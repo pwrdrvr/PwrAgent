@@ -236,6 +236,41 @@ describe("TranscriptList", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("loads one older page when the operator scrolls near the top", () => {
+    const loadOlder = vi.fn(async () => undefined);
+
+    render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "assistant",
+            text: "Recent history",
+          },
+        ]}
+        loading={false}
+        loadingMore={false}
+        pagination={{
+          supportsPagination: true,
+          hasPreviousPage: true,
+          previousCursor: "cursor-1",
+        }}
+        threadId="thread-1"
+        onLoadOlder={loadOlder}
+      />,
+    );
+
+    const list = screen.getByRole("list");
+    list.scrollTop = 200;
+    fireEvent.scroll(list);
+    expect(loadOlder).not.toHaveBeenCalled();
+
+    list.scrollTop = 120;
+    fireEvent.scroll(list);
+    expect(loadOlder).toHaveBeenCalledTimes(1);
+  });
+
   it("renders automation card details as markdown in the transcript", () => {
     const automationMarkdown = `| Priority | Service | Next step |
 |---|---|---|

@@ -51,6 +51,10 @@ import type { DesktopApi } from "../../lib/desktop-api";
 import type { IntegratedTerminalsController } from "../../lib/useIntegratedTerminals";
 import type { ThreadContextWindowState } from "../../lib/useThreadSessionState";
 import type { PendingForkEnvironmentSetup } from "../../lib/useThreadNavigation";
+import {
+  DEFAULT_RENDERED_TRANSCRIPT_ENTRY_LIMIT,
+  THREAD_HISTORY_PAGE_LIMIT,
+} from "../../lib/thread-history-limits";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { isSameWorktreeSubthreadLaunchpad } from "../../lib/subthread-launchpads";
 import { resolvePreferredEditor } from "../../lib/preferred-application";
@@ -934,6 +938,82 @@ type BranchDriftDialogState = {
   threadKey: string;
 };
 
+function scrollRenderedTranscriptToTurn(
+  container: HTMLElement,
+  turnId: string,
+  turnTimeMs?: number,
+): boolean {
+  // Land on the turn's LAST anchored entry, not its first: the clicked
+  // timestamp is the turn-END time, and the edited-file activity sits near
+  // the turn's tail. Scrolling to the first entry drops the user at the
+  // turn's start (an earlier time than the label, which reads as wrong).
+  let target: Element | null = null;
+  if (turnId) {
+    const matches = container.querySelectorAll(
+      `[data-turn-id="${CSS.escape(turnId)}"]`,
+    );
+    target = matches.length > 0 ? matches[matches.length - 1] : null;
+  }
+  if (!target && typeof turnTimeMs === "number") {
+    let bestDelta = Infinity;
+    for (const candidate of container.querySelectorAll("[data-turn-time]")) {
+      const time = Number((candidate as HTMLElement).dataset.turnTime);
+      if (!Number.isFinite(time)) {
+        continue;
+      }
+      const delta = Math.abs(time - turnTimeMs);
+      // `<=` so the LAST entry of the nearest turn wins (its tail), to
+      // match the turn-end semantics of the primary path.
+      if (delta <= bestDelta) {
+        bestDelta = delta;
+        target = candidate;
+      }
+    }
+  }
+  if (!target) {
+    return false;
+  }
+
+  // The `.transcript-list__item` wrapper is `display: contents` (no box),
+  // so scrolling IT is a no-op and its rect is empty. Scroll a real child
+  // element into view instead — the same approach the find bar uses.
+  const anchor = target.querySelector("*") ?? target;
+  anchor.scrollIntoView({ block: "center", behavior: "smooth" });
+  return true;
+}
+
+function findTranscriptTurnEntryIndex(
+  entries: AppServerThreadEntry[],
+  turnId: string,
+  turnTimeMs?: number,
+): number {
+  if (turnId) {
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      if (entries[index]?.turn?.id === turnId) {
+        return index;
+      }
+    }
+  }
+  if (typeof turnTimeMs !== "number") {
+    return -1;
+  }
+
+  let bestDelta = Infinity;
+  let bestIndex = -1;
+  entries.forEach((entry, index) => {
+    const time = entry.turn?.completedAt ?? entry.turn?.startedAt;
+    if (typeof time !== "number") {
+      return;
+    }
+    const delta = Math.abs(time - turnTimeMs);
+    if (delta <= bestDelta) {
+      bestDelta = delta;
+      bestIndex = index;
+    }
+  });
+  return bestIndex;
+}
+
 export function ThreadView(props: ThreadViewProps) {
   const [pendingActivityEntry, setPendingActivityEntry] =
     useState<AppServerThreadActivityEntry>();
@@ -972,6 +1052,9 @@ export function ThreadView(props: ThreadViewProps) {
   const [expandedImage, setExpandedImage] = useState<AppServerThreadImagePart>();
   const [contextRailResizing, setContextRailResizing] = useState(false);
   const [transcriptReglueRequestKey, setTranscriptReglueRequestKey] = useState(0);
+  const [transcriptEntryLimits, setTranscriptEntryLimits] = useState(
+    () => new Map<string, number>(),
+  );
   const [contextRailWidth, setContextRailWidth] = useState(380);
   const [launchpadMaterializing, setLaunchpadMaterializing] = useState(false);
   // Terminal state is owned by `useIntegratedTerminals` up in App, mirroring
@@ -1112,6 +1195,83 @@ export function ThreadView(props: ThreadViewProps) {
   const selectedThreadKey = selectedThread
     ? buildThreadIdentityKey(selectedThread.source, selectedThread.id)
     : undefined;
+  const transcriptEntryLimit = selectedThreadKey
+    ? transcriptEntryLimits.get(selectedThreadKey)
+      ?? DEFAULT_RENDERED_TRANSCRIPT_ENTRY_LIMIT
+    : DEFAULT_RENDERED_TRANSCRIPT_ENTRY_LIMIT;
+  const visibleTranscriptEntries = useMemo(
+    () => props.transcriptEntries.slice(-transcriptEntryLimit),
+    [props.transcriptEntries, transcriptEntryLimit],
+  );
+  const transcriptEntryCount = props.transcriptEntries.length;
+  const onLoadOlder = props.onLoadOlder;
+  const hiddenTranscriptEntryCount =
+    transcriptEntryCount - visibleTranscriptEntries.length;
+  const canLoadServerTranscriptHistory = Boolean(
+    props.transcriptPagination?.supportsPagination
+    && props.transcriptPagination.hasPreviousPage,
+  );
+  const hasMoreTranscriptHistory =
+    hiddenTranscriptEntryCount > 0 || canLoadServerTranscriptHistory;
+  const visibleTranscriptPagination = useMemo<
+    AppServerThreadReplayPagination | undefined
+  >(
+    () =>
+      hiddenTranscriptEntryCount > 0
+        ? {
+            ...(props.transcriptPagination ?? {}),
+            hasPreviousPage: true,
+            supportsPagination: true,
+          }
+        : props.transcriptPagination,
+    [hiddenTranscriptEntryCount, props.transcriptPagination],
+  );
+  const expandTranscriptEntryLimit = useCallback(
+    (minimumLimit: number) => {
+      if (!selectedThreadKey) {
+        return;
+      }
+      setTranscriptEntryLimits((current) => {
+        const currentLimit =
+          current.get(selectedThreadKey)
+          ?? DEFAULT_RENDERED_TRANSCRIPT_ENTRY_LIMIT;
+        if (currentLimit >= minimumLimit) {
+          return current;
+        }
+        const next = new Map(current);
+        next.set(selectedThreadKey, minimumLimit);
+        return next;
+      });
+    },
+    [selectedThreadKey],
+  );
+  const loadOlderTranscript = useCallback(async () => {
+    if (hiddenTranscriptEntryCount > 0) {
+      expandTranscriptEntryLimit(
+        Math.min(
+          transcriptEntryCount,
+          transcriptEntryLimit + THREAD_HISTORY_PAGE_LIMIT,
+        ),
+      );
+      return;
+    }
+    if (canLoadServerTranscriptHistory) {
+      // Reserve renderer capacity before the response prepends its page.
+      // Otherwise the newly loaded entries would remain hidden behind the
+      // existing tail window until a second upward scroll.
+      expandTranscriptEntryLimit(
+        transcriptEntryLimit + THREAD_HISTORY_PAGE_LIMIT,
+      );
+    }
+    await onLoadOlder();
+  }, [
+    canLoadServerTranscriptHistory,
+    expandTranscriptEntryLimit,
+    hiddenTranscriptEntryCount,
+    onLoadOlder,
+    transcriptEntryCount,
+    transcriptEntryLimit,
+  ]);
   const fileViewerContext = useMemo<MarkdownFileViewerContext | undefined>(() => {
     if (!selectedThread || !selectedThreadKey) {
       return undefined;
@@ -1604,43 +1764,29 @@ export function ThreadView(props: ThreadViewProps) {
       if (!container) {
         return;
       }
-      // Land on the turn's LAST anchored entry, not its first: the clicked
-      // timestamp is the turn-END time, and the edited-file activity sits near
-      // the turn's tail. Scrolling to the first entry drops the user at the
-      // turn's start (an earlier time than the label, which reads as wrong).
-      let target: Element | null = null;
-      if (turnId) {
-        const matches = container.querySelectorAll(
-          `[data-turn-id="${CSS.escape(turnId)}"]`,
-        );
-        target = matches.length > 0 ? matches[matches.length - 1] : null;
-      }
-      if (!target && typeof turnTimeMs === "number") {
-        let bestDelta = Infinity;
-        for (const candidate of container.querySelectorAll("[data-turn-time]")) {
-          const time = Number((candidate as HTMLElement).dataset.turnTime);
-          if (!Number.isFinite(time)) {
-            continue;
-          }
-          const delta = Math.abs(time - turnTimeMs);
-          // `<=` so the LAST entry of the nearest turn wins (its tail), to
-          // match the turn-end semantics of the primary path.
-          if (delta <= bestDelta) {
-            bestDelta = delta;
-            target = candidate;
-          }
-        }
-      }
-      if (!target) {
+      if (scrollRenderedTranscriptToTurn(container, turnId, turnTimeMs)) {
         return;
       }
-      // The `.transcript-list__item` wrapper is `display: contents` (no box),
-      // so scrolling IT is a no-op and its rect is empty. Scroll a real child
-      // element into view instead — the same approach the find bar uses.
-      const anchor = target.querySelector("*") ?? target;
-      anchor.scrollIntoView({ block: "center", behavior: "smooth" });
+      const targetIndex = findTranscriptTurnEntryIndex(
+        props.transcriptEntries,
+        turnId,
+        turnTimeMs,
+      );
+      if (targetIndex < 0) {
+        return;
+      }
+
+      expandTranscriptEntryLimit(props.transcriptEntries.length - targetIndex);
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          const liveContainer = transcriptPanelRef.current;
+          if (liveContainer) {
+            scrollRenderedTranscriptToTurn(liveContainer, turnId, turnTimeMs);
+          }
+        });
+      });
     },
-    [],
+    [expandTranscriptEntryLimit, props.transcriptEntries],
   );
 
   const moveEditedFilesToSidebar = useCallback(() => {
@@ -2522,16 +2668,13 @@ export function ThreadView(props: ThreadViewProps) {
           {props.findOpen ? (
             <ThreadFindBar
               containerRef={transcriptPanelRef}
-              refreshKey={`${selectedThread!.source}:${selectedThread!.id}:${props.transcriptEntries.length}`}
+              refreshKey={`${selectedThread!.source}:${selectedThread!.id}:${visibleTranscriptEntries.length}`}
               initialQuery={props.findInitialQuery}
               turnId={props.findTurnId}
               focusNonce={props.findFocusNonce}
-              hasMoreHistory={Boolean(
-                props.transcriptPagination?.supportsPagination &&
-                  props.transcriptPagination.hasPreviousPage,
-              )}
+              hasMoreHistory={hasMoreTranscriptHistory}
               loadingMore={props.loadingMore}
-              onLoadOlder={props.onLoadOlder}
+              onLoadOlder={loadOlderTranscript}
               onClose={() => props.onFindOpenChange?.(false)}
             />
           ) : null}
@@ -2542,7 +2685,7 @@ export function ThreadView(props: ThreadViewProps) {
             ref={transcriptPanelRef}
           >
             <TranscriptList
-              entries={props.transcriptEntries}
+              entries={visibleTranscriptEntries}
               permissionTransitions={selectedThread!.permissionTransitionLog}
               messagingBindingTransitions={
                 selectedThread!.messagingBindingTransitionLog
@@ -2557,7 +2700,7 @@ export function ThreadView(props: ThreadViewProps) {
               fileViewerContext={fileViewerContext}
               loading={props.loading}
               loadingMore={props.loadingMore}
-              pagination={props.transcriptPagination}
+              pagination={visibleTranscriptPagination}
               // File-diff activity renders in the LiveWorkRail above
               // the composer (issue #495). Generic tool activity has no
               // rail body, so keep it in the transcript while the turn
@@ -2578,7 +2721,7 @@ export function ThreadView(props: ThreadViewProps) {
               pendingProtocolActivityEntry={pendingProtocolActivityEntry}
               pendingUsageActivityEntry={pendingUsageActivityEntry}
               threadId={`${selectedThread!.source}:${selectedThread!.id}`}
-              onLoadOlder={props.onLoadOlder}
+              onLoadOlder={loadOlderTranscript}
               onOpenImage={setExpandedImage}
               onRespondToPendingRequest={respondToPendingRequest}
               onPendingMcpInteractionChange={(state) => {

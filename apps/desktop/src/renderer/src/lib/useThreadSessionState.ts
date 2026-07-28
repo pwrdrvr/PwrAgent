@@ -47,9 +47,9 @@ import {
   summarizeLiveActivity,
   withRendererSequence,
 } from "../features/thread-detail/live-transcript-activity";
+import { THREAD_HISTORY_PAGE_LIMIT } from "./thread-history-limits";
 
 const MAX_VIEW_ONLY_THREADS = 10;
-export const LIGHTWEIGHT_INITIAL_THREAD_HISTORY_LIMIT = 5;
 const SUPPORTED_APPROVAL_REQUEST_METHODS = new Set([
   "turn/requestApproval",
   "review/requestApproval",
@@ -4568,6 +4568,7 @@ export function useThreadSessionState(params: {
         backend: thread.source,
         threadId: thread.id,
         before: selectedSession.response.replay.pagination.previousCursor,
+        limit: THREAD_HISTORY_PAGE_LIMIT,
       });
 
       if ((requestVersionsRef.current[threadKey] ?? 0) !== requestVersion) {

@@ -507,6 +507,58 @@ describe("ThreadView", () => {
     });
   });
 
+  it("windows enormous replay pages before rendering transcript history", () => {
+    const loadOlder = vi.fn(async () => undefined);
+    const entries = Array.from({ length: 95 }, (_, index) => ({
+      type: "message" as const,
+      id: `message-${index}`,
+      role: "assistant" as const,
+      text: `History ${index}`,
+    }));
+    const selectedThread: NavigationThreadSummary = {
+      id: "thread-windowed",
+      title: "Windowed history",
+      titleSource: "explicit",
+      source: "codex",
+      executionMode: "default",
+      updatedAt: Date.now(),
+      linkedDirectories: [],
+      inbox: {
+        inInbox: true,
+      },
+    };
+
+    const { container } = render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[]}
+        clearPendingRequest={() => undefined}
+        composerDisabled={false}
+        desktopApi={{}}
+        loading={false}
+        loadingMore={false}
+        messageCount={entries.length}
+        onLoadOlder={loadOlder}
+        removeOptimisticMessage={(_id) => undefined}
+        selectedThread={selectedThread}
+        skills={[]}
+        transcriptEntries={entries}
+        transcriptPagination={{
+          supportsPagination: true,
+          hasPreviousPage: true,
+          previousCursor: "cursor-1",
+        }}
+      />,
+    );
+
+    expect(container.querySelectorAll(".transcript-message")).toHaveLength(40);
+
+    fireEvent.click(screen.getByRole("button", { name: "Load older messages" }));
+
+    expect(container.querySelectorAll(".transcript-message")).toHaveLength(90);
+    expect(loadOlder).not.toHaveBeenCalled();
+  });
+
   it("keeps the integrated terminal open state per selected thread", async () => {
     const firstThread: NavigationThreadSummary = {
       id: "thread-a",

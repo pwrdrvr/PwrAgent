@@ -777,6 +777,41 @@ describe("ThreadContextPanel", () => {
     expect(screen.getByText("Running total: $0.010 list price")).toBeInTheDocument();
   });
 
+  it("pages enormous pricing histories instead of rendering every row at once", () => {
+    const lines = Array.from({ length: 45 }, (_, index) =>
+      buildMonitorLine({
+        createdAt: 1_800_000_000_000 + index,
+        sourceItemId: `monitor-${index}`,
+        usageLineId: `line-${index}`,
+      }),
+    );
+
+    const { container } = renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      pricing: {
+        lines,
+        summaries: [],
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    expect(container.querySelectorAll(".pricing-usage-row")).toHaveLength(20);
+    expect(screen.getByText("Showing latest 20 of 45 usage rows.")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Show 20 older usage rows" }));
+
+    expect(container.querySelectorAll(".pricing-usage-row")).toHaveLength(40);
+    expect(screen.getByText("Showing latest 40 of 45 usage rows.")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Show 5 older usage rows" }));
+
+    expect(container.querySelectorAll(".pricing-usage-row")).toHaveLength(45);
+    expect(
+      screen.queryByRole("button", { name: /older usage rows/i }),
+    ).not.toBeInTheDocument();
+  });
+
   it("renders Codex Credits as an optional pricing display unit", () => {
     const summary: ThreadPricingSummary = {
       backend: "codex",

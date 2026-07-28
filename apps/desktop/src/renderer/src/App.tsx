@@ -58,10 +58,8 @@ import { TranscriptLinkProvider } from "./lib/transcript-links";
 import { useThreadNavigation } from "./lib/useThreadNavigation";
 import { usePwrAgentProfiles } from "./lib/usePwrAgentProfiles";
 import { usePullRequestRefresh } from "./features/pr-status/usePullRequestRefresh";
-import {
-  LIGHTWEIGHT_INITIAL_THREAD_HISTORY_LIMIT,
-  useThreadSessionState,
-} from "./lib/useThreadSessionState";
+import { useThreadSessionState } from "./lib/useThreadSessionState";
+import { DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT } from "./lib/thread-history-limits";
 import { setSidebarResizing } from "./lib/sidebar-resize-signal";
 import { useIntegratedTerminals } from "./lib/useIntegratedTerminals";
 import { useThreadSkills } from "./lib/useThreadSkills";
@@ -917,13 +915,9 @@ function DesktopAppShell(props: {
     settings.snapshot?.onboarding?.completed.value,
   ]);
   const loadThreadDetail = threadViewReady && mainView === "thread";
-  const lightweightNavigationRefresh =
-    settings.snapshot?.experimental.lightweightNavigationRefresh?.value ?? false;
   const session = useThreadSessionState({
     desktopApi,
-    initialHistoryLimit: lightweightNavigationRefresh
-      ? LIGHTWEIGHT_INITIAL_THREAD_HISTORY_LIMIT
-      : undefined,
+    initialHistoryLimit: DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT,
     liveTranscriptEventFiltering:
       settings.snapshot?.experimental.liveTranscriptEventFiltering?.value ?? false,
     thread: loadThreadDetail ? navigation.selectedThread : undefined,
