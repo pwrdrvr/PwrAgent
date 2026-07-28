@@ -109,6 +109,19 @@ describe("StateDb", () => {
     );
   });
 
+  it("creates the thread message origin table", () => {
+    const table = stateDb.raw
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+      )
+      .get("thread_message_origins") as { name: string } | undefined;
+
+    expect(table?.name).toBe("thread_message_origins");
+    expect(indexNames("thread_message_origins")).toContain(
+      "idx_thread_message_origins_thread",
+    );
+  });
+
   it("carries observed context-replay columns on both the turn and the line", () => {
     // The tally's source of truth is thread_usage_turns. The line columns are a
     // DEPRECATED dual-write (issue #947) kept so older locally-run builds — which
@@ -1400,7 +1413,10 @@ function columnNames(
 }
 
 function indexNames(
-  tableName: "thread_tool_invocations" | "thread_usage_lines",
+  tableName:
+    | "thread_message_origins"
+    | "thread_tool_invocations"
+    | "thread_usage_lines",
 ): string[] {
   return (
     stateDb.raw.prepare(`PRAGMA index_list(${tableName})`).all() as Array<{

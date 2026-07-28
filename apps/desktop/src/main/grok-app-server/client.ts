@@ -457,7 +457,13 @@ function extractStructuredMessageParts(value: unknown): AppServerThreadMessagePa
 }
 
 function normalizeRawMessages(
-  rawMessages: Array<{ role?: unknown; text?: unknown; parts?: unknown }>,
+  rawMessages: Array<{
+    id?: unknown;
+    messageId?: unknown;
+    role?: unknown;
+    text?: unknown;
+    parts?: unknown;
+  }>,
 ): ReplayMessage[] {
   return rawMessages.flatMap((message, index) => {
     if (!message || typeof message !== "object") {
@@ -476,7 +482,12 @@ function normalizeRawMessages(
 
     return [
       {
-        id: `message-${index + 1}`,
+        id:
+          typeof message.id === "string"
+            ? message.id
+            : typeof message.messageId === "string"
+              ? message.messageId
+              : `message-${index + 1}`,
         role,
         text: text ?? "",
         ...(parts.length > 0 ? { parts } : {}),
@@ -542,7 +553,14 @@ function extractReplayFromItems(
   items: Record<string, unknown>[],
   pagination: AppServerThreadReplay["pagination"],
 ): AppServerThreadReplay | undefined {
-  if (!items.some((item) => isActivityReplayItem(item) || isReviewReplayItem(item))) {
+  if (
+    !items.some(
+      (item) =>
+        Boolean(itemToMessage(item, 0))
+        || isActivityReplayItem(item)
+        || isReviewReplayItem(item),
+    )
+  ) {
     return undefined;
   }
 
@@ -657,7 +675,12 @@ function itemToMessage(item: Record<string, unknown>, index: number): ReplayMess
     return undefined;
   }
   return {
-    id: `message-${index}`,
+    id:
+      typeof item.id === "string"
+        ? item.id
+        : typeof item.messageId === "string"
+          ? item.messageId
+          : `message-${index}`,
     role,
     text: text ?? "",
     ...(parts.length > 0 ? { parts } : {}),

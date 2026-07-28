@@ -343,7 +343,7 @@ export type PendingThreadWorkspaceMoveSummary = {
 
 export type ThreadReadMessageSummary = Pick<
   AppServerThreadMessage,
-  "id" | "role" | "createdAt"
+  "id" | "role" | "origin" | "createdAt"
 > & {
   text: string;
   truncated?: boolean;
@@ -354,6 +354,7 @@ export type ThreadReadEntrySummary =
       type: "message";
       id: string;
       role: AppServerThreadMessage["role"];
+      origin?: AppServerThreadMessage["origin"];
       text: string;
       createdAt?: number;
       phase?: "commentary" | "final";

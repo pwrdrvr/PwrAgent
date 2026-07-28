@@ -4,10 +4,13 @@ import type {
   AppServerSkillSummary,
   AppServerThreadImagePart,
   AppServerThreadMessageEntry,
+  AppServerThreadMessageOrigin,
   AppServerThreadMessagePart,
   MarkdownFileViewerContext,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { useThreadLinks, type ResolvedThreadLink } from "../../lib/thread-links";
+import { ThreadChip } from "./ThreadChip";
 import { TranscriptImage } from "./TranscriptImage";
 import { ThreadMarkdown } from "./ThreadMarkdown";
 import { TranscriptCopyButton } from "./TranscriptCopyButton";
@@ -25,6 +28,10 @@ type TranscriptMessageProps = {
 };
 
 export const TranscriptMessage = memo(function TranscriptMessage(props: TranscriptMessageProps) {
+  const threadLinks = useThreadLinks();
+  const sourceThreadLink = props.message.origin?.sourceThread
+    ? threadLinks?.resolve(props.message.origin.sourceThread)
+    : undefined;
   const contentParts =
     props.message.parts && props.message.parts.length > 0
       ? props.message.parts
@@ -40,12 +47,14 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
   if (messageSegments.length === 0) {
     return (
       <article
-        className={`transcript-message transcript-message--${props.message.role}`}
+        className={`transcript-message ${messageToneClass(props.message)}`}
       >
         {renderMessageHeader({
           continuation: false,
           desktopApi: props.desktopApi,
           message: props.message,
+          sourceThreadLink,
+          threadLinks,
           text: messageCopyText,
         })}
       </article>
@@ -58,7 +67,7 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
         <article
           className={[
             "transcript-message",
-            `transcript-message--${props.message.role}`,
+            messageToneClass(props.message),
             segment.type === "table" ? "transcript-message--table" : undefined,
             segment.type === "table" && segment.wide
               ? "transcript-message--table-wide"
@@ -73,6 +82,8 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
             continuation: index > 0,
             desktopApi: props.desktopApi,
             message: props.message,
+            sourceThreadLink,
+            threadLinks,
             text: messageCopyText,
           })}
           <div className="transcript-message__text">
@@ -443,6 +454,8 @@ function renderMessageHeader(params: {
   continuation: boolean;
   desktopApi?: Pick<DesktopApi, "copyText">;
   message: AppServerThreadMessageEntry;
+  sourceThreadLink?: ResolvedThreadLink;
+  threadLinks: ReturnType<typeof useThreadLinks>;
   text: string;
 }): ReactNode {
   if (params.continuation) {
@@ -451,7 +464,22 @@ function renderMessageHeader(params: {
 
   return (
     <header className="transcript-message__header">
-      <span className="transcript-message__role">{labelForRole(params.message.role)}</span>
+      <span className="transcript-message__attribution">
+        <span className="transcript-message__role">
+          {labelForMessage(params.message)}
+        </span>
+        {params.sourceThreadLink && params.threadLinks ? (
+          <ThreadChip
+            fallbackLabel={params.message.origin?.sourceThread?.title}
+            link={params.sourceThreadLink}
+            onOpen={params.threadLinks.show}
+          />
+        ) : params.message.origin?.sourceThread?.title ? (
+          <span className="transcript-message__source">
+            {params.message.origin.sourceThread.title}
+          </span>
+        ) : null}
+      </span>
       <span className="transcript-message__header-actions">
         {params.text ? (
           <TranscriptCopyButton
@@ -477,11 +505,30 @@ function renderMessageHeader(params: {
   );
 }
 
-function labelForRole(role: AppServerThreadMessageEntry["role"]): string {
-  if (role === "assistant") {
+function messageToneClass(message: AppServerThreadMessageEntry): string {
+  return message.origin
+    ? "transcript-message--injected"
+    : `transcript-message--${message.role}`;
+}
+
+function labelForMessage(message: AppServerThreadMessageEntry): string {
+  if (message.role === "assistant") {
     return "Assistant";
   }
-  return "User";
+  return message.origin ? labelForOrigin(message.origin) : "User";
+}
+
+function labelForOrigin(origin: AppServerThreadMessageOrigin): string {
+  if (origin.kind === "agent") {
+    return "Agent";
+  }
+  if (origin.kind === "automation") {
+    return "Automation";
+  }
+  if (origin.kind === "messaging") {
+    return "Messaging";
+  }
+  return "PwrAgent";
 }
 
 function buildMessageCopyText(
