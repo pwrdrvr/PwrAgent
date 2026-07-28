@@ -24,7 +24,9 @@ execution: code
 ### Summary
 
 AI Providers will expose current discovered models and effort/thinking options for every enabled provider that advertises them.
-Users can choose provider-specific model and per-model reasoning baselines, reset to provider recommendations, and deliberately adopt a new baseline across matching unsent launchpads.
+Users can choose provider-specific model and per-model reasoning baselines, reset to provider recommendations, deliberately adopt a new baseline across matching unsent launchpads, and create a versioned migration that matching existing threads adopt once when next opened.
+
+Codex also has profile-scoped Fast safety controls: a hard policy can prevent Fast entirely, while a bulk-off action can clean up existing threads and future launchpad defaults without preventing later per-thread opt-in.
 
 ### Problem Frame
 
@@ -44,6 +46,8 @@ A Settings default is only trustworthy when the catalog behind it is fresh, capa
 - **Suspend invalid preferences instead of deleting them.** (session-settled: user-directed — chosen over clearing preferences on capability drift: temporary provider changes should not destroy intent.) Governs R17-R19.
 - **Confirmed bulk adoption.** (session-settled: user-directed — chosen over silent automatic rewrites and one-directory-at-a-time reset: users need a deliberate way to replace stale launchpad baselines at scale.) Governs R20-R23.
 - **Catalog required for a first launch.** (session-settled: user-directed — chosen over launching with an unknown provider default: a provider with no previously valid catalog must discover successfully before creating a thread.) Governs R7-R8.
+- **Versioned lazy existing-thread migration.** (session-settled: user-directed — chosen over eagerly rewriting every stored thread or permanently exempting manually edited threads: each migration applies once when a matching thread is next opened, and only edits made after the current migration remain authoritative.) Governs R24-R28.
+- **Codex Fast policy plus cleanup.** (session-settled: user-directed — chosen over treating Fast as only another model baseline: one profile may prohibit Fast entirely, while another may allow isolated use after deliberately turning it off across existing threads and future launchpads.) Governs R29-R33.
 
 <!-- ce-section: work-relationships -->
 ### How This Work Fits Together
@@ -73,7 +77,7 @@ The surrounding relationships are current context, not a committed roadmap:
 - R9. Model and reasoning baselines must be scoped to the active PwrAgent profile.
 - R10. Every provider covered by R1 must allow the user to choose one default model from its valid catalog.
 - R11. Every reasoning-capable model must allow its own effort/thinking baseline from the options valid for that model.
-- R12. Execution/access mode, Fast/service tier, Codex Environment, and other launch settings must remain outside this Settings baseline and retain their existing composer-owned behavior.
+- R12. Execution/access mode, Codex Environment, and other launch settings must remain outside this Settings baseline and retain their existing composer-owned behavior. Fast/service tier is not a model baseline; its Settings behavior is limited to the Codex policy and cleanup actions in R29-R33.
 - R13. Effective model and reasoning values must resolve in this order: restored thread state, current directory launchpad snapshot, learned per-provider sticky choice, Settings baseline, then provider-advertised recommendation.
 - R14. A Settings baseline must seed provider contexts with no higher-precedence choice and serve as the target of an explicit composer reset.
 - R15. Changing a Settings baseline alone must not rewrite learned provider choices, unsent launchpads, or existing threads.
@@ -91,6 +95,22 @@ The surrounding relationships are current context, not a committed roadmap:
 - R21. The bulk action must show the number of affected launchpads and require confirmation before applying.
 - R22. A confirmed bulk action must update model and reasoning on every matching launchpad and replace the provider's learned sticky model/reasoning choice for future launchpads.
 - R23. A confirmed bulk action must preserve prompt text, attachments, workspace mode, branch, access mode, Fast/service tier, Codex Environment, and every existing thread.
+
+**Adopt a new baseline across existing threads**
+
+- R24. AI Providers must offer an explicit, confirmed action that creates a new model/reasoning migration revision for the selected provider baseline.
+- R25. A matching thread created before the current migration and not yet acknowledging its revision must adopt the migration's model and reasoning once when next opened, before its next turn can start. Threads created after the migration are not eligible and acknowledge it without being changed.
+- R26. A manual model or reasoning change made after a thread acknowledges the current migration must remain authoritative for that migration revision.
+- R27. Creating a later migration revision must make every matching existing thread eligible again, including threads manually customized before the later migration; each thread applies each revision at most once.
+- R28. If the migration target is unavailable or invalid when a thread opens, PwrAgent must not stamp the revision as applied and must not silently substitute a different model or reasoning value.
+
+**Codex Fast policy and cleanup**
+
+- R29. AI Providers must expose a profile-scoped Codex policy that allows or prohibits Fast mode.
+- R30. When Fast is prohibited, PwrAgent must prevent Fast from being enabled in launchpads or threads and must force non-Fast settings before any Codex turn can start.
+- R31. Prohibiting Fast must also turn Fast off across existing Codex thread overlays and the sticky/default state used by future Codex launchpads so stale Fast choices do not reappear if the policy is later relaxed.
+- R32. When Fast remains allowed, AI Providers must offer a confirmed bulk action that turns Fast off across existing Codex threads and future Codex launchpads while preserving the ability to re-enable Fast on an individual thread afterward.
+- R33. Fast policy and cleanup actions must not change provider, model, reasoning, access mode, workspace, branch, prompt, attachments, Codex Environment, or historical turns.
 
 The precedence defined by R13 is the normal resolution path:
 
@@ -124,6 +144,16 @@ flowchart TB
   - **Steps:** PwrAgent updates the catalog, suspends invalid explicit preferences, and resolves an effective valid recommendation.
   - **Outcome:** New launches remain valid without silently destroying the user's saved intent.
   - **Covered by:** R3-R8, R17-R19.
+- F5. Adopt a baseline across existing threads
+  - **Trigger:** The operator confirms applying a provider baseline to existing threads.
+  - **Steps:** PwrAgent creates a new provider migration revision. Each matching thread adopts the target once when next opened; a later manual edit remains specific until another migration is created.
+  - **Outcome:** Old threads move forward as they are used without a synchronous rewrite of every provider session.
+  - **Covered by:** R24-R28.
+- F6. Control Codex Fast usage
+  - **Trigger:** The operator prohibits Fast for the profile or invokes Turn Fast off everywhere.
+  - **Steps:** PwrAgent enforces non-Fast turns, clears Fast from existing Codex overlays, and replaces future launchpad stickiness with Fast off. If Fast remains allowed, an individual thread may opt back in.
+  - **Outcome:** One profile can prohibit Fast entirely, while another can periodically clean up Fast usage without losing local opt-in.
+  - **Covered by:** R29-R33.
 
 ### Acceptance Examples
 
@@ -172,13 +202,40 @@ flowchart TB
   - **Given:** A thread was created with a model/reasoning combination that differs from current Settings and sticky choices.
   - **When:** The thread is restored after navigation, restart, a Settings change, or bulk adoption.
   - **Then:** Its saved thread settings remain authoritative and unchanged.
+- AE10. Existing thread adopts a migration once
+  - **Covers R24-R28.**
+  - **Given:** A Codex migration targets GPT-5.6-Sol with high reasoning and an unopened thread still uses GPT-5.5.
+  - **When:** The operator opens that thread.
+  - **Then:** The thread changes to GPT-5.6-Sol with high reasoning and records the current migration revision.
+- AE11. Post-migration manual choice sticks
+  - **Covers R26-R27.**
+  - **Given:** A thread acknowledged the current GPT-5.6-Sol/high migration and the operator then changes it to GPT-5.6-Terra/xhigh.
+  - **When:** The operator closes and reopens it before creating another migration.
+  - **Then:** GPT-5.6-Terra/xhigh remains selected.
+  - **And when:** The operator later creates a new provider migration.
+  - **Then:** The thread becomes eligible to adopt that newer revision once.
+- AE11a. New thread is not retroactively migrated
+  - **Covers R24-R27.**
+  - **Given:** A provider migration already exists and the operator creates a new thread with a different explicit model.
+  - **When:** The new thread is opened or starts its next turn.
+  - **Then:** It acknowledges the existing migration without changing its model or reasoning.
+- AE12. Fast prohibited for one profile
+  - **Covers R29-R31 and R33.**
+  - **Given:** A PwrAgent profile prohibits Codex Fast mode and previously contained Fast launchpads or threads.
+  - **When:** The policy is saved and Codex work continues.
+  - **Then:** Existing and future settings are non-Fast, Fast cannot be re-enabled, and unrelated thread settings remain unchanged.
+- AE13. Fast cleanup while opt-in remains allowed
+  - **Covers R29 and R32-R33.**
+  - **Given:** Codex Fast remains allowed and multiple existing threads or launchpads use Fast.
+  - **When:** The operator confirms Turn Fast off everywhere.
+  - **Then:** Existing threads and future launchpads use non-Fast settings, while the operator may later enable Fast on one individual thread.
 
 ### Scope Boundaries
 
 - This work does not upgrade, install, or control self-update behavior for provider executables.
-- This work does not mutate existing thread settings or historical turns.
+- This work does not eagerly rewrite provider-native sessions or historical turns; it may update PwrAgent's current settings for existing threads through the explicit migration and Fast actions in R24-R33.
 - This work does not make Settings authoritative over restored threads, directory launchpad snapshots, or learned provider choices outside explicit reset and bulk actions.
-- This work does not add Settings defaults for execution/access mode, Fast/service tier, Codex Environment, workspace mode, or branch.
+- This work does not add Settings defaults for execution/access mode, Codex Environment, workspace mode, or branch. It adds only the Codex Fast policy and cleanup behavior in R29-R33, not a general service-tier baseline.
 - This work does not hard-code provider model compatibility or promise a model list for providers that expose no discoverable catalog.
 - This work does not move defaults into Codex auth-profile or installation-global scope.
 - This work does not expand the sibling provider-stickiness fix.
