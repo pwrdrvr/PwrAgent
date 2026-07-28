@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonRpcTransport } from "@pwrdrvr/agent-transport";
+import type { InitializeResponse } from "@pwrdrvr/codex-app-server-protocol";
 import { ProtocolCaptureStore } from "../testing/capture-store";
 import { createProtocolCaptureObserver } from "../testing/protocol-capture";
 
@@ -34,16 +35,17 @@ class MockTransport implements JsonRpcTransport {
     const payload = JSON.parse(message) as { id?: string; method?: string };
 
     if (payload.method === "initialize") {
+      const result: InitializeResponse = {
+        userAgent: "codex_cli_rs/1.0.0 (Mac OS 26.0; arm64)",
+        codexHome: "/Users/huntharo/.codex",
+        platformFamily: "unix",
+        platformOs: "macos",
+      };
       this.emitRaw(
         JSON.stringify({
           jsonrpc: "2.0",
           id: payload.id,
-          result: {
-            serverInfo: {
-              name: "Codex App Server",
-              version: "1.0.0"
-            }
-          }
+          result,
         })
       );
       return;

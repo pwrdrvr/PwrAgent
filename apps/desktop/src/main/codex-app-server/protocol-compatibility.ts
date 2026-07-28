@@ -3,6 +3,7 @@ import type { DynamicToolSpec } from "@pwrdrvr/codex-app-server-protocol/v2";
 const PERSIST_EXTENDED_HISTORY_REMOVED_VERSION = [0, 137, 0] as const;
 const NAMESPACED_DYNAMIC_TOOLS_MIN_VERSION = [0, 141, 0] as const;
 const ON_FAILURE_APPROVAL_REMOVED_VERSION = [0, 143, 0] as const;
+const GENERATED_MODEL_LIST_MIN_VERSION = [0, 144, 0] as const;
 
 export type CodexProtocolCompatibility = {
   dynamicToolFormat: "flat" | "namespaced";
@@ -59,6 +60,16 @@ export function resolveCodexProtocolCompatibility(
     supportsOnFailureApprovalPolicy:
       !isAtLeast(ON_FAILURE_APPROVAL_REMOVED_VERSION),
   };
+}
+
+export function usesGeneratedCodexModelListResponse(
+  serverVersion?: string,
+): boolean {
+  const version = parseSemanticVersion(serverVersion);
+  return Boolean(
+    version
+    && compareSemanticVersions(version, GENERATED_MODEL_LIST_MIN_VERSION) >= 0,
+  );
 }
 
 export function serializeCompatibleDynamicTools(

@@ -58,7 +58,9 @@ import type {
 } from "@pwrdrvr/codex-app-server-protocol";
 import type {
   ConfigValueWriteParams as CodexConfigValueWriteParams,
+  Model as CodexModel,
   ModelListParams as CodexModelListParams,
+  ModelListResponse as CodexModelListResponse,
   SandboxMode as CodexSandboxMode,
   SandboxPolicy as CodexSandboxPolicy,
   ReviewStartParams as CodexReviewStartParams,
@@ -97,6 +99,7 @@ import {
   normalizeCompatibleApprovalPolicy,
   resolveCodexProtocolCompatibility,
   serializeCompatibleDynamicTools,
+  usesGeneratedCodexModelListResponse,
   type CodexProtocolCompatibility,
   type CompatibleApprovalPolicy,
   type CompatibleDynamicToolSpec,
@@ -195,13 +198,7 @@ export class CodexBootstrapDeferredError extends Error {
   }
 }
 
-type InitializeResult = Partial<CodexInitializeResponse> & {
-  serverInfo?: {
-    name?: string;
-    version?: string;
-  };
-  methods?: string[];
-};
+type InitializeResult = Partial<CodexInitializeResponse>;
 
 type RawCodexThreadSummary = Omit<
   AppServerThreadSummary,
@@ -415,14 +412,12 @@ function logSkillsChangedNotification(params: {
   payload: unknown;
   listenerCount: number;
   initialized: boolean;
-  serverAdvertisesSkillsList: boolean;
 }): void {
   codexClientLog.warn("codex skills changed notification received", {
     method: "skills/changed",
     ...describePayloadShape(params.payload),
     listenerCount: params.listenerCount,
     initialized: params.initialized,
-    serverAdvertisesSkillsList: params.serverAdvertisesSkillsList,
     expectedFollowup: "call skills/list when refreshed skill metadata is needed",
     payload: params.payload,
   });
@@ -4215,10 +4210,10 @@ function pickModelSupportsFast(
 ): boolean | undefined {
   const serviceTierIds = pickModelServiceTierIds(record);
   const additionalSpeedTiers = pickModelAdditionalSpeedTiers(record);
-  // Current Codex model/list responses advertise structured service tiers and
-  // retain additionalSpeedTiers for older clients. A present empty array is
-  // authoritative. When older app-server versions omit both fields, leave the
-  // capability unknown so the backend registry can use its model-id fallback.
+  // Legacy responses used both structured service tiers and speed-tier
+  // aliases. A present empty array is authoritative. When an old app-server
+  // omits both fields, leave the capability unknown so the registry can use
+  // its model-id fallback.
   if (serviceTierIds !== undefined || additionalSpeedTiers !== undefined) {
     return Boolean(
       serviceTierIds?.includes("priority")
@@ -4349,6 +4344,159 @@ function summarizeRawModelList(value: unknown): Array<Record<string, unknown>> {
       },
     ];
   });
+}
+
+function parseInitializeResponse(value: unknown): CodexInitializeResponse {
+  const record = asRecord(value);
+  if (
+    !record
+    || typeof record.userAgent !== "string"
+    || typeof record.codexHome !== "string"
+    || typeof record.platformFamily !== "string"
+    || typeof record.platformOs !== "string"
+  ) {
+    throw new Error(
+      "codex app server initialize response does not match the generated protocol",
+    );
+  }
+
+  return value as CodexInitializeResponse;
+}
+
+type ConsumedCodexModel = Pick<
+  CodexModel,
+  | "additionalSpeedTiers"
+  | "defaultReasoningEffort"
+  | "displayName"
+  | "hidden"
+  | "id"
+  | "inputModalities"
+  | "isDefault"
+> & {
+  serviceTiers: Array<
+    Pick<CodexModel["serviceTiers"][number], "id">
+  >;
+  supportedReasoningEfforts: Array<
+    Pick<CodexModel["supportedReasoningEfforts"][number], "reasoningEffort">
+  >;
+};
+
+type ConsumedCodexModelListResponse = Pick<
+  CodexModelListResponse,
+  "nextCursor"
+> & {
+  data: ConsumedCodexModel[];
+};
+
+function isConsumedCodexModel(value: unknown): value is ConsumedCodexModel {
+  const record = asRecord(value);
+  return Boolean(
+    record
+    && typeof record.id === "string"
+    && typeof record.displayName === "string"
+    && typeof record.hidden === "boolean"
+    && Array.isArray(record.supportedReasoningEfforts)
+    && record.supportedReasoningEfforts.every((effort) => {
+      const effortRecord = asRecord(effort);
+      return Boolean(
+        effortRecord
+        && typeof effortRecord.reasoningEffort === "string",
+      );
+    })
+    && typeof record.defaultReasoningEffort === "string"
+    && Array.isArray(record.inputModalities)
+    && record.inputModalities.every(
+      (modality) => modality === "text" || modality === "image",
+    )
+    && Array.isArray(record.additionalSpeedTiers)
+    && record.additionalSpeedTiers.every((tier) => typeof tier === "string")
+    && Array.isArray(record.serviceTiers)
+    && record.serviceTiers.every((tier) => {
+      const tierRecord = asRecord(tier);
+      return Boolean(tierRecord && typeof tierRecord.id === "string");
+    })
+    && typeof record.isDefault === "boolean",
+  );
+}
+
+function parseConsumedCodexModelListResponse(
+  value: unknown,
+): ConsumedCodexModelListResponse {
+  const record = asRecord(value);
+  if (
+    !record
+    || !Array.isArray(record.data)
+    || !record.data.every(isConsumedCodexModel)
+    || (
+      record.nextCursor !== null
+      && typeof record.nextCursor !== "string"
+    )
+  ) {
+    throw new Error(
+      "codex app server model/list response does not provide the generated fields PwrAgent consumes",
+    );
+  }
+
+  return value as ConsumedCodexModelListResponse;
+}
+
+function extractGeneratedModelOptions(
+  response: ConsumedCodexModelListResponse,
+): BackendModelOption[] {
+  const models = response.data.flatMap((model): BackendModelOption[] => {
+    if (!SUPPORTED_CODEX_MODELS.has(model.id.toLowerCase()) || model.hidden) {
+      return [];
+    }
+
+    const serviceTierIds = model.serviceTiers.map((tier) =>
+      tier.id.trim().toLowerCase()
+    );
+    const additionalSpeedTiers = model.additionalSpeedTiers.map((tier) =>
+      tier.trim().toLowerCase()
+    );
+    return [
+      {
+        id: model.id,
+        label: formatCodexModelLabel(model.id),
+        current: model.isDefault,
+        defaultReasoningEffort: model.defaultReasoningEffort,
+        reasoningEfforts: model.supportedReasoningEfforts.map(
+          (effort) => effort.reasoningEffort,
+        ),
+        supportsReasoning: model.supportedReasoningEfforts.length > 0,
+        supportsFast:
+          serviceTierIds.includes("priority")
+          || additionalSpeedTiers.includes("fast"),
+        supportsImage: model.inputModalities.includes("image"),
+      },
+    ];
+  });
+
+  return sortCodexModels(models);
+}
+
+function summarizeGeneratedModelList(
+  response: ConsumedCodexModelListResponse,
+): Array<Record<string, unknown>> {
+  return response.data.map((model) => ({
+    id: model.id,
+    displayName: model.displayName,
+    current: model.isDefault,
+    hidden: model.hidden,
+    supportsReasoning: model.supportedReasoningEfforts.length > 0,
+    supportedReasoningEfforts: model.supportedReasoningEfforts.map(
+      (effort) => effort.reasoningEffort,
+    ),
+    defaultReasoningEffort: model.defaultReasoningEffort,
+    additionalSpeedTiers: model.additionalSpeedTiers,
+    serviceTiers: model.serviceTiers.map((tier) => tier.id),
+    supportsFast:
+      model.serviceTiers.some((tier) => tier.id.trim().toLowerCase() === "priority")
+      || model.additionalSpeedTiers.some(
+        (tier) => tier.trim().toLowerCase() === "fast",
+      ),
+    inputModalities: model.inputModalities,
+  }));
 }
 
 function isSparkModelId(id: string): boolean {
@@ -5539,8 +5687,6 @@ export class CodexAppServerClient {
           payload: params,
           listenerCount: this.notificationListeners.size,
           initialized: this.initialized,
-          serverAdvertisesSkillsList:
-            this.initializeResult?.methods?.includes("skills/list") ?? false,
         });
       }
 
@@ -5644,8 +5790,7 @@ export class CodexAppServerClient {
 
   private getProtocolCompatibility(): CodexProtocolCompatibility {
     return resolveCodexProtocolCompatibility(
-      this.initializeResult?.userAgent
-        ?? this.initializeResult?.serverInfo?.version,
+      this.initializeResult?.userAgent,
     );
   }
 
@@ -5740,8 +5885,8 @@ export class CodexAppServerClient {
   private async setThreadNameWithCodex(params: {
     threadId: string;
     name: string;
-  }): Promise<unknown> {
-    return await requestWithFallbacks({
+  }): Promise<void> {
+    await requestWithFallbacks({
       client: this.connection,
       methods: ["thread/name/set"],
       payloads: [{ threadId: params.threadId, name: params.name }],
@@ -6146,6 +6291,16 @@ export class CodexAppServerClient {
       payloads: [payload],
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
     });
+
+    if (usesGeneratedCodexModelListResponse(this.initializeResult?.userAgent)) {
+      const parsedResult = parseConsumedCodexModelListResponse(result);
+      const models = extractGeneratedModelOptions(parsedResult);
+      codexClientLog.info("model/list", {
+        rawModels: summarizeGeneratedModelList(parsedResult),
+        normalizedModelIds: models.map((model) => model.id),
+      });
+      return models;
+    }
 
     const models = extractModelOptions(result);
     codexClientLog.info("model/list", {
@@ -6647,7 +6802,7 @@ export class CodexAppServerClient {
   async archiveThread(params: { threadId: string }): Promise<{ threadId: string }> {
     await this.ensureInitialized();
 
-    const result = await requestWithFallbacks({
+    await requestWithFallbacks({
       client: this.connection,
       methods: ["thread/archive"],
       payloads: [{ threadId: params.threadId }],
@@ -6655,7 +6810,7 @@ export class CodexAppServerClient {
     });
 
     return {
-      threadId: extractThreadIdFromValue(result) ?? params.threadId,
+      threadId: params.threadId,
     };
   }
 
@@ -6680,12 +6835,11 @@ export class CodexAppServerClient {
   }): Promise<{ threadId: string }> {
     await this.ensureInitialized();
 
-    const result = await this.setThreadNameWithCodex(params);
-    const threadId = extractThreadIdFromValue(result) ?? params.threadId;
-    this.recordedThreadNames.set(threadId, params.name);
+    await this.setThreadNameWithCodex(params);
+    this.recordedThreadNames.set(params.threadId, params.name);
 
     return {
-      threadId,
+      threadId: params.threadId,
     };
   }
 
@@ -6739,7 +6893,7 @@ export class CodexAppServerClient {
         threadId: params.threadId,
         turnId: params.turnId,
       };
-      const result = await requestWithFallbacks({
+      await requestWithFallbacks({
         client: this.connection,
         methods: ["turn/interrupt"],
         payloads: [payload],
@@ -6747,8 +6901,8 @@ export class CodexAppServerClient {
       });
 
       return {
-        threadId: extractThreadIdFromValue(result) ?? params.threadId,
-        turnId: extractTurnIdFromValue(result) ?? params.turnId,
+        threadId: params.threadId,
+        turnId: params.turnId,
       };
     } catch (error) {
       if (!isRequestTimeoutError(error, "turn/interrupt")) {
@@ -6787,7 +6941,7 @@ export class CodexAppServerClient {
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     }).catch(() => undefined);
 
-    const result = await requestWithFallbacks({
+    await requestWithFallbacks({
       client: this.connection,
       methods: ["thread/compact/start"],
       payloads: [
@@ -6798,12 +6952,9 @@ export class CodexAppServerClient {
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     });
 
-    const threadId = extractThreadIdFromValue(result) ?? params.threadId;
-    const turnId = extractTurnIdFromValue(result) ?? `compact:${threadId}`;
     return {
-      threadId,
-      turnId,
-      itemId: extractStringProperty(result, "itemId", "item_id"),
+      threadId: params.threadId,
+      turnId: `compact:${params.threadId}`,
     };
   }
 
@@ -6878,7 +7029,7 @@ export class CodexAppServerClient {
           capabilities: { experimentalApi: true, requestAttestation: false }
         };
         const result = await this.connection.request("initialize", initializeParams);
-        this.initializeResult = (asRecord(result) ?? {}) as InitializeResult;
+        this.initializeResult = parseInitializeResponse(result);
       } catch (error) {
         if (!isAlreadyInitializedError(error)) {
           throw error;

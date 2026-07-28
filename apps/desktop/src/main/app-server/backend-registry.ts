@@ -367,6 +367,7 @@ type InitializeResult = {
     version?: string;
   };
   methods?: string[];
+  userAgent?: string;
 };
 
 const isDevelopment = process.env.NODE_ENV !== "production";
