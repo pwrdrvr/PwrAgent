@@ -4622,6 +4622,11 @@ function titleHelperSubAgentMessage(params: {
       : "Generated a title.";
   }
   if (params.status === "cancelled") {
+    if (params.result?.title) {
+      return params.reason
+        ? `Generated title: ${params.result.title}. Not applied: ${params.reason}`
+        : `Generated title: ${params.result.title}. Not applied.`;
+    }
     return params.reason
       ? `Title generation cancelled: ${params.reason}`
       : "Title generation cancelled.";
@@ -4718,6 +4723,19 @@ function buildTitleEligibilityLogDetails(
       ? isInjectedContextPlaceholderTitle(thread.title)
       : null,
   };
+}
+
+function buildLateTitleCancellationReason(
+  backend: AppServerBackendKind,
+  thread: AppServerThreadSummary,
+): string {
+  if (thread.titleSource === "explicit") {
+    return `The thread was explicitly renamed first: ${thread.title}.`;
+  }
+  if (isAcpBackendId(backend)) {
+    return `ACP provided a durable title first: ${thread.title}.`;
+  }
+  return `A newer thread title was already present: ${thread.title}.`;
 }
 
 function createReplayThreadTitleService(): ThreadTitleService | undefined {
@@ -15861,6 +15879,7 @@ export class DesktopBackendRegistry {
         await this.safePersistExistingTitleHelperSubAgent({
           backend: params.backend,
           threadId: params.threadId,
+          result,
           status: "cancelled",
           reason: "Title generation became stale.",
         });
@@ -15882,8 +15901,12 @@ export class DesktopBackendRegistry {
         await this.safePersistExistingTitleHelperSubAgent({
           backend: params.backend,
           threadId: params.threadId,
+          result,
           status: "cancelled",
-          reason: "Latest title is no longer eligible.",
+          reason: buildLateTitleCancellationReason(
+            params.backend,
+            latestThread,
+          ),
         });
         return;
       }
