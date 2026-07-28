@@ -3393,7 +3393,7 @@ function buildTaskMonitorUsageLine(params: {
     parentThreadId: params.parentThreadId,
     priceStatus: cost ? "priced" : "unpriced",
     ...(priceUnavailableReason ? { priceUnavailableReason } : {}),
-    provider: cost?.provider ?? "openai",
+    provider: cost?.provider ?? fallbackUsageProvider(params.backend),
     ...(cost?.catalogId ? { pricingCatalogId: cost.catalogId } : {}),
     ...(cost?.catalogVersion ? { pricingCatalogVersion: cost.catalogVersion } : {}),
     ...(cost?.rateId ? { pricingRateId: cost.rateId } : {}),
@@ -3622,7 +3622,7 @@ function buildLiveThreadUsageLine(params: {
     outputTokens,
     priceStatus: cost ? "priced" : "unpriced",
     ...(priceUnavailableReason ? { priceUnavailableReason } : {}),
-    provider: cost?.provider ?? "openai",
+    provider: cost?.provider ?? fallbackUsageProvider(params.backend),
     ...(cost?.catalogId ? { pricingCatalogId: cost.catalogId } : {}),
     ...(cost?.catalogVersion ? { pricingCatalogVersion: cost.catalogVersion } : {}),
     ...(cost?.rateId ? { pricingRateId: cost.rateId } : {}),
@@ -3651,6 +3651,10 @@ function buildLiveThreadUsageLine(params: {
       "live-token-usage",
     ].join(":"),
   };
+}
+
+function fallbackUsageProvider(backend: AppServerBackendKind): string {
+  return backend === "acp:qwen" ? "qwen" : "openai";
 }
 
 /**

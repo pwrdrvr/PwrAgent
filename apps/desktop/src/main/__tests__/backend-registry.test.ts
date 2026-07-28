@@ -14143,6 +14143,64 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("persists Qwen turn usage as an unpriced card when no catalog rate exists", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/read"] },
+    });
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+
+    await registry.publishLocalEvent({
+      backend: "acp:qwen",
+      notification: {
+        method: "thread/tokenUsage/updated",
+        params: {
+          threadId: "qwen-thread",
+          turnId: "qwen-turn",
+          model: "qwen3-coder-plus",
+          tokenUsage: {
+            last_token_usage: {
+              input_tokens: 48_851,
+              cached_input_tokens: 20_000,
+              output_tokens: 322,
+              reasoning_output_tokens: 49,
+              total_tokens: 49_173,
+            },
+          },
+        },
+      },
+    });
+
+    const pricing = await overlayStore.readThreadPricing({
+      backend: "acp:qwen",
+      threadId: "qwen-thread",
+    });
+    expect(pricing.lines).toHaveLength(1);
+    expect(pricing.lines[0]).toMatchObject({
+      cachedInputTokens: 20_000,
+      inputTokens: 48_851,
+      model: "qwen3-coder-plus",
+      outputTokens: 322,
+      priceStatus: "unpriced",
+      priceUnavailableReason: "missing-rate",
+      provider: "qwen",
+      reasoningOutputTokens: 49,
+      totalCostMicros: 0,
+      totalTokens: 49_173,
+      turnId: "qwen-turn",
+      turnUsageAttributed: true,
+    });
+    expect(pricing.lines[0]?.pricingRateId).toBeUndefined();
+
+    await registry.close();
+  });
+
   it("marks a whole-thread total with no per-request usage as unattributed", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/read"] },

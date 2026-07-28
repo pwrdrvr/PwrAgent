@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import type {
   AcpBackendId,
@@ -13,6 +16,11 @@ import {
 } from "../app-server/acp-backend-adapter";
 import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
 import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
+
+const fixtureDir = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "fixtures/acp-transcripts",
+);
 
 describe("describeInstalledAcpBackend", () => {
   it("does not advertise session/load when the agent reports it is unsupported", () => {
@@ -872,6 +880,109 @@ describe("AcpBackendAdapter", () => {
           event.notification.params.delta === "I should run the build first.",
       ),
     ).toEqual([]);
+
+    await adapter.close();
+  });
+
+  it("emits cumulative Qwen usage across fixture-backed model calls", async () => {
+    const backendId = "acp:qwen" as AcpBackendId;
+    const transport = new FakeAcpAgentTransport();
+    const events: AgentEvent[] = [];
+    const sessions: AcpSessionMetadata[] = [];
+    const agent: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "qwen",
+      name: "Qwen Code",
+      launchDescriptor: {
+        backendId,
+        registryId: "qwen",
+        distributionKind: "local",
+        command: "qwen",
+        args: ["--experimental-acp"],
+        env: {},
+      },
+    };
+    const adapter = new AcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => agent,
+        listInstalledAgents: () => [agent],
+        upsertInstalledAgent: vi.fn(),
+      },
+      acpSessionStore: {
+        listSessions: () => sessions,
+        getSession: (_backendId, sessionId) =>
+          sessions.find((session) => session.sessionId === sessionId),
+        upsertSession: (metadata) => {
+          const index = sessions.findIndex(
+            (session) => session.sessionId === metadata.sessionId,
+          );
+          if (index >= 0) {
+            sessions[index] = metadata;
+          } else {
+            sessions.push(metadata);
+          }
+        },
+      },
+      captureStores: [],
+      createAcpTransport: () => transport,
+      emit: async (event) => {
+        events.push(event);
+      },
+      handleServerRequest: async () => ({ decision: "accept" }),
+    });
+
+    const client = await adapter.getClient(backendId);
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "full-access",
+      acpRuntime: {
+        currentModelId: "qwen3-coder-plus",
+      },
+    });
+    client.startPrompt({
+      sessionId: session.sessionId,
+      prompt: "What is this project?",
+      turnId: "turn-usage",
+    });
+    const updates = JSON.parse(
+      readFileSync(path.join(fixtureDir, "qwen-tool-usage.json"), "utf8"),
+    ) as Array<Record<string, unknown>>;
+    for (const update of updates) {
+      transport.emitSessionUpdate(session.sessionId, update);
+    }
+
+    await vi.waitFor(() => {
+      expect(
+        events.filter(
+          (event) =>
+            event.notification.method === "thread/tokenUsage/updated",
+        ),
+      ).toHaveLength(1);
+    });
+    const usageEvents = events.filter(
+      (event) => event.notification.method === "thread/tokenUsage/updated",
+    );
+    expect(usageEvents.at(-1)).toEqual({
+      backend: backendId,
+      notification: {
+        method: "thread/tokenUsage/updated",
+        params: {
+          threadId: session.sessionId,
+          turnId: "turn-usage",
+          model: "qwen3-coder-plus",
+          tokenUsage: {
+            last_token_usage: {
+              input_tokens: 48_851,
+              cached_input_tokens: 20_000,
+              output_tokens: 322,
+              reasoning_output_tokens: 49,
+              total_tokens: 49_173,
+            },
+          },
+        },
+      },
+    });
 
     await adapter.close();
   });
