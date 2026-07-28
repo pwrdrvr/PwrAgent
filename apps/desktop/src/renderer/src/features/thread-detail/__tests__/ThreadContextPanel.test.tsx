@@ -580,7 +580,7 @@ describe("ThreadContextPanel", () => {
 
     fireEvent.keyDown(info, { key: "ArrowDown" });
     expect(document.activeElement).toBe(
-      screen.getByRole("tab", { name: "AI provider info" }),
+      screen.getByRole("tab", { name: "Edits" }),
     );
 
     fireEvent.keyDown(document.activeElement!, { key: "ArrowUp" });
@@ -588,7 +588,7 @@ describe("ThreadContextPanel", () => {
 
     fireEvent.keyDown(info, { key: "End" });
     expect(document.activeElement).toBe(
-      screen.getByRole("tab", { name: "Linked projects" }),
+      screen.getByRole("tab", { name: "AI provider info" }),
     );
   });
 
