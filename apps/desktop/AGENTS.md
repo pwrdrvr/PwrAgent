@@ -63,6 +63,22 @@ protocol.
 
 ## Running the App for Development
 
+Choose the target checkout and profile before starting or controlling an app.
+For a checkout-bound `dev` profile, use the project-local
+[`pwragent-dev-profile` skill](../../.agents/skills/pwragent-dev-profile/SKILL.md):
+
+```bash
+.agents/skills/pwragent-dev-profile/scripts/pwragent-dev-profile.zsh status --root "$PWD"
+.agents/skills/pwragent-dev-profile/scripts/pwragent-dev-profile.zsh restart --root "$PWD"
+```
+
+Run `status` first and only `restart` when a new process is actually wanted.
+The skill supplies both `PWRAGENT_PROFILE=dev` and
+`PWRAGENT_INSTANCE_ROOT="$PWD"` so it manages the instance for this checkout.
+Use the
+[`pwragent-dev-restart` skill](../../.agents/skills/pwragent-dev-restart/SKILL.md)
+for a delayed restart that must survive the current in-app Agent session.
+
 To launch the desktop app with live threads and real user state, run from the **repo root** (or worktree root):
 
 ```bash
@@ -74,6 +90,27 @@ pnpm dev
 - Use `pnpm dev:no-messaging` when you explicitly want to guarantee that this app process never starts messaging adapters.
 - For visual verification of UI changes, either command can show real threads in the sidebar and thread detail pane; prefer `dev:no-messaging` when the UI work does not need live messaging.
 - If the app starts but shows no threads, you are likely running from the wrong directory or with overridden env vars.
+
+### Targeting an Existing Electron App
+
+- Confirm the intended checkout/profile with the dev-profile skill before
+  driving a window. With Computer Use, select an entry that is already running
+  (use the exact id returned by app discovery when multiple Electron instances
+  exist); do not use app lookup as an implicit launcher.
+- With a Codex browser/Electron controller, select and reuse the existing
+  PwrAgent Electron target and its window/page binding. With persistent
+  `node_repl` Playwright, reuse the existing `electronApp` and `appWindow`
+  handles. Playwright's `_electron.launch()` always creates a new process; it
+  cannot attach those handles to an arbitrary Electron app that was started
+  elsewhere, so use Computer Use or an existing controller binding instead.
+- If a separate Playwright-owned instance is explicitly required, prefer the
+  repository's E2E/inspect commands. A manual Playwright launch must pass the
+  PwrAgent package entry: `.` with `cwd` set to `apps/desktop`, or
+  `apps/desktop` with `cwd` set to the repository root, plus the intended
+  `PWRAGENT_PROFILE` and `PWRAGENT_INSTANCE_ROOT` environment.
+- **Never launch `Electron.app`, its `Contents/MacOS/Electron` executable, or
+  the repo's Electron binary without the PwrAgent app entry/path.** A bare
+  Electron launch opens Electron's default shell, not PwrAgent.
 
 ## E2E Locator Hygiene Around Global Chrome
 
