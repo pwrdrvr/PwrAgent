@@ -426,6 +426,80 @@ describe("ThreadRow chip flow", () => {
     );
   });
 
+  it("qualifies a PR from outside the thread's primary repository", () => {
+    renderRow({
+      thread: {
+        ...baseThread,
+        gitOriginUrl: "git@github.com:xai-org/grok-build.git",
+        prs: [
+          {
+            provider: "github.com",
+            number: 1024,
+            org: "pwrdrvr",
+            repo: "PwrAgent",
+            state: "passing",
+            url: "https://github.com/pwrdrvr/PwrAgent/pull/1024",
+          },
+        ],
+      },
+    });
+
+    expect(screen.getByText("pwrdrvr/PwrAgent#1024")).toBeInTheDocument();
+    expect(screen.queryByText("#1024")).not.toBeInTheDocument();
+  });
+
+  it("keeps primary-repository PR chips unqualified", () => {
+    renderRow({
+      thread: {
+        ...baseThread,
+        gitOriginUrl: "https://github.com/pwrdrvr/PwrAgent.git",
+        prs: [
+          {
+            provider: "github.com",
+            number: 1024,
+            org: "pwrdrvr",
+            repo: "PwrAgent",
+            state: "passing",
+            url: "https://github.com/pwrdrvr/PwrAgent/pull/1024",
+          },
+        ],
+      },
+    });
+
+    expect(screen.getByText("#1024")).toBeInTheDocument();
+    expect(screen.queryByText("pwrdrvr/PwrAgent#1024")).not.toBeInTheDocument();
+  });
+
+  it("qualifies only the cross-repository PR in a mixed PR row", () => {
+    renderRow({
+      thread: {
+        ...baseThread,
+        gitOriginUrl: "ssh://git@github.com/xai-org/grok-build.git",
+        prs: [
+          {
+            provider: "github.com",
+            number: 42,
+            org: "xai-org",
+            repo: "grok-build",
+            state: "passing",
+            url: "https://github.com/xai-org/grok-build/pull/42",
+          },
+          {
+            provider: "github.com",
+            number: 1024,
+            org: "pwrdrvr",
+            repo: "PwrAgent",
+            state: "passing",
+            url: "https://github.com/pwrdrvr/PwrAgent/pull/1024",
+          },
+        ],
+      },
+    });
+
+    expect(screen.getByText("#42")).toBeInTheDocument();
+    expect(screen.getByText("pwrdrvr/PwrAgent#1024")).toBeInTheDocument();
+  });
+
   it("dismisses the PR tooltip on window blur (cmd-tab away leaves no mouseleave)", () => {
     renderRow({
       thread: {

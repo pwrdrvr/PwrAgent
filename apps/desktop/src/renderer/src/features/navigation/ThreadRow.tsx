@@ -121,7 +121,6 @@ export function ThreadRow(props: ThreadRowProps) {
   // chips render instantly on app launch and stay in sync without any
   // renderer-side cache.
   const prs = props.thread.prs ?? [];
-  const showRepoPrefix = needsRepoPrefix(prs);
   const openPr = props.onOpenPullRequest ?? defaultOpenPullRequest;
   // Hover prefetch: 750ms intent timer — long enough that simply scrolling
   // past doesn't fire, short enough that a deliberate hover beats the
@@ -294,7 +293,7 @@ export function ThreadRow(props: ThreadRowProps) {
             <PrChip
               key={pr.url}
               pr={pr}
-              showRepoPrefix={showRepoPrefix}
+              showRepoPrefix={needsRepoPrefix(props.thread, pr, prs)}
               onOpen={openPr}
               onOpenContextMenu={
                 props.onOpenPullRequestContextMenu
@@ -777,12 +776,83 @@ function formatConversationType(binding: MessagingThreadBindingSummary): string 
   }
 }
 
-function needsRepoPrefix(prs: PrSummary[]): boolean {
+type RepositoryIdentity = {
+  provider: string;
+  org: string;
+  repo: string;
+};
+
+function needsRepoPrefix(
+  thread: NavigationThreadSummary,
+  pr: PrSummary,
+  prs: PrSummary[],
+): boolean {
+  const primaryRepository = parseRepositoryIdentity(thread.gitOriginUrl);
+  if (primaryRepository) {
+    return repositoryIdentityKey(primaryRepository) !== repositoryIdentityKey(pr);
+  }
+
   if (prs.length <= 1) {
     return false;
   }
   const firstKey = `${prs[0]!.org}/${prs[0]!.repo}`;
   return prs.some((pr) => `${pr.org}/${pr.repo}` !== firstKey);
+}
+
+function parseRepositoryIdentity(
+  remoteUrl?: string,
+): RepositoryIdentity | undefined {
+  const value = remoteUrl?.trim();
+  if (!value) {
+    return undefined;
+  }
+
+  const scpLike = value.match(/^[^@/]+@([^:]+):(.+)$/);
+  let provider: string;
+  let path: string;
+  if (scpLike) {
+    provider = scpLike[1]!;
+    path = scpLike[2]!;
+  } else {
+    try {
+      const parsed = new URL(value);
+      if (!parsed.hostname) {
+        return undefined;
+      }
+      provider = parsed.hostname;
+      path = parsed.pathname;
+    } catch {
+      return undefined;
+    }
+  }
+
+  const segments = path
+    .replace(/^\/+/, "")
+    .replace(/\.git$/i, "")
+    .replace(/\/+$/, "")
+    .split("/")
+    .filter(Boolean);
+  if (segments.length < 2) {
+    return undefined;
+  }
+
+  const repo = segments.at(-1);
+  const org = segments.slice(0, -1).join("/");
+  if (!org || !repo) {
+    return undefined;
+  }
+
+  return { provider, org, repo };
+}
+
+function repositoryIdentityKey(identity: RepositoryIdentity): string {
+  return [
+    identity.provider,
+    identity.org,
+    identity.repo,
+  ]
+    .map((part) => part.trim().toLowerCase())
+    .join("/");
 }
 
 function defaultOpenPullRequest(url: string): void {

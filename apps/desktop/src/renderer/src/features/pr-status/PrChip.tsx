@@ -5,7 +5,7 @@ import { useViewportTooltip } from "../../lib/useViewportTooltip";
 
 type PrChipProps = {
   pr: PrSummary;
-  /** When the thread spans multiple repos, render the org/repo prefix. */
+  /** Render the org/repo prefix when the PR needs repository context. */
   showRepoPrefix: boolean;
   /**
    * Set when the chip is rendered next to explicit status pills (the Pull
