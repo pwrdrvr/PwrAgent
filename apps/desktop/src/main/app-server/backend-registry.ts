@@ -207,6 +207,8 @@ import {
   acpRuntimeValueLooksPrivileged,
   acpSessionHasConversationHistory,
   acpSessionToThreadSummary,
+  findAcpModelConfigOption,
+  findAcpThoughtLevelConfigOption,
   formatAcpRuntimeLabel,
   inputToAcpPrompt,
   acpAdvertisesRuntimeModeSelector,
@@ -6872,11 +6874,29 @@ export class DesktopBackendRegistry {
         sessionForTurn = await this.rebindAcpSessionForWorkspace(client, sessionForTurn);
       }
     }
+    const runtimeCapabilities =
+      this.acpBackend.getInstalledAgent(params.backend)?.runtimeCapabilities;
+    const modelConfigOption =
+      findAcpModelConfigOption(runtimeCapabilities);
+    const thoughtLevelConfigOption =
+      findAcpThoughtLevelConfigOption(runtimeCapabilities);
+    const currentModel =
+      (modelConfigOption
+        ? sessionForTurn.acpRuntime?.configValues?.[modelConfigOption.id]
+        : undefined) ??
+      sessionForTurn.acpRuntime?.currentModelId;
+    const currentReasoningEffort =
+      (thoughtLevelConfigOption
+        ? sessionForTurn.acpRuntime?.configValues?.[
+            thoughtLevelConfigOption.id
+          ]
+        : undefined) ??
+      sessionForTurn.acpRuntime?.reasoningEffort;
     if (
       params.model &&
       (
-        sessionForTurn.acpRuntime?.currentModelId !== params.model ||
-        sessionForTurn.acpRuntime?.reasoningEffort !== params.reasoningEffort
+        currentModel !== params.model ||
+        currentReasoningEffort !== params.reasoningEffort
       )
     ) {
       await client.setRuntimeOption?.({
@@ -8250,6 +8270,7 @@ export class DesktopBackendRegistry {
           runtime: acpRuntimeWithDefaults,
           runtimeCapabilities: acpRuntimeCapabilities,
           model: modelSettings.model,
+          reasoningEffort: modelSettings.reasoningEffort,
           now: acpRuntimeStartedAt,
         })
       : acpRuntimeWithDefaults;

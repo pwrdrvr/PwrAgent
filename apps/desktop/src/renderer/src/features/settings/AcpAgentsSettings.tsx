@@ -5,6 +5,7 @@ import type {
   DesktopSettingsValue,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
 import { SettingsField, SettingsSection } from "./SettingsLayout";
 import { SettingsPathRow, type SettingsPathRowChip } from "./SettingsPathRow";
 import { SettingsSwitch } from "./SettingsSwitch";
@@ -75,6 +76,9 @@ export function AcpAgentsSettings(props: {
       });
       setEntries(response.entries);
       setError(response.error);
+      if (refreshRegistry) {
+        window.dispatchEvent(new Event(BACKEND_SUMMARIES_REFRESH_EVENT));
+      }
     } catch (refreshError) {
       setError(refreshError instanceof Error ? refreshError.message : String(refreshError));
     } finally {

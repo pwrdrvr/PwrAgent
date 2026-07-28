@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AcpAgentSettingsEntry } from "@pwragent/shared";
 import { AcpAgentsSettings } from "../AcpAgentsSettings";
 import type { DesktopApi } from "../../../lib/desktop-api";
+import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../../lib/useBackendSummaries";
 
 afterEach(() => {
   cleanup();
@@ -30,6 +31,7 @@ function geminiEntry(): AcpAgentSettingsEntry {
 
 describe("AcpAgentsSettings", () => {
   it("keeps cached ACP agents visible while background discovery refreshes", async () => {
+    const dispatchEvent = vi.spyOn(window, "dispatchEvent");
     let resolveRefresh:
       | ((value: { fetchedAt: number; entries: AcpAgentSettingsEntry[] }) => void)
       | undefined;
@@ -105,6 +107,11 @@ describe("AcpAgentsSettings", () => {
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled();
     });
+    expect(dispatchEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: BACKEND_SUMMARIES_REFRESH_EVENT,
+      }),
+    );
   });
 
   it("renders multiple installs with a 'Use' action and the active one as 'Using'", async () => {

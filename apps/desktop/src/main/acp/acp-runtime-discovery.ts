@@ -1,6 +1,8 @@
 import type {
   AcpBackendId,
   BackendAcpRuntimeCapabilities,
+  BackendAcpRuntimeConfigOption,
+  BackendAcpRuntimeModel,
   BackendAcpSessionRuntimeState,
 } from "@pwragent/shared";
 import { AcpAgentClient, type AcpJsonRpcTransport } from "./acp-client.js";
@@ -52,15 +54,111 @@ export async function discoverAcpRuntimeCapabilities(
 
   try {
     await client.initialize();
-    await client.startSession({
+    const session = await client.startSession({
       cwd: options.cwd,
       executionMode: "default",
       title: "ACP capability discovery",
+    });
+    runtimeCapabilities = await discoverModelReasoningCapabilities({
+      client,
+      readRuntimeCapabilities: () => runtimeCapabilities,
+      sessionId: session.sessionId,
     });
     return { runtimeCapabilities, runtimeState };
   } finally {
     await client.dispose();
   }
+}
+
+async function discoverModelReasoningCapabilities(params: {
+  client: AcpAgentClient;
+  readRuntimeCapabilities: () => BackendAcpRuntimeCapabilities | undefined;
+  sessionId: string;
+}): Promise<BackendAcpRuntimeCapabilities | undefined> {
+  const initial = params.readRuntimeCapabilities();
+  const modelOption = findConfigOption(initial, "model");
+  const thoughtLevelOption = findConfigOption(initial, "thought_level");
+  if (!modelOption || !thoughtLevelOption || modelOption.values.length === 0) {
+    return initial;
+  }
+
+  const originalModel = modelOption.currentValue;
+  let selectedModel = originalModel;
+  const models: BackendAcpRuntimeModel[] = [];
+  try {
+    for (const model of modelOption.values) {
+      if (model.value !== selectedModel) {
+        try {
+          await params.client.setRuntimeOption({
+            sessionId: params.sessionId,
+            source: "configOption",
+            optionId: modelOption.id,
+            value: model.value,
+          });
+          selectedModel = model.value;
+        } catch {
+          models.push({
+            id: model.value,
+            label: model.label,
+          });
+          continue;
+        }
+      }
+
+      const currentCapabilities = params.readRuntimeCapabilities();
+      const currentThoughtLevel =
+        findConfigOption(currentCapabilities, "thought_level");
+      const reasoningEfforts =
+        currentThoughtLevel?.values.map((value) => value.value) ?? [];
+      const supportsReasoning = reasoningEfforts.length > 1;
+      models.push({
+        id: model.value,
+        label: model.label,
+        current: model.value === originalModel,
+        ...(supportsReasoning
+          ? {
+              supportsReasoning: true,
+              reasoningEfforts,
+              ...(currentThoughtLevel?.currentValue
+                ? {
+                    defaultReasoningEffort:
+                      currentThoughtLevel.currentValue,
+                  }
+                : {}),
+            }
+          : { supportsReasoning: false }),
+      });
+    }
+  } finally {
+    if (originalModel && selectedModel !== originalModel) {
+      await params.client.setRuntimeOption({
+        sessionId: params.sessionId,
+        source: "configOption",
+        optionId: modelOption.id,
+        value: originalModel,
+      }).catch(() => undefined);
+    }
+  }
+
+  const restored = params.readRuntimeCapabilities() ?? initial;
+  return restored
+    ? {
+        ...restored,
+        models: {
+          availableModels: models,
+          ...(originalModel ? { currentModelId: originalModel } : {}),
+        },
+      }
+    : restored;
+}
+
+function findConfigOption(
+  capabilities: BackendAcpRuntimeCapabilities | undefined,
+  category: string,
+): BackendAcpRuntimeConfigOption | undefined {
+  return capabilities?.configOptions?.find(
+    (option) => option.category === category,
+  );
 }
 
 class MemoryAcpSessionStore implements Pick<

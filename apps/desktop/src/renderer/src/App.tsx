@@ -584,6 +584,19 @@ function DesktopAppShell(props: {
   const backendSummaries = useBackendSummaries(desktopApi, {
     enabled: normalAppEnabled,
   });
+  const refreshAcpAgents = backendSummaries.refreshAcpAgents;
+  const refreshSelectedAcpProvider = useCallback(
+    async (
+      backend: AppServerBackendKind,
+    ) => {
+      if (!backend.startsWith("acp:")) {
+        return undefined;
+      }
+      const refreshedBackends = await refreshAcpAgents();
+      return refreshedBackends.find((candidate) => candidate.kind === backend);
+    },
+    [refreshAcpAgents],
+  );
   const pullRequests = usePullRequestRefresh({
     desktopApi,
     onRefreshNavigation: navigation.refresh,
@@ -984,6 +997,7 @@ function DesktopAppShell(props: {
     composerDraftStore,
     desktopApi,
     launchpadError: navigation.launchpadError,
+    onProviderSelected: refreshSelectedAcpProvider,
     onShowNotice: setComposerNotice,
     loading: session.loading,
     loadingMore: session.loadingMore,

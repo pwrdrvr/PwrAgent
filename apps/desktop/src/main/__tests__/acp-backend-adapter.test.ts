@@ -8,6 +8,7 @@ import {
   AcpBackendAdapter,
   describeInstalledAcpBackend,
   isAcpSessionMissingForProjectError,
+  withAcpModelRuntimeSelection,
   type AcpSessionMetadata,
 } from "../app-server/acp-backend-adapter";
 import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
@@ -84,6 +85,125 @@ describe("describeInstalledAcpBackend", () => {
           supportsReasoning: true,
         },
       ],
+    });
+  });
+
+  it("advertises discovered Kimi 3 thinking levels in launchpad options", () => {
+    const backend = describeInstalledAcpBackend({
+      ...buildInstalledAgent(),
+      backendId: "acp:kimi" as AcpBackendId,
+      registryId: "kimi",
+      name: "Kimi Code CLI",
+      runtimeCapabilities: {
+        schemaVersion: 1,
+        status: "discovered",
+        checkedAt: 1000,
+        models: {
+          currentModelId: "kimi-code/kimi-for-coding",
+          availableModels: [
+            {
+              id: "kimi-code/kimi-for-coding",
+              label: "K2.7 Coding",
+              supportsReasoning: false,
+            },
+            {
+              id: "kimi-code/k3",
+              label: "K3",
+              defaultReasoningEffort: "high",
+              reasoningEfforts: ["low", "high", "max"],
+              supportsReasoning: true,
+            },
+          ],
+        },
+      },
+    });
+
+    expect(backend.launchpadOptions).toEqual({
+      models: [
+        {
+          id: "kimi-code/kimi-for-coding",
+          label: "K2.7 Coding",
+          current: true,
+          defaultReasoningEffort: undefined,
+          reasoningEfforts: undefined,
+          supportsReasoning: false,
+        },
+        {
+          id: "kimi-code/k3",
+          label: "K3",
+          current: false,
+          defaultReasoningEffort: "high",
+          reasoningEfforts: ["low", "high", "max"],
+          supportsReasoning: true,
+        },
+      ],
+    });
+  });
+
+  it("projects Kimi model reasoning into its thought-level config option", () => {
+    expect(
+      withAcpModelRuntimeSelection({
+        runtime: {
+          configValues: {
+            model: "kimi-code/kimi-for-coding",
+            thinking: "on",
+          },
+          updatedAt: 500,
+        },
+        runtimeCapabilities: {
+          schemaVersion: 1,
+          status: "discovered",
+          checkedAt: 1000,
+          configOptions: [
+            {
+              id: "model",
+              label: "Model",
+              category: "model",
+              type: "select",
+              currentValue: "kimi-code/kimi-for-coding",
+              values: [
+                {
+                  value: "kimi-code/kimi-for-coding",
+                  label: "K2.7 Coding",
+                },
+                { value: "kimi-code/k3", label: "K3" },
+              ],
+            },
+            {
+              id: "thinking",
+              label: "Thinking",
+              category: "thought_level",
+              type: "select",
+              currentValue: "on",
+              values: [
+                { value: "low", label: "Low" },
+                { value: "high", label: "High" },
+                { value: "max", label: "Max" },
+              ],
+            },
+          ],
+          models: {
+            currentModelId: "kimi-code/kimi-for-coding",
+            availableModels: [
+              {
+                id: "kimi-code/k3",
+                reasoningEfforts: ["low", "high", "max"],
+                supportsReasoning: true,
+              },
+            ],
+          },
+        },
+        model: "kimi-code/k3",
+        reasoningEffort: "max",
+        now: 1000,
+      }),
+    ).toEqual({
+      configValues: {
+        model: "kimi-code/k3",
+        thinking: "max",
+      },
+      reasoningEffort: "max",
+      updatedAt: 1000,
     });
   });
 

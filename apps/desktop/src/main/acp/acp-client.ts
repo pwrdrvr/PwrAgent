@@ -6,6 +6,7 @@ import type {
   AppServerThreadReplay,
   AppServerThreadMessagePart,
   BackendAcpRuntimeCapabilities,
+  BackendAcpRuntimeConfigOption,
   BackendAcpRuntimeOptionSource,
   BackendAcpSessionRuntimeState,
   ThreadExecutionMode,
@@ -564,6 +565,8 @@ export class AcpAgentClient {
       result,
     });
     const responseRuntimeState = acpSessionRuntimeStateFromResponse(result, now);
+    const modelConfigOption = this.runtimeConfigOption("model");
+    const thoughtLevelConfigOption = this.runtimeConfigOption("thought_level");
     const requestedRuntimeState: BackendAcpSessionRuntimeState =
       params.source === "configOption"
         ? {
@@ -580,6 +583,19 @@ export class AcpAgentClient {
             }
           : {
               currentModelId: params.value,
+              ...(modelConfigOption
+                ? {
+                    configValues: {
+                      [modelConfigOption.id]: params.value,
+                      ...(params.reasoningEffort && thoughtLevelConfigOption
+                        ? {
+                            [thoughtLevelConfigOption.id]:
+                              params.reasoningEffort,
+                          }
+                        : {}),
+                    },
+                  }
+                : {}),
               reasoningEffort:
                 responseRuntimeState?.reasoningEffort ??
                 params.reasoningEffort,
@@ -600,9 +616,15 @@ export class AcpAgentClient {
 
   private isRuntimeModeConfigOption(optionId: string): boolean {
     return (
-      this.runtimeCapabilities?.configOptions?.some(
-        (option) => option.id === optionId && option.category === "mode",
-      ) ?? false
+      this.runtimeConfigOption("mode")?.id === optionId
+    );
+  }
+
+  private runtimeConfigOption(
+    category: string,
+  ): BackendAcpRuntimeConfigOption | undefined {
+    return this.runtimeCapabilities?.configOptions?.find(
+      (option) => option.category === category,
     );
   }
 
@@ -626,6 +648,31 @@ export class AcpAgentClient {
         sessionId: params.protocolSessionId,
         modeId: params.value,
       });
+    }
+
+    const modelConfigOption = this.runtimeConfigOption("model");
+    if (modelConfigOption) {
+      let result = await this.options.transport.request(
+        "session/set_config_option",
+        {
+          sessionId: params.protocolSessionId,
+          configId: modelConfigOption.id,
+          value: params.value,
+        },
+      );
+      const thoughtLevelConfigOption =
+        this.runtimeConfigOption("thought_level");
+      if (params.reasoningEffort && thoughtLevelConfigOption) {
+        result = await this.options.transport.request(
+          "session/set_config_option",
+          {
+            sessionId: params.protocolSessionId,
+            configId: thoughtLevelConfigOption.id,
+            value: params.reasoningEffort,
+          },
+        );
+      }
+      return result;
     }
 
     return await this.options.transport.request("session/set_model", {

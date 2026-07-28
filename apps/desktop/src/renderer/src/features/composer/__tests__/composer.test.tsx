@@ -1542,6 +1542,330 @@ describe("Composer", () => {
     expect(screen.queryByRole("option", { name: "Default" })).not.toBeInTheDocument();
   });
 
+  it("adopts the refreshed ACP default when the provider is selected", async () => {
+    const staleKimi = {
+      ...backendSummary("acp:kimi", {
+        models: [
+          {
+            id: "kimi-code/kimi-for-coding",
+            label: "Kimi-k2.6",
+            current: true,
+          },
+        ],
+      }),
+      label: "Kimi",
+    };
+    const refreshedKimi = {
+      ...staleKimi,
+      launchpadOptions: {
+        models: [
+          {
+            id: "kimi-code/kimi-for-coding",
+            label: "K2.7 Coding",
+          },
+          {
+            id: "kimi-code/k3",
+            label: "K3",
+            current: true,
+          },
+        ],
+      },
+    };
+    const onProviderSelected = vi.fn(async () => refreshedKimi);
+    const onUpdateLaunchpad = vi.fn(async () => undefined);
+    const launchpad: NavigationLaunchpadDraft = {
+      directoryKey: "directory:/repo",
+      directoryKind: "directory",
+      directoryLabel: "Repo",
+      directoryPath: "/repo",
+      backend: "codex",
+      executionMode: "default",
+      prompt: "",
+      workMode: "local",
+      branchName: "main",
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const composer = (nextLaunchpad: NavigationLaunchpadDraft) => (
+      <Composer
+        backends={[backendSummary("codex"), staleKimi]}
+        launchpad={nextLaunchpad}
+        onProviderSelected={onProviderSelected}
+        onUpdateLaunchpad={onUpdateLaunchpad}
+        skills={[]}
+      />
+    );
+    const { rerender } = render(composer(launchpad));
+
+    chooseDropdownOption("Provider", "Kimi");
+    rerender(
+      composer({
+        ...launchpad,
+        backend: "acp:kimi",
+        model: "kimi-code/kimi-for-coding",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(onProviderSelected).toHaveBeenCalledWith("acp:kimi");
+      expect(onUpdateLaunchpad).toHaveBeenCalledWith(
+        "directory:/repo",
+        expect.objectContaining({
+          model: "kimi-code/k3",
+          reasoningEffort: undefined,
+        }),
+        { stickySettingsChanged: true },
+      );
+    });
+  });
+
+  it("preserves a model and reasoning choice made while ACP discovery runs", async () => {
+    const staleKimi = {
+      ...backendSummary("acp:kimi", {
+        models: [
+          {
+            id: "kimi-code/kimi-for-coding",
+            label: "K2.7 Coding",
+            current: true,
+          },
+          {
+            id: "kimi-code/k3",
+            label: "K3",
+            defaultReasoningEffort: "high",
+            reasoningEfforts: ["low", "high", "max"],
+            supportsReasoning: true,
+          },
+        ],
+      }),
+      label: "Kimi",
+    };
+    const refreshedKimi = {
+      ...staleKimi,
+      launchpadOptions: {
+        models: [
+          {
+            id: "kimi-code/kimi-for-coding",
+            label: "K2.7 Coding",
+            current: true,
+          },
+          {
+            id: "kimi-code/k3",
+            label: "K3",
+            defaultReasoningEffort: "high",
+            reasoningEfforts: ["low", "high", "max"],
+            supportsReasoning: true,
+          },
+        ],
+      },
+    };
+    const discovery = createDeferred<BackendSummary | undefined>();
+    const onProviderSelected = vi.fn(() => discovery.promise);
+    const onUpdateLaunchpad = vi.fn(async () => undefined);
+    const launchpad: NavigationLaunchpadDraft = {
+      directoryKey: "directory:/repo",
+      directoryKind: "directory",
+      directoryLabel: "Repo",
+      directoryPath: "/repo",
+      backend: "codex",
+      executionMode: "default",
+      prompt: "",
+      workMode: "local",
+      branchName: "main",
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const composer = (nextLaunchpad: NavigationLaunchpadDraft) => (
+      <Composer
+        backends={[backendSummary("codex"), staleKimi]}
+        launchpad={nextLaunchpad}
+        onProviderSelected={onProviderSelected}
+        onUpdateLaunchpad={onUpdateLaunchpad}
+        skills={[]}
+      />
+    );
+    const { rerender } = render(composer(launchpad));
+
+    chooseDropdownOption("Provider", "Kimi");
+    rerender(
+      composer({
+        ...launchpad,
+        backend: "acp:kimi",
+        model: "kimi-code/kimi-for-coding",
+      }),
+    );
+    await waitFor(() => {
+      expect(onProviderSelected).toHaveBeenCalledWith("acp:kimi");
+    });
+    onUpdateLaunchpad.mockClear();
+
+    rerender(
+      composer({
+        ...launchpad,
+        backend: "acp:kimi",
+        model: "kimi-code/k3",
+        reasoningEffort: "max",
+      }),
+    );
+    await act(async () => {
+      discovery.resolve(refreshedKimi);
+      await discovery.promise;
+    });
+
+    expect(onUpdateLaunchpad).not.toHaveBeenCalled();
+  });
+
+  it("refreshes a persisted ACP launchpad and replaces a removed model", async () => {
+    const refreshedKimi = {
+      ...backendSummary("acp:kimi", {
+        models: [
+          {
+            id: "kimi-code/k3",
+            label: "K3",
+            current: true,
+          },
+        ],
+      }),
+      label: "Kimi",
+    };
+    const onProviderSelected = vi.fn(async () => refreshedKimi);
+    const onUpdateLaunchpad = vi.fn(async () => undefined);
+
+    render(
+      <Composer
+        backends={[
+          {
+            ...backendSummary("acp:kimi", {
+              models: [
+                {
+                  id: "kimi-code/kimi-for-coding",
+                  label: "Kimi-k2.6",
+                  current: true,
+                },
+              ],
+            }),
+            label: "Kimi",
+          },
+        ]}
+        launchpad={{
+          directoryKey: "directory:/repo",
+          directoryKind: "directory",
+          directoryLabel: "Repo",
+          directoryPath: "/repo",
+          backend: "acp:kimi",
+          executionMode: "default",
+          model: "kimi-code/kimi-for-coding",
+          prompt: "",
+          workMode: "local",
+          branchName: "main",
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+        onProviderSelected={onProviderSelected}
+        onUpdateLaunchpad={onUpdateLaunchpad}
+        skills={[]}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(onProviderSelected).toHaveBeenCalledTimes(1);
+      expect(onUpdateLaunchpad).toHaveBeenCalledWith(
+        "directory:/repo",
+        expect.objectContaining({
+          model: "kimi-code/k3",
+          reasoningEffort: undefined,
+        }),
+        { stickySettingsChanged: true },
+      );
+    });
+  });
+
+  it("remembers Kimi thinking effort separately for each model", async () => {
+    const kimiBackend = {
+      ...backendSummary("acp:kimi", {
+        models: [
+          {
+            id: "kimi-code/k3",
+            label: "K3",
+            current: true,
+            defaultReasoningEffort: "high",
+            reasoningEfforts: ["low", "high", "max"],
+            supportsReasoning: true,
+          },
+          {
+            id: "kimi-code/k3-256k",
+            label: "K3-256k",
+            defaultReasoningEffort: "high",
+            reasoningEfforts: ["low", "high", "max"],
+            supportsReasoning: true,
+          },
+        ],
+      }),
+      label: "Kimi",
+    };
+    const initialLaunchpad: NavigationLaunchpadDraft = {
+      directoryKey: "directory:/repo",
+      directoryKind: "directory",
+      directoryLabel: "Repo",
+      directoryPath: "/repo",
+      backend: "acp:kimi",
+      executionMode: "default",
+      model: "kimi-code/k3",
+      reasoningEffort: "max",
+      providerSettings: {
+        "acp:kimi": {
+          model: "kimi-code/k3",
+          reasoningEffort: "max",
+          reasoningEffortsByModel: {
+            "kimi-code/k3": "max",
+            "kimi-code/k3-256k": "low",
+          },
+        },
+      },
+      prompt: "",
+      workMode: "local",
+      branchName: "main",
+      createdAt: 1,
+      updatedAt: 1,
+    };
+
+    function KimiThinkingHarness(): React.JSX.Element {
+      const [launchpad, setLaunchpad] = useState(initialLaunchpad);
+      return (
+        <Composer
+          backends={[kimiBackend]}
+          launchpad={launchpad}
+          onUpdateLaunchpad={async (_directoryKey, patch) => {
+            setLaunchpad((current) =>
+              applyNavigationLaunchpadProviderSettingsPatch<
+                NavigationLaunchpadDraft
+              >(current, patch),
+            );
+          }}
+          skills={[]}
+        />
+      );
+    }
+
+    render(<KimiThinkingHarness />);
+
+    expect(screen.getByLabelText("Reasoning")).toHaveValue("max");
+    chooseDropdownOption("Model", "K3-256k");
+    await waitFor(() => {
+      expect(screen.getByLabelText("Reasoning")).toHaveValue("low");
+    });
+
+    chooseDropdownOption("Reasoning", "high");
+    chooseDropdownOption("Model", "K3");
+    await waitFor(() => {
+      expect(screen.getByLabelText("Reasoning")).toHaveValue("max");
+    });
+
+    chooseDropdownOption("Model", "K3-256k");
+    await waitFor(() => {
+      expect(screen.getByLabelText("Reasoning")).toHaveValue("high");
+    });
+  });
+
   it("hides reasoning controls for Grok 4.20 models", () => {
     render(
       <Composer
