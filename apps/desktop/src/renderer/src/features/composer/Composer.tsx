@@ -6595,6 +6595,40 @@ export function Composer(props: ComposerProps) {
         : [],
     [props.launchpad, props.directory],
   );
+  const launchpadBranchStatusError =
+    props.launchpad?.directoryKind === "directory" &&
+    !isSameWorktreeSubthreadLaunchpad(props.launchpad.directoryKey) &&
+    props.directory?.gitStatus?.syncState === "status-unavailable"
+      ? props.directory.gitStatus.statusUnavailableReason ??
+        "Git did not return branch information."
+      : undefined;
+  const launchpadBranchStatusDirectoryKey = props.launchpad?.directoryKey;
+  const launchpadBranchStatusDirectoryLabel = props.launchpad?.directoryLabel;
+  const showLaunchpadBranchStatusNotice = props.onShowNotice;
+  useEffect(() => {
+    if (
+      !launchpadBranchStatusError ||
+      !launchpadBranchStatusDirectoryKey ||
+      !launchpadBranchStatusDirectoryLabel ||
+      !showLaunchpadBranchStatusNotice
+    ) {
+      return;
+    }
+
+    showLaunchpadBranchStatusNotice({
+      autoDismiss: false,
+      id: `launchpad-branches-unavailable:${launchpadBranchStatusDirectoryKey}:${launchpadBranchStatusError}`,
+      title: "Branches unavailable",
+      message: `PwrAgent couldn't load branches for ${launchpadBranchStatusDirectoryLabel}.`,
+      detail: launchpadBranchStatusError,
+      tone: "warning",
+    });
+  }, [
+    launchpadBranchStatusError,
+    launchpadBranchStatusDirectoryKey,
+    launchpadBranchStatusDirectoryLabel,
+    showLaunchpadBranchStatusNotice,
+  ]);
   const launchpadCodexEnvironmentOptions =
     props.launchpad?.codexEnvironmentOptions ?? [];
   const selectedCodexEnvironment = launchpadCodexEnvironmentOptions.find(

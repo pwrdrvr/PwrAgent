@@ -9224,6 +9224,104 @@ describe("Composer", () => {
     ).toHaveAttribute("aria-selected", "true");
   });
 
+  it("shows a sticky toast when worktree branch status is unavailable", async () => {
+    const onShowNotice = vi.fn();
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        directory={{
+          key: "subthread:codex:thread-parent:new-worktree",
+          kind: "directory",
+          label: "giphy-services",
+          path: "/missing/giphy-services",
+          threadKeys: [],
+          needsAttentionCount: 0,
+          gitStatus: {
+            syncState: "status-unavailable",
+            statusUnavailableReason: "fatal: unable to enumerate refs",
+          },
+        }}
+        launchpad={{
+          directoryKey: "subthread:codex:thread-parent:new-worktree",
+          directoryKind: "directory",
+          directoryLabel: "giphy-services",
+          directoryPath: "/missing/giphy-services",
+          backend: "codex",
+          executionMode: "default",
+          prompt: "",
+          workMode: "worktree",
+          branchName: "deleted-parent-branch",
+          parentThreadId: "thread-parent",
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+        onShowNotice={onShowNotice}
+        skills={[]}
+      />
+    );
+
+    await waitFor(() => {
+      expect(onShowNotice).toHaveBeenCalledWith({
+        autoDismiss: false,
+        id: expect.stringContaining("launchpad-branches-unavailable:"),
+        title: "Branches unavailable",
+        message: "PwrAgent couldn't load branches for giphy-services.",
+        detail: "fatal: unable to enumerate refs",
+        tone: "warning",
+      });
+    });
+  });
+
+  it("shows a sticky toast when branch status removes worktree mode", async () => {
+    const onShowNotice = vi.fn();
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        directory={{
+          key: "directory:/repo/app",
+          kind: "directory",
+          label: "app",
+          path: "/repo/app",
+          threadKeys: [],
+          needsAttentionCount: 0,
+          gitStatus: {
+            syncState: "status-unavailable",
+            statusUnavailableReason: "fatal: unable to enumerate refs",
+          },
+        }}
+        launchpad={{
+          directoryKey: "directory:/repo/app",
+          directoryKind: "directory",
+          directoryLabel: "app",
+          directoryPath: "/repo/app",
+          backend: "codex",
+          executionMode: "default",
+          prompt: "",
+          workMode: "local",
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+        onShowNotice={onShowNotice}
+        skills={[]}
+      />
+    );
+
+    expect(screen.getByLabelText("Workspace mode")).toHaveValue("local");
+    expect(
+      screen.queryByRole("option", { name: "New worktree" }),
+    ).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(onShowNotice).toHaveBeenCalledWith({
+        autoDismiss: false,
+        id: expect.stringContaining("launchpad-branches-unavailable:"),
+        title: "Branches unavailable",
+        message: "PwrAgent couldn't load branches for app.",
+        detail: "fatal: unable to enumerate refs",
+        tone: "warning",
+      });
+    });
+  });
+
   it("shows recency, current, and in-use metadata in the branch picker and filters by query", () => {
     const nowSeconds = Math.floor(Date.now() / 1000);
     render(

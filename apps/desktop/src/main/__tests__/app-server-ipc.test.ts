@@ -4350,14 +4350,23 @@ describe("app server ipc", () => {
 
     registerAppServerIpcHandlers();
 
-    await handlers.get(NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL)?.({}, {
+    const response = await handlers.get(
+      NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL,
+    )?.({}, {
       directoryKey: "directory:/repo/app",
       directoryKind: "directory",
       directoryLabel: "app",
-      directoryPath: "/repo/app",
+      directoryPath: "/repo/missing-worktree",
+      gitStatusSourcePath: "/repo/app",
       currentBranch: "stale-branch",
     });
 
+    expect(readDirectoryStatusEntries).toHaveBeenCalledWith([
+      expect.objectContaining({
+        key: "directory:/repo/app",
+        path: "/repo/app",
+      }),
+    ]);
     expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith(
       expect.objectContaining({
         directoryKey: "directory:/repo/app",
@@ -4367,7 +4376,15 @@ describe("app server ipc", () => {
     expect(writeDirectoryGitStatusCacheEntry).toHaveBeenCalledWith(
       expect.objectContaining({
         directoryKey: "directory:/repo/app",
+        directoryPath: "/repo/missing-worktree",
         gitStatus: expect.objectContaining({ currentBranch: "fresh-branch" }),
+      }),
+    );
+    expect(response).toEqual(
+      expect.objectContaining({
+        gitStatus: expect.objectContaining({
+          currentBranch: "fresh-branch",
+        }),
       }),
     );
   });

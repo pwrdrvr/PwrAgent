@@ -5072,6 +5072,7 @@ describe("useThreadNavigation", () => {
       directoryKind: "directory",
       directoryLabel: "app",
       directoryPath: "/repo/app",
+      gitStatusSourcePath: "/repo/app",
       parentThreadId: "thread-parent",
       parentThreadTitle: "Local parent",
       preferredBackend: "codex",
@@ -5605,7 +5606,7 @@ describe("useThreadNavigation", () => {
       directoryKey: "subthread:codex:thread-parent:new-worktree",
       patch: expect.objectContaining({
         workMode: "worktree",
-        directoryPath: "/repo/app/.worktrees/parent/app",
+        directoryPath: "/repo/app",
         branchName: "feature/parent",
         parentThreadId: "thread-parent",
       }),
@@ -5744,6 +5745,135 @@ describe("useThreadNavigation", () => {
       baseBranches: expect.arrayContaining(["develop", "origin/develop"]),
     });
     expect(result.current.selectedDirectory?.threadKeys).toEqual([]);
+  });
+
+  it("uses the live repository to materialize a new-worktree sub-thread from a missing parent worktree", async () => {
+    const repoPath = "/repo/app";
+    const parentWorktreePath = "/repo/app/.worktrees/missing-parent/app";
+    const directoryKey = "subthread:codex:thread-parent:new-worktree";
+    const parentThread = {
+      id: "thread-parent",
+      title: "Worktree parent",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      executionMode: "default" as const,
+      linkedDirectories: [
+        {
+          id: parentWorktreePath,
+          label: "app",
+          path: repoPath,
+          worktreePath: parentWorktreePath,
+          kind: "worktree" as const,
+        },
+      ],
+      gitBranch: "deleted-remote-branch",
+      observedGitBranch: "deleted-remote-branch",
+      inbox: {
+        inInbox: true,
+        reason: "new-thread" as const,
+      },
+      createdAt: 1_000,
+      updatedAt: 2_000,
+    };
+    const gitStatus = {
+      currentBranch: "main",
+      defaultBranch: "main",
+      branches: ["main", "release"],
+      baseBranches: ["main", "origin/main", "release", "origin/release"],
+      syncState: "in-sync" as const,
+    };
+    const ensureDirectoryLaunchpad = vi.fn(async () => ({
+      launchpad: {
+        directoryKey,
+        directoryKind: "directory" as const,
+        directoryLabel: "app",
+        directoryPath: parentWorktreePath,
+        workMode: "local" as const,
+        backend: "codex" as const,
+        executionMode: "default" as const,
+        prompt: "",
+        createdAt: 1,
+        updatedAt: 1,
+      },
+      defaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+      gitStatus,
+    }));
+    const updateDirectoryLaunchpad = vi.fn(async () => ({
+      launchpad: {
+        directoryKey,
+        directoryKind: "directory" as const,
+        directoryLabel: "app",
+        directoryPath: repoPath,
+        workMode: "worktree" as const,
+        backend: "codex" as const,
+        executionMode: "default" as const,
+        prompt: "",
+        branchName: "deleted-remote-branch",
+        parentThreadId: "thread-parent",
+        parentThreadTitle: "Worktree parent",
+        createdAt: 1,
+        updatedAt: 2,
+      },
+      defaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const desktopApi: DesktopApi = {
+      ensureDirectoryLaunchpad,
+      getNavigationSnapshot: async () => ({
+        backend: "all" as const,
+        fetchedAt: Date.now(),
+        unchanged: false,
+        inboxThreadKeys: ["codex:thread-parent"],
+        threads: [parentThread],
+        directories: [
+          {
+            key: `directory:${repoPath}`,
+            kind: "directory" as const,
+            label: "app",
+            path: repoPath,
+            threadKeys: ["codex:thread-parent"],
+            needsAttentionCount: 0,
+          },
+        ],
+        launchpadDefaults: {
+          backend: "codex" as const,
+          executionMode: "default" as const,
+        },
+      }),
+      onAgentEvent: () => () => undefined,
+      updateDirectoryLaunchpad,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+    await waitFor(() => {
+      expect(result.current.selectedThread?.id).toBe("thread-parent");
+    });
+
+    await act(async () => {
+      await result.current.createSubthread(parentThread, "new-worktree");
+    });
+
+    expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({
+        directoryKey,
+        directoryPath: repoPath,
+        gitStatusSourcePath: repoPath,
+      }),
+    );
+    expect(updateDirectoryLaunchpad).toHaveBeenCalledWith({
+      directoryKey,
+      patch: expect.objectContaining({
+        directoryPath: repoPath,
+        workMode: "worktree",
+      }),
+    });
+    expect(result.current.selectedLaunchpad?.directoryPath).toBe(repoPath);
+    expect(result.current.selectedDirectory?.gitStatus).toEqual(gitStatus);
   });
 
   it("keeps launchpad git status streamed before the sub-thread directory exists", async () => {
@@ -5994,6 +6124,7 @@ describe("useThreadNavigation", () => {
       directoryKind: "directory",
       directoryLabel: "app",
       directoryPath: "/repo/app/.worktrees/parent/app",
+      gitStatusSourcePath: "/repo/app",
       parentThreadId: "thread-parent",
       parentThreadTitle: "Worktree parent",
       preferredBackend: "codex",

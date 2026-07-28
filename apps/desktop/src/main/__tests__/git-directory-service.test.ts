@@ -353,6 +353,38 @@ describe("GitDirectoryService", () => {
     expect(forEachRefCalls).toBe(2);
   });
 
+  it("retries branch inventory after a required ref scan fails", async () => {
+    const repoDir = await createFixtureRepo();
+    cleanupPaths.push(repoDir);
+    let failBaseRefScan = true;
+    const runGitWithFailure = async (cwd: string, args: string[]) => {
+      if (
+        failBaseRefScan &&
+        args[0] === "for-each-ref" &&
+        args.includes("refs/remotes")
+      ) {
+        failBaseRefScan = false;
+        throw new Error("simulated branch inventory failure");
+      }
+      return execFileSync("git", ["-C", cwd, ...args], {
+        encoding: "utf8",
+      }).trim();
+    };
+    const service = new GitDirectoryService({
+      cacheTtlMs: 0,
+      runGit: runGitWithFailure,
+    });
+
+    await expect(service.readDirectoryStatus({ path: repoDir })).resolves.toMatchObject({
+      syncState: "status-unavailable",
+      statusUnavailableReason: "simulated branch inventory failure",
+    });
+    await expect(service.readDirectoryStatus({ path: repoDir })).resolves.toMatchObject({
+      branches: expect.arrayContaining(["main", "release"]),
+      syncState: "untracked",
+    });
+  });
+
   it("streams directory status lookups with bounded concurrency", async () => {
     const service = new GitDirectoryService({
       statusConcurrency: 2,

@@ -1666,51 +1666,111 @@ class DesktopAppServerService {
 
   private async refreshLaunchpadDirectoryGitStatus(
     request: EnsureDirectoryLaunchpadRequest,
-  ): Promise<EnsureDirectoryLaunchpadRequest> {
-    const directoryPath = request.directoryPath?.trim();
-    if (!directoryPath) {
-      return request;
+  ): Promise<{
+    gitStatus?: NavigationDirectoryGitStatus | null;
+    request: EnsureDirectoryLaunchpadRequest;
+  }> {
+    const launchpadPath = request.directoryPath?.trim();
+    const statusSourcePath =
+      request.gitStatusSourcePath?.trim() || launchpadPath;
+    if (!statusSourcePath) {
+      return { request };
     }
 
     const cachedDirectory = this.lastDirectoriesByKey.get(request.directoryKey);
-    const directory: NavigationSnapshot["directories"][number] = {
+    const statusDirectory: NavigationSnapshot["directories"][number] = {
       key: request.directoryKey,
       kind: request.directoryKind,
       label: request.directoryLabel,
-      path: directoryPath,
+      path: statusSourcePath,
       threadKeys: [],
       needsAttentionCount: 0,
       ...(cachedDirectory?.latestUpdatedAt !== undefined
         ? { latestUpdatedAt: cachedDirectory.latestUpdatedAt }
         : {}),
     };
+    const cacheDirectory = {
+      ...statusDirectory,
+      path: launchpadPath ?? statusSourcePath,
+    };
 
     try {
       const registry = getDesktopBackendRegistry();
-      for await (const entry of registry.readDirectoryStatusEntries([directory])) {
+      for await (const entry of registry.readDirectoryStatusEntries([statusDirectory])) {
         const fetchedAt = Date.now();
-        await this.writeDirectoryGitStatusEntry({
-          directory,
-          directoryKey: entry.directoryKey,
-          fetchedAt,
-          gitStatus: entry.gitStatus,
-        });
-        if (!entry.gitStatus?.currentBranch) {
-          return request;
+        let gitStatus = entry.gitStatus;
+        if (!gitStatus && request.gitStatusSourcePath) {
+          gitStatus = {
+            syncState: "status-unavailable",
+            statusUnavailableReason:
+              `Git branch information is unavailable for ${statusSourcePath}.`,
+          };
+        }
+        try {
+          await this.writeDirectoryGitStatusEntry({
+            directory: cacheDirectory,
+            directoryKey: entry.directoryKey,
+            fetchedAt,
+            gitStatus,
+          });
+        } catch (error) {
+          appServerLog.warn("failed to persist launchpad branch status", {
+            directoryKey: request.directoryKey,
+            error: error instanceof Error ? error.message : String(error),
+            statusSourcePath,
+          });
+        }
+        if (gitStatus?.syncState === "status-unavailable") {
+          appServerLog.warn("launchpad branch status unavailable", {
+            directoryKey: request.directoryKey,
+            error: gitStatus.statusUnavailableReason,
+            statusSourcePath,
+          });
         }
         return {
-          ...request,
-          currentBranch: entry.gitStatus.currentBranch,
+          gitStatus: gitStatus ?? null,
+          request: gitStatus?.currentBranch
+            ? {
+                ...request,
+                currentBranch: gitStatus.currentBranch,
+              }
+            : request,
         };
       }
     } catch (error) {
-      logDebug("directoryGitStatusRefresh:launchpadRefreshFailed", {
+      const message = error instanceof Error ? error.message : String(error);
+      appServerLog.warn("launchpad branch status refresh failed", {
         directoryKey: request.directoryKey,
-        error: error instanceof Error ? error.message : String(error),
+        error: message,
+        statusSourcePath,
       });
+      return {
+        gitStatus: {
+          syncState: "status-unavailable",
+          statusUnavailableReason: message,
+        },
+        request,
+      };
     }
 
-    return request;
+    if (request.gitStatusSourcePath) {
+      const statusUnavailableReason =
+        `Git branch information is unavailable for ${statusSourcePath}.`;
+      appServerLog.warn("launchpad branch status unavailable", {
+        directoryKey: request.directoryKey,
+        error: statusUnavailableReason,
+        statusSourcePath,
+      });
+      return {
+        gitStatus: {
+          syncState: "status-unavailable",
+          statusUnavailableReason,
+        },
+        request,
+      };
+    }
+
+    return { gitStatus: null, request };
   }
 
   private async refreshDirectoryGitStatuses(
@@ -3732,8 +3792,16 @@ class DesktopAppServerService {
   async ensureDirectoryLaunchpad(
     request: EnsureDirectoryLaunchpadRequest,
   ): Promise<EnsureDirectoryLaunchpadResponse> {
-    const refreshedRequest = await this.refreshLaunchpadDirectoryGitStatus(request);
-    return await getDesktopBackendRegistry().ensureDirectoryLaunchpad(refreshedRequest);
+    const refreshed = await this.refreshLaunchpadDirectoryGitStatus(request);
+    const response = await getDesktopBackendRegistry().ensureDirectoryLaunchpad(
+      refreshed.request,
+    );
+    return {
+      ...response,
+      ...(refreshed.gitStatus !== undefined
+        ? { gitStatus: refreshed.gitStatus }
+        : {}),
+    };
   }
 
   async updateDirectoryLaunchpad(
