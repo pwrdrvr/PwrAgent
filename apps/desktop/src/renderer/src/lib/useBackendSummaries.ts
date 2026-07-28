@@ -1,10 +1,14 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { BackendSummary } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 
-type BackendSummaryState = {
+type BackendSummaryData = {
   backends: BackendSummary[];
   error?: string;
+};
+
+type BackendSummaryState = BackendSummaryData & {
+  refreshAcpAgents: () => Promise<void>;
 };
 
 export const BACKEND_SUMMARIES_REFRESH_EVENT =
@@ -15,9 +19,10 @@ export function useBackendSummaries(
   options: { enabled?: boolean } = {},
 ): BackendSummaryState {
   const enabled = options.enabled ?? true;
-  const [state, setState] = useState<BackendSummaryState>({
+  const [state, setState] = useState<BackendSummaryData>({
     backends: []
   });
+  const acpRefreshPromiseRef = useRef<Promise<void> | undefined>(undefined);
 
   const refresh = useCallback(async (): Promise<void> => {
     if (!enabled) {
@@ -52,6 +57,33 @@ export function useBackendSummaries(
     }
   }, [desktopApi, enabled]);
 
+  const refreshAcpAgents = useCallback(async (): Promise<void> => {
+    if (!enabled || !desktopApi?.listAcpAgents) {
+      return;
+    }
+    if (acpRefreshPromiseRef.current) {
+      return await acpRefreshPromiseRef.current;
+    }
+
+    const refreshPromise = (async () => {
+      try {
+        await desktopApi.listAcpAgents?.({ refresh: true });
+        await refresh();
+      } catch {
+        // ACP discovery is best-effort. Keep the cached backend summaries
+        // usable when one local CLI cannot be probed.
+      }
+    })();
+    acpRefreshPromiseRef.current = refreshPromise;
+    try {
+      return await refreshPromise;
+    } finally {
+      if (acpRefreshPromiseRef.current === refreshPromise) {
+        acpRefreshPromiseRef.current = undefined;
+      }
+    }
+  }, [desktopApi, enabled, refresh]);
+
   useEffect(() => {
     void refresh();
   }, [refresh]);
@@ -82,5 +114,8 @@ export function useBackendSummaries(
     });
   }, [desktopApi, enabled, refresh]);
 
-  return state;
+  return {
+    ...state,
+    refreshAcpAgents,
+  };
 }

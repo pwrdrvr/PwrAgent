@@ -1,4 +1,4 @@
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "@pwragent/shared";
 import type { DesktopApi } from "../desktop-api";
@@ -8,6 +8,99 @@ import {
 } from "../useBackendSummaries";
 
 describe("useBackendSummaries", () => {
+  it("refreshes cached ACP models only when explicitly requested", async () => {
+    const listAcpAgents = vi
+      .fn<NonNullable<DesktopApi["listAcpAgents"]>>()
+      .mockResolvedValue({
+        fetchedAt: 2,
+        entries: [],
+      });
+    const staleKimi = {
+      kind: "acp:kimi" as const,
+      source: "acp" as const,
+      label: "Kimi",
+      available: true,
+      methods: [],
+      capabilities: {
+        listThreads: true,
+        createThread: true,
+        resumeThread: true,
+        renameThread: true,
+        readThread: true,
+        startTurn: true,
+        interruptTurn: true,
+        steerTurn: false,
+        transcriptPagination: false,
+        toolUse: true,
+        approvalRequests: true,
+        multiDirectoryThreads: true,
+      },
+      executionModes: [],
+      launchpadOptions: {
+        models: [
+          {
+            id: "kimi-code/kimi-for-coding",
+            label: "Kimi-k2.6",
+            current: true,
+          },
+        ],
+      },
+    };
+    const listBackends = vi
+      .fn<NonNullable<DesktopApi["listBackends"]>>()
+      .mockResolvedValueOnce({
+        fetchedAt: 1,
+        backends: [staleKimi],
+      })
+      .mockResolvedValue({
+        fetchedAt: 2,
+        backends: [
+          {
+            ...staleKimi,
+            launchpadOptions: {
+              models: [
+                {
+                  id: "kimi-code/kimi-for-coding",
+                  label: "K2.7 Coding",
+                  current: true,
+                },
+                {
+                  id: "kimi-code/k3",
+                  label: "K3",
+                },
+              ],
+            },
+          },
+        ],
+      });
+
+    const desktopApi: DesktopApi = {
+      listAcpAgents,
+      listBackends,
+    };
+    const { result } = renderHook(() => useBackendSummaries(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.backends[0]?.launchpadOptions?.models).toEqual([
+        expect.objectContaining({ label: "Kimi-k2.6" }),
+      ]);
+    });
+    expect(listAcpAgents).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await result.current.refreshAcpAgents();
+    });
+
+    await waitFor(() => {
+      expect(result.current.backends[0]?.launchpadOptions?.models).toEqual([
+        expect.objectContaining({ label: "K2.7 Coding" }),
+        expect.objectContaining({ label: "K3" }),
+      ]);
+    });
+    expect(listAcpAgents).toHaveBeenCalledWith({ refresh: true });
+    expect(listBackends).toHaveBeenCalledTimes(2);
+  });
+
   it("refreshes backend details when Codex rate limits update", async () => {
     let eventHandler: ((event: AgentEvent) => void) | undefined;
     const listBackends = vi

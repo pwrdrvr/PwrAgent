@@ -963,6 +963,11 @@ function DesktopAppShell(props: {
     composerDraftStore,
     desktopApi,
     launchpadError: navigation.launchpadError,
+    onProviderSelected: (backend: AppServerBackendKind) => {
+      if (backend.startsWith("acp:")) {
+        void backendSummaries.refreshAcpAgents();
+      }
+    },
     onShowNotice: setComposerNotice,
     loading: session.loading,
     loadingMore: session.loadingMore,

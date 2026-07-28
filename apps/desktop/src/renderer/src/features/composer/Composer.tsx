@@ -125,6 +125,9 @@ type ComposerProps = {
    * AppNoticeToast stack in App.tsx.
    */
   onShowNotice?: (notice: AppNoticeToastNotice) => void;
+  onProviderSelected?: (
+    backend: NavigationLaunchpadDraft["backend"],
+  ) => void;
   directory?: NavigationDirectorySummary;
   /**
    * Full set of currently-tracked directories from the navigation
@@ -7978,6 +7981,7 @@ export function Composer(props: ComposerProps) {
                 handleLaunchpadPatch({
                   backend: nextBackend,
                 });
+                props.onProviderSelected?.(nextBackend);
               }}
             />
           ) : props.thread ? (

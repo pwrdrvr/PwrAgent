@@ -1542,6 +1542,42 @@ describe("Composer", () => {
     expect(screen.queryByRole("option", { name: "Default" })).not.toBeInTheDocument();
   });
 
+  it("requests fresh ACP discovery when the provider is selected", () => {
+    const onProviderSelected = vi.fn();
+
+    render(
+      <Composer
+        backends={[
+          backendSummary("codex"),
+          {
+            ...backendSummary("acp:kimi"),
+            label: "Kimi",
+          },
+        ]}
+        launchpad={{
+          directoryKey: "directory:/repo",
+          directoryKind: "directory",
+          directoryLabel: "Repo",
+          directoryPath: "/repo",
+          backend: "codex",
+          executionMode: "default",
+          prompt: "",
+          workMode: "local",
+          branchName: "main",
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+        onProviderSelected={onProviderSelected}
+        onUpdateLaunchpad={async () => undefined}
+        skills={[]}
+      />,
+    );
+
+    chooseDropdownOption("Provider", "Kimi");
+
+    expect(onProviderSelected).toHaveBeenCalledWith("acp:kimi");
+  });
+
   it("hides reasoning controls for Grok 4.20 models", () => {
     render(
       <Composer

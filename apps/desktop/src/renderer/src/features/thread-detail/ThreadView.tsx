@@ -722,6 +722,9 @@ export type ThreadViewProps = {
   desktopApi?: DesktopApi;
   launchpadError?: string;
   onShowNotice?: (notice: AppNoticeToastNotice) => void;
+  onProviderSelected?: (
+    backend: NavigationLaunchpadDraft["backend"],
+  ) => void;
   archiveThreadError?: string;
   loading: boolean;
   loadingMore: boolean;
@@ -2394,6 +2397,7 @@ export function ThreadView(props: ThreadViewProps) {
               applications={props.applications}
               desktopApi={props.desktopApi}
               onShowNotice={props.onShowNotice}
+              onProviderSelected={props.onProviderSelected}
               composerImplementation={props.composerImplementation}
               draftStore={props.composerDraftStore}
               directory={props.selectedDirectory}
