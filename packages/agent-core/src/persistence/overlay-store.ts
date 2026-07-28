@@ -754,16 +754,20 @@ export class OverlayStore {
         previousObservedBranch !== nextObservedBranch
           ? previousObservedBranch
           : undefined;
-      const requestedExpectedBranch =
-        params.expectedBranch?.trim() &&
-        params.expectedBranch.trim() !== nextObservedBranch
-          ? params.expectedBranch.trim()
-          : undefined;
+      const requestedExpectedBranch = params.expectedBranch?.trim() || undefined;
+      const currentExpectedBranch = current.gitBranch?.trim() || undefined;
+      const shouldApplyRequestedExpectedBranch = Boolean(
+        requestedExpectedBranch &&
+        (
+          !currentExpectedBranch
+          || requestedExpectedBranch === nextObservedBranch
+        ),
+      );
       const nextState: ThreadOverlayState = {
         ...current,
-        gitBranch: current.gitBranch?.trim()
-          ? current.gitBranch
-          : requestedExpectedBranch ?? fallbackExpectedBranch,
+        gitBranch: shouldApplyRequestedExpectedBranch
+          ? requestedExpectedBranch
+          : currentExpectedBranch ?? fallbackExpectedBranch,
         observedGitBranch: params.branch,
       };
       data.threads[threadKey] = nextState;

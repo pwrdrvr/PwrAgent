@@ -86,4 +86,32 @@ describe("SqliteOverlayStore branch metadata", () => {
       observedGitBranch: "main",
     });
   });
+
+  it("preserves a newer expected branch when a stale drift check finishes", async () => {
+    await store.setThreadExpectedBranch({
+      backend: "codex",
+      threadId: "thread-1",
+      branch: "HEAD",
+    });
+
+    await store.setThreadExpectedBranch({
+      backend: "codex",
+      threadId: "thread-1",
+      branch: "feature/adopted-by-active-turn",
+    });
+
+    await store.setThreadObservedBranch({
+      backend: "codex",
+      threadId: "thread-1",
+      branch: "feature/adopted-by-active-turn",
+      expectedBranch: "HEAD",
+    });
+
+    await expect(
+      store.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }),
+    ).resolves.toMatchObject({
+      gitBranch: "feature/adopted-by-active-turn",
+      observedGitBranch: "feature/adopted-by-active-turn",
+    });
+  });
 });

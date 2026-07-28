@@ -10583,7 +10583,7 @@ export class DesktopBackendRegistry {
       };
     }
 
-    await this.overlayStore.setThreadObservedBranch({
+    const persistedOverlay = await this.overlayStore.setThreadObservedBranch({
       backend: params.backend,
       threadId: params.threadId,
       branch: normalizedObservedBranch,
@@ -10592,8 +10592,18 @@ export class DesktopBackendRegistry {
           ? expectedBranch
           : undefined,
     });
+    const persistedExpectedBranch = persistedOverlay.gitBranch?.trim() || undefined;
+    const effectiveExpectedBranch = persistedExpectedBranch ?? expectedBranch;
+    const effectiveDrifted = isBranchDrifted(
+      effectiveExpectedBranch,
+      normalizedObservedBranch,
+    );
 
-    if (expectedBranchResolution.repairedDetachedHandoffBranch && expectedBranch) {
+    if (
+      expectedBranchResolution.repairedDetachedHandoffBranch &&
+      expectedBranch &&
+      effectiveExpectedBranch === expectedBranch
+    ) {
       await this.updateThreadGitBranchMetadata({
         backend: params.backend,
         threadId: params.threadId,
@@ -10611,11 +10621,11 @@ export class DesktopBackendRegistry {
       } as unknown as AgentEvent);
     }
 
-    if (drifted) {
+    if (effectiveDrifted) {
       backendRegistryLog.debug("checked thread branch drift", {
         backend: params.backend,
-        drifted,
-        expectedBranch,
+        drifted: effectiveDrifted,
+        expectedBranch: effectiveExpectedBranch,
         observedBranch: normalizedObservedBranch,
         workspaceCwd,
         threadId: params.threadId,
@@ -10625,9 +10635,9 @@ export class DesktopBackendRegistry {
     return {
       backend: params.backend,
       threadId: params.threadId,
-      expectedBranch,
+      expectedBranch: effectiveExpectedBranch,
       observedBranch: normalizedObservedBranch,
-      drifted,
+      drifted: effectiveDrifted,
       checkedAt: Date.now(),
     };
   }
