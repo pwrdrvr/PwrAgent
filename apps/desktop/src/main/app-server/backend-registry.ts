@@ -4604,25 +4604,20 @@ function mergeImmutableUsageActivities(params: {
 
 function mergeThreadMessageOrigins(
   replay: AppServerThreadReplay,
-  originsByTurnId: Record<string, AppServerThreadMessageOrigin>,
+  originsByMessageId: Record<string, AppServerThreadMessageOrigin>,
 ): AppServerThreadReplay {
-  if (Object.keys(originsByTurnId).length === 0) {
+  if (Object.keys(originsByMessageId).length === 0) {
     return replay;
   }
-  const originsByMessageId = new Map<string, AppServerThreadMessageOrigin>();
   const entries = replay.entries.map((entry): AppServerThreadEntry => {
-    if (entry.type !== "message" || entry.role !== "user" || !entry.turn?.id) {
+    if (entry.type !== "message" || entry.role !== "user") {
       return entry;
     }
-    const origin = originsByTurnId[entry.turn.id];
-    if (!origin) {
-      return entry;
-    }
-    originsByMessageId.set(entry.id, origin);
-    return { ...entry, origin };
+    const origin = originsByMessageId[entry.id];
+    return origin ? { ...entry, origin } : entry;
   });
   const messages = replay.messages.map((message) => {
-    const origin = originsByMessageId.get(message.id);
+    const origin = originsByMessageId[message.id];
     return origin && message.role === "user" ? { ...message, origin } : message;
   });
   return {
@@ -5385,6 +5380,16 @@ function buildWorkspaceMoveFailurePrompt(params: {
   ].join("\n");
 }
 
+type PendingThreadMessageOrigin = {
+  backend: AppServerBackendKind;
+  createdAt: number;
+  id: string;
+  origin: AppServerThreadMessageOrigin;
+  text?: string;
+  threadId: string;
+  turnId?: string;
+};
+
 export class DesktopBackendRegistry {
   private readonly codexClient: BackendClient;
   private readonly grokClient: BackendClient;
@@ -5451,6 +5456,10 @@ export class DesktopBackendRegistry {
   private readonly pendingTitleGenerationInputs = new Map<
     string,
     AppServerTurnInputItem[]
+  >();
+  private readonly pendingThreadMessageOrigins = new Map<
+    string,
+    PendingThreadMessageOrigin
   >();
   private readonly activeCodexTurnModes = new Map<string, ThreadExecutionMode>();
   private readonly activeCodexReviewTurnKeys = new Set<string>();
@@ -8162,28 +8171,33 @@ export class DesktopBackendRegistry {
             replay: replayWithEnvironment,
             activities: overlay?.immutableUsageActivities,
           });
-    const messageTurnIds = replayWithImmutableUsage.entries.flatMap((entry) =>
-      entry.type === "message" && entry.turn?.id ? [entry.turn.id] : [],
-    );
+    const messageIds = [
+      ...replayWithImmutableUsage.entries.flatMap((entry) =>
+        entry.type === "message" && entry.role === "user" ? [entry.id] : [],
+      ),
+      ...replayWithImmutableUsage.messages.flatMap((message) =>
+        message.role === "user" ? [message.id] : [],
+      ),
+    ];
     const persistedMessageOrigins =
       typeof this.overlayStore.readThreadMessageOrigins === "function"
         ? await this.overlayStore.readThreadMessageOrigins({
             backend,
             threadId: request.threadId,
-            turnIds: messageTurnIds,
+            messageIds,
           })
         : {};
     const messageOrigins = { ...persistedMessageOrigins };
     const firstUserMessage = replayWithImmutableUsage.entries.find(
-      (entry) => entry.type === "message" && entry.role === "user" && entry.turn?.id,
+      (entry) => entry.type === "message" && entry.role === "user",
     );
     if (
       overlay?.handoffOrigin
+      && replayWithImmutableUsage.pagination.hasPreviousPage === false
       && firstUserMessage?.type === "message"
-      && firstUserMessage.turn?.id
-      && !messageOrigins[firstUserMessage.turn.id]
+      && !messageOrigins[firstUserMessage.id]
     ) {
-      messageOrigins[firstUserMessage.turn.id] = {
+      messageOrigins[firstUserMessage.id] = {
         kind: "agent",
         sourceThread: {
           backend: overlay.handoffOrigin.sourceBackend,
@@ -9034,6 +9048,7 @@ export class DesktopBackendRegistry {
         throw new Error("A turn is already active for this thread.");
       }
       this.reservedAcpStartThreadKeys.add(reservationKey);
+      let pendingMessageOriginId: string | undefined;
       try {
         if (this.usesSlashControlledAcpExecutionModes(params.backend)) {
           await this.flushQueuedExecutionModeIfPresent(
@@ -9045,6 +9060,12 @@ export class DesktopBackendRegistry {
           params.backend,
           params.threadId,
         );
+        pendingMessageOriginId = this.registerPendingThreadMessageOrigin({
+          backend: params.backend,
+          threadId: params.threadId,
+          origin: resolveThreadMessageOrigin(params),
+          text: extractFirstMeaningfulTextInput(params.input),
+        });
         const result = await this.startAcpTurn({
           backend: params.backend,
           threadId: params.threadId,
@@ -9057,13 +9078,21 @@ export class DesktopBackendRegistry {
           threadId: result.threadId,
           input: params.input,
         });
+        this.bindPendingThreadMessageOrigin(
+          pendingMessageOriginId,
+          result.turnId,
+        );
         await this.persistThreadMessageOrigin({
           backend: params.backend,
           threadId: result.threadId,
-          turnId: result.turnId,
+          messageId: `user:${result.turnId}`,
           origin: resolveThreadMessageOrigin(params),
         });
+        this.forgetPendingThreadMessageOrigin(pendingMessageOriginId);
         return result;
+      } catch (error) {
+        this.forgetPendingThreadMessageOrigin(pendingMessageOriginId);
+        throw error;
       } finally {
         this.reservedAcpStartThreadKeys.delete(reservationKey);
       }
@@ -9144,6 +9173,12 @@ export class DesktopBackendRegistry {
       params.threadId,
     );
     this.pendingTitleGenerationInputs.set(titleGenerationKey, params.input);
+    const pendingMessageOriginId = this.registerPendingThreadMessageOrigin({
+      backend: params.backend,
+      threadId: params.threadId,
+      origin: resolveThreadMessageOrigin(params),
+      text: extractFirstMeaningfulTextInput(params.input),
+    });
     try {
       result =
         params.backend === "codex"
@@ -9201,8 +9236,10 @@ export class DesktopBackendRegistry {
         this.reservedCodexStartThreadIds.delete(params.threadId);
       }
       this.pendingTitleGenerationInputs.delete(titleGenerationKey);
+      this.forgetPendingThreadMessageOrigin(pendingMessageOriginId);
       throw error;
     }
+    this.bindPendingThreadMessageOrigin(pendingMessageOriginId, result.turnId);
     this.activeCodexTurnModes.delete(
       buildActiveTurnModeKey(params.threadId, syntheticStartedTurnId),
     );
@@ -9235,12 +9272,6 @@ export class DesktopBackendRegistry {
         executionMode: params.executionMode,
       });
     }
-    await this.persistThreadMessageOrigin({
-      backend: params.backend,
-      threadId: result.threadId,
-      turnId: result.turnId,
-      origin: resolveThreadMessageOrigin(params),
-    });
     const response = {
       backend: params.backend,
       threadId: result.threadId,
@@ -9263,10 +9294,164 @@ export class DesktopBackendRegistry {
     return response;
   }
 
+  private registerPendingThreadMessageOrigin(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    origin?: AppServerThreadMessageOrigin;
+    text?: string;
+    turnId?: string;
+  }): string | undefined {
+    if (!params.origin) {
+      return undefined;
+    }
+    const oldestAllowed = Date.now() - 10 * 60 * 1000;
+    for (const [id, pending] of this.pendingThreadMessageOrigins) {
+      if (pending.createdAt < oldestAllowed) {
+        this.pendingThreadMessageOrigins.delete(id);
+      }
+    }
+    const id = randomUUID();
+    this.pendingThreadMessageOrigins.set(id, {
+      backend: params.backend,
+      createdAt: Date.now(),
+      id,
+      origin: params.origin,
+      ...(params.text ? { text: params.text } : {}),
+      threadId: params.threadId,
+      ...(params.turnId ? { turnId: params.turnId } : {}),
+    });
+    return id;
+  }
+
+  private bindPendingThreadMessageOrigin(
+    id: string | undefined,
+    turnId: string,
+  ): void {
+    if (!id) {
+      return;
+    }
+    const pending = this.pendingThreadMessageOrigins.get(id);
+    if (pending) {
+      pending.turnId = turnId;
+    }
+  }
+
+  private forgetPendingThreadMessageOrigin(id: string | undefined): void {
+    if (id) {
+      this.pendingThreadMessageOrigins.delete(id);
+    }
+  }
+
+  private findPendingThreadMessageOrigin(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    text?: string;
+    turnId?: string;
+  }): PendingThreadMessageOrigin | undefined {
+    const candidates = [...this.pendingThreadMessageOrigins.values()]
+      .filter(
+        (pending) =>
+          pending.backend === params.backend
+          && pending.threadId === params.threadId
+          && (
+            !pending.turnId
+            || !params.turnId
+            || pending.turnId === params.turnId
+          ),
+      )
+      .sort((left, right) => left.createdAt - right.createdAt);
+    return (
+      candidates.find(
+        (pending) =>
+          pending.text
+          && params.text
+          && pending.text.trim() === params.text.trim(),
+      )
+      ?? candidates.find(
+        (pending) => pending.turnId && pending.turnId === params.turnId,
+      )
+      ?? candidates.find((pending) => !pending.turnId)
+    );
+  }
+
+  private async withThreadMessageOrigin(event: AgentEvent): Promise<AgentEvent> {
+    if (event.notification.method === "turn/started") {
+      const notification = event.notification as {
+        method: "turn/started";
+        params: {
+          threadId: string;
+          turnId?: string;
+          turn: { id: string };
+        };
+      };
+      const pending = this.findPendingThreadMessageOrigin({
+        backend: event.backend,
+        threadId: notification.params.threadId,
+        turnId:
+          notification.params.turnId
+          ?? notification.params.turn.id,
+      });
+      if (pending && !pending.turnId) {
+        pending.turnId =
+          notification.params.turnId
+          ?? notification.params.turn.id;
+      }
+      return event;
+    }
+    if (event.notification.method !== "item/completed") {
+      return event;
+    }
+    const notification = event.notification as {
+      method: "item/completed";
+      params: {
+        threadId: string;
+        turnId?: string;
+        item: {
+          id: string;
+          type: string;
+          origin?: AppServerThreadMessageOrigin;
+          text?: string;
+        };
+      };
+    };
+    if (notification.params.item.type !== "userMessage") {
+      return event;
+    }
+    const pending = this.findPendingThreadMessageOrigin({
+      backend: event.backend,
+      threadId: notification.params.threadId,
+      text: notification.params.item.text,
+      turnId: notification.params.turnId,
+    });
+    if (!pending) {
+      return event;
+    }
+    await this.persistThreadMessageOrigin({
+      backend: event.backend,
+      threadId: notification.params.threadId,
+      messageId: notification.params.item.id,
+      origin: pending.origin,
+    });
+    this.pendingThreadMessageOrigins.delete(pending.id);
+    return {
+      ...event,
+      notification: {
+        ...notification,
+        params: {
+          ...notification.params,
+          item: {
+            ...notification.params.item,
+            origin: pending.origin,
+          },
+        },
+      } as AppServerNotification,
+    };
+  }
+
   private async persistThreadMessageOrigin(params: {
     backend: AppServerBackendKind;
     threadId: string;
-    turnId: string;
+    messageId: string;
     origin?: AppServerThreadMessageOrigin;
   }): Promise<void> {
     if (
@@ -9279,15 +9464,15 @@ export class DesktopBackendRegistry {
       await this.overlayStore.upsertThreadMessageOrigin({
         backend: params.backend,
         threadId: params.threadId,
-        turnId: params.turnId,
+        messageId: params.messageId,
         origin: params.origin,
       });
     } catch (error) {
       backendRegistryLog.warn("failed to persist injected message origin", {
         backend: params.backend,
         error: error instanceof Error ? error.message : String(error),
+        messageId: params.messageId,
         threadId: params.threadId,
-        turnId: params.turnId,
       });
     }
   }
@@ -9588,7 +9773,17 @@ export class DesktopBackendRegistry {
     };
   }
 
-  async steerTurn(params: SteerTurnRequest): Promise<SteerTurnResponse> {
+  async steerTurn(
+    params: SteerTurnRequest,
+    messageOrigin?: AppServerThreadMessageOrigin,
+  ): Promise<SteerTurnResponse> {
+    const pendingMessageOriginId = this.registerPendingThreadMessageOrigin({
+      backend: params.backend,
+      threadId: params.threadId,
+      turnId: params.expectedTurnId,
+      origin: messageOrigin,
+      text: extractFirstMeaningfulTextInput(params.input),
+    });
     const steerWithClient = async (
       client: BackendClient,
     ): Promise<{ threadId: string; turnId: string }> => {
@@ -9602,10 +9797,16 @@ export class DesktopBackendRegistry {
       });
     };
 
-    const result =
-      params.backend === "codex"
-        ? await this.withActiveCodexThreadClient(params.threadId, steerWithClient)
-        : await steerWithClient(this.grokClient);
+    let result: { threadId: string; turnId: string };
+    try {
+      result =
+        params.backend === "codex"
+          ? await this.withActiveCodexThreadClient(params.threadId, steerWithClient)
+          : await steerWithClient(this.grokClient);
+    } catch (error) {
+      this.forgetPendingThreadMessageOrigin(pendingMessageOriginId);
+      throw error;
+    }
 
     return {
       backend: params.backend,
@@ -20950,6 +21151,7 @@ export class DesktopBackendRegistry {
   }
 
   private async emit(event: AgentEvent): Promise<void> {
+    event = await this.withThreadMessageOrigin(event);
     this.rememberFileChangeApprovalContext(event);
     event = this.withEmbeddedFileChangeApprovalContext(event);
 

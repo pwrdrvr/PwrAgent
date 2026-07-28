@@ -184,6 +184,64 @@ describe("GrokAppServerClient", () => {
     await client.close();
   });
 
+  it("preserves Grok item identities when building replay messages", async () => {
+    const fake = createFakeServer();
+    const client = new GrokAppServerClient({
+      server: {
+        ...fake.server,
+        request: async (method, params) =>
+          method === "thread/read"
+            ? {
+                threadId: "thread-1",
+                messages: [],
+                items: [
+                  {
+                    id: "grok-user-item-17",
+                    type: "userMessage",
+                    text: "Injected prompt",
+                  },
+                  {
+                    id: "grok-agent-item-18",
+                    type: "agentMessage",
+                    text: "Handled",
+                  },
+                ],
+              }
+            : await fake.server.request(method, params),
+      },
+    });
+
+    const replay = await client.readThread({ threadId: "thread-1" });
+    expect(replay.messages).toEqual([
+        {
+          id: "grok-user-item-17",
+          role: "user",
+          text: "Injected prompt",
+        },
+        {
+          id: "grok-agent-item-18",
+          role: "assistant",
+          text: "Handled",
+        },
+    ]);
+    expect(replay.entries.slice(0, 2)).toEqual([
+      {
+        type: "message",
+        id: "grok-user-item-17",
+        role: "user",
+        text: "Injected prompt",
+      },
+      {
+        type: "message",
+        id: "grok-agent-item-18",
+        role: "assistant",
+        text: "Handled",
+      },
+    ]);
+
+    await client.close();
+  });
+
   it("forwards child notifications and bidirectional server requests", async () => {
     const fake = createFakeServer();
     const client = new GrokAppServerClient({ server: fake.server });

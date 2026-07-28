@@ -115,6 +115,47 @@ describe("state migration", () => {
     }
   });
 
+  it("replaces the v30 turn-keyed message origin table", () => {
+    const root = createTempRoot();
+    const dbPath = path.join(root, "state.db");
+    StateDb.open(dbPath).close();
+    const raw = new Database(dbPath);
+    raw.exec(`
+DROP INDEX idx_thread_message_origins_thread;
+DROP TABLE thread_message_origins;
+CREATE TABLE thread_message_origins (
+  backend     TEXT NOT NULL,
+  thread_id   TEXT NOT NULL,
+  turn_id     TEXT NOT NULL,
+  created_at  INTEGER NOT NULL,
+  payload     TEXT NOT NULL,
+  PRIMARY KEY (backend, thread_id, turn_id)
+);
+CREATE INDEX idx_thread_message_origins_thread
+  ON thread_message_origins(backend, thread_id, created_at, turn_id);
+INSERT INTO thread_message_origins
+VALUES ('codex', 'thread-1', 'turn-1', 1000, '{"kind":"messaging"}');
+`);
+    raw.pragma("user_version = 30");
+    raw.close();
+
+    const stateDb = StateDb.open(dbPath);
+    try {
+      const columns = stateDb.raw
+        .prepare("PRAGMA table_info(thread_message_origins)")
+        .all() as Array<{ name: string }>;
+      expect(columns.map((column) => column.name)).toContain("message_id");
+      expect(columns.map((column) => column.name)).not.toContain("turn_id");
+      expect(
+        stateDb.raw
+          .prepare("SELECT COUNT(*) AS count FROM thread_message_origins")
+          .get(),
+      ).toEqual({ count: 0 });
+    } finally {
+      stateDb.close();
+    }
+  });
+
   it("does not copy legacy default settings into a new named profile", () => {
     const root = createTempRoot();
     const pwragentHome = path.join(root, "pwragent");

@@ -192,11 +192,11 @@ describe("SqliteOverlayStore - thread Agent metadata", () => {
     reopenedDb.close();
   });
 
-  it("persists injected message origins by turn across sqlite handles", async () => {
+  it("persists injected message origins by message across sqlite handles", async () => {
     await store.upsertThreadMessageOrigin({
       backend: "codex",
       threadId: "child-thread",
-      turnId: "turn-injected",
+      messageId: "message-injected",
       origin: {
         kind: "agent",
         sourceThread: {
@@ -215,10 +215,10 @@ describe("SqliteOverlayStore - thread Agent metadata", () => {
       reopenedStore.readThreadMessageOrigins({
         backend: "codex",
         threadId: "child-thread",
-        turnIds: ["turn-injected", "turn-other"],
+        messageIds: ["message-injected", "message-other"],
       }),
     ).resolves.toEqual({
-      "turn-injected": {
+      "message-injected": {
         kind: "agent",
         sourceThread: {
           backend: "codex",

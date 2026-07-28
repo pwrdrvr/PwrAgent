@@ -9,7 +9,7 @@ import {
 } from "@pwragent/shared";
 import { getNativeBinding } from "./native-binding.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 30;
+export const CURRENT_STATE_DB_USER_VERSION = 31;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -707,13 +707,13 @@ const THREAD_MESSAGE_ORIGIN_SCHEMA = `
 CREATE TABLE IF NOT EXISTS thread_message_origins (
   backend     TEXT NOT NULL,
   thread_id   TEXT NOT NULL,
-  turn_id     TEXT NOT NULL,
+  message_id  TEXT NOT NULL,
   created_at  INTEGER NOT NULL,
   payload     TEXT NOT NULL,
-  PRIMARY KEY (backend, thread_id, turn_id)
+  PRIMARY KEY (backend, thread_id, message_id)
 );
 CREATE INDEX IF NOT EXISTS idx_thread_message_origins_thread
-  ON thread_message_origins(backend, thread_id, created_at, turn_id);
+  ON thread_message_origins(backend, thread_id, created_at, message_id);
 `;
 
 const DELIVERIES_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
@@ -957,7 +957,13 @@ export class StateDb {
     }
     if ((db.pragma("user_version", { simple: true }) as number) < 30) {
       db.transaction(() => {
-        db.exec(THREAD_MESSAGE_ORIGIN_SCHEMA);
+        ensureThreadMessageOriginSchema(db);
+        db.pragma("user_version = 30");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 31) {
+      db.transaction(() => {
+        ensureThreadMessageOriginSchema(db);
         db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
       })();
     }
@@ -1114,7 +1120,7 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     ensureThreadUsagePricingProviderScope(db);
     ensureThreadUsagePricingCumulativeColumns(db);
     db.exec(THREAD_TOOL_ACCOUNTING_SCHEMA);
-    db.exec(THREAD_MESSAGE_ORIGIN_SCHEMA);
+    ensureThreadMessageOriginSchema(db);
     if ((db.pragma("user_version", { simple: true }) as number) < 4) {
       db.pragma("user_version = 4");
     }
@@ -1914,6 +1920,7 @@ function tableColumnExists(
     | "automation_runs"
     | "pr_lookup_cache"
     | "pr_status_cache"
+    | "thread_message_origins"
     | "thread_pricing_summaries"
     | "thread_search_fts"
     | "thread_usage_lines"
@@ -1924,6 +1931,26 @@ function tableColumnExists(
   return rows.some((row) => row.name === columnName);
 }
 
+function ensureThreadMessageOriginSchema(db: BetterSqlite3.Database): void {
+  if (
+    tableColumnExists(db, "thread_message_origins", "turn_id")
+    && !tableColumnExists(db, "thread_message_origins", "message_id")
+  ) {
+    // v30 briefly keyed injected-message origins by turn. One turn can contain
+    // several user messages, so those rows cannot be migrated without guessing
+    // which message they describe. Recreate this unreleased metadata table with
+    // the concrete provider message identity instead.
+    db.exec(`
+DROP INDEX IF EXISTS idx_thread_message_origins_thread;
+ALTER TABLE thread_message_origins RENAME TO thread_message_origins_v30;
+`);
+    db.exec(THREAD_MESSAGE_ORIGIN_SCHEMA);
+    db.exec("DROP TABLE thread_message_origins_v30");
+    return;
+  }
+  db.exec(THREAD_MESSAGE_ORIGIN_SCHEMA);
+}
+
 function readTableInfo(
   db: BetterSqlite3.Database,
   tableName:
@@ -1931,6 +1958,7 @@ function readTableInfo(
     | "automation_runs"
     | "pr_lookup_cache"
     | "pr_status_cache"
+    | "thread_message_origins"
     | "thread_pricing_summaries"
     | "thread_search_fts"
     | "thread_usage_lines"
@@ -1951,6 +1979,10 @@ function readTableInfo(
       }>;
     case "pr_status_cache":
       return db.prepare("PRAGMA table_info(pr_status_cache)").all() as Array<{
+        name: string;
+      }>;
+    case "thread_message_origins":
+      return db.prepare("PRAGMA table_info(thread_message_origins)").all() as Array<{
         name: string;
       }>;
     case "thread_pricing_summaries":

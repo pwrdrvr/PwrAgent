@@ -676,6 +676,14 @@ describe("useThreadSessionState", () => {
             item: {
               id: "user-message-1",
               type: "userMessage",
+              origin: {
+                kind: "agent",
+                sourceThread: {
+                  backend: "codex",
+                  threadId: "parent-thread",
+                  title: "Parent thread",
+                },
+              },
               content: [
                 {
                   type: "text",
@@ -705,6 +713,14 @@ describe("useThreadSessionState", () => {
     ).toEqual([
       expect.objectContaining({
         id: "user-message-1",
+        origin: {
+          kind: "agent",
+          sourceThread: {
+            backend: "codex",
+            threadId: "parent-thread",
+            title: "Parent thread",
+          },
+        },
       }),
     ]);
   });

@@ -13,6 +13,7 @@ import type {
   AppServerThreadEntry,
   AppServerThreadMessage,
   AppServerThreadMessageEntry,
+  AppServerThreadMessageOrigin,
   AppServerThreadMessagePart,
   AppServerThreadReviewEntry,
   AppServerThreadTurnMetadata,
@@ -2793,6 +2794,7 @@ function userMessageEntryFromCompletedItem(params: {
     fallbackId: typeof params.turnId === "string" ? params.turnId : undefined,
     fallbackStatus: "in_progress",
   });
+  const origin = threadMessageOriginFromUnknown(record.origin);
 
   return {
     type: "message",
@@ -2800,8 +2802,47 @@ function userMessageEntryFromCompletedItem(params: {
     role: "user",
     text: content.text,
     ...(content.parts ? { parts: content.parts } : {}),
+    ...(origin ? { origin } : {}),
     ...(turn ? { turn } : {}),
     createdAt: Date.now(),
+  };
+}
+
+function threadMessageOriginFromUnknown(
+  value: unknown,
+): AppServerThreadMessageOrigin | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  if (
+    record.kind !== "agent"
+    && record.kind !== "automation"
+    && record.kind !== "messaging"
+    && record.kind !== "pwragent"
+  ) {
+    return undefined;
+  }
+  const source = record.sourceThread;
+  if (!source || typeof source !== "object" || Array.isArray(source)) {
+    return { kind: record.kind };
+  }
+  const sourceRecord = source as Record<string, unknown>;
+  if (
+    typeof sourceRecord.backend !== "string"
+    || typeof sourceRecord.threadId !== "string"
+  ) {
+    return { kind: record.kind };
+  }
+  return {
+    kind: record.kind,
+    sourceThread: {
+      backend: sourceRecord.backend as AppServerBackendKind,
+      threadId: sourceRecord.threadId,
+      ...(typeof sourceRecord.title === "string"
+        ? { title: sourceRecord.title }
+        : {}),
+    },
   };
 }
 

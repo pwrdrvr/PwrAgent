@@ -969,6 +969,7 @@ export type AppServerNotification =
           id: string;
           type: string;
           text?: string;
+          origin?: AppServerThreadMessageOrigin;
           review?: string;
           command?: string;
           commandAction?: AppServerCommandAction;

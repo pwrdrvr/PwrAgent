@@ -1297,7 +1297,7 @@ export class SqliteOverlayStore {
   async upsertThreadMessageOrigin(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;
-    turnId: string;
+    messageId: string;
     origin: AppServerThreadMessageOrigin;
     createdAt?: number;
   }): Promise<void> {
@@ -1306,18 +1306,18 @@ export class SqliteOverlayStore {
         `INSERT INTO thread_message_origins(
            backend,
            thread_id,
-           turn_id,
+           message_id,
            created_at,
            payload
          ) VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(backend, thread_id, turn_id) DO UPDATE SET
+         ON CONFLICT(backend, thread_id, message_id) DO UPDATE SET
            created_at = excluded.created_at,
            payload = excluded.payload`,
       )
       .run(
         params.backend,
         params.threadId,
-        params.turnId,
+        params.messageId,
         params.createdAt ?? Date.now(),
         JSON.stringify(params.origin),
       );
@@ -1326,31 +1326,31 @@ export class SqliteOverlayStore {
   async readThreadMessageOrigins(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;
-    turnIds: string[];
+    messageIds: string[];
   }): Promise<Record<string, AppServerThreadMessageOrigin>> {
-    const turnIds = [
+    const messageIds = [
       ...new Set(
-        params.turnIds.map((turnId) => turnId.trim()).filter(Boolean),
+        params.messageIds.map((messageId) => messageId.trim()).filter(Boolean),
       ),
     ];
-    if (turnIds.length === 0) {
+    if (messageIds.length === 0) {
       return {};
     }
     const rows = this.stateDb.raw
       .prepare(
-        `SELECT turn_id, payload
+        `SELECT message_id, payload
          FROM thread_message_origins
          WHERE backend = ?
            AND thread_id = ?
-           AND turn_id IN (SELECT value FROM json_each(?))`,
+           AND message_id IN (SELECT value FROM json_each(?))`,
       )
-      .all(params.backend, params.threadId, JSON.stringify(turnIds)) as Array<{
+      .all(params.backend, params.threadId, JSON.stringify(messageIds)) as Array<{
+        message_id: string;
         payload: string;
-        turn_id: string;
       }>;
     return Object.fromEntries(
       rows.map((row) => [
-        row.turn_id,
+        row.message_id,
         JSON.parse(row.payload) as AppServerThreadMessageOrigin,
       ]),
     );

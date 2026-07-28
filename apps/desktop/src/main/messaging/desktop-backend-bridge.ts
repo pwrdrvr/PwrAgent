@@ -211,7 +211,7 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
   }
 
   async steerTurn(request: SteerTurnRequest): Promise<SteerTurnResponse> {
-    return await this.registry.steerTurn(request);
+    return await this.registry.steerTurn(request, { kind: "messaging" });
   }
 
   async startThread(request: StartThreadRequest): Promise<StartThreadResponse> {

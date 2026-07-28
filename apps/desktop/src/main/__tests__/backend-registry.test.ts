@@ -283,15 +283,15 @@ function createOverlayStoreMock(params?: {
   const upsertThreadMessageOrigin = vi.fn(async ({
     backend,
     threadId,
-    turnId,
+    messageId,
     origin,
   }: {
     backend: AppServerBackendKind;
     threadId: string;
-    turnId: string;
+    messageId: string;
     origin: AppServerThreadMessageOrigin;
   }) => {
-    messageOrigins.set(`${backend}:${threadId}:${turnId}`, origin);
+    messageOrigins.set(`${backend}:${threadId}:${messageId}`, origin);
   });
   let launchpadDefaults: NavigationLaunchpadDefaults = {
     backend: "codex",
@@ -356,16 +356,16 @@ function createOverlayStoreMock(params?: {
     readThreadMessageOrigins: async ({
       backend,
       threadId,
-      turnIds,
+      messageIds,
     }: {
       backend: AppServerBackendKind;
       threadId: string;
-      turnIds: string[];
+      messageIds: string[];
     }) =>
       Object.fromEntries(
-        turnIds.flatMap((turnId) => {
-          const origin = messageOrigins.get(`${backend}:${threadId}:${turnId}`);
-          return origin ? [[turnId, origin]] : [];
+        messageIds.flatMap((messageId) => {
+          const origin = messageOrigins.get(`${backend}:${threadId}:${messageId}`);
+          return origin ? [[messageId, origin]] : [];
         }),
       ),
     setAcpWorktreeDirectory: async ({
@@ -12802,6 +12802,107 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("attributes a messaging steer to its own completed user item", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "turn/steer"] },
+    });
+    const overlayStore = createOverlayStoreMock({ executionMode: "full-access" });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      overlayStore,
+    });
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
+
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "thread-1",
+      input: [{ type: "text", text: "Start active work" }],
+      messageOrigin: { kind: "automation" },
+    });
+    await registry.steerTurn(
+      {
+        backend: "codex",
+        threadId: "thread-1",
+        expectedTurnId: "turn-1",
+        input: [{ type: "text", text: "Course correct from messaging" }],
+      },
+      { kind: "messaging" },
+    );
+    await codexClient.emit({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "message-steer",
+          type: "userMessage",
+          text: "Course correct from messaging",
+        },
+      },
+    });
+    await codexClient.emit({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "message-start",
+          type: "userMessage",
+          text: "Start active work",
+        },
+      },
+    });
+
+    expect(overlayStore.upsertThreadMessageOrigin).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      messageId: "message-steer",
+      origin: { kind: "messaging" },
+    });
+    expect(
+      events.find(
+        (event) =>
+          event.notification.method === "item/completed"
+          && (
+            event.notification.params.item as { id?: string } | undefined
+          )?.id === "message-steer",
+      ),
+    ).toMatchObject({
+      notification: {
+        params: {
+          item: {
+            origin: { kind: "messaging" },
+          },
+        },
+      },
+    });
+    expect(
+      events.find(
+        (event) =>
+          event.notification.method === "item/completed"
+          && (
+            event.notification.params.item as { id?: string } | undefined
+          )?.id === "message-start",
+      ),
+    ).toMatchObject({
+      notification: {
+        params: {
+          item: {
+            origin: { kind: "automation" },
+          },
+        },
+      },
+    });
+
+    await registry.close();
+  });
+
   it("does not retry Codex title generation for a thread after one generated attempt", async () => {
     const titleService = {
       generateTitle: vi.fn(async () => ({
@@ -20897,6 +20998,10 @@ script = "printf setup"
       overlayStore,
       threadTitleGenerationService: null,
     });
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
     await registry.publishLocalEvent({
       backend: "codex",
       notification: {
@@ -20966,10 +21071,45 @@ script = "printf setup"
       approvalPolicy: "never",
       sandbox: "danger-full-access",
     });
+    await codexClient.emit({
+      method: "item/completed",
+      params: {
+        threadId: "target-thread",
+        turnId: "turn-1",
+        item: {
+          id: "message-injected",
+          type: "userMessage",
+          text: "Please pick up the CI failure.",
+        },
+      },
+    });
+    expect(
+      events.find(
+        (event) =>
+          event.notification.method === "item/completed"
+          && (
+            event.notification.params.item as { id?: string } | undefined
+          )?.id === "message-injected",
+      ),
+    ).toMatchObject({
+      notification: {
+        params: {
+          item: {
+            origin: {
+              kind: "agent",
+              sourceThread: {
+                backend: "codex",
+                threadId: "parent-thread",
+              },
+            },
+          },
+        },
+      },
+    });
     expect(overlayStore.upsertThreadMessageOrigin).toHaveBeenCalledWith({
       backend: "codex",
       threadId: "target-thread",
-      turnId: "turn-1",
+      messageId: "message-injected",
       origin: {
         kind: "agent",
         sourceThread: {
@@ -20982,7 +21122,7 @@ script = "printf setup"
     await registry.close();
   });
 
-  it("hydrates persisted injected-message origins onto replay messages", async () => {
+  it("hydrates persisted origins onto Grok replay messages without turn metadata", async () => {
     const replay: AppServerThreadReplay = {
       entries: [
         {
@@ -20990,6 +21130,12 @@ script = "printf setup"
           id: "message-injected",
           role: "user",
           text: "Please pick up the CI failure.",
+        },
+        {
+          type: "message",
+          id: "message-manual-steer",
+          role: "user",
+          text: "A manual follow-up in the same turn.",
           turn: {
             id: "turn-injected",
             status: "completed",
@@ -21002,6 +21148,11 @@ script = "printf setup"
           role: "user",
           text: "Please pick up the CI failure.",
         },
+        {
+          id: "message-manual-steer",
+          role: "user",
+          text: "A manual follow-up in the same turn.",
+        },
       ],
       pagination: {
         supportsPagination: false,
@@ -21010,9 +21161,9 @@ script = "printf setup"
     };
     const overlayStore = createOverlayStoreMock();
     await overlayStore.upsertThreadMessageOrigin!({
-      backend: "codex",
+      backend: "grok",
       threadId: "target-thread",
-      turnId: "turn-injected",
+      messageId: "message-injected",
       origin: {
         kind: "agent",
         sourceThread: {
@@ -21022,16 +21173,14 @@ script = "printf setup"
       },
     });
     const registry = new DesktopBackendRegistry({
-      codexClient: new MockBackendClient({ replay }),
-      grokClient: new MockBackendClient({
-        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
-      }),
+      codexClient: new MockBackendClient({}),
+      grokClient: new MockBackendClient({ replay }),
       overlayStore,
       threadTitleGenerationService: null,
     });
 
     const response = await registry.readThread({
-      backend: "codex",
+      backend: "grok",
       threadId: "target-thread",
     });
 
@@ -21049,6 +21198,176 @@ script = "printf setup"
       id: "message-injected",
       origin: {
         kind: "agent",
+      },
+    });
+    expect(response.replay.entries[1]).not.toHaveProperty("origin");
+    expect(response.replay.messages[1]).not.toHaveProperty("origin");
+
+    await registry.close();
+  });
+
+  it("does not copy one message origin to another user message in the same turn", async () => {
+    const userEntries: AppServerThreadReplay["entries"] = [
+      {
+        type: "message",
+        id: "message-injected",
+        role: "user",
+        text: "Injected prompt.",
+        turn: { id: "turn-1", status: "completed" },
+      },
+      {
+        type: "message",
+        id: "message-manual",
+        role: "user",
+        text: "Manual steer.",
+        turn: { id: "turn-1", status: "completed" },
+      },
+    ];
+    const replay: AppServerThreadReplay = {
+      entries: userEntries,
+      messages: userEntries.map((entry) => {
+        if (entry.type !== "message") {
+          throw new Error("expected message entry");
+        }
+        return {
+          id: entry.id,
+          role: entry.role,
+          text: entry.text,
+        };
+      }),
+      pagination: {
+        supportsPagination: false,
+        hasPreviousPage: false,
+      },
+    };
+    const overlayStore = createOverlayStoreMock();
+    await overlayStore.upsertThreadMessageOrigin!({
+      backend: "codex",
+      threadId: "target-thread",
+      messageId: "message-injected",
+      origin: { kind: "automation" },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ replay }),
+      grokClient: new MockBackendClient({}),
+      overlayStore,
+      threadTitleGenerationService: null,
+    });
+
+    const response = await registry.readThread({
+      backend: "codex",
+      threadId: "target-thread",
+    });
+
+    expect(response.replay.entries[0]).toMatchObject({
+      id: "message-injected",
+      origin: { kind: "automation" },
+    });
+    expect(response.replay.entries[1]).not.toHaveProperty("origin");
+    expect(response.replay.messages[1]).not.toHaveProperty("origin");
+
+    await registry.close();
+  });
+
+  it("applies the legacy handoff fallback only on a page containing the thread start", async () => {
+    const laterPage: AppServerThreadReplay = {
+      entries: [
+        {
+          type: "message",
+          id: "message-later",
+          role: "user",
+          text: "A later manual follow-up.",
+        },
+      ],
+      messages: [
+        {
+          id: "message-later",
+          role: "user",
+          text: "A later manual follow-up.",
+        },
+      ],
+      pagination: {
+        supportsPagination: true,
+        hasPreviousPage: true,
+        previousCursor: "older",
+      },
+    };
+    const initialPage: AppServerThreadReplay = {
+      entries: [
+        {
+          type: "message",
+          id: "message-initial",
+          role: "user",
+          text: "The delegated task.",
+        },
+      ],
+      messages: [
+        {
+          id: "message-initial",
+          role: "user",
+          text: "The delegated task.",
+        },
+      ],
+      pagination: {
+        supportsPagination: true,
+        hasPreviousPage: false,
+      },
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        readThreadReplays: [laterPage, initialPage],
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:target-thread": {
+            backend: "codex",
+            threadId: "target-thread",
+            extraLinkedDirectories: [],
+            handoffOrigin: {
+              sourceBackend: "codex",
+              sourceThreadId: "parent-thread",
+              sourceTitle: "Parent thread",
+              seedMode: "clean",
+              groupingMode: "none",
+              createdAt: 1_000,
+              workspace: {
+                mode: "none",
+                git: {
+                  kind: "none",
+                  worktreeCreationAvailable: false,
+                  unavailableReason: "No workspace requested.",
+                },
+              },
+            },
+          },
+        },
+      }),
+      threadTitleGenerationService: null,
+    });
+
+    const later = await registry.readThread({
+      backend: "codex",
+      threadId: "target-thread",
+    });
+    expect(later.replay.entries[0]).not.toHaveProperty("origin");
+
+    const initial = await registry.readThread({
+      backend: "codex",
+      threadId: "target-thread",
+      before: "older",
+    });
+    expect(initial.replay.entries[0]).toMatchObject({
+      id: "message-initial",
+      origin: {
+        kind: "agent",
+        sourceThread: {
+          backend: "codex",
+          threadId: "parent-thread",
+          title: "Parent thread",
+        },
       },
     });
 
