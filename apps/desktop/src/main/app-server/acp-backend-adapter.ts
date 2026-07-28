@@ -477,10 +477,19 @@ export function findAcpModelConfigOption(
   );
 }
 
+export function findAcpThoughtLevelConfigOption(
+  runtimeCapabilities: BackendAcpRuntimeCapabilities | undefined,
+) {
+  return runtimeCapabilities?.configOptions?.find(
+    (option) => option.category === "thought_level",
+  );
+}
+
 export function withAcpModelRuntimeSelection(params: {
   runtime: BackendAcpSessionRuntimeState | undefined;
   runtimeCapabilities: BackendAcpRuntimeCapabilities | undefined;
   model: string | undefined;
+  reasoningEffort?: string;
   now: number;
 }): BackendAcpSessionRuntimeState | undefined {
   const model = params.model?.trim();
@@ -495,18 +504,33 @@ export function withAcpModelRuntimeSelection(params: {
       (option) => option.id === model,
     ) ?? false;
   const shouldSetCurrentModelId =
-    hasAdvertisedModel || (!modelConfigOption && !hasModelList);
+    !modelConfigOption && (hasAdvertisedModel || !hasModelList);
   const configValues = modelConfigOption
     ? {
         ...(params.runtime?.configValues ?? {}),
         [modelConfigOption.id]: model,
       }
     : params.runtime?.configValues;
+  const thoughtLevelConfigOption = findAcpThoughtLevelConfigOption(
+    params.runtimeCapabilities,
+  );
+  const configValuesWithReasoning =
+    params.reasoningEffort && thoughtLevelConfigOption
+      ? {
+          ...(configValues ?? {}),
+          [thoughtLevelConfigOption.id]: params.reasoningEffort,
+        }
+      : configValues;
 
   return {
     ...params.runtime,
     ...(shouldSetCurrentModelId ? { currentModelId: model } : {}),
-    ...(configValues ? { configValues } : {}),
+    ...(params.reasoningEffort
+      ? { reasoningEffort: params.reasoningEffort }
+      : {}),
+    ...(configValuesWithReasoning
+      ? { configValues: configValuesWithReasoning }
+      : {}),
     updatedAt: Math.max(params.runtime?.updatedAt ?? 0, params.now),
   };
 }

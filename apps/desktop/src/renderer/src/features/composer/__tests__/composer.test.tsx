@@ -1684,6 +1684,93 @@ describe("Composer", () => {
     });
   });
 
+  it("remembers Kimi thinking effort separately for each model", async () => {
+    const kimiBackend = {
+      ...backendSummary("acp:kimi", {
+        models: [
+          {
+            id: "kimi-code/k3",
+            label: "K3",
+            current: true,
+            defaultReasoningEffort: "high",
+            reasoningEfforts: ["low", "high", "max"],
+            supportsReasoning: true,
+          },
+          {
+            id: "kimi-code/k3-256k",
+            label: "K3-256k",
+            defaultReasoningEffort: "high",
+            reasoningEfforts: ["low", "high", "max"],
+            supportsReasoning: true,
+          },
+        ],
+      }),
+      label: "Kimi",
+    };
+    const initialLaunchpad: NavigationLaunchpadDraft = {
+      directoryKey: "directory:/repo",
+      directoryKind: "directory",
+      directoryLabel: "Repo",
+      directoryPath: "/repo",
+      backend: "acp:kimi",
+      executionMode: "default",
+      model: "kimi-code/k3",
+      reasoningEffort: "max",
+      providerSettings: {
+        "acp:kimi": {
+          model: "kimi-code/k3",
+          reasoningEffort: "max",
+          reasoningEffortsByModel: {
+            "kimi-code/k3": "max",
+            "kimi-code/k3-256k": "low",
+          },
+        },
+      },
+      prompt: "",
+      workMode: "local",
+      branchName: "main",
+      createdAt: 1,
+      updatedAt: 1,
+    };
+
+    function KimiThinkingHarness(): React.JSX.Element {
+      const [launchpad, setLaunchpad] = useState(initialLaunchpad);
+      return (
+        <Composer
+          backends={[kimiBackend]}
+          launchpad={launchpad}
+          onUpdateLaunchpad={async (_directoryKey, patch) => {
+            setLaunchpad((current) =>
+              applyNavigationLaunchpadProviderSettingsPatch<
+                NavigationLaunchpadDraft
+              >(current, patch),
+            );
+          }}
+          skills={[]}
+        />
+      );
+    }
+
+    render(<KimiThinkingHarness />);
+
+    expect(screen.getByLabelText("Reasoning")).toHaveValue("max");
+    chooseDropdownOption("Model", "K3-256k");
+    await waitFor(() => {
+      expect(screen.getByLabelText("Reasoning")).toHaveValue("low");
+    });
+
+    chooseDropdownOption("Reasoning", "high");
+    chooseDropdownOption("Model", "K3");
+    await waitFor(() => {
+      expect(screen.getByLabelText("Reasoning")).toHaveValue("max");
+    });
+
+    chooseDropdownOption("Model", "K3-256k");
+    await waitFor(() => {
+      expect(screen.getByLabelText("Reasoning")).toHaveValue("high");
+    });
+  });
+
   it("hides reasoning controls for Grok 4.20 models", () => {
     render(
       <Composer

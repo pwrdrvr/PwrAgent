@@ -1148,6 +1148,111 @@ describe("AcpAgentClient", () => {
     });
   });
 
+  it("sets Kimi model and thinking through advertised config options", async () => {
+    const transport = new FakeAcpAgentTransport({
+      "session/new": {
+        sessionId: "kimi-session",
+        configOptions: [
+          {
+            id: "model",
+            name: "Model",
+            category: "model",
+            currentValue: "kimi-code/kimi-for-coding",
+            options: [
+              {
+                value: "kimi-code/kimi-for-coding",
+                name: "K2.7 Coding",
+              },
+              { value: "kimi-code/k3", name: "K3" },
+            ],
+          },
+          {
+            id: "thinking",
+            name: "Thinking",
+            category: "thought_level",
+            currentValue: "on",
+            options: [{ value: "on", name: "On" }],
+          },
+        ],
+      },
+      "session/set_config_option": {
+        configOptions: [
+          {
+            id: "model",
+            name: "Model",
+            category: "model",
+            currentValue: "kimi-code/k3",
+            options: [
+              {
+                value: "kimi-code/kimi-for-coding",
+                name: "K2.7 Coding",
+              },
+              { value: "kimi-code/k3", name: "K3" },
+            ],
+          },
+          {
+            id: "thinking",
+            name: "Thinking",
+            category: "thought_level",
+            currentValue: "high",
+            options: [
+              { value: "low", name: "Low" },
+              { value: "high", name: "High" },
+              { value: "max", name: "Max" },
+            ],
+          },
+        ],
+      },
+    });
+    const client = new AcpAgentClient({
+      backendId: "acp:kimi",
+      store,
+      transport,
+      now: () => 1000,
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+
+    await expect(
+      client.setRuntimeOption({
+        sessionId: session.sessionId,
+        source: "model",
+        optionId: "model",
+        value: "kimi-code/k3",
+        reasoningEffort: "high",
+      }),
+    ).resolves.toMatchObject({
+      currentModelId: "kimi-code/k3",
+      configValues: {
+        model: "kimi-code/k3",
+        thinking: "high",
+      },
+      reasoningEffort: "high",
+    });
+    expect(transport.requests.slice(-2)).toEqual([
+      {
+        method: "session/set_config_option",
+        params: {
+          sessionId: "kimi-session",
+          configId: "model",
+          value: "kimi-code/k3",
+        },
+      },
+      {
+        method: "session/set_config_option",
+        params: {
+          sessionId: "kimi-session",
+          configId: "thinking",
+          value: "high",
+        },
+      },
+    ]);
+  });
+
   it("keeps requested ACP config-option mode when response reports stale current mode", async () => {
     const transport = new FakeAcpAgentTransport({
       "session/new": {

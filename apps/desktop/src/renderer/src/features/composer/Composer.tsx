@@ -6283,7 +6283,13 @@ export function Composer(props: ComposerProps) {
           return;
         }
         const nextReasoningEffort = nextModelOption.supportsReasoning
-          ? getDefaultReasoningEffort(refreshedBackend, nextModelOption)
+          ? adoptRefreshedDefault
+            ? getDefaultReasoningEffort(refreshedBackend, nextModelOption)
+            : getReasoningEffortValue(
+                refreshedBackend,
+                nextModelOption,
+                latestLaunchpad.reasoningEffort,
+              )
           : undefined;
         if (
           latestLaunchpad.model === nextModelOption.id &&
@@ -8060,7 +8066,10 @@ export function Composer(props: ComposerProps) {
                   return;
                 }
                 const nextBackend = value as NavigationLaunchpadDraft["backend"];
-                if (nextBackend.startsWith("acp:")) {
+                const hasRememberedModel = Boolean(
+                  props.launchpad.providerSettings?.[nextBackend]?.model,
+                );
+                if (nextBackend.startsWith("acp:") && !hasRememberedModel) {
                   pendingProviderSelectionKeyRef.current =
                     `${props.launchpad.directoryKey}:${nextBackend}`;
                 } else {
