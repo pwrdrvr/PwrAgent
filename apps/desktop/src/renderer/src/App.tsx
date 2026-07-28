@@ -589,23 +589,28 @@ function DesktopAppShell(props: {
     onRefreshNavigation: navigation.refresh,
     selectedThread: navigation.selectedThread,
   });
-  // Browser-style back/forward across threads and the search view. The
-  // tracked location is (mainView, selected thread); Settings, Automations,
-  // and launchpads stay untracked — they're modal-ish chrome, not places
-  // you navigate back to (see useNavigationHistory). Search query/results
-  // live up here so Back lands on a still-populated results list after
-  // opening a result unmounts the panel.
+  // Browser-style back/forward across threads, project launchpads, and the
+  // search view. Settings and Automations stay untracked because they're
+  // modal-ish chrome. Search query/results live up here so Back lands on a
+  // still-populated results list after opening a result unmounts the panel.
   const threadSearchState = useThreadSearchPanelState();
   const historyLocation = useMemo<NavigationHistoryLocation | undefined>(() => {
     if (mainView === "search") {
       return { view: "search" };
     }
+    if (mainView === "thread" && navigation.selectedLaunchpad) {
+      return {
+        view: "launchpad",
+        directoryKey: navigation.selectedLaunchpad.directoryKey,
+      };
+    }
     if (mainView === "thread" && navigation.selectedThreadKey) {
       return { view: "thread", threadKey: navigation.selectedThreadKey };
     }
     return undefined;
-  }, [mainView, navigation.selectedThreadKey]);
+  }, [mainView, navigation.selectedLaunchpad, navigation.selectedThreadKey]);
   const showThread = navigation.showThread;
+  const selectDirectoryLaunchpad = navigation.selectDirectoryLaunchpad;
   // Target of `pwragent://thread/…` chips in the transcript. Navigation-only:
   // the scheme never carries an action, so this is the entire surface it can
   // reach. Mirrors the tray/notification `onShowThreadRequested` path below.
@@ -623,12 +628,16 @@ function DesktopAppShell(props: {
         return;
       }
       setMainView("thread");
+      if (location.view === "launchpad") {
+        selectDirectoryLaunchpad(location.directoryKey);
+        return;
+      }
       const parts = parseThreadIdentityKey(location.threadKey);
       if (parts) {
         void showThread(parts);
       }
     },
-    [showThread],
+    [selectDirectoryLaunchpad, showThread],
   );
   // Undefined while the snapshot is empty/loading so a transient blank
   // thread list can't wipe the stacks; otherwise dead threads (archived,
@@ -644,8 +653,20 @@ function DesktopAppShell(props: {
         : undefined,
     [navigation.threads],
   );
+  const liveLaunchpadKeys = useMemo<ReadonlySet<string> | undefined>(
+    () =>
+      navigation.loaded
+        ? new Set(
+            navigation.directories
+              .filter((directory) => directory.launchpad)
+              .map((directory) => directory.key),
+          )
+        : undefined,
+    [navigation.directories, navigation.loaded],
+  );
   const history = useNavigationHistory({
     current: historyLocation,
+    liveLaunchpadKeys,
     liveThreadKeys,
     restore: restoreHistoryLocation,
   });

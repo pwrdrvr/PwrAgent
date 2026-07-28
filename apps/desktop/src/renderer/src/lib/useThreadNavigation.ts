@@ -2222,6 +2222,8 @@ export function useThreadNavigation(
   clearPickDirectoryError: () => void;
   resetDirectoryLaunchpad: (directoryKey: string) => Promise<void>;
   removeDirectory: (directoryKey: string) => Promise<void>;
+  /** Select an existing launchpad without creating or resetting its draft. */
+  selectDirectoryLaunchpad: (directoryKey: string) => void;
   selectedDirectory?: NavigationDirectorySummary;
   selectedItemKey?: string;
   selectedLaunchpad?: NavigationLaunchpadDraft;
@@ -3757,6 +3759,15 @@ export function useThreadNavigation(
     },
     [refresh, selectThread, state.response?.threads],
   );
+
+  const selectDirectoryLaunchpad = useCallback((directoryKey: string): void => {
+    setCreateThreadError(undefined);
+    setLaunchpadError(undefined);
+    setArchiveThreadError(undefined);
+    setSetThreadExecutionModeError(undefined);
+    setSetThreadModelSettingsError(undefined);
+    setSelectedItemKey(buildLaunchpadSelectionKey(directoryKey));
+  }, []);
 
   const createThread = useCallback(
     async (
@@ -5806,6 +5817,7 @@ export function useThreadNavigation(
     clearPickDirectoryError,
     resetDirectoryLaunchpad,
     removeDirectory,
+    selectDirectoryLaunchpad,
     selectedDirectory,
     selectedItemKey,
     selectedLaunchpad,
