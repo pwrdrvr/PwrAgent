@@ -21,6 +21,7 @@ import type {
   DesktopMessagingSlackGroupDmAccessMode,
   DesktopOnboardingCompletedSource,
   DesktopProviderModelDefaults,
+  DesktopProviderThreadModelMigration,
   DesktopSettingsConfigPatch,
   DesktopUpdateChannel,
   DesktopWorktreeStorageLocation,
@@ -213,9 +214,14 @@ export type DesktopSettingsConfig = {
   };
   models?: {
     providerDefaults?: Record<string, DesktopProviderModelDefaults>;
+    providerThreadMigrations?: Record<
+      string,
+      DesktopProviderThreadModelMigration
+    >;
     codex?: {
       path?: string;
       profile?: string;
+      allowFast?: boolean;
     };
   };
   acpAgents?: {
@@ -1203,6 +1209,9 @@ export function desktopSettingsPatchToEdits(
   if (patch.models?.codex?.profile !== undefined) {
     set(["models", "codex", "profile"], patch.models.codex.profile);
   }
+  if (patch.models?.codex?.allowFast !== undefined) {
+    set(["models", "codex", "allow_fast"], patch.models.codex.allowFast);
+  }
   if (patch.models?.providerDefaults !== undefined) {
     const providerDefaults = normalizeProviderModelDefaults(
       patch.models.providerDefaults,
@@ -1224,6 +1233,34 @@ export function desktopSettingsPatchToEdits(
       edits.push({
         op: "deleteTableArray",
         path: ["models", "provider_defaults"],
+      });
+    }
+  }
+  if (patch.models?.providerThreadMigrations !== undefined) {
+    const providerThreadMigrations = normalizeProviderThreadModelMigrations(
+      patch.models.providerThreadMigrations,
+    );
+    const entries = Object.entries(providerThreadMigrations)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([provider, migration]) => ({
+        provider,
+        revision: migration.revision,
+        model: migration.model,
+        ...(migration.reasoningEffort
+          ? { reasoning_effort: migration.reasoningEffort }
+          : {}),
+        created_at: migration.createdAt,
+      }));
+    if (entries.length > 0) {
+      edits.push({
+        op: "setTableArray",
+        path: ["models", "provider_thread_migrations"],
+        value: entries,
+      });
+    } else {
+      edits.push({
+        op: "deleteTableArray",
+        path: ["models", "provider_thread_migrations"],
       });
     }
   }
@@ -1546,9 +1583,13 @@ function normalizeDesktopConfig(
     },
     models: {
       providerDefaults: readProviderModelDefaults(models?.provider_defaults),
+      providerThreadMigrations: readProviderThreadModelMigrations(
+        models?.provider_thread_migrations,
+      ),
       codex: {
         path: readString(codex?.path),
         profile: readString(codex?.profile),
+        allowFast: readBoolean(codex?.allow_fast),
       },
     },
     acpAgents: {
@@ -1780,14 +1821,25 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
 
   const codex = config.models?.codex;
   const providerDefaults = config.models?.providerDefaults;
+  const providerThreadMigrations = config.models?.providerThreadMigrations;
   if (
     (codex && hasDefinedValue(codex))
     || (providerDefaults && Object.keys(providerDefaults).length > 0)
+    || (
+      providerThreadMigrations
+      && Object.keys(providerThreadMigrations).length > 0
+    )
   ) {
     pruned.models = {
       ...(providerDefaults && Object.keys(providerDefaults).length > 0
         ? { providerDefaults }
         : {}),
+      ...(
+        providerThreadMigrations
+        && Object.keys(providerThreadMigrations).length > 0
+          ? { providerThreadMigrations }
+          : {}
+      ),
       ...(codex && hasDefinedValue(codex) ? { codex } : {}),
     };
   }
@@ -2131,6 +2183,71 @@ function readProviderModelDefaults(
     }
   }
   return defaults;
+}
+
+function normalizeProviderThreadModelMigrations(
+  value: Record<string, DesktopProviderThreadModelMigration>,
+): Record<string, DesktopProviderThreadModelMigration> {
+  return Object.fromEntries(
+    Object.entries(value).flatMap(([provider, migration]) => {
+      const normalizedProvider = provider.trim();
+      const revision = migration.revision.trim();
+      const model = migration.model.trim();
+      const reasoningEffort = migration.reasoningEffort?.trim() || undefined;
+      if (
+        !normalizedProvider
+        || !revision
+        || !model
+        || !Number.isFinite(migration.createdAt)
+      ) {
+        return [];
+      }
+      return [[
+        normalizedProvider,
+        {
+          revision,
+          model,
+          ...(reasoningEffort ? { reasoningEffort } : {}),
+          createdAt: migration.createdAt,
+        },
+      ]];
+    }),
+  );
+}
+
+function readProviderThreadModelMigrations(
+  value: TomlScalar | undefined,
+): Record<string, DesktopProviderThreadModelMigration> | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const migrations: Record<string, DesktopProviderThreadModelMigration> = {};
+  for (const item of value) {
+    if (typeof item !== "object" || item === null || Array.isArray(item)) {
+      continue;
+    }
+    const provider =
+      typeof item.provider === "string" ? item.provider.trim() : "";
+    const revision =
+      typeof item.revision === "string" ? item.revision.trim() : "";
+    const model = typeof item.model === "string" ? item.model.trim() : "";
+    const reasoningEffort =
+      typeof item.reasoning_effort === "string"
+        ? item.reasoning_effort.trim()
+        : "";
+    const createdAt =
+      typeof item.created_at === "number" && Number.isFinite(item.created_at)
+        ? item.created_at
+        : undefined;
+    if (!provider || !revision || !model || createdAt === undefined) {
+      continue;
+    }
+    migrations[provider] = {
+      revision,
+      model,
+      ...(reasoningEffort ? { reasoningEffort } : {}),
+      createdAt,
+    };
+  }
+  return migrations;
 }
 
 function readAuthorizedContacts(

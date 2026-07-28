@@ -81,6 +81,51 @@ describe("desktop config provider model defaults", () => {
       parseDesktopSettingsToml(written, "test.toml").models,
     ).toBeUndefined();
   });
+
+  it("round-trips thread migration revisions and the Codex Fast policy", () => {
+    const edits = desktopSettingsPatchToEdits({
+      models: {
+        providerThreadMigrations: {
+          codex: {
+            revision: "migration-2",
+            model: "gpt-5.6-sol",
+            reasoningEffort: "high",
+            createdAt: 2_000,
+          },
+          "acp:kimi": {
+            revision: "migration-1",
+            model: "kimi-k3",
+            createdAt: 1_000,
+          },
+        },
+        codex: {
+          allowFast: false,
+        },
+      },
+    });
+    const written = applyTomlEdits("", edits);
+
+    expect(written).toContain("allow_fast = false");
+    expect(written).toContain("[[models.provider_thread_migrations]]");
+    expect(parseDesktopSettingsToml(written, "test.toml").models).toEqual({
+      providerThreadMigrations: {
+        codex: {
+          revision: "migration-2",
+          model: "gpt-5.6-sol",
+          reasoningEffort: "high",
+          createdAt: 2_000,
+        },
+        "acp:kimi": {
+          revision: "migration-1",
+          model: "kimi-k3",
+          createdAt: 1_000,
+        },
+      },
+      codex: {
+        allowFast: false,
+      },
+    });
+  });
 });
 
 // Regression: the `[ui]` window-layout section (sidebar hidden, context-rail

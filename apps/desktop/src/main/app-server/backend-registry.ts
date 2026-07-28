@@ -65,6 +65,7 @@ import {
   type BackendRateLimitSummary,
   type BackendSummary,
   type DesktopProviderModelDefaults,
+  type DesktopProviderThreadModelMigration,
   type CheckThreadBranchDriftRequest,
   type CheckThreadBranchDriftResponse,
   type ForkThreadRequest,
@@ -112,6 +113,9 @@ import {
   type SetThreadExecutionModeResponse,
   type SetThreadModelSettingsRequest,
   type SetThreadModelSettingsResponse,
+  type ApplyThreadModelMigrationRequest,
+  type ApplyThreadModelMigrationResponse,
+  type TurnOffCodexFastEverywhereResponse,
   type QueueThreadExecutionModeRequest,
   type QueueThreadExecutionModeResponse,
   type CancelThreadExecutionModeQueueRequest,
@@ -5637,6 +5641,11 @@ export class DesktopBackendRegistry {
     string,
     DesktopProviderModelDefaults
   >;
+  private readonly resolveProviderThreadModelMigrationsFn: () => Record<
+    string,
+    DesktopProviderThreadModelMigration
+  >;
+  private readonly resolveCodexFastAllowedFn: () => boolean;
   /**
    * Reports whether the registry is running inside the throwaway
    * bootstrap profile (`.bootstrap/`). When `true`, `listThreads`
@@ -5680,6 +5689,11 @@ export class DesktopBackendRegistry {
       string,
       DesktopProviderModelDefaults
     >;
+    resolveProviderThreadModelMigrations?: () => Record<
+      string,
+      DesktopProviderThreadModelMigration
+    >;
+    resolveCodexFastAllowed?: () => boolean;
     resolveGrokApiKey?: () => string | undefined;
     acpWorktreeRepositoryResolver?: (
       cwd: string,
@@ -5743,6 +5757,12 @@ export class DesktopBackendRegistry {
     this.resolveProviderModelDefaultsFn =
       options?.resolveProviderModelDefaults ??
       (() => settingsService?.resolveProviderModelDefaults() ?? {});
+    this.resolveProviderThreadModelMigrationsFn =
+      options?.resolveProviderThreadModelMigrations ??
+      (() => settingsService?.resolveProviderThreadModelMigrations() ?? {});
+    this.resolveCodexFastAllowedFn =
+      options?.resolveCodexFastAllowed ??
+      (() => settingsService?.resolveCodexFastAllowed() ?? true);
     const codexCommand = settingsService?.resolveCodexCommandPreference();
     const codexEnv =
       typeof settingsService?.resolveCodexSpawnEnv === "function"
@@ -8623,16 +8643,24 @@ export class DesktopBackendRegistry {
         codexEnvironmentRuntime,
       });
     }
+    const currentMigration =
+      this.resolveProviderThreadModelMigrationsFn()[backend];
     if (
       modelSettings.model !== undefined ||
       modelSettings.reasoningEffort !== undefined ||
       modelSettings.serviceTier !== undefined ||
-      modelSettings.fastMode !== undefined
+      modelSettings.fastMode !== undefined ||
+      currentMigration !== undefined
     ) {
       await this.overlayStore.setThreadModelSettings({
         backend,
         threadId: result.threadId,
         ...modelSettings,
+        ...(currentMigration
+          ? {
+              modelMigrationRevision: currentMigration.revision,
+            }
+          : {}),
       });
     }
 
@@ -8850,16 +8878,24 @@ export class DesktopBackendRegistry {
         threadId: result.threadId,
         executionMode,
       });
+      const currentMigration =
+        this.resolveProviderThreadModelMigrationsFn()[backend];
       if (
         modelSettings.model !== undefined ||
         modelSettings.reasoningEffort !== undefined ||
         modelSettings.serviceTier !== undefined ||
-        modelSettings.fastMode !== undefined
+        modelSettings.fastMode !== undefined ||
+        currentMigration !== undefined
       ) {
         await this.overlayStore.setThreadModelSettings({
           backend,
           threadId: result.threadId,
           ...modelSettings,
+          ...(currentMigration
+            ? {
+                modelMigrationRevision: currentMigration.revision,
+              }
+            : {}),
         });
       }
       if (forkedCodexEnvironmentRuntime) {
@@ -9105,14 +9141,23 @@ export class DesktopBackendRegistry {
     messageOrigin?: AppServerThreadMessageOrigin;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
     this.assertNotBootstrap("startTurn");
+    const migrationResult = await this.applyThreadModelMigration({
+      backend: params.backend,
+      threadId: params.threadId,
+    });
+    const migrationApplied = migrationResult.status === "applied";
     if (isAcpBackendId(params.backend)) {
       const overlay = await this.overlayStore.getThreadOverlayState({
         backend: params.backend,
         threadId: params.threadId,
       });
       const modelSettings = await this.resolveModelSettings(params.backend, {
-        model: params.model ?? overlay?.model,
-        reasoningEffort: params.reasoningEffort ?? overlay?.reasoningEffort,
+        model: migrationApplied
+          ? overlay?.model
+          : params.model ?? overlay?.model,
+        reasoningEffort: migrationApplied
+          ? overlay?.reasoningEffort
+          : params.reasoningEffort ?? overlay?.reasoningEffort,
         reasoningEffortsByModel: overlay?.reasoningEffortsByModel,
       });
       const reservationKey = buildTurnStartReservationKey(
@@ -9204,9 +9249,13 @@ export class DesktopBackendRegistry {
       });
       turnParams = await this.resolveModelSettings(params.backend, {
         ...params,
-        model: params.model ?? overlay?.model,
+        model: migrationApplied
+          ? overlay?.model
+          : params.model ?? overlay?.model,
         serviceTier: params.serviceTier ?? overlay?.serviceTier,
-        reasoningEffort: params.reasoningEffort ?? overlay?.reasoningEffort,
+        reasoningEffort: migrationApplied
+          ? overlay?.reasoningEffort
+          : params.reasoningEffort ?? overlay?.reasoningEffort,
         fastMode: params.backend === "codex" ? params.fastMode ?? overlay?.fastMode : undefined,
       });
       cwd =
@@ -11059,6 +11108,24 @@ export class DesktopBackendRegistry {
   async setThreadModelSettings(
     params: SetThreadModelSettingsRequest
   ): Promise<SetThreadModelSettingsResponse> {
+    const modelSettingsManuallyUpdatedAt =
+      "model" in params || "reasoningEffort" in params
+        ? Date.now()
+        : undefined;
+    return await this.setThreadModelSettingsInternal(params, {
+      ...(modelSettingsManuallyUpdatedAt !== undefined
+        ? { modelSettingsManuallyUpdatedAt }
+        : {}),
+    });
+  }
+
+  private async setThreadModelSettingsInternal(
+    params: SetThreadModelSettingsRequest,
+    metadata: {
+      modelMigrationRevision?: string;
+      modelSettingsManuallyUpdatedAt?: number;
+    },
+  ): Promise<SetThreadModelSettingsResponse> {
     const current = await this.overlayStore.getThreadOverlayState({
       backend: params.backend,
       threadId: params.threadId,
@@ -11095,6 +11162,7 @@ export class DesktopBackendRegistry {
         backend: params.backend,
         threadId: params.threadId,
         ...modelSettings,
+        ...metadata,
       });
     };
     if (acpBackend && modelSettings.model && acpRuntimeModelChanged) {
@@ -11143,6 +11211,129 @@ export class DesktopBackendRegistry {
       threadId: params.threadId,
       ...modelSettings,
     };
+  }
+
+  async applyThreadModelMigration(
+    params: ApplyThreadModelMigrationRequest,
+  ): Promise<ApplyThreadModelMigrationResponse> {
+    const migration =
+      this.resolveProviderThreadModelMigrationsFn()[params.backend];
+    if (!migration) {
+      return {
+        backend: params.backend,
+        threadId: params.threadId,
+        status: "none",
+      };
+    }
+
+    const current = await this.overlayStore.getThreadOverlayState({
+      backend: params.backend,
+      threadId: params.threadId,
+    });
+    if (current?.modelMigrationRevision === migration.revision) {
+      return {
+        backend: params.backend,
+        threadId: params.threadId,
+        status: "already-applied",
+        revision: migration.revision,
+        model: current.model,
+        reasoningEffort: current.reasoningEffort,
+      };
+    }
+
+    if (
+      params.threadCreatedAt !== undefined
+      && params.threadCreatedAt > migration.createdAt
+    ) {
+      await this.overlayStore.setThreadModelSettings({
+        backend: params.backend,
+        threadId: params.threadId,
+        model: current?.model,
+        reasoningEffort: current?.reasoningEffort,
+        serviceTier: current?.serviceTier,
+        fastMode: current?.fastMode,
+        modelMigrationRevision: migration.revision,
+      });
+      return {
+        backend: params.backend,
+        threadId: params.threadId,
+        status: "acknowledged-new-thread",
+        revision: migration.revision,
+        model: current?.model,
+        reasoningEffort: current?.reasoningEffort,
+      };
+    }
+
+    if (
+      current?.modelSettingsManuallyUpdatedAt !== undefined
+      && current.modelSettingsManuallyUpdatedAt >= migration.createdAt
+    ) {
+      await this.overlayStore.setThreadModelSettings({
+        backend: params.backend,
+        threadId: params.threadId,
+        model: current.model,
+        reasoningEffort: current.reasoningEffort,
+        serviceTier: current.serviceTier,
+        fastMode: current.fastMode,
+        modelMigrationRevision: migration.revision,
+        modelSettingsManuallyUpdatedAt:
+          current.modelSettingsManuallyUpdatedAt,
+      });
+      return {
+        backend: params.backend,
+        threadId: params.threadId,
+        status: "acknowledged-manual-change",
+        revision: migration.revision,
+        model: current.model,
+        reasoningEffort: current.reasoningEffort,
+      };
+    }
+
+    const resolved = await this.resolveModelSettings(
+      params.backend,
+      {
+        model: migration.model,
+        reasoningEffort: migration.reasoningEffort,
+      },
+      "settings-refresh",
+    );
+    if (
+      resolved.model !== migration.model
+      || (
+        migration.reasoningEffort !== undefined
+        && resolved.reasoningEffort !== migration.reasoningEffort
+      )
+    ) {
+      return {
+        backend: params.backend,
+        threadId: params.threadId,
+        status: "unavailable",
+        revision: migration.revision,
+        model: migration.model,
+        reasoningEffort: migration.reasoningEffort,
+      };
+    }
+
+    const response = await this.setThreadModelSettingsInternal(
+      {
+        backend: params.backend,
+        threadId: params.threadId,
+        model: migration.model,
+        reasoningEffort: resolved.reasoningEffort,
+      },
+      {
+        modelMigrationRevision: migration.revision,
+      },
+    );
+    return {
+      ...response,
+      status: "applied",
+      revision: migration.revision,
+    };
+  }
+
+  async turnOffCodexFastEverywhere(): Promise<TurnOffCodexFastEverywhereResponse> {
+    return await this.overlayStore.turnOffCodexFastEverywhere();
   }
 
   async checkThreadBranchDrift(
@@ -12667,11 +12858,19 @@ export class DesktopBackendRegistry {
     settings: ModelSettings,
     callerReason: BackendModelCatalogCallerReason = "thread-start-defaults",
   ): Promise<ModelSettings> {
-    return resolveModelSettingsFromOptions(
+    const resolved = resolveModelSettingsFromOptions(
       backend,
       await this.getBackendLaunchpadOptions(backend, callerReason),
       settings,
     );
+    if (backend !== "codex" || this.resolveCodexFastAllowedFn()) {
+      return resolved;
+    }
+    return {
+      ...resolved,
+      serviceTier: undefined,
+      fastMode: false,
+    };
   }
 
   private async resolveReviewModelSettings(
@@ -12861,6 +13060,13 @@ export class DesktopBackendRegistry {
       ),
       ...modelSettings,
     };
+    if (
+      resolvedDefaults.backend === "codex"
+      && !this.resolveCodexFastAllowedFn()
+    ) {
+      resolvedDefaults.fastMode = false;
+      delete resolvedDefaults.serviceTier;
+    }
     if (
       resolvedDefaults.backend === "codex" &&
       (resolvedDefaults.serviceTier === "fast" ||
