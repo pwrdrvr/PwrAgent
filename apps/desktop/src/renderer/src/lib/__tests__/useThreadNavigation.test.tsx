@@ -5606,7 +5606,7 @@ describe("useThreadNavigation", () => {
       directoryKey: "subthread:codex:thread-parent:new-worktree",
       patch: expect.objectContaining({
         workMode: "worktree",
-        directoryPath: "/repo/app/.worktrees/parent/app",
+        directoryPath: "/repo/app",
         branchName: "feature/parent",
         parentThreadId: "thread-parent",
       }),
@@ -5747,7 +5747,7 @@ describe("useThreadNavigation", () => {
     expect(result.current.selectedDirectory?.threadKeys).toEqual([]);
   });
 
-  it("uses branch status returned while ensuring a new-worktree sub-thread", async () => {
+  it("uses the live repository to materialize a new-worktree sub-thread from a missing parent worktree", async () => {
     const repoPath = "/repo/app";
     const parentWorktreePath = "/repo/app/.worktrees/missing-parent/app";
     const directoryKey = "subthread:codex:thread-parent:new-worktree";
@@ -5806,7 +5806,7 @@ describe("useThreadNavigation", () => {
         directoryKey,
         directoryKind: "directory" as const,
         directoryLabel: "app",
-        directoryPath: parentWorktreePath,
+        directoryPath: repoPath,
         workMode: "worktree" as const,
         backend: "codex" as const,
         executionMode: "default" as const,
@@ -5861,10 +5861,18 @@ describe("useThreadNavigation", () => {
     expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith(
       expect.objectContaining({
         directoryKey,
-        directoryPath: parentWorktreePath,
+        directoryPath: repoPath,
         gitStatusSourcePath: repoPath,
       }),
     );
+    expect(updateDirectoryLaunchpad).toHaveBeenCalledWith({
+      directoryKey,
+      patch: expect.objectContaining({
+        directoryPath: repoPath,
+        workMode: "worktree",
+      }),
+    });
+    expect(result.current.selectedLaunchpad?.directoryPath).toBe(repoPath);
     expect(result.current.selectedDirectory?.gitStatus).toEqual(gitStatus);
   });
 

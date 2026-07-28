@@ -3991,6 +3991,10 @@ export function useThreadNavigation(
       }
 
       const directory = selectThreadWorkspace(parent, mode);
+      const launchpadDirectoryPath =
+        mode === "new-worktree"
+          ? directory.gitStatusSourcePath ?? directory.directoryPath
+          : directory.directoryPath;
       // Key the launchpad on the clicked card so each source gets its own
       // composer (two children of one root must not collide), but link the new
       // thread to the group root and remember the source for in-place insertion.
@@ -4010,7 +4014,7 @@ export function useThreadNavigation(
           directoryKey,
           directoryKind: directory.directoryKind,
           directoryLabel: directory.directoryLabel,
-          directoryPath: directory.directoryPath,
+          directoryPath: launchpadDirectoryPath,
           gitStatusSourcePath: directory.gitStatusSourcePath,
           parentThreadId: groupRoot.id,
           parentThreadTitle: groupRoot.title,
@@ -4028,7 +4032,7 @@ export function useThreadNavigation(
           executionMode: parent.executionMode ?? response.launchpad.executionMode,
           workMode: directory.workMode,
           directoryLabel: directory.directoryLabel,
-          directoryPath: directory.directoryPath,
+          directoryPath: launchpadDirectoryPath,
           ...(directory.branchName ? { branchName: directory.branchName } : {}),
           parentThreadId: groupRoot.id,
           parentThreadTitle: groupRoot.title,

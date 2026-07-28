@@ -6596,7 +6596,8 @@ export function Composer(props: ComposerProps) {
     [props.launchpad, props.directory],
   );
   const launchpadBranchStatusError =
-    props.launchpad?.workMode === "worktree" &&
+    props.launchpad?.directoryKind === "directory" &&
+    !isSameWorktreeSubthreadLaunchpad(props.launchpad.directoryKey) &&
     props.directory?.gitStatus?.syncState === "status-unavailable"
       ? props.directory.gitStatus.statusUnavailableReason ??
         "Git did not return branch information."
