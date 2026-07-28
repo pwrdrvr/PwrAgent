@@ -1,0 +1,50 @@
+[
+  {
+    "sessionUpdate": "agent_message_chunk",
+    "content": {
+      "type": "text",
+      "text": ""
+    },
+    "_meta": {
+      "usage": {
+        "inputTokens": 23851,
+        "outputTokens": 222,
+        "totalTokens": 24073,
+        "thoughtTokens": 29,
+        "cachedReadTokens": 0
+      }
+    }
+  },
+  {
+    "sessionUpdate": "tool_call",
+    "toolCallId": "call_read_readme",
+    "status": "in_progress",
+    "title": "ReadFile: README.md",
+    "kind": "read"
+  },
+  {
+    "sessionUpdate": "tool_call_update",
+    "toolCallId": "call_read_readme",
+    "status": "completed",
+    "content": {
+      "type": "text",
+      "text": "# PwrAgent"
+    }
+  },
+  {
+    "sessionUpdate": "agent_message_chunk",
+    "content": {
+      "type": "text",
+      "text": "PwrAgent is an open-source coding agent."
+    },
+    "_meta": {
+      "usage": {
+        "inputTokens": 25000,
+        "outputTokens": 100,
+        "totalTokens": 25100,
+        "thoughtTokens": 20,
+        "cachedReadTokens": 20000
+      }
+    }
+  }
+]

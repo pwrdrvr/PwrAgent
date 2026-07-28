@@ -51,8 +51,14 @@ import {
 } from "../settings/desktop-config";
 import {
   acpToolUpdateNotifications,
-  acpTurnCompletedUsageNotification,
+  acpUsageNotification,
 } from "../acp/acp-live-notifications";
+import {
+  foldAcpTurnUsage,
+  readAcpSelectedModel,
+  readAcpUsageEnvelope,
+  type AcpTokenUsage,
+} from "../acp/acp-usage.js";
 import {
   AcpRolloutStore,
   isPwrAgentSyntheticAcpUpdate,
@@ -126,6 +132,11 @@ export type LocalAcpDiscovery = () => Promise<AcpInstalledAgentRecord[]>;
 export type AcpSessionStoreLike =
   Pick<AcpSessionStoreContract, "getSession" | "listSessions"> &
   Partial<Pick<AcpSessionStoreContract, "upsertSession">>;
+
+type AcpLiveTurnUsage = {
+  model?: string;
+  tokenUsage: AcpTokenUsage;
+};
 
 export type AcpPromptPayload = {
   prompt: string;
@@ -692,6 +703,19 @@ function mergeAcpReplayWithSyntheticHistory(
   };
 }
 
+function selectedAcpModel(
+  agent: AcpInstalledAgentRecord,
+  session: AcpSessionMetadata | undefined,
+): string | undefined {
+  return (
+    readAcpSelectedModel(session?.acpRuntime) ??
+    agent.runtimeCapabilities?.models?.currentModelId ??
+    agent.runtimeCapabilities?.configOptions?.find(
+      (option) => option.category === "model",
+    )?.currentValue
+  );
+}
+
 export function isAcpSessionMissingForProjectError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return (
@@ -806,6 +830,7 @@ export class AcpBackendAdapter {
   private readonly providerStatusRefreshAttempts = new Map<AcpBackendId, number>();
   private readonly providerStatusRefreshes = new Map<AcpBackendId, Promise<void>>();
   private closed = false;
+  private readonly liveTurnUsage = new Map<string, AcpLiveTurnUsage>();
   private localAcpAgentsPromise?: Promise<AcpInstalledAgentRecord[]>;
 
   constructor(options: AcpBackendAdapterOptions) {
@@ -1416,6 +1441,7 @@ export class AcpBackendAdapter {
     this.providerStatuses.clear();
     this.providerStatusRefreshAttempts.clear();
     this.providerStatusRefreshes.clear();
+    this.liveTurnUsage.clear();
     await Promise.all(
       acpClients.map(async (clientPromise) => {
         const client = await clientPromise.catch(() => undefined);
@@ -1505,6 +1531,44 @@ export class AcpBackendAdapter {
         update,
       }) => {
         const updateKind = readAcpUpdateKind(update);
+        const usageEnvelope = readAcpUsageEnvelope(update);
+        if (usageEnvelope && turnId) {
+          const usageKey = [agent.backendId, sessionId, turnId].join(":");
+          const previousUsage = this.liveTurnUsage.get(usageKey);
+          this.liveTurnUsage.set(usageKey, {
+            model:
+              usageEnvelope.model ??
+              previousUsage?.model ??
+              selectedAcpModel(
+                agent,
+                this.getSession(agent.backendId, sessionId),
+              ),
+            tokenUsage: foldAcpTurnUsage(
+              previousUsage?.tokenUsage,
+              usageEnvelope,
+            ),
+          });
+        }
+        const completedUsage =
+          updateKind === "turn_finished" && turnId
+            ? this.liveTurnUsage.get(
+                [agent.backendId, sessionId, turnId].join(":"),
+              )
+            : undefined;
+        const usageNotification = completedUsage
+          ? acpUsageNotification({
+              envelope: {
+                ...(completedUsage.model
+                  ? { model: completedUsage.model }
+                  : {}),
+                scope: "turn",
+                tokenUsage: completedUsage.tokenUsage,
+              },
+              threadId: sessionId,
+              totalTokenUsage: completedUsage.tokenUsage,
+              turnId,
+            })
+          : undefined;
         if (title) {
           await this.emit({
             backend: agent.backendId,
@@ -1597,11 +1661,6 @@ export class AcpBackendAdapter {
             notification,
           });
         }
-        const usageNotification = acpTurnCompletedUsageNotification({
-          threadId: sessionId,
-          turnId,
-          update,
-        });
         if (usageNotification) {
           await this.emit({
             backend: agent.backendId,
@@ -1609,6 +1668,9 @@ export class AcpBackendAdapter {
           });
         }
         if (updateKind === "turn_finished" && turnId) {
+          this.liveTurnUsage.delete(
+            [agent.backendId, sessionId, turnId].join(":"),
+          );
           this.clearLiveToolNotificationFingerprints({
             backend: agent.backendId,
             threadId: sessionId,
@@ -1646,6 +1708,9 @@ export class AcpBackendAdapter {
         });
       },
       onPromptError: async ({ sessionId, turnId, error }) => {
+        this.liveTurnUsage.delete(
+          [agent.backendId, sessionId, turnId].join(":"),
+        );
         await this.emit({
           backend: agent.backendId,
           notification: {

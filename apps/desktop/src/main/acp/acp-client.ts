@@ -44,6 +44,12 @@ import {
   type AcpRolloutRecord,
   type AcpRolloutStoreAppendParams,
 } from "./acp-rollout-store.js";
+import {
+  foldAcpTurnUsage,
+  readAcpSelectedModel,
+  readAcpUsageEnvelope,
+  type AcpTokenUsage,
+} from "./acp-usage.js";
 import type { JsonRpcId } from "@pwrdrvr/agent-transport";
 import { getMainLogger } from "../log.js";
 
@@ -129,13 +135,7 @@ type AcpSuppressedControlPrompt = {
   fallbackOutputText?: string;
   finalTextChunks: string[];
   model?: string;
-  tokenUsage?: {
-    cachedInputTokens?: number;
-    inputTokens?: number;
-    outputTokens?: number;
-    reasoningOutputTokens?: number;
-    totalTokens?: number;
-  };
+  tokenUsage?: AcpTokenUsage;
 };
 
 type AcpHydratedSessionHistory = {
@@ -560,7 +560,14 @@ export class AcpAgentClient {
     tokenUsage?: AcpSuppressedControlPrompt["tokenUsage"];
   }> {
     const protocolSessionId = this.protocolSessionIdFor(params.sessionId);
-    const suppression: AcpSuppressedControlPrompt = { finalTextChunks: [] };
+    const selectedModel = readAcpSelectedModel(
+      this.options.store.getSession(this.options.backendId, params.sessionId)
+        ?.acpRuntime,
+    );
+    const suppression: AcpSuppressedControlPrompt = {
+      finalTextChunks: [],
+      ...(selectedModel ? { model: selectedModel } : {}),
+    };
     this.suppressedControlPromptSessions.set(protocolSessionId, suppression);
     try {
       await this.options.transport.request(
@@ -755,10 +762,14 @@ export class AcpAgentClient {
           suppressedControlPrompt.fallbackOutputText = text;
         }
       }
-      const usage = readControlPromptUsage(update);
+      const usage = readAcpUsageEnvelope(update);
       if (usage) {
-        suppressedControlPrompt.tokenUsage = usage.tokenUsage;
-        suppressedControlPrompt.model = usage.model;
+        suppressedControlPrompt.tokenUsage = foldAcpTurnUsage(
+          suppressedControlPrompt.tokenUsage,
+          usage,
+        );
+        suppressedControlPrompt.model =
+          usage.model ?? suppressedControlPrompt.model;
       }
       return;
     }
@@ -1273,55 +1284,6 @@ function readUpdateKind(update: Record<string, unknown>): string | undefined {
   const kind =
     update.sessionUpdate ?? update.session_update ?? update.kind ?? update.type;
   return typeof kind === "string" ? kind : undefined;
-}
-
-function readControlPromptUsage(
-  update: Record<string, unknown>,
-): Pick<AcpSuppressedControlPrompt, "model" | "tokenUsage"> | undefined {
-  const kind = readUpdateKind(update);
-  const usage =
-    kind === "turn_completed"
-      ? asRecord(update.usage)
-      : kind === "agent_message_chunk"
-        ? asRecord(asRecord(update._meta)?.usage)
-        : undefined;
-  if (!usage) {
-    return undefined;
-  }
-  const inputTokens = readFiniteNumber(usage.inputTokens);
-  const cachedInputTokens = readFiniteNumber(usage.cachedReadTokens);
-  const outputTokens = readFiniteNumber(usage.outputTokens);
-  const reasoningOutputTokens =
-    readFiniteNumber(usage.reasoningTokens) ??
-    readFiniteNumber(usage.thoughtTokens);
-  const totalTokens = readFiniteNumber(usage.totalTokens);
-  if (
-    inputTokens === undefined &&
-    outputTokens === undefined &&
-    totalTokens === undefined
-  ) {
-    return undefined;
-  }
-  const modelUsage = asRecord(usage.modelUsage);
-  const model = modelUsage ? Object.keys(modelUsage)[0] : undefined;
-  return {
-    ...(model ? { model } : {}),
-    tokenUsage: {
-      ...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
-      ...(inputTokens !== undefined ? { inputTokens } : {}),
-      ...(outputTokens !== undefined ? { outputTokens } : {}),
-      ...(reasoningOutputTokens !== undefined
-        ? { reasoningOutputTokens }
-        : {}),
-      ...(totalTokens !== undefined ? { totalTokens } : {}),
-    },
-  };
-}
-
-function readFiniteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value)
-    ? value
-    : undefined;
 }
 
 function isConversationHistoryUpdate(update: Record<string, unknown>): boolean {

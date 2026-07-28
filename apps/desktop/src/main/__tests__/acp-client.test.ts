@@ -332,7 +332,7 @@ describe("AcpAgentClient", () => {
     expect(sessionUpdates).toEqual([]);
   });
 
-  it("returns suppressed Qwen usage emitted on an agent message chunk", async () => {
+  it("aggregates suppressed Qwen model-call usage and preserves its selected model", async () => {
     const promptResponse = createDeferred<unknown>();
     const transport = new FakeAcpAgentTransport({
       "session/prompt": promptResponse.promise,
@@ -348,6 +348,9 @@ describe("AcpAgentClient", () => {
     const session = await client.startSession({
       cwd: "/repo",
       executionMode: "default",
+      acpRuntime: {
+        currentModelId: "qwen3-coder-plus",
+      },
     });
     const controlPrompt = client.sendControlPrompt({
       sessionId: session.sessionId,
@@ -366,16 +369,30 @@ describe("AcpAgentClient", () => {
         },
       },
     });
+    transport.emitSessionUpdate(session.sessionId, {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "" },
+      _meta: {
+        usage: {
+          inputTokens: 120,
+          outputTokens: 8,
+          totalTokens: 128,
+          thoughtTokens: 3,
+          cachedReadTokens: 20,
+        },
+      },
+    });
     promptResponse.resolve({ stopReason: "end_turn" });
 
     await expect(controlPrompt).resolves.toEqual({
       text: '{ "title": "Favorite cereal" }',
+      model: "qwen3-coder-plus",
       tokenUsage: {
-        inputTokens: 23_851,
-        cachedInputTokens: 0,
-        outputTokens: 222,
-        reasoningOutputTokens: 29,
-        totalTokens: 24_073,
+        inputTokens: 23_971,
+        cachedInputTokens: 20,
+        outputTokens: 230,
+        reasoningOutputTokens: 32,
+        totalTokens: 24_201,
       },
     });
     expect(client.readReplay(session.sessionId).messages).toEqual([]);

@@ -3206,7 +3206,10 @@ function mergeUsageSettingValue<T extends string>(
 }
 
 function repriceTokenUsageLine(line: ThreadUsageLineRecord): ThreadUsageLineRecord {
-  if (line.provider !== "openai") {
+  if (
+    line.provider !== "openai"
+    && line.provider !== "qwen"
+  ) {
     return line;
   }
   // Fork-baseline lines carry inherited context that was billed on the parent

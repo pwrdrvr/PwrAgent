@@ -9,6 +9,12 @@ import {
   readAcpWebSearch,
 } from "./acp-command-extraction.js";
 import { sanitizeAcpToolOutput } from "./acp-tool-output.js";
+import {
+  foldAcpTurnUsage,
+  readAcpUsageEnvelope,
+  type AcpTokenUsage,
+  type AcpUsageEnvelope,
+} from "./acp-usage.js";
 
 export function acpToolUpdateNotifications(params: {
   threadId: string;
@@ -41,32 +47,19 @@ export function acpToolUpdateNotifications(params: {
   ];
 }
 
-export function acpTurnCompletedUsageNotification(params: {
+export function acpUsageNotification(params: {
+  envelope: AcpUsageEnvelope;
+  model?: string;
   threadId: string;
+  totalTokenUsage: AcpTokenUsage;
   turnId?: string;
-  update: Record<string, unknown>;
 }): AppServerNotification | undefined {
-  if (!params.turnId || readKind(params.update) !== "turn_completed") {
+  if (!params.turnId) {
     return undefined;
   }
-  const usage = asRecord(params.update.usage);
-  if (!usage) {
-    return undefined;
-  }
-  const inputTokens = readNumber(usage, "inputTokens");
-  const cachedInputTokens = readNumber(usage, "cachedReadTokens");
-  const outputTokens = readNumber(usage, "outputTokens");
-  const reasoningOutputTokens = readNumber(usage, "reasoningTokens");
-  const totalTokens = readNumber(usage, "totalTokens");
-  if (
-    inputTokens === undefined &&
-    outputTokens === undefined &&
-    totalTokens === undefined
-  ) {
-    return undefined;
-  }
-  const modelUsage = asRecord(usage.modelUsage);
-  const model = modelUsage ? Object.keys(modelUsage)[0] : undefined;
+  const model = params.envelope.model ?? params.model;
+  const latest = tokenUsageNotificationBreakdown(params.envelope.tokenUsage);
+  const total = tokenUsageNotificationBreakdown(params.totalTokenUsage);
   return {
     method: "thread/tokenUsage/updated",
     params: {
@@ -74,20 +67,52 @@ export function acpTurnCompletedUsageNotification(params: {
       turnId: params.turnId,
       ...(model ? { model } : {}),
       tokenUsage: {
-        last_token_usage: {
-          ...(inputTokens !== undefined ? { input_tokens: inputTokens } : {}),
-          ...(cachedInputTokens !== undefined
-            ? { cached_input_tokens: cachedInputTokens }
-            : {}),
-          ...(outputTokens !== undefined ? { output_tokens: outputTokens } : {}),
-          ...(reasoningOutputTokens !== undefined
-            ? { reasoning_output_tokens: reasoningOutputTokens }
-            : {}),
-          ...(totalTokens !== undefined ? { total_tokens: totalTokens } : {}),
-        },
+        last_token_usage: latest,
+        ...(params.envelope.scope === "model-call"
+          ? { total_token_usage: total }
+          : {}),
       },
     },
   } as AppServerNotification;
+}
+
+export function acpTurnCompletedUsageNotification(params: {
+  threadId: string;
+  turnId?: string;
+  update: Record<string, unknown>;
+}): AppServerNotification | undefined {
+  const envelope = readAcpUsageEnvelope(params.update);
+  if (!envelope || envelope.scope !== "turn") {
+    return undefined;
+  }
+  return acpUsageNotification({
+    envelope,
+    threadId: params.threadId,
+    totalTokenUsage: foldAcpTurnUsage(undefined, envelope),
+    turnId: params.turnId,
+  });
+}
+
+function tokenUsageNotificationBreakdown(
+  usage: AcpTokenUsage,
+): Record<string, number> {
+  return {
+    ...(usage.inputTokens !== undefined
+      ? { input_tokens: usage.inputTokens }
+      : {}),
+    ...(usage.cachedInputTokens !== undefined
+      ? { cached_input_tokens: usage.cachedInputTokens }
+      : {}),
+    ...(usage.outputTokens !== undefined
+      ? { output_tokens: usage.outputTokens }
+      : {}),
+    ...(usage.reasoningOutputTokens !== undefined
+      ? { reasoning_output_tokens: usage.reasoningOutputTokens }
+      : {}),
+    ...(usage.totalTokens !== undefined
+      ? { total_tokens: usage.totalTokens }
+      : {}),
+  };
 }
 
 function liveItemForAcpToolUpdate(
@@ -228,22 +253,6 @@ function readString(
 ): string | undefined {
   const value = record[key];
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function readNumber(
-  record: Record<string, unknown>,
-  key: string,
-): number | undefined {
-  const value = record[key];
-  return typeof value === "number" && Number.isFinite(value)
-    ? value
-    : undefined;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 }
 
 function readFirstLocationPath(record: Record<string, unknown>): string | undefined {
