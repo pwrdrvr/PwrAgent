@@ -4,7 +4,17 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppServerThreadSummary } from "@pwragent/shared";
 import type { JsonRpcTransport } from "@pwrdrvr/agent-transport";
-import type { DynamicToolSpec } from "@pwrdrvr/codex-app-server-protocol/v2";
+import type { InitializeResponse } from "@pwrdrvr/codex-app-server-protocol";
+import type {
+  ConfigWriteResponse,
+  DynamicToolSpec,
+  Model,
+  ModelListResponse,
+  ThreadArchiveResponse,
+  ThreadSetNameResponse,
+  ThreadSettingsUpdateResponse,
+  TurnInterruptResponse,
+} from "@pwrdrvr/codex-app-server-protocol/v2";
 
 const codexClientLogError = vi.hoisted(() => vi.fn());
 const codexClientLogDebug = vi.hoisted(() => vi.fn());
@@ -19,6 +29,40 @@ vi.mock("../log", () => ({
     warn: codexClientLogWarn,
   })),
 }));
+
+function createCodexModel(
+  overrides: Pick<Model, "id"> & Partial<Model>,
+): Model {
+  const { id, ...modelOverrides } = overrides;
+  return {
+    id,
+    model: id,
+    upgrade: null,
+    upgradeInfo: null,
+    availabilityNux: null,
+    displayName: overrides.id,
+    description: "",
+    hidden: false,
+    supportedReasoningEfforts: [
+      { reasoningEffort: "medium", description: "Balanced" },
+    ],
+    defaultReasoningEffort: "medium",
+    inputModalities: ["text", "image"],
+    supportsPersonality: false,
+    additionalSpeedTiers: [],
+    serviceTiers: [],
+    defaultServiceTier: null,
+    isDefault: false,
+    ...modelOverrides,
+  };
+}
+
+function createModelListResponse(models: Model[]): ModelListResponse {
+  return {
+    data: models,
+    nextCursor: null,
+  };
+}
 
 class MockTransport implements JsonRpcTransport {
   static instances: MockTransport[] = [];
@@ -55,14 +99,7 @@ class MockTransport implements JsonRpcTransport {
     }
   };
   static turnStartPreResponseNotification: unknown | null = null;
-  static turnInterruptResult: unknown = {
-    thread: {
-      id: "thread-2"
-    },
-    turn: {
-      id: "turn-1"
-    }
-  };
+  static turnInterruptResult: TurnInterruptResponse = {};
   static reviewStartResult: unknown = {
     reviewThreadId: "thread-2",
     turn: {
@@ -70,27 +107,19 @@ class MockTransport implements JsonRpcTransport {
       status: "inProgress"
     }
   };
-  static threadArchiveResult: unknown = {
-    thread: {
-      id: "thread-2"
-    }
-  };
+  static threadArchiveResult: ThreadArchiveResponse = {};
   static threadUnarchiveResult: unknown = {
     thread: {
       id: "thread-2"
     }
   };
-  static threadNameSetResult: unknown = {
-    thread: {
-      id: "thread-2"
-    }
-  };
-  static modelListResult: unknown = {
-    data: []
-  };
-  static configValueWriteResult: unknown = {
+  static threadNameSetResult: ThreadSetNameResponse = {};
+  static modelListResult: unknown = createModelListResponse([]);
+  static configValueWriteResult: ConfigWriteResponse = {
     status: "ok",
-    filePath: "/Users/huntharo/.codex/config.toml"
+    version: "1",
+    filePath: "/Users/huntharo/.codex/config.toml",
+    overriddenMetadata: null,
   };
   static lastConfigValueWritePayload: unknown;
   static rateLimitsResult: unknown = {
@@ -129,17 +158,18 @@ class MockTransport implements JsonRpcTransport {
     };
 
     if (payload.method === "initialize") {
+      const result: InitializeResponse = {
+        userAgent:
+          `codex_cli_rs/${MockTransport.serverVersion} (Mac OS 26.0; arm64)`,
+        codexHome: "/Users/huntharo/.codex",
+        platformFamily: "unix",
+        platformOs: "macos",
+      };
       this.messageHandler(
         JSON.stringify({
           jsonrpc: "2.0",
           id: payload.id,
-          result: {
-            userAgent:
-              `codex_cli_rs/${MockTransport.serverVersion} (Mac OS 26.0; arm64)`,
-            codexHome: "/Users/huntharo/.codex",
-            platformFamily: "unix",
-            platformOs: "macos",
-          }
+          result,
         })
       );
       return;
@@ -836,11 +866,12 @@ class MockTransport implements JsonRpcTransport {
     }
 
     if (payload.method === "thread/settings/update") {
+      const result: ThreadSettingsUpdateResponse = {};
       this.messageHandler(
         JSON.stringify({
           jsonrpc: "2.0",
           id: payload.id,
-          result: {},
+          result,
         })
       );
       return;
@@ -1012,30 +1043,15 @@ describe("CodexAppServerClient", () => {
         status: "inProgress"
       }
     };
-    MockTransport.turnInterruptResult = {
-      thread: {
-        id: "thread-2"
-      },
-      turn: {
-        id: "turn-1"
-      }
-    };
-    MockTransport.threadArchiveResult = {
-      thread: {
-        id: "thread-2"
-      }
-    };
-    MockTransport.threadNameSetResult = {
-      thread: {
-        id: "thread-2"
-      }
-    };
-    MockTransport.modelListResult = {
-      data: []
-    };
+    MockTransport.turnInterruptResult = {};
+    MockTransport.threadArchiveResult = {};
+    MockTransport.threadNameSetResult = {};
+    MockTransport.modelListResult = createModelListResponse([]);
     MockTransport.configValueWriteResult = {
       status: "ok",
-      filePath: "/Users/huntharo/.codex/config.toml"
+      version: "1",
+      filePath: "/Users/huntharo/.codex/config.toml",
+      overriddenMetadata: null,
     };
     MockTransport.lastConfigValueWritePayload = undefined;
     MockTransport.rateLimitsResult = {
@@ -1494,6 +1510,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("filters Codex models to the supported picker set and orders them", async () => {
+    MockTransport.serverVersion = "0.143.0";
     MockTransport.modelListResult = {
       data: [
         {
@@ -1626,6 +1643,7 @@ describe("CodexAppServerClient", () => {
   });
 
   it("keeps available Spark models image-disabled and honors an explicit image-support protocol flag", async () => {
+    MockTransport.serverVersion = "0.143.0";
     MockTransport.modelListResult = {
       data: [
         { id: "gpt-5.5", supportsReasoning: true },
@@ -1650,54 +1668,52 @@ describe("CodexAppServerClient", () => {
   });
 
   it("derives Fast support from Codex model service tiers", async () => {
-    MockTransport.modelListResult = {
-      data: [
-        {
-          id: "gpt-5.6-sol",
-          serviceTiers: [
-            {
-              id: "priority",
-              name: "Fast",
-              description: "1.5x speed, increased usage",
-            },
-          ],
-          additionalSpeedTiers: ["fast"],
-        },
-        {
-          id: "gpt-5.6-terra",
-          service_tiers: [
-            {
-              id: "priority",
-              name: "Fast",
-              description: "1.5x speed, increased usage",
-            },
-          ],
-        },
-        {
-          id: "gpt-5.6-luna",
-          additionalSpeedTiers: ["fast"],
-        },
-        {
-          id: "gpt-5.5",
-          additional_speed_tiers: ["fast"],
-        },
-        {
-          id: "gpt-5.4",
-          serviceTiers: [],
-        },
-        {
-          id: "gpt-5.4-mini",
-          serviceTiers: [
-            {
-              id: "flex",
-              name: "Flex",
-              description: "Lower-cost asynchronous processing",
-            },
-          ],
-        },
-        { id: "gpt-5.2" },
-      ],
-    };
+    MockTransport.modelListResult = createModelListResponse([
+      createCodexModel({
+        id: "gpt-5.6-sol",
+        serviceTiers: [
+          {
+            id: "priority",
+            name: "Fast",
+            description: "1.5x speed, increased usage",
+          },
+        ],
+        additionalSpeedTiers: ["fast"],
+      }),
+      createCodexModel({
+        id: "gpt-5.6-terra",
+        serviceTiers: [
+          {
+            id: "priority",
+            name: "Fast",
+            description: "1.5x speed, increased usage",
+          },
+        ],
+      }),
+      createCodexModel({
+        id: "gpt-5.6-luna",
+        additionalSpeedTiers: ["fast"],
+      }),
+      createCodexModel({
+        id: "gpt-5.5",
+        additionalSpeedTiers: ["fast"],
+      }),
+      createCodexModel({
+        id: "gpt-5.4",
+        serviceTiers: [],
+      }),
+      createCodexModel({
+        id: "gpt-5.4-mini",
+        serviceTiers: [
+          {
+            id: "flex",
+            name: "Flex",
+            description: "Lower-cost asynchronous processing",
+          },
+        ],
+      }),
+      createCodexModel({ id: "gpt-5.2" }),
+    ]);
 
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     const client = new CodexAppServerClient({ command: "codex" });
@@ -1715,7 +1731,52 @@ describe("CodexAppServerClient", () => {
       { id: "gpt-5.5", supportsFast: true },
       { id: "gpt-5.4", supportsFast: false },
       { id: "gpt-5.4-mini", supportsFast: false },
-      { id: "gpt-5.2", supportsFast: undefined },
+      { id: "gpt-5.2", supportsFast: false },
+    ]);
+  });
+
+  it("rejects invented fields in modern model/list responses", async () => {
+    MockTransport.modelListResult = {
+      data: [
+        {
+          id: "gpt-5.6-sol",
+          supportsFast: true,
+        },
+      ],
+      nextCursor: null,
+    };
+
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex" });
+
+    await expect(client.listModels()).rejects.toThrow(
+      "model/list response does not provide the generated fields PwrAgent consumes",
+    );
+  });
+
+  it("keeps legacy model aliases behind the pre-0.144 compatibility path", async () => {
+    MockTransport.serverVersion = "0.143.0";
+    MockTransport.modelListResult = {
+      data: [
+        {
+          id: "gpt-5.5",
+          additional_speed_tiers: ["fast"],
+          supports_image: false,
+          supports_reasoning: true,
+        },
+      ],
+    };
+
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex" });
+
+    await expect(client.listModels()).resolves.toEqual([
+      expect.objectContaining({
+        id: "gpt-5.5",
+        supportsFast: true,
+        supportsImage: false,
+        supportsReasoning: true,
+      }),
     ]);
   });
 
@@ -5133,7 +5194,6 @@ describe("CodexAppServerClient", () => {
         payloadKeys: ["cwd", "reason"],
         listenerCount: 1,
         initialized: true,
-        serverAdvertisesSkillsList: false,
         expectedFollowup: "call skills/list when refreshed skill metadata is needed",
         payload: {
           cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
