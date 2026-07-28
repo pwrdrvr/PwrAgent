@@ -13113,6 +13113,7 @@ command = "pnpm dev"
     const overlayStore = createOverlayStoreMock();
     const upsertSubAgentSpy = vi.spyOn(overlayStore, "upsertThreadSubAgent");
     const upsertUsageLineSpy = vi.spyOn(overlayStore, "upsertThreadUsageLine");
+    const events: AgentEvent[] = [];
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       grokClient: new MockBackendClient({ threads: [] }),
@@ -13127,6 +13128,9 @@ command = "pnpm dev"
       acpSessionStore: createAcpSessionStoreMock(sessions),
       createAcpClient: () => acpClient,
       threadTitleGenerationService: titleService,
+    });
+    registry.onEvent((event) => {
+      events.push(event);
     });
 
     await registry.startTurn({
@@ -13168,7 +13172,12 @@ command = "pnpm dev"
     });
     await waitForCondition(() =>
       upsertSubAgentSpy.mock.calls.some(
-        ([call]) => call.subAgent.status === "cancelled",
+        ([call]) => call.subAgent.status === "success",
+      ),
+    );
+    await waitForCondition(() =>
+      events.some(
+        (event) => event.notification.method === "thread/pricing/updated",
       ),
     );
 
@@ -13180,12 +13189,15 @@ command = "pnpm dev"
       backend: acpBackendId,
       threadId: "grok-session-1",
       subAgent: expect.objectContaining({
-        status: "cancelled",
+        status: "success",
         monitorThreadId: "grok-title-helper",
         preferredModel: "grok-4.5",
         lastMessage:
           "Generated title: Favorite Breakfast Cereal. Not applied: ACP provided a durable title first: Favorite Cereal Preference Personal Question.",
-        outcome: "cancelled",
+        outcome: "success",
+        completionSource: expect.objectContaining({
+          terminalStatus: "completed",
+        }),
         monitorUsage: expect.objectContaining({
           model: "grok-4.5",
         }),
@@ -13199,6 +13211,26 @@ command = "pnpm dev"
         parentThreadId: "grok-session-1",
         threadId: "grok-title-helper",
       }),
+    });
+    expect(events).toContainEqual({
+      backend: acpBackendId,
+      notification: {
+        method: "thread/pricing/updated",
+        params: {
+          threadId: "grok-session-1",
+          pricing: expect.objectContaining({
+            lines: expect.arrayContaining([
+              expect.objectContaining({
+                parentThreadId: "grok-session-1",
+                scope: "monitor",
+                sourceItemId:
+                  "system:title-helper:acp:grok:grok-session-1",
+                threadId: "grok-title-helper",
+              }),
+            ]),
+          }),
+        },
+      },
     });
 
     await registry.close();

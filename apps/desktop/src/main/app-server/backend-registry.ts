@@ -4617,9 +4617,12 @@ function titleHelperSubAgentMessage(params: {
     return params.reason ?? "Generating a title.";
   }
   if (params.status === "success") {
-    return params.result?.title
-      ? `Generated title: ${params.result.title}`
-      : "Generated a title.";
+    if (params.result?.title) {
+      return params.reason
+        ? `Generated title: ${params.result.title}. Not applied: ${params.reason}`
+        : `Generated title: ${params.result.title}`;
+    }
+    return "Generated a title.";
   }
   if (params.status === "cancelled") {
     if (params.result?.title) {
@@ -15880,7 +15883,7 @@ export class DesktopBackendRegistry {
           backend: params.backend,
           threadId: params.threadId,
           result,
-          status: "cancelled",
+          status: "success",
           reason: "Title generation became stale.",
         });
         return;
@@ -15902,7 +15905,7 @@ export class DesktopBackendRegistry {
           backend: params.backend,
           threadId: params.threadId,
           result,
-          status: "cancelled",
+          status: "success",
           reason: buildLateTitleCancellationReason(
             params.backend,
             latestThread,
