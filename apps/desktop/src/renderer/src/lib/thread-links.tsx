@@ -59,6 +59,17 @@ function sameThreadLink(
   );
 }
 
+function threadLinkMetadataKey(threads: NavigationThreadSummary[]): string {
+  return JSON.stringify(
+    threads.map((thread) => [
+      thread.source,
+      thread.id,
+      thread.title,
+      thread.gitBranch ?? null,
+    ]),
+  );
+}
+
 /**
  * A narrowly-scoped external store for mutable thread-link metadata.
  *
@@ -167,10 +178,13 @@ export function ThreadLinkProvider(props: {
     metadataStoreRef.current = new ThreadLinkMetadataStore(threads);
   }
   const metadataStore = metadataStoreRef.current;
+  const threadsRef = useRef(threads);
+  threadsRef.current = threads;
+  const metadataKey = threadLinkMetadataKey(threads);
 
   useLayoutEffect(() => {
-    metadataStore.update(threads);
-  }, [metadataStore, threads]);
+    metadataStore.update(threadsRef.current);
+  }, [metadataKey, metadataStore]);
 
   // `threads` is `navigation.threads` — a fresh array on every snapshot patch
   // (unread flips, updatedAt bumps, title generation). This provider wraps the
@@ -188,8 +202,6 @@ export function ThreadLinkProvider(props: {
 
   // Read the latest inputs through refs so the value can be rebuilt from
   // current data at each membership change without listing them as deps.
-  const threadsRef = useRef(threads);
-  threadsRef.current = threads;
   const onShowThreadRef = useRef(onShowThread);
   onShowThreadRef.current = onShowThread;
 
