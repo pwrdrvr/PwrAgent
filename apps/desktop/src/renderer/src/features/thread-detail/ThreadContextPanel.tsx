@@ -68,7 +68,6 @@ type ContextTab = {
 
 const CONTEXT_TABS: ContextTab[] = [
   { id: "info", label: "Thread info", Icon: InfoIcon },
-  { id: "providers", label: "AI provider info", Icon: ServerIcon },
   { id: "edits", label: "Edits", Icon: EditsIcon },
   { id: "pricing", label: "Pricing", Icon: PricingIcon },
   { id: "actions", label: "Actions", Icon: TerminalIcon },
@@ -76,6 +75,7 @@ const CONTEXT_TABS: ContextTab[] = [
   { id: "automations", label: "Automations", Icon: AutomationsIcon },
   { id: "prs", label: "Pull requests", Icon: PullRequestIcon },
   { id: "projects", label: "Linked projects", Icon: ProjectsIcon },
+  { id: "providers", label: "AI provider info", Icon: ServerIcon, bottom: true },
 ];
 
 type ThreadContextPanelProps = {
