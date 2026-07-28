@@ -470,6 +470,50 @@ describe("ThreadRow chip flow", () => {
     expect(screen.queryByText("pwrdrvr/PwrAgent#1024")).not.toBeInTheDocument();
   });
 
+  it("keeps PR chips with missing repository metadata unqualified", () => {
+    renderRow({
+      thread: {
+        ...baseThread,
+        gitOriginUrl: "git@github.com:pwrdrvr/PwrAgent.git",
+        prs: [
+          {
+            provider: "github.com",
+            number: 123,
+            org: "",
+            repo: "",
+            state: "passing",
+            url: "https://github.com/pwrdrvr/PwrAgent/pull/123",
+          },
+        ],
+      },
+    });
+
+    expect(screen.getByText("#123")).toBeInTheDocument();
+    expect(screen.queryByText("/#123")).not.toBeInTheDocument();
+  });
+
+  it("matches GitHub's alternate SSH hostname to github.com PRs", () => {
+    renderRow({
+      thread: {
+        ...baseThread,
+        gitOriginUrl: "ssh://git@ssh.github.com:443/pwrdrvr/PwrAgent.git",
+        prs: [
+          {
+            provider: "github.com",
+            number: 1024,
+            org: "pwrdrvr",
+            repo: "PwrAgent",
+            state: "passing",
+            url: "https://github.com/pwrdrvr/PwrAgent/pull/1024",
+          },
+        ],
+      },
+    });
+
+    expect(screen.getByText("#1024")).toBeInTheDocument();
+    expect(screen.queryByText("pwrdrvr/PwrAgent#1024")).not.toBeInTheDocument();
+  });
+
   it("qualifies only the cross-repository PR in a mixed PR row", () => {
     renderRow({
       thread: {

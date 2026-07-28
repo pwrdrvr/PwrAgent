@@ -787,6 +787,13 @@ function needsRepoPrefix(
   pr: PrSummary,
   prs: PrSummary[],
 ): boolean {
+  // Deleted fork heads can leave retained PRs without repository metadata.
+  // Never opt those chips into a prefix: PrChip would otherwise render the
+  // malformed `/#123` instead of preserving the unqualified fallback.
+  if (!pr.org.trim() || !pr.repo.trim()) {
+    return false;
+  }
+
   const primaryRepository = parseRepositoryIdentity(thread.gitOriginUrl);
   if (primaryRepository) {
     return repositoryIdentityKey(primaryRepository) !== repositoryIdentityKey(pr);
@@ -847,12 +854,20 @@ function parseRepositoryIdentity(
 
 function repositoryIdentityKey(identity: RepositoryIdentity): string {
   return [
-    identity.provider,
+    normalizeRepositoryProvider(identity.provider),
     identity.org,
     identity.repo,
   ]
     .map((part) => part.trim().toLowerCase())
     .join("/");
+}
+
+function normalizeRepositoryProvider(provider: string): string {
+  const normalized = provider.trim().toLowerCase();
+  // GitHub documents ssh.github.com:443 as an alternate SSH transport for
+  // networks that block port 22. PR URLs still identify that forge as
+  // github.com, so compare both hostnames as the same provider.
+  return normalized === "ssh.github.com" ? "github.com" : normalized;
 }
 
 function defaultOpenPullRequest(url: string): void {
