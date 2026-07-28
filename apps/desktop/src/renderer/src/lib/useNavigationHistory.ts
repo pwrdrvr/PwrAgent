@@ -183,12 +183,23 @@ export function useNavigationHistory(args: {
       }
       return true;
     };
-    const back = pruneStack(prev.back, isLive);
+    let back = pruneStack(prev.back, isLive);
     const forward = pruneStack(prev.forward, isLive);
-    const cursor =
+    let cursor =
       prev.cursor !== undefined && isLive(prev.cursor)
         ? prev.cursor
         : undefined;
+    if (
+      prev.cursor !== undefined
+      && cursor === undefined
+      && back.length > 0
+    ) {
+      // A cancelled launchpad clears the shell selection, making `current`
+      // untracked. Preserve a usable Back target by promoting the newest live
+      // entry into the cursor that untracked-surface navigation restores.
+      cursor = back[back.length - 1];
+      back = back.slice(0, -1);
+    }
     if (
       back === prev.back
       && cursor === prev.cursor
@@ -196,9 +207,9 @@ export function useNavigationHistory(args: {
     ) {
       return;
     }
-    // Drop a dead cursor too. This matters during launch submission: the
-    // launchpad can disappear one render before its materialized thread is
-    // selected, and that stale cursor must not be appended on the next hop.
+    // Drop a dead cursor too. During launch submission, the materialized
+    // thread becomes the next cursor; during cancellation, the promotion
+    // above preserves the prior live location for Back.
     const next: HistoryStacks = { back, cursor, forward };
     stacksRef.current = next;
     setStacks(next);

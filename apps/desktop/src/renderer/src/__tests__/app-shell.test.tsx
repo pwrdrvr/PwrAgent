@@ -3486,6 +3486,16 @@ describe("App", () => {
     ).toHaveAttribute("data-value", "Keep this configured project draft.");
     expect(screen.getAllByText("Full Access").length).toBeGreaterThan(0);
     expect(ensureDirectoryLaunchpad).toHaveBeenCalledTimes(1);
+
+    await clickButton("Cancel");
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Back" })).toBeEnabled();
+    });
+    await clickButton("Back");
+    await screen.findByRole("heading", {
+      level: 2,
+      name: "First project thread",
+    });
   });
 
   it("renames the selected thread from the sidebar actions menu", async () => {

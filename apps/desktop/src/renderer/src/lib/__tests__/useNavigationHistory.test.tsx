@@ -237,6 +237,28 @@ describe("useNavigationHistory", () => {
     expect(restore).toHaveBeenLastCalledWith(launchpad("directory:/repo-b"));
   });
 
+  it("restores the prior thread after cancelling the active launchpad", () => {
+    const {
+      hook,
+      navigate,
+      restore,
+      setLiveLaunchpadKeys,
+      settle,
+    } = renderHistory(thread("codex:a"));
+    setLiveLaunchpadKeys(new Set(["directory:/repo"]));
+    navigate(launchpad("directory:/repo"));
+
+    // Cancellation removes the draft and clears the shell selection.
+    setLiveLaunchpadKeys(new Set());
+    navigate(undefined);
+
+    expect(hook.result.current.canGoBack).toBe(true);
+    act(() => hook.result.current.goBack());
+    expect(restore).toHaveBeenLastCalledWith(thread("codex:a"));
+    settle();
+    expect(hook.result.current.canGoBack).toBe(false);
+  });
+
   it("prunes vanished threads from both stacks so Back never lands on a dead thread", () => {
     const { hook, navigate, restore, setLiveThreadKeys, settle } =
       renderHistory(thread("codex:a"));
