@@ -271,6 +271,56 @@ describe("TranscriptList", () => {
     expect(loadOlder).toHaveBeenCalledTimes(1);
   });
 
+  it("does not carry an in-flight older-page lock into another thread", () => {
+    let resolveFirstLoad: (() => void) | undefined;
+    const firstLoad = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveFirstLoad = resolve;
+        }),
+    );
+    const secondLoad = vi.fn(async () => undefined);
+    const commonProps = {
+      entries: [
+        {
+          type: "message" as const,
+          id: "message-1",
+          role: "assistant" as const,
+          text: "Recent history",
+        },
+      ],
+      loading: false,
+      loadingMore: false,
+      pagination: {
+        supportsPagination: true,
+        hasPreviousPage: true,
+        previousCursor: "cursor-1",
+      },
+    };
+    const { rerender } = render(
+      <TranscriptList
+        {...commonProps}
+        threadId="thread-1"
+        onLoadOlder={firstLoad}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Load older messages" }));
+    expect(firstLoad).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <TranscriptList
+        {...commonProps}
+        threadId="thread-2"
+        onLoadOlder={secondLoad}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Load older messages" }));
+
+    expect(secondLoad).toHaveBeenCalledTimes(1);
+    resolveFirstLoad?.();
+  });
+
   it("renders automation card details as markdown in the transcript", () => {
     const automationMarkdown = `| Priority | Service | Next step |
 |---|---|---|

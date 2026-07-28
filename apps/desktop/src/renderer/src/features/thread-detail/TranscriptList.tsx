@@ -566,6 +566,7 @@ export function TranscriptList(props: TranscriptListProps) {
   const savedViewportsRef = useRef(new Map<string, TranscriptViewport>());
   const appliedReglueRequestKeyRef = useRef(0);
   const olderPageRequestPendingRef = useRef(false);
+  const olderPageRequestGenerationRef = useRef(0);
   const shouldScrollToBottomRef = useRef(true);
   const isGluedToBottomRef = useRef(true);
   const [hasContentBelow, setHasContentBelow] = useState(false);
@@ -586,6 +587,10 @@ export function TranscriptList(props: TranscriptListProps) {
   );
   const loadingMore = props.loadingMore;
   const onLoadOlder = props.onLoadOlder;
+  useEffect(() => {
+    olderPageRequestGenerationRef.current += 1;
+    olderPageRequestPendingRef.current = false;
+  }, [props.threadId]);
   const requestOlderPage = useCallback(() => {
     if (
       !canLoadOlder
@@ -596,17 +601,19 @@ export function TranscriptList(props: TranscriptListProps) {
     }
 
     olderPageRequestPendingRef.current = true;
+    const requestGeneration = olderPageRequestGenerationRef.current;
+    const releaseRequestLock = (): void => {
+      if (olderPageRequestGenerationRef.current === requestGeneration) {
+        olderPageRequestPendingRef.current = false;
+      }
+    };
     try {
       void onLoadOlder().then(
-        () => {
-          olderPageRequestPendingRef.current = false;
-        },
-        () => {
-          olderPageRequestPendingRef.current = false;
-        },
+        releaseRequestLock,
+        releaseRequestLock,
       );
     } catch (error) {
-      olderPageRequestPendingRef.current = false;
+      releaseRequestLock();
       throw error;
     }
   }, [canLoadOlder, loadingMore, onLoadOlder]);

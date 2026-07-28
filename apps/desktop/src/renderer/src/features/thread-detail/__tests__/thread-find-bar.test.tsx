@@ -42,6 +42,8 @@ afterEach(() => {
  */
 function Harness(props: {
   entries: readonly string[];
+  hasMoreHistory?: boolean;
+  onLoadOlder?: () => Promise<void> | void;
   refreshKey?: unknown;
   onClose?: () => void;
 }): ReactElement {
@@ -50,6 +52,8 @@ function Harness(props: {
     <div>
       <ThreadFindBar
         containerRef={containerRef}
+        hasMoreHistory={props.hasMoreHistory}
+        onLoadOlder={props.onLoadOlder}
         refreshKey={props.refreshKey ?? props.entries.length}
         onClose={props.onClose ?? (() => {})}
       />
@@ -83,6 +87,22 @@ function findInput(): HTMLElement {
 }
 
 describe("ThreadFindBar scrolling", () => {
+  it("searches older history for a manually entered query with no visible match", () => {
+    const onLoadOlder = vi.fn(async () => undefined);
+    render(
+      <Harness
+        entries={["visible tail"]}
+        hasMoreHistory
+        onLoadOlder={onLoadOlder}
+      />,
+    );
+
+    typeQuery("hidden needle");
+
+    expect(onLoadOlder).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("Searching older messages…")).toBeInTheDocument();
+  });
+
   it("scrolls to the first match when the operator types a query", () => {
     renderBar(["alpha needle", "beta", "gamma needle"]);
     typeQuery("needle");

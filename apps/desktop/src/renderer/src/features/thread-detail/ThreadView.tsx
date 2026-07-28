@@ -2668,7 +2668,7 @@ export function ThreadView(props: ThreadViewProps) {
           {props.findOpen ? (
             <ThreadFindBar
               containerRef={transcriptPanelRef}
-              refreshKey={`${selectedThread!.source}:${selectedThread!.id}:${visibleTranscriptEntries.length}`}
+              refreshKey={visibleTranscriptEntries}
               initialQuery={props.findInitialQuery}
               turnId={props.findTurnId}
               focusNonce={props.findFocusNonce}

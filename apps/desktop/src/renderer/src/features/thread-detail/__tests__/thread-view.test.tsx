@@ -118,9 +118,21 @@ function buildRendererLiveDiffEvent(params: {
 
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
 });
 
 beforeEach(() => {
+  vi.stubGlobal("Highlight", class {
+    ranges: Range[];
+    constructor(...ranges: Range[]) {
+      this.ranges = ranges;
+    }
+  });
+  vi.stubGlobal("CSS", {
+    highlights: new Map<string, unknown>(),
+    escape: (value: string) => value,
+  });
+  Element.prototype.scrollIntoView = vi.fn();
   Object.defineProperty(URL, "createObjectURL", {
     configurable: true,
     value: vi.fn(() => "blob:expanded-transcript-image")
@@ -557,6 +569,120 @@ describe("ThreadView", () => {
 
     expect(container.querySelectorAll(".transcript-message")).toHaveLength(90);
     expect(loadOlder).not.toHaveBeenCalled();
+  });
+
+  it("pages manual find through hidden in-memory transcript history", async () => {
+    const loadOlder = vi.fn(async () => undefined);
+    const entries = Array.from({ length: 95 }, (_, index) => ({
+      type: "message" as const,
+      id: `message-${index}`,
+      role: "assistant" as const,
+      text: index === 0 ? "old hidden needle" : `History ${index}`,
+    }));
+    const selectedThread: NavigationThreadSummary = {
+      id: "thread-find-hidden",
+      title: "Find hidden history",
+      titleSource: "explicit",
+      source: "codex",
+      executionMode: "default",
+      updatedAt: Date.now(),
+      linkedDirectories: [],
+      inbox: {
+        inInbox: true,
+      },
+    };
+    const { container } = render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[]}
+        clearPendingRequest={() => undefined}
+        composerDisabled={false}
+        desktopApi={{}}
+        findOpen
+        loading={false}
+        loadingMore={false}
+        messageCount={entries.length}
+        onLoadOlder={loadOlder}
+        removeOptimisticMessage={(_id) => undefined}
+        selectedThread={selectedThread}
+        skills={[]}
+        transcriptEntries={entries}
+        transcriptPagination={{
+          supportsPagination: true,
+          hasPreviousPage: true,
+          previousCursor: "cursor-1",
+        }}
+      />,
+    );
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Find in thread" }), {
+      target: { value: "needle" },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("1 of 1")).toBeInTheDocument();
+    });
+    expect(container.querySelectorAll(".transcript-message")).toHaveLength(95);
+    expect(loadOlder).not.toHaveBeenCalled();
+  });
+
+  it("refreshes an open find when fixed-length transcript content changes", async () => {
+    const entries = Array.from({ length: 40 }, (_, index) => ({
+      type: "message" as const,
+      id: `message-${index}`,
+      role: "assistant" as const,
+      text: index === 39 ? "removable needle" : `History ${index}`,
+    }));
+    const selectedThread: NavigationThreadSummary = {
+      id: "thread-find-refresh",
+      title: "Find refresh",
+      titleSource: "explicit",
+      source: "codex",
+      executionMode: "default",
+      updatedAt: Date.now(),
+      linkedDirectories: [],
+      inbox: {
+        inInbox: true,
+      },
+    };
+    const commonProps = {
+      addOptimisticUserMessage: (_text: string) => "optimistic-1",
+      backends: [],
+      clearPendingRequest: () => undefined,
+      composerDisabled: false,
+      desktopApi: {},
+      findOpen: true,
+      loading: false,
+      loadingMore: false,
+      messageCount: entries.length,
+      onLoadOlder: async () => undefined,
+      removeOptimisticMessage: (_id: string) => undefined,
+      selectedThread,
+      skills: [],
+    };
+    const { rerender } = render(
+      <ThreadView {...commonProps} transcriptEntries={entries} />,
+    );
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Find in thread" }), {
+      target: { value: "needle" },
+    });
+    expect(screen.getByText("1 of 1")).toBeInTheDocument();
+
+    rerender(
+      <ThreadView
+        {...commonProps}
+        transcriptEntries={entries.map((entry) =>
+          entry.id === "message-39"
+            ? { ...entry, text: "replacement without the query" }
+            : entry,
+        )}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("No matches")).toBeInTheDocument();
+    });
   });
 
   it("keeps the integrated terminal open state per selected thread", async () => {
