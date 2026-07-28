@@ -236,6 +236,91 @@ describe("TranscriptList", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("loads one older page when the operator scrolls near the top", () => {
+    const loadOlder = vi.fn(async () => undefined);
+
+    render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "assistant",
+            text: "Recent history",
+          },
+        ]}
+        loading={false}
+        loadingMore={false}
+        pagination={{
+          supportsPagination: true,
+          hasPreviousPage: true,
+          previousCursor: "cursor-1",
+        }}
+        threadId="thread-1"
+        onLoadOlder={loadOlder}
+      />,
+    );
+
+    const list = screen.getByRole("list");
+    list.scrollTop = 200;
+    fireEvent.scroll(list);
+    expect(loadOlder).not.toHaveBeenCalled();
+
+    list.scrollTop = 120;
+    fireEvent.scroll(list);
+    expect(loadOlder).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not carry an in-flight older-page lock into another thread", () => {
+    let resolveFirstLoad: (() => void) | undefined;
+    const firstLoad = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveFirstLoad = resolve;
+        }),
+    );
+    const secondLoad = vi.fn(async () => undefined);
+    const commonProps = {
+      entries: [
+        {
+          type: "message" as const,
+          id: "message-1",
+          role: "assistant" as const,
+          text: "Recent history",
+        },
+      ],
+      loading: false,
+      loadingMore: false,
+      pagination: {
+        supportsPagination: true,
+        hasPreviousPage: true,
+        previousCursor: "cursor-1",
+      },
+    };
+    const { rerender } = render(
+      <TranscriptList
+        {...commonProps}
+        threadId="thread-1"
+        onLoadOlder={firstLoad}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Load older messages" }));
+    expect(firstLoad).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <TranscriptList
+        {...commonProps}
+        threadId="thread-2"
+        onLoadOlder={secondLoad}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Load older messages" }));
+
+    expect(secondLoad).toHaveBeenCalledTimes(1);
+    resolveFirstLoad?.();
+  });
+
   it("renders automation card details as markdown in the transcript", () => {
     const automationMarkdown = `| Priority | Service | Next step |
 |---|---|---|

@@ -133,6 +133,7 @@ type SyncScrollStateOptions = {
 };
 
 const BOTTOM_THRESHOLD_PX = 24;
+const LOAD_OLDER_THRESHOLD_PX = 160;
 
 type AutomationThreadTarget = {
   backend: "codex" | "grok";
@@ -564,6 +565,8 @@ export function TranscriptList(props: TranscriptListProps) {
   const snapshotRef = useRef<ScrollSnapshot | undefined>(undefined);
   const savedViewportsRef = useRef(new Map<string, TranscriptViewport>());
   const appliedReglueRequestKeyRef = useRef(0);
+  const olderPageRequestPendingRef = useRef(false);
+  const olderPageRequestGenerationRef = useRef(0);
   const shouldScrollToBottomRef = useRef(true);
   const isGluedToBottomRef = useRef(true);
   const [hasContentBelow, setHasContentBelow] = useState(false);
@@ -582,6 +585,38 @@ export function TranscriptList(props: TranscriptListProps) {
   const canLoadOlder = Boolean(
     props.pagination?.supportsPagination && props.pagination.hasPreviousPage
   );
+  const loadingMore = props.loadingMore;
+  const onLoadOlder = props.onLoadOlder;
+  useEffect(() => {
+    olderPageRequestGenerationRef.current += 1;
+    olderPageRequestPendingRef.current = false;
+  }, [props.threadId]);
+  const requestOlderPage = useCallback(() => {
+    if (
+      !canLoadOlder
+      || loadingMore
+      || olderPageRequestPendingRef.current
+    ) {
+      return;
+    }
+
+    olderPageRequestPendingRef.current = true;
+    const requestGeneration = olderPageRequestGenerationRef.current;
+    const releaseRequestLock = (): void => {
+      if (olderPageRequestGenerationRef.current === requestGeneration) {
+        olderPageRequestPendingRef.current = false;
+      }
+    };
+    try {
+      void onLoadOlder().then(
+        releaseRequestLock,
+        releaseRequestLock,
+      );
+    } catch (error) {
+      releaseRequestLock();
+      throw error;
+    }
+  }, [canLoadOlder, loadingMore, onLoadOlder]);
   const hasPendingContent = Boolean(
     props.pendingActivityEntry ||
       props.pendingProtocolActivityEntry ||
@@ -1097,9 +1132,7 @@ export function TranscriptList(props: TranscriptListProps) {
         <button
           className="button button--ghost transcript-list__load-older"
           type="button"
-          onClick={() => {
-            void props.onLoadOlder();
-          }}
+          onClick={requestOlderPage}
         >
           {props.loadingMore ? "Loading older messages" : "Load older messages"}
         </button>
@@ -1116,7 +1149,7 @@ export function TranscriptList(props: TranscriptListProps) {
             disableBottomGlue();
           }
         }}
-        onScroll={() => {
+        onScroll={(event) => {
           // A sidebar drag can shift scrollTop via reflow/scroll-anchoring;
           // those aren't real navigations, so skip the re-sync until the drag
           // ends (the user can't scroll while holding the resize handle).
@@ -1124,6 +1157,9 @@ export function TranscriptList(props: TranscriptListProps) {
             return;
           }
           syncScrollState({ preserveGlueOnResize: true });
+          if (event.currentTarget.scrollTop <= LOAD_OLDER_THRESHOLD_PX) {
+            requestOlderPage();
+          }
         }}
       >
         {/*

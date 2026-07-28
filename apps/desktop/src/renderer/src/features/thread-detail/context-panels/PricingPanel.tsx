@@ -59,11 +59,27 @@ const DEFAULT_PRICING_DISPLAY_OPTIONS: PricingDisplayOptions = {
   codexCredits: false,
   usd: true,
 };
+const PRICING_USAGE_PAGE_SIZE = 20;
 
 export function PricingPanel(props: PricingPanelProps) {
   const summaries = props.pricing?.summaries ?? [];
   const lines = props.pricing?.lines ?? [];
   const displayLines = buildPricingDisplayLines(lines);
+  const pricingHistoryKey = summaries[0]
+    ? `${summaries[0].backend}:${summaries[0].threadId}`
+    : displayLines[0]
+      ? `${displayLines[0].backend}:${displayLines[0].threadId}`
+      : "empty";
+  const [usagePage, setUsagePage] = useState({
+    count: PRICING_USAGE_PAGE_SIZE,
+    key: pricingHistoryKey,
+  });
+  const visibleUsageRowCount =
+    usagePage.key === pricingHistoryKey
+      ? usagePage.count
+      : PRICING_USAGE_PAGE_SIZE;
+  const visibleDisplayLines = displayLines.slice(0, visibleUsageRowCount);
+  const hiddenUsageRowCount = displayLines.length - visibleDisplayLines.length;
   const estimatedLines = displayLines.filter(isEstimatedUsageGap);
   const displaySummaries = addEstimatedLinesToSummaries(summaries, estimatedLines);
   const summary =
@@ -266,7 +282,7 @@ export function PricingPanel(props: PricingPanelProps) {
 
       {displayLines.length > 0 ? (
         <ul className="context-list context-list--cards pricing-usage-list">
-          {displayLines.map((line) => {
+          {visibleDisplayLines.map((line) => {
             const lineTotals = pricingTotals.byLineId.get(line.usageLineId);
             const usageLineEstimate = formatUsageLineEstimates({
               displayOptions,
@@ -358,6 +374,34 @@ export function PricingPanel(props: PricingPanelProps) {
             );
           })}
         </ul>
+      ) : null}
+      {hiddenUsageRowCount > 0 ? (
+        <div className="pricing-usage-list__pagination">
+          <p className="pricing-usage-list__status">
+            Showing latest {visibleDisplayLines.length.toLocaleString()} of{" "}
+            {displayLines.length.toLocaleString()} usage rows.
+          </p>
+          <button
+            className="button button--ghost pricing-usage-list__more"
+            type="button"
+            onClick={() => {
+              setUsagePage({
+                count: Math.min(
+                  displayLines.length,
+                  visibleUsageRowCount + PRICING_USAGE_PAGE_SIZE,
+                ),
+                key: pricingHistoryKey,
+              });
+            }}
+          >
+            Show{" "}
+            {Math.min(
+              PRICING_USAGE_PAGE_SIZE,
+              hiddenUsageRowCount,
+            ).toLocaleString()}{" "}
+            older usage rows
+          </button>
+        </div>
       ) : null}
     </section>
   );

@@ -11,10 +11,13 @@ import type {
 import type { DesktopApi } from "../desktop-api";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  LIGHTWEIGHT_INITIAL_THREAD_HISTORY_LIMIT,
   getContextWindowMoonPhase,
   useThreadSessionState,
 } from "../useThreadSessionState";
+import {
+  DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT,
+  THREAD_HISTORY_PAGE_LIMIT,
+} from "../thread-history-limits";
 import { readRendererSequence } from "../../features/thread-detail/live-transcript-activity";
 
 function buildThread(params: {
@@ -232,7 +235,7 @@ describe("useThreadSessionState", () => {
     const { result } = renderHook(() =>
       useThreadSessionState({
         desktopApi,
-        initialHistoryLimit: LIGHTWEIGHT_INITIAL_THREAD_HISTORY_LIMIT,
+        initialHistoryLimit: DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT,
         thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
       })
     );
@@ -240,7 +243,7 @@ describe("useThreadSessionState", () => {
     await waitForThreadHydration(result);
     expect(readThread).toHaveBeenCalledWith({
       backend: "codex",
-      limit: LIGHTWEIGHT_INITIAL_THREAD_HISTORY_LIMIT,
+      limit: DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT,
       threadId: "thread-1",
     });
   });
@@ -284,7 +287,7 @@ describe("useThreadSessionState", () => {
       ({ updatedAt }: { updatedAt: number }) =>
         useThreadSessionState({
           desktopApi,
-          initialHistoryLimit: LIGHTWEIGHT_INITIAL_THREAD_HISTORY_LIMIT,
+          initialHistoryLimit: DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT,
           thread: buildThread({ id: "thread-1", updatedAt }),
         }),
       {
@@ -302,6 +305,12 @@ describe("useThreadSessionState", () => {
       await result.current.loadOlder();
     });
 
+    expect(readThread).toHaveBeenNthCalledWith(2, {
+      backend: "codex",
+      before: "older-page",
+      limit: THREAD_HISTORY_PAGE_LIMIT,
+      threadId: "thread-1",
+    });
     await waitFor(() => {
       expect(transcriptLabels(result.current.entries)).toEqual([
         "message:Older 1",
@@ -322,7 +331,7 @@ describe("useThreadSessionState", () => {
 
     expect(readThread).toHaveBeenLastCalledWith({
       backend: "codex",
-      limit: LIGHTWEIGHT_INITIAL_THREAD_HISTORY_LIMIT,
+      limit: DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT,
       threadId: "thread-1",
     });
     await waitFor(() => {
@@ -380,14 +389,14 @@ describe("useThreadSessionState", () => {
       threadId: "thread-1",
     });
 
-    rerender({ initialHistoryLimit: LIGHTWEIGHT_INITIAL_THREAD_HISTORY_LIMIT });
+    rerender({ initialHistoryLimit: DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT });
 
     await waitFor(() => {
       expect(readThread).toHaveBeenCalledTimes(2);
     });
     expect(readThread).toHaveBeenLastCalledWith({
       backend: "codex",
-      limit: LIGHTWEIGHT_INITIAL_THREAD_HISTORY_LIMIT,
+      limit: DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT,
       threadId: "thread-1",
     });
   });

@@ -12,10 +12,10 @@ import { CloseIcon, SearchIcon } from "../../icons";
 const HIGHLIGHT_ALL = "thread-find";
 const HIGHLIGHT_ACTIVE = "thread-find-active";
 
-// Safety cap on the deep-link auto-load loop. `hasMoreHistory` normally stops
-// it once the thread is fully loaded; this guards the pathological case where
-// the matched text never renders in the DOM (e.g. markdown reflowed it across
-// nodes) so we don't keep paging a giant thread forever.
+// Safety cap on automatic older-history search. `hasMoreHistory` normally
+// stops it once the thread is fully loaded; this guards the pathological case
+// where matched text never renders in the DOM (e.g. markdown reflowed it across
+// nodes) so a deep link or manually entered query cannot page forever.
 const MAX_AUTO_LOADS = 60;
 
 // How many animation frames (~2.5s at 60fps) the deep-link landing keeps the
@@ -127,7 +127,8 @@ export function ThreadFindBar(props: ThreadFindBarProps): ReactElement {
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   // The search-seeded query we're auto-loading toward (deep-link), plus how
-  // many older pages we've requested for it and whether we've landed on it.
+  // many older pages the current query has requested and whether the seeded
+  // query has landed.
   const seededRef = useRef<string | undefined>(undefined);
   const autoLoadsRef = useRef(0);
   const landedSeedRef = useRef<string | undefined>(undefined);
@@ -141,6 +142,11 @@ export function ThreadFindBar(props: ThreadFindBarProps): ReactElement {
   // The query the current `matches` were collected for, so the recompute below
   // can tell "the operator retyped" from "the transcript moved under us".
   const collectedQueryRef = useRef(query);
+  // Updated synchronously by the matching effect before the paging effect
+  // runs. Reading this ref avoids requesting an older page for a query that
+  // already matched the visible DOM but whose `targetFound` state update has
+  // not committed yet.
+  const targetFoundRef = useRef(false);
   const onCloseRef = useRef(props.onClose);
   useEffect(() => {
     onCloseRef.current = props.onClose;
@@ -194,6 +200,7 @@ export function ThreadFindBar(props: ThreadFindBarProps): ReactElement {
     if (!container || !highlightsSupported()) {
       setMatches([]);
       setTargetFound(false);
+      targetFoundRef.current = false;
       return;
     }
     const ranges = collectMatchRanges(container, query);
@@ -211,11 +218,13 @@ export function ThreadFindBar(props: ThreadFindBarProps): ReactElement {
       // operator's place, only clamping if their match went away.
       setActiveIndex((current) => (current < ranges.length ? current : 0));
     }
-    const anchorPresent = props.turnId
+    const anchorPresent = props.turnId && query === seededRef.current
       ? container.querySelector(`[data-turn-id="${CSS.escape(props.turnId)}"]`) !==
         null
       : false;
-    setTargetFound(anchorPresent || ranges.length > 0);
+    const found = anchorPresent || ranges.length > 0;
+    targetFoundRef.current = found;
+    setTargetFound(found);
   }, [query, props.refreshKey, props.containerRef, props.turnId]);
 
   // Paint the highlights, and scroll the active match into view only when the
@@ -251,17 +260,16 @@ export function ThreadFindBar(props: ThreadFindBarProps): ReactElement {
   // Drop highlights when the bar unmounts (closed).
   useEffect(() => clearHighlights, []);
 
-  // Deep-link: while showing the seeded query with no match yet, page in older
-  // history until it appears (or we run out / hit the cap). Each load grows the
-  // transcript, bumping refreshKey, which re-collects matches and re-runs this.
-  const autoLoadActive =
-    seededRef.current !== undefined &&
-    query === seededRef.current &&
-    query !== "";
+  // While a seeded or manually entered query has no visible match, page in
+  // older history until one appears (or we run out / hit the cap). Each load
+  // grows the transcript, bumping refreshKey, which re-collects matches and
+  // re-runs this. A visible manual match stops immediately; ordinary find does
+  // not inflate the DOM merely to count additional off-screen matches.
+  const searchOlderActive = query !== "";
   useEffect(() => {
     if (
-      !autoLoadActive ||
-      targetFound ||
+      !searchOlderActive ||
+      targetFoundRef.current ||
       props.loadingMore ||
       !props.hasMoreHistory ||
       autoLoadsRef.current >= MAX_AUTO_LOADS
@@ -272,7 +280,14 @@ export function ThreadFindBar(props: ThreadFindBarProps): ReactElement {
     void props.onLoadOlder?.();
     // props intentionally excluded from deps: the effect re-runs as the
     // transcript/pagination state changes, and reads the latest callbacks.
-  }, [autoLoadActive, targetFound, props.loadingMore, props.hasMoreHistory]);
+  }, [
+    props.hasMoreHistory,
+    props.loadingMore,
+    props.refreshKey,
+    query,
+    searchOlderActive,
+    targetFound,
+  ]);
 
   // Once the seeded deep-link match is found AND older-page loading has
   // settled, scroll it into view — once per seed, and held centered past the
@@ -408,6 +423,7 @@ export function ThreadFindBar(props: ThreadFindBarProps): ReactElement {
   // The active index is reset where the new matches land (see above).
   const changeQuery = useCallback((next: string) => {
     scrollIntentRef.current = true;
+    autoLoadsRef.current = 0;
     setQuery(next);
   }, []);
 
@@ -425,7 +441,9 @@ export function ThreadFindBar(props: ThreadFindBarProps): ReactElement {
 
   const count = matches.length;
   const searchingOlder =
-    autoLoadActive && !targetFound && (props.loadingMore || props.hasMoreHistory);
+    query !== "" &&
+    !targetFound &&
+    (props.loadingMore || props.hasMoreHistory);
   const status =
     query === ""
       ? ""
