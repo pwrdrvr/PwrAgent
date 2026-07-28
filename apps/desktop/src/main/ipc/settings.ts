@@ -148,15 +148,16 @@ let inFlightAcpRefreshForced = false;
 
 async function listAcpAgentSettings(
   request: ListAcpAgentSettingsRequest = {},
+  service?: DesktopSettingsService,
 ): Promise<ListAcpAgentSettingsResponse> {
   if (request.refresh === false) {
-    return await listAcpAgentSettingsImpl(request);
+    return await listAcpAgentSettingsImpl(request, service);
   }
   const wantsForce = request.force === true;
   if (inFlightAcpRefresh && (!wantsForce || inFlightAcpRefreshForced)) {
     return await inFlightAcpRefresh;
   }
-  const run = listAcpAgentSettingsImpl(request).finally(() => {
+  const run = listAcpAgentSettingsImpl(request, service).finally(() => {
     if (inFlightAcpRefresh === run) {
       inFlightAcpRefresh = undefined;
       inFlightAcpRefreshForced = false;
@@ -169,6 +170,7 @@ async function listAcpAgentSettings(
 
 async function listAcpAgentSettingsImpl(
   request: ListAcpAgentSettingsRequest = {},
+  service?: DesktopSettingsService,
 ): Promise<ListAcpAgentSettingsResponse> {
   const store = new AcpAgentStore(getAppStateDb());
   const registryService = new AcpRegistryService();
@@ -185,9 +187,24 @@ async function listAcpAgentSettingsImpl(
   }
 
   snapshot ??= store.readRegistrySnapshot();
+  let discoveryEnv: NodeJS.ProcessEnv | undefined;
+  if (request.refresh === true) {
+    try {
+      // Electron and package managers can prepend transient Node bin
+      // directories to the app process PATH. Discover ACP CLIs from the same
+      // hydrated login-shell environment used by the integrated terminal so
+      // `qwen`, `kimi`, etc. resolve to the binaries the operator invokes.
+      discoveryEnv = await getService(service).resolveTerminalSpawnEnvAsync();
+    } catch (envError) {
+      settingsIpcLog.debug("acp_discovery_shell_env_failed", {
+        error: envError instanceof Error ? envError.message : String(envError),
+      });
+    }
+  }
   const installed = await listInstalledAndLocalAcpAgents(store, {
     refreshLocal: request.refresh === true,
     ...(request.force === true ? { force: true } : {}),
+    ...(discoveryEnv ? { env: discoveryEnv } : {}),
   });
   const entries = snapshot
     ? registryService
@@ -292,7 +309,11 @@ function placeholderAcpAgentSettingsEntry(
 
 async function listInstalledAndLocalAcpAgents(
   store: AcpAgentStore,
-  options?: { refreshLocal?: boolean; force?: boolean },
+  options?: {
+    refreshLocal?: boolean;
+    force?: boolean;
+    env?: NodeJS.ProcessEnv;
+  },
 ): Promise<AcpInstalledAgentRecord[]> {
   const installed = store.listInstalledAgents();
   let discovered: AcpInstalledAgentRecord[] = [];
@@ -312,6 +333,7 @@ async function listInstalledAndLocalAcpAgents(
       discovered = await discoverLocalAcpAgentRecords({
         enabledRegistryIds,
         ...(Object.keys(preferences).length > 0 ? { preferences } : {}),
+        ...(options?.env ? { env: options.env } : {}),
       });
       const discoveryCwd = await ensureAcpRuntimeDiscoveryWorkspace();
       const now = Date.now();
@@ -877,7 +899,8 @@ export function registerSettingsIpcHandlers(
     async (
       _event,
       request?: ListAcpAgentSettingsRequest,
-    ): Promise<ListAcpAgentSettingsResponse> => await listAcpAgentSettings(request),
+    ): Promise<ListAcpAgentSettingsResponse> =>
+      await listAcpAgentSettings(request, service),
   );
 
   ipcMain.removeHandler(SETTINGS_READ_CHANNEL);

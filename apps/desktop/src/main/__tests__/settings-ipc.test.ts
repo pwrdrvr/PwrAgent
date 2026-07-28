@@ -901,9 +901,12 @@ describe("settings ipc", () => {
     const { ACP_AGENTS_LIST_CHANNEL } = await import("../../shared/ipc");
     const service = new DesktopSettingsService({
       configPath: path.join(tempRoot, "config.toml"),
-      env: {},
+      env: { PATH: "/electron/bin:/usr/bin" },
       secretStore: new MemoryDesktopSecretStore(),
       now: () => 20,
+      resolveCodexShellEnv: () => ({
+        PATH: "/opt/homebrew/bin:/usr/bin",
+      }),
     });
 
     initializeAppState();
@@ -920,6 +923,9 @@ describe("settings ipc", () => {
             grok: { overridePath: "/opt/pwragent/bin/grok" },
             qwen: { overridePath: "/opt/pwragent/bin/qwen" },
           },
+          env: expect.objectContaining({
+            PATH: "/opt/homebrew/bin:/usr/bin",
+          }),
         }),
       );
     } finally {

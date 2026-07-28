@@ -5715,6 +5715,9 @@ export class DesktopBackendRegistry {
       captureStores: this.captureStores,
       createAcpClient: options?.createAcpClient,
       discoverLocalAcpAgents: options?.discoverLocalAcpAgents,
+      resolveLocalAcpDiscoveryEnv: settingsService
+        ? async () => await settingsService.resolveTerminalSpawnEnvAsync()
+        : undefined,
       isAcpAgentEnabled: options?.isAcpAgentEnabled,
       emit: async (event) => await this.emit(event),
       handleServerRequest: async (backend, request) =>
