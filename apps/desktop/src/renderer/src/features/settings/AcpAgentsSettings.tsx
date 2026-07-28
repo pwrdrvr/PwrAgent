@@ -10,7 +10,6 @@ import { SettingsField, SettingsSection } from "./SettingsLayout";
 import { SettingsPathRow, type SettingsPathRowChip } from "./SettingsPathRow";
 import { SettingsSwitch } from "./SettingsSwitch";
 import { acpStatusLabel } from "./acp-agent-copy";
-import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
 
 /** Look up the persisted CLI-path override for an agent by its registry id. */
 function cliPathSnapshotFor(

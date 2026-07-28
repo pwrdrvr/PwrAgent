@@ -6173,9 +6173,13 @@ export function Composer(props: ComposerProps) {
           && latestLaunchpad.model === automaticModel
           && latestLaunchpad.reasoningEffort === automaticReasoningEffort;
         const refreshedModels = refreshedBackend.launchpadOptions?.models ?? [];
+        const configuredDefaults = props.providerModelDefaults?.[backend];
+        const configuredModelOption = refreshedModels.find(
+          (model) => model.id === configuredDefaults?.model,
+        );
         const nextModelOption =
           (shouldAdoptRefreshedDefault
-            ? undefined
+            ? configuredModelOption
             : refreshedModels.find(
                 (model) => model.id === latestLaunchpad.model,
               )) ??
@@ -6183,9 +6187,18 @@ export function Composer(props: ComposerProps) {
         if (!nextModelOption) {
           return;
         }
+        const configuredReasoningEffort =
+          configuredDefaults?.reasoningEffortsByModel[nextModelOption.id];
+        const refreshedReasoningEfforts = getReasoningEffortsForModel(
+          refreshedBackend,
+          nextModelOption,
+        );
         const nextReasoningEffort = nextModelOption.supportsReasoning
           ? shouldAdoptRefreshedDefault
-            ? getDefaultReasoningEffort(refreshedBackend, nextModelOption)
+            ? configuredReasoningEffort
+              && refreshedReasoningEfforts.includes(configuredReasoningEffort)
+                ? configuredReasoningEffort
+                : getDefaultReasoningEffort(refreshedBackend, nextModelOption)
             : getReasoningEffortValue(
                 refreshedBackend,
                 nextModelOption,
@@ -6220,6 +6233,7 @@ export function Composer(props: ComposerProps) {
     props.launchpad?.directoryKey,
     props.onProviderSelected,
     props.onUpdateLaunchpad,
+    props.providerModelDefaults,
   ]);
 
   const runThreadCodexEnvironmentAction = async (): Promise<void> => {
