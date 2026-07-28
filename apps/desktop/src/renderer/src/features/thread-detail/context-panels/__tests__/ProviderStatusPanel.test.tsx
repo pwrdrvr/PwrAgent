@@ -1,8 +1,9 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BackendSummary } from "@pwragent/shared";
 import { ProviderStatusPanel } from "../ProviderStatusPanel";
+import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../../../lib/useBackendSummaries";
 
 afterEach(() => {
   cleanup();
@@ -65,7 +66,61 @@ const grokBackend: BackendSummary = {
   unavailableReason: "XAI_API_KEY is not set",
 };
 
+const kimiBackend: BackendSummary = {
+  ...codexBackend,
+  kind: "acp:kimi",
+  source: "acp",
+  label: "Kimi",
+  account: undefined,
+  rateLimits: undefined,
+  acp: {
+    registryId: "kimi",
+    version: "0.29.2",
+    distributionKinds: ["local"],
+    installStatus: "installed",
+    authStatus: "not-required",
+    verificationStatus: "not-applicable",
+  },
+};
+
+const grokAcpBackend: BackendSummary = {
+  ...codexBackend,
+  kind: "acp:grok",
+  source: "acp",
+  label: "Grok",
+  account: {
+    type: "provider",
+    label: "Grok account",
+    planType: "SuperGrok Heavy",
+  },
+  rateLimits: [
+    {
+      name: "Included credits",
+      usedPercent: 42.5,
+    },
+  ],
+  acp: {
+    registryId: "grok",
+    version: "0.2.112",
+    distributionKinds: ["local"],
+    installStatus: "installed",
+    authStatus: "authenticated",
+    verificationStatus: "not-applicable",
+  },
+};
+
 describe("ProviderStatusPanel", () => {
+  it("refreshes account usage whenever the provider tab opens", () => {
+    const onRefresh = vi.fn();
+    window.addEventListener(BACKEND_SUMMARIES_REFRESH_EVENT, onRefresh, {
+      once: true,
+    });
+
+    render(<ProviderStatusPanel backends={[]} />);
+
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
+
   it("renders account, plan, and rate limits for an available backend", () => {
     render(<ProviderStatusPanel backends={[codexBackend]} />);
 
@@ -82,6 +137,22 @@ describe("ProviderStatusPanel", () => {
 
     expect(screen.getByText("Grok app server")).toBeInTheDocument();
     expect(screen.getByText("XAI_API_KEY is not set")).toBeInTheDocument();
+  });
+
+  it("shows ACP runtime and authentication metadata without a limits API", () => {
+    render(<ProviderStatusPanel backends={[kimiBackend]} />);
+
+    expect(screen.getByRole("heading", { name: "AI providers" })).toBeInTheDocument();
+    expect(screen.getByText("0.29.2")).toBeInTheDocument();
+    expect(screen.getByText("Managed by provider")).toBeInTheDocument();
+  });
+
+  it("shows Grok subscription and included-credit usage from ACP billing", () => {
+    render(<ProviderStatusPanel backends={[grokAcpBackend]} />);
+
+    expect(screen.getByText("Grok account")).toBeInTheDocument();
+    expect(screen.getByText("SuperGrok Heavy")).toBeInTheDocument();
+    expect(screen.getByText(/Included credits: 58% left/)).toBeInTheDocument();
   });
 
   it("renders a backend error when status is unavailable", () => {

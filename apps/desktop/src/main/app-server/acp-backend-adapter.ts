@@ -108,7 +108,12 @@ export type AcpRuntimeClient = Pick<
   | "startPrompt"
   | "startSession"
 > &
-  Partial<Pick<AcpAgentClient, "sendControlPrompt" | "setRuntimeOption">>;
+  Partial<
+    Pick<
+      AcpAgentClient,
+      "readProviderStatus" | "sendControlPrompt" | "setRuntimeOption"
+    >
+  >;
 
 export type AcpClientFactory = (agent: AcpInstalledAgentRecord) => AcpRuntimeClient;
 export type AcpTransportFactory = (
@@ -861,13 +866,45 @@ export class AcpBackendAdapter {
   async describeInstalledBackends(): Promise<BackendSummary[]> {
     const config = readDesktopSettingsConfigSafe();
     const installedAgents = await this.listAvailableAgents();
-    return installedAgents
+    const enabledAgents = installedAgents
       .filter((agent) =>
         this.isAcpAgentEnabled
           ? this.isAcpAgentEnabled(agent.registryId)
           : acpAgentEnabledFor(config, agent.registryId),
-      )
-      .map((agent) => describeInstalledAcpBackend(agent));
+      );
+    return await Promise.all(
+      enabledAgents.map(async (agent) => {
+        const summary = describeInstalledAcpBackend(agent);
+        if (agent.registryId !== "grok" || !summary.available) {
+          return summary;
+        }
+        // Do not launch an otherwise-idle ACP process merely to decorate the
+        // provider panel. Once Grok is active, its initialize notification
+        // refreshes backend summaries and this cached connection can serve the
+        // vendor billing extension without another process.
+        const clientPromise = this.acpClients.get(agent.backendId);
+        if (!clientPromise) {
+          return summary;
+        }
+        try {
+          const client = await clientPromise;
+          const providerStatus = await client.readProviderStatus?.();
+          return providerStatus
+            ? {
+                ...summary,
+                account: providerStatus.account,
+                rateLimits: providerStatus.rateLimits,
+              }
+            : summary;
+        } catch (error) {
+          acpBackendAdapterLog.debug("acp_provider_status_unavailable", {
+            backend: agent.backendId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return summary;
+        }
+      }),
+    );
   }
 
   invalidateLocalAgentDiscovery(): void {

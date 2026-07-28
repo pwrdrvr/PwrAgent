@@ -31,8 +31,8 @@ test("shows linked directory path tooltips in the context rail", async () => {
     const contextRail = app.window.getByRole("complementary", {
       name: "Thread context",
     });
-    // Open the Thread info tab to reveal the linked-directories panel.
-    await contextRail.getByRole("tab", { name: "Thread info" }).click();
+    // Directory paths live together in the dedicated Linked Projects tab.
+    await contextRail.getByRole("tab", { name: "Linked projects" }).click();
     await expect(
       contextRail.getByLabel("Path for PwrAgent", { exact: true })
     ).toBeVisible();

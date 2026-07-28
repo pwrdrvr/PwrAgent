@@ -24,10 +24,10 @@ import { collectEditedFileGroups } from "../edited-file-groups";
 const HOVER_RAIL_REVEAL_DELAY_MS = 350;
 
 // When the rail is open, the active tab's panel content renders. The
-// default tab is "info"; its first (unconditional) section heading is a
+// default tab is "info"; its execution-context heading is a
 // stable "the panel is revealed" signal. There is no separate panel title
 // anymore — each panel's own section <h3> is the title.
-const REVEALED_SIGNAL = "Linked directories";
+const REVEALED_SIGNAL = "Execution context";
 
 afterEach(() => {
   cleanup();
@@ -575,19 +575,20 @@ describe("ThreadContextPanel", () => {
     renderPanel({ pinned: true });
 
     const info = screen.getByRole("tab", { name: "Thread info" });
-    const edits = screen.getByRole("tab", { name: "Edits" });
     info.focus();
     expect(document.activeElement).toBe(info);
 
     fireEvent.keyDown(info, { key: "ArrowDown" });
-    expect(document.activeElement).toBe(edits);
+    expect(document.activeElement).toBe(
+      screen.getByRole("tab", { name: "AI provider info" }),
+    );
 
-    fireEvent.keyDown(edits, { key: "ArrowUp" });
+    fireEvent.keyDown(document.activeElement!, { key: "ArrowUp" });
     expect(document.activeElement).toBe(info);
 
     fireEvent.keyDown(info, { key: "End" });
     expect(document.activeElement).toBe(
-      screen.getByRole("tab", { name: "Provider status" }),
+      screen.getByRole("tab", { name: "Linked projects" }),
     );
   });
 
@@ -2198,6 +2199,7 @@ describe("ThreadContextPanel", () => {
 
   it("shows path tooltips on linked directory labels and kind badges", () => {
     renderPanel({
+      activeTab: "projects",
       pinned: true,
       thread: {
         ...baseThread,
@@ -2397,7 +2399,7 @@ describe("ThreadContextPanel", () => {
     expect(detachDirectoryFromThread).not.toHaveBeenCalled();
   });
 
-  it("shows regular and Spark rate limits together on the Provider status tab", () => {
+  it("shows regular and Spark rate limits together on the AI provider info tab", () => {
     renderPanel({ activeTab: "providers", pinned: true });
 
     expect(screen.getByText(/5h limit: 93% left/)).toBeInTheDocument();

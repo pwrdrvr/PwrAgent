@@ -68,6 +68,7 @@ type ContextTab = {
 
 const CONTEXT_TABS: ContextTab[] = [
   { id: "info", label: "Thread info", Icon: InfoIcon },
+  { id: "providers", label: "AI provider info", Icon: ServerIcon },
   { id: "edits", label: "Edits", Icon: EditsIcon },
   { id: "pricing", label: "Pricing", Icon: PricingIcon },
   { id: "actions", label: "Actions", Icon: TerminalIcon },
@@ -75,7 +76,6 @@ const CONTEXT_TABS: ContextTab[] = [
   { id: "automations", label: "Automations", Icon: AutomationsIcon },
   { id: "prs", label: "Pull requests", Icon: PullRequestIcon },
   { id: "projects", label: "Linked projects", Icon: ProjectsIcon },
-  { id: "providers", label: "Provider status", Icon: ServerIcon, bottom: true },
 ];
 
 type ThreadContextPanelProps = {
@@ -643,9 +643,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             backends={props.backends}
             platform={props.platform}
             desktopApi={props.desktopApi}
-            worktreeArchiveError={props.worktreeArchiveError}
             onRefreshNavigation={props.onRefreshNavigation}
-            onRestoreWorktree={props.onRestoreWorktree}
             showTooltip={showRailTooltip}
             hideTooltip={hideRailTooltip}
           />
@@ -720,7 +718,9 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
           <LinkedProjectsPanel
             desktopApi={props.desktopApi}
             onRefreshNavigation={props.onRefreshNavigation}
+            onRestoreWorktree={props.onRestoreWorktree}
             thread={props.thread}
+            worktreeArchiveError={props.worktreeArchiveError}
             showTooltip={showRailTooltip}
             hideTooltip={hideRailTooltip}
           />
