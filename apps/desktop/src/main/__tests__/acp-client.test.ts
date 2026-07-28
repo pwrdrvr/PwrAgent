@@ -332,6 +332,55 @@ describe("AcpAgentClient", () => {
     expect(sessionUpdates).toEqual([]);
   });
 
+  it("returns suppressed Qwen usage emitted on an agent message chunk", async () => {
+    const promptResponse = createDeferred<unknown>();
+    const transport = new FakeAcpAgentTransport({
+      "session/prompt": promptResponse.promise,
+    });
+    const client = new AcpAgentClient({
+      backendId: "acp:qwen",
+      store,
+      transport,
+      now: () => 1000,
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    const controlPrompt = client.sendControlPrompt({
+      sessionId: session.sessionId,
+      prompt: "name this thread",
+    });
+    transport.emitSessionUpdate(session.sessionId, {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: '{ "title": "Favorite cereal" }' },
+      _meta: {
+        usage: {
+          inputTokens: 23_851,
+          outputTokens: 222,
+          totalTokens: 24_073,
+          thoughtTokens: 29,
+          cachedReadTokens: 0,
+        },
+      },
+    });
+    promptResponse.resolve({ stopReason: "end_turn" });
+
+    await expect(controlPrompt).resolves.toEqual({
+      text: '{ "title": "Favorite cereal" }',
+      tokenUsage: {
+        inputTokens: 23_851,
+        cachedInputTokens: 0,
+        outputTokens: 222,
+        reasoningOutputTokens: 29,
+        totalTokens: 24_073,
+      },
+    });
+    expect(client.readReplay(session.sessionId).messages).toEqual([]);
+  });
+
   it("preserves split JSON control prompt chunks without inserted newlines", async () => {
     const promptResponse = createDeferred<unknown>();
     const transport = new FakeAcpAgentTransport({

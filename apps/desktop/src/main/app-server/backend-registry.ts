@@ -1430,6 +1430,11 @@ type ThreadTitleGenerationLogStatus =
   | "requesting"
   | "skipped";
 
+type ThreadTitleHelperResult = Extract<
+  ThreadTitleGenerationResult,
+  { status: "generated" | "invalid" }
+>;
+
 type WorktreeArchiveCandidate = {
   repositoryPath: string;
   worktreePath: string;
@@ -4613,7 +4618,7 @@ function titleHelperSubAgentId(
 }
 
 function titleHelperSubAgentMessage(params: {
-  result?: Extract<ThreadTitleGenerationResult, { status: "generated" }>;
+  result?: ThreadTitleHelperResult;
   status: "pending" | "running" | "success" | "failed" | "cancelled";
   reason?: string;
 }): string {
@@ -4624,18 +4629,22 @@ function titleHelperSubAgentMessage(params: {
     return params.reason ?? "Generating a title.";
   }
   if (params.status === "success") {
-    if (params.result?.title) {
+    const title =
+      params.result?.status === "generated" ? params.result.title : undefined;
+    if (title) {
       return params.reason
-        ? `Generated title: ${params.result.title}. Not applied: ${params.reason}`
-        : `Generated title: ${params.result.title}`;
+        ? `Generated title: ${title}. Not applied: ${params.reason}`
+        : `Generated title: ${title}`;
     }
     return "Generated a title.";
   }
   if (params.status === "cancelled") {
-    if (params.result?.title) {
+    const title =
+      params.result?.status === "generated" ? params.result.title : undefined;
+    if (title) {
       return params.reason
-        ? `Generated title: ${params.result.title}. Not applied: ${params.reason}`
-        : `Generated title: ${params.result.title}. Not applied.`;
+        ? `Generated title: ${title}. Not applied: ${params.reason}`
+        : `Generated title: ${title}. Not applied.`;
     }
     return params.reason
       ? `Title generation cancelled: ${params.reason}`
@@ -15876,6 +15885,7 @@ export class DesktopBackendRegistry {
         await this.safePersistExistingTitleHelperSubAgent({
           backend: params.backend,
           threadId: params.threadId,
+          ...(result?.status === "invalid" ? { result } : {}),
           status: "failed",
           reason: result?.reason ?? "title_generation_unavailable",
         });
@@ -15982,7 +15992,7 @@ export class DesktopBackendRegistry {
   private async safePersistTitleHelperSubAgent(params: {
     backend: AppServerBackendKind;
     threadId: string;
-    result?: Extract<ThreadTitleGenerationResult, { status: "generated" }>;
+    result?: ThreadTitleHelperResult;
     status: "pending" | "running" | "success" | "failed" | "cancelled";
     model?: string;
     reasoningEffort?: string;
@@ -16004,7 +16014,7 @@ export class DesktopBackendRegistry {
   private async safePersistExistingTitleHelperSubAgent(params: {
     backend: AppServerBackendKind;
     threadId: string;
-    result?: Extract<ThreadTitleGenerationResult, { status: "generated" }>;
+    result?: ThreadTitleHelperResult;
     status: "running" | "success" | "failed" | "cancelled";
     model?: string;
     reasoningEffort?: string;
@@ -16060,7 +16070,7 @@ export class DesktopBackendRegistry {
   private async persistTitleHelperSubAgent(params: {
     backend: AppServerBackendKind;
     threadId: string;
-    result?: Extract<ThreadTitleGenerationResult, { status: "generated" }>;
+    result?: ThreadTitleHelperResult;
     status: "pending" | "running" | "success" | "failed" | "cancelled";
     model?: string;
     reasoningEffort?: string;

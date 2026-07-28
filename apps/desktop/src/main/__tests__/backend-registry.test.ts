@@ -12395,6 +12395,102 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("persists title helper usage when the generated title is invalid", async () => {
+    const titleService = {
+      generateTitle: vi.fn(async () => ({
+        status: "invalid" as const,
+        reason: "title_too_many_words",
+        helperThreadId: "invalid-title-helper-thread",
+        helperTurnId: "invalid-title-helper-turn",
+        model: "gpt-5.4-mini",
+        reasoningEffort: "low",
+        tokenUsage: {
+          inputTokens: 100,
+          cachedInputTokens: 20,
+          outputTokens: 10,
+          totalTokens: 110,
+        },
+      })),
+    };
+    const overlayStore = createOverlayStoreMock();
+    const upsertSubAgentSpy = vi.spyOn(overlayStore, "upsertThreadSubAgent");
+    const upsertUsageLineSpy = vi.spyOn(overlayStore, "upsertThreadUsageLine");
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "thread/name/set"] },
+      threads: [
+        {
+          id: "thread-invalid-title-helper",
+          title: "Make button",
+          titleSource: "derived",
+          linkedDirectories: [],
+          source: "codex",
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      overlayStore,
+      threadTitleGenerationService: titleService,
+    });
+
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "thread-invalid-title-helper",
+      input: [{ type: "text", text: "Make button" }],
+    });
+    await waitForCondition(() =>
+      upsertSubAgentSpy.mock.calls.some(
+        ([call]) => call.subAgent.status === "failed",
+      ),
+    );
+
+    expect(upsertSubAgentSpy).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-invalid-title-helper",
+      subAgent: expect.objectContaining({
+        monitorId: "system:title-helper:codex:thread-invalid-title-helper",
+        status: "failed",
+        outcome: "failure",
+        monitorThreadId: "invalid-title-helper-thread",
+        monitorTurnId: "invalid-title-helper-turn",
+        preferredModel: "gpt-5.4-mini",
+        preferredReasoningEffort: "low",
+        lastMessage: "Title generation failed: title_too_many_words",
+        monitorUsage: expect.objectContaining({
+          model: "gpt-5.4-mini",
+          tokenUsage: {
+            inputTokens: 100,
+            cachedInputTokens: 20,
+            uncachedInputTokens: 80,
+            outputTokens: 10,
+            reasoningOutputTokens: 0,
+            totalTokens: 110,
+          },
+        }),
+      }),
+    });
+    expect(upsertUsageLineSpy).toHaveBeenCalledWith({
+      line: expect.objectContaining({
+        backend: "codex",
+        parentThreadId: "thread-invalid-title-helper",
+        threadId: "invalid-title-helper-thread",
+        turnId: "invalid-title-helper-turn",
+        scope: "monitor",
+        source: "monitor",
+        inputTokens: 100,
+        cachedInputTokens: 20,
+        outputTokens: 10,
+        totalTokens: 110,
+      }),
+    });
+    expect(codexClient.lastRenameThreadParams).toBeUndefined();
+
+    await registry.close();
+  });
+
   it("logs title helper sub-agent persistence failures without retrying the same write", async () => {
     mainLoggerMock.warn.mockClear();
     const titleService = {

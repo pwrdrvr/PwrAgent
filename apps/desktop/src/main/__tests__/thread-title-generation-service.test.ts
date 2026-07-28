@@ -260,6 +260,7 @@ describe("ThreadTitleGenerationService", () => {
     ).resolves.toEqual({
       status: "invalid",
       reason: "title_too_long",
+      cachedTokens: 12,
     });
     await expect(
       wordyTitleService.generateTitle({
@@ -269,6 +270,48 @@ describe("ThreadTitleGenerationService", () => {
     ).resolves.toEqual({
       status: "invalid",
       reason: "title_too_many_words",
+      cachedTokens: 12,
+    });
+  });
+
+  it("preserves helper metadata when a generated title is invalid", async () => {
+    const tokenUsage = {
+      inputTokens: 120,
+      cachedInputTokens: 20,
+      outputTokens: 8,
+      totalTokens: 128,
+    };
+    const service = new ThreadTitleGenerationService({
+      generators: {
+        codex: {
+          generateTitle: vi.fn(async () => ({
+            status: "ok" as const,
+            object: { title: "One two three four five six seven" },
+            helperThreadId: "title-helper-thread",
+            helperTurnId: "title-helper-turn",
+            model: "gpt-5.4-mini",
+            reasoningEffort: "low",
+            serviceTier: "priority",
+            tokenUsage,
+          })),
+        },
+      },
+    });
+
+    await expect(
+      service.generateTitle({
+        backend: "codex",
+        userPrompt: "Name this thread",
+      })
+    ).resolves.toEqual({
+      status: "invalid",
+      reason: "title_too_many_words",
+      helperThreadId: "title-helper-thread",
+      helperTurnId: "title-helper-turn",
+      model: "gpt-5.4-mini",
+      reasoningEffort: "low",
+      serviceTier: "priority",
+      tokenUsage,
     });
   });
 
@@ -287,6 +330,7 @@ describe("ThreadTitleGenerationService", () => {
     ).resolves.toEqual({
       status: "invalid",
       reason: "title_must_be_string",
+      cachedTokens: 12,
     });
   });
 

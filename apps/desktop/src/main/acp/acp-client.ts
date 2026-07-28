@@ -688,10 +688,10 @@ export class AcpAgentClient {
           suppressedControlPrompt.fallbackOutputText = text;
         }
       }
-      const completedUsage = readCompletedControlPromptUsage(update);
-      if (completedUsage) {
-        suppressedControlPrompt.tokenUsage = completedUsage.tokenUsage;
-        suppressedControlPrompt.model = completedUsage.model;
+      const usage = readControlPromptUsage(update);
+      if (usage) {
+        suppressedControlPrompt.tokenUsage = usage.tokenUsage;
+        suppressedControlPrompt.model = usage.model;
       }
       return;
     }
@@ -1208,20 +1208,25 @@ function readUpdateKind(update: Record<string, unknown>): string | undefined {
   return typeof kind === "string" ? kind : undefined;
 }
 
-function readCompletedControlPromptUsage(
+function readControlPromptUsage(
   update: Record<string, unknown>,
 ): Pick<AcpSuppressedControlPrompt, "model" | "tokenUsage"> | undefined {
-  if (readUpdateKind(update) !== "turn_completed") {
-    return undefined;
-  }
-  const usage = asRecord(update.usage);
+  const kind = readUpdateKind(update);
+  const usage =
+    kind === "turn_completed"
+      ? asRecord(update.usage)
+      : kind === "agent_message_chunk"
+        ? asRecord(asRecord(update._meta)?.usage)
+        : undefined;
   if (!usage) {
     return undefined;
   }
   const inputTokens = readFiniteNumber(usage.inputTokens);
   const cachedInputTokens = readFiniteNumber(usage.cachedReadTokens);
   const outputTokens = readFiniteNumber(usage.outputTokens);
-  const reasoningOutputTokens = readFiniteNumber(usage.reasoningTokens);
+  const reasoningOutputTokens =
+    readFiniteNumber(usage.reasoningTokens) ??
+    readFiniteNumber(usage.thoughtTokens);
   const totalTokens = readFiniteNumber(usage.totalTokens);
   if (
     inputTokens === undefined &&
