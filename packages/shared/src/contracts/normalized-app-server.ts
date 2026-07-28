@@ -321,7 +321,23 @@ export type AppServerThreadMessage = {
   role: "user" | "assistant";
   text: string;
   parts?: AppServerThreadMessagePart[];
+  origin?: AppServerThreadMessageOrigin;
   createdAt?: number;
+};
+
+export type AppServerThreadMessageOriginKind =
+  | "agent"
+  | "automation"
+  | "messaging"
+  | "pwragent";
+
+export type AppServerThreadMessageOrigin = {
+  kind: AppServerThreadMessageOriginKind;
+  sourceThread?: {
+    backend: AppServerBackendKind;
+    threadId: ThreadIdentifier;
+    title?: string;
+  };
 };
 
 export type AppServerThreadTextPart = {

@@ -1,6 +1,7 @@
 import path from "node:path";
 import type {
   AppServerBackendScope,
+  AppServerThreadMessageOrigin,
   AppServerThreadSummary,
   AutomationThreadSummary,
   DirectoryLaunchpadOverlayState,
@@ -1291,6 +1292,68 @@ export class SqliteOverlayStore {
         toolName: params.toolName,
       }) as ThreadToolInvocationRow[];
     return rows.map(threadToolInvocationFromRow);
+  }
+
+  async upsertThreadMessageOrigin(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    turnId: string;
+    origin: AppServerThreadMessageOrigin;
+    createdAt?: number;
+  }): Promise<void> {
+    this.stateDb.raw
+      .prepare(
+        `INSERT INTO thread_message_origins(
+           backend,
+           thread_id,
+           turn_id,
+           created_at,
+           payload
+         ) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(backend, thread_id, turn_id) DO UPDATE SET
+           created_at = excluded.created_at,
+           payload = excluded.payload`,
+      )
+      .run(
+        params.backend,
+        params.threadId,
+        params.turnId,
+        params.createdAt ?? Date.now(),
+        JSON.stringify(params.origin),
+      );
+  }
+
+  async readThreadMessageOrigins(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    turnIds: string[];
+  }): Promise<Record<string, AppServerThreadMessageOrigin>> {
+    const turnIds = [
+      ...new Set(
+        params.turnIds.map((turnId) => turnId.trim()).filter(Boolean),
+      ),
+    ];
+    if (turnIds.length === 0) {
+      return {};
+    }
+    const rows = this.stateDb.raw
+      .prepare(
+        `SELECT turn_id, payload
+         FROM thread_message_origins
+         WHERE backend = ?
+           AND thread_id = ?
+           AND turn_id IN (SELECT value FROM json_each(?))`,
+      )
+      .all(params.backend, params.threadId, JSON.stringify(turnIds)) as Array<{
+        payload: string;
+        turn_id: string;
+      }>;
+    return Object.fromEntries(
+      rows.map((row) => [
+        row.turn_id,
+        JSON.parse(row.payload) as AppServerThreadMessageOrigin,
+      ]),
+    );
   }
 
   // Per-turn metadata lives on thread_usage_turns. The turn record is refreshed
@@ -3638,4 +3701,6 @@ export type OverlayStoreLike = Pick<
 > & {
   setThreadCodexEnvironmentRuntime?: SqliteOverlayStore["setThreadCodexEnvironmentRuntime"];
   listThreadOverlaysWithCodexEnvironmentRuntime?: SqliteOverlayStore["listThreadOverlaysWithCodexEnvironmentRuntime"];
+  upsertThreadMessageOrigin?: SqliteOverlayStore["upsertThreadMessageOrigin"];
+  readThreadMessageOrigins?: SqliteOverlayStore["readThreadMessageOrigins"];
 };

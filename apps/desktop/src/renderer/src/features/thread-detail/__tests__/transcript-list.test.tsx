@@ -1,6 +1,8 @@
 import "@testing-library/jest-dom/vitest";
+import type { NavigationThreadSummary } from "@pwragent/shared";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ThreadLinkProvider } from "../../../lib/thread-links";
 import { buildAutomationCardActivityEntries } from "../automation-card-entries";
 import { TranscriptList } from "../TranscriptList";
 
@@ -147,6 +149,57 @@ describe("TranscriptList", () => {
     expect(
       screen.getByText("Channel bound: Telegram - PwrDrvr / PwrDrvr/Topic")
     ).toBeInTheDocument();
+  });
+
+  it("attributes an injected Agent message and links its source thread", () => {
+    const onShowThread = vi.fn();
+    const sourceThread = {
+      id: "source-thread",
+      title: "Branch picker error handling",
+      titleSource: "derived",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: true, unread: false },
+    } as NavigationThreadSummary;
+
+    const { container } = render(
+      <ThreadLinkProvider onShowThread={onShowThread} threads={[sourceThread]}>
+        <TranscriptList
+          entries={[
+            {
+              type: "message",
+              id: "message-injected",
+              role: "user",
+              text: "Please take this through publication now.",
+              origin: {
+                kind: "agent",
+                sourceThread: {
+                  backend: "codex",
+                  threadId: "source-thread",
+                },
+              },
+            },
+          ]}
+          loading={false}
+          loadingMore={false}
+          onLoadOlder={async () => undefined}
+        />
+      </ThreadLinkProvider>,
+    );
+
+    expect(screen.getByText("Agent")).toBeInTheDocument();
+    expect(screen.queryByText("User")).not.toBeInTheDocument();
+    expect(container.querySelector(".transcript-message--injected")).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Open thread Branch picker error handling",
+      }),
+    );
+    expect(onShowThread).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "source-thread",
+    });
   });
 
   it("renders transcript history and exposes incremental history loading when available", () => {

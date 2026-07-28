@@ -191,4 +191,42 @@ describe("SqliteOverlayStore - thread Agent metadata", () => {
     ).resolves.toMatchObject({ handoffOrigin });
     reopenedDb.close();
   });
+
+  it("persists injected message origins by turn across sqlite handles", async () => {
+    await store.upsertThreadMessageOrigin({
+      backend: "codex",
+      threadId: "child-thread",
+      turnId: "turn-injected",
+      origin: {
+        kind: "agent",
+        sourceThread: {
+          backend: "codex",
+          threadId: "parent-thread",
+          title: "Branch picker error handling",
+        },
+      },
+      createdAt: 1_773_000_000_000,
+    });
+    stateDb.close();
+
+    const reopenedDb = StateDb.open(path.join(tempDir, "state.db"));
+    const reopenedStore = new SqliteOverlayStore(reopenedDb);
+    await expect(
+      reopenedStore.readThreadMessageOrigins({
+        backend: "codex",
+        threadId: "child-thread",
+        turnIds: ["turn-injected", "turn-other"],
+      }),
+    ).resolves.toEqual({
+      "turn-injected": {
+        kind: "agent",
+        sourceThread: {
+          backend: "codex",
+          threadId: "parent-thread",
+          title: "Branch picker error handling",
+        },
+      },
+    });
+    reopenedDb.close();
+  });
 });

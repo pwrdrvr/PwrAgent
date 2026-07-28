@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type {
   AppServerBackendKind,
   AppServerCollaborationModeRequest,
+  AppServerThreadMessageOrigin,
   AppServerTurnInputItem,
   ThreadExecutionMode,
   ThreadIdentifier,
@@ -14,6 +15,7 @@ export type ThreadTurnQueueEntry = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   origin: ThreadTurnQueueOrigin;
+  messageOrigin?: AppServerThreadMessageOrigin;
   input: AppServerTurnInputItem[];
   executionMode?: ThreadExecutionMode;
   approvalPolicy?: string;

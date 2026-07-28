@@ -40,6 +40,7 @@ import {
   type AppServerThreadActivityEntry,
   type AppServerThreadEntry,
   type AppServerThreadMessage,
+  type AppServerThreadMessageOrigin,
   type AppServerToolRequestUserInputResponse,
   type AppServerThreadReplay,
   type AppServerThreadStatus,
@@ -4601,6 +4602,49 @@ function mergeImmutableUsageActivities(params: {
   };
 }
 
+function mergeThreadMessageOrigins(
+  replay: AppServerThreadReplay,
+  originsByTurnId: Record<string, AppServerThreadMessageOrigin>,
+): AppServerThreadReplay {
+  if (Object.keys(originsByTurnId).length === 0) {
+    return replay;
+  }
+  const originsByMessageId = new Map<string, AppServerThreadMessageOrigin>();
+  const entries = replay.entries.map((entry): AppServerThreadEntry => {
+    if (entry.type !== "message" || entry.role !== "user" || !entry.turn?.id) {
+      return entry;
+    }
+    const origin = originsByTurnId[entry.turn.id];
+    if (!origin) {
+      return entry;
+    }
+    originsByMessageId.set(entry.id, origin);
+    return { ...entry, origin };
+  });
+  const messages = replay.messages.map((message) => {
+    const origin = originsByMessageId.get(message.id);
+    return origin && message.role === "user" ? { ...message, origin } : message;
+  });
+  return {
+    ...replay,
+    entries,
+    messages,
+  };
+}
+
+function resolveThreadMessageOrigin(params: {
+  origin?: ThreadTurnQueueOrigin;
+  messageOrigin?: AppServerThreadMessageOrigin;
+}): AppServerThreadMessageOrigin | undefined {
+  if (params.messageOrigin) {
+    return params.messageOrigin;
+  }
+  if (params.origin === "automation" || params.origin === "messaging") {
+    return { kind: params.origin };
+  }
+  return undefined;
+}
+
 function extractFirstMeaningfulTextInput(input: AppServerTurnInputItem[]): string | undefined {
   const text = input
     .filter((item): item is Extract<AppServerTurnInputItem, { type: "text" }> => item.type === "text")
@@ -5173,6 +5217,7 @@ function pageNormalizedReplay(
             role: entry.role,
             text: entry.text,
             ...(entry.parts ? { parts: entry.parts } : {}),
+            ...(entry.origin ? { origin: entry.origin } : {}),
             ...(entry.createdAt ? { createdAt: entry.createdAt } : {}),
           },
         ]
@@ -8117,6 +8162,42 @@ export class DesktopBackendRegistry {
             replay: replayWithEnvironment,
             activities: overlay?.immutableUsageActivities,
           });
+    const messageTurnIds = replayWithImmutableUsage.entries.flatMap((entry) =>
+      entry.type === "message" && entry.turn?.id ? [entry.turn.id] : [],
+    );
+    const persistedMessageOrigins =
+      typeof this.overlayStore.readThreadMessageOrigins === "function"
+        ? await this.overlayStore.readThreadMessageOrigins({
+            backend,
+            threadId: request.threadId,
+            turnIds: messageTurnIds,
+          })
+        : {};
+    const messageOrigins = { ...persistedMessageOrigins };
+    const firstUserMessage = replayWithImmutableUsage.entries.find(
+      (entry) => entry.type === "message" && entry.role === "user" && entry.turn?.id,
+    );
+    if (
+      overlay?.handoffOrigin
+      && firstUserMessage?.type === "message"
+      && firstUserMessage.turn?.id
+      && !messageOrigins[firstUserMessage.turn.id]
+    ) {
+      messageOrigins[firstUserMessage.turn.id] = {
+        kind: "agent",
+        sourceThread: {
+          backend: overlay.handoffOrigin.sourceBackend,
+          threadId: overlay.handoffOrigin.sourceThreadId,
+          ...(overlay.handoffOrigin.sourceTitle
+            ? { title: overlay.handoffOrigin.sourceTitle }
+            : {}),
+        },
+      };
+    }
+    const replayWithMessageOrigins = mergeThreadMessageOrigins(
+      replayWithImmutableUsage,
+      messageOrigins,
+    );
     if (!request.before && shouldAppendTranscriptOverlays) {
       await this.persistReplayUsageLines(replayWithEnvironment);
     }
@@ -8141,10 +8222,10 @@ export class DesktopBackendRegistry {
       threadId: request.threadId,
       pricing,
       ...(toolAccounting ? { toolAccounting } : {}),
-      ...(replayWithImmutableUsage.threadStatus
-        ? { threadStatus: replayWithImmutableUsage.threadStatus }
+      ...(replayWithMessageOrigins.threadStatus
+        ? { threadStatus: replayWithMessageOrigins.threadStatus }
         : {}),
-      replay: replayWithImmutableUsage,
+      replay: replayWithMessageOrigins,
     };
   }
 
@@ -8800,6 +8881,7 @@ export class DesktopBackendRegistry {
     reasoningEffort?: string;
     fastMode?: boolean;
     automationRunId?: string;
+    messageOrigin?: AppServerThreadMessageOrigin;
   }): Promise<ThreadTurnQueueSubmissionResult> {
     const { origin = "manual", ...entry } = params;
     return await this.threadTurnQueue.submit({
@@ -8913,6 +8995,7 @@ export class DesktopBackendRegistry {
     serviceTier?: string;
     reasoningEffort?: string;
     fastMode?: boolean;
+    messageOrigin?: AppServerThreadMessageOrigin;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
     return await this.startTurnNow(params);
   }
@@ -8930,6 +9013,7 @@ export class DesktopBackendRegistry {
     serviceTier?: string;
     reasoningEffort?: string;
     fastMode?: boolean;
+    messageOrigin?: AppServerThreadMessageOrigin;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
     this.assertNotBootstrap("startTurn");
     if (isAcpBackendId(params.backend)) {
@@ -8972,6 +9056,12 @@ export class DesktopBackendRegistry {
           backend: params.backend,
           threadId: result.threadId,
           input: params.input,
+        });
+        await this.persistThreadMessageOrigin({
+          backend: params.backend,
+          threadId: result.threadId,
+          turnId: result.turnId,
+          origin: resolveThreadMessageOrigin(params),
         });
         return result;
       } finally {
@@ -9145,6 +9235,12 @@ export class DesktopBackendRegistry {
         executionMode: params.executionMode,
       });
     }
+    await this.persistThreadMessageOrigin({
+      backend: params.backend,
+      threadId: result.threadId,
+      turnId: result.turnId,
+      origin: resolveThreadMessageOrigin(params),
+    });
     const response = {
       backend: params.backend,
       threadId: result.threadId,
@@ -9165,6 +9261,35 @@ export class DesktopBackendRegistry {
     }
 
     return response;
+  }
+
+  private async persistThreadMessageOrigin(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    turnId: string;
+    origin?: AppServerThreadMessageOrigin;
+  }): Promise<void> {
+    if (
+      !params.origin
+      || typeof this.overlayStore.upsertThreadMessageOrigin !== "function"
+    ) {
+      return;
+    }
+    try {
+      await this.overlayStore.upsertThreadMessageOrigin({
+        backend: params.backend,
+        threadId: params.threadId,
+        turnId: params.turnId,
+        origin: params.origin,
+      });
+    } catch (error) {
+      backendRegistryLog.warn("failed to persist injected message origin", {
+        backend: params.backend,
+        error: error instanceof Error ? error.message : String(error),
+        threadId: params.threadId,
+        turnId: params.turnId,
+      });
+    }
   }
 
   private scheduleCompletedTurnFromReplay(params: {
@@ -17635,6 +17760,7 @@ export class DesktopBackendRegistry {
       backend: move.backend,
       threadId: move.threadId,
       input: [{ type: "text", text: prompt }],
+      messageOrigin: { kind: "pwragent" },
     });
     this.updatePendingThreadWorkspaceMove(params.moveId, {
       status: params.kind === "success" ? "completed" : "failed",
@@ -17712,6 +17838,13 @@ export class DesktopBackendRegistry {
         backend,
         threadId,
         input: [{ type: "text", text: prompt }],
+        messageOrigin: {
+          kind: "agent",
+          sourceThread: {
+            backend: request.context.backend,
+            threadId: request.context.threadId,
+          },
+        },
         executionMode: request.args.executionMode,
         model: request.args.model,
         reasoningEffort: request.args.reasoningEffort,
@@ -18235,6 +18368,14 @@ export class DesktopBackendRegistry {
         backend,
         threadId,
         input: [{ type: "text", text: prompt }],
+        messageOrigin: {
+          kind: "agent",
+          sourceThread: {
+            backend: sourceBackend,
+            threadId: sourceThreadId,
+            ...(sourceThread?.title ? { title: sourceThread.title } : {}),
+          },
+        },
         executionMode,
         model: inheritedSettings.model,
         reasoningEffort: inheritedSettings.reasoningEffort,
@@ -21236,6 +21377,7 @@ function toThreadReadMessageSummary(
   return {
     id: message.id,
     role: message.role,
+    ...(message.origin ? { origin: message.origin } : {}),
     ...(message.createdAt !== undefined ? { createdAt: message.createdAt } : {}),
     text: text.value,
     ...(text.truncated ? { truncated: true } : {}),
@@ -21256,6 +21398,7 @@ function toThreadReadEntrySummary(
         type: "message",
         id: entry.id,
         role: entry.role,
+        ...(entry.origin ? { origin: entry.origin } : {}),
         text: text.value,
         ...(entry.createdAt !== undefined ? { createdAt: entry.createdAt } : {}),
         ...(entry.phase ? { phase: entry.phase } : {}),

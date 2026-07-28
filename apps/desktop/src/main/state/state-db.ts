@@ -9,7 +9,7 @@ import {
 } from "@pwragent/shared";
 import { getNativeBinding } from "./native-binding.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 29;
+export const CURRENT_STATE_DB_USER_VERSION = 30;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -703,6 +703,19 @@ CREATE INDEX IF NOT EXISTS idx_thread_tool_invocation_alerts_read_thread
   ON thread_tool_invocation_alerts(backend, thread_id, updated_at DESC, alert_id DESC);
 `;
 
+const THREAD_MESSAGE_ORIGIN_SCHEMA = `
+CREATE TABLE IF NOT EXISTS thread_message_origins (
+  backend     TEXT NOT NULL,
+  thread_id   TEXT NOT NULL,
+  turn_id     TEXT NOT NULL,
+  created_at  INTEGER NOT NULL,
+  payload     TEXT NOT NULL,
+  PRIMARY KEY (backend, thread_id, turn_id)
+);
+CREATE INDEX IF NOT EXISTS idx_thread_message_origins_thread
+  ON thread_message_origins(backend, thread_id, created_at, turn_id);
+`;
+
 const DELIVERIES_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const REVOKED_BINDINGS_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 const APP_RUNTIME_INSTANCE_RETENTION_MS = 60 * 60 * 1000;
@@ -939,6 +952,12 @@ export class StateDb {
     if ((db.pragma("user_version", { simple: true }) as number) < 29) {
       db.transaction(() => {
         repairTokenUsagePricing(db);
+        db.pragma("user_version = 29");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 30) {
+      db.transaction(() => {
+        db.exec(THREAD_MESSAGE_ORIGIN_SCHEMA);
         db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
       })();
     }
@@ -1095,6 +1114,7 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     ensureThreadUsagePricingProviderScope(db);
     ensureThreadUsagePricingCumulativeColumns(db);
     db.exec(THREAD_TOOL_ACCOUNTING_SCHEMA);
+    db.exec(THREAD_MESSAGE_ORIGIN_SCHEMA);
     if ((db.pragma("user_version", { simple: true }) as number) < 4) {
       db.pragma("user_version = 4");
     }
