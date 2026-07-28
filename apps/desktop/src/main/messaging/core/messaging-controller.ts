@@ -4443,20 +4443,28 @@ export class MessagingController {
       if (!selectedBackend) {
         return;
       }
+      const backendChanged =
+        selectedBackend.kind !==
+        (nextSession.backend ?? navigation.launchpadDefaults.backend);
+      const updatedAt = this.now();
       const normalizedSession = normalizeNewThreadSessionForBackend(
-        {
-          ...nextSession,
-          backend: selectedBackend.kind,
-        },
+        backendChanged
+          ? clearNewThreadProviderPreferences(
+              {
+                ...nextSession,
+                backend: selectedBackend.kind,
+              },
+              updatedAt,
+            )
+          : {
+              ...nextSession,
+              backend: selectedBackend.kind,
+            },
         selectedBackend,
-        this.now(),
+        updatedAt,
       );
       await this.updateNewThreadStickySettings(normalizedSession, {
         backend: selectedBackend.kind,
-        fastMode: normalizedSession.preferences?.fastMode,
-        model: normalizedSession.preferences?.model,
-        reasoningEffort: normalizedSession.preferences?.reasoningEffort,
-        serviceTier: normalizedSession.preferences?.serviceTier,
       });
       await this.presentNewThreadPromptGate(
         normalizedSession,
@@ -5689,7 +5697,7 @@ export class MessagingController {
     const options = directory?.launchpad?.codexEnvironmentOptions ?? [];
     const currentEnvironmentId = resolveNewThreadCodexEnvironmentId(
       session,
-      directory,
+      directory?.launchpad,
     );
     if (options.length === 0 && !currentEnvironmentId) {
       await this.presentNewThreadPromptGate(session, event, navigation);
@@ -6167,7 +6175,7 @@ export class MessagingController {
         now: this.now(),
         model: options.supportsModel ? options.model : undefined,
         reasoningEffort: options.supportsReasoning ? options.reasoningEffort : undefined,
-        serviceTier: preferences?.serviceTier,
+        serviceTier: options.serviceTier,
         fastMode: options.supportsFast ? options.fastMode : undefined,
         acpRuntime: options.acpRuntime,
         codexEnvironmentRuntime: started.codexEnvironmentRuntime,
@@ -6242,7 +6250,7 @@ export class MessagingController {
       fastMode: options.supportsFast ? options.fastMode : undefined,
       model: options.supportsModel ? options.model : undefined,
       reasoningEffort: options.supportsReasoning ? options.reasoningEffort : undefined,
-      serviceTier: preferences?.serviceTier,
+      serviceTier: options.serviceTier,
       acpRuntime: options.acpRuntime,
       agent: agentForNewThreadSession(session),
       ...(options.workMode === "worktree"
@@ -13138,6 +13146,39 @@ function normalizeNewThreadSessionForBackend(
   };
 }
 
+function clearNewThreadProviderPreferences(
+  session: MessagingBrowseSessionRecord,
+  updatedAt: number,
+): MessagingBrowseSessionRecord {
+  if (!session.preferences) {
+    return session;
+  }
+
+  const preferences = { ...session.preferences };
+  delete preferences.acpRuntime;
+  delete preferences.codexEnvironmentActionId;
+  delete preferences.codexEnvironmentExecutionTarget;
+  delete preferences.codexEnvironmentId;
+  delete preferences.codexEnvironmentSetupEnabled;
+  delete preferences.executionMode;
+  delete preferences.fastMode;
+  delete preferences.model;
+  delete preferences.permissionsMode;
+  delete preferences.reasoningEffort;
+  delete preferences.serviceTier;
+
+  const hasPreferences = Object.keys(preferences).some((key) => key !== "updatedAt");
+  return {
+    ...session,
+    preferences: hasPreferences
+      ? {
+          ...preferences,
+          updatedAt,
+        }
+      : undefined,
+  };
+}
+
 function defaultBackendModel(
   models: NonNullable<BackendSummary["launchpadOptions"]>["models"] = [],
 ) {
@@ -13205,6 +13246,7 @@ type NewThreadOptionsSummary = {
   fastMode: boolean;
   model: string;
   reasoningEffort?: string;
+  serviceTier?: string;
   supportsFast: boolean;
   supportsModel: boolean;
   supportsReasoning: boolean;
@@ -13240,14 +13282,22 @@ function newThreadOptionsForSession(
   const models = backend.launchpadOptions?.models ?? [];
   const modelOption =
     models.find((model) => model.id === session.preferences?.model) ??
+    models.find((model) => model.id === directoryLaunchpad?.model) ??
     models.find((model) => model.id === launchpadDefaults.model) ??
     models.find((model) => model.current) ??
     models[0];
   const reasoningEfforts = reasoningEffortsForModel(backend, modelOption);
   const reasoningEffort = resolveReasoningEffortForModel(backend, modelOption, [
     session.preferences?.reasoningEffort,
+    directoryLaunchpad?.reasoningEffort,
     launchpadDefaults.reasoningEffort,
   ]);
+  const serviceTiers = backend.launchpadOptions?.serviceTiers ?? [];
+  const serviceTier = [
+    session.preferences?.serviceTier,
+    directoryLaunchpad?.serviceTier,
+    launchpadDefaults.serviceTier,
+  ].find((candidate) => candidate ? serviceTiers.includes(candidate) : false);
   const supportsFast =
     Boolean(backend.launchpadOptions?.supportsFastMode) ||
     Boolean(modelOption?.supportsFast);
@@ -13268,7 +13318,10 @@ function newThreadOptionsForSession(
       ? "directory-launchpad"
       : "launchpad-defaults";
   const codexEnvironmentOptions = directoryLaunchpad?.codexEnvironmentOptions ?? [];
-  const codexEnvironmentId = resolveNewThreadCodexEnvironmentId(session, directory);
+  const codexEnvironmentId = resolveNewThreadCodexEnvironmentId(
+    session,
+    directoryLaunchpad,
+  );
   const selectedEnvironment = codexEnvironmentOptions.find(
     (environment) => environment.id === codexEnvironmentId,
   );
@@ -13292,10 +13345,14 @@ function newThreadOptionsForSession(
     executionModeSource,
     fastMode:
       supportsFast
-        ? session.preferences?.fastMode ?? launchpadDefaults.fastMode ?? false
+        ? session.preferences?.fastMode ??
+          directoryLaunchpad?.fastMode ??
+          launchpadDefaults.fastMode ??
+          false
         : false,
     model: session.preferences?.model ?? modelOption?.id ?? "default",
     reasoningEffort,
+    serviceTier,
     supportsFast,
     supportsModel: models.length > 0,
     supportsReasoning,
@@ -13376,14 +13433,14 @@ function newThreadPromptGateBody(
 
 function resolveNewThreadCodexEnvironmentId(
   session: MessagingBrowseSessionRecord,
-  directory: NavigationDirectorySummary | undefined,
+  launchpad: NavigationLaunchpadDraft | undefined,
 ): string | null | undefined {
   if (session.preferences?.codexEnvironmentId === null) {
     return null;
   }
   return (
     session.preferences?.codexEnvironmentId ??
-    directory?.launchpad?.codexEnvironmentId
+    launchpad?.codexEnvironmentId
   );
 }
 
@@ -14850,7 +14907,7 @@ function launchpadForMessagingProject(params: {
     reasoningEffort: params.options.supportsReasoning
       ? params.options.reasoningEffort
       : undefined,
-    serviceTier: params.preferences?.serviceTier,
+    serviceTier: params.options.serviceTier,
     fastMode: params.options.supportsFast ? params.options.fastMode : undefined,
     prompt: "",
     workMode: params.workMode,

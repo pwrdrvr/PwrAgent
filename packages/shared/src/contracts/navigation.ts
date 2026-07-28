@@ -304,6 +304,9 @@ export type NavigationLaunchpadProviderSettings = {
   serviceTier?: string;
   fastMode?: boolean;
   acpRuntime?: BackendAcpSessionRuntimeState;
+  codexEnvironmentId?: string;
+  codexEnvironmentExecutionTarget?: CodexEnvironmentExecutionTarget;
+  codexEnvironmentActionId?: string;
 };
 
 const NAVIGATION_LAUNCHPAD_PROVIDER_SETTING_KEYS = [
@@ -314,6 +317,9 @@ const NAVIGATION_LAUNCHPAD_PROVIDER_SETTING_KEYS = [
   "serviceTier",
   "fastMode",
   "acpRuntime",
+  "codexEnvironmentId",
+  "codexEnvironmentExecutionTarget",
+  "codexEnvironmentActionId",
 ] as const satisfies readonly (keyof NavigationLaunchpadProviderSettings)[];
 
 export function extractNavigationLaunchpadProviderSettings(
@@ -438,6 +444,9 @@ function clearNavigationLaunchpadProviderFields<T extends NavigationLaunchpadDef
     serviceTier: undefined,
     fastMode: undefined,
     acpRuntime: undefined,
+    codexEnvironmentId: undefined,
+    codexEnvironmentExecutionTarget: undefined,
+    codexEnvironmentActionId: undefined,
   };
 }
 
@@ -458,6 +467,9 @@ export function projectNavigationLaunchpadProviderSettings<
     serviceTier: settings.serviceTier,
     fastMode: settings.fastMode,
     acpRuntime: settings.acpRuntime,
+    codexEnvironmentId: settings.codexEnvironmentId,
+    codexEnvironmentExecutionTarget: settings.codexEnvironmentExecutionTarget,
+    codexEnvironmentActionId: settings.codexEnvironmentActionId,
   };
 }
 

@@ -23,6 +23,7 @@ import type {
   ThreadExecutionMode,
 } from "@pwragent/shared";
 import {
+  applyNavigationLaunchpadProviderSettingsPatch,
   buildAppendPinRank,
   buildPinnedRanks,
   buildPullRequestStatusKey,
@@ -1792,7 +1793,13 @@ function mergeLaunchpadUpdateResponse(
   const preserveSetting = <Key extends keyof NavigationLaunchpadDraft>(
     key: Key,
   ): void => {
-    if (!backendChanged && !(key in patch)) {
+    const serverResolvesReasoningForModel =
+      key === "reasoningEffort" && "model" in patch;
+    if (
+      !backendChanged
+      && !(key in patch)
+      && !serverResolvesReasoningForModel
+    ) {
       merged[key] = current[key] as NavigationLaunchpadDraft[Key];
     }
   };
@@ -4492,8 +4499,10 @@ export function useThreadNavigation(
           response: applyLaunchpadUpdate(
             currentResponse,
             {
-              ...currentLaunchpad,
-              ...patch,
+              ...applyNavigationLaunchpadProviderSettingsPatch<NavigationLaunchpadDraft>(
+                currentLaunchpad,
+                patch,
+              ),
               directoryKey,
               updatedAt: Date.now(),
             },
@@ -4509,8 +4518,10 @@ export function useThreadNavigation(
         return {
           ...current,
           [directoryKey]: {
-            ...currentLaunchpad,
-            ...patch,
+            ...applyNavigationLaunchpadProviderSettingsPatch<NavigationLaunchpadDraft>(
+              currentLaunchpad,
+              patch,
+            ),
             directoryKey,
             updatedAt: Date.now(),
           },
@@ -4519,8 +4530,10 @@ export function useThreadNavigation(
       const pendingPickedLaunchpad = pendingPickedLaunchpadRef.current.get(directoryKey);
       if (pendingPickedLaunchpad) {
         pendingPickedLaunchpadRef.current.set(directoryKey, {
-          ...pendingPickedLaunchpad,
-          ...patch,
+          ...applyNavigationLaunchpadProviderSettingsPatch<NavigationLaunchpadDraft>(
+            pendingPickedLaunchpad,
+            patch,
+          ),
           directoryKey,
           updatedAt: Date.now(),
         });

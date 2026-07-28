@@ -103,12 +103,15 @@ export function withCodexEnvironmentOptions(
   const selectedEnvironment = options.find(
     (environment) => environment.id === launchpad.codexEnvironmentId,
   );
+  const selectedAction = selectedEnvironment?.actions.find(
+    (action) => action.id === launchpad.codexEnvironmentActionId,
+  );
   return {
     ...launchpadWithoutDeprecatedSetupFlag,
     codexEnvironmentId: selectedEnvironment?.id,
     codexEnvironmentExecutionTarget:
       launchpad.codexEnvironmentExecutionTarget ?? "local",
-    codexEnvironmentActionId: undefined,
+    codexEnvironmentActionId: selectedAction?.id,
     codexEnvironmentOptions: options,
   };
 }

@@ -127,6 +127,8 @@ command = "pnpm dev:alt"
       directoryPath: "/repo",
       backend: "acp:kimi",
       executionMode: "default",
+      codexEnvironmentId: "environment",
+      codexEnvironmentActionId: "start-dev",
       prompt: "",
       workMode: "local",
       createdAt: 1,
@@ -140,11 +142,19 @@ command = "pnpm dev:alt"
           name: "Repo Environment",
           sourcePath: "/repo/.codex/environments/environment.toml",
           setupScript: "pnpm install",
-          actions: [],
+          actions: [
+            {
+              id: "start-dev",
+              name: "Start dev",
+              command: "pnpm dev",
+            },
+          ],
         },
       ]),
     ).toMatchObject({
       backend: "acp:kimi",
+      codexEnvironmentActionId: "start-dev",
+      codexEnvironmentId: "environment",
       codexEnvironmentOptions: [
         {
           id: "environment",
