@@ -3819,14 +3819,18 @@ export function useThreadNavigation(
           [directoryKey]: launchpad,
         }));
         const pendingGitStatus = takePendingDirectoryGitStatus(directoryKey);
+        const ensuredGitStatus =
+          response.gitStatus !== undefined
+            ? response.gitStatus
+            : pendingGitStatus;
         setState((current) => ({
           ...current,
           response: applyLaunchpadUpdate(
             current.response,
             launchpad,
             defaults,
-            pendingGitStatus !== undefined
-              ? { gitStatus: pendingGitStatus }
+            ensuredGitStatus !== undefined
+              ? { gitStatus: ensuredGitStatus }
               : undefined,
           ),
         }));
@@ -4007,6 +4011,7 @@ export function useThreadNavigation(
           directoryKind: directory.directoryKind,
           directoryLabel: directory.directoryLabel,
           directoryPath: directory.directoryPath,
+          gitStatusSourcePath: directory.gitStatusSourcePath,
           parentThreadId: groupRoot.id,
           parentThreadTitle: groupRoot.title,
           preferredBackend: parent.source,
@@ -4046,11 +4051,15 @@ export function useThreadNavigation(
           [directoryKey]: launchpad,
         }));
         const pendingGitStatus = takePendingDirectoryGitStatus(directoryKey);
+        const ensuredGitStatus =
+          response.gitStatus !== undefined
+            ? response.gitStatus
+            : pendingGitStatus;
         setState((current) => ({
           ...current,
           response: applyLaunchpadUpdate(current.response, launchpad, defaults, {
-            ...(pendingGitStatus !== undefined
-              ? { gitStatus: pendingGitStatus }
+            ...(ensuredGitStatus !== undefined
+              ? { gitStatus: ensuredGitStatus }
               : {}),
             gitStatusSourcePath: directory.gitStatusSourcePath,
           }),

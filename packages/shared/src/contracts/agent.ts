@@ -18,6 +18,7 @@ import type {
 import type {
   DirectorySummaryKind,
   LaunchpadWorkMode,
+  NavigationDirectoryGitStatus,
   NavigationLaunchpadDraft,
   NavigationLaunchpadDefaults,
 } from "./navigation";
@@ -435,6 +436,11 @@ export type EnsureDirectoryLaunchpadRequest = {
   directoryKind: DirectorySummaryKind;
   directoryLabel: string;
   directoryPath?: string;
+  /**
+   * Existing repository/worktree path to probe for branch choices when the
+   * launchpad's target path is stale, missing, or has not been created yet.
+   */
+  gitStatusSourcePath?: string;
   currentBranch?: string;
   parentThreadId?: string;
   parentThreadTitle?: string;
@@ -445,6 +451,11 @@ export type EnsureDirectoryLaunchpadRequest = {
 export type EnsureDirectoryLaunchpadResponse = {
   launchpad: NavigationLaunchpadDraft;
   defaults: NavigationLaunchpadDefaults;
+  /**
+   * Status read while ensuring the launchpad. Returning it directly keeps the
+   * branch picker independent of notification/render ordering.
+   */
+  gitStatus?: NavigationDirectoryGitStatus | null;
 };
 
 export type UpdateDirectoryLaunchpadRequest = {

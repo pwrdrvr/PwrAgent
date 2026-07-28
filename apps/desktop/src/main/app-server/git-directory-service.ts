@@ -922,13 +922,28 @@ export class GitDirectoryService {
       return cached.inventory;
     }
 
-    const inFlight = this.loadBranchInventory(params.repoRoot).then((inventory) => {
-      this.branchInventoryCache.set(params.commonGitDir, {
-        expiresAt: Date.now() + this.cacheTtlMs,
-        inventory,
+    const inFlight = this.loadBranchInventory(params.repoRoot)
+      .then((inventory) => {
+        this.branchInventoryCache.set(params.commonGitDir, {
+          expiresAt: Date.now() + this.cacheTtlMs,
+          inventory,
+        });
+        return inventory;
+      })
+      .catch((error) => {
+        const current = this.branchInventoryCache.get(params.commonGitDir);
+        if (current?.inFlight === inFlight) {
+          if (current.inventory) {
+            this.branchInventoryCache.set(params.commonGitDir, {
+              expiresAt: current.expiresAt,
+              inventory: current.inventory,
+            });
+          } else {
+            this.branchInventoryCache.delete(params.commonGitDir);
+          }
+        }
+        throw error;
       });
-      return inventory;
-    });
     this.branchInventoryCache.set(params.commonGitDir, {
       expiresAt: cached?.expiresAt ?? 0,
       inFlight,
@@ -956,7 +971,7 @@ export class GitDirectoryService {
           "--format=%(refname:short)%09%(committerdate:unix)",
         ],
         gitEnv,
-      ).catch(() => ""),
+      ),
       runGit(
         repoRoot,
         [
@@ -967,7 +982,7 @@ export class GitDirectoryService {
           "--format=%(refname)%09%(refname:short)%09%(committerdate:unix)%09%(symref)",
         ],
         gitEnv,
-      ).catch(() => ""),
+      ),
       runGit(
         repoRoot,
         ["symbolic-ref", "refs/remotes/origin/HEAD", "--short"],
