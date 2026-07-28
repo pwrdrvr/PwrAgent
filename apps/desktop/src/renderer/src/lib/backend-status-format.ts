@@ -27,7 +27,7 @@ export function formatBackendAccountText(
 }
 
 export function selectVisibleRateLimits(
-  backend: BackendSummary,
+  backend: Pick<BackendSummary, "kind" | "rateLimits">,
 ): BackendRateLimitSummary[] {
   return [...(backend.rateLimits ?? [])]
     .filter((limit) => {
