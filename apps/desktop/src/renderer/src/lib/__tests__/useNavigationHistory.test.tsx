@@ -9,10 +9,15 @@ function thread(threadKey: string): NavigationHistoryLocation {
   return { view: "thread", threadKey };
 }
 
+function launchpad(directoryKey: string): NavigationHistoryLocation {
+  return { view: "launchpad", directoryKey };
+}
+
 const SEARCH: NavigationHistoryLocation = { view: "search" };
 
 type HistoryHookProps = {
   current: NavigationHistoryLocation | undefined;
+  liveLaunchpadKeys?: ReadonlySet<string>;
   liveThreadKeys?: ReadonlySet<string>;
 };
 
@@ -40,6 +45,9 @@ function renderHistory(initial: NavigationHistoryLocation | undefined) {
   const setLiveThreadKeys = (keys: ReadonlySet<string> | undefined): void => {
     update({ liveThreadKeys: keys });
   };
+  const setLiveLaunchpadKeys = (keys: ReadonlySet<string> | undefined): void => {
+    update({ liveLaunchpadKeys: keys });
+  };
   // Apply what restore asked for, like App's setMainView/showThread would.
   const settle = (): void => {
     const location = restore.mock.lastCall?.[0] as
@@ -49,7 +57,14 @@ function renderHistory(initial: NavigationHistoryLocation | undefined) {
       navigate(location);
     }
   };
-  return { hook, navigate, restore, setLiveThreadKeys, settle };
+  return {
+    hook,
+    navigate,
+    restore,
+    setLiveLaunchpadKeys,
+    setLiveThreadKeys,
+    settle,
+  };
 }
 
 describe("useNavigationHistory", () => {
@@ -105,10 +120,10 @@ describe("useNavigationHistory", () => {
     expect(hook.result.current.canGoBack).toBe(false);
   });
 
-  it("holds the cursor across untracked surfaces (settings, launchpads)", () => {
+  it("holds the cursor across untracked overlay surfaces", () => {
     const { hook, navigate } = renderHistory(thread("codex:a"));
     navigate(thread("codex:b"));
-    navigate(undefined); // e.g. Settings overlay opens
+    navigate(undefined); // e.g. Settings opens
     navigate(thread("codex:b")); // ...and closes back onto the same thread
     expect(hook.result.current.canGoBack).toBe(true);
 
@@ -120,7 +135,7 @@ describe("useNavigationHistory", () => {
   it("returns to the last tracked location from an untracked surface without consuming an entry", () => {
     const { hook, navigate, restore, settle } = renderHistory(thread("codex:a"));
     navigate(thread("codex:b"));
-    navigate(undefined); // launchpad in front
+    navigate(undefined); // Settings in front
     expect(hook.result.current.canGoBack).toBe(true);
 
     act(() => hook.result.current.goBack());
@@ -137,7 +152,7 @@ describe("useNavigationHistory", () => {
     navigate(thread("codex:b"));
     act(() => hook.result.current.goBack());
     settle(); // at a, forward = [b]
-    navigate(undefined); // launchpad in front
+    navigate(undefined); // Settings in front
 
     act(() => hook.result.current.goForward());
     expect(restore).toHaveBeenLastCalledWith(thread("codex:b"));
@@ -151,6 +166,75 @@ describe("useNavigationHistory", () => {
     act(() => hook.result.current.goBack());
     act(() => hook.result.current.goForward());
     expect(restore).not.toHaveBeenCalled();
+  });
+
+  it("returns to an unsubmitted project launchpad with its live draft", () => {
+    const { hook, navigate, restore, settle } =
+      renderHistory(thread("codex:a"));
+    navigate(launchpad("directory:/repo"));
+    navigate(thread("codex:b"));
+
+    act(() => hook.result.current.goBack());
+    expect(restore).toHaveBeenLastCalledWith(launchpad("directory:/repo"));
+    settle();
+
+    act(() => hook.result.current.goBack());
+    expect(restore).toHaveBeenLastCalledWith(thread("codex:a"));
+  });
+
+  it("keeps only the newest history position for each project launchpad", () => {
+    const { hook, navigate, restore, settle } =
+      renderHistory(thread("codex:a"));
+    navigate(launchpad("directory:/repo-a"));
+    navigate(thread("codex:b"));
+    navigate(launchpad("directory:/repo-b"));
+    navigate(thread("codex:c"));
+    navigate(launchpad("directory:/repo-a"));
+    navigate(thread("codex:d"));
+
+    const expected = [
+      launchpad("directory:/repo-a"),
+      thread("codex:c"),
+      launchpad("directory:/repo-b"),
+      thread("codex:b"),
+      thread("codex:a"),
+    ];
+    for (const location of expected) {
+      act(() => hook.result.current.goBack());
+      expect(restore).toHaveBeenLastCalledWith(location);
+      settle();
+    }
+    expect(hook.result.current.canGoBack).toBe(false);
+  });
+
+  it("removes a submitted launchpad without removing other project launchpads", () => {
+    const {
+      hook,
+      navigate,
+      restore,
+      setLiveLaunchpadKeys,
+      settle,
+    } = renderHistory(thread("codex:a"));
+    setLiveLaunchpadKeys(
+      new Set(["directory:/repo-a", "directory:/repo-b"]),
+    );
+    navigate(launchpad("directory:/repo-b"));
+    navigate(thread("codex:b"));
+    navigate(launchpad("directory:/repo-a"));
+
+    // Submission clears repo-a's launchpad before selecting its new thread.
+    setLiveLaunchpadKeys(new Set(["directory:/repo-b"]));
+    navigate(thread("codex:new"));
+    navigate(thread("codex:c"));
+
+    act(() => hook.result.current.goBack());
+    expect(restore).toHaveBeenLastCalledWith(thread("codex:new"));
+    settle();
+    act(() => hook.result.current.goBack());
+    expect(restore).toHaveBeenLastCalledWith(thread("codex:b"));
+    settle();
+    act(() => hook.result.current.goBack());
+    expect(restore).toHaveBeenLastCalledWith(launchpad("directory:/repo-b"));
   });
 
   it("prunes vanished threads from both stacks so Back never lands on a dead thread", () => {

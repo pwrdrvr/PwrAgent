@@ -3260,6 +3260,234 @@ describe("App", () => {
     });
   });
 
+  it("restores an unsubmitted project launchpad from thread history", async () => {
+    const directoryKey = "directory:/Users/huntharo/pwrdrvr/PwrAgent";
+    let launchpad = {
+      directoryKey,
+      directoryKind: "directory" as const,
+      directoryLabel: "PwrAgent",
+      directoryPath: "/Users/huntharo/pwrdrvr/PwrAgent",
+      backend: "codex" as const,
+      executionMode: "full-access" as const,
+      prompt: "",
+      workMode: "worktree" as const,
+      branchName: "feature/history-launchpad",
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const ensureDirectoryLaunchpad = vi.fn(async () => ({
+      launchpad,
+      defaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const updateDirectoryLaunchpad = vi.fn(
+      async ({
+        patch,
+      }: {
+        directoryKey: string;
+        patch: Record<string, unknown>;
+      }) => {
+        launchpad = {
+          ...launchpad,
+          ...patch,
+          updatedAt: launchpad.updatedAt + 1,
+        };
+        return {
+          launchpad,
+          defaults: {
+            backend: "codex" as const,
+            executionMode: "default" as const,
+          },
+        };
+      },
+    );
+
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: {
+        ping: () => "pong",
+        listSkills: async () => ({
+          backend: "codex" as const,
+          fetchedAt: Date.now(),
+          data: [],
+        }),
+        listBackends: async () => ({
+          fetchedAt: Date.now(),
+          backends: [
+            {
+              kind: "codex",
+              label: "Codex app server",
+              available: true,
+              methods: ["thread/list", "thread/read", "turn/start"],
+              capabilities: {
+                listThreads: true,
+                createThread: true,
+                resumeThread: true,
+                renameThread: false,
+                readThread: true,
+                startTurn: true,
+                interruptTurn: true,
+                steerTurn: false,
+                transcriptPagination: true,
+                toolUse: false,
+                approvalRequests: false,
+                multiDirectoryThreads: true,
+              },
+              executionModes: [
+                {
+                  mode: "default",
+                  label: "Default Access",
+                  available: true,
+                  isDefault: true,
+                },
+                {
+                  mode: "full-access",
+                  label: "Full Access",
+                  available: true,
+                },
+              ],
+            },
+          ],
+        }),
+        getNavigationSnapshot: async () => ({
+          backend: "all" as const,
+          fetchedAt: Date.now(),
+          unchanged: false,
+          inboxThreadKeys: ["codex:thread-1", "codex:thread-2"],
+          threads: [
+            {
+              id: "thread-1",
+              title: "First project thread",
+              titleSource: "explicit" as const,
+              source: "codex" as const,
+              linkedDirectories: [
+                {
+                  id: "/Users/huntharo/pwrdrvr/PwrAgent",
+                  label: "PwrAgent",
+                  path: "/Users/huntharo/pwrdrvr/PwrAgent",
+                  kind: "local" as const,
+                },
+              ],
+              inbox: {
+                inInbox: true,
+                reason: "new-thread" as const,
+              },
+              updatedAt: 1_000,
+            },
+            {
+              id: "thread-2",
+              title: "Second project thread",
+              titleSource: "explicit" as const,
+              source: "codex" as const,
+              linkedDirectories: [
+                {
+                  id: "/Users/huntharo/pwrdrvr/PwrAgent",
+                  label: "PwrAgent",
+                  path: "/Users/huntharo/pwrdrvr/PwrAgent",
+                  kind: "local" as const,
+                },
+              ],
+              inbox: {
+                inInbox: true,
+                reason: "new-thread" as const,
+              },
+              updatedAt: 900,
+            },
+          ],
+          directories: [
+            {
+              key: directoryKey,
+              kind: "directory" as const,
+              label: "PwrAgent",
+              path: "/Users/huntharo/pwrdrvr/PwrAgent",
+              threadKeys: ["codex:thread-1", "codex:thread-2"],
+              needsAttentionCount: 2,
+            },
+          ],
+          launchpadDefaults: {
+            backend: "codex" as const,
+            executionMode: "default" as const,
+          },
+        }),
+        markThreadSeen: async ({
+          backend,
+          threadId,
+        }: {
+          backend: "codex";
+          threadId: string;
+        }) => ({
+          backend,
+          threadId,
+          seenAt: Date.now(),
+        }),
+        onAgentEvent: () => () => undefined,
+        onWindowFocus: () => () => undefined,
+        readThread: async ({
+          backend,
+          threadId,
+        }: {
+          backend: "codex";
+          threadId: string;
+        }) => ({
+          backend,
+          fetchedAt: Date.now(),
+          threadId,
+          replay: {
+            entries: [],
+            messages: [],
+            pagination: {
+              supportsPagination: false,
+              hasPreviousPage: false,
+            },
+          },
+        }),
+        ensureDirectoryLaunchpad,
+        updateDirectoryLaunchpad,
+        platform: "darwin",
+        versions: {
+          electron: "41.2.1",
+        },
+      },
+    });
+
+    render(<App />);
+
+    await screen.findByRole("heading", {
+      level: 2,
+      name: "First project thread",
+    });
+    fireEvent.click(
+      screen.getByRole("tab", { name: /^Directories/ }),
+    );
+    await clickButton("Open new thread launchpad for PwrAgent");
+    await screen.findByRole("heading", { level: 2, name: "PwrAgent" });
+
+    const composer = screen.getByRole("textbox", { name: "New thread" });
+    pasteComposerText(composer, "Keep this configured project draft.");
+    await waitFor(() => {
+      expect(getComposerValueHost(composer)).toHaveAttribute(
+        "data-value",
+        "Keep this configured project draft.",
+      );
+    });
+
+    await clickButton(/Second project thread/i);
+    await screen.findByRole("heading", {
+      level: 2,
+      name: "Second project thread",
+    });
+    await clickButton("Back");
+
+    await screen.findByRole("heading", { level: 2, name: "PwrAgent" });
+    expect(
+      getComposerValueHost(screen.getByRole("textbox", { name: "New thread" })),
+    ).toHaveAttribute("data-value", "Keep this configured project draft.");
+    expect(screen.getAllByText("Full Access").length).toBeGreaterThan(0);
+    expect(ensureDirectoryLaunchpad).toHaveBeenCalledTimes(1);
+  });
+
   it("renames the selected thread from the sidebar actions menu", async () => {
     let threadTitle = "Build Codex client";
     const renameThread = vi.fn(

@@ -2,13 +2,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 /**
  * One entry in the renderer's browser-style navigation history. Only the
- * two "content" surfaces are recorded: an open thread (by identity key)
- * and the thread-search view. Overlay-ish surfaces — Settings,
- * Automations, launchpads, the empty no-selection state — are deliberately
- * untracked: they behave like modal chrome, not places you navigate back
- * to. The caller signals those by passing `current: undefined`.
+ * three "content" surfaces are recorded: an open thread (by identity key),
+ * a project launchpad (by directory key), and the thread-search view.
+ * Overlay-ish surfaces — Settings, Automations, and the empty no-selection
+ * state — are deliberately untracked: they behave like modal chrome, not
+ * places you navigate back to. The caller signals those by passing
+ * `current: undefined`.
  */
 export type NavigationHistoryLocation =
+  | { view: "launchpad"; directoryKey: string }
   | { view: "search" }
   | { view: "thread"; threadKey: string };
 
@@ -22,19 +24,31 @@ function sameLocation(
   if (a.view === "search") {
     return b.view === "search";
   }
+  if (a.view === "launchpad") {
+    return b.view === "launchpad" && a.directoryKey === b.directoryKey;
+  }
   return b.view === "thread" && a.threadKey === b.threadKey;
 }
 
-/** Append with consecutive-duplicate dedup + depth cap. */
+/**
+ * Append with consecutive-duplicate dedup + depth cap. Launchpads are
+ * singletons: revisiting a project's still-unsubmitted launchpad moves its
+ * one history entry to the newest position instead of preserving stale
+ * visits to the same live draft.
+ */
 function appendLocation(
   stack: NavigationHistoryLocation[],
   location: NavigationHistoryLocation,
 ): NavigationHistoryLocation[] {
-  const top = stack[stack.length - 1];
+  const base =
+    location.view === "launchpad"
+      ? stack.filter((candidate) => !sameLocation(candidate, location))
+      : stack;
+  const top = base[base.length - 1];
   if (top !== undefined && sameLocation(top, location)) {
-    return stack;
+    return base;
   }
-  return [...stack, location].slice(-MAX_HISTORY_DEPTH);
+  return [...base, location].slice(-MAX_HISTORY_DEPTH);
 }
 
 /**
@@ -66,8 +80,8 @@ type HistoryStacks = {
   back: NavigationHistoryLocation[];
   /**
    * The history cursor: the last tracked location the user was on. Stays
-   * put while an untracked surface (Settings, a launchpad) is in front,
-   * so returning to the same thread afterwards never records a hop.
+   * put while an untracked surface (Settings, Automations) is in front, so
+   * returning to the same location afterwards never records a hop.
    */
   cursor: NavigationHistoryLocation | undefined;
   forward: NavigationHistoryLocation[];
@@ -101,6 +115,12 @@ export function useNavigationHistory(args: {
    * a transient blank list can't wipe the history.
    */
   liveThreadKeys?: ReadonlySet<string>;
+  /**
+   * Directory keys whose unsubmitted launchpads still exist. A successful
+   * submission or discard removes the key and prunes that launchpad from
+   * both directions of history.
+   */
+  liveLaunchpadKeys?: ReadonlySet<string>;
 }): {
   canGoBack: boolean;
   canGoForward: boolean;
@@ -129,11 +149,15 @@ export function useNavigationHistory(args: {
       // Same place (or our own goBack/goForward restore) — nothing to record.
       return;
     }
+    const baseBack =
+      current.view === "launchpad"
+        ? prev.back.filter((location) => !sameLocation(location, current))
+        : prev.back;
     const next: HistoryStacks = {
       back:
         prev.cursor !== undefined
-          ? appendLocation(prev.back, prev.cursor)
-          : prev.back,
+          ? appendLocation(baseBack, prev.cursor)
+          : baseBack,
       cursor: current,
       forward: [],
     };
@@ -142,25 +166,43 @@ export function useNavigationHistory(args: {
   }, [current]);
 
   const liveThreadKeys = args.liveThreadKeys;
+  const liveLaunchpadKeys = args.liveLaunchpadKeys;
   useEffect(() => {
-    if (liveThreadKeys === undefined) {
+    if (liveThreadKeys === undefined && liveLaunchpadKeys === undefined) {
       return;
     }
     const prev = stacksRef.current;
-    const isLive = (location: NavigationHistoryLocation): boolean =>
-      location.view !== "thread" || liveThreadKeys.has(location.threadKey);
+    const isLive = (location: NavigationHistoryLocation): boolean => {
+      if (location.view === "thread") {
+        return liveThreadKeys === undefined
+          || liveThreadKeys.has(location.threadKey);
+      }
+      if (location.view === "launchpad") {
+        return liveLaunchpadKeys === undefined
+          || liveLaunchpadKeys.has(location.directoryKey);
+      }
+      return true;
+    };
     const back = pruneStack(prev.back, isLive);
     const forward = pruneStack(prev.forward, isLive);
-    if (back === prev.back && forward === prev.forward) {
+    const cursor =
+      prev.cursor !== undefined && isLive(prev.cursor)
+        ? prev.cursor
+        : undefined;
+    if (
+      back === prev.back
+      && cursor === prev.cursor
+      && forward === prev.forward
+    ) {
       return;
     }
-    // The cursor mirrors the live selection and is left alone — if the
-    // selected thread itself vanishes, the shell moves the selection and
-    // the tracking effect above follows it.
-    const next: HistoryStacks = { back, cursor: prev.cursor, forward };
+    // Drop a dead cursor too. This matters during launch submission: the
+    // launchpad can disappear one render before its materialized thread is
+    // selected, and that stale cursor must not be appended on the next hop.
+    const next: HistoryStacks = { back, cursor, forward };
     stacksRef.current = next;
     setStacks(next);
-  }, [liveThreadKeys]);
+  }, [liveLaunchpadKeys, liveThreadKeys]);
 
   const goBack = useCallback((): void => {
     const prev = stacksRef.current;
