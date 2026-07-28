@@ -14165,6 +14165,11 @@ export class DesktopBackendRegistry {
         continue;
       }
       if (call.receiverThreadIds.length === 0) {
+        // Codex also uses receiverless waits as timed yield operations. There
+        // is no native sub-agent card to update in that case.
+        if (call.tool === "wait") {
+          continue;
+        }
         backendRegistryLog.warn("codex native subagent call missing receiver thread ids", {
           itemId: call.itemId,
           method: event.notification.method,

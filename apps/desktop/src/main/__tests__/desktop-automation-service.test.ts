@@ -8,6 +8,17 @@ import { DesktopAutomationService } from "../automations/desktop-automation-serv
 import { AutomationStore } from "../automations/automation-store";
 import { StateDb } from "../state/state-db";
 
+const automationLoggerMock = vi.hoisted(() => ({
+  debug: vi.fn(),
+  error: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+}));
+
+vi.mock("../log", () => ({
+  getMainLogger: vi.fn(() => automationLoggerMock),
+}));
+
 let tempDir: string;
 let stateDb: StateDb;
 let store: AutomationStore;
@@ -891,6 +902,43 @@ describe("DesktopAutomationService", () => {
         }),
       },
     });
+  });
+
+  it("quietly ignores terminal backend turns that are not automations", async () => {
+    const service = new DesktopAutomationService({ registry, store });
+    service.start();
+    automationLoggerMock.debug.mockClear();
+    automationLoggerMock.warn.mockClear();
+
+    await Promise.all(
+      registryListeners.map((listener) =>
+        listener({
+          backend: "codex",
+          notification: {
+            method: "turn/completed",
+            params: {
+              threadId: "ordinary-thread",
+              turnId: "ordinary-turn",
+              turn: {
+                id: "ordinary-turn",
+                status: "completed",
+              },
+            },
+          },
+        } as AgentEvent),
+      ),
+    );
+
+    expect(automationLoggerMock.warn).not.toHaveBeenCalled();
+    expect(automationLoggerMock.debug).toHaveBeenCalledWith(
+      "terminal backend turn was not an automation",
+      {
+        backend: "codex",
+        method: "turn/completed",
+        threadId: "ordinary-thread",
+        turnId: "ordinary-turn",
+      },
+    );
   });
 
   it("recovers automation completion from a structured assistant final when terminal correlation is missed", async () => {
