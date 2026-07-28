@@ -5,6 +5,7 @@ import type {
   DesktopCodexAuthProfileCandidate,
   DesktopCodexDiscoveryCandidate,
   DesktopProviderModelDefaults,
+  DesktopProviderThreadModelMigration,
   DesktopSettingsSecretName,
   DesktopSettingsSnapshot,
 } from "@pwragent/shared";
@@ -27,6 +28,7 @@ import {
   CodexAuthProfileLoginButton,
 } from "./CodexAuthProfileSelect";
 import { AcpAgentsSettings } from "./AcpAgentsSettings";
+import { SettingsSwitch } from "./SettingsSwitch";
 
 type CodexPathMode = "auto" | "specified";
 
@@ -45,6 +47,10 @@ export function ModelsSettings(props: {
   onSaveProviderDefaults: (
     defaults: Record<string, DesktopProviderModelDefaults>,
   ) => Promise<void>;
+  onSaveProviderThreadMigrations: (
+    migrations: Record<string, DesktopProviderThreadModelMigration>,
+  ) => Promise<boolean>;
+  onSaveCodexFastAllowed: (allowed: boolean) => Promise<boolean>;
   /** Persist a per-ACP-agent CLI-path override (also pins a discovered install). */
   onAcpCliPathChange: (registryId: string, cliPath: string) => Promise<void>;
   /** Persist a per-ACP-agent enabled flag (off = hidden from the model picker). */
@@ -143,11 +149,15 @@ export function ModelsSettings(props: {
         backends={backends}
         desktopApi={props.desktopApi}
         defaults={props.snapshot.models.providerDefaults ?? {}}
+        migrations={props.snapshot.models.providerThreadMigrations ?? {}}
+        codexFastAllowed={props.snapshot.models.codex.allowFast?.value ?? true}
         error={catalogError}
         refreshing={refreshingCatalog}
         saving={props.saving}
         onRefresh={() => refreshCatalog(true, true)}
         onSave={props.onSaveProviderDefaults}
+        onSaveMigrations={props.onSaveProviderThreadMigrations}
+        onSaveCodexFastAllowed={props.onSaveCodexFastAllowed}
       />
 
       <SettingsSection eyebrow="Models" title="Codex">
@@ -380,6 +390,8 @@ function ProviderModelDefaultsSettings(props: {
   backends: BackendSummary[];
   desktopApi?: DesktopApi;
   defaults: Record<string, DesktopProviderModelDefaults>;
+  migrations: Record<string, DesktopProviderThreadModelMigration>;
+  codexFastAllowed: boolean;
   error?: string;
   refreshing: boolean;
   saving: boolean;
@@ -387,6 +399,10 @@ function ProviderModelDefaultsSettings(props: {
   onSave: (
     defaults: Record<string, DesktopProviderModelDefaults>,
   ) => Promise<void>;
+  onSaveMigrations: (
+    migrations: Record<string, DesktopProviderThreadModelMigration>,
+  ) => Promise<boolean>;
+  onSaveCodexFastAllowed: (allowed: boolean) => Promise<boolean>;
 }) {
   const [pendingApply, setPendingApply] = useState<{
     backend: BackendSummary;
@@ -394,6 +410,16 @@ function ProviderModelDefaultsSettings(props: {
     directoryKeys: string[];
     model: string;
     reasoningEffort?: string;
+  }>();
+  const [pendingMigration, setPendingMigration] = useState<{
+    backend: BackendSummary;
+    count: number;
+    model: string;
+    reasoningEffort?: string;
+  }>();
+  const [pendingFastAction, setPendingFastAction] = useState<{
+    kind: "disable" | "turn-off";
+    threadCount: number;
   }>();
   const [applying, setApplying] = useState(false);
   const [status, setStatus] = useState<string | undefined>();
@@ -468,6 +494,115 @@ function ProviderModelDefaultsSettings(props: {
     }
   };
 
+  const previewThreadMigration = async (
+    backend: BackendSummary,
+    model: string,
+    reasoningEffort?: string,
+  ): Promise<void> => {
+    if (!props.desktopApi?.getNavigationSnapshot) {
+      setStatus("Thread migration is unavailable in this build.");
+      return;
+    }
+    const navigation = await props.desktopApi.getNavigationSnapshot();
+    const count = navigation.threads.filter(
+      (thread) => thread.source === backend.kind,
+    ).length;
+    if (count === 0) {
+      setStatus(`No existing ${backend.label} threads need a migration.`);
+      return;
+    }
+    setStatus(undefined);
+    setPendingApply(undefined);
+    setPendingFastAction(undefined);
+    setPendingMigration({
+      backend,
+      count,
+      model,
+      reasoningEffort,
+    });
+  };
+
+  const createThreadMigration = async (): Promise<void> => {
+    if (!pendingMigration) return;
+    setApplying(true);
+    try {
+      const createdAt = Date.now();
+      const saved = await props.onSaveMigrations({
+        ...props.migrations,
+        [pendingMigration.backend.kind]: {
+          revision: `${createdAt}-${crypto.randomUUID()}`,
+          model: pendingMigration.model,
+          ...(pendingMigration.reasoningEffort
+            ? { reasoningEffort: pendingMigration.reasoningEffort }
+            : {}),
+          createdAt,
+        },
+      });
+      if (!saved) {
+        setStatus("Could not save the thread migration.");
+        return;
+      }
+      setStatus(
+        `${pendingMigration.count} ${pendingMigration.backend.label} thread${
+          pendingMigration.count === 1 ? "" : "s"
+        } will adopt ${pendingMigration.model} when next opened.`,
+      );
+      setPendingMigration(undefined);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setApplying(false);
+    }
+  };
+
+  const previewFastAction = async (
+    kind: "disable" | "turn-off",
+  ): Promise<void> => {
+    if (!props.desktopApi?.getNavigationSnapshot) {
+      setStatus("Codex Fast cleanup is unavailable in this build.");
+      return;
+    }
+    const navigation = await props.desktopApi.getNavigationSnapshot();
+    setStatus(undefined);
+    setPendingApply(undefined);
+    setPendingMigration(undefined);
+    setPendingFastAction({
+      kind,
+      threadCount: navigation.threads.filter(
+        (thread) => thread.source === "codex",
+      ).length,
+    });
+  };
+
+  const applyFastAction = async (): Promise<void> => {
+    if (!pendingFastAction || !props.desktopApi?.turnOffCodexFastEverywhere) {
+      return;
+    }
+    setApplying(true);
+    try {
+      if (pendingFastAction.kind === "disable") {
+        const saved = await props.onSaveCodexFastAllowed(false);
+        if (!saved) {
+          setStatus("Could not save the Codex Fast policy.");
+          return;
+        }
+      }
+      const result = await props.desktopApi.turnOffCodexFastEverywhere();
+      setStatus(
+        `Fast is off for ${result.threadCount} Codex thread${
+          result.threadCount === 1 ? "" : "s"
+        } and ${result.launchpadCount} saved launchpad${
+          result.launchpadCount === 1 ? "" : "s"
+        }. Future Codex launchpads will also start non-Fast.`,
+      );
+      setPendingFastAction(undefined);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setApplying(false);
+    }
+  };
+
   return (
     <SettingsSection
       eyebrow="Defaults"
@@ -484,9 +619,52 @@ function ProviderModelDefaultsSettings(props: {
             onApply={(model, reasoningEffort) => {
               void previewApply(backend, model, reasoningEffort);
             }}
+            onMigrate={(model, reasoningEffort) => {
+              void previewThreadMigration(backend, model, reasoningEffort);
+            }}
             onChange={(next) => saveProvider(backend, next)}
           />
         ))}
+        <SettingsField
+          label="Codex Fast mode"
+          sub={
+            props.codexFastAllowed
+              ? "Allowed for this profile. Turn it off everywhere without preventing later per-thread use."
+              : "Prohibited for this profile. Codex turns and launchpads are forced to non-Fast."
+          }
+          control={
+            <div className="settings-inline-actions">
+              <SettingsSwitch
+                checked={props.codexFastAllowed}
+                disabled={props.saving || applying}
+                label="Allow Codex Fast mode"
+                onChange={(allowed) => {
+                  if (allowed) {
+                    void props.onSaveCodexFastAllowed(true).then((saved) => {
+                      if (!saved) {
+                        setStatus("Could not save the Codex Fast policy.");
+                      }
+                    });
+                  } else {
+                    void previewFastAction("disable");
+                  }
+                }}
+              />
+              <button
+                className="button button--secondary"
+                disabled={
+                  props.saving
+                  || applying
+                  || !props.codexFastAllowed
+                }
+                type="button"
+                onClick={() => void previewFastAction("turn-off")}
+              >
+                Turn Fast off everywhere
+              </button>
+            </div>
+          }
+        />
         {providers.length === 0 ? (
           <SettingsField
             label="Discovered models"
@@ -550,6 +728,66 @@ function ProviderModelDefaultsSettings(props: {
             }
           />
         ) : null}
+        {pendingMigration ? (
+          <SettingsField
+            label={`Migrate ${pendingMigration.count} existing thread${
+              pendingMigration.count === 1 ? "" : "s"
+            }?`}
+            sub="Each matching thread will adopt this model and reasoning once when next opened. Manual changes made afterward will stick until you create another migration."
+            control={
+              <div className="settings-inline-actions">
+                <button
+                  className="button button--primary"
+                  disabled={applying}
+                  type="button"
+                  onClick={() => void createThreadMigration()}
+                >
+                  {applying ? "Creating…" : "Create migration"}
+                </button>
+                <button
+                  className="button button--ghost"
+                  disabled={applying}
+                  type="button"
+                  onClick={() => setPendingMigration(undefined)}
+                >
+                  Cancel
+                </button>
+              </div>
+            }
+          />
+        ) : null}
+        {pendingFastAction ? (
+          <SettingsField
+            label={
+              pendingFastAction.kind === "disable"
+                ? "Prohibit Fast for this profile?"
+                : "Turn Fast off everywhere?"
+            }
+            sub={`This will set ${pendingFastAction.threadCount} existing Codex thread${
+              pendingFastAction.threadCount === 1 ? "" : "s"
+            } and future launchpads to non-Fast. Models, reasoning, prompts, and access settings stay unchanged.`}
+            control={
+              <div className="settings-inline-actions">
+                <button
+                  className="button button--primary"
+                  disabled={applying}
+                  type="button"
+                  onClick={() => void applyFastAction()}
+                >
+                  {applying ? "Updating…" : "Turn Fast off"}
+                </button>
+                <button
+                  className="button button--ghost"
+                  disabled={applying}
+                  type="button"
+                  onClick={() => setPendingFastAction(undefined)}
+                >
+                  Cancel
+                </button>
+              </div>
+            }
+          />
+        ) : null}
         {status ? <p className="settings-empty">{status}</p> : null}
       </div>
     </SettingsSection>
@@ -561,6 +799,7 @@ function ProviderModelDefaultField(props: {
   defaults?: DesktopProviderModelDefaults;
   disabled: boolean;
   onApply: (model: string, reasoningEffort?: string) => void;
+  onMigrate: (model: string, reasoningEffort?: string) => void;
   onChange: (defaults: DesktopProviderModelDefaults | undefined) => void;
 }) {
   const models = props.backend.launchpadOptions?.models ?? [];
@@ -672,6 +911,17 @@ function ProviderModelDefaultField(props: {
                 )}
               >
                 Apply to launchpads
+              </button>
+              <button
+                className="button button--secondary"
+                disabled={props.disabled || !selectionAvailable}
+                type="button"
+                onClick={() => props.onMigrate(
+                  selectedModel,
+                  selectedReasoning || undefined,
+                )}
+              >
+                Apply to existing threads
               </button>
               <button
                 className="button button--ghost"

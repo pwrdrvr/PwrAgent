@@ -6187,7 +6187,7 @@ textarea,
   color: var(--text-primary);
   font-family: var(--font-mono);
   font-size: 12px;
-  line-height: 1;
+  line-height: 1.2;
 }
 
 .settings-select:focus,

@@ -5499,6 +5499,41 @@ describe("Composer", () => {
     });
   });
 
+  it("hides Fast controls when the profile prohibits Codex Fast mode", () => {
+    render(
+      <Composer
+        backends={[
+          backendSummary("codex", {
+            models: [
+              {
+                id: "gpt-5.6-sol",
+                label: "GPT-5.6-Sol",
+                current: true,
+                supportsFast: true,
+              },
+            ],
+            supportsFastMode: true,
+          }),
+        ]}
+        codexFastAllowed={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Fast prohibited",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          model: "gpt-5.6-sol",
+          fastMode: true,
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+
+    expect(screen.queryByLabelText("Fast mode")).not.toBeInTheDocument();
+  });
+
   it("routes slash review to startReview instead of startTurn", async () => {
     const startTurn = vi.fn();
     const addOptimisticReviewEntry = vi.fn(() => "review-optimistic-1");

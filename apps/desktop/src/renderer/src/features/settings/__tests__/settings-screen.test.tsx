@@ -1540,7 +1540,7 @@ describe("SettingsScreen", () => {
     ).toBeInTheDocument();
   });
 
-  it("saves per-model reasoning and explicitly applies defaults to matching launchpads", async () => {
+  it("saves defaults and confirms launchpad, thread, and Fast bulk actions", async () => {
     const snapshot = createSnapshot();
     snapshot.models.providerDefaults = {
       codex: {
@@ -1572,6 +1572,10 @@ describe("SettingsScreen", () => {
         model: request.patch.model,
         reasoningEffort: request.patch.reasoningEffort,
       },
+    }));
+    const turnOffCodexFastEverywhere = vi.fn(async () => ({
+      launchpadCount: 1,
+      threadCount: 2,
     }));
     const desktopApi = {
       listAcpAgents: vi.fn(async () => ({
@@ -1661,8 +1665,37 @@ describe("SettingsScreen", () => {
           executionMode: "default" as const,
           workMode: "local" as const,
         },
-        threads: [],
+        threads: [
+          {
+            id: "codex-1",
+            title: "Codex one",
+            createdAt: 1,
+            updatedAt: 1,
+            linkedDirectories: [],
+            source: "codex" as const,
+            inbox: { inInbox: true },
+          },
+          {
+            id: "codex-2",
+            title: "Codex two",
+            createdAt: 1,
+            updatedAt: 1,
+            linkedDirectories: [],
+            source: "codex" as const,
+            inbox: { inInbox: true },
+          },
+          {
+            id: "kimi-1",
+            title: "Kimi",
+            createdAt: 1,
+            updatedAt: 1,
+            linkedDirectories: [],
+            source: "acp:kimi" as const,
+            inbox: { inInbox: true },
+          },
+        ],
       })),
+      turnOffCodexFastEverywhere,
       updateDirectoryLaunchpad,
     } as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"];
 
@@ -1712,6 +1745,64 @@ describe("SettingsScreen", () => {
         "Updated 1 Codex launchpad. Existing threads were not changed.",
       ),
     ).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Apply to existing threads" }),
+    );
+    expect(
+      await screen.findByText("Migrate 2 existing threads?"),
+    ).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Create migration" }),
+    );
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        models: {
+          providerThreadMigrations: {
+            codex: {
+              revision: expect.any(String),
+              model: "gpt-5.6-sol",
+              reasoningEffort: "high",
+              createdAt: expect.any(Number),
+            },
+          },
+        },
+      });
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Turn Fast off everywhere" }),
+    );
+    expect(
+      await screen.findByText("Turn Fast off everywhere?"),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Turn Fast off" }));
+    await waitFor(() => {
+      expect(turnOffCodexFastEverywhere).toHaveBeenCalledTimes(1);
+    });
+    expect(
+      screen.getByText(
+        "Fast is off for 2 Codex threads and 1 saved launchpad. Future Codex launchpads will also start non-Fast.",
+      ),
+    ).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Allow Codex Fast mode" }),
+    );
+    expect(
+      await screen.findByText("Prohibit Fast for this profile?"),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Turn Fast off" }));
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        models: {
+          codex: {
+            allowFast: false,
+          },
+        },
+      });
+    });
+    expect(turnOffCodexFastEverywhere).toHaveBeenCalledTimes(2);
   });
 
   it("can restart login for an existing Codex auth profile", async () => {

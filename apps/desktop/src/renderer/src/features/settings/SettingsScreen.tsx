@@ -675,6 +675,18 @@ function SettingsSectionBody(props: {
           models: { providerDefaults },
         });
       }}
+      onSaveProviderThreadMigrations={async (providerThreadMigrations) => {
+        return await props.settings.writeConfig({
+          models: { providerThreadMigrations },
+        });
+      }}
+      onSaveCodexFastAllowed={async (allowFast) => {
+        return await props.settings.writeConfig({
+          models: {
+            codex: { allowFast },
+          },
+        });
+      }}
       onAcpCliPathChange={async (registryId, cliPath) => {
         await props.settings.writeConfig({
           acpAgents: { [registryId]: { cliPath } } as NonNullable<

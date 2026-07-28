@@ -305,6 +305,13 @@ describe("Tangerine Terminal theme contract", () => {
     expect(compactTitleRule).not.toContain("line-height: 1;");
   });
 
+  it("keeps Settings select values tall enough for descenders", () => {
+    const settingsSelectRule = extractRuleBody(css, ".settings-select");
+
+    expect(settingsSelectRule).toContain("line-height: 1.2;");
+    expect(settingsSelectRule).not.toContain("line-height: 1;");
+  });
+
   it("keeps messaging indicators ahead of thread header title overflow", () => {
     const headerMainRule = extractRuleBody(css, ".thread-header__main");
     const statusBarRule = extractRuleBody(css, ".messaging-status-bar");

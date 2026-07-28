@@ -124,6 +124,7 @@ type ComposerProps = {
   ) => string;
   backends?: BackendSummary[];
   applications?: DesktopApplicationsSnapshot;
+  codexFastAllowed?: boolean;
   providerModelDefaults?: Record<string, DesktopProviderModelDefaults>;
   desktopApi?: DesktopApi;
   /**
@@ -6428,6 +6429,7 @@ export function Composer(props: ComposerProps) {
     );
   const supportsFast =
     backend?.kind === "codex"
+    && props.codexFastAllowed !== false
       ? selectedModelOption?.supportsFast ??
         backend.launchpadOptions?.supportsFastMode ??
         false
