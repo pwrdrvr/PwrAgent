@@ -8,7 +8,7 @@ type BackendSummaryData = {
 };
 
 type BackendSummaryState = BackendSummaryData & {
-  refreshAcpAgents: () => Promise<void>;
+  refreshAcpAgents: () => Promise<BackendSummary[]>;
 };
 
 export const BACKEND_SUMMARIES_REFRESH_EVENT =
@@ -22,15 +22,16 @@ export function useBackendSummaries(
   const [state, setState] = useState<BackendSummaryData>({
     backends: []
   });
-  const acpRefreshPromiseRef = useRef<Promise<void> | undefined>(undefined);
+  const acpRefreshPromiseRef =
+    useRef<Promise<BackendSummary[]> | undefined>(undefined);
 
-  const refresh = useCallback(async (): Promise<void> => {
+  const refresh = useCallback(async (): Promise<BackendSummary[]> => {
     if (!enabled) {
       setState({
         backends: [],
         error: undefined
       });
-      return;
+      return [];
     }
 
     if (!desktopApi?.listBackends) {
@@ -38,7 +39,7 @@ export function useBackendSummaries(
         backends: [],
         error: undefined
       });
-      return;
+      return [];
     }
 
     try {
@@ -49,17 +50,19 @@ export function useBackendSummaries(
         backends: response.backends,
         error: undefined
       });
+      return response.backends;
     } catch (error) {
       setState({
         backends: [],
         error: error instanceof Error ? error.message : String(error)
       });
+      return [];
     }
   }, [desktopApi, enabled]);
 
-  const refreshAcpAgents = useCallback(async (): Promise<void> => {
+  const refreshAcpAgents = useCallback(async (): Promise<BackendSummary[]> => {
     if (!enabled || !desktopApi?.listAcpAgents) {
-      return;
+      return [];
     }
     if (acpRefreshPromiseRef.current) {
       return await acpRefreshPromiseRef.current;
@@ -68,10 +71,11 @@ export function useBackendSummaries(
     const refreshPromise = (async () => {
       try {
         await desktopApi.listAcpAgents?.({ refresh: true });
-        await refresh();
+        return await refresh();
       } catch {
         // ACP discovery is best-effort. Keep the cached backend summaries
         // usable when one local CLI cannot be probed.
+        return [];
       }
     })();
     acpRefreshPromiseRef.current = refreshPromise;

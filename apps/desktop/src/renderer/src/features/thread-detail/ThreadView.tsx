@@ -724,7 +724,7 @@ export type ThreadViewProps = {
   onShowNotice?: (notice: AppNoticeToastNotice) => void;
   onProviderSelected?: (
     backend: NavigationLaunchpadDraft["backend"],
-  ) => void;
+  ) => BackendSummary | undefined | Promise<BackendSummary | undefined>;
   archiveThreadError?: string;
   loading: boolean;
   loadingMore: boolean;

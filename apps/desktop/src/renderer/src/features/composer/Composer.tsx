@@ -127,7 +127,7 @@ type ComposerProps = {
   onShowNotice?: (notice: AppNoticeToastNotice) => void;
   onProviderSelected?: (
     backend: NavigationLaunchpadDraft["backend"],
-  ) => void;
+  ) => BackendSummary | undefined | Promise<BackendSummary | undefined>;
   directory?: NavigationDirectorySummary;
   /**
    * Full set of currently-tracked directories from the navigation
@@ -2508,6 +2508,11 @@ export function Composer(props: ComposerProps) {
   const slashListboxId = useId();
   const directoryRefListboxId = useId();
   const hydratedLaunchpadKeyRef = useRef<string | undefined>(undefined);
+  const activeAcpLaunchpadRefreshKeyRef = useRef<string | undefined>(undefined);
+  const pendingProviderSelectionKeyRef = useRef<string | undefined>(undefined);
+  const latestLaunchpadRef =
+    useRef<NavigationLaunchpadDraft | undefined>(props.launchpad);
+  latestLaunchpadRef.current = props.launchpad;
   const pendingProgrammaticComposerChangeRef =
     useRef<PendingProgrammaticComposerChange | undefined>(undefined);
   const composerScopeKey = props.launchpad
@@ -6233,6 +6238,83 @@ export function Composer(props: ComposerProps) {
     }, 0);
   };
 
+  useEffect(() => {
+    const launchpad = props.launchpad;
+    const backend = launchpad?.backend;
+    if (!launchpad || !backend?.startsWith("acp:")) {
+      activeAcpLaunchpadRefreshKeyRef.current = undefined;
+      return;
+    }
+
+    const refreshKey = `${launchpad.directoryKey}:${backend}`;
+    if (activeAcpLaunchpadRefreshKeyRef.current === refreshKey) {
+      return;
+    }
+    activeAcpLaunchpadRefreshKeyRef.current = refreshKey;
+    const adoptRefreshedDefault =
+      pendingProviderSelectionKeyRef.current === refreshKey;
+    if (adoptRefreshedDefault) {
+      pendingProviderSelectionKeyRef.current = undefined;
+    }
+
+    let cancelled = false;
+    void Promise.resolve(props.onProviderSelected?.(backend)).then(
+      async (refreshedBackend) => {
+        if (cancelled || !refreshedBackend || !props.onUpdateLaunchpad) {
+          return;
+        }
+        const latestLaunchpad = latestLaunchpadRef.current;
+        if (
+          latestLaunchpad?.directoryKey !== launchpad.directoryKey ||
+          latestLaunchpad.backend !== backend
+        ) {
+          return;
+        }
+
+        const refreshedModels = refreshedBackend.launchpadOptions?.models ?? [];
+        const nextModelOption =
+          (adoptRefreshedDefault
+            ? undefined
+            : refreshedModels.find(
+                (model) => model.id === latestLaunchpad.model,
+              )) ??
+          getDefaultModelOption(refreshedBackend);
+        if (!nextModelOption) {
+          return;
+        }
+        const nextReasoningEffort = nextModelOption.supportsReasoning
+          ? getDefaultReasoningEffort(refreshedBackend, nextModelOption)
+          : undefined;
+        if (
+          latestLaunchpad.model === nextModelOption.id &&
+          latestLaunchpad.reasoningEffort === nextReasoningEffort
+        ) {
+          return;
+        }
+
+        await props.onUpdateLaunchpad(
+          latestLaunchpad.directoryKey,
+          {
+            model: nextModelOption.id,
+            reasoningEffort: nextReasoningEffort,
+          },
+          {
+            stickySettingsChanged: true,
+          },
+        );
+      },
+    );
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    props.launchpad?.backend,
+    props.launchpad?.directoryKey,
+    props.onProviderSelected,
+    props.onUpdateLaunchpad,
+  ]);
+
   const runThreadCodexEnvironmentAction = async (): Promise<void> => {
     if (
       !props.thread ||
@@ -7978,10 +8060,15 @@ export function Composer(props: ComposerProps) {
                   return;
                 }
                 const nextBackend = value as NavigationLaunchpadDraft["backend"];
+                if (nextBackend.startsWith("acp:")) {
+                  pendingProviderSelectionKeyRef.current =
+                    `${props.launchpad.directoryKey}:${nextBackend}`;
+                } else {
+                  pendingProviderSelectionKeyRef.current = undefined;
+                }
                 handleLaunchpadPatch({
                   backend: nextBackend,
                 });
-                props.onProviderSelected?.(nextBackend);
               }}
             />
           ) : props.thread ? (

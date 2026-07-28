@@ -1542,15 +1542,112 @@ describe("Composer", () => {
     expect(screen.queryByRole("option", { name: "Default" })).not.toBeInTheDocument();
   });
 
-  it("requests fresh ACP discovery when the provider is selected", () => {
-    const onProviderSelected = vi.fn();
+  it("adopts the refreshed ACP default when the provider is selected", async () => {
+    const staleKimi = {
+      ...backendSummary("acp:kimi", {
+        models: [
+          {
+            id: "kimi-code/kimi-for-coding",
+            label: "Kimi-k2.6",
+            current: true,
+          },
+        ],
+      }),
+      label: "Kimi",
+    };
+    const refreshedKimi = {
+      ...staleKimi,
+      launchpadOptions: {
+        models: [
+          {
+            id: "kimi-code/kimi-for-coding",
+            label: "K2.7 Coding",
+          },
+          {
+            id: "kimi-code/k3",
+            label: "K3",
+            current: true,
+          },
+        ],
+      },
+    };
+    const onProviderSelected = vi.fn(async () => refreshedKimi);
+    const onUpdateLaunchpad = vi.fn(async () => undefined);
+    const launchpad: NavigationLaunchpadDraft = {
+      directoryKey: "directory:/repo",
+      directoryKind: "directory",
+      directoryLabel: "Repo",
+      directoryPath: "/repo",
+      backend: "codex",
+      executionMode: "default",
+      prompt: "",
+      workMode: "local",
+      branchName: "main",
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const composer = (nextLaunchpad: NavigationLaunchpadDraft) => (
+      <Composer
+        backends={[backendSummary("codex"), staleKimi]}
+        launchpad={nextLaunchpad}
+        onProviderSelected={onProviderSelected}
+        onUpdateLaunchpad={onUpdateLaunchpad}
+        skills={[]}
+      />
+    );
+    const { rerender } = render(composer(launchpad));
+
+    chooseDropdownOption("Provider", "Kimi");
+    rerender(
+      composer({
+        ...launchpad,
+        backend: "acp:kimi",
+        model: "kimi-code/kimi-for-coding",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(onProviderSelected).toHaveBeenCalledWith("acp:kimi");
+      expect(onUpdateLaunchpad).toHaveBeenCalledWith(
+        "directory:/repo",
+        expect.objectContaining({
+          model: "kimi-code/k3",
+          reasoningEffort: undefined,
+        }),
+        { stickySettingsChanged: true },
+      );
+    });
+  });
+
+  it("refreshes a persisted ACP launchpad and replaces a removed model", async () => {
+    const refreshedKimi = {
+      ...backendSummary("acp:kimi", {
+        models: [
+          {
+            id: "kimi-code/k3",
+            label: "K3",
+            current: true,
+          },
+        ],
+      }),
+      label: "Kimi",
+    };
+    const onProviderSelected = vi.fn(async () => refreshedKimi);
+    const onUpdateLaunchpad = vi.fn(async () => undefined);
 
     render(
       <Composer
         backends={[
-          backendSummary("codex"),
           {
-            ...backendSummary("acp:kimi"),
+            ...backendSummary("acp:kimi", {
+              models: [
+                {
+                  id: "kimi-code/kimi-for-coding",
+                  label: "Kimi-k2.6",
+                  current: true,
+                },
+              ],
+            }),
             label: "Kimi",
           },
         ]}
@@ -1559,8 +1656,9 @@ describe("Composer", () => {
           directoryKind: "directory",
           directoryLabel: "Repo",
           directoryPath: "/repo",
-          backend: "codex",
+          backend: "acp:kimi",
           executionMode: "default",
+          model: "kimi-code/kimi-for-coding",
           prompt: "",
           workMode: "local",
           branchName: "main",
@@ -1568,14 +1666,22 @@ describe("Composer", () => {
           updatedAt: 1,
         }}
         onProviderSelected={onProviderSelected}
-        onUpdateLaunchpad={async () => undefined}
+        onUpdateLaunchpad={onUpdateLaunchpad}
         skills={[]}
       />,
     );
 
-    chooseDropdownOption("Provider", "Kimi");
-
-    expect(onProviderSelected).toHaveBeenCalledWith("acp:kimi");
+    await waitFor(() => {
+      expect(onProviderSelected).toHaveBeenCalledTimes(1);
+      expect(onUpdateLaunchpad).toHaveBeenCalledWith(
+        "directory:/repo",
+        expect.objectContaining({
+          model: "kimi-code/k3",
+          reasoningEffort: undefined,
+        }),
+        { stickySettingsChanged: true },
+      );
+    });
   });
 
   it("hides reasoning controls for Grok 4.20 models", () => {
