@@ -319,16 +319,22 @@ test("clicking jump-to-latest reaches the bottom in a single click", async () =>
       .poll(async () => await distanceFromTranscriptBottom(list))
       .toBeLessThanOrEqual(4);
 
-    // Manually scroll to the top so the jump-to-latest button is exposed.
+    // Scroll well away from both edges so the jump-to-latest button is
+    // exposed without crossing the near-top threshold that intentionally
+    // starts loading an older history page.
     await list.evaluate((element) => {
-      element.scrollTop = 0;
+      const maxScrollTop = Math.max(
+        element.scrollHeight - element.clientHeight,
+        0
+      );
+      element.scrollTop = Math.round(maxScrollTop / 2);
       element.dispatchEvent(new Event("scroll", { bubbles: true }));
     });
 
     await expect(jumpToLatest).toBeVisible();
     await expect
-      .poll(async () => await list.evaluate((element) => Math.round(element.scrollTop)))
-      .toBeLessThan(50);
+      .poll(async () => await distanceFromTranscriptBottom(list))
+      .toBeGreaterThan(500);
 
     // A single click must take the user all the way to the bottom — not 90%,
     // then 95%, then 100% across three clicks. The window for the scroll to
