@@ -5777,27 +5777,31 @@ export class DesktopBackendRegistry {
                       })
                     : undefined,
                 },
-                generatorResolver: (backend) =>
-                  isAcpBackendId(backend)
-                    ? new AcpThreadTitleGenerator({
-                        backend,
-                        configureHelperSession: async ({
-                          client,
-                          parentSession,
-                          session,
-                        }) => {
-                          await this.applyAcpRuntimeSelection(
-                            client,
-                            session.sessionId,
-                            session.acpRuntime ?? parentSession?.acpRuntime,
-                          );
-                        },
-                        getClient: (acpBackend) =>
-                          this.acpBackend.getClient(acpBackend),
-                        getSession: (acpBackend, threadId) =>
-                          this.acpBackend.getSession(acpBackend, threadId),
-                      })
-                    : undefined,
+                generatorResolver: (backend) => {
+                  if (!isAcpBackendId(backend) || backend === "acp:grok") {
+                    // Grok emits its own durable title through ACP. Starting a
+                    // full coding session solely to race that title is redundant.
+                    return undefined;
+                  }
+                  return new AcpThreadTitleGenerator({
+                    backend,
+                    configureHelperSession: async ({
+                      client,
+                      parentSession,
+                      session,
+                    }) => {
+                      await this.applyAcpRuntimeSelection(
+                        client,
+                        session.sessionId,
+                        session.acpRuntime ?? parentSession?.acpRuntime,
+                      );
+                    },
+                    getClient: (acpBackend) =>
+                      this.acpBackend.getClient(acpBackend),
+                    getSession: (acpBackend, threadId) =>
+                      this.acpBackend.getSession(acpBackend, threadId),
+                  });
+                },
               }));
     this.threadInspectionSearchService =
       options && "threadSearchService" in options

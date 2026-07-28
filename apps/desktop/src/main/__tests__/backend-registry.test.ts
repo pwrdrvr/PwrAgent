@@ -13080,6 +13080,80 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("does not start a redundant title helper for Grok ACP sessions", async () => {
+    const acpBackendId = "acp:grok" as AcpBackendId;
+    const sessions: AcpSessionMetadata[] = [
+      {
+        backendId: acpBackendId,
+        sessionId: "grok-session-1",
+        title: "What is your favorite cereal?",
+        titleSource: "fallback",
+        cwd: "/repo/project",
+        createdAt: 1000,
+        updatedAt: 1000,
+        executionMode: "default",
+        acpRuntime: {
+          currentModelId: "grok-4.5",
+          updatedAt: 1000,
+        },
+        status: "idle",
+      },
+    ];
+    const acpClient = {
+      initialize: vi.fn(async () => undefined),
+      dispose: vi.fn(),
+      startSession: vi.fn(),
+      ensureSession: vi.fn(async () => undefined),
+      loadSession: vi.fn(),
+      refreshSession: vi.fn(async () => undefined),
+      cancelSession: vi.fn(),
+      startPrompt: vi.fn(() => ({
+        sessionId: "grok-session-1",
+        turnId: "turn-1",
+      })),
+      sendControlPrompt: vi.fn(),
+      readReplay: vi.fn((): AppServerThreadReplay => ({
+        entries: [],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+        threadStatus: "idle",
+      })),
+    };
+    const overlayStore = createOverlayStoreMock();
+    const upsertSubAgentSpy = vi.spyOn(overlayStore, "upsertThreadSubAgent");
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore,
+      acpAgentStore: createAcpAgentStoreMock([
+        {
+          ...createKimiAgentRecord(acpBackendId),
+          registryId: "grok",
+          name: "Grok",
+        },
+      ]),
+      acpSessionStore: createAcpSessionStoreMock(sessions),
+      createAcpClient: () => acpClient,
+    });
+
+    await registry.startTurn({
+      backend: acpBackendId,
+      threadId: "grok-session-1",
+      input: [{ type: "text", text: "What is your favorite cereal?" }],
+    });
+    await emitCompletedTurn(registry, acpBackendId, "grok-session-1");
+    await flushAsync();
+
+    expect(acpClient.startSession).not.toHaveBeenCalled();
+    expect(acpClient.sendControlPrompt).not.toHaveBeenCalled();
+    expect(upsertSubAgentSpy).not.toHaveBeenCalled();
+
+    await registry.close();
+  });
+
   it("reports the generated candidate when an ACP durable title arrives first", async () => {
     const acpBackendId = "acp:grok" as AcpBackendId;
     const prompt = "What is your favorite cereal?";
