@@ -1064,7 +1064,7 @@ describe("AcpBackendAdapter", () => {
             end: "2026-08-03T00:00:00Z",
           },
         },
-        subscriptionTier: "SuperGrok Heavy",
+        subscription_tier: "SuperGrok Heavy",
       },
     });
     const agent: AcpInstalledAgentRecord = {
@@ -1081,6 +1081,7 @@ describe("AcpBackendAdapter", () => {
         env: {},
       },
     };
+    const emit = vi.fn(async () => undefined);
     const adapter = new AcpBackendAdapter({
       acpAgentStore: {
         getInstalledAgent: () => agent,
@@ -1095,12 +1096,24 @@ describe("AcpBackendAdapter", () => {
       captureStores: [],
       createAcpTransport: () => transport,
       discoverLocalAcpAgents: async () => [],
-      emit: vi.fn(async () => undefined),
+      emit,
       handleServerRequest: async () => ({ decision: "accept" }),
       isAcpAgentEnabled: () => true,
     });
 
     await adapter.getClient(backendId);
+    const [initialSummary] = await adapter.describeInstalledBackends();
+    expect(initialSummary?.account).toBeUndefined();
+
+    await vi.waitFor(() => {
+      expect(emit).toHaveBeenCalledWith({
+        backend: backendId,
+        notification: {
+          method: "backend/providerStatus/updated",
+          params: { backend: backendId },
+        },
+      });
+    });
     const [summary] = await adapter.describeInstalledBackends();
 
     expect(summary).toMatchObject({
@@ -1122,6 +1135,55 @@ describe("AcpBackendAdapter", () => {
       params: {},
       timeoutMs: 20_000,
     });
+    expect(
+      transport.requests.filter((request) => request.method === "_x.ai/billing"),
+    ).toHaveLength(1);
+
+    await adapter.close();
+  });
+
+  it("does not block backend discovery while Grok billing is pending", async () => {
+    const backendId = "acp:grok" as AcpBackendId;
+    const agent: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "grok",
+      name: "Grok",
+    };
+    const readProviderStatus = vi.fn(
+      async () => await new Promise<never>(() => undefined),
+    );
+    const adapter = new AcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => agent,
+        listInstalledAgents: () => [agent],
+        upsertInstalledAgent: vi.fn(),
+      },
+      acpSessionStore: {
+        listSessions: () => [],
+        getSession: () => undefined,
+        upsertSession: vi.fn(),
+      },
+      captureStores: [],
+      createAcpClient: () =>
+        ({
+          initialize: vi.fn(async () => undefined),
+          readProviderStatus,
+          dispose: vi.fn(async () => undefined),
+        }) as never,
+      discoverLocalAcpAgents: async () => [],
+      emit: vi.fn(async () => undefined),
+      handleServerRequest: async () => ({ decision: "accept" }),
+      isAcpAgentEnabled: () => true,
+    });
+
+    await adapter.getClient(backendId);
+    const [summary] = await adapter.describeInstalledBackends();
+    await adapter.describeInstalledBackends();
+
+    expect(summary?.kind).toBe(backendId);
+    expect(summary?.account).toBeUndefined();
+    expect(readProviderStatus).toHaveBeenCalledTimes(1);
 
     await adapter.close();
   });

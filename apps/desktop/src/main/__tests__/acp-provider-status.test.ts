@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeGrokBillingStatus } from "../acp-provider-status";
+import { normalizeGrokBillingStatus } from "../acp/acp-provider-status";
 
 describe("normalizeGrokBillingStatus", () => {
   it("normalizes the current percentage-based weekly billing shape", () => {
@@ -13,7 +13,7 @@ describe("normalizeGrokBillingStatus", () => {
             end: "2026-07-27T00:00:00Z",
           },
         },
-        subscriptionTier: "SuperGrok Heavy",
+        subscription_tier: "SuperGrok Heavy",
       }),
     ).toEqual({
       account: {
@@ -28,6 +28,21 @@ describe("normalizeGrokBillingStatus", () => {
           resetAt: Date.parse("2026-07-27T00:00:00Z"),
         },
       ],
+    });
+  });
+
+  it("keeps camel-case subscription tiers as a compatibility fallback", () => {
+    expect(
+      normalizeGrokBillingStatus({
+        config: null,
+        subscriptionTier: "SuperGrok",
+      }),
+    ).toEqual({
+      account: {
+        type: "provider",
+        label: "Grok account",
+        planType: "SuperGrok",
+      },
     });
   });
 

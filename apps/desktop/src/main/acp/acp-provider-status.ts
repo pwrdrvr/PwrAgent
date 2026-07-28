@@ -21,7 +21,9 @@ export function normalizeGrokBillingStatus(
     return undefined;
   }
   const config = asRecord(root.config);
-  const subscriptionTier = readString(root, "subscriptionTier");
+  const subscriptionTier =
+    readString(root, "subscription_tier")
+    ?? readString(root, "subscriptionTier");
   const account: BackendAccountSummary = {
     type: "provider",
     label: "Grok account",

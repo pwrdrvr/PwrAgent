@@ -104,6 +104,40 @@ describe("useBackendSummaries", () => {
     expect(listBackends).toHaveBeenCalledTimes(2);
   });
 
+  it("refreshes backend details when ACP provider status updates", async () => {
+    let eventHandler: ((event: AgentEvent) => void) | undefined;
+    const listBackends = vi
+      .fn<NonNullable<DesktopApi["listBackends"]>>()
+      .mockResolvedValue({
+        fetchedAt: 1,
+        backends: [],
+      });
+    const desktopApi: DesktopApi = {
+      listBackends,
+      onAgentEvent: (callback) => {
+        eventHandler = callback;
+        return () => undefined;
+      },
+    };
+
+    renderHook(() => useBackendSummaries(desktopApi));
+
+    await waitFor(() => {
+      expect(listBackends).toHaveBeenCalledTimes(1);
+    });
+    eventHandler?.({
+      backend: "acp:grok",
+      notification: {
+        method: "backend/providerStatus/updated",
+        params: { backend: "acp:grok" },
+      },
+    });
+
+    await waitFor(() => {
+      expect(listBackends).toHaveBeenCalledTimes(2);
+    });
+  });
+
   it("refreshes backend details when Codex rate limits update", async () => {
     let eventHandler: ((event: AgentEvent) => void) | undefined;
     const listBackends = vi
