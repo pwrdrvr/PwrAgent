@@ -83,11 +83,13 @@ export class AcpThreadTitleGenerator implements ThreadTitleGenerator {
       const model = resolveAcpTitleModel(
         helperSession.acpRuntime ?? parentSession?.acpRuntime,
       );
+      const usageModel = response.model ?? model;
       return {
         status: "ok",
         object: parseAcpTitleObject(response.text),
         helperThreadId: helperSession.sessionId,
-        ...(model ? { model } : {}),
+        ...(usageModel ? { model: usageModel } : {}),
+        ...(response.tokenUsage ? { tokenUsage: response.tokenUsage } : {}),
       };
     } catch {
       return {

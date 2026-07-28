@@ -12946,6 +12946,13 @@ command = "pnpm dev"
     ];
     const sendControlPrompt = vi.fn(async () => ({
       text: '{ "title": "Favorite cereal" }',
+      model: "kimi-k2-0711-preview",
+      tokenUsage: {
+        inputTokens: 100,
+        cachedInputTokens: 20,
+        outputTokens: 10,
+        totalTokens: 110,
+      },
     }));
     const helperSession: AcpSessionMetadata = {
       backendId: acpBackendId,
@@ -12989,6 +12996,7 @@ command = "pnpm dev"
     };
     const overlayStore = createOverlayStoreMock();
     const upsertSubAgentSpy = vi.spyOn(overlayStore, "upsertThreadSubAgent");
+    const upsertUsageLineSpy = vi.spyOn(overlayStore, "upsertThreadUsageLine");
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       grokClient: new MockBackendClient({ threads: [] }),
@@ -13047,6 +13055,25 @@ command = "pnpm dev"
         monitorThreadId: "kimi-title-helper",
         lastMessage: "Generated title: Favorite cereal",
         outcome: "success",
+        monitorUsage: expect.objectContaining({
+          model: "kimi-k2-0711-preview",
+          tokenUsage: expect.objectContaining({
+            cachedInputTokens: 20,
+            inputTokens: 100,
+            outputTokens: 10,
+            totalTokens: 110,
+            uncachedInputTokens: 80,
+          }),
+        }),
+      }),
+    });
+    expect(upsertUsageLineSpy).toHaveBeenCalledWith({
+      line: expect.objectContaining({
+        backend: acpBackendId,
+        parentThreadId: "kimi-session-1",
+        scope: "monitor",
+        sourceItemId: "system:title-helper:acp:kimi:kimi-session-1",
+        threadId: "kimi-title-helper",
       }),
     });
 

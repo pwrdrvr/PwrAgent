@@ -7,6 +7,13 @@ describe("AcpThreadTitleGenerator", () => {
     const backend = "acp:qwen" as AcpBackendId;
     const sendControlPrompt = vi.fn(async () => ({
       text: '{"title": "\nFavorite cereal question\n"}',
+      model: "qwen3.6-plus",
+      tokenUsage: {
+        inputTokens: 120,
+        cachedInputTokens: 20,
+        outputTokens: 8,
+        totalTokens: 128,
+      },
     }));
     const startSession = vi.fn(async () => ({
       backendId: backend,
@@ -57,6 +64,13 @@ describe("AcpThreadTitleGenerator", () => {
       status: "ok",
       object: { title: " Favorite cereal question " },
       helperThreadId: "qwen-title-helper",
+      model: "qwen3.6-plus",
+      tokenUsage: {
+        inputTokens: 120,
+        cachedInputTokens: 20,
+        outputTokens: 8,
+        totalTokens: 128,
+      },
     });
     expect(startSession).toHaveBeenCalledWith(
       expect.objectContaining({
