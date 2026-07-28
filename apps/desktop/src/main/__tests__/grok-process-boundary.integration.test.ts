@@ -117,7 +117,7 @@ describe("Grok child app-server process boundary", () => {
       ]);
       await secondClient.close();
     } finally {
-      await fs.rm(tempRoot, { recursive: true, force: true });
+      await removeTempRoot(tempRoot);
     }
   });
 
@@ -218,7 +218,7 @@ describe("Grok child app-server process boundary", () => {
       await client.close();
       xaiServer.close();
       await once(xaiServer, "close");
-      await fs.rm(tempRoot, { recursive: true, force: true });
+      await removeTempRoot(tempRoot);
     }
   });
 
@@ -286,7 +286,7 @@ describe("Grok child app-server process boundary", () => {
       });
     } finally {
       await client.close();
-      await fs.rm(tempRoot, { recursive: true, force: true });
+      await removeTempRoot(tempRoot);
     }
   });
 
@@ -303,6 +303,18 @@ describe("Grok child app-server process boundary", () => {
     await client.close();
   });
 });
+
+async function removeTempRoot(tempRoot: string): Promise<void> {
+  // Windows can release child-process and filesystem handles shortly after
+  // their awaited close completes. POSIX removes the directory on this first
+  // attempt; Windows gets a bounded retry window for transient EBUSY failures.
+  await fs.rm(tempRoot, {
+    recursive: true,
+    force: true,
+    maxRetries: 5,
+    retryDelay: 100,
+  });
+}
 
 function makeAiSdkXaiResponse(
   text: string,
