@@ -15304,6 +15304,96 @@ command = "pnpm dev"
     }
   });
 
+  it("ignores receiverless Codex native wait calls without warning", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+    mainLoggerMock.warn.mockClear();
+
+    for (const method of ["item/started", "item/completed"] as const) {
+      await codexClient.emit({
+        method,
+        params: {
+          threadId: "thread-parent",
+          turnId: "turn-1",
+          item: {
+            id: "collab-wait-1",
+            type: "collabAgentToolCall",
+            tool: "wait",
+            status: method === "item/started" ? "inProgress" : "completed",
+            receiverThreadIds: [],
+          },
+        },
+      } as AppServerNotification);
+    }
+
+    expect(
+      mainLoggerMock.warn.mock.calls.some(
+        ([message]) =>
+          message === "codex native subagent call missing receiver thread ids",
+      ),
+    ).toBe(false);
+    expect(
+      (
+        await overlayStore.getThreadOverlayState({
+          backend: "codex",
+          threadId: "thread-parent",
+        })
+      )?.subAgents,
+    ).toBeUndefined();
+
+    await registry.close();
+  });
+
+  it("warns when a directed Codex native sub-agent call has no receiver", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+    mainLoggerMock.warn.mockClear();
+
+    await codexClient.emit({
+      method: "item/completed",
+      params: {
+        threadId: "thread-parent",
+        turnId: "turn-1",
+        item: {
+          id: "collab-close-1",
+          type: "collabAgentToolCall",
+          tool: "closeAgent",
+          status: "completed",
+          receiverThreadIds: [],
+        },
+      },
+    } as AppServerNotification);
+
+    expect(mainLoggerMock.warn).toHaveBeenCalledWith(
+      "codex native subagent call missing receiver thread ids",
+      {
+        itemId: "collab-close-1",
+        method: "item/completed",
+        threadId: "thread-parent",
+        tool: "closeAgent",
+      },
+    );
+
+    await registry.close();
+  });
+
   it("updates Codex native sub-agent summaries from later wait calls", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },

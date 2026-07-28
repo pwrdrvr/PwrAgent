@@ -557,7 +557,7 @@ export class DesktopAutomationService {
         });
         return;
       }
-      automationServiceLog.warn("terminal backend turn did not match a running automation", {
+      automationServiceLog.debug("terminal backend turn was not an automation", {
         backend: event.backend,
         method: event.notification.method,
         threadId: event.notification.params.threadId,
