@@ -190,4 +190,37 @@ describe("thread links in transcript markdown", () => {
       .not.toBeInTheDocument();
     expect(screen.getByText("See").parentElement).toBe(markdownNode);
   });
+
+  it("updates when navigation reuses its thread collection across a rename", () => {
+    const text = `See [Untitled thread](pwragent://thread/${CHILD_THREAD_ID})`;
+    const onShowThread = vi.fn();
+    const threads = [
+      threadSummary({ title: "Untitled thread", titleSource: "fallback" }),
+    ];
+    const { rerender } = render(
+      <ThreadLinkProvider onShowThread={onShowThread} threads={threads}>
+        <ThreadMarkdown text={text} />
+      </ThreadLinkProvider>,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Open thread Untitled thread" }),
+    ).toBeInTheDocument();
+    const markdownNode = screen.getByText("See").parentElement;
+
+    // A snapshot producer may retain its collection while replacing a changed
+    // summary. Consumers reading the collection directly see the new title;
+    // the chip metadata store must also resync.
+    threads[0] = threadSummary({ title: "Named child thread" });
+    rerender(
+      <ThreadLinkProvider onShowThread={onShowThread} threads={threads}>
+        <ThreadMarkdown text={text} />
+      </ThreadLinkProvider>,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Open thread Named child thread" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("See").parentElement).toBe(markdownNode);
+  });
 });
