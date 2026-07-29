@@ -42,6 +42,7 @@ export function ModelsSettings(props: {
     value: string,
   ) => Promise<boolean>;
   onRefresh: () => Promise<void>;
+  onRefreshNavigation?: () => Promise<void>;
   onSaveCodexPath: (path: string) => Promise<void>;
   onSaveCodexProfile: (profile: string) => Promise<void>;
   onSaveProviderDefaults: (
@@ -155,6 +156,7 @@ export function ModelsSettings(props: {
         refreshing={refreshingCatalog}
         saving={props.saving}
         onRefresh={() => refreshCatalog(true, true)}
+        onRefreshNavigation={props.onRefreshNavigation}
         onSave={props.onSaveProviderDefaults}
         onSaveMigrations={props.onSaveProviderThreadMigrations}
         onSaveCodexFastAllowed={props.onSaveCodexFastAllowed}
@@ -396,6 +398,7 @@ function ProviderModelDefaultsSettings(props: {
   refreshing: boolean;
   saving: boolean;
   onRefresh: () => Promise<void>;
+  onRefreshNavigation?: () => Promise<void>;
   onSave: (
     defaults: Record<string, DesktopProviderModelDefaults>,
   ) => Promise<void>;
@@ -590,6 +593,7 @@ function ProviderModelDefaultsSettings(props: {
         }
       }
       const result = await props.desktopApi.turnOffCodexFastEverywhere();
+      await props.onRefreshNavigation?.();
       setStatus(
         `Fast is off for ${result.threadCount} Codex thread${
           result.threadCount === 1 ? "" : "s"

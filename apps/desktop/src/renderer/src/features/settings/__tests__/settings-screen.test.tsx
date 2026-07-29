@@ -1577,6 +1577,7 @@ describe("SettingsScreen", () => {
       launchpadCount: 1,
       threadCount: 2,
     }));
+    const refreshNavigation = vi.fn(async () => undefined);
     const desktopApi = {
       listAcpAgents: vi.fn(async () => ({
         fetchedAt: 1000,
@@ -1704,6 +1705,7 @@ describe("SettingsScreen", () => {
         desktopApi={desktopApi}
         initialSection="models"
         settings={settings}
+        onRefreshNavigation={refreshNavigation}
       />,
     );
 
@@ -1803,6 +1805,7 @@ describe("SettingsScreen", () => {
     fireEvent.click(screen.getByRole("button", { name: "Turn Fast off" }));
     await waitFor(() => {
       expect(turnOffCodexFastEverywhere).toHaveBeenCalledTimes(1);
+      expect(refreshNavigation).toHaveBeenCalledTimes(1);
     });
     expect(
       screen.getByText(
@@ -1827,6 +1830,7 @@ describe("SettingsScreen", () => {
       });
     });
     expect(turnOffCodexFastEverywhere).toHaveBeenCalledTimes(2);
+    expect(refreshNavigation).toHaveBeenCalledTimes(2);
   });
 
   it("can restart login for an existing Codex auth profile", async () => {

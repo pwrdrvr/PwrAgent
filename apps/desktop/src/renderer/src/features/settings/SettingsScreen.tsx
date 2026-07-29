@@ -98,6 +98,9 @@ export function SettingsScreen(props: {
   /** Initial section to render. Defaults to Applications. */
   initialSection?: SettingsSection;
   onClose?: () => void;
+  /** Refreshes the live thread/launchpad state after Settings performs a
+   *  bulk mutation that bypasses the normal composer update path. */
+  onRefreshNavigation?: () => Promise<void>;
   /** Fired from the title-bar messaging controller.
    *  The App-level handler closes the Settings overlay and opens the
    *  Messaging Activity overlay (its own top-level mainView). */
@@ -282,6 +285,7 @@ export function SettingsScreen(props: {
               section={section}
               settings={props.settings}
               snapshot={snapshot}
+              onRefreshNavigation={props.onRefreshNavigation}
             />
           ) : (
             <p className="settings-empty">Settings are unavailable.</p>
@@ -302,6 +306,7 @@ function SettingsSectionBody(props: {
   section: SettingsSection;
   settings: DesktopSettingsState;
   snapshot: DesktopSettingsSnapshot;
+  onRefreshNavigation?: () => Promise<void>;
 }) {
   if (props.section === "about") {
     return <AboutSettings desktopApi={props.desktopApi} />;
@@ -656,6 +661,7 @@ function SettingsSectionBody(props: {
       onClearSecret={props.settings.clearSecret}
       onReplaceSecret={props.settings.replaceSecret}
       onRefresh={props.settings.refresh}
+      onRefreshNavigation={props.onRefreshNavigation}
       onSaveCodexPath={async (path) => {
         await props.settings.writeConfig({
           models: {

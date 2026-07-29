@@ -1481,6 +1481,7 @@ function DesktopAppShell(props: {
                 profiles={profiles}
                 settings={settings}
                 onClose={() => setMainView("thread")}
+                onRefreshNavigation={() => navigation.refresh()}
                 onOpenMessagingActivity={openMessagingActivityWindow}
               />
             </Suspense>
