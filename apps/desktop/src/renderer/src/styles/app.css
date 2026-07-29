@@ -6614,6 +6614,41 @@ textarea,
   gap: 8px;
 }
 
+.settings-action-confirmation {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px;
+  border: 1px solid var(--accent-border);
+  border-radius: 6px;
+  background: var(--accent-soft);
+}
+
+.settings-action-confirmation__copy {
+  display: flex;
+  flex: 1 1 360px;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.settings-action-confirmation__copy strong {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.settings-action-confirmation__copy span {
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.settings-action-confirmation > .settings-inline-actions {
+  flex: 0 0 auto;
+}
+
 /* Path-row list — canonical row for Codex discovery, Editor / Terminal
    candidates. Replaces .settings-discovery__row + .settings-application. */
 .settings-paths {

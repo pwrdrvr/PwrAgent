@@ -1725,9 +1725,14 @@ describe("SettingsScreen", () => {
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Apply to launchpads" }));
+    const launchpadConfirmation =
+      await screen.findByText("Apply to 1 launchpad?");
+    expect(launchpadConfirmation.closest(".settings-field")).toHaveTextContent(
+      "Codex",
+    );
     expect(
-      await screen.findByText("Apply to 1 launchpad?"),
-    ).toBeInTheDocument();
+      screen.queryByRole("button", { name: "Apply to launchpads" }),
+    ).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Apply" }));
     await waitFor(() => {
       expect(updateDirectoryLaunchpad).toHaveBeenCalledTimes(1);
@@ -1749,9 +1754,14 @@ describe("SettingsScreen", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Apply to existing threads" }),
     );
+    const migrationConfirmation =
+      await screen.findByText("Migrate 2 existing threads?");
+    expect(migrationConfirmation.closest(".settings-field")).toHaveTextContent(
+      "Codex",
+    );
     expect(
-      await screen.findByText("Migrate 2 existing threads?"),
-    ).toBeInTheDocument();
+      screen.queryByRole("button", { name: "Apply to existing threads" }),
+    ).not.toBeInTheDocument();
     fireEvent.click(
       screen.getByRole("button", { name: "Create migration" }),
     );
@@ -1773,9 +1783,14 @@ describe("SettingsScreen", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Turn Fast off everywhere" }),
     );
+    const fastConfirmation =
+      await screen.findByText("Turn Fast off everywhere?");
+    expect(fastConfirmation.closest(".settings-field")).toHaveTextContent(
+      "Codex Fast mode",
+    );
     expect(
-      await screen.findByText("Turn Fast off everywhere?"),
-    ).toBeInTheDocument();
+      screen.queryByRole("button", { name: "Turn Fast off everywhere" }),
+    ).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Turn Fast off" }));
     await waitFor(() => {
       expect(turnOffCodexFastEverywhere).toHaveBeenCalledTimes(1);

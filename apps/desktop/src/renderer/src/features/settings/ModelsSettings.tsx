@@ -458,6 +458,8 @@ function ProviderModelDefaultsSettings(props: {
       return;
     }
     setStatus(undefined);
+    setPendingMigration(undefined);
+    setPendingFastAction(undefined);
     setPendingApply({
       backend,
       count: directoryKeys.length,
@@ -610,21 +612,43 @@ function ProviderModelDefaultsSettings(props: {
       description="These profile-wide baselines fill new launchpads that do not already have a directory or learned provider choice."
     >
       <div className="settings-fields">
-        {providers.map((backend) => (
-          <ProviderModelDefaultField
-            key={backend.kind}
-            backend={backend}
-            defaults={props.defaults[backend.kind]}
-            disabled={props.saving || applying}
-            onApply={(model, reasoningEffort) => {
-              void previewApply(backend, model, reasoningEffort);
-            }}
-            onMigrate={(model, reasoningEffort) => {
-              void previewThreadMigration(backend, model, reasoningEffort);
-            }}
-            onChange={(next) => saveProvider(backend, next)}
-          />
-        ))}
+        {providers.map((backend) => {
+          const providerPendingApply =
+            pendingApply?.backend.kind === backend.kind
+              ? pendingApply
+              : undefined;
+          const providerPendingMigration =
+            pendingMigration?.backend.kind === backend.kind
+              ? pendingMigration
+              : undefined;
+          return (
+            <ProviderModelDefaultField
+              key={backend.kind}
+              backend={backend}
+              defaults={props.defaults[backend.kind]}
+              disabled={
+                props.saving
+                || applying
+                || Boolean(providerPendingApply)
+                || Boolean(providerPendingMigration)
+              }
+              applying={applying}
+              pendingApply={providerPendingApply}
+              pendingMigration={providerPendingMigration}
+              onApply={(model, reasoningEffort) => {
+                void previewApply(backend, model, reasoningEffort);
+              }}
+              onCancelApply={() => setPendingApply(undefined)}
+              onConfirmApply={() => void applyToLaunchpads()}
+              onCancelMigration={() => setPendingMigration(undefined)}
+              onConfirmMigration={() => void createThreadMigration()}
+              onMigrate={(model, reasoningEffort) => {
+                void previewThreadMigration(backend, model, reasoningEffort);
+              }}
+              onChange={(next) => saveProvider(backend, next)}
+            />
+          );
+        })}
         <SettingsField
           label="Codex Fast mode"
           sub={
@@ -633,35 +657,54 @@ function ProviderModelDefaultsSettings(props: {
               : "Prohibited for this profile. Codex turns and launchpads are forced to non-Fast."
           }
           control={
-            <div className="settings-inline-actions">
-              <SettingsSwitch
-                checked={props.codexFastAllowed}
-                disabled={props.saving || applying}
-                label="Allow Codex Fast mode"
-                onChange={(allowed) => {
-                  if (allowed) {
-                    void props.onSaveCodexFastAllowed(true).then((saved) => {
-                      if (!saved) {
-                        setStatus("Could not save the Codex Fast policy.");
-                      }
-                    });
-                  } else {
-                    void previewFastAction("disable");
+            <div className="settings-paths">
+              {pendingFastAction ? (
+                <InlineActionConfirmation
+                  applying={applying}
+                  confirmLabel="Turn Fast off"
+                  label={
+                    pendingFastAction.kind === "disable"
+                      ? "Prohibit Fast for this profile?"
+                      : "Turn Fast off everywhere?"
                   }
-                }}
-              />
-              <button
-                className="button button--secondary"
-                disabled={
-                  props.saving
-                  || applying
-                  || !props.codexFastAllowed
-                }
-                type="button"
-                onClick={() => void previewFastAction("turn-off")}
-              >
-                Turn Fast off everywhere
-              </button>
+                  sub={`This will set ${pendingFastAction.threadCount} existing Codex thread${
+                    pendingFastAction.threadCount === 1 ? "" : "s"
+                  } and future launchpads to non-Fast. Models, reasoning, prompts, and access settings stay unchanged.`}
+                  onCancel={() => setPendingFastAction(undefined)}
+                  onConfirm={() => void applyFastAction()}
+                />
+              ) : (
+                <div className="settings-inline-actions">
+                  <SettingsSwitch
+                    checked={props.codexFastAllowed}
+                    disabled={props.saving || applying}
+                    label="Allow Codex Fast mode"
+                    onChange={(allowed) => {
+                      if (allowed) {
+                        void props.onSaveCodexFastAllowed(true).then((saved) => {
+                          if (!saved) {
+                            setStatus("Could not save the Codex Fast policy.");
+                          }
+                        });
+                      } else {
+                        void previewFastAction("disable");
+                      }
+                    }}
+                  />
+                  <button
+                    className="button button--secondary"
+                    disabled={
+                      props.saving
+                      || applying
+                      || !props.codexFastAllowed
+                    }
+                    type="button"
+                    onClick={() => void previewFastAction("turn-off")}
+                  >
+                    Turn Fast off everywhere
+                  </button>
+                </div>
+              )}
             </div>
           }
         />
@@ -700,94 +743,6 @@ function ProviderModelDefaultsSettings(props: {
             }
           />
         )}
-        {pendingApply ? (
-          <SettingsField
-            label={`Apply to ${pendingApply.count} launchpad${
-              pendingApply.count === 1 ? "" : "s"
-            }?`}
-            sub="Prompts, attachments, work mode, access, Fast/service tier, and Codex Environment will stay unchanged."
-            control={
-              <div className="settings-inline-actions">
-                <button
-                  className="button button--primary"
-                  disabled={applying}
-                  type="button"
-                  onClick={() => void applyToLaunchpads()}
-                >
-                  {applying ? "Applying…" : "Apply"}
-                </button>
-                <button
-                  className="button button--ghost"
-                  disabled={applying}
-                  type="button"
-                  onClick={() => setPendingApply(undefined)}
-                >
-                  Cancel
-                </button>
-              </div>
-            }
-          />
-        ) : null}
-        {pendingMigration ? (
-          <SettingsField
-            label={`Migrate ${pendingMigration.count} existing thread${
-              pendingMigration.count === 1 ? "" : "s"
-            }?`}
-            sub="Each matching thread will adopt this model and reasoning once when next opened. Manual changes made afterward will stick until you create another migration."
-            control={
-              <div className="settings-inline-actions">
-                <button
-                  className="button button--primary"
-                  disabled={applying}
-                  type="button"
-                  onClick={() => void createThreadMigration()}
-                >
-                  {applying ? "Creating…" : "Create migration"}
-                </button>
-                <button
-                  className="button button--ghost"
-                  disabled={applying}
-                  type="button"
-                  onClick={() => setPendingMigration(undefined)}
-                >
-                  Cancel
-                </button>
-              </div>
-            }
-          />
-        ) : null}
-        {pendingFastAction ? (
-          <SettingsField
-            label={
-              pendingFastAction.kind === "disable"
-                ? "Prohibit Fast for this profile?"
-                : "Turn Fast off everywhere?"
-            }
-            sub={`This will set ${pendingFastAction.threadCount} existing Codex thread${
-              pendingFastAction.threadCount === 1 ? "" : "s"
-            } and future launchpads to non-Fast. Models, reasoning, prompts, and access settings stay unchanged.`}
-            control={
-              <div className="settings-inline-actions">
-                <button
-                  className="button button--primary"
-                  disabled={applying}
-                  type="button"
-                  onClick={() => void applyFastAction()}
-                >
-                  {applying ? "Updating…" : "Turn Fast off"}
-                </button>
-                <button
-                  className="button button--ghost"
-                  disabled={applying}
-                  type="button"
-                  onClick={() => setPendingFastAction(undefined)}
-                >
-                  Cancel
-                </button>
-              </div>
-            }
-          />
-        ) : null}
         {status ? <p className="settings-empty">{status}</p> : null}
       </div>
     </SettingsSection>
@@ -798,7 +753,18 @@ function ProviderModelDefaultField(props: {
   backend: BackendSummary;
   defaults?: DesktopProviderModelDefaults;
   disabled: boolean;
+  applying: boolean;
+  pendingApply?: {
+    count: number;
+  };
+  pendingMigration?: {
+    count: number;
+  };
   onApply: (model: string, reasoningEffort?: string) => void;
+  onCancelApply: () => void;
+  onConfirmApply: () => void;
+  onCancelMigration: () => void;
+  onConfirmMigration: () => void;
   onMigrate: (model: string, reasoningEffort?: string) => void;
   onChange: (defaults: DesktopProviderModelDefaults | undefined) => void;
 }) {
@@ -899,7 +865,29 @@ function ProviderModelDefaultField(props: {
               ))}
             </select>
           ) : null}
-          {selectedModel ? (
+          {props.pendingApply ? (
+            <InlineActionConfirmation
+              applying={props.applying}
+              confirmLabel="Apply"
+              label={`Apply to ${props.pendingApply.count} launchpad${
+                props.pendingApply.count === 1 ? "" : "s"
+              }?`}
+              sub="Prompts, attachments, work mode, access, Fast/service tier, and Codex Environment will stay unchanged."
+              onCancel={props.onCancelApply}
+              onConfirm={props.onConfirmApply}
+            />
+          ) : props.pendingMigration ? (
+            <InlineActionConfirmation
+              applying={props.applying}
+              confirmLabel="Create migration"
+              label={`Migrate ${props.pendingMigration.count} existing thread${
+                props.pendingMigration.count === 1 ? "" : "s"
+              }?`}
+              sub="Each matching thread will adopt this model and reasoning once when next opened. Manual changes made afterward will stick until you create another migration."
+              onCancel={props.onCancelMigration}
+              onConfirm={props.onConfirmMigration}
+            />
+          ) : selectedModel ? (
             <div className="settings-inline-actions">
               <button
                 className="button button--secondary"
@@ -936,6 +924,45 @@ function ProviderModelDefaultField(props: {
         </div>
       }
     />
+  );
+}
+
+function InlineActionConfirmation(props: {
+  applying: boolean;
+  confirmLabel: string;
+  label: string;
+  sub: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div
+      aria-live="polite"
+      className="settings-action-confirmation"
+    >
+      <div className="settings-action-confirmation__copy">
+        <strong>{props.label}</strong>
+        <span>{props.sub}</span>
+      </div>
+      <div className="settings-inline-actions">
+        <button
+          className="button button--primary"
+          disabled={props.applying}
+          type="button"
+          onClick={props.onConfirm}
+        >
+          {props.applying ? "Updating…" : props.confirmLabel}
+        </button>
+        <button
+          className="button button--ghost"
+          disabled={props.applying}
+          type="button"
+          onClick={props.onCancel}
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
   );
 }
 
