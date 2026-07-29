@@ -6968,56 +6968,6 @@ describe("useThreadNavigation", () => {
     });
   });
 
-  it("adopts a bulk Fast cleanup when Settings refreshes navigation", async () => {
-    const snapshot = (fastMode: boolean): NavigationSnapshot => ({
-      backend: "all",
-      fetchedAt: Date.now(),
-      unchanged: false,
-      inboxThreadKeys: ["codex:thread-1"],
-      threads: [
-        {
-          id: "thread-1",
-          title: "First thread",
-          titleSource: "explicit",
-          source: "codex",
-          linkedDirectories: [],
-          model: "gpt-5.6-sol",
-          reasoningEffort: "high",
-          fastMode,
-          inbox: { inInbox: true, reason: "new-thread" },
-          updatedAt: 1_000,
-        },
-      ],
-      directories: [],
-      launchpadDefaults: {
-        backend: "codex",
-        executionMode: "default",
-      },
-    });
-    const getNavigationSnapshot = vi
-      .fn()
-      .mockResolvedValueOnce(snapshot(true))
-      .mockResolvedValueOnce(snapshot(false));
-    const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
-      onAgentEvent: () => () => undefined,
-    };
-
-    const { result } = renderHook(() => useThreadNavigation(desktopApi));
-
-    await waitFor(() => {
-      expect(result.current.selectedThread?.fastMode).toBe(true);
-    });
-
-    await act(async () => {
-      await result.current.refresh();
-    });
-
-    await waitFor(() => {
-      expect(result.current.selectedThread?.fastMode).toBe(false);
-    });
-  });
-
   it("patches the snapshot for thread/modelSettings/updated without refetching", async () => {
     const listeners = new Set<(event: any) => void>();
     const getNavigationSnapshot = vi.fn(async () => ({
@@ -7084,6 +7034,27 @@ describe("useThreadNavigation", () => {
       expect(result.current.selectedThread?.model).toBe("gpt-5.5");
       expect(result.current.selectedThread?.reasoningEffort).toBe("high");
       expect(result.current.selectedThread?.fastMode).toBe(true);
+    });
+
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "thread/modelSettings/updated",
+            params: {
+              threadId: "thread-1",
+              fastMode: false,
+            },
+          },
+        });
+      }
+    });
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.model).toBe("gpt-5.5");
+      expect(result.current.selectedThread?.reasoningEffort).toBe("high");
+      expect(result.current.selectedThread?.fastMode).toBe(false);
     });
     // Push-driven patch — no full snapshot re-fetch.
     expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);

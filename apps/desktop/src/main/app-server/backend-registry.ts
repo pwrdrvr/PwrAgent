@@ -11333,7 +11333,23 @@ export class DesktopBackendRegistry {
   }
 
   async turnOffCodexFastEverywhere(): Promise<TurnOffCodexFastEverywhereResponse> {
-    return await this.overlayStore.turnOffCodexFastEverywhere();
+    const result = await this.overlayStore.turnOffCodexFastEverywhere();
+    for (const threadId of result.updatedThreadIds) {
+      await this.emit({
+        backend: "codex",
+        notification: {
+          method: "thread/modelSettings/updated",
+          params: {
+            threadId,
+            fastMode: false,
+          },
+        },
+      });
+    }
+    return {
+      launchpadCount: result.launchpadCount,
+      threadCount: result.threadCount,
+    };
   }
 
   async checkThreadBranchDrift(

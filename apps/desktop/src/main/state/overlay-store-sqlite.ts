@@ -2238,11 +2238,13 @@ export class SqliteOverlayStore {
   async turnOffCodexFastEverywhere(): Promise<{
     launchpadCount: number;
     threadCount: number;
+    updatedThreadIds: string[];
   }> {
     const rows = this.stateDb.raw
       .prepare("SELECT thread_id, payload FROM threads")
       .all() as Array<{ thread_id: string; payload: string }>;
     let threadCount = 0;
+    const updatedThreadIds: string[] = [];
     for (const row of rows) {
       try {
         const thread = JSON.parse(row.payload) as ThreadOverlayState;
@@ -2253,6 +2255,7 @@ export class SqliteOverlayStore {
           ...thread,
           fastMode: false,
         });
+        updatedThreadIds.push(thread.threadId);
         threadCount += 1;
       } catch {
         // Ignore malformed cache rows. A later reconciliation can repair them.
@@ -2291,7 +2294,7 @@ export class SqliteOverlayStore {
         : {}),
     });
 
-    return { launchpadCount, threadCount };
+    return { launchpadCount, threadCount, updatedThreadIds };
   }
 
   async setThreadExpectedBranch(params: {

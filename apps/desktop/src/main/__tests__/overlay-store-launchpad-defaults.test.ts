@@ -162,6 +162,7 @@ describe("SqliteOverlayStore - launchpad defaults", () => {
     await expect(store.turnOffCodexFastEverywhere()).resolves.toEqual({
       launchpadCount: 1,
       threadCount: 1,
+      updatedThreadIds: ["codex-fast"],
     });
     await expect(store.getThreadOverlayState({
       backend: "codex",

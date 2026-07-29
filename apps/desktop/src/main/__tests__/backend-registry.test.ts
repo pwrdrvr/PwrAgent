@@ -529,16 +529,19 @@ function createOverlayStoreMock(params?: {
     },
     turnOffCodexFastEverywhere: async () => {
       let threadCount = 0;
+      const updatedThreadIds: string[] = [];
       for (const [key, overlay] of overlays) {
         if (overlay.backend !== "codex" || overlay.fastMode === false) {
           continue;
         }
         overlays.set(key, { ...overlay, fastMode: false });
+        updatedThreadIds.push(overlay.threadId);
         threadCount += 1;
       }
       return {
         launchpadCount: 0,
         threadCount,
+        updatedThreadIds,
       };
     },
     setThreadParent: async ({
@@ -12094,6 +12097,67 @@ command = "pnpm dev"
       fastMode: false,
     });
 
+    await registry.close();
+  });
+
+  it("emits model settings updates when turning Codex Fast off everywhere", async () => {
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-fast": {
+          backend: "codex",
+          threadId: "thread-fast",
+          executionMode: "default",
+          model: "gpt-5.6-sol",
+          reasoningEffort: "high",
+          fastMode: true,
+          extraLinkedDirectories: [],
+        },
+        "codex:thread-standard": {
+          backend: "codex",
+          threadId: "thread-standard",
+          executionMode: "default",
+          model: "gpt-5.6-sol",
+          reasoningEffort: "high",
+          fastMode: false,
+          extraLinkedDirectories: [],
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({}),
+      grokClient: new MockBackendClient({}),
+      overlayStore,
+    });
+    const events: AgentEvent[] = [];
+    const unsubscribe = registry.onEvent((event) => {
+      events.push(event);
+    });
+
+    await expect(registry.turnOffCodexFastEverywhere()).resolves.toEqual({
+      launchpadCount: 0,
+      threadCount: 1,
+    });
+    expect(events).toContainEqual({
+      backend: "codex",
+      notification: {
+        method: "thread/modelSettings/updated",
+        params: {
+          threadId: "thread-fast",
+          fastMode: false,
+        },
+      },
+    });
+    expect(events).not.toContainEqual(
+      expect.objectContaining({
+        notification: expect.objectContaining({
+          params: expect.objectContaining({
+            threadId: "thread-standard",
+          }),
+        }),
+      }),
+    );
+
+    unsubscribe();
     await registry.close();
   });
 
