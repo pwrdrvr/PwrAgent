@@ -6202,6 +6202,40 @@ textarea,
   opacity: 0.55;
 }
 
+/* Provider defaults use the same compact, content-sized pill language as the
+   composer model and reasoning pickers. Keep native select semantics here;
+   `field-sizing` lets Chromium size each control to its current value. */
+.settings-provider-defaults__selectors {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-select--chip {
+  width: auto;
+  min-width: 0;
+  max-width: min(100%, 320px);
+  field-sizing: content;
+  height: 26px;
+  padding: 0 26px 0 10px;
+  border-color: var(--border-subtle);
+  border-radius: 999px;
+  background-color: var(--bg-input);
+  background-position:
+    calc(100% - 13px) 50%,
+    calc(100% - 8px) 50%;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.settings-select--chip:hover:not(:disabled) {
+  border-color: var(--accent-border);
+  background-color: var(--bg-panel-hover);
+}
+
 .settings-input--invalid {
   border-color: var(--danger-border);
   box-shadow: 0 0 0 1px var(--status-error-ring-soft);
@@ -6609,9 +6643,39 @@ textarea,
 
 .settings-inline-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: flex-start;
   gap: 8px;
+}
+
+.settings-provider-defaults__fast {
+  display: grid;
+  grid-template-columns: minmax(140px, 220px) minmax(0, 1fr);
+  align-items: center;
+  gap: 8px 16px;
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.settings-provider-defaults__fast-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.settings-provider-defaults__fast-copy strong {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.settings-provider-defaults__fast-copy span {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.4;
 }
 
 .settings-action-confirmation {
@@ -6647,6 +6711,13 @@ textarea,
 
 .settings-action-confirmation > .settings-inline-actions {
   flex: 0 0 auto;
+}
+
+@media (max-width: 760px) {
+  .settings-provider-defaults__fast {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
 }
 
 /* Path-row list — canonical row for Codex discovery, Editor / Terminal

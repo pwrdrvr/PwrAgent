@@ -312,6 +312,22 @@ describe("Tangerine Terminal theme contract", () => {
     expect(settingsSelectRule).not.toContain("line-height: 1;");
   });
 
+  it("uses composer-style compact chips for provider defaults", () => {
+    const providerSelectRule = extractRuleBody(css, ".settings-select--chip");
+    const composerSelectRule = extractRuleBody(css, ".composer-dropdown__button");
+
+    expect(providerSelectRule).toContain("height: 26px;");
+    expect(providerSelectRule).toContain("border-radius: 999px;");
+    expect(providerSelectRule).toContain("background-color: var(--bg-input);");
+    expect(providerSelectRule).toContain("font-size: 13px;");
+    expect(providerSelectRule).toContain("font-weight: 500;");
+    expect(composerSelectRule).toContain("min-height: 26px;");
+    expect(composerSelectRule).toContain("border-radius: 999px;");
+    expect(composerSelectRule).toContain("background: var(--bg-input);");
+    expect(composerSelectRule).toContain("font-size: 13px;");
+    expect(composerSelectRule).toContain("font-weight: 500;");
+  });
+
   it("keeps messaging indicators ahead of thread header title overflow", () => {
     const headerMainRule = extractRuleBody(css, ".thread-header__main");
     const statusBarRule = extractRuleBody(css, ".messaging-status-bar");

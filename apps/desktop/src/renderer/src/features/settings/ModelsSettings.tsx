@@ -621,6 +621,27 @@ function ProviderModelDefaultsSettings(props: {
             pendingMigration?.backend.kind === backend.kind
               ? pendingMigration
               : undefined;
+          const fastMode =
+            backend.kind === "codex"
+              ? {
+                  allowed: props.codexFastAllowed,
+                  pending: pendingFastAction,
+                  onAllowChange: (allowed: boolean) => {
+                    if (allowed) {
+                      void props.onSaveCodexFastAllowed(true).then((saved) => {
+                        if (!saved) {
+                          setStatus("Could not save the Codex Fast policy.");
+                        }
+                      });
+                    } else {
+                      void previewFastAction("disable");
+                    }
+                  },
+                  onCancel: () => setPendingFastAction(undefined),
+                  onConfirm: () => void applyFastAction(),
+                  onTurnOffEverywhere: () => void previewFastAction("turn-off"),
+                }
+              : undefined;
           return (
             <ProviderModelDefaultField
               key={backend.kind}
@@ -633,6 +654,7 @@ function ProviderModelDefaultsSettings(props: {
                 || Boolean(providerPendingMigration)
               }
               applying={applying}
+              fastMode={fastMode}
               pendingApply={providerPendingApply}
               pendingMigration={providerPendingMigration}
               onApply={(model, reasoningEffort) => {
@@ -649,65 +671,6 @@ function ProviderModelDefaultsSettings(props: {
             />
           );
         })}
-        <SettingsField
-          label="Codex Fast mode"
-          sub={
-            props.codexFastAllowed
-              ? "Allowed for this profile. Turn it off everywhere without preventing later per-thread use."
-              : "Prohibited for this profile. Codex turns and launchpads are forced to non-Fast."
-          }
-          control={
-            <div className="settings-paths">
-              {pendingFastAction ? (
-                <InlineActionConfirmation
-                  applying={applying}
-                  confirmLabel="Turn Fast off"
-                  label={
-                    pendingFastAction.kind === "disable"
-                      ? "Prohibit Fast for this profile?"
-                      : "Turn Fast off everywhere?"
-                  }
-                  sub={`This will set ${pendingFastAction.threadCount} existing Codex thread${
-                    pendingFastAction.threadCount === 1 ? "" : "s"
-                  } and future launchpads to non-Fast. Models, reasoning, prompts, and access settings stay unchanged.`}
-                  onCancel={() => setPendingFastAction(undefined)}
-                  onConfirm={() => void applyFastAction()}
-                />
-              ) : (
-                <div className="settings-inline-actions">
-                  <SettingsSwitch
-                    checked={props.codexFastAllowed}
-                    disabled={props.saving || applying}
-                    label="Allow Codex Fast mode"
-                    onChange={(allowed) => {
-                      if (allowed) {
-                        void props.onSaveCodexFastAllowed(true).then((saved) => {
-                          if (!saved) {
-                            setStatus("Could not save the Codex Fast policy.");
-                          }
-                        });
-                      } else {
-                        void previewFastAction("disable");
-                      }
-                    }}
-                  />
-                  <button
-                    className="button button--secondary"
-                    disabled={
-                      props.saving
-                      || applying
-                      || !props.codexFastAllowed
-                    }
-                    type="button"
-                    onClick={() => void previewFastAction("turn-off")}
-                  >
-                    Turn Fast off everywhere
-                  </button>
-                </div>
-              )}
-            </div>
-          }
-        />
         {providers.length === 0 ? (
           <SettingsField
             label="Discovered models"
@@ -754,6 +717,17 @@ function ProviderModelDefaultField(props: {
   defaults?: DesktopProviderModelDefaults;
   disabled: boolean;
   applying: boolean;
+  fastMode?: {
+    allowed: boolean;
+    pending?: {
+      kind: "disable" | "turn-off";
+      threadCount: number;
+    };
+    onAllowChange: (allowed: boolean) => void;
+    onCancel: () => void;
+    onConfirm: () => void;
+    onTurnOffEverywhere: () => void;
+  };
   pendingApply?: {
     count: number;
   };
@@ -795,76 +769,78 @@ function ProviderModelDefaultField(props: {
       }
       control={
         <div className="settings-paths">
-          <select
-            aria-label={`${props.backend.label} default model`}
-            className="settings-select"
-            disabled={props.disabled}
-            value={selectedModel}
-            onChange={(event) => {
-              const model = event.currentTarget.value;
-              if (!model) {
-                props.onChange(undefined);
-                return;
-              }
-              const option = models.find((candidate) => candidate.id === model);
-              const reasoningEffortsByModel = {
-                ...(props.defaults?.reasoningEffortsByModel ?? {}),
-              };
-              if (
-                option?.defaultReasoningEffort
-                && !reasoningEffortsByModel[model]
-              ) {
-                reasoningEffortsByModel[model] = option.defaultReasoningEffort;
-              }
-              props.onChange({ model, reasoningEffortsByModel });
-            }}
-          >
-            <option value="">Provider advertised default</option>
-            {selectedModel && !modelOption ? (
-              <option value={selectedModel}>{selectedModel} (unavailable)</option>
-            ) : null}
-            {models.map((model) => (
-              <option key={model.id} value={model.id}>
-                {model.label ?? model.id}
-              </option>
-            ))}
-          </select>
-          {selectedModel && reasoningOptions.length > 0 ? (
+          <div className="settings-provider-defaults__selectors">
             <select
-              aria-label={`${props.backend.label} default reasoning`}
-              className="settings-select"
+              aria-label={`${props.backend.label} default model`}
+              className="settings-select settings-select--chip"
               disabled={props.disabled}
-              value={selectedReasoning}
+              value={selectedModel}
               onChange={(event) => {
+                const model = event.currentTarget.value;
+                if (!model) {
+                  props.onChange(undefined);
+                  return;
+                }
+                const option = models.find((candidate) => candidate.id === model);
                 const reasoningEffortsByModel = {
                   ...(props.defaults?.reasoningEffortsByModel ?? {}),
                 };
-                const effort = event.currentTarget.value;
-                if (effort) {
-                  reasoningEffortsByModel[selectedModel] = effort;
-                } else {
-                  delete reasoningEffortsByModel[selectedModel];
+                if (
+                  option?.defaultReasoningEffort
+                  && !reasoningEffortsByModel[model]
+                ) {
+                  reasoningEffortsByModel[model] = option.defaultReasoningEffort;
                 }
-                props.onChange({
-                  model: selectedModel,
-                  reasoningEffortsByModel,
-                });
+                props.onChange({ model, reasoningEffortsByModel });
               }}
             >
-              <option value="">Provider advertised reasoning</option>
-              {selectedReasoning
-              && !reasoningOptions.includes(selectedReasoning) ? (
-                <option value={selectedReasoning}>
-                  {selectedReasoning} (unavailable)
-                </option>
+              <option value="">Provider advertised default</option>
+              {selectedModel && !modelOption ? (
+                <option value={selectedModel}>{selectedModel} (unavailable)</option>
               ) : null}
-              {reasoningOptions.map((effort) => (
-                <option key={effort} value={effort}>
-                  {effort}
+              {models.map((model) => (
+                <option key={model.id} value={model.id}>
+                  {model.label ?? model.id}
                 </option>
               ))}
             </select>
-          ) : null}
+            {selectedModel && reasoningOptions.length > 0 ? (
+              <select
+                aria-label={`${props.backend.label} default reasoning`}
+                className="settings-select settings-select--chip"
+                disabled={props.disabled}
+                value={selectedReasoning}
+                onChange={(event) => {
+                  const reasoningEffortsByModel = {
+                    ...(props.defaults?.reasoningEffortsByModel ?? {}),
+                  };
+                  const effort = event.currentTarget.value;
+                  if (effort) {
+                    reasoningEffortsByModel[selectedModel] = effort;
+                  } else {
+                    delete reasoningEffortsByModel[selectedModel];
+                  }
+                  props.onChange({
+                    model: selectedModel,
+                    reasoningEffortsByModel,
+                  });
+                }}
+              >
+                <option value="">Provider advertised reasoning</option>
+                {selectedReasoning
+                && !reasoningOptions.includes(selectedReasoning) ? (
+                  <option value={selectedReasoning}>
+                    {selectedReasoning} (unavailable)
+                  </option>
+                ) : null}
+                {reasoningOptions.map((effort) => (
+                  <option key={effort} value={effort}>
+                    {effort}
+                  </option>
+                ))}
+              </select>
+            ) : null}
+          </div>
           {props.pendingApply ? (
             <InlineActionConfirmation
               applying={props.applying}
@@ -919,6 +895,52 @@ function ProviderModelDefaultField(props: {
               >
                 Reset
               </button>
+            </div>
+          ) : null}
+          {props.fastMode ? (
+            <div className="settings-provider-defaults__fast">
+              <div className="settings-provider-defaults__fast-copy">
+                <strong>Fast mode</strong>
+                <span>
+                  {props.fastMode.allowed
+                    ? "Allowed for this profile. Existing threads keep their own choice."
+                    : "Prohibited for this profile. Codex is forced to non-Fast."}
+                </span>
+              </div>
+              {props.fastMode.pending ? (
+                <InlineActionConfirmation
+                  applying={props.applying}
+                  confirmLabel="Turn Fast off"
+                  label={
+                    props.fastMode.pending.kind === "disable"
+                      ? "Prohibit Fast for this profile?"
+                      : "Turn Fast off everywhere?"
+                  }
+                  sub={`This will set ${props.fastMode.pending.threadCount} existing Codex thread${
+                    props.fastMode.pending.threadCount === 1 ? "" : "s"
+                  } and future launchpads to non-Fast. Models, reasoning, prompts, and access settings stay unchanged.`}
+                  onCancel={props.fastMode.onCancel}
+                  onConfirm={props.fastMode.onConfirm}
+                />
+              ) : (
+                <div className="settings-inline-actions">
+                  <SettingsSwitch
+                    checked={props.fastMode.allowed}
+                    disabled={props.disabled}
+                    label="Allow Codex Fast mode"
+                    onChange={props.fastMode.onAllowChange}
+                  />
+                  <button
+                    aria-label="Turn Fast off everywhere"
+                    className="button button--secondary"
+                    disabled={props.disabled || !props.fastMode.allowed}
+                    type="button"
+                    onClick={props.fastMode.onTurnOffEverywhere}
+                  >
+                    Turn off everywhere
+                  </button>
+                </div>
+              )}
             </div>
           ) : null}
         </div>

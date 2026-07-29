@@ -1750,6 +1750,12 @@ describe("SettingsScreen", () => {
         "Updated 1 Codex launchpad. Existing threads were not changed.",
       ),
     ).toBeInTheDocument();
+    expect(
+      screen.getByRole("combobox", { name: "Codex default model" }),
+    ).toHaveClass("settings-select--chip");
+    expect(
+      screen.getByRole("combobox", { name: "Codex default reasoning" }),
+    ).toHaveClass("settings-select--chip");
 
     fireEvent.click(
       screen.getByRole("button", { name: "Apply to existing threads" }),
@@ -1786,7 +1792,10 @@ describe("SettingsScreen", () => {
     const fastConfirmation =
       await screen.findByText("Turn Fast off everywhere?");
     expect(fastConfirmation.closest(".settings-field")).toHaveTextContent(
-      "Codex Fast mode",
+      "Codex",
+    );
+    expect(fastConfirmation.closest(".settings-field")).toHaveTextContent(
+      "Fast mode",
     );
     expect(
       screen.queryByRole("button", { name: "Turn Fast off everywhere" }),
