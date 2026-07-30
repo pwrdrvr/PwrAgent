@@ -13,10 +13,10 @@ ordinary messaging bindings and provider-managed child conversations.
 
 An operator explicitly assigns an eligible Agent as the default for a
 normalized messaging scope. An authorized, addressed message in an unbound
-surface resolves that assignment, asks the adapter to materialize a bindable
-child conversation, creates a normal Agent-thread binding there, and submits the
-message through normal turn admission. From then on, the child conversation is
-an ordinary bound messaging surface.
+surface resolves that assignment, chooses a bindable placement from normalized
+conversation kind and adapter capabilities, creates a normal Agent-thread
+binding there, and submits the message through normal turn admission. From then
+on, the conversation is an ordinary bound messaging surface.
 
 Ordinary bound work-thread turns also retain their live messaging origin. That
 lets existing `handoff_task` messaging attachment behavior and
@@ -127,22 +127,30 @@ The bootstrap applies only when all of these are true:
 - the normalized conversation has no active binding
 - a valid default resolves
 
-The controller then:
+The controller then resolves placement generically:
 
-1. asks `getManagedConversationRights` when available
-2. calls `createManagedConversation` with the original actor, channel, and
-   opaque routing state
-3. creates a normal `agent_thread` binding for the returned conversation
-4. delivers the initial status surface, which materializes Slack's reply thread
-5. admits the original text through the existing turn-admission path with an
-   event rewritten only to the adapter-returned normalized child conversation
+1. If the normalized inbound conversation kind is `thread` or `topic`, use
+   `current_conversation`. The existing child is already a safe bindable
+   placement; no adapter create call is needed.
+2. Otherwise, ask `getManagedConversationRights` when available and call
+   `createManagedConversation` only when `create_child` is supported for the
+   source event.
+3. If neither current-conversation placement nor safe child creation is
+   available, return a capability error without creating a binding or admitting
+   a turn.
+4. Create a normal `agent_thread` binding for the selected current or returned
+   child conversation.
+5. Deliver the initial status surface. For Slack root mentions, this reply
+   materializes the Slack thread.
+6. Admit the original text through the existing turn-admission path, rewriting
+   the event channel/routing state only when the adapter returned a new child.
 
 The original actor, text, and routing state remain intact. Mutable conversation
 labels are not interpolated into privileged Agent instructions.
 
-If child creation is unsupported, denied, or fails, the controller sends a
-clear capability error to the source surface and creates no binding. It does
-not invent an ephemeral binding or submit a side-channel turn.
+If child creation is needed but unsupported, denied, or fails, the controller
+sends a clear capability error to the source surface and creates no binding. It
+does not invent an ephemeral binding or submit a side-channel turn.
 
 Unaddressed ambient messages in unbound shared channels retain current behavior.
 Commands, callbacks, media handling, authorization, queueing, steering, and
@@ -193,7 +201,8 @@ without making lifecycle/no-turn tool calls guess a location.
 ### 3. Bootstrap and origin parity
 
 - Resolve valid defaults for addressed, unbound text.
-- Create an adapter-managed child conversation and a normal Agent binding.
+- Bind an existing normalized child conversation in place, or create an
+  adapter-managed child from a root conversation when supported.
 - Submit through existing turn admission and preserve the original actor and
   normalized origin.
 - Revoke stale targets and continue fallback resolution.
@@ -214,13 +223,16 @@ without making lifecycle/no-turn tool calls guess a location.
 4. The Agent can use existing thread search/read/send tools, then
    `attach_thread_here` with `placement=current_conversation` to replace the
    Slack reply-thread binding with the chosen work thread.
-5. An ordinary bound Codex turn can call `handoff_task` with
+5. An authorized addressed message in an unbound normalized Telegram topic or
+   Discord/Slack thread binds that existing conversation to the default Agent
+   and admits the turn without calling `createManagedConversation`.
+6. An ordinary bound Codex turn can call `handoff_task` with
    `messagingAttachment` or `attach_thread_here` using its concrete turn
    origin.
-6. Telegram topics and Discord threads resolve exact and normalized parent
+7. Telegram topics and Discord threads resolve exact and normalized parent
    fallbacks without desktop core parsing native IDs.
-7. A provider that cannot create a bindable child returns a capability error
-   and receives no Agent turn.
+8. A root-like surface whose provider cannot create a bindable child returns a
+   capability error and receives no Agent turn.
 
 ## Verification
 
