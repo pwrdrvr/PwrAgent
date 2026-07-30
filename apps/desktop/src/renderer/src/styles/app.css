@@ -4269,7 +4269,7 @@ textarea,
   padding: 0;
   border: 0;
   background: transparent;
-  font: inherit;
+  font-family: inherit;
   cursor: pointer;
   margin-top: 4px;
   margin-bottom: 2px;

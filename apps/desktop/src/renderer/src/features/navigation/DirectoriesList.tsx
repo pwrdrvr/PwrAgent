@@ -229,6 +229,10 @@ export function DirectoriesList(props: DirectoriesListProps) {
    * naturally expires. Plan 2026-05-09-002 Unit K follow-up.
    */
   const lastDirectoryDragEndedAtRef = useRef(0);
+  // The Directory threads disclosure is also a thread-pin drop target.
+  // Suppress the click browsers synthesize immediately after a drop so
+  // pinning a thread never also minimizes the section.
+  const lastDirectoryThreadDropAtRef = useRef(0);
   const threadsByKey = useMemo(
     () =>
       new Map(
@@ -1078,6 +1082,12 @@ export function DirectoriesList(props: DirectoriesListProps) {
                         } directory threads for ${directory.label}`}
                         disabled={!props.onSetDirectoryThreadsCollapsed}
                         onClick={() => {
+                          if (
+                            Date.now() - lastDirectoryThreadDropAtRef.current <
+                            POST_DRAG_CLICK_SUPPRESS_MS
+                          ) {
+                            return;
+                          }
                           void props.onSetDirectoryThreadsCollapsed?.(
                             directory,
                             !directoryThreadsCollapsed,
@@ -1105,6 +1115,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                         }}
                         onDrop={(event) => {
                           event.preventDefault();
+                          lastDirectoryThreadDropAtRef.current = Date.now();
                           setDraggedThreadKey(undefined);
                           setDividerDropTarget(undefined);
                           dropThreadAfterDirectoryPins(

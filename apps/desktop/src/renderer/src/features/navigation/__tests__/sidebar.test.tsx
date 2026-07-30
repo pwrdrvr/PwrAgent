@@ -2068,6 +2068,7 @@ describe("Sidebar", () => {
 
   it("pins a same-directory thread by dropping it on the directory divider", () => {
     const onReorderThreadPins = vi.fn(async () => undefined);
+    const onSetDirectoryThreadsCollapsed = vi.fn(async () => undefined);
     const pinnedThread = {
       ...updatedSinceSeenThread,
       pinnedRank: "1024",
@@ -2094,21 +2095,24 @@ describe("Sidebar", () => {
         onOpenLaunchpad={async () => undefined}
         onReorderThreadPins={onReorderThreadPins}
         onSelectThread={() => undefined}
-        onSetDirectoryThreadsCollapsed={async () => undefined}
+        onSetDirectoryThreadsCollapsed={onSetDirectoryThreadsCollapsed}
       />
     );
 
+    const directoryThreads = screen.getByRole("button", {
+      name: "Hide directory threads for PwrAgent",
+    });
     fireEvent.drop(
-      screen.getByRole("button", {
-        name: "Hide directory threads for PwrAgent",
-      }),
+      directoryThreads,
       { dataTransfer: createDataTransfer("codex:thread-1") },
     );
+    fireEvent.click(directoryThreads);
 
     expect(onReorderThreadPins).toHaveBeenCalledWith([
       "codex:thread-updated",
       "codex:thread-1",
     ]);
+    expect(onSetDirectoryThreadsCollapsed).not.toHaveBeenCalled();
   });
 
   it("shows recents drop targets for row edges and the pin divider", () => {

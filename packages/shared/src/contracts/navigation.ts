@@ -643,7 +643,7 @@ export type NavigationDirectorySummary = {
    * pseudo-directories are filtered at both the snapshot builder
    * (`buildDirectorySummaries`) and the IPC handler
    * (`setDirectoryPin`) so this field stays meaningful.
-  */
+   */
   pinnedRank?: string;
   /**
    * Sticky per-directory preference for hiding the unpinned
