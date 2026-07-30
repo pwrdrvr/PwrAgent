@@ -1058,7 +1058,7 @@ export type MessagingApprovalIntent = MessagingBaseSurfaceIntent & {
   decisions: Array<
     MessagingSurfaceAction & {
       decision: MessagingApprovalDecision;
-      response?: { decision: unknown };
+      response?: Record<string, unknown>;
     }
   >;
 };

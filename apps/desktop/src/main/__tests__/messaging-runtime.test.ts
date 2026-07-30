@@ -870,6 +870,51 @@ describe("DesktopMessagingRuntime", () => {
     });
   });
 
+  it("routes MCP login requests to bound channel adapters", async () => {
+    const { runtime, adapter, emitBackendEvent } = await createRuntimeHarness();
+
+    await runtime.start();
+    await adapter.listener?.(
+      buildCallbackEvent("bind:codex:thread-1", {
+        backend: "codex",
+        threadId: "thread-1",
+      }),
+    );
+    adapter.delivered.length = 0;
+
+    await emitBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "mcpServer/elicitation/request",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          requestId: "mcp-login-1",
+          serverName: "github",
+          mode: "url",
+          _meta: null,
+          message: "Reconnect GitHub to restore access.",
+          url: "https://example.test/oauth/start?state=opaque",
+          elicitationId: "elicitation-1",
+        },
+      },
+    });
+
+    expect(adapter.delivered.find((intent) => intent.kind === "approval"))
+      .toMatchObject({
+        kind: "approval",
+        title: "MCP Login",
+        body: expect.stringContaining("https://example.test/oauth/start?state=opaque"),
+        requestContext: {
+          backend: "codex",
+          method: "mcpServer/elicitation/request",
+          requestId: "mcp-login-1",
+          threadId: "thread-1",
+          turnId: "turn-1",
+        },
+      });
+  });
+
   it("logs rejected inbound actor ids before returning the authorization error", async () => {
     const { runtime, adapter } = await createRuntimeHarness();
 

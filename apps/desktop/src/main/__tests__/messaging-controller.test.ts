@@ -11454,6 +11454,78 @@ describe("MessagingController", () => {
     });
   });
 
+  it("presents and submits MCP login requests even when Working Updates is None", async () => {
+    const harness = await createHarness({ toolUpdateDefaultMode: "show_none" });
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendPendingRequest("codex", {
+      method: "mcpServer/elicitation/request",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        requestId: "mcp-login-1",
+        serverName: "github",
+        mode: "url",
+        _meta: null,
+        message: "Reconnect GitHub to restore access.",
+        url: "https://example.test/oauth/start?state=opaque",
+        elicitationId: "elicitation-1",
+      },
+    });
+
+    expect(harness.delivered.find((intent) => intent.kind === "approval"))
+      .toMatchObject({
+        kind: "approval",
+        title: "MCP Login",
+        decisions: expect.arrayContaining([
+          expect.objectContaining({
+            id: "approval:mcp:accept",
+            label: "Allow",
+          }),
+        ]),
+      });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "approval:mcp:accept" }),
+    );
+
+    expect(harness.submitServerRequest).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      requestId: "mcp-login-1",
+      response: {
+        action: "accept",
+        content: {},
+        _meta: null,
+      },
+    });
+  });
+
+  it("presents command approvals even when Working Updates is None", async () => {
+    const harness = await createHarness({ toolUpdateDefaultMode: "show_none" });
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendPendingRequest("codex", {
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        requestId: "approval-none-1",
+        prompt: "Run tests?",
+        command: "pnpm test",
+      },
+    });
+
+    expect(harness.delivered.find((intent) => intent.kind === "approval"))
+      .toMatchObject({
+        kind: "approval",
+        title: "Command Approval",
+      });
+  });
+
   it("keeps Plan questionnaires active for the durable callback lifetime", async () => {
     let now = 1000;
     const harness = await createHarness({ now: () => now });

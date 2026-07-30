@@ -1,5 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import {
+  isMessagingInteractivePendingRequest,
   MessagingController,
   type MessagingControllerDeliveryBudgetEvent,
 } from "./core/messaging-controller";
@@ -13,7 +14,6 @@ import type {
 } from "./core/messaging-adapter";
 import type {
   AgentEvent,
-  AppServerPendingRequestNotification,
   GenerateMessagingPairingTokenRequest,
   GenerateMessagingPairingTokenResponse,
   InboundPreviewMessage,
@@ -1322,7 +1322,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       await Promise.all(
         this.controllers.map(async (controller) => {
           try {
-            if (isMessagingPendingRequest(event.notification)) {
+            if (isMessagingInteractivePendingRequest(event.notification)) {
               await controller.handleBackendPendingRequest(
                 event.backend,
                 event.notification,
@@ -2524,14 +2524,4 @@ function formatDurationForStatus(durationMs: number): string {
   }
   const minutes = Math.ceil(seconds / 60);
   return `${minutes}m`;
-}
-
-function isMessagingPendingRequest(
-  notification: AgentEvent["notification"],
-): notification is AppServerPendingRequestNotification {
-  if (notification.method === "item/tool/requestUserInput") {
-    return true;
-  }
-
-  return notification.method.toLowerCase().includes("requestapproval");
 }
