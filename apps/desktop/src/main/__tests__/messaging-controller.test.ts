@@ -395,6 +395,66 @@ describe("MessagingController", () => {
     });
   });
 
+  it("shows only plausible review base branches as buttons", async () => {
+    const navigation = buildWorktreeHandoffNavigationSnapshot();
+    navigation.directories[0] = {
+      ...navigation.directories[0]!,
+      gitStatus: {
+        currentBranch: "feature/handoff",
+        defaultBranch: "develop",
+        baseBranches: [
+          "origin/develop",
+          "develop",
+          ...Array.from(
+            { length: 50 },
+            (_, index) => `origin/feature/old-${index + 1}`,
+          ),
+        ],
+        branches: [
+          "develop",
+          "feature/handoff",
+          ...Array.from(
+            { length: 50 },
+            (_, index) => `feature/old-${index + 1}`,
+          ),
+        ],
+      },
+    };
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      gitWorkingState: {
+        dirtyFiles: 0,
+        dirtyAdditions: 0,
+        dirtyDeletions: 0,
+        untrackedFiles: 0,
+        unpushedCommits: 1,
+        baseBranch: "develop",
+      },
+    };
+    const harness = await createHarness({ navigation });
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/review"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "review:summary:base-branch" }),
+    );
+
+    const branchPicker = harness.delivered.at(-1);
+    expect(branchPicker).toMatchObject({
+      kind: "review",
+      body: "Choose a suggested base branch or reply with any branch name.",
+    });
+    if (!branchPicker || branchPicker.kind !== "review") {
+      throw new Error("Expected review base branch picker");
+    }
+    expect(
+      branchPicker.actions
+        .filter((action) => action.id.startsWith("review:base-branch:"))
+        .map((action) => action.label),
+    ).toEqual(["origin/develop", "develop"]);
+  });
+
   it("returns to the summary with the selected project and its default base branch", async () => {
     const navigation = buildMultiProjectReviewNavigationSnapshot();
     const harness = await createHarness({ navigation });

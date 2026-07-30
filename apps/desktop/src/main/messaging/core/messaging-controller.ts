@@ -1966,10 +1966,10 @@ export class MessagingController {
       ];
     } else if (params.phase === "base_branch") {
       title = "Base branch";
-      body = "Choose a base branch or reply with a branch name.";
+      body = "Choose a suggested base branch or reply with any branch name.";
       allowFreeform = true;
       actions = [
-        ...buildReviewBranchOptions({
+        ...messagingReviewBranchOptions({
           directory,
           thread: workspaceThread,
         }).map((branch, index) => ({
@@ -14180,6 +14180,49 @@ function paginateReviewWorkspaces(params: {
     startIndex,
     totalPages,
   };
+}
+
+function messagingReviewBranchOptions(params: {
+  directory: NavigationDirectorySummary | undefined;
+  thread: NavigationThreadSummary | undefined;
+}): string[] {
+  const options = buildReviewBranchOptions(params);
+  const primaryBranch = normalizeReviewBranchName(options[0]);
+  const knownBranchNames = new Set(
+    [
+      ...(params.directory?.gitStatus?.baseBranches ?? []),
+      ...(params.directory?.gitStatus?.branches ?? []),
+      params.directory?.gitStatus?.defaultBranch,
+    ]
+      .map(normalizeReviewBranchName)
+      .filter((branch): branch is string => Boolean(branch)),
+  );
+  const conventionalBaseBranches = new Set([
+    "main",
+    "master",
+    "develop",
+    "trunk",
+  ]);
+  return options
+    .filter((branch) => {
+      const normalized = normalizeReviewBranchName(branch);
+      if (!normalized) {
+        return false;
+      }
+      return (
+        normalized === primaryBranch
+        || (
+          conventionalBaseBranches.has(normalized)
+          && knownBranchNames.has(normalized)
+        )
+      );
+    })
+    .slice(0, 8);
+}
+
+function normalizeReviewBranchName(branch: string | undefined): string | undefined {
+  const normalized = branch?.trim().replace(/^origin\//, "");
+  return normalized || undefined;
 }
 
 function formatMessagingReviewScope(target: AppServerReviewTarget): string {
