@@ -77,6 +77,8 @@ import {
   type SetSubthreadsCollapsedResponse,
   type SetDirectoryPinRequest,
   type SetDirectoryPinResponse,
+  type SetDirectoryThreadsCollapsedRequest,
+  type SetDirectoryThreadsCollapsedResponse,
   type SetThreadParentRequest,
   type SetThreadParentResponse,
   type SetThreadAgentRequest,
@@ -169,6 +171,7 @@ import {
   NAVIGATION_MARK_THREAD_SEEN_CHANNEL,
   NAVIGATION_SET_SUBTHREADS_COLLAPSED_CHANNEL,
   NAVIGATION_SET_DIRECTORY_PIN_CHANNEL,
+  NAVIGATION_SET_DIRECTORY_THREADS_COLLAPSED_CHANNEL,
   NAVIGATION_SET_THREAD_PARENT_CHANNEL,
   NAVIGATION_SET_THREAD_AGENT_CHANNEL,
   NAVIGATION_SET_THREAD_PIN_CHANNEL,
@@ -272,25 +275,20 @@ type ThreadPrRefreshContext = {
 const appServerLog = getMainLogger("pwragent:app-server");
 
 /**
- * Reject pin requests that target the synthetic catch-all bucket
- * (`unlinked`). Directory pinning is a user-curated order for
- * named entries the user actually browses — both real directories
- * (`directory:*`) and workspaces (`workspace:*`) qualify, since the
- * user picks them by name in the sidebar. The `unlinked` bucket is
- * a roll-up of threads with no linked directory and doesn't model
- * a single entry, so pinning it is meaningless. The snapshot
- * builder (`buildDirectorySummaries`) also defends against this on
- * the read side, but rejecting here keeps the overlay store free
- * of stale rows that would otherwise accumulate without any
- * read-side effect. See plan 2026-05-09-002, Unit G.
+ * Reject directory preference writes that target the synthetic
+ * catch-all bucket (`unlinked`). Both real directories
+ * (`directory:*`) and workspaces (`workspace:*`) are named entries
+ * the user actually browses. The `unlinked` bucket is a roll-up of
+ * threads with no linked directory and doesn't model a single
+ * entry, so sticky preferences there are meaningless.
  */
-function rejectNonDirectoryPinKey(directoryKey: string): void {
+function rejectNonUserDirectoryKey(directoryKey: string): void {
   if (
     !directoryKey.startsWith("directory:") &&
     !directoryKey.startsWith("workspace:")
   ) {
     throw new Error(
-      `Cannot pin synthetic directory entry: ${directoryKey} (only directory:* and workspace:* keys are pinnable)`,
+      `Cannot persist preferences for synthetic directory entry: ${directoryKey} (only directory:* and workspace:* keys are supported)`,
     );
   }
 }
@@ -3725,7 +3723,7 @@ class DesktopAppServerService {
   async setDirectoryPin(
     request: SetDirectoryPinRequest,
   ): Promise<SetDirectoryPinResponse> {
-    rejectNonDirectoryPinKey(request.directoryKey);
+    rejectNonUserDirectoryKey(request.directoryKey);
 
     const overlay = await this.getOverlayStore().setDirectoryPin({
       directoryKey: request.directoryKey,
@@ -3765,7 +3763,7 @@ class DesktopAppServerService {
     request: ReorderDirectoryPinsRequest,
   ): Promise<ReorderDirectoryPinsResponse> {
     for (const directoryKey of request.directoryKeys) {
-      rejectNonDirectoryPinKey(directoryKey);
+      rejectNonUserDirectoryKey(directoryKey);
     }
 
     const pinnedRanks = await this.getOverlayStore().reorderDirectoryPins({
@@ -3787,6 +3785,39 @@ class DesktopAppServerService {
     });
 
     return { pinnedRanks };
+  }
+
+  async setDirectoryThreadsCollapsed(
+    request: SetDirectoryThreadsCollapsedRequest,
+  ): Promise<SetDirectoryThreadsCollapsedResponse> {
+    rejectNonUserDirectoryKey(request.directoryKey);
+
+    const overlay = await this.getOverlayStore().setDirectoryThreadsCollapsed({
+      directoryKey: request.directoryKey,
+      collapsed: request.collapsed,
+    });
+    const collapsed = overlay.directoryThreadsCollapsed === true;
+
+    logDebug("setDirectoryThreadsCollapsed", {
+      directoryKey: request.directoryKey,
+      collapsed,
+    });
+
+    await getDesktopBackendRegistry().publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "directory/threadsCollapsed/updated",
+        params: {
+          directoryKey: request.directoryKey,
+          collapsed,
+        },
+      },
+    });
+
+    return {
+      directoryKey: request.directoryKey,
+      collapsed,
+    };
   }
 
   async ensureDirectoryLaunchpad(
@@ -4666,6 +4697,16 @@ export function registerAppServerIpcHandlers(): void {
       request: ReorderDirectoryPinsRequest,
     ): Promise<ReorderDirectoryPinsResponse> => {
       return await appServerService.reorderDirectoryPins(request);
+    },
+  );
+  ipcMain.removeHandler(NAVIGATION_SET_DIRECTORY_THREADS_COLLAPSED_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_SET_DIRECTORY_THREADS_COLLAPSED_CHANNEL,
+    async (
+      _event,
+      request: SetDirectoryThreadsCollapsedRequest,
+    ): Promise<SetDirectoryThreadsCollapsedResponse> => {
+      return await appServerService.setDirectoryThreadsCollapsed(request);
     },
   );
   ipcMain.removeHandler(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL);

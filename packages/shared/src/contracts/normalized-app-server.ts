@@ -1429,4 +1429,11 @@ export type AppServerNotification =
         pinnedRanks: Record<string, string>;
       };
     }
+  | {
+      method: "directory/threadsCollapsed/updated";
+      params: {
+        directoryKey: string;
+        collapsed: boolean;
+      };
+    }
   | AppServerPendingRequestNotification;

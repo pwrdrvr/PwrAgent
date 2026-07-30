@@ -65,6 +65,33 @@ describe("SqliteOverlayStore — directory pins", () => {
     ).resolves.toMatchObject({ pinnedRank: "2048" });
   });
 
+  it("persists the Directory threads disclosure without erasing pin state", async () => {
+    const directoryKey = "directory:/Users/me/code/PwrAgent";
+    await store.setDirectoryPin({
+      directoryKey,
+      pinnedRank: "2048",
+    });
+
+    await expect(
+      store.setDirectoryThreadsCollapsed({
+        directoryKey,
+        collapsed: true,
+      }),
+    ).resolves.toMatchObject({
+      pinnedRank: "2048",
+      directoryThreadsCollapsed: true,
+    });
+
+    await expect(
+      store.setDirectoryPin({
+        directoryKey,
+        pinnedRank: null,
+      }),
+    ).resolves.toMatchObject({
+      directoryThreadsCollapsed: true,
+    });
+  });
+
   it("returns undefined for a directoryKey with no overlay row", async () => {
     await expect(
       store.getDirectoryOverlayState({
@@ -130,6 +157,10 @@ describe("SqliteOverlayStore — directory pins", () => {
         directoryKey: "directory:/Users/me/code/PwrAgent",
         pinnedRank: "1024",
       });
+      await store.setDirectoryThreadsCollapsed({
+        directoryKey: "directory:/Users/me/code/PwrAgent",
+        collapsed: true,
+      });
       stateDb.close();
 
       const reopenedDb = StateDb.open(dbPath);
@@ -139,7 +170,10 @@ describe("SqliteOverlayStore — directory pins", () => {
           reopenedStore.getDirectoryOverlayState({
             directoryKey: "directory:/Users/me/code/PwrAgent",
           }),
-        ).resolves.toMatchObject({ pinnedRank: "1024" });
+        ).resolves.toMatchObject({
+          pinnedRank: "1024",
+          directoryThreadsCollapsed: true,
+        });
       } finally {
         reopenedDb.close();
       }

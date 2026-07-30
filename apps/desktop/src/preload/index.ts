@@ -86,6 +86,8 @@ import type {
   SetSubthreadsCollapsedResponse,
   SetDirectoryPinRequest,
   SetDirectoryPinResponse,
+  SetDirectoryThreadsCollapsedRequest,
+  SetDirectoryThreadsCollapsedResponse,
   SetThreadParentRequest,
   SetThreadParentResponse,
   SetThreadPinRequest,
@@ -401,6 +403,7 @@ import {
   NAVIGATION_SET_BROWSE_MODE_CHANNEL,
   NAVIGATION_SET_SUBTHREADS_COLLAPSED_CHANNEL,
   NAVIGATION_SET_DIRECTORY_PIN_CHANNEL,
+  NAVIGATION_SET_DIRECTORY_THREADS_COLLAPSED_CHANNEL,
   NAVIGATION_SET_THREAD_PARENT_CHANNEL,
   NAVIGATION_SET_THREAD_AGENT_CHANNEL,
   NAVIGATION_SET_THREAD_PIN_CHANNEL,
@@ -1171,6 +1174,13 @@ const desktopApi = Object.freeze({
   ): Promise<ReorderDirectoryPinsResponse> =>
     await ipcRenderer.invoke(
       NAVIGATION_REORDER_DIRECTORY_PINS_CHANNEL,
+      request,
+    ),
+  setDirectoryThreadsCollapsed: async (
+    request: SetDirectoryThreadsCollapsedRequest,
+  ): Promise<SetDirectoryThreadsCollapsedResponse> =>
+    await ipcRenderer.invoke(
+      NAVIGATION_SET_DIRECTORY_THREADS_COLLAPSED_CHANNEL,
       request,
     ),
   refreshThreadPullRequests: async (

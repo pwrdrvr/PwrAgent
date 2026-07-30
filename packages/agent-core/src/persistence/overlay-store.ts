@@ -666,6 +666,7 @@ export class OverlayStore {
     return await this.withData(async (data) => {
       const pinnedRank = params.pinnedRank?.trim();
       const nextState: DirectoryOverlayState = {
+        ...data.directoryOverlays[params.directoryKey],
         directoryKey: params.directoryKey,
         pinnedRank: pinnedRank || undefined,
       };
@@ -683,11 +684,27 @@ export class OverlayStore {
         const pinnedRank = String((index + 1) * 1024);
         pinnedRanks[directoryKey] = pinnedRank;
         data.directoryOverlays[directoryKey] = {
+          ...data.directoryOverlays[directoryKey],
           directoryKey,
           pinnedRank,
         };
       });
       return pinnedRanks;
+    });
+  }
+
+  async setDirectoryThreadsCollapsed(params: {
+    directoryKey: string;
+    collapsed: boolean;
+  }): Promise<DirectoryOverlayState> {
+    return await this.withData(async (data) => {
+      const nextState: DirectoryOverlayState = {
+        ...data.directoryOverlays[params.directoryKey],
+        directoryKey: params.directoryKey,
+        directoryThreadsCollapsed: params.collapsed,
+      };
+      data.directoryOverlays[params.directoryKey] = nextState;
+      return nextState;
     });
   }
 

@@ -271,9 +271,8 @@ function migrateRetainedBranchDriftPairs(
 /**
  * Migrate the directory overlay map (plan 2026-05-09-002). New in
  * version 6; pre-v6 stores get an empty `{}` from the parent
- * migrator. The shape is intentionally minimal — currently just
- * `pinnedRank` — so the migrator only validates the key + filters
- * malformed payloads.
+ * migrator. Validate each optional display preference so malformed
+ * payloads cannot leak into navigation snapshots.
  */
 function migrateDirectoryOverlays(
   raw: Record<string, unknown>,
@@ -288,7 +287,15 @@ function migrateDirectoryOverlays(
       typeof record.pinnedRank === "string" && record.pinnedRank.trim()
         ? record.pinnedRank
         : undefined;
-    result[directoryKey] = { directoryKey, pinnedRank };
+    const directoryThreadsCollapsed =
+      typeof record.directoryThreadsCollapsed === "boolean"
+        ? record.directoryThreadsCollapsed
+        : undefined;
+    result[directoryKey] = {
+      directoryKey,
+      pinnedRank,
+      directoryThreadsCollapsed,
+    };
   }
   return result;
 }

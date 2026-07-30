@@ -1180,6 +1180,35 @@ function updateDirectoryPinsInSnapshot(
   return changed ? { ...snapshot, directories } : snapshot;
 }
 
+function updateDirectoryThreadsCollapsedInSnapshot(
+  snapshot: NavigationSnapshot | undefined,
+  params: {
+    directoryKey: string;
+    collapsed: boolean;
+  },
+): NavigationSnapshot | undefined {
+  if (!snapshot) {
+    return snapshot;
+  }
+
+  let changed = false;
+  const directories = snapshot.directories.map((directory) => {
+    if (directory.key !== params.directoryKey) {
+      return directory;
+    }
+    if (directory.directoryThreadsCollapsed === params.collapsed) {
+      return directory;
+    }
+    changed = true;
+    return {
+      ...directory,
+      directoryThreadsCollapsed: params.collapsed,
+    };
+  });
+
+  return changed ? { ...snapshot, directories } : snapshot;
+}
+
 function markThreadSeenInSnapshot(
   snapshot: NavigationSnapshot | undefined,
   params: {
@@ -2321,6 +2350,10 @@ export function useThreadNavigation(
     pinned: boolean,
   ) => Promise<void>;
   reorderDirectoryPins: (directoryKeys: string[]) => Promise<void>;
+  setDirectoryThreadsCollapsed: (
+    directory: NavigationDirectorySummary,
+    collapsed: boolean,
+  ) => Promise<void>;
   snapshot?: NavigationSnapshot;
   threads: NavigationThreadSummary[];
 } {
@@ -3409,6 +3442,24 @@ export function useThreadNavigation(
           response: updateDirectoryPinsInSnapshot(current.response, {
             pinnedRanks,
           }),
+        }));
+        return;
+      }
+
+      if (method === "directory/threadsCollapsed/updated") {
+        const { directoryKey, collapsed } = event.notification.params as {
+          directoryKey: string;
+          collapsed: boolean;
+        };
+        setState((current) => ({
+          ...current,
+          response: updateDirectoryThreadsCollapsedInSnapshot(
+            current.response,
+            {
+              directoryKey,
+              collapsed,
+            },
+          ),
         }));
         return;
       }
@@ -5230,6 +5281,8 @@ export function useThreadNavigation(
   const setSubthreadsCollapsedRequest = desktopApi?.setSubthreadsCollapsed;
   const setDirectoryPinRequest = desktopApi?.setDirectoryPin;
   const reorderDirectoryPinsRequest = desktopApi?.reorderDirectoryPins;
+  const setDirectoryThreadsCollapsedRequest =
+    desktopApi?.setDirectoryThreadsCollapsed;
   const setThreadReaction = useCallback(
     async (
       thread: NavigationThreadSummary,
@@ -5586,6 +5639,48 @@ export function useThreadNavigation(
     [refresh, reorderDirectoryPinsRequest],
   );
 
+  const setDirectoryThreadsCollapsed = useCallback(
+    async (
+      directory: NavigationDirectorySummary,
+      collapsed: boolean,
+    ): Promise<void> => {
+      if (!setDirectoryThreadsCollapsedRequest) {
+        return;
+      }
+
+      setState((current) => ({
+        ...current,
+        response: updateDirectoryThreadsCollapsedInSnapshot(
+          current.response,
+          {
+            directoryKey: directory.key,
+            collapsed,
+          },
+        ),
+      }));
+
+      try {
+        const result = await setDirectoryThreadsCollapsedRequest({
+          directoryKey: directory.key,
+          collapsed,
+        });
+        setState((current) => ({
+          ...current,
+          response: updateDirectoryThreadsCollapsedInSnapshot(
+            current.response,
+            {
+              directoryKey: result.directoryKey,
+              collapsed: result.collapsed,
+            },
+          ),
+        }));
+      } catch {
+        await refresh();
+      }
+    },
+    [refresh, setDirectoryThreadsCollapsedRequest],
+  );
+
   const updateThreadExecutionMode = useCallback(
     async (
       thread: NavigationThreadSummary,
@@ -5861,6 +5956,7 @@ export function useThreadNavigation(
     setSubthreadsCollapsed,
     setDirectoryPin,
     reorderDirectoryPins,
+    setDirectoryThreadsCollapsed,
     snapshot: state.response,
     threads,
   };

@@ -7358,6 +7358,55 @@ describe("useThreadNavigation", () => {
     });
   });
 
+  it("persists and optimistically applies the Directory threads disclosure", async () => {
+    const directory = {
+      key: "directory:/Users/me/repos/PwrAgent",
+      kind: "directory" as const,
+      label: "PwrAgent",
+      path: "/Users/me/repos/PwrAgent",
+      threadKeys: [],
+      needsAttentionCount: 0,
+    };
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [directory],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const setDirectoryThreadsCollapsed: NonNullable<
+      DesktopApi["setDirectoryThreadsCollapsed"]
+    > = vi.fn(async (request) => ({
+      directoryKey: request.directoryKey,
+      collapsed: request.collapsed,
+    }));
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+      setDirectoryThreadsCollapsed,
+    };
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    await act(async () => {
+      await result.current.setDirectoryThreadsCollapsed(directory, true);
+    });
+
+    expect(setDirectoryThreadsCollapsed).toHaveBeenCalledWith({
+      directoryKey: directory.key,
+      collapsed: true,
+    });
+    expect(result.current.directories[0]?.directoryThreadsCollapsed).toBe(true);
+  });
+
   describe("pickAndRegisterDirectory (issue #223)", () => {
     const launchpadDefaults = {
       backend: "codex" as const,

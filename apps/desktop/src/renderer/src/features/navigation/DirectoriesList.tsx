@@ -89,6 +89,10 @@ type DirectoriesListProps = {
     pinned: boolean,
   ) => Promise<void>;
   onReorderDirectoryPins?: (directoryKeys: string[]) => Promise<void>;
+  onSetDirectoryThreadsCollapsed?: (
+    directory: NavigationDirectorySummary,
+    collapsed: boolean,
+  ) => Promise<void>;
   /**
    * Opens the directory context menu at the cursor position. Sidebar
    * owns the menu (so it can escape the sidebar's scroll container,
@@ -632,6 +636,12 @@ export function DirectoriesList(props: DirectoriesListProps) {
     );
     const unpinnedExpanded =
       unpinnedExpandedByKey[directory.key] ?? selectedUnpinnedInOverflow;
+    // This preference applies only when there is a pinned section to
+    // preserve. Without pinned threads, hiding every row would make an
+    // expanded directory look empty and remove the disclosure control.
+    const directoryThreadsCollapsed =
+      directoryPinnedThreads.length > 0 &&
+      directory.directoryThreadsCollapsed === true;
     // Render one unpinned thread row. Shared by the always-shown capped
     // slice and the overflow slice so the "Show more / Show less" toggle
     // sits at a fixed pivot between them — collapsing never makes the
@@ -1055,14 +1065,24 @@ export function DirectoriesList(props: DirectoriesListProps) {
 
                     {directoryPinnedThreads.length > 0 &&
                     directoryUnpinnedThreads.length > 0 ? (
-                      <div
+                      <button
+                        type="button"
                         className={`recents-pinned-divider directory-row__thread-divider${
                           dividerDropTarget === directory.key
                             ? " is-drop-target"
                             : ""
                         }`}
-                        role="separator"
-                        aria-label={`Directory threads for ${directory.label}`}
+                        aria-expanded={!directoryThreadsCollapsed}
+                        aria-label={`${
+                          directoryThreadsCollapsed ? "Show" : "Hide"
+                        } directory threads for ${directory.label}`}
+                        disabled={!props.onSetDirectoryThreadsCollapsed}
+                        onClick={() => {
+                          void props.onSetDirectoryThreadsCollapsed?.(
+                            directory,
+                            !directoryThreadsCollapsed,
+                          );
+                        }}
                         onDragOver={(event) => {
                           event.preventDefault();
                           if (
@@ -1093,12 +1113,27 @@ export function DirectoriesList(props: DirectoriesListProps) {
                           );
                         }}
                       >
-                        <span>Directory threads</span>
-                      </div>
+                        <span className="directory-row__thread-divider-label">
+                          <span>Directory threads</span>
+                          {directoryThreadsCollapsed ? (
+                            <span className="directory-row__thread-divider-count">
+                              {directoryUnpinnedThreads.length}
+                            </span>
+                          ) : null}
+                          <span
+                            aria-hidden="true"
+                            className={`directory-row__thread-divider-chevron${
+                              directoryThreadsCollapsed ? "" : " is-open"
+                            }`}
+                          />
+                        </span>
+                      </button>
                     ) : null}
 
-                    {cappedUnpinnedThreads.map(renderUnpinnedRow)}
-                    {hiddenUnpinnedCount > 0 ? (
+                    {directoryThreadsCollapsed
+                      ? null
+                      : cappedUnpinnedThreads.map(renderUnpinnedRow)}
+                    {!directoryThreadsCollapsed && hiddenUnpinnedCount > 0 ? (
                       <button
                         type="button"
                         className="directory-row__show-more"
@@ -1115,7 +1150,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                           : `Show ${hiddenUnpinnedCount} more`}
                       </button>
                     ) : null}
-                    {unpinnedExpanded
+                    {!directoryThreadsCollapsed && unpinnedExpanded
                       ? overflowUnpinnedThreads.map(renderUnpinnedRow)
                       : null}
                   </div>
