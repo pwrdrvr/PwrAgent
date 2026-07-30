@@ -35,6 +35,7 @@ type CodexPathMode = "auto" | "specified";
 const UNSPECIFIED_SOURCE_MODEL_KEY = "\0unspecified";
 
 type ThreadMigrationSourceGroup = {
+  acknowledgedCurrentRevisionCount: number;
   count: number;
   key: string;
   label: string;
@@ -43,11 +44,38 @@ type ThreadMigrationSourceGroup = {
 
 type PendingThreadMigration = {
   backend: BackendSummary;
+  justScheduled?: boolean;
   model: string;
   reasoningEffort?: string;
   selectedSourceKeys: string[];
   sourceGroups: ThreadMigrationSourceGroup[];
 };
+
+function migrationMatchesSelection(
+  migration: DesktopProviderThreadModelMigration | undefined,
+  pending: PendingThreadMigration,
+): boolean {
+  if (
+    !migration
+    || migration.model !== pending.model
+    || migration.reasoningEffort !== pending.reasoningEffort
+    || migration.sourceModels === undefined
+  ) {
+    return false;
+  }
+  const selectedKeys = new Set(pending.selectedSourceKeys);
+  const selectedModels = pending.sourceGroups
+    .filter((group) => group.model && selectedKeys.has(group.key))
+    .map((group) => group.model as string)
+    .sort();
+  const migrationModels = [...migration.sourceModels].sort();
+  return (
+    selectedModels.length === migrationModels.length
+    && selectedModels.every((model, index) => model === migrationModels[index])
+    && selectedKeys.has(UNSPECIFIED_SOURCE_MODEL_KEY)
+      === (migration.includeThreadsWithoutModel === true)
+  );
+}
 
 export function ModelsSettings(props: {
   cachedBackends?: BackendSummary[];
@@ -541,28 +569,50 @@ function ProviderModelDefaultsSettings(props: {
         option.label ?? option.id,
       ]),
     );
-    const sourceCounts = new Map<string, number>();
+    const currentMigration = props.migrations[backend.kind];
+    const sourceCounts = new Map<string, {
+      acknowledgedCurrentRevisionCount: number;
+      count: number;
+    }>();
     for (const thread of threads) {
       const key = thread.model?.trim() || UNSPECIFIED_SOURCE_MODEL_KEY;
-      sourceCounts.set(key, (sourceCounts.get(key) ?? 0) + 1);
+      const current = sourceCounts.get(key) ?? {
+        acknowledgedCurrentRevisionCount: 0,
+        count: 0,
+      };
+      sourceCounts.set(key, {
+        acknowledgedCurrentRevisionCount:
+          current.acknowledgedCurrentRevisionCount
+          + (
+            thread.modelMigrationRevision === currentMigration?.revision
+              ? 1
+              : 0
+          ),
+        count: current.count + 1,
+      });
     }
     const sourceGroups = [...sourceCounts.entries()]
-      .map(([key, count]): ThreadMigrationSourceGroup => {
+      .map(([key, counts]): ThreadMigrationSourceGroup => {
         if (key === UNSPECIFIED_SOURCE_MODEL_KEY) {
           return {
-            count,
+            ...counts,
             key,
             label: "Provider default / unknown",
           };
         }
         return {
-          count,
+          ...counts,
           key,
           label: modelLabels.get(key) ?? key,
           model: key,
         };
       })
       .sort((left, right) => left.label.localeCompare(right.label));
+    const currentMigrationTargetsSelection =
+      currentMigration?.model === model
+      && currentMigration.reasoningEffort === reasoningEffort
+      && currentMigration.sourceModels !== undefined;
+    const currentSourceModels = new Set(currentMigration?.sourceModels ?? []);
     setStatus(undefined);
     setPendingApply(undefined);
     setPendingFastAction(undefined);
@@ -570,9 +620,17 @@ function ProviderModelDefaultsSettings(props: {
       backend,
       model,
       reasoningEffort,
-      selectedSourceKeys: sourceGroups
-        .filter((group) => group.model !== model)
-        .map((group) => group.key),
+      selectedSourceKeys: currentMigrationTargetsSelection
+        ? sourceGroups
+            .filter((group) =>
+              group.model
+                ? currentSourceModels.has(group.model)
+                : currentMigration?.includeThreadsWithoutModel === true
+            )
+            .map((group) => group.key)
+        : sourceGroups
+            .filter((group) => group.model !== model)
+            .map((group) => group.key),
       sourceGroups,
     });
   };
@@ -588,6 +646,19 @@ function ProviderModelDefaultsSettings(props: {
       0,
     );
     if (threadCount === 0) return;
+    if (
+      migrationMatchesSelection(
+        props.migrations[pendingMigration.backend.kind],
+        pendingMigration,
+      )
+    ) {
+      setStatus(
+        `This ${pendingMigration.backend.label} migration is already scheduled. `
+        + "Pending threads will adopt it when next opened.",
+      );
+      setPendingMigration(undefined);
+      return;
+    }
     setApplying(true);
     try {
       const createdAt = Date.now();
@@ -613,11 +684,22 @@ function ProviderModelDefaultsSettings(props: {
         return;
       }
       setStatus(
-        `${threadCount} ${pendingMigration.backend.label} thread${
+        `Scheduled ${threadCount} ${pendingMigration.backend.label} thread${
           threadCount === 1 ? "" : "s"
-        } will adopt ${pendingMigration.model} when next opened.`,
+        } to adopt ${pendingMigration.model} when next opened.`,
       );
-      setPendingMigration(undefined);
+      setPendingMigration((current) =>
+        current
+          ? {
+              ...current,
+              justScheduled: true,
+              sourceGroups: current.sourceGroups.map((group) => ({
+                ...group,
+                acknowledgedCurrentRevisionCount: 0,
+              })),
+            }
+          : current,
+      );
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error));
     } finally {
@@ -776,12 +858,15 @@ function ProviderModelDefaultsSettings(props: {
       {pendingMigration ? (
         <ThreadMigrationDialog
           applying={applying}
+          currentMigration={props.migrations[pendingMigration.backend.kind]}
           migration={pendingMigration}
           onCancel={() => setPendingMigration(undefined)}
           onConfirm={() => void createThreadMigration()}
           onSelectionChange={(selectedSourceKeys) => {
             setPendingMigration((current) =>
-              current ? { ...current, selectedSourceKeys } : current,
+              current
+                ? { ...current, justScheduled: false, selectedSourceKeys }
+                : current,
             );
           }}
         />
@@ -792,6 +877,7 @@ function ProviderModelDefaultsSettings(props: {
 
 function ThreadMigrationDialog(props: {
   applying: boolean;
+  currentMigration?: DesktopProviderThreadModelMigration;
   migration: PendingThreadMigration;
   onCancel: () => void;
   onConfirm: () => void;
@@ -807,6 +893,27 @@ function ThreadMigrationDialog(props: {
       count + (selectedSourceKeys.has(group.key) ? group.count : 0),
     0,
   );
+  const alreadyScheduled =
+    props.migration.justScheduled === true
+    || migrationMatchesSelection(props.currentMigration, props.migration);
+  const selectedAcknowledgedThreadCount =
+    props.migration.sourceGroups.reduce(
+      (count, group) =>
+        count
+        + (
+          selectedSourceKeys.has(group.key)
+            ? group.acknowledgedCurrentRevisionCount
+            : 0
+        ),
+      0,
+    );
+  const acknowledgedThreadCount = props.migration.sourceGroups.reduce(
+    (count, group) =>
+      count + group.acknowledgedCurrentRevisionCount,
+    0,
+  );
+  const pendingThreadCount =
+    Math.max(0, selectedThreadCount - selectedAcknowledgedThreadCount);
 
   useEffect(() => {
     dialogRef.current?.focus();
@@ -867,17 +974,27 @@ function ThreadMigrationDialog(props: {
           {props.migration.reasoningEffort
             ? ` with ${props.migration.reasoningEffort} reasoning`
             : ""}
-          . Each selected thread changes once when next opened. Newer threads and
-          unselected models stay unchanged.
+          . This schedules a one-time change when each selected thread is next
+          opened. Newer threads and unselected models stay unchanged.
         </p>
+        {alreadyScheduled ? (
+          <p className="settings-thread-migration-dialog__scheduled">
+            This exact migration is already scheduled. {pendingThreadCount} thread
+            {pendingThreadCount === 1 ? " is" : "s are"} still pending;{" "}
+            {acknowledgedThreadCount} already acknowledged this revision.
+          </p>
+        ) : null}
         <div className="settings-thread-migration-dialog__toolbar">
           <span>
-            {selectedThreadCount} of{" "}
+            {alreadyScheduled
+              ? `${pendingThreadCount} pending`
+              : `${selectedThreadCount} selected`}{" "}
+            of{" "}
             {props.migration.sourceGroups.reduce(
               (count, group) => count + group.count,
               0,
             )}{" "}
-            threads selected
+            threads
           </span>
           <div className="settings-inline-actions">
             <button
@@ -951,15 +1068,21 @@ function ThreadMigrationDialog(props: {
           </button>
           <button
             className="button button--primary"
-            disabled={props.applying || selectedThreadCount === 0}
+            disabled={
+              props.applying
+              || selectedThreadCount === 0
+              || alreadyScheduled
+            }
             type="button"
             onClick={props.onConfirm}
           >
             {props.applying
               ? "Creating migration…"
-              : `Update ${selectedThreadCount} thread${
-                  selectedThreadCount === 1 ? "" : "s"
-                }`}
+              : alreadyScheduled
+                ? "Already scheduled"
+                : `Schedule ${selectedThreadCount} thread${
+                    selectedThreadCount === 1 ? "" : "s"
+                  }`}
           </button>
         </div>
       </div>
@@ -1124,7 +1247,7 @@ function ProviderModelDefaultField(props: {
                   selectedReasoning || undefined,
                 )}
               >
-                Apply to existing threads…
+                Schedule existing threads…
               </button>
               <button
                 className="button button--ghost"

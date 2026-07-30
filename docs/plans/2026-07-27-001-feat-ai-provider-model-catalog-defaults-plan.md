@@ -99,6 +99,7 @@ The surrounding relationships are current context, not a committed roadmap:
 **Adopt a new baseline across existing threads**
 
 - R24. AI Providers must offer an explicit action that previews existing provider threads grouped by their current model and count, supports click/Command-click toggles plus Shift-click range selection, and creates a confirmed model/reasoning migration revision for only the selected source-model groups.
+- R24a. Creating a migration schedules the selected threads to change when next opened; the UI must show pending and acknowledged state for an identical saved migration and must not create duplicate revisions unless the destination, reasoning, or selected source-model set changes.
 - R25. A matching thread uses a selected source model, was created before the current migration, and has not yet acknowledged its revision. It must adopt the migration's model and reasoning once when next opened, before its next turn can start. Threads using unselected source models or created after the migration acknowledge it without being changed.
 - R26. A manual model or reasoning change made after a thread acknowledges the current migration must remain authoritative for that migration revision.
 - R27. Creating a later migration revision must make every matching existing thread eligible again, including threads manually customized before the later migration; each thread applies each revision at most once.
@@ -212,6 +213,11 @@ flowchart TB
   - **Given:** The migration dialog lists GPT-5.4, GPT-5.5, GPT-5.6-Sol, and GPT-5.6-Terra with their thread counts.
   - **When:** The operator selects GPT-5.4 and GPT-5.5 but leaves both GPT-5.6 models unselected before creating a GPT-5.6-Sol/high migration.
   - **Then:** Only threads currently using GPT-5.4 or GPT-5.5 adopt the migration; GPT-5.6-Sol and GPT-5.6-Terra threads acknowledge the revision without changing.
+- AE10b. Identical migration is not rescheduled
+  - **Covers R24-R28.**
+  - **Given:** A GPT-5.5 to GPT-5.6-Sol/high migration is already saved and some selected threads have not yet opened.
+  - **When:** The operator reopens the migration dialog without changing the destination, reasoning, or source-model selection.
+  - **Then:** The dialog reports how many threads are pending and how many acknowledged the revision, labels the action as already scheduled, and does not create another revision.
 - AE11. Post-migration manual choice sticks
   - **Covers R26-R27.**
   - **Given:** A thread acknowledged the current GPT-5.6-Sol/high migration and the operator then changes it to GPT-5.6-Terra/xhigh.

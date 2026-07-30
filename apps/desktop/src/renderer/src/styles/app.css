@@ -7418,6 +7418,14 @@ textarea,
   outline: none;
 }
 
+.settings-confirm-dialog p.settings-thread-migration-dialog__scheduled {
+  padding: 8px 10px;
+  border: 1px solid var(--accent-border);
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
 .settings-thread-migration-dialog__toolbar {
   display: flex;
   align-items: center;

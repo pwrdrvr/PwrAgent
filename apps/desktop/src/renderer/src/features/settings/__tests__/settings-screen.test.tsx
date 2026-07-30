@@ -1789,7 +1789,7 @@ describe("SettingsScreen", () => {
       updateDirectoryLaunchpad,
     } as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"];
 
-    render(
+    const { rerender } = render(
       <SettingsScreen
         desktopApi={desktopApi}
         initialSection="models"
@@ -1848,13 +1848,13 @@ describe("SettingsScreen", () => {
     ).toHaveClass("settings-select--chip");
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Apply to existing threads…" }),
+      screen.getByRole("button", { name: "Schedule existing threads…" }),
     );
     const migrationDialog = await screen.findByRole("dialog", {
       name: "Choose Codex threads to update",
     });
     expect(
-      within(migrationDialog).getByText("2 of 3 threads selected"),
+      within(migrationDialog).getByText("2 selected of 3 threads"),
     ).toBeInTheDocument();
     const terraGroup = within(migrationDialog).getByRole("option", {
       name: /GPT-5.6-Terra.*1 thread/,
@@ -1871,25 +1871,25 @@ describe("SettingsScreen", () => {
       within(migrationDialog).getByRole("button", { name: "Clear" }),
     );
     expect(
-      within(migrationDialog).getByText("0 of 3 threads selected"),
+      within(migrationDialog).getByText("0 selected of 3 threads"),
     ).toBeInTheDocument();
     fireEvent.click(oldModelGroup);
     fireEvent.click(destinationGroup, { shiftKey: true });
     expect(
-      within(migrationDialog).getByText("2 of 3 threads selected"),
+      within(migrationDialog).getByText("2 selected of 3 threads"),
     ).toBeInTheDocument();
     fireEvent.click(
       within(migrationDialog).getByRole("button", { name: "Clear" }),
     );
     fireEvent.click(oldModelGroup);
     expect(
-      within(migrationDialog).getByText("1 of 3 threads selected"),
+      within(migrationDialog).getByText("1 selected of 3 threads"),
     ).toBeInTheDocument();
     expect(terraGroup).toHaveAttribute("aria-selected", "false");
     expect(oldModelGroup).toHaveAttribute("aria-selected", "true");
     fireEvent.click(
       within(migrationDialog).getByRole("button", {
-        name: "Update 1 thread",
+        name: "Schedule 1 thread",
       }),
     );
     await waitFor(() => {
@@ -1907,6 +1907,55 @@ describe("SettingsScreen", () => {
         },
       });
     });
+    expect(
+      within(migrationDialog).getByText(/This exact migration is already scheduled/),
+    ).toHaveTextContent(
+      "1 thread is still pending; 0 already acknowledged this revision.",
+    );
+    expect(
+      within(migrationDialog).getByRole("button", {
+        name: "Already scheduled",
+      }),
+    ).toBeDisabled();
+    fireEvent.click(
+      within(migrationDialog).getByRole("button", { name: "Cancel" }),
+    );
+
+    snapshot.models.providerThreadMigrations = {
+      codex: {
+        revision: "saved-migration",
+        model: "gpt-5.6-sol",
+        reasoningEffort: "high",
+        sourceModels: ["gpt-5.5"],
+        createdAt: Date.now(),
+      },
+    };
+    rerender(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        initialSection="models"
+        settings={settings}
+      />,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Schedule existing threads…" }),
+    );
+    const scheduledDialog = await screen.findByRole("dialog", {
+      name: "Choose Codex threads to update",
+    });
+    expect(
+      within(scheduledDialog).getByText(/This exact migration is already scheduled/),
+    ).toHaveTextContent(
+      "1 thread is still pending; 0 already acknowledged this revision.",
+    );
+    expect(
+      within(scheduledDialog).getByRole("button", {
+        name: "Already scheduled",
+      }),
+    ).toBeDisabled();
+    fireEvent.click(
+      within(scheduledDialog).getByRole("button", { name: "Cancel" }),
+    );
 
     fireEvent.click(
       screen.getByRole("button", { name: "Turn Fast off everywhere" }),
