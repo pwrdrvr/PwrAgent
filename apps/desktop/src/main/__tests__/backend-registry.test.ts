@@ -9613,8 +9613,7 @@ command = "pnpm test"
 
   it("refreshes stale thread environment actions before running a command", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-thread-env-run-"));
-    const outputPath = path.join(root, "action.txt");
-    const shellOutputPath = outputPath.replace(/\\/g, "/");
+    const expectedActionCommand = `node -e "process.stdout.write('action-ran')"`;
     await mkdir(path.join(root, ".codex", "environments"), { recursive: true });
     await writeFile(
       path.join(root, ".codex", "environments", "environment.toml"),
@@ -9624,7 +9623,7 @@ name = "PwrAgnt"
 
 [[actions]]
 name = "Dev - Messaging"
-command = '''node -e "require('node:fs').writeFileSync(process.argv[1], 'action-ran')" ${JSON.stringify(shellOutputPath)}'''
+command = '''${expectedActionCommand}'''
 `,
       "utf8",
     );
@@ -9646,6 +9645,7 @@ command = '''node -e "require('node:fs').writeFileSync(process.argv[1], 'action-
         },
       },
     });
+    let commandParams: Parameters<CodexEnvironmentCommandRunner>[0] | undefined;
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({
         initializeResult: { methods: ["thread/list"] },
@@ -9655,6 +9655,10 @@ command = '''node -e "require('node:fs').writeFileSync(process.argv[1], 'action-
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
       overlayStore,
+      codexEnvironmentCommandRunner: vi.fn(async (params) => {
+        commandParams = params;
+        return { pid: 12345 };
+      }),
     });
 
     try {
@@ -9675,13 +9679,10 @@ command = '''node -e "require('node:fs').writeFileSync(process.argv[1], 'action-
           ],
         },
       });
-      await expectEventually(async () => await readFile(outputPath, "utf8"), "action-ran");
-      // Gate cleanup on the detached child fully exiting (see helper) so the
-      // temp dir it spawned into is no longer locked when we remove it.
-      await waitForDetachedActionRunToExit(overlayStore, {
-        backend: "codex",
-        threadId: "thread-1",
-        actionId: "dev-messaging",
+      expect(commandParams).toMatchObject({
+        command: expectedActionCommand,
+        cwd: root,
+        mode: "detach",
       });
     } finally {
       await registry.close();
