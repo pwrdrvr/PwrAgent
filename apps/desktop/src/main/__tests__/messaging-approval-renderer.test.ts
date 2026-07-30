@@ -96,6 +96,50 @@ describe("buildApprovalIntent", () => {
     );
   });
 
+  it.each([
+    {
+      label: "URL mode without an elicitation id",
+      params: {
+        serverName: "github",
+        mode: "url" as const,
+        _meta: null,
+        message: "Reconnect GitHub to restore access.",
+        url: "https://example.test/oauth/start?state=opaque",
+      },
+    },
+    {
+      label: "form mode without a requested schema",
+      params: {
+        serverName: "example",
+        mode: "form" as const,
+        _meta: null,
+        message: "Provide deployment details.",
+      },
+    },
+  ])("does not offer Allow for malformed MCP requests: $label", ({ params }) => {
+    const intent = buildApprovalIntent({
+      id: "mcp-malformed-1",
+      createdAt: 1000,
+      request: {
+        method: "mcpServer/elicitation/request",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          requestId: "request-mcp-malformed-1",
+          ...params,
+        },
+      },
+    });
+
+    expect(intent.decisions.map((decision) => decision.decision)).toEqual([
+      "decline",
+      "cancel",
+    ]);
+    expect(intent.body).toContain(
+      "must be completed in PwrAgent desktop",
+    );
+  });
+
   it("renders command approvals with prompt, command code block, and conservative choices", () => {
     const intent = buildApprovalIntent({
       id: "approval-1",

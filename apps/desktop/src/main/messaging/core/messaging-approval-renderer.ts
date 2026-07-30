@@ -142,11 +142,13 @@ function mcpElicitationContext(
   if (!isMcpElicitationRequest(request)) {
     return undefined;
   }
-  if (request.params.mode === "url" && request.params.url) {
-    return `Open login: ${request.params.url}`;
-  }
   if (!mcpElicitationCanAcceptWithoutFormInput(request)) {
-    return "This request includes fields that must be completed in PwrAgent desktop. You can still decline or cancel it here.";
+    return request.params.mode === "url"
+      ? "This MCP login request is incomplete and must be completed in PwrAgent desktop. You can still decline or cancel it here."
+      : "This request includes fields that must be completed in PwrAgent desktop. You can still decline or cancel it here.";
+  }
+  if (request.params.mode === "url") {
+    return `Open login: ${request.params.url}`;
   }
   return request.params.serverName
     ? `MCP server: ${request.params.serverName}`
@@ -157,9 +159,26 @@ function mcpElicitationCanAcceptWithoutFormInput(
   request: AppServerMcpElicitationRequestNotification,
 ): boolean {
   if (request.params.mode === "url") {
-    return Boolean(request.params.url);
+    return (
+      hasNonEmptyString(request.params.url)
+      && hasNonEmptyString(request.params.elicitationId)
+    );
   }
-  return (request.params.requestedSchema?.required?.length ?? 0) === 0;
+  const schema = request.params.requestedSchema;
+  if (
+    !schema
+    || typeof schema !== "object"
+    || Array.isArray(schema)
+    || schema.type !== "object"
+  ) {
+    return false;
+  }
+  const required = Array.isArray(schema.required) ? schema.required : [];
+  return required.length === 0;
+}
+
+function hasNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
 }
 
 function messagingDecisionFromPendingAction(
