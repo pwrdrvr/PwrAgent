@@ -6541,7 +6541,7 @@ describe("CodexAppServerClient", () => {
       },
       helperThreadId: "thread-title-helper",
       helperTurnId: "turn-title-helper",
-      model: "gpt-5.4-mini",
+      model: "gpt-5.6-luna",
       reasoningEffort: "low",
       tokenUsage: {
         inputTokens: 100,
@@ -6570,7 +6570,7 @@ describe("CodexAppServerClient", () => {
           cwd: titleHelperWorkspace,
           runtimeWorkspaceRoots: [titleHelperWorkspace],
           ephemeral: true,
-          model: "gpt-5.4-mini",
+          model: "gpt-5.6-luna",
           serviceTier: null,
           config: {
             web_search: "disabled",
@@ -6603,7 +6603,7 @@ describe("CodexAppServerClient", () => {
         method: "turn/start",
         params: expect.objectContaining({
           threadId: "thread-title-helper",
-          model: "gpt-5.4-mini",
+          model: "gpt-5.6-luna",
           serviceTier: null,
           effort: "low",
           outputSchema: expect.objectContaining({
@@ -6697,7 +6697,7 @@ describe("CodexAppServerClient", () => {
       },
       helperThreadId: "thread-title-helper",
       helperTurnId: "turn-title-helper",
-      model: "gpt-5.4-mini",
+      model: "gpt-5.6-luna",
       reasoningEffort: "low",
     });
 
@@ -6762,7 +6762,7 @@ describe("CodexAppServerClient", () => {
       },
       helperThreadId: "thread-title-helper",
       helperTurnId: "turn-title-helper",
-      model: "gpt-5.4-mini",
+      model: "gpt-5.6-luna",
       reasoningEffort: "low",
     });
 
