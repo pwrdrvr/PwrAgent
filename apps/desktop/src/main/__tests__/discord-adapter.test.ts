@@ -1063,6 +1063,8 @@ describe("DiscordAdapter", () => {
             username: "ada_new",
           },
           platform: "discord",
+          sourceUrl:
+            `https://discord.com/channels/${DISCORD_GUILD_ID}/${DISCORD_CHANNEL_ID}/${DISCORD_MESSAGE_ID}`,
           surface: {
             id: DISCORD_CHANNEL_ID,
             kind: "channel",

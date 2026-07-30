@@ -1,4 +1,11 @@
-import { memo, useMemo, useState, type ReactNode } from "react";
+import {
+  memo,
+  useMemo,
+  useState,
+  type FocusEvent,
+  type MouseEvent,
+  type ReactNode,
+} from "react";
 import type {
   DesktopApplicationsSnapshot,
   AppServerSkillSummary,
@@ -14,6 +21,7 @@ import {
   MESSAGING_PLATFORM_ICONS,
 } from "../../lib/messaging-platform-branding";
 import { useThreadLinks, type ResolvedThreadLink } from "../../lib/thread-links";
+import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { ThreadChip } from "./ThreadChip";
 import { TranscriptImage } from "./TranscriptImage";
 import { ThreadMarkdown } from "./ThreadMarkdown";
@@ -516,6 +524,7 @@ function renderMessageHeader(params: {
 function MessagingOriginChip(props: {
   origin: NonNullable<AppServerThreadMessageOrigin["messaging"]>;
 }) {
+  const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
   const Icon = MESSAGING_PLATFORM_ICONS[props.origin.platform];
   const platform = formatMessagingPlatformName(props.origin.platform);
   const surface = formatMessagingOriginSurface(props.origin);
@@ -526,13 +535,12 @@ function MessagingOriginChip(props: {
       : props.origin.actor.phoneNumber?.trim()
         || props.origin.actor.platformUserId);
   const description = `${platform}: ${surface} · ${actor}`;
-
-  return (
-    <span
-      aria-label={description}
-      className="chip transcript-message__messaging-origin"
-      title={description}
-    >
+  const sourceUrl = safeMessagingSourceUrl(props.origin.sourceUrl);
+  const tooltipText = sourceUrl
+    ? `${description}\nOpen in ${platform}`
+    : description;
+  const content = (
+    <>
       <span
         aria-hidden="true"
         className="transcript-message__messaging-platform"
@@ -555,8 +563,51 @@ function MessagingOriginChip(props: {
         ·
       </span>
       <span className="transcript-message__messaging-actor">{actor}</span>
-    </span>
+    </>
   );
+  const sharedProps = {
+    "aria-label": description,
+    className: "chip transcript-message__messaging-origin",
+    onBlur: tooltip.hide,
+    onFocus: (event: FocusEvent<HTMLElement>) =>
+      tooltip.show(event.currentTarget, tooltipText),
+    onMouseEnter: (event: MouseEvent<HTMLElement>) =>
+      tooltip.show(event.currentTarget, tooltipText),
+    onMouseLeave: tooltip.hide,
+  };
+
+  return (
+    <>
+      {sourceUrl ? (
+        <a
+          {...sharedProps}
+          href={sourceUrl}
+          onClick={tooltip.hide}
+          rel="noreferrer"
+          target="_blank"
+        >
+          {content}
+        </a>
+      ) : (
+        <span {...sharedProps} tabIndex={0}>
+          {content}
+        </span>
+      )}
+      {tooltip.tooltipNode}
+    </>
+  );
+}
+
+function safeMessagingSourceUrl(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "https:" ? parsed.toString() : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function formatMessagingOriginSurface(

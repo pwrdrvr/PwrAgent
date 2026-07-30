@@ -98,6 +98,10 @@ export type SlackApi = {
     limit?: number;
     ts: string;
   }): Promise<SlackThreadMessageInfo[]>;
+  getPermalink?(params: {
+    channel: string;
+    messageTs: string;
+  }): Promise<string | undefined>;
   deleteMessage(params: { channel: string; ts: string }): Promise<void>;
   downloadFile(params: { url: string; maxBytes: number }): Promise<Uint8Array>;
   filesInfo(params: { file: string }): Promise<SlackFileInfo | undefined>;
@@ -858,6 +862,8 @@ export class SlackAdapter implements SlackProviderAdapter {
       teamId: ids.teamId,
     })) return;
 
+    const sourceUrl = await this.sourceUrlForSlackMessage(ids);
+
     if (event.files?.length) {
       await this.listener({
         id: this.newEventId("slack-media"),
@@ -866,6 +872,7 @@ export class SlackAdapter implements SlackProviderAdapter {
         channel,
         receivedAt: this.now(),
         routingState,
+        sourceUrl,
         ...(isMention ? { botMention: true } : {}),
         text: text || undefined,
         disposition: "available",
@@ -882,6 +889,7 @@ export class SlackAdapter implements SlackProviderAdapter {
         channel,
         receivedAt: this.now(),
         routingState,
+        sourceUrl,
         ...(isMention ? { botMention: true } : {}),
         command: command.command,
         args: command.args,
@@ -898,9 +906,32 @@ export class SlackAdapter implements SlackProviderAdapter {
       channel,
       receivedAt: this.now(),
       routingState,
+      sourceUrl,
       ...(isMention ? { botMention: true } : {}),
       text,
     });
+  }
+
+  private async sourceUrlForSlackMessage(ids: {
+    channelId: string;
+    teamId?: string;
+    ts: string;
+  }): Promise<string> {
+    const fallback = slackConversationUrl(ids.channelId, ids.teamId);
+    if (!this.api.getPermalink) {
+      return fallback;
+    }
+    try {
+      return (await this.api.getPermalink({
+        channel: ids.channelId,
+        messageTs: ids.ts,
+      })) ?? fallback;
+    } catch {
+      this.logger.debug?.(
+        "slack inbound permalink lookup failed; using channel link",
+      );
+      return fallback;
+    }
   }
 
   private async handleBlockAction(body: SlackBlockActionPayload): Promise<void> {
@@ -988,6 +1019,7 @@ export class SlackAdapter implements SlackProviderAdapter {
         id: ids.ts,
         state: routingState,
       },
+      sourceUrl: await this.sourceUrlForSlackMessage(ids),
       actionId: record.actionId,
       ...(record.value !== undefined ? { value: record.value } : {}),
     });
@@ -1039,6 +1071,7 @@ export class SlackAdapter implements SlackProviderAdapter {
       channel,
       receivedAt: this.now(),
       routingState,
+      sourceUrl: slackConversationUrl(ids.channelId, ids.teamId),
       command,
       args,
       rawText: [body.command, body.text].filter(Boolean).join(" "),
@@ -2197,6 +2230,15 @@ export function createSlackApi(botToken: string): SlackApi {
       const response = await client.files.info(params);
       return response.file as SlackFileInfo | undefined;
     },
+    async getPermalink(params) {
+      const response = await client.chat.getPermalink({
+        channel: params.channel,
+        message_ts: params.messageTs,
+      });
+      return typeof response.permalink === "string"
+        ? response.permalink
+        : undefined;
+    },
     async postMessage(params) {
       return (await client.chat.postMessage(
         params as unknown as Parameters<typeof client.chat.postMessage>[0],
@@ -2246,6 +2288,15 @@ function hostFromUrl(url: string | undefined): string | undefined {
   } catch {
     return url;
   }
+}
+
+function slackConversationUrl(channelId: string, teamId?: string): string {
+  const url = new URL("https://slack.com/app_redirect");
+  url.searchParams.set("channel", channelId);
+  if (teamId) {
+    url.searchParams.set("team", teamId);
+  }
+  return url.toString();
 }
 
 export function stripBotMention(text: string, botUserId: string | undefined): string {

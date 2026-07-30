@@ -202,7 +202,7 @@ describe("TranscriptList", () => {
     });
   });
 
-  it("shows the messaging platform, surface, and actor for an inbound message", () => {
+  it("shows a linked messaging origin with its full value in a tooltip", async () => {
     const { container } = render(
       <TranscriptList
         entries={[
@@ -215,6 +215,8 @@ describe("TranscriptList", () => {
               kind: "messaging",
               messaging: {
                 platform: "discord",
+                sourceUrl:
+                  "https://discord.com/channels/1480556454498009353/1480556454498009352/1480556454498009354",
                 surface: {
                   id: "thread-1",
                   kind: "channel",
@@ -246,6 +248,14 @@ describe("TranscriptList", () => {
     );
     expect(origin).toHaveTextContent("Hunter");
     expect(origin.querySelector("img")).toBeInTheDocument();
+    expect(origin).toHaveAttribute(
+      "href",
+      "https://discord.com/channels/1480556454498009353/1480556454498009352/1480556454498009354",
+    );
+    fireEvent.mouseEnter(origin);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(
+      "Discord: PwrAgent / #signals-chat / api-search circuit breaker timeout · Hunter Open in Discord",
+    );
     expect(container.querySelector(".transcript-message--injected")).toBeInTheDocument();
   });
 

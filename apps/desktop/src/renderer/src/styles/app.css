@@ -8703,6 +8703,21 @@ textarea,
   border: 1px solid var(--accent-border);
 }
 
+a.transcript-message__messaging-origin {
+  cursor: pointer;
+  text-decoration: none;
+}
+
+a.transcript-message__messaging-origin:hover,
+a.transcript-message__messaging-origin:focus-visible {
+  background: var(--bg-row-active);
+}
+
+.transcript-message__messaging-origin:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
 .transcript-message__messaging-platform {
   display: inline-flex;
   flex: 0 0 auto;

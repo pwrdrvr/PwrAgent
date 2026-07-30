@@ -739,6 +739,8 @@ describe("useThreadSessionState", () => {
                 kind: "messaging",
                 messaging: {
                   platform: "slack",
+                  sourceUrl:
+                    "https://pwrdrvr.slack.com/archives/C012ABCDEF0/p1712023030000000",
                   surface: {
                     id: "message-thread-1",
                     kind: "thread",
@@ -775,6 +777,8 @@ describe("useThreadSessionState", () => {
           kind: "messaging",
           messaging: {
             platform: "slack",
+            sourceUrl:
+              "https://pwrdrvr.slack.com/archives/C012ABCDEF0/p1712023030000000",
             surface: {
               id: "message-thread-1",
               kind: "thread",
