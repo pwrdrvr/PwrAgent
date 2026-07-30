@@ -1237,6 +1237,15 @@ export class MattermostAdapter implements MattermostProviderAdapter {
           },
         },
       },
+      ...(body.post_id
+        ? {
+            sourceSurface: surfaceRefForPost(
+              body.post_id,
+              body.channel_id,
+              contextRootId,
+            ),
+          }
+        : {}),
     });
 
     // Channel-neutral principle: the producer (controller) is the

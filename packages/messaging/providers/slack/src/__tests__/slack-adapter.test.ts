@@ -2152,6 +2152,16 @@ describe("SlackAdapter", () => {
       expect.objectContaining({
         kind: "callback",
         actionId: "resume",
+        sourceSurface: {
+          channel: "slack",
+          id: "1712023032.123456",
+          state: {
+            opaque: expect.objectContaining({
+              channelId: "D012ABCDEF0",
+              ts: "1712023032.123456",
+            }),
+          },
+        },
         channel: expect.objectContaining({
           conversation: expect.objectContaining({
             id: "D012ABCDEF0",

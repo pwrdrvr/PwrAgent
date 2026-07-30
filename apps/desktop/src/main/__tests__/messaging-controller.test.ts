@@ -7376,11 +7376,25 @@ describe("MessagingController", () => {
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: "command:new",
-        interactionId: "help-surface",
+        interactionId: "callback-handle",
+        interactionState: {
+          opaque: {
+            callbackData: "tg:callback-handle",
+          },
+        },
         routingState: {
           opaque: {
             chatId: 777,
-            messageId: 42,
+          },
+        },
+        sourceSurface: {
+          channel: "telegram",
+          id: "42",
+          state: {
+            opaque: {
+              chatId: 777,
+              messageId: 42,
+            },
           },
         },
       }),
@@ -7395,7 +7409,7 @@ describe("MessagingController", () => {
       fallbackText: expect.stringContaining("new PwrAgent thread"),
       targetSurface: {
         channel: "telegram",
-        id: "help-surface",
+        id: "42",
         state: {
           opaque: {
             chatId: 777,
@@ -7412,11 +7426,15 @@ describe("MessagingController", () => {
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: "command:new",
-        interactionId: "help-surface",
-        routingState: {
-          opaque: {
-            chatId: 777,
-            messageId: 42,
+        interactionId: "callback-handle",
+        sourceSurface: {
+          channel: "telegram",
+          id: "42",
+          state: {
+            opaque: {
+              chatId: 777,
+              messageId: 42,
+            },
           },
         },
       }),
@@ -7437,6 +7455,44 @@ describe("MessagingController", () => {
       targetSurface: expect.objectContaining({
         channel: "telegram",
       }),
+    });
+  });
+
+  it("does not mistake callback identity or routing state for an editable surface", async () => {
+    const harness = await createHarness();
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "command:new",
+        interactionId: "callback-handle",
+        interactionState: {
+          opaque: {
+            callbackData: "tg:callback-handle",
+          },
+        },
+        routingState: {
+          opaque: {
+            chatId: 777,
+          },
+        },
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "project_picker",
+      delivery: {
+        fallback: "present_new",
+        mode: "present",
+      },
+      targetSurface: {
+        channel: "telegram",
+        id: "event-callback",
+        state: {
+          opaque: {
+            chatId: 777,
+          },
+        },
+      },
     });
   });
 
@@ -16806,7 +16862,9 @@ function buildCallbackEvent(params: {
   actionId: string;
   channel?: MessagingInboundCallbackEvent["channel"];
   interactionId?: string;
+  interactionState?: MessagingInboundCallbackEvent["interaction"]["state"];
   routingState?: MessagingInboundCallbackEvent["routingState"];
+  sourceSurface?: MessagingInboundCallbackEvent["sourceSurface"];
   value?: MessagingInboundCallbackEvent["value"];
 }): MessagingInboundCallbackEvent {
   return {
@@ -16827,7 +16885,9 @@ function buildCallbackEvent(params: {
     interaction: {
       channel: "telegram",
       id: params.interactionId ?? params.actionId,
+      state: params.interactionState,
     },
+    sourceSurface: params.sourceSurface,
     actionId: params.actionId,
     value: params.value,
   };

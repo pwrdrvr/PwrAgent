@@ -1991,6 +1991,7 @@ export class MessagingController {
               channel: event.channel.channel,
               id: mapped.action.id,
             },
+            sourceSurface: pendingIntent.surface,
             actionId: mapped.action.id,
             value: mapped.action.value,
           });
@@ -2022,6 +2023,7 @@ export class MessagingController {
               channel: event.channel.channel,
               id: mapped.action.id,
             },
+            sourceSurface: pendingIntent.surface,
             actionId: mapped.action.id,
             value: mapped.action.value,
           });
@@ -2876,7 +2878,7 @@ export class MessagingController {
           rawText: `/${command}`,
         },
         {
-          targetSurface: surfaceForCallback(event),
+          targetSurface: event.sourceSurface,
         },
       );
       return;
@@ -13037,20 +13039,6 @@ function readCommandAction(event: MessagingInboundCallbackEvent): string | undef
   const actionId = event.actionId ?? event.interaction.id;
   const match = /^command:([a-z0-9_-]+)$/i.exec(actionId);
   return match?.[1]?.toLowerCase();
-}
-
-function surfaceForCallback(
-  event: MessagingInboundCallbackEvent,
-): MessagingSurfaceRef {
-  return {
-    channel: event.interaction.channel,
-    id: event.interaction.id,
-    ...(event.interaction.state
-      ? { state: event.interaction.state }
-      : event.routingState
-        ? { state: event.routingState }
-        : {}),
-  };
 }
 
 /**

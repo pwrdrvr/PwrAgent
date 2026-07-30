@@ -26,6 +26,7 @@ const unknownChannelError = new Error("DiscordAPIError[10003]: Unknown Channel")
 const TEST_CHANNEL_ID = "1480556454498009352";
 const TEST_GUILD_ID = "1480556454498009353";
 const TEST_MESSAGE_ID = "1480556454498009354";
+const TEST_SURFACE_MESSAGE_ID = "1480556454498009357";
 const TEST_USER_ID = "1480556454498009355";
 const TEST_OTHER_USER_ID = "1480556454498009356";
 const TEST_AUTHORIZED_GUILD_IDS = [{ id: TEST_GUILD_ID, displayName: "" }];
@@ -509,6 +510,9 @@ describe("discord adapter", () => {
         },
         guild_id: TEST_GUILD_ID,
         id: TEST_MESSAGE_ID,
+        message: {
+          id: TEST_SURFACE_MESSAGE_ID,
+        },
         token: "token_ABC.123",
         type: 3,
         user: {
@@ -525,6 +529,17 @@ describe("discord adapter", () => {
       expect.objectContaining({
         actionId: "permissions",
         kind: "callback",
+        sourceSurface: {
+          channel: "discord",
+          id: TEST_SURFACE_MESSAGE_ID,
+          state: {
+            opaque: {
+              channelId: TEST_CHANNEL_ID,
+              guildId: TEST_GUILD_ID,
+              messageId: TEST_SURFACE_MESSAGE_ID,
+            },
+          },
+        },
         value: { mode: "review" },
       }),
     ]);

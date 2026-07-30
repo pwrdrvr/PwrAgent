@@ -1153,6 +1153,27 @@ export class FeishuAdapter implements FeishuProviderAdapter {
         id: signed.handle,
         ...(record.surface?.state ? { state: record.surface.state } : {}),
       },
+      ...(messageId
+        ? {
+            sourceSurface: {
+              channel: this.channel,
+              id: messageId,
+              state: {
+                opaque: {
+                  messageId,
+                  receiveId: record.channel.conversation.id,
+                  receiveIdType:
+                    record.channel.conversation.kind === "dm"
+                      ? "open_id"
+                      : "chat_id",
+                  ...(record.channel.conversation.parentId
+                    ? { tenantKey: record.channel.conversation.parentId }
+                    : {}),
+                },
+              },
+            },
+          }
+        : {}),
       actionId: record.actionId,
       ...(record.value !== undefined ? { value: record.value } : {}),
       receivedAt: this.now(),

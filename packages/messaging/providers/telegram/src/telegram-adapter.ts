@@ -1633,6 +1633,8 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     this.options.logger?.debug(
       `telegram inbound callback update=${updateId} callback=${callbackQuery.id} chat=${message.chat.id} actor=${callbackQuery.from.id} action=${persistedBinding?.actionId ?? "unresolved"}`,
     );
+    const routingState = this.routingStateFromMessage(message);
+    const messageThreadId = this.messageThreadIdFromMessage(message);
     await listener({
       id: `telegram:update:${updateId}:callback:${callbackQuery.id}`,
       kind: "callback",
@@ -1647,10 +1649,21 @@ export class TelegramAdapter implements TelegramProviderAdapter {
           },
         },
       },
+      sourceSurface: {
+        channel: this.channel,
+        id: String(message.message_id),
+        state: {
+          opaque: {
+            chatId: message.chat.id,
+            messageId: message.message_id,
+            messageThreadId: messageThreadId ?? null,
+          },
+        },
+      },
       actionId: persistedBinding?.actionId,
       value: persistedBinding?.value,
       receivedAt: this.now(),
-      routingState: this.routingStateFromMessage(message),
+      routingState,
     });
   }
 

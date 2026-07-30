@@ -983,6 +983,11 @@ export class SlackAdapter implements SlackProviderAdapter {
         id: `${ids.channelId}:${ids.ts}:${action.action_id ?? "action"}`,
         state: routingState,
       },
+      sourceSurface: {
+        channel: this.channel,
+        id: ids.ts,
+        state: routingState,
+      },
       actionId: record.actionId,
       ...(record.value !== undefined ? { value: record.value } : {}),
     });
