@@ -3121,7 +3121,7 @@ describe("MessagingController", () => {
     }
   });
 
-  it("routes raw shared-channel text to a strict thread binding even in mention-only mode", async () => {
+  it("applies mention-only response mode to strict thread bindings", async () => {
     const harness = await createHarness({
       responseModeForConversation: () => "mention_only",
     });
@@ -3139,6 +3139,86 @@ describe("MessagingController", () => {
     });
 
     await harness.controller.handleInboundEvent(event);
+
+    expect(harness.startTurn).not.toHaveBeenCalled();
+
+    await harness.controller.handleInboundEvent({
+      ...event,
+      id: "event-mentioned",
+      botMention: true,
+    });
+
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        threadId: "thread-1",
+        input: [{ type: "text", text: "continue the implementation" }],
+      }),
+    );
+  });
+
+  it("uses a binding response-mode override before the channel default", async () => {
+    const harness = await createHarness({
+      responseModeForConversation: () => "mention_only",
+    });
+    const channel = buildTopicChannel("500");
+    await harness.store.upsertBinding({
+      id: "binding:telegram:topic:-1001:500:codex:thread-1",
+      authorizedActorIds: ["user-1"],
+      backend: "codex",
+      channel,
+      createdAt: 1000,
+      preferences: {
+        responseMode: "every_message",
+        updatedAt: 1000,
+      },
+      targetKind: "thread",
+      threadId: "thread-1",
+      updatedAt: 1000,
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("continue the implementation", { channel }),
+    );
+
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        threadId: "thread-1",
+        input: [{ type: "text", text: "continue the implementation" }],
+      }),
+    );
+  });
+
+  it("ignores response modes when the provider cannot report bot mentions", async () => {
+    const harness = await createHarness({
+      capabilityProfile: {
+        ...PERMISSIVE_CAPABILITY_PROFILE,
+        conversationInput: {
+          reportsBotMention: false,
+        },
+      },
+      responseModeForConversation: () => "mention_only",
+    });
+    const channel = buildTopicChannel("500");
+    await harness.store.upsertBinding({
+      id: "binding:telegram:topic:-1001:500:codex:thread-1",
+      authorizedActorIds: ["user-1"],
+      backend: "codex",
+      channel,
+      createdAt: 1000,
+      preferences: {
+        responseMode: "mention_only",
+        updatedAt: 1000,
+      },
+      targetKind: "thread",
+      threadId: "thread-1",
+      updatedAt: 1000,
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("continue the implementation", { channel }),
+    );
 
     expect(harness.startTurn).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -14766,6 +14846,118 @@ describe("MessagingController", () => {
         text: expect.stringContaining(`Working Updates: ${expected}`),
       });
     }
+  });
+
+  it("shows and updates the binding response mode from the status card", async () => {
+    const harness = await createHarness({
+      responseModeForConversation: () => "mention_only",
+    });
+    const channel = buildTopicChannel("510");
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "bind:codex:thread-1",
+        channel,
+        value: {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining(
+        "Responses: @mentions only (channel default)",
+      ),
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "status:response-mode",
+          label: "Responses: @mentions",
+        }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "status:response-mode",
+        channel,
+      }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "single_select",
+      prompt: expect.stringContaining("Responses"),
+      choices: expect.arrayContaining([
+        expect.objectContaining({
+          id: "status:set-response-mode",
+          label: "Channel default (@mentions only) (current)",
+          value: { responseMode: "inherit" },
+        }),
+        expect.objectContaining({
+          id: "status:set-response-mode",
+          label: "Every message",
+          value: { responseMode: "every_message" },
+        }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "status:set-response-mode",
+        channel,
+        value: { responseMode: "every_message" },
+      }),
+    );
+
+    await expect(
+      harness.store.findActiveBindingForChannel(channel),
+    ).resolves.toMatchObject({
+      preferences: {
+        responseMode: "every_message",
+      },
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining(
+        "Responses: every message (binding override)",
+      ),
+      actions: expect.arrayContaining([
+        expect.objectContaining({ label: "Responses: all" }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("continue without a mention", { channel }),
+    );
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: "thread-1",
+        input: [{ type: "text", text: "continue without a mention" }],
+      }),
+    );
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "status:response-mode",
+        channel,
+      }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "status:set-response-mode",
+        channel,
+        value: { responseMode: "inherit" },
+      }),
+    );
+
+    const inheritedBinding =
+      await harness.store.findActiveBindingForChannel(channel);
+    expect(inheritedBinding?.preferences).not.toHaveProperty("responseMode");
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining(
+        "Responses: @mentions only (channel default)",
+      ),
+    });
   });
 
   it("stops an active turn through the backend bridge", async () => {

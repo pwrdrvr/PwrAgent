@@ -6,6 +6,7 @@ import type {
 import type {
   MessagingBindingRecord,
 } from "@pwragent/messaging-interface";
+import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/testing";
 import {
   buildBindingStatusIntent,
   buildHandoffBranchPickerIntent,
@@ -168,6 +169,105 @@ describe("buildBindingStatusIntent", () => {
     expect(intent.text).not.toContain("Context usage:");
     expect(intent.text).not.toContain("Account:");
     expect(intent.text).not.toContain("Rate limits:");
+  });
+
+  it("shows the effective shared-conversation response mode and its source", () => {
+    const inheritedBinding = {
+      ...buildBinding(),
+      channel: {
+        channel: "slack" as const,
+        conversation: {
+          id: "C012ABCDEF0",
+          kind: "thread" as const,
+          parentId: "1712023032.123456",
+        },
+      },
+    };
+    const inheritedIntent = buildBindingStatusIntent({
+      id: "status-inherited-response-mode",
+      binding: inheritedBinding,
+      capabilityProfile: PERMISSIVE_CAPABILITY_PROFILE,
+      createdAt: 1000,
+      responseModeDefault: "mention_only",
+      threadState: resolveMessagingThreadState({
+        binding: inheritedBinding,
+        navigation: buildNavigationSnapshot(),
+      }),
+    });
+
+    expect(inheritedIntent.text).toContain(
+      "Responses: @mentions only (channel default)",
+    );
+    expect(inheritedIntent.actions).toContainEqual(
+      expect.objectContaining({
+        id: "status:response-mode",
+        label: "Responses: @mentions",
+      }),
+    );
+
+    const overriddenBinding = {
+      ...inheritedBinding,
+      preferences: {
+        responseMode: "every_message" as const,
+        updatedAt: 1000,
+      },
+    };
+    const overriddenIntent = buildBindingStatusIntent({
+      id: "status-overridden-response-mode",
+      binding: overriddenBinding,
+      capabilityProfile: PERMISSIVE_CAPABILITY_PROFILE,
+      createdAt: 1000,
+      responseModeDefault: "mention_only",
+      threadState: resolveMessagingThreadState({
+        binding: overriddenBinding,
+        navigation: buildNavigationSnapshot(),
+      }),
+    });
+
+    expect(overriddenIntent.text).toContain(
+      "Responses: every message (binding override)",
+    );
+    expect(overriddenIntent.actions).toContainEqual(
+      expect.objectContaining({ label: "Responses: all" }),
+    );
+  });
+
+  it("hides response-mode controls without bot-mention reporting", () => {
+    const binding = {
+      ...buildBinding(),
+      channel: {
+        channel: "mattermost" as const,
+        conversation: {
+          id: "channel-1",
+          kind: "channel" as const,
+        },
+      },
+      preferences: {
+        responseMode: "mention_only" as const,
+        updatedAt: 1000,
+      },
+    };
+    const intent = buildBindingStatusIntent({
+      id: "status-no-mention-reporting",
+      binding,
+      capabilityProfile: {
+        ...PERMISSIVE_CAPABILITY_PROFILE,
+        conversationInput: {
+          reportsBotMention: false,
+        },
+      },
+      createdAt: 1000,
+      responseModeDefault: "every_message",
+      threadState: resolveMessagingThreadState({
+        binding,
+        navigation: buildNavigationSnapshot(),
+      }),
+    });
+
+    expect(intent.text).not.toContain("Responses:");
+    expect(intent.actions).not.toContainEqual(
+      expect.objectContaining({ id: "status:response-mode" }),
+    );
   });
 
   it("redacts backend account email in shared conversations", () => {

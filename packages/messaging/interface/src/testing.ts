@@ -34,6 +34,9 @@ export const PERMISSIVE_CAPABILITY_PROFILE: MessagingCapabilityProfile = {
     supportsInlineCode: true,
     supportsMessageEdit: true,
   },
+  conversationInput: {
+    reportsBotMention: true,
+  },
   outboundAttachments: {
     maxUploadBytes: 100 * 1024 * 1024,
     supportsFileUpload: true,

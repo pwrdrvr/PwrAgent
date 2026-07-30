@@ -270,6 +270,9 @@ export class SlackAdapter implements SlackProviderAdapter {
   readonly channel = "slack" as const;
   readonly clientRateLimitStrategy: MessagingClientRateLimitStrategy = "externalized";
   readonly capabilityProfile: MessagingCapabilityProfile = {
+    conversationInput: {
+      reportsBotMention: true,
+    },
     actions: {
       // Slack Block Kit actions blocks allow at most 25 elements.
       // Source: https://docs.slack.dev/reference/block-kit/blocks/actions-block/
