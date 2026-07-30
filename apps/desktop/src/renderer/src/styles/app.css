@@ -7510,7 +7510,7 @@ textarea,
 
 .settings-thread-migration-dialog__model small {
   color: var(--text-muted);
-  font-family: var(--font-sans);
+  font-family: var(--font-sans, sans-serif);
   font-size: 11px;
 }
 
