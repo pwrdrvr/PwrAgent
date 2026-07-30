@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,6 +11,10 @@ import { AcpRolloutStore } from "../acp/acp-rollout-store";
 import { AcpSessionStore } from "../acp/acp-session-store";
 import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
 import { StateDb } from "../state/state-db";
+import {
+  openInMemoryStateDb,
+  removeTempStateDbDir,
+} from "./sqlite-test-utils";
 
 let tempDir: string;
 let stateDb: StateDb;
@@ -18,14 +22,14 @@ let store: AcpSessionStore;
 
 beforeEach(() => {
   tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-acp-client-"));
-  stateDb = StateDb.open(path.join(tempDir, "state.db"));
+  stateDb = openInMemoryStateDb();
   store = new AcpSessionStore(stateDb);
 });
 
 afterEach(() => {
   vi.useRealTimers();
   stateDb.close();
-  rmSync(tempDir, { recursive: true, force: true });
+  removeTempStateDbDir(tempDir);
 });
 
 function createDeferred<T>(): {
@@ -163,6 +167,9 @@ describe("AcpAgentClient", () => {
     await vi.waitFor(() => {
       expect(client.readReplay(session.sessionId).lastAssistantMessage).toBe(
         "Kimi says hi.",
+      );
+      expect(store.getSession("acp:kimi", session.sessionId)?.status).toBe(
+        "idle",
       );
     });
 

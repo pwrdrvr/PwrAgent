@@ -4,6 +4,7 @@ import { defineConfig } from "vitest/config";
 // bash.exe), so git/worktree-heavy desktop tests can exceed the 5s default.
 // Give Windows more headroom; POSIX keeps the standard timeout.
 const TEST_TIMEOUT_MS = process.platform === "win32" ? 30_000 : 5_000;
+const HOOK_TIMEOUT_MS = process.platform === "win32" ? 30_000 : 10_000;
 
 export default defineConfig({
   test: {
@@ -49,6 +50,7 @@ export default defineConfig({
           name: "desktop-main",
           globals: true,
           testTimeout: TEST_TIMEOUT_MS,
+          hookTimeout: HOOK_TIMEOUT_MS,
           environment: "node",
           include: [
             "scripts/**/*.test.mjs",
