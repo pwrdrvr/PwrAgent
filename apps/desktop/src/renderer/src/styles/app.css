@@ -4265,8 +4265,53 @@ textarea,
 }
 
 .directory-row__thread-divider {
+  appearance: none;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-family: inherit;
+  cursor: pointer;
   margin-top: 4px;
   margin-bottom: 2px;
+}
+
+.directory-row__thread-divider:hover:not(:disabled) {
+  color: var(--text-secondary);
+}
+
+.directory-row__thread-divider:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.directory-row__thread-divider:disabled {
+  cursor: default;
+}
+
+.directory-row__thread-divider-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.directory-row__thread-divider-count {
+  color: currentColor;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.82;
+}
+
+.directory-row__thread-divider-chevron {
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  opacity: 0.82;
+  transition: transform 120ms ease;
+  transform: rotate(-45deg);
+}
+
+.directory-row__thread-divider-chevron.is-open {
+  transform: rotate(45deg);
 }
 
 .directory-row__threads .thread-row--compact {

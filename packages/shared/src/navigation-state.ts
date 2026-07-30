@@ -271,7 +271,7 @@ export function buildNavigationSnapshot(params: {
   launchpadDefaults?: NavigationLaunchpadDefaults;
   launchpadsByKey?: Record<string, DirectoryLaunchpadOverlayState | undefined>;
   /**
-   * Per-directory overlay (currently `pinnedRank` only) — see
+   * Per-directory pin and display preferences — see
    * `buildDirectorySummaries` for the contract. Plumbed through here
    * so the caller (SqliteOverlayStore.reconcileNavigationSnapshot)
    * doesn't have to call the builder twice.
@@ -575,6 +575,10 @@ export function buildNavigationSnapshotHash(params: {
       // unchanged-snapshot short-circuit. Without this, the renderer
       // never sees the new pin state.
       pinnedRank: directory.pinnedRank ?? null,
+      // Sticky Directory-threads disclosure state is persisted in
+      // the same overlay and must invalidate the snapshot cache too.
+      directoryThreadsCollapsed:
+        directory.directoryThreadsCollapsed ?? null,
       launchpad: directory.launchpad
         ? {
             backend: directory.launchpad.backend,

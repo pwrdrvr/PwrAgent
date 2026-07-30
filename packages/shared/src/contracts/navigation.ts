@@ -646,6 +646,11 @@ export type NavigationDirectorySummary = {
    * (`setDirectoryPin`) so this field stays meaningful.
    */
   pinnedRank?: string;
+  /**
+   * Sticky per-directory preference for hiding the unpinned
+   * "Directory threads" section while keeping pinned threads visible.
+   */
+  directoryThreadsCollapsed?: boolean;
 };
 
 export type NavigationDirectoryGitStatusUpdatedNotification = {
@@ -1022,6 +1027,16 @@ export type ReorderDirectoryPinsResponse = {
   pinnedRanks: Record<string, string>;
 };
 
+export type SetDirectoryThreadsCollapsedRequest = {
+  directoryKey: string;
+  collapsed: boolean;
+};
+
+export type SetDirectoryThreadsCollapsedResponse = {
+  directoryKey: string;
+  collapsed: boolean;
+};
+
 /**
  * Tells the main-process PR poller which threads the operator is actually
  * looking at, so their PRs poll on the fast tier and everything else backs off.
@@ -1188,12 +1203,10 @@ export type GetGhStatusRequest = {
 };
 
 /**
- * Persisted per-directory overlay. Today this only carries
- * `pinnedRank` (directory pinning), but the shape is intentionally
- * extensible so future per-directory state (e.g., a user-curated
- * label, a tracked-only-when-active flag, etc.) lands here rather
- * than in scattered tables. Mirrors `ThreadOverlayState`'s "single
- * JSON payload per row, keyed by identity" pattern.
+ * Persisted per-directory overlay. Carries directory pin order and
+ * directory-specific display preferences. Mirrors
+ * `ThreadOverlayState`'s "single JSON payload per row, keyed by
+ * identity" pattern.
  */
 export type DirectoryOverlayState = {
   /**
@@ -1206,6 +1219,8 @@ export type DirectoryOverlayState = {
   directoryKey: string;
   /** User-curated position in the pinned section. Undefined = unpinned. */
   pinnedRank?: string;
+  /** Hide unpinned directory threads while leaving pinned threads visible. */
+  directoryThreadsCollapsed?: boolean;
 };
 
 export type ThreadOverlayState = {

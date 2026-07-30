@@ -1742,6 +1742,7 @@ export class SqliteOverlayStore {
   }): Promise<DirectoryOverlayState> {
     const pinnedRank = params.pinnedRank?.trim();
     const nextState: DirectoryOverlayState = {
+      ...this.getDirectoryOverlay(params.directoryKey),
       directoryKey: params.directoryKey,
       pinnedRank: pinnedRank || undefined,
     };
@@ -1758,6 +1759,7 @@ export class SqliteOverlayStore {
         const pinnedRank = String((index + 1) * 1024);
         pinnedRanks[directoryKey] = pinnedRank;
         this.putDirectoryOverlay(directoryKey, {
+          ...this.getDirectoryOverlay(directoryKey),
           directoryKey,
           pinnedRank,
         });
@@ -1765,6 +1767,19 @@ export class SqliteOverlayStore {
     });
     write();
     return pinnedRanks;
+  }
+
+  async setDirectoryThreadsCollapsed(params: {
+    directoryKey: string;
+    collapsed: boolean;
+  }): Promise<DirectoryOverlayState> {
+    const nextState: DirectoryOverlayState = {
+      ...this.getDirectoryOverlay(params.directoryKey),
+      directoryKey: params.directoryKey,
+      directoryThreadsCollapsed: params.collapsed,
+    };
+    this.putDirectoryOverlay(params.directoryKey, nextState);
+    return nextState;
   }
 
   async getDirectoryOverlayState(params: {
@@ -3672,6 +3687,7 @@ export type OverlayStoreLike = Pick<
   | "setSubthreadsCollapsed"
   | "setDirectoryPin"
   | "reorderDirectoryPins"
+  | "setDirectoryThreadsCollapsed"
   | "getDirectoryOverlayState"
   | "readAllDirectoryOverlays"
   | "setThreadPullRequests"

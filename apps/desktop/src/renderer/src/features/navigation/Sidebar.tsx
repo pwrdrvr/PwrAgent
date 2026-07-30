@@ -161,6 +161,10 @@ type SidebarProps = {
     pinned: boolean,
   ) => Promise<void>;
   onReorderDirectoryPins?: (directoryKeys: string[]) => Promise<void>;
+  onSetDirectoryThreadsCollapsed?: (
+    directory: NavigationDirectorySummary,
+    collapsed: boolean,
+  ) => Promise<void>;
   /**
    * Remove an empty directory (no linked threads) from the Directories list.
    * Offered in the directory context menu only when the directory has no
@@ -954,6 +958,9 @@ export function Sidebar(props: SidebarProps) {
               onSetSubthreadsCollapsed={props.onSetSubthreadsCollapsed}
               onSetDirectoryPin={props.onSetDirectoryPin}
               onReorderDirectoryPins={props.onReorderDirectoryPins}
+              onSetDirectoryThreadsCollapsed={
+                props.onSetDirectoryThreadsCollapsed
+              }
               onOpenDirectoryContextMenu={
                 props.onSetDirectoryPin ? openDirectoryContextMenu : undefined
               }

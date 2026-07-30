@@ -1557,6 +1557,33 @@ describe("buildDirectorySummaries — directory pin overlay (Unit D)", () => {
     expect(directories[0]?.pinnedRank).toBeUndefined();
   });
 
+  it("attaches the sticky Directory threads disclosure preference", () => {
+    const directoryKey = "directory:/Users/me/code/PwrAgent";
+    const directories = buildDirectorySummaries({
+      threads: [
+        buildThread({
+          id: "thread-1",
+          linkedDirectories: [
+            {
+              id: "dir-1",
+              label: "PwrAgent",
+              path: "/Users/me/code/PwrAgent",
+              kind: "local",
+            },
+          ],
+        }),
+      ],
+      directoryOverlayByKey: {
+        [directoryKey]: {
+          directoryKey,
+          directoryThreadsCollapsed: true,
+        },
+      },
+    });
+
+    expect(directories[0]?.directoryThreadsCollapsed).toBe(true);
+  });
+
   it("attaches pinnedRank to workspace pseudo-directories (workspaces are pinnable)", () => {
     // Policy: both `kind: "directory"` and `kind: "workspace"`
     // entries are user-pinnable. Workspaces are named entries the
@@ -1656,6 +1683,22 @@ describe("buildNavigationSnapshotHash — directory pin invariant (Unit E, GATE)
     const pinnedHash = buildNavigationSnapshotHash(pinned);
 
     expect(pinnedHash).not.toBe(unpinnedHash);
+  });
+
+  it("changes the hash when Directory threads are minimized", () => {
+    const base = buildBaseHashInput();
+    const expandedHash = buildNavigationSnapshotHash(base);
+    const collapsedHash = buildNavigationSnapshotHash({
+      ...base,
+      directories: [
+        {
+          ...base.directories[0]!,
+          directoryThreadsCollapsed: true,
+        },
+      ],
+    });
+
+    expect(collapsedHash).not.toBe(expandedHash);
   });
 
   it("changes the hash when the pinnedRank value changes (reorder case)", () => {

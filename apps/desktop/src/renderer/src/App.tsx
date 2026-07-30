@@ -1366,6 +1366,9 @@ function DesktopAppShell(props: {
           onSetSubthreadsCollapsed={navigation.setSubthreadsCollapsed}
           onSetDirectoryPin={navigation.setDirectoryPin}
           onReorderDirectoryPins={navigation.reorderDirectoryPins}
+          onSetDirectoryThreadsCollapsed={
+            navigation.setDirectoryThreadsCollapsed
+          }
           onRemoveDirectory={(directory) => {
             void navigation.removeDirectory(directory.key);
           }}

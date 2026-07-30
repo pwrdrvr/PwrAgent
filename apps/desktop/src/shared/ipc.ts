@@ -87,6 +87,8 @@ export const NAVIGATION_SET_DIRECTORY_PIN_CHANNEL =
   "navigation:set-directory-pin";
 export const NAVIGATION_REORDER_DIRECTORY_PINS_CHANNEL =
   "navigation:reorder-directory-pins";
+export const NAVIGATION_SET_DIRECTORY_THREADS_COLLAPSED_CHANNEL =
+  "navigation:set-directory-threads-collapsed";
 export const NAVIGATION_REFRESH_THREAD_PRS_CHANNEL =
   "navigation:refresh-thread-prs";
 export const NAVIGATION_SET_PR_POLLING_FOCUS_CHANNEL =

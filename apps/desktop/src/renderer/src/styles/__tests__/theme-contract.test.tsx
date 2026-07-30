@@ -781,6 +781,16 @@ describe("Tangerine Terminal theme contract", () => {
       expect(directoriesDivider).toContain(fragment);
     }
 
+    // The Directory threads disclosure reuses the divider primitive.
+    // A late `font:` shorthand would reset the inherited 11px divider
+    // size to the sidebar row size, making this label visibly oversized.
+    const directoryThreadsDivider = extractRuleBody(
+      css,
+      ".directory-row__thread-divider",
+    );
+    expect(directoryThreadsDivider).not.toMatch(/(?:^|\s)font\s*:/);
+    expect(directoryThreadsDivider).toContain("font-family: inherit;");
+
     const recentsActive = extractRuleBody(
       css,
       ".recents-pinned-divider.is-drop-target",

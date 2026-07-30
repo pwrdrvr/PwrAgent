@@ -93,6 +93,8 @@ import type {
   SetSubthreadsCollapsedResponse,
   SetDirectoryPinRequest,
   SetDirectoryPinResponse,
+  SetDirectoryThreadsCollapsedRequest,
+  SetDirectoryThreadsCollapsedResponse,
   SetThreadReactionRequest,
   SetThreadReactionResponse,
   SetThreadParentRequest,
@@ -642,6 +644,9 @@ export type DesktopApi = {
   reorderDirectoryPins?: (
     request: ReorderDirectoryPinsRequest
   ) => Promise<ReorderDirectoryPinsResponse>;
+  setDirectoryThreadsCollapsed?: (
+    request: SetDirectoryThreadsCollapsedRequest
+  ) => Promise<SetDirectoryThreadsCollapsedResponse>;
   refreshThreadPullRequests?: (
     request: RefreshThreadPullRequestsRequest
   ) => Promise<RefreshThreadPullRequestsResponse>;

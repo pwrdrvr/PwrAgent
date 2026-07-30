@@ -398,6 +398,29 @@ describe("OverlayStore", () => {
     });
   });
 
+  it("preserves sticky Directory threads state across JSON store reloads", async () => {
+    const store = await createStore();
+    const directoryKey = "directory:/Users/me/code/PwrAgent";
+    await store.setDirectoryPin({
+      directoryKey,
+      pinnedRank: "1024",
+    });
+    await store.setDirectoryThreadsCollapsed({
+      directoryKey,
+      collapsed: true,
+    });
+
+    const filePath = (store as unknown as { filePath: string }).filePath;
+    const reopened = new OverlayStore(filePath);
+
+    await expect(
+      reopened.getDirectoryOverlayState({ directoryKey }),
+    ).resolves.toMatchObject({
+      pinnedRank: "1024",
+      directoryThreadsCollapsed: true,
+    });
+  });
+
   it("persists thread model settings separately from launchpad defaults", async () => {
     const store = await createStore();
 

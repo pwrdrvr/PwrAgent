@@ -1852,7 +1852,9 @@ describe("Sidebar", () => {
     );
 
     const directoryThreads = screen
-      .getByRole("separator", { name: "Directory threads for PwrAgent" })
+      .getByRole("button", {
+        name: "Hide directory threads for PwrAgent",
+      })
       .closest(".directory-row__threads") as HTMLElement;
     expect(
       screen.queryByRole("separator", {
@@ -1868,6 +1870,64 @@ describe("Sidebar", () => {
       within(rows[0]).getByRole("img", { name: "Pinned" }),
     ).toBeInTheDocument();
     expect(rows[1]).toHaveTextContent("Cross-project cleanup");
+  });
+
+  it("minimizes only unpinned directory threads and restores the sticky state", async () => {
+    const onSetDirectoryThreadsCollapsed = vi.fn(async () => undefined);
+    const pinnedThread = {
+      ...updatedSinceSeenThread,
+      pinnedRank: "1024",
+    };
+    const directoryWithPinnedThread = {
+      ...directories[0],
+      threadKeys: ["codex:thread-1", "codex:thread-updated"],
+    };
+    const renderSidebar = (directoryThreadsCollapsed: boolean) => (
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        createThreadError={undefined}
+        directories={[
+          {
+            ...directoryWithPinnedThread,
+            directoryThreadsCollapsed,
+          },
+        ]}
+        inboxThreads={[sharedThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-updated"
+        threads={[sharedThread, pinnedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onSetDirectoryThreadsCollapsed={onSetDirectoryThreadsCollapsed}
+      />
+    );
+
+    const { rerender } = render(renderSidebar(false));
+
+    await clickElement(
+      screen.getByRole("button", {
+        name: "Hide directory threads for PwrAgent",
+      }),
+    );
+    expect(onSetDirectoryThreadsCollapsed).toHaveBeenCalledWith(
+      expect.objectContaining({ key: directories[0].key }),
+      true,
+    );
+
+    rerender(renderSidebar(true));
+
+    expect(screen.getByText("Updated thread")).toBeInTheDocument();
+    expect(screen.queryByText("Cross-project cleanup")).not.toBeInTheDocument();
+    const showDirectoryThreads = screen.getByRole("button", {
+      name: "Show directory threads for PwrAgent",
+    });
+    expect(showDirectoryThreads).toHaveAttribute("aria-expanded", "false");
+    expect(within(showDirectoryThreads).getByText("1")).toBeInTheDocument();
   });
 
   it("caps unpinned directory threads and toggles the overflow behind Show more / Show less", async () => {
@@ -2000,14 +2060,15 @@ describe("Sidebar", () => {
       }),
     ).not.toBeInTheDocument();
     expect(
-      screen.queryByRole("separator", {
-        name: "Directory threads for PwrAgent",
+      screen.queryByRole("button", {
+        name: "Hide directory threads for PwrAgent",
       }),
     ).not.toBeInTheDocument();
   });
 
   it("pins a same-directory thread by dropping it on the directory divider", () => {
     const onReorderThreadPins = vi.fn(async () => undefined);
+    const onSetDirectoryThreadsCollapsed = vi.fn(async () => undefined);
     const pinnedThread = {
       ...updatedSinceSeenThread,
       pinnedRank: "1024",
@@ -2034,18 +2095,24 @@ describe("Sidebar", () => {
         onOpenLaunchpad={async () => undefined}
         onReorderThreadPins={onReorderThreadPins}
         onSelectThread={() => undefined}
+        onSetDirectoryThreadsCollapsed={onSetDirectoryThreadsCollapsed}
       />
     );
 
+    const directoryThreads = screen.getByRole("button", {
+      name: "Hide directory threads for PwrAgent",
+    });
     fireEvent.drop(
-      screen.getByRole("separator", { name: "Directory threads for PwrAgent" }),
+      directoryThreads,
       { dataTransfer: createDataTransfer("codex:thread-1") },
     );
+    fireEvent.click(directoryThreads);
 
     expect(onReorderThreadPins).toHaveBeenCalledWith([
       "codex:thread-updated",
       "codex:thread-1",
     ]);
+    expect(onSetDirectoryThreadsCollapsed).not.toHaveBeenCalled();
   });
 
   it("shows recents drop targets for row edges and the pin divider", () => {
@@ -2164,6 +2231,7 @@ describe("Sidebar", () => {
         onOpenLaunchpad={async () => undefined}
         onReorderThreadPins={onReorderThreadPins}
         onSelectThread={() => undefined}
+        onSetDirectoryThreadsCollapsed={async () => undefined}
       />
     );
 
@@ -2174,7 +2242,9 @@ describe("Sidebar", () => {
 
     fireEvent.click(projectBSummary!);
     fireEvent.drop(
-      screen.getByRole("separator", { name: "Directory threads for ProjectB" }),
+      screen.getByRole("button", {
+        name: "Hide directory threads for ProjectB",
+      }),
       { dataTransfer: createDataTransfer("codex:thread-1") },
     );
 

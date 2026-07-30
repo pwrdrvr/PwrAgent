@@ -1180,6 +1180,35 @@ function updateDirectoryPinsInSnapshot(
   return changed ? { ...snapshot, directories } : snapshot;
 }
 
+function updateDirectoryThreadsCollapsedInSnapshot(
+  snapshot: NavigationSnapshot | undefined,
+  params: {
+    directoryKey: string;
+    collapsed: boolean;
+  },
+): NavigationSnapshot | undefined {
+  if (!snapshot) {
+    return snapshot;
+  }
+
+  let changed = false;
+  const directories = snapshot.directories.map((directory) => {
+    if (directory.key !== params.directoryKey) {
+      return directory;
+    }
+    if (directory.directoryThreadsCollapsed === params.collapsed) {
+      return directory;
+    }
+    changed = true;
+    return {
+      ...directory,
+      directoryThreadsCollapsed: params.collapsed,
+    };
+  });
+
+  return changed ? { ...snapshot, directories } : snapshot;
+}
+
 function markThreadSeenInSnapshot(
   snapshot: NavigationSnapshot | undefined,
   params: {
@@ -1979,6 +2008,7 @@ function buildOptimisticThreadFromLaunchpad(params: {
   optimisticUserMessage?: NavigationThreadSummary["optimisticUserMessage"];
   optimisticActiveTurn?: NavigationThreadSummary["optimisticActiveTurn"];
   parentThreadId?: string;
+  pinnedRank?: string;
 }): NavigationThreadSummary {
   const titlePrompt =
     params.optimisticUserMessage?.text?.trim() || params.launchpad.prompt.trim();
@@ -1997,6 +2027,7 @@ function buildOptimisticThreadFromLaunchpad(params: {
     serviceTier: params.launchpad.serviceTier,
     fastMode: params.launchpad.fastMode,
     parentThreadId: params.parentThreadId,
+    pinnedRank: params.pinnedRank,
     acpRuntime: params.launchpad.acpRuntime,
     codexEnvironmentRuntime: params.codexEnvironmentRuntime,
     optimisticUserMessage: params.optimisticUserMessage,
@@ -2023,6 +2054,29 @@ function buildOptimisticThreadFromLaunchpad(params: {
       reason: "new-thread",
     },
   };
+}
+
+function shouldAutoPinMaterializedThread(params: {
+  directory: NavigationDirectorySummary | undefined;
+  threads: NavigationThreadSummary[];
+  parentThreadId: string | undefined;
+}): boolean {
+  if (
+    params.parentThreadId
+    || params.directory?.directoryThreadsCollapsed !== true
+  ) {
+    return false;
+  }
+
+  const directoryThreadKeys = new Set(params.directory.threadKeys);
+  return params.threads.some(
+    (thread) =>
+      !thread.parentThreadId
+      && Boolean(thread.pinnedRank)
+      && directoryThreadKeys.has(
+        buildThreadIdentityKey(thread.source, thread.id),
+      ),
+  );
 }
 
 function mergeHydratedThreadWithOptimisticTitle(
@@ -2321,6 +2375,10 @@ export function useThreadNavigation(
     pinned: boolean,
   ) => Promise<void>;
   reorderDirectoryPins: (directoryKeys: string[]) => Promise<void>;
+  setDirectoryThreadsCollapsed: (
+    directory: NavigationDirectorySummary,
+    collapsed: boolean,
+  ) => Promise<void>;
   snapshot?: NavigationSnapshot;
   threads: NavigationThreadSummary[];
 } {
@@ -3409,6 +3467,24 @@ export function useThreadNavigation(
           response: updateDirectoryPinsInSnapshot(current.response, {
             pinnedRanks,
           }),
+        }));
+        return;
+      }
+
+      if (method === "directory/threadsCollapsed/updated") {
+        const { directoryKey, collapsed } = event.notification.params as {
+          directoryKey: string;
+          collapsed: boolean;
+        };
+        setState((current) => ({
+          ...current,
+          response: updateDirectoryThreadsCollapsedInSnapshot(
+            current.response,
+            {
+              directoryKey,
+              collapsed,
+            },
+          ),
         }));
         return;
       }
@@ -4799,6 +4875,42 @@ export function useThreadNavigation(
         setLaunchpadError(error instanceof Error ? error.message : String(error));
         throw error;
       }
+      let autoPinnedRank: string | undefined;
+      let autoPinFailure: string | undefined;
+      if (
+        shouldAutoPinMaterializedThread({
+          directory,
+          threads: stateRef.current.response?.threads ?? [],
+          parentThreadId: materializeParentThreadId,
+        })
+      ) {
+        const requestedPinnedRank = buildAppendPinRank(
+          (stateRef.current.response?.threads ?? []).map(
+            (thread) => thread.pinnedRank,
+          ),
+        );
+        if (!desktopApi.setThreadPin) {
+          autoPinFailure =
+            "The new thread was created, but it could not be pinned automatically.";
+        } else {
+          try {
+            const pinResult = await desktopApi.setThreadPin({
+              backend: response.backend,
+              threadId: response.threadId,
+              pinnedRank: requestedPinnedRank,
+            });
+            autoPinnedRank = pinResult.pinnedRank;
+            if (!autoPinnedRank) {
+              autoPinFailure =
+                "The new thread was created, but it could not be pinned automatically.";
+            }
+          } catch (error) {
+            autoPinFailure = `The new thread was created, but it could not be pinned automatically: ${
+              error instanceof Error ? error.message : String(error)
+            }`;
+          }
+        }
+      }
       const optimisticMaterializedThread = buildOptimisticThreadFromLaunchpad({
         directory,
         launchpad,
@@ -4825,6 +4937,7 @@ export function useThreadNavigation(
             }
           : undefined,
         parentThreadId: materializeParentThreadId,
+        pinnedRank: autoPinnedRank,
       });
       const nextThreadKey = buildThreadIdentityKey(response.backend, response.threadId);
       // Sub-thread launchpads drop the new child directly below their source
@@ -4862,6 +4975,8 @@ export function useThreadNavigation(
       }
       if (response.turnStartFailure) {
         setLaunchpadError(response.turnStartFailure.message);
+      } else if (autoPinFailure) {
+        setLaunchpadError(autoPinFailure);
       }
       // Link composer `@`-referenced directories to the just-created
       // thread before the refresh below so the snapshot comes back with
@@ -5230,6 +5345,8 @@ export function useThreadNavigation(
   const setSubthreadsCollapsedRequest = desktopApi?.setSubthreadsCollapsed;
   const setDirectoryPinRequest = desktopApi?.setDirectoryPin;
   const reorderDirectoryPinsRequest = desktopApi?.reorderDirectoryPins;
+  const setDirectoryThreadsCollapsedRequest =
+    desktopApi?.setDirectoryThreadsCollapsed;
   const setThreadReaction = useCallback(
     async (
       thread: NavigationThreadSummary,
@@ -5586,6 +5703,48 @@ export function useThreadNavigation(
     [refresh, reorderDirectoryPinsRequest],
   );
 
+  const setDirectoryThreadsCollapsed = useCallback(
+    async (
+      directory: NavigationDirectorySummary,
+      collapsed: boolean,
+    ): Promise<void> => {
+      if (!setDirectoryThreadsCollapsedRequest) {
+        return;
+      }
+
+      setState((current) => ({
+        ...current,
+        response: updateDirectoryThreadsCollapsedInSnapshot(
+          current.response,
+          {
+            directoryKey: directory.key,
+            collapsed,
+          },
+        ),
+      }));
+
+      try {
+        const result = await setDirectoryThreadsCollapsedRequest({
+          directoryKey: directory.key,
+          collapsed,
+        });
+        setState((current) => ({
+          ...current,
+          response: updateDirectoryThreadsCollapsedInSnapshot(
+            current.response,
+            {
+              directoryKey: result.directoryKey,
+              collapsed: result.collapsed,
+            },
+          ),
+        }));
+      } catch {
+        await refresh();
+      }
+    },
+    [refresh, setDirectoryThreadsCollapsedRequest],
+  );
+
   const updateThreadExecutionMode = useCallback(
     async (
       thread: NavigationThreadSummary,
@@ -5861,6 +6020,7 @@ export function useThreadNavigation(
     setSubthreadsCollapsed,
     setDirectoryPin,
     reorderDirectoryPins,
+    setDirectoryThreadsCollapsed,
     snapshot: state.response,
     threads,
   };
