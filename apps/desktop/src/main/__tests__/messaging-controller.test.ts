@@ -96,17 +96,27 @@ describe("MessagingController", () => {
     expect(harness.delivered).toHaveLength(1);
     expect(harness.delivered[0]).toMatchObject({
       kind: "review",
-      title: "Review target",
+      title: "Review",
+      body: [
+        "Project: PwrAgent",
+        "Review: Base Branch",
+        "Base Branch: main",
+      ].join("\n"),
       review: {
         backend: "codex",
         threadId: "thread-1",
-        phase: "target",
+        phase: "summary",
         cwd: "/repo/pwragent",
+        target: { type: "baseBranch", branch: "main" },
       },
       actions: expect.arrayContaining([
         expect.objectContaining({
-          id: "review:target:current-changes",
-          label: "Current changes",
+          id: "review:summary:start",
+          label: "Start Review",
+        }),
+        expect.objectContaining({
+          id: "review:cancel",
+          label: "Cancel",
         }),
       ]),
     });
@@ -120,7 +130,22 @@ describe("MessagingController", () => {
 
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
+        actionId: "review:summary:target",
+      }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
         actionId: "review:target:current-changes",
+      }),
+    );
+    expect(harness.submitReview).not.toHaveBeenCalled();
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "review",
+      body: expect.stringContaining("Review: Current Changes"),
+    });
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "review:summary:start",
       }),
     );
 
@@ -131,6 +156,37 @@ describe("MessagingController", () => {
       delivery: "inline",
       cwd: "/repo/pwragent",
     });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Review started",
+    });
+  });
+
+  it("preserves the backend bridge receiver when submitting a review", async () => {
+    let receiver: MessagingBackendBridge | undefined;
+    const harness = await createHarness({
+      submitReview: async function (request) {
+        receiver = this as MessagingBackendBridge;
+        if (typeof receiver.getNavigationSnapshot !== "function") {
+          throw new Error("backend receiver was lost");
+        }
+        return {
+          status: "started" as const,
+          response: {
+            backend: request.backend,
+            threadId: request.threadId,
+            reviewThreadId: request.threadId,
+            turnId: "review-turn-1",
+          },
+        };
+      },
+    });
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/review main"));
+
+    expect(receiver).toBeDefined();
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "confirmation",
       title: "Review started",
@@ -256,6 +312,17 @@ describe("MessagingController", () => {
         ],
       },
     };
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      gitWorkingState: {
+        dirtyFiles: 0,
+        dirtyAdditions: 0,
+        dirtyDeletions: 0,
+        untrackedFiles: 0,
+        unpushedCommits: 1,
+        baseBranch: "release",
+      },
+    };
     const harness = await createHarness({ navigation });
     await bindThread(harness);
     harness.delivered.length = 0;
@@ -263,13 +330,14 @@ describe("MessagingController", () => {
     await harness.controller.handleInboundEvent(buildCommandEvent("/review"));
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "review",
+      body: expect.stringContaining("Base Branch: release"),
       review: {
         cwd: "/repo/pwragent/.worktrees/pwragent-feature-handoff",
         repositoryPath: "/repo/pwragent",
       },
     });
     await harness.controller.handleInboundEvent(
-      buildCallbackEvent({ actionId: "review:target:base-branch" }),
+      buildCallbackEvent({ actionId: "review:summary:base-branch" }),
     );
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "review",
@@ -280,11 +348,36 @@ describe("MessagingController", () => {
         }),
       ]),
     });
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "review:base-branch:0" }),
+    );
+    expect(harness.submitReview).not.toHaveBeenCalled();
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "review",
+      body: expect.stringContaining("Base Branch: release"),
+      review: {
+        phase: "summary",
+        target: { type: "baseBranch", branch: "release" },
+      },
+    });
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "review:summary:start" }),
+    );
+    expect(harness.submitReview).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      target: { type: "baseBranch", branch: "release" },
+      delivery: "inline",
+      cwd: "/repo/pwragent/.worktrees/pwragent-feature-handoff",
+    });
 
     const commitHarness = await createHarness({ navigation });
     await bindThread(commitHarness);
     commitHarness.delivered.length = 0;
     await commitHarness.controller.handleInboundEvent(buildCommandEvent("/review"));
+    await commitHarness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "review:summary:target" }),
+    );
     await commitHarness.controller.handleInboundEvent(
       buildCallbackEvent({ actionId: "review:target:commit" }),
     );
@@ -300,6 +393,286 @@ describe("MessagingController", () => {
         }),
       ]),
     });
+  });
+
+  it("returns to the summary with the selected project and its default base branch", async () => {
+    const navigation = buildMultiProjectReviewNavigationSnapshot();
+    const harness = await createHarness({ navigation });
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/review"));
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "review",
+      body: [
+        "Project: [needs selection]",
+        "Review: Base Branch",
+        "Base Branch: origin/main",
+      ].join("\n"),
+      actions: expect.arrayContaining([
+        expect.objectContaining({ id: "review:summary:workspace" }),
+        expect.objectContaining({ id: "review:summary:start" }),
+        expect.objectContaining({ id: "review:cancel" }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "review:summary:workspace" }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "review:workspace:1" }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "review",
+      body: [
+        "Project: Infra",
+        "Review: Base Branch",
+        "Base Branch: origin/develop",
+      ].join("\n"),
+      review: {
+        phase: "summary",
+        cwd: "/worktrees/infra",
+        repositoryPath: "/repo/infra",
+        target: {
+          type: "baseBranch",
+          branch: "origin/develop",
+        },
+      },
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "review:summary:base-branch" }),
+    );
+    const baseBranchIntent = harness.delivered.at(-1);
+    expect(baseBranchIntent).toMatchObject({ kind: "review" });
+    expect(
+      baseBranchIntent && "actions" in baseBranchIntent
+        ? baseBranchIntent.actions?.[0]
+        : undefined,
+    ).toMatchObject({
+      label: "origin/develop",
+      value: { branch: "origin/develop" },
+    });
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "review:back" }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "review:summary:start" }),
+    );
+    expect(harness.submitReview).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      target: { type: "baseBranch", branch: "origin/develop" },
+      delivery: "inline",
+      cwd: "/worktrees/infra",
+    });
+  });
+
+  it("resets a selected commit when changing review projects", async () => {
+    const harness = await createHarness({
+      navigation: buildMultiProjectReviewNavigationSnapshot(),
+    });
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/review"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "review:summary:workspace" }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "review:workspace:0" }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "review",
+      body: expect.stringContaining("Base Branch: release"),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "review:summary:target" }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "review:target:commit" }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "review:commit:0" }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "review",
+      body: expect.stringContaining("Commit: Fix app review"),
+      review: {
+        target: {
+          type: "commit",
+          sha: "aaaaaaaaaaaaaaaa",
+        },
+      },
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "review:summary:workspace" }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "review:workspace:1" }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "review",
+      body: [
+        "Project: Infra",
+        "Review: Base Branch",
+        "Base Branch: origin/develop",
+      ].join("\n"),
+      review: {
+        cwd: "/worktrees/infra",
+        target: {
+          type: "baseBranch",
+          branch: "origin/develop",
+        },
+      },
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "review:summary:start" }),
+    );
+    expect(harness.submitReview).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      target: { type: "baseBranch", branch: "origin/develop" },
+      delivery: "inline",
+      cwd: "/worktrees/infra",
+    });
+  });
+
+  it("pages linked review projects within the provider action limit", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      linkedDirectories: Array.from({ length: 12 }, (_, index) => ({
+        id: `directory:project-${index + 1}`,
+        kind: "worktree" as const,
+        label: `Project ${index + 1}`,
+        path: `/repo/project-${index + 1}`,
+        worktreePath: `/worktrees/project-${index + 1}`,
+      })),
+    };
+    navigation.directories = Array.from({ length: 12 }, (_, index) => ({
+      key: `directory:project-${index + 1}`,
+      kind: "directory" as const,
+      label: `Project ${index + 1}`,
+      path: `/repo/project-${index + 1}`,
+      threadKeys: ["codex:thread-1"],
+      needsAttentionCount: 0,
+      gitStatus: {
+        defaultBranch: "main",
+        branches: ["main"],
+        baseBranches: ["origin/main", "main"],
+      },
+    }));
+    const harness = await createHarness({
+      capabilityProfile: {
+        ...PERMISSIVE_CAPABILITY_PROFILE,
+        actions: {
+          ...PERMISSIVE_CAPABILITY_PROFILE.actions!,
+          maxActions: 13,
+        },
+      },
+      navigation,
+    });
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/review"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "review:summary:workspace" }),
+    );
+
+    const firstPage = harness.delivered.at(-1);
+    expect(firstPage).toMatchObject({
+      kind: "review",
+      body: expect.stringContaining("Page 1/2."),
+    });
+    if (!firstPage || firstPage.kind !== "review") {
+      throw new Error("Expected the first review project page");
+    }
+    expect(firstPage.actions).toHaveLength(12);
+    expect(firstPage.actions).toContainEqual(
+      expect.objectContaining({
+        id: "review:workspace:next",
+        value: { pageIndex: 1 },
+      }),
+    );
+    expect(firstPage.actions).not.toContainEqual(
+      expect.objectContaining({ id: "review:workspace:11" }),
+    );
+
+    const next = findAction(firstPage, "review:workspace:next");
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: next.id,
+        value: next.value,
+      }),
+    );
+
+    const secondPage = harness.delivered.at(-1);
+    expect(secondPage).toMatchObject({
+      kind: "review",
+      body: expect.stringContaining("Page 2/2."),
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "review:workspace:11",
+          label: "Project 12",
+        }),
+        expect.objectContaining({
+          id: "review:workspace:previous",
+          value: { pageIndex: 0 },
+        }),
+      ]),
+    });
+    if (!secondPage || secondPage.kind !== "review") {
+      throw new Error("Expected the second review project page");
+    }
+    expect(secondPage.actions.length).toBeLessThanOrEqual(13);
+
+    const projectTwelve = findAction(secondPage, "review:workspace:11");
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: projectTwelve.id,
+        value: projectTwelve.value,
+      }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "review",
+      body: expect.stringContaining("Project: Project 12"),
+      review: {
+        cwd: "/worktrees/project-12",
+        repositoryPath: "/repo/project-12",
+      },
+    });
+  });
+
+  it("cancels the review summary without starting a review", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+    await harness.controller.handleInboundEvent(buildCommandEvent("/review"));
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "review:cancel" }),
+    );
+
+    expect(harness.submitReview).not.toHaveBeenCalled();
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Review cancelled",
+      body: "No review was started.",
+      delivery: expect.objectContaining({ mode: "update" }),
+    });
+    await expect(
+      harness.store.findActivePendingIntentForChannel({
+        actorId: "user-1",
+        channel: buildCommandEvent("/review").channel,
+        now: 1000,
+      }),
+    ).resolves.toBeUndefined();
   });
 
   it("delivers deferred review start failures to the bound conversation", async () => {
@@ -16719,6 +17092,83 @@ function buildNavigationSnapshot(): NavigationSnapshot {
       executionMode: "default",
     },
   };
+}
+
+function buildMultiProjectReviewNavigationSnapshot(): NavigationSnapshot {
+  const snapshot = buildNavigationSnapshot();
+  snapshot.threads[0] = {
+    ...snapshot.threads[0]!,
+    projectKey: "/worktrees/app/packages/service",
+    gitWorkingState: {
+      dirtyFiles: 0,
+      dirtyAdditions: 0,
+      dirtyDeletions: 0,
+      untrackedFiles: 0,
+      unpushedCommits: 1,
+      baseBranch: "release",
+    },
+    linkedDirectories: [
+      {
+        id: "directory:app",
+        kind: "worktree",
+        label: "App",
+        path: "/repo/app",
+        worktreePath: "/worktrees/app",
+      },
+      {
+        id: "directory:infra",
+        kind: "worktree",
+        label: "Infra",
+        path: "/repo/infra",
+        worktreePath: "/worktrees/infra",
+      },
+    ],
+  };
+  snapshot.directories = [
+    {
+      key: "directory:app",
+      kind: "directory",
+      label: "App",
+      path: "/repo/app",
+      threadKeys: ["codex:thread-1"],
+      needsAttentionCount: 0,
+      gitStatus: {
+        currentBranch: "feature/app",
+        defaultBranch: "main",
+        branches: ["feature/app", "main"],
+        baseBranches: ["origin/main", "main"],
+        recentCommits: [
+          {
+            sha: "aaaaaaaaaaaaaaaa",
+            shortSha: "aaaaaaa",
+            subject: "Fix app review",
+          },
+        ],
+      },
+    },
+    {
+      key: "directory:infra",
+      kind: "directory",
+      label: "Infra",
+      path: "/repo/infra",
+      threadKeys: ["codex:thread-1"],
+      needsAttentionCount: 0,
+      gitStatus: {
+        currentBranch: "deploy/search",
+        defaultBranch: "develop",
+        branches: ["deploy/search", "develop"],
+        baseBranches: ["origin/develop", "develop"],
+        recentCommits: [
+          {
+            sha: "bbbbbbbbbbbbbbbb",
+            shortSha: "bbbbbbb",
+            subject: "Fix infra review",
+          },
+        ],
+      },
+    },
+  ];
+  return snapshot;
 }
 
 function buildWorktreeLaunchpadNavigationSnapshot(): NavigationSnapshot {

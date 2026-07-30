@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
+import path from "node:path";
 import {
   applyNavigationLaunchpadProviderSettingsPatch,
+  buildReviewBranchOptions,
   buildThreadIdentityKey,
   isAcpBackendId,
   isAppServerBackendKind,
@@ -1709,15 +1711,34 @@ export class MessagingController {
         } =>
           Boolean(workspace.cwd),
       );
-    const phase = workspaces.length > 1 ? "workspace" : "target";
+    const selectedWorkspace = workspaces.length === 1
+      ? workspaces[0]
+      : undefined;
+    const defaultRepositoryPath =
+      selectedWorkspace?.repositoryPath
+      ?? workspaces[0]?.repositoryPath;
+    const directory = navigation.directories.find((candidate) =>
+      reviewWorkspaceMatches(candidate.path, defaultRepositoryPath),
+    );
+    const workspaceThread = reviewThreadForWorkspace(
+      thread,
+      selectedWorkspace?.cwd,
+    );
+    const target: AppServerReviewTarget = {
+      type: "baseBranch",
+      branch:
+        buildReviewBranchOptions({ directory, thread: workspaceThread })[0]
+        ?? "main",
+    };
     const intent = this.buildReviewIntent({
       binding,
       navigation,
-      phase,
-      ...(workspaces.length === 1
+      phase: "summary",
+      target,
+      ...(selectedWorkspace
         ? {
-            cwd: workspaces[0]!.cwd,
-            repositoryPath: workspaces[0]!.repositoryPath,
+            cwd: selectedWorkspace.cwd,
+            repositoryPath: selectedWorkspace.repositoryPath,
           }
         : {}),
     });
@@ -1735,6 +1756,8 @@ export class MessagingController {
     phase: MessagingReviewIntent["review"]["phase"];
     cwd?: string;
     repositoryPath?: string;
+    workspacePageIndex?: number;
+    target?: AppServerReviewTarget;
     id?: string;
     createdAt?: number;
     targetSurface?: MessagingSurfaceRef;
@@ -1753,28 +1776,162 @@ export class MessagingController {
     const directory = params.navigation.directories.find((candidate) =>
       reviewWorkspaceMatches(
         candidate.path,
-        params.repositoryPath ?? params.cwd,
+        params.repositoryPath
+        ?? params.cwd
+        ?? linkedWorkspaces[0]?.repositoryPath,
       ),
     );
-    let title = "Review target";
-    let body = "What should PwrAgent review?";
+    const selectedWorkspace = linkedWorkspaces.find(
+      (workspace) => workspace.cwd === params.cwd,
+    );
+    const workspaceThread = reviewThreadForWorkspace(thread, params.cwd);
+    const defaultBaseBranch =
+      buildReviewBranchOptions({ directory, thread: workspaceThread })[0]
+      ?? "main";
+    const target =
+      params.target
+      ?? {
+        type: "baseBranch" as const,
+        branch: defaultBaseBranch,
+      };
+    let title = "Review";
+    let body: string;
     let allowFreeform = false;
-    let targetType: AppServerReviewTarget["type"] | undefined;
     let actions: MessagingSurfaceAction[] = [];
+    const backAction: MessagingSurfaceAction = {
+      id: "review:back",
+      label: "Back",
+      fallbackText: "back",
+      priority: 1,
+    };
+    const cancelAction: MessagingSurfaceAction = {
+      id: "review:cancel",
+      label: "Cancel",
+      style: "danger",
+      fallbackText: "cancel",
+      priority: 2,
+    };
 
-    if (params.phase === "workspace") {
-      title = "Review project";
-      body = "Choose the linked project to review.";
-      actions = linkedWorkspaces.map((workspace, index) => ({
-        id: `review:workspace:${index}`,
-        label: workspace.label,
-        fallbackText: workspace.cwd,
-        value: {
-          cwd: workspace.cwd,
-          repositoryPath: workspace.repositoryPath,
+    if (params.phase === "summary") {
+      const projectLabel =
+        selectedWorkspace?.label
+        ?? (
+          linkedWorkspaces.length > 1
+            ? "[needs selection]"
+            : linkedWorkspaces[0]?.label ?? "Thread workspace"
+        );
+      const summaryLines = [
+        `Project: ${projectLabel}`,
+        `Review: ${formatMessagingReviewScope(target)}`,
+      ];
+      if (target.type === "baseBranch") {
+        summaryLines.push(`Base Branch: ${target.branch}`);
+      } else if (target.type === "commit") {
+        summaryLines.push(
+          `Commit: ${target.title?.trim() || target.sha || "[needs selection]"}`,
+        );
+      } else if (target.type === "custom") {
+        summaryLines.push(`Instructions: ${target.instructions}`);
+      }
+      body = summaryLines.join("\n");
+      actions = [
+        ...(linkedWorkspaces.length > 1
+          ? [{
+              id: "review:summary:workspace",
+              label: "Project",
+              fallbackText: "project",
+              priority: 10,
+            }]
+          : []),
+        {
+          id: "review:summary:target",
+          label: "Review Scope",
+          fallbackText: "review scope",
+          priority: 11,
         },
-      }));
+        ...(target.type === "baseBranch"
+          ? [{
+              id: "review:summary:base-branch",
+              label: "Base Branch",
+              fallbackText: "base branch",
+              priority: 12,
+            }]
+          : target.type === "commit"
+            ? [{
+                id: "review:summary:commit",
+                label: "Commit",
+                fallbackText: "commit",
+                priority: 12,
+              }]
+            : target.type === "custom"
+              ? [{
+                  id: "review:summary:custom",
+                  label: "Instructions",
+                  fallbackText: "instructions",
+                  priority: 12,
+                }]
+              : []),
+        {
+          id: "review:summary:start",
+          label: "Start Review",
+          style: "primary",
+          fallbackText: "start review",
+          priority: 0,
+        },
+        cancelAction,
+      ];
+    } else if (params.phase === "workspace") {
+      const page = paginateReviewWorkspaces({
+        itemCount: linkedWorkspaces.length,
+        maxActions: this.capabilityProfile.actions?.maxActions,
+        pageIndex: params.workspacePageIndex,
+      });
+      title = "Review project";
+      body = [
+        "Choose the linked project to review.",
+        page.totalPages > 1
+          ? `Page ${page.pageIndex + 1}/${page.totalPages}.`
+          : undefined,
+      ]
+        .filter((line): line is string => Boolean(line))
+        .join("\n");
+      actions = [
+        ...linkedWorkspaces
+          .slice(page.startIndex, page.endIndex)
+          .map((workspace, index) => ({
+            id: `review:workspace:${page.startIndex + index}`,
+            label: workspace.label,
+            fallbackText: workspace.cwd,
+            priority: 10 + index,
+            value: {
+              cwd: workspace.cwd,
+              repositoryPath: workspace.repositoryPath,
+            },
+          })),
+        ...(page.pageIndex > 0
+          ? [{
+              id: "review:workspace:previous",
+              label: "Previous",
+              fallbackText: "previous",
+              priority: 3,
+              value: { pageIndex: page.pageIndex - 1 },
+            }]
+          : []),
+        ...(page.pageIndex < page.totalPages - 1
+          ? [{
+              id: "review:workspace:next",
+              label: "Next",
+              fallbackText: "next",
+              priority: 4,
+              value: { pageIndex: page.pageIndex + 1 },
+            }]
+          : []),
+        backAction,
+        cancelAction,
+      ];
     } else if (params.phase === "target") {
+      title = "Review scope";
+      body = "Choose what PwrAgent should review.";
       actions = [
         {
           id: "review:target:base-branch",
@@ -1804,48 +1961,50 @@ export class MessagingController {
           fallbackText: "custom",
           value: { targetType: "custom" },
         },
+        backAction,
+        cancelAction,
       ];
     } else if (params.phase === "base_branch") {
       title = "Base branch";
       body = "Choose a base branch or reply with a branch name.";
       allowFreeform = true;
-      targetType = "baseBranch";
-      const branches = [
-        ...(directory?.gitStatus?.baseBranches ?? []),
-        ...(directory?.gitStatus?.branches ?? []),
-        directory?.gitStatus?.defaultBranch,
-        "main",
-      ]
-        .map((branch) => branch?.trim())
-        .filter(
-          (branch, index, candidates): branch is string =>
-            Boolean(branch) && candidates.indexOf(branch) === index,
-        );
-      actions = branches.map((branch, index) => ({
-        id: `review:base-branch:${index}`,
-        label: branch,
-        fallbackText: branch,
-        value: { branch },
-      }));
+      actions = [
+        ...buildReviewBranchOptions({
+          directory,
+          thread: workspaceThread,
+        }).map((branch, index) => ({
+          id: `review:base-branch:${index}`,
+          label: branch,
+          fallbackText: branch,
+          priority: 10 + index,
+          value: { branch },
+        })),
+        backAction,
+        cancelAction,
+      ];
     } else if (params.phase === "commit") {
       title = "Commit";
       body = "Choose a recent commit or reply with a commit SHA.";
       allowFreeform = true;
-      targetType = "commit";
-      actions = (directory?.gitStatus?.recentCommits ?? []).map((commit, index) => ({
-        id: `review:commit:${index}`,
-        label: `${commit.shortSha} ${commit.subject}`,
-        fallbackText: commit.sha,
-        value: {
-          sha: commit.sha,
-          title: commit.subject,
-        },
-      }));
+      actions = [
+        ...(directory?.gitStatus?.recentCommits ?? []).map((commit, index) => ({
+          id: `review:commit:${index}`,
+          label: `${commit.shortSha} ${commit.subject}`,
+          fallbackText: commit.sha,
+          priority: 10 + index,
+          value: {
+            sha: commit.sha,
+            title: commit.subject,
+          },
+        })),
+        backAction,
+        cancelAction,
+      ];
     } else if (params.phase === "custom") {
       title = "Custom review";
       body = "Reply with the review instructions.";
       allowFreeform = true;
-      targetType = "custom";
+      actions = [backAction, cancelAction];
     } else {
       title = "Review submitted";
       body = "The review request was submitted.";
@@ -1872,7 +2031,12 @@ export class MessagingController {
         ...(params.repositoryPath
           ? { repositoryPath: params.repositoryPath }
           : {}),
-        ...(targetType ? { targetType } : {}),
+        workspaceSelectionRequired: linkedWorkspaces.length > 1,
+        ...(params.workspacePageIndex !== undefined
+          ? { workspacePageIndex: params.workspacePageIndex }
+          : {}),
+        targetType: target.type,
+        target,
       },
       ...(params.targetSurface
         ? {
@@ -3134,11 +3298,10 @@ export class MessagingController {
       return false;
     }
 
-    await this.submitMessagingReviewFromPending(
-      pendingIntent,
-      event,
+    await this.updateReviewPendingIntent(pendingIntent, event, {
+      phase: "summary",
       target,
-    );
+    });
     return true;
   }
 
@@ -3153,7 +3316,84 @@ export class MessagingController {
 
     const value = asPlainRecord(action.value);
     const phase = pendingIntent.intent.review.phase;
+    if (action.id === "review:cancel") {
+      await this.cancelReviewPendingIntent(pendingIntent, event);
+      return;
+    }
+    if (action.id === "review:back") {
+      await this.updateReviewPendingIntent(pendingIntent, event, {
+        phase: "summary",
+      });
+      return;
+    }
+
+    if (phase === "summary") {
+      if (action.id === "review:summary:workspace") {
+        await this.updateReviewPendingIntent(pendingIntent, event, {
+          phase: "workspace",
+          workspacePageIndex: 0,
+        });
+      } else if (action.id === "review:summary:target") {
+        await this.updateReviewPendingIntent(pendingIntent, event, {
+          phase: "target",
+        });
+      } else if (action.id === "review:summary:base-branch") {
+        await this.updateReviewPendingIntent(pendingIntent, event, {
+          phase: "base_branch",
+        });
+      } else if (action.id === "review:summary:commit") {
+        await this.updateReviewPendingIntent(pendingIntent, event, {
+          phase: "commit",
+        });
+      } else if (action.id === "review:summary:custom") {
+        await this.updateReviewPendingIntent(pendingIntent, event, {
+          phase: "custom",
+        });
+      } else if (action.id === "review:summary:start") {
+        if (
+          pendingIntent.intent.review.workspaceSelectionRequired
+          && !pendingIntent.intent.review.cwd
+        ) {
+          await this.updateReviewPendingIntent(pendingIntent, event, {
+            phase: "workspace",
+            workspacePageIndex: 0,
+          });
+          return;
+        }
+        const target = pendingIntent.intent.review.target;
+        if (!target) {
+          await this.updateReviewPendingIntent(pendingIntent, event, {
+            phase: "target",
+          });
+          return;
+        }
+        await this.submitMessagingReviewFromPending(
+          pendingIntent,
+          event,
+          target,
+        );
+      }
+      return;
+    }
+
     if (phase === "workspace") {
+      const workspacePageIndex =
+        typeof value?.pageIndex === "number" && Number.isFinite(value.pageIndex)
+          ? Math.max(0, Math.trunc(value.pageIndex))
+          : undefined;
+      if (
+        (
+          action.id === "review:workspace:previous"
+          || action.id === "review:workspace:next"
+        )
+        && workspacePageIndex !== undefined
+      ) {
+        await this.updateReviewPendingIntent(pendingIntent, event, {
+          phase: "workspace",
+          workspacePageIndex,
+        });
+        return;
+      }
       const cwd = typeof value?.cwd === "string" ? value.cwd.trim() : "";
       const repositoryPath =
         typeof value?.repositoryPath === "string"
@@ -3161,9 +3401,11 @@ export class MessagingController {
           : "";
       if (cwd) {
         await this.updateReviewPendingIntent(pendingIntent, event, {
-          phase: "target",
+          phase: "summary",
           cwd,
           ...(repositoryPath ? { repositoryPath } : {}),
+          resetRepositoryTarget: true,
+          resetBaseBranch: true,
         });
       }
       return;
@@ -3173,14 +3415,15 @@ export class MessagingController {
       const targetType =
         typeof value?.targetType === "string" ? value.targetType : undefined;
       if (targetType === "uncommittedChanges") {
-        await this.submitMessagingReviewFromPending(
-          pendingIntent,
-          event,
-          { type: "uncommittedChanges" },
-        );
+        await this.updateReviewPendingIntent(pendingIntent, event, {
+          phase: "summary",
+          target: { type: "uncommittedChanges" },
+        });
       } else if (targetType === "baseBranch") {
         await this.updateReviewPendingIntent(pendingIntent, event, {
-          phase: "base_branch",
+          phase: "summary",
+          forceBaseBranch: true,
+          resetBaseBranch: true,
         });
       } else if (targetType === "commit") {
         await this.updateReviewPendingIntent(pendingIntent, event, {
@@ -3197,11 +3440,10 @@ export class MessagingController {
     if (phase === "base_branch") {
       const branch = typeof value?.branch === "string" ? value.branch.trim() : "";
       if (branch) {
-        await this.submitMessagingReviewFromPending(
-          pendingIntent,
-          event,
-          { type: "baseBranch", branch },
-        );
+        await this.updateReviewPendingIntent(pendingIntent, event, {
+          phase: "summary",
+          target: { type: "baseBranch", branch },
+        });
       }
       return;
     }
@@ -3210,11 +3452,10 @@ export class MessagingController {
       const sha = typeof value?.sha === "string" ? value.sha.trim() : "";
       const title = typeof value?.title === "string" ? value.title : null;
       if (sha) {
-        await this.submitMessagingReviewFromPending(
-          pendingIntent,
-          event,
-          { type: "commit", sha, title },
-        );
+        await this.updateReviewPendingIntent(pendingIntent, event, {
+          phase: "summary",
+          target: { type: "commit", sha, title },
+        });
       }
     }
   }
@@ -3226,6 +3467,11 @@ export class MessagingController {
       phase: MessagingReviewIntent["review"]["phase"];
       cwd?: string;
       repositoryPath?: string;
+      workspacePageIndex?: number;
+      target?: AppServerReviewTarget;
+      forceBaseBranch?: boolean;
+      resetRepositoryTarget?: boolean;
+      resetBaseBranch?: boolean;
     },
   ): Promise<void> {
     if (pendingIntent.intent.kind !== "review") {
@@ -3245,14 +3491,45 @@ export class MessagingController {
     const targetSurface = pendingIntent.surface ?? (
       event.kind === "callback" ? event.interaction : undefined
     );
+    const cwd = review.cwd ?? pendingIntent.intent.review.cwd;
+    const repositoryPath =
+      review.repositoryPath
+      ?? pendingIntent.intent.review.repositoryPath;
+    let target = review.target ?? pendingIntent.intent.review.target;
+    if (review.resetRepositoryTarget && target?.type === "commit") {
+      target = undefined;
+    }
+    if (
+      review.resetBaseBranch
+      && (
+        review.forceBaseBranch
+        || !target
+        || target.type === "baseBranch"
+      )
+    ) {
+      const thread = findThreadForBinding(navigation, binding);
+      const workspaceThread = reviewThreadForWorkspace(thread, cwd);
+      const directory = navigation.directories.find((candidate) =>
+        reviewWorkspaceMatches(
+          candidate.path,
+          repositoryPath ?? cwd,
+        ),
+      );
+      target = {
+        type: "baseBranch",
+        branch:
+          buildReviewBranchOptions({ directory, thread: workspaceThread })[0]
+          ?? "main",
+      };
+    }
     const intent = this.buildReviewIntent({
       binding,
       navigation,
       phase: review.phase,
-      cwd: review.cwd ?? pendingIntent.intent.review.cwd,
-      repositoryPath:
-        review.repositoryPath
-        ?? pendingIntent.intent.review.repositoryPath,
+      cwd,
+      repositoryPath,
+      workspacePageIndex: review.workspacePageIndex,
+      target,
       id: pendingIntent.intent.id,
       createdAt: pendingIntent.intent.createdAt,
       targetSurface,
@@ -3263,6 +3540,33 @@ export class MessagingController {
       intent,
       surface: result.surface ?? pendingIntent.surface,
     });
+  }
+
+  private async cancelReviewPendingIntent(
+    pendingIntent: MessagingPendingIntentRecord,
+    event: MessagingInboundCallbackEvent,
+  ): Promise<void> {
+    const binding = pendingIntent.bindingId
+      ? await this.options.store.getBinding(pendingIntent.bindingId)
+      : undefined;
+    await this.options.store.deletePendingIntent(pendingIntent.id);
+    await this.deliver(
+      buildConfirmationIntent({
+        id: this.newIntentId("review-cancelled"),
+        capabilityProfile: this.capabilityProfile,
+        createdAt: this.now(),
+        title: "Review cancelled",
+        body: "No review was started.",
+        targetSurface: pendingIntent.surface ?? event.interaction,
+        delivery: {
+          mode: "update",
+          replaceMarkup: true,
+          fallback: "present_new",
+        },
+      }),
+      binding && !binding.revokedAt ? binding : undefined,
+      event,
+    );
   }
 
   private async submitMessagingReviewFromPending(
@@ -3310,7 +3614,7 @@ export class MessagingController {
         backend: params.binding.backend,
       });
       const settings = turnSettingsForBinding(params.binding, navigation);
-      const result = await submitReview({
+      const result = await submitReview.call(this.options.backend, {
         backend: params.binding.backend,
         threadId: params.binding.threadId,
         target: params.target,
@@ -9193,7 +9497,6 @@ export class MessagingController {
     const navigation = await this.options.backend.getNavigationSnapshot({
       backend: "all",
     });
-    const thread = findThreadForBinding(navigation, binding);
     const models = summary?.launchpadOptions?.models ?? [];
     const modelOption = models.find((candidate) => candidate.id === model);
     if (summary && !modelOption) {
@@ -13817,6 +14120,79 @@ function reviewWorkspaceMatches(
   }
   const normalize = (value: string) => value.replace(/\/+$/, "");
   return normalize(directoryPath) === normalize(cwd);
+}
+
+function reviewWorkspaceContains(
+  workspacePath: string | undefined,
+  cwd: string | undefined,
+): boolean {
+  if (!workspacePath || !cwd) {
+    return false;
+  }
+  const relative = path.relative(
+    path.resolve(workspacePath),
+    path.resolve(cwd),
+  );
+  return (
+    relative === ""
+    || (!relative.startsWith("..") && !path.isAbsolute(relative))
+  );
+}
+
+function reviewThreadForWorkspace(
+  thread: NavigationThreadSummary | undefined,
+  cwd: string | undefined,
+): NavigationThreadSummary | undefined {
+  if (!thread || thread.linkedDirectories.length <= 1) {
+    return thread;
+  }
+  return reviewWorkspaceContains(cwd, thread.projectKey)
+    ? thread
+    : undefined;
+}
+
+function paginateReviewWorkspaces(params: {
+  itemCount: number;
+  maxActions: number | undefined;
+  pageIndex: number | undefined;
+}): {
+  endIndex: number;
+  pageIndex: number;
+  startIndex: number;
+  totalPages: number;
+} {
+  const maxActions =
+    params.maxActions === undefined
+      ? Number.MAX_SAFE_INTEGER
+      : Math.max(1, Math.trunc(params.maxActions));
+  const singlePageSize = Math.max(1, maxActions - 2);
+  const pageSize =
+    params.itemCount > singlePageSize
+      ? Math.max(1, maxActions - 4)
+      : singlePageSize;
+  const totalPages = Math.max(1, Math.ceil(params.itemCount / pageSize));
+  const requestedPage = Math.max(0, Math.trunc(params.pageIndex ?? 0));
+  const pageIndex = Math.min(requestedPage, totalPages - 1);
+  const startIndex = pageIndex * pageSize;
+  return {
+    endIndex: Math.min(params.itemCount, startIndex + pageSize),
+    pageIndex,
+    startIndex,
+    totalPages,
+  };
+}
+
+function formatMessagingReviewScope(target: AppServerReviewTarget): string {
+  switch (target.type) {
+    case "uncommittedChanges":
+      return "Current Changes";
+    case "baseBranch":
+      return "Base Branch";
+    case "commit":
+      return "Commit";
+    case "custom":
+      return "Custom";
+  }
 }
 
 function formatReviewTarget(target: AppServerReviewTarget): string {
