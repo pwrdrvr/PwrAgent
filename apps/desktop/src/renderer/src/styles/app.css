@@ -8653,6 +8653,46 @@ textarea,
   height: 20px;
 }
 
+.transcript-message__messaging-origin {
+  height: 20px;
+  border: 1px solid var(--accent-border);
+}
+
+.transcript-message__messaging-platform {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+}
+
+.transcript-message__messaging-platform-fallback {
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.transcript-message__messaging-surface,
+.transcript-message__messaging-actor {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.transcript-message__messaging-surface {
+  min-width: 0;
+}
+
+.transcript-message__messaging-separator {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+}
+
+.transcript-message__messaging-actor {
+  flex: 0 1 auto;
+  color: var(--text-secondary);
+}
+
 .transcript-message__source {
   overflow: hidden;
   color: var(--text-muted);

@@ -12580,6 +12580,7 @@ export class DesktopBackendRegistry {
           backend: launchpad.backend,
           threadId: startThreadResponse.threadId,
           input,
+          messageOrigin: options?.messageOrigin,
           model: launchpad.model,
           reasoningEffort: launchpad.reasoningEffort,
           serviceTier: launchpad.serviceTier,

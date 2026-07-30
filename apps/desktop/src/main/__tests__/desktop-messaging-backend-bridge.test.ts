@@ -7,6 +7,54 @@ import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { DesktopMessagingBackendBridge } from "../messaging/desktop-backend-bridge";
 
 describe("DesktopMessagingBackendBridge", () => {
+  it("preserves enriched messaging provenance when starting a turn", async () => {
+    const submitTurn = vi.fn(async (request) => ({
+      status: "started" as const,
+      entry: {
+        ...request,
+        id: "queue-entry-1",
+        createdAt: 1_000,
+      },
+      turnId: "turn-1",
+    }));
+    const bridge = new DesktopMessagingBackendBridge({
+      submitTurn,
+    } as unknown as DesktopBackendRegistry);
+    const messageOrigin = {
+      kind: "messaging" as const,
+      messaging: {
+        platform: "slack" as const,
+        surface: {
+          id: "thread-1",
+          kind: "thread" as const,
+          title: "api-search circuit breaker timeout",
+          parentTitle: "signals-chat",
+          ancestorTitle: "PwrAgent",
+        },
+        actor: {
+          platformUserId: "U012345",
+          displayName: "Hunter",
+          username: "huntharo",
+        },
+      },
+    };
+
+    await bridge.startTurn({
+      backend: "codex",
+      threadId: "thread-1",
+      input: [{ type: "text", text: "Go for it." }],
+      messageOrigin,
+    });
+
+    expect(submitTurn).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      input: [{ type: "text", text: "Go for it." }],
+      messageOrigin,
+      origin: "messaging",
+    });
+  });
+
   it("reads active turns from the registry", async () => {
     const bridge = createBridge({
       entries: [],

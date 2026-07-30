@@ -18,6 +18,8 @@ import type {
   AppServerThreadReviewEntry,
   AppServerThreadTurnMetadata,
   AppServerThreadImagePart,
+  MessagingChannelKind,
+  MessagingConversationKind,
   NavigationThreadSummary,
 } from "@pwragent/shared";
 import { buildThreadIdentityKey } from "@pwragent/shared";
@@ -2823,16 +2825,23 @@ function threadMessageOriginFromUnknown(
   ) {
     return undefined;
   }
+  const messaging = threadMessageMessagingOriginFromUnknown(record.messaging);
   const source = record.sourceThread;
   if (!source || typeof source !== "object" || Array.isArray(source)) {
-    return { kind: record.kind };
+    return {
+      kind: record.kind,
+      ...(messaging ? { messaging } : {}),
+    };
   }
   const sourceRecord = source as Record<string, unknown>;
   if (
     typeof sourceRecord.backend !== "string"
     || typeof sourceRecord.threadId !== "string"
   ) {
-    return { kind: record.kind };
+    return {
+      kind: record.kind,
+      ...(messaging ? { messaging } : {}),
+    };
   }
   return {
     kind: record.kind,
@@ -2843,7 +2852,103 @@ function threadMessageOriginFromUnknown(
         ? { title: sourceRecord.title }
         : {}),
     },
+    ...(messaging ? { messaging } : {}),
   };
+}
+
+function threadMessageMessagingOriginFromUnknown(
+  value: unknown,
+): AppServerThreadMessageOrigin["messaging"] | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const surface = record.surface;
+  const actor = record.actor;
+  if (
+    typeof record.platform !== "string"
+    || !isMessagingChannelKind(record.platform)
+    || !surface
+    || typeof surface !== "object"
+    || Array.isArray(surface)
+    || !actor
+    || typeof actor !== "object"
+    || Array.isArray(actor)
+  ) {
+    return undefined;
+  }
+  const surfaceRecord = surface as Record<string, unknown>;
+  const actorRecord = actor as Record<string, unknown>;
+  if (
+    typeof surfaceRecord.id !== "string"
+    || typeof surfaceRecord.kind !== "string"
+    || !isMessagingConversationKind(surfaceRecord.kind)
+    || typeof actorRecord.platformUserId !== "string"
+  ) {
+    return undefined;
+  }
+  return {
+    platform: record.platform,
+    surface: {
+      id: surfaceRecord.id,
+      kind: surfaceRecord.kind,
+      ...(typeof surfaceRecord.title === "string"
+        ? { title: surfaceRecord.title }
+        : {}),
+      ...(typeof surfaceRecord.parentTitle === "string"
+        ? { parentTitle: surfaceRecord.parentTitle }
+        : {}),
+      ...(typeof surfaceRecord.ancestorTitle === "string"
+        ? { ancestorTitle: surfaceRecord.ancestorTitle }
+        : {}),
+    },
+    actor: {
+      platformUserId: actorRecord.platformUserId,
+      ...(typeof actorRecord.displayName === "string"
+        ? { displayName: actorRecord.displayName }
+        : {}),
+      ...(typeof actorRecord.phoneNumber === "string"
+        ? { phoneNumber: actorRecord.phoneNumber }
+        : {}),
+      ...(typeof actorRecord.username === "string"
+        ? { username: actorRecord.username }
+        : {}),
+    },
+  };
+}
+
+function isMessagingChannelKind(value: string): value is MessagingChannelKind {
+  return [
+    "telegram",
+    "discord",
+    "slack",
+    "mattermost",
+    "feishu",
+    "googlechat",
+    "msteams",
+    "matrix",
+    "irc",
+    "imessage",
+    "signal",
+    "whatsapp",
+    "line",
+    "zalo",
+    "nextcloud-talk",
+    "synology-chat",
+    "twitch",
+    "nostr",
+    "qqbot",
+    "bluebubbles",
+    "tlon",
+    "voice-call",
+    "custom",
+  ].includes(value);
+}
+
+function isMessagingConversationKind(
+  value: string,
+): value is MessagingConversationKind {
+  return ["dm", "channel", "thread", "topic"].includes(value);
 }
 
 function assistantMessageEntryFromCompletedItem(params: {

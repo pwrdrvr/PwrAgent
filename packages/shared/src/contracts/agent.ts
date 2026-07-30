@@ -3,6 +3,7 @@ import type {
   AppServerMcpElicitationResponse,
   AppServerNotification,
   AppServerThreadActivityEntry,
+  AppServerThreadMessageOrigin,
   LinkedDirectorySummary,
   ThreadExecutionMode,
   AppServerReviewDelivery,
@@ -527,6 +528,7 @@ export type MaterializedDirectoryLaunchpadThread = {
 };
 
 export type MaterializeDirectoryLaunchpadOptions = {
+  messageOrigin?: AppServerThreadMessageOrigin;
   onCodexEnvironmentSetupProgress?: (
     event: CodexEnvironmentSetupProgressEvent,
   ) => void;

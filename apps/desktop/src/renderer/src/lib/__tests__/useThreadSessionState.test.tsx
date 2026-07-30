@@ -723,6 +723,74 @@ describe("useThreadSessionState", () => {
         },
       }),
     ]);
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-2",
+            item: {
+              id: "user-message-2",
+              type: "userMessage",
+              origin: {
+                kind: "messaging",
+                messaging: {
+                  platform: "slack",
+                  surface: {
+                    id: "message-thread-1",
+                    kind: "thread",
+                    title: "api-search circuit breaker timeout",
+                    parentTitle: "signals-chat",
+                    ancestorTitle: "PwrAgent",
+                  },
+                  actor: {
+                    platformUserId: "U012345",
+                    displayName: "Hunter",
+                    username: "huntharo",
+                  },
+                },
+              },
+              content: [
+                {
+                  type: "text",
+                  text: "Go for it.",
+                },
+              ],
+            },
+          },
+        },
+      });
+    });
+
+    expect(
+      result.current.response?.replay.messages.find(
+        (message) => message.id === "user-message-2",
+      ),
+    ).toEqual(
+      expect.objectContaining({
+        origin: {
+          kind: "messaging",
+          messaging: {
+            platform: "slack",
+            surface: {
+              id: "message-thread-1",
+              kind: "thread",
+              title: "api-search circuit breaker timeout",
+              parentTitle: "signals-chat",
+              ancestorTitle: "PwrAgent",
+            },
+            actor: {
+              platformUserId: "U012345",
+              displayName: "Hunter",
+              username: "huntharo",
+            },
+          },
+        },
+      }),
+    );
   });
 
   it("keeps an optimistic image user message ahead of a hydrated assistant final", async () => {

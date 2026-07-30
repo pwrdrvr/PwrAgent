@@ -1,6 +1,7 @@
 import type {
   AgentEvent,
   AppServerBackendKind,
+  AppServerThreadMessageOrigin,
   AppServerThreadReplay,
   AppServerListSkillsRequest,
   AppServerListSkillsResponse,
@@ -189,7 +190,9 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
     return await this.registry.updateDirectoryLaunchpad(request);
   }
 
-  async startTurn(request: StartTurnRequest): Promise<StartTurnResponse> {
+  async startTurn(
+    request: StartTurnRequest & { messageOrigin?: AppServerThreadMessageOrigin },
+  ): Promise<StartTurnResponse> {
     const submitted = await this.registry.submitTurn({
       ...request,
       origin: "messaging",
@@ -225,8 +228,13 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
     return await this.registry.submitReview(request);
   }
 
-  async steerTurn(request: SteerTurnRequest): Promise<SteerTurnResponse> {
-    return await this.registry.steerTurn(request, { kind: "messaging" });
+  async steerTurn(
+    request: SteerTurnRequest & { messageOrigin?: AppServerThreadMessageOrigin },
+  ): Promise<SteerTurnResponse> {
+    return await this.registry.steerTurn(
+      request,
+      request.messageOrigin ?? { kind: "messaging" },
+    );
   }
 
   async startThread(request: StartThreadRequest): Promise<StartThreadResponse> {

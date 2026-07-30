@@ -3,6 +3,7 @@ import type {
   AppServerBackendKind,
   AppServerListSkillsRequest,
   AppServerListSkillsResponse,
+  AppServerThreadMessageOrigin,
   AppServerThreadStatus,
   CancelThreadExecutionModeQueueRequest,
   CancelThreadExecutionModeQueueResponse,
@@ -172,8 +173,12 @@ export type MessagingBackendBridge = {
         invokingTurnId: string;
       }
   >;
-  startTurn(request: StartTurnRequest): Promise<StartTurnResponse>;
-  steerTurn?(request: SteerTurnRequest): Promise<SteerTurnResponse>;
+  startTurn(
+    request: StartTurnRequest & { messageOrigin?: AppServerThreadMessageOrigin },
+  ): Promise<StartTurnResponse>;
+  steerTurn?(
+    request: SteerTurnRequest & { messageOrigin?: AppServerThreadMessageOrigin },
+  ): Promise<SteerTurnResponse>;
   compactThread?(request: CompactThreadRequest): Promise<CompactThreadResponse>;
   interruptTurn?(request: InterruptTurnRequest): Promise<InterruptTurnResponse>;
   listSkills?(

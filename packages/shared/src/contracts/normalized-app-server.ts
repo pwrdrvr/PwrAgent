@@ -1,4 +1,8 @@
 import type { AutomationRunOutputDecision } from "./automations";
+import type {
+  MessagingChannelKind,
+  MessagingConversationKind,
+} from "./messaging";
 import type { PrSummary } from "./navigation";
 import type { ThreadPricingSummary, ThreadUsageLineRecord } from "../token-usage-pricing";
 
@@ -337,6 +341,22 @@ export type AppServerThreadMessageOrigin = {
     backend: AppServerBackendKind;
     threadId: ThreadIdentifier;
     title?: string;
+  };
+  messaging?: {
+    platform: MessagingChannelKind;
+    surface: {
+      id: string;
+      kind: MessagingConversationKind;
+      title?: string;
+      parentTitle?: string;
+      ancestorTitle?: string;
+    };
+    actor: {
+      platformUserId: string;
+      displayName?: string;
+      phoneNumber?: string;
+      username?: string;
+    };
   };
 };
 

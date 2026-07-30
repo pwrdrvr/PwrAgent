@@ -9,6 +9,10 @@ import type {
   MarkdownFileViewerContext,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import {
+  formatMessagingPlatformName,
+  MESSAGING_PLATFORM_ICONS,
+} from "../../lib/messaging-platform-branding";
 import { useThreadLinks, type ResolvedThreadLink } from "../../lib/thread-links";
 import { ThreadChip } from "./ThreadChip";
 import { TranscriptImage } from "./TranscriptImage";
@@ -479,6 +483,10 @@ function renderMessageHeader(params: {
             {params.message.origin.sourceThread.title}
           </span>
         ) : null}
+        {params.message.origin?.kind === "messaging"
+          && params.message.origin.messaging ? (
+            <MessagingOriginChip origin={params.message.origin.messaging} />
+          ) : null}
       </span>
       <span className="transcript-message__header-actions">
         {params.text ? (
@@ -503,6 +511,78 @@ function renderMessageHeader(params: {
       </span>
     </header>
   );
+}
+
+function MessagingOriginChip(props: {
+  origin: NonNullable<AppServerThreadMessageOrigin["messaging"]>;
+}) {
+  const Icon = MESSAGING_PLATFORM_ICONS[props.origin.platform];
+  const platform = formatMessagingPlatformName(props.origin.platform);
+  const surface = formatMessagingOriginSurface(props.origin);
+  const actor =
+    props.origin.actor.displayName?.trim()
+    || (props.origin.actor.username?.trim()
+      ? `@${props.origin.actor.username.trim().replace(/^@/, "")}`
+      : props.origin.actor.phoneNumber?.trim()
+        || props.origin.actor.platformUserId);
+  const description = `${platform}: ${surface} · ${actor}`;
+
+  return (
+    <span
+      aria-label={description}
+      className="chip transcript-message__messaging-origin"
+      title={description}
+    >
+      <span
+        aria-hidden="true"
+        className="transcript-message__messaging-platform"
+      >
+        {Icon ? (
+          <Icon size={12} />
+        ) : (
+          <span className="transcript-message__messaging-platform-fallback">
+            {props.origin.platform.slice(0, 2)}
+          </span>
+        )}
+      </span>
+      <span className="transcript-message__messaging-surface">
+        {surface}
+      </span>
+      <span
+        aria-hidden="true"
+        className="transcript-message__messaging-separator"
+      >
+        ·
+      </span>
+      <span className="transcript-message__messaging-actor">{actor}</span>
+    </span>
+  );
+}
+
+function formatMessagingOriginSurface(
+  origin: NonNullable<AppServerThreadMessageOrigin["messaging"]>,
+): string {
+  const title = origin.surface.title?.trim();
+  const parent = origin.surface.parentTitle?.trim();
+  const ancestor = origin.surface.ancestorTitle?.trim();
+
+  switch (origin.surface.kind) {
+    case "dm":
+      return title || "Direct message";
+    case "topic":
+      return [parent, title].filter(Boolean).join(" / ") || "Topic";
+    case "thread":
+      return [ancestor, parent ? `#${parent}` : undefined, title]
+        .filter(Boolean)
+        .join(" / ") || "Thread";
+    case "channel":
+      if (origin.platform === "telegram") {
+        return title || parent || "Group";
+      }
+      return [ancestor || parent, title ? `#${title}` : undefined]
+        .filter(Boolean)
+        .join(" / ") || "Channel";
+  }
 }
 
 function messageToneClass(message: AppServerThreadMessageEntry): string {
