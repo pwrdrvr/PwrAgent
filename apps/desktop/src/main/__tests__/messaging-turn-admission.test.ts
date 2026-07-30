@@ -44,6 +44,50 @@ describe("MessagingTurnAdmission", () => {
     admission.dispose();
   });
 
+  it("keeps different actors in separate debounce bundles", async () => {
+    vi.useFakeTimers();
+    const binding = buildBinding();
+    const onBundleReady = vi.fn();
+    const admission = new MessagingTurnAdmission({
+      debounceMs: 500,
+      now: () => 1000,
+      onBundleReady,
+    });
+
+    await admission.append({
+      binding,
+      event: buildTextEvent("first", "user-1"),
+    });
+    await admission.append({
+      binding,
+      event: buildTextEvent("second", "user-2"),
+    });
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(onBundleReady).toHaveBeenCalledTimes(2);
+    expect(onBundleReady.mock.calls.map(([bundle]) => bundle)).toEqual([
+      expect.objectContaining({
+        events: [
+          expect.objectContaining({
+            actor: expect.objectContaining({ platformUserId: "user-1" }),
+            text: "first",
+          }),
+        ],
+        threadKey: "codex:thread-1",
+      }),
+      expect.objectContaining({
+        events: [
+          expect.objectContaining({
+            actor: expect.objectContaining({ platformUserId: "user-2" }),
+            text: "second",
+          }),
+        ],
+        threadKey: "codex:thread-1",
+      }),
+    ]);
+    admission.dispose();
+  });
+
   it("tracks queued entries and skips cancelled entries when flushing", () => {
     const binding = buildBinding();
     const admission = new MessagingTurnAdmission({
@@ -94,12 +138,15 @@ function buildBinding(): MessagingBindingRecord {
   };
 }
 
-function buildTextEvent(text: string): MessagingInboundTextEvent {
+function buildTextEvent(
+  text: string,
+  platformUserId = "user-1",
+): MessagingInboundTextEvent {
   return {
     id: `event:${text}`,
     kind: "text",
     actor: {
-      platformUserId: "user-1",
+      platformUserId,
     },
     channel: {
       channel: "telegram",

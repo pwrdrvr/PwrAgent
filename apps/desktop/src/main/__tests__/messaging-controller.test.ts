@@ -8810,6 +8810,19 @@ describe("MessagingController", () => {
           text: "second turn",
         },
       ],
+      messageOrigin: {
+        kind: "messaging",
+        messaging: {
+          platform: "telegram",
+          surface: {
+            id: "chat-1",
+            kind: "dm",
+          },
+          actor: {
+            platformUserId: "user-1",
+          },
+        },
+      },
     });
   });
 
@@ -8976,6 +8989,19 @@ describe("MessagingController", () => {
           text: "also check the logs",
         },
       ],
+      messageOrigin: {
+        kind: "messaging",
+        messaging: {
+          platform: "telegram",
+          surface: {
+            id: "chat-1",
+            kind: "dm",
+          },
+          actor: {
+            platformUserId: "user-1",
+          },
+        },
+      },
     });
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "confirmation",

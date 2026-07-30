@@ -1046,7 +1046,7 @@ describe("DiscordAdapter", () => {
       t: "MESSAGE_CREATE",
     });
 
-    expect(harness.startTurn).toHaveBeenCalledWith({
+    expect(harness.startTurn).toHaveBeenCalledWith(expect.objectContaining({
       backend: "codex",
       input: [
         {
@@ -1054,8 +1054,23 @@ describe("DiscordAdapter", () => {
           type: "text",
         },
       ],
+      messageOrigin: {
+        kind: "messaging",
+        messaging: {
+          actor: {
+            displayName: "Ada New",
+            platformUserId: DISCORD_USER_ID,
+            username: "ada_new",
+          },
+          platform: "discord",
+          surface: {
+            id: DISCORD_CHANNEL_ID,
+            kind: "channel",
+          },
+        },
+      },
       threadId: "thread-1",
-    });
+    }));
   });
 
   it("drops matching display names with different Discord ids before controller dispatch", async () => {

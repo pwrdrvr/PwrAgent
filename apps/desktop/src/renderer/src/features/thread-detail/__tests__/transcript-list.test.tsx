@@ -202,6 +202,53 @@ describe("TranscriptList", () => {
     });
   });
 
+  it("shows the messaging platform, surface, and actor for an inbound message", () => {
+    const { container } = render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "message-from-discord",
+            role: "user",
+            text: "Go for it. Do what is necessary.",
+            origin: {
+              kind: "messaging",
+              messaging: {
+                platform: "discord",
+                surface: {
+                  id: "thread-1",
+                  kind: "channel",
+                  title: "api-search circuit breaker timeout",
+                  parentTitle: "signals-chat",
+                  ancestorTitle: "PwrAgent",
+                },
+                actor: {
+                  platformUserId: "U012345",
+                  displayName: "Hunter",
+                  username: "huntharo",
+                },
+              },
+            },
+          },
+        ]}
+        loading={false}
+        loadingMore={false}
+        onLoadOlder={async () => undefined}
+      />,
+    );
+
+    expect(screen.getByText("Messaging")).toBeInTheDocument();
+    const origin = screen.getByLabelText(
+      "Discord: PwrAgent / #signals-chat / api-search circuit breaker timeout · Hunter",
+    );
+    expect(origin).toHaveTextContent(
+      "PwrAgent / #signals-chat / api-search circuit breaker timeout",
+    );
+    expect(origin).toHaveTextContent("Hunter");
+    expect(origin.querySelector("img")).toBeInTheDocument();
+    expect(container.querySelector(".transcript-message--injected")).toBeInTheDocument();
+  });
+
   it("renders transcript history and exposes incremental history loading when available", () => {
     const loadOlder = vi.fn(async () => undefined);
 

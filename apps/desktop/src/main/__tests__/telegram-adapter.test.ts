@@ -2436,7 +2436,7 @@ describe("TelegramAdapter", () => {
       },
     });
 
-    expect(harness.startTurn).toHaveBeenCalledWith({
+    expect(harness.startTurn).toHaveBeenCalledWith(expect.objectContaining({
       backend: "codex",
       input: [
         {
@@ -2444,8 +2444,22 @@ describe("TelegramAdapter", () => {
           type: "text",
         },
       ],
+      messageOrigin: {
+        kind: "messaging",
+        messaging: {
+          actor: {
+            platformUserId: "42",
+            username: "new_username",
+          },
+          platform: "telegram",
+          surface: {
+            id: "777",
+            kind: "dm",
+          },
+        },
+      },
       threadId: "thread-1",
-    });
+    }));
   });
 
   it("drops matching usernames with different Telegram numeric ids before controller dispatch", async () => {

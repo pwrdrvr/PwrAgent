@@ -26,6 +26,7 @@ import type {
   BackendModelOption,
   BackendSummary,
   AppServerPendingRequestNotification,
+  AppServerThreadMessageOrigin,
   AppServerToolRequestUserInputNotification,
   DesktopAuthorizedContact,
   DesktopMessagingFullAccessWarningGlobalPolicy,
@@ -2506,6 +2507,7 @@ export class MessagingController {
         backend: params.binding.backend,
         threadId: params.binding.threadId,
         input: params.input,
+        messageOrigin: messageOriginForInboundEvent(params.event),
         ...turnSettings,
       });
       if (started.queueStatus === "queued") {
@@ -2785,6 +2787,7 @@ export class MessagingController {
         threadId: entry.binding.threadId,
         expectedTurnId: activeTurn.turnId,
         input: entry.input,
+        messageOrigin: messageOriginForInboundEvent(entry.event),
       });
     } catch (error) {
       await this.deliver(
@@ -6890,6 +6893,7 @@ export class MessagingController {
                 : { input: prepared.input }),
             },
             {
+              messageOrigin: messageOriginForInboundEvent(event),
               ...(environmentSetupReporter
                 ? {
                     onCodexEnvironmentSetupProgress: (
@@ -16001,6 +16005,43 @@ function messagingAdapterStateEqual(
   right: MessagingAdapterState | undefined,
 ): boolean {
   return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
+}
+
+function messageOriginForInboundEvent(
+  event: MessagingInboundEvent | undefined,
+): AppServerThreadMessageOrigin {
+  if (!event) {
+    return { kind: "messaging" };
+  }
+
+  const conversation = event.channel.conversation;
+  return {
+    kind: "messaging",
+    messaging: {
+      platform: event.channel.channel,
+      surface: {
+        id: conversation.id,
+        kind: conversation.kind,
+        ...(conversation.title ? { title: conversation.title } : {}),
+        ...(conversation.parentTitle
+          ? { parentTitle: conversation.parentTitle }
+          : {}),
+        ...(conversation.ancestorTitle
+          ? { ancestorTitle: conversation.ancestorTitle }
+          : {}),
+      },
+      actor: {
+        platformUserId: event.actor.platformUserId,
+        ...(event.actor.displayName
+          ? { displayName: event.actor.displayName }
+          : {}),
+        ...(event.actor.phoneNumber
+          ? { phoneNumber: event.actor.phoneNumber }
+          : {}),
+        ...(event.actor.username ? { username: event.actor.username } : {}),
+      },
+    },
+  };
 }
 
 function describeConversation(
