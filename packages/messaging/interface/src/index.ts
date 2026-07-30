@@ -1238,6 +1238,12 @@ export type MessagingBindingPreferences = {
   model?: string;
   permissionsMode?: MessagingPermissionsMode;
   reasoningEffort?: string;
+  /**
+   * Per-binding override for shared-conversation input. When omitted, the
+   * binding inherits the provider conversation's configured response mode.
+   * DMs always accept ordinary text regardless of this preference.
+   */
+  responseMode?: MessagingResponseMode;
   serviceTier?: string;
   streamingResponses?: MessagingStreamingResponseMode;
   /**

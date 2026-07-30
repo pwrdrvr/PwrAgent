@@ -170,6 +170,65 @@ describe("buildBindingStatusIntent", () => {
     expect(intent.text).not.toContain("Rate limits:");
   });
 
+  it("shows the effective shared-conversation response mode and its source", () => {
+    const inheritedBinding = {
+      ...buildBinding(),
+      channel: {
+        channel: "slack" as const,
+        conversation: {
+          id: "C012ABCDEF0",
+          kind: "thread" as const,
+          parentId: "1712023032.123456",
+        },
+      },
+    };
+    const inheritedIntent = buildBindingStatusIntent({
+      id: "status-inherited-response-mode",
+      binding: inheritedBinding,
+      createdAt: 1000,
+      responseModeDefault: "mention_only",
+      threadState: resolveMessagingThreadState({
+        binding: inheritedBinding,
+        navigation: buildNavigationSnapshot(),
+      }),
+    });
+
+    expect(inheritedIntent.text).toContain(
+      "Responses: @mentions only (channel default)",
+    );
+    expect(inheritedIntent.actions).toContainEqual(
+      expect.objectContaining({
+        id: "status:response-mode",
+        label: "Responses: @mentions",
+      }),
+    );
+
+    const overriddenBinding = {
+      ...inheritedBinding,
+      preferences: {
+        responseMode: "every_message" as const,
+        updatedAt: 1000,
+      },
+    };
+    const overriddenIntent = buildBindingStatusIntent({
+      id: "status-overridden-response-mode",
+      binding: overriddenBinding,
+      createdAt: 1000,
+      responseModeDefault: "mention_only",
+      threadState: resolveMessagingThreadState({
+        binding: overriddenBinding,
+        navigation: buildNavigationSnapshot(),
+      }),
+    });
+
+    expect(overriddenIntent.text).toContain(
+      "Responses: every message (binding override)",
+    );
+    expect(overriddenIntent.actions).toContainEqual(
+      expect.objectContaining({ label: "Responses: all" }),
+    );
+  });
+
   it("redacts backend account email in shared conversations", () => {
     const binding = {
       ...buildBinding(),

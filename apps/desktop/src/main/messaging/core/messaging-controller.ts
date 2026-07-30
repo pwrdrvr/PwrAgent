@@ -165,6 +165,7 @@ import {
   buildStatusModelPickerIntent,
   buildStatusPermissionsPickerIntent,
   buildStatusReasoningPickerIntent,
+  buildStatusResponseModePickerIntent,
   buildStatusToolUpdateModePickerIntent,
   formatExecutionModeLabel,
   formatMessagingToolUpdateModeLabel,
@@ -174,6 +175,7 @@ import {
   messagingStreamingResponsesEnabled,
   messagingToolUpdateModeChoices,
   nextMessagingStreamingResponseMode,
+  resolveMessagingResponseMode,
   resolveMessagingStreamingResponseMode,
   resolveMessagingToolUpdateMode,
   shouldShowStreamingControl,
@@ -1701,10 +1703,7 @@ export class MessagingController {
       return;
     }
 
-    if (
-      binding.targetKind === "agent_thread" &&
-      !await this.shouldHandleAmbientSharedMessage(event, binding)
-    ) {
+    if (!await this.shouldHandleAmbientSharedMessage(event, binding)) {
       return;
     }
 
@@ -1780,10 +1779,7 @@ export class MessagingController {
       return;
     }
 
-    if (
-      binding.targetKind === "agent_thread" &&
-      !await this.shouldHandleAmbientSharedMessage(event, binding)
-    ) {
+    if (!await this.shouldHandleAmbientSharedMessage(event, binding)) {
       return;
     }
 
@@ -1797,10 +1793,10 @@ export class MessagingController {
     if (event.channel.conversation.kind === "dm") {
       return true;
     }
-    if (binding?.targetKind === "thread") {
-      return true;
-    }
-    const responseMode = await this.responseModeForConversation(event.channel);
+    const responseMode = resolveMessagingResponseMode(
+      binding,
+      await this.responseModeForConversation(event.channel),
+    );
     return responseMode === "every_message" || event.botMention === true;
   }
 
@@ -7588,6 +7584,10 @@ export class MessagingController {
       await this.setToolUpdateMode(binding, event);
       return;
     }
+    if (actionId === "status:set-response-mode") {
+      await this.setBindingResponseMode(binding, event);
+      return;
+    }
     if (actionId === "status:fast") {
       await this.toggleFastMode(binding, event);
       return;
@@ -7615,6 +7615,10 @@ export class MessagingController {
     }
     if (actionId === "status:tool-updates") {
       await this.presentToolUpdateModePicker(binding, event);
+      return;
+    }
+    if (actionId === "status:response-mode") {
+      await this.presentResponseModePicker(binding, event);
       return;
     }
     if (actionId === "status:streaming") {
@@ -8431,6 +8435,23 @@ export class MessagingController {
         binding,
         choices: messagingToolUpdateModeChoices(currentMode),
         createdAt: this.now(),
+      }),
+      binding,
+      event,
+    );
+  }
+
+  private async presentResponseModePicker(
+    binding: MessagingBindingRecord,
+    event: MessagingInboundEvent,
+  ): Promise<void> {
+    await this.deliverAndStoreStatusSubmode(
+      buildStatusResponseModePickerIntent({
+        id: this.newIntentId("status-response-mode-picker"),
+        capabilityProfile: this.capabilityProfile,
+        binding,
+        createdAt: this.now(),
+        defaultMode: await this.responseModeForConversation(binding.channel),
       }),
       binding,
       event,
@@ -9797,6 +9818,36 @@ export class MessagingController {
     await this.renderBindingStatus(updatedBinding, event);
   }
 
+  private async setBindingResponseMode(
+    binding: MessagingBindingRecord,
+    event: MessagingInboundCallbackEvent,
+  ): Promise<void> {
+    const selected = readStringValue(event.value, "responseMode");
+    if (
+      selected !== "inherit" &&
+      selected !== "mention_only" &&
+      selected !== "every_message"
+    ) {
+      await this.deliverInvalidStatusSelection(event);
+      return;
+    }
+    const {
+      responseMode: _previousResponseMode,
+      ...preferences
+    } = binding.preferences ?? { updatedAt: this.now() };
+    const updatedBinding = await this.options.store.upsertBinding({
+      ...binding,
+      preferences: {
+        ...preferences,
+        ...(selected === "inherit" ? {} : { responseMode: selected }),
+        updatedAt: this.now(),
+      },
+      updatedAt: this.now(),
+    });
+    await this.clearActiveBindingSubmodeIntent(event, updatedBinding);
+    await this.renderBindingStatus(updatedBinding, event);
+  }
+
   private async cycleStreamingResponseMode(
     binding: MessagingBindingRecord,
     event: MessagingInboundEvent,
@@ -10083,6 +10134,9 @@ export class MessagingController {
             capabilityProfile: this.capabilityProfile,
             contextUsageSummary: this.contextUsageSummaryForBinding(binding),
             createdAt: this.now(),
+            responseModeDefault: await this.responseModeForConversation(
+              binding.channel,
+            ),
             threadState: resolveMessagingThreadState({
               activeTurn: this.getActiveTurn(binding),
               binding,
@@ -10171,6 +10225,9 @@ export class MessagingController {
       handoff: this.options.backend.handoffThreadWorkspace
         ? handoffContextForBinding(binding, snapshot)
         : undefined,
+      responseModeDefault: await this.responseModeForConversation(
+        binding.channel,
+      ),
       streamingResponsesDefault: this.streamingResponsesDefault,
       showStreamingOption: await this.resolveShowStreamingOption(),
       threadState: resolveMessagingThreadState({

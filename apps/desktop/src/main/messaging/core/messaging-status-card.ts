@@ -12,6 +12,7 @@ import type {
   MessagingBindingRecord,
   MessagingConfirmationIntent,
   MessagingJsonValue,
+  MessagingResponseMode,
   MessagingStreamingResponseMode,
   MessagingSingleSelectIntent,
   MessagingSurfaceAction,
@@ -122,6 +123,7 @@ export function buildBindingStatusIntent(params: {
   createdAt: number;
   handoff?: MessagingWorkspaceHandoffContext;
   id: string;
+  responseModeDefault?: MessagingResponseMode;
   streamingResponsesDefault?: boolean;
   showStreamingOption?: boolean;
   threadState: MessagingResolvedThreadState;
@@ -191,6 +193,12 @@ export function buildBindingStatusIntent(params: {
     streamingMode,
     params.streamingResponsesDefault,
   );
+  const responseMode = resolveMessagingResponseMode(
+    params.binding,
+    params.responseModeDefault,
+  );
+  const isSharedConversation =
+    params.binding.channel.conversation.kind !== "dm";
   const acpRuntimeMode = isAcpBackendId(params.binding.backend)
     ? buildMessagingAcpRuntimeModeSummary({
         backend: params.backendSummary,
@@ -235,6 +243,13 @@ export function buildBindingStatusIntent(params: {
       supportsFastMode ? `Fast mode: ${fastMode ? "on" : "off"}` : undefined,
       planDeliveryLine(params.capabilityProfile),
       `Permissions: ${permissionsLineLabel}`,
+      isSharedConversation
+        ? `Responses: ${formatMessagingResponseModeLabel(responseMode)} (${
+            params.binding.preferences?.responseMode
+              ? "binding override"
+              : "channel default"
+          })`
+        : undefined,
       `Working Updates: ${formatMessagingToolUpdateModeLabel(toolUpdateMode)}`,
       shouldShowStreamingControl(
         streamingMode,
@@ -269,6 +284,8 @@ export function buildBindingStatusIntent(params: {
         permissionsMode === "full-access",
       queuedExecutionMode,
       reasoning,
+      responseMode,
+      showResponseModeControl: isSharedConversation,
       supportsFastMode,
       supportsReasoning,
       streamingMode,
@@ -504,6 +521,8 @@ function buildStatusActions(params: {
   supportsLegacyPermissionsAction?: boolean;
   queuedExecutionMode?: ThreadExecutionMode;
   reasoning?: string;
+  responseMode: MessagingResponseMode;
+  showResponseModeControl: boolean;
   supportsFastMode: boolean;
   supportsReasoning: boolean;
   streamingMode: MessagingStreamingResponseMode;
@@ -575,12 +594,25 @@ function buildStatusActions(params: {
           },
         ]
       : []),
+    ...(params.showResponseModeControl
+      ? [
+          {
+            id: "status:response-mode",
+            label: `Responses: ${formatMessagingResponseModeActionLabel(
+              params.responseMode,
+            )}`,
+            style: "secondary" as const,
+            fallbackText: "responses",
+            priority: 9,
+          },
+        ]
+      : []),
     {
       id: "status:tool-updates",
       label: `Working Updates: ${formatMessagingToolUpdateModeLabel(params.toolUpdateMode)}`,
       style: "secondary",
       fallbackText: "tools",
-      priority: 9,
+      priority: 10,
     },
     ...(shouldShowStreamingControl(
       params.streamingMode,
@@ -596,7 +628,7 @@ function buildStatusActions(params: {
             )}`,
             style: "secondary" as const,
             fallbackText: "stream",
-            priority: 10,
+            priority: 11,
           },
         ]
       : []),
@@ -605,21 +637,21 @@ function buildStatusActions(params: {
       label: "Compact",
       style: "secondary",
       fallbackText: "compact",
-      priority: 11,
+      priority: 12,
     },
     {
       id: "status:sync-name",
       label: "Sync name",
       style: "secondary",
       fallbackText: "sync name",
-      priority: 12,
+      priority: 13,
     },
     {
       id: "status:skills",
       label: "Skills",
       style: "secondary",
       fallbackText: "skills",
-      priority: 13,
+      priority: 14,
     },
     {
       id: "status:stop",
@@ -702,6 +734,25 @@ export function resolveMessagingToolUpdateMode(
   defaultMode: MessagingToolUpdateMode | undefined,
 ): MessagingToolUpdateMode {
   return binding.preferences?.toolUpdateMode ?? defaultMode ?? "show_some";
+}
+
+export function resolveMessagingResponseMode(
+  binding: MessagingBindingRecord | undefined,
+  defaultMode: MessagingResponseMode | undefined,
+): MessagingResponseMode {
+  return binding?.preferences?.responseMode ?? defaultMode ?? "every_message";
+}
+
+export function formatMessagingResponseModeLabel(
+  mode: MessagingResponseMode,
+): string {
+  return mode === "mention_only" ? "@mentions only" : "every message";
+}
+
+function formatMessagingResponseModeActionLabel(
+  mode: MessagingResponseMode,
+): string {
+  return mode === "mention_only" ? "@mentions" : "all";
 }
 
 export function nextMessagingToolUpdateMode(
@@ -1430,6 +1481,71 @@ export function buildStatusToolUpdateModePickerIntent(params: {
           priority: 10 + index,
           value: {
             toolUpdateMode: choice.mode,
+          },
+        })),
+        {
+          id: "status:refresh",
+          label: "Back",
+          fallbackText: "back",
+          style: "secondary" as const,
+          priority: 1,
+        },
+      ],
+      params.capabilityProfile,
+    ),
+  };
+}
+
+export function buildStatusResponseModePickerIntent(params: {
+  binding: MessagingBindingRecord;
+  capabilityProfile?: MessagingCapabilityProfile;
+  createdAt: number;
+  defaultMode: MessagingResponseMode;
+  id: string;
+}): MessagingSingleSelectIntent {
+  const selected = params.binding.preferences?.responseMode ?? "inherit";
+  const choices: Array<{
+    label: string;
+    mode: "inherit" | MessagingResponseMode;
+  }> = [
+    {
+      label: `Channel default (${formatMessagingResponseModeLabel(
+        params.defaultMode,
+      )})`,
+      mode: "inherit",
+    },
+    {
+      label: "@mentions only",
+      mode: "mention_only",
+    },
+    {
+      label: "Every message",
+      mode: "every_message",
+    },
+  ];
+  return {
+    id: params.id,
+    kind: "single_select",
+    bindingId: params.binding.id,
+    createdAt: params.createdAt,
+    delivery: {
+      mode: params.binding.statusSurface ? "update" : "present",
+      fallback: "present_new",
+    },
+    targetSurface: params.binding.statusSurface,
+    fallbackText: "Reply with a response mode option number, Back, or Cancel.",
+    prompt:
+      "Responses — choose which messages in this shared conversation reach this bound thread. DMs and explicit commands are unaffected.",
+    choices: applyActionCapabilityLimits(
+      [
+        ...choices.map((choice, index) => ({
+          id: "status:set-response-mode",
+          label: `${choice.label}${choice.mode === selected ? " (current)" : ""}`,
+          fallbackText: String(index + 1),
+          style: "secondary" as const,
+          priority: 10 + index,
+          value: {
+            responseMode: choice.mode,
           },
         })),
         {

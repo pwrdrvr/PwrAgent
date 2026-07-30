@@ -940,16 +940,14 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       return false;
     }
     const binding = await params.store.findActiveBindingForChannel(event.channel);
-    if (binding?.targetKind === "thread") {
-      return false;
-    }
-    if (
+    const responseMode =
+      binding?.preferences?.responseMode ??
       responseModeForChannel(
         await this.loadConfig(),
         params.channel,
         event.channel,
-      ) !== "mention_only"
-    ) {
+      );
+    if (responseMode !== "mention_only") {
       return false;
     }
     // @mention-only mode suppresses the bot's NORMAL replies, but it must not
