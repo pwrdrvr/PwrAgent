@@ -3,8 +3,8 @@ import type { AppServerBackendKind, ThreadIdentifier } from "./normalized-app-se
 /** @deprecated Use PWRAGENT_TOOL_NAMESPACE for advertised dynamic tools. */
 export const TASK_MONITOR_TOOL_NAMESPACE = "pwragent_task_monitors";
 
-export const DEFAULT_TASK_MONITOR_MODEL = "gpt-5.4-mini";
-export const DEFAULT_TASK_MONITOR_REASONING_EFFORT = "low";
+export const DEFAULT_TASK_MONITOR_MODEL = "gpt-5.6-luna";
+export const DEFAULT_TASK_MONITOR_REASONING_EFFORT = "medium";
 export const DEFAULT_TASK_MONITOR_POLL_INTERVAL_SECONDS = 30;
 export const DEFAULT_TASK_MONITOR_STARTUP_TIMEOUT_SECONDS = 45;
 export const DEFAULT_TASK_MONITOR_HEARTBEAT_INTERVAL_SECONDS =

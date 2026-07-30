@@ -9,7 +9,7 @@ import {
 } from "@pwragent/shared";
 import { getNativeBinding } from "./native-binding.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 31;
+export const CURRENT_STATE_DB_USER_VERSION = 32;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -964,6 +964,12 @@ export class StateDb {
     if ((db.pragma("user_version", { simple: true }) as number) < 31) {
       db.transaction(() => {
         ensureThreadMessageOriginSchema(db);
+        db.pragma("user_version = 31");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 32) {
+      db.transaction(() => {
+        repairTokenUsagePricing(db);
         db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
       })();
     }
