@@ -4393,6 +4393,12 @@ describe("MessagingController", () => {
     expect(textPart).toEqual(expect.objectContaining({
       text: expect.stringContaining("Missing validation"),
     }));
+    if (!textPart || textPart.type !== "text") {
+      throw new Error("Expected structured review artifact text");
+    }
+    expect(
+      textPart.text.split("The patch has one validation issue."),
+    ).toHaveLength(2);
   });
 
   it("delivers a single added markdown file as attachment plus bounded preview", async () => {

@@ -261,17 +261,25 @@ function renderPlanMarkdown(plan: AppServerThreadPlanEntry): string {
 
 function renderReviewMarkdown(review: AppServerThreadReviewEntry): string {
   const lines = ["# Review"];
+  const reviewText = review.review.trim();
   if (review.displayText?.trim()) {
     lines.push("", review.displayText.trim());
   }
-  if (review.review.trim()) {
-    lines.push("", review.review.trim());
+  if (reviewText) {
+    lines.push("", reviewText);
   }
   if (review.output) {
     lines.push("", "## Summary");
     lines.push(`- Correctness: ${review.output.overall_correctness}`);
     lines.push(`- Confidence: ${review.output.overall_confidence_score}`);
-    lines.push(`- Explanation: ${review.output.overall_explanation}`);
+    if (
+      !reviewTextContainsExplanation(
+        reviewText,
+        review.output.overall_explanation,
+      )
+    ) {
+      lines.push(`- Explanation: ${review.output.overall_explanation}`);
+    }
     if (review.output.findings.length > 0) {
       lines.push("", "## Findings");
       for (const finding of review.output.findings) {
@@ -280,6 +288,18 @@ function renderReviewMarkdown(review: AppServerThreadReviewEntry): string {
     }
   }
   return lines.join("\n").trim();
+}
+
+function reviewTextContainsExplanation(
+  reviewText: string,
+  explanation: string,
+): boolean {
+  const normalize = (value: string) => value.replace(/\s+/g, " ").trim();
+  const normalizedExplanation = normalize(explanation);
+  return (
+    normalizedExplanation.length > 0
+    && normalize(reviewText).includes(normalizedExplanation)
+  );
 }
 
 function formatAttachmentSummary(params: {

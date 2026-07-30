@@ -4,6 +4,7 @@ import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/tes
 import {
   buildArtifactDeliveryIntent,
   buildPlanArtifactIntent,
+  buildReviewArtifactIntent,
 } from "../messaging/core/messaging-artifact-renderer";
 
 describe("messaging artifact renderer", () => {
@@ -28,6 +29,41 @@ describe("messaging artifact renderer", () => {
       type: "text",
       text: expect.stringContaining("Write the test"),
     });
+  });
+
+  it("renders a structured review explanation only once", () => {
+    const explanation =
+      "The forced fetch refspec correctly permits updating the shallow remote-tracking ref.";
+    const intent = buildReviewArtifactIntent({
+      capabilityProfile: PERMISSIVE_CAPABILITY_PROFILE,
+      createdAt: 1000,
+      id: "review-structured",
+      review: {
+        type: "review",
+        id: "review-1",
+        createdAt: 1000,
+        displayText: "Code review completed",
+        review: explanation,
+        output: {
+          findings: [],
+          overall_correctness: "patch is correct",
+          overall_confidence_score: 0.97,
+          overall_explanation: explanation,
+        },
+      },
+    });
+
+    expect(intent.artifactDelivery).toEqual({
+      kind: "review",
+      mode: "inline_only",
+    });
+    const text = intent.parts[0]?.type === "text"
+      ? intent.parts[0].text
+      : "";
+    expect(text).toContain("# Review");
+    expect(text).toContain("Code review completed");
+    expect(text).toContain("- Correctness: patch is correct");
+    expect(text.split(explanation)).toHaveLength(2);
   });
 
   it("adds a markdown attachment and bounded preview for long artifacts when upload is supported", () => {
