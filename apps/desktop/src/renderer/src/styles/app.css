@@ -8733,13 +8733,32 @@ a.transcript-message__messaging-origin:focus-visible {
   text-transform: uppercase;
 }
 
-.transcript-message__messaging-surface,
-.transcript-message__messaging-actor {
+.transcript-message__messaging-surface {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.transcript-message__messaging-surface-segment {
+  display: inline-flex;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.transcript-message__messaging-surface-divider {
+  flex: 0 0 auto;
+}
+
+.transcript-message__messaging-surface-label {
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.transcript-message__messaging-surface {
+.transcript-message__messaging-actor {
+  flex: 0 0 auto;
   min-width: 0;
 }
 
