@@ -293,6 +293,17 @@ export type MessagingConversationRef = {
   kind: MessagingConversationKind;
   parentId?: string;
   /**
+   * Normalized containing conversation used for scope inheritance. This is
+   * separate from `parentId`, which remains part of some providers' persisted
+   * conversation identity.
+   */
+  parentConversationId?: string;
+  /**
+   * Normalized workspace/server/team identifier. Providers populate this at
+   * their boundary; workflow code must not recover it from opaque state.
+   */
+  workspaceId?: string;
+  /**
    * Title of this conversation node (DM peer, channel, topic, thread).
    * Optional — adapters populate when the platform makes it cheap.
    */
@@ -1456,6 +1467,44 @@ export type MessagingBindingRecord = {
   threadDisplay?: MessagingThreadDisplaySummary;
 };
 
+export type MessagingDefaultAgentTarget = {
+  kind: "agent";
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+};
+
+export type MessagingDefaultAgentScope =
+  | {
+      kind: "conversation";
+      channel: MessagingChannelRef;
+    }
+  | {
+      kind: "parent";
+      channel: MessagingChannelKind;
+      conversationId: string;
+    }
+  | {
+      kind: "workspace";
+      channel: MessagingChannelKind;
+      workspaceId: string;
+    }
+  | {
+      kind: "provider";
+      channel: MessagingChannelKind;
+    }
+  | {
+      kind: "profile";
+    };
+
+export type MessagingDefaultAgentAssignmentRecord = {
+  id: string;
+  scope: MessagingDefaultAgentScope;
+  target: MessagingDefaultAgentTarget;
+  createdAt: number;
+  updatedAt: number;
+  revokedAt?: number;
+};
+
 export type MessagingPendingIntentRecord = {
   id: string;
   bindingId?: string;
@@ -1478,7 +1527,8 @@ export type MessagingBrowseMode =
 export type MessagingBrowseLaunchAction =
   | "resume_thread"
   | "start_new_thread"
-  | "start_new_agent_thread";
+  | "start_new_agent_thread"
+  | "assign_default_agent";
 
 export type MessagingBrowseSelectedProject = {
   directoryKey?: string;
@@ -1506,6 +1556,7 @@ export type MessagingBrowseSessionRecord = {
   expiresAt: number;
   fullAccessRiskAcceptedAt?: number;
   launchAction: MessagingBrowseLaunchAction;
+  defaultAgentScope?: MessagingDefaultAgentScope;
   mode: MessagingBrowseMode;
   pageIndex: number;
   pageSize: number;

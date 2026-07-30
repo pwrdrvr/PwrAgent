@@ -2,6 +2,7 @@ import type {
   MessagingBindingRecord,
   MessagingBrowseSessionRecord,
   MessagingCallbackHandleRecord,
+  MessagingDefaultAgentAssignmentRecord,
   MessagingDeliveryResult,
   MessagingManagedTopicRecord,
   MessagingMonitorSubscriptionRecord,
@@ -20,7 +21,7 @@ import { normalizeMessagingBindingTargetKind } from "@pwragent/shared";
 // must also land in the seed module, or the README screenshot capture
 // (`pnpm --filter @pwragent/desktop screenshot:readme`) silently
 // produces broken UI shots.
-export const CURRENT_MESSAGING_STORE_VERSION = 2;
+export const CURRENT_MESSAGING_STORE_VERSION = 3;
 
 export type MessagingDeliveryRecord = MessagingDeliveryResult & {
   id: string;
@@ -32,6 +33,7 @@ export type MessagingStoreData = {
   version: number;
   browseSessions: Record<string, MessagingBrowseSessionRecord>;
   bindings: Record<string, MessagingBindingRecord>;
+  defaultAgentAssignments: Record<string, MessagingDefaultAgentAssignmentRecord>;
   callbackHandles: Record<string, MessagingCallbackHandleRecord>;
   monitorSubscriptions: Record<string, MessagingMonitorSubscriptionRecord>;
   topicCleanupProposals: Record<string, MessagingTopicCleanupProposalRecord>;
@@ -45,6 +47,7 @@ const EMPTY_MESSAGING_STORE_DATA: MessagingStoreData = {
   version: CURRENT_MESSAGING_STORE_VERSION,
   browseSessions: {},
   bindings: {},
+  defaultAgentAssignments: {},
   callbackHandles: {},
   monitorSubscriptions: {},
   topicCleanupProposals: {},
@@ -64,6 +67,10 @@ export function migrateMessagingStoreData(raw: unknown): MessagingStoreData {
     version: CURRENT_MESSAGING_STORE_VERSION,
     browseSessions: migrateRecord(record.browseSessions, isMessagingBrowseSessionRecord),
     bindings: migrateBindingRecords(record.bindings),
+    defaultAgentAssignments: migrateRecord(
+      record.defaultAgentAssignments,
+      isMessagingDefaultAgentAssignmentRecord,
+    ),
     callbackHandles: migrateRecord(record.callbackHandles, isMessagingCallbackHandleRecord),
     monitorSubscriptions: migrateRecord(
       record.monitorSubscriptions,
@@ -78,6 +85,60 @@ export function migrateMessagingStoreData(raw: unknown): MessagingStoreData {
     pendingIntents: migrateRecord(record.pendingIntents, isMessagingPendingIntentRecord),
     deliveries: migrateRecord(record.deliveries, isMessagingDeliveryRecord),
   };
+}
+
+function isMessagingDefaultAgentAssignmentRecord(
+  value: unknown,
+): value is MessagingDefaultAgentAssignmentRecord {
+  const record = asRecord(value);
+  const scope = asRecord(record?.scope);
+  const target = asRecord(record?.target);
+  return Boolean(
+    record &&
+      typeof record.id === "string" &&
+      isMessagingDefaultAgentScope(scope) &&
+      target?.kind === "agent" &&
+      typeof target.backend === "string" &&
+      typeof target.threadId === "string" &&
+      typeof record.createdAt === "number" &&
+      typeof record.updatedAt === "number",
+  );
+}
+
+function isMessagingDefaultAgentScope(
+  scope: Record<string, unknown> | null | undefined,
+): boolean {
+  if (!scope || typeof scope.kind !== "string") {
+    return false;
+  }
+  if (scope.kind === "profile") {
+    return true;
+  }
+  if (scope.kind === "provider") {
+    return typeof scope.channel === "string";
+  }
+  if (scope.kind === "parent") {
+    return (
+      typeof scope.channel === "string"
+      && typeof scope.conversationId === "string"
+    );
+  }
+  if (scope.kind === "workspace") {
+    return (
+      typeof scope.channel === "string"
+      && typeof scope.workspaceId === "string"
+    );
+  }
+  if (scope.kind === "conversation") {
+    const channel = asRecord(scope.channel);
+    const conversation = asRecord(channel?.conversation);
+    return (
+      typeof channel?.channel === "string"
+      && typeof conversation?.id === "string"
+      && typeof conversation?.kind === "string"
+    );
+  }
+  return false;
 }
 
 function migrateBindingRecords(value: unknown): Record<string, MessagingBindingRecord> {

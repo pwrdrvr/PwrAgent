@@ -919,12 +919,73 @@ describe("MessagingController", () => {
       threadId: "thread-1",
       targetKind: "agent_thread",
     });
+    await expect(
+      harness.store.findActiveDefaultAgentAssignmentForChannel(agentEvent.channel),
+    ).resolves.toBeUndefined();
     const confirmation = harness.delivered.find(
       (intent) => intent.kind === "confirmation" && intent.title === "Thread bound",
     );
     expect(confirmation).toMatchObject({
       body: expect.stringContaining("selected Agent thread"),
       fallbackText: "Send a message to continue with the Agent thread.",
+    });
+  });
+
+  it("explicitly sets, inspects, and clears a conversation default Agent", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      title: "Default Agent",
+      agent: {
+        name: "Inbox Agent",
+        instructionLineCount: 1,
+        instructionsTooLong: false,
+        updatedAt: 1500,
+      },
+    };
+    const harness = await createHarness({ navigation });
+    const event = buildCommandEvent("/agent default set");
+
+    await harness.controller.handleInboundEvent(event);
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "thread_picker",
+      prompt: expect.stringContaining("Choose the default Agent"),
+      page: {
+        items: [expect.objectContaining({ id: "thread-1", source: "codex" })],
+      },
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-thread",
+        value: { backend: "codex", threadId: "thread-1" },
+      }),
+    );
+
+    await expect(
+      harness.store.findActiveBindingForChannel(event.channel),
+    ).resolves.toBeUndefined();
+    await expect(
+      harness.store.findActiveDefaultAgentAssignmentForChannel(event.channel),
+    ).resolves.toMatchObject({
+      scope: { kind: "conversation" },
+      target: { backend: "codex", threadId: "thread-1" },
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Default Agent",
+      body: expect.stringContaining("Effective default: Default Agent (conversation)."),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCommandEvent("/agent default clear"),
+    );
+    await expect(
+      harness.store.findActiveDefaultAgentAssignmentForChannel(event.channel),
+    ).resolves.toBeUndefined();
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      body: expect.stringContaining("conversation default cleared"),
     });
   });
 

@@ -7,6 +7,8 @@ import type {
   MessagingBrowseSessionRecord,
   MessagingCallbackHandleRecord,
   MessagingChannelRef,
+  MessagingDefaultAgentAssignmentRecord,
+  MessagingDefaultAgentScope,
   MessagingJsonValue,
   MessagingManagedTopicRecord,
   MessagingMonitorSubscriptionRecord,
@@ -21,6 +23,10 @@ import {
   type MessagingDeliveryRecord,
   type MessagingStoreData,
 } from "./messaging-migrations.js";
+import {
+  buildDefaultAgentScopeLookup,
+  buildMessagingDefaultAgentScopeKey,
+} from "./messaging-default-agent.js";
 
 const SECRET_KEY_PATTERN = /token|secret|password|authorization|api[_-]?key/i;
 
@@ -52,6 +58,136 @@ export class MessagingStore {
 
   async getBinding(id: string): Promise<MessagingBindingRecord | undefined> {
     return await this.withReadData((data) => cloneOptional(data.bindings[id]));
+  }
+
+  async upsertDefaultAgentAssignment(
+    assignment: MessagingDefaultAgentAssignmentRecord,
+  ): Promise<MessagingDefaultAgentAssignmentRecord> {
+    const sanitized = sanitizeDefaultAgentAssignment(assignment);
+    const scopeKey = buildMessagingDefaultAgentScopeKey(sanitized.scope);
+    return await this.withData((data) => {
+      for (const existing of Object.values(data.defaultAgentAssignments)) {
+        if (
+          !sanitized.revokedAt &&
+          existing.id !== sanitized.id &&
+          !existing.revokedAt &&
+          buildMessagingDefaultAgentScopeKey(existing.scope) === scopeKey
+        ) {
+          const revoked: MessagingDefaultAgentAssignmentRecord = {
+            ...existing,
+            revokedAt: sanitized.updatedAt,
+            updatedAt: sanitized.updatedAt,
+          };
+          data.defaultAgentAssignments[existing.id] = revoked;
+        }
+      }
+
+      data.defaultAgentAssignments[sanitized.id] = sanitized;
+      return structuredClone(sanitized);
+    });
+  }
+
+  async getDefaultAgentAssignment(
+    id: string,
+  ): Promise<MessagingDefaultAgentAssignmentRecord | undefined> {
+    return await this.withReadData((data) =>
+      cloneOptional(data.defaultAgentAssignments[id]),
+    );
+  }
+
+  async findActiveDefaultAgentAssignmentForChannel(
+    channel: MessagingChannelRef,
+  ): Promise<MessagingDefaultAgentAssignmentRecord | undefined> {
+    return (await this.findActiveDefaultAgentAssignmentsForChannel(channel))[0];
+  }
+
+  async findActiveDefaultAgentAssignmentsForChannel(
+    channel: MessagingChannelRef,
+  ): Promise<MessagingDefaultAgentAssignmentRecord[]> {
+    const scopeKeys = buildDefaultAgentScopeLookup(channel).map(
+      (candidate) => candidate.key,
+    );
+    return await this.withReadData((data) => {
+      const active = Object.values(data.defaultAgentAssignments).filter(
+        (assignment) => !assignment.revokedAt,
+      );
+      const matches: MessagingDefaultAgentAssignmentRecord[] = [];
+      for (const scopeKey of scopeKeys) {
+        const match = active
+          .filter(
+            (assignment) =>
+              buildMessagingDefaultAgentScopeKey(assignment.scope) === scopeKey,
+          )
+          .sort((a, b) => b.updatedAt - a.updatedAt || b.createdAt - a.createdAt)[0];
+        if (match) {
+          matches.push(structuredClone(match));
+        }
+      }
+      return matches;
+    });
+  }
+
+  async findActiveDefaultAgentAssignmentForScope(
+    scope: MessagingDefaultAgentScope,
+  ): Promise<MessagingDefaultAgentAssignmentRecord | undefined> {
+    const scopeKey = buildMessagingDefaultAgentScopeKey(scope);
+    return await this.withReadData((data) =>
+      cloneOptional(
+        Object.values(data.defaultAgentAssignments)
+          .filter(
+            (assignment) =>
+              !assignment.revokedAt
+              && buildMessagingDefaultAgentScopeKey(assignment.scope) === scopeKey,
+          )
+          .sort((a, b) => b.updatedAt - a.updatedAt || b.createdAt - a.createdAt)[0],
+      ),
+    );
+  }
+
+  async revokeDefaultAgentAssignment(params: {
+    assignmentId: string;
+    revokedAt?: number;
+  }): Promise<MessagingDefaultAgentAssignmentRecord | undefined> {
+    return await this.withData((data) => {
+      const current = data.defaultAgentAssignments[params.assignmentId];
+      if (!current) return undefined;
+      const revokedAt = params.revokedAt ?? Date.now();
+      const revoked: MessagingDefaultAgentAssignmentRecord = {
+        ...current,
+        revokedAt,
+        updatedAt: revokedAt,
+      };
+      data.defaultAgentAssignments[params.assignmentId] = revoked;
+      return structuredClone(revoked);
+    });
+  }
+
+  async revokeDefaultAgentAssignmentsForTarget(params: {
+    backend: MessagingDefaultAgentAssignmentRecord["target"]["backend"];
+    threadId: MessagingDefaultAgentAssignmentRecord["target"]["threadId"];
+    revokedAt?: number;
+  }): Promise<MessagingDefaultAgentAssignmentRecord[]> {
+    return await this.withData((data) => {
+      const revokedAt = params.revokedAt ?? Date.now();
+      const revoked: MessagingDefaultAgentAssignmentRecord[] = [];
+      for (const assignment of Object.values(data.defaultAgentAssignments)) {
+        if (
+          assignment.revokedAt
+          || assignment.target.backend !== params.backend
+          || assignment.target.threadId !== params.threadId
+        ) {
+          continue;
+        }
+        const next = {
+          ...assignment,
+          revokedAt,
+          updatedAt: revokedAt,
+        };
+        data.defaultAgentAssignments[assignment.id] = next;
+        revoked.push(structuredClone(next));
+      }
+      return revoked;
+    });
   }
 
   async findActiveBindingForChannel(
@@ -638,6 +774,7 @@ export class MessagingStore {
           callbackHandles: {},
           pendingIntents: {},
           deliveries: {},
+          defaultAgentAssignments: {},
         });
       }
 
@@ -660,6 +797,24 @@ export function buildMessagingConversationKey(channel: MessagingChannelRef): str
     channel.conversation.parentId ?? "",
     channel.conversation.id,
   ].join(":");
+}
+
+function sanitizeDefaultAgentAssignment(
+  assignment: MessagingDefaultAgentAssignmentRecord,
+): MessagingDefaultAgentAssignmentRecord {
+  return {
+    ...assignment,
+    scope: assignment.scope.kind === "conversation"
+      ? {
+          ...assignment.scope,
+          channel: {
+            ...assignment.scope.channel,
+            conversation: { ...assignment.scope.channel.conversation },
+          },
+        }
+      : { ...assignment.scope },
+    target: { ...assignment.target },
+  };
 }
 
 function sanitizeBinding(binding: MessagingBindingRecord): MessagingBindingRecord {
