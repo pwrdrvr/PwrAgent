@@ -78,6 +78,10 @@ branching on platform names.
 Interactive callbacks should use compact opaque platform handles backed by
 long-lived sqlite records:
 
+- When the callback payload identifies the message containing the clicked
+  control, adapters should set `MessagingInboundCallbackEvent.sourceSurface`
+  to that editable message. Keep it separate from `interaction`, which
+  identifies the callback handle or interaction rather than the message.
 - Telegram `callback_data` is byte-limited, so never embed semantic action data.
 - Discord component `custom_id` should likewise carry only a compact handle.
 - Slack button `value` and Mattermost `integration.context` should carry or wrap

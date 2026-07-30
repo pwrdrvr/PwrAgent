@@ -1407,6 +1407,18 @@ describe("FeishuAdapter", () => {
       expect.objectContaining({
         kind: "callback",
         actionId: "approve",
+        sourceSurface: {
+          channel: "feishu",
+          id: "om_sent",
+          state: {
+            opaque: {
+              messageId: "om_sent",
+              receiveId: "oc_chat",
+              receiveIdType: "chat_id",
+              tenantKey: "tenant_1",
+            },
+          },
+        },
         channel: {
           channel: "feishu",
           conversation: { id: "oc_chat", kind: "channel", parentId: "tenant_1" },

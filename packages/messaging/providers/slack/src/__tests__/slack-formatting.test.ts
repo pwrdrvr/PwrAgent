@@ -84,4 +84,27 @@ describe("Slack formatting", () => {
     };
     expect(textForSlackIntent(intent)).toBe("Working");
   });
+
+  it("keeps picker fallback copy out of the visible Block Kit section", () => {
+    const intent: MessagingSurfaceIntent = {
+      id: "picker-1",
+      kind: "project_picker",
+      createdAt: 1,
+      fallbackText: "Choose a project.\n1. PwrAgent\nReply with a number.",
+      navigation: {
+        backend: "all",
+        fetchedAt: 1,
+        unchanged: false,
+      },
+      page: {
+        actions: [],
+        items: [],
+        pageIndex: 0,
+        pageSize: 8,
+      },
+      prompt: "Choose a project.",
+    };
+
+    expect(textForSlackIntent(intent)).toBe("Choose a project.");
+  });
 });

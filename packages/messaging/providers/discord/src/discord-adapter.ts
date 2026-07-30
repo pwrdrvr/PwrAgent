@@ -985,6 +985,14 @@ export class DiscordAdapter implements DiscordProviderAdapter {
           now: this.now(),
         })
       : undefined;
+    const routingState = this.routingStateFromDiscord(
+      interaction.channel_id,
+      interaction.guild_id,
+      {
+        channelType: interaction.channel_type,
+        isThread: interaction.is_thread,
+      },
+    );
     await listener({
       id: `discord:interaction:${interaction.id}`,
       kind: "callback",
@@ -1000,17 +1008,25 @@ export class DiscordAdapter implements DiscordProviderAdapter {
           },
         },
       },
+      ...(interaction.message?.id
+        ? {
+            sourceSurface: {
+              channel: this.channel,
+              id: interaction.message.id,
+              state: {
+                opaque: {
+                  channelId: interaction.channel_id,
+                  guildId: interaction.guild_id ?? null,
+                  messageId: interaction.message.id,
+                },
+              },
+            },
+          }
+        : {}),
       actionId: persistedBinding?.actionId,
       value: persistedBinding?.value,
       receivedAt: this.now(),
-      routingState: this.routingStateFromDiscord(
-        interaction.channel_id,
-        interaction.guild_id,
-        {
-          channelType: interaction.channel_type,
-          isThread: interaction.is_thread,
-        },
-      ),
+      routingState,
     });
   }
 

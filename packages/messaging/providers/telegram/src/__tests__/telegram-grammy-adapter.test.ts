@@ -425,6 +425,17 @@ describe("TelegramAdapter callback persistence", () => {
       expect.objectContaining({
         actionId: undefined,
         kind: "callback",
+        sourceSurface: {
+          channel: "telegram",
+          id: "200",
+          state: {
+            opaque: {
+              chatId: 42,
+              messageId: 200,
+              messageThreadId: null,
+            },
+          },
+        },
         value: undefined,
       }),
     ]);

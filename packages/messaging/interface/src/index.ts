@@ -1196,6 +1196,12 @@ export type MessagingInboundCommandEvent = MessagingInboundBaseEvent & {
 export type MessagingInboundCallbackEvent = MessagingInboundBaseEvent & {
   kind: "callback";
   interaction: MessagingInteractionRef;
+  /**
+   * The message surface that contained the clicked control, when the provider
+   * supplies an editable message reference. This is distinct from
+   * `interaction`, whose id/state identify the callback itself.
+   */
+  sourceSurface?: MessagingSurfaceRef;
   actionId?: string;
   value?: MessagingJsonValue;
 };
@@ -1486,6 +1492,7 @@ export type MessagingBrowseSessionRecord = {
   allowedActorIds: string[];
   backend?: AppServerBackendKind;
   bindingId?: string;
+  cancelDestination?: "help";
   channel: MessagingChannelRef;
   createdAt: number;
   expiresAt: number;

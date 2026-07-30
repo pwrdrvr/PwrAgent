@@ -641,6 +641,92 @@ describe("SlackAdapter", () => {
     });
   });
 
+  it("updates a project picker in place without repeating its prompt", async () => {
+    const posted: unknown[] = [];
+    const updated: Array<{
+      blocks?: Array<{ text?: { text?: string } }>;
+      channel: string;
+      text?: string;
+      ts: string;
+    }> = [];
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({ posted, updated }),
+      socketClient: fakeSocket(),
+      now: () => 1_700_000_000_000,
+    });
+    const prompt =
+      "Choose a project for the new PwrAgent thread. Page 1/2.\n"
+      + "Tap a project to start a fresh thread there.";
+    const fallbackText =
+      `${prompt}\n1. pwragent (11)\nReply with a number, or reply next or cancel.`;
+
+    await expect(
+      adapter.deliver({
+        id: "project-picker-1",
+        kind: "project_picker",
+        browseSessionId: "browse-1",
+        createdAt: 1,
+        delivery: {
+          mode: "update",
+          fallback: "present_new",
+        },
+        fallbackText,
+        navigation: {
+          backend: "all",
+          fetchedAt: 1,
+          unchanged: false,
+        },
+        page: {
+          actions: [
+            {
+              id: "browse:select-project",
+              label: "1. pwragent (11)",
+              value: { directoryKey: "directory:pwragent", label: "pwragent" },
+            },
+          ],
+          items: [],
+          pageIndex: 0,
+          pageSize: 8,
+          totalItems: 11,
+        },
+        prompt,
+        targetSurface: {
+          channel: "slack",
+          id: "1712023032.123456",
+          state: {
+            opaque: {
+              channelId: "C012ABCDEF0",
+              ts: "1712023032.123456",
+            },
+          },
+        },
+      } satisfies MessagingSurfaceIntent),
+    ).resolves.toMatchObject({
+      channel: "slack",
+      outcome: "updated",
+    });
+
+    expect(posted).toEqual([]);
+    expect(updated).toHaveLength(1);
+    expect(updated[0]).toMatchObject({
+      channel: "C012ABCDEF0",
+      text: fallbackText,
+      ts: "1712023032.123456",
+      blocks: [
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: prompt,
+          },
+        },
+        expect.objectContaining({ type: "actions" }),
+      ],
+    });
+  });
+
   it("maps source-relative thread broadcast delivery to Slack post fields", async () => {
     const spies: { posted: unknown[] } = { posted: [] };
     const adapter = new SlackAdapter({
@@ -2066,6 +2152,16 @@ describe("SlackAdapter", () => {
       expect.objectContaining({
         kind: "callback",
         actionId: "resume",
+        sourceSurface: {
+          channel: "slack",
+          id: "1712023032.123456",
+          state: {
+            opaque: expect.objectContaining({
+              channelId: "D012ABCDEF0",
+              ts: "1712023032.123456",
+            }),
+          },
+        },
         channel: expect.objectContaining({
           conversation: expect.objectContaining({
             id: "D012ABCDEF0",
