@@ -229,6 +229,11 @@ type SlackSocketEnvelope = {
   event?: unknown;
 };
 
+type SlackEventsApiBody = {
+  event?: unknown;
+  team_id?: unknown;
+};
+
 type SlackMessageEvent = {
   bot_id?: string;
   channel?: string;
@@ -745,13 +750,14 @@ export class SlackAdapter implements SlackProviderAdapter {
   private readonly handleSlackEvent = async (payload: unknown): Promise<void> => {
     const envelope = payload as SlackSocketEnvelope;
     await envelope.ack?.();
-    const event = (envelope.event ?? (envelope.body as { event?: unknown })?.event) as
+    const body = envelope.body as SlackEventsApiBody | undefined;
+    const event = (envelope.event ?? body?.event) as
       | SlackMessageEvent
       | undefined;
     if (!event || (event.type !== "message" && event.type !== "app_mention")) {
       return;
     }
-    await this.handleMessageEvent(event);
+    await this.handleMessageEvent(event, body?.team_id ?? event.team);
   };
 
   private readonly handleInteractive = async (payload: unknown): Promise<void> => {
@@ -766,7 +772,10 @@ export class SlackAdapter implements SlackProviderAdapter {
     await this.handleSlashPayload(envelope.body as SlackSlashCommandPayload);
   };
 
-  private async handleMessageEvent(event: SlackMessageEvent): Promise<void> {
+  private async handleMessageEvent(
+    event: SlackMessageEvent,
+    teamId?: unknown,
+  ): Promise<void> {
     if (!this.listener) return;
     if (
       (this.botId && event.bot_id === this.botId) ||
@@ -779,7 +788,7 @@ export class SlackAdapter implements SlackProviderAdapter {
     const ids = this.validateInboundMessageIds({
       botId: event.bot_id,
       channelId: event.channel,
-      teamId: event.team,
+      teamId,
       userId: event.user,
       ts: event.ts ?? event.event_ts,
     });

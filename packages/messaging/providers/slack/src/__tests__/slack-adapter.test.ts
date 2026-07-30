@@ -881,6 +881,81 @@ describe("SlackAdapter", () => {
     ]);
   });
 
+  it("uses the Socket Mode envelope team ID to authorize file shares", async () => {
+    const socket = fakeSocket();
+    const adapter = new SlackAdapter({
+      config: {
+        ...baseConfig,
+        authorizedConversationIds: [{ id: "C012ABCDEF0", displayName: "dev" }],
+        channelAuthorizationMode: "approved_only",
+        teamAuthorizationMode: "approved_only",
+      },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      socketClient: socket,
+      now: () => 1_700_000_000_000,
+    });
+    const events: MessagingInboundEvent[] = [];
+    const rejected: MessagingRejectedInboundEvent[] = [];
+    adapter.onInboundRejected((event) => {
+      rejected.push(event);
+    });
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await socket.emitEvent("slack_event", {
+      ack: async () => undefined,
+      body: {
+        type: "event_callback",
+        team_id: "T012ABCDEF0",
+        event: {
+          type: "message",
+          subtype: "file_share",
+          channel: "C012ABCDEF0",
+          channel_type: "channel",
+          thread_ts: "1712023031.123456",
+          ts: "1712023032.123456",
+          user: "U012ABCDEF0",
+          text: "Please inspect this screenshot",
+          files: [{
+            id: "F012ABCDEF0",
+            mimetype: "image/png",
+            name: "screenshot.png",
+          }],
+        },
+      },
+    });
+
+    expect(rejected).toEqual([]);
+    expect(events).toEqual([
+      expect.objectContaining({
+        kind: "media",
+        text: "Please inspect this screenshot",
+        attachments: [
+          expect.objectContaining({
+            id: "F012ABCDEF0",
+            kind: "image",
+            name: "screenshot.png",
+          }),
+        ],
+        channel: expect.objectContaining({
+          conversation: expect.objectContaining({
+            id: "C012ABCDEF0",
+            kind: "thread",
+            parentId: "1712023031.123456",
+          }),
+        }),
+        routingState: expect.objectContaining({
+          opaque: expect.objectContaining({
+            channelId: "C012ABCDEF0",
+            teamId: "T012ABCDEF0",
+          }),
+        }),
+      }),
+    ]);
+  });
+
   it("routes authorized non-self bot message events for automation triggers", async () => {
     const socket = fakeSocket();
     const adapter = new SlackAdapter({
