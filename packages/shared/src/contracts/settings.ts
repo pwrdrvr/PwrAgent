@@ -127,6 +127,10 @@ export type DesktopProviderThreadModelMigration = {
   revision: string;
   model: string;
   reasoningEffort?: string;
+  /** Existing thread models eligible to adopt this migration. Missing = all. */
+  sourceModels?: string[];
+  /** Whether threads with no reported current model are eligible. */
+  includeThreadsWithoutModel?: boolean;
   createdAt: number;
 };
 

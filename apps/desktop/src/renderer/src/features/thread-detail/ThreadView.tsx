@@ -1571,12 +1571,14 @@ export function ThreadView(props: ThreadViewProps) {
         backend: thread.source,
         threadId: thread.id,
         threadCreatedAt: thread.createdAt,
+        threadModel: thread.model,
       })
       .then(async (result) => {
         if (
           result.status === "applied"
           || result.status === "acknowledged-manual-change"
           || result.status === "acknowledged-new-thread"
+          || result.status === "acknowledged-source-model"
         ) {
           await migrationRefreshNavigation?.();
           return;
@@ -1588,6 +1590,17 @@ export function ThreadView(props: ThreadViewProps) {
             message:
               `${migration.model} is not currently available for `
               + `${thread.source}. This thread was left unchanged.`,
+            tone: "warning",
+          });
+          return;
+        }
+        if (result.status === "metadata-unavailable") {
+          migrationNotice?.({
+            id: `thread-model-migration-metadata:${checkKey}`,
+            title: "Thread model migration pending",
+            message:
+              "PwrAgent could not verify this thread's creation time, so it "
+              + "was left unchanged.",
             tone: "warning",
           });
         }

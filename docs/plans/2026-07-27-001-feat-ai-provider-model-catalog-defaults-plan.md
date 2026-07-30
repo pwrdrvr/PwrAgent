@@ -98,8 +98,8 @@ The surrounding relationships are current context, not a committed roadmap:
 
 **Adopt a new baseline across existing threads**
 
-- R24. AI Providers must offer an explicit, confirmed action that creates a new model/reasoning migration revision for the selected provider baseline.
-- R25. A matching thread created before the current migration and not yet acknowledging its revision must adopt the migration's model and reasoning once when next opened, before its next turn can start. Threads created after the migration are not eligible and acknowledge it without being changed.
+- R24. AI Providers must offer an explicit action that previews existing provider threads grouped by their current model and count, supports click/Command-click toggles plus Shift-click range selection, and creates a confirmed model/reasoning migration revision for only the selected source-model groups.
+- R25. A matching thread uses a selected source model, was created before the current migration, and has not yet acknowledged its revision. It must adopt the migration's model and reasoning once when next opened, before its next turn can start. Threads using unselected source models or created after the migration acknowledge it without being changed.
 - R26. A manual model or reasoning change made after a thread acknowledges the current migration must remain authoritative for that migration revision.
 - R27. Creating a later migration revision must make every matching existing thread eligible again, including threads manually customized before the later migration; each thread applies each revision at most once.
 - R28. If the migration target is unavailable or invalid when a thread opens, PwrAgent must not stamp the revision as applied and must not silently substitute a different model or reasoning value.
@@ -204,9 +204,14 @@ flowchart TB
   - **Then:** Its saved thread settings remain authoritative and unchanged.
 - AE10. Existing thread adopts a migration once
   - **Covers R24-R28.**
-  - **Given:** A Codex migration targets GPT-5.6-Sol with high reasoning and an unopened thread still uses GPT-5.5.
+  - **Given:** A Codex migration targets GPT-5.6-Sol with high reasoning, includes GPT-5.5 as a selected source model, and an unopened thread still uses GPT-5.5.
   - **When:** The operator opens that thread.
   - **Then:** The thread changes to GPT-5.6-Sol with high reasoning and records the current migration revision.
+- AE10a. Current-generation model remains untouched
+  - **Covers R24-R28.**
+  - **Given:** The migration dialog lists GPT-5.4, GPT-5.5, GPT-5.6-Sol, and GPT-5.6-Terra with their thread counts.
+  - **When:** The operator selects GPT-5.4 and GPT-5.5 but leaves both GPT-5.6 models unselected before creating a GPT-5.6-Sol/high migration.
+  - **Then:** Only threads currently using GPT-5.4 or GPT-5.5 adopt the migration; GPT-5.6-Sol and GPT-5.6-Terra threads acknowledge the revision without changing.
 - AE11. Post-migration manual choice sticks
   - **Covers R26-R27.**
   - **Given:** A thread acknowledged the current GPT-5.6-Sol/high migration and the operator then changes it to GPT-5.6-Terra/xhigh.

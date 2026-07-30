@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type {
   BackendModelOption,
   BackendSummary,
@@ -31,6 +31,23 @@ import { AcpAgentsSettings } from "./AcpAgentsSettings";
 import { SettingsSwitch } from "./SettingsSwitch";
 
 type CodexPathMode = "auto" | "specified";
+
+const UNSPECIFIED_SOURCE_MODEL_KEY = "\0unspecified";
+
+type ThreadMigrationSourceGroup = {
+  count: number;
+  key: string;
+  label: string;
+  model?: string;
+};
+
+type PendingThreadMigration = {
+  backend: BackendSummary;
+  model: string;
+  reasoningEffort?: string;
+  selectedSourceKeys: string[];
+  sourceGroups: ThreadMigrationSourceGroup[];
+};
 
 export function ModelsSettings(props: {
   cachedBackends?: BackendSummary[];
@@ -420,12 +437,8 @@ function ProviderModelDefaultsSettings(props: {
     model: string;
     reasoningEffort?: string;
   }>();
-  const [pendingMigration, setPendingMigration] = useState<{
-    backend: BackendSummary;
-    count: number;
-    model: string;
-    reasoningEffort?: string;
-  }>();
+  const [pendingMigration, setPendingMigration] =
+    useState<PendingThreadMigration>();
   const [pendingFastAction, setPendingFastAction] = useState<{
     kind: "disable" | "turn-off";
     threadCount: number;
@@ -515,26 +528,66 @@ function ProviderModelDefaultsSettings(props: {
       return;
     }
     const navigation = await props.desktopApi.getNavigationSnapshot();
-    const count = navigation.threads.filter(
+    const threads = navigation.threads.filter(
       (thread) => thread.source === backend.kind,
-    ).length;
-    if (count === 0) {
+    );
+    if (threads.length === 0) {
       setStatus(`No existing ${backend.label} threads need a migration.`);
       return;
     }
+    const modelLabels = new Map(
+      (backend.launchpadOptions?.models ?? []).map((option) => [
+        option.id,
+        option.label ?? option.id,
+      ]),
+    );
+    const sourceCounts = new Map<string, number>();
+    for (const thread of threads) {
+      const key = thread.model?.trim() || UNSPECIFIED_SOURCE_MODEL_KEY;
+      sourceCounts.set(key, (sourceCounts.get(key) ?? 0) + 1);
+    }
+    const sourceGroups = [...sourceCounts.entries()]
+      .map(([key, count]): ThreadMigrationSourceGroup => {
+        if (key === UNSPECIFIED_SOURCE_MODEL_KEY) {
+          return {
+            count,
+            key,
+            label: "Provider default / unknown",
+          };
+        }
+        return {
+          count,
+          key,
+          label: modelLabels.get(key) ?? key,
+          model: key,
+        };
+      })
+      .sort((left, right) => left.label.localeCompare(right.label));
     setStatus(undefined);
     setPendingApply(undefined);
     setPendingFastAction(undefined);
     setPendingMigration({
       backend,
-      count,
       model,
       reasoningEffort,
+      selectedSourceKeys: sourceGroups
+        .filter((group) => group.model !== model)
+        .map((group) => group.key),
+      sourceGroups,
     });
   };
 
   const createThreadMigration = async (): Promise<void> => {
     if (!pendingMigration) return;
+    const selectedSourceKeys = new Set(pendingMigration.selectedSourceKeys);
+    const selectedGroups = pendingMigration.sourceGroups.filter(
+      (group) => selectedSourceKeys.has(group.key),
+    );
+    const threadCount = selectedGroups.reduce(
+      (count, group) => count + group.count,
+      0,
+    );
+    if (threadCount === 0) return;
     setApplying(true);
     try {
       const createdAt = Date.now();
@@ -546,6 +599,12 @@ function ProviderModelDefaultsSettings(props: {
           ...(pendingMigration.reasoningEffort
             ? { reasoningEffort: pendingMigration.reasoningEffort }
             : {}),
+          sourceModels: selectedGroups.flatMap((group) =>
+            group.model ? [group.model] : [],
+          ),
+          ...(selectedSourceKeys.has(UNSPECIFIED_SOURCE_MODEL_KEY)
+            ? { includeThreadsWithoutModel: true }
+            : {}),
           createdAt,
         },
       });
@@ -554,8 +613,8 @@ function ProviderModelDefaultsSettings(props: {
         return;
       }
       setStatus(
-        `${pendingMigration.count} ${pendingMigration.backend.label} thread${
-          pendingMigration.count === 1 ? "" : "s"
+        `${threadCount} ${pendingMigration.backend.label} thread${
+          threadCount === 1 ? "" : "s"
         } will adopt ${pendingMigration.model} when next opened.`,
       );
       setPendingMigration(undefined);
@@ -580,7 +639,7 @@ function ProviderModelDefaultsSettings(props: {
     setPendingFastAction({
       kind,
       threadCount: navigation.threads.filter(
-        (thread) => thread.source === "codex",
+        (thread) => thread.source === "codex" && thread.fastMode === true,
       ).length,
     });
   };
@@ -665,14 +724,11 @@ function ProviderModelDefaultsSettings(props: {
               applying={applying}
               fastMode={fastMode}
               pendingApply={providerPendingApply}
-              pendingMigration={providerPendingMigration}
               onApply={(model, reasoningEffort) => {
                 void previewApply(backend, model, reasoningEffort);
               }}
               onCancelApply={() => setPendingApply(undefined)}
               onConfirmApply={() => void applyToLaunchpads()}
-              onCancelMigration={() => setPendingMigration(undefined)}
-              onConfirmMigration={() => void createThreadMigration()}
               onMigrate={(model, reasoningEffort) => {
                 void previewThreadMigration(backend, model, reasoningEffort);
               }}
@@ -717,7 +773,197 @@ function ProviderModelDefaultsSettings(props: {
         )}
         {status ? <p className="settings-empty">{status}</p> : null}
       </div>
+      {pendingMigration ? (
+        <ThreadMigrationDialog
+          applying={applying}
+          migration={pendingMigration}
+          onCancel={() => setPendingMigration(undefined)}
+          onConfirm={() => void createThreadMigration()}
+          onSelectionChange={(selectedSourceKeys) => {
+            setPendingMigration((current) =>
+              current ? { ...current, selectedSourceKeys } : current,
+            );
+          }}
+        />
+      ) : null}
     </SettingsSection>
+  );
+}
+
+function ThreadMigrationDialog(props: {
+  applying: boolean;
+  migration: PendingThreadMigration;
+  onCancel: () => void;
+  onConfirm: () => void;
+  onSelectionChange: (selectedSourceKeys: string[]) => void;
+}) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const selectionAnchorRef = useRef<number | undefined>(undefined);
+  const applying = props.applying;
+  const onCancel = props.onCancel;
+  const selectedSourceKeys = new Set(props.migration.selectedSourceKeys);
+  const selectedThreadCount = props.migration.sourceGroups.reduce(
+    (count, group) =>
+      count + (selectedSourceKeys.has(group.key) ? group.count : 0),
+    0,
+  );
+
+  useEffect(() => {
+    dialogRef.current?.focus();
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === "Escape" && !applying) {
+        event.preventDefault();
+        onCancel();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [applying, onCancel]);
+
+  const toggleSourceGroup = (index: number, shiftKey: boolean): void => {
+    const group = props.migration.sourceGroups[index];
+    if (!group) return;
+    const next = new Set(selectedSourceKeys);
+    const shouldSelect = !next.has(group.key);
+    if (shiftKey && selectionAnchorRef.current !== undefined) {
+      const start = Math.min(selectionAnchorRef.current, index);
+      const end = Math.max(selectionAnchorRef.current, index);
+      for (
+        const rangeGroup of
+        props.migration.sourceGroups.slice(start, end + 1)
+      ) {
+        if (shouldSelect) {
+          next.add(rangeGroup.key);
+        } else {
+          next.delete(rangeGroup.key);
+        }
+      }
+    } else if (shouldSelect) {
+      next.add(group.key);
+    } else {
+      next.delete(group.key);
+    }
+    selectionAnchorRef.current = index;
+    props.onSelectionChange([...next]);
+  };
+
+  return (
+    <div className="settings-confirm-modal" role="presentation">
+      <div
+        ref={dialogRef}
+        aria-describedby="thread-migration-description"
+        aria-labelledby="thread-migration-heading"
+        aria-modal="true"
+        className="settings-confirm-dialog settings-thread-migration-dialog"
+        role="dialog"
+        tabIndex={-1}
+      >
+        <h2 id="thread-migration-heading">
+          Choose {props.migration.backend.label} threads to update
+        </h2>
+        <p id="thread-migration-description">
+          Select the models currently used by threads that should adopt{" "}
+          <strong>{props.migration.model}</strong>
+          {props.migration.reasoningEffort
+            ? ` with ${props.migration.reasoningEffort} reasoning`
+            : ""}
+          . Each selected thread changes once when next opened. Newer threads and
+          unselected models stay unchanged.
+        </p>
+        <div className="settings-thread-migration-dialog__toolbar">
+          <span>
+            {selectedThreadCount} of{" "}
+            {props.migration.sourceGroups.reduce(
+              (count, group) => count + group.count,
+              0,
+            )}{" "}
+            threads selected
+          </span>
+          <div className="settings-inline-actions">
+            <button
+              className="button button--ghost"
+              disabled={props.applying}
+              type="button"
+              onClick={() => props.onSelectionChange(
+                props.migration.sourceGroups.map((group) => group.key),
+              )}
+            >
+              Select all
+            </button>
+            <button
+              className="button button--ghost"
+              disabled={props.applying}
+              type="button"
+              onClick={() => props.onSelectionChange([])}
+            >
+              Clear
+            </button>
+          </div>
+        </div>
+        <div
+          aria-label="Current thread models"
+          aria-multiselectable="true"
+          className="settings-thread-migration-dialog__list"
+          role="listbox"
+        >
+          {props.migration.sourceGroups.map((group, index) => {
+            const selected = selectedSourceKeys.has(group.key);
+            return (
+              <button
+                key={group.key}
+                aria-selected={selected}
+                className="settings-thread-migration-dialog__option"
+                disabled={props.applying}
+                role="option"
+                type="button"
+                onClick={(event) => toggleSourceGroup(index, event.shiftKey)}
+              >
+                <span
+                  aria-hidden="true"
+                  className="settings-thread-migration-dialog__check"
+                >
+                  {selected ? "✓" : ""}
+                </span>
+                <span className="settings-thread-migration-dialog__model">
+                  {group.label}
+                  {group.model === props.migration.model ? (
+                    <small>destination model</small>
+                  ) : null}
+                </span>
+                <span className="settings-thread-migration-dialog__count">
+                  {group.count} thread{group.count === 1 ? "" : "s"}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        <p className="settings-thread-migration-dialog__hint">
+          Click or ⌘-click to toggle a model. Shift-click selects a range.
+        </p>
+        <div className="settings-confirm-dialog__actions">
+          <button
+            className="button button--secondary"
+            disabled={props.applying}
+            type="button"
+            onClick={props.onCancel}
+          >
+            Cancel
+          </button>
+          <button
+            className="button button--primary"
+            disabled={props.applying || selectedThreadCount === 0}
+            type="button"
+            onClick={props.onConfirm}
+          >
+            {props.applying
+              ? "Creating migration…"
+              : `Update ${selectedThreadCount} thread${
+                  selectedThreadCount === 1 ? "" : "s"
+                }`}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -740,14 +986,9 @@ function ProviderModelDefaultField(props: {
   pendingApply?: {
     count: number;
   };
-  pendingMigration?: {
-    count: number;
-  };
   onApply: (model: string, reasoningEffort?: string) => void;
   onCancelApply: () => void;
   onConfirmApply: () => void;
-  onCancelMigration: () => void;
-  onConfirmMigration: () => void;
   onMigrate: (model: string, reasoningEffort?: string) => void;
   onChange: (defaults: DesktopProviderModelDefaults | undefined) => void;
 }) {
@@ -861,17 +1102,6 @@ function ProviderModelDefaultField(props: {
               onCancel={props.onCancelApply}
               onConfirm={props.onConfirmApply}
             />
-          ) : props.pendingMigration ? (
-            <InlineActionConfirmation
-              applying={props.applying}
-              confirmLabel="Create migration"
-              label={`Migrate ${props.pendingMigration.count} existing thread${
-                props.pendingMigration.count === 1 ? "" : "s"
-              }?`}
-              sub="Each matching thread will adopt this model and reasoning once when next opened. Manual changes made afterward will stick until you create another migration."
-              onCancel={props.onCancelMigration}
-              onConfirm={props.onConfirmMigration}
-            />
           ) : selectedModel ? (
             <div className="settings-inline-actions">
               <button
@@ -894,7 +1124,7 @@ function ProviderModelDefaultField(props: {
                   selectedReasoning || undefined,
                 )}
               >
-                Apply to existing threads
+                Apply to existing threads…
               </button>
               <button
                 className="button button--ghost"

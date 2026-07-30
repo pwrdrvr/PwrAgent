@@ -231,6 +231,7 @@ describe("ThreadView", () => {
           title: "Old model",
           titleSource: "explicit",
           source: "codex",
+          model: "gpt-5.5",
           createdAt: 1_000,
           updatedAt: 1_500,
           linkedDirectories: [],
@@ -246,6 +247,7 @@ describe("ThreadView", () => {
         backend: "codex",
         threadId: "thread-old",
         threadCreatedAt: 1_000,
+        threadModel: "gpt-5.5",
       });
     });
     await waitFor(() => {

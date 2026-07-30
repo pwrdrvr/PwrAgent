@@ -7410,6 +7410,114 @@ textarea,
   margin-top: 16px;
 }
 
+.settings-thread-migration-dialog {
+  width: min(620px, calc(100vw - 48px));
+}
+
+.settings-thread-migration-dialog:focus {
+  outline: none;
+}
+
+.settings-thread-migration-dialog__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.settings-thread-migration-dialog__list {
+  overflow-y: auto;
+  max-height: min(360px, 45vh);
+  margin-top: 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel);
+}
+
+.settings-thread-migration-dialog__option {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 42px;
+  padding: 8px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--border-subtle);
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.settings-thread-migration-dialog__option:last-child {
+  border-bottom: 0;
+}
+
+.settings-thread-migration-dialog__option:hover,
+.settings-thread-migration-dialog__option:focus-visible {
+  background: var(--bg-panel-hover);
+  outline: none;
+}
+
+.settings-thread-migration-dialog__option[aria-selected="true"] {
+  background: var(--accent-soft);
+}
+
+.settings-thread-migration-dialog__option:disabled {
+  cursor: default;
+  opacity: 0.58;
+}
+
+.settings-thread-migration-dialog__check {
+  display: grid;
+  width: 16px;
+  height: 16px;
+  place-items: center;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.settings-thread-migration-dialog__option[aria-selected="true"]
+  .settings-thread-migration-dialog__check {
+  border-color: var(--accent-border);
+}
+
+.settings-thread-migration-dialog__model {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.settings-thread-migration-dialog__model small {
+  color: var(--text-muted);
+  font-family: var(--font-sans);
+  font-size: 11px;
+}
+
+.settings-thread-migration-dialog__count {
+  color: var(--text-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.settings-confirm-dialog p.settings-thread-migration-dialog__hint {
+  margin-top: 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
 .settings-codex-profile-select {
   display: grid;
   gap: 6px;

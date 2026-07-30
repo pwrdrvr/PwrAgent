@@ -30,6 +30,7 @@ import type {
   BackendModelOption,
   BackendRateLimitSummary,
   CodexThreadEnvironmentRuntime,
+  DesktopProviderThreadModelMigration,
   LinkedDirectorySummary,
   NavigationLaunchpadDefaults,
   NavigationLaunchpadDraft,
@@ -8457,11 +8458,12 @@ script = "echo setup"
 
   it("applies each provider thread migration once and lets a later revision supersede it", async () => {
     const overlayStore = createOverlayStoreMock();
-    let migrations = {
+    let migrations: Record<string, DesktopProviderThreadModelMigration> = {
       codex: {
         revision: "migration-1",
         model: "gpt-5.6-sol",
         reasoningEffort: "high",
+        sourceModels: ["gpt-5.5"],
         createdAt: 1,
       },
     };
@@ -8476,6 +8478,15 @@ script = "echo setup"
           linkedDirectories: [],
           createdAt: 0,
           model: "gpt-5.5",
+        },
+        {
+          id: "new-turn-thread",
+          title: "New turn thread",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          createdAt: 2,
+          model: "gpt-5.6-terra",
         },
       ],
       models: [
@@ -8513,16 +8524,50 @@ script = "echo setup"
       model: "gpt-5.6-sol",
       reasoningEffort: "high",
     });
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "new-turn-thread",
+      input: [{ type: "text", text: "Keep the newer thread unchanged" }],
+      model: "gpt-5.6-terra",
+      reasoningEffort: "xhigh",
+    });
+    expect(codexClient.lastStartTurnParams).toMatchObject({
+      model: "gpt-5.6-terra",
+      reasoningEffort: "xhigh",
+    });
+    await expect(overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: "new-turn-thread",
+    })).resolves.toMatchObject({
+      modelMigrationRevision: "migration-1",
+    });
 
     await expect(registry.applyThreadModelMigration({
       backend: "codex",
       threadId: "thread-1",
       threadCreatedAt: 0,
+      threadModel: "gpt-5.5",
     })).resolves.toMatchObject({
       status: "applied",
       revision: "migration-1",
       model: "gpt-5.6-sol",
       reasoningEffort: "high",
+    });
+    await expect(registry.applyThreadModelMigration({
+      backend: "codex",
+      threadId: "terra-thread",
+      threadCreatedAt: 0,
+      threadModel: "gpt-5.6-terra",
+    })).resolves.toMatchObject({
+      status: "acknowledged-source-model",
+      revision: "migration-1",
+      model: "gpt-5.6-terra",
+    });
+    await expect(overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: "terra-thread",
+    })).resolves.toMatchObject({
+      modelMigrationRevision: "migration-1",
     });
     await expect(registry.applyThreadModelMigration({
       backend: "codex",

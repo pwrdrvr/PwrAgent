@@ -358,6 +358,8 @@ export type ApplyThreadModelMigrationRequest = {
   threadId: ThreadIdentifier;
   /** Creation time from the provider summary, used to exclude newer threads. */
   threadCreatedAt?: number;
+  /** Current provider-reported model, used when no overlay model is recorded. */
+  threadModel?: string;
 };
 
 export type ApplyThreadModelMigrationResponse = {
@@ -368,6 +370,7 @@ export type ApplyThreadModelMigrationResponse = {
     | "already-applied"
     | "acknowledged-manual-change"
     | "acknowledged-new-thread"
+    | "acknowledged-source-model"
     | "metadata-unavailable"
     | "applied"
     | "unavailable";

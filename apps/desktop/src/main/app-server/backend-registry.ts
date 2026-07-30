@@ -11241,15 +11241,50 @@ export class DesktopBackendRegistry {
       };
     }
 
-    const threadCreatedAt =
-      params.threadCreatedAt
-      ?? (
-        await this.findThreadForWorkspaceHandoff({
+    if (
+      current?.modelSettingsManuallyUpdatedAt !== undefined
+      && current.modelSettingsManuallyUpdatedAt >= migration.createdAt
+    ) {
+      await this.overlayStore.setThreadModelSettings({
+        backend: params.backend,
+        threadId: params.threadId,
+        model: current.model,
+        reasoningEffort: current.reasoningEffort,
+        serviceTier: current.serviceTier,
+        fastMode: current.fastMode,
+        modelMigrationRevision: migration.revision,
+        modelSettingsManuallyUpdatedAt:
+          current.modelSettingsManuallyUpdatedAt,
+      });
+      return {
+        backend: params.backend,
+        threadId: params.threadId,
+        status: "acknowledged-manual-change",
+        revision: migration.revision,
+        model: current.model,
+        reasoningEffort: current.reasoningEffort,
+      };
+    }
+
+    const migrationUsesSourceFilter =
+      migration.sourceModels !== undefined
+      || migration.includeThreadsWithoutModel === true;
+    const needsThreadSummary =
+      params.threadCreatedAt === undefined
+      || (
+        migrationUsesSourceFilter
+        && current?.model === undefined
+        && params.threadModel === undefined
+      );
+    const threadSummary = needsThreadSummary
+      ? await this.findThreadForWorkspaceHandoff({
           backend: params.backend,
           callerReason: "thread-model-migration",
           threadId: params.threadId,
         })
-      )?.createdAt;
+      : undefined;
+    const threadCreatedAt =
+      params.threadCreatedAt ?? threadSummary?.createdAt;
     if (threadCreatedAt === undefined) {
       return {
         backend: params.backend,
@@ -11281,28 +11316,34 @@ export class DesktopBackendRegistry {
       };
     }
 
-    if (
-      current?.modelSettingsManuallyUpdatedAt !== undefined
-      && current.modelSettingsManuallyUpdatedAt >= migration.createdAt
-    ) {
+    const sourceModel =
+      current?.model
+      ?? params.threadModel
+      ?? threadSummary?.model;
+    const sourceModelSelected =
+      !migrationUsesSourceFilter
+      || (
+        sourceModel
+          ? migration.sourceModels?.includes(sourceModel) === true
+          : migration.includeThreadsWithoutModel === true
+      );
+    if (!sourceModelSelected) {
       await this.overlayStore.setThreadModelSettings({
         backend: params.backend,
         threadId: params.threadId,
-        model: current.model,
-        reasoningEffort: current.reasoningEffort,
-        serviceTier: current.serviceTier,
-        fastMode: current.fastMode,
+        model: current?.model,
+        reasoningEffort: current?.reasoningEffort,
+        serviceTier: current?.serviceTier,
+        fastMode: current?.fastMode,
         modelMigrationRevision: migration.revision,
-        modelSettingsManuallyUpdatedAt:
-          current.modelSettingsManuallyUpdatedAt,
       });
       return {
         backend: params.backend,
         threadId: params.threadId,
-        status: "acknowledged-manual-change",
+        status: "acknowledged-source-model",
         revision: migration.revision,
-        model: current.model,
-        reasoningEffort: current.reasoningEffort,
+        model: current?.model ?? sourceModel,
+        reasoningEffort: current?.reasoningEffort,
       };
     }
 

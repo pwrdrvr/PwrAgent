@@ -1679,6 +1679,16 @@ describe("SettingsScreen", () => {
                   reasoningEfforts: ["low", "high", "xhigh"],
                   supportsReasoning: true,
                 },
+                {
+                  id: "gpt-5.6-terra",
+                  label: "GPT-5.6-Terra",
+                  supportsReasoning: true,
+                },
+                {
+                  id: "gpt-5.5",
+                  label: "GPT-5.5",
+                  supportsReasoning: true,
+                },
               ],
             },
           },
@@ -1738,6 +1748,8 @@ describe("SettingsScreen", () => {
             updatedAt: 1,
             linkedDirectories: [],
             source: "codex" as const,
+            model: "gpt-5.5",
+            fastMode: true,
             inbox: { inInbox: true },
           },
           {
@@ -1747,6 +1759,19 @@ describe("SettingsScreen", () => {
             updatedAt: 1,
             linkedDirectories: [],
             source: "codex" as const,
+            model: "gpt-5.6-terra",
+            fastMode: true,
+            inbox: { inInbox: true },
+          },
+          {
+            id: "codex-3",
+            title: "Codex three",
+            createdAt: 1,
+            updatedAt: 1,
+            linkedDirectories: [],
+            source: "codex" as const,
+            model: "gpt-5.6-sol",
+            fastMode: false,
             inbox: { inInbox: true },
           },
           {
@@ -1823,18 +1848,49 @@ describe("SettingsScreen", () => {
     ).toHaveClass("settings-select--chip");
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Apply to existing threads" }),
+      screen.getByRole("button", { name: "Apply to existing threads…" }),
     );
-    const migrationConfirmation =
-      await screen.findByText("Migrate 2 existing threads?");
-    expect(migrationConfirmation.closest(".settings-field")).toHaveTextContent(
-      "Codex",
+    const migrationDialog = await screen.findByRole("dialog", {
+      name: "Choose Codex threads to update",
+    });
+    expect(
+      within(migrationDialog).getByText("2 of 3 threads selected"),
+    ).toBeInTheDocument();
+    const terraGroup = within(migrationDialog).getByRole("option", {
+      name: /GPT-5.6-Terra.*1 thread/,
+    });
+    const oldModelGroup = within(migrationDialog).getByRole("option", {
+      name: /GPT-5.5.*1 thread/,
+    });
+    const destinationGroup = within(migrationDialog).getByRole("option", {
+      name: /GPT-5.6-Sol.*destination model.*1 thread/,
+    });
+    expect(terraGroup).toHaveAttribute("aria-selected", "true");
+    expect(destinationGroup).toHaveAttribute("aria-selected", "false");
+    fireEvent.click(
+      within(migrationDialog).getByRole("button", { name: "Clear" }),
     );
     expect(
-      screen.queryByRole("button", { name: "Apply to existing threads" }),
-    ).not.toBeInTheDocument();
+      within(migrationDialog).getByText("0 of 3 threads selected"),
+    ).toBeInTheDocument();
+    fireEvent.click(oldModelGroup);
+    fireEvent.click(destinationGroup, { shiftKey: true });
+    expect(
+      within(migrationDialog).getByText("2 of 3 threads selected"),
+    ).toBeInTheDocument();
     fireEvent.click(
-      screen.getByRole("button", { name: "Create migration" }),
+      within(migrationDialog).getByRole("button", { name: "Clear" }),
+    );
+    fireEvent.click(oldModelGroup);
+    expect(
+      within(migrationDialog).getByText("1 of 3 threads selected"),
+    ).toBeInTheDocument();
+    expect(terraGroup).toHaveAttribute("aria-selected", "false");
+    expect(oldModelGroup).toHaveAttribute("aria-selected", "true");
+    fireEvent.click(
+      within(migrationDialog).getByRole("button", {
+        name: "Update 1 thread",
+      }),
     );
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
@@ -1844,6 +1900,7 @@ describe("SettingsScreen", () => {
               revision: expect.any(String),
               model: "gpt-5.6-sol",
               reasoningEffort: "high",
+              sourceModels: ["gpt-5.5"],
               createdAt: expect.any(Number),
             },
           },

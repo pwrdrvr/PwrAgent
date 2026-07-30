@@ -90,6 +90,8 @@ describe("desktop config provider model defaults", () => {
             revision: "migration-2",
             model: "gpt-5.6-sol",
             reasoningEffort: "high",
+            sourceModels: ["gpt-5.4", "gpt-5.5"],
+            includeThreadsWithoutModel: true,
             createdAt: 2_000,
           },
           "acp:kimi": {
@@ -113,6 +115,8 @@ describe("desktop config provider model defaults", () => {
           revision: "migration-2",
           model: "gpt-5.6-sol",
           reasoningEffort: "high",
+          sourceModels: ["gpt-5.4", "gpt-5.5"],
+          includeThreadsWithoutModel: true,
           createdAt: 2_000,
         },
         "acp:kimi": {

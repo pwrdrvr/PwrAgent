@@ -1249,6 +1249,12 @@ export function desktopSettingsPatchToEdits(
         ...(migration.reasoningEffort
           ? { reasoning_effort: migration.reasoningEffort }
           : {}),
+        ...(migration.sourceModels
+          ? { source_models: migration.sourceModels }
+          : {}),
+        ...(migration.includeThreadsWithoutModel
+          ? { include_threads_without_model: true }
+          : {}),
         created_at: migration.createdAt,
       }));
     if (entries.length > 0) {
@@ -2194,6 +2200,9 @@ function normalizeProviderThreadModelMigrations(
       const revision = migration.revision.trim();
       const model = migration.model.trim();
       const reasoningEffort = migration.reasoningEffort?.trim() || undefined;
+      const sourceModels = migration.sourceModels
+        ?.map((sourceModel) => sourceModel.trim())
+        .filter(Boolean);
       if (
         !normalizedProvider
         || !revision
@@ -2208,6 +2217,10 @@ function normalizeProviderThreadModelMigrations(
           revision,
           model,
           ...(reasoningEffort ? { reasoningEffort } : {}),
+          ...(sourceModels ? { sourceModels: [...new Set(sourceModels)] } : {}),
+          ...(migration.includeThreadsWithoutModel
+            ? { includeThreadsWithoutModel: true }
+            : {}),
           createdAt: migration.createdAt,
         },
       ]];
@@ -2233,6 +2246,11 @@ function readProviderThreadModelMigrations(
       typeof item.reasoning_effort === "string"
         ? item.reasoning_effort.trim()
         : "";
+    const sourceModels = readStringArray(item.source_models)
+      ?.map((sourceModel) => sourceModel.trim())
+      .filter(Boolean);
+    const includeThreadsWithoutModel =
+      item.include_threads_without_model === true;
     const createdAt =
       typeof item.created_at === "number" && Number.isFinite(item.created_at)
         ? item.created_at
@@ -2244,6 +2262,10 @@ function readProviderThreadModelMigrations(
       revision,
       model,
       ...(reasoningEffort ? { reasoningEffort } : {}),
+      ...(sourceModels ? { sourceModels: [...new Set(sourceModels)] } : {}),
+      ...(includeThreadsWithoutModel
+        ? { includeThreadsWithoutModel: true }
+        : {}),
       createdAt,
     };
   }
