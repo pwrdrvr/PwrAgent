@@ -413,47 +413,50 @@ describe("messaging status ipc", () => {
     );
   });
 
-  it("dismisses a partially approved Slack pairing without reporting rejection", async () => {
-    const { registerMessagingStatusIpcHandlers } = await import(
-      "../ipc/messaging-status"
-    );
-    const { MESSAGING_REJECT_PAIRING_CHANNEL } = await import("../../shared/ipc");
-    const entry = {
-      id: "pairing-slack-partial",
-      platform: "slack",
-      instanceId: "default",
-      scope: "observed",
-      status: "observed",
-      generatedAt: 1_000,
-      expiresAt: 2_000,
-      observedActor: { id: "U012ABCDEF0", displayName: "Harold" },
-      observedChat: {
-        id: "C012ABCDEF0",
-        kind: "channel",
-        title: "p-search-signals-projects",
-        bucketId: "T025C2NKT",
-      },
-      approvedTargets: ["conversation"],
-    };
-    const consumed = { ...entry, status: "consumed" };
-    runtimeMock.listPairingRequests.mockReturnValue({ entries: [entry] });
-    pairingStoreMock.markStatus.mockReturnValue(consumed);
+  it.each(["observed", "expired"] as const)(
+    "dismisses a %s partially approved Slack pairing without reporting rejection",
+    async (status) => {
+      const { registerMessagingStatusIpcHandlers } = await import(
+        "../ipc/messaging-status"
+      );
+      const { MESSAGING_REJECT_PAIRING_CHANNEL } = await import("../../shared/ipc");
+      const entry = {
+        id: "pairing-slack-partial",
+        platform: "slack",
+        instanceId: "default",
+        scope: "observed",
+        status,
+        generatedAt: 1_000,
+        expiresAt: 2_000,
+        observedActor: { id: "U012ABCDEF0", displayName: "Harold" },
+        observedChat: {
+          id: "C012ABCDEF0",
+          kind: "channel",
+          title: "p-search-signals-projects",
+          bucketId: "T025C2NKT",
+        },
+        approvedTargets: ["conversation"],
+      };
+      const consumed = { ...entry, status: "consumed" };
+      runtimeMock.listPairingRequests.mockReturnValue({ entries: [entry] });
+      pairingStoreMock.markStatus.mockReturnValue(consumed);
 
-    registerMessagingStatusIpcHandlers();
+      registerMessagingStatusIpcHandlers();
 
-    await expect(
-      handlers.get(MESSAGING_REJECT_PAIRING_CHANNEL)?.(
-        {},
-        { entryId: entry.id },
-      ),
-    ).resolves.toEqual({ entry: consumed });
+      await expect(
+        handlers.get(MESSAGING_REJECT_PAIRING_CHANNEL)?.(
+          {},
+          { entryId: entry.id },
+        ),
+      ).resolves.toEqual({ entry: consumed });
 
-    expect(pairingStoreMock.markStatus).toHaveBeenCalledWith({
-      entryId: entry.id,
-      status: "consumed",
-    });
-    expect(runtimeMock.deliverPairingOutcome).not.toHaveBeenCalled();
-  });
+      expect(pairingStoreMock.markStatus).toHaveBeenCalledWith({
+        entryId: entry.id,
+        status: "consumed",
+      });
+      expect(runtimeMock.deliverPairingOutcome).not.toHaveBeenCalled();
+    },
+  );
 
   it("reports rejection when dismissing a Slack pairing with no approvals", async () => {
     const { registerMessagingStatusIpcHandlers } = await import(

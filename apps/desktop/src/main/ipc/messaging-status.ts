@@ -704,8 +704,7 @@ export function registerMessagingStatusIpcHandlers(): void {
       const pairing = runtime.listPairingRequests({ includeResolved: true }).entries
         .find((entry) => entry.id === request.entryId);
       const dismissAfterApproval =
-        pairing?.status === "observed"
-        && (pairing.approvedTargets?.length ?? 0) > 0;
+        (pairing?.approvedTargets?.length ?? 0) > 0;
       const entry = dismissAfterApproval
         ? markPairingConsumed(request.entryId)
         : markPairingRejected(request.entryId);
