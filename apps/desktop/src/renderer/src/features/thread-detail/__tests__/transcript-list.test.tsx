@@ -208,16 +208,16 @@ describe("TranscriptList", () => {
         entries={[
           {
             type: "message",
-            id: "message-from-slack",
+            id: "message-from-discord",
             role: "user",
             text: "Go for it. Do what is necessary.",
             origin: {
               kind: "messaging",
               messaging: {
-                platform: "slack",
+                platform: "discord",
                 surface: {
                   id: "thread-1",
-                  kind: "thread",
+                  kind: "channel",
                   title: "api-search circuit breaker timeout",
                   parentTitle: "signals-chat",
                   ancestorTitle: "PwrAgent",
@@ -239,7 +239,7 @@ describe("TranscriptList", () => {
 
     expect(screen.getByText("Messaging")).toBeInTheDocument();
     const origin = screen.getByLabelText(
-      "Slack: PwrAgent / #signals-chat / api-search circuit breaker timeout · Hunter",
+      "Discord: PwrAgent / #signals-chat / api-search circuit breaker timeout · Hunter",
     );
     expect(origin).toHaveTextContent(
       "PwrAgent / #signals-chat / api-search circuit breaker timeout",

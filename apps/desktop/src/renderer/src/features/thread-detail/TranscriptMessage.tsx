@@ -579,6 +579,11 @@ function formatMessagingOriginSurface(
       if (origin.platform === "telegram") {
         return title || parent || "Group";
       }
+      if (ancestor && parent) {
+        return [ancestor, `#${parent}`, title]
+          .filter(Boolean)
+          .join(" / ");
+      }
       return [ancestor || parent, title ? `#${title}` : undefined]
         .filter(Boolean)
         .join(" / ") || "Channel";
