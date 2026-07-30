@@ -116,6 +116,12 @@ describe("SqliteOverlayStore - launchpad defaults", () => {
       reasoningEffort: "on",
       fastMode: true,
     });
+    await store.setThreadModelSettings({
+      backend: "codex",
+      threadId: "codex-unset",
+      model: "gpt-5.5",
+      reasoningEffort: "high",
+    });
     await store.upsertDirectoryLaunchpad({
       directoryKey: "directory:/codex",
       directoryKind: "directory",
@@ -130,6 +136,20 @@ describe("SqliteOverlayStore - launchpad defaults", () => {
       fastMode: true,
       createdAt: 1,
       updatedAt: 1,
+    });
+    await store.upsertDirectoryLaunchpad({
+      directoryKey: "directory:/codex-unset",
+      directoryKind: "directory",
+      directoryLabel: "Codex unset",
+      directoryPath: "/codex-unset",
+      backend: "codex",
+      executionMode: "default",
+      workMode: "local",
+      prompt: "do not touch me",
+      model: "gpt-5.5",
+      reasoningEffort: "high",
+      createdAt: 1,
+      updatedAt: 7,
     });
     await store.upsertDirectoryLaunchpad({
       directoryKey: "directory:/kimi",
@@ -173,6 +193,21 @@ describe("SqliteOverlayStore - launchpad defaults", () => {
       fastMode: false,
     });
     await expect(store.getThreadOverlayState({
+      backend: "codex",
+      threadId: "codex-unset",
+    })).resolves.toMatchObject({
+      model: "gpt-5.5",
+      reasoningEffort: "high",
+    });
+    expect(
+      (
+        await store.getThreadOverlayState({
+          backend: "codex",
+          threadId: "codex-unset",
+        })
+      )?.fastMode,
+    ).toBeUndefined();
+    await expect(store.getThreadOverlayState({
       backend: "acp:kimi",
       threadId: "kimi-thinking",
     })).resolves.toMatchObject({
@@ -186,6 +221,20 @@ describe("SqliteOverlayStore - launchpad defaults", () => {
       reasoningEffort: "high",
       fastMode: false,
     });
+    await expect(store.getDirectoryLaunchpad({
+      directoryKey: "directory:/codex-unset",
+    })).resolves.toMatchObject({
+      prompt: "do not touch me",
+      model: "gpt-5.5",
+      updatedAt: 7,
+    });
+    expect(
+      (
+        await store.getDirectoryLaunchpad({
+          directoryKey: "directory:/codex-unset",
+        })
+      )?.fastMode,
+    ).toBeUndefined();
     await expect(store.getDirectoryLaunchpad({
       directoryKey: "directory:/kimi",
     })).resolves.toMatchObject({

@@ -11241,10 +11241,27 @@ export class DesktopBackendRegistry {
       };
     }
 
-    if (
-      params.threadCreatedAt !== undefined
-      && params.threadCreatedAt > migration.createdAt
-    ) {
+    const threadCreatedAt =
+      params.threadCreatedAt
+      ?? (
+        await this.findThreadForWorkspaceHandoff({
+          backend: params.backend,
+          callerReason: "thread-model-migration",
+          threadId: params.threadId,
+        })
+      )?.createdAt;
+    if (threadCreatedAt === undefined) {
+      return {
+        backend: params.backend,
+        threadId: params.threadId,
+        status: "metadata-unavailable",
+        revision: migration.revision,
+        model: current?.model,
+        reasoningEffort: current?.reasoningEffort,
+      };
+    }
+
+    if (threadCreatedAt > migration.createdAt) {
       await this.overlayStore.setThreadModelSettings({
         backend: params.backend,
         threadId: params.threadId,

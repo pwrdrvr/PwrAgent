@@ -2248,7 +2248,7 @@ export class SqliteOverlayStore {
     for (const row of rows) {
       try {
         const thread = JSON.parse(row.payload) as ThreadOverlayState;
-        if (thread.backend !== "codex" || thread.fastMode === false) {
+        if (thread.backend !== "codex" || thread.fastMode !== true) {
           continue;
         }
         this.putThread(row.thread_id, {
@@ -2265,7 +2265,7 @@ export class SqliteOverlayStore {
     const launchpads = await this.listDirectoryLaunchpads();
     let launchpadCount = 0;
     for (const launchpad of launchpads) {
-      if (launchpad.backend !== "codex" || launchpad.fastMode === false) {
+      if (launchpad.backend !== "codex" || launchpad.fastMode !== true) {
         continue;
       }
       await this.upsertDirectoryLaunchpad({

@@ -531,7 +531,7 @@ function createOverlayStoreMock(params?: {
       let threadCount = 0;
       const updatedThreadIds: string[] = [];
       for (const [key, overlay] of overlays) {
-        if (overlay.backend !== "codex" || overlay.fastMode === false) {
+        if (overlay.backend !== "codex" || overlay.fastMode !== true) {
           continue;
         }
         overlays.set(key, { ...overlay, fastMode: false });
@@ -8467,6 +8467,17 @@ script = "echo setup"
     };
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "turn/start"] },
+      threads: [
+        {
+          id: "turn-thread",
+          title: "Turn thread",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          createdAt: 0,
+          model: "gpt-5.5",
+        },
+      ],
       models: [
         {
           id: "gpt-5.6-sol",
@@ -8506,6 +8517,7 @@ script = "echo setup"
     await expect(registry.applyThreadModelMigration({
       backend: "codex",
       threadId: "thread-1",
+      threadCreatedAt: 0,
     })).resolves.toMatchObject({
       status: "applied",
       revision: "migration-1",
@@ -8529,6 +8541,7 @@ script = "echo setup"
     await expect(registry.applyThreadModelMigration({
       backend: "codex",
       threadId: "thread-1",
+      threadCreatedAt: 0,
     })).resolves.toMatchObject({
       status: "already-applied",
       model: "gpt-5.6-sol",
@@ -8563,6 +8576,7 @@ script = "echo setup"
     await expect(registry.applyThreadModelMigration({
       backend: "codex",
       threadId: "thread-1",
+      threadCreatedAt: 0,
     })).resolves.toMatchObject({
       status: "applied",
       revision: "migration-2",
@@ -8581,6 +8595,7 @@ script = "echo setup"
     await expect(registry.applyThreadModelMigration({
       backend: "codex",
       threadId: "thread-1",
+      threadCreatedAt: 0,
     })).resolves.toMatchObject({
       status: "unavailable",
       revision: "migration-3",
@@ -8592,6 +8607,14 @@ script = "echo setup"
       model: "gpt-5.6-sol",
       reasoningEffort: "high",
       modelMigrationRevision: "migration-2",
+    });
+
+    await expect(registry.applyThreadModelMigration({
+      backend: "codex",
+      threadId: "missing-metadata-thread",
+    })).resolves.toMatchObject({
+      status: "metadata-unavailable",
+      revision: "migration-3",
     });
 
     await registry.close();

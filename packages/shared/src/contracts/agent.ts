@@ -368,6 +368,7 @@ export type ApplyThreadModelMigrationResponse = {
     | "already-applied"
     | "acknowledged-manual-change"
     | "acknowledged-new-thread"
+    | "metadata-unavailable"
     | "applied"
     | "unavailable";
   revision?: string;
