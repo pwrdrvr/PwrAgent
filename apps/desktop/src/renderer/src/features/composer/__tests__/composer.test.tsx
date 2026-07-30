@@ -13479,6 +13479,108 @@ describe("Composer", () => {
     });
   });
 
+  it("keeps messaging-started reviews on the turn that actually completes", async () => {
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const interruptTurn = vi.fn(async (request) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: request.turnId,
+    }));
+    const onActiveTurnIdChange = vi.fn();
+    const onPendingStatusChange = vi.fn();
+    render(
+      <Composer
+        desktopApi={{
+          interruptTurn,
+          onAgentEvent: (callback) => {
+            agentEventHandler = callback;
+            return () => undefined;
+          },
+        }}
+        disabled={false}
+        onActiveTurnIdChange={onActiveTurnIdChange}
+        onPendingStatusChange={onPendingStatusChange}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Build Codex client",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-review",
+            item: {
+              id: "review-entered",
+              type: "enteredReviewMode",
+              review: "Review changes against main",
+            },
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-stray",
+            turn: {
+              id: "turn-stray",
+              status: "inProgress",
+            },
+          },
+        },
+      });
+    });
+
+    expect(await screen.findByRole("button", { name: "Stop" })).toBeInTheDocument();
+    await clickButton("Stop");
+    expect(interruptTurn).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      turnId: "turn-review",
+    });
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-review",
+            turn: {
+              id: "turn-review",
+              status: "completed",
+              output: [],
+            },
+          },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Stop" })).not.toBeInTheDocument();
+    });
+    expect(onActiveTurnIdChange).not.toHaveBeenCalledWith("turn-stray");
+    expect(onActiveTurnIdChange).toHaveBeenLastCalledWith(undefined);
+    expect(onPendingStatusChange).toHaveBeenCalledWith("Reviewing");
+    expect(onPendingStatusChange).toHaveBeenLastCalledWith(undefined);
+  });
+
   it("clears stale thinking when Stop finds no active backend turn", async () => {
     const interruptTurn = vi.fn(async () => {
       throw new Error("json-rpc error (-32600): no active turn to interrupt");

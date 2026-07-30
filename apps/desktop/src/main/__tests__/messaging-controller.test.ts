@@ -455,6 +455,47 @@ describe("MessagingController", () => {
     ).toEqual(["origin/develop", "develop"]);
   });
 
+  it("offers conventional base branches from remotes not named origin", async () => {
+    const navigation = buildWorktreeHandoffNavigationSnapshot();
+    navigation.directories[0] = {
+      ...navigation.directories[0]!,
+      gitStatus: {
+        currentBranch: "feature/handoff",
+        upstreamBranch: "upstream/feature/handoff",
+        baseBranches: ["upstream/main"],
+        branches: ["feature/handoff"],
+      },
+    };
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      gitWorkingState: {
+        dirtyFiles: 0,
+        dirtyAdditions: 0,
+        dirtyDeletions: 0,
+        untrackedFiles: 0,
+        unpushedCommits: 1,
+      },
+    };
+    const harness = await createHarness({ navigation });
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/review"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "review:summary:base-branch" }),
+    );
+
+    const branchPicker = harness.delivered.at(-1);
+    if (!branchPicker || branchPicker.kind !== "review") {
+      throw new Error("Expected review base branch picker");
+    }
+    expect(
+      branchPicker.actions
+        .filter((action) => action.id.startsWith("review:base-branch:"))
+        .map((action) => action.label),
+    ).toEqual(["upstream/main"]);
+  });
+
   it("returns to the summary with the selected project and its default base branch", async () => {
     const navigation = buildMultiProjectReviewNavigationSnapshot();
     const harness = await createHarness({ navigation });

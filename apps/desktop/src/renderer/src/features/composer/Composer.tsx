@@ -3949,6 +3949,32 @@ export function Composer(props: ComposerProps) {
         return;
       }
 
+      const completedItemRecord =
+        event.notification.method === "item/completed" &&
+        typeof event.notification.params.item === "object" &&
+        event.notification.params.item !== null
+          ? (event.notification.params.item as { type?: unknown })
+          : undefined;
+      const completedItemTurnId =
+        event.notification.method === "item/completed" &&
+        typeof event.notification.params.turnId === "string"
+          ? event.notification.params.turnId
+          : undefined;
+      if (
+        completedItemRecord?.type === "enteredReviewMode" &&
+        completedItemTurnId
+      ) {
+        // Reviews started outside this Composer (for example from a bound
+        // messaging conversation) do not pass through submitReviewCommand,
+        // so claim their review turn from the first review-mode item. Codex
+        // can follow it with a mismatched turn/started id that never receives
+        // a terminal event; retaining the review id keeps Stop and completion
+        // handling wired to the lifecycle that actually finishes.
+        updateActiveTurnId(completedItemTurnId, { review: true });
+        props.onActiveTurnIdChange?.(completedItemTurnId);
+        props.onPendingStatusChange?.("Reviewing");
+      }
+
       if (
         pendingSteer?.status === "steering" &&
         event.notification.method === "item/completed" &&
