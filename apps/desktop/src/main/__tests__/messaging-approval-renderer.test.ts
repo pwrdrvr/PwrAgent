@@ -2,6 +2,100 @@ import { describe, expect, it } from "vitest";
 import { buildApprovalIntent } from "../messaging/core/messaging-approval-renderer";
 
 describe("buildApprovalIntent", () => {
+  it("renders URL-mode MCP login requests with MCP-shaped responses", () => {
+    const intent = buildApprovalIntent({
+      id: "mcp-login-1",
+      createdAt: 1000,
+      request: {
+        method: "mcpServer/elicitation/request",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          requestId: "request-mcp-1",
+          serverName: "github",
+          mode: "url",
+          _meta: null,
+          message: "Reconnect GitHub to restore access.",
+          url: "https://example.test/oauth/start?state=opaque",
+          elicitationId: "elicitation-1",
+        },
+      },
+    });
+
+    expect(intent).toMatchObject({
+      kind: "approval",
+      title: "MCP Login",
+      decisions: [
+        {
+          id: "approval:mcp:accept",
+          label: "Allow",
+          decision: "accept",
+          response: {
+            action: "accept",
+            content: {},
+            _meta: null,
+          },
+        },
+        {
+          id: "approval:mcp:decline",
+          decision: "decline",
+          response: {
+            action: "decline",
+            content: null,
+            _meta: null,
+          },
+        },
+        {
+          id: "approval:mcp:cancel",
+          decision: "cancel",
+          response: {
+            action: "cancel",
+            content: null,
+            _meta: null,
+          },
+        },
+      ],
+    });
+    expect(intent.body).toContain("Reconnect GitHub to restore access.");
+    expect(intent.body).toContain(
+      "Open login: https://example.test/oauth/start?state=opaque",
+    );
+  });
+
+  it("keeps required MCP forms visible without offering an invalid empty approval", () => {
+    const intent = buildApprovalIntent({
+      id: "mcp-form-1",
+      createdAt: 1000,
+      request: {
+        method: "mcpServer/elicitation/request",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          requestId: "request-mcp-form-1",
+          serverName: "example",
+          mode: "form",
+          _meta: null,
+          message: "Provide the deployment region.",
+          requestedSchema: {
+            type: "object",
+            properties: {
+              region: { type: "string" },
+            },
+            required: ["region"],
+          },
+        },
+      },
+    });
+
+    expect(intent.decisions.map((decision) => decision.decision)).toEqual([
+      "decline",
+      "cancel",
+    ]);
+    expect(intent.body).toContain(
+      "must be completed in PwrAgent desktop",
+    );
+  });
+
   it("renders command approvals with prompt, command code block, and conservative choices", () => {
     const intent = buildApprovalIntent({
       id: "approval-1",

@@ -11233,7 +11233,7 @@ export class MessagingController {
       });
     }
 
-    if (request.method.toLowerCase().includes("requestapproval")) {
+    if (isMessagingInteractivePendingRequest(request)) {
       return buildApprovalIntent({
         id: this.newIntentId("approval"),
         capabilityProfile: this.capabilityProfile,
@@ -12241,6 +12241,18 @@ export class MessagingController {
   private newIntentId(prefix: string): string {
     return `${prefix}:${randomUUID()}`;
   }
+}
+
+export function isMessagingInteractivePendingRequest(
+  notification: AgentEvent["notification"],
+): notification is AppServerPendingRequestNotification {
+  return (
+    notification.method === "item/tool/requestUserInput"
+    || notification.method === "mcpServer/elicitation/request"
+    || notification.method === "applyPatchApproval"
+    || notification.method === "execCommandApproval"
+    || notification.method.toLowerCase().includes("requestapproval")
+  );
 }
 
 function readCommandAction(event: MessagingInboundCallbackEvent): string | undefined {

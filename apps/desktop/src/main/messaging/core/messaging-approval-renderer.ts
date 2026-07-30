@@ -1,6 +1,7 @@
 import {
   buildPendingRequestActions,
   buildPendingRequestApprovalContext,
+  type AppServerMcpElicitationRequestNotification,
   type AppServerPendingRequestNotification,
   type PendingRequestAction,
 } from "@pwragent/shared";
@@ -20,12 +21,16 @@ export function buildApprovalIntent(params: {
   id: string;
   request: AppServerPendingRequestNotification;
 }): MessagingApprovalIntent {
-  const prompt = stringField(params.request.params.prompt) ?? "Approve this action?";
+  const prompt =
+    stringField(params.request.params.prompt)
+    ?? stringField(params.request.params.message)
+    ?? "Approve this action?";
   const command = extractCommand(params.request.params);
   const context = buildPendingRequestApprovalContext(params.request, {
     directoryPaths: params.directoryPaths,
   });
   const fileContext = approvalContextMarkdown(context);
+  const mcpContext = mcpElicitationContext(params.request);
   const decisions = applyActionCapabilityLimits(
     buildDecisions(params.request),
     params.capabilityProfile,
@@ -44,6 +49,7 @@ export function buildApprovalIntent(params: {
         ? ["Command:", "```shell", stripDisplayShellWrapper(command), "```"].join("\n")
         : undefined,
       fileContext ? ["Context:", fileContext].join("\n") : undefined,
+      mcpContext,
       replyInstruction.body,
     ]
       .filter((part): part is string => Boolean(part))
@@ -54,6 +60,9 @@ export function buildApprovalIntent(params: {
 }
 
 function titleForRequest(request: AppServerPendingRequestNotification): string {
+  if (isMcpElicitationRequest(request)) {
+    return request.params.mode === "url" ? "MCP Login" : "MCP Approval";
+  }
   if (request.method.toLowerCase().includes("command")) {
     return "Command Approval";
   }
@@ -66,6 +75,51 @@ function titleForRequest(request: AppServerPendingRequestNotification): string {
 function buildDecisions(
   request: AppServerPendingRequestNotification,
 ): MessagingApprovalIntent["decisions"] {
+  if (isMcpElicitationRequest(request)) {
+    const canAccept = mcpElicitationCanAcceptWithoutFormInput(request);
+    return [
+      ...(canAccept
+        ? [
+            {
+              id: "approval:mcp:accept",
+              label: "Allow",
+              decision: "accept" as const,
+              style: "primary" as const,
+              fallbackText: "yes",
+              response: {
+                action: "accept",
+                content: {},
+                _meta: null,
+              },
+            },
+          ]
+        : []),
+      {
+        id: "approval:mcp:decline",
+        label: "Decline",
+        decision: "decline" as const,
+        style: "danger" as const,
+        fallbackText: "no",
+        response: {
+          action: "decline",
+          content: null,
+          _meta: null,
+        },
+      },
+      {
+        id: "approval:mcp:cancel",
+        label: "Cancel Turn",
+        decision: "cancel" as const,
+        style: "secondary" as const,
+        fallbackText: "cancel",
+        response: {
+          action: "cancel",
+          content: null,
+          _meta: null,
+        },
+      },
+    ];
+  }
   return buildPendingRequestActions(request).map((action) => ({
     id: action.id,
     label: action.label,
@@ -74,6 +128,38 @@ function buildDecisions(
     fallbackText: action.fallbackText,
     response: action.response,
   }));
+}
+
+function isMcpElicitationRequest(
+  request: AppServerPendingRequestNotification,
+): request is AppServerMcpElicitationRequestNotification {
+  return request.method === "mcpServer/elicitation/request";
+}
+
+function mcpElicitationContext(
+  request: AppServerPendingRequestNotification,
+): string | undefined {
+  if (!isMcpElicitationRequest(request)) {
+    return undefined;
+  }
+  if (request.params.mode === "url" && request.params.url) {
+    return `Open login: ${request.params.url}`;
+  }
+  if (!mcpElicitationCanAcceptWithoutFormInput(request)) {
+    return "This request includes fields that must be completed in PwrAgent desktop. You can still decline or cancel it here.";
+  }
+  return request.params.serverName
+    ? `MCP server: ${request.params.serverName}`
+    : undefined;
+}
+
+function mcpElicitationCanAcceptWithoutFormInput(
+  request: AppServerMcpElicitationRequestNotification,
+): boolean {
+  if (request.params.mode === "url") {
+    return Boolean(request.params.url);
+  }
+  return (request.params.requestedSchema?.required?.length ?? 0) === 0;
 }
 
 function messagingDecisionFromPendingAction(
