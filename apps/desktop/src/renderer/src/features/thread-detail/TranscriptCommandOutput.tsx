@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import type { AppServerThreadActivityDetail } from "@pwragent/shared";
 import { copyText } from "../../lib/copy-text";
+import { TranscriptSubAgentCall } from "./TranscriptSubAgentCall";
 
 type TranscriptCommandOutputProps = {
   detail: AppServerThreadActivityDetail;
@@ -10,6 +11,14 @@ const PREVIEW_LINE_LIMIT = 12;
 const PREVIEW_CHARACTER_LIMIT = 3_000;
 
 export function TranscriptCommandOutput(props: TranscriptCommandOutputProps) {
+  if (props.detail.command?.subAgent) {
+    return <TranscriptSubAgentCall detail={props.detail} />;
+  }
+
+  return <GenericTranscriptCommandOutput {...props} />;
+}
+
+function GenericTranscriptCommandOutput(props: TranscriptCommandOutputProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const command = props.detail.command;
   const output = useMemo(() => sanitizeCommandOutput(command?.output), [command?.output]);

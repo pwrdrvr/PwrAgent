@@ -161,6 +161,7 @@ export type ThreadSubAgentSummary = {
   agentName?: string;
   preferredModel?: string;
   preferredReasoningEffort?: string;
+  preferredFastMode?: boolean;
   monitorThreadId?: ThreadIdentifier;
   monitorTurnId?: ThreadIdentifier;
   lastMessage?: string;

@@ -3635,6 +3635,7 @@ function buildCollabAgentCommandDetail(params: {
   const prompt = pickString(params.item, ["prompt"]);
   const model = pickString(params.item, ["model"]);
   const reasoningEffort = pickString(params.item, ["reasoningEffort", "reasoning_effort"]);
+  const fastMode = pickBoolean(params.item, ["fastMode", "fast_mode"]);
   const stateSummary = formatCollabAgentStates(asRecord(params.item.agentsStates));
   const output = [
     params.receiverThreadIds.length > 0
@@ -3642,6 +3643,7 @@ function buildCollabAgentCommandDetail(params: {
       : undefined,
     model ? `Model: ${model}` : undefined,
     reasoningEffort ? `Reasoning effort: ${reasoningEffort}` : undefined,
+    fastMode !== undefined ? `Fast mode: ${fastMode ? "on" : "off"}` : undefined,
     prompt ? `Prompt: ${truncateActivityText(prompt, 1_000)}` : undefined,
     stateSummary ? `Agent states:\n${stateSummary}` : undefined,
   ].filter((entry): entry is string => Boolean(entry)).join("\n\n");
@@ -3654,7 +3656,85 @@ function buildCollabAgentCommandDetail(params: {
     displayCommand,
     rawCommand: params.tool,
     ...(output ? { output } : {}),
+    subAgent: {
+      backend: "codex",
+      origin: "codex-native",
+      operation: collabAgentOperation(params.tool),
+      agents: collabAgentDetails(params.item, params.receiverThreadIds),
+      ...(model ? { model } : {}),
+      ...(reasoningEffort ? { reasoningEffort } : {}),
+      ...(fastMode !== undefined ? { fastMode } : {}),
+    },
   };
+}
+
+function collabAgentOperation(
+  tool: string,
+): "spawn" | "wait" | "send_input" | "resume" | "close" | "unknown" {
+  switch (tool) {
+    case "spawnAgent":
+      return "spawn";
+    case "wait":
+      return "wait";
+    case "sendInput":
+      return "send_input";
+    case "resumeAgent":
+      return "resume";
+    case "closeAgent":
+      return "close";
+    default:
+      return "unknown";
+  }
+}
+
+function collabAgentDetails(
+  item: Record<string, unknown>,
+  receiverThreadIds: string[],
+): NonNullable<AppServerThreadCommandDetail["subAgent"]>["agents"] {
+  const states = asRecord(item.agentsStates) ?? asRecord(item.agents_states);
+  const receiverThreads = Array.isArray(item.receiverThreads)
+    ? item.receiverThreads
+    : Array.isArray(item.receiver_threads)
+      ? item.receiver_threads
+      : [];
+  return receiverThreadIds.map((threadId) => {
+    const state = asRecord(states?.[threadId]);
+    const receiver = receiverThreads
+      .map(asRecord)
+      .find((value) => pickString(value ?? {}, ["threadId", "thread_id", "id"]) === threadId);
+    const receiverThread = asRecord(receiver?.thread) ?? receiver;
+    const name =
+      readCollabAgentName(state) ??
+      readCollabAgentName(receiverThread);
+    const status = pickString(state ?? {}, ["status", "state"]);
+    const message = pickString(state ?? {}, ["message", "output", "summary"]);
+    return {
+      threadId,
+      ...(name ? { name } : {}),
+      ...(status ? { status } : {}),
+      ...(message ? { message: truncateActivityText(message, 1_000) } : {}),
+    };
+  });
+}
+
+function readCollabAgentName(
+  value: Record<string, unknown> | null | undefined,
+): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const direct = pickString(value, ["agentNickname", "agent_nickname", "nickname"]);
+  if (direct) {
+    return direct.replace(/^@+/, "");
+  }
+  const source = asRecord(value.source);
+  const subAgent = asRecord(source?.subAgent) ?? asRecord(source?.sub_agent);
+  const spawn =
+    asRecord(subAgent?.thread_spawn) ??
+    asRecord(subAgent?.threadSpawn) ??
+    asRecord(source?.thread_spawn) ??
+    asRecord(source?.threadSpawn);
+  return pickString(spawn ?? {}, ["agentNickname", "agent_nickname"]);
 }
 
 function formatCollabAgentStates(
@@ -3989,6 +4069,7 @@ export function extractThreadReplayFromReadResult(
 ): AppServerThreadReplay {
   const entries = extractThreadEntries(value, options);
   const messages = extractConversationMessages(value);
+  const agentName = extractCodexNativeAgentName(value);
   let lastUserMessage: string | undefined;
   let lastAssistantMessage: string | undefined;
 
@@ -4009,11 +4090,32 @@ export function extractThreadReplayFromReadResult(
   return {
     entries,
     messages,
+    ...(agentName ? { agentName } : {}),
     lastUserMessage,
     lastAssistantMessage,
     pagination: extractReplayPagination(value),
     ...(threadStatus ? { threadStatus } : {})
   };
+}
+
+function extractCodexNativeAgentName(value: unknown): string | undefined {
+  const record = asRecord(value);
+  if (!record) {
+    return undefined;
+  }
+  const thread = asRecord(record.thread) ?? asRecord(record.session) ?? record;
+  const direct = pickString(thread, ["agentNickname", "agent_nickname", "nickname"]);
+  if (direct) {
+    return direct.replace(/^@+/, "");
+  }
+  const source = asRecord(thread.source) ?? asRecord(record.source);
+  const subAgent = asRecord(source?.subAgent) ?? asRecord(source?.sub_agent);
+  const spawn =
+    asRecord(subAgent?.thread_spawn) ??
+    asRecord(subAgent?.threadSpawn) ??
+    asRecord(source?.thread_spawn) ??
+    asRecord(source?.threadSpawn);
+  return pickString(spawn ?? {}, ["agentNickname", "agent_nickname"]);
 }
 
 function extractThreadIdFromValue(value: unknown): string | undefined {

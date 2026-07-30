@@ -15293,6 +15293,7 @@ command = "pnpm dev"
           prompt: "You are the correctness reviewer. Inspect the diff.",
           model: "gpt-5.4-mini",
           reasoningEffort: "medium",
+          fastMode: true,
           agentsStates: {
             [nativeThreadId]: {
               status: "running",
@@ -15314,6 +15315,7 @@ command = "pnpm dev"
       agentName: "Poincare",
       preferredModel: "gpt-5.4-mini",
       preferredReasoningEffort: "medium",
+      preferredFastMode: true,
       status: "running",
       lastMessage: "Inspecting the diff.",
     });
@@ -15436,7 +15438,7 @@ command = "pnpm dev"
         item: {
           id: "assistant-message-1",
           type: "agentMessage",
-          text: "Spawned sub-agent Huygens for PR #783 using `gpt-5.4-mini` with low reasoning. I did not wait.",
+          text: "The child is running as Huygens for PR #783 using `gpt-5.4-mini` with low reasoning. I did not wait.",
         },
       },
     } as AppServerNotification);
@@ -15783,6 +15785,7 @@ command = "pnpm dev"
     const replay = (
       threadStatus: AppServerThreadReplay["threadStatus"],
       lastAssistantMessage?: string,
+      agentName?: string,
     ): AppServerThreadReplay => ({
       entries: [],
       messages: lastAssistantMessage
@@ -15800,11 +15803,12 @@ command = "pnpm dev"
         hasPreviousPage: false,
       },
       ...(threadStatus ? { threadStatus } : {}),
+      ...(agentName ? { agentName } : {}),
     });
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/read", "turn/start"] },
       readThreadReplays: [
-        replay("active"),
+        replay("active", undefined, "Huygens"),
         replay("idle"),
         replay("idle", "PR #783 checks are passing."),
       ],
@@ -15856,6 +15860,7 @@ command = "pnpm dev"
         threadId: "thread-parent",
       });
       expect(overlay?.subAgents?.[0]).toMatchObject({
+        agentName: "Huygens",
         status: "running",
         lastMessage: "Spawned by Codex native spawnAgent.",
       });

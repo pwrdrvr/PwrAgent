@@ -11,6 +11,7 @@ import {
   type AppServerThreadActivityDetail,
   type AppServerThreadActivityEntry,
   type AppServerThreadCommandDetail,
+  type AppServerThreadSubAgentCallDetail,
   type AppServerThreadTurnMetadata,
 } from "@pwragent/shared";
 
@@ -44,6 +45,11 @@ function readString(record: Record<string, unknown> | undefined, key: string): s
 function readNumber(record: Record<string, unknown> | undefined, key: string): number | undefined {
   const value = record?.[key];
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function readBoolean(record: Record<string, unknown> | undefined, key: string): boolean | undefined {
+  const value = record?.[key];
+  return typeof value === "boolean" ? value : undefined;
 }
 
 function readFiniteNumber(
@@ -738,11 +744,13 @@ function buildCollabAgentCommandDetail(
   const model = readString(item, "model");
   const reasoningEffort =
     readString(item, "reasoningEffort") ?? readString(item, "reasoning_effort");
+  const fastMode = readBoolean(item, "fastMode") ?? readBoolean(item, "fast_mode");
   const stateSummary = formatCollabAgentStates(readRecord(item.agentsStates));
   const output = [
     receiverThreadIds.length > 0 ? `Agents: ${receiverThreadIds.join(", ")}` : undefined,
     model ? `Model: ${model}` : undefined,
     reasoningEffort ? `Reasoning effort: ${reasoningEffort}` : undefined,
+    fastMode !== undefined ? `Fast mode: ${fastMode ? "on" : "off"}` : undefined,
     prompt ? `Prompt: ${truncateActivityText(prompt, 1_000)}` : undefined,
     stateSummary ? `Agent states:\n${stateSummary}` : undefined,
   ].filter((entry): entry is string => Boolean(entry)).join("\n\n");
@@ -754,7 +762,92 @@ function buildCollabAgentCommandDetail(
         : toolName,
     rawCommand: toolName,
     ...(output ? { output } : {}),
+    subAgent: {
+      backend: "codex",
+      origin: "codex-native",
+      operation: collabAgentOperation(toolName),
+      agents: collabAgentDetails(item, receiverThreadIds),
+      ...(model ? { model } : {}),
+      ...(reasoningEffort ? { reasoningEffort } : {}),
+      ...(fastMode !== undefined ? { fastMode } : {}),
+    },
   };
+}
+
+function collabAgentOperation(
+  tool: string,
+): "spawn" | "wait" | "send_input" | "resume" | "close" | "unknown" {
+  switch (tool) {
+    case "spawnAgent":
+      return "spawn";
+    case "wait":
+      return "wait";
+    case "sendInput":
+      return "send_input";
+    case "resumeAgent":
+      return "resume";
+    case "closeAgent":
+      return "close";
+    default:
+      return "unknown";
+  }
+}
+
+function collabAgentDetails(
+  item: Record<string, unknown>,
+  receiverThreadIds: string[],
+): NonNullable<AppServerThreadCommandDetail["subAgent"]>["agents"] {
+  const states = readRecord(item.agentsStates) ?? readRecord(item.agents_states);
+  const receiverThreads = Array.isArray(item.receiverThreads)
+    ? item.receiverThreads
+    : Array.isArray(item.receiver_threads)
+      ? item.receiver_threads
+      : [];
+  return receiverThreadIds.map((threadId) => {
+    const state = readRecord(states?.[threadId]);
+    const receiver = receiverThreads
+      .map(readRecord)
+      .find(
+        (value) =>
+          (readString(value, "threadId") ??
+            readString(value, "thread_id") ??
+            readString(value, "id")) === threadId,
+      );
+    const receiverThread = readRecord(receiver?.thread) ?? receiver;
+    const name = readCollabAgentName(state) ?? readCollabAgentName(receiverThread);
+    const status = readString(state, "status") ?? readString(state, "state");
+    const message =
+      readString(state, "message") ??
+      readString(state, "output") ??
+      readString(state, "summary");
+    return {
+      threadId,
+      ...(name ? { name } : {}),
+      ...(status ? { status } : {}),
+      ...(message ? { message: truncateActivityText(message, 1_000) } : {}),
+    };
+  });
+}
+
+function readCollabAgentName(value: Record<string, unknown> | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const direct =
+    readString(value, "agentNickname") ??
+    readString(value, "agent_nickname") ??
+    readString(value, "nickname");
+  if (direct) {
+    return direct.replace(/^@+/, "");
+  }
+  const source = readRecord(value.source);
+  const subAgent = readRecord(source?.subAgent) ?? readRecord(source?.sub_agent);
+  const spawn =
+    readRecord(subAgent?.thread_spawn) ??
+    readRecord(subAgent?.threadSpawn) ??
+    readRecord(source?.thread_spawn) ??
+    readRecord(source?.threadSpawn);
+  return readString(spawn, "agentNickname") ?? readString(spawn, "agent_nickname");
 }
 
 function formatCollabAgentStates(
@@ -990,6 +1083,29 @@ export function mergeCommandDetail(
     ...(typeof (next?.durationMs ?? existing?.durationMs) === "number"
       ? { durationMs: next?.durationMs ?? existing?.durationMs }
       : {}),
+    ...(existing?.subAgent || next?.subAgent
+      ? { subAgent: mergeSubAgentCallDetail(existing?.subAgent, next?.subAgent) }
+      : {}),
+  };
+}
+
+function mergeSubAgentCallDetail(
+  existing: AppServerThreadSubAgentCallDetail | undefined,
+  next: AppServerThreadSubAgentCallDetail | undefined,
+): AppServerThreadSubAgentCallDetail | undefined {
+  if (!next) {
+    return existing;
+  }
+  if (!existing) {
+    return next;
+  }
+  return {
+    ...existing,
+    ...next,
+    agents: next.agents.map((agent) => {
+      const previous = existing.agents.find((candidate) => candidate.threadId === agent.threadId);
+      return { ...previous, ...agent };
+    }),
   };
 }
 

@@ -448,6 +448,23 @@ export type AppServerThreadCommandDetail = {
   output?: string;
   exitCode?: number;
   durationMs?: number;
+  /** Structured lifecycle data for delegated agent work. */
+  subAgent?: AppServerThreadSubAgentCallDetail;
+};
+
+export type AppServerThreadSubAgentCallDetail = {
+  backend: AppServerBackendKind;
+  origin: "codex-native" | "pwragent";
+  operation: "spawn" | "wait" | "send_input" | "resume" | "close" | "unknown";
+  agents: Array<{
+    threadId: string;
+    name?: string;
+    status?: string;
+    message?: string;
+  }>;
+  model?: string;
+  reasoningEffort?: string;
+  fastMode?: boolean;
 };
 
 export type AppServerThreadActivityDetail = {
@@ -529,6 +546,8 @@ export type AppServerThreadReplayPagination = {
 export type AppServerThreadReplay = {
   entries: AppServerThreadEntry[];
   messages: AppServerThreadMessage[];
+  /** Native Codex nickname when a replay belongs to a delegated sub-agent. */
+  agentName?: string;
   lastUserMessage?: string;
   lastAssistantMessage?: string;
   pagination: AppServerThreadReplayPagination;
