@@ -1219,6 +1219,17 @@ export type AppServerNotification =
       };
     }
   | {
+      method: "thread/reviewStart/updated";
+      params: {
+        threadId: string;
+        pendingReviewId: string;
+        status: "started" | "cancelled" | "failed";
+        reviewThreadId?: string;
+        reviewTurnId?: string;
+        error?: string;
+      };
+    }
+  | {
       method: "thread/modelSettings/updated";
       params: {
         threadId: string;

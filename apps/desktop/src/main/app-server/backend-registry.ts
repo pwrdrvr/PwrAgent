@@ -8973,6 +8973,40 @@ export class DesktopBackendRegistry {
     return undefined;
   }
 
+  private getPendingTurnForThread(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): { backend: AppServerBackendKind; threadId: string; turnId: string } | undefined {
+    if (params.backend === "codex") {
+      for (const key of this.activeCodexTurnModes.keys()) {
+        const parsed = parseThreadTurnKeyBody(key);
+        if (
+          parsed?.threadId === params.threadId
+          && parsed.turnId.startsWith("pending:")
+        ) {
+          return {
+            backend: params.backend,
+            threadId: parsed.threadId,
+            turnId: parsed.turnId,
+          };
+        }
+      }
+      return undefined;
+    }
+
+    for (const key of this.activeTurnKeys) {
+      const parsed = parseActiveTurnKey(key);
+      if (
+        parsed?.backend === params.backend
+        && parsed.threadId === params.threadId
+        && parsed.turnId.startsWith("pending:")
+      ) {
+        return parsed;
+      }
+    }
+    return undefined;
+  }
+
   getInProgressThreadSnapshotForQuit(): {
     count: number;
     threadIds: string[];
@@ -9175,6 +9209,12 @@ export class DesktopBackendRegistry {
         },
       });
     } catch (error) {
+      await this.drainPendingReviewStartsForTerminalTurn({
+        backend: params.backend,
+        threadId: params.threadId,
+        turnId: syntheticStartedTurnId,
+        method: "turn/failed",
+      });
       this.activeCodexTurnModes.delete(
         buildActiveTurnModeKey(params.threadId, syntheticStartedTurnId),
       );
@@ -9257,6 +9297,12 @@ export class DesktopBackendRegistry {
       throw error;
     }
     this.bindPendingThreadMessageOrigin(pendingMessageOriginId, result.turnId);
+    this.rebindPendingReviewStartsForStartedTurn({
+      backend: params.backend,
+      threadId: params.threadId,
+      pendingTurnId: syntheticStartedTurnId,
+      turnId: result.turnId,
+    });
     this.activeCodexTurnModes.delete(
       buildActiveTurnModeKey(params.threadId, syntheticStartedTurnId),
     );
@@ -9696,14 +9742,26 @@ export class DesktopBackendRegistry {
       backend: params.backend,
       threadId: params.threadId,
     });
-    if (!activeTurn) {
+    const invokingTurnId =
+      activeTurn?.turnId
+      ?? this.getPendingTurnForThread({
+        backend: params.backend,
+        threadId: params.threadId,
+      })?.turnId
+      ?? (
+        params.backend === "codex"
+        && this.reservedCodexStartThreadIds.has(params.threadId)
+          ? `pending:${params.threadId}`
+          : undefined
+      );
+    if (!invokingTurnId) {
       return {
         status: "started",
         response: await this.startReview(params),
       };
     }
     const pending = this.scheduleReviewStart({
-      invokingTurnId: activeTurn.turnId,
+      invokingTurnId,
       request: params,
     });
     return {
@@ -9756,6 +9814,29 @@ export class DesktopBackendRegistry {
     return pending;
   }
 
+  private rebindPendingReviewStartsForStartedTurn(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    pendingTurnId: string;
+    turnId: string;
+  }): void {
+    for (const candidate of this.pendingReviewStarts.values()) {
+      if (
+        candidate.backend !== params.backend
+        || candidate.threadId !== params.threadId
+        || candidate.invokingTurnId !== params.pendingTurnId
+        || candidate.status !== "scheduled"
+      ) {
+        continue;
+      }
+      this.pendingReviewStarts.set(candidate.pendingReviewId, {
+        ...candidate,
+        invokingTurnId: params.turnId,
+        updatedAt: Date.now(),
+      });
+    }
+  }
+
   private async drainPendingReviewStartsForTerminalTurn(params: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -9774,10 +9855,25 @@ export class DesktopBackendRegistry {
     );
     for (const candidate of pending) {
       if (params.method !== "turn/completed") {
+        const error =
+          "The active turn did not complete successfully, so the queued review was cancelled.";
         this.pendingReviewStarts.set(candidate.pendingReviewId, {
           ...candidate,
           status: "cancelled",
+          error,
           updatedAt: Date.now(),
+        });
+        await this.emit({
+          backend: candidate.backend,
+          notification: {
+            method: "thread/reviewStart/updated",
+            params: {
+              threadId: candidate.threadId,
+              pendingReviewId: candidate.pendingReviewId,
+              status: "cancelled",
+              error,
+            },
+          },
         });
         continue;
       }
@@ -9790,18 +9886,44 @@ export class DesktopBackendRegistry {
           reviewTurnId: response.turnId,
           updatedAt: Date.now(),
         });
+        await this.emit({
+          backend: candidate.backend,
+          notification: {
+            method: "thread/reviewStart/updated",
+            params: {
+              threadId: candidate.threadId,
+              pendingReviewId: candidate.pendingReviewId,
+              status: "started",
+              reviewThreadId: response.reviewThreadId,
+              reviewTurnId: response.turnId,
+            },
+          },
+        });
       } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
         this.pendingReviewStarts.set(candidate.pendingReviewId, {
           ...candidate,
           status: "failed",
-          error: error instanceof Error ? error.message : String(error),
+          error: message,
           updatedAt: Date.now(),
         });
         backendRegistryLog.warn("scheduled review start failed", {
           backend: candidate.backend,
           pendingReviewId: candidate.pendingReviewId,
           threadId: candidate.threadId,
-          error: error instanceof Error ? error.message : String(error),
+          error: message,
+        });
+        await this.emit({
+          backend: candidate.backend,
+          notification: {
+            method: "thread/reviewStart/updated",
+            params: {
+              threadId: candidate.threadId,
+              pendingReviewId: candidate.pendingReviewId,
+              status: "failed",
+              error: message,
+            },
+          },
         });
       }
     }

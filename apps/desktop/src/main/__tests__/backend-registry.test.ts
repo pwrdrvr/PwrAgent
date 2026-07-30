@@ -1231,6 +1231,7 @@ class MockBackendClient {
         reviewThreadId: string;
         turnId: string;
       };
+      startReviewError?: Error;
     }
   ) {}
 
@@ -1447,6 +1448,9 @@ class MockBackendClient {
     cwd?: string;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   }): Promise<{ threadId: string; reviewThreadId: string; turnId: string }> {
+    if (this.options.startReviewError) {
+      throw this.options.startReviewError;
+    }
     this.lastStartReviewParams = params;
     return this.options.startReviewResult ?? {
       threadId: params.threadId,
@@ -21049,6 +21053,124 @@ script = "printf setup"
       target: { type: "baseBranch", branch: "main" },
       delivery: "inline",
       cwd: "/repo/pwragent",
+    });
+
+    await registry.close();
+  });
+
+  it("queues review submission while the invoking turn start is pending", async () => {
+    const startTurnDelay = createDeferred<void>();
+    const codexClient = new MockBackendClient({
+      initializeResult: {
+        methods: ["turn/start", "review/start", "thread/resume"],
+      },
+      startTurnDelay: startTurnDelay.promise,
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null,
+    });
+
+    const turnPromise = registry.startTurn({
+      backend: "codex",
+      threadId: "parent-thread",
+      input: [{ type: "text", text: "Keep working" }],
+    });
+    await flushAsync();
+
+    await expect(
+      registry.submitReview({
+        backend: "codex",
+        threadId: "parent-thread",
+        target: { type: "uncommittedChanges" },
+        delivery: "inline",
+      }),
+    ).resolves.toMatchObject({
+      status: "scheduled",
+      invokingTurnId: "pending:parent-thread",
+    });
+    expect(codexClient.lastStartReviewParams).toBeUndefined();
+
+    startTurnDelay.resolve();
+    await turnPromise;
+    await codexClient.emit({
+      method: "turn/completed",
+      params: {
+        threadId: "parent-thread",
+        turnId: "turn-1",
+        turn: { id: "turn-1", status: "completed", output: [] },
+      },
+    });
+
+    expect(codexClient.lastStartReviewParams).toEqual({
+      threadId: "parent-thread",
+      target: { type: "uncommittedChanges" },
+      delivery: "inline",
+    });
+
+    await registry.close();
+  });
+
+  it("emits a terminal outcome when a deferred review cannot start", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: {
+        methods: ["turn/start", "review/start", "thread/resume"],
+      },
+      startReviewError: new Error("Codex disconnected"),
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null,
+    });
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "parent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+    await registry.submitReview({
+      backend: "codex",
+      threadId: "parent-thread",
+      target: { type: "baseBranch", branch: "main" },
+      delivery: "inline",
+    });
+
+    await codexClient.emit({
+      method: "turn/completed",
+      params: {
+        threadId: "parent-thread",
+        turnId: "turn-1",
+        turn: { id: "turn-1", status: "completed", output: [] },
+      },
+    });
+
+    expect(events).toContainEqual({
+      backend: "codex",
+      notification: {
+        method: "thread/reviewStart/updated",
+        params: expect.objectContaining({
+          threadId: "parent-thread",
+          status: "failed",
+          error: "Codex disconnected",
+        }),
+      },
     });
 
     await registry.close();

@@ -184,6 +184,150 @@ describe("MessagingController", () => {
     });
   });
 
+  it("rejects review before opening a picker for unsupported backends", async () => {
+    const harness = await createHarness({
+      listBackends: async (): Promise<ListBackendsResponse> => ({
+        fetchedAt: 1000,
+        backends: [
+          buildAcpRuntimeBackendSummary({
+            capabilities: {
+              ...buildAcpRuntimeBackendSummary().capabilities,
+              startReview: false,
+            },
+          }),
+        ],
+      }),
+    });
+    await bindThreadToBackend(harness, "acp:gemini");
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/review"));
+
+    expect(harness.submitReview).not.toHaveBeenCalled();
+    expect(harness.delivered).toHaveLength(1);
+    expect(harness.delivered[0]).toMatchObject({
+      kind: "error",
+      title: "Review unavailable",
+    });
+  });
+
+  it("rejects review when Codex does not advertise review/start", async () => {
+    const harness = await createHarness({
+      listBackends: async (): Promise<ListBackendsResponse> => ({
+        fetchedAt: 1000,
+        backends: [
+          buildBackendSummary({
+            methods: ["turn/start"],
+            capabilities: {
+              ...buildBackendSummary().capabilities,
+              startReview: false,
+            },
+          }),
+        ],
+      }),
+    });
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/review"));
+
+    expect(harness.submitReview).not.toHaveBeenCalled();
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "error",
+      title: "Review unavailable",
+    });
+  });
+
+  it("uses repository metadata for review pickers on worktree threads", async () => {
+    const navigation = buildWorktreeHandoffNavigationSnapshot();
+    navigation.directories[0] = {
+      ...navigation.directories[0]!,
+      gitStatus: {
+        currentBranch: "feature/handoff",
+        defaultBranch: "main",
+        baseBranches: ["release"],
+        branches: ["main", "feature/handoff"],
+        recentCommits: [
+          {
+            sha: "1234567890abcdef",
+            shortSha: "1234567",
+            subject: "Fix review routing",
+          },
+        ],
+      },
+    };
+    const harness = await createHarness({ navigation });
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/review"));
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "review",
+      review: {
+        cwd: "/repo/pwragent/.worktrees/pwragent-feature-handoff",
+        repositoryPath: "/repo/pwragent",
+      },
+    });
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "review:target:base-branch" }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "review",
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          label: "release",
+          value: { branch: "release" },
+        }),
+      ]),
+    });
+
+    const commitHarness = await createHarness({ navigation });
+    await bindThread(commitHarness);
+    commitHarness.delivered.length = 0;
+    await commitHarness.controller.handleInboundEvent(buildCommandEvent("/review"));
+    await commitHarness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "review:target:commit" }),
+    );
+    expect(commitHarness.delivered.at(-1)).toMatchObject({
+      kind: "review",
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          label: "1234567 Fix review routing",
+          value: {
+            sha: "1234567890abcdef",
+            title: "Fix review routing",
+          },
+        }),
+      ]),
+    });
+  });
+
+  it("delivers deferred review start failures to the bound conversation", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/reviewStart/updated",
+        params: {
+          threadId: "thread-1",
+          pendingReviewId: "pending-review:1",
+          status: "failed",
+          error: "Codex disconnected",
+        },
+      },
+    });
+
+    expect(harness.delivered).toHaveLength(1);
+    expect(harness.delivered[0]).toMatchObject({
+      kind: "error",
+      title: "Queued review could not start",
+      body: "Codex disconnected",
+    });
+  });
+
   it("presents a channel-neutral thread picker for authorized /resume commands", async () => {
     const harness = await createHarness();
 
@@ -5140,6 +5284,29 @@ describe("MessagingController", () => {
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "confirmation",
       title: "PwrAgent commands",
+    });
+  });
+
+  it("includes review in help only for a bound review-capable thread", async () => {
+    const harness = await createHarness();
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/help"));
+    expect((harness.delivered.at(-1) as { body?: string }).body)
+      .not.toContain("/review");
+
+    await bindThread(harness);
+    harness.delivered.length = 0;
+    await harness.controller.handleInboundEvent(buildCommandEvent("/help"));
+
+    expect((harness.delivered.at(-1) as { body?: string }).body)
+      .toContain("/review - start a code review for the bound thread");
+    expect(harness.delivered.at(-1)).toMatchObject({
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "command:review",
+          label: "Review",
+        }),
+      ]),
     });
   });
 
@@ -15960,6 +16127,7 @@ function buildBackendSummary(overrides: Partial<BackendSummary> = {}): BackendSu
       renameThread: true,
       readThread: true,
       startTurn: true,
+      startReview: true,
       interruptTurn: true,
       steerTurn: false,
       transcriptPagination: false,

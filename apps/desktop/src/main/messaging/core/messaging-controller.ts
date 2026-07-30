@@ -95,6 +95,8 @@ import {
   buildHelpActions,
   formatMessagingCommandHelpBody,
   matchMessagingCommandVerb,
+  MESSAGING_COMMAND_CATALOG,
+  MESSAGING_REVIEW_HELP_SPEC,
   paginateHelpCatalog,
 } from "./messaging-command-catalog.js";
 import {
@@ -1040,6 +1042,36 @@ export class MessagingController {
         threadId,
       }),
     );
+    const reviewStartOutcome = reviewStartOutcomeForBackendEvent(event);
+    if (reviewStartOutcome) {
+      if (
+        reviewStartOutcome.status === "failed"
+        || reviewStartOutcome.status === "cancelled"
+      ) {
+        for (const binding of bindings) {
+          await this.deliver(
+            buildErrorIntent({
+              id: this.newIntentId("queued-review-terminal"),
+              createdAt: this.now(),
+              title:
+                reviewStartOutcome.status === "failed"
+                  ? "Queued review could not start"
+                  : "Queued review cancelled",
+              body:
+                reviewStartOutcome.error
+                ?? (
+                  reviewStartOutcome.status === "failed"
+                    ? "The queued review failed to start."
+                    : "The active turn did not complete successfully, so the queued review was cancelled."
+                ),
+              recoverable: reviewStartOutcome.status === "failed",
+            }),
+            binding,
+          );
+        }
+      }
+      return;
+    }
     const automationRunUpdate = automationRunUpdateForBackendEvent(event);
     if (automationRunUpdate) {
       await this.handleAutomationRunUpdated({
@@ -1598,7 +1630,7 @@ export class MessagingController {
       await this.presentThreadCommandNeedsBinding(event);
       return;
     }
-    if (!this.options.backend.submitReview) {
+    if (!await this.reviewSupportedForBinding(binding)) {
       await this.deliverReviewUnsupported(binding, event);
       return;
     }
@@ -1645,9 +1677,14 @@ export class MessagingController {
       .map((directory) => ({
         cwd: directory.worktreePath ?? directory.path,
         label: directory.label,
+        repositoryPath: directory.path,
       }))
       .filter(
-        (workspace): workspace is { cwd: string; label: string } =>
+        (workspace): workspace is {
+          cwd: string;
+          label: string;
+          repositoryPath: string;
+        } =>
           Boolean(workspace.cwd),
       );
     const phase = workspaces.length > 1 ? "workspace" : "target";
@@ -1655,7 +1692,12 @@ export class MessagingController {
       binding,
       navigation,
       phase,
-      ...(workspaces.length === 1 ? { cwd: workspaces[0]!.cwd } : {}),
+      ...(workspaces.length === 1
+        ? {
+            cwd: workspaces[0]!.cwd,
+            repositoryPath: workspaces[0]!.repositoryPath,
+          }
+        : {}),
     });
     const pending = await this.storePendingIntent(intent, binding, event);
     const result = await this.deliver(intent, binding, event);
@@ -1670,6 +1712,7 @@ export class MessagingController {
     navigation: NavigationSnapshot;
     phase: MessagingReviewIntent["review"]["phase"];
     cwd?: string;
+    repositoryPath?: string;
     id?: string;
     createdAt?: number;
     targetSurface?: MessagingSurfaceRef;
@@ -1677,10 +1720,19 @@ export class MessagingController {
     const thread = findThreadForBinding(params.navigation, params.binding);
     const linkedWorkspaces = (thread?.linkedDirectories ?? []).flatMap((directory) => {
       const cwd = directory.worktreePath ?? directory.path;
-      return cwd ? [{ cwd, label: directory.label }] : [];
+      return cwd
+        ? [{
+            cwd,
+            label: directory.label,
+            repositoryPath: directory.path,
+          }]
+        : [];
     });
     const directory = params.navigation.directories.find((candidate) =>
-      reviewWorkspaceMatches(candidate.path, params.cwd),
+      reviewWorkspaceMatches(
+        candidate.path,
+        params.repositoryPath ?? params.cwd,
+      ),
     );
     let title = "Review target";
     let body = "What should PwrAgent review?";
@@ -1695,7 +1747,10 @@ export class MessagingController {
         id: `review:workspace:${index}`,
         label: workspace.label,
         fallbackText: workspace.cwd,
-        value: { cwd: workspace.cwd },
+        value: {
+          cwd: workspace.cwd,
+          repositoryPath: workspace.repositoryPath,
+        },
       }));
     } else if (params.phase === "target") {
       actions = [
@@ -1792,6 +1847,9 @@ export class MessagingController {
         threadId: params.binding.threadId,
         phase: params.phase,
         ...(params.cwd ? { cwd: params.cwd } : {}),
+        ...(params.repositoryPath
+          ? { repositoryPath: params.repositoryPath }
+          : {}),
         ...(targetType ? { targetType } : {}),
       },
       ...(params.targetSurface
@@ -1830,7 +1888,13 @@ export class MessagingController {
     event: MessagingInboundEvent,
     options?: { pageIndex?: number; targetSurface?: MessagingSurfaceRef },
   ): Promise<void> {
+    const binding = await this.options.store.findActiveBindingForChannel(event.channel);
+    const catalog =
+      binding && await this.reviewSupportedForBinding(binding)
+        ? [...MESSAGING_COMMAND_CATALOG, MESSAGING_REVIEW_HELP_SPEC]
+        : MESSAGING_COMMAND_CATALOG;
     const page = paginateHelpCatalog({
+      catalog,
       profile: this.capabilityProfile,
       pageIndex: options?.pageIndex,
     });
@@ -1845,7 +1909,7 @@ export class MessagingController {
         capabilityProfile: this.capabilityProfile,
         createdAt: this.now(),
         title: `PwrAgent commands${titleSuffix}`,
-        body: formatMessagingCommandHelpBody(),
+        body: formatMessagingCommandHelpBody({ catalog }),
         actions,
         ...(options?.targetSurface
           ? {
@@ -3061,10 +3125,15 @@ export class MessagingController {
     const phase = pendingIntent.intent.review.phase;
     if (phase === "workspace") {
       const cwd = typeof value?.cwd === "string" ? value.cwd.trim() : "";
+      const repositoryPath =
+        typeof value?.repositoryPath === "string"
+          ? value.repositoryPath.trim()
+          : "";
       if (cwd) {
         await this.updateReviewPendingIntent(pendingIntent, event, {
           phase: "target",
           cwd,
+          ...(repositoryPath ? { repositoryPath } : {}),
         });
       }
       return;
@@ -3126,6 +3195,7 @@ export class MessagingController {
     review: {
       phase: MessagingReviewIntent["review"]["phase"];
       cwd?: string;
+      repositoryPath?: string;
     },
   ): Promise<void> {
     if (pendingIntent.intent.kind !== "review") {
@@ -3150,6 +3220,9 @@ export class MessagingController {
       navigation,
       phase: review.phase,
       cwd: review.cwd ?? pendingIntent.intent.review.cwd,
+      repositoryPath:
+        review.repositoryPath
+        ?? pendingIntent.intent.review.repositoryPath,
       id: pendingIntent.intent.id,
       createdAt: pendingIntent.intent.createdAt,
       targetSurface,
@@ -3196,7 +3269,8 @@ export class MessagingController {
     targetSurface?: MessagingSurfaceRef;
     pendingIntentId?: string;
   }): Promise<void> {
-    if (!this.options.backend.submitReview) {
+    const submitReview = this.options.backend.submitReview;
+    if (!submitReview || !await this.reviewSupportedForBinding(params.binding)) {
       await this.deliverReviewUnsupported(params.binding, params.event);
       return;
     }
@@ -3206,7 +3280,7 @@ export class MessagingController {
         backend: params.binding.backend,
       });
       const settings = turnSettingsForBinding(params.binding, navigation);
-      const result = await this.options.backend.submitReview({
+      const result = await submitReview({
         backend: params.binding.backend,
         threadId: params.binding.threadId,
         target: params.target,
@@ -10432,6 +10506,24 @@ export class MessagingController {
     return response?.backends.find((candidate) => candidate.kind === backend);
   }
 
+  private async reviewSupportedForBinding(
+    binding: MessagingBindingRecord,
+  ): Promise<boolean> {
+    if (!this.options.backend.submitReview || isAcpBackendId(binding.backend)) {
+      return false;
+    }
+    try {
+      const summary = await this.getBackendSummary(binding.backend);
+      return Boolean(summary?.available && summary.capabilities.startReview);
+    } catch (error) {
+      this.logger.debug?.("messaging review capability lookup failed", {
+        backend: binding.backend,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
+  }
+
   private rememberContextUsageSummary(event: AgentEvent): void {
     const params = event.notification.params as {
       threadId?: unknown;
@@ -14234,6 +14326,36 @@ function threadIdForBackendEvent(event: AgentEvent): ThreadIdentifier | undefine
     return params.threadId;
   }
   return typeof params.parentThreadId === "string" ? params.parentThreadId : undefined;
+}
+
+function reviewStartOutcomeForBackendEvent(
+  event: AgentEvent,
+):
+  | {
+      status: "started" | "cancelled" | "failed";
+      error?: string;
+    }
+  | undefined {
+  if (event.notification.method !== "thread/reviewStart/updated") {
+    return undefined;
+  }
+  const params = event.notification.params as {
+    status?: unknown;
+    error?: unknown;
+  };
+  if (
+    params.status !== "started"
+    && params.status !== "cancelled"
+    && params.status !== "failed"
+  ) {
+    return undefined;
+  }
+  return {
+    status: params.status,
+    ...(typeof params.error === "string"
+      ? { error: params.error }
+      : {}),
+  };
 }
 
 function contextUsageSummaryFromValue(value: unknown): string | undefined {

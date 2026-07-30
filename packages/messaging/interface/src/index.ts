@@ -866,6 +866,7 @@ export type MessagingReviewIntent = MessagingBaseSurfaceIntent & {
     threadId: ThreadIdentifier;
     phase: MessagingReviewPhase;
     cwd?: string;
+    repositoryPath?: string;
     targetType?: AppServerReviewTarget["type"];
     target?: AppServerReviewTarget;
   };
