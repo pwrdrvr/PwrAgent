@@ -30,6 +30,7 @@ export * from "./inbox";
 export * from "./navigation-state";
 export * from "./pending-request-response";
 export * from "./renderer-payload-boundary";
+export * from "./review-branches";
 export * from "./subthreads";
 export * from "./thread-pins";
 export * from "./thread-titles";

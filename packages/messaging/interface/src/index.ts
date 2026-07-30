@@ -848,6 +848,7 @@ export type MessagingQuestionnaireIntent = MessagingBaseSurfaceIntent & {
 };
 
 export type MessagingReviewPhase =
+  | "summary"
   | "workspace"
   | "target"
   | "base_branch"
@@ -867,6 +868,7 @@ export type MessagingReviewIntent = MessagingBaseSurfaceIntent & {
     phase: MessagingReviewPhase;
     cwd?: string;
     repositoryPath?: string;
+    workspaceSelectionRequired?: boolean;
     targetType?: AppServerReviewTarget["type"];
     target?: AppServerReviewTarget;
   };
