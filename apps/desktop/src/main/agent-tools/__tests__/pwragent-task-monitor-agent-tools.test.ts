@@ -25,10 +25,12 @@ describe("PwrAgent task monitor agent tools", () => {
       .flatMap((catalog) => catalog.router.buildMcpTools())
       .sort((left, right) => left.name.localeCompare(right.name));
 
-    expect(dynamicTools).toHaveLength(20);
+    expect(dynamicTools).toHaveLength(21);
     expect(mcpTools).toEqual(dynamicTools);
     expect(mcpTools.map((tool) => tool.name))
       .toContain("create_monitor_delegation");
+    expect(mcpTools.map((tool) => tool.name))
+      .toContain("start_review");
   });
 
   it("dispatches dynamic and MCP monitor creation with matching ACP context", async () => {

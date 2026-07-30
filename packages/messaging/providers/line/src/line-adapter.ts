@@ -1210,6 +1210,7 @@ function titleForLineActionBubble(
       return intent.prompt;
     case "approval":
     case "confirmation":
+    case "review":
       return intent.title;
     case "status":
       return "Thread status";

@@ -34,6 +34,7 @@ describe("messaging surface contract", () => {
       "single_select",
       "multi_select",
       "questionnaire",
+      "review",
       "approval",
       "confirmation",
       "error",

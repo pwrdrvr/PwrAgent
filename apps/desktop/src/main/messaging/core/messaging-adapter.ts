@@ -29,6 +29,8 @@ import type {
   SetThreadModelSettingsResponse,
   StartThreadRequest,
   StartThreadResponse,
+  StartReviewRequest,
+  StartReviewResponse,
   StartTurnRequest,
   StartTurnResponse,
   SteerTurnRequest,
@@ -159,6 +161,17 @@ export type MessagingBackendBridge = {
     request: UpdateDirectoryLaunchpadRequest,
   ): Promise<UpdateDirectoryLaunchpadResponse>;
   startThread?(request: StartThreadRequest): Promise<StartThreadResponse>;
+  submitReview?(request: StartReviewRequest): Promise<
+    | {
+        status: "started";
+        response: StartReviewResponse;
+      }
+    | {
+        status: "scheduled";
+        pendingReviewId: string;
+        invokingTurnId: string;
+      }
+  >;
   startTurn(request: StartTurnRequest): Promise<StartTurnResponse>;
   steerTurn?(request: SteerTurnRequest): Promise<SteerTurnResponse>;
   compactThread?(request: CompactThreadRequest): Promise<CompactThreadResponse>;

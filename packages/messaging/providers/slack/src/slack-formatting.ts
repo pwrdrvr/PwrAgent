@@ -86,6 +86,8 @@ export function actionsForSlackIntent(
       return intent.choices;
     case "questionnaire":
       return messagingQuestionnaireActions(intent);
+    case "review":
+      return intent.actions;
     case "approval":
       return intent.decisions;
     case "confirmation":
@@ -206,6 +208,8 @@ export function textForSlackIntent(intent: MessagingSurfaceIntent): string {
         .join("\n\n");
     case "questionnaire":
       return formatMessagingQuestionnaireText(intent);
+    case "review":
+      return [intent.title, intent.body].filter(Boolean).join("\n\n");
     case "approval":
       return [intent.title, intent.body].filter(Boolean).join("\n\n");
     case "confirmation":

@@ -102,6 +102,8 @@ export function textForTelegramIntent(intent: MessagingSurfaceIntent): string {
       return renderTelegramHtml(intent.prompt, "plain");
     case "questionnaire":
       return renderTelegramHtml(formatMessagingQuestionnaireText(intent), "plain");
+    case "review":
+      return renderTelegramHtml([intent.title, intent.body].join("\n\n"), "plain");
     case "approval":
       return renderTelegramHtml([intent.title, intent.body].join("\n\n"), "markdown");
     case "confirmation":
@@ -126,6 +128,8 @@ export function actionsForTelegramIntent(
       return intent.choices;
     case "questionnaire":
       return messagingQuestionnaireActions(intent);
+    case "review":
+      return intent.actions;
     case "approval":
       return intent.decisions;
     case "confirmation":

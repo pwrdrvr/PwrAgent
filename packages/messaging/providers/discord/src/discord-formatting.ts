@@ -93,6 +93,8 @@ export function textForDiscordIntent(intent: MessagingSurfaceIntent): string {
       return intent.prompt;
     case "questionnaire":
       return formatMessagingQuestionnaireText(intent);
+    case "review":
+      return [intent.title, intent.body].join("\n\n");
     case "approval":
       return [intent.title, intent.body].join("\n\n");
     case "confirmation":
@@ -117,6 +119,8 @@ export function actionsForDiscordIntent(
       return intent.choices;
     case "questionnaire":
       return messagingQuestionnaireActions(intent);
+    case "review":
+      return intent.actions;
     case "approval":
       return intent.decisions;
     case "confirmation":

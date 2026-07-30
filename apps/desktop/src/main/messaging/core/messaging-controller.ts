@@ -15,6 +15,7 @@ import type {
   AppServerBackendKind,
   AppServerThreadPlanEntry,
   AppServerThreadReviewEntry,
+  AppServerReviewTarget,
   AutomationMessagingConversationSnapshot,
   AutomationRunSourceMetadata,
   AutomationRunOutputDecision,
@@ -74,6 +75,7 @@ import type {
   MessagingPendingIntentRecord,
   MessagingQuestionnaireAnswer,
   MessagingQuestionnaireIntent,
+  MessagingReviewIntent,
   MessagingResponseMode,
   MessagingStreamUpdateIntent,
   MessagingSurfaceAction,
@@ -83,6 +85,7 @@ import type {
   MessagingTopicCleanupProposalRecord,
 } from "@pwragent/messaging-interface";
 import {
+  applyActionCapabilityLimits,
   evictStaleStreamAnchors,
   MESSAGING_CALLBACK_HANDLE_TTL_MS,
   messagingQuestionnaireAnswerComplete,
@@ -92,6 +95,8 @@ import {
   buildHelpActions,
   formatMessagingCommandHelpBody,
   matchMessagingCommandVerb,
+  MESSAGING_COMMAND_CATALOG,
+  MESSAGING_REVIEW_HELP_SPEC,
   paginateHelpCatalog,
 } from "./messaging-command-catalog.js";
 import {
@@ -141,6 +146,7 @@ import { buildMessagingAuditContext } from "./messaging-audit.js";
 import { getMainLogger } from "../../log.js";
 import { DeterministicInteractionMapper } from "./deterministic-interaction-mapper.js";
 import { actionsForIntent } from "./deterministic-interaction-mapper.js";
+import { parseReviewCommand } from "../../../shared/review-command.js";
 import type { MessagingInteractionMapper } from "./interaction-mapper.js";
 import {
   buildResumeIntent,
@@ -1038,6 +1044,36 @@ export class MessagingController {
         threadId,
       }),
     );
+    const reviewStartOutcome = reviewStartOutcomeForBackendEvent(event);
+    if (reviewStartOutcome) {
+      if (
+        reviewStartOutcome.status === "failed"
+        || reviewStartOutcome.status === "cancelled"
+      ) {
+        for (const binding of bindings) {
+          await this.deliver(
+            buildErrorIntent({
+              id: this.newIntentId("queued-review-terminal"),
+              createdAt: this.now(),
+              title:
+                reviewStartOutcome.status === "failed"
+                  ? "Queued review could not start"
+                  : "Queued review cancelled",
+              body:
+                reviewStartOutcome.error
+                ?? (
+                  reviewStartOutcome.status === "failed"
+                    ? "The queued review failed to start."
+                    : "The active turn did not complete successfully, so the queued review was cancelled."
+                ),
+              recoverable: reviewStartOutcome.status === "failed",
+            }),
+            binding,
+          );
+        }
+      }
+      return;
+    }
     const automationRunUpdate = automationRunUpdateForBackendEvent(event);
     if (automationRunUpdate) {
       await this.handleAutomationRunUpdated({
@@ -1518,10 +1554,317 @@ export class MessagingController {
       });
       return;
     }
-    // `verb === "help"` and any unrecognized command both fall
-    // through to the help surface. For unknown commands this serves
-    // as a "did you mean?" prompt with the canonical list.
-    await this.presentHelp(event);
+    if (verb === "help") {
+      await this.presentHelp(event);
+      return;
+    }
+    if (event.command.trim().replace(/^\/+/, "").toLowerCase() === "review") {
+      await this.handleReviewCommand(event);
+      return;
+    }
+    await this.routeUnknownCommandToBoundThread(event);
+  }
+
+  private async routeUnknownCommandToBoundThread(
+    event: MessagingInboundCommandEvent,
+  ): Promise<void> {
+    const binding = await this.options.store.findActiveBindingForChannel(event.channel);
+    if (!binding) {
+      await this.presentThreadCommandNeedsBinding(event);
+      return;
+    }
+    if (
+      binding.targetKind === "agent_thread" &&
+      !await this.shouldHandleAmbientSharedMessage(
+        {
+          ...event,
+          kind: "text",
+          text: event.rawText,
+        },
+        binding,
+      )
+    ) {
+      return;
+    }
+    const text = `/${[event.command.replace(/^\/+/, ""), ...event.args]
+      .filter(Boolean)
+      .join(" ")}`;
+    await this.turnAdmission.append({
+      binding,
+      event: {
+        ...event,
+        kind: "text",
+        text,
+      },
+    });
+  }
+
+  private async presentThreadCommandNeedsBinding(
+    event: MessagingInboundEvent,
+  ): Promise<void> {
+    await this.deliver(
+      buildConfirmationIntent({
+        id: this.newIntentId("thread-command-needs-binding"),
+        capabilityProfile: this.capabilityProfile,
+        createdAt: this.now(),
+        title: "Choose a thread",
+        body: "Bind this conversation to a PwrAgent thread before sending thread commands.",
+        fallbackText: "Reply /resume to choose a thread.",
+        actions: [
+          {
+            id: "command:resume",
+            label: "Resume",
+            style: "primary",
+            fallbackText: "/resume",
+          },
+        ],
+      }),
+      undefined,
+      event,
+    );
+  }
+
+  private async handleReviewCommand(
+    event: MessagingInboundCommandEvent,
+  ): Promise<void> {
+    const binding = await this.options.store.findActiveBindingForChannel(event.channel);
+    if (!binding) {
+      await this.presentThreadCommandNeedsBinding(event);
+      return;
+    }
+    if (!await this.reviewSupportedForBinding(binding)) {
+      await this.deliverReviewUnsupported(binding, event);
+      return;
+    }
+
+    if (event.args.length > 0) {
+      const parsed = parseReviewCommand(
+        `/${["review", ...event.args].join(" ")}`,
+      );
+      if (!parsed) {
+        await this.deliver(
+          buildErrorIntent({
+            id: this.newIntentId("invalid-review-command"),
+            createdAt: this.now(),
+            title: "Invalid review command",
+            body:
+              "Use /review, /review <base branch>, /review --commit <sha>, or /review --custom <instructions>.",
+            recoverable: true,
+          }),
+          binding,
+          event,
+        );
+        return;
+      }
+      await this.submitMessagingReview({
+        binding,
+        event,
+        target: parsed.target,
+      });
+      return;
+    }
+
+    await this.presentReviewPicker(binding, event);
+  }
+
+  private async presentReviewPicker(
+    binding: MessagingBindingRecord,
+    event: MessagingInboundEvent,
+  ): Promise<void> {
+    const navigation = await this.options.backend.getNavigationSnapshot({
+      backend: binding.backend,
+    });
+    const thread = findThreadForBinding(navigation, binding);
+    const workspaces = (thread?.linkedDirectories ?? [])
+      .map((directory) => ({
+        cwd: directory.worktreePath ?? directory.path,
+        label: directory.label,
+        repositoryPath: directory.path,
+      }))
+      .filter(
+        (workspace): workspace is {
+          cwd: string;
+          label: string;
+          repositoryPath: string;
+        } =>
+          Boolean(workspace.cwd),
+      );
+    const phase = workspaces.length > 1 ? "workspace" : "target";
+    const intent = this.buildReviewIntent({
+      binding,
+      navigation,
+      phase,
+      ...(workspaces.length === 1
+        ? {
+            cwd: workspaces[0]!.cwd,
+            repositoryPath: workspaces[0]!.repositoryPath,
+          }
+        : {}),
+    });
+    const pending = await this.storePendingIntent(intent, binding, event);
+    const result = await this.deliver(intent, binding, event);
+    await this.options.store.upsertPendingIntent({
+      ...pending,
+      surface: result.surface ?? pending.surface,
+    });
+  }
+
+  private buildReviewIntent(params: {
+    binding: MessagingBindingRecord;
+    navigation: NavigationSnapshot;
+    phase: MessagingReviewIntent["review"]["phase"];
+    cwd?: string;
+    repositoryPath?: string;
+    id?: string;
+    createdAt?: number;
+    targetSurface?: MessagingSurfaceRef;
+  }): MessagingReviewIntent {
+    const thread = findThreadForBinding(params.navigation, params.binding);
+    const linkedWorkspaces = (thread?.linkedDirectories ?? []).flatMap((directory) => {
+      const cwd = directory.worktreePath ?? directory.path;
+      return cwd
+        ? [{
+            cwd,
+            label: directory.label,
+            repositoryPath: directory.path,
+          }]
+        : [];
+    });
+    const directory = params.navigation.directories.find((candidate) =>
+      reviewWorkspaceMatches(
+        candidate.path,
+        params.repositoryPath ?? params.cwd,
+      ),
+    );
+    let title = "Review target";
+    let body = "What should PwrAgent review?";
+    let allowFreeform = false;
+    let targetType: AppServerReviewTarget["type"] | undefined;
+    let actions: MessagingSurfaceAction[] = [];
+
+    if (params.phase === "workspace") {
+      title = "Review project";
+      body = "Choose the linked project to review.";
+      actions = linkedWorkspaces.map((workspace, index) => ({
+        id: `review:workspace:${index}`,
+        label: workspace.label,
+        fallbackText: workspace.cwd,
+        value: {
+          cwd: workspace.cwd,
+          repositoryPath: workspace.repositoryPath,
+        },
+      }));
+    } else if (params.phase === "target") {
+      actions = [
+        {
+          id: "review:target:base-branch",
+          label: "Base branch",
+          description: "Compare this branch with a base branch",
+          fallbackText: "base branch",
+          value: { targetType: "baseBranch" },
+        },
+        {
+          id: "review:target:current-changes",
+          label: "Current changes",
+          description: "Review staged, unstaged, and untracked files",
+          fallbackText: "current changes",
+          value: { targetType: "uncommittedChanges" },
+        },
+        {
+          id: "review:target:commit",
+          label: "Commit",
+          description: "Review one commit by SHA",
+          fallbackText: "commit",
+          value: { targetType: "commit" },
+        },
+        {
+          id: "review:target:custom",
+          label: "Custom",
+          description: "Review using custom instructions",
+          fallbackText: "custom",
+          value: { targetType: "custom" },
+        },
+      ];
+    } else if (params.phase === "base_branch") {
+      title = "Base branch";
+      body = "Choose a base branch or reply with a branch name.";
+      allowFreeform = true;
+      targetType = "baseBranch";
+      const branches = [
+        ...(directory?.gitStatus?.baseBranches ?? []),
+        ...(directory?.gitStatus?.branches ?? []),
+        directory?.gitStatus?.defaultBranch,
+        "main",
+      ]
+        .map((branch) => branch?.trim())
+        .filter(
+          (branch, index, candidates): branch is string =>
+            Boolean(branch) && candidates.indexOf(branch) === index,
+        );
+      actions = branches.map((branch, index) => ({
+        id: `review:base-branch:${index}`,
+        label: branch,
+        fallbackText: branch,
+        value: { branch },
+      }));
+    } else if (params.phase === "commit") {
+      title = "Commit";
+      body = "Choose a recent commit or reply with a commit SHA.";
+      allowFreeform = true;
+      targetType = "commit";
+      actions = (directory?.gitStatus?.recentCommits ?? []).map((commit, index) => ({
+        id: `review:commit:${index}`,
+        label: `${commit.shortSha} ${commit.subject}`,
+        fallbackText: commit.sha,
+        value: {
+          sha: commit.sha,
+          title: commit.subject,
+        },
+      }));
+    } else if (params.phase === "custom") {
+      title = "Custom review";
+      body = "Reply with the review instructions.";
+      allowFreeform = true;
+      targetType = "custom";
+    } else {
+      title = "Review submitted";
+      body = "The review request was submitted.";
+    }
+
+    actions = applyActionCapabilityLimits(actions, this.capabilityProfile);
+    return {
+      id: params.id ?? this.newIntentId("review"),
+      kind: "review",
+      bindingId: params.binding.id,
+      createdAt: params.createdAt ?? this.now(),
+      title,
+      body,
+      actions,
+      allowFreeform,
+      fallbackText: allowFreeform
+        ? `${body} Reply with text or tap an option.`
+        : body,
+      review: {
+        backend: params.binding.backend,
+        threadId: params.binding.threadId,
+        phase: params.phase,
+        ...(params.cwd ? { cwd: params.cwd } : {}),
+        ...(params.repositoryPath
+          ? { repositoryPath: params.repositoryPath }
+          : {}),
+        ...(targetType ? { targetType } : {}),
+      },
+      ...(params.targetSurface
+        ? {
+            targetSurface: params.targetSurface,
+            delivery: {
+              mode: "update",
+              replaceMarkup: true,
+              fallback: "present_new",
+            },
+          }
+        : {}),
+    };
   }
 
   /**
@@ -1547,7 +1890,13 @@ export class MessagingController {
     event: MessagingInboundEvent,
     options?: { pageIndex?: number; targetSurface?: MessagingSurfaceRef },
   ): Promise<void> {
+    const binding = await this.options.store.findActiveBindingForChannel(event.channel);
+    const catalog =
+      binding && await this.reviewSupportedForBinding(binding)
+        ? [...MESSAGING_COMMAND_CATALOG, MESSAGING_REVIEW_HELP_SPEC]
+        : MESSAGING_COMMAND_CATALOG;
     const page = paginateHelpCatalog({
+      catalog,
       profile: this.capabilityProfile,
       pageIndex: options?.pageIndex,
     });
@@ -1562,7 +1911,7 @@ export class MessagingController {
         capabilityProfile: this.capabilityProfile,
         createdAt: this.now(),
         title: `PwrAgent commands${titleSuffix}`,
-        body: formatMessagingCommandHelpBody(),
+        body: formatMessagingCommandHelpBody({ catalog }),
         actions,
         ...(options?.targetSurface
           ? {
@@ -1657,6 +2006,12 @@ export class MessagingController {
             actionId: mapped.action.id,
             value: mapped.action.value,
           });
+          return;
+        }
+        if (
+          pendingIntent.intent.kind === "review" &&
+          await this.handleReviewTextAnswer(pendingIntent, event)
+        ) {
           return;
         }
         if (
@@ -2625,6 +2980,10 @@ export class MessagingController {
         await this.handleQuestionnaireAction(pendingIntent, event, action);
         return;
       }
+      if (action && pendingIntent.intent.kind === "review") {
+        await this.handleReviewAction(pendingIntent, event, action);
+        return;
+      }
     }
 
     if ((event.actionId ?? event.interaction.id).startsWith("approval:")) {
@@ -2649,6 +3008,21 @@ export class MessagingController {
           createdAt: this.now(),
           title: "Input request expired",
           body: "That input request is no longer available. Retry the command or request that needed input.",
+          recoverable: true,
+        }),
+        undefined,
+        event,
+      );
+      return;
+    }
+
+    if ((event.actionId ?? event.interaction.id).startsWith("review:")) {
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("expired-review"),
+          createdAt: this.now(),
+          title: "Review picker expired",
+          body: "That review picker is no longer available. Send /review to open a new one.",
           recoverable: true,
         }),
         undefined,
@@ -2696,6 +3070,296 @@ export class MessagingController {
 
     await this.updateQuestionnairePendingIntent(pendingIntent, updated, event);
     return true;
+  }
+
+  private async handleReviewTextAnswer(
+    pendingIntent: MessagingPendingIntentRecord,
+    event: MessagingInboundTextEvent,
+  ): Promise<boolean> {
+    if (pendingIntent.intent.kind !== "review") {
+      return false;
+    }
+
+    const value = event.text.trim();
+    if (!pendingIntent.intent.allowFreeform || !value) {
+      return false;
+    }
+
+    let target: AppServerReviewTarget | undefined;
+    if (pendingIntent.intent.review.phase === "base_branch") {
+      target = { type: "baseBranch", branch: value };
+    } else if (pendingIntent.intent.review.phase === "commit") {
+      const [sha, ...titleParts] = value.split(/\s+/);
+      if (sha) {
+        target = {
+          type: "commit",
+          sha,
+          title: titleParts.length > 0 ? titleParts.join(" ") : null,
+        };
+      }
+    } else if (pendingIntent.intent.review.phase === "custom") {
+      target = { type: "custom", instructions: value };
+    }
+
+    if (!target) {
+      return false;
+    }
+
+    await this.submitMessagingReviewFromPending(
+      pendingIntent,
+      event,
+      target,
+    );
+    return true;
+  }
+
+  private async handleReviewAction(
+    pendingIntent: MessagingPendingIntentRecord,
+    event: MessagingInboundCallbackEvent,
+    action: MessagingSurfaceAction,
+  ): Promise<void> {
+    if (pendingIntent.intent.kind !== "review") {
+      return;
+    }
+
+    const value = asPlainRecord(action.value);
+    const phase = pendingIntent.intent.review.phase;
+    if (phase === "workspace") {
+      const cwd = typeof value?.cwd === "string" ? value.cwd.trim() : "";
+      const repositoryPath =
+        typeof value?.repositoryPath === "string"
+          ? value.repositoryPath.trim()
+          : "";
+      if (cwd) {
+        await this.updateReviewPendingIntent(pendingIntent, event, {
+          phase: "target",
+          cwd,
+          ...(repositoryPath ? { repositoryPath } : {}),
+        });
+      }
+      return;
+    }
+
+    if (phase === "target") {
+      const targetType =
+        typeof value?.targetType === "string" ? value.targetType : undefined;
+      if (targetType === "uncommittedChanges") {
+        await this.submitMessagingReviewFromPending(
+          pendingIntent,
+          event,
+          { type: "uncommittedChanges" },
+        );
+      } else if (targetType === "baseBranch") {
+        await this.updateReviewPendingIntent(pendingIntent, event, {
+          phase: "base_branch",
+        });
+      } else if (targetType === "commit") {
+        await this.updateReviewPendingIntent(pendingIntent, event, {
+          phase: "commit",
+        });
+      } else if (targetType === "custom") {
+        await this.updateReviewPendingIntent(pendingIntent, event, {
+          phase: "custom",
+        });
+      }
+      return;
+    }
+
+    if (phase === "base_branch") {
+      const branch = typeof value?.branch === "string" ? value.branch.trim() : "";
+      if (branch) {
+        await this.submitMessagingReviewFromPending(
+          pendingIntent,
+          event,
+          { type: "baseBranch", branch },
+        );
+      }
+      return;
+    }
+
+    if (phase === "commit") {
+      const sha = typeof value?.sha === "string" ? value.sha.trim() : "";
+      const title = typeof value?.title === "string" ? value.title : null;
+      if (sha) {
+        await this.submitMessagingReviewFromPending(
+          pendingIntent,
+          event,
+          { type: "commit", sha, title },
+        );
+      }
+    }
+  }
+
+  private async updateReviewPendingIntent(
+    pendingIntent: MessagingPendingIntentRecord,
+    event: MessagingInboundCallbackEvent | MessagingInboundTextEvent,
+    review: {
+      phase: MessagingReviewIntent["review"]["phase"];
+      cwd?: string;
+      repositoryPath?: string;
+    },
+  ): Promise<void> {
+    if (pendingIntent.intent.kind !== "review") {
+      return;
+    }
+    const binding = pendingIntent.bindingId
+      ? await this.options.store.getBinding(pendingIntent.bindingId)
+      : undefined;
+    if (!binding || binding.revokedAt) {
+      await this.options.store.deletePendingIntent(pendingIntent.id);
+      return;
+    }
+
+    const navigation = await this.options.backend.getNavigationSnapshot({
+      backend: binding.backend,
+    });
+    const targetSurface = pendingIntent.surface ?? (
+      event.kind === "callback" ? event.interaction : undefined
+    );
+    const intent = this.buildReviewIntent({
+      binding,
+      navigation,
+      phase: review.phase,
+      cwd: review.cwd ?? pendingIntent.intent.review.cwd,
+      repositoryPath:
+        review.repositoryPath
+        ?? pendingIntent.intent.review.repositoryPath,
+      id: pendingIntent.intent.id,
+      createdAt: pendingIntent.intent.createdAt,
+      targetSurface,
+    });
+    const result = await this.deliver(intent, binding, event);
+    await this.options.store.upsertPendingIntent({
+      ...pendingIntent,
+      intent,
+      surface: result.surface ?? pendingIntent.surface,
+    });
+  }
+
+  private async submitMessagingReviewFromPending(
+    pendingIntent: MessagingPendingIntentRecord,
+    event: MessagingInboundCallbackEvent | MessagingInboundTextEvent,
+    target: AppServerReviewTarget,
+  ): Promise<void> {
+    if (pendingIntent.intent.kind !== "review") {
+      return;
+    }
+    const binding = pendingIntent.bindingId
+      ? await this.options.store.getBinding(pendingIntent.bindingId)
+      : undefined;
+    if (!binding || binding.revokedAt) {
+      await this.options.store.deletePendingIntent(pendingIntent.id);
+      return;
+    }
+
+    await this.submitMessagingReview({
+      binding,
+      event,
+      target,
+      cwd: pendingIntent.intent.review.cwd,
+      targetSurface: pendingIntent.surface,
+      pendingIntentId: pendingIntent.id,
+    });
+  }
+
+  private async submitMessagingReview(params: {
+    binding: MessagingBindingRecord;
+    event: MessagingInboundEvent;
+    target: AppServerReviewTarget;
+    cwd?: string;
+    targetSurface?: MessagingSurfaceRef;
+    pendingIntentId?: string;
+  }): Promise<void> {
+    const submitReview = this.options.backend.submitReview;
+    if (!submitReview || !await this.reviewSupportedForBinding(params.binding)) {
+      await this.deliverReviewUnsupported(params.binding, params.event);
+      return;
+    }
+
+    try {
+      const navigation = await this.options.backend.getNavigationSnapshot({
+        backend: params.binding.backend,
+      });
+      const settings = turnSettingsForBinding(params.binding, navigation);
+      const result = await submitReview({
+        backend: params.binding.backend,
+        threadId: params.binding.threadId,
+        target: params.target,
+        delivery: "inline",
+        ...(params.cwd ? { cwd: params.cwd } : {}),
+        ...(settings.model ? { model: settings.model } : {}),
+        ...(settings.reasoningEffort
+          ? { reasoningEffort: settings.reasoningEffort }
+          : {}),
+        ...(settings.serviceTier ? { serviceTier: settings.serviceTier } : {}),
+        ...(settings.fastMode !== undefined ? { fastMode: settings.fastMode } : {}),
+      });
+      if (params.pendingIntentId) {
+        await this.options.store.deletePendingIntent(params.pendingIntentId);
+      }
+      await this.deliver(
+        buildConfirmationIntent({
+          id: this.newIntentId("review-submitted"),
+          capabilityProfile: this.capabilityProfile,
+          createdAt: this.now(),
+          title: result.status === "scheduled" ? "Review queued" : "Review started",
+          body:
+            result.status === "scheduled"
+              ? `${formatReviewTarget(params.target)} will start after the active turn completes successfully.`
+              : `${formatReviewTarget(params.target)} is now running.`,
+          fallbackText:
+            result.status === "scheduled"
+              ? "Review queued until the active turn completes."
+              : "Review started.",
+          ...(params.targetSurface
+            ? {
+                targetSurface: params.targetSurface,
+                delivery: {
+                  mode: "update" as const,
+                  replaceMarkup: true,
+                  fallback: "present_new" as const,
+                },
+              }
+            : {}),
+        }),
+        params.binding,
+        params.event,
+      );
+    } catch (error) {
+      this.logger.warn?.("messaging review submission failed", {
+        backend: params.binding.backend,
+        threadId: params.binding.threadId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("review-submit-failed"),
+          createdAt: this.now(),
+          title: "Review could not start",
+          body: error instanceof Error ? error.message : String(error),
+          recoverable: true,
+        }),
+        params.binding,
+        params.event,
+      );
+    }
+  }
+
+  private async deliverReviewUnsupported(
+    binding: MessagingBindingRecord,
+    event: MessagingInboundEvent,
+  ): Promise<void> {
+    await this.deliver(
+      buildErrorIntent({
+        id: this.newIntentId("review-unsupported"),
+        createdAt: this.now(),
+        title: "Review unavailable",
+        body: "This thread backend does not support code review.",
+        recoverable: false,
+      }),
+      binding,
+      event,
+    );
   }
 
   private async handleQuestionnaireAction(
@@ -9898,6 +10562,24 @@ export class MessagingController {
     return response?.backends.find((candidate) => candidate.kind === backend);
   }
 
+  private async reviewSupportedForBinding(
+    binding: MessagingBindingRecord,
+  ): Promise<boolean> {
+    if (!this.options.backend.submitReview || isAcpBackendId(binding.backend)) {
+      return false;
+    }
+    try {
+      const summary = await this.getBackendSummary(binding.backend);
+      return Boolean(summary?.available && summary.capabilities.startReview);
+    } catch (error) {
+      this.logger.debug?.("messaging review capability lookup failed", {
+        backend: binding.backend,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
+  }
+
   private rememberContextUsageSummary(event: AgentEvent): void {
     const params = event.notification.params as {
       threadId?: unknown;
@@ -13062,6 +13744,30 @@ function findNavigationDirectory(
   );
 }
 
+function reviewWorkspaceMatches(
+  directoryPath: string | undefined,
+  cwd: string | undefined,
+): boolean {
+  if (!directoryPath || !cwd) {
+    return false;
+  }
+  const normalize = (value: string) => value.replace(/\/+$/, "");
+  return normalize(directoryPath) === normalize(cwd);
+}
+
+function formatReviewTarget(target: AppServerReviewTarget): string {
+  switch (target.type) {
+    case "uncommittedChanges":
+      return "Current changes review";
+    case "baseBranch":
+      return `Review against ${target.branch}`;
+    case "commit":
+      return `Review of commit ${target.sha}`;
+    case "custom":
+      return "Custom review";
+  }
+}
+
 function validateHandoffRequest(
   request: HandoffThreadWorkspaceRequest,
   context: MessagingWorkspaceHandoffContext,
@@ -13682,6 +14388,36 @@ function threadIdForBackendEvent(event: AgentEvent): ThreadIdentifier | undefine
     return params.threadId;
   }
   return typeof params.parentThreadId === "string" ? params.parentThreadId : undefined;
+}
+
+function reviewStartOutcomeForBackendEvent(
+  event: AgentEvent,
+):
+  | {
+      status: "started" | "cancelled" | "failed";
+      error?: string;
+    }
+  | undefined {
+  if (event.notification.method !== "thread/reviewStart/updated") {
+    return undefined;
+  }
+  const params = event.notification.params as {
+    status?: unknown;
+    error?: unknown;
+  };
+  if (
+    params.status !== "started"
+    && params.status !== "cancelled"
+    && params.status !== "failed"
+  ) {
+    return undefined;
+  }
+  return {
+    status: params.status,
+    ...(typeof params.error === "string"
+      ? { error: params.error }
+      : {}),
+  };
 }
 
 function contextUsageSummaryFromValue(value: unknown): string | undefined {
@@ -14324,6 +15060,7 @@ export function messagingDeliveryPriority(
       }
       return "critical_interactive";
     case "questionnaire":
+    case "review":
       return "critical_interactive";
     case "stream_update":
       return intent.stream.isFinal ? "final_turn" : "stream_partial";

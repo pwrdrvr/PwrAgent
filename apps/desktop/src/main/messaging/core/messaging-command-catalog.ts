@@ -65,6 +65,21 @@ export type MessagingCommandSpec = {
   description: string;
 };
 
+export type MessagingCommandHelpSpec = {
+  verb: string;
+  description: string;
+};
+
+/**
+ * Help-only entry for the agent-facing review command. It is deliberately
+ * excluded from `MESSAGING_COMMAND_CATALOG` so `/review` does not become a
+ * messaging control command and continues to follow backend capability checks.
+ */
+export const MESSAGING_REVIEW_HELP_SPEC: MessagingCommandHelpSpec = {
+  verb: "review",
+  description: "start a code review for the bound thread",
+};
+
 /**
  * Canonical command set, in the order they should appear in the
  * `/help` body. Order is intentional — `resume` first because it's
@@ -122,7 +137,7 @@ export const MESSAGING_COMMAND_CATALOG: readonly MessagingCommandSpec[] = [
  *   <invocation footer>
  */
 export function formatMessagingCommandHelpBody(options?: {
-  catalog?: readonly MessagingCommandSpec[];
+  catalog?: readonly MessagingCommandHelpSpec[];
   invocationFooter?: string;
 }): string {
   const catalog = options?.catalog ?? MESSAGING_COMMAND_CATALOG;
@@ -206,7 +221,7 @@ export type MessagingCommandHelpPage = {
    * Subset of `MESSAGING_COMMAND_CATALOG` for this page, in catalog
    * order. Empty when `pageSize === 0`.
    */
-  commands: readonly MessagingCommandSpec[];
+  commands: readonly MessagingCommandHelpSpec[];
 };
 
 /**
@@ -239,7 +254,7 @@ export function helpPageSize(
  * `buildHelpActions` for the canonical pattern.
  */
 export function paginateHelpCatalog(params: {
-  catalog?: readonly MessagingCommandSpec[];
+  catalog?: readonly MessagingCommandHelpSpec[];
   profile?: MessagingCapabilityProfile;
   pageIndex?: number;
 }): MessagingCommandHelpPage {

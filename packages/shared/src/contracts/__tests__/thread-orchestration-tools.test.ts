@@ -24,6 +24,7 @@ describe("thread orchestration tool contracts", () => {
       "handoff_task",
       "move_thread_workspace",
       "send_message_to_thread",
+      "start_review",
     ]);
   });
 

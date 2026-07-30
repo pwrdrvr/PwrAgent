@@ -20,6 +20,7 @@ import type {
   SetAcpSessionRuntimeOptionRequest,
   SetThreadExecutionModeRequest,
   SetThreadModelSettingsRequest,
+  StartReviewRequest,
   StartThreadRequest,
   StartTurnRequest,
   SteerTurnRequest,
@@ -83,6 +84,250 @@ afterEach(async () => {
 });
 
 describe("MessagingController", () => {
+  it("opens the review picker for a mentioned /review command", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("/review", { botMention: true }),
+    );
+
+    expect(harness.delivered).toHaveLength(1);
+    expect(harness.delivered[0]).toMatchObject({
+      kind: "review",
+      title: "Review target",
+      review: {
+        backend: "codex",
+        threadId: "thread-1",
+        phase: "target",
+        cwd: "/repo/pwragent",
+      },
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "review:target:current-changes",
+          label: "Current changes",
+        }),
+      ]),
+    });
+  });
+
+  it("submits the selected messaging review target", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+    await harness.controller.handleInboundEvent(buildCommandEvent("/review"));
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "review:target:current-changes",
+      }),
+    );
+
+    expect(harness.submitReview).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      target: { type: "uncommittedChanges" },
+      delivery: "inline",
+      cwd: "/repo/pwragent",
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Review started",
+    });
+  });
+
+  it("routes non-control slash commands to the bound thread", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("/compact preserve the summary", { botMention: true }),
+    );
+
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        threadId: "thread-1",
+        input: [
+          {
+            type: "text",
+            text: "/compact preserve the summary",
+          },
+        ],
+      }),
+    );
+    expect(harness.delivered).not.toContainEqual(
+      expect.objectContaining({
+        title: expect.stringContaining("PwrAgent commands"),
+      }),
+    );
+  });
+
+  it("submits direct review command arguments without opening the picker", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/review main"));
+
+    expect(harness.submitReview).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      target: { type: "baseBranch", branch: "main" },
+      delivery: "inline",
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Review started",
+    });
+  });
+
+  it("rejects review before opening a picker for unsupported backends", async () => {
+    const harness = await createHarness({
+      listBackends: async (): Promise<ListBackendsResponse> => ({
+        fetchedAt: 1000,
+        backends: [
+          buildAcpRuntimeBackendSummary({
+            capabilities: {
+              ...buildAcpRuntimeBackendSummary().capabilities,
+              startReview: false,
+            },
+          }),
+        ],
+      }),
+    });
+    await bindThreadToBackend(harness, "acp:gemini");
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/review"));
+
+    expect(harness.submitReview).not.toHaveBeenCalled();
+    expect(harness.delivered).toHaveLength(1);
+    expect(harness.delivered[0]).toMatchObject({
+      kind: "error",
+      title: "Review unavailable",
+    });
+  });
+
+  it("rejects review when Codex does not advertise review/start", async () => {
+    const harness = await createHarness({
+      listBackends: async (): Promise<ListBackendsResponse> => ({
+        fetchedAt: 1000,
+        backends: [
+          buildBackendSummary({
+            methods: ["turn/start"],
+            capabilities: {
+              ...buildBackendSummary().capabilities,
+              startReview: false,
+            },
+          }),
+        ],
+      }),
+    });
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/review"));
+
+    expect(harness.submitReview).not.toHaveBeenCalled();
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "error",
+      title: "Review unavailable",
+    });
+  });
+
+  it("uses repository metadata for review pickers on worktree threads", async () => {
+    const navigation = buildWorktreeHandoffNavigationSnapshot();
+    navigation.directories[0] = {
+      ...navigation.directories[0]!,
+      gitStatus: {
+        currentBranch: "feature/handoff",
+        defaultBranch: "main",
+        baseBranches: ["release"],
+        branches: ["main", "feature/handoff"],
+        recentCommits: [
+          {
+            sha: "1234567890abcdef",
+            shortSha: "1234567",
+            subject: "Fix review routing",
+          },
+        ],
+      },
+    };
+    const harness = await createHarness({ navigation });
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/review"));
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "review",
+      review: {
+        cwd: "/repo/pwragent/.worktrees/pwragent-feature-handoff",
+        repositoryPath: "/repo/pwragent",
+      },
+    });
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "review:target:base-branch" }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "review",
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          label: "release",
+          value: { branch: "release" },
+        }),
+      ]),
+    });
+
+    const commitHarness = await createHarness({ navigation });
+    await bindThread(commitHarness);
+    commitHarness.delivered.length = 0;
+    await commitHarness.controller.handleInboundEvent(buildCommandEvent("/review"));
+    await commitHarness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "review:target:commit" }),
+    );
+    expect(commitHarness.delivered.at(-1)).toMatchObject({
+      kind: "review",
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          label: "1234567 Fix review routing",
+          value: {
+            sha: "1234567890abcdef",
+            title: "Fix review routing",
+          },
+        }),
+      ]),
+    });
+  });
+
+  it("delivers deferred review start failures to the bound conversation", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/reviewStart/updated",
+        params: {
+          threadId: "thread-1",
+          pendingReviewId: "pending-review:1",
+          status: "failed",
+          error: "Codex disconnected",
+        },
+      },
+    });
+
+    expect(harness.delivered).toHaveLength(1);
+    expect(harness.delivered[0]).toMatchObject({
+      kind: "error",
+      title: "Queued review could not start",
+      body: "Codex disconnected",
+    });
+  });
+
   it("presents a channel-neutral thread picker for authorized /resume commands", async () => {
     const harness = await createHarness();
 
@@ -5098,7 +5343,7 @@ describe("MessagingController", () => {
     });
   });
 
-  it("does not treat legacy /threads as a resume alias — falls through to the help surface", async () => {
+  it("does not treat legacy /threads as a control alias and asks for a binding", async () => {
     const harness = await createHarness();
 
     await harness.controller.handleInboundEvent(buildCommandEvent("/threads"));
@@ -5106,7 +5351,7 @@ describe("MessagingController", () => {
     expect(harness.getNavigationSnapshot).not.toHaveBeenCalled();
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "confirmation",
-      title: "PwrAgent commands",
+      title: "Choose a thread",
     });
   });
 
@@ -5119,6 +5364,29 @@ describe("MessagingController", () => {
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "confirmation",
       title: "PwrAgent commands",
+    });
+  });
+
+  it("includes review in help only for a bound review-capable thread", async () => {
+    const harness = await createHarness();
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/help"));
+    expect((harness.delivered.at(-1) as { body?: string }).body)
+      .not.toContain("/review");
+
+    await bindThread(harness);
+    harness.delivered.length = 0;
+    await harness.controller.handleInboundEvent(buildCommandEvent("/help"));
+
+    expect((harness.delivered.at(-1) as { body?: string }).body)
+      .toContain("/review - start a code review for the bound thread");
+    expect(harness.delivered.at(-1)).toMatchObject({
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "command:review",
+          label: "Review",
+        }),
+      ]),
     });
   });
 
@@ -15553,6 +15821,7 @@ async function createHarness(options?: {
   >;
   setConversationTitle?: MessagingAdapter["setConversationTitle"];
   startThread?: NonNullable<MessagingBackendBridge["startThread"]>;
+  submitReview?: NonNullable<MessagingBackendBridge["submitReview"]>;
   toolUpdateDefaultMode?: MessagingToolUpdateMode;
   showStreamingOption?: boolean;
 }): Promise<{
@@ -15577,6 +15846,7 @@ async function createHarness(options?: {
   setThreadExecutionMode: ReturnType<typeof vi.fn>;
   setThreadModelSettings: ReturnType<typeof vi.fn>;
   startThread: ReturnType<typeof vi.fn>;
+  submitReview: ReturnType<typeof vi.fn>;
   startTurn: ReturnType<typeof vi.fn>;
   steerTurn: ReturnType<typeof vi.fn>;
   submitServerRequest: ReturnType<typeof vi.fn>;
@@ -15675,6 +15945,18 @@ async function createHarness(options?: {
         backend: request.backend,
         threadId: "new-thread-1",
         executionMode: request.executionMode ?? "default",
+      })),
+  );
+  const submitReview = vi.fn(
+    options?.submitReview ??
+      (async (request: StartReviewRequest) => ({
+        status: "started" as const,
+        response: {
+          backend: request.backend,
+          threadId: request.threadId,
+          reviewThreadId: "review-thread-1",
+          turnId: "review-turn-1",
+        },
       })),
   );
   const materializeDirectoryLaunchpad = vi.fn(
@@ -15929,6 +16211,7 @@ async function createHarness(options?: {
     setThreadExecutionMode,
     setThreadModelSettings,
     startThread,
+    submitReview,
     startTurn,
     steerTurn,
     submitServerRequest,
@@ -15992,6 +16275,7 @@ async function createHarness(options?: {
     setThreadExecutionMode,
     setThreadModelSettings,
     startThread,
+    submitReview,
     startTurn,
     steerTurn,
     submitServerRequest,
@@ -16035,6 +16319,7 @@ function buildBackendSummary(overrides: Partial<BackendSummary> = {}): BackendSu
       renameThread: true,
       readThread: true,
       startTurn: true,
+      startReview: true,
       interruptTurn: true,
       steerTurn: false,
       transcriptPagination: false,

@@ -639,6 +639,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
         case "single_select":
         case "multi_select":
         case "questionnaire":
+        case "review":
         case "approval":
         case "confirmation":
         case "error":
