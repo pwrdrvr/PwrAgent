@@ -2008,6 +2008,7 @@ function buildOptimisticThreadFromLaunchpad(params: {
   optimisticUserMessage?: NavigationThreadSummary["optimisticUserMessage"];
   optimisticActiveTurn?: NavigationThreadSummary["optimisticActiveTurn"];
   parentThreadId?: string;
+  pinnedRank?: string;
 }): NavigationThreadSummary {
   const titlePrompt =
     params.optimisticUserMessage?.text?.trim() || params.launchpad.prompt.trim();
@@ -2026,6 +2027,7 @@ function buildOptimisticThreadFromLaunchpad(params: {
     serviceTier: params.launchpad.serviceTier,
     fastMode: params.launchpad.fastMode,
     parentThreadId: params.parentThreadId,
+    pinnedRank: params.pinnedRank,
     acpRuntime: params.launchpad.acpRuntime,
     codexEnvironmentRuntime: params.codexEnvironmentRuntime,
     optimisticUserMessage: params.optimisticUserMessage,
@@ -2052,6 +2054,29 @@ function buildOptimisticThreadFromLaunchpad(params: {
       reason: "new-thread",
     },
   };
+}
+
+function shouldAutoPinMaterializedThread(params: {
+  directory: NavigationDirectorySummary | undefined;
+  threads: NavigationThreadSummary[];
+  parentThreadId: string | undefined;
+}): boolean {
+  if (
+    params.parentThreadId
+    || params.directory?.directoryThreadsCollapsed !== true
+  ) {
+    return false;
+  }
+
+  const directoryThreadKeys = new Set(params.directory.threadKeys);
+  return params.threads.some(
+    (thread) =>
+      !thread.parentThreadId
+      && Boolean(thread.pinnedRank)
+      && directoryThreadKeys.has(
+        buildThreadIdentityKey(thread.source, thread.id),
+      ),
+  );
 }
 
 function mergeHydratedThreadWithOptimisticTitle(
@@ -4850,6 +4875,42 @@ export function useThreadNavigation(
         setLaunchpadError(error instanceof Error ? error.message : String(error));
         throw error;
       }
+      let autoPinnedRank: string | undefined;
+      let autoPinFailure: string | undefined;
+      if (
+        shouldAutoPinMaterializedThread({
+          directory,
+          threads: stateRef.current.response?.threads ?? [],
+          parentThreadId: materializeParentThreadId,
+        })
+      ) {
+        const requestedPinnedRank = buildAppendPinRank(
+          (stateRef.current.response?.threads ?? []).map(
+            (thread) => thread.pinnedRank,
+          ),
+        );
+        if (!desktopApi.setThreadPin) {
+          autoPinFailure =
+            "The new thread was created, but it could not be pinned automatically.";
+        } else {
+          try {
+            const pinResult = await desktopApi.setThreadPin({
+              backend: response.backend,
+              threadId: response.threadId,
+              pinnedRank: requestedPinnedRank,
+            });
+            autoPinnedRank = pinResult.pinnedRank;
+            if (!autoPinnedRank) {
+              autoPinFailure =
+                "The new thread was created, but it could not be pinned automatically.";
+            }
+          } catch (error) {
+            autoPinFailure = `The new thread was created, but it could not be pinned automatically: ${
+              error instanceof Error ? error.message : String(error)
+            }`;
+          }
+        }
+      }
       const optimisticMaterializedThread = buildOptimisticThreadFromLaunchpad({
         directory,
         launchpad,
@@ -4876,6 +4937,7 @@ export function useThreadNavigation(
             }
           : undefined,
         parentThreadId: materializeParentThreadId,
+        pinnedRank: autoPinnedRank,
       });
       const nextThreadKey = buildThreadIdentityKey(response.backend, response.threadId);
       // Sub-thread launchpads drop the new child directly below their source
@@ -4913,6 +4975,8 @@ export function useThreadNavigation(
       }
       if (response.turnStartFailure) {
         setLaunchpadError(response.turnStartFailure.message);
+      } else if (autoPinFailure) {
+        setLaunchpadError(autoPinFailure);
       }
       // Link composer `@`-referenced directories to the just-created
       // thread before the refresh below so the snapshot comes back with

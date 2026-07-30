@@ -2273,6 +2273,9 @@ describe("useThreadNavigation", () => {
           path: "/Users/huntharo/github/PwrAgent",
           threadKeys: [],
           needsAttentionCount: 0,
+          // A saved collapsed preference is latent when the directory
+          // has no pinned threads, so it must not auto-pin by itself.
+          directoryThreadsCollapsed: true,
           launchpad: {
             directoryKey: "directory:/Users/huntharo/github/PwrAgent",
             directoryKind: "directory" as const,
@@ -2299,11 +2302,19 @@ describe("useThreadNavigation", () => {
       executionMode: "default" as const,
       workMode: "worktree" as const,
     }));
+    const setThreadPin: NonNullable<DesktopApi["setThreadPin"]> = vi.fn(
+      async (request) => ({
+        backend: request.backend ?? "codex",
+        threadId: request.threadId,
+        pinnedRank: request.pinnedRank ?? undefined,
+      }),
+    );
 
     const desktopApi: DesktopApi = {
       getNavigationSnapshot,
       materializeDirectoryLaunchpad,
       onAgentEvent: () => () => undefined,
+      setThreadPin,
     };
 
     const { result } = renderHook(() => useThreadNavigation(desktopApi));
@@ -2334,6 +2345,95 @@ describe("useThreadNavigation", () => {
     expect(result.current.selectedThread?.observedGitBranch).toBe("HEAD");
     expect(result.current.directories[0]?.threadKeys).toEqual(["codex:thread-new"]);
     expect(result.current.directories[0]?.needsAttentionCount).toBe(1);
+    expect(setThreadPin).not.toHaveBeenCalled();
+  });
+
+  it("auto-pins a new top-level thread when Directory threads are collapsed", async () => {
+    const directoryKey = "directory:/Users/huntharo/github/PwrAgent";
+    const existingPinnedThread = {
+      id: "thread-pinned",
+      title: "Pinned thread",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      linkedDirectories: [],
+      inbox: { inInbox: true },
+      executionMode: "default" as const,
+      updatedAt: 1,
+      pinnedRank: "1024",
+    };
+    const getNavigationSnapshot = vi.fn(async (): Promise<NavigationSnapshot> => ({
+      backend: "all",
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: ["codex:thread-pinned"],
+      threads: [existingPinnedThread],
+      directories: [
+        {
+          key: directoryKey,
+          kind: "directory",
+          label: "PwrAgent",
+          path: "/Users/huntharo/github/PwrAgent",
+          threadKeys: ["codex:thread-pinned"],
+          needsAttentionCount: 0,
+          directoryThreadsCollapsed: true,
+          launchpad: {
+            directoryKey,
+            directoryKind: "directory",
+            directoryLabel: "PwrAgent",
+            directoryPath: "/Users/huntharo/github/PwrAgent",
+            backend: "codex",
+            executionMode: "default",
+            prompt: "",
+            workMode: "worktree",
+            branchName: "main",
+            createdAt: 1,
+            updatedAt: 1,
+          },
+        },
+      ],
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+    }));
+    const materializeDirectoryLaunchpad = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-new",
+      executionMode: "default" as const,
+      workMode: "worktree" as const,
+    }));
+    const setThreadPin: NonNullable<DesktopApi["setThreadPin"]> = vi.fn(
+      async (request) => ({
+        backend: request.backend ?? "codex",
+        threadId: request.threadId,
+        pinnedRank: request.pinnedRank ?? undefined,
+      }),
+    );
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      materializeDirectoryLaunchpad,
+      onAgentEvent: () => () => undefined,
+      setThreadPin,
+    };
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.directories[0]?.directoryThreadsCollapsed).toBe(true);
+    });
+
+    await act(async () => {
+      await result.current.materializeDirectoryLaunchpad(directoryKey);
+    });
+
+    expect(setThreadPin).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-new",
+      pinnedRank: "2048",
+    });
+    expect(result.current.selectedThread).toMatchObject({
+      id: "thread-new",
+      pinnedRank: "2048",
+    });
   });
 
   it("carries the started review turn from launchpad materialization", async () => {
