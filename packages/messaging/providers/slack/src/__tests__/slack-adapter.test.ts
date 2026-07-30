@@ -221,8 +221,10 @@ describe("SlackAdapter", () => {
         id: "C012ABCDEF0",
         kind: "thread",
         parentId: "1712023030.000000",
+        parentConversationId: "C012ABCDEF0",
         parentTitle: "signals-chat",
         title: "GIPHY-services PR status",
+        workspaceId: "T012ABCDEF0",
       },
       outcome: "created",
       routingState: {

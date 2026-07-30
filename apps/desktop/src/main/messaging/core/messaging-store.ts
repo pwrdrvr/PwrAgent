@@ -193,14 +193,14 @@ export class MessagingStore {
   async findActiveBindingForChannel(
     channel: MessagingChannelRef,
   ): Promise<MessagingBindingRecord | undefined> {
-    const channelKey = buildMessagingConversationKey(channel);
+    const channelKeys = buildMessagingConversationLookupKeys(channel);
     return await this.withReadData((data) =>
       cloneOptional(
         Object.values(data.bindings)
           .filter(
             (binding) =>
               !binding.revokedAt &&
-              buildMessagingConversationKey(binding.channel) === channelKey,
+              channelKeys.has(buildMessagingConversationKey(binding.channel)),
           )
           .sort((a, b) => b.updatedAt - a.updatedAt || b.createdAt - a.createdAt)[0],
       ),
@@ -797,6 +797,22 @@ export function buildMessagingConversationKey(channel: MessagingChannelRef): str
     channel.conversation.parentId ?? "",
     channel.conversation.id,
   ].join(":");
+}
+
+function buildMessagingConversationLookupKeys(
+  channel: MessagingChannelRef,
+): Set<string> {
+  const keys = new Set([buildMessagingConversationKey(channel)]);
+  if (channel.conversation.kind === "thread") {
+    keys.add(buildMessagingConversationKey({
+      channel: channel.channel,
+      conversation: {
+        ...channel.conversation,
+        kind: "channel",
+      },
+    }));
+  }
+  return keys;
 }
 
 function sanitizeDefaultAgentAssignment(

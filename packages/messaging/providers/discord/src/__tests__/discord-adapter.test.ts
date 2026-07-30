@@ -982,16 +982,15 @@ describe("discord adapter", () => {
       expect(events).toEqual([
         expect.objectContaining({
           actor: expect.objectContaining({ platformUserId: TEST_USER_ID }),
-          args: ["123456789ABCDEFGHJKLMNPQRSTUVWXY"],
+          botMention: true,
           channel: expect.objectContaining({
             conversation: expect.objectContaining({
               id: TEST_CHANNEL_ID,
               parentId: TEST_GUILD_ID,
             }),
           }),
-          command: "pair",
-          kind: "command",
-          rawText: "/pair 123456789ABCDEFGHJKLMNPQRSTUVWXY",
+          kind: "text",
+          text: "pair 123456789ABCDEFGHJKLMNPQRSTUVWXY",
         }),
       ]);
       expect(rejectedEvents).toEqual([]);
@@ -1335,7 +1334,7 @@ describe("discord adapter", () => {
       await adapter.stop();
     });
 
-    it("dispatches `<@bot> resume` as a command event", async () => {
+    it("normalizes `<@bot> resume` as addressed text for core command matching", async () => {
       const BOT_ID = "1480556454498009352";
       const events: MessagingInboundEvent[] = [];
       const gateway = new TestDiscordGateway();
@@ -1369,14 +1368,83 @@ describe("discord adapter", () => {
       expect(events).toHaveLength(1);
       const dispatched = events[0];
       expect(dispatched).toMatchObject({
-        kind: "command",
-        command: "resume",
-        rawText: "/resume",
+        botMention: true,
+        kind: "text",
+        text: "resume",
       });
       await adapter.stop();
     });
 
-    it("dispatches `<@bot> help args` with args parsed from the remainder", async () => {
+    it("normalizes addressed Discord threads as bindable child conversations", async () => {
+      const BOT_ID = "1480556454498009352";
+      const parentChannelId = "1480556454498009357";
+      const events: MessagingInboundEvent[] = [];
+      const gateway = new TestDiscordGateway();
+      const adapter = new DiscordAdapter({
+        api: createApi({
+          getChannel: async (id) => id === TEST_CHANNEL_ID
+            ? {
+                id,
+                name: "Search signals",
+                parentId: parentChannelId,
+              }
+            : {
+                id,
+                name: "p-search-signals-project",
+              },
+          getGuild: async (id) => ({
+            id,
+            name: "PwrDrvr",
+          }),
+        }),
+        config: {
+          applicationId: BOT_ID,
+          authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
+          authorizedGuildIds: TEST_AUTHORIZED_GUILD_IDS,
+          botToken: "token",
+          channel: "discord",
+        },
+        gateway,
+        now: () => 1234,
+      });
+      await adapter.start(async (event) => {
+        events.push(event);
+      });
+
+      await gateway.emit({
+        op: 0,
+        t: "MESSAGE_CREATE",
+        d: {
+          ...messageDispatch({
+            authorBot: false,
+            content: `<@${BOT_ID}> investigate this`,
+            id: "thread-msg",
+          }),
+          channel_type: 11,
+          is_thread: true,
+        },
+      });
+
+      expect(events[0]).toMatchObject({
+        botMention: true,
+        channel: {
+          channel: "discord",
+          conversation: {
+            ancestorTitle: "PwrDrvr",
+            id: TEST_CHANNEL_ID,
+            kind: "thread",
+            parentConversationId: parentChannelId,
+            parentTitle: "p-search-signals-project",
+            workspaceId: TEST_GUILD_ID,
+          },
+        },
+        kind: "text",
+        text: "investigate this",
+      });
+      await adapter.stop();
+    });
+
+    it("normalizes `<@bot> help args` as addressed text", async () => {
       const BOT_ID = "1480556454498009352";
       const events: MessagingInboundEvent[] = [];
       const gateway = new TestDiscordGateway();
@@ -1408,15 +1476,14 @@ describe("discord adapter", () => {
 
       expect(events).toHaveLength(1);
       expect(events[0]).toMatchObject({
-        kind: "command",
-        command: "help",
-        args: ["foo", "bar"],
-        rawText: "/help foo bar",
+        botMention: true,
+        kind: "text",
+        text: "help foo bar",
       });
       await adapter.stop();
     });
 
-    it("dispatches a bare `<@bot>` mention as the help command", async () => {
+    it("normalizes a bare `<@bot>` mention to addressed help text", async () => {
       const BOT_ID = "1480556454498009352";
       const events: MessagingInboundEvent[] = [];
       const gateway = new TestDiscordGateway();
@@ -1448,15 +1515,14 @@ describe("discord adapter", () => {
 
       expect(events).toHaveLength(1);
       expect(events[0]).toMatchObject({
-        kind: "command",
-        command: "help",
-        args: [],
-        rawText: "/help",
+        botMention: true,
+        kind: "text",
+        text: "help",
       });
       await adapter.stop();
     });
 
-    it("routes a caption like `<@bot> resume` on an attachment to a command, not media", async () => {
+    it("normalizes a caption like `<@bot> resume` for core command matching", async () => {
       const BOT_ID = "1480556454498009352";
       const events: MessagingInboundEvent[] = [];
       const gateway = new TestDiscordGateway();
@@ -1496,9 +1562,9 @@ describe("discord adapter", () => {
 
       expect(events).toHaveLength(1);
       expect(events[0]).toMatchObject({
-        kind: "command",
-        command: "resume",
-        rawText: "/resume",
+        botMention: true,
+        kind: "media",
+        text: "resume",
       });
       await adapter.stop();
     });
@@ -1543,8 +1609,9 @@ describe("discord adapter", () => {
 
       expect(events).toHaveLength(1);
       expect(events[0]).toMatchObject({
+        botMention: true,
         kind: "media",
-        text: `<@${BOT_ID}>`,
+        text: "",
         attachments: [
           expect.objectContaining({
             kind: "file",

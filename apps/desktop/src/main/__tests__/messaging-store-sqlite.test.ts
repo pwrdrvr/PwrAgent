@@ -217,6 +217,36 @@ describe("SqliteMessagingStore", () => {
     });
   });
 
+  it("finds a legacy channel-shaped binding from its normalized thread surface", async () => {
+    const store = await createStore();
+    await store.upsertBinding(buildBinding({
+      channel: {
+        channel: "discord",
+        conversation: {
+          id: "thread-channel-1",
+          kind: "channel",
+          parentId: "guild-1",
+        },
+      },
+    }));
+
+    await expect(
+      store.findActiveBindingForChannel({
+        channel: "discord",
+        conversation: {
+          id: "thread-channel-1",
+          kind: "thread",
+          parentConversationId: "parent-channel-1",
+          parentId: "guild-1",
+          workspaceId: "guild-1",
+        },
+      }),
+    ).resolves.toMatchObject({
+      id: "binding-1",
+      threadId: "thread-1",
+    });
+  });
+
   it("keeps default Agent assignments separate from active bindings", async () => {
     const store = await createStore();
     await store.upsertBinding(buildBinding({ threadId: "work-thread-1" }));

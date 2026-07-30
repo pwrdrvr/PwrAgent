@@ -73,7 +73,9 @@ import type {
   MessagingAdapterState,
   MessagingJsonValue,
   MessagingManagedConversationActionResult,
+  MessagingManagedConversationCreateResult,
   MessagingManagedConversationOperationSupport,
+  MessagingManagedConversationRightsResult,
   MessagingManagedTopicRecord,
   MessagingMonitorState,
   MessagingMonitorSubscriptionRecord,
@@ -1006,6 +1008,13 @@ export class MessagingController {
     }
     if (!threadId) {
       return;
+    }
+    if (event.notification.method === "thread/archived") {
+      await this.options.store.revokeDefaultAgentAssignmentsForTarget({
+        backend: event.backend,
+        threadId,
+        revokedAt: this.now(),
+      });
     }
     if (event.notification.method === "thread/tokenUsage/updated") {
       this.rememberContextUsageSummary(event);
@@ -2269,6 +2278,12 @@ export class MessagingController {
 
     const binding = await this.options.store.findActiveBindingForChannel(event.channel);
     if (!binding) {
+      if (
+        event.botMention &&
+        await this.bootstrapDefaultAgentForAddressedMessage(event)
+      ) {
+        return;
+      }
       if (!await this.shouldHandleAmbientSharedMessage(event)) {
         return;
       }
@@ -2290,6 +2305,186 @@ export class MessagingController {
     }
 
     await this.turnAdmission.append({ binding, event });
+  }
+
+  private async bootstrapDefaultAgentForAddressedMessage(
+    event: MessagingInboundTextEvent,
+  ): Promise<boolean> {
+    const assignments =
+      await this.options.store.findActiveDefaultAgentAssignmentsForChannel(
+        event.channel,
+      );
+    if (assignments.length === 0) {
+      return false;
+    }
+
+    let navigation: NavigationSnapshot;
+    try {
+      navigation = await this.options.backend.getNavigationSnapshot({
+        backend: "all",
+      });
+    } catch (error) {
+      await this.deliverDefaultAgentBootstrapError(
+        event,
+        "Default Agent unavailable",
+        error instanceof Error ? error.message : String(error),
+      );
+      return true;
+    }
+
+    let selected:
+      | {
+          assignment: MessagingDefaultAgentAssignmentRecord;
+          thread: NavigationThreadSummary;
+        }
+      | undefined;
+    for (const assignment of assignments) {
+      const thread = navigation.threads.find(
+        (candidate) =>
+          candidate.source === assignment.target.backend
+          && candidate.id === assignment.target.threadId
+          && Boolean(candidate.agent),
+      );
+      if (
+        assignment.target.backend === "codex"
+        && assignment.target.kind === "agent"
+        && thread
+      ) {
+        selected = { assignment, thread };
+        break;
+      }
+      await this.options.store.revokeDefaultAgentAssignment({
+        assignmentId: assignment.id,
+        revokedAt: this.now(),
+      });
+    }
+    if (!selected) {
+      return false;
+    }
+
+    let admissionEvent: MessagingInboundTextEvent = event;
+    const conversationKind = event.channel.conversation.kind;
+    if (conversationKind !== "thread" && conversationKind !== "topic") {
+      const createManagedConversation =
+        this.options.adapter.createManagedConversation;
+      if (!createManagedConversation) {
+        await this.deliverDefaultAgentBootstrapError(
+          event,
+          "Default Agent cannot start here",
+          "This messaging adapter cannot safely create a child conversation from the addressed message.",
+        );
+        return true;
+      }
+
+      let rights: MessagingManagedConversationRightsResult | undefined;
+      try {
+        rights = this.options.adapter.getManagedConversationRights
+          ? await this.options.adapter.getManagedConversationRights({
+              actor: event.actor,
+              channel: event.channel,
+              routingState: event.routingState,
+            })
+          : undefined;
+      } catch (error) {
+        await this.deliverDefaultAgentBootstrapError(
+          event,
+          "Default Agent cannot start here",
+          error instanceof Error ? error.message : String(error),
+        );
+        return true;
+      }
+      const createChild = rights?.operations.find(
+        (operation) => operation.operation === "create_child",
+      );
+      if (
+        rights
+        && (rights.outcome !== "ok" || !createChild?.supported)
+      ) {
+        await this.deliverDefaultAgentBootstrapError(
+          event,
+          "Default Agent cannot start here",
+          createChild?.reason
+            ?? (createChild?.missingPermission
+              ? `Missing adapter permission: ${createChild.missingPermission}.`
+              : rights.errorMessage
+                ?? "This messaging surface cannot create a child conversation."),
+        );
+        return true;
+      }
+
+      let created: MessagingManagedConversationCreateResult;
+      try {
+        created = await createManagedConversation({
+          actor: event.actor,
+          parent: event.channel,
+          routingState: event.routingState,
+          title: selected.thread.title,
+        });
+      } catch (error) {
+        await this.deliverDefaultAgentBootstrapError(
+          event,
+          "Default Agent cannot start here",
+          error instanceof Error ? error.message : String(error),
+        );
+        return true;
+      }
+      if (
+        created.outcome !== "created"
+        || !created.conversation
+        || created.channel !== event.channel.channel
+        || (
+          created.conversation.kind !== "thread"
+          && created.conversation.kind !== "topic"
+        )
+      ) {
+        await this.deliverDefaultAgentBootstrapError(
+          event,
+          "Default Agent cannot start here",
+          created.errorMessage
+            ?? "The adapter did not create a bindable child conversation.",
+        );
+        return true;
+      }
+      admissionEvent = {
+        ...event,
+        id: `${event.id}:default-agent-child`,
+        channel: {
+          channel: created.channel,
+          conversation: created.conversation,
+        },
+        routingState: created.routingState,
+      };
+    }
+
+    const binding = await this.bindChannelToThread(admissionEvent, {
+      backend: selected.assignment.target.backend,
+      threadId: selected.assignment.target.threadId,
+      targetKind: "agent_thread",
+    });
+    await this.renderBindingStatus(binding, admissionEvent, navigation);
+    await this.turnAdmission.append({
+      binding,
+      event: admissionEvent,
+    });
+    return true;
+  }
+
+  private async deliverDefaultAgentBootstrapError(
+    event: MessagingInboundEvent,
+    title: string,
+    body: string,
+  ): Promise<void> {
+    await this.deliver(
+      buildErrorIntent({
+        id: this.newIntentId("default-agent-bootstrap"),
+        createdAt: this.now(),
+        title,
+        body,
+        recoverable: true,
+      }),
+      undefined,
+      event,
+    );
   }
 
   private async handleMedia(event: MessagingInboundMediaEvent): Promise<void> {
@@ -12221,7 +12416,7 @@ export class MessagingController {
   }): void {
     if (
       !params.event ||
-      !isMessagingToolOriginBinding(params.binding, params.navigation)
+      !isLiveMessagingToolOriginBinding(params.binding, params.navigation)
     ) {
       return;
     }
@@ -12495,7 +12690,8 @@ export class MessagingController {
     };
     if (
       previousBinding &&
-      (previousBinding.backend !== binding.backend ||
+      (previousBinding.id !== binding.id ||
+        previousBinding.backend !== binding.backend ||
         previousBinding.threadId !== binding.threadId)
     ) {
       await this.options.store.revokeBinding({
@@ -15582,6 +15778,16 @@ function isMessagingToolOriginBinding(
       thread.source === binding.backend &&
       thread.id === binding.threadId &&
       Boolean(thread.handoffOrigin),
+  );
+}
+
+function isLiveMessagingToolOriginBinding(
+  binding: MessagingBindingRecord,
+  navigation: NavigationSnapshot | undefined,
+): boolean {
+  return (
+    binding.backend === "codex"
+    || isMessagingToolOriginBinding(binding, navigation)
   );
 }
 

@@ -254,7 +254,7 @@ export class SqliteMessagingStore {
   async findActiveBindingForChannel(
     channel: MessagingChannelRef,
   ): Promise<MessagingBindingRecord | undefined> {
-    const channelKey = buildMessagingConversationKey(channel);
+    const channelKeys = buildMessagingConversationLookupKeys(channel);
     const rows = this.stateDb.raw
       .prepare(
         "SELECT payload FROM bindings WHERE status = 'active' AND channel_kind = ?",
@@ -264,7 +264,7 @@ export class SqliteMessagingStore {
       const binding: MessagingBindingRecord = JSON.parse(row.payload);
       if (
         !binding.revokedAt &&
-        buildMessagingConversationKey(binding.channel) === channelKey
+        channelKeys.has(buildMessagingConversationKey(binding.channel))
       ) {
         return binding;
       }
@@ -1072,6 +1072,22 @@ export function buildMessagingConversationKey(
     channel.conversation.parentId ?? "",
     channel.conversation.id,
   ].join(":");
+}
+
+function buildMessagingConversationLookupKeys(
+  channel: MessagingChannelRef,
+): Set<string> {
+  const keys = new Set([buildMessagingConversationKey(channel)]);
+  if (channel.conversation.kind === "thread") {
+    keys.add(buildMessagingConversationKey({
+      channel: channel.channel,
+      conversation: {
+        ...channel.conversation,
+        kind: "channel",
+      },
+    }));
+  }
+  return keys;
 }
 
 function buildChannelId(channel: MessagingChannelRef): string {

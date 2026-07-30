@@ -510,6 +510,59 @@ describe("TelegramAdapter callback persistence", () => {
     });
     expect(rejected).toEqual(["unauthorized-conversation"]);
   });
+
+  it("normalizes Telegram topics with their containing conversation", async () => {
+    const adapter = new TelegramAdapter({
+      api: fakeTelegramApi(),
+      config: {
+        authorizedActorIds: [{ id: "42", displayName: "" }],
+        authorizedSupergroupIds: [{ id: "-100123", displayName: "Claw Dev" }],
+        botToken: "token",
+        channel: "telegram",
+      },
+      now: () => 1_700_000_000_000,
+      store: fakeCallbackStore(),
+    });
+    const events: MessagingInboundEvent[] = [];
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await adapter.handleUpdate({
+      update_id: 102,
+      message: {
+        chat: {
+          id: -100123,
+          title: "Claw Dev",
+          type: "supergroup",
+        },
+        date: 1_700_000_002,
+        from: {
+          first_name: "Harold",
+          id: 42,
+          username: "huntharo",
+        },
+        message_id: 502,
+        message_thread_id: 77,
+        text: "topic request",
+      },
+    });
+
+    expect(events[0]).toMatchObject({
+      channel: {
+        channel: "telegram",
+        conversation: {
+          id: "77",
+          kind: "topic",
+          parentConversationId: "-100123",
+          parentId: "-100123",
+          parentTitle: "Claw Dev",
+        },
+      },
+      kind: "text",
+      text: "topic request",
+    });
+  });
 });
 
 describe("TelegramAdapter source-relative delivery", () => {

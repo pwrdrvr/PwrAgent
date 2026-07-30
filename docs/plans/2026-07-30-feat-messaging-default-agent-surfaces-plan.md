@@ -57,7 +57,7 @@ type MessagingDefaultAgentTarget = {
 };
 
 type MessagingDefaultAgentScope =
-  | { kind: "conversation"; channel: MessagingChannelKind; conversationKey: string }
+  | { kind: "conversation"; channel: MessagingChannelRef }
   | { kind: "parent"; channel: MessagingChannelKind; conversationId: string }
   | { kind: "workspace"; channel: MessagingChannelKind; workspaceId: string }
   | { kind: "provider"; channel: MessagingChannelKind }
@@ -242,6 +242,8 @@ pnpm test apps/desktop/src/main/__tests__/messaging-store-sqlite.test.ts
 pnpm test apps/desktop/src/main/__tests__/state-db.test.ts
 pnpm test packages/messaging/interface/src/__tests__/messaging-contract.test.ts
 pnpm test packages/messaging/providers/slack/src/__tests__/slack-adapter.test.ts
+pnpm test packages/messaging/providers/telegram/src/__tests__/telegram-grammy-adapter.test.ts
+pnpm test packages/messaging/providers/discord/src/__tests__/discord-adapter.test.ts
 pnpm test apps/desktop/src/main/__tests__/messaging-controller.test.ts
 pnpm test apps/desktop/src/main/__tests__/backend-registry.test.ts
 pnpm lint:eslint
