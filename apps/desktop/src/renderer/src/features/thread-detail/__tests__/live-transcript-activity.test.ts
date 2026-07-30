@@ -148,6 +148,8 @@ describe("buildLiveToolDetails", () => {
       senderThreadId: "parent-thread",
       receiverThreadIds: ["019e5630-b147-7980-9f33-3cd7997c235a"],
       prompt: "You are the correctness reviewer.",
+      model: "gpt-5.4-mini",
+      reasoningEffort: "medium",
       agentsStates: {
         "019e5630-b147-7980-9f33-3cd7997c235a": {
           status: "running",
@@ -165,6 +167,19 @@ describe("buildLiveToolDetails", () => {
         command: expect.objectContaining({
           displayCommand: "spawnAgent 019e5630",
           output: expect.stringContaining("Prompt: You are the correctness reviewer."),
+          subAgent: expect.objectContaining({
+            backend: "codex",
+            origin: "codex-native",
+            operation: "spawn",
+            model: "gpt-5.4-mini",
+            reasoningEffort: "medium",
+            agents: [
+              expect.objectContaining({
+                threadId: "019e5630-b147-7980-9f33-3cd7997c235a",
+                status: "running",
+              }),
+            ],
+          }),
         }),
       },
     ]);

@@ -1,7 +1,8 @@
 import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
-import type { ThreadSubAgentSummary } from "@pwragent/shared";
+import type { AppServerBackendKind, ThreadSubAgentSummary } from "@pwragent/shared";
 import { formatBackendLabel } from "../../../lib/backend-label";
+import { useThreadLinks } from "../../../lib/thread-links";
 import { formatTimestamp } from "./context-rail-shared";
 import {
   formatSubAgentUsageEstimates,
@@ -15,6 +16,7 @@ import { RailStatusChip } from "./RailStatusChip";
 import { subAgentOriginLabel } from "./subagent-kind";
 
 type SubAgentDetailsModalProps = {
+  defaultBackend: AppServerBackendKind;
   pricingDisplayOptions?: PricingDisplayOptions;
   subAgent: ThreadSubAgentSummary;
   onClose: () => void;
@@ -30,6 +32,7 @@ type SubAgentDetailsModalProps = {
 export function SubAgentDetailsModal(props: SubAgentDetailsModalProps) {
   const { subAgent } = props;
   const contentRef = useRef<HTMLDivElement>(null);
+  const threadLinks = useThreadLinks();
 
   // Dialog focus management: move focus into the dialog on open, keep Tab
   // cycling within it (so focus can't fall behind the scrim), restore focus
@@ -83,6 +86,8 @@ export function SubAgentDetailsModal(props: SubAgentDetailsModalProps) {
   const tone = subAgentTone(subAgent.status);
   const usage = subAgent.monitorUsage;
   const model = subAgent.preferredModel ?? usage?.model ?? usage?.cost?.model;
+  const fastMode = subAgent.preferredFastMode ?? usage?.fastMode;
+  const transcriptThreadId = subAgent.monitorThreadId;
   const backendLabel = subAgent.backend ? formatBackendLabel(subAgent.backend) : undefined;
   const usageEstimates = usage
     ? formatSubAgentUsageEstimates({
@@ -117,13 +122,31 @@ export function SubAgentDetailsModal(props: SubAgentDetailsModalProps) {
           <RailStatusChip tone={tone} alert={tone === "error"}>
             {subAgentStatusLabel(subAgent.status)}
           </RailStatusChip>
-          <button
-            type="button"
-            className="button button--ghost subagent-modal__close"
-            onClick={props.onClose}
-          >
-            Close
-          </button>
+          <div className="subagent-modal__actions">
+            {threadLinks && transcriptThreadId ? (
+              <button
+                type="button"
+                className="button button--ghost subagent-modal__open-transcript"
+                onClick={() => {
+                  threadLinks.show({
+                    backend: subAgent.backend ?? props.defaultBackend,
+                    threadId: transcriptThreadId,
+                    title: subAgent.agentName ?? subAgent.task,
+                  });
+                  props.onClose();
+                }}
+              >
+                Open transcript
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="button button--ghost subagent-modal__close"
+              onClick={props.onClose}
+            >
+              Close
+            </button>
+          </div>
         </div>
 
         <h2 className="subagent-modal__title">{subAgent.task}</h2>
@@ -157,6 +180,12 @@ export function SubAgentDetailsModal(props: SubAgentDetailsModalProps) {
             <div>
               <dt>Reasoning</dt>
               <dd>{subAgent.preferredReasoningEffort}</dd>
+            </div>
+          ) : null}
+          {fastMode !== undefined ? (
+            <div>
+              <dt>Fast mode</dt>
+              <dd>{fastMode ? "On" : "Off"}</dd>
             </div>
           ) : null}
           <div>

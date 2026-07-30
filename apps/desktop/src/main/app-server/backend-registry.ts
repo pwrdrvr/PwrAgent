@@ -2379,12 +2379,16 @@ function normalizeCodexNativeAgentName(value: unknown): string | undefined {
 
 function extractCodexNativeSpawnedAgentNames(text: string): string[] {
   const names: string[] = [];
-  const pattern =
-    /Spawned\s+sub-agent\s+(?:`([^`]+)`|@?([A-Za-z][A-Za-z0-9_.-]{0,79}))/gi;
-  for (const match of text.matchAll(pattern)) {
-    const name = normalizeCodexNativeAgentName(match[1] ?? match[2]);
-    if (name) {
-      names.push(name);
+  const patterns = [
+    /Spawned\s+sub-agent\s+(?:`([^`]+)`|@?([A-Za-z][A-Za-z0-9_.-]{0,79}))/gi,
+    /\b(?:child|sub[- ]agent)\s+(?:is\s+)?running\s+as\s+(?:`([^`]+)`|@?([A-Za-z][A-Za-z0-9_.-]{0,79}))/gi,
+  ];
+  for (const pattern of patterns) {
+    for (const match of text.matchAll(pattern)) {
+      const name = normalizeCodexNativeAgentName(match[1] ?? match[2]);
+      if (name) {
+        names.push(name);
+      }
     }
   }
   return names;
@@ -14756,6 +14760,7 @@ export class DesktopBackendRegistry {
       "reasoningEffort",
       "reasoning_effort",
     ]);
+    const fastMode = readBooleanLike(params.call.item, ["fastMode", "fast_mode"]);
     const agentName =
       params.call.receiverThreadNames.get(params.receiverThreadId) ??
       existing?.agentName;
@@ -14800,6 +14805,11 @@ export class DesktopBackendRegistry {
         ? { preferredReasoningEffort: reasoningEffort }
         : existing?.preferredReasoningEffort
           ? { preferredReasoningEffort: existing.preferredReasoningEffort }
+          : {}),
+      ...(fastMode !== undefined
+        ? { preferredFastMode: fastMode }
+        : existing?.preferredFastMode !== undefined
+          ? { preferredFastMode: existing.preferredFastMode }
           : {}),
       lastMessage,
       ...(outcome
@@ -14927,6 +14937,28 @@ export class DesktopBackendRegistry {
       reconciliation.attempts += 1;
       const status = probe.threadStatus;
 
+      if (probe.agentName && probe.agentName !== existing.agentName) {
+        await this.overlayStore.upsertThreadSubAgent({
+          backend: "codex",
+          threadId: reconciliation.parentThreadId,
+          subAgent: {
+            ...existing,
+            agentName: probe.agentName,
+            updatedAt: now,
+          },
+        });
+        this.invalidateThreadListCache("codex");
+        await this.emit({
+          backend: "codex",
+          notification: {
+            method: "thread/subAgents/updated",
+            params: {
+              threadId: reconciliation.parentThreadId,
+            },
+          },
+        });
+      }
+
       if (status === "idle") {
         const completed = await this.completeCodexNativeSubAgentFromThread({
           existing,
@@ -15002,6 +15034,7 @@ export class DesktopBackendRegistry {
         outcome: "success",
         completedAt: existing.completedAt ?? now,
         lastMessage,
+        ...(replay.agentName ? { agentName: replay.agentName } : {}),
         updatedAt: now,
       },
     });

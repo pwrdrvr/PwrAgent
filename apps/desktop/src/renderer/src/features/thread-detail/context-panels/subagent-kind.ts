@@ -19,7 +19,10 @@ export function subAgentOriginLabel(
   if (isCodexNativeSubAgent(subAgent)) {
     return "Codex native spawnAgent";
   }
-  return undefined;
+  if (subAgent.monitorId.startsWith("review:")) {
+    return "PwrAgent code review";
+  }
+  return "PwrAgent task monitor";
 }
 
 export function subAgentOriginSentence(

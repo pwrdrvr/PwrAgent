@@ -11302,6 +11302,140 @@ textarea,
   font-size: 12px;
 }
 
+/* Delegated-agent lifecycle activity: distinct from a shell transcript so a
+   wait visibly reads as observing a child, not running `$ wait`. */
+.transcript-subagent {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: hidden;
+  border: 1px solid var(--accent-border);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+}
+
+.transcript-subagent__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 12px 0;
+}
+
+.transcript-subagent__origin,
+.transcript-subagent__settings,
+.transcript-subagent__agent-id,
+.transcript-subagent__message {
+  margin: 0;
+}
+
+.transcript-subagent__origin {
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.transcript-subagent__head h4,
+.transcript-subagent__agent-name {
+  margin: 2px 0 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.3;
+}
+
+.transcript-subagent__status,
+.transcript-subagent__agent-status {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.transcript-subagent__settings {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  padding: 0 12px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.transcript-subagent__settings code,
+.transcript-subagent__agent-id,
+.transcript-subagent__output code {
+  font-family: var(--font-mono);
+}
+
+.transcript-subagent__agents {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 12px;
+}
+
+.transcript-subagent__agent {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel);
+}
+
+.transcript-subagent__agent-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.transcript-subagent__agent-id {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.transcript-subagent__message {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.transcript-subagent__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 12px 12px;
+}
+
+.transcript-subagent__action {
+  align-self: flex-start;
+  min-height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.transcript-subagent__output {
+  margin: -2px 0 0;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 .transcript-diff {
   display: flex;
   flex-direction: column;
@@ -13301,6 +13435,18 @@ textarea,
 
 .subagent-modal__close {
   flex: 0 0 auto;
+}
+
+.subagent-modal__actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.subagent-modal__open-transcript {
+  white-space: nowrap;
 }
 
 .subagent-modal__title {

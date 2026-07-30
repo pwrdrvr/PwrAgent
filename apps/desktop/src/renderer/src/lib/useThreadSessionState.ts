@@ -2098,7 +2098,8 @@ function activityCommandDetailsEqual(
     left?.cwd === right?.cwd &&
     left?.output === right?.output &&
     left?.exitCode === right?.exitCode &&
-    left?.durationMs === right?.durationMs
+    left?.durationMs === right?.durationMs &&
+    JSON.stringify(left?.subAgent) === JSON.stringify(right?.subAgent)
   );
 }
 

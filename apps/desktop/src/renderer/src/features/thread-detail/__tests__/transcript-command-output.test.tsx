@@ -2,6 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TranscriptCommandOutput } from "../TranscriptCommandOutput";
+import { ThreadLinkProvider } from "../../../lib/thread-links";
 
 describe("TranscriptCommandOutput", () => {
   afterEach(() => {
@@ -56,6 +57,58 @@ describe("TranscriptCommandOutput", () => {
     expect(screen.getAllByText((_, element) =>
       element?.textContent?.includes("Review transcript") ?? false
     ).length).toBeGreaterThan(0);
+  });
+
+  it("renders structured native-agent waits as delegated work with transcript access", () => {
+    const onShowThread = vi.fn();
+    render(
+      <ThreadLinkProvider onShowThread={onShowThread} threads={[]}>
+        <TranscriptCommandOutput
+          detail={{
+            id: "agent-wait-1",
+            kind: "command",
+            label: "Waited on agent 019fb3d1",
+            status: "completed",
+            command: {
+              displayCommand: "wait 019fb3d1",
+              rawCommand: "wait",
+              output: "The agent is still working.",
+              subAgent: {
+                backend: "codex",
+                origin: "codex-native",
+                operation: "wait",
+                model: "gpt-5.6-sol",
+                reasoningEffort: "high",
+                fastMode: true,
+                agents: [
+                  {
+                    threadId: "019fb3d1-28e0-7a30-b964-e93d7a1f3435",
+                    name: "Kieregaard",
+                    status: "running",
+                    message: "Implementing the replacement.",
+                  },
+                ],
+              },
+            },
+          }}
+        />
+      </ThreadLinkProvider>,
+    );
+
+    expect(screen.getByText("Codex native agent")).toBeInTheDocument();
+    expect(screen.getByText("Waited on agent")).toBeInTheDocument();
+    expect(screen.getByText("Kieregaard")).toBeInTheDocument();
+    expect(screen.getByText("gpt-5.6-sol")).toBeInTheDocument();
+    expect(screen.getByText("Reasoning: high")).toBeInTheDocument();
+    expect(screen.getByText("Fast mode: on")).toBeInTheDocument();
+    expect(screen.queryByText("$ wait 019fb3d1")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Open transcript" }));
+
+    expect(onShowThread).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "019fb3d1-28e0-7a30-b964-e93d7a1f3435",
+    });
   });
 
   it("renders structured ACP tool invocations without pretending they are shell commands", () => {
