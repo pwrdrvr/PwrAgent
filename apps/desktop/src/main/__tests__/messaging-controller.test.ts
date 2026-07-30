@@ -542,6 +542,113 @@ describe("MessagingController", () => {
     });
   });
 
+  it("pages linked review projects within the provider action limit", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      linkedDirectories: Array.from({ length: 12 }, (_, index) => ({
+        id: `directory:project-${index + 1}`,
+        kind: "worktree" as const,
+        label: `Project ${index + 1}`,
+        path: `/repo/project-${index + 1}`,
+        worktreePath: `/worktrees/project-${index + 1}`,
+      })),
+    };
+    navigation.directories = Array.from({ length: 12 }, (_, index) => ({
+      key: `directory:project-${index + 1}`,
+      kind: "directory" as const,
+      label: `Project ${index + 1}`,
+      path: `/repo/project-${index + 1}`,
+      threadKeys: ["codex:thread-1"],
+      needsAttentionCount: 0,
+      gitStatus: {
+        defaultBranch: "main",
+        branches: ["main"],
+        baseBranches: ["origin/main", "main"],
+      },
+    }));
+    const harness = await createHarness({
+      capabilityProfile: {
+        ...PERMISSIVE_CAPABILITY_PROFILE,
+        actions: {
+          ...PERMISSIVE_CAPABILITY_PROFILE.actions!,
+          maxActions: 13,
+        },
+      },
+      navigation,
+    });
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/review"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "review:summary:workspace" }),
+    );
+
+    const firstPage = harness.delivered.at(-1);
+    expect(firstPage).toMatchObject({
+      kind: "review",
+      body: expect.stringContaining("Page 1/2."),
+    });
+    if (!firstPage || firstPage.kind !== "review") {
+      throw new Error("Expected the first review project page");
+    }
+    expect(firstPage.actions).toHaveLength(12);
+    expect(firstPage.actions).toContainEqual(
+      expect.objectContaining({
+        id: "review:workspace:next",
+        value: { pageIndex: 1 },
+      }),
+    );
+    expect(firstPage.actions).not.toContainEqual(
+      expect.objectContaining({ id: "review:workspace:11" }),
+    );
+
+    const next = findAction(firstPage, "review:workspace:next");
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: next.id,
+        value: next.value,
+      }),
+    );
+
+    const secondPage = harness.delivered.at(-1);
+    expect(secondPage).toMatchObject({
+      kind: "review",
+      body: expect.stringContaining("Page 2/2."),
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "review:workspace:11",
+          label: "Project 12",
+        }),
+        expect.objectContaining({
+          id: "review:workspace:previous",
+          value: { pageIndex: 0 },
+        }),
+      ]),
+    });
+    if (!secondPage || secondPage.kind !== "review") {
+      throw new Error("Expected the second review project page");
+    }
+    expect(secondPage.actions.length).toBeLessThanOrEqual(13);
+
+    const projectTwelve = findAction(secondPage, "review:workspace:11");
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: projectTwelve.id,
+        value: projectTwelve.value,
+      }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "review",
+      body: expect.stringContaining("Project: Project 12"),
+      review: {
+        cwd: "/worktrees/project-12",
+        repositoryPath: "/repo/project-12",
+      },
+    });
+  });
+
   it("cancels the review summary without starting a review", async () => {
     const harness = await createHarness();
     await bindThread(harness);
@@ -16782,7 +16889,7 @@ function buildMultiProjectReviewNavigationSnapshot(): NavigationSnapshot {
   const snapshot = buildNavigationSnapshot();
   snapshot.threads[0] = {
     ...snapshot.threads[0]!,
-    projectKey: "/worktrees/app",
+    projectKey: "/worktrees/app/packages/service",
     gitWorkingState: {
       dirtyFiles: 0,
       dirtyAdditions: 0,

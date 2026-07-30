@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import path from "node:path";
 import {
   applyNavigationLaunchpadProviderSettingsPatch,
   buildReviewBranchOptions,
@@ -1735,6 +1736,7 @@ export class MessagingController {
     phase: MessagingReviewIntent["review"]["phase"];
     cwd?: string;
     repositoryPath?: string;
+    workspacePageIndex?: number;
     target?: AppServerReviewTarget;
     id?: string;
     createdAt?: number;
@@ -1859,19 +1861,51 @@ export class MessagingController {
         cancelAction,
       ];
     } else if (params.phase === "workspace") {
+      const page = paginateReviewWorkspaces({
+        itemCount: linkedWorkspaces.length,
+        maxActions: this.capabilityProfile.actions?.maxActions,
+        pageIndex: params.workspacePageIndex,
+      });
       title = "Review project";
-      body = "Choose the linked project to review.";
+      body = [
+        "Choose the linked project to review.",
+        page.totalPages > 1
+          ? `Page ${page.pageIndex + 1}/${page.totalPages}.`
+          : undefined,
+      ]
+        .filter((line): line is string => Boolean(line))
+        .join("\n");
       actions = [
-        ...linkedWorkspaces.map((workspace, index) => ({
-          id: `review:workspace:${index}`,
-          label: workspace.label,
-          fallbackText: workspace.cwd,
-          priority: 10 + index,
-          value: {
-            cwd: workspace.cwd,
-            repositoryPath: workspace.repositoryPath,
-          },
-        })),
+        ...linkedWorkspaces
+          .slice(page.startIndex, page.endIndex)
+          .map((workspace, index) => ({
+            id: `review:workspace:${page.startIndex + index}`,
+            label: workspace.label,
+            fallbackText: workspace.cwd,
+            priority: 10 + index,
+            value: {
+              cwd: workspace.cwd,
+              repositoryPath: workspace.repositoryPath,
+            },
+          })),
+        ...(page.pageIndex > 0
+          ? [{
+              id: "review:workspace:previous",
+              label: "Previous",
+              fallbackText: "previous",
+              priority: 3,
+              value: { pageIndex: page.pageIndex - 1 },
+            }]
+          : []),
+        ...(page.pageIndex < page.totalPages - 1
+          ? [{
+              id: "review:workspace:next",
+              label: "Next",
+              fallbackText: "next",
+              priority: 4,
+              value: { pageIndex: page.pageIndex + 1 },
+            }]
+          : []),
         backAction,
         cancelAction,
       ];
@@ -1978,6 +2012,9 @@ export class MessagingController {
           ? { repositoryPath: params.repositoryPath }
           : {}),
         workspaceSelectionRequired: linkedWorkspaces.length > 1,
+        ...(params.workspacePageIndex !== undefined
+          ? { workspacePageIndex: params.workspacePageIndex }
+          : {}),
         targetType: target.type,
         target,
       },
@@ -3265,6 +3302,7 @@ export class MessagingController {
       if (action.id === "review:summary:workspace") {
         await this.updateReviewPendingIntent(pendingIntent, event, {
           phase: "workspace",
+          workspacePageIndex: 0,
         });
       } else if (action.id === "review:summary:target") {
         await this.updateReviewPendingIntent(pendingIntent, event, {
@@ -3289,6 +3327,7 @@ export class MessagingController {
         ) {
           await this.updateReviewPendingIntent(pendingIntent, event, {
             phase: "workspace",
+            workspacePageIndex: 0,
           });
           return;
         }
@@ -3309,6 +3348,23 @@ export class MessagingController {
     }
 
     if (phase === "workspace") {
+      const workspacePageIndex =
+        typeof value?.pageIndex === "number" && Number.isFinite(value.pageIndex)
+          ? Math.max(0, Math.trunc(value.pageIndex))
+          : undefined;
+      if (
+        (
+          action.id === "review:workspace:previous"
+          || action.id === "review:workspace:next"
+        )
+        && workspacePageIndex !== undefined
+      ) {
+        await this.updateReviewPendingIntent(pendingIntent, event, {
+          phase: "workspace",
+          workspacePageIndex,
+        });
+        return;
+      }
       const cwd = typeof value?.cwd === "string" ? value.cwd.trim() : "";
       const repositoryPath =
         typeof value?.repositoryPath === "string"
@@ -3382,6 +3438,7 @@ export class MessagingController {
       phase: MessagingReviewIntent["review"]["phase"];
       cwd?: string;
       repositoryPath?: string;
+      workspacePageIndex?: number;
       target?: AppServerReviewTarget;
       forceBaseBranch?: boolean;
       resetRepositoryTarget?: boolean;
@@ -3442,6 +3499,7 @@ export class MessagingController {
       phase: review.phase,
       cwd,
       repositoryPath,
+      workspacePageIndex: review.workspacePageIndex,
       target,
       id: pendingIntent.intent.id,
       createdAt: pendingIntent.intent.createdAt,
@@ -14000,6 +14058,23 @@ function reviewWorkspaceMatches(
   return normalize(directoryPath) === normalize(cwd);
 }
 
+function reviewWorkspaceContains(
+  workspacePath: string | undefined,
+  cwd: string | undefined,
+): boolean {
+  if (!workspacePath || !cwd) {
+    return false;
+  }
+  const relative = path.relative(
+    path.resolve(workspacePath),
+    path.resolve(cwd),
+  );
+  return (
+    relative === ""
+    || (!relative.startsWith("..") && !path.isAbsolute(relative))
+  );
+}
+
 function reviewThreadForWorkspace(
   thread: NavigationThreadSummary | undefined,
   cwd: string | undefined,
@@ -14007,9 +14082,40 @@ function reviewThreadForWorkspace(
   if (!thread || thread.linkedDirectories.length <= 1) {
     return thread;
   }
-  return reviewWorkspaceMatches(thread.projectKey, cwd)
+  return reviewWorkspaceContains(cwd, thread.projectKey)
     ? thread
     : undefined;
+}
+
+function paginateReviewWorkspaces(params: {
+  itemCount: number;
+  maxActions: number | undefined;
+  pageIndex: number | undefined;
+}): {
+  endIndex: number;
+  pageIndex: number;
+  startIndex: number;
+  totalPages: number;
+} {
+  const maxActions =
+    params.maxActions === undefined
+      ? Number.MAX_SAFE_INTEGER
+      : Math.max(1, Math.trunc(params.maxActions));
+  const singlePageSize = Math.max(1, maxActions - 2);
+  const pageSize =
+    params.itemCount > singlePageSize
+      ? Math.max(1, maxActions - 4)
+      : singlePageSize;
+  const totalPages = Math.max(1, Math.ceil(params.itemCount / pageSize));
+  const requestedPage = Math.max(0, Math.trunc(params.pageIndex ?? 0));
+  const pageIndex = Math.min(requestedPage, totalPages - 1);
+  const startIndex = pageIndex * pageSize;
+  return {
+    endIndex: Math.min(params.itemCount, startIndex + pageSize),
+    pageIndex,
+    startIndex,
+    totalPages,
+  };
 }
 
 function formatMessagingReviewScope(target: AppServerReviewTarget): string {

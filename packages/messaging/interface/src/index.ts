@@ -869,6 +869,7 @@ export type MessagingReviewIntent = MessagingBaseSurfaceIntent & {
     cwd?: string;
     repositoryPath?: string;
     workspaceSelectionRequired?: boolean;
+    workspacePageIndex?: number;
     targetType?: AppServerReviewTarget["type"];
     target?: AppServerReviewTarget;
   };
