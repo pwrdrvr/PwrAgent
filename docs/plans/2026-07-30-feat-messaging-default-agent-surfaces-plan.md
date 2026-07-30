@@ -251,6 +251,32 @@ pnpm lint:boundaries
 pnpm typecheck
 ```
 
+## Implementation Status
+
+Completed on 2026-07-30:
+
+- [x] Provider-neutral assignment contract, specificity lookup, JSON/SQLite
+  parity, and state DB version 32 migration.
+- [x] Explicit `/agent default` inspect/set/change/clear workflow without
+  implicit persistence from ordinary Agent browsing.
+- [x] Existing-child and root-to-managed-child addressed bootstrap through
+  ordinary bindings and turn admission.
+- [x] Live origin parity for ordinary bound Codex turns with the conservative
+  no-turn fallback unchanged.
+- [x] Slack, Telegram, and Discord hierarchy normalization, including
+  compatibility lookup for legacy channel-shaped Discord thread bindings.
+- [x] Stale-target fallback cleanup and proactive archive cleanup.
+
+Executed verification:
+
+- Focused controller, store, migration, Slack, Telegram, and Discord suites:
+  442 tests passed.
+- Messaging interface and backend-registry suites: 397 tests passed.
+- `pnpm lint:eslint`: passed with zero errors (baseline warnings remain).
+- `pnpm lint:boundaries`: passed with no dependency violations.
+- `pnpm lint:sql`: passed.
+- `pnpm typecheck`: passed for all workspace projects.
+
 ## Deferred
 
 - `/agent <request>` side-channel routing from an already bound surface.
