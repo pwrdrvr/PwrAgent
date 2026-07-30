@@ -5,18 +5,19 @@ import { CodexAppServer } from "../app-server/codex-app-server.js";
 import { resolveGrokAppServerRuntimeConfig } from "../config/grok-app-server-config.js";
 import type { AppServerNotification } from "../app-server/internal-contract.js";
 import { GrokProvider } from "../providers/grok-provider.js";
-import { resolveLiveAgentCoreSkipReason } from "../testing/live-test-gate.js";
+import { resolveLiveAgentCoreTestConfig } from "../testing/live-test-gate.js";
 import { createTemporaryTestDirectory } from "../testing/test-harness.js";
 
-const runtimeConfig = resolveGrokAppServerRuntimeConfig();
-const xaiApiKey = runtimeConfig.apiKey?.trim();
-const xaiBaseUrl = runtimeConfig.baseUrl?.trim() || "https://api.x.ai/v1";
-const grokModel = runtimeConfig.model?.trim() || "grok-4.20-reasoning";
-const liveSkipReason = resolveLiveAgentCoreSkipReason({
-  apiKey: xaiApiKey,
-  configPath: runtimeConfig.configPath,
+const liveTestConfig = resolveLiveAgentCoreTestConfig({
   lifecycleEvent: process.env.npm_lifecycle_event,
+  resolveRuntimeConfig: resolveGrokAppServerRuntimeConfig,
 });
+const xaiApiKey = liveTestConfig.runtimeConfig?.apiKey?.trim();
+const xaiBaseUrl =
+  liveTestConfig.runtimeConfig?.baseUrl?.trim() || "https://api.x.ai/v1";
+const grokModel =
+  liveTestConfig.runtimeConfig?.model?.trim() || "grok-4.20-reasoning";
+const liveSkipReason = liveTestConfig.skipReason;
 
 const itLive = liveSkipReason ? it.skip : it;
 const liveNotificationTimeoutMs = 60_000;
