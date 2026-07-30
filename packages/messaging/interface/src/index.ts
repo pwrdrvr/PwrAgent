@@ -1578,6 +1578,12 @@ export type MessagingOutboundAttachmentCapabilities = {
 
 export type MessagingConversationInputCapabilities = {
   /**
+   * The adapter sets `botMention: true` on inbound text/media events that
+   * explicitly mention the bot. Response-mode filtering may only offer or
+   * enforce `mention_only` when this capability is true.
+   */
+  reportsBotMention?: boolean;
+  /**
    * Shared conversations require an explicit bot mention before the platform
    * delivers messages to the adapter.
    */

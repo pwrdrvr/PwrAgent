@@ -3190,6 +3190,45 @@ describe("MessagingController", () => {
     );
   });
 
+  it("ignores response modes when the provider cannot report bot mentions", async () => {
+    const harness = await createHarness({
+      capabilityProfile: {
+        ...PERMISSIVE_CAPABILITY_PROFILE,
+        conversationInput: {
+          reportsBotMention: false,
+        },
+      },
+      responseModeForConversation: () => "mention_only",
+    });
+    const channel = buildTopicChannel("500");
+    await harness.store.upsertBinding({
+      id: "binding:telegram:topic:-1001:500:codex:thread-1",
+      authorizedActorIds: ["user-1"],
+      backend: "codex",
+      channel,
+      createdAt: 1000,
+      preferences: {
+        responseMode: "mention_only",
+        updatedAt: 1000,
+      },
+      targetKind: "thread",
+      threadId: "thread-1",
+      updatedAt: 1000,
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("continue the implementation", { channel }),
+    );
+
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        threadId: "thread-1",
+        input: [{ type: "text", text: "continue the implementation" }],
+      }),
+    );
+  });
+
   it("applies mention-only response mode to agent-thread bindings", async () => {
     const harness = await createHarness({
       responseModeForConversation: () => "mention_only",

@@ -197,8 +197,9 @@ export function buildBindingStatusIntent(params: {
     params.binding,
     params.responseModeDefault,
   );
-  const isSharedConversation =
-    params.binding.channel.conversation.kind !== "dm";
+  const showResponseModeControl =
+    params.binding.channel.conversation.kind !== "dm" &&
+    params.capabilityProfile?.conversationInput?.reportsBotMention === true;
   const acpRuntimeMode = isAcpBackendId(params.binding.backend)
     ? buildMessagingAcpRuntimeModeSummary({
         backend: params.backendSummary,
@@ -243,7 +244,7 @@ export function buildBindingStatusIntent(params: {
       supportsFastMode ? `Fast mode: ${fastMode ? "on" : "off"}` : undefined,
       planDeliveryLine(params.capabilityProfile),
       `Permissions: ${permissionsLineLabel}`,
-      isSharedConversation
+      showResponseModeControl
         ? `Responses: ${formatMessagingResponseModeLabel(responseMode)} (${
             params.binding.preferences?.responseMode
               ? "binding override"
@@ -285,7 +286,7 @@ export function buildBindingStatusIntent(params: {
       queuedExecutionMode,
       reasoning,
       responseMode,
-      showResponseModeControl: isSharedConversation,
+      showResponseModeControl,
       supportsFastMode,
       supportsReasoning,
       streamingMode,

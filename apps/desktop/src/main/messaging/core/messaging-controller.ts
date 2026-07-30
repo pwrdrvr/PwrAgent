@@ -1793,6 +1793,11 @@ export class MessagingController {
     if (event.channel.conversation.kind === "dm") {
       return true;
     }
+    if (
+      this.capabilityProfile.conversationInput?.reportsBotMention !== true
+    ) {
+      return true;
+    }
     const responseMode = resolveMessagingResponseMode(
       binding,
       await this.responseModeForConversation(event.channel),

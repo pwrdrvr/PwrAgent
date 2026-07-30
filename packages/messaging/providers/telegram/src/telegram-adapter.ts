@@ -453,6 +453,9 @@ export class TelegramAdapter implements TelegramProviderAdapter {
   readonly channel = "telegram" as const;
   readonly clientRateLimitStrategy: MessagingClientRateLimitStrategy = "direct";
   readonly capabilityProfile: MessagingCapabilityProfile = {
+    conversationInput: {
+      reportsBotMention: true,
+    },
     actions: {
       maxActions: 100,
       maxActionsPerRow: 8,

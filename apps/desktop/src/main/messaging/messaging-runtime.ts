@@ -930,6 +930,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   private async shouldDropAmbientSharedMessage(params: {
     channel: MessagingChannelKind;
     event: MessagingInboundEvent;
+    reportsBotMention: boolean;
     store: MessagingStoreLike;
   }): Promise<boolean> {
     const { event } = params;
@@ -937,6 +938,9 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       return false;
     }
     if (event.botMention || event.channel.conversation.kind === "dm") {
+      return false;
+    }
+    if (!params.reportsBotMention) {
       return false;
     }
     const binding = await params.store.findActiveBindingForChannel(event.channel);
@@ -948,6 +952,19 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
         event.channel,
       );
     if (responseMode !== "mention_only") {
+      return false;
+    }
+    const [pendingIntent, browseSession] = await Promise.all([
+      params.store.findActivePendingIntentForChannel({
+        actorId: event.actor.platformUserId,
+        channel: event.channel,
+      }),
+      params.store.findActiveBrowseSessionForChannel({
+        actorId: event.actor.platformUserId,
+        channel: event.channel,
+      }),
+    ]);
+    if (pendingIntent || browseSession) {
       return false;
     }
     // @mention-only mode suppresses the bot's NORMAL replies, but it must not
@@ -1075,6 +1092,9 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
           await this.shouldDropAmbientSharedMessage({
             channel: adapter.channel,
             event,
+            reportsBotMention:
+              adapter.capabilityProfile.conversationInput?.reportsBotMention ===
+              true,
             store,
           })
         ) {

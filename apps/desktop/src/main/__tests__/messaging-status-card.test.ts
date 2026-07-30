@@ -6,6 +6,7 @@ import type {
 import type {
   MessagingBindingRecord,
 } from "@pwragent/messaging-interface";
+import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/testing";
 import {
   buildBindingStatusIntent,
   buildHandoffBranchPickerIntent,
@@ -185,6 +186,7 @@ describe("buildBindingStatusIntent", () => {
     const inheritedIntent = buildBindingStatusIntent({
       id: "status-inherited-response-mode",
       binding: inheritedBinding,
+      capabilityProfile: PERMISSIVE_CAPABILITY_PROFILE,
       createdAt: 1000,
       responseModeDefault: "mention_only",
       threadState: resolveMessagingThreadState({
@@ -213,6 +215,7 @@ describe("buildBindingStatusIntent", () => {
     const overriddenIntent = buildBindingStatusIntent({
       id: "status-overridden-response-mode",
       binding: overriddenBinding,
+      capabilityProfile: PERMISSIVE_CAPABILITY_PROFILE,
       createdAt: 1000,
       responseModeDefault: "mention_only",
       threadState: resolveMessagingThreadState({
@@ -226,6 +229,44 @@ describe("buildBindingStatusIntent", () => {
     );
     expect(overriddenIntent.actions).toContainEqual(
       expect.objectContaining({ label: "Responses: all" }),
+    );
+  });
+
+  it("hides response-mode controls without bot-mention reporting", () => {
+    const binding = {
+      ...buildBinding(),
+      channel: {
+        channel: "mattermost" as const,
+        conversation: {
+          id: "channel-1",
+          kind: "channel" as const,
+        },
+      },
+      preferences: {
+        responseMode: "mention_only" as const,
+        updatedAt: 1000,
+      },
+    };
+    const intent = buildBindingStatusIntent({
+      id: "status-no-mention-reporting",
+      binding,
+      capabilityProfile: {
+        ...PERMISSIVE_CAPABILITY_PROFILE,
+        conversationInput: {
+          reportsBotMention: false,
+        },
+      },
+      createdAt: 1000,
+      responseModeDefault: "every_message",
+      threadState: resolveMessagingThreadState({
+        binding,
+        navigation: buildNavigationSnapshot(),
+      }),
+    });
+
+    expect(intent.text).not.toContain("Responses:");
+    expect(intent.actions).not.toContainEqual(
+      expect.objectContaining({ id: "status:response-mode" }),
     );
   });
 

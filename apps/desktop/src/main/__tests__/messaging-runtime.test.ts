@@ -352,6 +352,7 @@ describe("DesktopMessagingRuntime", () => {
   async function startMentionOnlyRuntime(options: {
     automationInboundHandler: MessagingAutomationInboundHandler;
     automationInboundMatches: MessagingAutomationInboundMatcher;
+    reportsBotMention?: boolean;
   }): Promise<{
     adapter: ReturnType<typeof createAdapter>;
     bridge: ReturnType<typeof createBackendBridge>;
@@ -361,7 +362,19 @@ describe("DesktopMessagingRuntime", () => {
       "../messaging/inbound-preview-bus"
     );
     resetInboundPreview();
-    const adapter = createAdapter("telegram");
+    const adapter = createAdapter(
+      "telegram",
+      options.reportsBotMention === false
+        ? {
+            capabilityProfile: {
+              ...PERMISSIVE_CAPABILITY_PROFILE,
+              conversationInput: {
+                reportsBotMention: false,
+              },
+            },
+          }
+        : {},
+    );
     const bridge = createBackendBridge();
     const { DesktopMessagingRuntime: Runtime } = await import(
       "../messaging/messaging-runtime"
@@ -465,14 +478,30 @@ describe("DesktopMessagingRuntime", () => {
 
     expect(bridge.startTurn).not.toHaveBeenCalled();
 
-    await store.upsertBinding({
-      ...binding,
+    await adapter.listener?.({
+      ...buildCallbackEvent("status:response-mode", {}),
+      id: "ambient-response-mode-picker",
+      channel: ambientEvent.channel,
+    });
+    expect(adapter.delivered.at(-1)).toMatchObject({
+      kind: "single_select",
+      prompt: expect.stringContaining("Responses"),
+    });
+
+    await adapter.listener?.({
+      ...ambientEvent,
+      id: "ambient-response-mode-choice",
+      text: "3",
+    });
+    await expect(
+      store.findActiveBindingForChannel(ambientEvent.channel),
+    ).resolves.toMatchObject({
       preferences: {
         responseMode: "every_message",
-        updatedAt: 1001,
       },
-      updatedAt: 1001,
     });
+    expect(bridge.startTurn).not.toHaveBeenCalled();
+
     await adapter.listener?.({
       ...ambientEvent,
       id: "ambient-2",
@@ -485,6 +514,41 @@ describe("DesktopMessagingRuntime", () => {
         backend: "codex",
         threadId: "thread-1",
         input: [{ type: "text", text: "continue without a mention" }],
+      }),
+    );
+  });
+
+  it("does not enforce response modes without bot-mention reporting", async () => {
+    const { adapter, bridge } = await startMentionOnlyRuntime({
+      automationInboundHandler: vi.fn(async () => false),
+      automationInboundMatches: vi.fn(() => false),
+      reportsBotMention: false,
+    });
+    const { getDesktopMessagingStore } = await import(
+      "../messaging/desktop-messaging-store"
+    );
+    await getDesktopMessagingStore().upsertBinding({
+      id: "binding:telegram:channel::chat-ambient:codex:thread-1",
+      authorizedActorIds: ["user-1"],
+      backend: "codex",
+      channel: ambientEvent.channel,
+      createdAt: 1000,
+      preferences: {
+        responseMode: "mention_only",
+        updatedAt: 1000,
+      },
+      targetKind: "thread",
+      threadId: "thread-1",
+      updatedAt: 1000,
+    });
+
+    await adapter.listener?.(ambientEvent);
+    await waitFor(() => vi.mocked(bridge.startTurn).mock.calls.length > 0);
+
+    expect(bridge.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: "thread-1",
+        input: [{ type: "text", text: ambientEvent.text }],
       }),
     );
   });
