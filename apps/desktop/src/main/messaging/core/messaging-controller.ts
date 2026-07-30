@@ -1966,10 +1966,10 @@ export class MessagingController {
       ];
     } else if (params.phase === "base_branch") {
       title = "Base branch";
-      body = "Choose a base branch or reply with a branch name.";
+      body = "Choose a suggested base branch or reply with any branch name.";
       allowFreeform = true;
       actions = [
-        ...buildReviewBranchOptions({
+        ...messagingReviewBranchOptions({
           directory,
           thread: workspaceThread,
         }).map((branch, index) => ({
@@ -14180,6 +14180,69 @@ function paginateReviewWorkspaces(params: {
     startIndex,
     totalPages,
   };
+}
+
+function messagingReviewBranchOptions(params: {
+  directory: NavigationDirectorySummary | undefined;
+  thread: NavigationThreadSummary | undefined;
+}): string[] {
+  const options = buildReviewBranchOptions(params);
+  const primaryBranch = options[0]?.trim();
+  const localBranchNames = new Set(
+    [
+      ...(params.directory?.gitStatus?.branches ?? []),
+      params.directory?.gitStatus?.defaultBranch,
+    ]
+      .map((branch) => branch?.trim())
+      .filter((branch): branch is string => Boolean(branch)),
+  );
+  const baseBranchNames = new Set(
+    (params.directory?.gitStatus?.baseBranches ?? [])
+      .map((branch) => branch.trim())
+      .filter(Boolean),
+  );
+  const knownBranchNames = new Set(
+    [...localBranchNames, ...baseBranchNames],
+  );
+  const conventionalBaseBranches = new Set([
+    "main",
+    "master",
+    "develop",
+    "trunk",
+  ]);
+  const conventionalName = (branch: string): string | undefined => {
+    const value = branch.trim();
+    if (conventionalBaseBranches.has(value)) {
+      return value;
+    }
+    if (!baseBranchNames.has(value) || localBranchNames.has(value)) {
+      return undefined;
+    }
+    const remoteSeparator = value.indexOf("/");
+    const remoteBranch =
+      remoteSeparator >= 0 ? value.slice(remoteSeparator + 1) : "";
+    return conventionalBaseBranches.has(remoteBranch)
+      ? remoteBranch
+      : undefined;
+  };
+  const knownConventionalOptions = options.filter(
+    (branch) =>
+      knownBranchNames.has(branch.trim())
+      && Boolean(conventionalName(branch)),
+  );
+  const keepPrimary =
+    primaryBranch !== undefined
+    && (
+      knownBranchNames.has(primaryBranch)
+      || primaryBranch !== "main"
+      || knownConventionalOptions.length === 0
+    );
+  return [
+    ...(keepPrimary && primaryBranch ? [primaryBranch] : []),
+    ...knownConventionalOptions,
+  ]
+    .filter((branch, index, branches) => branches.indexOf(branch) === index)
+    .slice(0, 8);
 }
 
 function formatMessagingReviewScope(target: AppServerReviewTarget): string {

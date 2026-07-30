@@ -395,6 +395,107 @@ describe("MessagingController", () => {
     });
   });
 
+  it("shows only plausible review base branches as buttons", async () => {
+    const navigation = buildWorktreeHandoffNavigationSnapshot();
+    navigation.directories[0] = {
+      ...navigation.directories[0]!,
+      gitStatus: {
+        currentBranch: "feature/handoff",
+        defaultBranch: "develop",
+        baseBranches: [
+          "origin/develop",
+          "develop",
+          ...Array.from(
+            { length: 50 },
+            (_, index) => `origin/feature/old-${index + 1}`,
+          ),
+        ],
+        branches: [
+          "develop",
+          "feature/handoff",
+          ...Array.from(
+            { length: 50 },
+            (_, index) => `feature/old-${index + 1}`,
+          ),
+        ],
+      },
+    };
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      gitWorkingState: {
+        dirtyFiles: 0,
+        dirtyAdditions: 0,
+        dirtyDeletions: 0,
+        untrackedFiles: 0,
+        unpushedCommits: 1,
+        baseBranch: "develop",
+      },
+    };
+    const harness = await createHarness({ navigation });
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/review"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "review:summary:base-branch" }),
+    );
+
+    const branchPicker = harness.delivered.at(-1);
+    expect(branchPicker).toMatchObject({
+      kind: "review",
+      body: "Choose a suggested base branch or reply with any branch name.",
+    });
+    if (!branchPicker || branchPicker.kind !== "review") {
+      throw new Error("Expected review base branch picker");
+    }
+    expect(
+      branchPicker.actions
+        .filter((action) => action.id.startsWith("review:base-branch:"))
+        .map((action) => action.label),
+    ).toEqual(["origin/develop", "develop"]);
+  });
+
+  it("offers conventional base branches from remotes not named origin", async () => {
+    const navigation = buildWorktreeHandoffNavigationSnapshot();
+    navigation.directories[0] = {
+      ...navigation.directories[0]!,
+      gitStatus: {
+        currentBranch: "feature/handoff",
+        upstreamBranch: "upstream/feature/handoff",
+        baseBranches: ["upstream/main"],
+        branches: ["feature/handoff"],
+      },
+    };
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      gitWorkingState: {
+        dirtyFiles: 0,
+        dirtyAdditions: 0,
+        dirtyDeletions: 0,
+        untrackedFiles: 0,
+        unpushedCommits: 1,
+      },
+    };
+    const harness = await createHarness({ navigation });
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/review"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "review:summary:base-branch" }),
+    );
+
+    const branchPicker = harness.delivered.at(-1);
+    if (!branchPicker || branchPicker.kind !== "review") {
+      throw new Error("Expected review base branch picker");
+    }
+    expect(
+      branchPicker.actions
+        .filter((action) => action.id.startsWith("review:base-branch:"))
+        .map((action) => action.label),
+    ).toEqual(["upstream/main"]);
+  });
+
   it("returns to the summary with the selected project and its default base branch", async () => {
     const navigation = buildMultiProjectReviewNavigationSnapshot();
     const harness = await createHarness({ navigation });
@@ -4393,6 +4494,12 @@ describe("MessagingController", () => {
     expect(textPart).toEqual(expect.objectContaining({
       text: expect.stringContaining("Missing validation"),
     }));
+    if (!textPart || textPart.type !== "text") {
+      throw new Error("Expected structured review artifact text");
+    }
+    expect(
+      textPart.text.split("The patch has one validation issue."),
+    ).toHaveLength(2);
   });
 
   it("delivers a single added markdown file as attachment plus bounded preview", async () => {
