@@ -396,56 +396,7 @@ describe("MessagingController", () => {
   });
 
   it("returns to the summary with the selected project and its default base branch", async () => {
-    const navigation = buildNavigationSnapshot();
-    navigation.threads[0] = {
-      ...navigation.threads[0]!,
-      linkedDirectories: [
-        {
-          id: "directory:app",
-          kind: "worktree",
-          label: "App",
-          path: "/repo/app",
-          worktreePath: "/worktrees/app",
-        },
-        {
-          id: "directory:infra",
-          kind: "worktree",
-          label: "Infra",
-          path: "/repo/infra",
-          worktreePath: "/worktrees/infra",
-        },
-      ],
-    };
-    navigation.directories = [
-      {
-        key: "directory:app",
-        kind: "directory",
-        label: "App",
-        path: "/repo/app",
-        threadKeys: ["codex:thread-1"],
-        needsAttentionCount: 0,
-        gitStatus: {
-          currentBranch: "feature/app",
-          defaultBranch: "main",
-          branches: ["feature/app", "main"],
-          baseBranches: ["origin/main", "main"],
-        },
-      },
-      {
-        key: "directory:infra",
-        kind: "directory",
-        label: "Infra",
-        path: "/repo/infra",
-        threadKeys: ["codex:thread-1"],
-        needsAttentionCount: 0,
-        gitStatus: {
-          currentBranch: "deploy/search",
-          defaultBranch: "develop",
-          branches: ["deploy/search", "develop"],
-          baseBranches: ["origin/develop", "develop"],
-        },
-      },
-    ];
+    const navigation = buildMultiProjectReviewNavigationSnapshot();
     const harness = await createHarness({ navigation });
     await bindThread(harness);
     harness.delivered.length = 0;
@@ -506,6 +457,79 @@ describe("MessagingController", () => {
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({ actionId: "review:back" }),
     );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "review:summary:start" }),
+    );
+    expect(harness.submitReview).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      target: { type: "baseBranch", branch: "origin/develop" },
+      delivery: "inline",
+      cwd: "/worktrees/infra",
+    });
+  });
+
+  it("resets a selected commit when changing review projects", async () => {
+    const harness = await createHarness({
+      navigation: buildMultiProjectReviewNavigationSnapshot(),
+    });
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/review"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "review:summary:workspace" }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "review:workspace:0" }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "review",
+      body: expect.stringContaining("Base Branch: release"),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "review:summary:target" }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "review:target:commit" }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "review:commit:0" }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "review",
+      body: expect.stringContaining("Commit: Fix app review"),
+      review: {
+        target: {
+          type: "commit",
+          sha: "aaaaaaaaaaaaaaaa",
+        },
+      },
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "review:summary:workspace" }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "review:workspace:1" }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "review",
+      body: [
+        "Project: Infra",
+        "Review: Base Branch",
+        "Base Branch: origin/develop",
+      ].join("\n"),
+      review: {
+        cwd: "/worktrees/infra",
+        target: {
+          type: "baseBranch",
+          branch: "origin/develop",
+        },
+      },
+    });
+
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({ actionId: "review:summary:start" }),
     );
@@ -16752,6 +16776,83 @@ function buildNavigationSnapshot(): NavigationSnapshot {
       executionMode: "default",
     },
   };
+}
+
+function buildMultiProjectReviewNavigationSnapshot(): NavigationSnapshot {
+  const snapshot = buildNavigationSnapshot();
+  snapshot.threads[0] = {
+    ...snapshot.threads[0]!,
+    projectKey: "/worktrees/app",
+    gitWorkingState: {
+      dirtyFiles: 0,
+      dirtyAdditions: 0,
+      dirtyDeletions: 0,
+      untrackedFiles: 0,
+      unpushedCommits: 1,
+      baseBranch: "release",
+    },
+    linkedDirectories: [
+      {
+        id: "directory:app",
+        kind: "worktree",
+        label: "App",
+        path: "/repo/app",
+        worktreePath: "/worktrees/app",
+      },
+      {
+        id: "directory:infra",
+        kind: "worktree",
+        label: "Infra",
+        path: "/repo/infra",
+        worktreePath: "/worktrees/infra",
+      },
+    ],
+  };
+  snapshot.directories = [
+    {
+      key: "directory:app",
+      kind: "directory",
+      label: "App",
+      path: "/repo/app",
+      threadKeys: ["codex:thread-1"],
+      needsAttentionCount: 0,
+      gitStatus: {
+        currentBranch: "feature/app",
+        defaultBranch: "main",
+        branches: ["feature/app", "main"],
+        baseBranches: ["origin/main", "main"],
+        recentCommits: [
+          {
+            sha: "aaaaaaaaaaaaaaaa",
+            shortSha: "aaaaaaa",
+            subject: "Fix app review",
+          },
+        ],
+      },
+    },
+    {
+      key: "directory:infra",
+      kind: "directory",
+      label: "Infra",
+      path: "/repo/infra",
+      threadKeys: ["codex:thread-1"],
+      needsAttentionCount: 0,
+      gitStatus: {
+        currentBranch: "deploy/search",
+        defaultBranch: "develop",
+        branches: ["deploy/search", "develop"],
+        baseBranches: ["origin/develop", "develop"],
+        recentCommits: [
+          {
+            sha: "bbbbbbbbbbbbbbbb",
+            shortSha: "bbbbbbb",
+            subject: "Fix infra review",
+          },
+        ],
+      },
+    },
+  ];
+  return snapshot;
 }
 
 function buildWorktreeLaunchpadNavigationSnapshot(): NavigationSnapshot {

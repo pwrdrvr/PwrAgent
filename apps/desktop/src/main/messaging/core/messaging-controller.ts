@@ -1699,10 +1699,14 @@ export class MessagingController {
     const directory = navigation.directories.find((candidate) =>
       reviewWorkspaceMatches(candidate.path, defaultRepositoryPath),
     );
+    const workspaceThread = reviewThreadForWorkspace(
+      thread,
+      selectedWorkspace?.cwd,
+    );
     const target: AppServerReviewTarget = {
       type: "baseBranch",
       branch:
-        buildReviewBranchOptions({ directory, thread })[0]
+        buildReviewBranchOptions({ directory, thread: workspaceThread })[0]
         ?? "main",
     };
     const intent = this.buildReviewIntent({
@@ -1758,8 +1762,9 @@ export class MessagingController {
     const selectedWorkspace = linkedWorkspaces.find(
       (workspace) => workspace.cwd === params.cwd,
     );
+    const workspaceThread = reviewThreadForWorkspace(thread, params.cwd);
     const defaultBaseBranch =
-      buildReviewBranchOptions({ directory, thread })[0]
+      buildReviewBranchOptions({ directory, thread: workspaceThread })[0]
       ?? "main";
     const target =
       params.target
@@ -1910,7 +1915,10 @@ export class MessagingController {
       body = "Choose a base branch or reply with a branch name.";
       allowFreeform = true;
       actions = [
-        ...buildReviewBranchOptions({ directory, thread }).map((branch, index) => ({
+        ...buildReviewBranchOptions({
+          directory,
+          thread: workspaceThread,
+        }).map((branch, index) => ({
           id: `review:base-branch:${index}`,
           label: branch,
           fallbackText: branch,
@@ -3311,6 +3319,7 @@ export class MessagingController {
           phase: "summary",
           cwd,
           ...(repositoryPath ? { repositoryPath } : {}),
+          resetRepositoryTarget: true,
           resetBaseBranch: true,
         });
       }
@@ -3375,6 +3384,7 @@ export class MessagingController {
       repositoryPath?: string;
       target?: AppServerReviewTarget;
       forceBaseBranch?: boolean;
+      resetRepositoryTarget?: boolean;
       resetBaseBranch?: boolean;
     },
   ): Promise<void> {
@@ -3400,6 +3410,9 @@ export class MessagingController {
       review.repositoryPath
       ?? pendingIntent.intent.review.repositoryPath;
     let target = review.target ?? pendingIntent.intent.review.target;
+    if (review.resetRepositoryTarget && target?.type === "commit") {
+      target = undefined;
+    }
     if (
       review.resetBaseBranch
       && (
@@ -3409,6 +3422,7 @@ export class MessagingController {
       )
     ) {
       const thread = findThreadForBinding(navigation, binding);
+      const workspaceThread = reviewThreadForWorkspace(thread, cwd);
       const directory = navigation.directories.find((candidate) =>
         reviewWorkspaceMatches(
           candidate.path,
@@ -3418,7 +3432,7 @@ export class MessagingController {
       target = {
         type: "baseBranch",
         branch:
-          buildReviewBranchOptions({ directory, thread })[0]
+          buildReviewBranchOptions({ directory, thread: workspaceThread })[0]
           ?? "main",
       };
     }
@@ -13984,6 +13998,18 @@ function reviewWorkspaceMatches(
   }
   const normalize = (value: string) => value.replace(/\/+$/, "");
   return normalize(directoryPath) === normalize(cwd);
+}
+
+function reviewThreadForWorkspace(
+  thread: NavigationThreadSummary | undefined,
+  cwd: string | undefined,
+): NavigationThreadSummary | undefined {
+  if (!thread || thread.linkedDirectories.length <= 1) {
+    return thread;
+  }
+  return reviewWorkspaceMatches(thread.projectKey, cwd)
+    ? thread
+    : undefined;
 }
 
 function formatMessagingReviewScope(target: AppServerReviewTarget): string {
