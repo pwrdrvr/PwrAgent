@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   AppServerListThreadsResponse,
   AppServerThreadSummary,
+  BackendSummary,
   DesktopSettingsSnapshot,
   MessagingPairingEntry,
   WorktreeSnapshotSummary,
@@ -438,6 +439,70 @@ function createArchivedSnapshot(
 }
 
 describe("SettingsScreen", () => {
+  it("renders cached provider models while refreshing the catalog", async () => {
+    const cachedBackends: BackendSummary[] = [
+      {
+        kind: "codex",
+        label: "OpenAI",
+        available: true,
+        methods: [],
+        capabilities: {
+          listThreads: true,
+          createThread: true,
+          resumeThread: true,
+          renameThread: true,
+          readThread: true,
+          startTurn: true,
+          interruptTurn: true,
+          steerTurn: true,
+          transcriptPagination: true,
+          toolUse: true,
+          approvalRequests: true,
+          multiDirectoryThreads: true,
+        },
+        executionModes: [],
+        launchpadOptions: {
+          models: [
+            {
+              id: "gpt-5.6-sol",
+              label: "GPT-5.6-Sol",
+              supportsReasoning: true,
+              reasoningEfforts: ["high", "xhigh"],
+            },
+          ],
+        },
+      },
+    ];
+    const listBackends = vi.fn(
+      async () => await new Promise<never>(() => undefined),
+    );
+
+    render(
+      <SettingsScreen
+        cachedBackends={cachedBackends}
+        desktopApi={{ listBackends }}
+        initialSection="models"
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(screen.getByText("1 discovered model")).toBeInTheDocument();
+    expect(
+      within(screen.getByLabelText("OpenAI default model")).getByRole("option", {
+        name: "GPT-5.6-Sol",
+      }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("No provider has reported a model catalog yet."))
+      .not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(listBackends).toHaveBeenCalledWith({
+        includeUnavailable: true,
+        refreshModels: true,
+      });
+    });
+  });
+
   it("clamps accidental document scroll while mounted", async () => {
     Object.defineProperty(window, "scrollX", {
       configurable: true,

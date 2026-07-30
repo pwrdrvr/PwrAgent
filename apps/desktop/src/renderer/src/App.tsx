@@ -1476,6 +1476,7 @@ function DesktopAppShell(props: {
             <Suspense fallback={null}>
               <LazySettingsScreen
                 appearanceController={props.appearanceController}
+                cachedBackends={backendSummaries.backends}
                 desktopApi={desktopApi}
                 initialSection={settingsInitialSection}
                 profiles={profiles}

@@ -33,6 +33,7 @@ import { SettingsSwitch } from "./SettingsSwitch";
 type CodexPathMode = "auto" | "specified";
 
 export function ModelsSettings(props: {
+  cachedBackends?: BackendSummary[];
   desktopApi?: DesktopApi;
   saving: boolean;
   snapshot: DesktopSettingsSnapshot;
@@ -61,7 +62,9 @@ export function ModelsSettings(props: {
     props.snapshot.models.codex.path.value.trim() ? "specified" : "auto",
   );
   const [grokKey, setGrokKey] = useState("");
-  const [backends, setBackends] = useState<BackendSummary[]>([]);
+  const [backends, setBackends] = useState<BackendSummary[]>(
+    props.cachedBackends ?? [],
+  );
   const [catalogError, setCatalogError] = useState<string | undefined>();
   const [refreshingCatalog, setRefreshingCatalog] = useState(false);
   const codex = props.snapshot.models.codex;
@@ -86,6 +89,12 @@ export function ModelsSettings(props: {
     setCodexPath(codex.path.value);
     setCodexMode(codex.path.value.trim() || envForced ? "specified" : "auto");
   }, [codex.path.value, envForced]);
+
+  useEffect(() => {
+    if (props.cachedBackends) {
+      setBackends(props.cachedBackends);
+    }
+  }, [props.cachedBackends]);
 
   const refreshCatalog = async (
     force = false,
