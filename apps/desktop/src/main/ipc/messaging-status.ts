@@ -701,10 +701,23 @@ export function registerMessagingStatusIpcHandlers(): void {
       _event,
       request: RejectMessagingPairingRequest,
     ): Promise<RejectMessagingPairingResponse> => {
-      const entry = markPairingRejected(request.entryId);
+      const pairing = runtime.listPairingRequests({ includeResolved: true }).entries
+        .find((entry) => entry.id === request.entryId);
+      const dismissAfterApproval =
+        (pairing?.approvedTargets?.length ?? 0) > 0;
+      const entry = dismissAfterApproval
+        ? markPairingConsumed(request.entryId)
+        : markPairingRejected(request.entryId);
       if (!entry) throw new Error("Pairing request not found.");
-      recordPairingActivity(entry, "Rejected pairing request");
-      await runtime.deliverPairingOutcome(entry, "rejected");
+      recordPairingActivity(
+        entry,
+        dismissAfterApproval
+          ? "Dismissed pairing request after partial approval"
+          : "Rejected pairing request",
+      );
+      if (!dismissAfterApproval) {
+        await runtime.deliverPairingOutcome(entry, "rejected");
+      }
       broadcastPairingChanged({ at: Date.now(), entry });
       return { entry };
     },
