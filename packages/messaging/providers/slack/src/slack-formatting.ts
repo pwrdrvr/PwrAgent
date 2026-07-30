@@ -198,14 +198,10 @@ export function textForSlackIntent(intent: MessagingSurfaceIntent): string {
         .join("\n");
     case "thread_picker":
     case "project_picker":
-      return [intent.prompt, intent.fallbackText]
-        .filter((value): value is string => Boolean(value))
-        .join("\n\n");
+      return intent.prompt;
     case "single_select":
     case "multi_select":
-      return [intent.prompt, intent.fallbackText]
-        .filter((value): value is string => Boolean(value))
-        .join("\n\n");
+      return intent.prompt;
     case "questionnaire":
       return formatMessagingQuestionnaireText(intent);
     case "review":

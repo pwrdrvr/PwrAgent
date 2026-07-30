@@ -7376,12 +7376,67 @@ describe("MessagingController", () => {
     await harness.controller.handleInboundEvent(
       buildCallbackEvent({
         actionId: "command:new",
+        interactionId: "help-surface",
+        routingState: {
+          opaque: {
+            chatId: 777,
+            messageId: 42,
+          },
+        },
       }),
     );
 
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "project_picker",
+      delivery: {
+        fallback: "present_new",
+        mode: "update",
+      },
       fallbackText: expect.stringContaining("new PwrAgent thread"),
+      targetSurface: {
+        channel: "telegram",
+        id: "help-surface",
+        state: {
+          opaque: {
+            chatId: 777,
+            messageId: 42,
+          },
+        },
+      },
+    });
+  });
+
+  it("restores the help surface when a command-button browser is cancelled", async () => {
+    const harness = await createHarness();
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "command:new",
+        interactionId: "help-surface",
+        routingState: {
+          opaque: {
+            chatId: 777,
+            messageId: 42,
+          },
+        },
+      }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:cancel",
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "PwrAgent commands",
+      delivery: {
+        mode: "update",
+        replaceMarkup: true,
+      },
+      targetSurface: expect.objectContaining({
+        channel: "telegram",
+      }),
     });
   });
 

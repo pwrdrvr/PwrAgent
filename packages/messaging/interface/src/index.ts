@@ -1486,6 +1486,7 @@ export type MessagingBrowseSessionRecord = {
   allowedActorIds: string[];
   backend?: AppServerBackendKind;
   bindingId?: string;
+  cancelDestination?: "help";
   channel: MessagingChannelRef;
   createdAt: number;
   expiresAt: number;

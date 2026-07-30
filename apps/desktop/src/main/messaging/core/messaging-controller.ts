@@ -1523,7 +1523,12 @@ export class MessagingController {
     this.notifyBindingChanged("refresh-from-inbound");
   }
 
-  private async handleCommand(event: MessagingInboundCommandEvent): Promise<void> {
+  private async handleCommand(
+    event: MessagingInboundCommandEvent,
+    options?: {
+      targetSurface?: MessagingSurfaceRef;
+    },
+  ): Promise<void> {
     const verb = matchMessagingCommandVerb(event.command);
     if (verb === "status") {
       await this.presentStatus(event);
@@ -1538,24 +1543,38 @@ export class MessagingController {
       return;
     }
     if (verb === "resume") {
-      await this.presentResumeBrowser(event);
-      return;
-    }
-    if (verb === "agent") {
-      await this.presentAgentBrowser(event);
-      return;
-    }
-    if (verb === "new") {
-      await this.presentResumeBrowser({
-        ...event,
-        command: "resume",
-        args: ["--new", ...event.args],
-        rawText: ["/resume", "--new", ...event.args].join(" "),
+      await this.presentResumeBrowser(event, {
+        cancelDestination: options?.targetSurface ? "help" : undefined,
+        targetSurface: options?.targetSurface,
       });
       return;
     }
+    if (verb === "agent") {
+      await this.presentAgentBrowser(event, {
+        cancelDestination: options?.targetSurface ? "help" : undefined,
+        targetSurface: options?.targetSurface,
+      });
+      return;
+    }
+    if (verb === "new") {
+      await this.presentResumeBrowser(
+        {
+          ...event,
+          command: "resume",
+          args: ["--new", ...event.args],
+          rawText: ["/resume", "--new", ...event.args].join(" "),
+        },
+        {
+          cancelDestination: options?.targetSurface ? "help" : undefined,
+          targetSurface: options?.targetSurface,
+        },
+      );
+      return;
+    }
     if (verb === "help") {
-      await this.presentHelp(event);
+      await this.presentHelp(event, {
+        targetSurface: options?.targetSurface,
+      });
       return;
     }
     if (event.command.trim().replace(/^\/+/, "").toLowerCase() === "review") {
@@ -2848,13 +2867,18 @@ export class MessagingController {
   private async handleCallback(event: MessagingInboundCallbackEvent): Promise<void> {
     const command = readCommandAction(event);
     if (command) {
-      await this.handleCommand({
-        ...event,
-        kind: "command",
-        args: [],
-        command,
-        rawText: `/${command}`,
-      });
+      await this.handleCommand(
+        {
+          ...event,
+          kind: "command",
+          args: [],
+          command,
+          rawText: `/${command}`,
+        },
+        {
+          targetSurface: surfaceForCallback(event),
+        },
+      );
       return;
     }
 
@@ -4463,7 +4487,13 @@ export class MessagingController {
     });
   }
 
-  private async presentResumeBrowser(event: MessagingInboundCommandEvent): Promise<void> {
+  private async presentResumeBrowser(
+    event: MessagingInboundCommandEvent,
+    options?: {
+      cancelDestination?: MessagingBrowseSessionRecord["cancelDestination"];
+      targetSurface?: MessagingSurfaceRef;
+    },
+  ): Promise<void> {
     const parsed = parseResumeCommandArgs(event.args);
     if (parsed.error) {
       await this.deliver(
@@ -4505,6 +4535,7 @@ export class MessagingController {
       id: this.newIntentId("browse"),
       allowedActorIds: [event.actor.platformUserId],
       backend: selectedBackend?.kind,
+      cancelDestination: options?.cancelDestination,
       channel: event.channel,
       createdAt: this.now(),
       updatedAt: this.now(),
@@ -4527,11 +4558,18 @@ export class MessagingController {
             path: selectedDirectory.path,
           }
         : undefined,
+      surface: options?.targetSurface,
     };
     await this.renderResumeBrowser(session, navigation, event);
   }
 
-  private async presentAgentBrowser(event: MessagingInboundCommandEvent): Promise<void> {
+  private async presentAgentBrowser(
+    event: MessagingInboundCommandEvent,
+    options?: {
+      cancelDestination?: MessagingBrowseSessionRecord["cancelDestination"];
+      targetSurface?: MessagingSurfaceRef;
+    },
+  ): Promise<void> {
     const parsed = parseResumeCommandArgs(event.args);
     if (parsed.error) {
       await this.deliver(
@@ -4573,6 +4611,7 @@ export class MessagingController {
       id: this.newIntentId("browse"),
       allowedActorIds: [event.actor.platformUserId],
       backend: selectedBackend?.kind,
+      cancelDestination: options?.cancelDestination,
       channel: event.channel,
       createdAt: this.now(),
       updatedAt: this.now(),
@@ -4597,6 +4636,7 @@ export class MessagingController {
             path: selectedDirectory.path,
           }
         : undefined,
+      surface: options?.targetSurface,
     };
     await this.renderResumeBrowser(session, navigation, event);
   }
@@ -4744,6 +4784,12 @@ export class MessagingController {
     }
     if (actionId === "browse:cancel") {
       await this.retireBrowseSession(session);
+      if (session.cancelDestination === "help" && session.surface) {
+        await this.presentHelp(event, {
+          targetSurface: session.surface,
+        });
+        return;
+      }
       await this.deliver(
         buildConfirmationIntent({
           id: this.newIntentId("browse-cancelled"),
@@ -12991,6 +13037,20 @@ function readCommandAction(event: MessagingInboundCallbackEvent): string | undef
   const actionId = event.actionId ?? event.interaction.id;
   const match = /^command:([a-z0-9_-]+)$/i.exec(actionId);
   return match?.[1]?.toLowerCase();
+}
+
+function surfaceForCallback(
+  event: MessagingInboundCallbackEvent,
+): MessagingSurfaceRef {
+  return {
+    channel: event.interaction.channel,
+    id: event.interaction.id,
+    ...(event.interaction.state
+      ? { state: event.interaction.state }
+      : event.routingState
+        ? { state: event.routingState }
+        : {}),
+  };
 }
 
 /**

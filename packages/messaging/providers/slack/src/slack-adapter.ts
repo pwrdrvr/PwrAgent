@@ -567,9 +567,23 @@ export class SlackAdapter implements SlackProviderAdapter {
       intent,
       text: rawText,
     });
+    const pickerFallbackText =
+      (
+        intent.kind === "thread_picker"
+        || intent.kind === "project_picker"
+        || intent.kind === "single_select"
+        || intent.kind === "multi_select"
+      )
+        ? intent.fallbackText
+        : undefined;
     const body: SlackPostBody = {
       channel: target.channelId,
-      text: text || intent.fallbackText || "PwrAgent",
+      text:
+        (pickerFallbackText
+          ? clampSlackMessage(markdownToSlackMrkdwn(pickerFallbackText))
+          : text)
+        || intent.fallbackText
+        || "PwrAgent",
       ...(blocks.length > 0 ? { blocks } : {}),
       ...(target.threadTs ? { thread_ts: target.threadTs } : {}),
       ...(target.threadTs && intent.delivery?.broadcastThreadReply
