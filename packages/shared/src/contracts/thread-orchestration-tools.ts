@@ -1,5 +1,6 @@
 import type {
   AppServerBackendKind,
+  AppServerReviewTarget,
   CodexThreadEnvironmentRuntime,
   LinkedDirectorySummary,
   ThreadExecutionMode,
@@ -16,6 +17,7 @@ export const PWRAGENT_THREAD_ORCHESTRATION_OPERATION_NAMES = [
   "handoff_task",
   "move_thread_workspace",
   "send_message_to_thread",
+  "start_review",
 ] as const;
 
 export type PwrAgentThreadOrchestrationOperationName =
@@ -119,6 +121,15 @@ export type SendMessageToThreadToolArgs = {
   executionMode?: ThreadExecutionMode;
   approvalPolicy?: string;
   sandbox?: string;
+};
+
+export type StartReviewToolArgs = {
+  target: AppServerReviewTarget;
+  /**
+   * Optional linked workspace to review when the invoking thread has more than
+   * one directory. Omit it to use the thread's primary runtime workspace.
+   */
+  cwd?: string;
 };
 
 export type MoveThreadWorkspaceToolArgs = {
@@ -366,12 +377,25 @@ export type SendMessageToThreadResult = {
   };
 };
 
+export type StartReviewToolResult = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  pendingReviewId: string;
+  status: "scheduled";
+  target: AppServerReviewTarget;
+  cwd?: string;
+  invokingTurnId: string;
+  createdAt: number;
+  message: string;
+};
+
 export type PwrAgentThreadOrchestrationToolArgsByOperation = {
   attach_thread_directory: AttachThreadDirectoryToolArgs;
   detach_thread_directory: DetachThreadDirectoryToolArgs;
   handoff_task: HandoffTaskToolArgs;
   move_thread_workspace: MoveThreadWorkspaceToolArgs;
   send_message_to_thread: SendMessageToThreadToolArgs;
+  start_review: StartReviewToolArgs;
 };
 
 export type PwrAgentThreadOrchestrationToolArgs<
@@ -398,7 +422,8 @@ export type PwrAgentThreadOrchestrationResponse =
         | DetachThreadDirectoryResult
         | HandoffTaskResult
         | MoveThreadWorkspaceResult
-        | SendMessageToThreadResult;
+        | SendMessageToThreadResult
+        | StartReviewToolResult;
     }
   | {
       ok: false;

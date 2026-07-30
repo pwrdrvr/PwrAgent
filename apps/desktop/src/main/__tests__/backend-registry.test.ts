@@ -6466,6 +6466,7 @@ script = "echo setup"
       "get_current_messaging_surface",
       "handoff_task",
       "send_message_to_thread",
+      "start_review",
       "create_monitor_delegation",
     ]);
 
@@ -6511,6 +6512,7 @@ script = "echo setup"
       "attach_thread_here",
       "handoff_task",
       "send_message_to_thread",
+      "start_review",
     ]);
     const getThreadStatusTool = pwragentDynamicTools(dynamicTools)
       .find((tool) => tool.name === "get_thread_status");
@@ -20983,6 +20985,124 @@ script = "printf setup"
 
     await registry.close();
     await rm(root, { recursive: true, force: true });
+  });
+
+  it("schedules a dynamic-tool review until the invoking turn completes", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: {
+        methods: ["turn/start", "review/start", "thread/resume"],
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null,
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "parent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "parent-thread",
+        turnId: "turn-1",
+        callId: "call-review-1",
+        requestId: "call-review-1",
+        namespace: "pwragent",
+        tool: "start_review",
+        arguments: {
+          target: {
+            type: "baseBranch",
+            branch: "main",
+          },
+          cwd: "/repo/pwragent",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toMatchObject({ success: true });
+    expect(codexClient.lastStartReviewParams).toBeUndefined();
+
+    await codexClient.emit({
+      method: "turn/completed",
+      params: {
+        threadId: "parent-thread",
+        turnId: "turn-1",
+        turn: { id: "turn-1", status: "completed", output: [] },
+      },
+    });
+
+    expect(codexClient.lastStartReviewParams).toEqual({
+      threadId: "parent-thread",
+      target: { type: "baseBranch", branch: "main" },
+      delivery: "inline",
+      cwd: "/repo/pwragent",
+    });
+
+    await registry.close();
+  });
+
+  it("exposes start_review through the MCP tool catalog", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: {
+        methods: ["turn/start", "review/start", "thread/resume"],
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null,
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "parent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await callRegistryMcpTool({
+      registry,
+      backend: "codex",
+      threadId: "parent-thread",
+      turnId: "turn-1",
+      tool: "start_review",
+      args: {
+        target: { type: "uncommittedChanges" },
+      },
+    });
+
+    expect(response).toMatchObject({
+      structuredContent: {
+        backend: "codex",
+        threadId: "parent-thread",
+        status: "scheduled",
+        target: { type: "uncommittedChanges" },
+        invokingTurnId: "turn-1",
+      },
+    });
+    expect(codexClient.lastStartReviewParams).toBeUndefined();
+
+    await registry.close();
   });
 
   it("sends a follow-up prompt to another thread from an active turn", async () => {

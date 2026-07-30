@@ -20,6 +20,7 @@ import type {
   SetAcpSessionRuntimeOptionRequest,
   SetThreadExecutionModeRequest,
   SetThreadModelSettingsRequest,
+  StartReviewRequest,
   StartThreadRequest,
   StartTurnRequest,
   SteerTurnRequest,
@@ -83,6 +84,106 @@ afterEach(async () => {
 });
 
 describe("MessagingController", () => {
+  it("opens the review picker for a mentioned /review command", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("/review", { botMention: true }),
+    );
+
+    expect(harness.delivered).toHaveLength(1);
+    expect(harness.delivered[0]).toMatchObject({
+      kind: "review",
+      title: "Review target",
+      review: {
+        backend: "codex",
+        threadId: "thread-1",
+        phase: "target",
+        cwd: "/repo/pwragent",
+      },
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "review:target:current-changes",
+          label: "Current changes",
+        }),
+      ]),
+    });
+  });
+
+  it("submits the selected messaging review target", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+    await harness.controller.handleInboundEvent(buildCommandEvent("/review"));
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "review:target:current-changes",
+      }),
+    );
+
+    expect(harness.submitReview).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      target: { type: "uncommittedChanges" },
+      delivery: "inline",
+      cwd: "/repo/pwragent",
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Review started",
+    });
+  });
+
+  it("routes non-control slash commands to the bound thread", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("/compact preserve the summary", { botMention: true }),
+    );
+
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        threadId: "thread-1",
+        input: [
+          {
+            type: "text",
+            text: "/compact preserve the summary",
+          },
+        ],
+      }),
+    );
+    expect(harness.delivered).not.toContainEqual(
+      expect.objectContaining({
+        title: expect.stringContaining("PwrAgent commands"),
+      }),
+    );
+  });
+
+  it("submits direct review command arguments without opening the picker", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/review main"));
+
+    expect(harness.submitReview).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      target: { type: "baseBranch", branch: "main" },
+      delivery: "inline",
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Review started",
+    });
+  });
+
   it("presents a channel-neutral thread picker for authorized /resume commands", async () => {
     const harness = await createHarness();
 
@@ -5018,7 +5119,7 @@ describe("MessagingController", () => {
     });
   });
 
-  it("does not treat legacy /threads as a resume alias — falls through to the help surface", async () => {
+  it("does not treat legacy /threads as a control alias and asks for a binding", async () => {
     const harness = await createHarness();
 
     await harness.controller.handleInboundEvent(buildCommandEvent("/threads"));
@@ -5026,7 +5127,7 @@ describe("MessagingController", () => {
     expect(harness.getNavigationSnapshot).not.toHaveBeenCalled();
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "confirmation",
-      title: "PwrAgent commands",
+      title: "Choose a thread",
     });
   });
 
@@ -15361,6 +15462,7 @@ async function createHarness(options?: {
   >;
   setConversationTitle?: MessagingAdapter["setConversationTitle"];
   startThread?: NonNullable<MessagingBackendBridge["startThread"]>;
+  submitReview?: NonNullable<MessagingBackendBridge["submitReview"]>;
   toolUpdateDefaultMode?: MessagingToolUpdateMode;
   showStreamingOption?: boolean;
 }): Promise<{
@@ -15385,6 +15487,7 @@ async function createHarness(options?: {
   setThreadExecutionMode: ReturnType<typeof vi.fn>;
   setThreadModelSettings: ReturnType<typeof vi.fn>;
   startThread: ReturnType<typeof vi.fn>;
+  submitReview: ReturnType<typeof vi.fn>;
   startTurn: ReturnType<typeof vi.fn>;
   steerTurn: ReturnType<typeof vi.fn>;
   submitServerRequest: ReturnType<typeof vi.fn>;
@@ -15483,6 +15586,18 @@ async function createHarness(options?: {
         backend: request.backend,
         threadId: "new-thread-1",
         executionMode: request.executionMode ?? "default",
+      })),
+  );
+  const submitReview = vi.fn(
+    options?.submitReview ??
+      (async (request: StartReviewRequest) => ({
+        status: "started" as const,
+        response: {
+          backend: request.backend,
+          threadId: request.threadId,
+          reviewThreadId: "review-thread-1",
+          turnId: "review-turn-1",
+        },
       })),
   );
   const materializeDirectoryLaunchpad = vi.fn(
@@ -15737,6 +15852,7 @@ async function createHarness(options?: {
     setThreadExecutionMode,
     setThreadModelSettings,
     startThread,
+    submitReview,
     startTurn,
     steerTurn,
     submitServerRequest,
@@ -15800,6 +15916,7 @@ async function createHarness(options?: {
     setThreadExecutionMode,
     setThreadModelSettings,
     startThread,
+    submitReview,
     startTurn,
     steerTurn,
     submitServerRequest,

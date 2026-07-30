@@ -134,6 +134,8 @@ export function actionsForMattermostIntent(
       return intent.choices;
     case "questionnaire":
       return messagingQuestionnaireActions(intent);
+    case "review":
+      return intent.actions;
     case "approval":
       return intent.decisions;
     case "confirmation":
@@ -256,6 +258,8 @@ export function textForMattermostIntent(intent: MessagingSurfaceIntent): string 
         .join("\n\n");
     case "questionnaire":
       return formatMessagingQuestionnaireText(intent);
+    case "review":
+      return [intent.title, intent.body].join("\n\n");
     case "approval":
       return [intent.title, intent.body].join("\n\n");
     case "confirmation":

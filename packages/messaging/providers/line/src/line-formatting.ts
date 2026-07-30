@@ -81,6 +81,8 @@ export function actionsForLineIntent(
       return intent.choices;
     case "questionnaire":
       return messagingQuestionnaireActions(intent);
+    case "review":
+      return intent.actions;
     case "approval":
       return intent.decisions;
     case "confirmation":
@@ -197,6 +199,8 @@ export function textForLineIntent(intent: MessagingSurfaceIntent): string {
         .join("\n\n");
     case "questionnaire":
       return formatMessagingQuestionnaireText(intent);
+    case "review":
+      return [intent.title, intent.body].filter(Boolean).join("\n\n");
     case "approval":
     case "confirmation":
       return [intent.title, intent.body].filter(Boolean).join("\n\n");

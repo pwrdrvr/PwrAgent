@@ -103,6 +103,30 @@ describe("pwragent thread orchestration agent tools", () => {
               required: ["backend", "threadId", "prompt"],
             }),
           }),
+          expect.objectContaining({
+            type: "function",
+            name: "start_review",
+            description: expect.stringContaining("after the current turn completes successfully"),
+            deferLoading: false,
+            inputSchema: expect.objectContaining({
+              required: ["target"],
+              properties: expect.objectContaining({
+                target: expect.objectContaining({
+                  required: ["type"],
+                  properties: expect.objectContaining({
+                    type: expect.objectContaining({
+                      enum: [
+                        "uncommittedChanges",
+                        "baseBranch",
+                        "commit",
+                        "custom",
+                      ],
+                    }),
+                  }),
+                }),
+              }),
+            }),
+          }),
         ]),
       }),
     ]);
@@ -218,6 +242,83 @@ describe("pwragent thread orchestration agent tools", () => {
           tool: "move_thread_workspace",
           arguments: {
             sourcePath: "  ",
+          },
+        },
+      }),
+    ).resolves.toMatchObject({ success: false });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("validates and dispatches structured start_review args", async () => {
+    const handler = vi.fn(async () => ({
+      ok: true as const,
+      data: {
+        backend: "codex" as const,
+        threadId: "thread-1",
+        pendingReviewId: "pending-review:1",
+        status: "scheduled" as const,
+        target: {
+          type: "baseBranch" as const,
+          branch: "main",
+        },
+        cwd: "/repo/app",
+        invokingTurnId: "turn-1",
+        createdAt: 1_773_000_000_000,
+        message: "Review scheduled.",
+      },
+    }));
+    const router = buildPwrAgentThreadOrchestrationToolRouter(handler);
+
+    await router.handleDynamicToolCall({
+      backend: "codex",
+      call: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-1",
+        namespace: "pwragent",
+        tool: "start_review",
+        arguments: {
+          target: {
+            type: "baseBranch",
+            branch: " main ",
+          },
+          cwd: " /repo/app ",
+        },
+      },
+    });
+
+    expect(handler).toHaveBeenCalledWith({
+      operation: "start_review",
+      context: {
+        backend: "codex",
+        threadId: "thread-1",
+        callId: "call-1",
+        turnId: "turn-1",
+      },
+      args: {
+        target: {
+          type: "baseBranch",
+          branch: "main",
+        },
+        cwd: "/repo/app",
+      },
+    });
+
+    handler.mockClear();
+    await expect(
+      router.handleDynamicToolCall({
+        backend: "codex",
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-2",
+          namespace: "pwragent",
+          tool: "start_review",
+          arguments: {
+            target: {
+              type: "commit",
+              sha: " ",
+            },
           },
         },
       }),

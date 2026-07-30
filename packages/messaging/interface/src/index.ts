@@ -1,5 +1,6 @@
 import type {
   AppServerBackendKind,
+  AppServerReviewTarget,
   BackendAcpSessionRuntimeState,
   CodexEnvironmentExecutionTarget,
   LaunchpadWorkMode,
@@ -62,6 +63,7 @@ export const MESSAGING_SURFACE_INTENT_KINDS = [
   "single_select",
   "multi_select",
   "questionnaire",
+  "review",
   "approval",
   "confirmation",
   "error",
@@ -845,6 +847,30 @@ export type MessagingQuestionnaireIntent = MessagingBaseSurfaceIntent & {
   questions: MessagingQuestionnaireQuestion[];
 };
 
+export type MessagingReviewPhase =
+  | "workspace"
+  | "target"
+  | "base_branch"
+  | "commit"
+  | "custom"
+  | "submitted";
+
+export type MessagingReviewIntent = MessagingBaseSurfaceIntent & {
+  kind: "review";
+  title: string;
+  body: string;
+  actions: MessagingSurfaceAction[];
+  allowFreeform?: boolean;
+  review: {
+    backend: AppServerBackendKind;
+    threadId: ThreadIdentifier;
+    phase: MessagingReviewPhase;
+    cwd?: string;
+    targetType?: AppServerReviewTarget["type"];
+    target?: AppServerReviewTarget;
+  };
+};
+
 export function normalizeMessagingQuestionnaireIntent(
   intent: MessagingQuestionnaireIntent,
 ): MessagingQuestionnaireIntent {
@@ -1068,6 +1094,7 @@ export type MessagingSurfaceIntent =
   | MessagingSingleSelectIntent
   | MessagingMultiSelectIntent
   | MessagingQuestionnaireIntent
+  | MessagingReviewIntent
   | MessagingApprovalIntent
   | MessagingConfirmationIntent
   | MessagingErrorIntent

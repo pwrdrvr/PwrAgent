@@ -85,6 +85,8 @@ export function actionsForIntent(intent: MessagingSurfaceIntent): MessagingSurfa
       return intent.choices;
     case "questionnaire":
       return questionnaireActions(intent);
+    case "review":
+      return intent.actions;
     case "approval":
       return intent.decisions;
     case "confirmation":

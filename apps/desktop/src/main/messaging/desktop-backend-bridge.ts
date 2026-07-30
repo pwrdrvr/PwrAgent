@@ -34,6 +34,7 @@ import type {
   SteerTurnResponse,
   StartThreadRequest,
   StartThreadResponse,
+  StartReviewRequest,
   SubmitServerRequestRequest,
   SubmitServerRequestResponse,
   ThreadMessagingBindingTransition,
@@ -208,6 +209,20 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
           queueStatus: "queued",
           queueEntryId: submitted.entry.id,
         };
+  }
+
+  async submitReview(request: StartReviewRequest): Promise<
+    | {
+        status: "started";
+        response: Awaited<ReturnType<DesktopBackendRegistry["startReview"]>>;
+      }
+    | {
+        status: "scheduled";
+        pendingReviewId: string;
+        invokingTurnId: string;
+      }
+  > {
+    return await this.registry.submitReview(request);
   }
 
   async steerTurn(request: SteerTurnRequest): Promise<SteerTurnResponse> {
