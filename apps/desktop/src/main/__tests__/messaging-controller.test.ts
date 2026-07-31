@@ -5582,6 +5582,8 @@ describe("MessagingController", () => {
       },
     } satisfies AgentEvent);
 
+    expect(harness.delivered).toEqual([]);
+
     await harness.controller.handleInboundEvent(buildCommandEvent("/status"));
 
     const statusText = readDeliveredStatusText(harness.delivered.at(-1));
@@ -15913,6 +15915,79 @@ describe("MessagingController", () => {
       kind: "status",
       text: expect.stringContaining(
         "Responses: @mentions only (channel default)",
+      ),
+    });
+  });
+
+  it("preserves an active status child menu during automatic thread refreshes", async () => {
+    const harness = await createHarness({
+      responseModeForConversation: () => "mention_only",
+    });
+    const channel = buildTopicChannel("510");
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "bind:codex:thread-1",
+        channel,
+        value: {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+      }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "status:response-mode",
+        channel,
+      }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "single_select",
+      prompt: expect.stringContaining("Responses"),
+    });
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/executionMode/updated",
+        params: {
+          threadId: "thread-1",
+          executionMode: "full-access",
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.delivered).toEqual([]);
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "running",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+    expect(
+      harness.delivered.filter((intent) => intent.kind === "status"),
+    ).toEqual([]);
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "status:set-response-mode",
+        channel,
+        value: { responseMode: "every_message" },
+      }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining(
+        "Responses: every message (binding override)",
       ),
     });
   });
