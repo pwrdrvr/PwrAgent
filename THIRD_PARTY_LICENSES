@@ -137,7 +137,7 @@ MIT
 - bl@4.1.0 | https://github.com/rvagg/bl
 - body-parser@2.3.0 | expressjs/body-parser
 - buffer@5.7.1 | https://github.com/feross/buffer
-- builder-util-runtime@9.5.1 | https://github.com/electron-userland/electron-builder
+- builder-util-runtime@9.7.0 | https://github.com/electron-userland/electron-builder
 - bytes@3.1.2 | visionmedia/bytes.js
 - call-bind-apply-helpers@1.0.2 | https://github.com/ljharb/call-bind-apply-helpers
 - call-bound@1.0.4 | https://github.com/ljharb/call-bound
@@ -167,7 +167,7 @@ MIT
 - ee-first@1.1.1 | jonathanong/ee-first
 - electron@41.7.1 | https://github.com/electron/electron
 - electron-log@5.4.4 | megahertz/electron-log
-- electron-updater@6.8.3 | https://github.com/electron-userland/electron-builder
+- electron-updater@6.8.9 | https://github.com/electron-userland/electron-builder
 - encodeurl@2.0.0 | pillarjs/encodeurl
 - encoding@0.1.13 | https://github.com/andris9/encoding
 - end-of-stream@1.4.5 | https://github.com/mafintosh/end-of-stream
@@ -1666,14 +1666,14 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
-builder-util-runtime@9.5.1 (MIT)
+builder-util-runtime@9.7.0 (MIT)
 --------------------------------
 
 Applies to:
-- builder-util-runtime@9.5.1 (MIT)
-- electron-updater@6.8.3 (MIT)
+- builder-util-runtime@9.7.0 (MIT)
+- electron-updater@6.8.9 (MIT)
 
-Representative file: builder-util-runtime@9.5.1/LICENSE
+Representative file: builder-util-runtime@9.7.0/LICENSE
 
 The MIT License (MIT)
 
