@@ -1058,32 +1058,38 @@ function ThreadMigrationDialog(props: {
           Click or ⌘-click to toggle a model. Shift-click selects a range.
         </p>
         <div className="settings-confirm-dialog__actions">
-          <button
-            className="button button--secondary"
-            disabled={props.applying}
-            type="button"
-            onClick={props.onCancel}
-          >
-            Cancel
-          </button>
-          <button
-            className="button button--primary"
-            disabled={
-              props.applying
-              || selectedThreadCount === 0
-              || alreadyScheduled
-            }
-            type="button"
-            onClick={props.onConfirm}
-          >
-            {props.applying
-              ? "Creating migration…"
-              : alreadyScheduled
-                ? "Already scheduled"
-                : `Schedule ${selectedThreadCount} thread${
-                    selectedThreadCount === 1 ? "" : "s"
-                  }`}
-          </button>
+          {alreadyScheduled ? (
+            <button
+              className="button button--primary"
+              type="button"
+              onClick={props.onCancel}
+            >
+              Done
+            </button>
+          ) : (
+            <>
+              <button
+                className="button button--secondary"
+                disabled={props.applying}
+                type="button"
+                onClick={props.onCancel}
+              >
+                Cancel
+              </button>
+              <button
+                className="button button--primary"
+                disabled={props.applying || selectedThreadCount === 0}
+                type="button"
+                onClick={props.onConfirm}
+              >
+                {props.applying
+                  ? "Creating migration…"
+                  : `Schedule ${selectedThreadCount} thread${
+                      selectedThreadCount === 1 ? "" : "s"
+                    }`}
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>
