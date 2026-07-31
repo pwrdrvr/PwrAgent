@@ -385,6 +385,10 @@ export function parseGitHubPullRequestUrl(href: string): PrSummary | undefined {
     return undefined;
   }
 
+  if (isGitHubPullRequestCommentHash(parsed.hash)) {
+    return undefined;
+  }
+
   const segments = parsed.pathname.split("/").filter(Boolean);
   if (segments.length < 4 || segments[2] !== "pull") {
     return undefined;
@@ -408,6 +412,10 @@ export function parseGitHubPullRequestUrl(href: string): PrSummary | undefined {
     state: "unknown",
     url: href,
   };
+}
+
+function isGitHubPullRequestCommentHash(hash: string): boolean {
+  return /^#(?:discussion_r|issuecomment-|pullrequestreview-)\d+$/i.test(hash);
 }
 
 function decodeUrlSegment(value: string): string | undefined {

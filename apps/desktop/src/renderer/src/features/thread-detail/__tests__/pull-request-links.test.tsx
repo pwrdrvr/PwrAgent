@@ -368,7 +368,7 @@ describe("pull request links in transcript markdown", () => {
   });
 
   it("preserves an authored PR deep link while hydrating its live status", () => {
-    const deepLink = `${PR_URL}/files?diff=split#discussion_r1`;
+    const deepLink = `${PR_URL}/files?diff=split`;
     const open = vi.spyOn(window, "open").mockImplementation(() => null);
     renderWithPullRequests(`Review [the changed files](${deepLink})`, [
       prSummary(),
@@ -440,6 +440,22 @@ describe("pull request links in transcript markdown", () => {
       .toBeInTheDocument();
   });
 
+  it("leaves GitHub review comment permalinks as distinct transcript links", () => {
+    const commentUrls = [
+      `${PR_URL}#discussion_r3549020872`,
+      `${PR_URL}#discussion_r3549020877`,
+      `${PR_URL}#discussion_r3549138295`,
+    ];
+    renderWithPullRequests(commentUrls.join("\n\n"), [prSummary()]);
+
+    expect(screen.queryByRole("button", {
+      name: /Open Giphy\/giphy-services#13290/,
+    })).not.toBeInTheDocument();
+    for (const url of commentUrls) {
+      expect(screen.getByRole("link", { name: url })).toHaveAttribute("href", url);
+    }
+  });
+
   it("leaves PR links as normal links on surfaces without navigation metadata", () => {
     render(<ThreadMarkdown text={`Draft PR: [#13290](${PR_URL})`} />);
 
@@ -458,7 +474,7 @@ describe("pull request links in transcript markdown", () => {
 
 describe("parseGitHubPullRequestUrl", () => {
   it("accepts PR subpaths and query strings while preserving the target URL", () => {
-    const href = `${PR_URL}/files?diff=split#discussion_r1`;
+    const href = `${PR_URL}/files?diff=split`;
     expect(parseGitHubPullRequestUrl(href)).toMatchObject({
       provider: "github.com",
       org: "Giphy",
@@ -467,6 +483,18 @@ describe("parseGitHubPullRequestUrl", () => {
       state: "unknown",
       url: href,
     });
+  });
+
+  it("rejects GitHub pull request comment permalinks", () => {
+    expect(parseGitHubPullRequestUrl(
+      `${PR_URL}#discussion_r3549020872`,
+    )).toBeUndefined();
+    expect(parseGitHubPullRequestUrl(
+      `${PR_URL}#issuecomment-3549020872`,
+    )).toBeUndefined();
+    expect(parseGitHubPullRequestUrl(
+      `${PR_URL}#pullrequestreview-3549020872`,
+    )).toBeUndefined();
   });
 
   it("rejects issues, invalid numbers, non-GitHub hosts, and insecure URLs", () => {
