@@ -7552,6 +7552,128 @@ describe("useThreadSessionState", () => {
     });
   });
 
+  it("keeps a live review authoritative across a transient idle hydration", async () => {
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    let resolveReadThread:
+      | ((response: AppServerReadThreadResponse) => void)
+      | undefined;
+    const readThread = vi.fn(
+      async () =>
+        await new Promise<AppServerReadThreadResponse>((resolve) => {
+          resolveReadThread = resolve;
+        })
+    );
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      readThread,
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(1);
+      expect(agentEventHandler).toBeDefined();
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-review",
+            item: {
+              id: "turn-review-entered",
+              type: "enteredReviewMode",
+              review: "Review changes against main",
+            },
+          },
+        },
+      });
+    });
+
+    expect(result.current.activeTurnId).toBe("turn-review");
+    expect(result.current.threadBusy).toBe(true);
+
+    await act(async () => {
+      resolveReadThread?.({
+        backend: "codex",
+        fetchedAt: Date.now(),
+        threadId: "thread-1",
+        threadStatus: "idle",
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      });
+      await Promise.resolve();
+    });
+
+    expect(result.current.activeTurnId).toBe("turn-review");
+    expect(result.current.threadBusy).toBe(true);
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-stray",
+            turn: {
+              id: "turn-stray",
+              status: "inProgress",
+            },
+          },
+        },
+      });
+    });
+
+    expect(result.current.activeTurnId).toBe("turn-review");
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/failed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-review",
+            turn: {
+              id: "turn-review",
+              status: "failed",
+              error: {
+                message: "Selected model is at capacity. Please try a different model.",
+              },
+            },
+          },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.activeTurnId).toBeUndefined();
+      expect(result.current.pendingStatusText).toBeUndefined();
+      expect(result.current.threadBusy).toBe(false);
+      expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBeUndefined();
+    });
+  });
+
   it("seeds launchpad review turns before stray turn starts arrive", async () => {
     let agentEventHandler:
       | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
