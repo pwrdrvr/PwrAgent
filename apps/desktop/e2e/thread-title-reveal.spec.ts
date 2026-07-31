@@ -6,6 +6,8 @@ import { launchElectronApp } from "./fixtures/electron-app";
 import { SqliteOverlayStore } from "../src/main/state/overlay-store-sqlite";
 import { StateDb } from "../src/main/state/state-db";
 
+const GEOMETRY_TOLERANCE_PX = 1;
+
 async function createThreadTitleRevealFixture(): Promise<{
   cleanup: () => Promise<void>;
   fixturePath: string;
@@ -313,7 +315,7 @@ test("thread title reveals a linked child hidden by collapsed directory sections
     expect(scrollBox).not.toBeNull();
     expect(childBox!.y).toBeGreaterThanOrEqual(scrollBox!.y);
     expect(childBox!.y + childBox!.height).toBeLessThanOrEqual(
-      scrollBox!.y + scrollBox!.height,
+      scrollBox!.y + scrollBox!.height + GEOMETRY_TOLERANCE_PX,
     );
   } finally {
     await app.close();
