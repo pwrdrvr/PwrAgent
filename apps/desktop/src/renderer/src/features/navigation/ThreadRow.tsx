@@ -52,6 +52,7 @@ type ThreadRowProps = {
   includeLinkedDirectories?: boolean;
   linkedDirectoryMode?: "label" | "kind";
   nested?: boolean;
+  revealSelectedThreadRequest?: number;
   selectedThreadKey?: string;
   subthreadCount?: number;
   subthreadsCollapsed?: boolean;
@@ -86,6 +87,7 @@ type ThreadRowProps = {
     binding: MessagingThreadBindingSummary,
   ) => Promise<void>;
   onSelectThread: (thread: NavigationThreadSummary) => void;
+  onRevealSelectedThreadComplete?: (request: number) => void;
   onToggleSubthreads?: () => void;
   onDragStartThread?: (event: DragEvent<HTMLDivElement>) => void;
   onDragOverThread?: (event: DragEvent<HTMLDivElement>) => void;
@@ -112,6 +114,10 @@ export function ThreadRow(props: ThreadRowProps) {
   const status = getThreadRowStatus(props.thread, props.thinkingThreadKeys);
   const [pickerOpen, setPickerOpen] = useState(false);
   const rowButtonRef = useRef<HTMLButtonElement>(null);
+  const completedRevealRequestRef = useRef(0);
+  const revealSelectedThreadRequest = props.revealSelectedThreadRequest ?? 0;
+  const onRevealSelectedThreadComplete =
+    props.onRevealSelectedThreadComplete;
   const addReactionRef = useRef<HTMLSpanElement>(null);
   const reactions = props.thread.reactions ?? [];
   const canReact = Boolean(props.onSetReaction);
@@ -146,6 +152,23 @@ export function ThreadRow(props: ThreadRowProps) {
       block: "nearest",
     });
   }, [selected, threadKey]);
+  useEffect(() => {
+    if (!selected) {
+      return;
+    }
+
+    if (
+      revealSelectedThreadRequest > completedRevealRequestRef.current
+      && onRevealSelectedThreadComplete
+    ) {
+      completedRevealRequestRef.current = revealSelectedThreadRequest;
+      onRevealSelectedThreadComplete(revealSelectedThreadRequest);
+    }
+  }, [
+    onRevealSelectedThreadComplete,
+    revealSelectedThreadRequest,
+    selected,
+  ]);
   const armHoverPrefetch = (): void => {
     if (!props.onPrefetchPullRequests) return;
     if (hoverTimerRef.current !== undefined) return;

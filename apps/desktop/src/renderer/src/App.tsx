@@ -203,6 +203,8 @@ function DesktopAppShell(props: {
   // The rail defaults to pinned-open (matches the persisted default) so a
   // fresh user discovers it without a collapse→expand flash on first paint.
   const [sidebarHidden, setSidebarHidden] = useState(false);
+  const [revealSelectedThreadRequest, setRevealSelectedThreadRequest] =
+    useState(0);
   const [contextRailPinned, setContextRailPinned] = useState(true);
   const [activeContextTab, setActiveContextTab] =
     useState<ContextTabId>(DEFAULT_CONTEXT_TAB);
@@ -469,6 +471,13 @@ function DesktopAppShell(props: {
   // the first argument) still gets the default.
   const revealSelectedThreadInList = useCallback(
     (options?: { instant?: boolean }) => {
+      // A selected row can be unmounted behind a collapsed directory,
+      // Directory threads divider, overflow cap, or parent-thread group. The
+      // request nonce lets the active sidebar lens open those containers
+      // before ThreadRow's mount effect performs the final nearest-edge
+      // scroll. Keep the direct query for the common already-visible case so
+      // title clicks retain their centered smooth-scroll behavior.
+      setRevealSelectedThreadRequest((current) => current + 1);
       const selectedRow = document.querySelector<HTMLElement>(
         ".sidebar .thread-row.is-selected",
       );
@@ -1293,6 +1302,8 @@ function DesktopAppShell(props: {
           terminalThreadKeys={terminalThreadKeys}
           queuedMessageThreadKeys={queuedMessageThreadKeys}
           composerSourceThreadKey={navigation.composerSourceThreadKey}
+          revealSelectedThreadRequest={revealSelectedThreadRequest}
+          onRevealSelectedThreadComplete={threadJump.completePeekRestore}
           selectedItemKey={navigation.selectedItemKey}
           thinkingThreadKeys={session.thinkingThreadKeys}
           threads={navigation.threads}
@@ -1353,12 +1364,15 @@ function DesktopAppShell(props: {
             navigation.selectThread(thread);
             // Reveal on the next frame, once the new selection has rendered.
             // Do it even when the sidebar is only peeked open (⌘K over a hidden
-            // sidebar) — the popup is closing and taking the sidebar with it,
-            // but the scroll offset survives, so bringing the sidebar back later
-            // shows the thread we jumped to instead of stranding it off-screen.
-            // That reveal must be instant: an animated scroll wouldn't finish
-            // before the sidebar hides.
+            // sidebar). Hidden rows reveal asynchronously as their collapsed
+            // containers reopen, so keep a peek laid out until ThreadRow reports
+            // that the selected row mounted and scrolled. The offset survives
+            // restoring the hidden preference, and an instant scroll avoids
+            // dismissing the peek partway through an animation.
             const instant = threadJump.isPeeking();
+            if (instant) {
+              threadJump.deferPeekRestore();
+            }
             requestAnimationFrame(() => revealSelectedThreadInList({ instant }));
           }}
           onArchiveThread={navigation.archiveThread}

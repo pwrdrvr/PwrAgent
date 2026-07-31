@@ -19,6 +19,10 @@ export function useThreadJump(options: {
   open: boolean;
   openJump: () => void;
   closeJump: () => void;
+  /** Keep a peek laid out until an asynchronous selected-row reveal completes. */
+  deferPeekRestore: () => void;
+  /** Restore a deferred peek after the selected row has mounted and scrolled. */
+  completePeekRestore: () => void;
   /**
    * Whether the sidebar on screen right now is a peek — i.e. it's about to be
    * hidden again when the search closes. Callers that scroll the thread list on
@@ -41,6 +45,7 @@ export function useThreadJump(options: {
   const { sidebarHidden, setSidebarHidden } = options;
   const [open, setOpen] = useState(false);
   const peekedRef = useRef(false);
+  const peekRestoreDeferredRef = useRef(false);
 
   const openJump = useCallback(() => {
     if (sidebarHidden) {
@@ -55,6 +60,9 @@ export function useThreadJump(options: {
     if (!peekedRef.current) {
       return;
     }
+    if (peekRestoreDeferredRef.current) {
+      return;
+    }
     peekedRef.current = false;
     // Restore on the NEXT frame, not in this commit. Picking a thread closes the
     // popup and schedules a scroll-the-selected-row-into-view for that same
@@ -67,6 +75,21 @@ export function useThreadJump(options: {
     requestAnimationFrame(() => setSidebarHidden(true));
   }, [setSidebarHidden]);
 
+  const deferPeekRestore = useCallback(() => {
+    if (peekedRef.current) {
+      peekRestoreDeferredRef.current = true;
+    }
+  }, []);
+
+  const completePeekRestore = useCallback(() => {
+    if (!peekedRef.current || !peekRestoreDeferredRef.current) {
+      return;
+    }
+    peekRestoreDeferredRef.current = false;
+    peekedRef.current = false;
+    setSidebarHidden(true);
+  }, [setSidebarHidden]);
+
   const toggleJump = useCallback(() => {
     if (open) {
       closeJump();
@@ -77,9 +100,19 @@ export function useThreadJump(options: {
 
   const endPeek = useCallback(() => {
     peekedRef.current = false;
+    peekRestoreDeferredRef.current = false;
   }, []);
 
   const isPeeking = useCallback(() => peekedRef.current, []);
 
-  return { open, openJump, closeJump, isPeeking, toggleJump, endPeek };
+  return {
+    open,
+    openJump,
+    closeJump,
+    deferPeekRestore,
+    completePeekRestore,
+    isPeeking,
+    toggleJump,
+    endPeek,
+  };
 }

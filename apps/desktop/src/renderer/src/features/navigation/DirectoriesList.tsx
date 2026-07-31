@@ -47,6 +47,7 @@ type DirectoriesListProps = {
   queuedMessageThreadKeys?: Record<string, ThreadQueuedMessageState>;
   composerSourceThreadKey?: string;
   directories: NavigationDirectorySummary[];
+  revealSelectedThreadRequest?: number;
   selectedItemKey?: string;
   thinkingThreadKeys?: Record<string, boolean>;
   threads: NavigationThreadSummary[];
@@ -63,6 +64,7 @@ type DirectoriesListProps = {
     directory: NavigationDirectorySummary,
     preferredBackend?: AppServerBackendKind
   ) => Promise<void>;
+  onRevealSelectedThreadComplete?: (request: number) => void;
   onSelectThread: (thread: NavigationThreadSummary) => void;
   onPrefetchPullRequests?: (thread: NavigationThreadSummary) => void;
   onDetachPullRequest?: (
@@ -213,6 +215,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
   const [directoriesPinnedDividerDropTarget, setDirectoriesPinnedDividerDropTarget] =
     useState(false);
   const previousSelectedItemKeyRef = useRef<string | undefined>(undefined);
+  const handledRevealRequestRef = useRef(0);
   /**
    * Suppress the directory summary button's expand/collapse click
    * when the click is the trailing edge of a drag gesture. Browsers
@@ -300,6 +303,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
     () => new Map(visibleDirectories.map((directory) => [directory.key, directory])),
     [visibleDirectories],
   );
+  const revealSelectedThreadRequest = props.revealSelectedThreadRequest;
+  const selectedItemKeyForReveal = props.selectedItemKey;
+  const setDirectoryThreadsCollapsed = props.onSetDirectoryThreadsCollapsed;
 
   const reorderDirectoryPins = (nextKeys: string[]): void => {
     void props.onReorderDirectoryPins?.(nextKeys);
@@ -447,6 +453,102 @@ export function DirectoriesList(props: DirectoriesListProps) {
     });
   }, [visibleDirectories, props.selectedItemKey]);
 
+  useEffect(() => {
+    const request = revealSelectedThreadRequest ?? 0;
+    const selectedItemKey = selectedItemKeyForReveal;
+    if (request <= handledRevealRequestRef.current || !selectedItemKey) {
+      return;
+    }
+
+    const matchingDirectory = visibleDirectories.find(
+      (directory) =>
+        selectedItemKey === buildLaunchpadSelectionKey(directory.key) ||
+        directory.threadKeys.includes(selectedItemKey),
+    );
+    if (!matchingDirectory) {
+      // showThread() can select before a refreshed navigation snapshot adds
+      // the thread to its directory. Leave the request pending until the
+      // matching directory exists instead of consuming it as a no-op.
+      return;
+    }
+    handledRevealRequestRef.current = request;
+    setExpandedByKey((current) => ({
+      ...current,
+      [matchingDirectory.key]: true,
+    }));
+
+    const selectedThread = threadsByKey.get(selectedItemKey);
+    if (!selectedThread) {
+      return;
+    }
+
+    const directoryThreadKeys = new Set(matchingDirectory.threadKeys);
+    let topLevelThread = selectedThread;
+    const visited = new Set<string>();
+    while (topLevelThread.parentThreadId) {
+      const parentKey = buildThreadIdentityKey(
+        topLevelThread.source,
+        topLevelThread.parentThreadId,
+      );
+      if (visited.has(parentKey) || !directoryThreadKeys.has(parentKey)) {
+        break;
+      }
+      visited.add(parentKey);
+      const parent = threadsByKey.get(parentKey);
+      if (!parent) {
+        break;
+      }
+      topLevelThread = parent;
+    }
+
+    if (isPinnedThread(topLevelThread)) {
+      return;
+    }
+
+    // The selected child is rendered with its top-level ancestor. Reveal that
+    // ancestor through both directory-only layers: the sticky pinned/unpinned
+    // disclosure and the ten-row overflow cap. ThreadRow scrolls the selected
+    // child into view when these state changes mount it.
+    if (matchingDirectory.directoryThreadsCollapsed === true) {
+      void setDirectoryThreadsCollapsed?.(matchingDirectory, false);
+    }
+
+    const topLevelUnpinnedThreads = matchingDirectory.threadKeys
+      .map((threadKey) => threadsByKey.get(threadKey))
+      .filter((thread): thread is NavigationThreadSummary => Boolean(thread))
+      .filter((thread) => {
+        if (!thread.parentThreadId) {
+          return true;
+        }
+        return !directoryThreadKeys.has(
+          buildThreadIdentityKey(thread.source, thread.parentThreadId),
+        );
+      })
+      .filter((thread) => !isPinnedThread(thread));
+    const topLevelThreadKey = buildThreadIdentityKey(
+      topLevelThread.source,
+      topLevelThread.id,
+    );
+    if (
+      topLevelUnpinnedThreads.findIndex(
+        (thread) =>
+          buildThreadIdentityKey(thread.source, thread.id) ===
+          topLevelThreadKey,
+      ) >= UNPINNED_THREAD_CAP
+    ) {
+      setUnpinnedExpandedByKey((current) => ({
+        ...current,
+        [matchingDirectory.key]: true,
+      }));
+    }
+  }, [
+    revealSelectedThreadRequest,
+    selectedItemKeyForReveal,
+    setDirectoryThreadsCollapsed,
+    threadsByKey,
+    visibleDirectories,
+  ]);
+
   if (visibleDirectories.length === 0) {
     return <p className="sidebar-empty">No directory-linked threads.</p>;
   }
@@ -539,6 +641,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
               includeLinkedDirectories
               linkedDirectoryMode="kind"
               nested
+              revealSelectedThreadRequest={props.revealSelectedThreadRequest}
               selectedThreadKey={props.selectedItemKey}
               thinkingThreadKeys={props.thinkingThreadKeys}
               thread={child}
@@ -607,6 +710,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
               onOpenPullRequestContextMenu={props.onOpenPullRequestContextMenu}
               onDetachPullRequest={props.onDetachPullRequest}
               onPrefetchPullRequests={props.onPrefetchPullRequests}
+              onRevealSelectedThreadComplete={
+                props.onRevealSelectedThreadComplete
+              }
               onSelectThread={props.onSelectThread}
               onSetReaction={props.onSetReaction}
               onUnbindMessagingBinding={props.onUnbindMessagingBinding}
@@ -669,6 +775,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
             draggable={Boolean(props.onReorderThreadPins)}
             includeLinkedDirectories
             linkedDirectoryMode="kind"
+            revealSelectedThreadRequest={props.revealSelectedThreadRequest}
             selectedThreadKey={props.selectedItemKey}
             subthreadCount={subthreadCount}
             subthreadsCollapsed={thread.subthreadsCollapsed === true}
@@ -697,6 +804,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
             onOpenPullRequestContextMenu={props.onOpenPullRequestContextMenu}
             onDetachPullRequest={props.onDetachPullRequest}
             onPrefetchPullRequests={props.onPrefetchPullRequests}
+            onRevealSelectedThreadComplete={props.onRevealSelectedThreadComplete}
             onSelectThread={props.onSelectThread}
             onSetReaction={props.onSetReaction}
             onUnbindMessagingBinding={props.onUnbindMessagingBinding}
@@ -981,6 +1089,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
                           draggable={Boolean(props.onReorderThreadPins)}
                           includeLinkedDirectories
                           linkedDirectoryMode="kind"
+                          revealSelectedThreadRequest={
+                            props.revealSelectedThreadRequest
+                          }
 	                          selectedThreadKey={props.selectedItemKey}
                               subthreadCount={subthreadCount}
                               subthreadsCollapsed={thread.subthreadsCollapsed === true}
@@ -1058,6 +1169,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
                           onOpenPullRequestContextMenu={props.onOpenPullRequestContextMenu}
                           onDetachPullRequest={props.onDetachPullRequest}
                           onPrefetchPullRequests={props.onPrefetchPullRequests}
+                          onRevealSelectedThreadComplete={
+                            props.onRevealSelectedThreadComplete
+                          }
                           onSelectThread={props.onSelectThread}
                           onSetReaction={props.onSetReaction}
 	                          onUnbindMessagingBinding={props.onUnbindMessagingBinding}
