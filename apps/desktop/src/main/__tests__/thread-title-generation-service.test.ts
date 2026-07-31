@@ -35,17 +35,11 @@ describe("ThreadTitleGenerationService", () => {
       title: "PROJECT-123 checkout crash",
       cachedTokens: 12,
     });
-    expect(generator.generateTitle).toHaveBeenCalledWith(
-      expect.objectContaining({
-        schema: expect.objectContaining({
-          properties: expect.objectContaining({
-            title: expect.objectContaining({
-              maxLength: 50,
-            }),
-          }),
-        }),
-      }),
-    );
+    const schema = vi.mocked(generator.generateTitle).mock.calls[0]?.[0]
+      .schema as {
+        properties?: { title?: Record<string, unknown> };
+      };
+    expect(schema.properties?.title).not.toHaveProperty("maxLength");
   });
 
   it("allows 20 seconds for title generators by default", async () => {
@@ -249,11 +243,11 @@ describe("ThreadTitleGenerationService", () => {
     });
   });
 
-  it("rejects overlong titles and accepts clear titles over six words", async () => {
+  it("allows 30 percent title slack and truncates beyond it", async () => {
     const longTitleService = new ThreadTitleGenerationService({
       generators: {
         codex: makeGenerator({
-          title: "This title is intentionally much too long for the desktop thread title limit",
+          title: "x".repeat(66),
         }),
       },
     });
@@ -271,8 +265,8 @@ describe("ThreadTitleGenerationService", () => {
         userPrompt: "Name this thread",
       })
     ).resolves.toEqual({
-      status: "invalid",
-      reason: "title_too_long",
+      status: "generated",
+      title: "x".repeat(65),
       cachedTokens: 12,
     });
     await expect(
@@ -283,6 +277,24 @@ describe("ThreadTitleGenerationService", () => {
     ).resolves.toEqual({
       status: "generated",
       title: "Paul Revere opening by the Beastie Boys",
+      cachedTokens: 12,
+    });
+
+    const eightWordService = new ThreadTitleGenerationService({
+      generators: {
+        codex: makeGenerator({
+          title: "One two three four five six seven eight",
+        }),
+      },
+    });
+    await expect(
+      eightWordService.generateTitle({
+        backend: "codex",
+        userPrompt: "Name this thread",
+      })
+    ).resolves.toEqual({
+      status: "generated",
+      title: "One two three four five six seven",
       cachedTokens: 12,
     });
   });
@@ -299,10 +311,7 @@ describe("ThreadTitleGenerationService", () => {
         codex: {
           generateTitle: vi.fn(async () => ({
             status: "ok" as const,
-            object: {
-              title:
-                "This generated title is intentionally too long for the desktop title limit",
-            },
+            object: { title: 123 },
             helperThreadId: "title-helper-thread",
             helperTurnId: "title-helper-turn",
             model: "gpt-5.4-mini",
@@ -321,7 +330,7 @@ describe("ThreadTitleGenerationService", () => {
       })
     ).resolves.toEqual({
       status: "invalid",
-      reason: "title_too_long",
+      reason: "title_must_be_string",
       helperThreadId: "title-helper-thread",
       helperTurnId: "title-helper-turn",
       model: "gpt-5.4-mini",

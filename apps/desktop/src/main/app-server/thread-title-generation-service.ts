@@ -5,11 +5,19 @@ import {
 } from "./ephemeral-object-call";
 import { buildThreadTitlePrompt } from "./thread-title-prompt";
 
-export const THREAD_TITLE_PROMPT_VERSION = "thread-title-v1";
+export const THREAD_TITLE_PROMPT_VERSION = "thread-title-v2";
 export const DEFAULT_GROK_THREAD_TITLE_MODEL = "grok-4-1-fast-non-reasoning";
 
 const THREAD_TITLE_TIMEOUT_MS = 20_000;
-const MAX_TITLE_CHARACTERS = 50;
+const REQUESTED_MAX_TITLE_CHARACTERS = 50;
+const REQUESTED_MAX_TITLE_WORDS = 6;
+const TITLE_LIMIT_TOLERANCE = 0.3;
+const ACCEPTED_MAX_TITLE_CHARACTERS = Math.floor(
+  REQUESTED_MAX_TITLE_CHARACTERS * (1 + TITLE_LIMIT_TOLERANCE),
+);
+const ACCEPTED_MAX_TITLE_WORDS = Math.floor(
+  REQUESTED_MAX_TITLE_WORDS * (1 + TITLE_LIMIT_TOLERANCE),
+);
 
 const THREAD_TITLE_RESPONSE_SCHEMA = {
   type: "object",
@@ -19,8 +27,8 @@ const THREAD_TITLE_RESPONSE_SCHEMA = {
     title: {
       type: "string",
       minLength: 1,
-      maxLength: MAX_TITLE_CHARACTERS,
-      description: "A concise thread title, ideally 6 words or fewer.",
+      description:
+        "A concise thread title of 6 words or fewer and no more than 50 characters.",
     },
   },
 } as const;
@@ -226,11 +234,8 @@ function normalizeThreadTitleObject(
   if (!cleaned) {
     return { reason: "title_empty" };
   }
-  if (cleaned.length > MAX_TITLE_CHARACTERS) {
-    return { reason: "title_too_long" };
-  }
   return {
-    title: cleaned,
+    title: truncateThreadTitle(cleaned),
     reason: "ok",
   };
 }
@@ -254,6 +259,20 @@ function cleanThreadTitle(value: string): string {
   title = stripMatchingQuotes(title);
   title = title.replace(/[.!?。！？]+$/u, "").trim();
   return title;
+}
+
+function truncateThreadTitle(value: string): string {
+  const words = value.split(/\s+/u);
+  const wordTruncated = words
+    .slice(0, ACCEPTED_MAX_TITLE_WORDS)
+    .join(" ");
+  const characters = Array.from(wordTruncated);
+  if (characters.length <= ACCEPTED_MAX_TITLE_CHARACTERS) {
+    return wordTruncated;
+  }
+  return cleanThreadTitle(
+    characters.slice(0, ACCEPTED_MAX_TITLE_CHARACTERS).join(""),
+  );
 }
 
 function stripMatchingQuotes(value: string): string {

@@ -13409,7 +13409,7 @@ command = "pnpm dev"
     const titleService = {
       generateTitle: vi.fn(async () => ({
         status: "invalid" as const,
-        reason: "title_too_many_words",
+        reason: "title_empty",
         helperThreadId: "invalid-title-helper-thread",
         helperTurnId: "invalid-title-helper-turn",
         model: "gpt-5.6-luna",
@@ -13468,7 +13468,7 @@ command = "pnpm dev"
         monitorTurnId: "invalid-title-helper-turn",
         preferredModel: "gpt-5.6-luna",
         preferredReasoningEffort: "low",
-        lastMessage: "Title generation failed: title_too_many_words",
+        lastMessage: "Title generation failed: title_empty",
         monitorUsage: expect.objectContaining({
           model: "gpt-5.6-luna",
           tokenUsage: {
