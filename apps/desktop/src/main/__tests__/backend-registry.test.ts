@@ -131,6 +131,19 @@ function pwragentDynamicTools(dynamicTools: unknown): DynamicToolTestSpec[] {
   return namespace?.tools as DynamicToolTestSpec[] ?? [];
 }
 
+function isCompletedItemType(event: AgentEvent, itemType: string): boolean {
+  if (event.notification.method !== "item/completed") {
+    return false;
+  }
+  const item = event.notification.params.item;
+  return Boolean(
+    item
+    && typeof item === "object"
+    && "type" in item
+    && item.type === itemType,
+  );
+}
+
 function expectPwragentDynamicTools(dynamicTools: unknown, names: string[]): void {
   expect(pwragentDynamicTools(dynamicTools)).toEqual(
     expect.arrayContaining(
@@ -426,6 +439,39 @@ function createOverlayStoreMock(params?: {
       } as ThreadOverlayState;
       overlays.set(key, next);
       return { overlay: next, persisted: true };
+    },
+    upsertManagedReviewEntry: async ({
+      backend,
+      threadId,
+      entry,
+    }: {
+      backend: "codex" | "grok";
+      threadId: string;
+      entry: NonNullable<ThreadOverlayState["managedReviewEntries"]>[number];
+    }) => {
+      const key = `${backend}:${threadId}`;
+      const current = overlays.get(key) ?? {
+        backend,
+        threadId,
+        executionMode: "default" as const,
+        extraLinkedDirectories: [],
+      };
+      const existingEntries = current.managedReviewEntries ?? [];
+      const existingIndex = existingEntries.findIndex(
+        (candidate) => candidate.id === entry.id,
+      );
+      const nextEntries = [...existingEntries];
+      if (existingIndex === -1) {
+        nextEntries.push(entry);
+      } else {
+        nextEntries[existingIndex] = entry;
+      }
+      const next = {
+        ...current,
+        managedReviewEntries: nextEntries,
+      } as ThreadOverlayState;
+      overlays.set(key, next);
+      return next;
     },
     upsertThreadSubAgent: async ({
       backend,
@@ -14853,6 +14899,323 @@ command = "pnpm dev"
       reasoningEffort: "high",
       serviceTier: "priority",
       fastMode: true,
+    });
+
+    await registry.close();
+  });
+
+  it("runs the managed review experiment as one child turn and attributes usage to it", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start"] },
+      models: [
+        {
+          id: "gpt-5.5",
+          label: "GPT-5.5",
+          current: true,
+          supportsFast: true,
+          supportsReasoning: true,
+        },
+      ],
+      startThreadResult: { threadId: "managed-review-child" },
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-parent": {
+          backend: "codex",
+          threadId: "thread-parent",
+          executionMode: "full-access",
+          model: "gpt-5.5",
+          reasoningEffort: "high",
+          serviceTier: "priority",
+          fastMode: true,
+          extraLinkedDirectories: [
+            {
+              id: "/repo/worktree",
+              kind: "worktree",
+              label: "worktree",
+              path: "/repo",
+              worktreePath: "/repo/worktree",
+            },
+          ],
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      overlayStore,
+      resolveManagedReviewEnabled: () => true,
+    });
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
+
+    const codexBackend = (await registry.listBackends({ includeUnavailable: true }))
+      .backends.find((backend) => backend.kind === "codex");
+    expect(codexBackend?.methods).not.toContain("review/start");
+    expect(codexBackend?.capabilities.startReview).toBe(true);
+
+    const response = await registry.startReview({
+      backend: "codex",
+      threadId: "thread-parent",
+      target: { type: "baseBranch", branch: "main" },
+      delivery: "inline",
+    });
+
+    expect(response).toEqual({
+      backend: "codex",
+      threadId: "thread-parent",
+      reviewThreadId: "managed-review-child",
+      turnId: "turn-1",
+    });
+    expect(codexClient.lastStartReviewParams).toBeUndefined();
+    expect(codexClient.lastStartThreadParams).toMatchObject({
+      approvalPolicy: "never",
+      cwd: "/repo/worktree",
+      ephemeral: true,
+      fastMode: true,
+      model: "gpt-5.5",
+      reasoningEffort: "high",
+      sandbox: "danger-full-access",
+      serviceTier: "priority",
+    });
+    expect(codexClient.lastStartTurnParams).toMatchObject({
+      threadId: "managed-review-child",
+      cwd: "/repo/worktree",
+      fastMode: true,
+      model: "gpt-5.5",
+      reasoningEffort: "high",
+      serviceTier: "priority",
+    });
+    expect(codexClient.lastStartTurnParams?.input[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining("against base branch 'main'"),
+    });
+
+    const approvalResponse = codexClient.emitRequest({
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "managed-review-child",
+        turnId: "turn-1",
+        itemId: "review-command",
+        requestId: "review-approval",
+        command: "git diff main...HEAD",
+      },
+    } as AppServerPendingRequestNotification);
+    await waitForCondition(() => events.some((event) =>
+      event.notification.method === "item/commandExecution/requestApproval"
+    ));
+    expect(events.find((event) =>
+      event.notification.method === "item/commandExecution/requestApproval"
+    )).toMatchObject({
+      backend: "codex",
+      notification: {
+        params: {
+          threadId: "thread-parent",
+          turnId: "turn-1",
+          requestId: "review-approval",
+        },
+      },
+    });
+    await registry.submitServerRequest({
+      backend: "codex",
+      threadId: "thread-parent",
+      turnId: "turn-1",
+      requestId: "review-approval",
+      response: { decision: "accept" },
+    });
+    await expect(approvalResponse).resolves.toEqual({ decision: "accept" });
+
+    await codexClient.emit({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: "managed-review-child",
+        turnId: "turn-1",
+        model: "gpt-5.5",
+        tokenUsage: {
+          total: {
+            inputTokens: 1_000,
+            cachedInputTokens: 250,
+            outputTokens: 100,
+            reasoningOutputTokens: 25,
+            fastMode: true,
+            serviceTier: "priority",
+          },
+        },
+      },
+    });
+    await codexClient.emit({
+      method: "turn/completed",
+      params: {
+        threadId: "managed-review-child",
+        turnId: "turn-1",
+        turn: {
+          id: "turn-1",
+          status: "completed",
+          output: [{
+            type: "text",
+            text: JSON.stringify({
+              findings: [],
+              overall_correctness: "patch is correct",
+              overall_explanation: "No blocking findings.",
+              overall_confidence_score: 0.96,
+            }),
+          }],
+        },
+      },
+    });
+
+    const parentEvents = events.filter(
+      (event) => "threadId" in event.notification.params
+        && event.notification.params.threadId === "thread-parent",
+    );
+    expect(parentEvents.filter((event) =>
+      isCompletedItemType(event, "enteredReviewMode")
+    )).toHaveLength(1);
+    expect(parentEvents.filter((event) =>
+      isCompletedItemType(event, "exitedReviewMode")
+    )).toHaveLength(1);
+    expect(parentEvents.filter((event) =>
+      event.notification.method === "turn/completed"
+    )).toHaveLength(1);
+
+    const overlay = await overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: "thread-parent",
+    });
+    expect(overlay?.subAgents?.[0]).toMatchObject({
+      monitorId: "review:turn-1",
+      monitorThreadId: "managed-review-child",
+      monitorTurnId: "turn-1",
+      outcome: "success",
+      status: "success",
+    });
+    expect(overlay?.managedReviewEntries).toEqual([
+      expect.objectContaining({
+        id: "managed-review:turn-1:started",
+        displayText: "Review changes against main",
+        turn: expect.objectContaining({
+          id: "turn-1",
+          status: "in_progress",
+        }),
+      }),
+      expect.objectContaining({
+        id: "managed-review:turn-1:result",
+        output: expect.objectContaining({
+          overall_correctness: "patch is correct",
+          overall_explanation: "No blocking findings.",
+        }),
+        turn: expect.objectContaining({
+          id: "turn-1",
+          status: "completed",
+        }),
+      }),
+    ]);
+    const hydratedParent = await registry.readThread({
+      backend: "codex",
+      threadId: "thread-parent",
+    });
+    expect(hydratedParent.replay.entries.filter(
+      (entry) => entry.type === "review",
+    )).toEqual(overlay?.managedReviewEntries);
+    const pricing = await overlayStore.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-parent",
+    });
+    expect(pricing.lines[0]).toMatchObject({
+      parentThreadId: "thread-parent",
+      scope: "monitor",
+      threadId: "managed-review-child",
+      turnId: "turn-1",
+    });
+
+    await expect(registry.startTurn({
+      backend: "codex",
+      threadId: "thread-parent",
+      input: [{ type: "text", text: "Continue after review" }],
+    })).resolves.toMatchObject({ threadId: "thread-parent" });
+
+    await registry.close();
+  });
+
+  it("terminal-gates failed managed reviews and releases the parent thread", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "review/start"] },
+      startThreadResult: { threadId: "managed-review-child" },
+    });
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      overlayStore,
+      resolveManagedReviewEnabled: () => true,
+    });
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
+
+    await registry.startReview({
+      backend: "codex",
+      threadId: "thread-parent",
+      target: { type: "uncommittedChanges" },
+      delivery: "inline",
+    });
+    const queuedTurn = await registry.submitTurn({
+      backend: "codex",
+      threadId: "thread-parent",
+      input: [{ type: "text", text: "Continue after failure" }],
+      origin: "messaging",
+    });
+    expect(queuedTurn.status).toBe("queued");
+    await codexClient.emit({
+      method: "turn/failed",
+      params: {
+        threadId: "managed-review-child",
+        turnId: "turn-1",
+        turn: {
+          id: "turn-1",
+          status: "failed",
+          error: { message: "You have 8147 weighted tokens left" },
+        },
+      },
+    });
+
+    const parentEvents = events.filter(
+      (event) => "threadId" in event.notification.params
+        && event.notification.params.threadId === "thread-parent",
+    );
+    expect(parentEvents.some((event) =>
+      isCompletedItemType(event, "exitedReviewMode")
+    )).toBe(false);
+    expect(parentEvents.filter((event) =>
+      event.notification.method === "turn/completed"
+    )).toHaveLength(0);
+    expect(parentEvents.filter((event) =>
+      event.notification.method === "turn/failed"
+    )).toHaveLength(1);
+    const overlay = await overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: "thread-parent",
+    });
+    expect(overlay?.subAgents?.[0]).toMatchObject({
+      outcome: "failure",
+      status: "failed",
+    });
+    expect(overlay?.managedReviewEntries).toEqual([
+      expect.objectContaining({
+        id: "managed-review:turn-1:started",
+      }),
+    ]);
+
+    await expect.poll(() => codexClient.lastStartTurnParams).toMatchObject({
+      threadId: "thread-parent",
+      input: [{ type: "text", text: "Continue after failure" }],
     });
 
     await registry.close();

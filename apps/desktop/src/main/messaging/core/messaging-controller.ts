@@ -661,6 +661,10 @@ export class MessagingController {
   private readonly activeTurnsByThreadKey = new Map<string, MessagingActiveTurnSummary>();
   private readonly contextUsageSummariesByThreadKey = new Map<string, string>();
   private readonly planArtifactsByTurnKey = new Map<string, AppServerThreadPlanEntry>();
+  private readonly reviewArtifactsByTurnKey = new Map<
+    string,
+    AppServerThreadReviewEntry
+  >();
   private readonly markdownFileAttachmentSelector =
     new MessagingMarkdownFileAttachmentSelector();
   private readonly typingActivityLastSignaledAt = new Map<string, number>();
@@ -1154,11 +1158,26 @@ export class MessagingController {
       );
     }
     const reviewArtifact = reviewArtifactForBackendEvent(event, this.now());
+    if (reviewArtifact) {
+      this.reviewArtifactsByTurnKey.set(
+        artifactTurnKey(
+          event.backend,
+          threadId,
+          reviewArtifact.turn?.id ?? reviewArtifact.id,
+        ),
+        reviewArtifact,
+      );
+    }
     const markdownFileArtifactSelection =
       this.markdownFileAttachmentSelector.selectFromBackendEvent(event);
     const lifecycle = turnLifecycleForBackendEvent(event, this.now());
     const completedPlan = lifecycle && isTerminalTurnLifecycle(lifecycle)
       ? this.planArtifactsByTurnKey.get(artifactTurnKey(event.backend, threadId, lifecycle.turnId))
+      : undefined;
+    const completedReview = lifecycle?.status === "completed"
+      ? this.reviewArtifactsByTurnKey.get(
+          artifactTurnKey(event.backend, threadId, lifecycle.turnId),
+        )
       : undefined;
     for (const binding of bindings) {
       let activeTurn = this.getActiveTurn(binding);
@@ -1247,6 +1266,7 @@ export class MessagingController {
         if (
           !isNonFinalAssistantTextForBackendEvent(event)
           && !isTaskMonitorProgressEvent(event)
+          && !completedReview
         ) {
           const deliveredFinalStream = await this.flushAssistantStreamForEvent(
             event,
@@ -1302,11 +1322,11 @@ export class MessagingController {
         });
       }
 
-      if (reviewArtifact && !automationTurnEvent) {
+      if (completedReview && !automationTurnEvent) {
         await this.deliverArtifactForBinding({
-          artifact: artifactFromReviewEntry(reviewArtifact),
+          artifact: artifactFromReviewEntry(completedReview),
           binding,
-          intentId: `artifact:review:${reviewArtifact.id}:${binding.id}`,
+          intentId: `artifact:review:${completedReview.id}:${binding.id}`,
         });
       }
 
@@ -1372,6 +1392,9 @@ export class MessagingController {
       this.forgetAutomationTurn(event.backend, threadId, lifecycle.turnId);
       this.forgetAgentMessagingOrigin(event.backend, threadId, lifecycle.turnId);
       this.planArtifactsByTurnKey.delete(artifactTurnKey(event.backend, threadId, lifecycle.turnId));
+      this.reviewArtifactsByTurnKey.delete(
+        artifactTurnKey(event.backend, threadId, lifecycle.turnId),
+      );
     }
   }
 

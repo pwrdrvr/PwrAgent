@@ -48,6 +48,11 @@ const DEFAULT_CODEX_DEFAULT_MODE_REQUEST_USER_INPUT = {
   source: "default" as const,
 };
 
+const DEFAULT_MANAGED_REVIEW = {
+  value: false,
+  source: "default" as const,
+};
+
 const DEFAULT_AGENT_CORE_GROK = {
   value: false,
   source: "default" as const,
@@ -88,6 +93,7 @@ export function ExperimentalSettings(props: {
   onCodexDefaultModeRequestUserInputChange: (
     enabled: boolean,
   ) => Promise<void>;
+  onManagedReviewChange: (enabled: boolean) => Promise<void>;
   onAgentCoreGrokChange: (enabled: boolean) => Promise<void>;
 }) {
   const condensation = props.snapshot.experimental.diffCondensation;
@@ -115,6 +121,8 @@ export function ExperimentalSettings(props: {
   const codexDefaultModeRequestUserInput =
     props.snapshot.experimental.codexDefaultModeRequestUserInput ??
     DEFAULT_CODEX_DEFAULT_MODE_REQUEST_USER_INPUT;
+  const managedReview =
+    props.snapshot.experimental.managedReview ?? DEFAULT_MANAGED_REVIEW;
   const agentCoreGrok =
     props.snapshot.experimental.agentCoreGrok ?? DEFAULT_AGENT_CORE_GROK;
   const knownCondensationModel = DIFF_CONDENSATION_MODEL_OPTIONS.some(
@@ -253,6 +261,33 @@ export function ExperimentalSettings(props: {
                 label="Enable background pull request status"
                 onChange={(enabled) => {
                   void props.onBackgroundPrPollingChange(enabled);
+                }}
+              />
+            }
+          />
+        </div>
+      </SettingsSection>
+
+      <SettingsSection
+        eyebrow="Experimental"
+        title="PwrAgent-managed Code Review"
+        description="Run code reviews in a PwrAgent-managed child turn instead of Codex's native review lifecycle. Disabled by default while failure handling and usage attribution are validated."
+        chip={managedReview.value ? "On" : "Off"}
+        chipKind={managedReview.value ? "ok" : "default"}
+      >
+        <div className="settings-fields">
+          <SettingsField
+            label="Enable managed code review"
+            sub="Route desktop and messaging /review requests through a managed child turn."
+            help="Existing threads are not migrated; turning this off restores native Codex review/start for the next review."
+            source={sourceBadge(managedReview)}
+            control={
+              <SettingsSwitch
+                checked={managedReview.value}
+                disabled={props.saving}
+                label="Enable managed code review"
+                onChange={(enabled) => {
+                  void props.onManagedReviewChange(enabled);
                 }}
               />
             }

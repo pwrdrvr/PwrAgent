@@ -5023,6 +5023,21 @@ describe("MessagingController", () => {
         },
       },
     } satisfies AgentEvent);
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [],
+          },
+        },
+      },
+    } satisfies AgentEvent);
 
     expect(
       harness.delivered.find(
@@ -5085,6 +5100,21 @@ describe("MessagingController", () => {
         },
       },
     } satisfies AgentEvent);
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [],
+          },
+        },
+      },
+    } satisfies AgentEvent);
 
     const artifactIntent = harness.delivered.find(
       (intent): intent is MessagingSurfaceIntent & {
@@ -5113,6 +5143,53 @@ describe("MessagingController", () => {
     expect(
       textPart.text.split("The patch has one validation issue."),
     ).toHaveLength(2);
+  });
+
+  it("discards review artifacts when the review turn fails", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-capacity",
+          item: {
+            id: "review-capacity",
+            type: "exited_review_mode",
+            review: "This output must not be published.",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/failed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-capacity",
+          turn: {
+            id: "turn-capacity",
+            status: "failed",
+            error: { message: "You have 8147 weighted tokens left" },
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.delivered.some(
+      (intent) => intent.kind === "message" && "artifactDelivery" in intent,
+    )).toBe(false);
+    expect(JSON.stringify(harness.delivered)).not.toContain("Code review completed");
+    expect(harness.delivered).toContainEqual(expect.objectContaining({
+      kind: "error",
+      title: "Turn failed",
+      body: "You have 8147 weighted tokens left",
+    }));
   });
 
   it("delivers a single added markdown file as attachment plus bounded preview", async () => {

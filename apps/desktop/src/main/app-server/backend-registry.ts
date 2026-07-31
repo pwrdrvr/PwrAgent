@@ -18,6 +18,11 @@ import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
 import { requestShowThread } from "../window-show-thread";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import {
+  buildManagedReviewPrompt,
+  formatManagedReviewOutput,
+  parseManagedReviewOutput,
+} from "./managed-review";
+import {
   type AcpBackendId,
   buildAppendPinRank,
   buildThreadMarkdownLink,
@@ -42,6 +47,7 @@ import {
   type AppServerThreadEntry,
   type AppServerThreadMessage,
   type AppServerThreadMessageOrigin,
+  type AppServerThreadReviewEntry,
   type AppServerToolRequestUserInputResponse,
   type AppServerThreadReplay,
   type AppServerThreadStatus,
@@ -2275,8 +2281,10 @@ type TaskMonitorDelegationRecord = {
 type ReviewSubAgentRecord = {
   backend: Exclude<AppServerBackendKind, AcpBackendId>;
   createdAt: number;
+  displayText: string;
   fastMode?: boolean;
   latestUsage?: TaskMonitorUsageSnapshot;
+  mode: "managed" | "native";
   model?: string;
   parentThreadId: string;
   serviceTier?: string;
@@ -4570,32 +4578,53 @@ function usageActivityScope(
 
 function insertTranscriptEntry(
   entries: AppServerThreadEntry[],
-  activity: AppServerThreadActivityEntry,
+  entry: AppServerThreadEntry,
 ): AppServerThreadEntry[] {
   const nextEntries = [...entries];
-  const turnId = activity.turn?.id;
+  const turnId = entry.turn?.id;
   if (turnId) {
     const sameTurnIndex = nextEntries.findLastIndex((entry) => entry.turn?.id === turnId);
     if (sameTurnIndex !== -1) {
-      nextEntries.splice(sameTurnIndex + 1, 0, activity);
+      nextEntries.splice(sameTurnIndex + 1, 0, entry);
       return nextEntries;
     }
   }
 
-  if (typeof activity.createdAt === "number") {
+  if (typeof entry.createdAt === "number") {
     const timedIndex = nextEntries.findIndex(
-      (entry) =>
-        typeof entry.createdAt === "number" &&
-        entry.createdAt > (activity.createdAt as number),
+      (candidate) =>
+        typeof candidate.createdAt === "number" &&
+        candidate.createdAt > (entry.createdAt as number),
     );
     if (timedIndex !== -1) {
-      nextEntries.splice(timedIndex, 0, activity);
+      nextEntries.splice(timedIndex, 0, entry);
       return nextEntries;
     }
   }
 
-  nextEntries.push(activity);
+  nextEntries.push(entry);
   return nextEntries;
+}
+
+function mergeManagedReviewEntries(params: {
+  replay: AppServerThreadReplay;
+  entries?: AppServerThreadReviewEntry[];
+}): AppServerThreadReplay {
+  if (!params.entries?.length) {
+    return params.replay;
+  }
+
+  let entries = params.replay.entries;
+  for (const reviewEntry of params.entries) {
+    entries = insertTranscriptEntry(
+      entries.filter((entry) => entry.id !== reviewEntry.id),
+      reviewEntry,
+    );
+  }
+  return {
+    ...params.replay,
+    entries,
+  };
 }
 
 function mergeImmutableUsageActivities(params: {
@@ -5656,6 +5685,7 @@ export class DesktopBackendRegistry {
    */
   private readonly isCodexBootstrapDeferredFn: () => boolean;
   private readonly resolveCodexDefaultModeRequestUserInputFn: () => boolean;
+  private readonly resolveManagedReviewEnabledFn: () => boolean;
   private readonly resolveProviderModelDefaultsFn: () => Record<
     string,
     DesktopProviderModelDefaults
@@ -5704,6 +5734,7 @@ export class DesktopBackendRegistry {
     isCodexBootstrapDeferred?: () => boolean;
     isBootstrapMode?: () => boolean;
     resolveCodexDefaultModeRequestUserInput?: () => boolean;
+    resolveManagedReviewEnabled?: () => boolean;
     resolveProviderModelDefaults?: () => Record<
       string,
       DesktopProviderModelDefaults
@@ -5766,6 +5797,23 @@ export class DesktopBackendRegistry {
         } catch (error) {
           backendRegistryLog.warn(
             "failed to resolve Codex default-mode request_user_input setting",
+            {
+              error: error instanceof Error ? error.message : String(error),
+            },
+          );
+          return false;
+        }
+      });
+    this.resolveManagedReviewEnabledFn =
+      options?.resolveManagedReviewEnabled ??
+      (() => {
+        try {
+          return (
+            settingsService ?? getDesktopSettingsService()
+          ).resolveManagedReviewEnabled();
+        } catch (error) {
+          backendRegistryLog.warn(
+            "failed to resolve managed review experiment setting",
             {
               error: error instanceof Error ? error.message : String(error),
             },
@@ -8279,11 +8327,18 @@ export class DesktopBackendRegistry {
           runtime: overlay?.codexEnvironmentRuntime,
         })
       : replay;
-    const replayWithImmutableUsage =
+    const replayWithManagedReviews =
       request.before || !shouldAppendTranscriptOverlays
         ? replayWithEnvironment
-        : mergeImmutableUsageActivities({
+        : mergeManagedReviewEntries({
             replay: replayWithEnvironment,
+            entries: overlay?.managedReviewEntries,
+          });
+    const replayWithImmutableUsage =
+      request.before || !shouldAppendTranscriptOverlays
+        ? replayWithManagedReviews
+        : mergeImmutableUsageActivities({
+            replay: replayWithManagedReviews,
             activities: overlay?.immutableUsageActivities,
           });
     const messageIds = [
@@ -9887,6 +9942,8 @@ export class DesktopBackendRegistry {
     if (isAcpBackendId(params.backend)) {
       throw new Error("Selected backend does not support review/start");
     }
+    const managedMode =
+      params.backend === "codex" && this.resolveManagedReviewEnabledFn();
     const reserveCodexReviewStart = params.backend === "codex";
     if (reserveCodexReviewStart) {
       if (this.threadHasActiveTurn(params.threadId)) {
@@ -9896,21 +9953,19 @@ export class DesktopBackendRegistry {
     }
     let modelSettings: ModelSettings = {};
     let result: { threadId: string; reviewThreadId: string; turnId: string };
+    let overlay: ThreadOverlayState | undefined;
+    let cwd: string | undefined;
     try {
-      modelSettings = hasExplicitModelSettings(params)
-        ? await this.resolveReviewModelSettings(params.backend, params)
-        : {};
       if (params.backend === "codex") {
         await this.flushQueuedExecutionModeIfPresent(params.threadId);
       }
-      const overlay =
+      overlay =
         params.backend === "codex"
           ? await this.overlayStore.getThreadOverlayState({
               backend: params.backend,
               threadId: params.threadId,
             })
           : undefined;
-      let cwd: string | undefined;
       if (params.backend === "codex") {
         cwd =
           params.cwd?.trim()
@@ -9920,6 +9975,20 @@ export class DesktopBackendRegistry {
             overlay,
           );
       }
+      const requestedModelSettings: ModelSettings = managedMode
+        ? {
+            model: params.model ?? overlay?.model,
+            reasoningEffort: params.reasoningEffort ?? overlay?.reasoningEffort,
+            serviceTier: params.serviceTier ?? overlay?.serviceTier ?? undefined,
+            fastMode: params.fastMode ?? overlay?.fastMode,
+          }
+        : params;
+      modelSettings = hasExplicitModelSettings(requestedModelSettings)
+        ? await this.resolveReviewModelSettings(
+            params.backend,
+            requestedModelSettings,
+          )
+        : {};
 
       const startWithClient = async (
         client: BackendClient,
@@ -9939,8 +10008,15 @@ export class DesktopBackendRegistry {
         });
       };
 
-      result =
-        params.backend === "codex"
+      result = managedMode
+        ? await this.startManagedReviewChild({
+            cwd,
+            modelSettings,
+            overlay,
+            parentThreadId: params.threadId,
+            target: params.target,
+          })
+        : params.backend === "codex"
           ? await this.withCodexThreadClient(params.threadId, startWithClient)
           : await startWithClient(this.getClient(params.backend));
     } catch (error) {
@@ -9952,7 +10028,9 @@ export class DesktopBackendRegistry {
 
     if (params.backend === "codex") {
       try {
-        const reviewThreadId = result.reviewThreadId || result.threadId;
+        const reviewThreadId = managedMode
+          ? result.threadId
+          : result.reviewThreadId || result.threadId;
         // Codex review/start returns the real review turn id, but current
         // Codex builds can also emit a lone, mismatched turn/started for the
         // same thread. Treat the returned review turn as active so queued
@@ -9978,8 +10056,10 @@ export class DesktopBackendRegistry {
     const reviewSubAgentRecord: ReviewSubAgentRecord = {
       backend: params.backend as Exclude<AppServerBackendKind, AcpBackendId>,
       createdAt: Date.now(),
+      displayText: reviewTaskLabel(params.target),
       ...(modelSettings.fastMode !== undefined ? { fastMode: modelSettings.fastMode } : {}),
       ...(modelSettings.model ? { model: modelSettings.model } : {}),
+      mode: managedMode ? "managed" : "native",
       parentThreadId: result.threadId,
       reviewThreadId: result.reviewThreadId || result.threadId,
       ...(modelSettings.serviceTier ? { serviceTier: modelSettings.serviceTier } : {}),
@@ -9994,6 +10074,15 @@ export class DesktopBackendRegistry {
     this.activeReviewSubAgents.set(reviewSubAgentKey, reviewSubAgentRecord);
     this.reviewSubAgentsByReviewTurn.set(reviewSubAgentKey, reviewSubAgentRecord);
     await this.persistReviewSubAgent(reviewSubAgentRecord);
+    backendRegistryLog.info("code review started", {
+      mode: reviewSubAgentRecord.mode,
+      parentThreadId: reviewSubAgentRecord.parentThreadId,
+      reviewThreadId: reviewSubAgentRecord.reviewThreadId,
+      turnId: reviewSubAgentRecord.turnId,
+    });
+    if (managedMode) {
+      await this.emitManagedReviewStarted(reviewSubAgentRecord);
+    }
     if (hasExplicitModelSettings(modelSettings)) {
       await this.overlayStore.setThreadModelSettings({
         backend: params.backend,
@@ -10008,6 +10097,114 @@ export class DesktopBackendRegistry {
       reviewThreadId: result.reviewThreadId,
       turnId: result.turnId,
     };
+  }
+
+  private async startManagedReviewChild(params: {
+    cwd?: string;
+    modelSettings: ModelSettings;
+    overlay?: ThreadOverlayState;
+    parentThreadId: string;
+    target: StartReviewRequest["target"];
+  }): Promise<{ threadId: string; reviewThreadId: string; turnId: string }> {
+    const executionMode =
+      params.overlay?.executionMode
+      ?? await this.resolveCodexThreadExecutionModeForActiveTurn(
+        params.parentThreadId,
+      );
+    const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
+    const client = this.getClient("codex", executionMode);
+    const thread = await client.startThread({
+      ...(params.cwd ? { cwd: params.cwd } : {}),
+      approvalPolicy: modeSettings.approvalPolicy,
+      ephemeral: true,
+      sandbox: modeSettings.sandbox,
+      ...params.modelSettings,
+      ...(params.overlay?.codexEnvironmentRuntime
+        ? { codexEnvironmentRuntime: params.overlay.codexEnvironmentRuntime }
+        : {}),
+    });
+    this.reservedCodexStartThreadIds.add(thread.threadId);
+    try {
+      const turn = await client.startTurn({
+        threadId: thread.threadId,
+        input: [{ type: "text", text: buildManagedReviewPrompt(params.target) }],
+        ...(params.cwd ? { cwd: params.cwd } : {}),
+        approvalPolicy: modeSettings.approvalPolicy,
+        sandbox: modeSettings.sandbox,
+        ...params.modelSettings,
+        ...(params.overlay?.codexEnvironmentRuntime
+          ? { codexEnvironmentRuntime: params.overlay.codexEnvironmentRuntime }
+          : {}),
+      });
+      this.activeTurnKeys.add(
+        buildActiveTurnKey("codex", turn.threadId, turn.turnId),
+      );
+      this.activeCodexTurnModes.set(
+        buildActiveTurnModeKey(turn.threadId, turn.turnId),
+        executionMode,
+      );
+      return {
+        threadId: params.parentThreadId,
+        reviewThreadId: turn.threadId,
+        turnId: turn.turnId,
+      };
+    } finally {
+      this.reservedCodexStartThreadIds.delete(thread.threadId);
+    }
+  }
+
+  private async emitManagedReviewStarted(
+    record: ReviewSubAgentRecord,
+  ): Promise<void> {
+    const startedAt = Date.now();
+    const entry: AppServerThreadReviewEntry = {
+      type: "review",
+      id: `managed-review:${record.turnId}:started`,
+      review: record.displayText,
+      displayText: record.displayText,
+      createdAt: startedAt,
+      turn: {
+        id: record.turnId,
+        status: "in_progress",
+        startedAt,
+      },
+    };
+    await this.overlayStore.upsertManagedReviewEntry({
+      backend: record.backend,
+      threadId: record.parentThreadId,
+      entry,
+    });
+    await this.emit({
+      backend: record.backend,
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: record.parentThreadId,
+          turnId: record.turnId,
+          turn: {
+            id: record.turnId,
+            status: "inProgress",
+            startedAt,
+          },
+        },
+      },
+    });
+    await this.emit({
+      backend: record.backend,
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: record.parentThreadId,
+          turnId: record.turnId,
+          item: {
+            id: entry.id,
+            type: "enteredReviewMode",
+            review: record.displayText,
+            createdAt: startedAt,
+          },
+        },
+      },
+    });
   }
 
   async submitReview(params: StartReviewRequest): Promise<
@@ -10234,6 +10431,33 @@ export class DesktopBackendRegistry {
             },
           },
         },
+      });
+      return params;
+    }
+
+    const managedReview = this.findManagedReviewForParentTurn({
+      backend: params.backend,
+      parentThreadId: params.threadId,
+      turnId: params.turnId,
+    });
+    if (managedReview) {
+      const activeMode = this.activeCodexTurnModes.get(
+        buildActiveTurnModeKey(
+          managedReview.reviewThreadId,
+          managedReview.turnId,
+        ),
+      );
+      const client = activeMode
+        ? this.getClient("codex", activeMode)
+        : this.codexClient;
+      await client.interruptTurn({
+        threadId: managedReview.reviewThreadId,
+        turnId: managedReview.turnId,
+      });
+      backendRegistryLog.info("managed review interrupt requested", {
+        parentThreadId: managedReview.parentThreadId,
+        reviewThreadId: managedReview.reviewThreadId,
+        turnId: managedReview.turnId,
       });
       return params;
     }
@@ -14554,6 +14778,14 @@ export class DesktopBackendRegistry {
           ? initializeResult.reason.message
           : String(initializeResult.reason)
         : "";
+    const capabilities = buildCapabilities(methods, "codex");
+    if (
+      this.resolveManagedReviewEnabledFn()
+      && capabilities.createThread
+      && capabilities.startTurn
+    ) {
+      capabilities.startReview = true;
+    }
 
     return {
       kind: "codex",
@@ -14571,7 +14803,7 @@ export class DesktopBackendRegistry {
       serverName: successful[0]?.serverInfo?.name,
       serverVersion: successful[0]?.serverInfo?.version,
       methods,
-      capabilities: buildCapabilities(methods, "codex"),
+      capabilities,
       launchpadOptions: buildLaunchpadOptions("codex", discoveredModels),
       executionModes: [
         {
@@ -16051,6 +16283,200 @@ export class DesktopBackendRegistry {
       status: "failed",
       updatedAt: completedAt,
     });
+  }
+
+  private findManagedReviewForParentTurn(params: {
+    backend: AppServerBackendKind;
+    parentThreadId: string;
+    turnId: string;
+  }): ReviewSubAgentRecord | undefined {
+    return Array.from(this.activeReviewSubAgents.values()).find(
+      (record) =>
+        record.mode === "managed"
+        && record.backend === params.backend
+        && record.parentThreadId === params.parentThreadId
+        && record.turnId === params.turnId,
+    );
+  }
+
+  private findManagedReviewForChildRequest(params: {
+    backend: AppServerBackendKind;
+    reviewThreadId: string;
+    turnId?: string;
+  }): ReviewSubAgentRecord | undefined {
+    return Array.from(this.activeReviewSubAgents.values()).find(
+      (record) =>
+        record.mode === "managed"
+        && record.backend === params.backend
+        && record.reviewThreadId === params.reviewThreadId
+        && (!params.turnId || record.turnId === params.turnId),
+    );
+  }
+
+  private async publishManagedReviewTerminal(params: {
+    method: "turn/completed" | "turn/failed" | "turn/cancelled";
+    notification: Extract<
+      AppServerNotification,
+      { method: "turn/completed" | "turn/failed" | "turn/cancelled" }
+    >;
+    record: ReviewSubAgentRecord;
+  }): Promise<void> {
+    const completedAt =
+      completedAtFromTerminalNotification(params.notification) ?? Date.now();
+    if (params.method === "turn/completed") {
+      const output = await this.readManagedReviewOutput(
+        params.record,
+        params.notification as Extract<
+          AppServerNotification,
+          { method: "turn/completed" }
+        >,
+      );
+      const parsed = parseManagedReviewOutput(output);
+      const review = parsed
+        ? formatManagedReviewOutput(parsed)
+        : output?.trim() || "Review completed without output.";
+      const entry: AppServerThreadReviewEntry = {
+        type: "review",
+        id: `managed-review:${params.record.turnId}:result`,
+        review,
+        createdAt: completedAt,
+        ...(parsed ? { output: parsed } : {}),
+        turn: {
+          id: params.record.turnId,
+          status: "completed",
+          completedAt,
+        },
+      };
+      await this.overlayStore.upsertManagedReviewEntry({
+        backend: params.record.backend,
+        threadId: params.record.parentThreadId,
+        entry,
+      });
+      await this.emit({
+        backend: params.record.backend,
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: params.record.parentThreadId,
+            turnId: params.record.turnId,
+            item: {
+              id: entry.id,
+              type: "exitedReviewMode",
+              review,
+              createdAt: completedAt,
+              ...(parsed ? { data: { reviewOutput: parsed } } : {}),
+            },
+          },
+        },
+      });
+      backendRegistryLog.info("managed review artifact published", {
+        parentThreadId: params.record.parentThreadId,
+        reviewThreadId: params.record.reviewThreadId,
+        structured: Boolean(parsed),
+        turnId: params.record.turnId,
+      });
+      await this.emit({
+        backend: params.record.backend,
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: params.record.parentThreadId,
+            turnId: params.record.turnId,
+            turn: {
+              id: params.record.turnId,
+              status: "completed",
+              completedAt,
+              output: [{ type: "text", text: review }],
+            },
+          },
+        },
+      });
+      return;
+    }
+
+    backendRegistryLog.info("managed review artifact discarded", {
+      method: params.method,
+      parentThreadId: params.record.parentThreadId,
+      reviewThreadId: params.record.reviewThreadId,
+      turnId: params.record.turnId,
+    });
+    if (params.method === "turn/cancelled") {
+      await this.emit({
+        backend: params.record.backend,
+        notification: {
+          method: "turn/cancelled",
+          params: {
+            threadId: params.record.parentThreadId,
+            turnId: params.record.turnId,
+            turn: {
+              id: params.record.turnId,
+              status: "cancelled",
+              completedAt,
+            },
+          },
+        },
+      });
+      return;
+    }
+
+    const failure = (
+      params.notification as Extract<
+        AppServerNotification,
+        { method: "turn/failed" }
+      >
+    ).params.turn?.error?.message;
+    await this.emit({
+      backend: params.record.backend,
+      notification: {
+        method: "turn/failed",
+        params: {
+          threadId: params.record.parentThreadId,
+          turnId: params.record.turnId,
+          turn: {
+            id: params.record.turnId,
+            status: "failed",
+            completedAt,
+            error: {
+              message:
+                typeof failure === "string" && failure.trim()
+                  ? failure
+                  : "Managed review failed.",
+            },
+          },
+        },
+      },
+    });
+  }
+
+  private async readManagedReviewOutput(
+    record: ReviewSubAgentRecord,
+    notification: Extract<AppServerNotification, { method: "turn/completed" }>,
+  ): Promise<string | undefined> {
+    const terminalOutput = notification.params.turn?.output
+      ?.map((item) => item.text)
+      .filter((text): text is string => typeof text === "string" && Boolean(text.trim()))
+      .join("\n\n")
+      .trim();
+    if (terminalOutput) {
+      return terminalOutput;
+    }
+    try {
+      const replay = await this.readThread({
+        backend: record.backend,
+        threadId: record.reviewThreadId,
+      });
+      return assistantOutputForTurn(replay.replay, record.turnId)
+        .map((item) => item.text)
+        .join("\n\n")
+        .trim() || undefined;
+    } catch (error) {
+      backendRegistryLog.warn("managed review output read failed", {
+        error: error instanceof Error ? error.message : String(error),
+        reviewThreadId: record.reviewThreadId,
+        turnId: record.turnId,
+      });
+      return undefined;
+    }
   }
 
   private findActiveReviewSubAgentForTerminal(params: {
@@ -17752,10 +18178,35 @@ export class DesktopBackendRegistry {
       return buildHeadlessAutomationRequestCancelResponse(request);
     }
 
+    const managedReview = this.findManagedReviewForChildRequest({
+      backend,
+      reviewThreadId: request.params.threadId,
+      turnId: request.params.turnId ?? undefined,
+    });
+    const routedRequest = managedReview
+      ? {
+          ...request,
+          params: {
+            ...request.params,
+            threadId: managedReview.parentThreadId,
+            turnId: managedReview.turnId,
+          },
+        } as AppServerPendingRequestNotification
+      : request;
+    if (managedReview) {
+      backendRegistryLog.info("managed review request routed to parent", {
+        method: request.method,
+        parentThreadId: managedReview.parentThreadId,
+        requestId: request.params.requestId,
+        reviewThreadId: managedReview.reviewThreadId,
+        turnId: managedReview.turnId,
+      });
+    }
+
     const key = buildPendingRequestKey({
       backend,
-      threadId: request.params.threadId,
-      requestId: request.params.requestId,
+      threadId: routedRequest.params.threadId,
+      requestId: routedRequest.params.requestId,
     });
 
     return await new Promise<SubmitServerRequestRequest["response"]>((resolve, reject) => {
@@ -17763,16 +18214,16 @@ export class DesktopBackendRegistry {
 
       void this.emit({
         backend,
-        notification: request as AppServerNotification,
+        notification: routedRequest as AppServerNotification,
       }).catch((error) => {
         backendRegistryLog.error(
           "failed to publish pending server request; keeping request pending",
           {
             backend,
             error: error instanceof Error ? error.message : String(error),
-            requestId: request.params.requestId,
-            threadId: request.params.threadId,
-            turnId: request.params.turnId,
+            requestId: routedRequest.params.requestId,
+            threadId: routedRequest.params.threadId,
+            turnId: routedRequest.params.turnId,
           },
         );
       });
@@ -22146,6 +22597,13 @@ export class DesktopBackendRegistry {
         };
       };
       const turnId = turnIdFromTerminalNotification(notification);
+      const managedReview = turnId
+        ? this.findActiveReviewSubAgentForTerminal({
+            backend: event.backend,
+            threadId: notification.params.threadId,
+            turnId,
+          })?.record
+        : undefined;
       if (turnId) {
         await this.completeReviewSubAgent({
           backend: event.backend,
@@ -22153,6 +22611,16 @@ export class DesktopBackendRegistry {
           method: event.notification.method,
           threadId: notification.params.threadId,
           turnId,
+        });
+      }
+      if (managedReview?.mode === "managed") {
+        await this.publishManagedReviewTerminal({
+          method: event.notification.method,
+          notification: event.notification as Extract<
+            AppServerNotification,
+            { method: "turn/completed" | "turn/failed" | "turn/cancelled" }
+          >,
+          record: managedReview,
         });
       }
       if (turnId) {

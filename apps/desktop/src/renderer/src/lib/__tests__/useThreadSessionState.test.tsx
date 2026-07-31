@@ -7961,6 +7961,246 @@ describe("useThreadSessionState", () => {
     });
   });
 
+  it("deduplicates Slack-started review markers by authoritative turn id", async () => {
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        threadStatus: "idle",
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+    await waitForThreadHydration(result);
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-review",
+            item: {
+              id: "review-start-live",
+              type: "enteredReviewMode",
+              review: "Review current changes",
+            },
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-review",
+            item: {
+              id: "review-start-hydrated",
+              type: "enteredReviewMode",
+              review: "Code review started",
+            },
+          },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.entries.filter((entry) =>
+        entry.type === "review" && entry.turn?.status === "in_progress"
+      )).toHaveLength(1);
+    });
+  });
+
+  it("does not clear a just-started review from a racing idle hydration", async () => {
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    let resolveRead:
+      | ((response: AppServerReadThreadResponse) => void)
+      | undefined;
+    const readThread = vi.fn(() => new Promise<AppServerReadThreadResponse>((resolve) => {
+      resolveRead = resolve;
+    }));
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      readThread,
+    };
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(1);
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-review",
+            item: {
+              id: "review-start",
+              type: "enteredReviewMode",
+              review: "Review current changes",
+            },
+          },
+        },
+      });
+      resolveRead?.({
+        backend: "codex",
+        fetchedAt: Date.now(),
+        threadId: "thread-1",
+        threadStatus: "idle",
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.activeTurnId).toBe("turn-review");
+      expect(result.current.threadBusy).toBe(true);
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/failed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-review",
+            turn: {
+              id: "turn-review",
+              status: "failed",
+              error: { message: "capacity exhausted" },
+            },
+          },
+        },
+      });
+    });
+    await waitFor(() => {
+      expect(result.current.activeTurnId).toBeUndefined();
+      expect(result.current.pendingStatusText).toBeUndefined();
+      expect(result.current.threadBusy).toBe(false);
+    });
+  });
+
+  it("rechecks an idle review after the own-update grace period", async () => {
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    let resolveFirstRead:
+      | ((response: AppServerReadThreadResponse) => void)
+      | undefined;
+    let readCount = 0;
+    const idleResponse = (): AppServerReadThreadResponse => ({
+      backend: "codex",
+      fetchedAt: Date.now(),
+      threadId: "thread-1",
+      threadStatus: "idle",
+      replay: {
+        entries: [],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+      },
+    });
+    const readThread = vi.fn(() => {
+      readCount += 1;
+      if (readCount === 1) {
+        return new Promise<AppServerReadThreadResponse>((resolve) => {
+          resolveFirstRead = resolve;
+        });
+      }
+      return Promise.resolve(idleResponse());
+    });
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      readThread,
+    };
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(1);
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-review",
+            item: {
+              id: "review-start",
+              type: "enteredReviewMode",
+              review: "Review current changes",
+            },
+          },
+        },
+      });
+      resolveFirstRead?.(idleResponse());
+    });
+
+    await waitFor(() => {
+      expect(result.current.activeTurnId).toBe("turn-review");
+      expect(result.current.threadBusy).toBe(true);
+    });
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(2);
+    }, { timeout: 2_500 });
+    await waitFor(() => {
+      expect(result.current.activeTurnId).toBeUndefined();
+      expect(result.current.threadBusy).toBe(false);
+    });
+  });
+
   it("clears stale review thinking when idle hydration also contains a terminal review entry", async () => {
     const readThread = vi.fn(async ({ backend, threadId }) => ({
       backend: backend ?? "codex",

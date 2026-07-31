@@ -53,6 +53,7 @@ import {
 import { THREAD_HISTORY_PAGE_LIMIT } from "./thread-history-limits";
 
 const MAX_VIEW_ONLY_THREADS = 10;
+const OWN_UPDATE_IDLE_GRACE_MS = 1_500;
 const SUPPORTED_APPROVAL_REQUEST_METHODS = new Set([
   "turn/requestApproval",
   "review/requestApproval",
@@ -151,6 +152,7 @@ type ThreadSessionEntry = {
   pendingStatusText?: string;
   pendingTurnUsage?: TurnUsageAccumulator;
   response?: AppServerReadThreadResponse;
+  staleThinkingRecheckAt?: number;
   thinkingSinceAt?: number;
   viewport?: ThreadViewportState;
 };
@@ -376,6 +378,18 @@ function mergeTranscriptEntries(
     if (existingIndex !== -1) {
       merged[existingIndex] = optimisticEntry;
       continue;
+    }
+
+    if (optimisticEntry.type === "review") {
+      const matchingReviewIndex = merged.findIndex(
+        (entry) =>
+          entry.type === "review"
+          && reviewEntriesMatch(entry, optimisticEntry)
+      );
+      if (matchingReviewIndex !== -1) {
+        merged[matchingReviewIndex] = optimisticEntry;
+        continue;
+      }
     }
 
     const optimisticTurnId = optimisticEntry.turn?.id;
@@ -1081,6 +1095,14 @@ function reviewEntriesMatch(
 ): boolean {
   if (isReviewStartEntry(candidate) !== isReviewStartEntry(optimisticEntry)) {
     return false;
+  }
+
+  if (
+    isReviewStartEntry(candidate)
+    && candidate.turn?.id
+    && candidate.turn.id === optimisticEntry.turn?.id
+  ) {
+    return true;
   }
 
   const candidateLabels = reviewEntryLabels(candidate);
@@ -2598,7 +2620,7 @@ function appendThreadEntries(
     fetchedAt: Date.now(),
     replay: {
       ...baseResponse.replay,
-      entries: mergeItems(baseResponse.replay.entries, entries),
+      entries: mergeTranscriptEntries(baseResponse.replay.entries, entries),
     },
   };
 }
@@ -3342,10 +3364,24 @@ export function useThreadSessionState(params: {
             ? current.completionHydrationRetries + 1
             : 0;
           const thinkingReasons = describeThinkingState(current);
+          const now = Date.now();
+          const ownUpdateSettlesAt =
+            current.lastTouchedAt + OWN_UPDATE_IDLE_GRACE_MS;
+          const ownUpdateStillSettling =
+            current.expectOwnUpdate
+            && !targetThread.optimisticActiveTurn
+            && responseHasInProgressTurn(current.response ?? response, current.activeTurnId)
+            && !response.replay.entries.some(
+              (entry) =>
+                entry.turn?.id === current.activeTurnId
+                && isCompletedTurnMetadata(entry.turn)
+            )
+            && now < ownUpdateSettlesAt;
           const shouldClearStaleThinking =
             readResponseThreadStatus(response) === "idle" &&
             thinkingReasons.length > 0 &&
             !hasPendingInteraction(current) &&
+            !ownUpdateStillSettling &&
             !responseHasInProgressTurn(responseWithLoadedHistory, current.activeTurnId);
 
           if (shouldClearStaleThinking) {
@@ -3393,6 +3429,9 @@ export function useThreadSessionState(params: {
               ? undefined
               : current.pendingStatusText,
             response: responseWithLoadedHistory,
+            staleThinkingRecheckAt: ownUpdateStillSettling
+              ? ownUpdateSettlesAt
+              : undefined,
           };
         });
       } catch (error) {
@@ -3637,6 +3676,28 @@ export function useThreadSessionState(params: {
 
     void loadLatest(thread);
   }, [initialHistoryLimit, loadLatest, sessions, thread, threadKey, updateSession]);
+
+  useEffect(() => {
+    if (!thread || !threadKey) {
+      return;
+    }
+    const recheckAt = sessions[threadKey]?.staleThinkingRecheckAt;
+    if (typeof recheckAt !== "number") {
+      return;
+    }
+    const timer = setTimeout(() => {
+      updateSession(threadKey, (current) => ({
+        ...current,
+        hydratedUpdatedAt: undefined,
+        lastTouchedAt: Date.now(),
+        staleThinkingRecheckAt: undefined,
+      }));
+      void loadLatest(thread);
+    }, Math.max(0, recheckAt - Date.now()) + 1);
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [loadLatest, sessions, thread, threadKey, updateSession]);
 
   useEffect(() => {
     if (!desktopApi?.onAgentEvent) {

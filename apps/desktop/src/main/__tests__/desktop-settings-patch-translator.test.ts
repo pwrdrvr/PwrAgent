@@ -206,6 +206,18 @@ describe("desktopSettingsPatchToEdits — experimental", () => {
       },
     ]);
   });
+
+  it("writes the managed review experiment flag", () => {
+    const edits = desktopSettingsPatchToEdits({
+      experimental: { managedReview: true },
+    });
+
+    expect(edits).toEqual([{
+      op: "set",
+      path: ["experimental", "managed_review"],
+      value: true,
+    }]);
+  });
 });
 
 describe("desktopSettingsPatchToEdits — image uploads", () => {
