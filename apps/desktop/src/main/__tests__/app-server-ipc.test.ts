@@ -164,6 +164,7 @@ const reconcileNavigationSnapshot = vi.fn(async (params: unknown) => ({
     executionMode: "default" as const,
   },
 }));
+const rememberCompleteNavigationSnapshot = vi.fn();
 const readDirectoryStatuses = vi.fn(async () => ({
   "directory:/repo/app": {
     currentBranch: "main",
@@ -504,6 +505,7 @@ vi.mock("../app-server/backend-registry", () => ({
     setThreadPullRequestStatusToolHandler,
     ensureDirectoryLaunchpad,
     getQueuedExecutionModesSnapshot: () => ({}),
+    rememberCompleteNavigationSnapshot,
   }),
 }));
 
@@ -533,6 +535,7 @@ describe("app server ipc", () => {
     listThreads.mockClear();
     readThread.mockClear();
     reconcileNavigationSnapshot.mockClear();
+    rememberCompleteNavigationSnapshot.mockClear();
     readDirectoryStatuses.mockClear();
     readDirectoryStatusEntries.mockClear();
     readDirectoryGitStatusCache.mockClear();
@@ -619,6 +622,7 @@ describe("app server ipc", () => {
         path.join(os.homedir(), ".pwragnt", "projects"),
       ],
     });
+    expect(rememberCompleteNavigationSnapshot).toHaveBeenCalledWith(response);
     expect(response).toEqual({
       backend: "all",
       fetchedAt: 1234,
@@ -669,6 +673,7 @@ describe("app server ipc", () => {
       maxPages: 1,
       skipArchivedMetadataRefresh: true,
     });
+    expect(rememberCompleteNavigationSnapshot).not.toHaveBeenCalled();
   });
 
   it("merges lightweight navigation refreshes into the last full thread list", async () => {

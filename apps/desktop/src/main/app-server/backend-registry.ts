@@ -19,6 +19,7 @@ import { requestShowThread } from "../window-show-thread";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import {
   type AcpBackendId,
+  buildAppendPinRank,
   buildThreadMarkdownLink,
   buildThreadUrl,
   estimateTokenUsageCost,
@@ -88,6 +89,7 @@ import {
   type NavigationDirectorySummary,
   type NavigationLaunchpadDraft,
   type NavigationLaunchpadDefaults,
+  type NavigationSnapshot,
   type ResetDirectoryLaunchpadRequest,
   type ResetDirectoryLaunchpadResponse,
   type RetainThreadBranchDriftRequest,
@@ -4221,6 +4223,14 @@ type ThreadListCacheHit = {
   value: Promise<AppServerThreadSummary[]> | AppServerThreadSummary[];
 };
 
+type CreatedThreadDirectoryVisibility = Pick<
+  NavigationDirectorySummary,
+  "key" | "kind" | "path"
+> & {
+  directoryThreadsCollapsed: boolean;
+  hasPinnedTopLevelThread: boolean;
+};
+
 let threadListCacheSequence = 0;
 
 function shouldEnrichThreadDirectories(
@@ -5456,6 +5466,12 @@ export class DesktopBackendRegistry {
   private readonly codexEnvironmentHydrationStore?: CodexEnvironmentHydrationStoreLike;
   private readonly threadListCacheOwnerId = `backend-thread-list-cache-${++threadListCacheSequence}`;
   private readonly threadListCache = new Map<string, ThreadListCacheState>();
+  private createdThreadDirectoryVisibility = new Map<
+    string,
+    CreatedThreadDirectoryVisibility
+  >();
+  private createdThreadVisibilityPinnedRanks: string[] = [];
+  private readonly createdThreadVisibilityLock = new PerKeyAsyncLock();
   private readonly activeThreadIdsByBackend = new Map<AppServerBackendKind, Set<string>>();
   private readonly pendingStartedThreads = new Map<string, AppServerThreadSummary>();
   private readonly pendingThreadHandoffs = new Map<string, PendingThreadHandoffSummary>();
@@ -6160,6 +6176,41 @@ export class DesktopBackendRegistry {
     handler: ThreadPullRequestStatusToolHandler | null | undefined,
   ): void {
     this.threadPullRequestStatusToolHandler = handler ?? undefined;
+  }
+
+  /**
+   * Remember only the visibility facts needed when a later creation finishes.
+   * Callers provide a complete, unfiltered snapshot; this intentionally does
+   * not advance overlay reconciliation state or retain the thread history.
+   */
+  rememberCompleteNavigationSnapshot(snapshot: NavigationSnapshot): void {
+    const threadsByKey = new Map(
+      snapshot.threads.map((thread) => [
+        buildThreadIdentityKey(thread.source, thread.id),
+        thread,
+      ]),
+    );
+    this.createdThreadVisibilityPinnedRanks = snapshot.threads
+      .map((thread) => thread.pinnedRank)
+      .filter((rank): rank is string => Boolean(rank));
+    this.createdThreadDirectoryVisibility = new Map(
+      snapshot.directories.map((directory) => [
+        directory.key,
+        {
+          key: directory.key,
+          kind: directory.kind,
+          path: directory.path,
+          directoryThreadsCollapsed:
+            directory.directoryThreadsCollapsed === true,
+          hasPinnedTopLevelThread: directory.threadKeys.some((threadKey) => {
+            const thread = threadsByKey.get(threadKey);
+            return Boolean(
+              thread && !thread.parentThreadId && thread.pinnedRank,
+            );
+          }),
+        },
+      ]),
+    );
   }
 
   async publishLocalEvent(event: AgentEvent): Promise<void> {
@@ -8366,10 +8417,125 @@ export class DesktopBackendRegistry {
     });
   }
 
+  /**
+   * Keep a newly created top-level thread visible when its directory's
+   * unpinned section is collapsed. This runs after parent and directory
+   * relationships are persisted so every creation surface shares the same
+   * policy and a child of an already-visible parent is never pinned itself.
+   */
+  private resolveCreatedThreadDirectoryVisibility(params: {
+    directoryKey?: string;
+    cwd?: string;
+    linkedDirectories?: LinkedDirectorySummary[];
+  }): CreatedThreadDirectoryVisibility | undefined {
+    const explicitDirectory = params.directoryKey
+      ? this.createdThreadDirectoryVisibility.get(params.directoryKey)
+      : undefined;
+    if (explicitDirectory) {
+      return explicitDirectory;
+    }
+
+    const normalizePath = (value?: string): string | undefined => {
+      const normalized = value?.trim().replace(/\\/g, "/").replace(/\/+$/, "");
+      return normalized || undefined;
+    };
+    const candidatePaths = new Set(
+      [
+        ...(params.linkedDirectories ?? []).map((directory) => directory.path),
+        params.cwd,
+      ]
+        .map(normalizePath)
+        .filter((value): value is string => Boolean(value)),
+    );
+    const directories = [...this.createdThreadDirectoryVisibility.values()];
+    for (const candidatePath of candidatePaths) {
+      const exact = directories.find(
+        (directory) => normalizePath(directory.path) === candidatePath,
+      );
+      if (exact) {
+        return exact;
+      }
+    }
+
+    return directories
+      .filter((directory) => directory.kind === "workspace")
+      .sort(
+        (left, right) =>
+          (normalizePath(right.path)?.length ?? 0)
+          - (normalizePath(left.path)?.length ?? 0),
+      )
+      .find((directory) => {
+        const directoryPath = normalizePath(directory.path);
+        return Boolean(
+          directoryPath
+          && [...candidatePaths].some((candidatePath) =>
+            candidatePath.startsWith(`${directoryPath}/`),
+          ),
+        );
+      });
+  }
+
+  private async finalizeCreatedThreadVisibility(params: {
+    backend: AppServerBackendKind;
+    directoryKey?: string;
+    cwd?: string;
+    linkedDirectories?: LinkedDirectorySummary[];
+    parentThreadId?: string;
+    threadId: string;
+  }): Promise<Pick<StartThreadResponse, "pinnedRank" | "autoPinFailure">> {
+    if (params.parentThreadId?.trim()) {
+      return {};
+    }
+
+    const directory = this.resolveCreatedThreadDirectoryVisibility(params);
+    if (
+      !directory?.directoryThreadsCollapsed
+      || !directory.hasPinnedTopLevelThread
+    ) {
+      return {};
+    }
+
+    return await this.createdThreadVisibilityLock.run("global-pin-order", async () => {
+      const pinnedRank = buildAppendPinRank(
+        this.createdThreadVisibilityPinnedRanks,
+      );
+      try {
+        await this.overlayStore.setThreadPin({
+          backend: params.backend,
+          threadId: params.threadId,
+          pinnedRank,
+        });
+        await this.emit({
+          backend: params.backend,
+          notification: {
+            method: "thread/pin/added",
+            params: {
+              threadId: params.threadId,
+              pinnedRank,
+            },
+          },
+        });
+        this.createdThreadVisibilityPinnedRanks.push(pinnedRank);
+        return { pinnedRank };
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        const message =
+          `The new thread was created, but it could not be pinned automatically: ${detail}`;
+        backendRegistryLog.warn("created thread visibility finalization failed", {
+          backend: params.backend,
+          error: detail,
+          threadId: params.threadId,
+        });
+        return { autoPinFailure: { message } };
+      }
+    });
+  }
+
   async startThread(params: {
     backend: AppServerBackendKind;
     executionMode?: ThreadExecutionMode;
     cwd?: string;
+    directoryKey?: string;
     model?: string;
     approvalPolicy?: string;
     sandbox?: string;
@@ -8381,6 +8547,7 @@ export class DesktopBackendRegistry {
     workMode?: NavigationLaunchpadDraft["workMode"];
     branchName?: string;
     requiredWorkMode?: NavigationLaunchpadDraft["workMode"];
+    parentThreadId?: string;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
     linkedDirectories?: LinkedDirectorySummary[];
   }): Promise<StartThreadResponse> {
@@ -8388,10 +8555,12 @@ export class DesktopBackendRegistry {
     const {
       backend,
       executionMode = "default",
+      directoryKey,
       linkedDirectories,
       workMode,
       branchName,
       requiredWorkMode,
+      parentThreadId,
       ...request
     } = params;
     const modelSettings = await this.resolveModelSettings(backend, request);
@@ -8667,10 +8836,40 @@ export class DesktopBackendRegistry {
       });
     }
 
+    if (parentThreadId?.trim()) {
+      await this.overlayStore.setThreadParent?.({
+        backend,
+        threadId: result.threadId,
+        parentThreadId,
+      });
+      await this.emit({
+        backend,
+        notification: {
+          method: "thread/parent/set",
+          params: {
+            threadId: result.threadId,
+            parentThreadId,
+          },
+        },
+      });
+    }
+    const visibilityFinalization = await this.finalizeCreatedThreadVisibility({
+      backend,
+      directoryKey,
+      cwd,
+      linkedDirectories:
+        resolvedLinkedDirectories?.length
+          ? resolvedLinkedDirectories
+          : buildLocalLinkedDirectory(cwd),
+      parentThreadId,
+      threadId: result.threadId,
+    });
+
     return {
       backend,
       threadId: result.threadId,
       executionMode: effectiveExecutionMode,
+      ...visibilityFinalization,
       codexEnvironmentRuntime,
       codexEnvironmentStartupFailure,
     };
@@ -8947,12 +9146,20 @@ export class DesktopBackendRegistry {
       request.onPreparedWorkspaceRollback?.(undefined);
       throw error;
     }
+    const visibilityFinalization = await this.finalizeCreatedThreadVisibility({
+      backend,
+      cwd,
+      linkedDirectories,
+      parentThreadId: request.parentThreadId,
+      threadId: result.threadId,
+    });
 
     return {
       backend,
       sourceThreadId: request.sourceThreadId,
       threadId: result.threadId,
       executionMode,
+      ...visibilityFinalization,
       linkedDirectory: linkedDirectories[0],
       workMode: preparedWorkspace.workMode,
       ...(gitBranch ? { gitBranch, observedGitBranch: gitBranch } : {}),
@@ -12775,29 +12982,14 @@ export class DesktopBackendRegistry {
       fastMode: launchpad.backend === "codex" ? launchpad.fastMode : undefined,
       acpRuntime: launchpad.acpRuntime,
       codexEnvironmentRuntime,
+      directoryKey: launchpad.directoryKey,
+      parentThreadId: request.parentThreadId,
     });
     pendingActionThreadId = startThreadResponse.threadId;
     // The auto-started environment action spawned before this thread existed;
     // give its detached-process record an owner now so the quit dialog can name
     // it and link back here.
     attachDetachedCommandThreadId(autoActionRunId, startThreadResponse.threadId);
-    if (request.parentThreadId?.trim()) {
-      await this.overlayStore.setThreadParent?.({
-        backend: startThreadResponse.backend,
-        threadId: startThreadResponse.threadId,
-        parentThreadId: request.parentThreadId,
-      });
-      await this.emit({
-        backend: startThreadResponse.backend,
-        notification: {
-          method: "thread/parent/set",
-          params: {
-            threadId: startThreadResponse.threadId,
-            parentThreadId: request.parentThreadId,
-          },
-        },
-      });
-    }
     if (codexEnvironmentSelection?.action?.id) {
       for (const event of queuedActionDetachedOutputs) {
         void this.handleCodexEnvironmentActionDetachedOutput({
@@ -12829,6 +13021,12 @@ export class DesktopBackendRegistry {
       backend: startThreadResponse.backend,
       threadId: startThreadResponse.threadId,
       executionMode: startThreadResponse.executionMode,
+      ...(startThreadResponse.pinnedRank
+        ? { pinnedRank: startThreadResponse.pinnedRank }
+        : {}),
+      ...(startThreadResponse.autoPinFailure
+        ? { autoPinFailure: startThreadResponse.autoPinFailure }
+        : {}),
       ...(linkedDirectories?.[0] ? { linkedDirectory: linkedDirectories[0] } : {}),
       workMode: workspace.workMode,
       codexEnvironmentRuntime,
@@ -19113,6 +19311,7 @@ export class DesktopBackendRegistry {
     let codexEnvironmentStartupFailure:
       | HandoffTaskResult["codexEnvironmentStartupFailure"]
       | undefined;
+    let autoPinFailure: HandoffTaskResult["autoPinFailure"];
     try {
       this.updatePendingThreadHandoff(handoffId, {
         phase: "preparing_workspace",
@@ -19152,6 +19351,7 @@ export class DesktopBackendRegistry {
         createdLinkedDirectory = forked.linkedDirectory;
         inheritedSettings.codexEnvironmentRuntime = forked.codexEnvironmentRuntime;
         codexEnvironmentStartupFailure = forked.codexEnvironmentStartupFailure;
+        autoPinFailure = forked.autoPinFailure;
         createdWorkspaceMode =
           forked.workMode === "worktree" ? "new_worktree" : workspaceMode;
       } else {
@@ -19174,18 +19374,13 @@ export class DesktopBackendRegistry {
           approvalPolicy: inheritedSettings.approvalPolicy,
           sandbox: inheritedSettings.sandbox,
           codexEnvironmentRuntime: inheritedSettings.codexEnvironmentRuntime,
+          parentThreadId: groupedParentThreadId,
         });
         threadId = started.threadId;
         this.updatePendingThreadHandoff(handoffId, { threadId });
         inheritedSettings.codexEnvironmentRuntime = started.codexEnvironmentRuntime;
         codexEnvironmentStartupFailure = started.codexEnvironmentStartupFailure;
-        if (groupedParentThreadId) {
-          await this.overlayStore.setThreadParent?.({
-            backend,
-            threadId,
-            parentThreadId: groupedParentThreadId,
-          });
-        }
+        autoPinFailure = started.autoPinFailure;
       }
       if (groupedParentThreadId && this.overlayStore.updateSubthreadOrder) {
         const parentOverlay = await this.overlayStore.getThreadOverlayState({
@@ -19355,6 +19550,7 @@ export class DesktopBackendRegistry {
         ...(codexEnvironmentStartupFailure
           ? { codexEnvironmentStartupFailure }
           : {}),
+        ...(autoPinFailure ? { autoPinFailure } : {}),
         ...(turnStartFailure ? { turnStartFailure } : {}),
       },
     };

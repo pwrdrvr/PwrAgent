@@ -1270,6 +1270,13 @@ class DesktopAppServerService {
       threads,
       workspaceRoots: resolveScratchProjectsRoots(),
     });
+    if (
+      backend === "all"
+      && !request.filter?.trim()
+      && !activeRecentRefresh
+    ) {
+      getDesktopBackendRegistry().rememberCompleteNavigationSnapshot(snapshot);
+    }
     await this.loadPrStatusRegistry();
     await this.loadPrLookupRegistry();
     this.seedPrStatusRegistryFromThreads(snapshot.threads);

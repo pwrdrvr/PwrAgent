@@ -8,7 +8,10 @@ import type {
   ThreadWorkspaceHandoffDirection,
   ThreadWorkspaceHandoffStrategy,
 } from "./normalized-app-server";
-import type { CodexEnvironmentStartupFailure } from "./agent";
+import type {
+  CodexEnvironmentStartupFailure,
+  ThreadAutoPinFailure,
+} from "./agent";
 import type { MessagingChannelKind, MessagingConversationKind } from "./messaging";
 
 export const PWRAGENT_THREAD_ORCHESTRATION_OPERATION_NAMES = [
@@ -351,6 +354,7 @@ export type HandoffTaskResult = {
   workspace: ThreadHandoffOriginWorkspace;
   messagingAttachment: HandoffTaskMessagingAttachment;
   codexEnvironmentStartupFailure?: CodexEnvironmentStartupFailure;
+  autoPinFailure?: ThreadAutoPinFailure;
   turnStartFailure?: {
     message: string;
     phase: "turn";

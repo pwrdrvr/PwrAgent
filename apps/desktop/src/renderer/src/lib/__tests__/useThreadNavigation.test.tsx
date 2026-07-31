@@ -2348,7 +2348,7 @@ describe("useThreadNavigation", () => {
     expect(setThreadPin).not.toHaveBeenCalled();
   });
 
-  it("auto-pins a new top-level thread when Directory threads are collapsed", async () => {
+  it("projects a centrally auto-pinned materialized thread without another pin write", async () => {
     const directoryKey = "directory:/Users/huntharo/github/PwrAgent";
     const existingPinnedThread = {
       id: "thread-pinned",
@@ -2401,6 +2401,7 @@ describe("useThreadNavigation", () => {
       threadId: "thread-new",
       executionMode: "default" as const,
       workMode: "worktree" as const,
+      pinnedRank: "2048",
     }));
     const setThreadPin: NonNullable<DesktopApi["setThreadPin"]> = vi.fn(
       async (request) => ({
@@ -2425,11 +2426,7 @@ describe("useThreadNavigation", () => {
       await result.current.materializeDirectoryLaunchpad(directoryKey);
     });
 
-    expect(setThreadPin).toHaveBeenCalledWith({
-      backend: "codex",
-      threadId: "thread-new",
-      pinnedRank: "2048",
-    });
+    expect(setThreadPin).not.toHaveBeenCalled();
     expect(result.current.selectedThread).toMatchObject({
       id: "thread-new",
       pinnedRank: "2048",
