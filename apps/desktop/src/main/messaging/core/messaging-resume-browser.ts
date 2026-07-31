@@ -482,15 +482,6 @@ function navigationActions(
   pageIndex: number,
   totalPages: number,
 ): MessagingSurfaceAction[] {
-  if (session.launchAction === "assign_default_agent") {
-    return [{
-      id: "browse:cancel",
-      label: "Cancel",
-      style: "secondary",
-      fallbackText: "cancel",
-      layout: { row: FOOTER_ROW },
-    }];
-  }
   const actions: MessagingSurfaceAction[] = [];
   if (pageIndex > 0) {
     actions.push({
@@ -509,6 +500,16 @@ function navigationActions(
       fallbackText: "next",
       layout: { row: NAV_ROW },
     });
+  }
+  if (session.launchAction === "assign_default_agent") {
+    actions.push({
+      id: "browse:cancel",
+      label: "Cancel",
+      style: "secondary",
+      fallbackText: "cancel",
+      layout: { row: FOOTER_ROW },
+    });
+    return actions;
   }
   if (session.mode === "agents") {
     actions.push({
@@ -619,14 +620,21 @@ function threadPickerFallbackText(
     totalPages: number;
   },
 ): string {
-  const controls = [
-    page.pageIndex > 0 ? "previous" : undefined,
-    page.pageIndex < page.totalPages - 1 ? "next" : undefined,
-    session.mode === "agents" ? "recent" : "projects",
-    session.mode === "agents" ? undefined : "agents",
-    "new",
-    "cancel",
-  ].filter(Boolean);
+  const controls =
+    session.launchAction === "assign_default_agent"
+      ? [
+          page.pageIndex > 0 ? "previous" : undefined,
+          page.pageIndex < page.totalPages - 1 ? "next" : undefined,
+          "cancel",
+        ].filter(Boolean)
+      : [
+          page.pageIndex > 0 ? "previous" : undefined,
+          page.pageIndex < page.totalPages - 1 ? "next" : undefined,
+          session.mode === "agents" ? "recent" : "projects",
+          session.mode === "agents" ? undefined : "agents",
+          "new",
+          "cancel",
+        ].filter(Boolean);
   return [
     threadPickerPromptText(session, page.totalPages, page.totalItems),
     ...page.items.map(
