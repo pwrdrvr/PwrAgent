@@ -588,6 +588,10 @@ describe("Tangerine Terminal theme contract", () => {
 
   it("keeps composer autocomplete visually separated from transcript surfaces", () => {
     const autocompleteRule = extractRuleBody(css, ".composer__autocomplete");
+    const directoryAutocompleteRule = extractRuleBody(
+      css,
+      ".composer__autocomplete--directories",
+    );
 
     expect(autocompleteRule).toContain("border: 1px solid var(--border-strong);");
     expect(autocompleteRule).toContain("background: var(--bg-panel-elevated);");
@@ -595,6 +599,8 @@ describe("Tangerine Terminal theme contract", () => {
       "inset 0 0 0 1px color-mix(in srgb, var(--text-primary) 6%, transparent)",
     );
     expect(autocompleteRule).not.toContain("background: rgba(10, 10, 10, 0.98);");
+    expect(directoryAutocompleteRule).toContain("right: auto;");
+    expect(directoryAutocompleteRule).toContain("width: min(100%, 560px);");
   });
 
   it("locks composer height contract — compact when empty, grows, capped at 280px", () => {

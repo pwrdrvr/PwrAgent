@@ -10429,6 +10429,7 @@ describe("Composer", () => {
       });
 
       const listbox = screen.getByRole("listbox", { name: "Directories" });
+      expect(listbox).toHaveClass("composer__autocomplete--directories");
       fireEvent.click(
         within(listbox).getByRole("button", { name: /search-product/ })
       );

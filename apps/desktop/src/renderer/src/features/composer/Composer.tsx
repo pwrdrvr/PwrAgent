@@ -7965,7 +7965,7 @@ export function Composer(props: ComposerProps) {
           </div>
         ) : autocompleteKind === "directories" ? (
           <div
-            className={`composer__autocomplete composer__autocomplete--${autocompleteLayout.placement}`}
+            className={`composer__autocomplete composer__autocomplete--directories composer__autocomplete--${autocompleteLayout.placement}`}
             ref={autocompleteListRef}
             role="listbox"
             aria-label="Directories"

@@ -16257,6 +16257,13 @@ a.transcript-message__messaging-origin:focus-visible {
   top: calc(100% + 10px);
 }
 
+/* Directory names and paths need room to scan, but stretching this picker
+   across the entire 940px chat column leaves excessive empty space. */
+.composer__autocomplete--directories {
+  right: auto;
+  width: min(100%, 560px);
+}
+
 .composer__autocomplete-option {
   display: flex;
   position: relative;
