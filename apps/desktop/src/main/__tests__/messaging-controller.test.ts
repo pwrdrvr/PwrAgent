@@ -11405,15 +11405,59 @@ describe("MessagingController", () => {
     );
   });
 
-  it("discards a coalesced monitor heartbeat when the monitor completes", async () => {
+  it("cancels a released monitor heartbeat when the monitor completes", async () => {
     vi.useFakeTimers();
+    let now = 0;
+    let finishFirstAttempt:
+      | ((result: MessagingDeliveryResult) => void)
+      | undefined;
+    let signalFirstAttemptStarted: (() => void) | undefined;
+    const firstAttemptStarted = new Promise<void>((resolve) => {
+      signalFirstAttemptStarted = resolve;
+    });
+    const scope: MessagingDeliveryScope = {
+      platform: "telegram",
+      id: "telegram:dm:chat-1",
+      kind: "dm",
+      budget: { limit: 10, intervalMs: 60_000, reserved: 1 },
+    };
+    const attempts: MessagingSurfaceIntent[] = [];
+    let holdNextAttempt = false;
+    const deliveryBudget = new MessagingDeliveryBudget({ now: () => now });
     let harness: Awaited<ReturnType<typeof createHarness>> | undefined;
     try {
       harness = await createHarness({
+        deliveryBudget,
+        now: () => now,
+        resolveDeliveryScope: () => scope,
+        deliver: async (intent) => {
+          attempts.push(intent);
+          if (holdNextAttempt) {
+            holdNextAttempt = false;
+            signalFirstAttemptStarted?.();
+            return await new Promise<MessagingDeliveryResult>((resolve) => {
+              finishFirstAttempt = resolve;
+            });
+          }
+          return {
+            channel: "telegram",
+            deliveredAt: now,
+            outcome: "presented",
+            surface: {
+              channel: "telegram",
+              id: `surface:${intent.id}`,
+            },
+          };
+        },
+        sleepUntil: async () => {
+          throw new Error("Completed monitor delivery should not retry");
+        },
         toolUpdateDefaultMode: "show_less",
       });
       await bindThread(harness);
-      harness.delivered.length = 0;
+      attempts.length = 0;
+      holdNextAttempt = true;
+      now = 2000;
 
       await harness.controller.handleBackendEvent({
         backend: "codex",
@@ -11435,7 +11479,9 @@ describe("MessagingController", () => {
           },
         },
       } satisfies AgentEvent);
-      expect(harness.delivered).toEqual([]);
+      expect(attempts).toEqual([]);
+      vi.advanceTimersByTime(60_000);
+      await firstAttemptStarted;
 
       await harness.controller.handleBackendEvent({
         backend: "codex",
@@ -11457,9 +11503,29 @@ describe("MessagingController", () => {
           },
         },
       } satisfies AgentEvent);
-      await vi.advanceTimersByTimeAsync(60_000);
+      finishFirstAttempt?.({
+        channel: "telegram",
+        deliveredAt: now,
+        errorMessage: "Too Many Requests",
+        outcome: "failed",
+        rateLimit: {
+          scope,
+          retryAfterMs: 5_000,
+          observedAt: now,
+          message: "Too Many Requests",
+          retryable: true,
+        },
+      });
+      await vi.waitFor(() => {
+        expect(attempts).toHaveLength(1);
+      });
+      await Promise.resolve();
 
-      expect(harness.delivered).toEqual([]);
+      expect(attempts).toHaveLength(1);
+      expect(attempts[0]).toMatchObject({
+        kind: "message",
+        role: "assistant",
+      });
     } finally {
       harness?.controller.dispose();
       vi.useRealTimers();

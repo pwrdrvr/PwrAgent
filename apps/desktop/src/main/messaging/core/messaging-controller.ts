@@ -571,6 +571,10 @@ type PendingNewThreadPromptBundle = {
   session: MessagingBrowseSessionRecord;
 };
 
+type MessagingDeliveryGuard = {
+  isCancelled: () => boolean;
+};
+
 export type MessagingControllerOptions = {
   adapter: MessagingAdapter;
   authorizedActorIds: string[];
@@ -668,6 +672,7 @@ export class MessagingController {
   // Bounded so a turn that ends without a clean terminal event to clear it
   // cannot grow the map without limit.
   private readonly turnProse = new Map<string, MessagingTurnProseState>();
+  private readonly completedTaskMonitorTurns = new Set<string>();
   private readonly turnAdmission: MessagingTurnAdmission;
   private readonly pendingNewThreadPrompts = new Map<string, PendingNewThreadPromptWindow>();
   private readonly pendingFullAccessNewThreadPrompts = new Map<
@@ -1187,9 +1192,11 @@ export class MessagingController {
       );
       if (eventTurnId && isTaskMonitorCompletionEvent(event)) {
         // A monitor's terminal result wakes the parent agent, whose final
-        // response is the one user-facing completion notification. Discard
-        // any coalesced heartbeat that has not fired yet so stale progress
-        // cannot arrive after that terminal response.
+        // response is the one user-facing completion notification. Tombstone
+        // the monitor turn before clearing its batch so a heartbeat already
+        // released into budget/retry handling is also cancelled before the
+        // adapter sees it.
+        this.rememberCompletedTaskMonitorTurn(binding.id, eventTurnId);
         this.toolUpdatePolicy.flush({
           bindingId: binding.id,
           clear: true,
@@ -4762,6 +4769,7 @@ export class MessagingController {
     this.pendingNewThreadPrompts.clear();
     this.pendingFullAccessNewThreadPrompts.clear();
     this.toolUpdatePolicy.dispose();
+    this.completedTaskMonitorTurns.clear();
   }
 
   /**
@@ -12444,6 +12452,7 @@ export class MessagingController {
     intent: MessagingSurfaceIntent,
     binding?: MessagingBindingRecord,
     event?: MessagingInboundEvent,
+    guard?: MessagingDeliveryGuard,
   ): Promise<MessagingDeliveryResult> {
     if (binding && shouldFlushToolUpdatesBeforeIntent(intent)) {
       await this.flushToolUpdatesForBinding(binding, { clear: false });
@@ -12457,7 +12466,15 @@ export class MessagingController {
     const channel = binding?.channel.channel ??
       routedIntent.audit?.channel.channel ??
       this.options.channel;
+    const cancelledResult = (): MessagingDeliveryResult => ({
+      channel: channel ?? "telegram",
+      deliveredAt: this.now(),
+      outcome: "discarded",
+    });
     while (true) {
+      if (guard?.isCancelled()) {
+        return cancelledResult();
+      }
       if (this.deliveryBudget) {
         const budgetChannel = channel ?? scope?.platform ?? "telegram";
         let admission = this.deliveryBudget.admit({
@@ -12494,6 +12511,9 @@ export class MessagingController {
           });
           this.notifyDeliveryBudgetEvent(budgetEvent);
           await (this.options.sleepUntil ?? sleepUntil)(admission.retryAt, this.now);
+          if (guard?.isCancelled()) {
+            return cancelledResult();
+          }
           admission = this.deliveryBudget.admit({
             consumeCapacity: consumeDeliveryBudget,
             priority,
@@ -12533,6 +12553,9 @@ export class MessagingController {
             outcome: "discarded",
           };
         }
+      }
+      if (guard?.isCancelled()) {
+        return cancelledResult();
       }
       const result = await this.options.adapter.deliver(routedIntent);
       this.logDeliveryResult(routedIntent, binding, result);
@@ -12791,6 +12814,29 @@ export class MessagingController {
     this.turnProse.delete(this.turnProseKey(bindingId, turnId));
   }
 
+  private rememberCompletedTaskMonitorTurn(
+    bindingId: string,
+    turnId: string,
+  ): void {
+    this.completedTaskMonitorTurns.add(this.turnProseKey(bindingId, turnId));
+    while (this.completedTaskMonitorTurns.size > MAX_TRACKED_TURN_PROSE) {
+      const oldest = this.completedTaskMonitorTurns.values().next().value;
+      if (oldest === undefined) {
+        break;
+      }
+      this.completedTaskMonitorTurns.delete(oldest);
+    }
+  }
+
+  private isTaskMonitorTurnComplete(
+    bindingId: string,
+    turnId: string,
+  ): boolean {
+    return this.completedTaskMonitorTurns.has(
+      this.turnProseKey(bindingId, turnId),
+    );
+  }
+
   private async flushToolUpdatesForBinding(
     binding: MessagingBindingRecord,
     options: { clear: boolean; turnId?: string },
@@ -12809,6 +12855,11 @@ export class MessagingController {
     delivery: MessagingToolUpdatePolicyDelivery,
     knownBinding?: MessagingBindingRecord,
   ): Promise<void> {
+    const isCancelled = () =>
+      this.isTaskMonitorTurnComplete(delivery.bindingId, delivery.turnId);
+    if (isCancelled()) {
+      return;
+    }
     const binding =
       knownBinding?.id === delivery.bindingId
         ? knownBinding
@@ -12839,7 +12890,7 @@ export class MessagingController {
             id: this.newIntentId("tool-update-batch"),
           });
     this.markProseActivitiesDelivered({ ...delivery, activities });
-    await this.deliver(intent, binding);
+    await this.deliver(intent, binding, undefined, { isCancelled });
   }
 
   private filterUndeliveredProseActivities(
