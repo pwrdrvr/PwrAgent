@@ -4,6 +4,9 @@ import { expect, test } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
 
 const approvalPendingSpecDir = path.dirname(fileURLToPath(import.meta.url));
+const approvalCommand =
+  "/opt/homebrew/bin/python3.13 -m unittest scripts.github_actions.tests.test_spin_scala_environments scripts.github_actions.tests.test_spin_scala_metadata scripts.github_actions.tests.test_ci_config_contract scripts.github_actions.tests.test_classify_changes";
+const approvalPrefix = approvalCommand;
 
 async function openApprovalPendingReplay() {
   const app = await launchElectronApp({
@@ -49,13 +52,45 @@ async function openApprovalPendingReplay() {
   await expect(pendingApproval.getByText("Command:")).toBeVisible();
   await expect(
     pendingApproval.locator("pre code")
-  ).toHaveText("npm view dive");
+  ).toHaveText(approvalCommand);
   await expect(app.window.getByText(/\/bin\/zsh -lc/)).toHaveCount(0);
   await expect(
     app.window.getByText("Waiting for approval before this turn can continue.")
   ).toBeVisible();
   await expect(
     app.window.getByRole("button", { name: "Approve Once" })
+  ).toBeVisible();
+  const allowPrefix = app.window.getByRole("button", {
+    name: `Always Allow Prefix: ${approvalPrefix}`,
+  });
+  await expect(allowPrefix).toBeVisible();
+  await expect(allowPrefix).toHaveClass(/button--ghost/);
+  await expect(allowPrefix).toHaveClass(/transcript-request__action--detailed/);
+  await expect(allowPrefix).toHaveAttribute(
+    "title",
+    `Always Allow Prefix: ${approvalPrefix}`
+  );
+  await expect(
+    allowPrefix.locator(".transcript-request__action-detail")
+  ).toHaveText(approvalPrefix);
+  const prefixLayout = await allowPrefix.evaluate((element) => {
+    const detail = element.querySelector("code");
+    const style = detail ? window.getComputedStyle(detail) : undefined;
+    return {
+      actionHeight: element.getBoundingClientRect().height,
+      overflow: style?.overflow,
+      textOverflow: style?.textOverflow,
+      whiteSpace: style?.whiteSpace,
+    };
+  });
+  expect(prefixLayout).toMatchObject({
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  });
+  expect(prefixLayout.actionHeight).toBeLessThan(60);
+  await expect(
+    app.window.getByRole("button", { name: "Cancel Turn" })
   ).toBeVisible();
 
   return app;
@@ -73,7 +108,7 @@ test("shows pending approval UI without duplicating the turn elsewhere", async (
     await expect(pendingApproval.getByText("Command:")).toBeVisible();
     await expect(
       pendingApproval.locator("pre code")
-    ).toHaveText("npm view dive");
+    ).toHaveText(approvalCommand);
     await expect(app.window.getByText(/\/bin\/zsh -lc/)).toHaveCount(0);
     await expect(
       app.window.getByText("Waiting for approval before this turn can continue.")

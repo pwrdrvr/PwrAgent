@@ -3243,6 +3243,53 @@ describe("TranscriptList", () => {
     );
   });
 
+  it("renders a durable command prefix as a secondary, structured action", () => {
+    render(
+      <TranscriptList
+        entries={[]}
+        loading={false}
+        loadingMore={false}
+        pendingRequest={{
+          method: "item/commandExecution/requestApproval",
+          params: {
+            threadId: "thread-1",
+            requestId: "approval-1",
+            command: "python -m unittest package.tests.test_first package.tests.test_second",
+            availableDecisions: [
+              "accept",
+              {
+                acceptWithExecpolicyAmendment: {
+                  execpolicy_amendment: [
+                    "python",
+                    "-m",
+                    "unittest",
+                    "package.tests.test_first",
+                    "package.tests.test_second",
+                  ],
+                },
+              },
+              "cancel",
+            ],
+          },
+        }}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    const action = screen.getByRole("button", {
+      name: "Always Allow Prefix: python -m unittest package.tests.test_first package.tests.test_second",
+    });
+    expect(action).toHaveClass("button--ghost", "transcript-request__action--detailed");
+    expect(action).not.toHaveClass("button--primary");
+    expect(action.querySelector(".transcript-request__action-label")).toHaveTextContent(
+      "Always Allow Prefix"
+    );
+    expect(action.querySelector(".transcript-request__action-detail")).toHaveTextContent(
+      "python -m unittest package.tests.test_first package.tests.test_second"
+    );
+  });
+
   it("derives Kimi approval commands from prompt text when command is a shell title", () => {
     const { container } = render(
       <TranscriptList
