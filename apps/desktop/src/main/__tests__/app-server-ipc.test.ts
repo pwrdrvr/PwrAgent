@@ -2440,7 +2440,7 @@ describe("app server ipc", () => {
       state: "passing",
       url: "https://github.com/pwrdrvr/PwrAgent/pull/922",
     });
-    const fetchedAt = 1_000_000;
+    const fetchedAt = Date.now();
     readPrLookupCache.mockResolvedValueOnce({
       [lookupKey]: {
         lookupKey,
