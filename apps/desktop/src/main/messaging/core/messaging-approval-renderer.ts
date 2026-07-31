@@ -35,6 +35,7 @@ export function buildApprovalIntent(params: {
     buildDecisions(params.request),
     params.capabilityProfile,
   );
+  const persistentPrefixContext = persistentPrefixMarkdown(decisions);
   const replyInstruction = approvalReplyInstruction(decisions);
 
   return {
@@ -48,6 +49,7 @@ export function buildApprovalIntent(params: {
       command
         ? ["Command:", "```shell", stripDisplayShellWrapper(command), "```"].join("\n")
         : undefined,
+      persistentPrefixContext,
       fileContext ? ["Context:", fileContext].join("\n") : undefined,
       mcpContext,
       replyInstruction.body,
@@ -120,14 +122,85 @@ function buildDecisions(
       },
     ];
   }
-  return buildPendingRequestActions(request).map((action) => ({
-    id: action.id,
-    label: action.label,
-    decision: messagingDecisionFromPendingAction(action),
-    style: action.style,
-    fallbackText: action.fallbackText,
-    response: action.response,
-  }));
+  const actions = buildPendingRequestActions(request);
+  const persistentActions = actions.filter(
+    (action) => action.decision === "accept_with_execpolicy_amendment",
+  );
+  let persistentIndex = 0;
+
+  return actions.map((action) => {
+    const isPersistent = action.decision === "accept_with_execpolicy_amendment";
+    const description = isPersistent ? execpolicyPrefix(action) : undefined;
+    if (isPersistent) {
+      persistentIndex += 1;
+    }
+    return {
+      id: action.id,
+      label: isPersistent
+        ? `Always Allow Prefix${persistentActions.length > 1 ? ` ${persistentIndex}` : ""}`
+        : action.label,
+      ...(description ? { description } : {}),
+      decision: messagingDecisionFromPendingAction(action),
+      style: action.style,
+      fallbackText: action.fallbackText,
+      response: action.response,
+    };
+  });
+}
+
+function execpolicyPrefix(action: PendingRequestAction): string | undefined {
+  const responseDecision = objectField(action.response.decision);
+  const amendment = objectField(
+    responseDecision?.acceptWithExecpolicyAmendment
+    ?? responseDecision?.accept_with_execpolicy_amendment,
+  );
+  const rawPrefix =
+    amendment?.execpolicy_amendment
+    ?? amendment?.proposed_execpolicy_amendment;
+  if (Array.isArray(rawPrefix)) {
+    const rendered = rawPrefix
+      .filter((part): part is string => typeof part === "string" && Boolean(part.trim()))
+      .join(" ");
+    if (rendered) {
+      return rendered;
+    }
+  }
+
+  const separatorIndex = action.label.indexOf(": ");
+  return separatorIndex > 0
+    ? action.label.slice(separatorIndex + 2).trim() || undefined
+    : undefined;
+}
+
+function persistentPrefixMarkdown(
+  decisions: MessagingApprovalIntent["decisions"],
+): string | undefined {
+  const persistent = decisions.filter(
+    (decision) =>
+      decision.decision === "accept_with_execpolicy_amendment"
+      && Boolean(decision.description),
+  );
+  if (persistent.length === 0) {
+    return undefined;
+  }
+  if (persistent.length === 1) {
+    return [
+      "Persistent prefix:",
+      "```shell",
+      persistent[0]!.description!,
+      "```",
+    ].join("\n");
+  }
+
+  return [
+    "Persistent prefixes:",
+    ...persistent.flatMap((decision) => [
+      `${decision.label}:`,
+      "```shell",
+      decision.description!,
+      "```",
+    ]),
+  ].join("\n");
 }
 
 function isMcpElicitationRequest(
@@ -179,6 +252,12 @@ function mcpElicitationCanAcceptWithoutFormInput(
 
 function hasNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+function objectField(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
 }
 
 function messagingDecisionFromPendingAction(
