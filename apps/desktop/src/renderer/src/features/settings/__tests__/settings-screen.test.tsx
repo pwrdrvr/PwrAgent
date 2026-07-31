@@ -1914,12 +1914,16 @@ describe("SettingsScreen", () => {
     );
     expect(
       within(migrationDialog).getByRole("button", {
-        name: "Already scheduled",
+        name: "Done",
       }),
-    ).toBeDisabled();
+    ).toBeEnabled();
+    expect(
+      within(migrationDialog).queryByRole("button", { name: "Cancel" }),
+    ).not.toBeInTheDocument();
     fireEvent.click(
-      within(migrationDialog).getByRole("button", { name: "Cancel" }),
+      within(migrationDialog).getByRole("button", { name: "Done" }),
     );
+    expect(migrationDialog).not.toBeInTheDocument();
 
     snapshot.models.providerThreadMigrations = {
       codex: {
@@ -1950,12 +1954,16 @@ describe("SettingsScreen", () => {
     );
     expect(
       within(scheduledDialog).getByRole("button", {
-        name: "Already scheduled",
+        name: "Done",
       }),
-    ).toBeDisabled();
+    ).toBeEnabled();
+    expect(
+      within(scheduledDialog).queryByRole("button", { name: "Cancel" }),
+    ).not.toBeInTheDocument();
     fireEvent.click(
-      within(scheduledDialog).getByRole("button", { name: "Cancel" }),
+      within(scheduledDialog).getByRole("button", { name: "Done" }),
     );
+    expect(scheduledDialog).not.toBeInTheDocument();
 
     fireEvent.click(
       screen.getByRole("button", { name: "Turn Fast off everywhere" }),
