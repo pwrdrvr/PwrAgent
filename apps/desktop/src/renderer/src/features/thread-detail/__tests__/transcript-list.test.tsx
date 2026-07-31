@@ -202,7 +202,7 @@ describe("TranscriptList", () => {
     });
   });
 
-  it("shows the messaging platform, surface, and actor for an inbound message", () => {
+  it("shows a linked messaging origin with its full value in a tooltip", async () => {
     const { container } = render(
       <TranscriptList
         entries={[
@@ -215,6 +215,8 @@ describe("TranscriptList", () => {
               kind: "messaging",
               messaging: {
                 platform: "discord",
+                sourceUrl:
+                  "https://discord.com/channels/1480556454498009353/1480556454498009352/1480556454498009354",
                 surface: {
                   id: "thread-1",
                   kind: "channel",
@@ -239,13 +241,31 @@ describe("TranscriptList", () => {
 
     expect(screen.getByText("Messaging")).toBeInTheDocument();
     const origin = screen.getByLabelText(
-      "Discord: PwrAgent / #signals-chat / api-search circuit breaker timeout · Hunter",
+      "Discord: PwrAgent / #signals-chat / api-search circuit breaker timeout · Hunter (@huntharo)",
     );
     expect(origin).toHaveTextContent(
       "PwrAgent / #signals-chat / api-search circuit breaker timeout",
     );
-    expect(origin).toHaveTextContent("Hunter");
+    expect(
+      origin.querySelector(".transcript-message__messaging-actor"),
+    ).toHaveTextContent("Hunter");
+    expect(
+      origin.querySelectorAll(".transcript-message__messaging-surface-segment"),
+    ).toHaveLength(3);
     expect(origin.querySelector("img")).toBeInTheDocument();
+    expect(origin).toHaveAttribute(
+      "href",
+      "https://discord.com/channels/1480556454498009353/1480556454498009352/1480556454498009354",
+    );
+    fireEvent.mouseEnter(origin);
+    expect((await screen.findByRole("tooltip")).textContent).toBe(
+      [
+        "Discord",
+        "PwrAgent / #signals-chat / api-search circuit breaker timeout",
+        "Hunter (@huntharo)",
+        "Open in Discord",
+      ].join("\n"),
+    );
     expect(container.querySelector(".transcript-message--injected")).toBeInTheDocument();
   });
 

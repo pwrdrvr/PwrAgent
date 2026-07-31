@@ -1144,6 +1144,11 @@ export type MessagingInboundBaseEvent = {
   channel: MessagingChannelRef;
   receivedAt: number;
   /**
+   * Provider-generated HTTPS destination for the original message or, when
+   * the platform cannot expose a message permalink, its conversation.
+   */
+  sourceUrl?: string;
+  /**
    * True when the original platform message explicitly addressed the bot via
    * a textual @mention. Slash commands and button callbacks are already
    * explicit event kinds and do not need this marker.

@@ -58,6 +58,7 @@ function fakeApi(spies: {
   assistantStatuses?: Array<{ channelId: string; status: string; threadTs: string }>;
   conversations?: Record<string, string>;
   mpimChannels?: string[];
+  permalinks?: Record<string, string>;
   deleted?: Array<{ channel: string; ts: string }>;
   posted?: unknown[];
   replies?: Record<string, string>;
@@ -87,6 +88,8 @@ function fakeApi(spies: {
       ts: params.ts,
       text: spies.replies?.[`${params.channel}:${params.ts}`],
     }],
+    getPermalink: async (params) =>
+      spies.permalinks?.[`${params.channel}:${params.messageTs}`],
     deleteMessage: async (params) => {
       spies.deleted?.push(params);
     },
@@ -160,6 +163,10 @@ describe("SlackAdapter", () => {
       callbackHandleStore: fakeStore(),
       api: fakeApi({
         conversations: { C012ABCDEF0: "signals-chat" },
+        permalinks: {
+          "C012ABCDEF0:1712023030.000000":
+            "https://pwrdrvr.slack.com/archives/C012ABCDEF0/p1712023030000000",
+        },
         posted,
       }),
       socketClient: socket,
@@ -184,6 +191,9 @@ describe("SlackAdapter", () => {
     });
 
     const source = events[0]!;
+    expect(source.sourceUrl).toBe(
+      "https://pwrdrvr.slack.com/archives/C012ABCDEF0/p1712023030000000",
+    );
     await expect(adapter.getManagedConversationRights({
       actor: source.actor,
       channel: source.channel,
@@ -963,6 +973,8 @@ describe("SlackAdapter", () => {
             teamId: "T012ABCDEF0",
           }),
         }),
+        sourceUrl:
+          "https://slack.com/app_redirect?channel=C012ABCDEF0&team=T012ABCDEF0",
       }),
     ]);
   });

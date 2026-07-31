@@ -2890,6 +2890,9 @@ function threadMessageMessagingOriginFromUnknown(
   }
   return {
     platform: record.platform,
+    ...(typeof record.sourceUrl === "string"
+      ? { sourceUrl: record.sourceUrl }
+      : {}),
     surface: {
       id: surfaceRecord.id,
       kind: surfaceRecord.kind,

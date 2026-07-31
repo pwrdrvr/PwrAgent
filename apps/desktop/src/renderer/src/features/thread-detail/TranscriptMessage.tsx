@@ -1,4 +1,11 @@
-import { memo, useMemo, useState, type ReactNode } from "react";
+import {
+  memo,
+  useMemo,
+  useState,
+  type FocusEvent,
+  type MouseEvent,
+  type ReactNode,
+} from "react";
 import type {
   DesktopApplicationsSnapshot,
   AppServerSkillSummary,
@@ -14,6 +21,7 @@ import {
   MESSAGING_PLATFORM_ICONS,
 } from "../../lib/messaging-platform-branding";
 import { useThreadLinks, type ResolvedThreadLink } from "../../lib/thread-links";
+import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { ThreadChip } from "./ThreadChip";
 import { TranscriptImage } from "./TranscriptImage";
 import { ThreadMarkdown } from "./ThreadMarkdown";
@@ -516,23 +524,22 @@ function renderMessageHeader(params: {
 function MessagingOriginChip(props: {
   origin: NonNullable<AppServerThreadMessageOrigin["messaging"]>;
 }) {
+  const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
   const Icon = MESSAGING_PLATFORM_ICONS[props.origin.platform];
   const platform = formatMessagingPlatformName(props.origin.platform);
-  const surface = formatMessagingOriginSurface(props.origin);
-  const actor =
-    props.origin.actor.displayName?.trim()
-    || (props.origin.actor.username?.trim()
-      ? `@${props.origin.actor.username.trim().replace(/^@/, "")}`
-      : props.origin.actor.phoneNumber?.trim()
-        || props.origin.actor.platformUserId);
-  const description = `${platform}: ${surface} · ${actor}`;
-
-  return (
-    <span
-      aria-label={description}
-      className="chip transcript-message__messaging-origin"
-      title={description}
-    >
+  const surfaceParts = messagingOriginSurfaceParts(props.origin);
+  const surface = surfaceParts.join(" / ");
+  const actor = formatMessagingOriginActor(props.origin.actor);
+  const description = `${platform}: ${surface} · ${actor.detail}`;
+  const sourceUrl = safeMessagingSourceUrl(props.origin.sourceUrl);
+  const tooltipText = [
+    platform,
+    surface,
+    actor.detail,
+    sourceUrl ? `Open in ${platform}` : undefined,
+  ].filter(Boolean).join("\n");
+  const content = (
+    <>
       <span
         aria-hidden="true"
         className="transcript-message__messaging-platform"
@@ -546,7 +553,24 @@ function MessagingOriginChip(props: {
         )}
       </span>
       <span className="transcript-message__messaging-surface">
-        {surface}
+        {surfaceParts.map((part, index) => (
+          <span
+            className="transcript-message__messaging-surface-segment"
+            key={`${index}:${part}`}
+          >
+            {index > 0 ? (
+              <span
+                aria-hidden="true"
+                className="transcript-message__messaging-surface-divider"
+              >
+                {" / "}
+              </span>
+            ) : null}
+            <span className="transcript-message__messaging-surface-label">
+              {part}
+            </span>
+          </span>
+        ))}
       </span>
       <span
         aria-hidden="true"
@@ -554,40 +578,114 @@ function MessagingOriginChip(props: {
       >
         ·
       </span>
-      <span className="transcript-message__messaging-actor">{actor}</span>
-    </span>
+      <span className="transcript-message__messaging-actor">{actor.label}</span>
+    </>
+  );
+  const sharedProps = {
+    "aria-label": description,
+    className: "chip transcript-message__messaging-origin",
+    onBlur: tooltip.hide,
+    onFocus: (event: FocusEvent<HTMLElement>) =>
+      tooltip.show(event.currentTarget, tooltipText),
+    onMouseEnter: (event: MouseEvent<HTMLElement>) =>
+      tooltip.show(event.currentTarget, tooltipText),
+    onMouseLeave: tooltip.hide,
+  };
+
+  return (
+    <>
+      {sourceUrl ? (
+        <a
+          {...sharedProps}
+          href={sourceUrl}
+          onClick={tooltip.hide}
+          rel="noreferrer"
+          target="_blank"
+        >
+          {content}
+        </a>
+      ) : (
+        <span {...sharedProps} tabIndex={0}>
+          {content}
+        </span>
+      )}
+      {tooltip.tooltipNode}
+    </>
   );
 }
 
-function formatMessagingOriginSurface(
+function safeMessagingSourceUrl(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "https:" ? parsed.toString() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function messagingOriginSurfaceParts(
   origin: NonNullable<AppServerThreadMessageOrigin["messaging"]>,
-): string {
+): string[] {
   const title = origin.surface.title?.trim();
   const parent = origin.surface.parentTitle?.trim();
   const ancestor = origin.surface.ancestorTitle?.trim();
 
   switch (origin.surface.kind) {
     case "dm":
-      return title || "Direct message";
+      return [title || "Direct message"];
     case "topic":
-      return [parent, title].filter(Boolean).join(" / ") || "Topic";
+      return messagingSurfaceParts([parent, title], "Topic");
     case "thread":
-      return [ancestor, parent ? `#${parent}` : undefined, title]
-        .filter(Boolean)
-        .join(" / ") || "Thread";
+      return messagingSurfaceParts([
+        ancestor,
+        parent ? `#${parent}` : undefined,
+        title,
+      ], "Thread");
     case "channel":
       if (origin.platform === "telegram") {
-        return title || parent || "Group";
+        return [title || parent || "Group"];
       }
       if (ancestor && parent) {
-        return [ancestor, `#${parent}`, title]
-          .filter(Boolean)
-          .join(" / ");
+        return messagingSurfaceParts(
+          [ancestor, `#${parent}`, title],
+          "Channel",
+        );
       }
-      return [ancestor || parent, title ? `#${title}` : undefined]
-        .filter(Boolean)
-        .join(" / ") || "Channel";
+      return messagingSurfaceParts([
+        ancestor || parent,
+        title ? `#${title}` : undefined,
+      ], "Channel");
   }
+}
+
+function messagingSurfaceParts(
+  parts: Array<string | undefined>,
+  fallback: string,
+): string[] {
+  const available = parts.filter((part): part is string => Boolean(part));
+  return available.length > 0 ? available : [fallback];
+}
+
+function formatMessagingOriginActor(
+  actor: NonNullable<AppServerThreadMessageOrigin["messaging"]>["actor"],
+): { detail: string; label: string } {
+  const displayName = actor.displayName?.trim();
+  const username = actor.username?.trim().replace(/^@/, "");
+  const usernameLabel = username ? `@${username}` : undefined;
+  const label =
+    displayName
+    || usernameLabel
+    || actor.phoneNumber?.trim()
+    || actor.platformUserId;
+  return {
+    label,
+    detail: displayName && usernameLabel
+      ? `${displayName} (${usernameLabel})`
+      : label,
+  };
 }
 
 function messageToneClass(message: AppServerThreadMessageEntry): string {

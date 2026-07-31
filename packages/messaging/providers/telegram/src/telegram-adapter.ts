@@ -119,6 +119,7 @@ export type TelegramChat = {
   is_forum?: true;
   title?: string;
   type: "private" | "group" | "supergroup" | "channel";
+  username?: string;
 };
 
 export type TelegramMessage = {
@@ -1500,6 +1501,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       ? stripTelegramBotMention(mentionCandidate, this.botUsername)
       : undefined;
     const attachments = this.attachmentsFromMessage(message);
+    const sourceUrl = telegramMessageUrl(message, this.botUsername);
     if (
       !isPairingMessage &&
       !this.isAuthorizedMessageSource(message, {
@@ -1535,6 +1537,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
           rawText: "/help",
           receivedAt: this.messageReceivedAt(message),
           routingState: this.routingStateFromMessage(message),
+          ...(sourceUrl ? { sourceUrl } : {}),
         });
         return;
       }
@@ -1562,6 +1565,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         },
         receivedAt: this.messageReceivedAt(message),
         routingState: this.routingStateFromMessage(message),
+        ...(sourceUrl ? { sourceUrl } : {}),
         ...(mentionRemainder !== undefined ? { botMention: true } : {}),
         text: mentionRemainder ?? message.caption,
       });
@@ -1594,6 +1598,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
           }),
       receivedAt: this.messageReceivedAt(message),
       routingState: this.routingStateFromMessage(message),
+      ...(sourceUrl ? { sourceUrl } : {}),
     } as MessagingInboundEvent);
   }
 
@@ -1635,6 +1640,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     );
     const routingState = this.routingStateFromMessage(message);
     const messageThreadId = this.messageThreadIdFromMessage(message);
+    const sourceUrl = telegramMessageUrl(message, this.botUsername);
     await listener({
       id: `telegram:update:${updateId}:callback:${callbackQuery.id}`,
       kind: "callback",
@@ -1664,6 +1670,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       value: persistedBinding?.value,
       receivedAt: this.now(),
       routingState,
+      ...(sourceUrl ? { sourceUrl } : {}),
     });
   }
 
@@ -2883,6 +2890,49 @@ function coerceTelegramSentMessage(
     },
     message_id: request.message_id,
   };
+}
+
+function telegramMessageUrl(
+  message: TelegramMessage,
+  botUsername: string | undefined,
+): string | undefined {
+  if (message.chat.type === "private") {
+    return botUsername
+      ? `https://t.me/${encodeURIComponent(botUsername.replace(/^@/, ""))}`
+      : undefined;
+  }
+
+  const username = message.chat.username;
+  if (username) {
+    const base = `https://t.me/${encodeURIComponent(username.replace(/^@/, ""))}`;
+    return telegramMessageUrlWithBase(base, message);
+  }
+
+  if (
+    message.chat.type !== "supergroup"
+    && message.chat.type !== "channel"
+  ) {
+    return undefined;
+  }
+  const chatId = String(message.chat.id);
+  if (!chatId.startsWith("-100") || chatId.length <= 4) {
+    return undefined;
+  }
+  return telegramMessageUrlWithBase(
+    `https://t.me/c/${chatId.slice(4)}`,
+    message,
+  );
+}
+
+function telegramMessageUrlWithBase(
+  base: string,
+  message: TelegramMessage,
+): string {
+  const url = new URL(`${base}/${message.message_id}`);
+  if (message.message_thread_id) {
+    url.searchParams.set("thread", String(message.message_thread_id));
+  }
+  return url.toString();
 }
 
 function parseTelegramIdentifier(value: string): number | string {

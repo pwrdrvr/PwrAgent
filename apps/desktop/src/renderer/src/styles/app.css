@@ -8925,6 +8925,21 @@ textarea,
   border: 1px solid var(--accent-border);
 }
 
+a.transcript-message__messaging-origin {
+  cursor: pointer;
+  text-decoration: none;
+}
+
+a.transcript-message__messaging-origin:hover,
+a.transcript-message__messaging-origin:focus-visible {
+  background: var(--bg-row-active);
+}
+
+.transcript-message__messaging-origin:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
 .transcript-message__messaging-platform {
   display: inline-flex;
   flex: 0 0 auto;
@@ -8940,24 +8955,39 @@ textarea,
   text-transform: uppercase;
 }
 
-.transcript-message__messaging-surface,
-.transcript-message__messaging-actor {
+.transcript-message__messaging-surface {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.transcript-message__messaging-surface-segment {
+  display: inline-flex;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.transcript-message__messaging-surface-divider {
+  flex: 0 0 auto;
+}
+
+.transcript-message__messaging-surface-label {
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.transcript-message__messaging-surface {
+.transcript-message__messaging-actor {
+  flex: 0 0 auto;
   min-width: 0;
+  color: var(--text-secondary);
 }
 
 .transcript-message__messaging-separator {
   flex: 0 0 auto;
   color: var(--text-muted);
-}
-
-.transcript-message__messaging-actor {
-  flex: 0 1 auto;
-  color: var(--text-secondary);
 }
 
 .transcript-message__source {

@@ -817,6 +817,11 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       channelType: message.channel_type,
       isThread: message.is_thread,
     });
+    const sourceUrl = discordConversationUrl({
+      channelId: message.channel_id,
+      guildId: message.guild_id,
+      messageId: message.id,
+    });
     const hasAttachments = Boolean(message.attachments?.length);
 
     // `<@botUserId> <verb>` text mention → command. Run BEFORE the
@@ -862,6 +867,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
             rawText: synthRaw,
             receivedAt,
             routingState,
+            sourceUrl,
           });
           return;
         }
@@ -889,6 +895,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         },
         receivedAt,
         routingState,
+        sourceUrl,
         text: message.content,
       });
       return;
@@ -917,6 +924,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
           }),
       receivedAt,
       routingState,
+      sourceUrl,
     } as MessagingInboundEvent);
   }
 
@@ -1027,6 +1035,11 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       value: persistedBinding?.value,
       receivedAt: this.now(),
       routingState,
+      sourceUrl: discordConversationUrl({
+        channelId: interaction.channel_id,
+        guildId: interaction.guild_id,
+        messageId: interaction.message?.id,
+      }),
     });
   }
 
@@ -1054,6 +1067,10 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       command: commandName,
       rawText: [`/${commandName}`, ...args].join(" ").trim(),
       receivedAt: this.now(),
+      sourceUrl: discordConversationUrl({
+        channelId: interaction.channel_id,
+        guildId: interaction.guild_id,
+      }),
       routingState: this.routingStateFromDiscord(
         interaction.channel_id,
         interaction.guild_id,
@@ -2381,6 +2398,19 @@ function userToDiscordUser(user: User): DiscordUser {
     id: user.id,
     username: user.username,
   };
+}
+
+function discordConversationUrl(params: {
+  channelId: string;
+  guildId?: string;
+  messageId?: string;
+}): string {
+  return [
+    "https://discord.com/channels",
+    params.guildId ?? "@me",
+    params.channelId,
+    params.messageId,
+  ].filter(Boolean).join("/");
 }
 
 function isDiscordThreadConversation(

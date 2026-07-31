@@ -344,6 +344,7 @@ export type AppServerThreadMessageOrigin = {
   };
   messaging?: {
     platform: MessagingChannelKind;
+    sourceUrl?: string;
     surface: {
       id: string;
       kind: MessagingConversationKind;

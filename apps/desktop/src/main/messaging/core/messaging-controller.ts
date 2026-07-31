@@ -16506,6 +16506,7 @@ function messageOriginForInboundEvent(
     kind: "messaging",
     messaging: {
       platform: event.channel.channel,
+      ...(event.sourceUrl ? { sourceUrl: event.sourceUrl } : {}),
       surface: {
         id: conversation.id,
         kind: conversation.kind,
