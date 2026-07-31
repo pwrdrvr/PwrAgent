@@ -1501,7 +1501,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       ? stripTelegramBotMention(mentionCandidate, this.botUsername)
       : undefined;
     const attachments = this.attachmentsFromMessage(message);
-    const sourceUrl = telegramMessageUrl(message);
+    const sourceUrl = telegramMessageUrl(message, this.botUsername);
     if (
       !isPairingMessage &&
       !this.isAuthorizedMessageSource(message, {
@@ -1640,7 +1640,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     );
     const routingState = this.routingStateFromMessage(message);
     const messageThreadId = this.messageThreadIdFromMessage(message);
-    const sourceUrl = telegramMessageUrl(message);
+    const sourceUrl = telegramMessageUrl(message, this.botUsername);
     await listener({
       id: `telegram:update:${updateId}:callback:${callbackQuery.id}`,
       kind: "callback",
@@ -2892,17 +2892,19 @@ function coerceTelegramSentMessage(
   };
 }
 
-function telegramMessageUrl(message: TelegramMessage): string | undefined {
-  const username = message.chat.username ?? (
-    message.chat.type === "private"
-      ? message.from?.username
-      : undefined
-  );
+function telegramMessageUrl(
+  message: TelegramMessage,
+  botUsername: string | undefined,
+): string | undefined {
+  if (message.chat.type === "private") {
+    return botUsername
+      ? `https://t.me/${encodeURIComponent(botUsername.replace(/^@/, ""))}`
+      : undefined;
+  }
+
+  const username = message.chat.username;
   if (username) {
     const base = `https://t.me/${encodeURIComponent(username.replace(/^@/, ""))}`;
-    if (message.chat.type === "private") {
-      return base;
-    }
     return telegramMessageUrlWithBase(base, message);
   }
 

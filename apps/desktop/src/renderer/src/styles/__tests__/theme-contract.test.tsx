@@ -223,6 +223,17 @@ describe("Tangerine Terminal theme contract", () => {
     );
   });
 
+  it("keeps messaging origin actors visible when breadcrumbs are truncated", () => {
+    const actorRules = [
+      ...css.matchAll(
+        /(?:^|\n)\.transcript-message__messaging-actor\s*\{(?<body>[\s\S]*?)\n\}/g,
+      ),
+    ];
+
+    expect(actorRules).toHaveLength(1);
+    expect(actorRules[0]?.groups?.body).toContain("flex: 0 0 auto;");
+  });
+
   it("keeps unavailable thread detail surfaces draggable", () => {
     const emptyStateRule = extractRuleBody(css, ".thread-empty-state");
     const pendingMainRule = extractRuleBody(css, ".app-main--thread-detail-pending");

@@ -2452,7 +2452,7 @@ describe("TelegramAdapter", () => {
             username: "new_username",
           },
           platform: "telegram",
-          sourceUrl: "https://t.me/new_username",
+          sourceUrl: "https://t.me/pwragentbot",
           surface: {
             id: "777",
             kind: "dm",
@@ -2461,6 +2461,44 @@ describe("TelegramAdapter", () => {
       },
       threadId: "thread-1",
     }));
+  });
+
+  it("links private Telegram messages to the bot when the actor has no username", async () => {
+    const events: MessagingInboundEvent[] = [];
+    const adapter = new TelegramAdapter({
+      api: createApi() as unknown as TelegramBotApi,
+      config: {
+        channel: "telegram",
+        botToken: "telegram-token",
+        authorizedActorIds: [{ id: "42", displayName: "" }],
+      },
+      pollOnStart: false,
+    });
+
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+    await adapter.handleUpdate({
+      update_id: 4,
+      message: {
+        chat: {
+          id: 777,
+          type: "private",
+        },
+        from: {
+          id: 42,
+          is_bot: false,
+        },
+        message_id: 103,
+        text: "show status",
+      },
+    });
+
+    expect(events.at(-1)).toMatchObject({
+      kind: "text",
+      sourceUrl: "https://t.me/pwragentbot",
+      text: "show status",
+    });
   });
 
   it("drops matching usernames with different Telegram numeric ids before controller dispatch", async () => {
