@@ -51,6 +51,7 @@
   "pnpm": {
     "overrides": {
       "@babel/core": "7.29.6",
+      "@hono/node-server": "2.0.5",
       "@types/node": "^24.12.4",
       "axios": "^1.16.0",
       "esbuild": "0.28.1",
@@ -59,7 +60,7 @@
       "postcss": "8.5.20",
       "prosemirror-model": "1.25.9",
       "prosemirror-view": "1.41.9",
-      "protobufjs": "7.6.3",
+      "protobufjs": "7.6.5",
       "qs": "6.15.2",
       "rollup": "4.61.1",
       "tar": "7.5.22",

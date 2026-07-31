@@ -6,6 +6,7 @@ packages:
 minimumReleaseAge: 10080
 minimumReleaseAgeExclude:
   - '@pwrdrvr/codex-app-server-protocol@0.133.0'
+  - '@modelcontextprotocol/sdk@1.30.0'
   - '@pwrdrvr/agent-core'
   - '@pwrdrvr/agent-transport'
   - '@pwrdrvr/codex-discovery'
@@ -40,7 +41,7 @@ minimumReleaseAgeExclude:
   - '@esbuild/win32-x64@0.28.1'
   - esbuild@0.28.1
   - form-data@4.0.6
-  - protobufjs@7.6.3
+  - protobufjs@7.6.5
   - tmp@0.2.7
   - ws@8.21.0
 globalPnpmfile: ''
