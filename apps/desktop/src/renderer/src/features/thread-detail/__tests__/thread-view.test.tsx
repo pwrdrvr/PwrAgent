@@ -12,6 +12,7 @@ import type {
   NavigationLaunchpadDraft,
   NavigationThreadSummary,
   StartReviewRequest,
+  ThreadUsageLineRecord,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import type { PendingMcpInteractionState } from "../mcp-elicitation";
@@ -58,6 +59,54 @@ import {
 function ThreadView(props: Omit<ThreadViewProps, "terminals">): ReactElement {
   const terminals = useIntegratedTerminals(props.desktopApi);
   return <ThreadViewWithTerminals {...props} terminals={terminals} />;
+}
+
+function buildTimestampPricingLine(params: {
+  createdAt: number;
+  threadId: string;
+  turnId: string;
+}): ThreadUsageLineRecord {
+  return {
+    backend: "codex",
+    cachedInputCostMicros: 0,
+    cachedInputTokens: 0,
+    createdAt: params.createdAt,
+    currency: "USD",
+    inputTokens: 100,
+    outputCostMicros: 0,
+    outputTokens: 10,
+    priceStatus: "priced",
+    provider: "openai",
+    reasoningOutputTokens: 0,
+    scope: "turn",
+    source: "hydration",
+    status: "finalized",
+    threadId: params.threadId,
+    totalCostMicros: 1_000,
+    totalTokens: 110,
+    turnId: params.turnId,
+    uncachedInputCostMicros: 0,
+    uncachedInputTokens: 100,
+    usageLineId: `line-${params.turnId}`,
+  };
+}
+
+function buildTimestampTargetThread(
+  id: string,
+  title: string,
+): NavigationThreadSummary {
+  return {
+    id,
+    title,
+    titleSource: "explicit",
+    source: "codex",
+    executionMode: "default",
+    updatedAt: Date.now(),
+    linkedDirectories: [],
+    inbox: {
+      inInbox: true,
+    },
+  };
 }
 
 function buildRendererLiveDiffEvent(params: {
@@ -626,10 +675,185 @@ describe("ThreadView", () => {
 
     expect(container.querySelectorAll(".transcript-message")).toHaveLength(40);
 
-    fireEvent.click(screen.getByRole("button", { name: "Load older messages" }));
+    const transcriptList = screen.getByRole("list");
+    transcriptList.scrollTop = 120;
+    fireEvent.scroll(transcriptList);
 
     expect(container.querySelectorAll(".transcript-message")).toHaveLength(90);
     expect(loadOlder).not.toHaveBeenCalled();
+  });
+
+  it("reveals an exact hidden turn when its pricing timestamp is clicked", async () => {
+    const targetTime = 1_800_000_000_000;
+    const entries = Array.from({ length: 95 }, (_, index) => ({
+      type: "message" as const,
+      id: `message-${index}`,
+      role: "assistant" as const,
+      text: index === 0 ? "Exact hidden target" : `History ${index}`,
+      turn: {
+        id: `turn-${index}`,
+        status: "completed" as const,
+        completedAt: targetTime + index,
+      },
+    }));
+    const selectedThread = buildTimestampTargetThread(
+      "thread-hidden-turn",
+      "Hidden timestamp target",
+    );
+    const { container } = render(
+      <ThreadView
+        activeContextTab="pricing"
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[]}
+        clearPendingRequest={() => undefined}
+        composerDisabled={false}
+        contextRailPinned
+        desktopApi={{}}
+        loading={false}
+        loadingMore={false}
+        messageCount={entries.length}
+        onLoadOlder={async () => undefined}
+        pricing={{
+          lines: [buildTimestampPricingLine({
+            createdAt: targetTime,
+            threadId: selectedThread.id,
+            turnId: "turn-0",
+          })],
+          summaries: [],
+        }}
+        removeOptimisticMessage={(_id) => undefined}
+        selectedThread={selectedThread}
+        skills={[]}
+        threadPricingSummaryEnabled
+        transcriptEntries={entries}
+      />,
+    );
+
+    expect(container.querySelectorAll(".transcript-message")).toHaveLength(40);
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /Scroll the transcript to this turn/,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(container.querySelectorAll(".transcript-message")).toHaveLength(95);
+    });
+    expect(screen.getByText("Exact hidden target")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
+    });
+  });
+
+  it("loads older server pages to reach a pricing timestamp target", async () => {
+    const targetTime = 1_800_000_000_000;
+    const loadOlder = vi.fn();
+    let loadedPageCount = 0;
+    const recentEntries = Array.from({ length: 40 }, (_, index) => ({
+      type: "message" as const,
+      id: `message-${index}`,
+      role: "assistant" as const,
+      text: `Recent history ${index}`,
+      turn: {
+        id: `turn-recent-${index}`,
+        status: "completed" as const,
+        completedAt: targetTime + index + 1,
+      },
+    }));
+    const selectedThread = buildTimestampTargetThread(
+      "thread-server-turn",
+      "Server timestamp target",
+    );
+
+    function Harness() {
+      const [entries, setEntries] = useState(recentEntries);
+      const [hasPreviousPage, setHasPreviousPage] = useState(true);
+      return (
+        <ThreadView
+          activeContextTab="pricing"
+          addOptimisticUserMessage={(_text) => "optimistic-1"}
+          backends={[]}
+          clearPendingRequest={() => undefined}
+          composerDisabled={false}
+          contextRailPinned
+          desktopApi={{}}
+          loading={false}
+          loadingMore={false}
+          messageCount={entries.length}
+          onLoadOlder={async () => {
+            loadOlder();
+            loadedPageCount += 1;
+            if (loadedPageCount === 1) {
+              setEntries((current) => [
+                {
+                  type: "message",
+                  id: "message-intermediate",
+                  role: "assistant",
+                  text: "Intermediate older page",
+                  turn: {
+                    id: "turn-intermediate",
+                    status: "completed",
+                    completedAt: targetTime - 1,
+                  },
+                },
+                ...current,
+              ]);
+              return;
+            }
+            setEntries((current) => [
+              {
+                type: "message",
+                id: "message-target",
+                role: "assistant",
+                text: "Server-loaded exact target",
+                turn: {
+                  id: "turn-target",
+                  status: "completed",
+                  completedAt: targetTime,
+                },
+              },
+              ...current,
+            ]);
+            setHasPreviousPage(false);
+          }}
+          pricing={{
+            lines: [buildTimestampPricingLine({
+              createdAt: targetTime,
+              threadId: selectedThread.id,
+              turnId: "turn-target",
+            })],
+            summaries: [],
+          }}
+          removeOptimisticMessage={(_id) => undefined}
+          selectedThread={selectedThread}
+          skills={[]}
+          threadPricingSummaryEnabled
+          transcriptEntries={entries}
+          transcriptPagination={{
+            supportsPagination: true,
+            hasPreviousPage,
+            previousCursor: hasPreviousPage ? "cursor-1" : undefined,
+          }}
+        />
+      );
+    }
+
+    render(<Harness />);
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /Scroll the transcript to this turn/,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(loadOlder).toHaveBeenCalledTimes(2);
+    });
+    expect(await screen.findByText("Server-loaded exact target")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
+    });
   });
 
   it("pages manual find through hidden in-memory transcript history", async () => {

@@ -946,6 +946,14 @@ type BranchDriftDialogState = {
   threadKey: string;
 };
 
+type PendingTranscriptTurnTarget = {
+  threadKey: string;
+  turnId: string;
+  turnTimeMs?: number;
+};
+
+const MAX_TRANSCRIPT_TARGET_PAGE_LOADS = 60;
+
 function scrollRenderedTranscriptToTurn(
   container: HTMLElement,
   turnId: string,
@@ -1001,6 +1009,11 @@ function findTranscriptTurnEntryIndex(
         return index;
       }
     }
+    // A supplied turn id is authoritative. Do not let a nearby timestamp
+    // masquerade as the target while the exact turn may still live in an
+    // older server page; the caller can choose a rendered-time fallback only
+    // after history is exhausted.
+    return -1;
   }
   if (typeof turnTimeMs !== "number") {
     return -1;
@@ -1063,6 +1076,12 @@ export function ThreadView(props: ThreadViewProps) {
   const [transcriptEntryLimits, setTranscriptEntryLimits] = useState(
     () => new Map<string, number>(),
   );
+  const [pendingTranscriptTurnTarget, setPendingTranscriptTurnTarget] =
+    useState<PendingTranscriptTurnTarget>();
+  const transcriptTurnPageLoadsRef = useRef(0);
+  const transcriptTurnPageRequestGenerationRef = useRef(0);
+  const [transcriptTurnPageRequestPending, setTranscriptTurnPageRequestPending] =
+    useState(false);
   const [contextRailWidth, setContextRailWidth] = useState(380);
   const [launchpadMaterializing, setLaunchpadMaterializing] = useState(false);
   // Terminal state is owned by `useIntegratedTerminals` up in App, mirroring
@@ -1116,6 +1135,10 @@ export function ThreadView(props: ThreadViewProps) {
     setSetupFailureArchiving(false);
     setContextRailResizing(false);
     setExpandedImage(undefined);
+    setPendingTranscriptTurnTarget(undefined);
+    transcriptTurnPageLoadsRef.current = 0;
+    transcriptTurnPageRequestGenerationRef.current += 1;
+    setTranscriptTurnPageRequestPending(false);
     setLaunchpadMaterializing(false);
     setLaunchpadMaterializeError(undefined);
     setLaunchpadSetupProgress(undefined);
@@ -1279,6 +1302,94 @@ export function ThreadView(props: ThreadViewProps) {
     onLoadOlder,
     transcriptEntryCount,
     transcriptEntryLimit,
+  ]);
+  useEffect(() => {
+    const target = pendingTranscriptTurnTarget;
+    if (!target) {
+      return;
+    }
+    if (target.threadKey !== selectedThreadKey) {
+      setPendingTranscriptTurnTarget(undefined);
+      transcriptTurnPageLoadsRef.current = 0;
+      return;
+    }
+
+    const targetIndex = findTranscriptTurnEntryIndex(
+      props.transcriptEntries,
+      target.turnId,
+      target.turnTimeMs,
+    );
+    if (targetIndex >= 0) {
+      expandTranscriptEntryLimit(props.transcriptEntries.length - targetIndex);
+      setPendingTranscriptTurnTarget(undefined);
+      transcriptTurnPageLoadsRef.current = 0;
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          const container = transcriptPanelRef.current;
+          if (container) {
+            scrollRenderedTranscriptToTurn(
+              container,
+              target.turnId,
+              target.turnTimeMs,
+            );
+          }
+        });
+      });
+      return;
+    }
+
+    const finishAtNearestRenderedTurn = (): void => {
+      const container = transcriptPanelRef.current;
+      if (container) {
+        scrollRenderedTranscriptToTurn(
+          container,
+          target.turnId,
+          target.turnTimeMs,
+        );
+      }
+      setPendingTranscriptTurnTarget(undefined);
+      transcriptTurnPageLoadsRef.current = 0;
+    };
+    if (
+      !canLoadServerTranscriptHistory
+      || transcriptTurnPageLoadsRef.current >= MAX_TRANSCRIPT_TARGET_PAGE_LOADS
+    ) {
+      finishAtNearestRenderedTurn();
+      return;
+    }
+    if (props.loadingMore || transcriptTurnPageRequestPending) {
+      return;
+    }
+
+    setTranscriptTurnPageRequestPending(true);
+    const requestGeneration = transcriptTurnPageRequestGenerationRef.current;
+    transcriptTurnPageLoadsRef.current += 1;
+    void onLoadOlder()
+      .catch(() => {
+        setPendingTranscriptTurnTarget((current) =>
+          current?.threadKey === target.threadKey
+          && current.turnId === target.turnId
+            ? undefined
+            : current,
+        );
+      })
+      .finally(() => {
+        if (
+          transcriptTurnPageRequestGenerationRef.current === requestGeneration
+        ) {
+          setTranscriptTurnPageRequestPending(false);
+        }
+      });
+  }, [
+    canLoadServerTranscriptHistory,
+    expandTranscriptEntryLimit,
+    onLoadOlder,
+    pendingTranscriptTurnTarget,
+    props.loadingMore,
+    props.transcriptEntries,
+    props.transcriptPagination?.previousCursor,
+    selectedThreadKey,
+    transcriptTurnPageRequestPending,
   ]);
   const fileViewerContext = useMemo<MarkdownFileViewerContext | undefined>(() => {
     if (!selectedThread || !selectedThreadKey) {
@@ -1854,29 +1965,41 @@ export function ThreadView(props: ThreadViewProps) {
       if (!container) {
         return;
       }
-      if (scrollRenderedTranscriptToTurn(container, turnId, turnTimeMs)) {
-        return;
-      }
       const targetIndex = findTranscriptTurnEntryIndex(
         props.transcriptEntries,
         turnId,
         turnTimeMs,
       );
-      if (targetIndex < 0) {
+      if (targetIndex >= 0) {
+        expandTranscriptEntryLimit(props.transcriptEntries.length - targetIndex);
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            const liveContainer = transcriptPanelRef.current;
+            if (liveContainer) {
+              scrollRenderedTranscriptToTurn(liveContainer, turnId, turnTimeMs);
+            }
+          });
+        });
+        return;
+      }
+      if (canLoadServerTranscriptHistory && selectedThreadKey) {
+        transcriptTurnPageLoadsRef.current = 0;
+        setPendingTranscriptTurnTarget({
+          threadKey: selectedThreadKey,
+          turnId,
+          turnTimeMs,
+        });
         return;
       }
 
-      expandTranscriptEntryLimit(props.transcriptEntries.length - targetIndex);
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          const liveContainer = transcriptPanelRef.current;
-          if (liveContainer) {
-            scrollRenderedTranscriptToTurn(liveContainer, turnId, turnTimeMs);
-          }
-        });
-      });
+      scrollRenderedTranscriptToTurn(container, turnId, turnTimeMs);
     },
-    [expandTranscriptEntryLimit, props.transcriptEntries],
+    [
+      canLoadServerTranscriptHistory,
+      expandTranscriptEntryLimit,
+      props.transcriptEntries,
+      selectedThreadKey,
+    ],
   );
 
   const moveEditedFilesToSidebar = useCallback(() => {

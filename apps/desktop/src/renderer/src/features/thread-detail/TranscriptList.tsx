@@ -567,6 +567,8 @@ export function TranscriptList(props: TranscriptListProps) {
   const appliedReglueRequestKeyRef = useRef(0);
   const olderPageRequestPendingRef = useRef(false);
   const olderPageRequestGenerationRef = useRef(0);
+  const lastUnderflowHistoryRequestRef = useRef<string | undefined>(undefined);
+  const [olderPageRequestSettledKey, setOlderPageRequestSettledKey] = useState(0);
   const shouldScrollToBottomRef = useRef(true);
   const isGluedToBottomRef = useRef(true);
   const [hasContentBelow, setHasContentBelow] = useState(false);
@@ -590,14 +592,15 @@ export function TranscriptList(props: TranscriptListProps) {
   useEffect(() => {
     olderPageRequestGenerationRef.current += 1;
     olderPageRequestPendingRef.current = false;
+    lastUnderflowHistoryRequestRef.current = undefined;
   }, [props.threadId]);
-  const requestOlderPage = useCallback(() => {
+  const requestOlderPage = useCallback((): boolean => {
     if (
       !canLoadOlder
       || loadingMore
       || olderPageRequestPendingRef.current
     ) {
-      return;
+      return false;
     }
 
     olderPageRequestPendingRef.current = true;
@@ -605,6 +608,7 @@ export function TranscriptList(props: TranscriptListProps) {
     const releaseRequestLock = (): void => {
       if (olderPageRequestGenerationRef.current === requestGeneration) {
         olderPageRequestPendingRef.current = false;
+        setOlderPageRequestSettledKey((current) => current + 1);
       }
     };
     try {
@@ -616,7 +620,35 @@ export function TranscriptList(props: TranscriptListProps) {
       releaseRequestLock();
       throw error;
     }
+    return true;
   }, [canLoadOlder, loadingMore, onLoadOlder]);
+  const requestOlderPageIfUnderflowing = useCallback(() => {
+    const container = scrollContainerRef.current;
+    if (
+      !container
+      || container.clientHeight <= 0
+      || container.scrollHeight > container.clientHeight
+    ) {
+      return;
+    }
+    const historySignature = [
+      props.threadId ?? "",
+      props.pagination?.previousCursor ?? "",
+      props.entries[0]?.id ?? "",
+      props.entries.length,
+    ].join(":");
+    if (lastUnderflowHistoryRequestRef.current === historySignature) {
+      return;
+    }
+    if (requestOlderPage()) {
+      lastUnderflowHistoryRequestRef.current = historySignature;
+    }
+  }, [
+    props.pagination?.previousCursor,
+    props.entries,
+    props.threadId,
+    requestOlderPage,
+  ]);
   const hasPendingContent = Boolean(
     props.pendingActivityEntry ||
       props.pendingProtocolActivityEntry ||
@@ -1060,6 +1092,14 @@ export function TranscriptList(props: TranscriptListProps) {
   ]);
 
   useEffect(() => {
+    requestOlderPageIfUnderflowing();
+  }, [
+    olderPageRequestSettledKey,
+    requestOlderPageIfUnderflowing,
+    transcriptEntries,
+  ]);
+
+  useEffect(() => {
     const content = scrollContentRef.current;
     const container = scrollContainerRef.current;
     if (!content || !container || typeof ResizeObserver === "undefined") {
@@ -1079,13 +1119,14 @@ export function TranscriptList(props: TranscriptListProps) {
       } else {
         syncScrollState({ preserveGlueOnResize: true });
       }
+      requestOlderPageIfUnderflowing();
     });
     observer.observe(content);
     observer.observe(container);
     return () => {
       observer.disconnect();
     };
-  }, [scrollToBottom, syncScrollState]);
+  }, [requestOlderPageIfUnderflowing, scrollToBottom, syncScrollState]);
 
   // When a sidebar drag ends, the pane has settled at its final width but the
   // ResizeObserver/onScroll handlers were paused throughout — re-sync the
@@ -1128,25 +1169,19 @@ export function TranscriptList(props: TranscriptListProps) {
       data-fade-top={isAtTop ? "hidden" : "visible"}
       data-fade-bottom={hasContentBelow ? "visible" : "hidden"}
     >
-      {canLoadOlder ? (
-        <button
-          className="button button--ghost transcript-list__load-older"
-          type="button"
-          onClick={requestOlderPage}
-        >
-          {props.loadingMore ? "Loading older messages" : "Load older messages"}
-        </button>
-      ) : null}
-
       {props.error ? <p className="transcript-error">{props.error}</p> : null}
 
       <div
         ref={scrollContainerRef}
         className="transcript-list__items"
         role="list"
+        tabIndex={0}
         onWheel={(event) => {
           if (event.deltaY < 0) {
             disableBottomGlue();
+            if (event.currentTarget.scrollTop <= LOAD_OLDER_THRESHOLD_PX) {
+              requestOlderPage();
+            }
           }
         }}
         onScroll={(event) => {

@@ -8640,10 +8640,9 @@ textarea,
   overflow: hidden;
 }
 
-.transcript-list__load-older,
 .transcript-list > .transcript-error {
   /* Restore the lateral / top breathing room the wrapper used to
-     provide for these sibling rows above the items. */
+     provide for error rows above the items. */
   align-self: flex-start;
   margin: 12px 16px 0;
 }
