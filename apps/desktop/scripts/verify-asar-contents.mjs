@@ -7,6 +7,7 @@
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
+import { normalizeAsarListing } from "./asar-entry-paths.mjs";
 
 const args = process.argv.slice(2);
 const appPath = args[0]
@@ -41,7 +42,9 @@ if (!existsSync(asarPath)) {
 // from the desktop package's node_modules without an extra install step.
 const require = createRequire(import.meta.url);
 const asar = require("@electron/asar");
-const listing = asar.listPackage(asarPath, { isPack: false });
+const listing = normalizeAsarListing(
+  asar.listPackage(asarPath, { isPack: false }),
+);
 const required = [
   "/out/grok-app-server/index.mjs",
 ];
