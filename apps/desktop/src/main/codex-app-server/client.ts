@@ -6900,12 +6900,10 @@ export class CodexAppServerClient {
     return readConfiguredMcpServerNames(result);
   }
 
-  private async attestHelperHasNoConfiguredMcpTools(
+  private async attestHelperHasNoMcpTools(
     threadId: string,
-    configuredServerNames: string[],
     timeoutMs: number,
   ): Promise<void> {
-    const configuredNames = new Set(configuredServerNames);
     const seenCursors = new Set<string>();
     let cursor: string | undefined;
 
@@ -6922,8 +6920,8 @@ export class CodexAppServerClient {
         timeoutMs,
       });
       const page = readMcpServerInventoryPage(result);
-      if (page.namesWithTools.some((name) => configuredNames.has(name))) {
-        throw new Error("codex_title_helper_configured_mcp_tools_present");
+      if (page.namesWithTools.length > 0) {
+        throw new Error("codex_title_helper_mcp_tools_present");
       }
       cursor = page.nextCursor;
       if (cursor) {
@@ -7009,18 +7007,17 @@ export class CodexAppServerClient {
         };
       }
       if (instructionSources.length > 0) {
-        codexClientLog.warn("codex helper thread rejected instruction sources", {
+        // Current Codex has no thread-level switch for process-owned global
+        // AGENTS.md. The helper cwd and project-doc budget still exclude
+        // project instructions, while the remaining global source is bounded
+        // to one fresh copy because every helper uses a new ephemeral thread.
+        codexClientLog.warn("codex helper thread retained global instruction source", {
           threadId: helperThreadId,
           instructionSourceCount: instructionSources.length,
         });
-        return {
-          status: "failed",
-          reason: "codex_title_helper_instruction_sources_present",
-        };
       }
-      await this.attestHelperHasNoConfiguredMcpTools(
+      await this.attestHelperHasNoMcpTools(
         helperThreadId,
-        mcpServerNames,
         timeoutMs,
       );
       this.helperThreadIds.add(helperThreadId);

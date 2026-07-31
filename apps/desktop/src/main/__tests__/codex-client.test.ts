@@ -6935,11 +6935,18 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
-  it("rejects global Codex instructions before starting the helper turn", async () => {
+  it("runs the bounded helper turn when Codex retains global instructions", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.threadStartResult = {
       thread: { id: "thread-title-helper" },
       instructionSources: ["/Users/huntharo/.codex/AGENTS.md"],
+    };
+    MockTransport.turnStartResult = {
+      thread: { id: "thread-title-helper" },
+      turn: {
+        id: "turn-title-helper",
+        output: [{ type: "text", text: JSON.stringify({ title: "Paul Revere story" }) }],
+      },
     };
     const client = new CodexAppServerClient({
       command: "codex",
@@ -6958,33 +6965,42 @@ describe("CodexAppServerClient", () => {
         schemaName: "thread_title",
         timeoutMs: 5_000,
       }),
-    ).resolves.toEqual({
-      status: "failed",
-      reason: "codex_title_helper_instruction_sources_present",
+    ).resolves.toMatchObject({
+      status: "ok",
+      object: { title: "Paul Revere story" },
+      helperThreadId: "thread-title-helper",
+      helperTurnId: "turn-title-helper",
     });
 
     const requests = MockTransport.instances.at(-1)!.sentMessages.map(
       (message) => JSON.parse(message) as { method?: string; params?: unknown },
     );
-    expect(requests.map((request) => request.method)).not.toContain("turn/start");
+    expect(requests.map((request) => request.method)).toContain("turn/start");
     expect(requests).toContainEqual(
       expect.objectContaining({
         method: "thread/unsubscribe",
         params: { threadId: "thread-title-helper" },
       }),
     );
+    expect(codexClientLogWarn).toHaveBeenCalledWith(
+      "codex helper thread retained global instruction source",
+      {
+        threadId: "thread-title-helper",
+        instructionSourceCount: 1,
+      },
+    );
 
     await client.close();
   });
 
-  it("rejects configured MCP tools that survive the helper thread overlay", async () => {
+  it("rejects any MCP tools that survive the helper thread overlay", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.threadStartResult = {
       thread: { id: "thread-title-helper" },
       instructionSources: [],
     };
     MockTransport.threadMcpServerStatusResult = {
-      data: [{ name: "context7", tools: { search: {} } }],
+      data: [{ name: "managed-server", tools: { search: {} } }],
       nextCursor: null,
     };
     const client = new CodexAppServerClient({
@@ -7006,7 +7022,7 @@ describe("CodexAppServerClient", () => {
       }),
     ).resolves.toEqual({
       status: "failed",
-      reason: "codex_title_helper_configured_mcp_tools_present",
+      reason: "codex_title_helper_mcp_tools_present",
     });
 
     const requests = MockTransport.instances.at(-1)!.sentMessages.map(
