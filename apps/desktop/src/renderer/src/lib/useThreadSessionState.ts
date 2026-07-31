@@ -1408,6 +1408,44 @@ function responseHasInProgressTurn(
   return turnEntries.some((entry) => entry.turn?.status === "in_progress");
 }
 
+function responseHasCompletedTurn(
+  response: AppServerReadThreadResponse,
+  turnId: string | undefined
+): boolean {
+  if (!turnId) {
+    return false;
+  }
+
+  return response.replay.entries.some(
+    (entry) =>
+      entry.turn?.id === turnId
+      && isCompletedTurnMetadata(entry.turn)
+  );
+}
+
+function sessionHasInProgressReviewTurn(
+  session: ThreadSessionEntry,
+  turnId: string | undefined
+): boolean {
+  if (!turnId) {
+    return false;
+  }
+
+  const reviewEntries = [
+    ...(session.response?.replay.entries ?? []),
+    ...session.optimisticEntries,
+  ].filter(
+    (entry) =>
+      entry.type === "review"
+      && entry.turn?.id === turnId
+  );
+  if (reviewEntries.some((entry) => isCompletedTurnMetadata(entry.turn))) {
+    return false;
+  }
+
+  return reviewEntries.some((entry) => entry.turn?.status === "in_progress");
+}
+
 function normalizeNotificationTimestamp(value: unknown): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return undefined;
@@ -3377,12 +3415,24 @@ export function useThreadSessionState(params: {
                 && isCompletedTurnMetadata(entry.turn)
             )
             && now < ownUpdateSettlesAt;
+          const reviewUpdateStillSettling =
+            current.expectOwnUpdate
+            && sessionHasInProgressReviewTurn(current, current.activeTurnId)
+            && !responseHasCompletedTurn(
+              responseWithLoadedHistory,
+              current.activeTurnId
+            )
+            && now < ownUpdateSettlesAt;
           const shouldClearStaleThinking =
-            readResponseThreadStatus(response) === "idle" &&
-            thinkingReasons.length > 0 &&
-            !hasPendingInteraction(current) &&
-            !ownUpdateStillSettling &&
-            !responseHasInProgressTurn(responseWithLoadedHistory, current.activeTurnId);
+            readResponseThreadStatus(response) === "idle"
+            && thinkingReasons.length > 0
+            && !hasPendingInteraction(current)
+            && !ownUpdateStillSettling
+            && !reviewUpdateStillSettling
+            && !responseHasInProgressTurn(
+              responseWithLoadedHistory,
+              current.activeTurnId
+            );
 
           if (shouldClearStaleThinking) {
             if (targetThread.optimisticActiveTurn) {
@@ -3429,7 +3479,8 @@ export function useThreadSessionState(params: {
               ? undefined
               : current.pendingStatusText,
             response: responseWithLoadedHistory,
-            staleThinkingRecheckAt: ownUpdateStillSettling
+            staleThinkingRecheckAt:
+              ownUpdateStillSettling || reviewUpdateStillSettling
               ? ownUpdateSettlesAt
               : undefined,
           };
