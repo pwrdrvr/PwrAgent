@@ -1185,6 +1185,18 @@ export class MessagingController {
         binding,
         activeTurn?.turnId,
       );
+      if (eventTurnId && isTaskMonitorCompletionEvent(event)) {
+        // A monitor's terminal result wakes the parent agent, whose final
+        // response is the one user-facing completion notification. Discard
+        // any coalesced heartbeat that has not fired yet so stale progress
+        // cannot arrive after that terminal response.
+        this.toolUpdatePolicy.flush({
+          bindingId: binding.id,
+          clear: true,
+          turnId: eventTurnId,
+        });
+        this.clearTurnProse(binding.id, eventTurnId);
+      }
       if (
         turnStateChanged &&
         (isTerminalTurnLifecycle(lifecycle) ||
@@ -1209,7 +1221,10 @@ export class MessagingController {
 
       const assistantText = assistantTextForBackendEvent(event);
       if (assistantText) {
-        if (!isNonFinalAssistantTextForBackendEvent(event)) {
+        if (
+          !isNonFinalAssistantTextForBackendEvent(event)
+          && !isTaskMonitorProgressEvent(event)
+        ) {
           const deliveredFinalStream = await this.flushAssistantStreamForEvent(
             event,
             binding,
@@ -15424,6 +15439,41 @@ function isNonFinalAssistantTextForBackendEvent(event: AgentEvent): boolean {
   }
   const phase = typeof params.item.phase === "string" ? params.item.phase : undefined;
   return Boolean(phase && phase !== "final" && phase !== "final_answer");
+}
+
+function isTaskMonitorProgressEvent(event: AgentEvent): boolean {
+  if (event.notification.method !== "item/completed") {
+    return false;
+  }
+  const item = (event.notification.params as {
+    item?: {
+      data?: unknown;
+      type?: unknown;
+    };
+  }).item;
+  const data = asPlainRecord(item?.data);
+  return (
+    item?.type === "agentMessage"
+    && data?.source === "pwragent_task_monitor"
+    && data.transient === true
+  );
+}
+
+function isTaskMonitorCompletionEvent(event: AgentEvent): boolean {
+  if (event.notification.method !== "item/completed") {
+    return false;
+  }
+  const item = (event.notification.params as {
+    item?: {
+      data?: unknown;
+      type?: unknown;
+    };
+  }).item;
+  const data = asPlainRecord(item?.data);
+  return (
+    item?.type === "taskMonitorCompletion"
+    && data?.source === "pwragent_task_monitor"
+  );
 }
 
 /**

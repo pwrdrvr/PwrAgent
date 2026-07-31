@@ -2822,14 +2822,17 @@ function formatTaskMonitorProgressMessage(params: {
   status?: InjectMonitorProgressToolArgs["status"];
   task: string;
 }): string {
+  const taskTitle =
+    shortenDerivedThreadTitle(params.task)
+    ?? truncateSubAgentText(params.task, 80);
+  const status =
+    params.status && params.status !== "running"
+      ? ` · ${params.status}`
+      : "";
   return [
-    "PwrAgent monitor update",
-    `Task: ${params.task}`,
-    params.status ? `Status: ${params.status}` : undefined,
-    params.message,
-  ]
-    .filter(Boolean)
-    .join("\n");
+    `Monitor · ${truncateSubAgentText(taskTitle, 80)}${status}`,
+    truncateSubAgentText(params.message, 360),
+  ].join("\n");
 }
 
 function formatTaskMonitorCompletionMessage(params: {
