@@ -84,6 +84,7 @@ import {
   type JsonRpcId,
   type JsonRpcObserver,
   type JsonRpcObserverDiagnostics,
+  type JsonRpcObserverEvent,
 } from "@pwrdrvr/agent-transport";
 import {
   createThreadDirectoryEnricher,
@@ -110,6 +111,7 @@ const ARCHIVED_THREAD_METADATA_REFRESH_INTERVAL_MS = 60_000;
 const DEFAULT_CODEX_COLLABORATION_MODEL = "gpt-5.5";
 export const DEFAULT_CODEX_THREAD_TITLE_MODEL = "gpt-5.6-luna";
 const DEFAULT_CODEX_THREAD_TITLE_TIMEOUT_MS = 20_000;
+const CODEX_THREAD_TITLE_CONFIG_READ_REASON = "thread-title-mcp-inventory";
 const CODEX_THREAD_TITLE_WORKSPACE_DIR = path.join(
   tmpdir(),
   "pwragent",
@@ -117,6 +119,7 @@ const CODEX_THREAD_TITLE_WORKSPACE_DIR = path.join(
 );
 const CODEX_THREAD_TITLE_CONFIG: NonNullable<CodexThreadStartParams["config"]> = {
   web_search: "disabled",
+  notify: [],
   include_permissions_instructions: false,
   include_apps_instructions: false,
   include_collaboration_mode_instructions: false,
@@ -128,11 +131,40 @@ const CODEX_THREAD_TITLE_CONFIG: NonNullable<CodexThreadStartParams["config"]> =
   },
   features: {
     apps: false,
-    plugins: false,
-    tool_suggest: false,
-    image_generation: false,
-    multi_agent: false,
+    code_mode: false,
+    code_mode_only: false,
+    current_time_reminder: false,
+    deferred_executor: false,
+    enable_fanout: false,
     goals: false,
+    hooks: false,
+    image_generation: false,
+    memories: false,
+    multi_agent: false,
+    multi_agent_v2: false,
+    plugins: false,
+    standalone_web_search: false,
+    token_budget: false,
+    tool_suggest: false,
+  },
+  orchestrator: {
+    mcp: { enabled: false },
+    skills: { enabled: false },
+  },
+  tools: {
+    experimental_request_user_input: { enabled: false },
+  },
+  hooks: {
+    PreToolUse: [],
+    PermissionRequest: [],
+    PostToolUse: [],
+    PreCompact: [],
+    PostCompact: [],
+    SessionStart: [],
+    UserPromptSubmit: [],
+    SubagentStart: [],
+    SubagentStop: [],
+    Stop: [],
   },
 };
 const LEGACY_CODEX_THREAD_TITLE_CONFIG: NonNullable<CodexThreadStartParams["config"]> = {
@@ -450,29 +482,13 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 /**
  * Codex recursively merges `mcp_servers`, so an empty table does not erase
- * servers configured in lower layers. Inspect only the effective server names
- * and pin each one off in the helper-thread overlay. Never copy commands, env,
- * credentials, or any other server configuration into the request.
+ * servers configured in lower layers. Pin every inventoried server off in the
+ * helper-thread overlay.
  */
 function buildCodexHelperConfig(
   baseConfig: NonNullable<CodexThreadStartParams["config"]>,
-  configReadResponse: unknown,
+  serverNames: string[],
 ): NonNullable<CodexThreadStartParams["config"]> {
-  const effectiveConfig = asRecord(asRecord(configReadResponse)?.config);
-  if (!effectiveConfig) {
-    throw new Error("codex_title_config_read_invalid_response");
-  }
-
-  const configuredServersValue = effectiveConfig.mcp_servers;
-  const configuredServers =
-    configuredServersValue === undefined
-      ? null
-      : asRecord(configuredServersValue);
-  if (configuredServersValue !== undefined && !configuredServers) {
-    throw new Error("codex_title_config_read_invalid_mcp_servers");
-  }
-
-  const serverNames = Object.keys(configuredServers ?? {}).sort();
   if (serverNames.length === 0) {
     return baseConfig;
   }
@@ -483,6 +499,124 @@ function buildCodexHelperConfig(
       serverNames.map((name) => [name, { enabled: false }]),
     ),
   };
+}
+
+function readConfiguredMcpServerNames(value: unknown): string[] {
+  const effectiveConfig = asRecord(asRecord(value)?.config);
+  if (!effectiveConfig) {
+    throw new Error("codex_title_config_read_invalid_response");
+  }
+  const configuredServersValue = effectiveConfig.mcp_servers;
+  if (configuredServersValue === undefined) {
+    return [];
+  }
+  const configuredServers = asRecord(configuredServersValue);
+  if (!configuredServers) {
+    throw new Error("codex_title_config_read_invalid_mcp_servers");
+  }
+  return Object.keys(configuredServers).sort();
+}
+
+function createCodexObserverWithConfigReadRedaction(
+  observer: JsonRpcObserver | undefined,
+): JsonRpcObserver | undefined {
+  if (!observer) {
+    return undefined;
+  }
+  const sensitiveRequestIds = new Set<string>();
+
+  return {
+    onMessage: async (event) => {
+      const requestId = event.envelope.id;
+      const requestKey = requestId === null || requestId === undefined
+        ? undefined
+        : String(requestId);
+      if (
+        event.direction === "outbound"
+        && event.envelope.method === "config/read"
+        && event.diagnostics?.callerReason === CODEX_THREAD_TITLE_CONFIG_READ_REASON
+        && requestKey
+      ) {
+        sensitiveRequestIds.add(requestKey);
+        await observer.onMessage(event);
+        return;
+      }
+      if (
+        event.direction !== "inbound"
+        || !requestKey
+        || !sensitiveRequestIds.delete(requestKey)
+        || !Object.hasOwn(event.envelope, "result")
+      ) {
+        await observer.onMessage(event);
+        return;
+      }
+
+      const names = readConfiguredMcpServerNames(event.envelope.result);
+      const envelope: JsonRpcObserverEvent["envelope"] = {
+        ...event.envelope,
+        result: {
+          config: {
+            mcp_servers: Object.fromEntries(names.map((name) => [name, {}])),
+          },
+        },
+      };
+      await observer.onMessage({
+        ...event,
+        envelope,
+        raw: JSON.stringify(envelope),
+      });
+    },
+  };
+}
+
+function readMcpServerInventoryPage(value: unknown): {
+  names: string[];
+  namesWithTools: string[];
+  nextCursor?: string;
+} {
+  const record = asRecord(value);
+  if (!record || !Array.isArray(record.data)) {
+    throw new Error("codex_title_mcp_inventory_invalid_response");
+  }
+
+  const namesWithTools: string[] = [];
+  const names = record.data.map((item) => {
+    const name = readStringFromRecord(item, "name");
+    if (!name) {
+      throw new Error("codex_title_mcp_inventory_invalid_server");
+    }
+    const tools = asRecord(asRecord(item)?.tools);
+    if (!tools) {
+      throw new Error("codex_title_mcp_inventory_invalid_tools");
+    }
+    if (Object.keys(tools).length > 0) {
+      namesWithTools.push(name);
+    }
+    return name;
+  });
+  const nextCursorValue = record.nextCursor;
+  if (nextCursorValue === null || nextCursorValue === undefined) {
+    return { names, namesWithTools };
+  }
+  if (typeof nextCursorValue !== "string" || !nextCursorValue.trim()) {
+    throw new Error("codex_title_mcp_inventory_invalid_cursor");
+  }
+  return { names, namesWithTools, nextCursor: nextCursorValue.trim() };
+}
+
+function readThreadInstructionSources(value: unknown): string[] | null {
+  const sources = asRecord(value)?.instructionSources;
+  if (!Array.isArray(sources)) {
+    return null;
+  }
+  const normalized: string[] = [];
+  for (const source of sources) {
+    if (typeof source !== "string" || !source.trim()) {
+      return null;
+    }
+    normalized.push(source.trim());
+  }
+  return normalized;
 }
 
 function pickString(
@@ -5164,6 +5298,7 @@ function buildThreadStartPayload(params: {
   cwd?: string;
   runtimeWorkspaceRoots?: string[];
   environments?: CodexThreadStartParams["environments"];
+  baseInstructions?: CodexThreadStartParams["baseInstructions"];
   model?: string;
   approvalPolicy?: string;
   sandbox?: string;
@@ -5191,6 +5326,9 @@ function buildThreadStartPayload(params: {
   }
   if (params.environments !== undefined) {
     base.environments = params.environments;
+  }
+  if (params.baseInstructions !== undefined) {
+    base.baseInstructions = params.baseInstructions;
   }
   if (params.model?.trim()) {
     base.model = params.model.trim();
@@ -5824,7 +5962,7 @@ export class CodexAppServerClient {
         resolveEnv: options.resolveEnv,
       }),
       options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
-      options.connectionObserver,
+      createCodexObserverWithConfigReadRedaction(options.connectionObserver),
       { logContext: { backend: "codex" }, logger: getMainLogger("pwragent:json-rpc") },
     );
     const directoryResolver = options.directoryResolver;
@@ -6747,6 +6885,56 @@ export class CodexAppServerClient {
     return await this.runHelperStructuredTurn(params);
   }
 
+  /** Read only configured MCP names; the observer wrapper strips secret values. */
+  private async readHelperMcpServerNames(
+    cwd: string,
+    timeoutMs: number,
+  ): Promise<string[]> {
+    const result = await requestWithFallbacks({
+      client: this.connection,
+      diagnostics: { callerReason: CODEX_THREAD_TITLE_CONFIG_READ_REASON },
+      methods: ["config/read"],
+      payloads: [{ includeLayers: false, cwd }],
+      timeoutMs,
+    });
+    return readConfiguredMcpServerNames(result);
+  }
+
+  private async attestHelperHasNoConfiguredMcpTools(
+    threadId: string,
+    configuredServerNames: string[],
+    timeoutMs: number,
+  ): Promise<void> {
+    const configuredNames = new Set(configuredServerNames);
+    const seenCursors = new Set<string>();
+    let cursor: string | undefined;
+
+    do {
+      const result = await requestWithFallbacks({
+        client: this.connection,
+        methods: ["mcpServerStatus/list"],
+        payloads: [{
+          threadId,
+          detail: "toolsAndAuthOnly",
+          limit: 100,
+          ...(cursor ? { cursor } : {}),
+        }],
+        timeoutMs,
+      });
+      const page = readMcpServerInventoryPage(result);
+      if (page.namesWithTools.some((name) => configuredNames.has(name))) {
+        throw new Error("codex_title_helper_configured_mcp_tools_present");
+      }
+      cursor = page.nextCursor;
+      if (cursor) {
+        if (seenCursors.has(cursor)) {
+          throw new Error("codex_title_helper_mcp_inventory_repeated_cursor");
+        }
+        seenCursors.add(cursor);
+      }
+    } while (cursor);
+  }
+
   private async runHelperStructuredTurn(params: {
     prompt: string;
     schema: Record<string, unknown>;
@@ -6761,19 +6949,17 @@ export class CodexAppServerClient {
     const timeoutMs = params.timeoutMs ?? DEFAULT_CODEX_THREAD_TITLE_TIMEOUT_MS;
     const helperWorkspaceDir = await ensureCodexThreadTitleWorkspace();
     try {
-      const configReadResult = await requestWithFallbacks({
-        client: this.connection,
-        methods: ["config/read"],
-        payloads: [{ includeLayers: false, cwd: helperWorkspaceDir }],
+      const mcpServerNames = await this.readHelperMcpServerNames(
+        helperWorkspaceDir,
         timeoutMs,
-      });
+      );
       const helperConfig = buildCodexHelperConfig(
         CODEX_THREAD_TITLE_CONFIG,
-        configReadResult,
+        mcpServerNames,
       );
       const legacyHelperConfig = buildCodexHelperConfig(
         LEGACY_CODEX_THREAD_TITLE_CONFIG,
-        configReadResult,
+        mcpServerNames,
       );
       const threadStartResult = await requestWithFallbacks({
         client: this.connection,
@@ -6784,6 +6970,7 @@ export class CodexAppServerClient {
               cwd: helperWorkspaceDir,
               runtimeWorkspaceRoots: [helperWorkspaceDir],
               environments: [],
+              baseInstructions: "",
               model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
               serviceTier: null,
               ephemeral: true,
@@ -6796,6 +6983,7 @@ export class CodexAppServerClient {
               cwd: helperWorkspaceDir,
               runtimeWorkspaceRoots: [helperWorkspaceDir],
               environments: [],
+              baseInstructions: "",
               model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
               serviceTier: null,
               ephemeral: true,
@@ -6813,6 +7001,28 @@ export class CodexAppServerClient {
           reason: "codex_title_thread_start_missing_thread_id",
         };
       }
+      const instructionSources = readThreadInstructionSources(threadStartResult);
+      if (!instructionSources) {
+        return {
+          status: "failed",
+          reason: "codex_title_thread_start_missing_instruction_sources",
+        };
+      }
+      if (instructionSources.length > 0) {
+        codexClientLog.warn("codex helper thread rejected instruction sources", {
+          threadId: helperThreadId,
+          instructionSourceCount: instructionSources.length,
+        });
+        return {
+          status: "failed",
+          reason: "codex_title_helper_instruction_sources_present",
+        };
+      }
+      await this.attestHelperHasNoConfiguredMcpTools(
+        helperThreadId,
+        mcpServerNames,
+        timeoutMs,
+      );
       this.helperThreadIds.add(helperThreadId);
       this.helperThreadPredicates.set(helperThreadId, params.isMatch);
 
