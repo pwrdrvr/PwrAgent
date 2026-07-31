@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.0.0-beta.50 - 2026-07-31
+
+- AI Provider Defaults - Added configurable default model, reasoning, access mode, and service tier per provider, applied to new threads and launchpads without overriding saved thread choices.
+- GPT-5.6 Pricing and Monitors - Updated GPT-5.6 Terra and Luna pricing and Codex Credits estimates, and made monitor threads use PwrAgent's managed model and reasoning defaults unless explicitly overridden.
+- Provider Support - Refreshed ACP model discovery, added Kimi thinking controls and Grok 4.5 effort choices, improved current CLI discovery, and kept disabled providers out of model pickers.
+- Messaging Reviews - Added messaging `/review` routing with a project-scoped configuration summary, preserved chosen answers and access, and fixed review lifecycle, response-mode, and Working Updates behavior.
+- Messaging Traceability - Linked inbound message origins into the transcript, showing provider and sender attribution while improving Slack file-share authorization, command picker refresh, and pairing behavior.
+- Agent Tools and Sub-agents - Exposed PwrAgent tools to ACP agents over MCP and added live sub-agent lifecycle activity to transcripts and detail views.
+- Pull Requests - Added background pull-request status polling with priority tiers, live PR link chips, tracked-remote discovery, and correct cross-repository references.
+- Thread Reliability - Windowed very large thread histories while preserving Find, kept collapsed directories and launchpad settings stable across navigation, and hardened queued-turn, terminal, and agent lifecycle handling.
+- Minor - Improved contrast for warning toasts, sanitized ACP command output, and updated compatible AI SDK, editor, and tooling dependencies.
+
 ## v1.0.0-beta.49 - 2026-07-15
 
 - Composer References - Added `@` directory and file references, with durable chips, reference pickers, and drag-and-drop or paste support for non-image files. Referenced projects are linked to the thread automatically when sent.
