@@ -2056,7 +2056,7 @@ function buildOptimisticThreadFromLaunchpad(params: {
   };
 }
 
-function shouldAutoPinMaterializedThread(params: {
+function shouldAutoPinThreadForVisibility(params: {
   directory: NavigationDirectorySummary | undefined;
   threads: NavigationThreadSummary[];
   parentThreadId: string | undefined;
@@ -2468,6 +2468,9 @@ export function useThreadNavigation(
   const pendingDirectoryGitStatusRef = useRef(
     new Map<string, NavigationDirectoryGitStatus | null>(),
   );
+  const autoPinRequestsRef = useRef(
+    new Map<string, Promise<string | undefined>>(),
+  );
   const setNavigationBrowseModeRequestRef = useRef(setNavigationBrowseModeRequest);
   const stateRef = useRef(state);
 
@@ -2519,6 +2522,56 @@ export function useThreadNavigation(
     }));
     setRetainedUnreadThread(undefined);
   }, []);
+
+  const autoPinThreadForVisibility = useCallback(
+    async (params: {
+      backend: AppServerBackendKind;
+      directory: NavigationDirectorySummary | undefined;
+      parentThreadId: string | undefined;
+      threadId: string;
+      threads: NavigationThreadSummary[];
+    }): Promise<string | undefined> => {
+      if (!shouldAutoPinThreadForVisibility(params)) {
+        return undefined;
+      }
+
+      const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+      const existingRequest = autoPinRequestsRef.current.get(threadKey);
+      if (existingRequest) {
+        return await existingRequest;
+      }
+
+      const request = (async (): Promise<string | undefined> => {
+        if (!desktopApi?.setThreadPin) {
+          throw new Error(
+            "The new thread was created, but it could not be pinned automatically.",
+          );
+        }
+        const pinResult = await desktopApi.setThreadPin({
+          backend: params.backend,
+          threadId: params.threadId,
+          pinnedRank: buildAppendPinRank(
+            params.threads.map((thread) => thread.pinnedRank),
+          ),
+        });
+        if (!pinResult.pinnedRank) {
+          throw new Error(
+            "The new thread was created, but it could not be pinned automatically.",
+          );
+        }
+        return pinResult.pinnedRank;
+      })();
+      autoPinRequestsRef.current.set(threadKey, request);
+
+      try {
+        return await request;
+      } catch (error) {
+        autoPinRequestsRef.current.delete(threadKey);
+        throw error;
+      }
+    },
+    [desktopApi],
+  );
 
   const performRefresh = useCallback(
     async (
@@ -2578,10 +2631,52 @@ export function useThreadNavigation(
           threadCount: snapshot.threads.length,
           unchanged: Boolean(snapshot.unchanged),
         });
-        const response = removeThreadKeysFromSnapshot(
+        let response = removeThreadKeysFromSnapshot(
           snapshot,
           suppressedArchivedThreadKeysRef.current
         );
+        const previousResponse = stateRef.current.response;
+        // Handoffs, messaging, and other main-process paths can create a
+        // thread without materializing a renderer launchpad. Apply the same
+        // collapsed-directory visibility rule whenever a refresh discovers a
+        // new thread so creation path does not determine whether it is shown.
+        if (previousResponse) {
+          const previousThreadKeys = new Set(
+            previousResponse.threads.map((thread) =>
+              buildThreadIdentityKey(thread.source, thread.id),
+            ),
+          );
+          for (const thread of response.threads) {
+            const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+            if (previousThreadKeys.has(threadKey) || thread.pinnedRank) {
+              continue;
+            }
+            const directory = response.directories.find((candidate) =>
+              candidate.threadKeys.includes(threadKey),
+            );
+            try {
+              const pinnedRank = await autoPinThreadForVisibility({
+                backend: thread.source,
+                directory,
+                parentThreadId: thread.parentThreadId,
+                threadId: thread.id,
+                threads: response.threads,
+              });
+              if (pinnedRank) {
+                response = updateThreadPinInSnapshot(response, {
+                  backend: thread.source,
+                  threadId: thread.id,
+                  pinnedRank,
+                })!;
+              }
+            } catch (error) {
+              console.warn(
+                `Could not auto-pin newly discovered thread ${threadKey}:`,
+                error,
+              );
+            }
+          }
+        }
         const optimisticSelection = preferredOptimisticThread ?? optimisticThreadRef.current;
         const optimisticThreadKey = optimisticSelection
           ? buildThreadIdentityKey(optimisticSelection.source, optimisticSelection.id)
@@ -2655,7 +2750,7 @@ export function useThreadNavigation(
         }));
       }
     },
-    [desktopApi, enabled]
+    [autoPinThreadForVisibility, desktopApi, enabled]
   );
 
   const refresh = useCallback(
@@ -4883,39 +4978,16 @@ export function useThreadNavigation(
       }
       let autoPinnedRank: string | undefined;
       let autoPinFailure: string | undefined;
-      if (
-        shouldAutoPinMaterializedThread({
+      try {
+        autoPinnedRank = await autoPinThreadForVisibility({
+          backend: response.backend,
           directory,
-          threads: stateRef.current.response?.threads ?? [],
           parentThreadId: materializeParentThreadId,
-        })
-      ) {
-        const requestedPinnedRank = buildAppendPinRank(
-          (stateRef.current.response?.threads ?? []).map(
-            (thread) => thread.pinnedRank,
-          ),
-        );
-        if (!desktopApi.setThreadPin) {
-          autoPinFailure =
-            "The new thread was created, but it could not be pinned automatically.";
-        } else {
-          try {
-            const pinResult = await desktopApi.setThreadPin({
-              backend: response.backend,
-              threadId: response.threadId,
-              pinnedRank: requestedPinnedRank,
-            });
-            autoPinnedRank = pinResult.pinnedRank;
-            if (!autoPinnedRank) {
-              autoPinFailure =
-                "The new thread was created, but it could not be pinned automatically.";
-            }
-          } catch (error) {
-            autoPinFailure = `The new thread was created, but it could not be pinned automatically: ${
-              error instanceof Error ? error.message : String(error)
-            }`;
-          }
-        }
+          threadId: response.threadId,
+          threads: stateRef.current.response?.threads ?? [],
+        });
+      } catch (error) {
+        autoPinFailure = error instanceof Error ? error.message : String(error);
       }
       const optimisticMaterializedThread = buildOptimisticThreadFromLaunchpad({
         directory,
@@ -5026,7 +5098,13 @@ export function useThreadNavigation(
         setLaunchpadError(error instanceof Error ? error.message : String(error));
       }
     },
-    [desktopApi, directories, insertSubthreadBelowSource, refresh]
+    [
+      autoPinThreadForVisibility,
+      desktopApi,
+      directories,
+      insertSubthreadBelowSource,
+      refresh,
+    ]
   );
 
   /**

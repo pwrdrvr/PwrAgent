@@ -2436,6 +2436,140 @@ describe("useThreadNavigation", () => {
     });
   });
 
+  it("auto-pins a new top-level thread created outside the renderer when Directory threads are collapsed", async () => {
+    const directoryKey = "directory:/Users/huntharo/github/PwrAgent";
+    const listeners = new Set<
+      Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+    >();
+    let threadStarted = false;
+    let childThreadStarted = false;
+    const existingPinnedThread = {
+      id: "thread-pinned",
+      title: "Pinned thread",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      linkedDirectories: [],
+      inbox: { inInbox: true },
+      executionMode: "default" as const,
+      updatedAt: 1,
+      pinnedRank: "1024",
+    };
+    const newThread = {
+      id: "thread-new",
+      title: "Thread created by handoff",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      linkedDirectories: [],
+      inbox: { inInbox: true, reason: "new-thread" as const },
+      executionMode: "default" as const,
+      updatedAt: 2,
+    };
+    const newChildThread = {
+      ...newThread,
+      id: "thread-child",
+      title: "Child thread created by handoff",
+      parentThreadId: "thread-pinned",
+      updatedAt: 3,
+    };
+    const getNavigationSnapshot = vi.fn(async (): Promise<NavigationSnapshot> => ({
+      backend: "all",
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: childThreadStarted
+        ? ["codex:thread-child", "codex:thread-new", "codex:thread-pinned"]
+        : threadStarted
+          ? ["codex:thread-new", "codex:thread-pinned"]
+          : ["codex:thread-pinned"],
+      threads: threadStarted
+        ? [
+            ...(childThreadStarted ? [newChildThread] : []),
+            newThread,
+            existingPinnedThread,
+          ]
+        : [existingPinnedThread],
+      directories: [
+        {
+          key: directoryKey,
+          kind: "directory",
+          label: "PwrAgent",
+          path: "/Users/huntharo/github/PwrAgent",
+          threadKeys: threadStarted
+            ? [
+                "codex:thread-pinned",
+                "codex:thread-new",
+                ...(childThreadStarted ? ["codex:thread-child"] : []),
+              ]
+            : ["codex:thread-pinned"],
+          needsAttentionCount: childThreadStarted ? 2 : threadStarted ? 1 : 0,
+          directoryThreadsCollapsed: true,
+        },
+      ],
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+    }));
+    const setThreadPin: NonNullable<DesktopApi["setThreadPin"]> = vi.fn(
+      async (request) => ({
+        backend: request.backend ?? "codex",
+        threadId: request.threadId,
+        pinnedRank: request.pinnedRank ?? undefined,
+      }),
+    );
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      onAgentEvent: (listener) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      setThreadPin,
+    };
+    renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
+    });
+
+    threadStarted = true;
+    act(() => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "thread/started",
+            params: { threadId: "thread-new" },
+          },
+        });
+      }
+    });
+
+    await waitFor(() => {
+      expect(setThreadPin).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-new",
+        pinnedRank: "2048",
+      });
+    });
+
+    childThreadStarted = true;
+    act(() => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "thread/started",
+            params: { threadId: "thread-child" },
+          },
+        });
+      }
+    });
+
+    await waitFor(() => {
+      expect(getNavigationSnapshot).toHaveBeenCalledTimes(3);
+    });
+    expect(setThreadPin).toHaveBeenCalledTimes(1);
+  });
+
   it("carries the started review turn from launchpad materialization", async () => {
     const directoryKey = "directory:/Users/huntharo/github/PwrAgent";
     const getNavigationSnapshot = vi.fn(async (): Promise<NavigationSnapshot> => ({
