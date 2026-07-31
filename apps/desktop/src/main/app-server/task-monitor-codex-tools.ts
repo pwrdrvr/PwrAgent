@@ -229,7 +229,7 @@ export function buildMonitorDelegationPrompt(params: {
     "</monitor_config>",
     "",
     "<model_guidance>",
-    "- PwrAgent should have started this monitor on a cheap mini/non-thinking model when available.",
+    "- PwrAgent should have started this monitor on a cost-efficient lightweight model.",
     "- For Codex, this monitor should use the returned preferredModel and preferredReasoningEffort values.",
     "- For ACP or other agent runtimes, choose a non-thinking model or the lowest reasoning setting that can poll status reliably.",
     "</model_guidance>",

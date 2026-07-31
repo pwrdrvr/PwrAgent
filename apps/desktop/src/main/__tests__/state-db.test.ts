@@ -939,7 +939,7 @@ describe("StateDb", () => {
     });
   });
 
-  it("reprices existing GPT-5.6 usage rows when the pricing catalog updates", () => {
+  it("reprices existing GPT-5.6 usage rows after the July 30 price reduction", () => {
     stateDb.close();
 
     const dbPath = path.join(tempDir, "gpt-5-6-pricing-repair-state.db");
@@ -965,6 +965,9 @@ describe("StateDb", () => {
           price_status,
           price_unavailable_reason,
           currency,
+          pricing_catalog_id,
+          pricing_catalog_version,
+          pricing_rate_id,
           uncached_input_cost_micros,
           cached_input_cost_micros,
           output_cost_micros,
@@ -986,21 +989,24 @@ describe("StateDb", () => {
           15,
           0,
           26306,
-          'unpriced',
-          'missing-rate',
+          'priced',
+          NULL,
           'USD',
+          'openai-api',
+          '2026-07-09',
+          'openai:2026-07-09:gpt-5.6-terra:standard',
+          65728,
           0,
-          0,
-          0,
-          0,
+          225,
+          65953,
           ?
         )`,
       )
       .run(
-        Date.UTC(2026, 6, 12, 22, 50, 30),
-        Date.UTC(2026, 6, 12, 22, 50, 30),
+        Date.UTC(2026, 6, 30, 22, 50, 30),
+        Date.UTC(2026, 6, 30, 22, 50, 30),
       );
-    stateDb.raw.pragma("user_version = 26");
+    stateDb.raw.pragma("user_version = 31");
     stateDb.close();
 
     stateDb = StateDb.open(dbPath);
@@ -1038,12 +1044,12 @@ describe("StateDb", () => {
     expect(line).toEqual({
       price_status: "priced",
       price_unavailable_reason: null,
-      pricing_rate_id: "openai:2026-07-09:gpt-5.6-terra:standard",
-      total_cost_micros: 65_953,
+      pricing_rate_id: "openai:2026-07-30:gpt-5.6-terra:standard",
+      total_cost_micros: 52_762,
     });
     expect(summary).toEqual({
       priced_usage_line_count: 1,
-      total_cost_micros: 65_953,
+      total_cost_micros: 52_762,
       unpriced_usage_line_count: 0,
     });
   });

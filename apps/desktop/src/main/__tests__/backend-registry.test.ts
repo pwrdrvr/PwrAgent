@@ -1060,8 +1060,8 @@ async function waitForDetachedActionRunToExit(
 
 const TEST_TASK_MONITOR_MODELS: BackendModelOption[] = [
   {
-    id: "gpt-5.4-mini",
-    label: "GPT-5.4-Mini",
+    id: "gpt-5.6-luna",
+    label: "GPT-5.6 Luna",
     supportsReasoning: true,
   },
 ];
@@ -12905,7 +12905,7 @@ command = "pnpm dev"
         status: "running",
         backend: "codex",
         agentName: "PwrAgent",
-        preferredModel: "gpt-5.4-mini",
+        preferredModel: "gpt-5.6-luna",
         preferredReasoningEffort: "low",
         lastMessage: "Generating a title.",
       }),
@@ -12942,7 +12942,7 @@ command = "pnpm dev"
         title: "Readable thread title",
         helperThreadId: "title-helper-thread",
         helperTurnId: "title-helper-turn",
-        model: "gpt-5.4-mini",
+        model: "gpt-5.6-luna",
         reasoningEffort: "low",
         tokenUsage: {
           inputTokens: 100,
@@ -12996,7 +12996,7 @@ command = "pnpm dev"
         status: "running",
         backend: "codex",
         agentName: "PwrAgent",
-        preferredModel: "gpt-5.4-mini",
+        preferredModel: "gpt-5.6-luna",
         preferredReasoningEffort: "low",
         lastMessage: "Generating a title.",
       }),
@@ -13011,14 +13011,14 @@ command = "pnpm dev"
         status: "success",
         backend: "codex",
         agentName: "PwrAgent",
-        preferredModel: "gpt-5.4-mini",
+        preferredModel: "gpt-5.6-luna",
         preferredReasoningEffort: "low",
         monitorThreadId: "title-helper-thread",
         monitorTurnId: "title-helper-turn",
         lastMessage: "Generated title: Readable thread title",
         outcome: "success",
         monitorUsage: expect.objectContaining({
-          model: "gpt-5.4-mini",
+          model: "gpt-5.6-luna",
           tokenUsage: {
             inputTokens: 100,
             cachedInputTokens: 20,
@@ -13039,8 +13039,8 @@ command = "pnpm dev"
         parentThreadId: "thread-title-helper-parent",
         threadId: "title-helper-thread",
         turnId: "title-helper-turn",
-        model: "gpt-5.4-mini",
-        pricingRateId: "openai:2026-06-16:gpt-5.4-mini:standard",
+        model: "gpt-5.6-luna",
+        pricingRateId: "openai:2026-07-30:gpt-5.6-luna:standard",
         inputTokens: 100,
         cachedInputTokens: 20,
         uncachedInputTokens: 80,
@@ -13059,7 +13059,7 @@ command = "pnpm dev"
         reason: "title_too_many_words",
         helperThreadId: "invalid-title-helper-thread",
         helperTurnId: "invalid-title-helper-turn",
-        model: "gpt-5.4-mini",
+        model: "gpt-5.6-luna",
         reasoningEffort: "low",
         tokenUsage: {
           inputTokens: 100,
@@ -13113,11 +13113,11 @@ command = "pnpm dev"
         outcome: "failure",
         monitorThreadId: "invalid-title-helper-thread",
         monitorTurnId: "invalid-title-helper-turn",
-        preferredModel: "gpt-5.4-mini",
+        preferredModel: "gpt-5.6-luna",
         preferredReasoningEffort: "low",
         lastMessage: "Title generation failed: title_too_many_words",
         monitorUsage: expect.objectContaining({
-          model: "gpt-5.4-mini",
+          model: "gpt-5.6-luna",
           tokenUsage: {
             inputTokens: 100,
             cachedInputTokens: 20,
@@ -13156,7 +13156,7 @@ command = "pnpm dev"
         title: "Readable thread title",
         helperThreadId: "title-helper-thread",
         helperTurnId: "title-helper-turn",
-        model: "gpt-5.4-mini",
+        model: "gpt-5.6-luna",
         reasoningEffort: "low",
         tokenUsage: {
           inputTokens: 100,
@@ -13277,7 +13277,7 @@ command = "pnpm dev"
       subAgent: expect.objectContaining({
         monitorId: "system:title-helper:codex:thread-title-helper-throws",
         status: "running",
-        preferredModel: "gpt-5.4-mini",
+        preferredModel: "gpt-5.6-luna",
         preferredReasoningEffort: "low",
         lastMessage: "Generating a title.",
       }),
@@ -13289,7 +13289,7 @@ command = "pnpm dev"
         monitorId: "system:title-helper:codex:thread-title-helper-throws",
         status: "failed",
         outcome: "failure",
-        preferredModel: "gpt-5.4-mini",
+        preferredModel: "gpt-5.6-luna",
         preferredReasoningEffort: "low",
         lastMessage: "Title generation failed: title helper unavailable",
         completionSource: expect.objectContaining({
@@ -25000,8 +25000,8 @@ script = "printf setup"
     expect(response).toMatchObject({ success: true });
     expect(payload).toMatchObject({
       parentThreadId: "thread-1",
-      preferredModel: "gpt-5.4-mini",
-      preferredReasoningEffort: "low",
+      preferredModel: "gpt-5.6-luna",
+      preferredReasoningEffort: "medium",
       pollIntervalSeconds: 30,
       heartbeatIntervalSeconds: 30,
       startupTimeoutSeconds: 45,
@@ -25011,7 +25011,7 @@ script = "printf setup"
     });
     expect(String(payload.monitorId)).toMatch(/^monitor-/);
     expect(String(payload.parentAgentGuidance)).toContain("do not call generic spawnAgent");
-    expect(String(payload.parentAgentGuidance)).toContain("model=gpt-5.4-mini");
+    expect(String(payload.parentAgentGuidance)).toContain("model=gpt-5.6-luna");
     expect(String(payload.parentAgentGuidance)).toContain("exact monitoring procedure");
     expect(String(payload.parentAgentGuidance)).toContain("Do not delegate an already-running parent tool session");
     expect(String(payload.parentAgentGuidance)).toContain("exec_command/write_stdin stdin, stdout, stderr, or exit status");
@@ -25024,8 +25024,8 @@ script = "printf setup"
     expect(String(payload.parentAgentGuidance)).toContain("only event that should wake");
     expect(codexClient.lastStartThreadParams).toMatchObject({
       ephemeral: true,
-      model: "gpt-5.4-mini",
-      reasoningEffort: "low",
+      model: "gpt-5.6-luna",
+      reasoningEffort: "medium",
       approvalPolicy: "on-request",
       sandbox: "workspace-write",
     });
@@ -25035,8 +25035,8 @@ script = "printf setup"
     expect(codexClient.startTurnCallCount).toBe(1);
     expect(codexClient.lastStartTurnParams).toMatchObject({
       threadId: "monitor-thread",
-      model: "gpt-5.4-mini",
-      reasoningEffort: "low",
+      model: "gpt-5.6-luna",
+      reasoningEffort: "medium",
       approvalPolicy: "on-request",
       sandbox: "workspace-write",
     });
@@ -25048,8 +25048,8 @@ script = "printf setup"
       ),
     ).toContain("Monitor id:");
     expect(String(payload.prompt)).toContain("Parent thread id: thread-1");
-    expect(String(payload.prompt)).toContain("Preferred monitor model: gpt-5.4-mini");
-    expect(String(payload.prompt)).toContain("Preferred reasoning effort: low");
+    expect(String(payload.prompt)).toContain("Preferred monitor model: gpt-5.6-luna");
+    expect(String(payload.prompt)).toContain("Preferred reasoning effort: medium");
     expect(String(payload.prompt)).toContain("Poll/heartbeat interval: 30 seconds");
     expect(String(payload.prompt)).toContain("local build/test/script");
     expect(String(payload.prompt)).toContain("Parent-local tool session ids are not portable");
@@ -25261,7 +25261,7 @@ script = "printf setup"
     expect(response).toMatchObject({ success: true });
     expect(codexClient.lastStartThreadParams).toMatchObject({
       ephemeral: true,
-      model: "gpt-5.4-mini",
+      model: "gpt-5.6-luna",
     });
     expect(codexClient.lastStartThreadParams?.threadSource).toBeUndefined();
     expect(codexClient.startTurnCallCount).toBe(1);
@@ -25540,8 +25540,8 @@ script = "printf setup"
           monitorId,
           monitorUsage: {
             cost: {
-              model: "gpt-5.4-mini",
-              totalUsd: 0.000885,
+              model: "gpt-5.6-luna",
+              totalUsd: 0.000236,
             },
             summary: expectedUsageSummary,
           },
@@ -25585,7 +25585,7 @@ script = "printf setup"
               source: "pwragent_task_monitor",
               monitorId,
               monitorUsage: {
-                model: "gpt-5.4-mini",
+                model: "gpt-5.6-luna",
                 summary: expectedUsageSummary,
                 tokenUsage: {
                   cachedInputTokens: 200,
@@ -25596,8 +25596,8 @@ script = "printf setup"
                   uncachedInputTokens: 800,
                 },
                 cost: {
-                  model: "gpt-5.4-mini",
-                  totalUsd: 0.000885,
+                  model: "gpt-5.6-luna",
+                  totalUsd: 0.000236,
                 },
                 phase: "progress",
               },
@@ -25736,8 +25736,8 @@ script = "printf setup"
           monitorThreadId: "monitor-thread",
           monitorUsage: {
             cost: {
-              model: "gpt-5.4-mini",
-              totalUsd: 0.000885,
+              model: "gpt-5.6-luna",
+              totalUsd: 0.000236,
             },
             summary: expectedUsageSummary,
           },
@@ -25829,8 +25829,8 @@ script = "printf setup"
     expect(codexClient.startTurnCallCount).toBe(2);
     expect(codexClient.startTurnCalls[1]).toMatchObject({
       threadId: "monitor-thread",
-      model: "gpt-5.4-mini",
-      reasoningEffort: "low",
+      model: "gpt-5.6-luna",
+      reasoningEffort: "medium",
     });
     expect(
       codexClient.startTurnCalls[1]?.input[0]?.type === "text"
@@ -26034,7 +26034,7 @@ script = "printf setup"
     expect(codexClient.startTurnCallCount).toBe(2);
     expect(codexClient.startTurnCalls[1]).toMatchObject({
       threadId: "monitor-thread",
-      model: "gpt-5.4-mini",
+      model: "gpt-5.6-luna",
     });
     expect(
       codexClient.startTurnCalls[1]?.input[0]?.type === "text"

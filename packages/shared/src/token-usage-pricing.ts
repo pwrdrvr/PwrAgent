@@ -242,17 +242,19 @@ type CodexCreditsStandardRates = Pick<
 const OPENAI_PRICING_CATALOG_ID = "openai-api";
 const OPENAI_PRICING_CATALOG_VERSION = "2026-06-16";
 const OPENAI_PRICING_EFFECTIVE_FROM = Date.UTC(2026, 3, 23);
-// Standard: https://developers.openai.com/api/docs/models
-// Priority: https://openai.com/api-priority-processing/
+// https://developers.openai.com/api/docs/pricing
 const OPENAI_GPT56_PRICING_CATALOG_VERSION = "2026-07-09";
 const OPENAI_GPT56_PRICING_EFFECTIVE_FROM = Date.UTC(2026, 6, 9);
+// https://openai.com/index/advancing-the-price-performance-frontier-with-gpt-5-6/
+const OPENAI_GPT56_REPRICING_CATALOG_VERSION = "2026-07-30";
+const OPENAI_GPT56_REPRICING_EFFECTIVE_FROM = Date.UTC(2026, 6, 30);
 const OPENAI_CODEX_CREDITS_CATALOG_ID = "openai-codex-credits";
 const OPENAI_CODEX_CREDITS_CATALOG_VERSION = "2026-06-16";
 const OPENAI_GPT56_CODEX_CREDITS_CATALOG_VERSION = "2026-07-27";
-// ChatGPT/Codex Fast credit multipliers are separate from API Priority rates.
+// ChatGPT/Codex Fast credit multipliers are separate from API Fast rates.
 // https://learn.chatgpt.com/docs/agent-configuration/speed.md currently says
-// GPT-5.6 consumes 2.5x credits, while API Priority remains 2x. Keep the
-// disputed GPT-5.6 assumption here so one value controls every derived rate.
+// GPT-5.6 consumes 2.5x credits, while API Fast remains 2x. Keep one value
+// here so every derived rate stays aligned.
 const OPENAI_CODEX_FAST_RATE_MULTIPLIERS = {
   "gpt-5.4": 2,
   "gpt-5.5": 2.5,
@@ -270,6 +272,58 @@ const QWEN_PRICING_CATALOG_VERSION = "2026-07-15";
 const QWEN37_PLUS_PRICING_EFFECTIVE_FROM = Date.UTC(2026, 4, 26);
 
 const OPENAI_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
+  {
+    catalogId: OPENAI_PRICING_CATALOG_ID,
+    catalogVersion: OPENAI_GPT56_REPRICING_CATALOG_VERSION,
+    model: "gpt-5.6-terra",
+    displayModel: "GPT-5.6 Terra",
+    displayTier: "Standard",
+    effectiveFrom: OPENAI_GPT56_REPRICING_EFFECTIVE_FROM,
+    provider: "openai",
+    serviceTier: "standard",
+    inputUsdPerMillion: 2,
+    cachedInputUsdPerMillion: 0.2,
+    outputUsdPerMillion: 12,
+  },
+  {
+    catalogId: OPENAI_PRICING_CATALOG_ID,
+    catalogVersion: OPENAI_GPT56_REPRICING_CATALOG_VERSION,
+    model: "gpt-5.6-terra",
+    displayModel: "GPT-5.6 Terra",
+    displayTier: "Fast",
+    effectiveFrom: OPENAI_GPT56_REPRICING_EFFECTIVE_FROM,
+    provider: "openai",
+    serviceTier: "priority",
+    inputUsdPerMillion: 4,
+    cachedInputUsdPerMillion: 0.4,
+    outputUsdPerMillion: 24,
+  },
+  {
+    catalogId: OPENAI_PRICING_CATALOG_ID,
+    catalogVersion: OPENAI_GPT56_REPRICING_CATALOG_VERSION,
+    model: "gpt-5.6-luna",
+    displayModel: "GPT-5.6 Luna",
+    displayTier: "Standard",
+    effectiveFrom: OPENAI_GPT56_REPRICING_EFFECTIVE_FROM,
+    provider: "openai",
+    serviceTier: "standard",
+    inputUsdPerMillion: 0.2,
+    cachedInputUsdPerMillion: 0.02,
+    outputUsdPerMillion: 1.2,
+  },
+  {
+    catalogId: OPENAI_PRICING_CATALOG_ID,
+    catalogVersion: OPENAI_GPT56_REPRICING_CATALOG_VERSION,
+    model: "gpt-5.6-luna",
+    displayModel: "GPT-5.6 Luna",
+    displayTier: "Fast",
+    effectiveFrom: OPENAI_GPT56_REPRICING_EFFECTIVE_FROM,
+    provider: "openai",
+    serviceTier: "priority",
+    inputUsdPerMillion: 0.4,
+    cachedInputUsdPerMillion: 0.04,
+    outputUsdPerMillion: 2.4,
+  },
   {
     catalogId: OPENAI_PRICING_CATALOG_ID,
     catalogVersion: OPENAI_GPT56_PRICING_CATALOG_VERSION,
@@ -303,6 +357,7 @@ const OPENAI_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
     displayModel: "GPT-5.6 Terra",
     displayTier: "Standard",
     effectiveFrom: OPENAI_GPT56_PRICING_EFFECTIVE_FROM,
+    effectiveTo: OPENAI_GPT56_REPRICING_EFFECTIVE_FROM,
     provider: "openai",
     serviceTier: "standard",
     inputUsdPerMillion: 2.5,
@@ -316,6 +371,7 @@ const OPENAI_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
     displayModel: "GPT-5.6 Terra",
     displayTier: "Fast (Priority)",
     effectiveFrom: OPENAI_GPT56_PRICING_EFFECTIVE_FROM,
+    effectiveTo: OPENAI_GPT56_REPRICING_EFFECTIVE_FROM,
     provider: "openai",
     serviceTier: "priority",
     inputUsdPerMillion: 5,
@@ -329,6 +385,7 @@ const OPENAI_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
     displayModel: "GPT-5.6 Luna",
     displayTier: "Standard",
     effectiveFrom: OPENAI_GPT56_PRICING_EFFECTIVE_FROM,
+    effectiveTo: OPENAI_GPT56_REPRICING_EFFECTIVE_FROM,
     provider: "openai",
     serviceTier: "standard",
     inputUsdPerMillion: 1,
@@ -342,6 +399,7 @@ const OPENAI_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
     displayModel: "GPT-5.6 Luna",
     displayTier: "Fast (Priority)",
     effectiveFrom: OPENAI_GPT56_PRICING_EFFECTIVE_FROM,
+    effectiveTo: OPENAI_GPT56_REPRICING_EFFECTIVE_FROM,
     provider: "openai",
     serviceTier: "priority",
     inputUsdPerMillion: 2,
@@ -490,6 +548,7 @@ function buildCodexCreditsCatalogEntries(params: {
   catalogVersion: string;
   displayModel: string;
   effectiveFrom: number;
+  effectiveTo?: number;
   fastRateMultiplier?: number;
   model: string;
   standardRates: CodexCreditsStandardRates;
@@ -501,6 +560,7 @@ function buildCodexCreditsCatalogEntries(params: {
     displayModel: params.displayModel,
     displayTier: "Standard",
     effectiveFrom: params.effectiveFrom,
+    ...(params.effectiveTo ? { effectiveTo: params.effectiveTo } : {}),
     provider: "openai",
     serviceTier: "standard",
     ...params.standardRates,
@@ -542,10 +602,35 @@ const OPENAI_CODEX_CREDITS_CATALOG: readonly CodexCreditsCatalogEntry[] = [
     },
   }),
   ...buildCodexCreditsCatalogEntries({
+    catalogVersion: OPENAI_GPT56_REPRICING_CATALOG_VERSION,
+    model: "gpt-5.6-terra",
+    displayModel: "GPT-5.6 Terra",
+    effectiveFrom: OPENAI_GPT56_REPRICING_EFFECTIVE_FROM,
+    fastRateMultiplier: OPENAI_CODEX_FAST_RATE_MULTIPLIERS["gpt-5.6"],
+    standardRates: {
+      inputCreditsPerMillion: 50,
+      cachedInputCreditsPerMillion: 5,
+      outputCreditsPerMillion: 300,
+    },
+  }),
+  ...buildCodexCreditsCatalogEntries({
+    catalogVersion: OPENAI_GPT56_REPRICING_CATALOG_VERSION,
+    model: "gpt-5.6-luna",
+    displayModel: "GPT-5.6 Luna",
+    effectiveFrom: OPENAI_GPT56_REPRICING_EFFECTIVE_FROM,
+    fastRateMultiplier: OPENAI_CODEX_FAST_RATE_MULTIPLIERS["gpt-5.6"],
+    standardRates: {
+      inputCreditsPerMillion: 5,
+      cachedInputCreditsPerMillion: 0.5,
+      outputCreditsPerMillion: 30,
+    },
+  }),
+  ...buildCodexCreditsCatalogEntries({
     catalogVersion: OPENAI_GPT56_CODEX_CREDITS_CATALOG_VERSION,
     model: "gpt-5.6-terra",
     displayModel: "GPT-5.6 Terra",
     effectiveFrom: OPENAI_GPT56_PRICING_EFFECTIVE_FROM,
+    effectiveTo: OPENAI_GPT56_REPRICING_EFFECTIVE_FROM,
     fastRateMultiplier: OPENAI_CODEX_FAST_RATE_MULTIPLIERS["gpt-5.6"],
     standardRates: {
       inputCreditsPerMillion: 62.5,
@@ -558,6 +643,7 @@ const OPENAI_CODEX_CREDITS_CATALOG: readonly CodexCreditsCatalogEntry[] = [
     model: "gpt-5.6-luna",
     displayModel: "GPT-5.6 Luna",
     effectiveFrom: OPENAI_GPT56_PRICING_EFFECTIVE_FROM,
+    effectiveTo: OPENAI_GPT56_REPRICING_EFFECTIVE_FROM,
     fastRateMultiplier: OPENAI_CODEX_FAST_RATE_MULTIPLIERS["gpt-5.6"],
     standardRates: {
       inputCreditsPerMillion: 25,

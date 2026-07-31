@@ -207,6 +207,43 @@ describe("token usage pricing", () => {
     }
   });
 
+  it("prices GPT-5.6 Terra and Luna at the reduced July 30 rates", () => {
+    const cases = [
+      ["gpt-5.6-terra", false, 14_200_000, 2, 0.2, 12],
+      ["gpt-5.6-terra", true, 28_400_000, 4, 0.4, 24],
+      ["gpt-5.6-luna", false, 1_420_000, 0.2, 0.02, 1.2],
+      ["gpt-5.6-luna", true, 2_840_000, 0.4, 0.04, 2.4],
+    ] as const;
+
+    for (const [
+      model,
+      fastMode,
+      totalCostMicros,
+      inputUsdPerMillion,
+      cachedInputUsdPerMillion,
+      outputUsdPerMillion,
+    ] of cases) {
+      const cost = estimateOpenAiTokenUsageCost({
+        at: Date.UTC(2026, 6, 30),
+        cachedInputTokens: 1_000_000,
+        fastMode,
+        model,
+        outputTokens: 1_000_000,
+        uncachedInputTokens: 1_000_000,
+      });
+
+      expect(cost).toMatchObject({
+        catalogVersion: "2026-07-30",
+        cachedInputUsdPerMillion,
+        inputUsdPerMillion,
+        outputUsdPerMillion,
+        rateId: `openai:2026-07-30:${model}:${fastMode ? "priority" : "standard"}`,
+        serviceTier: fastMode ? "priority" : "standard",
+        totalCostMicros,
+      });
+    }
+  });
+
   it("does not price GPT-5.6 usage before its catalog effective date", () => {
     expect(
       estimateOpenAiTokenUsageCost({
@@ -351,6 +388,21 @@ describe("token usage pricing", () => {
         serviceTier: "priority",
       }),
     );
+    expect(listOpenAiTokenUsagePricingRates()).toContainEqual(
+      expect.objectContaining({
+        catalogId: "openai-api",
+        catalogVersion: "2026-07-30",
+        currency: "USD",
+        displayName: "GPT-5.6 Luna Fast",
+        inputMicrosPerMillion: 400_000,
+        cachedInputMicrosPerMillion: 40_000,
+        outputMicrosPerMillion: 2_400_000,
+        model: "gpt-5.6-luna",
+        provider: "openai",
+        rateId: "openai:2026-07-30:gpt-5.6-luna:priority",
+        serviceTier: "priority",
+      }),
+    );
     expect(listTokenUsagePricingRates()).toContainEqual(
       expect.objectContaining({
         cachedInputUsdPerMillion: 0.3,
@@ -466,6 +518,45 @@ describe("token usage pricing", () => {
         outputCreditsPerMillion,
         provider: "openai",
         rateId: `openai:2026-07-27:codex-credits:${model}:priority`,
+        serviceTier: "priority",
+        totalCreditMicros,
+        totalCredits: totalCreditMicros / 1_000_000,
+      });
+    }
+  });
+
+  it("estimates reduced GPT-5.6 Terra and Luna Codex Credits from July 30", () => {
+    const cases = [
+      ["gpt-5.6-terra", "GPT-5.6 Terra Fast", 125, 12.5, 750, 887_500_000],
+      ["gpt-5.6-luna", "GPT-5.6 Luna Fast", 12.5, 1.25, 75, 88_750_000],
+    ] as const;
+
+    for (const [
+      model,
+      displayName,
+      inputCreditsPerMillion,
+      cachedInputCreditsPerMillion,
+      outputCreditsPerMillion,
+      totalCreditMicros,
+    ] of cases) {
+      const credits = estimateOpenAiCodexCreditUsage({
+        at: Date.UTC(2026, 6, 30),
+        cachedInputTokens: 1_000_000,
+        model,
+        outputTokens: 1_000_000,
+        serviceTier: "priority",
+        uncachedInputTokens: 1_000_000,
+      });
+
+      expect(credits).toMatchObject({
+        catalogId: "openai-codex-credits",
+        catalogVersion: "2026-07-30",
+        displayName,
+        inputCreditsPerMillion,
+        cachedInputCreditsPerMillion,
+        outputCreditsPerMillion,
+        provider: "openai",
+        rateId: `openai:2026-07-30:codex-credits:${model}:priority`,
         serviceTier: "priority",
         totalCreditMicros,
         totalCredits: totalCreditMicros / 1_000_000,
