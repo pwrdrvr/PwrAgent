@@ -1619,6 +1619,93 @@ describe("Composer", () => {
     });
   });
 
+  it("prefers a valid profile baseline over the refreshed ACP recommendation", async () => {
+    const staleKimi = {
+      ...backendSummary("acp:kimi", {
+        models: [
+          {
+            id: "kimi-code/kimi-for-coding",
+            label: "Kimi-k2.6",
+            current: true,
+          },
+        ],
+      }),
+      label: "Kimi",
+    };
+    const refreshedKimi = {
+      ...staleKimi,
+      launchpadOptions: {
+        models: [
+          {
+            id: "kimi-code/kimi-for-coding",
+            label: "K2.7 Coding",
+            current: true,
+          },
+          {
+            id: "kimi-code/k3",
+            label: "K3",
+            defaultReasoningEffort: "high",
+            reasoningEfforts: ["low", "high", "max"],
+            supportsReasoning: true,
+          },
+        ],
+      },
+    };
+    const onProviderSelected = vi.fn(async () => refreshedKimi);
+    const onUpdateLaunchpad = vi.fn(async () => undefined);
+    const launchpad: NavigationLaunchpadDraft = {
+      directoryKey: "directory:/repo",
+      directoryKind: "directory",
+      directoryLabel: "Repo",
+      directoryPath: "/repo",
+      backend: "codex",
+      executionMode: "default",
+      prompt: "",
+      workMode: "local",
+      branchName: "main",
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const composer = (nextLaunchpad: NavigationLaunchpadDraft) => (
+      <Composer
+        backends={[backendSummary("codex"), staleKimi]}
+        launchpad={nextLaunchpad}
+        onProviderSelected={onProviderSelected}
+        onUpdateLaunchpad={onUpdateLaunchpad}
+        providerModelDefaults={{
+          "acp:kimi": {
+            model: "kimi-code/k3",
+            reasoningEffortsByModel: {
+              "kimi-code/k3": "max",
+            },
+          },
+        }}
+        skills={[]}
+      />
+    );
+    const { rerender } = render(composer(launchpad));
+
+    chooseDropdownOption("Provider", "Kimi");
+    rerender(
+      composer({
+        ...launchpad,
+        backend: "acp:kimi",
+        model: "kimi-code/kimi-for-coding",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(onUpdateLaunchpad).toHaveBeenCalledWith(
+        "directory:/repo",
+        expect.objectContaining({
+          model: "kimi-code/k3",
+          reasoningEffort: "max",
+        }),
+        { stickySettingsChanged: true },
+      );
+    });
+  });
+
   it("preserves a model and reasoning choice made while ACP discovery runs", async () => {
     const staleKimi = {
       ...backendSummary("acp:kimi", {
@@ -2105,12 +2192,24 @@ describe("Composer", () => {
       updatedAt: 1,
     };
     const providerPatches: Array<Partial<NavigationLaunchpadDraft>> = [];
+    const listAcpAgents = vi.fn(async () => ({
+      fetchedAt: 1,
+      entries: [],
+    }));
+    const listBackends = vi.fn(async () => ({
+      fetchedAt: 1,
+      backends: [codexBackend, grokBackend],
+    }));
 
     function ProviderSwitchHarness(): React.JSX.Element {
       const [launchpad, setLaunchpad] = useState(initialLaunchpad);
       return (
         <Composer
           backends={[codexBackend, grokBackend]}
+          desktopApi={{
+            listAcpAgents,
+            listBackends,
+          }}
           directory={{
             key: "directory:/repo",
             kind: "directory",
@@ -2157,6 +2256,13 @@ describe("Composer", () => {
     chooseDropdownOption("Provider", "Grok");
     await waitFor(() => {
       expect(screen.getByLabelText("Provider")).toHaveValue("acp:grok");
+    });
+    await waitFor(() => {
+      expect(listAcpAgents).toHaveBeenCalledWith({ refresh: true });
+      expect(listBackends).toHaveBeenCalledWith({
+        includeUnavailable: true,
+        refreshModels: "acp:grok",
+      });
     });
     expect(providerPatches.at(-1)).toEqual({
       backend: "acp:grok",
@@ -5391,6 +5497,41 @@ describe("Composer", () => {
         fastMode: undefined,
       });
     });
+  });
+
+  it("hides Fast controls when the profile prohibits Codex Fast mode", () => {
+    render(
+      <Composer
+        backends={[
+          backendSummary("codex", {
+            models: [
+              {
+                id: "gpt-5.6-sol",
+                label: "GPT-5.6-Sol",
+                current: true,
+                supportsFast: true,
+              },
+            ],
+            supportsFastMode: true,
+          }),
+        ]}
+        codexFastAllowed={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Fast prohibited",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          model: "gpt-5.6-sol",
+          fastMode: true,
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+
+    expect(screen.queryByLabelText("Fast mode")).not.toBeInTheDocument();
   });
 
   it("routes slash review to startReview instead of startTurn", async () => {
@@ -11221,6 +11362,87 @@ describe("Composer", () => {
           ]),
           model: "gpt-5.5",
           prompt: "Keep this launchpad while changing settings",
+        }),
+        { stickySettingsChanged: true },
+      );
+    });
+  });
+
+  it("resets one launchpad to the profile model and reasoning baseline", async () => {
+    const onUpdateLaunchpad = vi.fn(async () => undefined);
+
+    render(
+      <Composer
+        backends={[
+          backendSummary("codex", {
+            models: [
+              {
+                id: "gpt-5.5",
+                label: "GPT-5.5",
+                current: true,
+                defaultReasoningEffort: "low",
+                reasoningEfforts: ["low", "high"],
+                supportsReasoning: true,
+              },
+              {
+                id: "gpt-5.6-sol",
+                label: "GPT-5.6-Sol",
+                defaultReasoningEffort: "low",
+                reasoningEfforts: ["low", "high", "xhigh"],
+                supportsReasoning: true,
+              },
+            ],
+          }),
+        ]}
+        directory={{
+          key: "directory:/repo",
+          kind: "directory",
+          label: "Repo",
+          path: "/repo",
+          threadKeys: [],
+          needsAttentionCount: 0,
+        }}
+        launchpad={{
+          directoryKey: "directory:/repo",
+          directoryKind: "directory",
+          directoryLabel: "Repo",
+          directoryPath: "/repo",
+          backend: "codex",
+          executionMode: "full-access",
+          model: "gpt-5.5",
+          reasoningEffort: "low",
+          prompt: "keep this prompt",
+          workMode: "worktree",
+          branchName: "feature/defaults",
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+        providerModelDefaults={{
+          codex: {
+            model: "gpt-5.6-sol",
+            reasoningEffortsByModel: {
+              "gpt-5.6-sol": "high",
+            },
+          },
+        }}
+        onUpdateLaunchpad={onUpdateLaunchpad}
+        skills={[]}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Reset model and reasoning to profile default",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(onUpdateLaunchpad).toHaveBeenCalledWith(
+        "directory:/repo",
+        expect.objectContaining({
+          model: "gpt-5.6-sol",
+          reasoningEffort: "high",
+          prompt: "keep this prompt",
         }),
         { stickySettingsChanged: true },
       );

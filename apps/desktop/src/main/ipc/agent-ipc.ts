@@ -3,6 +3,8 @@ import { subscribersForChannel } from "../window-channels";
 import {
   sanitizeRendererPayload,
   type AgentEvent,
+  type ApplyThreadModelMigrationRequest,
+  type ApplyThreadModelMigrationResponse,
   type CancelThreadExecutionModeQueueRequest,
   type CancelThreadExecutionModeQueueResponse,
   type CheckThreadBranchDriftRequest,
@@ -34,6 +36,7 @@ import {
   type SetThreadExecutionModeResponse,
   type SetThreadModelSettingsRequest,
   type SetThreadModelSettingsResponse,
+  type TurnOffCodexFastEverywhereResponse,
   type SteerTurnRequest,
   type SteerTurnResponse,
   type StartReviewRequest,
@@ -54,6 +57,7 @@ import { buildLiveDiffActivityEntry } from "../app-server/live-diff-activity";
 import { timeStartupProfileOperation } from "../diagnostics/startup-profile-events";
 import {
   AGENT_CANCEL_THREAD_EXECUTION_MODE_QUEUE_CHANNEL,
+  AGENT_APPLY_THREAD_MODEL_MIGRATION_CHANNEL,
   AGENT_EVENT_CHANNEL,
   AGENT_FORK_THREAD_CHANNEL,
   AGENT_LATEST_CODEX_CONFIG_WARNING_CHANNEL,
@@ -69,6 +73,7 @@ import {
   AGENT_SET_ACP_SESSION_RUNTIME_OPTION_CHANNEL,
   AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL,
   AGENT_SET_THREAD_MODEL_SETTINGS_CHANNEL,
+  AGENT_TURN_OFF_CODEX_FAST_EVERYWHERE_CHANNEL,
   AGENT_START_THREAD_CHANNEL,
   AGENT_START_REVIEW_CHANNEL,
   AGENT_START_TURN_CHANNEL,
@@ -568,6 +573,25 @@ export function registerAgentIpcHandlers(): void {
     },
   );
 
+  ipcMain.removeHandler(AGENT_APPLY_THREAD_MODEL_MIGRATION_CHANNEL);
+  ipcMain.handle(
+    AGENT_APPLY_THREAD_MODEL_MIGRATION_CHANNEL,
+    async (
+      _event,
+      request: ApplyThreadModelMigrationRequest,
+    ): Promise<ApplyThreadModelMigrationResponse> => {
+      return await registry.applyThreadModelMigration(request);
+    },
+  );
+
+  ipcMain.removeHandler(AGENT_TURN_OFF_CODEX_FAST_EVERYWHERE_CHANNEL);
+  ipcMain.handle(
+    AGENT_TURN_OFF_CODEX_FAST_EVERYWHERE_CHANNEL,
+    async (): Promise<TurnOffCodexFastEverywhereResponse> => {
+      return await registry.turnOffCodexFastEverywhere();
+    },
+  );
+
   ipcMain.removeHandler(AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL);
   ipcMain.handle(
     AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL,
@@ -696,6 +720,8 @@ export function disposeAgentIpcHandlers(): void {
   ipcMain.removeHandler(AGENT_CANCEL_THREAD_EXECUTION_MODE_QUEUE_CHANNEL);
   ipcMain.removeHandler(AGENT_SET_ACP_SESSION_RUNTIME_OPTION_CHANNEL);
   ipcMain.removeHandler(AGENT_SET_THREAD_MODEL_SETTINGS_CHANNEL);
+  ipcMain.removeHandler(AGENT_APPLY_THREAD_MODEL_MIGRATION_CHANNEL);
+  ipcMain.removeHandler(AGENT_TURN_OFF_CODEX_FAST_EVERYWHERE_CHANNEL);
   ipcMain.removeHandler(AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL);
   ipcMain.removeHandler(AGENT_UPDATE_THREAD_EXPECTED_BRANCH_CHANNEL);
   ipcMain.removeHandler(AGENT_RETAIN_THREAD_BRANCH_DRIFT_CHANNEL);

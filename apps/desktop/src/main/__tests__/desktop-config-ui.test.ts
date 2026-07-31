@@ -5,6 +5,133 @@ import {
 } from "../settings/desktop-config";
 import { applyTomlEdits, parseTomlTables } from "../settings/toml-editor";
 
+describe("desktop config provider model defaults", () => {
+  it("round-trips provider models and per-model reasoning", () => {
+    const edits = desktopSettingsPatchToEdits({
+      models: {
+        providerDefaults: {
+          codex: {
+            model: "gpt-5.6-sol",
+            reasoningEffortsByModel: {
+              "gpt-5.6-sol": "high",
+              "gpt-5.6-terra": "xhigh",
+            },
+          },
+          "acp:kimi": {
+            model: "kimi-k3",
+            reasoningEffortsByModel: {
+              "kimi-k3": "thinking",
+            },
+          },
+        },
+      },
+    });
+    const written = applyTomlEdits("", edits);
+
+    expect(written).toContain("[[models.provider_defaults]]");
+    expect(parseDesktopSettingsToml(written, "test.toml").models).toEqual({
+      providerDefaults: {
+        codex: {
+          model: "gpt-5.6-sol",
+          reasoningEffortsByModel: {
+            "gpt-5.6-sol": "high",
+            "gpt-5.6-terra": "xhigh",
+          },
+        },
+        "acp:kimi": {
+          model: "kimi-k3",
+          reasoningEffortsByModel: {
+            "kimi-k3": "thinking",
+          },
+        },
+      },
+    });
+  });
+
+  it("keeps unavailable preferences and replaces the full defaults array", () => {
+    const existing = applyTomlEdits(
+      "",
+      desktopSettingsPatchToEdits({
+        models: {
+          providerDefaults: {
+            codex: {
+              model: "retired-model",
+              reasoningEffortsByModel: {
+                "retired-model": "high",
+              },
+            },
+          },
+        },
+      }),
+    );
+    const written = applyTomlEdits(
+      existing,
+      desktopSettingsPatchToEdits(
+        {
+          models: {
+            providerDefaults: {},
+          },
+        },
+        parseTomlTables(existing, "test.toml"),
+      ),
+    );
+
+    expect(written).not.toContain("[[models.provider_defaults]]");
+    expect(
+      parseDesktopSettingsToml(written, "test.toml").models,
+    ).toBeUndefined();
+  });
+
+  it("round-trips thread migration revisions and the Codex Fast policy", () => {
+    const edits = desktopSettingsPatchToEdits({
+      models: {
+        providerThreadMigrations: {
+          codex: {
+            revision: "migration-2",
+            model: "gpt-5.6-sol",
+            reasoningEffort: "high",
+            sourceModels: ["gpt-5.4", "gpt-5.5"],
+            includeThreadsWithoutModel: true,
+            createdAt: 2_000,
+          },
+          "acp:kimi": {
+            revision: "migration-1",
+            model: "kimi-k3",
+            createdAt: 1_000,
+          },
+        },
+        codex: {
+          allowFast: false,
+        },
+      },
+    });
+    const written = applyTomlEdits("", edits);
+
+    expect(written).toContain("allow_fast = false");
+    expect(written).toContain("[[models.provider_thread_migrations]]");
+    expect(parseDesktopSettingsToml(written, "test.toml").models).toEqual({
+      providerThreadMigrations: {
+        codex: {
+          revision: "migration-2",
+          model: "gpt-5.6-sol",
+          reasoningEffort: "high",
+          sourceModels: ["gpt-5.4", "gpt-5.5"],
+          includeThreadsWithoutModel: true,
+          createdAt: 2_000,
+        },
+        "acp:kimi": {
+          revision: "migration-1",
+          model: "kimi-k3",
+          createdAt: 1_000,
+        },
+      },
+      codex: {
+        allowFast: false,
+      },
+    });
+  });
+});
+
 // Regression: the `[ui]` window-layout section (sidebar hidden, context-rail
 // pinned, active tab, edited-files dock) must survive the read path.
 // `pruneEmptyConfig` reconstructs the config section-by-section, so a newly

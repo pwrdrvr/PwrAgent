@@ -353,6 +353,37 @@ export type SetThreadModelSettingsRequest = {
 
 export type SetThreadModelSettingsResponse = SetThreadModelSettingsRequest;
 
+export type ApplyThreadModelMigrationRequest = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  /** Creation time from the provider summary, used to exclude newer threads. */
+  threadCreatedAt?: number;
+  /** Current provider-reported model, used when no overlay model is recorded. */
+  threadModel?: string;
+};
+
+export type ApplyThreadModelMigrationResponse = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  status:
+    | "none"
+    | "already-applied"
+    | "acknowledged-manual-change"
+    | "acknowledged-new-thread"
+    | "acknowledged-source-model"
+    | "metadata-unavailable"
+    | "applied"
+    | "unavailable";
+  revision?: string;
+  model?: string;
+  reasoningEffort?: string;
+};
+
+export type TurnOffCodexFastEverywhereResponse = {
+  launchpadCount: number;
+  threadCount: number;
+};
+
 export type SetAcpSessionRuntimeOptionRequest = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;

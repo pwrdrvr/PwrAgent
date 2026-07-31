@@ -942,9 +942,16 @@ export class DesktopSettingsService {
         },
       },
       models: {
+        providerDefaults: config.models?.providerDefaults ?? {},
+        providerThreadMigrations:
+          config.models?.providerThreadMigrations ?? {},
         codex: {
           path: this.resolveString(config.models?.codex?.path, CODEX_COMMAND_ENV),
           profile: this.resolveConfigString(config.models?.codex?.profile),
+          allowFast: this.resolveConfigBoolean(
+            config.models?.codex?.allowFast,
+            true,
+          ),
           discovery: codexDiscovery,
           profiles: codexProfiles,
         },
@@ -1328,6 +1335,21 @@ export class DesktopSettingsService {
       || this.readConfig().config.models?.codex?.path
       || undefined
     );
+  }
+
+  resolveProviderModelDefaults() {
+    return this.readConfig().config.models?.providerDefaults ?? {};
+  }
+
+  resolveProviderThreadModelMigrations() {
+    return this.readConfig().config.models?.providerThreadMigrations ?? {};
+  }
+
+  resolveCodexFastAllowed(): boolean {
+    return this.resolveConfigBoolean(
+      this.readConfig().config.models?.codex?.allowFast,
+      true,
+    ).value;
   }
 
   resolveCodexSpawnEnv(): NodeJS.ProcessEnv {

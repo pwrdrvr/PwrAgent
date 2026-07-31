@@ -2179,6 +2179,8 @@ export class SqliteOverlayStore {
     reasoningEffort?: string;
     serviceTier?: string;
     fastMode?: boolean;
+    modelMigrationRevision?: string;
+    modelSettingsManuallyUpdatedAt?: number;
   }): Promise<ThreadOverlayState> {
     const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
     const current = this.getThread(threadKey) ?? {
@@ -2201,6 +2203,11 @@ export class SqliteOverlayStore {
         Object.keys(reasoningEffortsByModel).length > 0
           ? reasoningEffortsByModel
           : undefined,
+      modelMigrationRevision:
+        params.modelMigrationRevision ?? current.modelMigrationRevision,
+      modelSettingsManuallyUpdatedAt:
+        params.modelSettingsManuallyUpdatedAt
+        ?? current.modelSettingsManuallyUpdatedAt,
       serviceTier: params.serviceTier,
       fastMode: params.fastMode,
     };
@@ -2226,6 +2233,68 @@ export class SqliteOverlayStore {
     };
     this.putThread(threadKey, nextState);
     return nextState;
+  }
+
+  async turnOffCodexFastEverywhere(): Promise<{
+    launchpadCount: number;
+    threadCount: number;
+    updatedThreadIds: string[];
+  }> {
+    const rows = this.stateDb.raw
+      .prepare("SELECT thread_id, payload FROM threads")
+      .all() as Array<{ thread_id: string; payload: string }>;
+    let threadCount = 0;
+    const updatedThreadIds: string[] = [];
+    for (const row of rows) {
+      try {
+        const thread = JSON.parse(row.payload) as ThreadOverlayState;
+        if (thread.backend !== "codex" || thread.fastMode !== true) {
+          continue;
+        }
+        this.putThread(row.thread_id, {
+          ...thread,
+          fastMode: false,
+        });
+        updatedThreadIds.push(thread.threadId);
+        threadCount += 1;
+      } catch {
+        // Ignore malformed cache rows. A later reconciliation can repair them.
+      }
+    }
+
+    const launchpads = await this.listDirectoryLaunchpads();
+    let launchpadCount = 0;
+    for (const launchpad of launchpads) {
+      if (launchpad.backend !== "codex" || launchpad.fastMode !== true) {
+        continue;
+      }
+      await this.upsertDirectoryLaunchpad({
+        ...launchpad,
+        fastMode: false,
+        updatedAt: Date.now(),
+      });
+      launchpadCount += 1;
+    }
+
+    const defaults = await this.getLaunchpadDefaults();
+    await this.setLaunchpadDefaults({
+      providerSettings: {
+        ...(defaults.providerSettings ?? {}),
+        codex: {
+          ...(defaults.providerSettings?.codex ?? {}),
+          fastMode: false,
+          serviceTier: undefined,
+        },
+      },
+      ...(defaults.backend === "codex"
+        ? {
+            fastMode: false,
+            serviceTier: undefined,
+          }
+        : {}),
+    });
+
+    return { launchpadCount, threadCount, updatedThreadIds };
   }
 
   async setThreadExpectedBranch(params: {
@@ -3700,6 +3769,7 @@ export type OverlayStoreLike = Pick<
   | "upsertWorktreeSnapshot"
   | "setThreadExecutionMode"
   | "setThreadModelSettings"
+  | "turnOffCodexFastEverywhere"
   | "setThreadExpectedBranch"
   | "setThreadObservedBranch"
   | "retainThreadBranchDrift"

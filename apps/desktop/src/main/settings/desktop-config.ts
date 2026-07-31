@@ -20,6 +20,8 @@ import type {
   DesktopMessagingSlackDmAccessMode,
   DesktopMessagingSlackGroupDmAccessMode,
   DesktopOnboardingCompletedSource,
+  DesktopProviderModelDefaults,
+  DesktopProviderThreadModelMigration,
   DesktopSettingsConfigPatch,
   DesktopUpdateChannel,
   DesktopWorktreeStorageLocation,
@@ -211,9 +213,15 @@ export type DesktopSettingsConfig = {
     };
   };
   models?: {
+    providerDefaults?: Record<string, DesktopProviderModelDefaults>;
+    providerThreadMigrations?: Record<
+      string,
+      DesktopProviderThreadModelMigration
+    >;
     codex?: {
       path?: string;
       profile?: string;
+      allowFast?: boolean;
     };
   };
   acpAgents?: {
@@ -1201,6 +1209,67 @@ export function desktopSettingsPatchToEdits(
   if (patch.models?.codex?.profile !== undefined) {
     set(["models", "codex", "profile"], patch.models.codex.profile);
   }
+  if (patch.models?.codex?.allowFast !== undefined) {
+    set(["models", "codex", "allow_fast"], patch.models.codex.allowFast);
+  }
+  if (patch.models?.providerDefaults !== undefined) {
+    const providerDefaults = normalizeProviderModelDefaults(
+      patch.models.providerDefaults,
+    );
+    const entries = Object.entries(providerDefaults)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([provider, defaults]) => ({
+        provider,
+        ...(defaults.model ? { model: defaults.model } : {}),
+        reasoning_efforts: JSON.stringify(defaults.reasoningEffortsByModel),
+      }));
+    if (entries.length > 0) {
+      edits.push({
+        op: "setTableArray",
+        path: ["models", "provider_defaults"],
+        value: entries,
+      });
+    } else {
+      edits.push({
+        op: "deleteTableArray",
+        path: ["models", "provider_defaults"],
+      });
+    }
+  }
+  if (patch.models?.providerThreadMigrations !== undefined) {
+    const providerThreadMigrations = normalizeProviderThreadModelMigrations(
+      patch.models.providerThreadMigrations,
+    );
+    const entries = Object.entries(providerThreadMigrations)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([provider, migration]) => ({
+        provider,
+        revision: migration.revision,
+        model: migration.model,
+        ...(migration.reasoningEffort
+          ? { reasoning_effort: migration.reasoningEffort }
+          : {}),
+        ...(migration.sourceModels
+          ? { source_models: migration.sourceModels }
+          : {}),
+        ...(migration.includeThreadsWithoutModel
+          ? { include_threads_without_model: true }
+          : {}),
+        created_at: migration.createdAt,
+      }));
+    if (entries.length > 0) {
+      edits.push({
+        op: "setTableArray",
+        path: ["models", "provider_thread_migrations"],
+        value: entries,
+      });
+    } else {
+      edits.push({
+        op: "deleteTableArray",
+        path: ["models", "provider_thread_migrations"],
+      });
+    }
+  }
   if (patch.acpAgents?.gemini?.cliPath !== undefined) {
     set(["acp_agents", "gemini", "cli_path"], patch.acpAgents.gemini.cliPath);
   }
@@ -1271,6 +1340,7 @@ function normalizeDesktopConfig(
   const slack = tables["messaging.slack"];
   const feishu = tables["messaging.feishu"];
   const line = tables["messaging.line"];
+  const models = tables["models"];
   const codex = tables["models.codex"];
   const acpAgentsGemini = tables["acp_agents.gemini"];
   const acpAgentsGrok = tables["acp_agents.grok"];
@@ -1518,9 +1588,14 @@ function normalizeDesktopConfig(
       },
     },
     models: {
+      providerDefaults: readProviderModelDefaults(models?.provider_defaults),
+      providerThreadMigrations: readProviderThreadModelMigrations(
+        models?.provider_thread_migrations,
+      ),
       codex: {
         path: readString(codex?.path),
         profile: readString(codex?.profile),
+        allowFast: readBoolean(codex?.allow_fast),
       },
     },
     acpAgents: {
@@ -1751,8 +1826,28 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   }
 
   const codex = config.models?.codex;
-  if (codex && hasDefinedValue(codex)) {
-    pruned.models = { codex };
+  const providerDefaults = config.models?.providerDefaults;
+  const providerThreadMigrations = config.models?.providerThreadMigrations;
+  if (
+    (codex && hasDefinedValue(codex))
+    || (providerDefaults && Object.keys(providerDefaults).length > 0)
+    || (
+      providerThreadMigrations
+      && Object.keys(providerThreadMigrations).length > 0
+    )
+  ) {
+    pruned.models = {
+      ...(providerDefaults && Object.keys(providerDefaults).length > 0
+        ? { providerDefaults }
+        : {}),
+      ...(
+        providerThreadMigrations
+        && Object.keys(providerThreadMigrations).length > 0
+          ? { providerThreadMigrations }
+          : {}
+      ),
+      ...(codex && hasDefinedValue(codex) ? { codex } : {}),
+    };
   }
 
   const acpAgentsGemini = config.acpAgents?.gemini;
@@ -2021,6 +2116,160 @@ function readStringArray(value: TomlScalar | undefined): string[] | undefined {
     return undefined;
   }
   return value.map((item) => item.trim()).filter(Boolean);
+}
+
+function normalizeProviderModelDefaults(
+  value: Record<string, DesktopProviderModelDefaults>,
+): Record<string, DesktopProviderModelDefaults> {
+  return Object.fromEntries(
+    Object.entries(value).flatMap(([provider, defaults]) => {
+      const normalizedProvider = provider.trim();
+      if (!normalizedProvider) return [];
+      const model = defaults.model?.trim() || undefined;
+      const reasoningEffortsByModel = Object.fromEntries(
+        Object.entries(defaults.reasoningEffortsByModel ?? {}).flatMap(
+          ([modelId, effort]) => {
+            const normalizedModel = modelId.trim();
+            const normalizedEffort = effort.trim();
+            return normalizedModel && normalizedEffort
+              ? [[normalizedModel, normalizedEffort]]
+              : [];
+          },
+        ),
+      );
+      if (!model && Object.keys(reasoningEffortsByModel).length === 0) {
+        return [];
+      }
+      return [[
+        normalizedProvider,
+        {
+          ...(model ? { model } : {}),
+          reasoningEffortsByModel,
+        },
+      ]];
+    }),
+  );
+}
+
+function readProviderModelDefaults(
+  value: TomlScalar | undefined,
+): Record<string, DesktopProviderModelDefaults> | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const defaults: Record<string, DesktopProviderModelDefaults> = {};
+  for (const item of value) {
+    if (typeof item !== "object" || item === null || Array.isArray(item)) {
+      continue;
+    }
+    const provider =
+      typeof item.provider === "string" ? item.provider.trim() : "";
+    if (!provider) continue;
+    const model = typeof item.model === "string" ? item.model.trim() : "";
+    let reasoningEffortsByModel: Record<string, string> = {};
+    if (typeof item.reasoning_efforts === "string") {
+      try {
+        const parsed = JSON.parse(item.reasoning_efforts) as unknown;
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          reasoningEffortsByModel = Object.fromEntries(
+            Object.entries(parsed).flatMap(([modelId, effort]) =>
+              typeof effort === "string" && modelId.trim() && effort.trim()
+                ? [[modelId.trim(), effort.trim()]]
+                : [],
+            ),
+          );
+        }
+      } catch {
+        reasoningEffortsByModel = {};
+      }
+    }
+    if (model || Object.keys(reasoningEffortsByModel).length > 0) {
+      defaults[provider] = {
+        ...(model ? { model } : {}),
+        reasoningEffortsByModel,
+      };
+    }
+  }
+  return defaults;
+}
+
+function normalizeProviderThreadModelMigrations(
+  value: Record<string, DesktopProviderThreadModelMigration>,
+): Record<string, DesktopProviderThreadModelMigration> {
+  return Object.fromEntries(
+    Object.entries(value).flatMap(([provider, migration]) => {
+      const normalizedProvider = provider.trim();
+      const revision = migration.revision.trim();
+      const model = migration.model.trim();
+      const reasoningEffort = migration.reasoningEffort?.trim() || undefined;
+      const sourceModels = migration.sourceModels
+        ?.map((sourceModel) => sourceModel.trim())
+        .filter(Boolean);
+      if (
+        !normalizedProvider
+        || !revision
+        || !model
+        || !Number.isFinite(migration.createdAt)
+      ) {
+        return [];
+      }
+      return [[
+        normalizedProvider,
+        {
+          revision,
+          model,
+          ...(reasoningEffort ? { reasoningEffort } : {}),
+          ...(sourceModels ? { sourceModels: [...new Set(sourceModels)] } : {}),
+          ...(migration.includeThreadsWithoutModel
+            ? { includeThreadsWithoutModel: true }
+            : {}),
+          createdAt: migration.createdAt,
+        },
+      ]];
+    }),
+  );
+}
+
+function readProviderThreadModelMigrations(
+  value: TomlScalar | undefined,
+): Record<string, DesktopProviderThreadModelMigration> | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const migrations: Record<string, DesktopProviderThreadModelMigration> = {};
+  for (const item of value) {
+    if (typeof item !== "object" || item === null || Array.isArray(item)) {
+      continue;
+    }
+    const provider =
+      typeof item.provider === "string" ? item.provider.trim() : "";
+    const revision =
+      typeof item.revision === "string" ? item.revision.trim() : "";
+    const model = typeof item.model === "string" ? item.model.trim() : "";
+    const reasoningEffort =
+      typeof item.reasoning_effort === "string"
+        ? item.reasoning_effort.trim()
+        : "";
+    const sourceModels = readStringArray(item.source_models)
+      ?.map((sourceModel) => sourceModel.trim())
+      .filter(Boolean);
+    const includeThreadsWithoutModel =
+      item.include_threads_without_model === true;
+    const createdAt =
+      typeof item.created_at === "number" && Number.isFinite(item.created_at)
+        ? item.created_at
+        : undefined;
+    if (!provider || !revision || !model || createdAt === undefined) {
+      continue;
+    }
+    migrations[provider] = {
+      revision,
+      model,
+      ...(reasoningEffort ? { reasoningEffort } : {}),
+      ...(sourceModels ? { sourceModels: [...new Set(sourceModels)] } : {}),
+      ...(includeThreadsWithoutModel
+        ? { includeThreadsWithoutModel: true }
+        : {}),
+      createdAt,
+    };
+  }
+  return migrations;
 }
 
 function readAuthorizedContacts(

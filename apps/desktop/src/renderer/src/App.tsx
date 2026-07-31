@@ -978,6 +978,11 @@ function DesktopAppShell(props: {
     backendError: backendSummaries.error,
     backends: backendSummaries.backends,
     applications: settings.snapshot?.applications,
+    codexFastAllowed:
+      settings.snapshot?.models?.codex.allowFast?.value ?? true,
+    providerModelDefaults: settings.snapshot?.models?.providerDefaults,
+    providerThreadMigrations:
+      settings.snapshot?.models?.providerThreadMigrations,
     archiveThreadError: navigation.archiveThreadError,
     clearPendingRequest: session.clearPendingRequest,
     composerDisabled:
@@ -1471,6 +1476,7 @@ function DesktopAppShell(props: {
             <Suspense fallback={null}>
               <LazySettingsScreen
                 appearanceController={props.appearanceController}
+                cachedBackends={backendSummaries.backends}
                 desktopApi={desktopApi}
                 initialSection={settingsInitialSection}
                 profiles={profiles}

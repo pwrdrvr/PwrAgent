@@ -225,6 +225,11 @@ export type BackendSummary = {
 
 export type ListBackendsRequest = {
   includeUnavailable?: boolean;
+  /**
+   * Re-read model capabilities before describing providers. A backend id
+   * refreshes one provider; `true` refreshes every provider.
+   */
+  refreshModels?: true | AppServerBackendKind;
 };
 
 export type ListBackendsResponse = {

@@ -285,6 +285,7 @@ describe("desktop settings contracts", () => {
         },
       },
       models: {
+        providerDefaults: {},
         codex: {
           path: { value: "", source: "default" },
           profile: { value: "", source: "default" },

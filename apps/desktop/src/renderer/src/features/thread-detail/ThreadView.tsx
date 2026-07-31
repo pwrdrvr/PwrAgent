@@ -29,6 +29,8 @@ import type {
   CodexEnvironmentActionRun,
   DesktopApplicationsSnapshot,
   DesktopChatReplyComposer,
+  DesktopProviderModelDefaults,
+  DesktopProviderThreadModelMigration,
   HandoffThreadWorkspaceRequest,
   MarkdownFileViewerContext,
   MessagingChannelKind,
@@ -719,6 +721,12 @@ export type ThreadViewProps = {
   backendError?: string;
   backends: BackendSummary[];
   applications?: DesktopApplicationsSnapshot;
+  codexFastAllowed?: boolean;
+  providerModelDefaults?: Record<string, DesktopProviderModelDefaults>;
+  providerThreadMigrations?: Record<
+    string,
+    DesktopProviderThreadModelMigration
+  >;
   clearPendingRequest: (requestId: string, nextStatus?: string) => void;
   composerDisabled: boolean;
   composerDraftStore?: ComposerDraftStore;
@@ -1532,6 +1540,88 @@ export function ThreadView(props: ThreadViewProps) {
   useEffect(() => {
     selectedThreadKeyRef.current = selectedThreadKey;
   }, [selectedThreadKey]);
+
+  const migrationDesktopApi = props.desktopApi;
+  const migrationNotice = props.onShowNotice;
+  const migrationRefreshNavigation = props.onRefreshNavigation;
+  const providerThreadMigrations = props.providerThreadMigrations;
+  const migrationCheckKeyRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const thread = selectedThread;
+    const migration = thread
+      ? providerThreadMigrations?.[thread.source]
+      : undefined;
+    if (
+      !thread
+      || selectedLaunchpad
+      || !migration
+      || thread.modelMigrationRevision === migration.revision
+      || !migrationDesktopApi?.applyThreadModelMigration
+    ) {
+      return;
+    }
+
+    const checkKey = `${thread.source}:${thread.id}:${migration.revision}`;
+    if (migrationCheckKeyRef.current === checkKey) {
+      return;
+    }
+    migrationCheckKeyRef.current = checkKey;
+    void migrationDesktopApi
+      .applyThreadModelMigration({
+        backend: thread.source,
+        threadId: thread.id,
+        threadCreatedAt: thread.createdAt,
+        threadModel: thread.model,
+      })
+      .then(async (result) => {
+        if (
+          result.status === "applied"
+          || result.status === "acknowledged-manual-change"
+          || result.status === "acknowledged-new-thread"
+          || result.status === "acknowledged-source-model"
+        ) {
+          await migrationRefreshNavigation?.();
+          return;
+        }
+        if (result.status === "unavailable") {
+          migrationNotice?.({
+            id: `thread-model-migration-unavailable:${checkKey}`,
+            title: "Thread model migration pending",
+            message:
+              `${migration.model} is not currently available for `
+              + `${thread.source}. This thread was left unchanged.`,
+            tone: "warning",
+          });
+          return;
+        }
+        if (result.status === "metadata-unavailable") {
+          migrationNotice?.({
+            id: `thread-model-migration-metadata:${checkKey}`,
+            title: "Thread model migration pending",
+            message:
+              "PwrAgent could not verify this thread's creation time, so it "
+              + "was left unchanged.",
+            tone: "warning",
+          });
+        }
+      })
+      .catch((error) => {
+        migrationCheckKeyRef.current = undefined;
+        migrationNotice?.({
+          id: `thread-model-migration-failed:${checkKey}`,
+          title: "Thread model migration failed",
+          message: error instanceof Error ? error.message : String(error),
+          tone: "warning",
+        });
+      });
+  }, [
+    migrationDesktopApi,
+    migrationNotice,
+    migrationRefreshNavigation,
+    providerThreadMigrations,
+    selectedLaunchpad,
+    selectedThread,
+  ]);
 
   useEffect(() => {
     const thread = selectedThread;
@@ -2541,6 +2631,8 @@ export function ThreadView(props: ThreadViewProps) {
             <Composer
               backends={props.backends}
               applications={props.applications}
+              codexFastAllowed={props.codexFastAllowed}
+              providerModelDefaults={props.providerModelDefaults}
               desktopApi={props.desktopApi}
               onShowNotice={props.onShowNotice}
               onProviderSelected={props.onProviderSelected}
@@ -2767,6 +2859,7 @@ export function ThreadView(props: ThreadViewProps) {
             addOptimisticUserMessage={props.addOptimisticUserMessage}
             backends={props.backends}
             applications={props.applications}
+            codexFastAllowed={props.codexFastAllowed}
             desktopApi={props.desktopApi}
             onShowNotice={props.onShowNotice}
             composerImplementation={props.composerImplementation}

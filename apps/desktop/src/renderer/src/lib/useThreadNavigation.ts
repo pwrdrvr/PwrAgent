@@ -3237,28 +3237,34 @@ export function useThreadNavigation(
       }
 
       if (method === "thread/modelSettings/updated") {
-        const { threadId, model, reasoningEffort, serviceTier, fastMode } =
-          event.notification.params as {
-            threadId: string;
-            model?: string;
-            reasoningEffort?: string;
-            serviceTier?: string;
-            fastMode?: boolean;
-          };
+        const params = event.notification.params as {
+          threadId: string;
+          model?: string;
+          reasoningEffort?: string;
+          serviceTier?: string;
+          fastMode?: boolean;
+        };
+        const modelSettingsPatch = {
+          ...("model" in params ? { model: params.model } : {}),
+          ...("reasoningEffort" in params
+            ? { reasoningEffort: params.reasoningEffort }
+            : {}),
+          ...("serviceTier" in params
+            ? { serviceTier: params.serviceTier }
+            : {}),
+          ...("fastMode" in params ? { fastMode: params.fastMode } : {}),
+        };
         setState((current) => ({
           ...current,
           response: applyThreadModelSettingsUpdate(current.response, {
             backend: event.backend,
-            threadId,
-            model,
-            reasoningEffort,
-            serviceTier,
-            fastMode,
+            threadId: params.threadId,
+            ...modelSettingsPatch,
           }),
         }));
         setOptimisticThread((current) =>
-          current?.source === event.backend && current.id === threadId
-            ? { ...current, model, reasoningEffort, serviceTier, fastMode }
+          current?.source === event.backend && current.id === params.threadId
+            ? { ...current, ...modelSettingsPatch }
             : current
         );
         return;

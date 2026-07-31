@@ -51,6 +51,10 @@ export type ThreadAgentMetadata = {
 
 export type NavigationThreadSummary = AppServerThreadSummary & {
   inbox: ThreadInboxState;
+  /** Last provider model-migration revision acknowledged by this thread. */
+  modelMigrationRevision?: string;
+  /** Last explicit model/reasoning change made outside a migration. */
+  modelSettingsManuallyUpdatedAt?: number;
   /**
    * Optional Agent/persona marker. When present, this thread is intended
    * to act as a personal Agent surface.
@@ -1236,6 +1240,10 @@ export type ThreadOverlayState = {
   model?: string;
   reasoningEffort?: string;
   reasoningEffortsByModel?: Record<string, string>;
+  /** Last provider model-migration revision acknowledged by this thread. */
+  modelMigrationRevision?: string;
+  /** Last explicit model/reasoning change made outside a migration. */
+  modelSettingsManuallyUpdatedAt?: number;
   serviceTier?: string;
   fastMode?: boolean;
   gitBranch?: string;

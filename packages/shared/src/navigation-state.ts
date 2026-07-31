@@ -232,6 +232,9 @@ export function materializeNavigationThreads(params: {
       turnFailureLog: overlay?.turnFailureLog,
       model: overlay?.model ?? thread.model,
       reasoningEffort: overlay?.reasoningEffort ?? thread.reasoningEffort,
+      modelMigrationRevision: overlay?.modelMigrationRevision,
+      modelSettingsManuallyUpdatedAt:
+        overlay?.modelSettingsManuallyUpdatedAt,
       serviceTier: overlay?.serviceTier ?? thread.serviceTier,
       fastMode: overlay?.fastMode ?? thread.fastMode,
       codexEnvironmentRuntime:

@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   AppServerListThreadsResponse,
   AppServerThreadSummary,
+  BackendSummary,
   DesktopSettingsSnapshot,
   MessagingPairingEntry,
   WorktreeSnapshotSummary,
@@ -438,6 +439,70 @@ function createArchivedSnapshot(
 }
 
 describe("SettingsScreen", () => {
+  it("renders cached provider models while refreshing the catalog", async () => {
+    const cachedBackends: BackendSummary[] = [
+      {
+        kind: "codex",
+        label: "OpenAI",
+        available: true,
+        methods: [],
+        capabilities: {
+          listThreads: true,
+          createThread: true,
+          resumeThread: true,
+          renameThread: true,
+          readThread: true,
+          startTurn: true,
+          interruptTurn: true,
+          steerTurn: true,
+          transcriptPagination: true,
+          toolUse: true,
+          approvalRequests: true,
+          multiDirectoryThreads: true,
+        },
+        executionModes: [],
+        launchpadOptions: {
+          models: [
+            {
+              id: "gpt-5.6-sol",
+              label: "GPT-5.6-Sol",
+              supportsReasoning: true,
+              reasoningEfforts: ["high", "xhigh"],
+            },
+          ],
+        },
+      },
+    ];
+    const listBackends = vi.fn(
+      async () => await new Promise<never>(() => undefined),
+    );
+
+    render(
+      <SettingsScreen
+        cachedBackends={cachedBackends}
+        desktopApi={{ listBackends }}
+        initialSection="models"
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(screen.getByText("1 discovered model")).toBeInTheDocument();
+    expect(
+      within(screen.getByLabelText("OpenAI default model")).getByRole("option", {
+        name: "GPT-5.6-Sol",
+      }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("No provider has reported a model catalog yet."))
+      .not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(listBackends).toHaveBeenCalledWith({
+        includeUnavailable: true,
+        refreshModels: true,
+      });
+    });
+  });
+
   it("clamps accidental document scroll while mounted", async () => {
     Object.defineProperty(window, "scrollX", {
       configurable: true,
@@ -1538,6 +1603,401 @@ describe("SettingsScreen", () => {
     expect(
       await screen.findByText("No AI providers are available right now."),
     ).toBeInTheDocument();
+  });
+
+  it("saves defaults and confirms launchpad, thread, and Fast bulk actions", async () => {
+    const snapshot = createSnapshot();
+    snapshot.models.providerDefaults = {
+      codex: {
+        model: "gpt-5.6-sol",
+        reasoningEffortsByModel: {
+          "gpt-5.6-sol": "high",
+        },
+      },
+    };
+    const settings = createSettingsState(snapshot);
+    const updateDirectoryLaunchpad = vi.fn(async (request) => ({
+      launchpad: {
+        directoryKey: request.directoryKey,
+        directoryKind: "directory" as const,
+        directoryLabel: "Repo",
+        backend: "codex" as const,
+        executionMode: "default" as const,
+        workMode: "local" as const,
+        prompt: "",
+        model: request.patch.model,
+        reasoningEffort: request.patch.reasoningEffort,
+        createdAt: 1,
+        updatedAt: 2,
+      },
+      defaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+        workMode: "local" as const,
+        model: request.patch.model,
+        reasoningEffort: request.patch.reasoningEffort,
+      },
+    }));
+    const turnOffCodexFastEverywhere = vi.fn(async () => ({
+      launchpadCount: 1,
+      threadCount: 2,
+    }));
+    const desktopApi = {
+      listAcpAgents: vi.fn(async () => ({
+        fetchedAt: 1000,
+        entries: [],
+      })),
+      listBackends: vi.fn(async () => ({
+        fetchedAt: 1000,
+        backends: [
+          {
+            kind: "codex" as const,
+            label: "Codex",
+            available: true,
+            methods: [],
+            capabilities: {
+              listThreads: true,
+              createThread: true,
+              resumeThread: true,
+              renameThread: true,
+              readThread: true,
+              startTurn: true,
+              interruptTurn: true,
+              steerTurn: true,
+              transcriptPagination: true,
+              toolUse: true,
+              approvalRequests: true,
+              multiDirectoryThreads: true,
+            },
+            executionModes: [],
+            launchpadOptions: {
+              models: [
+                {
+                  id: "gpt-5.6-sol",
+                  label: "GPT-5.6-Sol",
+                  defaultReasoningEffort: "low",
+                  reasoningEfforts: ["low", "high", "xhigh"],
+                  supportsReasoning: true,
+                },
+                {
+                  id: "gpt-5.6-terra",
+                  label: "GPT-5.6-Terra",
+                  supportsReasoning: true,
+                },
+                {
+                  id: "gpt-5.5",
+                  label: "GPT-5.5",
+                  supportsReasoning: true,
+                },
+              ],
+            },
+          },
+        ],
+      })),
+      getNavigationSnapshot: vi.fn(async () => ({
+        fetchedAt: 1000,
+        browseMode: "inbox" as const,
+        directories: [
+          {
+            key: "directory:/repo-a",
+            kind: "directory" as const,
+            label: "Repo A",
+            threadKeys: [],
+            needsAttentionCount: 0,
+            launchpad: {
+              directoryKey: "directory:/repo-a",
+              directoryKind: "directory" as const,
+              directoryLabel: "Repo A",
+              backend: "codex" as const,
+              executionMode: "default" as const,
+              workMode: "local" as const,
+              prompt: "keep me",
+              createdAt: 1,
+              updatedAt: 1,
+            },
+          },
+          {
+            key: "directory:/repo-b",
+            kind: "directory" as const,
+            label: "Repo B",
+            threadKeys: [],
+            needsAttentionCount: 0,
+            launchpad: {
+              directoryKey: "directory:/repo-b",
+              directoryKind: "directory" as const,
+              directoryLabel: "Repo B",
+              backend: "acp:kimi" as const,
+              executionMode: "default" as const,
+              workMode: "local" as const,
+              prompt: "leave me alone",
+              createdAt: 1,
+              updatedAt: 1,
+            },
+          },
+        ],
+        launchpadDefaults: {
+          backend: "codex" as const,
+          executionMode: "default" as const,
+          workMode: "local" as const,
+        },
+        threads: [
+          {
+            id: "codex-1",
+            title: "Codex one",
+            createdAt: 1,
+            updatedAt: 1,
+            linkedDirectories: [],
+            source: "codex" as const,
+            model: "gpt-5.5",
+            fastMode: true,
+            inbox: { inInbox: true },
+          },
+          {
+            id: "codex-2",
+            title: "Codex two",
+            createdAt: 1,
+            updatedAt: 1,
+            linkedDirectories: [],
+            source: "codex" as const,
+            model: "gpt-5.6-terra",
+            fastMode: true,
+            inbox: { inInbox: true },
+          },
+          {
+            id: "codex-3",
+            title: "Codex three",
+            createdAt: 1,
+            updatedAt: 1,
+            linkedDirectories: [],
+            source: "codex" as const,
+            model: "gpt-5.6-sol",
+            fastMode: false,
+            inbox: { inInbox: true },
+          },
+          {
+            id: "kimi-1",
+            title: "Kimi",
+            createdAt: 1,
+            updatedAt: 1,
+            linkedDirectories: [],
+            source: "acp:kimi" as const,
+            inbox: { inInbox: true },
+          },
+        ],
+      })),
+      turnOffCodexFastEverywhere,
+      updateDirectoryLaunchpad,
+    } as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"];
+
+    const { rerender } = render(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        initialSection="models"
+        settings={settings}
+      />,
+    );
+
+    const reasoning = await screen.findByLabelText("Codex default reasoning");
+    fireEvent.change(reasoning, { target: { value: "xhigh" } });
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        models: {
+          providerDefaults: {
+            codex: {
+              model: "gpt-5.6-sol",
+              reasoningEffortsByModel: {
+                "gpt-5.6-sol": "xhigh",
+              },
+            },
+          },
+        },
+      });
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Apply to launchpads" }));
+    const launchpadConfirmation =
+      await screen.findByText("Apply to 1 launchpad?");
+    expect(launchpadConfirmation.closest(".settings-field")).toHaveTextContent(
+      "Codex",
+    );
+    expect(
+      screen.queryByRole("button", { name: "Apply to launchpads" }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await waitFor(() => {
+      expect(updateDirectoryLaunchpad).toHaveBeenCalledTimes(1);
+    });
+    expect(updateDirectoryLaunchpad).toHaveBeenCalledWith({
+      directoryKey: "directory:/repo-a",
+      patch: {
+        model: "gpt-5.6-sol",
+        reasoningEffort: "high",
+      },
+      stickySettingsChanged: true,
+    });
+    expect(
+      screen.getByText(
+        "Updated 1 Codex launchpad. Existing threads were not changed.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("combobox", { name: "Codex default model" }),
+    ).toHaveClass("settings-select--chip");
+    expect(
+      screen.getByRole("combobox", { name: "Codex default reasoning" }),
+    ).toHaveClass("settings-select--chip");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Schedule existing threads…" }),
+    );
+    const migrationDialog = await screen.findByRole("dialog", {
+      name: "Choose Codex threads to update",
+    });
+    expect(
+      within(migrationDialog).getByText("2 selected of 3 threads"),
+    ).toBeInTheDocument();
+    const terraGroup = within(migrationDialog).getByRole("option", {
+      name: /GPT-5.6-Terra.*1 thread/,
+    });
+    const oldModelGroup = within(migrationDialog).getByRole("option", {
+      name: /GPT-5.5.*1 thread/,
+    });
+    const destinationGroup = within(migrationDialog).getByRole("option", {
+      name: /GPT-5.6-Sol.*destination model.*1 thread/,
+    });
+    expect(terraGroup).toHaveAttribute("aria-selected", "true");
+    expect(destinationGroup).toHaveAttribute("aria-selected", "false");
+    fireEvent.click(
+      within(migrationDialog).getByRole("button", { name: "Clear" }),
+    );
+    expect(
+      within(migrationDialog).getByText("0 selected of 3 threads"),
+    ).toBeInTheDocument();
+    fireEvent.click(oldModelGroup);
+    fireEvent.click(destinationGroup, { shiftKey: true });
+    expect(
+      within(migrationDialog).getByText("2 selected of 3 threads"),
+    ).toBeInTheDocument();
+    fireEvent.click(
+      within(migrationDialog).getByRole("button", { name: "Clear" }),
+    );
+    fireEvent.click(oldModelGroup);
+    expect(
+      within(migrationDialog).getByText("1 selected of 3 threads"),
+    ).toBeInTheDocument();
+    expect(terraGroup).toHaveAttribute("aria-selected", "false");
+    expect(oldModelGroup).toHaveAttribute("aria-selected", "true");
+    fireEvent.click(
+      within(migrationDialog).getByRole("button", {
+        name: "Schedule 1 thread",
+      }),
+    );
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        models: {
+          providerThreadMigrations: {
+            codex: {
+              revision: expect.any(String),
+              model: "gpt-5.6-sol",
+              reasoningEffort: "high",
+              sourceModels: ["gpt-5.5"],
+              createdAt: expect.any(Number),
+            },
+          },
+        },
+      });
+    });
+    expect(
+      within(migrationDialog).getByText(/This exact migration is already scheduled/),
+    ).toHaveTextContent(
+      "1 thread is still pending; 0 already acknowledged this revision.",
+    );
+    expect(
+      within(migrationDialog).getByRole("button", {
+        name: "Already scheduled",
+      }),
+    ).toBeDisabled();
+    fireEvent.click(
+      within(migrationDialog).getByRole("button", { name: "Cancel" }),
+    );
+
+    snapshot.models.providerThreadMigrations = {
+      codex: {
+        revision: "saved-migration",
+        model: "gpt-5.6-sol",
+        reasoningEffort: "high",
+        sourceModels: ["gpt-5.5"],
+        createdAt: Date.now(),
+      },
+    };
+    rerender(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        initialSection="models"
+        settings={settings}
+      />,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Schedule existing threads…" }),
+    );
+    const scheduledDialog = await screen.findByRole("dialog", {
+      name: "Choose Codex threads to update",
+    });
+    expect(
+      within(scheduledDialog).getByText(/This exact migration is already scheduled/),
+    ).toHaveTextContent(
+      "1 thread is still pending; 0 already acknowledged this revision.",
+    );
+    expect(
+      within(scheduledDialog).getByRole("button", {
+        name: "Already scheduled",
+      }),
+    ).toBeDisabled();
+    fireEvent.click(
+      within(scheduledDialog).getByRole("button", { name: "Cancel" }),
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Turn Fast off everywhere" }),
+    );
+    const fastConfirmation =
+      await screen.findByText("Turn Fast off everywhere?");
+    expect(fastConfirmation.closest(".settings-field")).toHaveTextContent(
+      "Codex",
+    );
+    expect(fastConfirmation.closest(".settings-field")).toHaveTextContent(
+      "Fast mode",
+    );
+    expect(
+      screen.queryByRole("button", { name: "Turn Fast off everywhere" }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Turn Fast off" }));
+    await waitFor(() => {
+      expect(turnOffCodexFastEverywhere).toHaveBeenCalledTimes(1);
+    });
+    expect(
+      screen.getByText(
+        "Fast is off for 2 Codex threads and 1 saved launchpad. Future Codex launchpads will also start non-Fast.",
+      ),
+    ).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Allow Codex Fast mode" }),
+    );
+    expect(
+      await screen.findByText("Prohibit Fast for this profile?"),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Turn Fast off" }));
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        models: {
+          codex: {
+            allowFast: false,
+          },
+        },
+      });
+    });
+    expect(turnOffCodexFastEverywhere).toHaveBeenCalledTimes(2);
   });
 
   it("can restart login for an existing Codex auth profile", async () => {

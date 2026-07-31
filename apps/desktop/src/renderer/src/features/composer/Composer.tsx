@@ -15,6 +15,7 @@ import { createPortal, flushSync } from "react-dom";
 import type { JSONContent } from "@tiptap/react";
 import type {
   AppServerAvailableCommandSummary,
+  AppServerBackendKind,
   AppServerCollaborationModeRequest,
   AppServerReviewTarget,
   AppServerSkillSummary,
@@ -27,6 +28,7 @@ import type {
   DesktopApplicationDiscoveryCandidate,
   DesktopApplicationsSnapshot,
   DesktopChatReplyComposer,
+  DesktopProviderModelDefaults,
   HandoffThreadWorkspaceRequest,
   NavigationDirectorySummary,
   NavigationGitCommitSummary,
@@ -59,6 +61,7 @@ import { ImageLightbox } from "../thread-detail/ImageLightbox";
 import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
 import { formatBackendLabel } from "../../lib/backend-label";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
 import {
   acpRuntimeModeRequiresFullAccess,
   formatExecutionModeLabel,
@@ -121,6 +124,8 @@ type ComposerProps = {
   ) => string;
   backends?: BackendSummary[];
   applications?: DesktopApplicationsSnapshot;
+  codexFastAllowed?: boolean;
+  providerModelDefaults?: Record<string, DesktopProviderModelDefaults>;
   desktopApi?: DesktopApi;
   /**
    * Surface a transient app-level toast (image attachment limit reached,
@@ -272,6 +277,33 @@ type ComposerProps = {
   ) => Promise<void>;
   threadModelSettingsError?: string;
 };
+
+const providerCatalogsRefreshedThisSession = new Set<AppServerBackendKind>();
+
+async function refreshProviderCatalogOnFirstSelection(
+  desktopApi: DesktopApi | undefined,
+  backend: AppServerBackendKind,
+): Promise<void> {
+  if (
+    providerCatalogsRefreshedThisSession.has(backend)
+    || !desktopApi?.listBackends
+  ) {
+    return;
+  }
+  providerCatalogsRefreshedThisSession.add(backend);
+  try {
+    if (backend.startsWith("acp:") && desktopApi.listAcpAgents) {
+      await desktopApi.listAcpAgents({ refresh: true });
+    }
+    await desktopApi.listBackends({
+      includeUnavailable: true,
+      refreshModels: backend,
+    });
+    window.dispatchEvent(new Event(BACKEND_SUMMARIES_REFRESH_EVENT));
+  } catch {
+    providerCatalogsRefreshedThisSession.delete(backend);
+  }
+}
 
 type LocalHandoffStrategy = ThreadWorkspaceHandoffStrategy;
 
@@ -6168,9 +6200,13 @@ export function Composer(props: ComposerProps) {
           && latestLaunchpad.model === automaticModel
           && latestLaunchpad.reasoningEffort === automaticReasoningEffort;
         const refreshedModels = refreshedBackend.launchpadOptions?.models ?? [];
+        const configuredDefaults = props.providerModelDefaults?.[backend];
+        const configuredModelOption = refreshedModels.find(
+          (model) => model.id === configuredDefaults?.model,
+        );
         const nextModelOption =
           (shouldAdoptRefreshedDefault
-            ? undefined
+            ? configuredModelOption
             : refreshedModels.find(
                 (model) => model.id === latestLaunchpad.model,
               )) ??
@@ -6178,9 +6214,18 @@ export function Composer(props: ComposerProps) {
         if (!nextModelOption) {
           return;
         }
+        const configuredReasoningEffort =
+          configuredDefaults?.reasoningEffortsByModel[nextModelOption.id];
+        const refreshedReasoningEfforts = getReasoningEffortsForModel(
+          refreshedBackend,
+          nextModelOption,
+        );
         const nextReasoningEffort = nextModelOption.supportsReasoning
           ? shouldAdoptRefreshedDefault
-            ? getDefaultReasoningEffort(refreshedBackend, nextModelOption)
+            ? configuredReasoningEffort
+              && refreshedReasoningEfforts.includes(configuredReasoningEffort)
+                ? configuredReasoningEffort
+                : getDefaultReasoningEffort(refreshedBackend, nextModelOption)
             : getReasoningEffortValue(
                 refreshedBackend,
                 nextModelOption,
@@ -6215,6 +6260,7 @@ export function Composer(props: ComposerProps) {
     props.launchpad?.directoryKey,
     props.onProviderSelected,
     props.onUpdateLaunchpad,
+    props.providerModelDefaults,
   ]);
 
   const runThreadCodexEnvironmentAction = async (): Promise<void> => {
@@ -6380,8 +6426,36 @@ export function Composer(props: ComposerProps) {
         currentSettings?.reasoningEffort,
       )
     : undefined;
+  const profileModelDefaults = backend
+    ? props.providerModelDefaults?.[backend.kind]
+    : undefined;
+  const profileModelOption =
+    modelOptions.find((option) => option.id === profileModelDefaults?.model)
+    ?? getDefaultModelOption(backend);
+  const profileReasoningOptions = getReasoningEffortsForModel(
+    backend,
+    profileModelOption,
+  );
+  const configuredProfileReasoning = profileModelOption
+    ? profileModelDefaults?.reasoningEffortsByModel[profileModelOption.id]
+    : undefined;
+  const profileReasoningEffort =
+    configuredProfileReasoning
+    && profileReasoningOptions.includes(configuredProfileReasoning)
+      ? configuredProfileReasoning
+      : getDefaultReasoningEffort(backend, profileModelOption);
+  const launchpadDiffersFromProfileDefaults =
+    Boolean(props.launchpad && profileModelOption)
+    && (
+      props.launchpad?.model !== profileModelOption?.id
+      || (
+        profileReasoningOptions.length > 0
+        && props.launchpad?.reasoningEffort !== profileReasoningEffort
+      )
+    );
   const supportsFast =
     backend?.kind === "codex"
+    && props.codexFastAllowed !== false
       ? selectedModelOption?.supportsFast ??
         backend.launchpadOptions?.supportsFastMode ??
         false
@@ -8005,6 +8079,15 @@ export function Composer(props: ComposerProps) {
                 } else {
                   pendingProviderSelectionKeyRef.current = undefined;
                 }
+                if (
+                  !nextBackend.startsWith("acp:")
+                  || !props.onProviderSelected
+                ) {
+                  void refreshProviderCatalogOnFirstSelection(
+                    props.desktopApi,
+                    nextBackend,
+                  );
+                }
                 handleLaunchpadPatch({
                   backend: nextBackend,
                 });
@@ -8325,6 +8408,29 @@ export function Composer(props: ComposerProps) {
                 handleThreadModelSettingsPatch({ reasoningEffort });
               }}
             />
+          ) : null}
+
+          {props.launchpad &&
+          profileModelOption &&
+          launchpadDiffersFromProfileDefaults ? (
+            <button
+              aria-label="Reset model and reasoning to profile default"
+              className="composer__toggle tooltip-target"
+              data-tooltip="Reset model and reasoning to the AI Providers default"
+              disabled={launchpadSubmitting}
+              type="button"
+              onClick={() => {
+                handleLaunchpadPatch({
+                  model: profileModelOption.id,
+                  reasoningEffort:
+                    profileReasoningOptions.length > 0
+                      ? profileReasoningEffort
+                      : undefined,
+                });
+              }}
+            >
+              <span aria-hidden="true">↺</span>
+            </button>
           ) : null}
 
           {(props.launchpad || props.thread) && backend?.launchpadOptions?.serviceTiers?.length ? (

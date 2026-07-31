@@ -109,6 +109,31 @@ export type DesktopSettingsValue<T> = {
   error?: string;
 };
 
+/**
+ * Explicit launchpad baseline for one backend in the active PwrAgent profile.
+ * Reasoning is remembered per model so switching models never overwrites the
+ * operator's preference for another model.
+ */
+export type DesktopProviderModelDefaults = {
+  model?: string;
+  reasoningEffortsByModel: Record<string, string>;
+};
+
+/**
+ * One operator-created migration generation for existing threads belonging to
+ * a provider. Threads acknowledge a revision once, when next opened.
+ */
+export type DesktopProviderThreadModelMigration = {
+  revision: string;
+  model: string;
+  reasoningEffort?: string;
+  /** Existing thread models eligible to adopt this migration. Missing = all. */
+  sourceModels?: string[];
+  /** Whether threads with no reported current model are eligible. */
+  includeThreadsWithoutModel?: boolean;
+  createdAt: number;
+};
+
 export type DesktopAuthorizedContact = {
   id: string;
   displayName: string;
@@ -657,9 +682,15 @@ export type DesktopSettingsSnapshot = {
     };
   };
   models: {
+    providerDefaults?: Record<string, DesktopProviderModelDefaults>;
+    providerThreadMigrations?: Record<
+      string,
+      DesktopProviderThreadModelMigration
+    >;
     codex: {
       path: DesktopSettingsValue<string>;
       profile: DesktopSettingsValue<string>;
+      allowFast?: DesktopSettingsValue<boolean>;
       discovery: DesktopCodexDiscoverySnapshot;
       profiles: DesktopCodexAuthProfileDiscoverySnapshot;
     };
@@ -866,9 +897,15 @@ export type DesktopSettingsConfigPatch = {
     };
   };
   models?: {
+    providerDefaults?: Record<string, DesktopProviderModelDefaults>;
+    providerThreadMigrations?: Record<
+      string,
+      DesktopProviderThreadModelMigration
+    >;
     codex?: {
       path?: string;
       profile?: string;
+      allowFast?: boolean;
     };
   };
   acpAgents?: {

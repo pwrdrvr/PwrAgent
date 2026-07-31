@@ -181,6 +181,9 @@ import type {
   SetThreadAgentResponse,
   SetThreadModelSettingsRequest,
   SetThreadModelSettingsResponse,
+  ApplyThreadModelMigrationRequest,
+  ApplyThreadModelMigrationResponse,
+  TurnOffCodexFastEverywhereResponse,
   SteerTurnRequest,
   SteerTurnResponse,
   StartThreadRequest,
@@ -461,6 +464,11 @@ export type DesktopApi = {
   setThreadModelSettings?: (
     request: SetThreadModelSettingsRequest
   ) => Promise<SetThreadModelSettingsResponse>;
+  applyThreadModelMigration?: (
+    request: ApplyThreadModelMigrationRequest
+  ) => Promise<ApplyThreadModelMigrationResponse>;
+  turnOffCodexFastEverywhere?: (
+  ) => Promise<TurnOffCodexFastEverywhereResponse>;
   checkThreadBranchDrift?: (
     request: CheckThreadBranchDriftRequest
   ) => Promise<CheckThreadBranchDriftResponse>;

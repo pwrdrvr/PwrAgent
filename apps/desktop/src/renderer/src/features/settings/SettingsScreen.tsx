@@ -1,4 +1,5 @@
 import type {
+  BackendSummary,
   DesktopHotCpuProfileStartDelayMs,
   DesktopHotCpuProfileTriggerMode,
   DesktopSettingsConfigPatch,
@@ -92,6 +93,7 @@ export function SettingsScreen(props: {
    *  it without compile errors — the Appearance UI is hidden there
    *  anyway because the snapshot is unavailable. */
   appearanceController?: AppearanceController;
+  cachedBackends?: BackendSummary[];
   desktopApi?: DesktopApi;
   profiles?: PwrAgentProfilesState;
   settings: DesktopSettingsState;
@@ -277,6 +279,7 @@ export function SettingsScreen(props: {
           ) : snapshot ? (
             <SettingsSectionBody
               appearanceController={props.appearanceController}
+              cachedBackends={props.cachedBackends}
               desktopApi={props.desktopApi}
               profiles={props.profiles}
               section={section}
@@ -297,6 +300,7 @@ export function SettingsScreen(props: {
 
 function SettingsSectionBody(props: {
   appearanceController?: AppearanceController;
+  cachedBackends?: BackendSummary[];
   desktopApi?: DesktopApi;
   profiles?: PwrAgentProfilesState;
   section: SettingsSection;
@@ -650,6 +654,7 @@ function SettingsSectionBody(props: {
 
   return (
     <ModelsSettings
+      cachedBackends={props.cachedBackends}
       desktopApi={props.desktopApi}
       saving={props.settings.saving}
       snapshot={props.snapshot}
@@ -667,6 +672,23 @@ function SettingsSectionBody(props: {
         await props.settings.writeConfig({
           models: {
             codex: { profile },
+          },
+        });
+      }}
+      onSaveProviderDefaults={async (providerDefaults) => {
+        await props.settings.writeConfig({
+          models: { providerDefaults },
+        });
+      }}
+      onSaveProviderThreadMigrations={async (providerThreadMigrations) => {
+        return await props.settings.writeConfig({
+          models: { providerThreadMigrations },
+        });
+      }}
+      onSaveCodexFastAllowed={async (allowFast) => {
+        return await props.settings.writeConfig({
+          models: {
+            codex: { allowFast },
           },
         });
       }}

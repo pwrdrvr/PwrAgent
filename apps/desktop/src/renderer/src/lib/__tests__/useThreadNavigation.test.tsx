@@ -7035,6 +7035,27 @@ describe("useThreadNavigation", () => {
       expect(result.current.selectedThread?.reasoningEffort).toBe("high");
       expect(result.current.selectedThread?.fastMode).toBe(true);
     });
+
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "thread/modelSettings/updated",
+            params: {
+              threadId: "thread-1",
+              fastMode: false,
+            },
+          },
+        });
+      }
+    });
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.model).toBe("gpt-5.5");
+      expect(result.current.selectedThread?.reasoningEffort).toBe("high");
+      expect(result.current.selectedThread?.fastMode).toBe(false);
+    });
     // Push-driven patch — no full snapshot re-fetch.
     expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
   });

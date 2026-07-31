@@ -101,6 +101,153 @@ describe("SqliteOverlayStore - launchpad defaults", () => {
     expect(listDefaultKeys()).not.toContain("serviceTier");
   });
 
+  it("turns Fast off across Codex threads, launchpads, and sticky defaults", async () => {
+    await store.setThreadModelSettings({
+      backend: "codex",
+      threadId: "codex-fast",
+      model: "gpt-5.6-sol",
+      reasoningEffort: "high",
+      fastMode: true,
+    });
+    await store.setThreadModelSettings({
+      backend: "acp:kimi",
+      threadId: "kimi-thinking",
+      model: "kimi-k2.6",
+      reasoningEffort: "on",
+      fastMode: true,
+    });
+    await store.setThreadModelSettings({
+      backend: "codex",
+      threadId: "codex-unset",
+      model: "gpt-5.5",
+      reasoningEffort: "high",
+    });
+    await store.upsertDirectoryLaunchpad({
+      directoryKey: "directory:/codex",
+      directoryKind: "directory",
+      directoryLabel: "Codex",
+      directoryPath: "/codex",
+      backend: "codex",
+      executionMode: "default",
+      workMode: "local",
+      prompt: "keep me",
+      model: "gpt-5.6-sol",
+      reasoningEffort: "high",
+      fastMode: true,
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    await store.upsertDirectoryLaunchpad({
+      directoryKey: "directory:/codex-unset",
+      directoryKind: "directory",
+      directoryLabel: "Codex unset",
+      directoryPath: "/codex-unset",
+      backend: "codex",
+      executionMode: "default",
+      workMode: "local",
+      prompt: "do not touch me",
+      model: "gpt-5.5",
+      reasoningEffort: "high",
+      createdAt: 1,
+      updatedAt: 7,
+    });
+    await store.upsertDirectoryLaunchpad({
+      directoryKey: "directory:/kimi",
+      directoryKind: "directory",
+      directoryLabel: "Kimi",
+      directoryPath: "/kimi",
+      backend: "acp:kimi",
+      executionMode: "default",
+      workMode: "local",
+      prompt: "leave me alone",
+      model: "kimi-k2.6",
+      reasoningEffort: "on",
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    await store.setLaunchpadDefaults({
+      backend: "codex",
+      model: "gpt-5.6-sol",
+      reasoningEffort: "high",
+      fastMode: true,
+      providerSettings: {
+        codex: {
+          model: "gpt-5.6-sol",
+          reasoningEffort: "high",
+          fastMode: true,
+        },
+      },
+    });
+
+    await expect(store.turnOffCodexFastEverywhere()).resolves.toEqual({
+      launchpadCount: 1,
+      threadCount: 1,
+      updatedThreadIds: ["codex-fast"],
+    });
+    await expect(store.getThreadOverlayState({
+      backend: "codex",
+      threadId: "codex-fast",
+    })).resolves.toMatchObject({
+      model: "gpt-5.6-sol",
+      reasoningEffort: "high",
+      fastMode: false,
+    });
+    await expect(store.getThreadOverlayState({
+      backend: "codex",
+      threadId: "codex-unset",
+    })).resolves.toMatchObject({
+      model: "gpt-5.5",
+      reasoningEffort: "high",
+    });
+    expect(
+      (
+        await store.getThreadOverlayState({
+          backend: "codex",
+          threadId: "codex-unset",
+        })
+      )?.fastMode,
+    ).toBeUndefined();
+    await expect(store.getThreadOverlayState({
+      backend: "acp:kimi",
+      threadId: "kimi-thinking",
+    })).resolves.toMatchObject({
+      fastMode: true,
+    });
+    await expect(store.getDirectoryLaunchpad({
+      directoryKey: "directory:/codex",
+    })).resolves.toMatchObject({
+      prompt: "keep me",
+      model: "gpt-5.6-sol",
+      reasoningEffort: "high",
+      fastMode: false,
+    });
+    await expect(store.getDirectoryLaunchpad({
+      directoryKey: "directory:/codex-unset",
+    })).resolves.toMatchObject({
+      prompt: "do not touch me",
+      model: "gpt-5.5",
+      updatedAt: 7,
+    });
+    expect(
+      (
+        await store.getDirectoryLaunchpad({
+          directoryKey: "directory:/codex-unset",
+        })
+      )?.fastMode,
+    ).toBeUndefined();
+    await expect(store.getDirectoryLaunchpad({
+      directoryKey: "directory:/kimi",
+    })).resolves.toMatchObject({
+      prompt: "leave me alone",
+      model: "kimi-k2.6",
+    });
+    const defaults = await store.getLaunchpadDefaults();
+    expect(defaults.model).toBe("gpt-5.6-sol");
+    expect(defaults.reasoningEffort).toBe("high");
+    expect(defaults.fastMode).not.toBe(true);
+    expect(defaults.providerSettings?.codex?.fastMode).not.toBe(true);
+  });
+
   it("remembers launchpad reasoning effort per selected model", async () => {
     await store.setLaunchpadDefaults({
       model: "gpt-5.6-terra",

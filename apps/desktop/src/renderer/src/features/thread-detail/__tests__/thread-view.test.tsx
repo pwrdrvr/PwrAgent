@@ -194,6 +194,67 @@ describe("ThreadView", () => {
     });
   });
 
+  it("applies a pending provider migration when an existing thread opens", async () => {
+    const applyThreadModelMigration = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-old",
+      status: "applied" as const,
+      revision: "migration-1",
+      model: "gpt-5.6-sol",
+      reasoningEffort: "high",
+    }));
+    const onRefreshNavigation = vi.fn(async () => undefined);
+
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[]}
+        clearPendingRequest={() => undefined}
+        composerDisabled={false}
+        desktopApi={{ applyThreadModelMigration }}
+        loading={false}
+        loadingMore={false}
+        messageCount={0}
+        onLoadOlder={async () => undefined}
+        onRefreshNavigation={onRefreshNavigation}
+        providerThreadMigrations={{
+          codex: {
+            revision: "migration-1",
+            model: "gpt-5.6-sol",
+            reasoningEffort: "high",
+            createdAt: 2_000,
+          },
+        }}
+        removeOptimisticMessage={(_id) => undefined}
+        selectedThread={{
+          id: "thread-old",
+          title: "Old model",
+          titleSource: "explicit",
+          source: "codex",
+          model: "gpt-5.5",
+          createdAt: 1_000,
+          updatedAt: 1_500,
+          linkedDirectories: [],
+          inbox: { inInbox: true },
+        }}
+        skills={[]}
+        transcriptEntries={[]}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(applyThreadModelMigration).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-old",
+        threadCreatedAt: 1_000,
+        threadModel: "gpt-5.5",
+      });
+    });
+    await waitFor(() => {
+      expect(onRefreshNavigation).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("renders a directory-less thread with transcript history and context", () => {
     render(
       <ThreadView

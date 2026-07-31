@@ -206,6 +206,13 @@ async function listAcpAgentSettingsImpl(
     ...(request.force === true ? { force: true } : {}),
     ...(discoveryEnv ? { env: discoveryEnv } : {}),
   });
+  if (request.refresh === true) {
+    // The settings discovery path updates the durable ACP capability cache.
+    // Drop the backend adapter's in-memory discovery result so the next
+    // backend summary immediately reflects newly added models and reasoning
+    // options.
+    getDesktopBackendRegistry().invalidateAcpBackendDiscovery();
+  }
   const entries = snapshot
     ? registryService
         .applyAllowlist(snapshot)

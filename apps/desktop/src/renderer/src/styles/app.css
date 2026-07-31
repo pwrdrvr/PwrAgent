@@ -6187,7 +6187,7 @@ textarea,
   color: var(--text-primary);
   font-family: var(--font-mono);
   font-size: 12px;
-  line-height: 1;
+  line-height: 1.2;
 }
 
 .settings-select:focus,
@@ -6200,6 +6200,40 @@ textarea,
 .settings-select:disabled {
   cursor: not-allowed;
   opacity: 0.55;
+}
+
+/* Provider defaults use the same compact, content-sized pill language as the
+   composer model and reasoning pickers. Keep native select semantics here;
+   `field-sizing` lets Chromium size each control to its current value. */
+.settings-provider-defaults__selectors {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-select--chip {
+  width: auto;
+  min-width: 0;
+  max-width: min(100%, 320px);
+  field-sizing: content;
+  height: 26px;
+  padding: 0 26px 0 10px;
+  border-color: var(--border-subtle);
+  border-radius: 999px;
+  background-color: var(--bg-input);
+  background-position:
+    calc(100% - 13px) 50%,
+    calc(100% - 8px) 50%;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.settings-select--chip:hover:not(:disabled) {
+  border-color: var(--accent-border);
+  background-color: var(--bg-panel-hover);
 }
 
 .settings-input--invalid {
@@ -6609,9 +6643,81 @@ textarea,
 
 .settings-inline-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: flex-start;
   gap: 8px;
+}
+
+.settings-provider-defaults__fast {
+  display: grid;
+  grid-template-columns: minmax(140px, 220px) minmax(0, 1fr);
+  align-items: center;
+  gap: 8px 16px;
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.settings-provider-defaults__fast-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.settings-provider-defaults__fast-copy strong {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.settings-provider-defaults__fast-copy span {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.settings-action-confirmation {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px;
+  border: 1px solid var(--accent-border);
+  border-radius: 6px;
+  background: var(--accent-soft);
+}
+
+.settings-action-confirmation__copy {
+  display: flex;
+  flex: 1 1 360px;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.settings-action-confirmation__copy strong {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.settings-action-confirmation__copy span {
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.settings-action-confirmation > .settings-inline-actions {
+  flex: 0 0 auto;
+}
+
+@media (max-width: 760px) {
+  .settings-provider-defaults__fast {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
 }
 
 /* Path-row list — canonical row for Codex discovery, Editor / Terminal
@@ -7302,6 +7408,122 @@ textarea,
   justify-content: flex-end;
   gap: 8px;
   margin-top: 16px;
+}
+
+.settings-thread-migration-dialog {
+  width: min(620px, calc(100vw - 48px));
+}
+
+.settings-thread-migration-dialog:focus {
+  outline: none;
+}
+
+.settings-confirm-dialog p.settings-thread-migration-dialog__scheduled {
+  padding: 8px 10px;
+  border: 1px solid var(--accent-border);
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
+.settings-thread-migration-dialog__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.settings-thread-migration-dialog__list {
+  overflow-y: auto;
+  max-height: min(360px, 45vh);
+  margin-top: 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel);
+}
+
+.settings-thread-migration-dialog__option {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 42px;
+  padding: 8px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--border-subtle);
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.settings-thread-migration-dialog__option:last-child {
+  border-bottom: 0;
+}
+
+.settings-thread-migration-dialog__option:hover,
+.settings-thread-migration-dialog__option:focus-visible {
+  background: var(--bg-panel-hover);
+  outline: none;
+}
+
+.settings-thread-migration-dialog__option[aria-selected="true"] {
+  background: var(--accent-soft);
+}
+
+.settings-thread-migration-dialog__option:disabled {
+  cursor: default;
+  opacity: 0.58;
+}
+
+.settings-thread-migration-dialog__check {
+  display: grid;
+  width: 16px;
+  height: 16px;
+  place-items: center;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.settings-thread-migration-dialog__option[aria-selected="true"]
+  .settings-thread-migration-dialog__check {
+  border-color: var(--accent-border);
+}
+
+.settings-thread-migration-dialog__model {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.settings-thread-migration-dialog__model small {
+  color: var(--text-muted);
+  font-family: var(--font-sans, sans-serif);
+  font-size: 11px;
+}
+
+.settings-thread-migration-dialog__count {
+  color: var(--text-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.settings-confirm-dialog p.settings-thread-migration-dialog__hint {
+  margin-top: 8px;
+  color: var(--text-muted);
+  font-size: 11px;
 }
 
 .settings-codex-profile-select {
