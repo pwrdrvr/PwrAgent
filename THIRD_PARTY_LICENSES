@@ -66,8 +66,8 @@ MIT
 - @floating-ui/core@1.8.0 | https://github.com/floating-ui/floating-ui
 - @floating-ui/dom@1.8.0 | https://github.com/floating-ui/floating-ui
 - @floating-ui/utils@0.2.12 | https://github.com/floating-ui/floating-ui
-- @hono/node-server@1.19.14 | https://github.com/honojs/node-server
-- @modelcontextprotocol/sdk@1.29.0 | https://github.com/modelcontextprotocol/typescript-sdk
+- @hono/node-server@2.0.5 | https://github.com/honojs/node-server
+- @modelcontextprotocol/sdk@1.30.0 | https://github.com/modelcontextprotocol/typescript-sdk
 - @octokit/endpoint@11.0.3 | github:octokit/endpoint.js
 - @octokit/graphql@9.0.3 | github:octokit/graphql.js
 - @octokit/openapi-types@27.0.0 | https://github.com/octokit/openapi-types.ts
@@ -411,13 +411,13 @@ COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
 IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-@hono/node-server@1.19.14 (MIT)
--------------------------------
+@hono/node-server@2.0.5 (MIT)
+-----------------------------
 
 Applies to:
-- @hono/node-server@1.19.14 (MIT)
+- @hono/node-server@2.0.5 (MIT)
 
-Representative file: @hono/node-server@1.19.14/LICENSE
+Representative file: @hono/node-server@2.0.5/LICENSE
 
 MIT License
 
@@ -441,13 +441,13 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-@modelcontextprotocol/sdk@1.29.0 (MIT)
+@modelcontextprotocol/sdk@1.30.0 (MIT)
 --------------------------------------
 
 Applies to:
-- @modelcontextprotocol/sdk@1.29.0 (MIT)
+- @modelcontextprotocol/sdk@1.30.0 (MIT)
 
-Representative file: @modelcontextprotocol/sdk@1.29.0/LICENSE
+Representative file: @modelcontextprotocol/sdk@1.30.0/LICENSE
 
 MIT License
 
