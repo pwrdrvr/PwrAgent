@@ -241,10 +241,20 @@ test("keeps workflow states and narrow desktop layout readable", async ({}, test
     await expect(composer).toBeVisible();
     await expect(approval).toContainText("Approval needed");
     await expect(approval).toContainText(
-      "Do you want to allow network access so I can query npm metadata for the dive package?"
+      "Do you want to allow a read-only validation command outside the sandbox?"
     );
     await expect(approval.getByText("Command:")).toBeVisible();
-    await expect(approval.locator("pre code")).toHaveText("npm view dive");
+    await expect(approval.locator("pre code")).toContainText(
+      "/opt/homebrew/bin/python3.13 -m unittest"
+    );
+    const allowPrefix = approval.getByRole("button", {
+      name: /Always Allow Prefix: \/opt\/homebrew\/bin\/python3\.13 -m unittest/,
+    });
+    await expect(allowPrefix).toBeVisible();
+    await expect(allowPrefix).toHaveClass(/button--ghost/);
+    await expect(allowPrefix.locator("code")).toContainText(
+      "scripts.github_actions.tests.test_classify_changes"
+    );
     await expect(app.window.getByRole("status")).toContainText("Waiting for approval");
     await expect(app.window.locator(".thinking-scanner").first()).toBeVisible();
 

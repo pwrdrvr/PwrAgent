@@ -302,13 +302,99 @@ describe("buildApprovalIntent", () => {
       expect.objectContaining({
         id: "approval:accept_with_execpolicy_amendment:1",
         decision: "accept_with_execpolicy_amendment",
-        label: "Always Allow Prefix: pnpm test",
+        label: "Always Allow Prefix",
+        description: "pnpm test",
+        style: "secondary",
         response: { decision: structuredDecision },
       }),
       expect.objectContaining({
         decision: "cancel",
       }),
     ]);
+    expect(intent.body).toContain(
+      ["Persistent prefix:", "```shell", "pnpm test", "```"].join("\n"),
+    );
+  });
+
+  it("numbers multiple persistent prefixes while preserving their exact scope", () => {
+    const firstDecision = {
+      acceptWithExecpolicyAmendment: {
+        execpolicy_amendment: ["pnpm", "test"],
+      },
+    };
+    const secondDecision = {
+      acceptWithExecpolicyAmendment: {
+        execpolicy_amendment: ["pnpm", "lint"],
+      },
+    };
+    const intent = buildApprovalIntent({
+      id: "approval-prefixes",
+      createdAt: 1000,
+      request: {
+        method: "item/commandExecution/requestApproval",
+        params: {
+          threadId: "thread-1",
+          requestId: "request-prefixes",
+          prompt: "Run checks?",
+          availableDecisions: ["accept", firstDecision, secondDecision, "cancel"],
+        },
+      },
+    });
+
+    expect(intent.decisions).toEqual([
+      expect.objectContaining({ decision: "accept" }),
+      expect.objectContaining({
+        label: "Always Allow Prefix 1",
+        description: "pnpm test",
+        response: { decision: firstDecision },
+      }),
+      expect.objectContaining({
+        label: "Always Allow Prefix 2",
+        description: "pnpm lint",
+        response: { decision: secondDecision },
+      }),
+      expect.objectContaining({ decision: "cancel" }),
+    ]);
+    expect(intent.body).toContain("Persistent prefixes:");
+    expect(intent.body).toContain(
+      ["Always Allow Prefix 1:", "```shell", "pnpm test", "```"].join("\n"),
+    );
+    expect(intent.body).toContain(
+      ["Always Allow Prefix 2:", "```shell", "pnpm lint", "```"].join("\n"),
+    );
+  });
+
+  it("preserves a free-form ACP persistent label when its scope cannot be extracted", () => {
+    const intent = buildApprovalIntent({
+      id: "approval-acp-prefix",
+      createdAt: 1000,
+      request: {
+        method: "item/commandExecution/requestApproval",
+        params: {
+          threadId: "thread-1",
+          requestId: "request-acp-prefix",
+          prompt: "Run npm metadata lookup?",
+          acpPermissionOptions: [
+            {
+              optionId: "allow-always-command",
+              name: "Always allow npm view",
+              kind: "allow_always",
+            },
+          ],
+        },
+      },
+    });
+
+    expect(intent.decisions).toEqual([
+      expect.objectContaining({
+        decision: "accept_with_execpolicy_amendment",
+        label: "Always allow npm view",
+        response: { decision: "allow-always-command" },
+      }),
+      expect.objectContaining({ decision: "cancel" }),
+    ]);
+    expect(intent.decisions[0]).not.toHaveProperty("description");
+    expect(intent.body).not.toContain("Persistent prefix:");
   });
 
   it("renders file-change approval context without a shell command", () => {

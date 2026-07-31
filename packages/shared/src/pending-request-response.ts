@@ -566,7 +566,7 @@ function actionFromEntry(
       id: `approval:accept_with_execpolicy_amendment:${index}`,
       label: label ?? execpolicyLabel(execpolicyPayload),
       responseDecision: entry,
-      style: "primary",
+      style: "secondary",
     });
   }
 
@@ -814,12 +814,12 @@ function defaultLabel(
 function defaultStyle(decision: PendingRequestActionDecision): PendingRequestActionStyle {
   switch (decision) {
     case "accept":
-    case "accept_with_execpolicy_amendment":
     case "apply_network_policy_amendment":
       return "primary";
     case "decline":
       return "danger";
     case "accept_for_session":
+    case "accept_with_execpolicy_amendment":
     case "cancel":
       return "secondary";
   }

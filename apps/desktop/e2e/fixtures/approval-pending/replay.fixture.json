@@ -129,10 +129,27 @@
         "params": {
           "threadId": "thread-approval-pending",
           "turnId": "turn-approval-2",
-          "itemId": "call-npm-view-dive",
+          "itemId": "call-read-only-validation",
           "requestId": "approval-request-1",
-          "reason": "Do you want to allow network access so I can query npm metadata for the `dive` package?",
-          "command": "/bin/zsh -lc 'npm view dive'"
+          "reason": "Do you want to allow a read-only validation command outside the sandbox?",
+          "command": "/opt/homebrew/bin/python3.13 -m unittest scripts.github_actions.tests.test_spin_scala_environments scripts.github_actions.tests.test_spin_scala_metadata scripts.github_actions.tests.test_ci_config_contract scripts.github_actions.tests.test_classify_changes",
+          "availableDecisions": [
+            "accept",
+            {
+              "acceptWithExecpolicyAmendment": {
+                "execpolicy_amendment": [
+                  "/opt/homebrew/bin/python3.13",
+                  "-m",
+                  "unittest",
+                  "scripts.github_actions.tests.test_spin_scala_environments",
+                  "scripts.github_actions.tests.test_spin_scala_metadata",
+                  "scripts.github_actions.tests.test_ci_config_contract",
+                  "scripts.github_actions.tests.test_classify_changes"
+                ]
+              }
+            },
+            "cancel"
+          ]
         }
       }
     },
