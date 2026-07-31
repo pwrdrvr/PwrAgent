@@ -5859,18 +5859,6 @@ function sanitizeAttachmentFileName(value: string): string {
   return sanitized && sanitized !== "." && sanitized !== ".." ? sanitized : "attachment";
 }
 
-function formatByteSize(bytes: number): string {
-  if (bytes < 1024) {
-    return `${bytes} bytes`;
-  }
-  const kib = bytes / 1024;
-  if (kib < 1024) {
-    return `${kib.toFixed(kib >= 10 ? 0 : 1)} KB`;
-  }
-  const mib = kib / 1024;
-  return `${mib.toFixed(mib >= 10 ? 0 : 1)} MB`;
-}
-
 function buildTurnStartPayload(params: {
   threadId: string;
   input: CodexUserInput[];
