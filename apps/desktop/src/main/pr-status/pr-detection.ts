@@ -38,6 +38,7 @@ export async function detectPullRequestsForThread(params: {
   fetcher: GithubPrFetcher;
   branch: string;
   directoryPaths: string[];
+  allowPrimedBranchLookup?: boolean;
 }): Promise<PrSummary[]> {
   const branch = params.branch.trim();
   if (!branch || params.directoryPaths.length === 0) {
@@ -55,7 +56,13 @@ export async function detectPullRequestsForThread(params: {
       const prsByBranch = await Promise.all(
         branches.map((lookupBranch) =>
           params.fetcher
-            .fetchAllPullRequestsForBranch({ cwd, branch: lookupBranch })
+            .fetchAllPullRequestsForBranch({
+              cwd,
+              branch: lookupBranch,
+              ...(params.allowPrimedBranchLookup === undefined
+                ? {}
+                : { allowPrimed: params.allowPrimedBranchLookup }),
+            })
             .catch(() => []),
         ),
       );

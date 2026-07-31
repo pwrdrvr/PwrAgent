@@ -755,6 +755,20 @@ function prLogIds(prs: PrSummary[]): string[] {
   return prs.map((pr) => getPrStatusKey(pr));
 }
 
+function prLogStatuses(prs: PrSummary[]): Record<string, unknown>[] {
+  return prs.map((pr) => {
+    const normalized = normalizePrSummary(pr);
+    return {
+      prKey: getPrStatusKey(normalized),
+      checkState: normalized.checkState,
+      lifecycleState: normalized.lifecycleState,
+      mergeState: normalized.mergeState,
+      reviewState: normalized.reviewState,
+      commitCount: normalized.commitShas?.length ?? 0,
+    };
+  });
+}
+
 function userPrRefreshLogPayload(params: {
   backend: AppServerBackendKind;
   branch: string;
@@ -779,6 +793,7 @@ function userPrRefreshLogPayload(params: {
     lookupCacheHit: params.lookupCacheHit,
     lookupKey: params.lookupKey,
     previousPrIds: prLogIds(params.previousPrs ?? []),
+    previousPrStatuses: prLogStatuses(params.previousPrs ?? []),
     provider: params.provider,
     reason: params.reason,
     requestKey: params.requestKey,
@@ -827,6 +842,7 @@ class DesktopAppServerService {
     Map<string, PrLookupSubscriber>
   >();
   private readonly prStatusTokenBucket = new PrStatusTokenBucket();
+  private lastPrObservationTimestamp = 0;
   private prStatusRegistryLoaded = false;
   private prLookupRegistryLoaded = false;
   private prGraphqlClient: GithubGraphqlPrClient | undefined;
@@ -2258,7 +2274,11 @@ class DesktopAppServerService {
       existing?.prs ?? [],
       existing?.detachedPrs ?? [],
     );
-    this.rememberPrStatuses(persistedPrs, existing?.prsFetchedAt ?? 0);
+    this.rememberPrStatuses(
+      persistedPrs,
+      existing?.prsFetchedAt ?? 0,
+      "thread-overlay",
+    );
     const existingPrs = this.canonicalizePrs(persistedPrs);
     const branch = request.branch.trim();
     const lookupKey = getPullRequestLookupKey(request);
@@ -2433,12 +2453,18 @@ class DesktopAppServerService {
     lookupDirectoryPaths: string[];
     previousPrs: PrSummary[];
   }): Promise<{ prs: PrSummary[]; fetchedAt: number }> {
+    // This timestamp is an observation-order token. Capture it before the
+    // network request so an older slow response cannot outrank a newer one.
+    const fetchedAt = this.nextPrObservationTimestamp();
+    const trigger = params.request.trigger ?? "scheduled";
     const prs = (await detectPullRequestsForThread({
       fetcher: this.getPrFetcher(),
       branch: params.request.branch.trim(),
       directoryPaths: params.request.directoryPaths,
+      ...(trigger === "user" || trigger === "post-turn"
+        ? { allowPrimedBranchLookup: false }
+        : {}),
     })).map(normalizePrSummary);
-    const fetchedAt = Date.now();
     const retainedPrs = await this.fetchRetainedNonTerminalPullRequests({
       prs: this.getPullRequestLookupSubscriberPreviousPrs({
         lookupKey: params.lookupKey,
@@ -2448,7 +2474,11 @@ class DesktopAppServerService {
       cwd: params.lookupDirectoryPaths[0] ?? params.request.directoryPaths[0],
     });
     const statusPrs = dedupePrsByStatusKey([...prs, ...retainedPrs]);
-    const changedStatusPrs = this.rememberPrStatuses(statusPrs, fetchedAt);
+    const changedStatusPrs = this.rememberPrStatuses(
+      statusPrs,
+      fetchedAt,
+      `thread-lookup:${trigger}`,
+    );
     await this.writePrStatusesToCache(statusPrs, fetchedAt);
     await this.publishPullRequestStatusUpdates({
       backend: params.backend,
@@ -2610,6 +2640,7 @@ class DesktopAppServerService {
           fetchedAt,
         });
         if (trigger === "user") {
+          const completedAt = Date.now();
           logDebug("threadPullRequestsRefresh:background-complete", {
             ...userPrRefreshLogPayload({
               backend: params.backend,
@@ -2625,6 +2656,9 @@ class DesktopAppServerService {
             changedThreadCount: publishResult.changedThreadCount,
             fetchedAt,
             fetchedPrIds: prLogIds(prs),
+            fetchedPrStatuses: prLogStatuses(prs),
+            completedAt,
+            durationMs: Math.max(0, completedAt - fetchedAt),
             subscriberCount: publishResult.subscriberCount,
           });
         }
@@ -2803,13 +2837,27 @@ class DesktopAppServerService {
     return { refreshKey: lookupKey };
   }
 
-  private rememberPrStatuses(prs: PrSummary[], fetchedAt: number): PrSummary[] {
+  private rememberPrStatuses(
+    prs: PrSummary[],
+    fetchedAt: number,
+    source: string,
+  ): PrSummary[] {
     const changedPrs: PrSummary[] = [];
     const transitions: PrStatusTransition[] = [];
     for (const pr of prs.map(normalizePrSummary)) {
       const key = getPrStatusKey(pr);
       const current = this.prStatusRegistry.get(key);
       if (current && current.fetchedAt > fetchedAt) {
+        if (source === "background-poll" || source.startsWith("thread-lookup:")) {
+          appServerLog.info("pr status observation ignored", {
+            prKey: key,
+            source,
+            observedAt: fetchedAt,
+            currentObservedAt: current.fetchedAt,
+            observedStatus: prLogStatuses([pr])[0],
+            currentStatus: prLogStatuses([current.pr])[0],
+          });
+        }
         continue;
       }
       if (!current || !prSummariesEqual([current.pr], [pr])) {
@@ -2830,9 +2878,18 @@ class DesktopAppServerService {
       });
     }
     if (transitions.length > 0) {
-      this.emitPrStatusTransitions(transitions);
+      this.emitPrStatusTransitions(transitions, { observedAt: fetchedAt, source });
     }
     return changedPrs;
+  }
+
+  private nextPrObservationTimestamp(): number {
+    const observedAt = Math.max(
+      Date.now(),
+      this.lastPrObservationTimestamp + 1,
+    );
+    this.lastPrObservationTimestamp = observedAt;
+    return observedAt;
   }
 
   /**
@@ -2848,11 +2905,17 @@ class DesktopAppServerService {
     };
   }
 
-  private emitPrStatusTransitions(transitions: PrStatusTransition[]): void {
+  private emitPrStatusTransitions(
+    transitions: PrStatusTransition[],
+    observation: { observedAt: number; source: string },
+  ): void {
     for (const transition of transitions) {
-      appServerLog.debug(
+      appServerLog.info(
         "pr status transition",
-        summarizePrStatusTransition(transition),
+        {
+          ...summarizePrStatusTransition(transition),
+          ...observation,
+        },
       );
       for (const listener of this.prStatusTransitionListeners) {
         try {
@@ -2923,7 +2986,7 @@ class DesktopAppServerService {
     this.prStatusRegistryLoaded = true;
     const entries = await this.getOverlayStore().readPrStatusCache();
     for (const entry of Object.values(entries)) {
-      this.rememberPrStatuses([entry.pr], entry.fetchedAt);
+      this.rememberPrStatuses([entry.pr], entry.fetchedAt, "pr-status-cache");
     }
   }
 
@@ -2935,7 +2998,7 @@ class DesktopAppServerService {
     const entries = await this.getOverlayStore().readPrLookupCache();
     for (const entry of Object.values(entries)) {
       this.rememberPrLookup(entry);
-      this.rememberPrStatuses(entry.prs, entry.fetchedAt);
+      this.rememberPrStatuses(entry.prs, entry.fetchedAt, "pr-lookup-cache");
     }
   }
 
@@ -2994,7 +3057,7 @@ class DesktopAppServerService {
       if (!thread.prs?.length) {
         continue;
       }
-      this.rememberPrStatuses(thread.prs, 0);
+      this.rememberPrStatuses(thread.prs, 0, "navigation-overlay");
     }
   }
 
@@ -3171,6 +3234,7 @@ class DesktopAppServerService {
       tryTakeToken: () => this.prStatusTokenBucket.tryTake(),
       fetchPullRequests: async (refs) =>
         await this.getPrGraphqlClient().fetchPullRequests(refs),
+      getObservationTimestamp: () => this.nextPrObservationTimestamp(),
       applyResults: async (prs, fetchedAt) =>
         await this.applyPolledPrStatuses(prs, fetchedAt),
     });
@@ -3429,7 +3493,7 @@ class DesktopAppServerService {
       return commitShas.length > 0 ? { ...pr, commitShas } : pr;
     });
 
-    const changed = this.rememberPrStatuses(merged, fetchedAt);
+    const changed = this.rememberPrStatuses(merged, fetchedAt, "background-poll");
     if (changed.length === 0) {
       return [];
     }
@@ -4192,6 +4256,7 @@ class DesktopAppServerService {
     this.pendingThreadPullRequestRefreshes.clear();
     this.pendingEditCommitResolves.clear();
     this.prStatusRegistry.clear();
+    this.lastPrObservationTimestamp = 0;
     this.prLookupRegistry.clear();
     this.pendingPrLookupRefreshes.clear();
     this.prLookupSubscribers.clear();

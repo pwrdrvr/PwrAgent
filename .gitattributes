@@ -6,6 +6,10 @@
 # for the listed globs.
 * text=auto eol=lf
 
+# This source historically used a literal NUL as an in-memory key separator.
+# Keep its cleanup and future changes reviewable as normal TypeScript diffs.
+apps/desktop/src/main/pr-status/github-pr-fetcher.ts text eol=lf diff
+
 # Binary asset handling.
 #
 # Tag image / icon / packaging artifacts as binary so git doesn't

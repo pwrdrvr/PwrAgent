@@ -292,6 +292,27 @@ describe("detectPullRequestsForThread", () => {
     });
   });
 
+  it("forwards authoritative lookup intent so user refreshes bypass discovery primes", async () => {
+    const branch = "fix/authoritative-pr-refresh";
+    const repo = await createRepoWithBranch(branch);
+    const fetcher = {
+      fetchAllPullRequestsForBranch: vi.fn(async () => []),
+    } as unknown as GithubPrFetcher;
+
+    await detectPullRequestsForThread({
+      fetcher,
+      branch,
+      directoryPaths: [repo],
+      allowPrimedBranchLookup: false,
+    });
+
+    expect(fetcher.fetchAllPullRequestsForBranch).toHaveBeenCalledWith({
+      cwd: repo,
+      branch,
+      allowPrimed: false,
+    });
+  });
+
   it("lets named-branch lookups degrade through the fetcher for invalid directories", async () => {
     const staleDirectory = await createNonGitDirectory();
     const fetcher = {
