@@ -197,7 +197,7 @@ async function createThreadTitleRevealFixture(): Promise<{
   };
 }
 
-test("thread title reveals a linked child hidden by collapsed directory sections", async () => {
+async function launchThreadTitleRevealApp() {
   const fixture = await createThreadTitleRevealFixture();
   const app = await launchElectronApp({
     fixturePath: fixture.fixturePath,
@@ -226,6 +226,11 @@ test("thread title reveals a linked child hidden by collapsed directory sections
       }
     },
   });
+  return { app, fixture };
+}
+
+test("thread title reveals a linked child hidden by collapsed directory sections", async () => {
+  const { app, fixture } = await launchThreadTitleRevealApp();
 
   try {
     const threadBrowser = app.window.getByRole("region", {
@@ -306,6 +311,101 @@ test("thread title reveals a linked child hidden by collapsed directory sections
       .filter({ hasText: "Hidden linked child thread" });
     await expect(selectedChild).toBeVisible();
 
+    const scrollRegion = threadBrowser.locator(".sidebar__scroll-region");
+    const [childBox, scrollBox] = await Promise.all([
+      selectedChild.boundingBox(),
+      scrollRegion.boundingBox(),
+    ]);
+    expect(childBox).not.toBeNull();
+    expect(scrollBox).not.toBeNull();
+    expect(childBox!.y).toBeGreaterThanOrEqual(scrollBox!.y);
+    expect(childBox!.y + childBox!.height).toBeLessThanOrEqual(
+      scrollBox!.y + scrollBox!.height + GEOMETRY_TOLERANCE_PX,
+    );
+  } finally {
+    await app.close();
+    await fixture.cleanup();
+  }
+});
+
+test("quick jump reveals a hidden child before restoring a hidden sidebar", async () => {
+  const { app, fixture } = await launchThreadTitleRevealApp();
+
+  try {
+    const sidebar = app.window.getByRole("complementary", { name: "Threads" });
+    const threadBrowser = app.window.getByRole("region", {
+      name: "Thread browser",
+    });
+    const anchorShell = threadBrowser
+      .locator(".thread-row-shell")
+      .filter({ hasText: "Pinned anchor thread" });
+    await anchorShell.hover();
+    await anchorShell.getByRole("button", { name: "Open thread actions" }).click();
+    await app.window.getByRole("menuitem", { name: "Pin Thread" }).click();
+
+    await threadBrowser
+      .getByRole("button", {
+        name: "Parent thread with child link",
+        exact: true,
+      })
+      .click();
+    await threadBrowser.getByRole("tab", { name: "Directories" }).click();
+
+    const directorySummary = threadBrowser
+      .locator(".directory-row__summary")
+      .filter({ hasText: "RevealFixture" });
+    const hideDirectoryThreads = threadBrowser.getByRole("button", {
+      name: "Hide directory threads for RevealFixture",
+    });
+    const collapseSubthreads = threadBrowser.getByRole("button", {
+      name: "Collapse sub-threads for Parent thread with child link",
+    });
+    await collapseSubthreads.click();
+    await hideDirectoryThreads.click();
+    await directorySummary.click();
+    await expect(directorySummary).toHaveAttribute("aria-expanded", "false");
+
+    await app.window.getByRole("button", { name: "Hide sidebar" }).click();
+    await expect(sidebar).toBeHidden();
+    await app.window.keyboard.press(
+      process.platform === "darwin" ? "Meta+K" : "Control+K",
+    );
+
+    const jumpDialog = app.window.getByRole("dialog", { name: "Jump to thread" });
+    await expect(jumpDialog).toBeVisible();
+    await jumpDialog
+      .getByRole("textbox", { name: "Jump to thread" })
+      .fill("Hidden linked child thread");
+    await jumpDialog
+      .getByRole("button", { name: /Hidden linked child thread/ })
+      .click();
+
+    await expect(
+      app.window.getByRole("heading", {
+        level: 2,
+        name: "Hidden linked child thread",
+      }),
+    ).toBeVisible();
+    await expect(sidebar).toBeHidden();
+
+    await app.window.getByRole("button", { name: "Show sidebar" }).click();
+    await expect(sidebar).toBeVisible();
+    await expect(directorySummary).toHaveAttribute("aria-expanded", "true");
+    await expect(
+      threadBrowser.getByRole("button", {
+        name: "Hide directory threads for RevealFixture",
+      }),
+    ).toBeVisible();
+    await expect(
+      threadBrowser.getByRole("button", {
+        name: "Collapse sub-threads for Parent thread with child link",
+      }),
+    ).toHaveAttribute("aria-expanded", "true");
+
+    const selectedChild = threadBrowser
+      .locator(".thread-row.is-selected")
+      .filter({ hasText: "Hidden linked child thread" });
+    await expect(selectedChild).toBeVisible();
     const scrollRegion = threadBrowser.locator(".sidebar__scroll-region");
     const [childBox, scrollBox] = await Promise.all([
       selectedChild.boundingBox(),

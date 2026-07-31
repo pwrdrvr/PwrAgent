@@ -95,6 +95,7 @@ type SidebarProps = {
   composerSourceThreadKey?: string;
   /** Incremented when the thread title asks the active lens to reveal its row. */
   revealSelectedThreadRequest?: number;
+  onRevealSelectedThreadComplete?: (request: number) => void;
   selectedItemKey?: string;
   thinkingThreadKeys?: Record<string, boolean>;
   threads: NavigationThreadSummary[];
@@ -1023,6 +1024,9 @@ export function Sidebar(props: SidebarProps) {
               onOpenThreadContextMenu={openThreadContextMenu}
               onOpenLaunchpad={props.onOpenLaunchpad}
               onPrefetchPullRequests={props.onPrefetchPullRequests}
+              onRevealSelectedThreadComplete={
+                props.onRevealSelectedThreadComplete
+              }
               onDetachPullRequest={detachPullRequest}
               onReorderThreadPins={props.onReorderThreadPins}
               onUpdateSubthreadOrder={props.onUpdateSubthreadOrder}
@@ -1050,12 +1054,16 @@ export function Sidebar(props: SidebarProps) {
                 inputRequestThreadKeys={props.inputRequestThreadKeys}
                 queuedMessageThreadKeys={props.queuedMessageThreadKeys}
                 composerSourceThreadKey={props.composerSourceThreadKey}
+                revealSelectedThreadRequest={revealSelectedThreadRequest}
                 selectedThreadKey={props.selectedItemKey}
                 thinkingThreadKeys={props.thinkingThreadKeys}
                 threads={visibleThreads}
                 onOpenThreadContextMenu={openThreadContextMenu}
                 onOpenPullRequestContextMenu={openPullRequestContextMenu}
                 onPrefetchPullRequests={props.onPrefetchPullRequests}
+                onRevealSelectedThreadComplete={
+                  props.onRevealSelectedThreadComplete
+                }
                 onDetachPullRequest={detachPullRequest}
                 onReorderThreadPins={props.onReorderThreadPins}
                 onUpdateSubthreadOrder={props.onUpdateSubthreadOrder}

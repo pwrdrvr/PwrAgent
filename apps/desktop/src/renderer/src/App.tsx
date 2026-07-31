@@ -1303,6 +1303,7 @@ function DesktopAppShell(props: {
           queuedMessageThreadKeys={queuedMessageThreadKeys}
           composerSourceThreadKey={navigation.composerSourceThreadKey}
           revealSelectedThreadRequest={revealSelectedThreadRequest}
+          onRevealSelectedThreadComplete={threadJump.completePeekRestore}
           selectedItemKey={navigation.selectedItemKey}
           thinkingThreadKeys={session.thinkingThreadKeys}
           threads={navigation.threads}
@@ -1363,12 +1364,15 @@ function DesktopAppShell(props: {
             navigation.selectThread(thread);
             // Reveal on the next frame, once the new selection has rendered.
             // Do it even when the sidebar is only peeked open (⌘K over a hidden
-            // sidebar) — the popup is closing and taking the sidebar with it,
-            // but the scroll offset survives, so bringing the sidebar back later
-            // shows the thread we jumped to instead of stranding it off-screen.
-            // That reveal must be instant: an animated scroll wouldn't finish
-            // before the sidebar hides.
+            // sidebar). Hidden rows reveal asynchronously as their collapsed
+            // containers reopen, so keep a peek laid out until ThreadRow reports
+            // that the selected row mounted and scrolled. The offset survives
+            // restoring the hidden preference, and an instant scroll avoids
+            // dismissing the peek partway through an animation.
             const instant = threadJump.isPeeking();
+            if (instant) {
+              threadJump.deferPeekRestore();
+            }
             requestAnimationFrame(() => revealSelectedThreadInList({ instant }));
           }}
           onArchiveThread={navigation.archiveThread}

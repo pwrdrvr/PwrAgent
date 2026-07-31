@@ -94,6 +94,25 @@ describe("useThreadJump", () => {
     expect(setSidebarHidden).toHaveBeenCalledWith(true);
   });
 
+  it("keeps a peek open until an asynchronous selected-row reveal completes", () => {
+    const { hook, setSidebarHidden, sidebarHidden } = renderThreadJump(true);
+    act(() => hook.result.current.openJump());
+    setSidebarHidden.mockClear();
+
+    act(() => hook.result.current.deferPeekRestore());
+    act(() => hook.result.current.closeJump());
+    flushFrame();
+
+    expect(hook.result.current.open).toBe(false);
+    expect(sidebarHidden()).toBe(false);
+    expect(setSidebarHidden).not.toHaveBeenCalled();
+
+    act(() => hook.result.current.completePeekRestore());
+
+    expect(setSidebarHidden).toHaveBeenCalledWith(true);
+    expect(sidebarHidden()).toBe(true);
+  });
+
   it("reports the peek to callers before the popup's close clears it", () => {
     // App reads isPeeking() inside onJumpToThread to choose an instant scroll —
     // and the popup calls onJumpToThread BEFORE onClose, so the peek must still

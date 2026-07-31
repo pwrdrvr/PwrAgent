@@ -27,6 +27,7 @@ type RecentsListProps = {
   inputRequestThreadKeys?: Record<string, boolean>;
   queuedMessageThreadKeys?: Record<string, ThreadQueuedMessageState>;
   composerSourceThreadKey?: string;
+  revealSelectedThreadRequest?: number;
   selectedThreadKey?: string;
   thinkingThreadKeys?: Record<string, boolean>;
   threads: NavigationThreadSummary[];
@@ -54,6 +55,7 @@ type RecentsListProps = {
     collapsed: boolean,
   ) => Promise<void>;
   onSelectThread: (thread: NavigationThreadSummary) => void;
+  onRevealSelectedThreadComplete?: (request: number) => void;
   onSetReaction?: (
     thread: NavigationThreadSummary,
     emoji: string,
@@ -157,6 +159,7 @@ export function RecentsList(props: RecentsListProps) {
               draggable={children.length > 1 && Boolean(props.onUpdateSubthreadOrder)}
               includeLinkedDirectories
               nested
+              revealSelectedThreadRequest={props.revealSelectedThreadRequest}
               selectedThreadKey={props.selectedThreadKey}
               thinkingThreadKeys={props.thinkingThreadKeys}
               thread={child}
@@ -220,6 +223,9 @@ export function RecentsList(props: RecentsListProps) {
               onOpenPullRequestContextMenu={props.onOpenPullRequestContextMenu}
               onDetachPullRequest={props.onDetachPullRequest}
               onPrefetchPullRequests={props.onPrefetchPullRequests}
+              onRevealSelectedThreadComplete={
+                props.onRevealSelectedThreadComplete
+              }
               onSelectThread={props.onSelectThread}
               onSetReaction={props.onSetReaction}
               onUnbindMessagingBinding={props.onUnbindMessagingBinding}
@@ -249,6 +255,7 @@ export function RecentsList(props: RecentsListProps) {
           }
           draggable={pinned || pinnedThreads.length > 0}
           includeLinkedDirectories
+          revealSelectedThreadRequest={props.revealSelectedThreadRequest}
           selectedThreadKey={props.selectedThreadKey}
           subthreadCount={children.length}
           subthreadsCollapsed={thread.subthreadsCollapsed === true}
@@ -333,6 +340,7 @@ export function RecentsList(props: RecentsListProps) {
           onOpenPullRequestContextMenu={props.onOpenPullRequestContextMenu}
           onDetachPullRequest={props.onDetachPullRequest}
           onPrefetchPullRequests={props.onPrefetchPullRequests}
+          onRevealSelectedThreadComplete={props.onRevealSelectedThreadComplete}
           onSelectThread={props.onSelectThread}
           onSetReaction={props.onSetReaction}
           onUnbindMessagingBinding={props.onUnbindMessagingBinding}

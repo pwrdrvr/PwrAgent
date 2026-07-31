@@ -64,6 +64,7 @@ type DirectoriesListProps = {
     directory: NavigationDirectorySummary,
     preferredBackend?: AppServerBackendKind
   ) => Promise<void>;
+  onRevealSelectedThreadComplete?: (request: number) => void;
   onSelectThread: (thread: NavigationThreadSummary) => void;
   onPrefetchPullRequests?: (thread: NavigationThreadSummary) => void;
   onDetachPullRequest?: (
@@ -640,6 +641,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
               includeLinkedDirectories
               linkedDirectoryMode="kind"
               nested
+              revealSelectedThreadRequest={props.revealSelectedThreadRequest}
               selectedThreadKey={props.selectedItemKey}
               thinkingThreadKeys={props.thinkingThreadKeys}
               thread={child}
@@ -708,6 +710,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
               onOpenPullRequestContextMenu={props.onOpenPullRequestContextMenu}
               onDetachPullRequest={props.onDetachPullRequest}
               onPrefetchPullRequests={props.onPrefetchPullRequests}
+              onRevealSelectedThreadComplete={
+                props.onRevealSelectedThreadComplete
+              }
               onSelectThread={props.onSelectThread}
               onSetReaction={props.onSetReaction}
               onUnbindMessagingBinding={props.onUnbindMessagingBinding}
@@ -770,6 +775,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
             draggable={Boolean(props.onReorderThreadPins)}
             includeLinkedDirectories
             linkedDirectoryMode="kind"
+            revealSelectedThreadRequest={props.revealSelectedThreadRequest}
             selectedThreadKey={props.selectedItemKey}
             subthreadCount={subthreadCount}
             subthreadsCollapsed={thread.subthreadsCollapsed === true}
@@ -798,6 +804,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
             onOpenPullRequestContextMenu={props.onOpenPullRequestContextMenu}
             onDetachPullRequest={props.onDetachPullRequest}
             onPrefetchPullRequests={props.onPrefetchPullRequests}
+            onRevealSelectedThreadComplete={props.onRevealSelectedThreadComplete}
             onSelectThread={props.onSelectThread}
             onSetReaction={props.onSetReaction}
             onUnbindMessagingBinding={props.onUnbindMessagingBinding}
@@ -1082,6 +1089,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
                           draggable={Boolean(props.onReorderThreadPins)}
                           includeLinkedDirectories
                           linkedDirectoryMode="kind"
+                          revealSelectedThreadRequest={
+                            props.revealSelectedThreadRequest
+                          }
 	                          selectedThreadKey={props.selectedItemKey}
                               subthreadCount={subthreadCount}
                               subthreadsCollapsed={thread.subthreadsCollapsed === true}
@@ -1159,6 +1169,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
                           onOpenPullRequestContextMenu={props.onOpenPullRequestContextMenu}
                           onDetachPullRequest={props.onDetachPullRequest}
                           onPrefetchPullRequests={props.onPrefetchPullRequests}
+                          onRevealSelectedThreadComplete={
+                            props.onRevealSelectedThreadComplete
+                          }
                           onSelectThread={props.onSelectThread}
                           onSetReaction={props.onSetReaction}
 	                          onUnbindMessagingBinding={props.onUnbindMessagingBinding}
