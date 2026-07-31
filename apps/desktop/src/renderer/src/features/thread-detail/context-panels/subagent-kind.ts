@@ -44,3 +44,18 @@ export function subAgentUsageLabel(subAgent: ThreadSubAgentSummary): string {
   }
   return "Monitor";
 }
+
+export function subAgentPricingUsageTitle(
+  subAgent: ThreadSubAgentSummary,
+): string {
+  if (isSystemTitleHelperSubAgent(subAgent)) {
+    return "Thread naming";
+  }
+  if (isCodexNativeSubAgent(subAgent)) {
+    return "Codex sub-agent usage";
+  }
+  if (subAgent.monitorId.startsWith("review:")) {
+    return "Review usage";
+  }
+  return "Monitor usage";
+}

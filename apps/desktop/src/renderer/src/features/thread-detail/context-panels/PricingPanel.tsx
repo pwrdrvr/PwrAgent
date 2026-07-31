@@ -19,6 +19,7 @@ import {
 } from "../../../lib/format-duration";
 import { formatTimestamp } from "./context-rail-shared";
 import { formatTokenCount } from "./subagent-format";
+import { subAgentPricingUsageTitle } from "./subagent-kind";
 
 type PricingPanelProps = {
   activeTurnId?: string;
@@ -317,7 +318,7 @@ export function PricingPanel(props: PricingPanelProps) {
               >
                 <div className="pricing-usage-row__header">
                   <p className="rail-card__title">
-                    {formatUsageLineTitle(line)}
+                    {formatUsageLineTitle(line, subAgent)}
                   </p>
                   {isActive ? (
                     <span className="rail-chip pricing-usage-row__live">
@@ -1155,9 +1156,14 @@ function hasSelectedEstimateUnit(displayOptions: PricingDisplayOptions): boolean
   return displayOptions.usd || displayOptions.codexCredits;
 }
 
-function formatUsageLineTitle(line: PricingUsageLine): string {
+function formatUsageLineTitle(
+  line: PricingUsageLine,
+  subAgent?: ThreadSubAgentSummary,
+): string {
   if (line.scope === "monitor") {
-    return "Sub-agent usage";
+    return subAgent
+      ? subAgentPricingUsageTitle(subAgent)
+      : "Sub-agent usage";
   }
   if (isForkBaselineLine(line)) {
     return "Fork point";

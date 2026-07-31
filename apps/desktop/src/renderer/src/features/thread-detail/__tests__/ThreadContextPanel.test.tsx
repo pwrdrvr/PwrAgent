@@ -1908,6 +1908,65 @@ describe("ThreadContextPanel", () => {
     });
   }
 
+  it("labels known sub-agent pricing rows by purpose", () => {
+    const subAgents = [
+      {
+        monitorId: "system:title-helper:codex:thread-1",
+        task: "Name this thread",
+        status: "success" as const,
+        createdAt: 1_800_000_000_000,
+        updatedAt: 1_800_000_000_000,
+      },
+      {
+        monitorId: "monitor-1",
+        task: "Watch CI",
+        status: "success" as const,
+        createdAt: 1_800_000_000_000,
+        updatedAt: 1_800_000_000_000,
+      },
+      {
+        monitorId: "review:turn-1",
+        task: "Review changes",
+        status: "success" as const,
+        createdAt: 1_800_000_000_000,
+        updatedAt: 1_800_000_000_000,
+      },
+      {
+        monitorId: "codex-native:thread-2",
+        task: "Inspect implementation",
+        status: "success" as const,
+        createdAt: 1_800_000_000_000,
+        updatedAt: 1_800_000_000_000,
+      },
+    ];
+    const pricingLines = subAgents.map((subAgent, index) =>
+      buildMonitorLine({
+        sourceItemId: subAgent.monitorId,
+        usageLineId: `monitor-line-${index}`,
+      })
+    );
+
+    renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      thread: {
+        ...baseThread,
+        subAgents,
+      },
+      pricing: {
+        lines: pricingLines,
+        summaries: [],
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    expect(screen.getByText("Thread naming")).toBeInTheDocument();
+    expect(screen.getByText("Monitor usage")).toBeInTheDocument();
+    expect(screen.getByText("Review usage")).toBeInTheDocument();
+    expect(screen.getByText("Codex sub-agent usage")).toBeInTheDocument();
+    expect(screen.queryByText("Sub-agent usage")).not.toBeInTheDocument();
+  });
+
   it("marks multiple concurrently-running sub-agents live", () => {
     const startedAt = 1_800_000_000_000;
     vi.useFakeTimers();
