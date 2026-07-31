@@ -440,6 +440,39 @@ function createOverlayStoreMock(params?: {
       overlays.set(key, next);
       return { overlay: next, persisted: true };
     },
+    upsertManagedReviewEntry: async ({
+      backend,
+      threadId,
+      entry,
+    }: {
+      backend: "codex" | "grok";
+      threadId: string;
+      entry: NonNullable<ThreadOverlayState["managedReviewEntries"]>[number];
+    }) => {
+      const key = `${backend}:${threadId}`;
+      const current = overlays.get(key) ?? {
+        backend,
+        threadId,
+        executionMode: "default" as const,
+        extraLinkedDirectories: [],
+      };
+      const existingEntries = current.managedReviewEntries ?? [];
+      const existingIndex = existingEntries.findIndex(
+        (candidate) => candidate.id === entry.id,
+      );
+      const nextEntries = [...existingEntries];
+      if (existingIndex === -1) {
+        nextEntries.push(entry);
+      } else {
+        nextEntries[existingIndex] = entry;
+      }
+      const next = {
+        ...current,
+        managedReviewEntries: nextEntries,
+      } as ThreadOverlayState;
+      overlays.set(key, next);
+      return next;
+    },
     upsertThreadSubAgent: async ({
       backend,
       threadId,
@@ -14655,6 +14688,40 @@ command = "pnpm dev"
       text: expect.stringContaining("against base branch 'main'"),
     });
 
+    const approvalResponse = codexClient.emitRequest({
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "managed-review-child",
+        turnId: "turn-1",
+        itemId: "review-command",
+        requestId: "review-approval",
+        command: "git diff main...HEAD",
+      },
+    } as AppServerPendingRequestNotification);
+    await waitForCondition(() => events.some((event) =>
+      event.notification.method === "item/commandExecution/requestApproval"
+    ));
+    expect(events.find((event) =>
+      event.notification.method === "item/commandExecution/requestApproval"
+    )).toMatchObject({
+      backend: "codex",
+      notification: {
+        params: {
+          threadId: "thread-parent",
+          turnId: "turn-1",
+          requestId: "review-approval",
+        },
+      },
+    });
+    await registry.submitServerRequest({
+      backend: "codex",
+      threadId: "thread-parent",
+      turnId: "turn-1",
+      requestId: "review-approval",
+      response: { decision: "accept" },
+    });
+    await expect(approvalResponse).resolves.toEqual({ decision: "accept" });
+
     await codexClient.emit({
       method: "thread/tokenUsage/updated",
       params: {
@@ -14719,6 +14786,34 @@ command = "pnpm dev"
       outcome: "success",
       status: "success",
     });
+    expect(overlay?.managedReviewEntries).toEqual([
+      expect.objectContaining({
+        id: "managed-review:turn-1:started",
+        displayText: "Review changes against main",
+        turn: expect.objectContaining({
+          id: "turn-1",
+          status: "in_progress",
+        }),
+      }),
+      expect.objectContaining({
+        id: "managed-review:turn-1:result",
+        output: expect.objectContaining({
+          overall_correctness: "patch is correct",
+          overall_explanation: "No blocking findings.",
+        }),
+        turn: expect.objectContaining({
+          id: "turn-1",
+          status: "completed",
+        }),
+      }),
+    ]);
+    const hydratedParent = await registry.readThread({
+      backend: "codex",
+      threadId: "thread-parent",
+    });
+    expect(hydratedParent.replay.entries.filter(
+      (entry) => entry.type === "review",
+    )).toEqual(overlay?.managedReviewEntries);
     const pricing = await overlayStore.readThreadPricing({
       backend: "codex",
       threadId: "thread-parent",
@@ -14805,6 +14900,11 @@ command = "pnpm dev"
       outcome: "failure",
       status: "failed",
     });
+    expect(overlay?.managedReviewEntries).toEqual([
+      expect.objectContaining({
+        id: "managed-review:turn-1:started",
+      }),
+    ]);
 
     await expect.poll(() => codexClient.lastStartTurnParams).toMatchObject({
       threadId: "thread-parent",

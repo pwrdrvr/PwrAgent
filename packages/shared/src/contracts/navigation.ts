@@ -6,6 +6,7 @@ import type {
   AppServerThreadActivityDetail,
   AppServerThreadActivityEntry,
   AppServerThreadImagePart,
+  AppServerThreadReviewEntry,
   AppServerThreadSummary,
   CodexEnvironmentAction,
   CodexEnvironmentExecutionTarget,
@@ -1345,6 +1346,12 @@ export type ThreadOverlayState = {
    * narrower per-request usage payload for the same completed turn.
    */
   immutableUsageActivities?: AppServerThreadActivityEntry[];
+  /**
+   * PwrAgent-managed review markers and successful result artifacts. These
+   * supplement the parent provider transcript because managed review child
+   * threads are intentionally ephemeral.
+   */
+  managedReviewEntries?: AppServerThreadReviewEntry[];
   /** Durable delegated sub-agent/task-monitor summaries for this thread. */
   subAgents?: ThreadSubAgentSummary[];
   /** Durable origin metadata for threads created by an Agent handoff tool. */
@@ -1388,6 +1395,8 @@ export type ThreadOverlayState = {
 export const MAX_PERMISSION_TRANSITION_LOG_ENTRIES = 100;
 
 export const MAX_IMMUTABLE_USAGE_ACTIVITY_ENTRIES = 100;
+
+export const MAX_MANAGED_REVIEW_ENTRIES = 100;
 
 export type ThreadPermissionTransitionStatus =
   | "queued"

@@ -35,6 +35,7 @@ import {
   AGENT_PERSONA_INSTRUCTIONS_LINE_GUIDANCE,
   MAX_MESSAGING_BINDING_TRANSITION_LOG_ENTRIES,
   MAX_IMMUTABLE_USAGE_ACTIVITY_ENTRIES,
+  MAX_MANAGED_REVIEW_ENTRIES,
   MAX_PERMISSION_TRANSITION_LOG_ENTRIES,
   MAX_TURN_FAILURE_LOG_ENTRIES,
   buildPullRequestStatusKey,
@@ -371,6 +372,7 @@ export class SqliteOverlayStore {
             current?.codexEnvironmentRuntime ?? thread.codexEnvironmentRuntime,
           retainedBranchDriftPairs: current?.retainedBranchDriftPairs,
           immutableUsageActivities: current?.immutableUsageActivities,
+          managedReviewEntries: current?.managedReviewEntries,
           subAgents: current?.subAgents,
           handoffOrigin: current?.handoffOrigin,
           lastSeenAt: params.fetchedAt,
@@ -669,6 +671,36 @@ export class SqliteOverlayStore {
     };
     this.putThread(threadKey, nextState);
     return { overlay: nextState, persisted: true };
+  }
+
+  async upsertManagedReviewEntry(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    entry: NonNullable<ThreadOverlayState["managedReviewEntries"]>[number];
+  }): Promise<ThreadOverlayState> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.getThread(threadKey) ?? {
+      backend: params.backend,
+      threadId: params.threadId,
+      executionMode: "default" as const,
+      extraLinkedDirectories: [],
+    };
+    const existingEntries = current.managedReviewEntries ?? [];
+    const existingIndex = existingEntries.findIndex(
+      (entry) => entry.id === params.entry.id,
+    );
+    const nextEntries = [...existingEntries];
+    if (existingIndex === -1) {
+      nextEntries.push(params.entry);
+    } else {
+      nextEntries[existingIndex] = params.entry;
+    }
+    const nextState: ThreadOverlayState = {
+      ...current,
+      managedReviewEntries: nextEntries.slice(-MAX_MANAGED_REVIEW_ENTRIES),
+    };
+    this.putThread(threadKey, nextState);
+    return nextState;
   }
 
   async upsertThreadUsageLine(params: {
@@ -3758,6 +3790,7 @@ export type OverlayStoreLike = Pick<
   | "getThreadOverlayStates"
   | "setAcpWorktreeDirectory"
   | "persistThreadUsageActivity"
+  | "upsertManagedReviewEntry"
   | "upsertThreadUsageLine"
   | "readThreadPricing"
   | "upsertThreadToolInvocation"

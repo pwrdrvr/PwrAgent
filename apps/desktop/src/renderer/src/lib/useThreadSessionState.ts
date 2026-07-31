@@ -152,6 +152,7 @@ type ThreadSessionEntry = {
   pendingStatusText?: string;
   pendingTurnUsage?: TurnUsageAccumulator;
   response?: AppServerReadThreadResponse;
+  staleThinkingRecheckAt?: number;
   thinkingSinceAt?: number;
   viewport?: ThreadViewportState;
 };
@@ -3363,6 +3364,9 @@ export function useThreadSessionState(params: {
             ? current.completionHydrationRetries + 1
             : 0;
           const thinkingReasons = describeThinkingState(current);
+          const now = Date.now();
+          const ownUpdateSettlesAt =
+            current.lastTouchedAt + OWN_UPDATE_IDLE_GRACE_MS;
           const ownUpdateStillSettling =
             current.expectOwnUpdate
             && !targetThread.optimisticActiveTurn
@@ -3372,7 +3376,7 @@ export function useThreadSessionState(params: {
                 entry.turn?.id === current.activeTurnId
                 && isCompletedTurnMetadata(entry.turn)
             )
-            && Date.now() - current.lastTouchedAt < OWN_UPDATE_IDLE_GRACE_MS;
+            && now < ownUpdateSettlesAt;
           const shouldClearStaleThinking =
             readResponseThreadStatus(response) === "idle" &&
             thinkingReasons.length > 0 &&
@@ -3425,6 +3429,9 @@ export function useThreadSessionState(params: {
               ? undefined
               : current.pendingStatusText,
             response: responseWithLoadedHistory,
+            staleThinkingRecheckAt: ownUpdateStillSettling
+              ? ownUpdateSettlesAt
+              : undefined,
           };
         });
       } catch (error) {
@@ -3669,6 +3676,28 @@ export function useThreadSessionState(params: {
 
     void loadLatest(thread);
   }, [initialHistoryLimit, loadLatest, sessions, thread, threadKey, updateSession]);
+
+  useEffect(() => {
+    if (!thread || !threadKey) {
+      return;
+    }
+    const recheckAt = sessions[threadKey]?.staleThinkingRecheckAt;
+    if (typeof recheckAt !== "number") {
+      return;
+    }
+    const timer = setTimeout(() => {
+      updateSession(threadKey, (current) => ({
+        ...current,
+        hydratedUpdatedAt: undefined,
+        lastTouchedAt: Date.now(),
+        staleThinkingRecheckAt: undefined,
+      }));
+      void loadLatest(thread);
+    }, Math.max(0, recheckAt - Date.now()) + 1);
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [loadLatest, sessions, thread, threadKey, updateSession]);
 
   useEffect(() => {
     if (!desktopApi?.onAgentEvent) {
