@@ -24,6 +24,14 @@ export const SLACK_MESSAGE_TEXT_LIMIT = 40_000;
 export const SLACK_SECTION_TEXT_LIMIT = 3_000;
 
 /**
+ * Slack standard-Markdown blocks accept up to 12,000 characters cumulatively
+ * per message. We emit at most one Markdown block per message, so the block
+ * and message limits are the same for this adapter.
+ * Source: Slack Block Kit `markdown` block reference.
+ */
+export const SLACK_MARKDOWN_TEXT_LIMIT = 12_000;
+
+/**
  * Slack messages support up to 50 blocks. Source: Slack Block Kit
  * `blocks` reference.
  */
@@ -40,6 +48,11 @@ export type SlackSectionBlock = {
   type: "section";
   block_id?: string;
   text: SlackTextObject;
+};
+
+export type SlackMarkdownBlock = {
+  type: "markdown";
+  text: string;
 };
 
 export type SlackContextBlock = {
@@ -62,7 +75,11 @@ export type SlackActionsBlock = {
   elements: SlackButtonElement[];
 };
 
-export type SlackBlock = SlackActionsBlock | SlackContextBlock | SlackSectionBlock;
+export type SlackBlock =
+  | SlackActionsBlock
+  | SlackContextBlock
+  | SlackMarkdownBlock
+  | SlackSectionBlock;
 
 export type SlackPostBody = {
   blocks?: SlackBlock[];
@@ -152,16 +169,24 @@ export function buildSlackBlocksForIntent(params: {
   intent: MessagingSurfaceIntent;
   text: string;
 }): SlackBlock[] {
-  const body = clampSlackSectionText(markdownToSlackMrkdwn(params.text));
+  const standardMarkdown = usesSlackStandardMarkdown(params.intent);
+  const body = standardMarkdown
+    ? clampSlackMarkdownText(params.text)
+    : clampSlackSectionText(markdownToSlackMrkdwn(params.text));
   const blocks: SlackBlock[] = body
     ? [
-        {
-          type: "section",
-          text: {
-            type: "mrkdwn",
-            text: body,
-          },
-        },
+        standardMarkdown
+          ? {
+              type: "markdown",
+              text: body,
+            }
+          : {
+              type: "section",
+              text: {
+                type: "mrkdwn",
+                text: body,
+              },
+            },
       ]
     : [];
 
@@ -235,6 +260,32 @@ export function clampSlackSectionText(text: string): string {
     return text;
   }
   return `${text.slice(0, SLACK_SECTION_TEXT_LIMIT - 1)}…`;
+}
+
+export function clampSlackMarkdownText(text: string): string {
+  if (text.length <= SLACK_MARKDOWN_TEXT_LIMIT) {
+    return text;
+  }
+  return `${text.slice(0, SLACK_MARKDOWN_TEXT_LIMIT - 1)}…`;
+}
+
+/**
+ * Assistant content explicitly marked as canonical Markdown can be handed to
+ * Slack's standard-Markdown block. Slack translates that block into native
+ * rich-text/table blocks, preserving GFM tables that legacy `mrkdwn` leaves as
+ * literal pipes. Other surface intents keep their existing `mrkdwn` rendering
+ * because buttons, pickers, and compact status cards already rely on it.
+ */
+export function usesSlackStandardMarkdown(intent: MessagingSurfaceIntent): boolean {
+  if (intent.kind === "stream_update") {
+    return intent.markdown === "markdown";
+  }
+  if (intent.kind === "message") {
+    return intent.parts.some(
+      (part) => part.type === "text" && part.markdown === "markdown",
+    );
+  }
+  return false;
 }
 
 /**

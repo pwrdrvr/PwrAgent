@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { MessagingCapabilityProfile, MessagingSurfaceIntent } from "@pwragent/messaging-interface";
 import {
   buildSlackActionBlocks,
+  buildSlackBlocksForIntent,
   markdownToSlackMrkdwn,
   sanitizeSlackActionId,
   textForSlackIntent,
@@ -38,6 +39,53 @@ describe("Slack formatting", () => {
     ).toBe(
       "Read *this* at <https://example.com?a=1&b=2|PwrAgent> &lt;ok&gt;",
     );
+  });
+
+  it("hands canonical assistant Markdown tables to Slack without translation", () => {
+    const text = [
+      "The Ruby cluster has recovered.",
+      "",
+      "| Signal | Alert period | Current/post-recovery |",
+      "|---|---:|---:|",
+      "| Search rejections | Two sharp increments | [Monitor](https://example.com) is `OK` |",
+      "| Ruby CPU | Hottest node 80% | Hottest node 63% |",
+      "",
+      "No immediate resource adjustment is needed.",
+    ].join("\n");
+    const intent: MessagingSurfaceIntent = {
+      id: "assistant-table",
+      kind: "message",
+      createdAt: 1,
+      role: "assistant",
+      parts: [{ type: "text", text, markdown: "markdown" }],
+    };
+
+    expect(buildSlackBlocksForIntent({ intent, text })).toEqual([
+      {
+        type: "markdown",
+        text,
+      },
+    ]);
+  });
+
+  it("keeps non-Markdown surface text on Slack mrkdwn sections", () => {
+    const intent: MessagingSurfaceIntent = {
+      id: "plain-message",
+      kind: "message",
+      createdAt: 1,
+      role: "assistant",
+      parts: [{ type: "text", text: "Literal **asterisks**", markdown: "plain" }],
+    };
+
+    expect(buildSlackBlocksForIntent({ intent, text: "Literal **asterisks**" })).toEqual([
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: "Literal *asterisks*",
+        },
+      },
+    ]);
   });
 
   it("sanitizes action IDs for Block Kit", () => {
