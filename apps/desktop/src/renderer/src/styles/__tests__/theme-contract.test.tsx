@@ -592,6 +592,14 @@ describe("Tangerine Terminal theme contract", () => {
       css,
       ".composer__autocomplete--directories",
     );
+    const directoryOptionRule = extractRuleBody(
+      css,
+      ".composer__autocomplete--directories .composer__autocomplete-option:not(.composer__autocomplete-option--action)",
+    );
+    const directoryMetaRule = extractRuleBody(
+      css,
+      ".composer__autocomplete--directories .composer__autocomplete-meta",
+    );
 
     expect(autocompleteRule).toContain("border: 1px solid var(--border-strong);");
     expect(autocompleteRule).toContain("background: var(--bg-panel-elevated);");
@@ -600,7 +608,19 @@ describe("Tangerine Terminal theme contract", () => {
     );
     expect(autocompleteRule).not.toContain("background: rgba(10, 10, 10, 0.98);");
     expect(directoryAutocompleteRule).toContain("right: auto;");
-    expect(directoryAutocompleteRule).toContain("width: min(100%, 560px);");
+    expect(directoryAutocompleteRule).toContain("width: min(100%, 440px);");
+    expect(directoryAutocompleteRule).toContain(
+      "border-color: var(--border-subtle);",
+    );
+    expect(directoryAutocompleteRule).toContain(
+      "box-shadow: var(--shadow-popover);",
+    );
+    expect(directoryOptionRule).toContain(
+      "grid-template-columns: minmax(0, 160px) minmax(0, 1fr);",
+    );
+    expect(directoryOptionRule).toContain("min-height: 38px;");
+    expect(directoryMetaRule).toContain("text-align: right;");
+    expect(directoryMetaRule).toContain("white-space: nowrap;");
   });
 
   it("locks composer height contract — compact when empty, grows, capped at 280px", () => {

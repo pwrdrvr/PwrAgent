@@ -16257,11 +16257,72 @@ a.transcript-message__messaging-origin:focus-visible {
   top: calc(100% + 10px);
 }
 
-/* Directory names and paths need room to scan, but stretching this picker
-   across the entire 940px chat column leaves excessive empty space. */
+/* The typed "@" picker mirrors the compact scan pattern of the "+" reference
+   picker: folder + name on the left, path on the same row at right. Keep the
+   autocomplete's keyboard/type-to-filter behavior, but share the reference
+   picker's panel width, density, and accent-focused row treatment. */
 .composer__autocomplete--directories {
   right: auto;
-  width: min(100%, 560px);
+  width: min(100%, 440px);
+  gap: 0;
+  padding: 6px;
+  border-color: var(--border-subtle);
+  box-shadow: var(--shadow-popover);
+}
+
+.composer__autocomplete--directories .composer__autocomplete-option:not(.composer__autocomplete-option--action) {
+  display: grid;
+  grid-template-columns: minmax(0, 160px) minmax(0, 1fr);
+  min-height: 38px;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 6px;
+}
+
+.composer__autocomplete--directories
+  .composer__autocomplete-option:not(.composer__autocomplete-option--action):hover,
+.composer__autocomplete--directories
+  .composer__autocomplete-option:not(.composer__autocomplete-option--action).is-active {
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.composer__autocomplete--directories
+  .composer__autocomplete-option.is-active::before {
+  display: none;
+}
+
+.composer__autocomplete--directories .composer__autocomplete-title {
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.composer__autocomplete--directories .composer__autocomplete-title > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.composer__autocomplete--directories .composer__autocomplete-meta {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer__autocomplete--directories
+  .composer__autocomplete-option--action {
+  min-height: 38px;
+  justify-content: center;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 6px;
 }
 
 .composer__autocomplete-option {
