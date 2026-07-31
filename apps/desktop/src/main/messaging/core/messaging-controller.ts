@@ -1019,6 +1019,7 @@ export class MessagingController {
     }
     if (event.notification.method === "thread/tokenUsage/updated") {
       this.rememberContextUsageSummary(event);
+      return;
     }
     if (event.notification.method === "serverRequest/resolved") {
       await this.handleBackendRequestResolved(event);
@@ -1048,7 +1049,6 @@ export class MessagingController {
       event.notification.method === "thread/executionMode/updated" ||
       event.notification.method === "thread/modelSettings/updated" ||
       event.notification.method === "thread/codexEnvironment/updated" ||
-      event.notification.method === "thread/tokenUsage/updated" ||
       event.notification.method === "thread/parent/set" ||
       event.notification.method === "thread/parent/cleared" ||
       event.notification.method === "thread/subthreadOrder/updated" ||
@@ -9292,18 +9292,48 @@ export class MessagingController {
     event: MessagingInboundEvent,
     binding: MessagingBindingRecord,
   ): Promise<void> {
-    const pendingIntent = await this.options.store.findActivePendingIntentForChannel({
-      actorId: event.actor.platformUserId,
-      channel: event.channel,
-      now: this.now(),
-    });
-    if (
-      pendingIntent &&
-      pendingIntent.bindingId === binding.id &&
-      !pendingIntent.intent.requestContext
-    ) {
+    while (true) {
+      const pendingIntent =
+        await this.options.store.findActivePendingIntentForChannel({
+          actorId: event.actor.platformUserId,
+          channel: event.channel,
+          now: this.now(),
+        });
+      if (
+        !pendingIntent ||
+        pendingIntent.bindingId !== binding.id ||
+        pendingIntent.intent.requestContext
+      ) {
+        return;
+      }
       await this.options.store.deletePendingIntent(pendingIntent.id);
     }
+  }
+
+  private async hasActiveBindingSubmodeIntent(
+    binding: MessagingBindingRecord,
+  ): Promise<boolean> {
+    const statusSurface = binding.statusSurface ?? binding.pinnedStatusSurface;
+    if (!statusSurface) {
+      return false;
+    }
+    for (const actorId of binding.authorizedActorIds) {
+      const pendingIntent =
+        await this.options.store.findActivePendingIntentForChannel({
+          actorId,
+          channel: binding.channel,
+          now: this.now(),
+        });
+      if (
+        pendingIntent?.bindingId === binding.id &&
+        !pendingIntent.intent.requestContext &&
+        pendingIntent.surface?.channel === statusSurface.channel &&
+        pendingIntent.surface.id === statusSurface.id
+      ) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private async dismissActiveSkillsWorkflow(
@@ -10596,6 +10626,7 @@ export class MessagingController {
         return;
       }
       if (binding.statusSurface || binding.pinnedStatusSurface) {
+        await this.clearActiveBindingSubmodeIntent(event, binding);
         await this.renderBindingStatus(binding, event);
         return;
       }
@@ -10729,6 +10760,7 @@ export class MessagingController {
       executionMode: "full-access",
       permissionsMode: "full-access",
     });
+    await this.clearActiveBindingSubmodeIntent(event, binding);
     await this.options.backend.setThreadExecutionMode?.({
       backend: binding.backend,
       threadId: escalationContext.threadId,
@@ -11582,6 +11614,7 @@ export class MessagingController {
     binding: MessagingBindingRecord,
     event: MessagingInboundEvent,
   ): Promise<MessagingBindingRecord> {
+    await this.clearActiveBindingSubmodeIntent(event, binding);
     const snapshot = await this.options.backend.getNavigationSnapshot({
       backend: "all",
     });
@@ -11711,6 +11744,13 @@ export class MessagingController {
     event?: MessagingInboundEvent,
     navigation?: NavigationSnapshot,
   ): Promise<MessagingBindingRecord> {
+    if (!event && await this.hasActiveBindingSubmodeIntent(binding)) {
+      this.logger.debug?.("messaging deferred automatic status refresh during active interaction", {
+        bindingId: binding.id,
+        threadId: binding.threadId,
+      });
+      return await this.options.store.getBinding(binding.id) ?? binding;
+    }
     const snapshot =
       navigation ??
       (await this.options.backend.getNavigationSnapshot({
