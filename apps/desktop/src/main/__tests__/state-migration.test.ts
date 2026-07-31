@@ -156,18 +156,20 @@ VALUES ('codex', 'thread-1', 'turn-1', 1000, '{"kind":"messaging"}');
     }
   });
 
-  it("adds default Agent assignments after the current-main v31 schema", () => {
+  it("adds default Agent assignments after the current-main v32 schema", () => {
     const root = createTempRoot();
     const dbPath = path.join(root, "state.db");
     StateDb.open(dbPath).close();
     const raw = new Database(dbPath);
     raw.exec("DROP TABLE messaging_default_agent_assignments");
-    raw.pragma("user_version = 31");
+    raw.pragma("user_version = 32");
     raw.close();
 
     const stateDb = StateDb.open(dbPath);
     try {
-      expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(32);
+      expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(
+        CURRENT_STATE_DB_USER_VERSION,
+      );
       const indexes = stateDb.raw
         .prepare("PRAGMA index_list(messaging_default_agent_assignments)")
         .all() as Array<{ name: string; unique: number }>;
