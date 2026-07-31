@@ -31,6 +31,26 @@ describe("PwrAgent task monitor agent tools", () => {
       .toContain("create_monitor_delegation");
     expect(mcpTools.map((tool) => tool.name))
       .toContain("start_review");
+    const createMonitorTool = mcpTools.find(
+      (tool) => tool.name === "create_monitor_delegation",
+    );
+    expect(createMonitorTool?.description).toContain(
+      "Normally omit preferredModel and preferredReasoningEffort",
+    );
+    expect(createMonitorTool?.inputSchema).toMatchObject({
+      properties: {
+        preferredModel: {
+          description: expect.stringContaining(
+            "Normally omit so PwrAgent uses its managed monitor default",
+          ),
+        },
+        preferredReasoningEffort: {
+          description: expect.stringContaining(
+            "Normally omit so PwrAgent uses its managed monitor default",
+          ),
+        },
+      },
+    });
   });
 
   it("dispatches dynamic and MCP monitor creation with matching ACP context", async () => {
@@ -40,8 +60,8 @@ describe("PwrAgent task monitor agent tools", () => {
       data: {
         monitorId: "monitor-1",
         parentThreadId: "thread-1",
-        preferredModel: "gpt-5.4-mini",
-        preferredReasoningEffort: "low",
+        preferredModel: "gpt-5.6-luna",
+        preferredReasoningEffort: "medium",
         pollIntervalSeconds: 30,
         heartbeatIntervalSeconds: 30,
         startupTimeoutSeconds: 45,
