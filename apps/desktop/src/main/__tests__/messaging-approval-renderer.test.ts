@@ -364,6 +364,39 @@ describe("buildApprovalIntent", () => {
     );
   });
 
+  it("preserves a free-form ACP persistent label when its scope cannot be extracted", () => {
+    const intent = buildApprovalIntent({
+      id: "approval-acp-prefix",
+      createdAt: 1000,
+      request: {
+        method: "item/commandExecution/requestApproval",
+        params: {
+          threadId: "thread-1",
+          requestId: "request-acp-prefix",
+          prompt: "Run npm metadata lookup?",
+          acpPermissionOptions: [
+            {
+              optionId: "allow-always-command",
+              name: "Always allow npm view",
+              kind: "allow_always",
+            },
+          ],
+        },
+      },
+    });
+
+    expect(intent.decisions).toEqual([
+      expect.objectContaining({
+        decision: "accept_with_execpolicy_amendment",
+        label: "Always allow npm view",
+        response: { decision: "allow-always-command" },
+      }),
+      expect.objectContaining({ decision: "cancel" }),
+    ]);
+    expect(intent.decisions[0]).not.toHaveProperty("description");
+    expect(intent.body).not.toContain("Persistent prefix:");
+  });
+
   it("renders file-change approval context without a shell command", () => {
     const intent = buildApprovalIntent({
       id: "approval-3",

@@ -123,21 +123,27 @@ function buildDecisions(
     ];
   }
   const actions = buildPendingRequestActions(request);
-  const persistentActions = actions.filter(
-    (action) => action.decision === "accept_with_execpolicy_amendment",
-  );
+  const presentedActions = actions.map((action) => ({
+    action,
+    description:
+      action.decision === "accept_with_execpolicy_amendment"
+        ? execpolicyPrefix(action)
+        : undefined,
+  }));
+  const describedPersistentCount = presentedActions.filter(
+    ({ description }) => Boolean(description),
+  ).length;
   let persistentIndex = 0;
 
-  return actions.map((action) => {
+  return presentedActions.map(({ action, description }) => {
     const isPersistent = action.decision === "accept_with_execpolicy_amendment";
-    const description = isPersistent ? execpolicyPrefix(action) : undefined;
-    if (isPersistent) {
+    if (description) {
       persistentIndex += 1;
     }
     return {
       id: action.id,
-      label: isPersistent
-        ? `Always Allow Prefix${persistentActions.length > 1 ? ` ${persistentIndex}` : ""}`
+      label: isPersistent && description
+        ? `Always Allow Prefix${describedPersistentCount > 1 ? ` ${persistentIndex}` : ""}`
         : action.label,
       ...(description ? { description } : {}),
       decision: messagingDecisionFromPendingAction(action),
