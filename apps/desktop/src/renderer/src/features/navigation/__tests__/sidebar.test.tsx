@@ -367,6 +367,118 @@ describe("Sidebar", () => {
     }
   });
 
+  it("reveals a selected child through collapsed directory and parent disclosures", async () => {
+    const { scrollIntoView, restore } = withMockScrollIntoView();
+    const onSetDirectoryThreadsCollapsed = vi.fn(async () => undefined);
+    const onSetSubthreadsCollapsed = vi.fn(async () => undefined);
+    const pinnedThread: NavigationThreadSummary = {
+      ...updatedSinceSeenThread,
+      pinnedRank: "1024",
+    };
+    const parentThread: NavigationThreadSummary = {
+      ...sharedThread,
+      id: "thread-parent",
+      title: "Collapsed parent thread",
+      subthreadsCollapsed: true,
+    };
+    const childThread: NavigationThreadSummary = {
+      ...sharedThread,
+      id: "thread-child",
+      title: "Hidden selected child",
+      parentThreadId: parentThread.id,
+    };
+    const collapsedDirectory: NavigationDirectorySummary = {
+      ...directories[0]!,
+      directoryThreadsCollapsed: true,
+      threadKeys: [
+        "codex:thread-updated",
+        "codex:thread-parent",
+        "codex:thread-child",
+      ],
+    };
+    const renderSidebar = (params: {
+      directoryThreadsCollapsed: boolean;
+      subthreadsCollapsed: boolean;
+    }) => (
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        createThreadError={undefined}
+        directories={[
+          {
+            ...collapsedDirectory,
+            directoryThreadsCollapsed: params.directoryThreadsCollapsed,
+          },
+        ]}
+        inboxThreads={[pinnedThread, parentThread, childThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        revealSelectedThreadRequest={1}
+        selectedItemKey="codex:thread-child"
+        threads={[
+          pinnedThread,
+          {
+            ...parentThread,
+            subthreadsCollapsed: params.subthreadsCollapsed,
+          },
+          childThread,
+        ]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onSetDirectoryThreadsCollapsed={onSetDirectoryThreadsCollapsed}
+        onSetSubthreadsCollapsed={onSetSubthreadsCollapsed}
+      />
+    );
+
+    try {
+      const { rerender } = render(
+        renderSidebar({
+          directoryThreadsCollapsed: true,
+          subthreadsCollapsed: true,
+        }),
+      );
+
+      expect(
+        screen.getByRole("button", {
+          name: "Show directory threads for PwrAgent",
+        }),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "Hidden selected child" }),
+      ).not.toBeInTheDocument();
+      await waitFor(() => {
+        expect(onSetDirectoryThreadsCollapsed).toHaveBeenCalledWith(
+          expect.objectContaining({ key: collapsedDirectory.key }),
+          false,
+        );
+        expect(onSetSubthreadsCollapsed).toHaveBeenCalledWith(
+          expect.objectContaining({ id: parentThread.id }),
+          false,
+        );
+      });
+
+      scrollIntoView.mockClear();
+      rerender(
+        renderSidebar({
+          directoryThreadsCollapsed: false,
+          subthreadsCollapsed: false,
+        }),
+      );
+
+      expect(
+        await screen.findByRole("button", { name: "Hidden selected child" }),
+      ).toBeInTheDocument();
+      expect(scrollIntoView).toHaveBeenCalledWith({
+        block: "nearest",
+      });
+    } finally {
+      restore();
+    }
+  });
+
   it("reveals a selected thread after its directory membership refreshes", async () => {
     const { scrollIntoView, restore } = withMockScrollIntoView();
     const refreshedThread: NavigationThreadSummary = {

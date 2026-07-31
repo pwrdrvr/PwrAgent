@@ -203,6 +203,8 @@ function DesktopAppShell(props: {
   // The rail defaults to pinned-open (matches the persisted default) so a
   // fresh user discovers it without a collapse→expand flash on first paint.
   const [sidebarHidden, setSidebarHidden] = useState(false);
+  const [revealSelectedThreadRequest, setRevealSelectedThreadRequest] =
+    useState(0);
   const [contextRailPinned, setContextRailPinned] = useState(true);
   const [activeContextTab, setActiveContextTab] =
     useState<ContextTabId>(DEFAULT_CONTEXT_TAB);
@@ -469,6 +471,13 @@ function DesktopAppShell(props: {
   // the first argument) still gets the default.
   const revealSelectedThreadInList = useCallback(
     (options?: { instant?: boolean }) => {
+      // A selected row can be unmounted behind a collapsed directory,
+      // Directory threads divider, overflow cap, or parent-thread group. The
+      // request nonce lets the active sidebar lens open those containers
+      // before ThreadRow's mount effect performs the final nearest-edge
+      // scroll. Keep the direct query for the common already-visible case so
+      // title clicks retain their centered smooth-scroll behavior.
+      setRevealSelectedThreadRequest((current) => current + 1);
       const selectedRow = document.querySelector<HTMLElement>(
         ".sidebar .thread-row.is-selected",
       );
@@ -1293,6 +1302,7 @@ function DesktopAppShell(props: {
           terminalThreadKeys={terminalThreadKeys}
           queuedMessageThreadKeys={queuedMessageThreadKeys}
           composerSourceThreadKey={navigation.composerSourceThreadKey}
+          revealSelectedThreadRequest={revealSelectedThreadRequest}
           selectedItemKey={navigation.selectedItemKey}
           thinkingThreadKeys={session.thinkingThreadKeys}
           threads={navigation.threads}

@@ -93,6 +93,8 @@ type SidebarProps = {
   queuedMessageThreadKeys?: Record<string, ThreadQueuedMessageState>;
   /** Identity key of the card to highlight as the open composer's source. */
   composerSourceThreadKey?: string;
+  /** Incremented when the thread title asks the active lens to reveal its row. */
+  revealSelectedThreadRequest?: number;
   selectedItemKey?: string;
   thinkingThreadKeys?: Record<string, boolean>;
   threads: NavigationThreadSummary[];
@@ -224,6 +226,8 @@ export function Sidebar(props: SidebarProps) {
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const directoryContextMenuRef = useRef<HTMLDivElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
+  const handledRevealRequestRef = useRef(0);
+  const [directoryRevealRequest, setDirectoryRevealRequest] = useState(0);
   const [contextMenu, setContextMenu] = useState<
     | {
         requestedPosition: ThreadContextMenuPosition;
@@ -296,6 +300,72 @@ export function Sidebar(props: SidebarProps) {
     props.browseMode === "recents"
       ? props.recentThreads ?? props.threads
       : props.inboxThreads ?? props.threads;
+  const revealSelectedThreadRequest = props.revealSelectedThreadRequest;
+  const selectedItemKey = props.selectedItemKey;
+  const navigationThreads = props.threads;
+  const setSubthreadsCollapsed = props.onSetSubthreadsCollapsed;
+  const browseMode = props.browseMode;
+
+  useEffect(() => {
+    const request = revealSelectedThreadRequest ?? 0;
+    if (request <= handledRevealRequestRef.current || !selectedItemKey) {
+      return;
+    }
+
+    const threadByKey = new Map(
+      navigationThreads.map((thread) => [
+        buildThreadIdentityKey(thread.source, thread.id),
+        thread,
+      ]),
+    );
+    const selectedThread = threadByKey.get(selectedItemKey);
+    if (!selectedThread) {
+      return;
+    }
+    handledRevealRequestRef.current = request;
+    if (browseMode === "directories") {
+      setDirectoryRevealRequest(request);
+    }
+
+    // Child rows are shared by every thread lens. Open each collapsed parent
+    // in the selected thread's ancestry here, while DirectoriesList handles
+    // its additional directory-only disclosures below.
+    const visited = new Set<string>();
+    let current = selectedThread;
+    while (current.parentThreadId) {
+      const parentKey = buildThreadIdentityKey(
+        current.source,
+        current.parentThreadId,
+      );
+      if (visited.has(parentKey)) {
+        break;
+      }
+      visited.add(parentKey);
+      const parent = threadByKey.get(parentKey);
+      if (!parent) {
+        break;
+      }
+      if (parent.subthreadsCollapsed === true) {
+        void setSubthreadsCollapsed?.(parent, false);
+      }
+      current = parent;
+    }
+  }, [
+    browseMode,
+    navigationThreads,
+    revealSelectedThreadRequest,
+    selectedItemKey,
+    setSubthreadsCollapsed,
+  ]);
+
+  useEffect(() => {
+    // DirectoriesList unmounts when another lens is active. Clear its event
+    // nonce on the way out so remounting the lens later cannot replay a title
+    // click that was already handled in an earlier view.
+    if (browseMode !== "directories" && directoryRevealRequest !== 0) {
+      setDirectoryRevealRequest(0);
+    }
+  }, [browseMode, directoryRevealRequest]);
 
   useEffect(() => {
     if (!copiedRuntimeValue) {
@@ -946,6 +1016,7 @@ export function Sidebar(props: SidebarProps) {
               queuedMessageThreadKeys={props.queuedMessageThreadKeys}
               composerSourceThreadKey={props.composerSourceThreadKey}
               directories={props.directories}
+              revealSelectedThreadRequest={directoryRevealRequest}
               selectedItemKey={props.selectedItemKey}
               thinkingThreadKeys={props.thinkingThreadKeys}
               threads={props.threads}
