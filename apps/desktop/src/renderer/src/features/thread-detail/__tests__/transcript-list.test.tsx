@@ -396,6 +396,44 @@ describe("TranscriptList", () => {
     expect(loadOlder).toHaveBeenCalledTimes(1);
   });
 
+  it("loads older history when the transcript is too short to scroll", async () => {
+    scrollHeight = 200;
+    clientHeight = 240;
+    const loadOlder = vi.fn(async () => undefined);
+
+    render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "assistant",
+            text: "Short recent history",
+          },
+        ]}
+        loading={false}
+        loadingMore={false}
+        pagination={{
+          supportsPagination: true,
+          hasPreviousPage: true,
+          previousCursor: "cursor-1",
+        }}
+        threadId="thread-underflow"
+        onLoadOlder={loadOlder}
+      />,
+    );
+
+    expect(loadOlder).toHaveBeenCalledTimes(1);
+    expect(
+      screen.queryByRole("button", { name: "Load older messages" }),
+    ).not.toBeInTheDocument();
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(loadOlder).toHaveBeenCalledTimes(1);
+  });
+
   it("does not carry an in-flight older-page lock into another thread", () => {
     let resolveFirstLoad: (() => void) | undefined;
     const firstLoad = vi.fn(

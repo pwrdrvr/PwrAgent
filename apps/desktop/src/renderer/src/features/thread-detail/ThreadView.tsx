@@ -1079,7 +1079,9 @@ export function ThreadView(props: ThreadViewProps) {
   const [pendingTranscriptTurnTarget, setPendingTranscriptTurnTarget] =
     useState<PendingTranscriptTurnTarget>();
   const transcriptTurnPageLoadsRef = useRef(0);
-  const transcriptTurnPageRequestPendingRef = useRef(false);
+  const transcriptTurnPageRequestGenerationRef = useRef(0);
+  const [transcriptTurnPageRequestPending, setTranscriptTurnPageRequestPending] =
+    useState(false);
   const [contextRailWidth, setContextRailWidth] = useState(380);
   const [launchpadMaterializing, setLaunchpadMaterializing] = useState(false);
   // Terminal state is owned by `useIntegratedTerminals` up in App, mirroring
@@ -1135,7 +1137,8 @@ export function ThreadView(props: ThreadViewProps) {
     setExpandedImage(undefined);
     setPendingTranscriptTurnTarget(undefined);
     transcriptTurnPageLoadsRef.current = 0;
-    transcriptTurnPageRequestPendingRef.current = false;
+    transcriptTurnPageRequestGenerationRef.current += 1;
+    setTranscriptTurnPageRequestPending(false);
     setLaunchpadMaterializing(false);
     setLaunchpadMaterializeError(undefined);
     setLaunchpadSetupProgress(undefined);
@@ -1354,11 +1357,12 @@ export function ThreadView(props: ThreadViewProps) {
       finishAtNearestRenderedTurn();
       return;
     }
-    if (props.loadingMore || transcriptTurnPageRequestPendingRef.current) {
+    if (props.loadingMore || transcriptTurnPageRequestPending) {
       return;
     }
 
-    transcriptTurnPageRequestPendingRef.current = true;
+    setTranscriptTurnPageRequestPending(true);
+    const requestGeneration = transcriptTurnPageRequestGenerationRef.current;
     transcriptTurnPageLoadsRef.current += 1;
     void onLoadOlder()
       .catch(() => {
@@ -1370,7 +1374,11 @@ export function ThreadView(props: ThreadViewProps) {
         );
       })
       .finally(() => {
-        transcriptTurnPageRequestPendingRef.current = false;
+        if (
+          transcriptTurnPageRequestGenerationRef.current === requestGeneration
+        ) {
+          setTranscriptTurnPageRequestPending(false);
+        }
       });
   }, [
     canLoadServerTranscriptHistory,
@@ -1381,6 +1389,7 @@ export function ThreadView(props: ThreadViewProps) {
     props.transcriptEntries,
     props.transcriptPagination?.previousCursor,
     selectedThreadKey,
+    transcriptTurnPageRequestPending,
   ]);
   const fileViewerContext = useMemo<MarkdownFileViewerContext | undefined>(() => {
     if (!selectedThread || !selectedThreadKey) {

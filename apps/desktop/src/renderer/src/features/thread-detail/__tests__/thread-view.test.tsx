@@ -749,6 +749,7 @@ describe("ThreadView", () => {
   it("loads older server pages to reach a pricing timestamp target", async () => {
     const targetTime = 1_800_000_000_000;
     const loadOlder = vi.fn();
+    let loadedPageCount = 0;
     const recentEntries = Array.from({ length: 40 }, (_, index) => ({
       type: "message" as const,
       id: `message-${index}`,
@@ -782,6 +783,24 @@ describe("ThreadView", () => {
           messageCount={entries.length}
           onLoadOlder={async () => {
             loadOlder();
+            loadedPageCount += 1;
+            if (loadedPageCount === 1) {
+              setEntries((current) => [
+                {
+                  type: "message",
+                  id: "message-intermediate",
+                  role: "assistant",
+                  text: "Intermediate older page",
+                  turn: {
+                    id: "turn-intermediate",
+                    status: "completed",
+                    completedAt: targetTime - 1,
+                  },
+                },
+                ...current,
+              ]);
+              return;
+            }
             setEntries((current) => [
               {
                 type: "message",
@@ -829,7 +848,7 @@ describe("ThreadView", () => {
     );
 
     await waitFor(() => {
-      expect(loadOlder).toHaveBeenCalledTimes(1);
+      expect(loadOlder).toHaveBeenCalledTimes(2);
     });
     expect(await screen.findByText("Server-loaded exact target")).toBeInTheDocument();
     await waitFor(() => {
