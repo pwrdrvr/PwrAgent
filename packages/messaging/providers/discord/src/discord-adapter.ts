@@ -811,6 +811,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       dmPeerName: message.guild_id
         ? undefined
         : (message.author.global_name ?? message.author.username),
+      isThread: message.is_thread,
     });
     const receivedAt = this.now();
     const routingState = this.routingStateFromDiscord(message.channel_id, message.guild_id, {
@@ -823,56 +824,9 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       messageId: message.id,
     });
     const hasAttachments = Boolean(message.attachments?.length);
-
-    // `<@botUserId> <verb>` text mention → command. Run BEFORE the
-    // attachment branch so captions like `@PwrAgent resume` on a
-    // file/image upload route to the command pathway too — the user
-    // typed a verb, that intent wins over the incidental attachment.
-    // Mirrors the Mattermost `@<bot> <verb>` path so users on Discord
-    // can invoke commands without remembering slash names. Discord
-    // ships raw `<@USER_ID>` (or legacy `<@!USER_ID>`) tokens in
-    // `message.content` even though the UI renders `@PwrAgent`, so we
-    // match on the id rather than the display name. The bot's user_id
-    // equals the configured applicationId for any modern Discord app
-    // (the application id and bot user id were unified for bots
-    // created since 2016).
-    if (message.content !== undefined) {
-      if (
-        mentionRemainder !== undefined &&
-        // A bare mention caption has no command verb. Let the media
-        // branch handle the upload so bound conversations can send it
-        // to the thread; unbound conversations will get the
-        // controller's normal "bind before attachments" response.
-        !(mentionRemainder.length === 0 && hasAttachments)
-      ) {
-        // Synthesize the slash form so the controller sees the same
-        // `MessagingInboundCommandEvent` shape as a `/`-prefixed
-        // message. The slash regex below extracts verb + args. If
-        // the remainder doesn't form a valid verb (e.g. `@bot @bot
-        // help` strips one mention but leaves another, or `@bot 123`
-        // leads with a non-identifier char) we deliberately fall
-        // through to the standard attachment / slash / text paths
-        // below — the original `message.content` is dispatched as
-        // media or plain text rather than a half-recognized command.
-        const synthRaw = mentionRemainder.length === 0 ? "/help" : `/${mentionRemainder}`;
-        const mentionCommandMatch = /^\/([A-Za-z0-9_]+)(?:\s+(.*))?$/.exec(synthRaw);
-        if (mentionCommandMatch) {
-          await listener({
-            id: `discord:message:${message.id}`,
-            kind: "command",
-            actor: this.actorFromUser(message.author),
-            args: mentionCommandMatch[2]?.split(/\s+/).filter(Boolean) ?? [],
-            channel,
-            command: mentionCommandMatch[1]?.toLowerCase() ?? "",
-            rawText: synthRaw,
-            receivedAt,
-            routingState,
-            sourceUrl,
-          });
-          return;
-        }
-      }
-    }
+    const normalizedContent = mentionRemainder === "" && !hasAttachments
+      ? "help"
+      : mentionRemainder ?? message.content;
 
     if (message.attachments && message.attachments.length > 0) {
       const attachments = message.attachments.map((attachment) =>
@@ -896,7 +850,8 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         receivedAt,
         routingState,
         sourceUrl,
-        text: message.content,
+        text: normalizedContent,
+        ...(mentionRemainder !== undefined ? { botMention: true } : {}),
       });
       return;
     }
@@ -907,7 +862,9 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       );
     }
 
-    const commandMatch = /^\/([A-Za-z0-9_]+)(?:\s+(.*))?$/.exec(message.content);
+    const commandMatch = mentionRemainder === undefined
+      ? /^\/([A-Za-z0-9_]+)(?:\s+(.*))?$/.exec(message.content)
+      : undefined;
     await listener({
       id: `discord:message:${message.id}`,
       kind: commandMatch ? "command" : "text",
@@ -920,7 +877,8 @@ export class DiscordAdapter implements DiscordProviderAdapter {
             rawText: message.content,
           }
         : {
-            text: message.content,
+            text: normalizedContent ?? "",
+            ...(mentionRemainder !== undefined ? { botMention: true } : {}),
           }),
       receivedAt,
       routingState,
@@ -984,6 +942,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     const channel = await this.channelFromDiscord(
       interaction.channel_id,
       interaction.guild_id,
+      { isThread: interaction.is_thread },
     );
     const persistedBinding = this.options.store
       ? await this.options.store.resolveCallbackHandle({
@@ -1057,6 +1016,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     const channel = await this.channelFromDiscord(
       interaction.channel_id,
       interaction.guild_id,
+      { isThread: interaction.is_thread },
     );
     await listener({
       id: `discord:command:${interaction.id}`,
@@ -1617,7 +1577,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
   private async channelFromDiscord(
     channelId: string,
     guildId: string | undefined,
-    options?: { dmPeerName?: string },
+    options?: { dmPeerName?: string; isThread?: boolean },
   ): Promise<MessagingInboundEvent["channel"]> {
     if (!guildId) {
       // DM — title from the peer's display name; no parent.
@@ -1630,25 +1590,24 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         },
       };
     }
-    // Guild-channel-or-thread. We keep kind="channel" for both
-    // regular channels and threads — kind is part of the conversation
-    // key used for binding lookup, so flipping to kind="thread" would
-    // make legacy thread bindings unfindable. Thread vs channel is
-    // distinguishable from data shape (ancestorTitle populated → it
-    // came from a thread).
     const breadcrumbs = await this.lookupChannelBreadcrumbs(
       channelId,
       guildId,
     );
+    const kind = options?.isThread ? "thread" : "channel";
     return {
       channel: this.channel,
       conversation: {
         id: channelId,
-        kind: "channel",
+        kind,
         parentId: guildId,
+        workspaceId: guildId,
+        ...(options?.isThread && breadcrumbs.parentChannelId
+          ? { parentConversationId: breadcrumbs.parentChannelId }
+          : {}),
         title: breadcrumbs.channelName,
         parentTitle: breadcrumbs.parentChannelName ?? breadcrumbs.guildName,
-        ancestorTitle: breadcrumbs.parentChannelName
+        ancestorTitle: options?.isThread && breadcrumbs.parentChannelName
           ? breadcrumbs.guildName
           : undefined,
       },
@@ -1668,6 +1627,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     guildId: string,
   ): Promise<{
     channelName?: string;
+    parentChannelId?: string;
     parentChannelName?: string;
     guildName?: string;
   }> {
@@ -1679,6 +1639,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     const guild = await this.cachedGuild(guildId);
     return {
       channelName: channel?.name,
+      parentChannelId: channel?.parentId,
       parentChannelName: parentChannel?.name,
       guildName: guild?.name,
     };
@@ -1798,7 +1759,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
   private basicChannelRef(
     channelId: string,
     guildId: string | undefined,
-    kind: "dm" | "channel",
+    kind: "dm" | "channel" | "thread",
   ): MessagingInboundEvent["channel"] {
     return {
       channel: this.channel,
@@ -1806,6 +1767,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         id: channelId,
         kind,
         ...(guildId ? { parentId: guildId } : {}),
+        ...(guildId ? { workspaceId: guildId } : {}),
       },
     };
   }

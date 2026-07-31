@@ -188,6 +188,49 @@ describe("messaging resume browser", () => {
     expect(intent.fallbackText).not.toContain("Ordinary thread");
   });
 
+  it("preserves pagination without browse-mode actions in default-Agent assignment", () => {
+    const intent = buildResumeIntent({
+      id: "intent-1",
+      createdAt: 1000,
+      navigation: buildNavigationSnapshot({
+        threads: Array.from({ length: 8 }, (_, index) =>
+          buildThread({
+            id: `agent-thread-${index + 1}`,
+            title: `Agent thread ${index + 1}`,
+            updatedAt: 2000 - index,
+            agent: {
+              name: `Agent ${index + 1}`,
+              instructionLineCount: 1,
+              instructionsTooLong: false,
+              updatedAt: 1500,
+            },
+          }),
+        ),
+      }),
+      session: buildBrowseSession({
+        launchAction: "assign_default_agent",
+        mode: "agents",
+        pageIndex: 1,
+        pageSize: 3,
+      }),
+    });
+
+    expect(intent.kind).toBe("thread_picker");
+    expect(intent.page.actions.map((action) => action.id)).toEqual([
+      "browse:select-thread",
+      "browse:select-thread",
+      "browse:select-thread",
+      "browse:page:prev",
+      "browse:page:next",
+      "browse:cancel",
+    ]);
+    expect(intent.fallbackText).toContain(
+      "Reply with a number, or reply previous, next, or cancel.",
+    );
+    expect(intent.fallbackText).not.toContain("recent");
+    expect(intent.fallbackText).not.toContain("new");
+  });
+
   it("renders Grok worktree threads with the primary project label", () => {
     const intent = buildResumeIntent({
       id: "intent-1",

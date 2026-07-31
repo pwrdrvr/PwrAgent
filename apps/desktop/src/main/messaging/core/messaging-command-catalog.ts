@@ -93,7 +93,7 @@ export const MESSAGING_COMMAND_CATALOG: readonly MessagingCommandSpec[] = [
   },
   {
     verb: "agent",
-    description: "choose an Agent thread to control from this conversation",
+    description: "choose an Agent thread, or manage the default with /agent default",
   },
   {
     verb: "new",

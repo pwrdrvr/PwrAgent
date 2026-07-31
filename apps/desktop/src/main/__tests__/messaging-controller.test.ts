@@ -919,6 +919,9 @@ describe("MessagingController", () => {
       threadId: "thread-1",
       targetKind: "agent_thread",
     });
+    await expect(
+      harness.store.findActiveDefaultAgentAssignmentForChannel(agentEvent.channel),
+    ).resolves.toBeUndefined();
     const confirmation = harness.delivered.find(
       (intent) => intent.kind === "confirmation" && intent.title === "Thread bound",
     );
@@ -926,6 +929,552 @@ describe("MessagingController", () => {
       body: expect.stringContaining("selected Agent thread"),
       fallbackText: "Send a message to continue with the Agent thread.",
     });
+  });
+
+  it("explicitly sets, inspects, and clears a conversation default Agent", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      title: "Default Agent",
+      agent: {
+        name: "Inbox Agent",
+        instructionLineCount: 1,
+        instructionsTooLong: false,
+        updatedAt: 1500,
+      },
+    };
+    const harness = await createHarness({ navigation });
+    const event = buildCommandEvent("/agent default set");
+
+    await harness.controller.handleInboundEvent(event);
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "thread_picker",
+      prompt: expect.stringContaining("Choose the default Agent"),
+      page: {
+        items: [expect.objectContaining({ id: "thread-1", source: "codex" })],
+      },
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-thread",
+        value: { backend: "codex", threadId: "thread-1" },
+      }),
+    );
+
+    await expect(
+      harness.store.findActiveBindingForChannel(event.channel),
+    ).resolves.toBeUndefined();
+    await expect(
+      harness.store.findActiveDefaultAgentAssignmentForChannel(event.channel),
+    ).resolves.toMatchObject({
+      scope: { kind: "conversation" },
+      target: { backend: "codex", threadId: "thread-1" },
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Default Agent",
+      body: expect.stringContaining("Effective default: Default Agent (conversation)."),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCommandEvent("/agent default clear"),
+    );
+    await expect(
+      harness.store.findActiveDefaultAgentAssignmentForChannel(event.channel),
+    ).resolves.toBeUndefined();
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      body: expect.stringContaining("conversation default cleared"),
+    });
+  });
+
+  it("assigns and bootstraps ACP Agents with PwrAgent HTTP MCP tools", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads = [
+      {
+        ...navigation.threads[0]!,
+        id: "codex-agent",
+        title: "Codex Agent",
+        agent: {
+          name: "Codex Agent",
+          instructionLineCount: 1,
+          instructionsTooLong: false,
+          updatedAt: 1500,
+        },
+      },
+      {
+        ...navigation.threads[0]!,
+        id: "kimi-agent",
+        source: "acp:kimi",
+        title: "Kimi Agent",
+        updatedAt: 2000,
+        agent: {
+          name: "Kimi Agent",
+          instructionLineCount: 1,
+          instructionsTooLong: false,
+          updatedAt: 1500,
+        },
+      },
+      {
+        ...navigation.threads[0]!,
+        id: "gemini-agent",
+        source: "acp:gemini",
+        title: "Gemini Agent",
+        agent: {
+          name: "Gemini Agent",
+          instructionLineCount: 1,
+          instructionsTooLong: false,
+          updatedAt: 1500,
+        },
+      },
+      {
+        ...navigation.threads[0]!,
+        id: "grok-agent",
+        source: "grok",
+        title: "Grok Agent",
+        agent: {
+          name: "Grok Agent",
+          instructionLineCount: 1,
+          instructionsTooLong: false,
+          updatedAt: 1500,
+        },
+      },
+    ];
+    const listBackends = async (): Promise<ListBackendsResponse> => ({
+      fetchedAt: 1000,
+      backends: [
+        buildBackendSummary(),
+        buildAcpHttpMcpBackendSummary(),
+        buildAcpRuntimeBackendSummary(),
+        buildBackendSummary({ kind: "grok" }),
+      ],
+    });
+    const harness = await createHarness({ listBackends, navigation });
+    const command = buildTopicCommandEvent("/agent default set", "13056");
+
+    await harness.controller.handleInboundEvent(command);
+
+    const picker = harness.delivered.at(-1);
+    expect(picker?.kind).toBe("thread_picker");
+    if (picker?.kind !== "thread_picker") {
+      throw new Error("Expected default Agent thread picker");
+    }
+    expect(picker.page.items.map((thread) => thread.source)).toEqual([
+      "acp:kimi",
+      "codex",
+    ]);
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-thread",
+        channel: command.channel,
+        value: { backend: "acp:kimi", threadId: "kimi-agent" },
+      }),
+    );
+
+    await expect(
+      harness.store.findActiveDefaultAgentAssignmentForChannel(command.channel),
+    ).resolves.toMatchObject({
+      target: { backend: "acp:kimi", threadId: "kimi-agent" },
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("summarize this topic", {
+        botMention: true,
+        channel: command.channel,
+      }),
+    );
+
+    await expect(
+      harness.store.findActiveBindingForChannel(command.channel),
+    ).resolves.toMatchObject({
+      backend: "acp:kimi",
+      targetKind: "agent_thread",
+      threadId: "kimi-agent",
+    });
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "acp:kimi",
+        input: [{ type: "text", text: "summarize this topic" }],
+        threadId: "kimi-agent",
+      }),
+    );
+  });
+
+  it("preserves an ACP default when tool-capability discovery is unavailable", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      source: "acp:kimi",
+      title: "Kimi Agent",
+      agent: {
+        name: "Kimi Agent",
+        instructionLineCount: 1,
+        instructionsTooLong: false,
+        updatedAt: 1500,
+      },
+    };
+    const harness = await createHarness({
+      listBackends: async () => {
+        throw new Error("backend discovery unavailable");
+      },
+      navigation,
+    });
+    const channel = buildTopicChannel("13056");
+    await seedConversationDefaultAgent(harness.store, channel, "acp:kimi");
+
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("keep this default", { botMention: true, channel }),
+    );
+
+    expect(harness.startTurn).not.toHaveBeenCalled();
+    await expect(
+      harness.store.findActiveDefaultAgentAssignmentForChannel(channel),
+    ).resolves.toMatchObject({
+      target: { backend: "acp:kimi", threadId: "thread-1" },
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "error",
+      title: "Default Agent unavailable",
+      body: expect.stringContaining("assignment was preserved"),
+    });
+  });
+
+  it("binds an addressed unbound topic to its default Agent and admits the turn there", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      title: "Topic Agent",
+      agent: {
+        name: "Topic Agent",
+        instructionLineCount: 1,
+        instructionsTooLong: false,
+        updatedAt: 1500,
+      },
+    };
+    const createManagedConversation = vi.fn(async () => ({
+      channel: "telegram" as const,
+      outcome: "unsupported" as const,
+      updatedAt: 1000,
+    }));
+    const harness = await createHarness({
+      createManagedConversation,
+      navigation,
+    });
+    const channel = buildTopicChannel("13056");
+    const event = buildTextEvent("find the thread for 13056", {
+      botMention: true,
+      channel,
+      routingState: {
+        opaque: {
+          chatId: -1001,
+          messageThreadId: 13056,
+        },
+      },
+    });
+    await seedConversationDefaultAgent(harness.store, channel);
+
+    await harness.controller.handleInboundEvent(event);
+
+    expect(createManagedConversation).not.toHaveBeenCalled();
+    await expect(
+      harness.store.findActiveBindingForChannel(channel),
+    ).resolves.toMatchObject({
+      backend: "codex",
+      channel,
+      targetKind: "agent_thread",
+      threadId: "thread-1",
+    });
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        input: [{ type: "text", text: "find the thread for 13056" }],
+        threadId: "thread-1",
+      }),
+    );
+  });
+
+  it("creates a child for an addressed unbound root and admits the default Agent turn there", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      title: "Search Signals Agent",
+      agent: {
+        name: "Search Signals Agent",
+        instructionLineCount: 2,
+        instructionsTooLong: false,
+        updatedAt: 1500,
+      },
+    };
+    const rootChannel = {
+      channel: "slack" as const,
+      conversation: {
+        id: "C012SIGNALS",
+        kind: "channel" as const,
+        title: "p-search-signals-project",
+        workspaceId: "T012WORKSPACE",
+      },
+    };
+    const childChannel = {
+      channel: "slack" as const,
+      conversation: {
+        id: "C012SIGNALS",
+        kind: "thread" as const,
+        parentId: "1712023030.000000",
+        parentConversationId: "C012SIGNALS",
+        parentTitle: "p-search-signals-project",
+        title: "Search Signals Agent",
+        workspaceId: "T012WORKSPACE",
+      },
+    };
+    const getManagedConversationRights = vi.fn(async () => ({
+      channel: "slack" as const,
+      conversation: rootChannel.conversation,
+      operations: [
+        {
+          operation: "create_child" as const,
+          supported: true,
+        },
+      ],
+      outcome: "ok" as const,
+      updatedAt: 1000,
+    }));
+    const createManagedConversation = vi.fn(async () => ({
+      channel: "slack" as const,
+      conversation: childChannel.conversation,
+      outcome: "created" as const,
+      routingState: {
+        opaque: {
+          channelId: "C012SIGNALS",
+          teamId: "T012WORKSPACE",
+          threadTs: "1712023030.000000",
+        },
+      },
+      updatedAt: 1000,
+    }));
+    const harness = await createHarness({
+      channel: "slack",
+      createManagedConversation,
+      getManagedConversationRights,
+      navigation,
+    });
+    const event = buildTextEvent(
+      "find the thread for 13056 and attach it as a reply",
+      {
+        botMention: true,
+        channel: rootChannel,
+        routingState: {
+          opaque: {
+            channelId: "C012SIGNALS",
+            teamId: "T012WORKSPACE",
+            ts: "1712023030.000000",
+          },
+        },
+      },
+    );
+    await seedConversationDefaultAgent(harness.store, rootChannel);
+
+    await harness.controller.handleInboundEvent(event);
+
+    expect(getManagedConversationRights).toHaveBeenCalledWith({
+      actor: event.actor,
+      channel: rootChannel,
+      routingState: event.routingState,
+    });
+    expect(createManagedConversation).toHaveBeenCalledWith({
+      actor: event.actor,
+      parent: rootChannel,
+      routingState: event.routingState,
+      title: "Search Signals Agent",
+    });
+    await expect(
+      harness.store.findActiveBindingForChannel(childChannel),
+    ).resolves.toMatchObject({
+      backend: "codex",
+      channel: childChannel,
+      targetKind: "agent_thread",
+      threadId: "thread-1",
+    });
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: [
+          {
+            type: "text",
+            text: "find the thread for 13056 and attach it as a reply",
+          },
+        ],
+        threadId: "thread-1",
+      }),
+    );
+  });
+
+  it("reports a capability error when an addressed root cannot create a child", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      agent: {
+        name: "Default Agent",
+        instructionLineCount: 1,
+        instructionsTooLong: false,
+        updatedAt: 1500,
+      },
+    };
+    const harness = await createHarness({ navigation });
+    const channel = {
+      channel: "discord" as const,
+      conversation: {
+        id: "channel-1",
+        kind: "channel" as const,
+        workspaceId: "guild-1",
+      },
+    };
+    const event = buildTextEvent("handle this", {
+      botMention: true,
+      channel,
+    });
+    await seedConversationDefaultAgent(harness.store, channel);
+
+    await harness.controller.handleInboundEvent(event);
+
+    expect(harness.startTurn).not.toHaveBeenCalled();
+    await expect(
+      harness.store.findActiveBindingForChannel(channel),
+    ).resolves.toBeUndefined();
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "error",
+      title: "Default Agent cannot start here",
+      body: expect.stringContaining("cannot safely create a child conversation"),
+    });
+  });
+
+  it("does not bootstrap a default for an unaddressed ambient root message", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      agent: {
+        name: "Default Agent",
+        instructionLineCount: 1,
+        instructionsTooLong: false,
+        updatedAt: 1500,
+      },
+    };
+    const createManagedConversation = vi.fn(async () => ({
+      channel: "slack" as const,
+      outcome: "unsupported" as const,
+      updatedAt: 1000,
+    }));
+    const harness = await createHarness({
+      channel: "slack",
+      createManagedConversation,
+      navigation,
+    });
+    const channel = {
+      channel: "slack" as const,
+      conversation: {
+        id: "C012SIGNALS",
+        kind: "channel" as const,
+        workspaceId: "T012WORKSPACE",
+      },
+    };
+    await seedConversationDefaultAgent(harness.store, channel);
+
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("ambient channel conversation", { channel }),
+    );
+
+    expect(createManagedConversation).not.toHaveBeenCalled();
+    expect(harness.startTurn).not.toHaveBeenCalled();
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "PwrAgent commands",
+    });
+  });
+
+  it("revokes a stale specific default and continues to a valid broader default", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      agent: {
+        name: "Provider Agent",
+        instructionLineCount: 1,
+        instructionsTooLong: false,
+        updatedAt: 1500,
+      },
+    };
+    const harness = await createHarness({ navigation });
+    const channel = buildTopicChannel("13056");
+    await harness.store.upsertDefaultAgentAssignment({
+      id: "default-agent:stale-conversation",
+      scope: {
+        kind: "conversation",
+        channel,
+      },
+      target: {
+        kind: "agent",
+        backend: "codex",
+        threadId: "archived-agent",
+      },
+      createdAt: 1000,
+      updatedAt: 1000,
+    });
+    await harness.store.upsertDefaultAgentAssignment({
+      id: "default-agent:telegram-provider",
+      scope: {
+        kind: "provider",
+        channel: "telegram",
+      },
+      target: {
+        kind: "agent",
+        backend: "codex",
+        threadId: "thread-1",
+      },
+      createdAt: 1000,
+      updatedAt: 1000,
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("use the available Agent", {
+        botMention: true,
+        channel,
+      }),
+    );
+
+    await expect(
+      harness.store.getDefaultAgentAssignment("default-agent:stale-conversation"),
+    ).resolves.toMatchObject({
+      revokedAt: 1000,
+    });
+    await expect(
+      harness.store.findActiveBindingForChannel(channel),
+    ).resolves.toMatchObject({
+      targetKind: "agent_thread",
+      threadId: "thread-1",
+    });
+  });
+
+  it("revokes default assignments when their Agent thread is archived", async () => {
+    const harness = await createHarness();
+    await seedConversationDefaultAgent(
+      harness.store,
+      buildTextEvent("request").channel,
+    );
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/archived",
+        params: {
+          threadId: "thread-1",
+        },
+      },
+    });
+
+    await expect(
+      harness.store.findActiveDefaultAgentAssignmentForChannel(
+        buildTextEvent("request").channel,
+      ),
+    ).resolves.toBeUndefined();
   });
 
   it("starts a new Agent thread from /agent --new and binds it as an Agent target", async () => {
@@ -1132,6 +1681,70 @@ describe("MessagingController", () => {
         routingState: event.routingState,
       }),
     );
+  });
+
+  it("preserves a concrete live messaging origin for ordinary Codex turns only", async () => {
+    const harness = await createHarness();
+    const event = buildTextEvent(
+      "Hand that off to a new thread in project XYZ",
+    );
+    await harness.store.upsertBinding({
+      id: "binding:telegram:dm::chat-1:codex:thread-1",
+      authorizedActorIds: ["user-1"],
+      backend: "codex",
+      channel: event.channel,
+      createdAt: 1000,
+      routingState: event.routingState,
+      targetKind: "thread",
+      threadId: "thread-1",
+      updatedAt: 1000,
+    });
+
+    await harness.controller.handleInboundEvent(event);
+
+    await expect(
+      harness.controller.handlePwrAgentMessagingRequest({
+        operation: "get_current_messaging_surface",
+        context: {
+          backend: "codex",
+          threadId: "thread-1",
+          turnId: "turn-1",
+        },
+        args: {},
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      data: {
+        location: {
+          actor: {
+            platformUserId: "user-1",
+          },
+          binding: {
+            targetKind: "thread",
+            threadId: "thread-1",
+          },
+          conversation: {
+            id: "chat-1",
+            kind: "dm",
+          },
+        },
+      },
+    });
+    await expect(
+      harness.controller.handlePwrAgentMessagingRequest({
+        operation: "get_current_messaging_surface",
+        context: {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+        args: {},
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "not_found",
+      },
+    });
   });
 
   it("preserves the messaging location for queued Agent-thread turns", async () => {
@@ -17463,6 +18076,24 @@ function buildKimiRuntimeBackendSummary(
   });
 }
 
+function buildAcpHttpMcpBackendSummary(): BackendSummary {
+  const summary = buildKimiRuntimeBackendSummary();
+  return {
+    ...summary,
+    acp: {
+      ...summary.acp!,
+      runtime: {
+        ...summary.acp!.runtime!,
+        agentCapabilities: {
+          mcp: {
+            http: true,
+          },
+        },
+      },
+    },
+  };
+}
+
 function buildNavigationSnapshot(): NavigationSnapshot {
   return {
     backend: "all",
@@ -17766,10 +18397,32 @@ function buildTopicChannel(topicId: string): MessagingInboundEvent["channel"] {
       id: topicId,
       kind: "topic",
       parentId: "-1001",
+      parentConversationId: "-1001",
       parentTitle: "Ops",
       title: topicId === "100" ? "PwrAgent" : `Topic ${topicId}`,
     },
   };
+}
+
+async function seedConversationDefaultAgent(
+  store: MessagingStore,
+  channel: MessagingInboundEvent["channel"],
+  backend: AppServerBackendKind = "codex",
+): Promise<void> {
+  await store.upsertDefaultAgentAssignment({
+    id: `default-agent:${channel.channel}:${channel.conversation.id}`,
+    scope: {
+      kind: "conversation",
+      channel,
+    },
+    target: {
+      kind: "agent",
+      backend,
+      threadId: "thread-1",
+    },
+    createdAt: 1000,
+    updatedAt: 1000,
+  });
 }
 
 function buildTextEvent(

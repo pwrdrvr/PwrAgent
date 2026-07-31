@@ -748,6 +748,10 @@ export class SlackAdapter implements SlackProviderAdapter {
         id: target.channelId,
         kind: "thread",
         parentId: target.threadTs,
+        parentConversationId: request.parent.conversation.id,
+        ...(request.parent.conversation.workspaceId
+          ? { workspaceId: request.parent.conversation.workspaceId }
+          : {}),
         ...(request.parent.conversation.title
           ? { parentTitle: request.parent.conversation.title }
           : {}),
@@ -1725,8 +1729,10 @@ export class SlackAdapter implements SlackProviderAdapter {
       conversation: {
         id: params.channelId,
         kind,
+        ...(params.teamId ? { workspaceId: params.teamId } : {}),
         ...(kind === "dm" && channelTitle ? { title: channelTitle } : {}),
         ...(isThread && params.threadTs ? { parentId: params.threadTs } : {}),
+        ...(isThread ? { parentConversationId: params.channelId } : {}),
         ...(kind === "channel" && channelTitle ? { title: channelTitle } : {}),
         ...(isThread && threadTitle ? { title: threadTitle } : {}),
         ...(isThread && channelTitle ? { parentTitle: channelTitle } : {}),

@@ -63,6 +63,8 @@ import type {
   MessagingConfirmationIntent,
   MessagingDeliveryScope,
   MessagingDeliveryResult,
+  MessagingDefaultAgentAssignmentRecord,
+  MessagingDefaultAgentScope,
   MessagingInboundCallbackEvent,
   MessagingInboundCommandEvent,
   MessagingInboundEvent,
@@ -71,7 +73,9 @@ import type {
   MessagingAdapterState,
   MessagingJsonValue,
   MessagingManagedConversationActionResult,
+  MessagingManagedConversationCreateResult,
   MessagingManagedConversationOperationSupport,
+  MessagingManagedConversationRightsResult,
   MessagingManagedTopicRecord,
   MessagingMonitorState,
   MessagingMonitorSubscriptionRecord,
@@ -114,6 +118,11 @@ import {
   selectMonitorThreads,
 } from "./messaging-monitor-card.js";
 import { buildMessagingConversationKey } from "./messaging-store.js";
+import {
+  defaultAgentBackendSupport,
+  defaultAgentScopeForChannel,
+  type MessagingDefaultAgentScopeKind,
+} from "./messaging-default-agent.js";
 import type { MessagingStoreLike } from "../../state/messaging-store-sqlite";
 import type { MessagingCapabilityProfile } from "@pwragent/messaging-interface";
 import type {
@@ -1001,6 +1010,13 @@ export class MessagingController {
     if (!threadId) {
       return;
     }
+    if (event.notification.method === "thread/archived") {
+      await this.options.store.revokeDefaultAgentAssignmentsForTarget({
+        backend: event.backend,
+        threadId,
+        revokedAt: this.now(),
+      });
+    }
     if (event.notification.method === "thread/tokenUsage/updated") {
       this.rememberContextUsageSummary(event);
     }
@@ -1575,6 +1591,10 @@ export class MessagingController {
       return;
     }
     if (verb === "agent") {
+      if (event.args[0]?.toLowerCase() === "default") {
+        await this.handleDefaultAgentCommand(event);
+        return;
+      }
       await this.presentAgentBrowser(event, {
         cancelDestination: options?.targetSurface ? "help" : undefined,
         targetSurface: options?.targetSurface,
@@ -2259,6 +2279,12 @@ export class MessagingController {
 
     const binding = await this.options.store.findActiveBindingForChannel(event.channel);
     if (!binding) {
+      if (
+        event.botMention &&
+        await this.bootstrapDefaultAgentForAddressedMessage(event)
+      ) {
+        return;
+      }
       if (!await this.shouldHandleAmbientSharedMessage(event)) {
         return;
       }
@@ -2280,6 +2306,199 @@ export class MessagingController {
     }
 
     await this.turnAdmission.append({ binding, event });
+  }
+
+  private async bootstrapDefaultAgentForAddressedMessage(
+    event: MessagingInboundTextEvent,
+  ): Promise<boolean> {
+    const assignments =
+      await this.options.store.findActiveDefaultAgentAssignmentsForChannel(
+        event.channel,
+      );
+    if (assignments.length === 0) {
+      return false;
+    }
+
+    let navigation: NavigationSnapshot;
+    try {
+      navigation = await this.options.backend.getNavigationSnapshot({
+        backend: "all",
+      });
+    } catch (error) {
+      await this.deliverDefaultAgentBootstrapError(
+        event,
+        "Default Agent unavailable",
+        error instanceof Error ? error.message : String(error),
+      );
+      return true;
+    }
+
+    let selected:
+      | {
+          assignment: MessagingDefaultAgentAssignmentRecord;
+          thread: NavigationThreadSummary;
+        }
+      | undefined;
+    const backendSummaries = await this.loadDefaultAgentBackendSummaries();
+    for (const assignment of assignments) {
+      const thread = navigation.threads.find(
+        (candidate) =>
+          candidate.source === assignment.target.backend
+          && candidate.id === assignment.target.threadId
+          && Boolean(candidate.agent),
+      );
+      const backendSupport = defaultAgentBackendSupport(
+        assignment.target.backend,
+        backendSummaries,
+      );
+      if (
+        assignment.target.kind === "agent"
+        && thread
+        && backendSupport === "supported"
+      ) {
+        selected = { assignment, thread };
+        break;
+      }
+      if (thread && backendSupport === "unknown") {
+        await this.deliverDefaultAgentBootstrapError(
+          event,
+          "Default Agent unavailable",
+          "PwrAgent could not confirm that this Agent backend currently exposes the required tools. The default assignment was preserved.",
+        );
+        return true;
+      }
+      await this.options.store.revokeDefaultAgentAssignment({
+        assignmentId: assignment.id,
+        revokedAt: this.now(),
+      });
+    }
+    if (!selected) {
+      return false;
+    }
+
+    let admissionEvent: MessagingInboundTextEvent = event;
+    const conversationKind = event.channel.conversation.kind;
+    if (conversationKind !== "thread" && conversationKind !== "topic") {
+      const createManagedConversation =
+        this.options.adapter.createManagedConversation;
+      if (!createManagedConversation) {
+        await this.deliverDefaultAgentBootstrapError(
+          event,
+          "Default Agent cannot start here",
+          "This messaging adapter cannot safely create a child conversation from the addressed message.",
+        );
+        return true;
+      }
+
+      let rights: MessagingManagedConversationRightsResult | undefined;
+      try {
+        rights = this.options.adapter.getManagedConversationRights
+          ? await this.options.adapter.getManagedConversationRights({
+              actor: event.actor,
+              channel: event.channel,
+              routingState: event.routingState,
+            })
+          : undefined;
+      } catch (error) {
+        await this.deliverDefaultAgentBootstrapError(
+          event,
+          "Default Agent cannot start here",
+          error instanceof Error ? error.message : String(error),
+        );
+        return true;
+      }
+      const createChild = rights?.operations.find(
+        (operation) => operation.operation === "create_child",
+      );
+      if (
+        rights
+        && (rights.outcome !== "ok" || !createChild?.supported)
+      ) {
+        await this.deliverDefaultAgentBootstrapError(
+          event,
+          "Default Agent cannot start here",
+          createChild?.reason
+            ?? (createChild?.missingPermission
+              ? `Missing adapter permission: ${createChild.missingPermission}.`
+              : rights.errorMessage
+                ?? "This messaging surface cannot create a child conversation."),
+        );
+        return true;
+      }
+
+      let created: MessagingManagedConversationCreateResult;
+      try {
+        created = await createManagedConversation({
+          actor: event.actor,
+          parent: event.channel,
+          routingState: event.routingState,
+          title: selected.thread.title,
+        });
+      } catch (error) {
+        await this.deliverDefaultAgentBootstrapError(
+          event,
+          "Default Agent cannot start here",
+          error instanceof Error ? error.message : String(error),
+        );
+        return true;
+      }
+      if (
+        created.outcome !== "created"
+        || !created.conversation
+        || created.channel !== event.channel.channel
+        || (
+          created.conversation.kind !== "thread"
+          && created.conversation.kind !== "topic"
+        )
+      ) {
+        await this.deliverDefaultAgentBootstrapError(
+          event,
+          "Default Agent cannot start here",
+          created.errorMessage
+            ?? "The adapter did not create a bindable child conversation.",
+        );
+        return true;
+      }
+      admissionEvent = {
+        ...event,
+        id: `${event.id}:default-agent-child`,
+        channel: {
+          channel: created.channel,
+          conversation: created.conversation,
+        },
+        routingState: created.routingState,
+      };
+    }
+
+    const binding = await this.bindChannelToThread(admissionEvent, {
+      backend: selected.assignment.target.backend,
+      threadId: selected.assignment.target.threadId,
+      targetKind: "agent_thread",
+    });
+    await this.renderBindingStatus(binding, admissionEvent, navigation);
+    await this.turnAdmission.append({
+      binding,
+      event: admissionEvent,
+    });
+    return true;
+  }
+
+  private async deliverDefaultAgentBootstrapError(
+    event: MessagingInboundEvent,
+    title: string,
+    body: string,
+  ): Promise<void> {
+    await this.deliver(
+      buildErrorIntent({
+        id: this.newIntentId("default-agent-bootstrap"),
+        createdAt: this.now(),
+        title,
+        body,
+        recoverable: true,
+      }),
+      undefined,
+      event,
+    );
   }
 
   private async handleMedia(event: MessagingInboundMediaEvent): Promise<void> {
@@ -3056,6 +3275,14 @@ export class MessagingController {
   }
 
   private async handleCallback(event: MessagingInboundCallbackEvent): Promise<void> {
+    if (event.actionId === "agent-default:set") {
+      await this.presentDefaultAgentAssignmentBrowser(event, "conversation");
+      return;
+    }
+    if (event.actionId === "agent-default:clear") {
+      await this.clearDefaultAgentAssignment(event, "conversation");
+      return;
+    }
     const command = readCommandAction(event);
     if (command) {
       await this.handleCommand(
@@ -4973,6 +5200,175 @@ export class MessagingController {
     await this.renderResumeBrowser(session, navigation, event);
   }
 
+  private async handleDefaultAgentCommand(
+    event: MessagingInboundCommandEvent,
+  ): Promise<void> {
+    const action = event.args[1]?.toLowerCase() ?? "show";
+    const requestedScope = parseDefaultAgentScopeKind(event.args[2]);
+    if (event.args[2] && !requestedScope) {
+      await this.deliverDefaultAgentCommandError(
+        event,
+        "Scope must be conversation, parent, workspace, provider, or profile.",
+      );
+      return;
+    }
+    const scopeKind = requestedScope ?? "conversation";
+    if (action === "set" || action === "change") {
+      await this.presentDefaultAgentAssignmentBrowser(event, scopeKind);
+      return;
+    }
+    if (action === "clear") {
+      await this.clearDefaultAgentAssignment(event, scopeKind);
+      return;
+    }
+    if (action !== "show") {
+      await this.deliverDefaultAgentCommandError(
+        event,
+        "Use /agent default, /agent default set [scope], or /agent default clear [scope].",
+      );
+      return;
+    }
+    await this.presentDefaultAgentStatus(event);
+  }
+
+  private async presentDefaultAgentAssignmentBrowser(
+    event: MessagingInboundEvent,
+    scopeKind: MessagingDefaultAgentScopeKind,
+  ): Promise<void> {
+    const scope = defaultAgentScopeForChannel(event.channel, scopeKind);
+    if (!scope) {
+      await this.deliverDefaultAgentCommandError(
+        event,
+        `This messaging surface does not expose a normalized ${scopeKind} scope.`,
+      );
+      return;
+    }
+    const navigation = await this.options.backend.getNavigationSnapshot({
+      backend: "all",
+    });
+    const session: MessagingBrowseSessionRecord = {
+      id: this.newIntentId("default-agent-browse"),
+      allowedActorIds: [event.actor.platformUserId],
+      channel: event.channel,
+      createdAt: this.now(),
+      updatedAt: this.now(),
+      expiresAt: this.now() + this.pendingIntentTtlMs,
+      launchAction: "assign_default_agent",
+      defaultAgentScope: scope,
+      mode: "agents",
+      pageIndex: 0,
+      pageSize: resumeBrowserPageSize(this.capabilityProfile),
+    };
+    await this.renderResumeBrowser(session, navigation, event);
+  }
+
+  private async clearDefaultAgentAssignment(
+    event: MessagingInboundEvent,
+    scopeKind: MessagingDefaultAgentScopeKind,
+  ): Promise<void> {
+    const scope = defaultAgentScopeForChannel(event.channel, scopeKind);
+    if (!scope) {
+      await this.deliverDefaultAgentCommandError(
+        event,
+        `This messaging surface does not expose a normalized ${scopeKind} scope.`,
+      );
+      return;
+    }
+    const assignment =
+      await this.options.store.findActiveDefaultAgentAssignmentForScope(scope);
+    if (assignment) {
+      await this.options.store.revokeDefaultAgentAssignment({
+        assignmentId: assignment.id,
+        revokedAt: this.now(),
+      });
+    }
+    await this.presentDefaultAgentStatus(event, {
+      notice: assignment
+        ? `${formatDefaultAgentScope(scope)} default cleared.`
+        : `No ${formatDefaultAgentScope(scope)} default was configured.`,
+    });
+  }
+
+  private async presentDefaultAgentStatus(
+    event: MessagingInboundEvent,
+    options: { notice?: string } = {},
+  ): Promise<void> {
+    const exactScope = defaultAgentScopeForChannel(event.channel, "conversation")!;
+    const exact =
+      await this.options.store.findActiveDefaultAgentAssignmentForScope(exactScope);
+    const effective =
+      await this.options.store.findActiveDefaultAgentAssignmentForChannel(event.channel);
+    let targetLabel: string | undefined;
+    if (effective) {
+      try {
+        const navigation = await this.options.backend.getNavigationSnapshot({
+          backend: "all",
+        });
+        targetLabel = navigation.threads.find(
+          (thread) =>
+            thread.source === effective.target.backend
+            && thread.id === effective.target.threadId,
+        )?.title;
+      } catch {
+        targetLabel = undefined;
+      }
+    }
+    const body = [
+      options.notice,
+      effective
+        ? `Effective default: ${targetLabel ?? effective.target.threadId} (${formatDefaultAgentScope(effective.scope)}).`
+        : "Effective default: none.",
+      exact
+        ? "This conversation has an explicit default."
+        : "This conversation has no explicit default.",
+      "",
+      "Use /agent default set [scope] or /agent default clear [scope].",
+    ].filter((line): line is string => line !== undefined).join("\n");
+    await this.deliver(
+      buildConfirmationIntent({
+        id: this.newIntentId("default-agent-status"),
+        capabilityProfile: this.capabilityProfile,
+        createdAt: this.now(),
+        title: "Default Agent",
+        body,
+        actions: [
+          {
+            id: "agent-default:set",
+            label: exact ? "Change" : "Set",
+            style: "primary",
+            fallbackText: "set",
+          },
+          {
+            id: "agent-default:clear",
+            label: "Clear",
+            style: "secondary",
+            disabled: !exact,
+            fallbackText: "clear",
+          },
+        ],
+      }),
+      undefined,
+      event,
+    );
+  }
+
+  private async deliverDefaultAgentCommandError(
+    event: MessagingInboundEvent,
+    body: string,
+  ): Promise<void> {
+    await this.deliver(
+      buildErrorIntent({
+        id: this.newIntentId("default-agent-error"),
+        createdAt: this.now(),
+        title: "Default Agent command error",
+        body,
+        recoverable: true,
+      }),
+      undefined,
+      event,
+    );
+  }
+
   private async handleBrowseCallback(
     event: MessagingInboundCallbackEvent,
     actionId: string,
@@ -5614,6 +6010,40 @@ export class MessagingController {
       );
       if (session.mode === "agents" && !targetThread?.agent) {
         await this.deliverInvalidBrowseSelection(event);
+        return;
+      }
+      if (session.launchAction === "assign_default_agent") {
+        const backendSummaries = await this.loadDefaultAgentBackendSummaries();
+        if (
+          !session.defaultAgentScope
+          || !targetThread?.agent
+          || defaultAgentBackendSupport(target.backend, backendSummaries)
+            !== "supported"
+        ) {
+          await this.deliverDefaultAgentCommandError(
+            event,
+            "That thread is not an eligible default Agent. Choose a Codex Agent or an ACP Agent with PwrAgent HTTP MCP tools.",
+          );
+          return;
+        }
+        const assignment: MessagingDefaultAgentAssignmentRecord = {
+          id: this.newIntentId("default-agent-assignment"),
+          scope: session.defaultAgentScope,
+          target: {
+            kind: "agent",
+            backend: target.backend,
+            threadId: target.threadId,
+          },
+          createdAt: this.now(),
+          updatedAt: this.now(),
+        };
+        await this.options.store.upsertDefaultAgentAssignment(assignment);
+        await this.options.store.deleteBrowseSession(session.id);
+        await this.presentDefaultAgentStatus(event, {
+          notice:
+            `${targetThread.title || target.threadId} is now the `
+            + `${formatDefaultAgentScope(assignment.scope)} default.`,
+        });
         return;
       }
       if (
@@ -7493,6 +7923,16 @@ export class MessagingController {
     session: MessagingBrowseSessionRecord,
     navigation: NavigationSnapshot,
   ): Promise<NavigationSnapshot> {
+    if (session.launchAction === "assign_default_agent") {
+      const backendSummaries = await this.loadDefaultAgentBackendSummaries();
+      const threads = navigation.threads.filter(
+        (thread) =>
+          Boolean(thread.agent)
+          && defaultAgentBackendSupport(thread.source, backendSummaries)
+            === "supported",
+      );
+      return filterNavigationToThreads(navigation, threads);
+    }
     if (session.launchAction !== "resume_thread") {
       return navigation;
     }
@@ -7502,22 +7942,25 @@ export class MessagingController {
     const threads = navigation.threads.filter(
       (thread) => thread.executionMode !== "full-access",
     );
-    const allowedThreadKeys = new Set(
-      threads.map((thread) => buildThreadIdentityKey(thread.source, thread.id)),
-    );
-    return {
-      ...navigation,
-      threads,
-      directories: navigation.directories.map((directory) => ({
-        ...directory,
-        threadKeys: directory.threadKeys.filter((threadKey) =>
-          allowedThreadKeys.has(threadKey)
-        ),
-      })),
-      inboxThreadKeys: navigation.inboxThreadKeys.filter((threadKey) =>
-        allowedThreadKeys.has(threadKey)
-      ),
-    };
+    return filterNavigationToThreads(navigation, threads);
+  }
+
+  private async loadDefaultAgentBackendSummaries(): Promise<
+    BackendSummary[] | undefined
+  > {
+    if (!this.options.backend.listBackends) {
+      return undefined;
+    }
+    try {
+      return (await this.options.backend.listBackends({
+        includeUnavailable: true,
+      })).backends;
+    } catch (error) {
+      this.logger.debug?.("default Agent backend capability lookup failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
   }
 
   private async presentStatus(event: MessagingInboundEvent): Promise<void> {
@@ -12001,7 +12444,7 @@ export class MessagingController {
   }): void {
     if (
       !params.event ||
-      !isMessagingToolOriginBinding(params.binding, params.navigation)
+      !isLiveMessagingToolOriginBinding(params.binding, params.navigation)
     ) {
       return;
     }
@@ -12275,7 +12718,8 @@ export class MessagingController {
     };
     if (
       previousBinding &&
-      (previousBinding.backend !== binding.backend ||
+      (previousBinding.id !== binding.id ||
+        previousBinding.backend !== binding.backend ||
         previousBinding.threadId !== binding.threadId)
     ) {
       await this.options.store.revokeBinding({
@@ -14410,6 +14854,28 @@ function handoffSuccessText(result: HandoffThreadWorkspaceResponse): string {
     .join("\n");
 }
 
+function filterNavigationToThreads(
+  navigation: NavigationSnapshot,
+  threads: NavigationThreadSummary[],
+): NavigationSnapshot {
+  const allowedThreadKeys = new Set(
+    threads.map((thread) => buildThreadIdentityKey(thread.source, thread.id)),
+  );
+  return {
+    ...navigation,
+    threads,
+    directories: navigation.directories.map((directory) => ({
+      ...directory,
+      threadKeys: directory.threadKeys.filter((threadKey) =>
+        allowedThreadKeys.has(threadKey)
+      ),
+    })),
+    inboxThreadKeys: navigation.inboxThreadKeys.filter((threadKey) =>
+      allowedThreadKeys.has(threadKey)
+    ),
+  };
+}
+
 function normalizeNewThreadSessionForBackend(
   session: MessagingBrowseSessionRecord,
   backend: BackendSummary,
@@ -15299,6 +15765,40 @@ function summarizeMessagingActor(
   };
 }
 
+function parseDefaultAgentScopeKind(
+  value: string | undefined,
+): MessagingDefaultAgentScopeKind | undefined {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  if (
+    normalized === "conversation"
+    || normalized === "parent"
+    || normalized === "workspace"
+    || normalized === "provider"
+    || normalized === "profile"
+  ) {
+    return normalized;
+  }
+  return undefined;
+}
+
+function formatDefaultAgentScope(scope: MessagingDefaultAgentScope): string {
+  switch (scope.kind) {
+    case "conversation":
+      return "conversation";
+    case "parent":
+      return "parent conversation";
+    case "workspace":
+      return "workspace";
+    case "provider":
+      return `${scope.channel} provider`;
+    case "profile":
+      return "profile";
+  }
+}
+
 function summarizeMessagingBinding(
   binding: MessagingBindingRecord,
   thread?: PwrAgentMessagingBoundThreadSummary,
@@ -15328,6 +15828,16 @@ function isMessagingToolOriginBinding(
       thread.source === binding.backend &&
       thread.id === binding.threadId &&
       Boolean(thread.handoffOrigin),
+  );
+}
+
+function isLiveMessagingToolOriginBinding(
+  binding: MessagingBindingRecord,
+  navigation: NavigationSnapshot | undefined,
+): boolean {
+  return (
+    binding.backend === "codex"
+    || isMessagingToolOriginBinding(binding, navigation)
   );
 }
 

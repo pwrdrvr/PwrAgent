@@ -3,6 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import type BetterSqlite3 from "better-sqlite3";
 import Database from "better-sqlite3";
+import type {
+  MessagingDefaultAgentAssignmentRecord,
+} from "@pwragent/messaging-interface";
+import { buildMessagingDefaultAgentScopeKey } from "../messaging/core/messaging-default-agent.js";
 import { migrateMessagingStoreData } from "../messaging/core/messaging-migrations.js";
 import {
   resolveActiveProfileName,
@@ -156,6 +160,10 @@ export function migrateIfNeeded(options?: {
         migrated.callbackHandles,
       );
       counts.deliveries = migrateDeliveries(stateDb.raw, migrated.deliveries);
+      counts.default_agent_assignments = migrateDefaultAgentAssignments(
+        stateDb.raw,
+        migrated.defaultAgentAssignments,
+      );
     }
 
     if (overlayData) {
@@ -347,6 +355,37 @@ function migrateDeliveries(
   return count;
 }
 
+function migrateDefaultAgentAssignments(
+  db: BetterSqlite3.Database,
+  assignments: Record<string, MessagingDefaultAgentAssignmentRecord>,
+): number {
+  const stmt = db.prepare(
+    `INSERT OR IGNORE INTO messaging_default_agent_assignments(assignment_id, scope_kind, scope_key, channel_kind, backend, thread_id, status, created_at, updated_at, revoked_at, payload)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  let count = 0;
+  const insert = db.transaction(() => {
+    for (const [id, assignment] of Object.entries(assignments)) {
+      const result = stmt.run(
+        id,
+        assignment.scope.kind,
+        buildMessagingDefaultAgentScopeKey(assignment.scope),
+        defaultAgentAssignmentChannelKind(assignment),
+        assignment.target.backend,
+        assignment.target.threadId,
+        assignment.revokedAt ? "revoked" : "active",
+        assignment.createdAt,
+        assignment.updatedAt,
+        assignment.revokedAt ?? null,
+        JSON.stringify(assignment),
+      );
+      count += result.changes;
+    }
+  });
+  insert();
+  return count;
+}
+
 function migrateBackends(
   db: BetterSqlite3.Database,
   backends: unknown,
@@ -486,6 +525,17 @@ function channelId(channel: Record<string, unknown> | undefined): string {
   return [conv.kind ?? "", conv.parentId ?? "", conv.id ?? ""].join(":");
 }
 
+function defaultAgentAssignmentChannelKind(
+  assignment: MessagingDefaultAgentAssignmentRecord,
+): string | null {
+  if (assignment.scope.kind === "profile") {
+    return null;
+  }
+  return assignment.scope.kind === "conversation"
+    ? assignment.scope.channel.channel
+    : assignment.scope.channel;
+}
+
 function copyConfig(
   srcPath: string | undefined,
   options?: { env?: NodeJS.ProcessEnv; homeDir?: string; cliProfile?: string },
@@ -522,6 +572,10 @@ function verifyCounts(dbPath: string): Record<string, number> {
   try {
     const tableCountQueries = [
       ["bindings", "SELECT COUNT(*) as count FROM bindings"],
+      [
+        "default_agent_assignments",
+        "SELECT COUNT(*) as count FROM messaging_default_agent_assignments",
+      ],
       ["pending_intents", "SELECT COUNT(*) as count FROM pending_intents"],
       ["browse_sessions", "SELECT COUNT(*) as count FROM browse_sessions"],
       ["callback_handles", "SELECT COUNT(*) as count FROM callback_handles"],

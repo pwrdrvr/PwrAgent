@@ -6,11 +6,13 @@ import type {
   MessagingBindingRecord,
   MessagingBrowseSessionRecord,
   MessagingCallbackHandleRecord,
+  MessagingDefaultAgentAssignmentRecord,
   MessagingManagedTopicRecord,
   MessagingPendingIntentRecord,
   MessagingThreadTopicLinkRecord,
   MessagingTopicCleanupProposalRecord,
 } from "@pwragent/messaging-interface";
+import { migrateMessagingStoreData } from "../messaging/core/messaging-migrations";
 import { MessagingStore } from "../messaging/core/messaging-store";
 
 const tempDirs: string[] = [];
@@ -40,6 +42,26 @@ function buildBinding(
     backend: "codex",
     threadId: "thread-1",
     authorizedActorIds: ["user-1"],
+    createdAt: 1000,
+    updatedAt: 1000,
+    ...overrides,
+  };
+}
+
+function buildDefaultAgentAssignment(
+  overrides: Partial<MessagingDefaultAgentAssignmentRecord> = {},
+): MessagingDefaultAgentAssignmentRecord {
+  return {
+    id: "default-agent-1",
+    scope: {
+      kind: "conversation",
+      channel: buildBinding().channel,
+    },
+    target: {
+      kind: "agent",
+      backend: "codex",
+      threadId: "agent-thread-1",
+    },
     createdAt: 1000,
     updatedAt: 1000,
     ...overrides,
@@ -383,6 +405,36 @@ describe("MessagingStore", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("finds a legacy channel-shaped binding from its normalized thread surface", async () => {
+    const { store } = await createStore();
+    await store.upsertBinding(buildBinding({
+      channel: {
+        channel: "discord",
+        conversation: {
+          id: "thread-channel-1",
+          kind: "channel",
+          parentId: "guild-1",
+        },
+      },
+    }));
+
+    await expect(
+      store.findActiveBindingForChannel({
+        channel: "discord",
+        conversation: {
+          id: "thread-channel-1",
+          kind: "thread",
+          parentConversationId: "parent-channel-1",
+          parentId: "guild-1",
+          workspaceId: "guild-1",
+        },
+      }),
+    ).resolves.toMatchObject({
+      id: "binding-1",
+      threadId: "thread-1",
+    });
+  });
+
   it("replaces the active binding when a conversation is rebound", async () => {
     const { store } = await createStore();
     await store.upsertBinding(buildBinding({ id: "binding-old", threadId: "thread-old" }));
@@ -403,6 +455,158 @@ describe("MessagingStore", () => {
     await expect(store.getBinding("binding-old")).resolves.toMatchObject({
       revokedAt: 2000,
     });
+  });
+
+  it("keeps default Agent assignments separate from active bindings", async () => {
+    const { store } = await createStore();
+    await store.upsertBinding(buildBinding({ threadId: "work-thread-1" }));
+    await store.upsertDefaultAgentAssignment(buildDefaultAgentAssignment());
+
+    await expect(store.findActiveBindingForChannel(buildBinding().channel)).resolves
+      .toMatchObject({
+        id: "binding-1",
+        threadId: "work-thread-1",
+      });
+    await expect(
+      store.findActiveDefaultAgentAssignmentForChannel(buildBinding().channel),
+    ).resolves.toMatchObject({
+      id: "default-agent-1",
+      target: { threadId: "agent-thread-1" },
+    });
+  });
+
+  it("resolves the most specific active default Agent assignment", async () => {
+    const { store } = await createStore();
+    await store.upsertDefaultAgentAssignment(
+      buildDefaultAgentAssignment({
+        id: "profile-default",
+        scope: { kind: "profile" },
+        target: { kind: "agent", backend: "codex", threadId: "profile-agent" },
+      }),
+    );
+    await store.upsertDefaultAgentAssignment(
+      buildDefaultAgentAssignment({
+        id: "provider-default",
+        scope: { kind: "provider", channel: "telegram" },
+        target: { kind: "agent", backend: "codex", threadId: "provider-agent" },
+        createdAt: 1100,
+        updatedAt: 1100,
+      }),
+    );
+    await store.upsertDefaultAgentAssignment(
+      buildDefaultAgentAssignment({
+        id: "conversation-default",
+        target: {
+          kind: "agent",
+          backend: "codex",
+          threadId: "conversation-agent",
+        },
+        createdAt: 1200,
+        updatedAt: 1200,
+      }),
+    );
+
+    await expect(
+      store.findActiveDefaultAgentAssignmentForChannel(buildBinding().channel),
+    ).resolves.toMatchObject({
+      id: "conversation-default",
+      target: { threadId: "conversation-agent" },
+    });
+
+    await store.revokeDefaultAgentAssignment({
+      assignmentId: "conversation-default",
+      revokedAt: 1300,
+    });
+
+    await expect(
+      store.findActiveDefaultAgentAssignmentForChannel(buildBinding().channel),
+    ).resolves.toMatchObject({
+      id: "provider-default",
+      target: { threadId: "provider-agent" },
+    });
+  });
+
+  it("replaces active default Agent assignments within the same scope", async () => {
+    const { store } = await createStore();
+    await store.upsertDefaultAgentAssignment(buildDefaultAgentAssignment());
+    await store.upsertDefaultAgentAssignment(
+      buildDefaultAgentAssignment({
+        id: "default-agent-2",
+        target: { kind: "agent", backend: "codex", threadId: "agent-thread-2" },
+        createdAt: 2000,
+        updatedAt: 2000,
+      }),
+    );
+
+    await expect(
+      store.findActiveDefaultAgentAssignmentForChannel(buildBinding().channel),
+    ).resolves.toMatchObject({
+      id: "default-agent-2",
+      target: { threadId: "agent-thread-2" },
+    });
+    await expect(store.getDefaultAgentAssignment("default-agent-1")).resolves
+      .toMatchObject({
+        revokedAt: 2000,
+      });
+  });
+
+  it("resolves parent and workspace defaults in specificity order", async () => {
+    const { store } = await createStore();
+    const channel = {
+      channel: "discord" as const,
+      conversation: {
+        id: "thread-1",
+        kind: "thread" as const,
+        parentId: "legacy-thread-parent",
+        parentConversationId: "channel-1",
+        workspaceId: "guild-1",
+      },
+    };
+    const records = [
+      buildDefaultAgentAssignment({
+        id: "workspace-default",
+        scope: { kind: "workspace", channel: "discord", workspaceId: "guild-1" },
+        target: { kind: "agent", backend: "codex", threadId: "workspace-agent" },
+      }),
+      buildDefaultAgentAssignment({
+        id: "parent-default",
+        scope: { kind: "parent", channel: "discord", conversationId: "channel-1" },
+        target: { kind: "agent", backend: "codex", threadId: "parent-agent" },
+      }),
+      buildDefaultAgentAssignment({
+        id: "exact-default",
+        scope: { kind: "conversation", channel },
+        target: { kind: "agent", backend: "codex", threadId: "exact-agent" },
+      }),
+    ];
+    for (const record of records) {
+      await store.upsertDefaultAgentAssignment(record);
+    }
+
+    await expect(store.findActiveDefaultAgentAssignmentsForChannel(channel))
+      .resolves.toMatchObject([
+        { id: "exact-default" },
+        { id: "parent-default" },
+        { id: "workspace-default" },
+      ]);
+  });
+
+  it("rejects malformed persisted assignment scopes instead of widening them", () => {
+    const migrated = migrateMessagingStoreData({
+      version: 2,
+      defaultAgentAssignments: {
+        malformed: {
+          id: "malformed",
+          scope: { kind: "workspace", channel: "slack" },
+          target: { kind: "agent", backend: "codex", threadId: "agent-1" },
+          createdAt: 1000,
+          updatedAt: 1000,
+        },
+      },
+    });
+
+    expect(migrated.defaultAgentAssignments).toEqual({});
+    expect(migrated.version).toBe(3);
   });
 
   it("sweeps binding and channel state when a binding is revoked", async () => {
@@ -686,7 +890,7 @@ describe("MessagingStore", () => {
     const store = new MessagingStore(filePath);
 
     await expect(store.readSnapshot()).resolves.toMatchObject({
-      version: 2,
+      version: 3,
       bindings: {
         valid: {
           id: "valid",

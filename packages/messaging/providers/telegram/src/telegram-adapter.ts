@@ -1327,6 +1327,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         id: String(topic.message_thread_id),
         kind: "topic" as const,
         parentId: String(target.chatId),
+        parentConversationId: String(target.chatId),
         parentTitle: parent.kind === "topic" ? parent.parentTitle : parent.title,
         title: topic.name,
       };
@@ -2503,6 +2504,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
           id: String(messageThreadId),
           kind: "topic",
           parentId: String(message.chat.id),
+          parentConversationId: String(message.chat.id),
           title: topicTitle,
           parentTitle: chatTitle,
         },

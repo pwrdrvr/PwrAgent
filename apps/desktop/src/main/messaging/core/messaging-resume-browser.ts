@@ -337,6 +337,9 @@ function threadsForSession(
   if (session.mode === "agents") {
     threads = threads.filter((thread) => Boolean(thread.agent));
   }
+  if (session.launchAction === "assign_default_agent") {
+    threads = threads.filter((thread) => Boolean(thread.agent));
+  }
   const selectedDirectory = session.selectedProject
     ? directoryForProjectSelection(navigation, session.selectedProject)
     : undefined;
@@ -496,6 +499,16 @@ function navigationActions(
       layout: { row: NAV_ROW },
     });
   }
+  if (session.launchAction === "assign_default_agent") {
+    actions.push({
+      id: "browse:cancel",
+      label: "Cancel",
+      style: "secondary",
+      fallbackText: "cancel",
+      layout: { row: FOOTER_ROW },
+    });
+    return actions;
+  }
   if (session.mode === "agents") {
     actions.push({
       id: "browse:mode:recents",
@@ -571,14 +584,18 @@ function threadPickerPromptText(
 ): string {
   const pageLabel = `Page ${session.pageIndex + 1}/${totalPages}`;
   const scope =
-    session.mode === "agents"
+    session.launchAction === "assign_default_agent"
+      ? "Showing eligible PwrAgent Agent threads."
+      : session.mode === "agents"
       ? "Showing PwrAgent Agent threads."
       : session.selectedProject
         ? `Showing recent PwrAgent threads for ${session.selectedProject.label}.`
         : "Showing recent PwrAgent threads.";
   return [
     `${scope} ${pageLabel}.`,
-    session.mode === "agents"
+    session.launchAction === "assign_default_agent"
+      ? "Choose the default Agent for this messaging scope, or Cancel to leave it unchanged."
+      : session.mode === "agents"
       ? "Choose an Agent thread to attach. Use Recent Threads to show every thread, or Cancel to close this picker."
       : "Choose a thread to resume. Use Projects to browse by project, New to start a thread, or Cancel to close this picker.",
     totalItems === 0
@@ -601,14 +618,21 @@ function threadPickerFallbackText(
     totalPages: number;
   },
 ): string {
-  const controls = [
-    page.pageIndex > 0 ? "previous" : undefined,
-    page.pageIndex < page.totalPages - 1 ? "next" : undefined,
-    session.mode === "agents" ? "recent" : "projects",
-    session.mode === "agents" ? undefined : "agents",
-    "new",
-    "cancel",
-  ].filter(Boolean);
+  const controls =
+    session.launchAction === "assign_default_agent"
+      ? [
+          page.pageIndex > 0 ? "previous" : undefined,
+          page.pageIndex < page.totalPages - 1 ? "next" : undefined,
+          "cancel",
+        ].filter(Boolean)
+      : [
+          page.pageIndex > 0 ? "previous" : undefined,
+          page.pageIndex < page.totalPages - 1 ? "next" : undefined,
+          session.mode === "agents" ? "recent" : "projects",
+          session.mode === "agents" ? undefined : "agents",
+          "new",
+          "cancel",
+        ].filter(Boolean);
   return [
     threadPickerPromptText(session, page.totalPages, page.totalItems),
     ...page.items.map(

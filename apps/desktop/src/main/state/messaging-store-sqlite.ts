@@ -4,6 +4,8 @@ import type {
   MessagingBrowseSessionRecord,
   MessagingCallbackHandleRecord,
   MessagingChannelRef,
+  MessagingDefaultAgentAssignmentRecord,
+  MessagingDefaultAgentScope,
   MessagingJsonValue,
   MessagingManagedTopicRecord,
   MessagingMonitorSubscriptionRecord,
@@ -18,6 +20,10 @@ import type {
   MessagingStoreData,
 } from "../messaging/core/messaging-migrations.js";
 import { CURRENT_MESSAGING_STORE_VERSION } from "../messaging/core/messaging-migrations.js";
+import {
+  buildDefaultAgentScopeLookup,
+  buildMessagingDefaultAgentScopeKey,
+} from "../messaging/core/messaging-default-agent.js";
 
 const SECRET_KEY_PATTERN = /token|secret|password|authorization|api[_-]?key/i;
 
@@ -55,10 +61,200 @@ export class SqliteMessagingStore {
     return row ? JSON.parse(row.payload) : undefined;
   }
 
+  async upsertDefaultAgentAssignment(
+    assignment: MessagingDefaultAgentAssignmentRecord,
+  ): Promise<MessagingDefaultAgentAssignmentRecord> {
+    const sanitized = sanitizeDefaultAgentAssignment(assignment);
+    const scopeKey = buildMessagingDefaultAgentScopeKey(sanitized.scope);
+    const now = sanitized.updatedAt;
+    const upsertAssignment = this.stateDb.raw.prepare(
+      `INSERT OR REPLACE INTO messaging_default_agent_assignments(assignment_id, scope_kind, scope_key, channel_kind, backend, thread_id, status, created_at, updated_at, revoked_at, payload)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const upsert = this.stateDb.raw.transaction(() => {
+      const rowsToRevoke = sanitized.revokedAt
+        ? []
+        : this.stateDb.raw
+            .prepare(
+              "SELECT assignment_id, payload FROM messaging_default_agent_assignments WHERE status = 'active' AND scope_key = ? AND assignment_id != ?",
+            )
+            .all(scopeKey, sanitized.id) as {
+              assignment_id: string;
+              payload: string;
+            }[];
+      for (const row of rowsToRevoke) {
+        try {
+          const current = JSON.parse(
+            row.payload,
+          ) as MessagingDefaultAgentAssignmentRecord;
+          const revoked: MessagingDefaultAgentAssignmentRecord = {
+            ...current,
+            revokedAt: now,
+            updatedAt: now,
+          };
+          upsertAssignment.run(
+            revoked.id,
+            revoked.scope.kind,
+            buildMessagingDefaultAgentScopeKey(revoked.scope),
+            channelKindForDefaultAgentScope(revoked.scope),
+            revoked.target.backend,
+            revoked.target.threadId,
+            "revoked",
+            revoked.createdAt,
+            revoked.updatedAt,
+            revoked.revokedAt ?? null,
+            JSON.stringify(revoked),
+          );
+        } catch {
+          this.stateDb.raw
+            .prepare(
+              "UPDATE messaging_default_agent_assignments SET status = 'revoked', revoked_at = ?, updated_at = ? WHERE assignment_id = ?",
+            )
+            .run(now, now, row.assignment_id);
+        }
+      }
+
+      upsertAssignment.run(
+        sanitized.id,
+        sanitized.scope.kind,
+        scopeKey,
+        channelKindForDefaultAgentScope(sanitized.scope),
+        sanitized.target.backend,
+        sanitized.target.threadId,
+        sanitized.revokedAt ? "revoked" : "active",
+        sanitized.createdAt,
+        sanitized.updatedAt,
+        sanitized.revokedAt ?? null,
+        JSON.stringify(sanitized),
+      );
+    });
+    upsert();
+
+    return structuredClone(sanitized);
+  }
+
+  async getDefaultAgentAssignment(
+    id: string,
+  ): Promise<MessagingDefaultAgentAssignmentRecord | undefined> {
+    const row = this.stateDb.raw
+      .prepare(
+        "SELECT payload FROM messaging_default_agent_assignments WHERE assignment_id = ?",
+      )
+      .get(id) as { payload: string } | undefined;
+    return row ? JSON.parse(row.payload) : undefined;
+  }
+
+  async findActiveDefaultAgentAssignmentForChannel(
+    channel: MessagingChannelRef,
+  ): Promise<MessagingDefaultAgentAssignmentRecord | undefined> {
+    return (await this.findActiveDefaultAgentAssignmentsForChannel(channel))[0];
+  }
+
+  async findActiveDefaultAgentAssignmentsForChannel(
+    channel: MessagingChannelRef,
+  ): Promise<MessagingDefaultAgentAssignmentRecord[]> {
+    const matches: MessagingDefaultAgentAssignmentRecord[] = [];
+    for (const { key: scopeKey } of buildDefaultAgentScopeLookup(channel)) {
+      const rows = this.stateDb.raw
+        .prepare(
+          "SELECT payload FROM messaging_default_agent_assignments WHERE status = 'active' AND scope_key = ? ORDER BY updated_at DESC, created_at DESC",
+        )
+        .all(scopeKey) as { payload: string }[];
+      const match = rows
+        .map((row) => JSON.parse(row.payload) as MessagingDefaultAgentAssignmentRecord)
+        .find((assignment) => !assignment.revokedAt);
+      if (match) matches.push(match);
+    }
+    return matches;
+  }
+
+  async findActiveDefaultAgentAssignmentForScope(
+    scope: MessagingDefaultAgentScope,
+  ): Promise<MessagingDefaultAgentAssignmentRecord | undefined> {
+    const row = this.stateDb.raw
+      .prepare(
+        "SELECT payload FROM messaging_default_agent_assignments WHERE status = 'active' AND scope_key = ? ORDER BY updated_at DESC, created_at DESC LIMIT 1",
+      )
+      .get(buildMessagingDefaultAgentScopeKey(scope)) as
+        | { payload: string }
+        | undefined;
+    if (!row) return undefined;
+    const assignment = JSON.parse(row.payload) as MessagingDefaultAgentAssignmentRecord;
+    return assignment.revokedAt ? undefined : assignment;
+  }
+
+  async revokeDefaultAgentAssignment(params: {
+    assignmentId: string;
+    revokedAt?: number;
+  }): Promise<MessagingDefaultAgentAssignmentRecord | undefined> {
+    const current = await this.getDefaultAgentAssignment(params.assignmentId);
+    if (!current) return undefined;
+    const revokedAt = params.revokedAt ?? Date.now();
+    const revoked: MessagingDefaultAgentAssignmentRecord = {
+      ...current,
+      revokedAt,
+      updatedAt: revokedAt,
+    };
+    await this.upsertDefaultAgentAssignment(revoked);
+    return structuredClone(revoked);
+  }
+
+  async revokeDefaultAgentAssignmentsForTarget(params: {
+    backend: MessagingDefaultAgentAssignmentRecord["target"]["backend"];
+    threadId: MessagingDefaultAgentAssignmentRecord["target"]["threadId"];
+    revokedAt?: number;
+  }): Promise<MessagingDefaultAgentAssignmentRecord[]> {
+    const revokedAt = params.revokedAt ?? Date.now();
+    const revoke = this.stateDb.raw.transaction(() => {
+      const rows = this.stateDb.raw
+        .prepare(
+          "SELECT payload FROM messaging_default_agent_assignments WHERE status = 'active' AND backend = ? AND thread_id = ?",
+        )
+        .all(params.backend, params.threadId) as { payload: string }[];
+      const revoked: MessagingDefaultAgentAssignmentRecord[] = [];
+      for (const row of rows) {
+        const current = JSON.parse(row.payload) as MessagingDefaultAgentAssignmentRecord;
+        const next = {
+          ...current,
+          revokedAt,
+          updatedAt: revokedAt,
+        };
+        this.writeDefaultAgentAssignment(next);
+        revoked.push(next);
+      }
+      return revoked;
+    });
+    return revoke().map((assignment) => structuredClone(assignment));
+  }
+
+  private writeDefaultAgentAssignment(
+    assignment: MessagingDefaultAgentAssignmentRecord,
+  ): void {
+    const scopeKey = buildMessagingDefaultAgentScopeKey(assignment.scope);
+    this.stateDb.raw
+      .prepare(
+        `INSERT OR REPLACE INTO messaging_default_agent_assignments(assignment_id, scope_kind, scope_key, channel_kind, backend, thread_id, status, created_at, updated_at, revoked_at, payload)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        assignment.id,
+        assignment.scope.kind,
+        scopeKey,
+        channelKindForDefaultAgentScope(assignment.scope),
+        assignment.target.backend,
+        assignment.target.threadId,
+        assignment.revokedAt ? "revoked" : "active",
+        assignment.createdAt,
+        assignment.updatedAt,
+        assignment.revokedAt ?? null,
+        JSON.stringify(assignment),
+      );
+  }
+
   async findActiveBindingForChannel(
     channel: MessagingChannelRef,
   ): Promise<MessagingBindingRecord | undefined> {
-    const channelKey = buildMessagingConversationKey(channel);
+    const channelKeys = buildMessagingConversationLookupKeys(channel);
     const rows = this.stateDb.raw
       .prepare(
         "SELECT payload FROM bindings WHERE status = 'active' AND channel_kind = ?",
@@ -68,7 +264,7 @@ export class SqliteMessagingStore {
       const binding: MessagingBindingRecord = JSON.parse(row.payload);
       if (
         !binding.revokedAt &&
-        buildMessagingConversationKey(binding.channel) === channelKey
+        channelKeys.has(buildMessagingConversationKey(binding.channel))
       ) {
         return binding;
       }
@@ -785,6 +981,10 @@ export class SqliteMessagingStore {
 
   async readSnapshot(): Promise<MessagingStoreData> {
     const bindings: Record<string, MessagingBindingRecord> = {};
+    const defaultAgentAssignments: Record<
+      string,
+      MessagingDefaultAgentAssignmentRecord
+    > = {};
     const monitorSubscriptions: Record<string, MessagingMonitorSubscriptionRecord> = {};
     const pendingIntents: Record<string, MessagingPendingIntentRecord> = {};
     const browseSessions: Record<string, MessagingBrowseSessionRecord> = {};
@@ -798,6 +998,13 @@ export class SqliteMessagingStore {
       .prepare("SELECT binding_id, payload FROM bindings")
       .all() as { binding_id: string; payload: string }[]) {
       bindings[row.binding_id] = JSON.parse(row.payload);
+    }
+    for (const row of this.stateDb.raw
+      .prepare(
+        "SELECT assignment_id, payload FROM messaging_default_agent_assignments",
+      )
+      .all() as { assignment_id: string; payload: string }[]) {
+      defaultAgentAssignments[row.assignment_id] = JSON.parse(row.payload);
     }
     for (const row of this.stateDb.raw
       .prepare("SELECT subscription_id, payload FROM monitor_subscriptions")
@@ -843,6 +1050,7 @@ export class SqliteMessagingStore {
     return {
       version: CURRENT_MESSAGING_STORE_VERSION,
       bindings,
+      defaultAgentAssignments,
       monitorSubscriptions,
       topicCleanupProposals,
       topicLinks,
@@ -864,6 +1072,22 @@ export function buildMessagingConversationKey(
     channel.conversation.parentId ?? "",
     channel.conversation.id,
   ].join(":");
+}
+
+function buildMessagingConversationLookupKeys(
+  channel: MessagingChannelRef,
+): Set<string> {
+  const keys = new Set([buildMessagingConversationKey(channel)]);
+  if (channel.conversation.kind === "thread") {
+    keys.add(buildMessagingConversationKey({
+      channel: channel.channel,
+      conversation: {
+        ...channel.conversation,
+        kind: "channel",
+      },
+    }));
+  }
+  return keys;
 }
 
 function buildChannelId(channel: MessagingChannelRef): string {
@@ -888,6 +1112,33 @@ function sanitizeBinding(
     statusSurface: sanitizeSurfaceRef(binding.statusSurface),
     targetKind: normalizeMessagingBindingTargetKind(binding.targetKind),
   };
+}
+
+function sanitizeDefaultAgentAssignment(
+  assignment: MessagingDefaultAgentAssignmentRecord,
+): MessagingDefaultAgentAssignmentRecord {
+  return {
+    ...assignment,
+    scope: assignment.scope.kind === "conversation"
+      ? {
+          ...assignment.scope,
+          channel: {
+            ...assignment.scope.channel,
+            conversation: { ...assignment.scope.channel.conversation },
+          },
+        }
+      : { ...assignment.scope },
+    target: { ...assignment.target },
+  };
+}
+
+function channelKindForDefaultAgentScope(
+  scope: MessagingDefaultAgentScope,
+): string | null {
+  if (scope.kind === "profile") {
+    return null;
+  }
+  return scope.kind === "conversation" ? scope.channel.channel : scope.channel;
 }
 
 function sanitizePendingIntent(
@@ -993,6 +1244,13 @@ export type MessagingStoreLike = Pick<
   SqliteMessagingStore,
   | "upsertBinding"
   | "getBinding"
+  | "upsertDefaultAgentAssignment"
+  | "getDefaultAgentAssignment"
+  | "findActiveDefaultAgentAssignmentForChannel"
+  | "findActiveDefaultAgentAssignmentsForChannel"
+  | "findActiveDefaultAgentAssignmentForScope"
+  | "revokeDefaultAgentAssignment"
+  | "revokeDefaultAgentAssignmentsForTarget"
   | "findActiveBindingForChannel"
   | "findActiveBindingsForBackend"
   | "findActiveBindingsForThread"
