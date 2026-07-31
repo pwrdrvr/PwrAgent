@@ -1877,34 +1877,36 @@ describe("ThreadContextPanel", () => {
     expect(times?.textContent).toContain("· 1m 5s");
   });
 
-  it("shows a terminal sub-agent's name but no Live chip", () => {
-    const { container } = renderPanel({
-      activeTab: "pricing",
-      pinned: true,
-      thread: {
-        ...baseThread,
-        subAgents: [
-          {
-            monitorId: "mon-1",
-            task: "Review the diff",
-            status: "success",
-            agentName: "Reviewer",
-            createdAt: 1_800_000_000_000,
-            updatedAt: 1_800_000_000_000,
-          },
-        ],
-      },
-      pricing: {
-        lines: [buildMonitorLine({})],
-        summaries: [],
-      },
-      threadPricingSummaryEnabled: true,
-    });
+  for (const status of ["success", "failure", "failed", "blocked", "cancelled"] as const) {
+    it(`shows a ${status} sub-agent's name but no Live chip`, () => {
+      const { container } = renderPanel({
+        activeTab: "pricing",
+        pinned: true,
+        thread: {
+          ...baseThread,
+          subAgents: [
+            {
+              monitorId: "mon-1",
+              task: "Review the diff",
+              status,
+              agentName: "Reviewer",
+              createdAt: 1_800_000_000_000,
+              updatedAt: 1_800_000_000_000,
+            },
+          ],
+        },
+        pricing: {
+          lines: [buildMonitorLine({})],
+          summaries: [],
+        },
+        threadPricingSummaryEnabled: true,
+      });
 
-    expect(container.querySelector(".pricing-usage-row--active")).toBeNull();
-    expect(screen.queryByText("Live")).not.toBeInTheDocument();
-    expect(screen.getByText("Reviewer")).toBeInTheDocument();
-  });
+      expect(container.querySelector(".pricing-usage-row--active")).toBeNull();
+      expect(screen.queryByText("Live")).not.toBeInTheDocument();
+      expect(screen.getByText("Reviewer")).toBeInTheDocument();
+    });
+  }
 
   it("marks multiple concurrently-running sub-agents live", () => {
     const startedAt = 1_800_000_000_000;

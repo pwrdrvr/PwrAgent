@@ -35,6 +35,17 @@ describe("ThreadTitleGenerationService", () => {
       title: "PROJECT-123 checkout crash",
       cachedTokens: 12,
     });
+    expect(generator.generateTitle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        schema: expect.objectContaining({
+          properties: expect.objectContaining({
+            title: expect.objectContaining({
+              maxLength: 50,
+            }),
+          }),
+        }),
+      }),
+    );
   });
 
   it("allows 20 seconds for title generators by default", async () => {
@@ -238,7 +249,7 @@ describe("ThreadTitleGenerationService", () => {
     });
   });
 
-  it("rejects overlong and wordy generated titles", async () => {
+  it("rejects overlong titles and accepts clear titles over six words", async () => {
     const longTitleService = new ThreadTitleGenerationService({
       generators: {
         codex: makeGenerator({
@@ -248,7 +259,9 @@ describe("ThreadTitleGenerationService", () => {
     });
     const wordyTitleService = new ThreadTitleGenerationService({
       generators: {
-        codex: makeGenerator({ title: "One two three four five six seven" }),
+        codex: makeGenerator({
+          title: "Paul Revere opening by the Beastie Boys",
+        }),
       },
     });
 
@@ -268,8 +281,8 @@ describe("ThreadTitleGenerationService", () => {
         userPrompt: "Name this thread",
       })
     ).resolves.toEqual({
-      status: "invalid",
-      reason: "title_too_many_words",
+      status: "generated",
+      title: "Paul Revere opening by the Beastie Boys",
       cachedTokens: 12,
     });
   });
@@ -286,7 +299,10 @@ describe("ThreadTitleGenerationService", () => {
         codex: {
           generateTitle: vi.fn(async () => ({
             status: "ok" as const,
-            object: { title: "One two three four five six seven" },
+            object: {
+              title:
+                "This generated title is intentionally too long for the desktop title limit",
+            },
             helperThreadId: "title-helper-thread",
             helperTurnId: "title-helper-turn",
             model: "gpt-5.4-mini",
@@ -305,7 +321,7 @@ describe("ThreadTitleGenerationService", () => {
       })
     ).resolves.toEqual({
       status: "invalid",
-      reason: "title_too_many_words",
+      reason: "title_too_long",
       helperThreadId: "title-helper-thread",
       helperTurnId: "title-helper-turn",
       model: "gpt-5.4-mini",

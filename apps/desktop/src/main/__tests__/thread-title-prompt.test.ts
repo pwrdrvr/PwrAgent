@@ -9,8 +9,9 @@ describe("thread title prompt", () => {
     const prompt = readThreadTitlePrompt();
 
     expect(prompt).toContain("same language as the user's prompt");
-    expect(prompt).toContain("under 50 characters");
+    expect(prompt).toContain("Never exceed 50 characters");
     expect(prompt).toContain("6 words or fewer");
+    expect(prompt).toContain("7-word title is acceptable");
     expect(prompt).toContain("PROJECT-123");
     expect(prompt).toContain("#123");
     expect(prompt).toContain("issue 123");

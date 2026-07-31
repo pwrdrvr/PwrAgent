@@ -41,6 +41,8 @@ type PricingPanelProps = {
 // running, so its usage row reads as live. Mirrors the main process
 // `codexNativeSubAgentIsTerminal`.
 const SUBAGENT_TERMINAL_STATUSES: ReadonlySet<ThreadSubAgentStatus> = new Set([
+  "blocked",
+  "failed",
   "success",
   "failure",
   "cancelled",

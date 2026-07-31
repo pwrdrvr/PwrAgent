@@ -10,7 +10,6 @@ export const DEFAULT_GROK_THREAD_TITLE_MODEL = "grok-4-1-fast-non-reasoning";
 
 const THREAD_TITLE_TIMEOUT_MS = 20_000;
 const MAX_TITLE_CHARACTERS = 50;
-const MAX_TITLE_WORDS = 6;
 
 const THREAD_TITLE_RESPONSE_SCHEMA = {
   type: "object",
@@ -20,7 +19,8 @@ const THREAD_TITLE_RESPONSE_SCHEMA = {
     title: {
       type: "string",
       minLength: 1,
-      maxLength: 80,
+      maxLength: MAX_TITLE_CHARACTERS,
+      description: "A concise thread title, ideally 6 words or fewer.",
     },
   },
 } as const;
@@ -229,10 +229,6 @@ function normalizeThreadTitleObject(
   if (cleaned.length > MAX_TITLE_CHARACTERS) {
     return { reason: "title_too_long" };
   }
-  if (countWords(cleaned) > MAX_TITLE_WORDS) {
-    return { reason: "title_too_many_words" };
-  }
-
   return {
     title: cleaned,
     reason: "ok",
@@ -274,8 +270,4 @@ function stripMatchingQuotes(value: string): string {
   }
 
   return value;
-}
-
-function countWords(value: string): number {
-  return value.split(/\s+/).filter(Boolean).length;
 }
