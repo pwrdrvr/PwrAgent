@@ -617,6 +617,10 @@ export class DesktopSettingsService {
           config.experimental?.codexDefaultModeRequestUserInput,
           false,
         ),
+        managedReview: this.resolveConfigBoolean(
+          config.experimental?.managedReview,
+          false,
+        ),
         diffCondensation: {
           enabled: this.resolveDiffCondensationEnabled(
             config.experimental?.diffCondensation?.enabled,
@@ -1128,6 +1132,13 @@ export class DesktopSettingsService {
   resolveCodexDefaultModeRequestUserInput(): boolean {
     return this.resolveConfigBoolean(
       this.readConfig().config.experimental?.codexDefaultModeRequestUserInput,
+      false,
+    ).value;
+  }
+
+  resolveManagedReviewEnabled(): boolean {
+    return this.resolveConfigBoolean(
+      this.readConfig().config.experimental?.managedReview,
       false,
     ).value;
   }

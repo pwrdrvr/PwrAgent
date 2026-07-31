@@ -53,6 +53,7 @@ import {
 import { THREAD_HISTORY_PAGE_LIMIT } from "./thread-history-limits";
 
 const MAX_VIEW_ONLY_THREADS = 10;
+const OWN_UPDATE_IDLE_GRACE_MS = 1_500;
 const SUPPORTED_APPROVAL_REQUEST_METHODS = new Set([
   "turn/requestApproval",
   "review/requestApproval",
@@ -376,6 +377,18 @@ function mergeTranscriptEntries(
     if (existingIndex !== -1) {
       merged[existingIndex] = optimisticEntry;
       continue;
+    }
+
+    if (optimisticEntry.type === "review") {
+      const matchingReviewIndex = merged.findIndex(
+        (entry) =>
+          entry.type === "review"
+          && reviewEntriesMatch(entry, optimisticEntry)
+      );
+      if (matchingReviewIndex !== -1) {
+        merged[matchingReviewIndex] = optimisticEntry;
+        continue;
+      }
     }
 
     const optimisticTurnId = optimisticEntry.turn?.id;
@@ -1081,6 +1094,14 @@ function reviewEntriesMatch(
 ): boolean {
   if (isReviewStartEntry(candidate) !== isReviewStartEntry(optimisticEntry)) {
     return false;
+  }
+
+  if (
+    isReviewStartEntry(candidate)
+    && candidate.turn?.id
+    && candidate.turn.id === optimisticEntry.turn?.id
+  ) {
+    return true;
   }
 
   const candidateLabels = reviewEntryLabels(candidate);
@@ -2598,7 +2619,7 @@ function appendThreadEntries(
     fetchedAt: Date.now(),
     replay: {
       ...baseResponse.replay,
-      entries: mergeItems(baseResponse.replay.entries, entries),
+      entries: mergeTranscriptEntries(baseResponse.replay.entries, entries),
     },
   };
 }
@@ -3342,10 +3363,21 @@ export function useThreadSessionState(params: {
             ? current.completionHydrationRetries + 1
             : 0;
           const thinkingReasons = describeThinkingState(current);
+          const ownUpdateStillSettling =
+            current.expectOwnUpdate
+            && !targetThread.optimisticActiveTurn
+            && responseHasInProgressTurn(current.response ?? response, current.activeTurnId)
+            && !response.replay.entries.some(
+              (entry) =>
+                entry.turn?.id === current.activeTurnId
+                && isCompletedTurnMetadata(entry.turn)
+            )
+            && Date.now() - current.lastTouchedAt < OWN_UPDATE_IDLE_GRACE_MS;
           const shouldClearStaleThinking =
             readResponseThreadStatus(response) === "idle" &&
             thinkingReasons.length > 0 &&
             !hasPendingInteraction(current) &&
+            !ownUpdateStillSettling &&
             !responseHasInProgressTurn(responseWithLoadedHistory, current.activeTurnId);
 
           if (shouldClearStaleThinking) {

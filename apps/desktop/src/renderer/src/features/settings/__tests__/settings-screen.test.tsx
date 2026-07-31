@@ -783,6 +783,17 @@ describe("SettingsScreen", () => {
       });
     });
 
+    const managedReviewSwitch = screen.getByRole("switch", {
+      name: "Enable managed code review",
+    });
+    expect(managedReviewSwitch).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(managedReviewSwitch);
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        experimental: { managedReview: true },
+      });
+    });
+
     fireEvent.click(within(sections).getByRole("button", { name: "Messaging" }));
     expect(screen.getByRole("heading", { name: "General" })).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "Medium" })).toHaveAttribute(

@@ -1951,6 +1951,42 @@ describe("DesktopSettingsService", () => {
     );
   });
 
+  it("defaults managed review to false and persists the additive flag", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(configPath, [
+      "# keep this operator comment",
+      "[experimental]",
+      "thread_tool_accounting = true",
+      "",
+    ].join("\n"));
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    expect((await service.readSettings()).experimental.managedReview).toEqual({
+      value: false,
+      source: "default",
+    });
+    expect(service.resolveManagedReviewEnabled()).toBe(false);
+
+    await service.writeConfigPatch({
+      experimental: { managedReview: true },
+    });
+
+    expect((await service.readSettings()).experimental.managedReview).toEqual({
+      value: true,
+      source: "config",
+    });
+    expect(service.resolveManagedReviewEnabled()).toBe(true);
+    const written = fs.readFileSync(configPath, "utf8");
+    expect(written).toContain("# keep this operator comment");
+    expect(written).toContain("thread_tool_accounting = true");
+    expect(written).toContain("managed_review = true");
+  });
+
   it("preserves unknown sections written by other builds when saving a patch", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");

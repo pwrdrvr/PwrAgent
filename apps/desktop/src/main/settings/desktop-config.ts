@@ -111,6 +111,7 @@ export type DesktopSettingsConfig = {
     threadPricingDisplayCodexCredits?: boolean;
     threadToolAccounting?: boolean;
     codexDefaultModeRequestUserInput?: boolean;
+    managedReview?: boolean;
     diffCondensation?: {
       enabled?: boolean;
       model?: string;
@@ -699,6 +700,12 @@ export function desktopSettingsPatchToEdits(
     set(
       ["experimental", "codex_default_mode_request_user_input"],
       patch.experimental.codexDefaultModeRequestUserInput,
+    );
+  }
+  if (patch.experimental?.managedReview !== undefined) {
+    set(
+      ["experimental", "managed_review"],
+      patch.experimental.managedReview,
     );
   }
   if (patch.experimental?.diffCondensation?.model !== undefined) {
@@ -1412,6 +1419,7 @@ function normalizeDesktopConfig(
       codexDefaultModeRequestUserInput: readBoolean(
         experimental?.codex_default_mode_request_user_input,
       ),
+      managedReview: readBoolean(experimental?.managed_review),
       diffCondensation: {
         enabled: readBoolean(diffCondensation?.enabled),
         model: readString(diffCondensation?.model),

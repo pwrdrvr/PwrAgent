@@ -550,6 +550,11 @@ export type DesktopSettingsSnapshot = {
      */
     codexDefaultModeRequestUserInput: DesktopSettingsValue<boolean>;
     /**
+     * Runs reviews as PwrAgent-managed Codex child turns instead of calling
+     * Codex App Server review/start. Disabled by default.
+     */
+    managedReview?: DesktopSettingsValue<boolean>;
+    /**
      * Diff condensation (a.k.a. "diff eliding") gates whether we send
      * focused-diff requests to xAI. When enabled, less-relevant diff
      * hunks are hidden via an xAI judgment call. When disabled, every
@@ -794,6 +799,7 @@ export type DesktopSettingsConfigPatch = {
     threadPricingDisplayCodexCredits?: boolean;
     threadToolAccounting?: boolean;
     codexDefaultModeRequestUserInput?: boolean;
+    managedReview?: boolean;
     diffCondensation?: {
       enabled?: boolean;
       /** "auto" or a specific model id. Empty string is coerced to "auto". */
