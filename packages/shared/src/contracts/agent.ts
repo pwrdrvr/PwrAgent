@@ -45,12 +45,14 @@ export type StartThreadRequest = {
   branchName?: string;
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   acpRuntime?: BackendAcpSessionRuntimeState;
+  parentThreadId?: ThreadIdentifier;
 };
 
 export type StartThreadResponse = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   executionMode: ThreadExecutionMode;
+  pinnedRank?: string;
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   codexEnvironmentStartupFailure?: CodexEnvironmentStartupFailure;
 };
@@ -91,6 +93,7 @@ export type ForkThreadResponse = {
   sourceThreadId: ThreadIdentifier;
   threadId: ThreadIdentifier;
   executionMode: ThreadExecutionMode;
+  pinnedRank?: string;
   linkedDirectory?: LinkedDirectorySummary;
   workMode: LaunchpadWorkMode;
   gitBranch?: string;
@@ -552,6 +555,7 @@ export type MaterializedDirectoryLaunchpadThread = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   executionMode: ThreadExecutionMode;
+  pinnedRank?: string;
   linkedDirectory?: LinkedDirectorySummary;
   workMode: LaunchpadWorkMode;
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;

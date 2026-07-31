@@ -19,6 +19,7 @@ import { requestShowThread } from "../window-show-thread";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import {
   type AcpBackendId,
+  buildAppendPinRank,
   buildThreadMarkdownLink,
   buildThreadUrl,
   estimateTokenUsageCost,
@@ -298,7 +299,10 @@ import {
   type AgentToolMcpServerLike,
   type ResolvedAgentToolMcpCallContext,
 } from "../agent-tools/agent-tool-mcp-server";
-import { createScratchProjectDirectory } from "./scratch-projects";
+import {
+  createScratchProjectDirectory,
+  resolveScratchProjectsRoots,
+} from "./scratch-projects";
 import { getDesktopOverlayStore } from "./desktop-overlay-store";
 import { createProtocolCaptureFromEnv } from "../testing/protocol-capture";
 import type { ProtocolCaptureStore } from "../testing/capture-store";
@@ -8366,6 +8370,90 @@ export class DesktopBackendRegistry {
     });
   }
 
+  /**
+   * Keep a newly created top-level thread visible when its directory's
+   * unpinned section is collapsed. This runs after parent and directory
+   * relationships are persisted so every creation surface shares the same
+   * policy and a child of an already-visible parent is never pinned itself.
+   */
+  private async finalizeCreatedThreadVisibility(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<string | undefined> {
+    try {
+      const threads = await this.listThreads({
+        callerReason: "thread-visibility-finalization",
+      });
+      const snapshot = await this.overlayStore.reconcileNavigationSnapshot({
+        backend: "all",
+        fetchedAt: Date.now(),
+        threads,
+        workspaceRoots: resolveScratchProjectsRoots(),
+      });
+      const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+      const thread = snapshot.threads.find(
+        (candidate) =>
+          candidate.source === params.backend &&
+          candidate.id === params.threadId,
+      );
+      if (!thread || thread.pinnedRank || thread.parentThreadId) {
+        return thread?.pinnedRank;
+      }
+
+      const directory = snapshot.directories.find((candidate) =>
+        candidate.threadKeys.includes(threadKey),
+      );
+      if (directory?.directoryThreadsCollapsed !== true) {
+        return undefined;
+      }
+
+      const threadsByKey = new Map(
+        snapshot.threads.map((candidate) => [
+          buildThreadIdentityKey(candidate.source, candidate.id),
+          candidate,
+        ]),
+      );
+      const hasPinnedTopLevelThread = directory.threadKeys.some(
+        (candidateKey) => {
+          const candidate = threadsByKey.get(candidateKey);
+          return Boolean(
+            candidate && !candidate.parentThreadId && candidate.pinnedRank,
+          );
+        },
+      );
+      if (!hasPinnedTopLevelThread) {
+        return undefined;
+      }
+
+      const pinnedRank = buildAppendPinRank(
+        snapshot.threads.map((candidate) => candidate.pinnedRank),
+      );
+      await this.overlayStore.setThreadPin({
+        backend: params.backend,
+        threadId: params.threadId,
+        pinnedRank,
+      });
+      await this.emit({
+        backend: params.backend,
+        notification: {
+          method: "thread/pin/added",
+          params: {
+            threadId: params.threadId,
+            pinnedRank,
+          },
+        },
+      });
+      return pinnedRank;
+    } catch (error) {
+      backendRegistryLog.warn("created thread visibility finalization failed", {
+        backend: params.backend,
+        error: error instanceof Error ? error.message : String(error),
+        threadId: params.threadId,
+      });
+      return undefined;
+    }
+  }
+
   async startThread(params: {
     backend: AppServerBackendKind;
     executionMode?: ThreadExecutionMode;
@@ -8381,6 +8469,7 @@ export class DesktopBackendRegistry {
     workMode?: NavigationLaunchpadDraft["workMode"];
     branchName?: string;
     requiredWorkMode?: NavigationLaunchpadDraft["workMode"];
+    parentThreadId?: string;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
     linkedDirectories?: LinkedDirectorySummary[];
   }): Promise<StartThreadResponse> {
@@ -8392,6 +8481,7 @@ export class DesktopBackendRegistry {
       workMode,
       branchName,
       requiredWorkMode,
+      parentThreadId,
       ...request
     } = params;
     const modelSettings = await this.resolveModelSettings(backend, request);
@@ -8667,10 +8757,33 @@ export class DesktopBackendRegistry {
       });
     }
 
+    if (parentThreadId?.trim()) {
+      await this.overlayStore.setThreadParent?.({
+        backend,
+        threadId: result.threadId,
+        parentThreadId,
+      });
+      await this.emit({
+        backend,
+        notification: {
+          method: "thread/parent/set",
+          params: {
+            threadId: result.threadId,
+            parentThreadId,
+          },
+        },
+      });
+    }
+    const pinnedRank = await this.finalizeCreatedThreadVisibility({
+      backend,
+      threadId: result.threadId,
+    });
+
     return {
       backend,
       threadId: result.threadId,
       executionMode: effectiveExecutionMode,
+      ...(pinnedRank ? { pinnedRank } : {}),
       codexEnvironmentRuntime,
       codexEnvironmentStartupFailure,
     };
@@ -8947,12 +9060,17 @@ export class DesktopBackendRegistry {
       request.onPreparedWorkspaceRollback?.(undefined);
       throw error;
     }
+    const pinnedRank = await this.finalizeCreatedThreadVisibility({
+      backend,
+      threadId: result.threadId,
+    });
 
     return {
       backend,
       sourceThreadId: request.sourceThreadId,
       threadId: result.threadId,
       executionMode,
+      ...(pinnedRank ? { pinnedRank } : {}),
       linkedDirectory: linkedDirectories[0],
       workMode: preparedWorkspace.workMode,
       ...(gitBranch ? { gitBranch, observedGitBranch: gitBranch } : {}),
@@ -12775,29 +12893,13 @@ export class DesktopBackendRegistry {
       fastMode: launchpad.backend === "codex" ? launchpad.fastMode : undefined,
       acpRuntime: launchpad.acpRuntime,
       codexEnvironmentRuntime,
+      parentThreadId: request.parentThreadId,
     });
     pendingActionThreadId = startThreadResponse.threadId;
     // The auto-started environment action spawned before this thread existed;
     // give its detached-process record an owner now so the quit dialog can name
     // it and link back here.
     attachDetachedCommandThreadId(autoActionRunId, startThreadResponse.threadId);
-    if (request.parentThreadId?.trim()) {
-      await this.overlayStore.setThreadParent?.({
-        backend: startThreadResponse.backend,
-        threadId: startThreadResponse.threadId,
-        parentThreadId: request.parentThreadId,
-      });
-      await this.emit({
-        backend: startThreadResponse.backend,
-        notification: {
-          method: "thread/parent/set",
-          params: {
-            threadId: startThreadResponse.threadId,
-            parentThreadId: request.parentThreadId,
-          },
-        },
-      });
-    }
     if (codexEnvironmentSelection?.action?.id) {
       for (const event of queuedActionDetachedOutputs) {
         void this.handleCodexEnvironmentActionDetachedOutput({
@@ -12829,6 +12931,9 @@ export class DesktopBackendRegistry {
       backend: startThreadResponse.backend,
       threadId: startThreadResponse.threadId,
       executionMode: startThreadResponse.executionMode,
+      ...(startThreadResponse.pinnedRank
+        ? { pinnedRank: startThreadResponse.pinnedRank }
+        : {}),
       ...(linkedDirectories?.[0] ? { linkedDirectory: linkedDirectories[0] } : {}),
       workMode: workspace.workMode,
       codexEnvironmentRuntime,
@@ -19174,18 +19279,12 @@ export class DesktopBackendRegistry {
           approvalPolicy: inheritedSettings.approvalPolicy,
           sandbox: inheritedSettings.sandbox,
           codexEnvironmentRuntime: inheritedSettings.codexEnvironmentRuntime,
+          parentThreadId: groupedParentThreadId,
         });
         threadId = started.threadId;
         this.updatePendingThreadHandoff(handoffId, { threadId });
         inheritedSettings.codexEnvironmentRuntime = started.codexEnvironmentRuntime;
         codexEnvironmentStartupFailure = started.codexEnvironmentStartupFailure;
-        if (groupedParentThreadId) {
-          await this.overlayStore.setThreadParent?.({
-            backend,
-            threadId,
-            parentThreadId: groupedParentThreadId,
-          });
-        }
       }
       if (groupedParentThreadId && this.overlayStore.updateSubthreadOrder) {
         const parentOverlay = await this.overlayStore.getThreadOverlayState({

@@ -2056,29 +2056,6 @@ function buildOptimisticThreadFromLaunchpad(params: {
   };
 }
 
-function shouldAutoPinThreadForVisibility(params: {
-  directory: NavigationDirectorySummary | undefined;
-  threads: NavigationThreadSummary[];
-  parentThreadId: string | undefined;
-}): boolean {
-  if (
-    params.parentThreadId
-    || params.directory?.directoryThreadsCollapsed !== true
-  ) {
-    return false;
-  }
-
-  const directoryThreadKeys = new Set(params.directory.threadKeys);
-  return params.threads.some(
-    (thread) =>
-      !thread.parentThreadId
-      && Boolean(thread.pinnedRank)
-      && directoryThreadKeys.has(
-        buildThreadIdentityKey(thread.source, thread.id),
-      ),
-  );
-}
-
 function mergeHydratedThreadWithOptimisticTitle(
   thread: NavigationThreadSummary,
   optimisticThread: NavigationThreadSummary,
@@ -2468,9 +2445,6 @@ export function useThreadNavigation(
   const pendingDirectoryGitStatusRef = useRef(
     new Map<string, NavigationDirectoryGitStatus | null>(),
   );
-  const autoPinRequestsRef = useRef(
-    new Map<string, Promise<string | undefined>>(),
-  );
   const setNavigationBrowseModeRequestRef = useRef(setNavigationBrowseModeRequest);
   const stateRef = useRef(state);
 
@@ -2522,56 +2496,6 @@ export function useThreadNavigation(
     }));
     setRetainedUnreadThread(undefined);
   }, []);
-
-  const autoPinThreadForVisibility = useCallback(
-    async (params: {
-      backend: AppServerBackendKind;
-      directory: NavigationDirectorySummary | undefined;
-      parentThreadId: string | undefined;
-      threadId: string;
-      threads: NavigationThreadSummary[];
-    }): Promise<string | undefined> => {
-      if (!shouldAutoPinThreadForVisibility(params)) {
-        return undefined;
-      }
-
-      const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
-      const existingRequest = autoPinRequestsRef.current.get(threadKey);
-      if (existingRequest) {
-        return await existingRequest;
-      }
-
-      const request = (async (): Promise<string | undefined> => {
-        if (!desktopApi?.setThreadPin) {
-          throw new Error(
-            "The new thread was created, but it could not be pinned automatically.",
-          );
-        }
-        const pinResult = await desktopApi.setThreadPin({
-          backend: params.backend,
-          threadId: params.threadId,
-          pinnedRank: buildAppendPinRank(
-            params.threads.map((thread) => thread.pinnedRank),
-          ),
-        });
-        if (!pinResult.pinnedRank) {
-          throw new Error(
-            "The new thread was created, but it could not be pinned automatically.",
-          );
-        }
-        return pinResult.pinnedRank;
-      })();
-      autoPinRequestsRef.current.set(threadKey, request);
-
-      try {
-        return await request;
-      } catch (error) {
-        autoPinRequestsRef.current.delete(threadKey);
-        throw error;
-      }
-    },
-    [desktopApi],
-  );
 
   const performRefresh = useCallback(
     async (
@@ -2631,52 +2555,10 @@ export function useThreadNavigation(
           threadCount: snapshot.threads.length,
           unchanged: Boolean(snapshot.unchanged),
         });
-        let response = removeThreadKeysFromSnapshot(
+        const response = removeThreadKeysFromSnapshot(
           snapshot,
           suppressedArchivedThreadKeysRef.current
         );
-        const previousResponse = stateRef.current.response;
-        // Handoffs, messaging, and other main-process paths can create a
-        // thread without materializing a renderer launchpad. Apply the same
-        // collapsed-directory visibility rule whenever a refresh discovers a
-        // new thread so creation path does not determine whether it is shown.
-        if (previousResponse) {
-          const previousThreadKeys = new Set(
-            previousResponse.threads.map((thread) =>
-              buildThreadIdentityKey(thread.source, thread.id),
-            ),
-          );
-          for (const thread of response.threads) {
-            const threadKey = buildThreadIdentityKey(thread.source, thread.id);
-            if (previousThreadKeys.has(threadKey) || thread.pinnedRank) {
-              continue;
-            }
-            const directory = response.directories.find((candidate) =>
-              candidate.threadKeys.includes(threadKey),
-            );
-            try {
-              const pinnedRank = await autoPinThreadForVisibility({
-                backend: thread.source,
-                directory,
-                parentThreadId: thread.parentThreadId,
-                threadId: thread.id,
-                threads: response.threads,
-              });
-              if (pinnedRank) {
-                response = updateThreadPinInSnapshot(response, {
-                  backend: thread.source,
-                  threadId: thread.id,
-                  pinnedRank,
-                })!;
-              }
-            } catch (error) {
-              console.warn(
-                `Could not auto-pin newly discovered thread ${threadKey}:`,
-                error,
-              );
-            }
-          }
-        }
         const optimisticSelection = preferredOptimisticThread ?? optimisticThreadRef.current;
         const optimisticThreadKey = optimisticSelection
           ? buildThreadIdentityKey(optimisticSelection.source, optimisticSelection.id)
@@ -2750,7 +2632,7 @@ export function useThreadNavigation(
         }));
       }
     },
-    [autoPinThreadForVisibility, desktopApi, enabled]
+    [desktopApi, enabled]
   );
 
   const refresh = useCallback(
@@ -4976,19 +4858,6 @@ export function useThreadNavigation(
         setLaunchpadError(error instanceof Error ? error.message : String(error));
         throw error;
       }
-      let autoPinnedRank: string | undefined;
-      let autoPinFailure: string | undefined;
-      try {
-        autoPinnedRank = await autoPinThreadForVisibility({
-          backend: response.backend,
-          directory,
-          parentThreadId: materializeParentThreadId,
-          threadId: response.threadId,
-          threads: stateRef.current.response?.threads ?? [],
-        });
-      } catch (error) {
-        autoPinFailure = error instanceof Error ? error.message : String(error);
-      }
       const optimisticMaterializedThread = buildOptimisticThreadFromLaunchpad({
         directory,
         launchpad,
@@ -5015,7 +4884,7 @@ export function useThreadNavigation(
             }
           : undefined,
         parentThreadId: materializeParentThreadId,
-        pinnedRank: autoPinnedRank,
+        pinnedRank: response.pinnedRank,
       });
       const nextThreadKey = buildThreadIdentityKey(response.backend, response.threadId);
       // Sub-thread launchpads drop the new child directly below their source
@@ -5053,8 +4922,6 @@ export function useThreadNavigation(
       }
       if (response.turnStartFailure) {
         setLaunchpadError(response.turnStartFailure.message);
-      } else if (autoPinFailure) {
-        setLaunchpadError(autoPinFailure);
       }
       // Link composer `@`-referenced directories to the just-created
       // thread before the refresh below so the snapshot comes back with
@@ -5098,13 +4965,7 @@ export function useThreadNavigation(
         setLaunchpadError(error instanceof Error ? error.message : String(error));
       }
     },
-    [
-      autoPinThreadForVisibility,
-      desktopApi,
-      directories,
-      insertSubthreadBelowSource,
-      refresh,
-    ]
+    [desktopApi, directories, insertSubthreadBelowSource, refresh]
   );
 
   /**
