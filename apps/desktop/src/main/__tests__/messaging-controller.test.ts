@@ -5059,6 +5059,214 @@ describe("MessagingController", () => {
     });
   });
 
+  it("delivers one review completion when Codex also emits the final agent message", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+    const reviewSummary =
+      "The deploy request acknowledgement, commit status updates, and final PR comment update paths are internally consistent. Targeted Python tests pass.";
+    const review = `${reviewSummary}\n\nFull review comments:\n\n- [P2] Preserve the live draft — /repo/src/composer.tsx:42`;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "review-turn-1",
+          item: {
+            id: "entered-review-1",
+            type: "enteredReviewMode",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+    await Promise.all([
+      harness.controller.handleBackendEvent({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "review-turn-1",
+            item: {
+              id: "exited-review-1",
+              type: "exitedReviewMode",
+              review: reviewSummary,
+            },
+          },
+        },
+      } satisfies AgentEvent),
+      harness.controller.handleBackendEvent({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "review-turn-1",
+            item: {
+              id: "review-agent-message-1",
+              type: "agentMessage",
+              text: review,
+            },
+          },
+        },
+      } satisfies AgentEvent),
+    ]);
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "review-turn-1",
+          turn: {
+            id: "review-turn-1",
+            status: "completed",
+            output: [{ type: "text", text: review }],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    const completionMessages = harness.delivered.filter(
+      (intent) => intent.kind === "message",
+    );
+    expect(completionMessages).toHaveLength(1);
+    expect(completionMessages[0]).toMatchObject({
+      artifactDelivery: {
+        kind: "review",
+      },
+      parts: [
+        expect.objectContaining({
+          type: "text",
+          text: expect.stringContaining(review),
+        }),
+      ],
+    });
+  });
+
+  it("does not stream a second completion surface for review turns", async () => {
+    let now = 1_000;
+    const harness = await createHarness({
+      now: () => now,
+      streamingResponsesDefault: true,
+    });
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "review-turn-1",
+          item: {
+            id: "entered-review-1",
+            type: "enteredReviewMode",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/agentMessage/delta",
+        params: {
+          delta: "Review found no blocking issues.",
+          itemId: "review-agent-message-1",
+          threadId: "thread-1",
+          turnId: "review-turn-1",
+        },
+      },
+    } satisfies AgentEvent);
+    now += 500;
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/agentMessage/delta",
+        params: {
+          delta: " Still no blocking issues.",
+          itemId: "review-agent-message-1",
+          threadId: "thread-1",
+          turnId: "review-turn-1",
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(
+      harness.delivered.filter((intent) => intent.kind === "stream_update"),
+    ).toHaveLength(0);
+  });
+
+  it("falls back to one assistant completion when a review has no artifact", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "review-turn-1",
+          item: {
+            id: "entered-review-1",
+            type: "enteredReviewMode",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "review-turn-1",
+          item: {
+            id: "review-agent-message-1",
+            type: "agentMessage",
+            text: "Review was interrupted. Please re-run it.",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+    expect(harness.delivered.filter((intent) => intent.kind === "message")).toEqual([]);
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "review-turn-1",
+          turn: {
+            id: "review-turn-1",
+            status: "completed",
+            output: [],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    const completionMessages = harness.delivered.filter(
+      (intent) => intent.kind === "message",
+    );
+    expect(completionMessages).toHaveLength(1);
+    expect(completionMessages[0]).toMatchObject({
+      role: "assistant",
+      parts: [
+        expect.objectContaining({
+          type: "text",
+          text: "Review was interrupted. Please re-run it.",
+        }),
+      ],
+    });
+  });
+
   it("delivers review artifacts from structured review output", async () => {
     const harness = await createHarness();
     await bindThread(harness);
@@ -5100,6 +5308,22 @@ describe("MessagingController", () => {
         },
       },
     } satisfies AgentEvent);
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
     await harness.controller.handleBackendEvent({
       backend: "codex",
       notification: {

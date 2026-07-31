@@ -266,6 +266,7 @@ const DEFAULT_INPUT_DEBOUNCE_MS = 500;
 // that completed long ago so a long-lived controller does not grow without
 // bound (one entry per automation run).
 const MAX_DELIVERED_AUTOMATION_KEYS = 1_000;
+const MAX_TRACKED_REVIEW_TURNS = 1_000;
 const MAX_TRACKED_TURN_PROSE = 256;
 const MESSAGING_ENVIRONMENT_SETUP_PROGRESS_INTERVAL_MS = 15_000;
 
@@ -661,10 +662,16 @@ export class MessagingController {
   private readonly activeTurnsByThreadKey = new Map<string, MessagingActiveTurnSummary>();
   private readonly contextUsageSummariesByThreadKey = new Map<string, string>();
   private readonly planArtifactsByTurnKey = new Map<string, AppServerThreadPlanEntry>();
-  private readonly reviewArtifactsByTurnKey = new Map<
+  // Codex emits a review result twice on the live protocol: first as an
+  // exitedReviewMode artifact, then as the turn's final agentMessage. Hold the
+  // pair by turn so messaging providers receive one enriched artifact intent.
+  private readonly pendingReviewArtifactsByTurnKey = new Map<
     string,
     AppServerThreadReviewEntry
   >();
+  private readonly pendingReviewAssistantTextByTurnKey = new Map<string, string>();
+  private readonly completedReviewTurnKeys = new Set<string>();
+  private readonly reviewTurnKeys = new Set<string>();
   private readonly markdownFileAttachmentSelector =
     new MessagingMarkdownFileAttachmentSelector();
   private readonly typingActivityLastSignaledAt = new Map<string, number>();
@@ -1014,6 +1021,105 @@ export class MessagingController {
     if (!threadId) {
       return;
     }
+    const eventTurnId = turnIdForBackendEvent(event);
+    const eventTurnKey = eventTurnId
+      ? artifactTurnKey(event.backend, threadId, eventTurnId)
+      : undefined;
+    if (eventTurnKey && isReviewTurnMarkerEvent(event)) {
+      rememberBoundedKey(
+        this.reviewTurnKeys,
+        eventTurnKey,
+        MAX_TRACKED_REVIEW_TURNS,
+      );
+    }
+    const reviewTurnEvent = Boolean(
+      eventTurnKey && this.reviewTurnKeys.has(eventTurnKey),
+    );
+    const reviewTurnCompleted = Boolean(
+      eventTurnKey && this.completedReviewTurnKeys.has(eventTurnKey),
+    );
+    const reviewArtifact = reviewArtifactForBackendEvent(event, this.now());
+    if (eventTurnKey && reviewArtifact && !reviewTurnCompleted) {
+      rememberBoundedMap(
+        this.pendingReviewArtifactsByTurnKey,
+        eventTurnKey,
+        reviewArtifact,
+        MAX_TRACKED_REVIEW_TURNS,
+      );
+    }
+    const rawAssistantText = assistantTextForBackendEvent(event);
+    const isFinalReviewAssistant = Boolean(
+      eventTurnKey
+      && reviewTurnEvent
+      && rawAssistantText
+      && !isNonFinalAssistantTextForBackendEvent(event)
+      && !isTaskMonitorProgressEvent(event),
+    );
+    if (
+      eventTurnKey
+      && rawAssistantText
+      && isFinalReviewAssistant
+      && !reviewTurnCompleted
+    ) {
+      rememberBoundedMap(
+        this.pendingReviewAssistantTextByTurnKey,
+        eventTurnKey,
+        rawAssistantText,
+        MAX_TRACKED_REVIEW_TURNS,
+      );
+    }
+    const lifecycle = turnLifecycleForBackendEvent(event, this.now());
+    const pendingReviewArtifact = eventTurnKey
+      ? this.pendingReviewArtifactsByTurnKey.get(eventTurnKey)
+      : undefined;
+    const pendingReviewAssistantText = eventTurnKey
+      ? this.pendingReviewAssistantTextByTurnKey.get(eventTurnKey)
+      : undefined;
+    const reviewCompletionReady = Boolean(
+      eventTurnKey
+      && reviewTurnEvent
+      && lifecycle?.status === "completed",
+    );
+    const reviewCompletionDiscarded = Boolean(
+      eventTurnKey
+      && reviewTurnEvent
+      && isTerminalTurnLifecycle(lifecycle)
+      && lifecycle?.status !== "completed",
+    );
+    const completedReviewArtifact = !eventTurnKey
+      ? reviewArtifact
+      : reviewCompletionReady && pendingReviewArtifact
+        ? {
+            ...pendingReviewArtifact,
+            ...(pendingReviewAssistantText
+              ? { review: pendingReviewAssistantText }
+              : {}),
+          }
+        : undefined;
+    const standaloneReviewAssistantText =
+      reviewCompletionReady && !pendingReviewArtifact
+        ? pendingReviewAssistantText
+        : undefined;
+    if ((reviewCompletionReady || reviewCompletionDiscarded) && eventTurnKey) {
+      this.pendingReviewArtifactsByTurnKey.delete(eventTurnKey);
+      this.pendingReviewAssistantTextByTurnKey.delete(eventTurnKey);
+      rememberBoundedKey(
+        this.completedReviewTurnKeys,
+        eventTurnKey,
+        MAX_TRACKED_REVIEW_TURNS,
+      );
+    }
+    if (completedReviewArtifact && pendingReviewAssistantText) {
+      this.logger.debug?.(
+        "messaging grouped review artifact with final assistant text",
+        {
+          backend: event.backend,
+          method: event.notification.method,
+          threadId,
+          turnId: eventTurnId,
+        },
+      );
+    }
     if (event.notification.method === "thread/archived") {
       await this.options.store.revokeDefaultAgentAssignmentsForTarget({
         backend: event.backend,
@@ -1157,32 +1263,14 @@ export class MessagingController {
         planUpdate,
       );
     }
-    const reviewArtifact = reviewArtifactForBackendEvent(event, this.now());
-    if (reviewArtifact) {
-      this.reviewArtifactsByTurnKey.set(
-        artifactTurnKey(
-          event.backend,
-          threadId,
-          reviewArtifact.turn?.id ?? reviewArtifact.id,
-        ),
-        reviewArtifact,
-      );
-    }
     const markdownFileArtifactSelection =
       this.markdownFileAttachmentSelector.selectFromBackendEvent(event);
-    const lifecycle = turnLifecycleForBackendEvent(event, this.now());
     const completedPlan = lifecycle && isTerminalTurnLifecycle(lifecycle)
       ? this.planArtifactsByTurnKey.get(artifactTurnKey(event.backend, threadId, lifecycle.turnId))
-      : undefined;
-    const completedReview = lifecycle?.status === "completed"
-      ? this.reviewArtifactsByTurnKey.get(
-          artifactTurnKey(event.backend, threadId, lifecycle.turnId),
-        )
       : undefined;
     for (const binding of bindings) {
       let activeTurn = this.getActiveTurn(binding);
       let turnStateChanged = false;
-      const eventTurnId = turnIdForBackendEvent(event);
       const automationTurnEvent = this.isAutomationTurnEvent(
         event,
         binding,
@@ -1255,18 +1343,19 @@ export class MessagingController {
       }
 
       const assistantDelta = assistantDeltaForBackendEvent(event);
-      if (assistantDelta) {
+      if (assistantDelta && !reviewTurnEvent) {
         if (!automationTurnEvent) {
           await this.deliverAssistantStreamUpdate(assistantDelta, binding);
         }
       }
 
-      const assistantText = assistantTextForBackendEvent(event);
+      const assistantText = standaloneReviewAssistantText ?? (
+        isFinalReviewAssistant ? undefined : rawAssistantText
+      );
       if (assistantText) {
         if (
           !isNonFinalAssistantTextForBackendEvent(event)
           && !isTaskMonitorProgressEvent(event)
-          && !completedReview
         ) {
           const deliveredFinalStream = await this.flushAssistantStreamForEvent(
             event,
@@ -1293,7 +1382,11 @@ export class MessagingController {
             activeTurn?.turnId,
           );
         }
-      } else if (isTerminalTurnLifecycle(activeTurn) && !assistantDelta) {
+      } else if (
+        isTerminalTurnLifecycle(activeTurn)
+        && !assistantDelta
+        && !reviewTurnEvent
+      ) {
         // Only flush buffered stream text on a genuine terminal event (e.g.
         // turn/completed, idle) — never on an assistant delta. Deltas are
         // mid-stream content owned by deliverAssistantStreamUpdate's buffer;
@@ -1322,11 +1415,11 @@ export class MessagingController {
         });
       }
 
-      if (completedReview && !automationTurnEvent) {
+      if (completedReviewArtifact && !automationTurnEvent) {
         await this.deliverArtifactForBinding({
-          artifact: artifactFromReviewEntry(completedReview),
+          artifact: artifactFromReviewEntry(completedReviewArtifact),
           binding,
-          intentId: `artifact:review:${completedReview.id}:${binding.id}`,
+          intentId: `artifact:review:${completedReviewArtifact.id}:${binding.id}`,
         });
       }
 
@@ -1392,9 +1485,6 @@ export class MessagingController {
       this.forgetAutomationTurn(event.backend, threadId, lifecycle.turnId);
       this.forgetAgentMessagingOrigin(event.backend, threadId, lifecycle.turnId);
       this.planArtifactsByTurnKey.delete(artifactTurnKey(event.backend, threadId, lifecycle.turnId));
-      this.reviewArtifactsByTurnKey.delete(
-        artifactTurnKey(event.backend, threadId, lifecycle.turnId),
-      );
     }
   }
 
@@ -15770,6 +15860,28 @@ function normalizeReviewItemType(type: string): string {
   return type.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
+function isReviewTurnMarkerEvent(event: AgentEvent): boolean {
+  if (
+    event.notification.method !== "item/started"
+    && event.notification.method !== "item/completed"
+  ) {
+    return false;
+  }
+  const item = (event.notification.params as {
+    item?: { type?: unknown };
+  }).item;
+  if (typeof item?.type !== "string") {
+    return false;
+  }
+  const normalizedType = normalizeReviewItemType(item.type);
+  return (
+    normalizedType === "enteredreviewmode"
+    || normalizedType === "exitedreviewmode"
+    || normalizedType === "review"
+    || normalizedType === "reviewartifact"
+  );
+}
+
 function artifactTurnKey(
   backend: AppServerBackendKind,
   threadId: ThreadIdentifier,
@@ -16136,18 +16248,30 @@ function isTerminalTurnLifecycle(
   );
 }
 
-/**
- * Add `key` to a dedup set, evicting the oldest entries (insertion order) once
- * the set exceeds MAX_DELIVERED_AUTOMATION_KEYS. Eviction only ever drops keys
- * for runs whose terminal events fired long ago and will not re-deliver, so the
- * dedup guarantee for in-flight runs is preserved while retention stays bounded.
- */
-function rememberBoundedKey(set: Set<string>, key: string): void {
+function rememberBoundedKey(
+  set: Set<string>,
+  key: string,
+  maxSize = MAX_DELIVERED_AUTOMATION_KEYS,
+): void {
   set.add(key);
-  while (set.size > MAX_DELIVERED_AUTOMATION_KEYS) {
+  while (set.size > maxSize) {
     const oldest = set.values().next().value;
     if (oldest === undefined) break;
     set.delete(oldest);
+  }
+}
+
+function rememberBoundedMap<Value>(
+  map: Map<string, Value>,
+  key: string,
+  value: Value,
+  maxSize = MAX_DELIVERED_AUTOMATION_KEYS,
+): void {
+  map.set(key, value);
+  while (map.size > maxSize) {
+    const oldest = map.keys().next().value;
+    if (oldest === undefined) break;
+    map.delete(oldest);
   }
 }
 
