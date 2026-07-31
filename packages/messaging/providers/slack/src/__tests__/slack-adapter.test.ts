@@ -60,6 +60,7 @@ function fakeApi(spies: {
   mpimChannels?: string[];
   permalinks?: Record<string, string>;
   deleted?: Array<{ channel: string; ts: string }>;
+  deleteErrors?: Error[];
   posted?: unknown[];
   replies?: Record<string, string>;
   updated?: unknown[];
@@ -91,6 +92,10 @@ function fakeApi(spies: {
     getPermalink: async (params) =>
       spies.permalinks?.[`${params.channel}:${params.messageTs}`],
     deleteMessage: async (params) => {
+      const error = spies.deleteErrors?.shift();
+      if (error) {
+        throw error;
+      }
       spies.deleted?.push(params);
     },
     downloadFile: async () => new Uint8Array([1, 2, 3]),
@@ -152,7 +157,54 @@ describe("SlackAdapter", () => {
     expect(adapter.clientRateLimitStrategy).toBe("externalized");
     expect(adapter.capabilityProfile.actions?.maxActions).toBe(25);
     expect(adapter.capabilityProfile.actions?.supportsLayoutHints).toBe(true);
-    expect(adapter.capabilityProfile.text.markdownDialect).toBe("slack-mrkdwn");
+    expect(adapter.capabilityProfile.text.markdownDialect).toBe("markdown");
+  });
+
+  it("posts assistant Markdown tables through Slack's native Markdown block", async () => {
+    const posted: unknown[] = [];
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({ posted }),
+      socketClient: fakeSocket(),
+      now: () => 1_700_000_000_000,
+    });
+    const text = [
+      "The Ruby cluster has recovered.",
+      "",
+      "| Signal | Alert period | Current/post-recovery |",
+      "|---|---:|---:|",
+      "| Search rejections | Two sharp increments | [Monitor](https://example.com) is `OK` |",
+      "| Ruby CPU | Hottest node 80% | Hottest node 63% |",
+      "",
+      "No immediate resource adjustment is needed.",
+    ].join("\n");
+
+    await expect(
+      adapter.deliver({
+        id: "assistant-table",
+        kind: "message",
+        createdAt: 1,
+        role: "assistant",
+        parts: [{ type: "text", text, markdown: "markdown" }],
+        audit: {
+          actor: { platformUserId: "U012ABCDEF0" },
+          bindingId: "slack-binding-1",
+          channel: {
+            channel: "slack",
+            conversation: { id: "D012ABCDEF0", kind: "dm" },
+          },
+          occurredAt: 1,
+        },
+      } satisfies MessagingSurfaceIntent),
+    ).resolves.toMatchObject({ channel: "slack", outcome: "presented" });
+
+    expect(posted).toEqual([
+      expect.objectContaining({
+        channel: "D012ABCDEF0",
+        blocks: [{ type: "markdown", text }],
+      }),
+    ]);
   });
 
   it("creates a bindable Slack thread from the invoking root message", async () => {
@@ -2497,9 +2549,64 @@ describe("SlackAdapter", () => {
     ]);
   });
 
+  it("edits streaming Markdown tables through Slack's native Markdown block", async () => {
+    const posted: unknown[] = [];
+    const updated: unknown[] = [];
+    const adapter = new SlackAdapter({
+      config: { ...baseConfig, streamingResponses: true },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({ posted, updated }),
+      socketClient: fakeSocket(),
+      now: () => 1_700_000_000_000,
+    });
+    const text = [
+      "Current state:",
+      "",
+      "| Signal | Current |",
+      "|---|---:|",
+      "| Search queue | 1 |",
+      "| Ruby CPU | 50% |",
+    ].join("\n");
+
+    await expect(
+      adapter.deliver({
+        id: "assistant-stream-table",
+        kind: "stream_update",
+        bindingId: "slack-binding-1",
+        createdAt: 1,
+        role: "assistant",
+        markdown: "markdown",
+        policy: "enabled",
+        text,
+        stream: { isFinal: true, key: "codex:thread-1:turn-1", sequence: 1 },
+        targetSurface: {
+          channel: "slack",
+          id: "1712023032.123456",
+          state: {
+            opaque: { channelId: "C012ABCDEF0", ts: "1712023032.123456" },
+          },
+        },
+      } satisfies MessagingSurfaceIntent),
+    ).resolves.toMatchObject({ channel: "slack", outcome: "updated" });
+
+    expect(posted).toEqual([]);
+    expect(updated).toEqual([
+      expect.objectContaining({
+        channel: "C012ABCDEF0",
+        ts: "1712023032.123456",
+        blocks: [{ type: "markdown", text }],
+      }),
+    ]);
+  });
+
   it("posts the first stream chunk then edits it for the rest of the turn", async () => {
     const posted: Array<{ channel: string; text?: string }> = [];
-    const updated: Array<{ channel: string; ts: string; text?: string }> = [];
+    const updated: Array<{
+      blocks?: Array<{ text?: string; type: string }>;
+      channel: string;
+      ts: string;
+      text?: string;
+    }> = [];
     const adapter = new SlackAdapter({
       config: { ...baseConfig, streamingResponses: true },
       callbackHandleStore: fakeStore(),
@@ -2551,7 +2658,9 @@ describe("SlackAdapter", () => {
       } satisfies MessagingSurfaceIntent),
     ).resolves.toMatchObject({ channel: "slack", outcome: "updated" });
 
-    // Final chunk edits the same message and clears the per-stream surface.
+    // Final chunk has the same text but changes from plain streaming text to
+    // canonical Markdown. It must still edit the message to replace the legacy
+    // mrkdwn section with Slack's native Markdown block.
     await expect(
       adapter.deliver({
         id: "assistant-stream-final",
@@ -2561,7 +2670,7 @@ describe("SlackAdapter", () => {
         role: "assistant",
         markdown: "markdown",
         policy: "enabled",
-        text: "Partial answer, done.",
+        text: "Partial answer",
         stream: { isFinal: true, key: "codex:thread-1:turn-1", sequence: 3 },
         audit,
       } satisfies MessagingSurfaceIntent),
@@ -2572,10 +2681,17 @@ describe("SlackAdapter", () => {
     expect(posted[0]).toMatchObject({ channel: "D012ABCDEF0" });
     expect(updated).toHaveLength(2);
     expect(updated.every((u) => u.ts === "1712023032.123456")).toBe(true);
+    expect(updated[1]?.blocks).toEqual([
+      { type: "markdown", text: "Partial answer" },
+    ]);
   });
 
-  it("rolls a streaming response longer than a section block onto extra messages", async () => {
-    const posted: Array<{ channel: string; text?: string }> = [];
+  it("rolls a streaming Markdown response longer than a Markdown block onto extra messages", async () => {
+    const posted: Array<{
+      blocks?: Array<{ text?: string; type: string }>;
+      channel: string;
+      text?: string;
+    }> = [];
     const updated: Array<{ channel: string; ts: string; text?: string }> = [];
     const adapter = new SlackAdapter({
       config: { ...baseConfig, streamingResponses: true },
@@ -2584,8 +2700,9 @@ describe("SlackAdapter", () => {
       socketClient: fakeSocket(),
       now: () => 1_700_000_000_000,
     });
-    // > 3000 chars (Slack section-block limit) split at sentence boundaries.
-    const longText = "This is a full sentence that keeps going. ".repeat(90);
+    // > 12,000 chars (Slack standard-Markdown block limit), split at sentence
+    // boundaries without falling back to legacy 3,000-char sections.
+    const longText = "This is a full sentence that keeps going. ".repeat(320);
 
     await expect(
       adapter.deliver({
@@ -2612,10 +2729,148 @@ describe("SlackAdapter", () => {
 
     // Rolled onto more than one message, and no single block was truncated.
     expect(posted.length).toBeGreaterThan(1);
+    for (const post of posted) {
+      expect(post.blocks).toEqual([
+        expect.objectContaining({ type: "markdown" }),
+      ]);
+      expect(post.blocks?.[0]?.text?.length ?? 0).toBeLessThanOrEqual(12_000);
+    }
   });
 
-  it("splits a long text-only message across multiple posts", async () => {
-    const posted: Array<{ channel: string; text?: string }> = [];
+  it("consolidates interim stream messages when final Markdown needs fewer blocks", async () => {
+    const deleted: Array<{ channel: string; ts: string }> = [];
+    const posted: unknown[] = [];
+    const updated: Array<{
+      blocks?: Array<{ text?: string; type: string }>;
+      channel: string;
+      ts: string;
+      text?: string;
+    }> = [];
+    const adapter = new SlackAdapter({
+      config: { ...baseConfig, streamingResponses: true },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({ deleted, posted, updated }),
+      socketClient: fakeSocket(),
+      now: () => 1_700_000_000_000,
+    });
+    const text = "This is a full sentence that keeps going. ".repeat(220);
+    const audit = {
+      actor: { platformUserId: "U012ABCDEF0" },
+      bindingId: "slack-binding-1",
+      channel: {
+        channel: "slack" as const,
+        conversation: { id: "D012ABCDEF0", kind: "dm" as const },
+      },
+      occurredAt: 1,
+    };
+
+    await adapter.deliver({
+      id: "assistant-stream-interim",
+      kind: "stream_update",
+      bindingId: "slack-binding-1",
+      createdAt: 1,
+      role: "assistant",
+      markdown: "plain",
+      policy: "enabled",
+      text,
+      stream: { isFinal: false, key: "codex:thread-1:turn-1", sequence: 1 },
+      audit,
+    } satisfies MessagingSurfaceIntent);
+    const interimPostCount = posted.length;
+    expect(interimPostCount).toBeGreaterThan(1);
+
+    await expect(
+      adapter.deliver({
+        id: "assistant-stream-final",
+        kind: "stream_update",
+        bindingId: "slack-binding-1",
+        createdAt: 2,
+        role: "assistant",
+        markdown: "markdown",
+        policy: "enabled",
+        text,
+        stream: { isFinal: true, key: "codex:thread-1:turn-1", sequence: 2 },
+        audit,
+      } satisfies MessagingSurfaceIntent),
+    ).resolves.toMatchObject({ channel: "slack", outcome: "updated" });
+
+    expect(updated.at(-1)?.blocks).toEqual([
+      { type: "markdown", text },
+    ]);
+    expect(deleted).toHaveLength(interimPostCount - 1);
+  });
+
+  it("retains obsolete stream anchors when final-message cleanup fails", async () => {
+    const deleted: Array<{ channel: string; ts: string }> = [];
+    const deleteErrors = [new Error("temporary delete failure")];
+    const posted: unknown[] = [];
+    const updated: unknown[] = [];
+    const adapter = new SlackAdapter({
+      config: { ...baseConfig, streamingResponses: true },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({ deleted, deleteErrors, posted, updated }),
+      socketClient: fakeSocket(),
+      now: () => 1_700_000_000_000,
+    });
+    const text = "This is a full sentence that keeps going. ".repeat(220);
+    const audit = {
+      actor: { platformUserId: "U012ABCDEF0" },
+      bindingId: "slack-binding-1",
+      channel: {
+        channel: "slack" as const,
+        conversation: { id: "D012ABCDEF0", kind: "dm" as const },
+      },
+      occurredAt: 1,
+    };
+
+    await adapter.deliver({
+      id: "assistant-stream-interim",
+      kind: "stream_update",
+      bindingId: "slack-binding-1",
+      createdAt: 1,
+      role: "assistant",
+      markdown: "plain",
+      policy: "enabled",
+      text,
+      stream: { isFinal: false, key: "codex:thread-1:turn-1", sequence: 1 },
+      audit,
+    } satisfies MessagingSurfaceIntent);
+    const interimPostCount = posted.length;
+    expect(interimPostCount).toBeGreaterThan(1);
+
+    const finalIntent = {
+      id: "assistant-stream-final",
+      kind: "stream_update",
+      bindingId: "slack-binding-1",
+      createdAt: 2,
+      role: "assistant",
+      markdown: "markdown",
+      policy: "enabled",
+      text,
+      stream: { isFinal: true, key: "codex:thread-1:turn-1", sequence: 2 },
+      audit,
+    } satisfies MessagingSurfaceIntent;
+
+    await expect(adapter.deliver(finalIntent)).resolves.toMatchObject({
+      channel: "slack",
+      outcome: "failed",
+      errorMessage: "temporary delete failure",
+    });
+    expect(deleted).toEqual([]);
+
+    await expect(adapter.deliver(finalIntent)).resolves.toMatchObject({
+      channel: "slack",
+      outcome: "updated",
+    });
+    expect(deleted).toHaveLength(interimPostCount - 1);
+  });
+
+  it("splits a long Markdown message across native Markdown posts", async () => {
+    const posted: Array<{
+      blocks?: Array<{ text?: string; type: string }>;
+      channel: string;
+      text?: string;
+    }> = [];
     const adapter = new SlackAdapter({
       config: baseConfig,
       callbackHandleStore: fakeStore(),
@@ -2623,7 +2878,7 @@ describe("SlackAdapter", () => {
       socketClient: fakeSocket(),
       now: () => 1_700_000_000_000,
     });
-    const longText = "This is a full sentence that keeps going. ".repeat(90);
+    const longText = "This is a full sentence that keeps going. ".repeat(320);
 
     await expect(
       adapter.deliver({
@@ -2631,7 +2886,7 @@ describe("SlackAdapter", () => {
         kind: "message",
         createdAt: 1,
         role: "assistant",
-        parts: [{ type: "text", text: longText }],
+        parts: [{ type: "text", text: longText, markdown: "markdown" }],
         audit: {
           actor: { platformUserId: "U012ABCDEF0" },
           bindingId: "slack-binding-1",
@@ -2646,7 +2901,102 @@ describe("SlackAdapter", () => {
 
     expect(posted.length).toBeGreaterThan(1);
     for (const post of posted) {
-      expect((post.text ?? "").length).toBeLessThanOrEqual(3000);
+      expect(post.blocks).toEqual([
+        expect.objectContaining({ type: "markdown" }),
+      ]);
+      expect(post.blocks?.[0]?.text?.length ?? 0).toBeLessThanOrEqual(12_000);
+    }
+  });
+
+  it("keeps oversized Markdown tables renderable across native Markdown posts", async () => {
+    const posted: Array<{
+      blocks?: Array<{ text?: string; type: string }>;
+      channel: string;
+      text?: string;
+    }> = [];
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({ posted }),
+      socketClient: fakeSocket(),
+      now: () => 1_700_000_000_000,
+    });
+    const header = "| Signal | Alert period | Current/post-recovery |";
+    const delimiter = "|---|---|---|";
+    const rows = Array.from(
+      { length: 240 },
+      (_, index) =>
+        `| Signal ${index + 1} | Alert detail ${"high ".repeat(6)}| Recovery detail |`,
+    );
+    const text = [header, delimiter, ...rows].join("\n");
+
+    await expect(
+      adapter.deliver({
+        id: "assistant-long-table",
+        kind: "message",
+        createdAt: 1,
+        role: "assistant",
+        parts: [{ type: "text", text, markdown: "markdown" }],
+        audit: {
+          actor: { platformUserId: "U012ABCDEF0" },
+          bindingId: "slack-binding-1",
+          channel: {
+            channel: "slack",
+            conversation: { id: "D012ABCDEF0", kind: "dm" },
+          },
+          occurredAt: 1,
+        },
+      } satisfies MessagingSurfaceIntent),
+    ).resolves.toMatchObject({ channel: "slack", outcome: "presented" });
+
+    expect(posted.length).toBeGreaterThan(1);
+    for (const post of posted) {
+      const markdown = post.blocks?.[0]?.text ?? "";
+      expect(post.blocks?.[0]?.type).toBe("markdown");
+      expect(markdown.split("\n").slice(0, 2)).toEqual([header, delimiter]);
+      expect(markdown.length).toBeLessThanOrEqual(12_000);
+    }
+  });
+
+  it("splits legacy messages by encoded mrkdwn length without truncation", async () => {
+    const posted: Array<{
+      blocks?: Array<{ text?: { text?: string }; type: string }>;
+      channel: string;
+      text?: string;
+    }> = [];
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({ posted }),
+      socketClient: fakeSocket(),
+      now: () => 1_700_000_000_000,
+    });
+    const text = "<".repeat(3_000);
+
+    await expect(
+      adapter.deliver({
+        id: "assistant-legacy-escaped",
+        kind: "message",
+        createdAt: 1,
+        role: "assistant",
+        parts: [{ type: "text", text, markdown: "plain" }],
+        audit: {
+          actor: { platformUserId: "U012ABCDEF0" },
+          bindingId: "slack-binding-1",
+          channel: {
+            channel: "slack",
+            conversation: { id: "D012ABCDEF0", kind: "dm" },
+          },
+          occurredAt: 1,
+        },
+      } satisfies MessagingSurfaceIntent),
+    ).resolves.toMatchObject({ channel: "slack", outcome: "presented" });
+
+    expect(posted.length).toBeGreaterThan(1);
+    const rendered = posted.map((post) => post.blocks?.[0]?.text?.text ?? "");
+    expect(rendered.join("")).toBe("&lt;".repeat(3_000));
+    for (const chunk of rendered) {
+      expect(chunk.length).toBeLessThanOrEqual(3_000);
     }
   });
 });

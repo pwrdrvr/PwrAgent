@@ -39,7 +39,6 @@ import type {
 import {
   evictStaleStreamAnchors,
   extractMessagingPairingToken,
-  splitTextForDelivery,
   SLACK_CHANNEL_AUTHORIZATION_MODE_DEFAULT,
   SLACK_CHANNEL_USER_ACCESS_MODE_DEFAULT,
   SLACK_DM_ACCESS_MODE_DEFAULT,
@@ -53,8 +52,9 @@ import {
   buildSlackBlocksForIntent,
   clampSlackMessage,
   markdownToSlackMrkdwn,
+  splitSlackTextForDelivery,
   textForSlackIntent,
-  SLACK_SECTION_TEXT_LIMIT,
+  usesSlackStandardMarkdown,
   type SlackPostBody,
 } from "./slack-formatting.ts";
 import {
@@ -306,7 +306,7 @@ export class SlackAdapter implements SlackProviderAdapter {
       // Source: Slack `chat.postMessage` docs.
       maxLength: 40_000,
       encoding: "characters",
-      markdownDialect: "slack-mrkdwn",
+      markdownDialect: "markdown",
       supportsCodeBlocks: true,
       supportsBold: true,
       supportsItalic: true,
@@ -349,12 +349,19 @@ export class SlackAdapter implements SlackProviderAdapter {
   // "create-or-edit" primitive, so the first chunk posts a new message and
   // records its `ts` here; later chunks (and the final) edit it in place — the
   // post-new-then-edit pattern Telegram and Discord use. A response longer than
-  // Slack's 3000-char section block rolls onto additional anchors (element 1,
-  // 2, …); `text` lets us skip re-editing a chunk that hasn't changed. Cleared
-  // when the final stream chunk lands.
+  // the active Slack block limit rolls onto additional anchors (element 1, 2,
+  // …); `text` and `renderMode` let us skip re-editing a chunk only when neither
+  // its content nor its Slack dialect changed. Cleared when the final stream
+  // chunk lands.
   private readonly streamSurfaces = new Map<
     string,
-    Array<{ channelId: string; ts: string; threadTs?: string; text: string }>
+    Array<{
+      channelId: string;
+      renderMode?: "markdown" | "mrkdwn";
+      ts: string;
+      threadTs?: string;
+      text: string;
+    }>
   >();
   private botAccount: string | undefined;
   private botAccountDetail: string | undefined;
@@ -549,19 +556,17 @@ export class SlackAdapter implements SlackProviderAdapter {
       layout: intent.actionLayout,
     });
     // Long text-only messages: split into several posts at clean boundaries so
-    // the 3000-char section block doesn't truncate the tail. Restricted to the
-    // simple case — a plain message with no buttons, no attachments, and no
-    // in-place edit — which is exactly the assistant-response path.
+    // neither a 12,000-char standard-Markdown block nor a legacy 3,000-char
+    // section block truncates the tail. Restricted to the simple case — a
+    // message with no buttons, attachments, or in-place edit — which is exactly
+    // the assistant-response path.
     if (
       intent.kind === "message" &&
       (actionBlocks?.length ?? 0) === 0 &&
       intent.delivery?.mode !== "update" &&
       !intent.parts.some((part) => part.type === "file")
     ) {
-      const chunks = splitTextForDelivery(markdownToSlackMrkdwn(rawText), {
-        limit: SLACK_SECTION_TEXT_LIMIT,
-        measure: "chars",
-      });
+      const chunks = splitSlackTextForDelivery(intent, rawText);
       if (chunks.length > 1) {
         return await this.deliverChunkedTextMessage({ intent, target, chunks });
       }
@@ -1134,7 +1139,7 @@ export class SlackAdapter implements SlackProviderAdapter {
         const blocks = buildSlackBlocksForIntent({ intent: params.intent, text: chunk });
         const result = await this.api.postMessage({
           channel: params.target.channelId,
-          text: chunk || "PwrAgent",
+          text: clampSlackMessage(markdownToSlackMrkdwn(chunk)) || "PwrAgent",
           ...(blocks.length > 0 ? { blocks } : {}),
           ...(params.target.threadTs ? { thread_ts: params.target.threadTs } : {}),
           unfurl_links: false,
@@ -1200,15 +1205,12 @@ export class SlackAdapter implements SlackProviderAdapter {
         errorMessage: "Slack stream update target is missing",
       };
     }
-    // Split the accumulated stream text at Slack's 3000-char section-block
-    // limit so a long response rolls onto additional messages instead of being
-    // truncated. Greedy splitting keeps prefix chunks stable as text grows, so
-    // only the last chunk is re-edited each tick and new ones are posted as the
-    // response spills over.
-    const chunks = splitTextForDelivery(markdownToSlackMrkdwn(intent.text), {
-      limit: SLACK_SECTION_TEXT_LIMIT,
-      measure: "chars",
-    });
+    // Split accumulated stream text at the active Slack block limit so a long
+    // response rolls onto additional messages instead of being truncated.
+    // Greedy splitting keeps prefix chunks stable as text grows, so only the
+    // last chunk is re-edited each tick and new ones are posted as the response
+    // spills over.
+    const chunks = splitSlackTextForDelivery(intent, intent.text);
     if (chunks.length === 0) {
       return {
         outcome: "discarded",
@@ -1216,6 +1218,7 @@ export class SlackAdapter implements SlackProviderAdapter {
         deliveredAt: this.now(),
       };
     }
+    const renderMode = usesSlackStandardMarkdown(intent) ? "markdown" : "mrkdwn";
     const threadTs = target.threadTs;
     // Seed anchor 0 from a caller-supplied surface `ts` (restart-safety: the
     // controller may hand us a surface we no longer have in memory) so the
@@ -1239,23 +1242,27 @@ export class SlackAdapter implements SlackProviderAdapter {
         const blocks = buildSlackBlocksForIntent({ intent, text: chunk });
         const anchor = anchors[index];
         if (anchor) {
-          if (anchor.text === chunk) {
+          if (anchor.text === chunk && anchor.renderMode === renderMode) {
             firstOutcome ??= "updated";
             continue;
           }
           await this.api.updateMessage({
             channel: anchor.channelId,
             ts: anchor.ts,
-            text: chunk,
+            text: clampSlackMessage(markdownToSlackMrkdwn(chunk)),
             ...(blocks.length > 0 ? { blocks } : {}),
             ...(anchor.threadTs ? { thread_ts: anchor.threadTs } : {}),
           });
           anchor.text = chunk;
+          anchor.renderMode = renderMode;
           firstOutcome ??= "updated";
         } else {
           const result = await this.api.postMessage({
             channel: target.channelId,
-            text: chunk || intent.fallbackText || "PwrAgent",
+            text:
+              clampSlackMessage(markdownToSlackMrkdwn(chunk))
+              || intent.fallbackText
+              || "PwrAgent",
             ...(blocks.length > 0 ? { blocks } : {}),
             ...(threadTs ? { thread_ts: threadTs } : {}),
             unfurl_links: false,
@@ -1272,11 +1279,27 @@ export class SlackAdapter implements SlackProviderAdapter {
           }
           anchors[index] = {
             channelId: result.channel ?? target.channelId,
+            renderMode,
             ts,
             text: chunk,
             ...(threadTs ? { threadTs } : {}),
           };
           firstOutcome ??= "presented";
+        }
+      }
+      // Interim stream updates use compact mrkdwn sections while the final
+      // update uses larger standard-Markdown blocks. Finalization can therefore
+      // consolidate several interim Slack messages into fewer rich messages;
+      // remove the obsolete tail instead of leaving duplicate partial text in
+      // the conversation.
+      if (anchors.length > chunks.length) {
+        while (anchors.length > chunks.length) {
+          const obsolete = anchors[chunks.length]!;
+          await this.api.deleteMessage({
+            channel: obsolete.channelId,
+            ts: obsolete.ts,
+          });
+          anchors.splice(chunks.length, 1);
         }
       }
       if (intent.stream.isFinal) {

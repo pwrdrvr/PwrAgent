@@ -58,6 +58,20 @@ describe("splitTextForDelivery", () => {
     expect(chunks).toEqual(["x".repeat(100), "x".repeat(100), "x".repeat(50)]);
   });
 
+  it("supports measuring a transformed representation without splitting the source", () => {
+    const text = "<".repeat(10);
+    const chunks = splitTextForDelivery(text, {
+      limit: 12,
+      measureText: (value) => value.replaceAll("<", "&lt;").length,
+    });
+
+    expect(chunks).toEqual(["<<<", "<<<", "<<<", "<"]);
+    expect(chunks.join("")).toBe(text);
+    for (const chunk of chunks) {
+      expect(chunk.replaceAll("<", "&lt;").length).toBeLessThanOrEqual(12);
+    }
+  });
+
   it("measures by bytes when asked (multibyte-safe)", () => {
     const text = "😀".repeat(10); // 4 bytes each = 40 bytes, 20 UTF-16 code units
     const chunks = splitTextForDelivery(text, { limit: 12, measure: "bytes" });
