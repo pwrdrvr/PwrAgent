@@ -81,6 +81,13 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
       threads,
       workspaceRoots: resolveScratchProjectsRoots(),
     });
+    if (
+      backend === "all"
+      && !request.filter?.trim()
+      && request.refreshMode !== "active-recent"
+    ) {
+      this.registry.rememberCompleteNavigationSnapshot(snapshot);
+    }
     const directoryStatuses = await this.registry.readDirectoryStatuses(
       snapshot.directories,
     );

@@ -31,7 +31,6 @@ import type {
   BackendRateLimitSummary,
   CodexThreadEnvironmentRuntime,
   DesktopProviderThreadModelMigration,
-  DirectoryOverlayState,
   LinkedDirectorySummary,
   NavigationLaunchpadDefaults,
   NavigationLaunchpadDraft,
@@ -265,7 +264,6 @@ async function expectEventually<T>(
 }
 
 function createOverlayStoreMock(params?: {
-  directoryOverlays?: Record<string, DirectoryOverlayState>;
   executionMode?: "default" | "full-access";
   launchpadDefaults?: NavigationLaunchpadDefaults;
   overlays?: Record<string, ThreadOverlayState>;
@@ -280,9 +278,6 @@ function createOverlayStoreMock(params?: {
     : undefined;
   const overlays = new Map<string, ThreadOverlayState>(
     Object.entries(params?.overlays ?? {})
-  );
-  const directoryOverlays = new Map<string, DirectoryOverlayState>(
-    Object.entries(params?.directoryOverlays ?? {}),
   );
   const usageLines = new Map<string, ThreadUsageLineRecord>();
   const messageOrigins = new Map<string, AppServerThreadMessageOrigin>();
@@ -596,41 +591,6 @@ function createOverlayStoreMock(params?: {
       overlays.set(key, next);
       return next;
     },
-    getDirectoryOverlayState: async ({
-      directoryKey,
-    }: {
-      directoryKey: string;
-    }) => directoryOverlays.get(directoryKey),
-    readAllDirectoryOverlays: async () =>
-      Object.fromEntries(directoryOverlays),
-    reconcileNavigationSnapshot: async ({
-      backend,
-      fetchedAt,
-      threads,
-      workspaceRoots,
-    }: {
-      backend: "all" | AppServerBackendKind;
-      fetchedAt: number;
-      threads: AppServerThreadSummary[];
-      workspaceRoots?: string[];
-    }) => buildNavigationSnapshot({
-      backend,
-      fetchedAt,
-      firstSnapshot: false,
-      directoryOverlayByKey: Object.fromEntries(directoryOverlays),
-      overlayByThreadKey: Object.fromEntries(
-        threads.map((thread) => [
-          buildThreadIdentityKey(thread.source, thread.id),
-          overlays.get(buildThreadIdentityKey(thread.source, thread.id)),
-        ]),
-      ),
-      previousKnownThreadKeys: threads.map((thread) =>
-        buildThreadIdentityKey(thread.source, thread.id),
-      ),
-      threads,
-      unchanged: false,
-      workspaceRoots,
-    }),
     updateSubthreadOrder: async ({
       backend,
       parentThreadId,
@@ -1989,6 +1949,54 @@ async function emitCompletedTurn(
       },
     },
   });
+}
+
+function rememberCollapsedDirectoryWithPinnedThread(params: {
+  directoryKey: string;
+  directoryPath: string;
+  registry: DesktopBackendRegistry;
+  threadId?: string;
+}): void {
+  const threadId = params.threadId ?? "thread-pinned";
+  params.registry.rememberCompleteNavigationSnapshot(buildNavigationSnapshot({
+    backend: "all",
+    fetchedAt: 1_000,
+    firstSnapshot: false,
+    directoryOverlayByKey: {
+      [params.directoryKey]: {
+        directoryKey: params.directoryKey,
+        directoryThreadsCollapsed: true,
+      },
+    },
+    overlayByThreadKey: {
+      [`codex:${threadId}`]: {
+        backend: "codex",
+        threadId,
+        executionMode: "default",
+        extraLinkedDirectories: [],
+        pinnedRank: "1024",
+      },
+    },
+    previousKnownThreadKeys: [`codex:${threadId}`],
+    threads: [
+      {
+        id: threadId,
+        title: "Pinned thread",
+        titleSource: "explicit",
+        source: "codex",
+        linkedDirectories: [
+          {
+            id: params.directoryKey,
+            kind: "local",
+            label: "project",
+            path: params.directoryPath,
+          },
+        ],
+        updatedAt: 1_000,
+      },
+    ],
+    unchanged: false,
+  }));
 }
 
 describe("DesktopBackendRegistry", () => {
@@ -4649,7 +4657,9 @@ describe("DesktopBackendRegistry", () => {
   });
 
   it("auto-pins a top-level thread created through the shared launchpad materialization path", async () => {
-    const directoryPath = "/repo/project";
+    const directoryPath = expectedDir(
+      path.join(os.tmpdir(), "pwragent-auto-pin-project"),
+    );
     const directoryKey = `directory:${directoryPath}`;
     const linkedDirectory = {
       id: directoryKey,
@@ -4658,12 +4668,6 @@ describe("DesktopBackendRegistry", () => {
       path: directoryPath,
     };
     const overlayStore = createOverlayStoreMock({
-      directoryOverlays: {
-        [directoryKey]: {
-          directoryKey,
-          directoryThreadsCollapsed: true,
-        },
-      },
       overlays: {
         "codex:thread-pinned": {
           backend: "codex",
@@ -4674,19 +4678,21 @@ describe("DesktopBackendRegistry", () => {
         },
       },
     });
+    const codexClient = new MockBackendClient({
+      threads: [
+        {
+          id: "thread-pinned",
+          title: "Pinned thread",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [linkedDirectory],
+          updatedAt: 1_000,
+        },
+      ],
+    });
+    const listThreads = vi.spyOn(codexClient, "listThreads");
     const registry = new DesktopBackendRegistry({
-      codexClient: new MockBackendClient({
-        threads: [
-          {
-            id: "thread-pinned",
-            title: "Pinned thread",
-            titleSource: "explicit",
-            source: "codex",
-            linkedDirectories: [linkedDirectory],
-            updatedAt: 1_000,
-          },
-        ],
-      }),
+      codexClient,
       grokClient: new MockBackendClient({ threads: [] }),
       overlayStore,
       gitDirectoryService: {
@@ -4695,6 +4701,11 @@ describe("DesktopBackendRegistry", () => {
           workMode: "local" as const,
         })),
       } as never,
+    });
+    rememberCollapsedDirectoryWithPinnedThread({
+      directoryKey,
+      directoryPath,
+      registry,
     });
     const events: AgentEvent[] = [];
     registry.onEvent((event) => {
@@ -4738,12 +4749,70 @@ describe("DesktopBackendRegistry", () => {
         },
       },
     });
+    expect(listThreads).not.toHaveBeenCalled();
+
+    await registry.close();
+  });
+
+  it("reports an automatic visibility pin failure to the creation caller", async () => {
+    const directoryPath = expectedDir(
+      path.join(os.tmpdir(), "pwragent-auto-pin-failure-project"),
+    );
+    const directoryKey = `directory:${directoryPath}`;
+    const overlayStore = createOverlayStoreMock();
+    overlayStore.setThreadPin = vi.fn(async () => {
+      throw new Error("state database is unavailable");
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore,
+      gitDirectoryService: {
+        prepareLaunchpadWorkspace: vi.fn(async () => ({
+          cwd: directoryPath,
+          workMode: "local" as const,
+        })),
+      } as never,
+    });
+    rememberCollapsedDirectoryWithPinnedThread({
+      directoryKey,
+      directoryPath,
+      registry,
+    });
+
+    const response = await registry.materializeDirectoryLaunchpad({
+      directoryKey,
+      launchpad: {
+        directoryKey,
+        directoryKind: "directory",
+        directoryLabel: "project",
+        directoryPath,
+        backend: "codex",
+        executionMode: "default",
+        prompt: "",
+        workMode: "local",
+        createdAt: 1_000,
+        updatedAt: 2_000,
+      },
+    });
+
+    expect(response).toMatchObject({
+      backend: "codex",
+      threadId: "thread-1",
+      autoPinFailure: {
+        message:
+          "The new thread was created, but it could not be pinned automatically: state database is unavailable",
+      },
+    });
+    expect(response).not.toHaveProperty("pinnedRank");
 
     await registry.close();
   });
 
   it("does not redundantly auto-pin a child of a pinned parent", async () => {
-    const directoryPath = "/repo/project";
+    const directoryPath = expectedDir(
+      path.join(os.tmpdir(), "pwragent-auto-pin-child-project"),
+    );
     const directoryKey = `directory:${directoryPath}`;
     const linkedDirectory = {
       id: directoryKey,
@@ -4752,12 +4821,6 @@ describe("DesktopBackendRegistry", () => {
       path: directoryPath,
     };
     const overlayStore = createOverlayStoreMock({
-      directoryOverlays: {
-        [directoryKey]: {
-          directoryKey,
-          directoryThreadsCollapsed: true,
-        },
-      },
       overlays: {
         "codex:thread-pinned": {
           backend: "codex",
@@ -4783,6 +4846,11 @@ describe("DesktopBackendRegistry", () => {
       }),
       grokClient: new MockBackendClient({ threads: [] }),
       overlayStore,
+    });
+    rememberCollapsedDirectoryWithPinnedThread({
+      directoryKey,
+      directoryPath,
+      registry,
     });
     const events: AgentEvent[] = [];
     registry.onEvent((event) => {

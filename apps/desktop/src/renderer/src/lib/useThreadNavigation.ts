@@ -4922,6 +4922,8 @@ export function useThreadNavigation(
       }
       if (response.turnStartFailure) {
         setLaunchpadError(response.turnStartFailure.message);
+      } else if (response.autoPinFailure) {
+        setLaunchpadError(response.autoPinFailure.message);
       }
       // Link composer `@`-referenced directories to the just-created
       // thread before the refresh below so the snapshot comes back with

@@ -7720,6 +7720,7 @@ export class MessagingController {
     const started = materialized ?? (await this.options.backend.startThread!({
       backend: selectedBackend.kind,
       cwd: directory?.path ?? project.path,
+      directoryKey: directory?.key,
       executionMode: options.executionMode,
       fastMode: options.supportsFast ? options.fastMode : undefined,
       model: options.supportsModel ? options.model : undefined,

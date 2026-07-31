@@ -35,6 +35,7 @@ export type StartThreadRequest = {
   };
   executionMode?: ThreadExecutionMode;
   cwd?: string;
+  directoryKey?: string;
   model?: string;
   approvalPolicy?: string;
   sandbox?: string;
@@ -53,6 +54,7 @@ export type StartThreadResponse = {
   threadId: ThreadIdentifier;
   executionMode: ThreadExecutionMode;
   pinnedRank?: string;
+  autoPinFailure?: ThreadAutoPinFailure;
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   codexEnvironmentStartupFailure?: CodexEnvironmentStartupFailure;
 };
@@ -61,6 +63,10 @@ export type CodexEnvironmentStartupFailure = {
   message: string;
   phase: "setup" | "action";
   worktreeCleanupAvailable: boolean;
+};
+
+export type ThreadAutoPinFailure = {
+  message: string;
 };
 
 export type ForkThreadRequest = {
@@ -94,6 +100,7 @@ export type ForkThreadResponse = {
   threadId: ThreadIdentifier;
   executionMode: ThreadExecutionMode;
   pinnedRank?: string;
+  autoPinFailure?: ThreadAutoPinFailure;
   linkedDirectory?: LinkedDirectorySummary;
   workMode: LaunchpadWorkMode;
   gitBranch?: string;
@@ -556,6 +563,7 @@ export type MaterializedDirectoryLaunchpadThread = {
   threadId: ThreadIdentifier;
   executionMode: ThreadExecutionMode;
   pinnedRank?: string;
+  autoPinFailure?: ThreadAutoPinFailure;
   linkedDirectory?: LinkedDirectorySummary;
   workMode: LaunchpadWorkMode;
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
