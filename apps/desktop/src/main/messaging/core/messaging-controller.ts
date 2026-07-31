@@ -8847,6 +8847,10 @@ export class MessagingController {
   private async hasActiveBindingSubmodeIntent(
     binding: MessagingBindingRecord,
   ): Promise<boolean> {
+    const statusSurface = binding.statusSurface ?? binding.pinnedStatusSurface;
+    if (!statusSurface) {
+      return false;
+    }
     for (const actorId of binding.authorizedActorIds) {
       const pendingIntent =
         await this.options.store.findActivePendingIntentForChannel({
@@ -8856,7 +8860,9 @@ export class MessagingController {
         });
       if (
         pendingIntent?.bindingId === binding.id &&
-        !pendingIntent.intent.requestContext
+        !pendingIntent.intent.requestContext &&
+        pendingIntent.surface?.channel === statusSurface.channel &&
+        pendingIntent.surface.id === statusSurface.id
       ) {
         return true;
       }
@@ -11142,6 +11148,7 @@ export class MessagingController {
     binding: MessagingBindingRecord,
     event: MessagingInboundEvent,
   ): Promise<MessagingBindingRecord> {
+    await this.clearActiveBindingSubmodeIntent(event, binding);
     const snapshot = await this.options.backend.getNavigationSnapshot({
       backend: "all",
     });

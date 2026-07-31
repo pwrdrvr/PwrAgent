@@ -5540,6 +5540,97 @@ describe("MessagingController", () => {
     });
   });
 
+  it("clears an active status child interaction when /status recreates the card", async () => {
+    const harness = await createHarness();
+    const statusEvent = buildCommandEvent("/status");
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:tool-updates" }),
+    );
+    await expect(
+      harness.store.findActivePendingIntentForChannel({
+        actorId: statusEvent.actor.platformUserId,
+        channel: statusEvent.channel,
+        now: 1000,
+      }),
+    ).resolves.toMatchObject({
+      bindingId: expect.any(String),
+      intent: { kind: "single_select" },
+    });
+
+    await harness.controller.handleInboundEvent(statusEvent);
+
+    await expect(
+      harness.store.findActivePendingIntentForChannel({
+        actorId: statusEvent.actor.platformUserId,
+        channel: statusEvent.channel,
+        now: 1000,
+      }),
+    ).resolves.toBeUndefined();
+    const recreatedBinding = await harness.store.findActiveBindingForChannel(
+      statusEvent.channel,
+    );
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/executionMode/updated",
+        params: {
+          threadId: "thread-1",
+          executionMode: "full-access",
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.delivered).toEqual([
+      expect.objectContaining({
+        kind: "status",
+        targetSurface: recreatedBinding?.statusSurface,
+      }),
+    ]);
+  });
+
+  it("ignores a pending status interaction that no longer owns the current surface", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:tool-updates" }),
+    );
+    const binding = await harness.store.findActiveBindingForChannel(
+      buildCommandEvent("/status").channel,
+    );
+    expect(binding).toBeDefined();
+    const replacementSurface = {
+      channel: "telegram" as const,
+      id: "surface:replacement-status",
+    };
+    await harness.store.upsertBinding({
+      ...binding!,
+      statusSurface: replacementSurface,
+      updatedAt: 1001,
+    });
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/executionMode/updated",
+        params: {
+          threadId: "thread-1",
+          executionMode: "full-access",
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.delivered).toEqual([
+      expect.objectContaining({
+        kind: "status",
+        targetSurface: replacementSurface,
+      }),
+    ]);
+  });
+
   it("passes Codex backend metadata through to rendered status cards", async () => {
     const harness = await createHarness({
       listBackends: async () => ({
