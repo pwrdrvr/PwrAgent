@@ -1806,6 +1806,13 @@ export class SqliteOverlayStore {
       executionMode: "default" as const,
       extraLinkedDirectories: [],
     };
+    const fetchedAt = params.fetchedAt ?? Date.now();
+    if (
+      current.prsFetchedAt !== undefined
+      && current.prsFetchedAt > fetchedAt
+    ) {
+      return current;
+    }
     const detachedPrKeys = normalizeDetachedPrKeys(current.detachedPrKeys);
     const detachedPrs = mergePrSummariesByStatusKey(
       current.detachedPrs,
@@ -1816,7 +1823,7 @@ export class SqliteOverlayStore {
       detachedPrKeys,
       detachedPrs,
       prs: filterDetachedPrs(params.prs, detachedPrKeys).map(normalizePrSummary),
-      prsFetchedAt: params.fetchedAt ?? Date.now(),
+      prsFetchedAt: fetchedAt,
       prsRefreshKey: params.refreshKey,
     };
     this.putThread(threadKey, nextState);

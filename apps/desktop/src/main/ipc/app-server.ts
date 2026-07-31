@@ -716,6 +716,20 @@ type PrLookupSubscriber = {
   previousPrs: PrSummary[];
 };
 
+type PrLookupRefreshParams = {
+  backend: AppServerBackendKind;
+  request: RefreshThreadPullRequestsRequest;
+  requestKey: string;
+  lookupKey: string;
+  lookupDirectoryPaths: string[];
+  previousPrs: PrSummary[];
+};
+
+type PendingPrLookupRefresh = {
+  authoritative: boolean;
+  promise: Promise<void>;
+};
+
 type PrLookupRefreshClaim =
   | {
       refreshKey: string;
@@ -836,7 +850,14 @@ class DesktopAppServerService {
   >();
   private readonly prStatusRegistry = new Map<string, PrStatusRegistryEntry>();
   private readonly prLookupRegistry = new Map<string, PrLookupRegistryEntry>();
-  private readonly pendingPrLookupRefreshes = new Map<string, Promise<void>>();
+  private readonly pendingPrLookupRefreshes = new Map<
+    string,
+    PendingPrLookupRefresh
+  >();
+  private readonly queuedAuthoritativePrLookupRefreshes = new Map<
+    string,
+    Map<string, PrLookupRefreshParams>
+  >();
   private readonly prLookupSubscribers = new Map<
     string,
     Map<string, PrLookupSubscriber>
@@ -2556,18 +2577,21 @@ class DesktopAppServerService {
       .map(normalizePrSummary);
   }
 
-  private startPullRequestLookupRefresh(params: {
-    backend: AppServerBackendKind;
-    request: RefreshThreadPullRequestsRequest;
-    requestKey: string;
-    lookupKey: string;
-    lookupDirectoryPaths: string[];
-    previousPrs: PrSummary[];
-  }): boolean {
+  private startPullRequestLookupRefresh(
+    params: PrLookupRefreshParams,
+    options: {
+      additionalSubscribers?: PrLookupRefreshParams[];
+      skipClaim?: boolean;
+    } = {},
+  ): boolean {
     const trigger = params.request.trigger ?? "scheduled";
+    const authoritative = trigger === "user" || trigger === "post-turn";
     const provider = normalizePullRequestProvider(params.request.provider);
     const pending = this.pendingPrLookupRefreshes.get(params.lookupKey);
     if (pending) {
+      if (authoritative && !pending.authoritative) {
+        return this.queueAuthoritativePullRequestLookupRefresh(params);
+      }
       this.addPullRequestLookupSubscriber(params.lookupKey, params);
       if (trigger === "user") {
         logDebug("threadPullRequestsRefresh:coalesced-background", userPrRefreshLogPayload({
@@ -2585,40 +2609,46 @@ class DesktopAppServerService {
       return true;
     }
 
-    const claim = this.claimPullRequestLookupRefreshKey(
-      params.lookupKey,
-      trigger,
-      provider,
-      params.previousPrs.length > 0
-        && params.previousPrs.every(
-          (pr) => pr.lifecycleState === "merged" || pr.lifecycleState === "closed",
-        ),
-    );
-    if (claim.skippedReason) {
-      if (trigger === "user") {
-        logDebug("threadPullRequestsRefresh:skipped", {
-          ...userPrRefreshLogPayload({
-            backend: params.backend,
-            branch: params.request.branch.trim(),
-            directoryPathCount: params.request.directoryPaths.length,
-            lookupKey: params.lookupKey,
-            previousPrs: params.previousPrs,
-            provider,
-            reason: claim.skippedReason,
-            requestKey: params.requestKey,
-            threadId: params.request.threadId,
-            trigger,
-          }),
-          ageMs: claim.ageMs,
-          minIntervalMs: claim.minIntervalMs,
-          nextAllowedInMs: claim.nextAllowedInMs,
-        });
+    let refreshKey = params.lookupKey;
+    if (!options.skipClaim) {
+      const claim = this.claimPullRequestLookupRefreshKey(
+        params.lookupKey,
+        trigger,
+        provider,
+        params.previousPrs.length > 0
+          && params.previousPrs.every(
+            (pr) => pr.lifecycleState === "merged" || pr.lifecycleState === "closed",
+          ),
+      );
+      if (claim.skippedReason) {
+        if (trigger === "user") {
+          logDebug("threadPullRequestsRefresh:skipped", {
+            ...userPrRefreshLogPayload({
+              backend: params.backend,
+              branch: params.request.branch.trim(),
+              directoryPathCount: params.request.directoryPaths.length,
+              lookupKey: params.lookupKey,
+              previousPrs: params.previousPrs,
+              provider,
+              reason: claim.skippedReason,
+              requestKey: params.requestKey,
+              threadId: params.request.threadId,
+              trigger,
+            }),
+            ageMs: claim.ageMs,
+            minIntervalMs: claim.minIntervalMs,
+            nextAllowedInMs: claim.nextAllowedInMs,
+          });
+        }
+        return false;
       }
-      return false;
+      refreshKey = claim.refreshKey;
     }
-    const refreshKey = claim.refreshKey;
 
     this.addPullRequestLookupSubscriber(params.lookupKey, params);
+    for (const subscriber of options.additionalSubscribers ?? []) {
+      this.addPullRequestLookupSubscriber(params.lookupKey, subscriber);
+    }
     if (trigger === "user") {
       logDebug("threadPullRequestsRefresh:background-start", userPrRefreshLogPayload({
         backend: params.backend,
@@ -2676,13 +2706,65 @@ class DesktopAppServerService {
         });
       })
       .finally(() => {
-        if (this.pendingPrLookupRefreshes.get(params.lookupKey) === promise) {
+        if (
+          this.pendingPrLookupRefreshes.get(params.lookupKey)?.promise
+          === promise
+        ) {
           this.pendingPrLookupRefreshes.delete(params.lookupKey);
           this.prLookupSubscribers.delete(params.lookupKey);
+          this.startQueuedAuthoritativePullRequestLookupRefresh(params.lookupKey);
         }
       });
-    this.pendingPrLookupRefreshes.set(params.lookupKey, promise);
+    this.pendingPrLookupRefreshes.set(params.lookupKey, {
+      authoritative,
+      promise,
+    });
     return true;
+  }
+
+  private queueAuthoritativePullRequestLookupRefresh(
+    params: PrLookupRefreshParams,
+  ): boolean {
+    const queued = this.queuedAuthoritativePrLookupRefreshes.get(params.lookupKey)
+      ?? new Map<string, PrLookupRefreshParams>();
+    const threadKey = buildThreadIdentityKey(
+      params.backend,
+      params.request.threadId,
+    );
+    queued.set(threadKey, params);
+    this.queuedAuthoritativePrLookupRefreshes.set(params.lookupKey, queued);
+    if (params.request.trigger === "user") {
+      logDebug("threadPullRequestsRefresh:queued-authoritative", userPrRefreshLogPayload({
+        backend: params.backend,
+        branch: params.request.branch.trim(),
+        directoryPathCount: params.request.directoryPaths.length,
+        lookupKey: params.lookupKey,
+        previousPrs: params.previousPrs,
+        provider: normalizePullRequestProvider(params.request.provider),
+        requestKey: params.requestKey,
+        threadId: params.request.threadId,
+        trigger: "user",
+      }));
+    }
+    return true;
+  }
+
+  private startQueuedAuthoritativePullRequestLookupRefresh(
+    lookupKey: string,
+  ): void {
+    const queued = this.queuedAuthoritativePrLookupRefreshes.get(lookupKey);
+    if (!queued?.size) {
+      return;
+    }
+    this.queuedAuthoritativePrLookupRefreshes.delete(lookupKey);
+    const [first, ...additionalSubscribers] = [...queued.values()];
+    if (!first) {
+      return;
+    }
+    this.startPullRequestLookupRefresh(first, {
+      additionalSubscribers,
+      skipClaim: true,
+    });
   }
 
   private addPullRequestLookupSubscriber(
@@ -2731,6 +2813,17 @@ class DesktopAppServerService {
           refreshKey: subscriber.requestKey,
         });
         const persistedPrs = updated.prs ?? [];
+        if ((updated.prsFetchedAt ?? 0) > params.fetchedAt) {
+          appServerLog.info("thread PR overlay observation ignored", {
+            backend: subscriber.backend,
+            threadId: subscriber.threadId,
+            requestKey: subscriber.requestKey,
+            observedAt: params.fetchedAt,
+            currentObservedAt: updated.prsFetchedAt,
+            currentRequestKey: updated.prsRefreshKey,
+          });
+          return;
+        }
 
         if (!prSummariesEqual(subscriber.previousPrs, persistedPrs)) {
           changedThreadCount += 1;
@@ -2771,6 +2864,9 @@ class DesktopAppServerService {
       refreshKey: params.requestKey,
     });
     const persistedPrs = updated.prs ?? [];
+    if ((updated.prsFetchedAt ?? 0) > params.fetchedAt) {
+      return persistedPrs;
+    }
 
     if (!prSummariesEqual(params.persistedPrs, persistedPrs)) {
       await this.publishThreadPullRequestsUpdated({
@@ -4259,6 +4355,7 @@ class DesktopAppServerService {
     this.lastPrObservationTimestamp = 0;
     this.prLookupRegistry.clear();
     this.pendingPrLookupRefreshes.clear();
+    this.queuedAuthoritativePrLookupRefreshes.clear();
     this.prLookupSubscribers.clear();
     this.prStatusRegistryLoaded = false;
     this.prLookupRegistryLoaded = false;

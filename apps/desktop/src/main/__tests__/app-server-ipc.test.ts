@@ -332,6 +332,7 @@ const setThreadPullRequests = vi.fn(async (request: {
   backend: "codex" | "grok";
   threadId: string;
   prs: PrSummary[];
+  fetchedAt?: number;
   refreshKey?: string;
 }) => ({
   backend: request.backend,
@@ -339,7 +340,7 @@ const setThreadPullRequests = vi.fn(async (request: {
   executionMode: "default" as const,
   extraLinkedDirectories: [],
   prs: request.prs,
-  prsFetchedAt: Date.now(),
+  prsFetchedAt: request.fetchedAt ?? Date.now(),
   prsRefreshKey: request.refreshKey,
 }));
 const addThreadPullRequestReference = vi.fn(async (request: {
@@ -1913,6 +1914,75 @@ describe("app server ipc", () => {
         prs: fetchedPrs,
       }),
     );
+  });
+
+  it("queues an authoritative refresh behind a pending scheduled lookup", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+    const scheduledRequest = {
+      backend: "codex",
+      threadId: "thread-scheduled",
+      trigger: "scheduled",
+      branch: "feat/pr-chip",
+      directoryPaths: ["/repo"],
+    } satisfies RefreshThreadPullRequestsRequest;
+    const userRequest = {
+      ...scheduledRequest,
+      threadId: "thread-user",
+      trigger: "user",
+    } satisfies RefreshThreadPullRequestsRequest;
+    const primedPr = githubPr({
+      number: 250,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      state: "passing",
+      mergeState: "mergeable",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/250",
+    });
+    const authoritativePr = {
+      ...primedPr,
+      mergeState: "conflicting" as const,
+    };
+    const resolveFetches: Array<(prs: PrSummary[]) => void> = [];
+    detectPullRequestsForThread.mockImplementation(
+      async () => await new Promise<PrSummary[]>((resolve) => {
+        resolveFetches.push(resolve);
+      }),
+    );
+
+    registerAppServerIpcHandlers();
+    const handler = handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)!;
+    await handler({}, scheduledRequest);
+    await handler({}, userRequest);
+
+    expect(detectPullRequestsForThread).toHaveBeenCalledOnce();
+    resolveFetches[0]?.([primedPr]);
+
+    await vi.waitFor(() => {
+      expect(detectPullRequestsForThread).toHaveBeenCalledTimes(2);
+    });
+    expect(detectPullRequestsForThread).toHaveBeenLastCalledWith({
+      fetcher: expect.any(Object),
+      branch: "feat/pr-chip",
+      directoryPaths: ["/repo"],
+      allowPrimedBranchLookup: false,
+    });
+    expect(setThreadPullRequests).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: "thread-user",
+        prs: [primedPr],
+      }),
+    );
+
+    resolveFetches[1]?.([authoritativePr]);
+    await vi.waitFor(() => {
+      expect(setThreadPullRequests).toHaveBeenCalledWith(
+        expect.objectContaining({
+          threadId: "thread-user",
+          prs: [authoritativePr],
+        }),
+      );
+    });
   });
 
   it("refreshes retained PRs from all subscribers on a coalesced lookup", async () => {

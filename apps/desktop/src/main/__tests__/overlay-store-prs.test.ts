@@ -128,6 +128,40 @@ describe("SqliteOverlayStore — thread PRs", () => {
     expect(overlay?.prs?.[0]?.state).toBe("failing");
   });
 
+  it("rejects an older PR lookup completion for the same thread", async () => {
+    const newerPr = pr({
+      ...prPassing,
+      mergeState: "conflicting",
+    });
+    await store.setThreadPullRequests({
+      backend: "codex",
+      threadId: "thread-1",
+      prs: [newerPr],
+      fetchedAt: 2000,
+      refreshKey: "newer-request",
+    });
+
+    const result = await store.setThreadPullRequests({
+      backend: "codex",
+      threadId: "thread-1",
+      prs: [prPassing],
+      fetchedAt: 1000,
+      refreshKey: "older-request",
+    });
+
+    expect(result.prs).toEqual([newerPr]);
+    expect(result.prsFetchedAt).toBe(2000);
+    expect(result.prsRefreshKey).toBe("newer-request");
+    await expect(store.getThreadOverlayState({
+      backend: "codex",
+      threadId: "thread-1",
+    })).resolves.toEqual(expect.objectContaining({
+      prs: [newerPr],
+      prsFetchedAt: 2000,
+      prsRefreshKey: "newer-request",
+    }));
+  });
+
   it("scopes prs per (backend, threadId)", async () => {
     await store.setThreadPullRequests({
       backend: "codex",
