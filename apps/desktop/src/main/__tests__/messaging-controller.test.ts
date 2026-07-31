@@ -11405,6 +11405,67 @@ describe("MessagingController", () => {
     );
   });
 
+  it("discards a coalesced monitor heartbeat when the monitor completes", async () => {
+    vi.useFakeTimers();
+    let harness: Awaited<ReturnType<typeof createHarness>> | undefined;
+    try {
+      harness = await createHarness({
+        toolUpdateDefaultMode: "show_less",
+      });
+      await bindThread(harness);
+      harness.delivered.length = 0;
+
+      await harness.controller.handleBackendEvent({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "monitor:monitor-1",
+            item: {
+              id: "monitor-1:progress:1000",
+              type: "agentMessage",
+              text: "Monitor · PR checks\nTests are still running.",
+              data: {
+                source: "pwragent_task_monitor",
+                monitorId: "monitor-1",
+                transient: true,
+              },
+            },
+          },
+        },
+      } satisfies AgentEvent);
+      expect(harness.delivered).toEqual([]);
+
+      await harness.controller.handleBackendEvent({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "monitor:monitor-1",
+            item: {
+              id: "monitor-1:completion:2000",
+              type: "taskMonitorCompletion",
+              data: {
+                source: "pwragent_task_monitor",
+                monitorId: "monitor-1",
+                outcome: "success",
+                transient: false,
+              },
+            },
+          },
+        },
+      } satisfies AgentEvent);
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(harness.delivered).toEqual([]);
+    } finally {
+      harness?.controller.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("cancels a released monitor heartbeat when the monitor completes", async () => {
     vi.useFakeTimers();
     let now = 0;

@@ -1194,8 +1194,8 @@ export class MessagingController {
         // A monitor's terminal result wakes the parent agent, whose final
         // response is the one user-facing completion notification. Tombstone
         // the monitor turn before clearing its batch so a heartbeat already
-        // released into budget/retry handling is also cancelled before the
-        // adapter sees it.
+        // released into budget/retry handling is also cancelled before a
+        // pending or replayed adapter attempt.
         this.rememberCompletedTaskMonitorTurn(binding.id, eventTurnId);
         this.toolUpdatePolicy.flush({
           bindingId: binding.id,
