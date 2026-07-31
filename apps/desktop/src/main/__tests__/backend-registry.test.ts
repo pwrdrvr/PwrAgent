@@ -25564,11 +25564,14 @@ script = "printf setup"
         item.text?.includes("lint is running") === true
       );
     });
-    expect(
+    const progressText =
       progressEvent?.notification.method === "item/completed"
         ? (progressEvent.notification.params.item as { text?: string }).text
-        : undefined,
-    ).not.toContain("Monitor usage");
+        : undefined;
+    expect(progressText).toBe(
+      "Monitor · Watch PR #123 checks until they finish\nlint is running",
+    );
+    expect(progressText).not.toContain("Monitor usage");
     expect(progressEvent).toMatchObject({
       backend: "codex",
       notification: {

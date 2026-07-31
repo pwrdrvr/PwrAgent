@@ -11287,6 +11287,312 @@ describe("MessagingController", () => {
     expect(assistantTexts).toContain("Pulling current conditions now.");
   });
 
+  it("suppresses transient monitor progress at None and keeps the parent terminal result", async () => {
+    const harness = await createHarness({
+      toolUpdateDefaultMode: "show_none",
+    });
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "monitor:monitor-1",
+          item: {
+            id: "monitor-1:progress:1000",
+            type: "agentMessage",
+            text: "Monitor · PR checks\nLint is still running.",
+            data: {
+              source: "pwragent_task_monitor",
+              monitorId: "monitor-1",
+              transient: true,
+            },
+          },
+        },
+      },
+    } satisfies AgentEvent);
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "monitor:monitor-1",
+          item: {
+            id: "monitor-1:completion:2000",
+            type: "taskMonitorCompletion",
+            data: {
+              source: "pwragent_task_monitor",
+              monitorId: "monitor-1",
+              outcome: "success",
+              transient: false,
+            },
+          },
+        },
+      },
+    } satisfies AgentEvent);
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "parent-turn-2",
+          item: {
+            id: "parent-final",
+            type: "agentMessage",
+            phase: "final",
+            text: "PR #315 is green and ready for review.",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    const assistantTexts = harness.delivered
+      .filter(
+        (intent): intent is Extract<MessagingSurfaceIntent, { kind: "message" }> =>
+          intent.kind === "message" && intent.role === "assistant",
+      )
+      .flatMap((intent) =>
+        intent.parts.map((part) => ("text" in part ? part.text : "")),
+      );
+    expect(assistantTexts).toEqual([
+      "PR #315 is green and ready for review.",
+    ]);
+  });
+
+  it("posts transient monitor progress through Working Updates at Show All", async () => {
+    const harness = await createHarness({
+      toolUpdateDefaultMode: "show_all",
+    });
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "monitor:monitor-1",
+          item: {
+            id: "monitor-1:progress:1000",
+            type: "agentMessage",
+            text: "Monitor · PR checks\nLint is still running.",
+            data: {
+              source: "pwragent_task_monitor",
+              monitorId: "monitor-1",
+              transient: true,
+            },
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.delivered).toContainEqual(
+      expect.objectContaining({
+        kind: "message",
+        role: "assistant",
+        parts: [
+          expect.objectContaining({
+            text: "Monitor · PR checks\nLint is still running.",
+          }),
+        ],
+      }),
+    );
+  });
+
+  it("discards a coalesced monitor heartbeat when the monitor completes", async () => {
+    vi.useFakeTimers();
+    let harness: Awaited<ReturnType<typeof createHarness>> | undefined;
+    try {
+      harness = await createHarness({
+        toolUpdateDefaultMode: "show_less",
+      });
+      await bindThread(harness);
+      harness.delivered.length = 0;
+
+      await harness.controller.handleBackendEvent({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "monitor:monitor-1",
+            item: {
+              id: "monitor-1:progress:1000",
+              type: "agentMessage",
+              text: "Monitor · PR checks\nTests are still running.",
+              data: {
+                source: "pwragent_task_monitor",
+                monitorId: "monitor-1",
+                transient: true,
+              },
+            },
+          },
+        },
+      } satisfies AgentEvent);
+      expect(harness.delivered).toEqual([]);
+
+      await harness.controller.handleBackendEvent({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "monitor:monitor-1",
+            item: {
+              id: "monitor-1:completion:2000",
+              type: "taskMonitorCompletion",
+              data: {
+                source: "pwragent_task_monitor",
+                monitorId: "monitor-1",
+                outcome: "success",
+                transient: false,
+              },
+            },
+          },
+        },
+      } satisfies AgentEvent);
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(harness.delivered).toEqual([]);
+    } finally {
+      harness?.controller.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels a released monitor heartbeat when the monitor completes", async () => {
+    vi.useFakeTimers();
+    let now = 0;
+    let finishFirstAttempt:
+      | ((result: MessagingDeliveryResult) => void)
+      | undefined;
+    let signalFirstAttemptStarted: (() => void) | undefined;
+    const firstAttemptStarted = new Promise<void>((resolve) => {
+      signalFirstAttemptStarted = resolve;
+    });
+    const scope: MessagingDeliveryScope = {
+      platform: "telegram",
+      id: "telegram:dm:chat-1",
+      kind: "dm",
+      budget: { limit: 10, intervalMs: 60_000, reserved: 1 },
+    };
+    const attempts: MessagingSurfaceIntent[] = [];
+    let holdNextAttempt = false;
+    const deliveryBudget = new MessagingDeliveryBudget({ now: () => now });
+    let harness: Awaited<ReturnType<typeof createHarness>> | undefined;
+    try {
+      harness = await createHarness({
+        deliveryBudget,
+        now: () => now,
+        resolveDeliveryScope: () => scope,
+        deliver: async (intent) => {
+          attempts.push(intent);
+          if (holdNextAttempt) {
+            holdNextAttempt = false;
+            signalFirstAttemptStarted?.();
+            return await new Promise<MessagingDeliveryResult>((resolve) => {
+              finishFirstAttempt = resolve;
+            });
+          }
+          return {
+            channel: "telegram",
+            deliveredAt: now,
+            outcome: "presented",
+            surface: {
+              channel: "telegram",
+              id: `surface:${intent.id}`,
+            },
+          };
+        },
+        sleepUntil: async () => {
+          throw new Error("Completed monitor delivery should not retry");
+        },
+        toolUpdateDefaultMode: "show_less",
+      });
+      await bindThread(harness);
+      attempts.length = 0;
+      holdNextAttempt = true;
+      now = 2000;
+
+      await harness.controller.handleBackendEvent({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "monitor:monitor-1",
+            item: {
+              id: "monitor-1:progress:1000",
+              type: "agentMessage",
+              text: "Monitor · PR checks\nTests are still running.",
+              data: {
+                source: "pwragent_task_monitor",
+                monitorId: "monitor-1",
+                transient: true,
+              },
+            },
+          },
+        },
+      } satisfies AgentEvent);
+      expect(attempts).toEqual([]);
+      vi.advanceTimersByTime(60_000);
+      await firstAttemptStarted;
+
+      await harness.controller.handleBackendEvent({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "monitor:monitor-1",
+            item: {
+              id: "monitor-1:completion:2000",
+              type: "taskMonitorCompletion",
+              data: {
+                source: "pwragent_task_monitor",
+                monitorId: "monitor-1",
+                outcome: "success",
+                transient: false,
+              },
+            },
+          },
+        },
+      } satisfies AgentEvent);
+      finishFirstAttempt?.({
+        channel: "telegram",
+        deliveredAt: now,
+        errorMessage: "Too Many Requests",
+        outcome: "failed",
+        rateLimit: {
+          scope,
+          retryAfterMs: 5_000,
+          observedAt: now,
+          message: "Too Many Requests",
+          retryable: true,
+        },
+      });
+      await vi.waitFor(() => {
+        expect(attempts).toHaveLength(1);
+      });
+      await Promise.resolve();
+
+      expect(attempts).toHaveLength(1);
+      expect(attempts[0]).toMatchObject({
+        kind: "message",
+        role: "assistant",
+      });
+    } finally {
+      harness?.controller.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("does not re-post buffered text when deltas arrive after the turn is terminal", async () => {
     let now = 1000;
     const delivered: MessagingSurfaceIntent[] = [];
