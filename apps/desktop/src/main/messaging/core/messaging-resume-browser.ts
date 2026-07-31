@@ -338,9 +338,7 @@ function threadsForSession(
     threads = threads.filter((thread) => Boolean(thread.agent));
   }
   if (session.launchAction === "assign_default_agent") {
-    threads = threads.filter(
-      (thread) => thread.source === "codex" && Boolean(thread.agent),
-    );
+    threads = threads.filter((thread) => Boolean(thread.agent));
   }
   const selectedDirectory = session.selectedProject
     ? directoryForProjectSelection(navigation, session.selectedProject)

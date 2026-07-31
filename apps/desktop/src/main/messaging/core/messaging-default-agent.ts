@@ -1,9 +1,37 @@
+import {
+  isAcpBackendId,
+  type AppServerBackendKind,
+  type BackendSummary,
+} from "@pwragent/shared";
 import type {
   MessagingChannelRef,
   MessagingDefaultAgentScope,
 } from "@pwragent/messaging-interface";
 
 export type MessagingDefaultAgentScopeKind = MessagingDefaultAgentScope["kind"];
+export type MessagingDefaultAgentBackendSupport =
+  | "supported"
+  | "unsupported"
+  | "unknown";
+
+export function defaultAgentBackendSupport(
+  backend: AppServerBackendKind,
+  summaries: readonly BackendSummary[] | undefined,
+): MessagingDefaultAgentBackendSupport {
+  if (backend === "codex") {
+    return "supported";
+  }
+  if (!isAcpBackendId(backend)) {
+    return "unsupported";
+  }
+  const summary = summaries?.find((candidate) => candidate.kind === backend);
+  if (!summary) {
+    return "unknown";
+  }
+  return summary.acp?.runtime?.agentCapabilities?.mcp?.http === true
+    ? "supported"
+    : "unsupported";
+}
 
 export function buildMessagingDefaultAgentScopeKey(
   scope: MessagingDefaultAgentScope,

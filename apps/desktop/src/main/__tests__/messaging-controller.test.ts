@@ -989,6 +989,158 @@ describe("MessagingController", () => {
     });
   });
 
+  it("assigns and bootstraps ACP Agents with PwrAgent HTTP MCP tools", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads = [
+      {
+        ...navigation.threads[0]!,
+        id: "codex-agent",
+        title: "Codex Agent",
+        agent: {
+          name: "Codex Agent",
+          instructionLineCount: 1,
+          instructionsTooLong: false,
+          updatedAt: 1500,
+        },
+      },
+      {
+        ...navigation.threads[0]!,
+        id: "kimi-agent",
+        source: "acp:kimi",
+        title: "Kimi Agent",
+        updatedAt: 2000,
+        agent: {
+          name: "Kimi Agent",
+          instructionLineCount: 1,
+          instructionsTooLong: false,
+          updatedAt: 1500,
+        },
+      },
+      {
+        ...navigation.threads[0]!,
+        id: "gemini-agent",
+        source: "acp:gemini",
+        title: "Gemini Agent",
+        agent: {
+          name: "Gemini Agent",
+          instructionLineCount: 1,
+          instructionsTooLong: false,
+          updatedAt: 1500,
+        },
+      },
+      {
+        ...navigation.threads[0]!,
+        id: "grok-agent",
+        source: "grok",
+        title: "Grok Agent",
+        agent: {
+          name: "Grok Agent",
+          instructionLineCount: 1,
+          instructionsTooLong: false,
+          updatedAt: 1500,
+        },
+      },
+    ];
+    const listBackends = async (): Promise<ListBackendsResponse> => ({
+      fetchedAt: 1000,
+      backends: [
+        buildBackendSummary(),
+        buildAcpHttpMcpBackendSummary(),
+        buildAcpRuntimeBackendSummary(),
+        buildBackendSummary({ kind: "grok" }),
+      ],
+    });
+    const harness = await createHarness({ listBackends, navigation });
+    const command = buildTopicCommandEvent("/agent default set", "13056");
+
+    await harness.controller.handleInboundEvent(command);
+
+    const picker = harness.delivered.at(-1);
+    expect(picker?.kind).toBe("thread_picker");
+    if (picker?.kind !== "thread_picker") {
+      throw new Error("Expected default Agent thread picker");
+    }
+    expect(picker.page.items.map((thread) => thread.source)).toEqual([
+      "acp:kimi",
+      "codex",
+    ]);
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-thread",
+        channel: command.channel,
+        value: { backend: "acp:kimi", threadId: "kimi-agent" },
+      }),
+    );
+
+    await expect(
+      harness.store.findActiveDefaultAgentAssignmentForChannel(command.channel),
+    ).resolves.toMatchObject({
+      target: { backend: "acp:kimi", threadId: "kimi-agent" },
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("summarize this topic", {
+        botMention: true,
+        channel: command.channel,
+      }),
+    );
+
+    await expect(
+      harness.store.findActiveBindingForChannel(command.channel),
+    ).resolves.toMatchObject({
+      backend: "acp:kimi",
+      targetKind: "agent_thread",
+      threadId: "kimi-agent",
+    });
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "acp:kimi",
+        input: [{ type: "text", text: "summarize this topic" }],
+        threadId: "kimi-agent",
+      }),
+    );
+  });
+
+  it("preserves an ACP default when tool-capability discovery is unavailable", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      source: "acp:kimi",
+      title: "Kimi Agent",
+      agent: {
+        name: "Kimi Agent",
+        instructionLineCount: 1,
+        instructionsTooLong: false,
+        updatedAt: 1500,
+      },
+    };
+    const harness = await createHarness({
+      listBackends: async () => {
+        throw new Error("backend discovery unavailable");
+      },
+      navigation,
+    });
+    const channel = buildTopicChannel("13056");
+    await seedConversationDefaultAgent(harness.store, channel, "acp:kimi");
+
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("keep this default", { botMention: true, channel }),
+    );
+
+    expect(harness.startTurn).not.toHaveBeenCalled();
+    await expect(
+      harness.store.findActiveDefaultAgentAssignmentForChannel(channel),
+    ).resolves.toMatchObject({
+      target: { backend: "acp:kimi", threadId: "thread-1" },
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "error",
+      title: "Default Agent unavailable",
+      body: expect.stringContaining("assignment was preserved"),
+    });
+  });
+
   it("binds an addressed unbound topic to its default Agent and admits the turn there", async () => {
     const navigation = buildNavigationSnapshot();
     navigation.threads[0] = {
@@ -17924,6 +18076,24 @@ function buildKimiRuntimeBackendSummary(
   });
 }
 
+function buildAcpHttpMcpBackendSummary(): BackendSummary {
+  const summary = buildKimiRuntimeBackendSummary();
+  return {
+    ...summary,
+    acp: {
+      ...summary.acp!,
+      runtime: {
+        ...summary.acp!.runtime!,
+        agentCapabilities: {
+          mcp: {
+            http: true,
+          },
+        },
+      },
+    },
+  };
+}
+
 function buildNavigationSnapshot(): NavigationSnapshot {
   return {
     backend: "all",
@@ -18237,6 +18407,7 @@ function buildTopicChannel(topicId: string): MessagingInboundEvent["channel"] {
 async function seedConversationDefaultAgent(
   store: MessagingStore,
   channel: MessagingInboundEvent["channel"],
+  backend: AppServerBackendKind = "codex",
 ): Promise<void> {
   await store.upsertDefaultAgentAssignment({
     id: `default-agent:${channel.channel}:${channel.conversation.id}`,
@@ -18246,7 +18417,7 @@ async function seedConversationDefaultAgent(
     },
     target: {
       kind: "agent",
-      backend: "codex",
+      backend,
       threadId: "thread-1",
     },
     createdAt: 1000,

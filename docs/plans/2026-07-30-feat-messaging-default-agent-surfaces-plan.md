@@ -106,17 +106,18 @@ where available.
 The required bootstrap prompt depends on `search_threads`, `read_thread`,
 `send_message_to_thread`, and `attach_thread_here`.
 
-The first implementation explicitly limits default assignment to Codex Agent
-threads because current main only guarantees the complete PwrAgent dynamic-tool
-set for Codex. The picker filters to:
+Default assignment is available when the backend exposes the complete PwrAgent
+tool catalog through a supported transport. Codex receives that catalog through
+dynamic tools. ACP runtimes receive the same catalog through PwrAgent's HTTP MCP
+server when their discovered runtime capabilities advertise HTTP MCP support.
+The picker filters to:
 
-- `thread.source === "codex"`
 - Agent metadata is present
+- the backend is Codex, or an ACP runtime advertising HTTP MCP support
 - the thread is present in the current navigation snapshot
 
-This is an explicit product constraint, not an assumption that every Agent
-backend has Codex tools. A future backend can become eligible through a shared
-backend capability once it supplies the same tool contract.
+Built-in Grok and ACP runtimes without HTTP MCP remain ineligible until they
+can expose the same PwrAgent search, send, handoff, and attachment contract.
 
 ### Addressed unbound bootstrap
 
@@ -193,7 +194,8 @@ without making lifecycle/no-turn tool calls guess a location.
 - Parse the `default` subcommand under `/agent`.
 - Add scope parsing and a compact status/management confirmation surface.
 - Extend browse-session continuation state for explicit default assignment.
-- Filter that picker to eligible Codex Agent threads.
+- Filter that picker to Agent threads whose backend exposes the complete
+  PwrAgent tool catalog through Codex dynamic tools or ACP HTTP MCP.
 - On selection, set the requested assignment and render confirmation without
   changing any active messaging binding.
 - Add callback actions for set/change and clear at the exact scope.
@@ -283,8 +285,8 @@ Executed verification:
 - Ephemeral control bindings, controller-local turn ownership maps, custom
   delivery filtering, and alternate backend FIFO routing.
 - Automatic default persistence from ordinary Agent browsing.
-- Non-Codex default Agents until a shared backend capability guarantees the
-  required PwrAgent tools.
+- Default Agents on built-in Grok or ACP runtimes without HTTP MCP until those
+  backends expose the required PwrAgent tools.
 - Settings-window management UI. Messaging commands/buttons/pickers are the
   first complete operator surface.
 - Automatic use of a default for unaddressed ambient shared-channel messages.

@@ -119,6 +119,7 @@ import {
 } from "./messaging-monitor-card.js";
 import { buildMessagingConversationKey } from "./messaging-store.js";
 import {
+  defaultAgentBackendSupport,
   defaultAgentScopeForChannel,
   type MessagingDefaultAgentScopeKind,
 } from "./messaging-default-agent.js";
@@ -2338,6 +2339,7 @@ export class MessagingController {
           thread: NavigationThreadSummary;
         }
       | undefined;
+    const backendSummaries = await this.loadDefaultAgentBackendSummaries();
     for (const assignment of assignments) {
       const thread = navigation.threads.find(
         (candidate) =>
@@ -2345,13 +2347,25 @@ export class MessagingController {
           && candidate.id === assignment.target.threadId
           && Boolean(candidate.agent),
       );
+      const backendSupport = defaultAgentBackendSupport(
+        assignment.target.backend,
+        backendSummaries,
+      );
       if (
-        assignment.target.backend === "codex"
-        && assignment.target.kind === "agent"
+        assignment.target.kind === "agent"
         && thread
+        && backendSupport === "supported"
       ) {
         selected = { assignment, thread };
         break;
+      }
+      if (thread && backendSupport === "unknown") {
+        await this.deliverDefaultAgentBootstrapError(
+          event,
+          "Default Agent unavailable",
+          "PwrAgent could not confirm that this Agent backend currently exposes the required tools. The default assignment was preserved.",
+        );
+        return true;
       }
       await this.options.store.revokeDefaultAgentAssignment({
         assignmentId: assignment.id,
@@ -5999,15 +6013,16 @@ export class MessagingController {
         return;
       }
       if (session.launchAction === "assign_default_agent") {
+        const backendSummaries = await this.loadDefaultAgentBackendSummaries();
         if (
           !session.defaultAgentScope
-          || target.backend !== "codex"
-          || targetThread?.source !== "codex"
-          || !targetThread.agent
+          || !targetThread?.agent
+          || defaultAgentBackendSupport(target.backend, backendSummaries)
+            !== "supported"
         ) {
           await this.deliverDefaultAgentCommandError(
             event,
-            "That thread is not an eligible default Agent. Choose a Codex Agent thread.",
+            "That thread is not an eligible default Agent. Choose a Codex Agent or an ACP Agent with PwrAgent HTTP MCP tools.",
           );
           return;
         }
@@ -7908,6 +7923,16 @@ export class MessagingController {
     session: MessagingBrowseSessionRecord,
     navigation: NavigationSnapshot,
   ): Promise<NavigationSnapshot> {
+    if (session.launchAction === "assign_default_agent") {
+      const backendSummaries = await this.loadDefaultAgentBackendSummaries();
+      const threads = navigation.threads.filter(
+        (thread) =>
+          Boolean(thread.agent)
+          && defaultAgentBackendSupport(thread.source, backendSummaries)
+            === "supported",
+      );
+      return filterNavigationToThreads(navigation, threads);
+    }
     if (session.launchAction !== "resume_thread") {
       return navigation;
     }
@@ -7917,22 +7942,25 @@ export class MessagingController {
     const threads = navigation.threads.filter(
       (thread) => thread.executionMode !== "full-access",
     );
-    const allowedThreadKeys = new Set(
-      threads.map((thread) => buildThreadIdentityKey(thread.source, thread.id)),
-    );
-    return {
-      ...navigation,
-      threads,
-      directories: navigation.directories.map((directory) => ({
-        ...directory,
-        threadKeys: directory.threadKeys.filter((threadKey) =>
-          allowedThreadKeys.has(threadKey)
-        ),
-      })),
-      inboxThreadKeys: navigation.inboxThreadKeys.filter((threadKey) =>
-        allowedThreadKeys.has(threadKey)
-      ),
-    };
+    return filterNavigationToThreads(navigation, threads);
+  }
+
+  private async loadDefaultAgentBackendSummaries(): Promise<
+    BackendSummary[] | undefined
+  > {
+    if (!this.options.backend.listBackends) {
+      return undefined;
+    }
+    try {
+      return (await this.options.backend.listBackends({
+        includeUnavailable: true,
+      })).backends;
+    } catch (error) {
+      this.logger.debug?.("default Agent backend capability lookup failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
   }
 
   private async presentStatus(event: MessagingInboundEvent): Promise<void> {
@@ -14824,6 +14852,28 @@ function handoffSuccessText(result: HandoffThreadWorkspaceResponse): string {
   ]
     .filter((line): line is string => Boolean(line))
     .join("\n");
+}
+
+function filterNavigationToThreads(
+  navigation: NavigationSnapshot,
+  threads: NavigationThreadSummary[],
+): NavigationSnapshot {
+  const allowedThreadKeys = new Set(
+    threads.map((thread) => buildThreadIdentityKey(thread.source, thread.id)),
+  );
+  return {
+    ...navigation,
+    threads,
+    directories: navigation.directories.map((directory) => ({
+      ...directory,
+      threadKeys: directory.threadKeys.filter((threadKey) =>
+        allowedThreadKeys.has(threadKey)
+      ),
+    })),
+    inboxThreadKeys: navigation.inboxThreadKeys.filter((threadKey) =>
+      allowedThreadKeys.has(threadKey)
+    ),
+  };
 }
 
 function normalizeNewThreadSessionForBackend(
