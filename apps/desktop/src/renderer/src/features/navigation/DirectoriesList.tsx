@@ -1125,18 +1125,18 @@ export function DirectoriesList(props: DirectoriesListProps) {
                         }}
                       >
                         <span className="directory-row__thread-divider-label">
-                          <span>Directory threads</span>
-                          {directoryThreadsCollapsed ? (
-                            <span className="directory-row__thread-divider-count">
-                              {directoryUnpinnedThreads.length}
-                            </span>
-                          ) : null}
                           <span
                             aria-hidden="true"
                             className={`directory-row__thread-divider-chevron${
                               directoryThreadsCollapsed ? "" : " is-open"
                             }`}
                           />
+                          <span>Directory threads</span>
+                          {directoryThreadsCollapsed ? (
+                            <span className="directory-row__thread-divider-count">
+                              {directoryUnpinnedThreads.length}
+                            </span>
+                          ) : null}
                         </span>
                       </button>
                     ) : null}

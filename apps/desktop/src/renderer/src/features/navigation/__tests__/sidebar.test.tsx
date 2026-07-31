@@ -1909,11 +1909,21 @@ describe("Sidebar", () => {
 
     const { rerender } = render(renderSidebar(false));
 
-    await clickElement(
-      screen.getByRole("button", {
-        name: "Hide directory threads for PwrAgent",
-      }),
+    const hideDirectoryThreads = screen.getByRole("button", {
+      name: "Hide directory threads for PwrAgent",
+    });
+    const expandedDividerLabel = hideDirectoryThreads.querySelector(
+      ".directory-row__thread-divider-label",
     );
+    expect(expandedDividerLabel?.firstElementChild).toHaveClass(
+      "directory-row__thread-divider-chevron",
+      "is-open",
+    );
+    expect(expandedDividerLabel?.children[1]).toHaveTextContent(
+      "Directory threads",
+    );
+
+    await clickElement(hideDirectoryThreads);
     expect(onSetDirectoryThreadsCollapsed).toHaveBeenCalledWith(
       expect.objectContaining({ key: directories[0].key }),
       true,
@@ -1928,6 +1938,16 @@ describe("Sidebar", () => {
     });
     expect(showDirectoryThreads).toHaveAttribute("aria-expanded", "false");
     expect(within(showDirectoryThreads).getByText("1")).toBeInTheDocument();
+    const collapsedDividerLabel = showDirectoryThreads.querySelector(
+      ".directory-row__thread-divider-label",
+    );
+    expect(collapsedDividerLabel?.firstElementChild).toHaveClass(
+      "directory-row__thread-divider-chevron",
+    );
+    expect(collapsedDividerLabel?.firstElementChild).not.toHaveClass("is-open");
+    expect(collapsedDividerLabel?.children[1]).toHaveTextContent(
+      "Directory threads",
+    );
   });
 
   it("caps unpinned directory threads and toggles the overflow behind Show more / Show less", async () => {
