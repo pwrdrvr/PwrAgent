@@ -128,6 +128,40 @@ describe("SqliteOverlayStore — thread PRs", () => {
     expect(overlay?.prs?.[0]?.state).toBe("failing");
   });
 
+  it("rejects an older PR lookup completion for the same thread", async () => {
+    const newerPr = pr({
+      ...prPassing,
+      mergeState: "conflicting",
+    });
+    await store.setThreadPullRequests({
+      backend: "codex",
+      threadId: "thread-1",
+      prs: [newerPr],
+      fetchedAt: 2000,
+      refreshKey: "newer-request",
+    });
+
+    const result = await store.setThreadPullRequests({
+      backend: "codex",
+      threadId: "thread-1",
+      prs: [prPassing],
+      fetchedAt: 1000,
+      refreshKey: "older-request",
+    });
+
+    expect(result.prs).toEqual([newerPr]);
+    expect(result.prsFetchedAt).toBe(2000);
+    expect(result.prsRefreshKey).toBe("newer-request");
+    await expect(store.getThreadOverlayState({
+      backend: "codex",
+      threadId: "thread-1",
+    })).resolves.toEqual(expect.objectContaining({
+      prs: [newerPr],
+      prsFetchedAt: 2000,
+      prsRefreshKey: "newer-request",
+    }));
+  });
+
   it("scopes prs per (backend, threadId)", async () => {
     await store.setThreadPullRequests({
       backend: "codex",
@@ -288,6 +322,38 @@ describe("SqliteOverlayStore — thread PRs", () => {
     store = new SqliteOverlayStore(stateDb);
   });
 
+  it("does not let an older PR status observation replace a newer cache row", async () => {
+    const conflictingPr = {
+      ...prPassing,
+      mergeState: "conflicting" as const,
+    };
+    await store.writePrStatusCacheEntries([
+      {
+        provider: "github.com",
+        prKey: "github.com/pwrdrvr/pwragent#179",
+        fetchedAt: 2000,
+        pr: conflictingPr,
+      },
+    ]);
+    await store.writePrStatusCacheEntries([
+      {
+        provider: "github.com",
+        prKey: "github.com/pwrdrvr/pwragent#179",
+        fetchedAt: 1000,
+        pr: prPassing,
+      },
+    ]);
+
+    await expect(store.readPrStatusCache()).resolves.toEqual({
+      "github.com/pwrdrvr/pwragent#179": {
+        provider: "github.com",
+        prKey: "github.com/pwrdrvr/pwragent#179",
+        fetchedAt: 2000,
+        pr: conflictingPr,
+      },
+    });
+  });
+
   it("persists branch lookup cache rows across reopen", async () => {
     await store.writePrLookupCacheEntry({
       lookupKey: "{\"lookupVersion\":2,\"provider\":\"github.com\",\"branch\":\"feat/pr-chip\",\"directoryPaths\":[\"/repo\"]}",
@@ -317,6 +383,41 @@ describe("SqliteOverlayStore — thread PRs", () => {
 
     stateDb = StateDb.open(dbPath);
     store = new SqliteOverlayStore(stateDb);
+  });
+
+  it("does not let an older branch lookup replace a newer cache row", async () => {
+    const lookupKey = "{\"lookupVersion\":2,\"provider\":\"github.com\",\"branch\":\"feat/pr-chip\",\"directoryPaths\":[\"/repo\"]}";
+    const conflictingPr = {
+      ...prPassing,
+      mergeState: "conflicting" as const,
+    };
+    await store.writePrLookupCacheEntry({
+      lookupKey,
+      provider: "github.com",
+      branch: "feat/pr-chip",
+      directoryPaths: ["/repo"],
+      fetchedAt: 2000,
+      prs: [conflictingPr],
+    });
+    await store.writePrLookupCacheEntry({
+      lookupKey,
+      provider: "github.com",
+      branch: "feat/pr-chip",
+      directoryPaths: ["/repo"],
+      fetchedAt: 1000,
+      prs: [prPassing],
+    });
+
+    await expect(store.readPrLookupCache()).resolves.toEqual({
+      [lookupKey]: {
+        lookupKey,
+        provider: "github.com",
+        branch: "feat/pr-chip",
+        directoryPaths: ["/repo"],
+        fetchedAt: 2000,
+        prs: [conflictingPr],
+      },
+    });
   });
 
   it("preserves PR providers inside branch lookup cache payloads", async () => {

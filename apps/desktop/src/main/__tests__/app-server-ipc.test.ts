@@ -332,6 +332,7 @@ const setThreadPullRequests = vi.fn(async (request: {
   backend: "codex" | "grok";
   threadId: string;
   prs: PrSummary[];
+  fetchedAt?: number;
   refreshKey?: string;
 }) => ({
   backend: request.backend,
@@ -339,7 +340,7 @@ const setThreadPullRequests = vi.fn(async (request: {
   executionMode: "default" as const,
   extraLinkedDirectories: [],
   prs: request.prs,
-  prsFetchedAt: Date.now(),
+  prsFetchedAt: request.fetchedAt ?? Date.now(),
   prsRefreshKey: request.refreshKey,
 }));
 const addThreadPullRequestReference = vi.fn(async (request: {
@@ -1225,6 +1226,7 @@ describe("app server ipc", () => {
         fetcher: expect.any(Object),
         branch: "fix/desktop-source-link-goto",
         directoryPaths: ["/repo"],
+        allowPrimedBranchLookup: false,
       });
     });
     await vi.waitFor(() => {
@@ -1325,18 +1327,197 @@ describe("app server ipc", () => {
       }),
     );
     await vi.waitFor(() => {
+      expect(detectPullRequestsForThread).toHaveBeenCalledWith({
+        fetcher: expect.any(Object),
+        branch: "fix/live-diff-activity-normalization",
+        directoryPaths: ["/repo"],
+        allowPrimedBranchLookup: false,
+      });
+    });
+    await vi.waitFor(() => {
       expect(mockAppServerLog.info).toHaveBeenCalledWith(
         "threadPullRequestsRefresh:background-complete",
         expect.objectContaining({
           changedThreadCount: 1,
           fetchedPrIds: ["github.com/pwrdrvr/pwragent#845"],
           previousPrIds: ["github.com/pwrdrvr/pwragent#845"],
+          fetchedPrStatuses: [
+            {
+              prKey: "github.com/pwrdrvr/pwragent#845",
+              checkState: "passing",
+              lifecycleState: "open",
+              mergeState: "unknown",
+              reviewState: "ready_for_review",
+              commitCount: 0,
+            },
+          ],
           subscriberCount: 1,
           threadId: "019ed359-0b92-7ca2-ae05-a5837cc80df8",
           trigger: "user",
         }),
       );
     });
+    expect(mockAppServerLog.info).toHaveBeenCalledWith(
+      "pr status transition",
+      expect.objectContaining({
+        changes: { checkState: "pending→passing" },
+        observedAt: expect.any(Number),
+        prKey: "github.com/pwrdrvr/pwragent#845",
+        source: "thread-lookup:user",
+      }),
+    );
+  });
+
+  it("orders thread lookup observations by request start time", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(3_000_000);
+      const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+      const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+      const request = {
+        backend: "codex",
+        threadId: "thread-request-order",
+        trigger: "user",
+        branch: "fix/request-order",
+        directoryPaths: ["/repo"],
+      } satisfies RefreshThreadPullRequestsRequest;
+      const requestKey = buildThreadPrRequestKey({
+        backend: "codex",
+        threadId: request.threadId,
+        branch: request.branch,
+        directoryPaths: request.directoryPaths,
+      });
+      const stalePr = githubPr({
+        number: 846,
+        org: "pwrdrvr",
+        repo: "PwrAgent",
+        state: "passing",
+        mergeState: "mergeable",
+        url: "https://github.com/pwrdrvr/PwrAgent/pull/846",
+      });
+      const freshPr = { ...stalePr, mergeState: "conflicting" as const };
+      let resolveFetch: ((prs: PrSummary[]) => void) | undefined;
+
+      getThreadOverlayState.mockResolvedValueOnce({
+        backend: "codex",
+        threadId: request.threadId,
+        executionMode: "default",
+        extraLinkedDirectories: [],
+        prs: [stalePr],
+        prsFetchedAt: 2_000_000,
+        prsRefreshKey: requestKey,
+      });
+      detectPullRequestsForThread.mockImplementationOnce(
+        async () => await new Promise<PrSummary[]>((resolve) => {
+          resolveFetch = resolve;
+        }),
+      );
+
+      registerAppServerIpcHandlers();
+      await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.({}, request);
+      await vi.waitFor(() => {
+        expect(detectPullRequestsForThread).toHaveBeenCalledOnce();
+      });
+
+      vi.setSystemTime(3_005_000);
+      resolveFetch?.([freshPr]);
+
+      await vi.waitFor(() => {
+        expect(setThreadPullRequests).toHaveBeenCalledWith(
+          expect.objectContaining({
+            threadId: request.threadId,
+            fetchedAt: 3_000_000,
+          }),
+        );
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects an older PR lookup that finishes after a newer lookup", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(4_000_000);
+      const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+      const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+      const stalePr = githubPr({
+        number: 847,
+        org: "pwrdrvr",
+        repo: "PwrAgent",
+        state: "passing",
+        mergeState: "mergeable",
+        url: "https://github.com/pwrdrvr/PwrAgent/pull/847",
+      });
+      const freshPr = { ...stalePr, mergeState: "conflicting" as const };
+      const requests = ["/repo/older", "/repo/newer"].map((directoryPath, index) => ({
+        backend: "codex" as const,
+        threadId: `thread-request-order-${index}`,
+        trigger: "user" as const,
+        branch: "fix/request-order",
+        directoryPaths: [directoryPath],
+      }));
+      const resolveFetches: Array<(prs: PrSummary[]) => void> = [];
+
+      getThreadOverlayState.mockImplementation(async ({ threadId }) => {
+        const request = requests.find((candidate) => candidate.threadId === threadId);
+        if (!request) {
+          return null;
+        }
+        return {
+          backend: "codex",
+          threadId,
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          prs: [stalePr],
+          prsFetchedAt: 3_000_000,
+          prsRefreshKey: buildThreadPrRequestKey(request),
+        };
+      });
+      detectPullRequestsForThread.mockImplementation(
+        async () => await new Promise<PrSummary[]>((resolve) => {
+          resolveFetches.push(resolve);
+        }),
+      );
+
+      registerAppServerIpcHandlers();
+      await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.({}, requests[0]);
+      await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.({}, requests[1]);
+      expect(detectPullRequestsForThread).toHaveBeenCalledTimes(2);
+
+      resolveFetches[1]?.([freshPr]);
+      await vi.waitFor(() => {
+        expect(mockAppServerLog.info).toHaveBeenCalledWith(
+          "pr status transition",
+          expect.objectContaining({
+            changes: { mergeState: "mergeable→conflicting" },
+            observedAt: 4_000_001,
+            source: "thread-lookup:user",
+          }),
+        );
+      });
+
+      resolveFetches[0]?.([stalePr]);
+      await vi.waitFor(() => {
+        expect(mockAppServerLog.info).toHaveBeenCalledWith(
+          "pr status observation ignored",
+          expect.objectContaining({
+            currentObservedAt: 4_000_001,
+            observedAt: 4_000_000,
+            prKey: "github.com/pwrdrvr/pwragent#847",
+            source: "thread-lookup:user",
+          }),
+        );
+      });
+      expect(setThreadPullRequests).toHaveBeenCalledWith(
+        expect.objectContaining({
+          threadId: "thread-request-order-0",
+          prs: [freshPr],
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("serves the same canonical PR state across different thread overlays", async () => {
@@ -1733,6 +1914,75 @@ describe("app server ipc", () => {
         prs: fetchedPrs,
       }),
     );
+  });
+
+  it("queues an authoritative refresh behind a pending scheduled lookup", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+    const scheduledRequest = {
+      backend: "codex",
+      threadId: "thread-scheduled",
+      trigger: "scheduled",
+      branch: "feat/pr-chip",
+      directoryPaths: ["/repo"],
+    } satisfies RefreshThreadPullRequestsRequest;
+    const userRequest = {
+      ...scheduledRequest,
+      threadId: "thread-user",
+      trigger: "user",
+    } satisfies RefreshThreadPullRequestsRequest;
+    const primedPr = githubPr({
+      number: 250,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      state: "passing",
+      mergeState: "mergeable",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/250",
+    });
+    const authoritativePr = {
+      ...primedPr,
+      mergeState: "conflicting" as const,
+    };
+    const resolveFetches: Array<(prs: PrSummary[]) => void> = [];
+    detectPullRequestsForThread.mockImplementation(
+      async () => await new Promise<PrSummary[]>((resolve) => {
+        resolveFetches.push(resolve);
+      }),
+    );
+
+    registerAppServerIpcHandlers();
+    const handler = handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)!;
+    await handler({}, scheduledRequest);
+    await handler({}, userRequest);
+
+    expect(detectPullRequestsForThread).toHaveBeenCalledOnce();
+    resolveFetches[0]?.([primedPr]);
+
+    await vi.waitFor(() => {
+      expect(detectPullRequestsForThread).toHaveBeenCalledTimes(2);
+    });
+    expect(detectPullRequestsForThread).toHaveBeenLastCalledWith({
+      fetcher: expect.any(Object),
+      branch: "feat/pr-chip",
+      directoryPaths: ["/repo"],
+      allowPrimedBranchLookup: false,
+    });
+    expect(setThreadPullRequests).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: "thread-user",
+        prs: [primedPr],
+      }),
+    );
+
+    resolveFetches[1]?.([authoritativePr]);
+    await vi.waitFor(() => {
+      expect(setThreadPullRequests).toHaveBeenCalledWith(
+        expect.objectContaining({
+          threadId: "thread-user",
+          prs: [authoritativePr],
+        }),
+      );
+    });
   });
 
   it("refreshes retained PRs from all subscribers on a coalesced lookup", async () => {
@@ -3927,6 +4177,7 @@ describe("app server ipc", () => {
         fetcher: expect.any(Object),
         branch: "fix/merged-pr-commits-pushed",
         directoryPaths: ["/repo/wt"],
+        allowPrimedBranchLookup: false,
       });
     });
     await vi.waitFor(() => {
@@ -4014,6 +4265,7 @@ describe("app server ipc", () => {
         fetcher: expect.any(Object),
         branch: "fix/adopted-branch",
         directoryPaths: ["/repo/wt"],
+        allowPrimedBranchLookup: false,
       });
     });
     expect(detectPullRequestsForThread).not.toHaveBeenCalledWith({
@@ -4081,11 +4333,13 @@ describe("app server ipc", () => {
         fetcher: expect.any(Object),
         branch: "main",
         directoryPaths: ["/repo/primary"],
+        allowPrimedBranchLookup: false,
       });
       expect(detectPullRequestsForThread).toHaveBeenCalledWith({
         fetcher: expect.any(Object),
         branch: "fix/channelsv2-live-pods",
         directoryPaths: ["/worktrees/kube-manifests"],
+        allowPrimedBranchLookup: false,
       });
     });
   });
@@ -4178,6 +4432,7 @@ describe("app server ipc", () => {
         fetcher: expect.any(Object),
         branch: "HEAD",
         directoryPaths: ["/worktrees/PwrAgnt"],
+        allowPrimedBranchLookup: false,
       });
     });
     await vi.waitFor(() => {

@@ -1806,6 +1806,13 @@ export class SqliteOverlayStore {
       executionMode: "default" as const,
       extraLinkedDirectories: [],
     };
+    const fetchedAt = params.fetchedAt ?? Date.now();
+    if (
+      current.prsFetchedAt !== undefined
+      && current.prsFetchedAt > fetchedAt
+    ) {
+      return current;
+    }
     const detachedPrKeys = normalizeDetachedPrKeys(current.detachedPrKeys);
     const detachedPrs = mergePrSummariesByStatusKey(
       current.detachedPrs,
@@ -1816,7 +1823,7 @@ export class SqliteOverlayStore {
       detachedPrKeys,
       detachedPrs,
       prs: filterDetachedPrs(params.prs, detachedPrKeys).map(normalizePrSummary),
-      prsFetchedAt: params.fetchedAt ?? Date.now(),
+      prsFetchedAt: fetchedAt,
       prsRefreshKey: params.refreshKey,
     };
     this.putThread(threadKey, nextState);
@@ -1930,7 +1937,7 @@ export class SqliteOverlayStore {
       return;
     }
     const insert = this.stateDb.raw.prepare(
-      `INSERT OR REPLACE INTO pr_status_cache(
+      `INSERT INTO pr_status_cache(
          pr_key,
          provider,
          org,
@@ -1938,7 +1945,15 @@ export class SqliteOverlayStore {
          number,
          fetched_at,
          payload
-       ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+       ) VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(pr_key) DO UPDATE SET
+         provider = excluded.provider,
+         org = excluded.org,
+         repo = excluded.repo,
+         number = excluded.number,
+         fetched_at = excluded.fetched_at,
+         payload = excluded.payload
+       WHERE excluded.fetched_at >= pr_status_cache.fetched_at`,
     );
     const write = this.stateDb.raw.transaction(() => {
       for (const entry of entries) {
@@ -2001,14 +2016,21 @@ export class SqliteOverlayStore {
   async writePrLookupCacheEntry(entry: PrLookupCacheEntry): Promise<void> {
     this.stateDb.raw
       .prepare(
-        `INSERT OR REPLACE INTO pr_lookup_cache(
+        `INSERT INTO pr_lookup_cache(
            lookup_key,
            provider,
            branch,
            directory_paths,
            fetched_at,
            payload
-         ) VALUES (?, ?, ?, ?, ?, ?)`,
+         ) VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(lookup_key) DO UPDATE SET
+           provider = excluded.provider,
+           branch = excluded.branch,
+           directory_paths = excluded.directory_paths,
+           fetched_at = excluded.fetched_at,
+           payload = excluded.payload
+         WHERE excluded.fetched_at >= pr_lookup_cache.fetched_at`,
       )
       .run(
         entry.lookupKey,
