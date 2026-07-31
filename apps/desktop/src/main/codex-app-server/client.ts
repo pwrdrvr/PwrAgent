@@ -121,9 +121,18 @@ const CODEX_THREAD_TITLE_CONFIG: NonNullable<CodexThreadStartParams["config"]> =
   include_apps_instructions: false,
   include_collaboration_mode_instructions: false,
   include_environment_context: false,
+  project_doc_max_bytes: 0,
   skills: {
     include_instructions: false,
     bundled: { enabled: false },
+  },
+  features: {
+    apps: false,
+    plugins: false,
+    tool_suggest: false,
+    image_generation: false,
+    multi_agent: false,
+    goals: false,
   },
 };
 const LEGACY_CODEX_THREAD_TITLE_CONFIG: NonNullable<CodexThreadStartParams["config"]> = {
@@ -132,8 +141,17 @@ const LEGACY_CODEX_THREAD_TITLE_CONFIG: NonNullable<CodexThreadStartParams["conf
   include_apps_instructions: false,
   include_collaboration_mode_instructions: false,
   include_environment_context: false,
+  project_doc_max_bytes: 0,
   skills: {
     include_instructions: false,
+  },
+  features: {
+    apps: false,
+    plugins: false,
+    tool_suggest: false,
+    image_generation: false,
+    multi_agent: false,
+    goals: false,
   },
 };
 const CODEX_DEFAULT_MODE_REQUEST_USER_INPUT_CONFIG_KEY =
@@ -428,6 +446,43 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     return null;
   }
   return value as Record<string, unknown>;
+}
+
+/**
+ * Codex recursively merges `mcp_servers`, so an empty table does not erase
+ * servers configured in lower layers. Inspect only the effective server names
+ * and pin each one off in the helper-thread overlay. Never copy commands, env,
+ * credentials, or any other server configuration into the request.
+ */
+function buildCodexHelperConfig(
+  baseConfig: NonNullable<CodexThreadStartParams["config"]>,
+  configReadResponse: unknown,
+): NonNullable<CodexThreadStartParams["config"]> {
+  const effectiveConfig = asRecord(asRecord(configReadResponse)?.config);
+  if (!effectiveConfig) {
+    throw new Error("codex_title_config_read_invalid_response");
+  }
+
+  const configuredServersValue = effectiveConfig.mcp_servers;
+  const configuredServers =
+    configuredServersValue === undefined
+      ? null
+      : asRecord(configuredServersValue);
+  if (configuredServersValue !== undefined && !configuredServers) {
+    throw new Error("codex_title_config_read_invalid_mcp_servers");
+  }
+
+  const serverNames = Object.keys(configuredServers ?? {}).sort();
+  if (serverNames.length === 0) {
+    return baseConfig;
+  }
+
+  return {
+    ...baseConfig,
+    mcp_servers: Object.fromEntries(
+      serverNames.map((name) => [name, { enabled: false }]),
+    ),
+  };
 }
 
 function pickString(
@@ -5108,6 +5163,7 @@ function normalizeCodexReasoningEffort(
 function buildThreadStartPayload(params: {
   cwd?: string;
   runtimeWorkspaceRoots?: string[];
+  environments?: CodexThreadStartParams["environments"];
   model?: string;
   approvalPolicy?: string;
   sandbox?: string;
@@ -5132,6 +5188,9 @@ function buildThreadStartPayload(params: {
   }
   if (params.runtimeWorkspaceRoots !== undefined) {
     base.runtimeWorkspaceRoots = params.runtimeWorkspaceRoots;
+  }
+  if (params.environments !== undefined) {
+    base.environments = params.environments;
   }
   if (params.model?.trim()) {
     base.model = params.model.trim();
@@ -5177,6 +5236,7 @@ function buildThreadStartPayload(params: {
     );
   }
   if (
+    params.environments === undefined &&
     params.codexEnvironmentRuntime?.executionTarget === "remote" &&
     params.codexEnvironmentRuntime.environmentId &&
     params.cwd?.trim()
@@ -6696,9 +6756,25 @@ export class CodexAppServerClient {
     await this.ensureInitialized();
 
     let helperThreadId: string | undefined;
+    let helperTurnId: string | undefined;
+    let helperTurnCompleted = false;
     const timeoutMs = params.timeoutMs ?? DEFAULT_CODEX_THREAD_TITLE_TIMEOUT_MS;
     const helperWorkspaceDir = await ensureCodexThreadTitleWorkspace();
     try {
+      const configReadResult = await requestWithFallbacks({
+        client: this.connection,
+        methods: ["config/read"],
+        payloads: [{ includeLayers: false, cwd: helperWorkspaceDir }],
+        timeoutMs,
+      });
+      const helperConfig = buildCodexHelperConfig(
+        CODEX_THREAD_TITLE_CONFIG,
+        configReadResult,
+      );
+      const legacyHelperConfig = buildCodexHelperConfig(
+        LEGACY_CODEX_THREAD_TITLE_CONFIG,
+        configReadResult,
+      );
       const threadStartResult = await requestWithFallbacks({
         client: this.connection,
         methods: ["thread/start"],
@@ -6707,10 +6783,11 @@ export class CodexAppServerClient {
             {
               cwd: helperWorkspaceDir,
               runtimeWorkspaceRoots: [helperWorkspaceDir],
+              environments: [],
               model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
               serviceTier: null,
               ephemeral: true,
-              config: CODEX_THREAD_TITLE_CONFIG,
+              config: helperConfig,
             },
             this.getProtocolCompatibility(),
           ),
@@ -6718,10 +6795,11 @@ export class CodexAppServerClient {
             {
               cwd: helperWorkspaceDir,
               runtimeWorkspaceRoots: [helperWorkspaceDir],
+              environments: [],
               model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
               serviceTier: null,
               ephemeral: true,
-              config: LEGACY_CODEX_THREAD_TITLE_CONFIG,
+              config: legacyHelperConfig,
             },
             this.getProtocolCompatibility(),
           ),
@@ -6756,23 +6834,23 @@ export class CodexAppServerClient {
         ],
         timeoutMs,
       });
+      helperTurnId = extractTurnIdFromValue(turnStartResult);
       const immediateObject = findStructuredRecord(turnStartResult, params.isMatch);
       if (immediateObject) {
-        const immediateTurnId = extractTurnIdFromValue(turnStartResult);
+        helperTurnCompleted = true;
         const tokenUsage = readHelperTokenUsage(turnStartResult);
         return {
           status: "ok",
           object: immediateObject,
           helperThreadId,
-          ...(immediateTurnId ? { helperTurnId: immediateTurnId } : {}),
+          ...(helperTurnId ? { helperTurnId } : {}),
           model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
           reasoningEffort: "low",
           ...(tokenUsage !== undefined ? { tokenUsage } : {}),
         };
       }
 
-      const turnId = extractTurnIdFromValue(turnStartResult);
-      if (!turnId) {
+      if (!helperTurnId) {
         return {
           status: "failed",
           reason: "codex_title_turn_start_missing_turn_id",
@@ -6781,14 +6859,15 @@ export class CodexAppServerClient {
 
       const helperResult = await this.waitForHelperTurnTitle({
         threadId: helperThreadId,
-        turnId,
+        turnId: helperTurnId,
         timeoutMs,
       });
+      helperTurnCompleted = true;
       return {
         status: "ok",
         object: helperResult.object,
         helperThreadId,
-        helperTurnId: turnId,
+        helperTurnId,
         model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
         reasoningEffort: "low",
         ...(helperResult.tokenUsage !== undefined
@@ -6802,6 +6881,38 @@ export class CodexAppServerClient {
       };
     } finally {
       if (helperThreadId) {
+        if (helperTurnId && !helperTurnCompleted) {
+          await requestWithFallbacks({
+            client: this.connection,
+            methods: ["turn/interrupt"],
+            payloads: [{ threadId: helperThreadId, turnId: helperTurnId }],
+            timeoutMs,
+          }).catch((error: unknown) => {
+            codexClientLog.warn("codex helper turn cleanup interrupt failed", {
+              threadId: helperThreadId,
+              turnId: helperTurnId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
+        }
+        await requestWithFallbacks({
+          client: this.connection,
+          methods: ["thread/unsubscribe"],
+          payloads: [{ threadId: helperThreadId }],
+          timeoutMs,
+        }).catch((error: unknown) => {
+          codexClientLog.warn("codex helper thread unsubscribe failed", {
+            threadId: helperThreadId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+        if (helperTurnId) {
+          const helperTurnKey = buildHelperTurnKey(helperThreadId, helperTurnId);
+          this.completedHelperTurnResults.delete(helperTurnKey);
+          this.helperTurnTitleObjects.delete(helperTurnKey);
+          this.helperTurnTokenUsage.delete(helperTurnKey);
+        }
+        this.helperThreadIds.delete(helperThreadId);
         this.helperThreadPredicates.delete(helperThreadId);
       }
     }

@@ -121,6 +121,20 @@ class MockTransport implements JsonRpcTransport {
     filePath: "/Users/huntharo/.codex/config.toml",
     overriddenMetadata: null,
   };
+  static configReadResult: unknown = {
+    config: {
+      mcp_servers: {
+        context7: {
+          command: "npx",
+          env: { SECRET: "never-forward-me" },
+        },
+        github: {
+          command: "github-mcp-server",
+        },
+      },
+    },
+  };
+  static configReadError: { code?: number; message: string } | undefined;
   static lastConfigValueWritePayload: unknown;
   static rateLimitsResult: unknown = {
     rateLimitsByLimitId: {}
@@ -610,6 +624,30 @@ class MockTransport implements JsonRpcTransport {
       return;
     }
 
+    if (payload.method === "config/read") {
+      if (MockTransport.configReadError) {
+        this.messageHandler(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: payload.id,
+            error: {
+              code: MockTransport.configReadError.code ?? -32000,
+              message: MockTransport.configReadError.message,
+            },
+          }),
+        );
+        return;
+      }
+      this.messageHandler(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: payload.id,
+          result: MockTransport.configReadResult,
+        }),
+      );
+      return;
+    }
+
     if (payload.method === "account/rateLimits/read") {
       this.messageHandler(
         JSON.stringify({
@@ -865,6 +903,17 @@ class MockTransport implements JsonRpcTransport {
       return;
     }
 
+    if (payload.method === "thread/unsubscribe") {
+      this.messageHandler(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: payload.id,
+          result: {},
+        }),
+      );
+      return;
+    }
+
     if (payload.method === "thread/settings/update") {
       const result: ThreadSettingsUpdateResponse = {};
       this.messageHandler(
@@ -1053,6 +1102,20 @@ describe("CodexAppServerClient", () => {
       filePath: "/Users/huntharo/.codex/config.toml",
       overriddenMetadata: null,
     };
+    MockTransport.configReadResult = {
+      config: {
+        mcp_servers: {
+          context7: {
+            command: "npx",
+            env: { SECRET: "never-forward-me" },
+          },
+          github: {
+            command: "github-mcp-server",
+          },
+        },
+      },
+    };
+    MockTransport.configReadError = undefined;
     MockTransport.lastConfigValueWritePayload = undefined;
     MockTransport.rateLimitsResult = {
       rateLimitsByLimitId: {}
@@ -6569,6 +6632,7 @@ describe("CodexAppServerClient", () => {
         params: expect.objectContaining({
           cwd: titleHelperWorkspace,
           runtimeWorkspaceRoots: [titleHelperWorkspace],
+          environments: [],
           ephemeral: true,
           model: "gpt-5.6-luna",
           serviceTier: null,
@@ -6578,9 +6642,22 @@ describe("CodexAppServerClient", () => {
             include_apps_instructions: false,
             include_collaboration_mode_instructions: false,
             include_environment_context: false,
+            project_doc_max_bytes: 0,
             skills: {
               include_instructions: false,
               bundled: { enabled: false },
+            },
+            features: {
+              apps: false,
+              plugins: false,
+              tool_suggest: false,
+              image_generation: false,
+              multi_agent: false,
+              goals: false,
+            },
+            mcp_servers: {
+              context7: { enabled: false },
+              github: { enabled: false },
             },
           },
         }),
@@ -6597,6 +6674,20 @@ describe("CodexAppServerClient", () => {
           }),
         }),
       ]),
+    );
+    for (const request of threadStartRequests) {
+      expect(request.params).not.toHaveProperty("dynamicTools");
+      expect(JSON.stringify(request.params)).not.toContain("never-forward-me");
+      expect(JSON.stringify(request.params)).not.toContain("github-mcp-server");
+    }
+    expect(requests).toContainEqual(
+      expect.objectContaining({
+        method: "config/read",
+        params: {
+          includeLayers: false,
+          cwd: titleHelperWorkspace,
+        },
+      }),
     );
     expect(requests).toContainEqual(
       expect.objectContaining({
@@ -6620,6 +6711,122 @@ describe("CodexAppServerClient", () => {
         }),
       })
     );
+    expect(requests).toContainEqual(
+      expect.objectContaining({
+        method: "thread/unsubscribe",
+        params: { threadId: "thread-title-helper" },
+      }),
+    );
+    expect(requests.map((request) => request.method)).not.toContain(
+      "thread/rollback",
+    );
+
+    await client.close();
+  });
+
+  it("uses a fresh helper thread for every title and unsubscribes each one", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+    const generate = async (threadId: string, turnId: string, title: string) => {
+      MockTransport.threadStartResult = {
+        thread: { id: threadId },
+      };
+      MockTransport.turnStartResult = {
+        thread: { id: threadId },
+        turn: {
+          id: turnId,
+          output: [{ type: "text", text: JSON.stringify({ title }) }],
+        },
+      };
+      return await client.generateTitle({
+        prompt: "Name the thread from this prompt",
+        promptVersion: "thread-title-v1",
+        schema: {
+          type: "object",
+          required: ["title"],
+          properties: { title: { type: "string" } },
+        },
+        schemaName: "thread_title",
+        timeoutMs: 5_000,
+      });
+    };
+
+    const first = await generate(
+      "thread-title-helper-1",
+      "turn-title-helper-1",
+      "First title",
+    );
+    const second = await generate(
+      "thread-title-helper-2",
+      "turn-title-helper-2",
+      "Second title",
+    );
+
+    expect(first).toMatchObject({
+      status: "ok",
+      helperThreadId: "thread-title-helper-1",
+      helperTurnId: "turn-title-helper-1",
+    });
+    expect(second).toMatchObject({
+      status: "ok",
+      helperThreadId: "thread-title-helper-2",
+      helperTurnId: "turn-title-helper-2",
+    });
+
+    const requests = MockTransport.instances.at(-1)!.sentMessages.map(
+      (message) => JSON.parse(message) as { method?: string; params?: Record<string, unknown> },
+    );
+    expect(
+      requests.filter((request) => request.method === "config/read"),
+    ).toHaveLength(2);
+    expect(
+      requests.filter((request) => request.method === "thread/start"),
+    ).toHaveLength(2);
+    expect(
+      requests
+        .filter((request) => request.method === "thread/unsubscribe")
+        .map((request) => request.params?.threadId),
+    ).toEqual(["thread-title-helper-1", "thread-title-helper-2"]);
+    expect(requests.map((request) => request.method)).not.toContain(
+      "thread/rollback",
+    );
+
+    await client.close();
+  });
+
+  it("fails closed before starting a title helper when MCP config inspection fails", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.configReadError = { message: "config unavailable" };
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    await expect(
+      client.generateTitle({
+        prompt: "Name the thread from this prompt",
+        promptVersion: "thread-title-v1",
+        schema: {
+          type: "object",
+          required: ["title"],
+          properties: { title: { type: "string" } },
+        },
+        schemaName: "thread_title",
+        timeoutMs: 5_000,
+      }),
+    ).resolves.toEqual({
+      status: "failed",
+      reason: "json-rpc error (-32000): config unavailable",
+    });
+
+    const methods = MockTransport.instances.at(-1)!.sentMessages.map(
+      (message) => (JSON.parse(message) as { method?: string }).method,
+    );
+    expect(methods).toContain("config/read");
+    expect(methods).not.toContain("thread/start");
 
     await client.close();
   });
