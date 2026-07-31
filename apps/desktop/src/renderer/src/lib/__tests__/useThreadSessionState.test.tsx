@@ -8323,6 +8323,86 @@ describe("useThreadSessionState", () => {
     });
   });
 
+  it("rechecks an idle optimistic review before clearing missed terminal state", async () => {
+    let resolveFirstRead:
+      | ((response: AppServerReadThreadResponse) => void)
+      | undefined;
+    let readCount = 0;
+    const idleResponse = (): AppServerReadThreadResponse => ({
+      backend: "codex",
+      fetchedAt: Date.now(),
+      threadId: "thread-1",
+      threadStatus: "idle",
+      replay: {
+        entries: [],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+      },
+    });
+    const readThread = vi.fn(() => {
+      readCount += 1;
+      if (readCount === 1) {
+        return new Promise<AppServerReadThreadResponse>((resolve) => {
+          resolveFirstRead = resolve;
+        });
+      }
+      return Promise.resolve(idleResponse());
+    });
+    const optimisticThread = {
+      ...buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      optimisticActiveTurn: {
+        id: "turn-review",
+        statusText: "Reviewing",
+        startedAt: Date.now(),
+        reviewDisplayText: "Review changes against main",
+      },
+    };
+    const { result, rerender } = renderHook(
+      ({ currentThread }) =>
+        useThreadSessionState({
+          desktopApi: { readThread },
+          thread: currentThread,
+        }),
+      {
+        initialProps: {
+          currentThread: optimisticThread,
+        },
+      }
+    );
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(1);
+      expect(result.current.activeTurnId).toBe("turn-review");
+      expect(result.current.threadBusy).toBe(true);
+    });
+
+    act(() => {
+      resolveFirstRead?.(idleResponse());
+    });
+
+    await waitFor(() => {
+      expect(result.current.activeTurnId).toBe("turn-review");
+      expect(result.current.threadBusy).toBe(true);
+    });
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(2);
+    }, { timeout: 2_500 });
+    await waitFor(() => {
+      expect(result.current.activeTurnId).toBeUndefined();
+      expect(result.current.pendingStatusText).toBeUndefined();
+      expect(result.current.threadBusy).toBe(false);
+    });
+
+    rerender({ currentThread: { ...optimisticThread } });
+    await flushReactUpdates();
+
+    expect(result.current.activeTurnId).toBeUndefined();
+    expect(result.current.threadBusy).toBe(false);
+  });
+
   it("clears stale review thinking when idle hydration also contains a terminal review entry", async () => {
     const readThread = vi.fn(async ({ backend, threadId }) => ({
       backend: backend ?? "codex",

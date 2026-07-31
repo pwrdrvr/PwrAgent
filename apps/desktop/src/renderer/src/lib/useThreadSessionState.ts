@@ -3415,18 +3415,20 @@ export function useThreadSessionState(params: {
                 && isCompletedTurnMetadata(entry.turn)
             )
             && now < ownUpdateSettlesAt;
+          const reviewUpdateStillSettling =
+            current.expectOwnUpdate
+            && sessionHasInProgressReviewTurn(current, current.activeTurnId)
+            && !responseHasCompletedTurn(
+              responseWithLoadedHistory,
+              current.activeTurnId
+            )
+            && now < ownUpdateSettlesAt;
           const shouldClearStaleThinking =
             readResponseThreadStatus(response) === "idle"
             && thinkingReasons.length > 0
             && !hasPendingInteraction(current)
             && !ownUpdateStillSettling
-            && (
-              !sessionHasInProgressReviewTurn(current, current.activeTurnId)
-              || responseHasCompletedTurn(
-                responseWithLoadedHistory,
-                current.activeTurnId
-              )
-            )
+            && !reviewUpdateStillSettling
             && !responseHasInProgressTurn(
               responseWithLoadedHistory,
               current.activeTurnId
@@ -3477,7 +3479,8 @@ export function useThreadSessionState(params: {
               ? undefined
               : current.pendingStatusText,
             response: responseWithLoadedHistory,
-            staleThinkingRecheckAt: ownUpdateStillSettling
+            staleThinkingRecheckAt:
+              ownUpdateStillSettling || reviewUpdateStillSettling
               ? ownUpdateSettlesAt
               : undefined,
           };
