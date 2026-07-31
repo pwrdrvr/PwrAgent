@@ -28,11 +28,17 @@ export function measureMessageText(text: string, measure: MessageTextMeasure): n
  */
 export function splitTextForDelivery(
   text: string,
-  options: { limit: number; measure?: MessageTextMeasure },
+  options: {
+    limit: number;
+    measure?: MessageTextMeasure;
+    /** Measure an encoded/rendered form while returning chunks of source text. */
+    measureText?: (value: string) => number;
+  },
 ): string[] {
   const measure = options.measure ?? "chars";
   const limit = Math.max(1, Math.floor(options.limit));
-  const size = (value: string): number => measureMessageText(value, measure);
+  const size = options.measureText
+    ?? ((value: string): number => measureMessageText(value, measure));
 
   if (!text) {
     return [];

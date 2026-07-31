@@ -5,6 +5,8 @@ import {
   buildSlackBlocksForIntent,
   markdownToSlackMrkdwn,
   sanitizeSlackActionId,
+  splitSlackStandardMarkdown,
+  splitSlackTextForDelivery,
   textForSlackIntent,
 } from "../slack-formatting.ts";
 
@@ -86,6 +88,103 @@ describe("Slack formatting", () => {
         },
       },
     ]);
+  });
+
+  it("splits legacy text by its escaped mrkdwn length", () => {
+    const text = "<".repeat(3_000);
+    const intent: MessagingSurfaceIntent = {
+      id: "plain-escaped-message",
+      kind: "message",
+      createdAt: 1,
+      role: "assistant",
+      parts: [{ type: "text", text, markdown: "plain" }],
+    };
+    const chunks = splitSlackTextForDelivery(intent, text);
+
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.join("")).toBe(text);
+    for (const chunk of chunks) {
+      expect(markdownToSlackMrkdwn(chunk).length).toBeLessThanOrEqual(3_000);
+    }
+  });
+
+  it("repeats table structure and reference definitions across Markdown chunks", () => {
+    const header = "| Signal | Current/post-recovery |";
+    const delimiter = "|---|---|";
+    const rows = Array.from(
+      { length: 18 },
+      (_, index) =>
+        `| Signal ${index + 1} | [Monitor][monitor] ${"healthy ".repeat(4)}|`,
+    );
+    const definition = "[monitor]: https://example.com/monitor";
+    const markdown = [header, delimiter, ...rows, "", definition].join("\n");
+    const chunks = splitSlackStandardMarkdown(markdown, 240);
+    const tableChunks = chunks.filter((chunk) => chunk.startsWith(header));
+
+    expect(tableChunks.length).toBeGreaterThan(1);
+    expect(
+      tableChunks.flatMap((chunk) =>
+        chunk.split("\n").filter((line) => /^\| Signal \d+ /.test(line))
+      ),
+    ).toHaveLength(rows.length);
+    for (const chunk of tableChunks) {
+      expect(chunk.split("\n")[1]).toBe(delimiter);
+      expect(chunk).toContain(definition);
+      expect(chunk.length).toBeLessThanOrEqual(240);
+    }
+  });
+
+  it("keeps a single oversized table row inside repeated table structure", () => {
+    const header = "| Signal | Detail |";
+    const delimiter = "|---|---|";
+    const markdown = [
+      header,
+      delimiter,
+      `| Search queue | ${"x".repeat(600)} |`,
+    ].join("\n");
+    const chunks = splitSlackStandardMarkdown(markdown, 180);
+
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(
+      chunks
+        .flatMap((chunk) => chunk.split("\n").slice(2))
+        .join("")
+        .match(/x/g),
+    ).toHaveLength(600);
+    for (const chunk of chunks) {
+      expect(chunk.split("\n").slice(0, 2)).toEqual([header, delimiter]);
+      expect(chunk.length).toBeLessThanOrEqual(180);
+    }
+  });
+
+  it("closes and reopens oversized fenced code across Markdown chunks", () => {
+    const codeLines = Array.from(
+      { length: 24 },
+      (_, index) => `console.log("line-${index + 1}");`,
+    );
+    const markdown = [
+      "Before the code.",
+      "",
+      "```ts",
+      ...codeLines,
+      "```",
+      "",
+      "After the code.",
+    ].join("\n");
+    const chunks = splitSlackStandardMarkdown(markdown, 160);
+    const codeChunks = chunks.filter((chunk) => chunk.includes("console.log"));
+
+    expect(codeChunks.length).toBeGreaterThan(1);
+    expect(
+      codeChunks.flatMap((chunk) =>
+        chunk.split("\n").filter((line) => line.startsWith("console.log"))
+      ),
+    ).toHaveLength(codeLines.length);
+    for (const chunk of codeChunks) {
+      expect(chunk).toMatch(/^```ts$/m);
+      expect(chunk).toMatch(/^```$/m);
+      expect(chunk.length).toBeLessThanOrEqual(160);
+    }
   });
 
   it("sanitizes action IDs for Block Kit", () => {

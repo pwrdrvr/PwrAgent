@@ -2,6 +2,7 @@ import {
   formatMessagingQuestionnaireText,
   layoutMessagingActionRows,
   messagingQuestionnaireActions,
+  splitTextForDelivery,
   type MessagingActionLayoutPolicy,
   type MessagingCapabilityProfile,
   type MessagingContentPart,
@@ -286,6 +287,362 @@ export function usesSlackStandardMarkdown(intent: MessagingSurfaceIntent): boole
     );
   }
   return false;
+}
+
+export function splitSlackTextForDelivery(
+  intent: MessagingSurfaceIntent,
+  text: string,
+): string[] {
+  if (usesSlackStandardMarkdown(intent)) {
+    return splitSlackStandardMarkdown(text, SLACK_MARKDOWN_TEXT_LIMIT);
+  }
+  return splitTextForDelivery(text, {
+    limit: SLACK_SECTION_TEXT_LIMIT,
+    measureText: (value) => markdownToSlackMrkdwn(value).length,
+  });
+}
+
+type SlackMarkdownSegment = {
+  text: string;
+  type: "fence" | "table" | "text";
+};
+
+/**
+ * Split a standard-Markdown document without stranding table rows or fenced
+ * code in independent Slack messages. Ordinary prose still uses the shared
+ * boundary-aware splitter. Oversized tables repeat their header and delimiter;
+ * oversized fences close and reopen around every chunk.
+ */
+export function splitSlackStandardMarkdown(
+  markdown: string,
+  limit = SLACK_MARKDOWN_TEXT_LIMIT,
+): string[] {
+  const safeLimit = Math.max(1, Math.floor(limit));
+  if (!markdown) {
+    return [];
+  }
+  if (markdown.length <= safeLimit) {
+    return [markdown];
+  }
+
+  const referenceDefinitions = extractSlackMarkdownReferenceDefinitions(markdown);
+  const pieces = splitSlackMarkdownSegments(markdown).flatMap((segment) =>
+    splitOversizedSlackMarkdownSegment(segment, safeLimit, referenceDefinitions)
+  );
+  const chunks: string[] = [];
+  let pending = "";
+  for (const piece of pieces) {
+    const combined = pending ? `${pending}\n\n${piece}` : piece;
+    if (combined.length <= safeLimit) {
+      pending = combined;
+      continue;
+    }
+    if (pending) {
+      chunks.push(pending);
+    }
+    pending = piece;
+  }
+  if (pending) {
+    chunks.push(pending);
+  }
+  return chunks;
+}
+
+function splitSlackMarkdownSegments(markdown: string): SlackMarkdownSegment[] {
+  const lines = markdown.split("\n");
+  const segments: SlackMarkdownSegment[] = [];
+  let textBuffer: string[] = [];
+  let index = 0;
+
+  const flushText = (): void => {
+    const text = trimBlankMarkdownLines(textBuffer).join("\n");
+    textBuffer = [];
+    if (text) {
+      segments.push({ text, type: "text" });
+    }
+  };
+
+  while (index < lines.length) {
+    const line = lines[index] ?? "";
+    const fence = parseSlackMarkdownFence(line);
+    if (fence) {
+      flushText();
+      const fenceLines = [line];
+      index += 1;
+      while (index < lines.length) {
+        const nextLine = lines[index] ?? "";
+        fenceLines.push(nextLine);
+        index += 1;
+        if (isClosingSlackMarkdownFence(nextLine, fence)) {
+          break;
+        }
+      }
+      segments.push({ text: fenceLines.join("\n"), type: "fence" });
+      continue;
+    }
+
+    if (
+      isSlackMarkdownTableHeader(line)
+      && isSlackMarkdownTableDelimiter(lines[index + 1] ?? "")
+    ) {
+      flushText();
+      const tableLines = [line, lines[index + 1] ?? ""];
+      index += 2;
+      while (index < lines.length && isSlackMarkdownTableRow(lines[index] ?? "")) {
+        tableLines.push(lines[index] ?? "");
+        index += 1;
+      }
+      segments.push({ text: tableLines.join("\n"), type: "table" });
+      continue;
+    }
+
+    textBuffer.push(line);
+    index += 1;
+  }
+
+  flushText();
+  return segments;
+}
+
+function splitOversizedSlackMarkdownSegment(
+  segment: SlackMarkdownSegment,
+  limit: number,
+  referenceDefinitions: string[],
+): string[] {
+  if (segment.type === "table") {
+    const definitions = referencedSlackMarkdownDefinitions(
+      segment.text,
+      referenceDefinitions,
+    );
+    const withDefinitions = appendSlackMarkdownReferenceDefinitions(
+      segment.text,
+      definitions,
+    );
+    if (withDefinitions.length <= limit) {
+      return [withDefinitions];
+    }
+    return splitOversizedSlackMarkdownTable(segment.text, limit, definitions);
+  }
+  if (segment.text.length <= limit) {
+    return [segment.text];
+  }
+  if (segment.type === "fence") {
+    return splitOversizedSlackMarkdownFence(segment.text, limit);
+  }
+  return splitTextForDelivery(segment.text, { limit, measure: "chars" });
+}
+
+function splitOversizedSlackMarkdownTable(
+  table: string,
+  limit: number,
+  referenceDefinitions: string[],
+): string[] {
+  const [header = "", delimiter = "", ...rows] = table.split("\n");
+  const prefix = `${header}\n${delimiter}`;
+  const suffix = referenceDefinitions.length > 0
+    ? `\n\n${referenceDefinitions.join("\n")}`
+    : "";
+  const tableLimit = limit - suffix.length;
+  if (!header || !delimiter || prefix.length >= tableLimit) {
+    return splitTextForDelivery(table, { limit, measure: "chars" });
+  }
+
+  const chunks: string[] = [];
+  let current = prefix;
+  for (const row of rows) {
+    const candidate = `${current}\n${row}`;
+    if (candidate.length <= tableLimit) {
+      current = candidate;
+      continue;
+    }
+    if (current !== prefix) {
+      chunks.push(`${current}${suffix}`);
+      current = prefix;
+    }
+    if (`${prefix}\n${row}`.length <= tableLimit) {
+      current = `${prefix}\n${row}`;
+      continue;
+    }
+    chunks.push(
+      ...splitOversizedSlackMarkdownTableRow(
+        row,
+        prefix,
+        suffix,
+        tableLimit,
+      ),
+    );
+  }
+  if (current !== prefix) {
+    chunks.push(`${current}${suffix}`);
+  }
+  return chunks;
+}
+
+function splitOversizedSlackMarkdownTableRow(
+  row: string,
+  prefix: string,
+  suffix: string,
+  tableLimit: number,
+): string[] {
+  const cells = splitSlackMarkdownTableCells(row);
+  const emptyRow = renderSlackMarkdownTableRow(cells.map(() => ""));
+  const contentBudget = tableLimit - prefix.length - emptyRow.length - 1;
+  if (cells.length === 0 || contentBudget < cells.length) {
+    return splitTextForDelivery(row, {
+      limit: Math.max(1, tableLimit),
+      measure: "chars",
+    });
+  }
+
+  const cellLimit = Math.max(1, Math.floor(contentBudget / cells.length));
+  const cellChunks = cells.map((cell) => {
+    const chunks = splitTextForDelivery(cell, {
+      limit: cellLimit,
+      measure: "chars",
+    });
+    return chunks.length > 0 ? chunks : [""];
+  });
+  const rowCount = Math.max(...cellChunks.map((chunks) => chunks.length));
+  return Array.from({ length: rowCount }, (_, index) => {
+    const continuation = renderSlackMarkdownTableRow(
+      cellChunks.map((chunks) => chunks[index] ?? ""),
+    );
+    return `${prefix}\n${continuation}${suffix}`;
+  });
+}
+
+function splitOversizedSlackMarkdownFence(fence: string, limit: number): string[] {
+  const lines = fence.split("\n");
+  const opening = lines[0] ?? "```";
+  const parsed = parseSlackMarkdownFence(opening);
+  if (!parsed) {
+    return splitTextForDelivery(fence, { limit, measure: "chars" });
+  }
+  const hasClosing = isClosingSlackMarkdownFence(lines.at(-1) ?? "", parsed);
+  const closing = parsed.marker;
+  const content = lines.slice(1, hasClosing ? -1 : undefined).join("\n");
+  const contentLimit = limit - opening.length - closing.length - 2;
+  if (contentLimit < 1) {
+    return splitTextForDelivery(fence, { limit, measure: "chars" });
+  }
+  return splitTextForDelivery(content, {
+    limit: contentLimit,
+    measure: "chars",
+  }).map((chunk) => `${opening}\n${chunk}\n${closing}`);
+}
+
+function parseSlackMarkdownFence(
+  line: string,
+): { character: "`" | "~"; length: number; marker: string } | undefined {
+  const match = line.match(/^\s{0,3}(`{3,}|~{3,})/);
+  const marker = match?.[1];
+  if (!marker) {
+    return undefined;
+  }
+  const character = marker[0];
+  if (character !== "`" && character !== "~") {
+    return undefined;
+  }
+  return { character, length: marker.length, marker };
+}
+
+function isClosingSlackMarkdownFence(
+  line: string,
+  fence: { character: "`" | "~"; length: number },
+): boolean {
+  const trimmed = line.trim();
+  return (
+    trimmed.length >= fence.length
+    && [...trimmed].every((character) => character === fence.character)
+  );
+}
+
+function isSlackMarkdownTableHeader(line: string): boolean {
+  const trimmed = line.trim();
+  return trimmed.includes("|") && splitSlackMarkdownTableCells(trimmed).length >= 2;
+}
+
+function isSlackMarkdownTableDelimiter(line: string): boolean {
+  const cells = splitSlackMarkdownTableCells(line.trim());
+  return (
+    cells.length >= 2
+    && cells.every((cell) => /^:?-{3,}:?$/.test(cell.trim()))
+  );
+}
+
+function isSlackMarkdownTableRow(line: string): boolean {
+  const trimmed = line.trim();
+  return (
+    trimmed !== ""
+    && trimmed.includes("|")
+    && splitSlackMarkdownTableCells(trimmed).length >= 2
+  );
+}
+
+function splitSlackMarkdownTableCells(line: string): string[] {
+  const trimmed = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+  const cells: string[] = [];
+  let cell = "";
+  for (let index = 0; index < trimmed.length; index += 1) {
+    const character = trimmed[index] ?? "";
+    if (character === "\\" && index + 1 < trimmed.length) {
+      cell += `${character}${trimmed[index + 1] ?? ""}`;
+      index += 1;
+      continue;
+    }
+    if (character === "|") {
+      cells.push(cell.trim());
+      cell = "";
+      continue;
+    }
+    cell += character;
+  }
+  cells.push(cell.trim());
+  return cells;
+}
+
+function renderSlackMarkdownTableRow(cells: string[]): string {
+  return `| ${cells.join(" | ")} |`;
+}
+
+function trimBlankMarkdownLines(lines: string[]): string[] {
+  let start = 0;
+  let end = lines.length;
+  while (start < end && lines[start]?.trim() === "") {
+    start += 1;
+  }
+  while (end > start && lines[end - 1]?.trim() === "") {
+    end -= 1;
+  }
+  return lines.slice(start, end);
+}
+
+function extractSlackMarkdownReferenceDefinitions(markdown: string): string[] {
+  return markdown
+    .split("\n")
+    .filter((line) => /^\s{0,3}\[[^\]]+\]:\s+\S/.test(line));
+}
+
+function referencedSlackMarkdownDefinitions(
+  table: string,
+  definitions: string[],
+): string[] {
+  const normalizedTable = table.toLocaleLowerCase();
+  return definitions.filter((definition) => {
+    const label = definition.match(/^\s{0,3}\[([^\]]+)\]:/)?.[1];
+    return label
+      ? normalizedTable.includes(`[${label.toLocaleLowerCase()}]`)
+      : false;
+  });
+}
+
+function appendSlackMarkdownReferenceDefinitions(
+  table: string,
+  definitions: string[],
+): string {
+  return definitions.length > 0
+    ? `${table}\n\n${definitions.join("\n")}`
+    : table;
 }
 
 /**

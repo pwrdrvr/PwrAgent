@@ -60,6 +60,7 @@ function fakeApi(spies: {
   mpimChannels?: string[];
   permalinks?: Record<string, string>;
   deleted?: Array<{ channel: string; ts: string }>;
+  deleteErrors?: Error[];
   posted?: unknown[];
   replies?: Record<string, string>;
   updated?: unknown[];
@@ -91,6 +92,10 @@ function fakeApi(spies: {
     getPermalink: async (params) =>
       spies.permalinks?.[`${params.channel}:${params.messageTs}`],
     deleteMessage: async (params) => {
+      const error = spies.deleteErrors?.shift();
+      if (error) {
+        throw error;
+      }
       spies.deleted?.push(params);
     },
     downloadFile: async () => new Uint8Array([1, 2, 3]),
@@ -2793,6 +2798,71 @@ describe("SlackAdapter", () => {
     expect(deleted).toHaveLength(interimPostCount - 1);
   });
 
+  it("retains obsolete stream anchors when final-message cleanup fails", async () => {
+    const deleted: Array<{ channel: string; ts: string }> = [];
+    const deleteErrors = [new Error("temporary delete failure")];
+    const posted: unknown[] = [];
+    const updated: unknown[] = [];
+    const adapter = new SlackAdapter({
+      config: { ...baseConfig, streamingResponses: true },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({ deleted, deleteErrors, posted, updated }),
+      socketClient: fakeSocket(),
+      now: () => 1_700_000_000_000,
+    });
+    const text = "This is a full sentence that keeps going. ".repeat(220);
+    const audit = {
+      actor: { platformUserId: "U012ABCDEF0" },
+      bindingId: "slack-binding-1",
+      channel: {
+        channel: "slack" as const,
+        conversation: { id: "D012ABCDEF0", kind: "dm" as const },
+      },
+      occurredAt: 1,
+    };
+
+    await adapter.deliver({
+      id: "assistant-stream-interim",
+      kind: "stream_update",
+      bindingId: "slack-binding-1",
+      createdAt: 1,
+      role: "assistant",
+      markdown: "plain",
+      policy: "enabled",
+      text,
+      stream: { isFinal: false, key: "codex:thread-1:turn-1", sequence: 1 },
+      audit,
+    } satisfies MessagingSurfaceIntent);
+    const interimPostCount = posted.length;
+    expect(interimPostCount).toBeGreaterThan(1);
+
+    const finalIntent = {
+      id: "assistant-stream-final",
+      kind: "stream_update",
+      bindingId: "slack-binding-1",
+      createdAt: 2,
+      role: "assistant",
+      markdown: "markdown",
+      policy: "enabled",
+      text,
+      stream: { isFinal: true, key: "codex:thread-1:turn-1", sequence: 2 },
+      audit,
+    } satisfies MessagingSurfaceIntent;
+
+    await expect(adapter.deliver(finalIntent)).resolves.toMatchObject({
+      channel: "slack",
+      outcome: "failed",
+      errorMessage: "temporary delete failure",
+    });
+    expect(deleted).toEqual([]);
+
+    await expect(adapter.deliver(finalIntent)).resolves.toMatchObject({
+      channel: "slack",
+      outcome: "updated",
+    });
+    expect(deleted).toHaveLength(interimPostCount - 1);
+  });
+
   it("splits a long Markdown message across native Markdown posts", async () => {
     const posted: Array<{
       blocks?: Array<{ text?: string; type: string }>;
@@ -2833,6 +2903,98 @@ describe("SlackAdapter", () => {
         expect.objectContaining({ type: "markdown" }),
       ]);
       expect(post.blocks?.[0]?.text?.length ?? 0).toBeLessThanOrEqual(12_000);
+    }
+  });
+
+  it("keeps oversized Markdown tables renderable across native Markdown posts", async () => {
+    const posted: Array<{
+      blocks?: Array<{ text?: string; type: string }>;
+      channel: string;
+      text?: string;
+    }> = [];
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({ posted }),
+      socketClient: fakeSocket(),
+      now: () => 1_700_000_000_000,
+    });
+    const header = "| Signal | Alert period | Current/post-recovery |";
+    const delimiter = "|---|---|---|";
+    const rows = Array.from(
+      { length: 240 },
+      (_, index) =>
+        `| Signal ${index + 1} | Alert detail ${"high ".repeat(6)}| Recovery detail |`,
+    );
+    const text = [header, delimiter, ...rows].join("\n");
+
+    await expect(
+      adapter.deliver({
+        id: "assistant-long-table",
+        kind: "message",
+        createdAt: 1,
+        role: "assistant",
+        parts: [{ type: "text", text, markdown: "markdown" }],
+        audit: {
+          actor: { platformUserId: "U012ABCDEF0" },
+          bindingId: "slack-binding-1",
+          channel: {
+            channel: "slack",
+            conversation: { id: "D012ABCDEF0", kind: "dm" },
+          },
+          occurredAt: 1,
+        },
+      } satisfies MessagingSurfaceIntent),
+    ).resolves.toMatchObject({ channel: "slack", outcome: "presented" });
+
+    expect(posted.length).toBeGreaterThan(1);
+    for (const post of posted) {
+      const markdown = post.blocks?.[0]?.text ?? "";
+      expect(post.blocks?.[0]?.type).toBe("markdown");
+      expect(markdown.split("\n").slice(0, 2)).toEqual([header, delimiter]);
+      expect(markdown.length).toBeLessThanOrEqual(12_000);
+    }
+  });
+
+  it("splits legacy messages by encoded mrkdwn length without truncation", async () => {
+    const posted: Array<{
+      blocks?: Array<{ text?: { text?: string }; type: string }>;
+      channel: string;
+      text?: string;
+    }> = [];
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({ posted }),
+      socketClient: fakeSocket(),
+      now: () => 1_700_000_000_000,
+    });
+    const text = "<".repeat(3_000);
+
+    await expect(
+      adapter.deliver({
+        id: "assistant-legacy-escaped",
+        kind: "message",
+        createdAt: 1,
+        role: "assistant",
+        parts: [{ type: "text", text, markdown: "plain" }],
+        audit: {
+          actor: { platformUserId: "U012ABCDEF0" },
+          bindingId: "slack-binding-1",
+          channel: {
+            channel: "slack",
+            conversation: { id: "D012ABCDEF0", kind: "dm" },
+          },
+          occurredAt: 1,
+        },
+      } satisfies MessagingSurfaceIntent),
+    ).resolves.toMatchObject({ channel: "slack", outcome: "presented" });
+
+    expect(posted.length).toBeGreaterThan(1);
+    const rendered = posted.map((post) => post.blocks?.[0]?.text?.text ?? "");
+    expect(rendered.join("")).toBe("&lt;".repeat(3_000));
+    for (const chunk of rendered) {
+      expect(chunk.length).toBeLessThanOrEqual(3_000);
     }
   });
 });

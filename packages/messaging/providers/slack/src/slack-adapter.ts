@@ -39,7 +39,6 @@ import type {
 import {
   evictStaleStreamAnchors,
   extractMessagingPairingToken,
-  splitTextForDelivery,
   SLACK_CHANNEL_AUTHORIZATION_MODE_DEFAULT,
   SLACK_CHANNEL_USER_ACCESS_MODE_DEFAULT,
   SLACK_DM_ACCESS_MODE_DEFAULT,
@@ -53,10 +52,9 @@ import {
   buildSlackBlocksForIntent,
   clampSlackMessage,
   markdownToSlackMrkdwn,
+  splitSlackTextForDelivery,
   textForSlackIntent,
   usesSlackStandardMarkdown,
-  SLACK_MARKDOWN_TEXT_LIMIT,
-  SLACK_SECTION_TEXT_LIMIT,
   type SlackPostBody,
 } from "./slack-formatting.ts";
 import {
@@ -568,12 +566,7 @@ export class SlackAdapter implements SlackProviderAdapter {
       intent.delivery?.mode !== "update" &&
       !intent.parts.some((part) => part.type === "file")
     ) {
-      const chunks = splitTextForDelivery(rawText, {
-        limit: usesSlackStandardMarkdown(intent)
-          ? SLACK_MARKDOWN_TEXT_LIMIT
-          : SLACK_SECTION_TEXT_LIMIT,
-        measure: "chars",
-      });
+      const chunks = splitSlackTextForDelivery(intent, rawText);
       if (chunks.length > 1) {
         return await this.deliverChunkedTextMessage({ intent, target, chunks });
       }
@@ -1213,12 +1206,7 @@ export class SlackAdapter implements SlackProviderAdapter {
     // Greedy splitting keeps prefix chunks stable as text grows, so only the
     // last chunk is re-edited each tick and new ones are posted as the response
     // spills over.
-    const chunks = splitTextForDelivery(intent.text, {
-      limit: usesSlackStandardMarkdown(intent)
-        ? SLACK_MARKDOWN_TEXT_LIMIT
-        : SLACK_SECTION_TEXT_LIMIT,
-      measure: "chars",
-    });
+    const chunks = splitSlackTextForDelivery(intent, intent.text);
     if (chunks.length === 0) {
       return {
         outcome: "discarded",
@@ -1301,12 +1289,13 @@ export class SlackAdapter implements SlackProviderAdapter {
       // remove the obsolete tail instead of leaving duplicate partial text in
       // the conversation.
       if (anchors.length > chunks.length) {
-        const obsoleteAnchors = anchors.splice(chunks.length);
-        for (const obsolete of obsoleteAnchors) {
+        while (anchors.length > chunks.length) {
+          const obsolete = anchors[chunks.length]!;
           await this.api.deleteMessage({
             channel: obsolete.channelId,
             ts: obsolete.ts,
           });
+          anchors.splice(chunks.length, 1);
         }
       }
       if (intent.stream.isFinal) {

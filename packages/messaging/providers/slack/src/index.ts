@@ -31,6 +31,8 @@ export {
   clampSlackSectionText,
   markdownToSlackMrkdwn,
   sanitizeSlackActionId,
+  splitSlackStandardMarkdown,
+  splitSlackTextForDelivery,
   styleForSlackAction,
   textForSlackIntent,
   usesSlackStandardMarkdown,
