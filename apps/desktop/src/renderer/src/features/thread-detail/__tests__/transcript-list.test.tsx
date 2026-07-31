@@ -269,7 +269,7 @@ describe("TranscriptList", () => {
     expect(container.querySelector(".transcript-message--injected")).toBeInTheDocument();
   });
 
-  it("renders transcript history and exposes incremental history loading when available", () => {
+  it("renders transcript history without a persistent older-history button", () => {
     const loadOlder = vi.fn(async () => undefined);
 
     render(
@@ -348,9 +348,14 @@ describe("TranscriptList", () => {
     expect(screen.getByText("Read ThreadView.tsx")).toBeInTheDocument();
     expect(screen.getByText("pwd && rg --files")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Load older messages" }));
-
-    expect(loadOlder).toHaveBeenCalledTimes(1);
+    expect(
+      screen.queryByRole("button", { name: "Load older messages" })
+    ).not.toBeInTheDocument();
+    expect(document.querySelector(".transcript-list__items")).toHaveAttribute(
+      "tabindex",
+      "0",
+    );
+    expect(loadOlder).not.toHaveBeenCalled();
     expect(
       screen.queryByRole("button", { name: "Jump to latest message" })
     ).not.toBeInTheDocument();
@@ -425,7 +430,9 @@ describe("TranscriptList", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Load older messages" }));
+    const firstList = screen.getByRole("list");
+    firstList.scrollTop = 120;
+    fireEvent.scroll(firstList);
     expect(firstLoad).toHaveBeenCalledTimes(1);
 
     rerender(
@@ -435,7 +442,9 @@ describe("TranscriptList", () => {
         onLoadOlder={secondLoad}
       />,
     );
-    fireEvent.click(screen.getByRole("button", { name: "Load older messages" }));
+    const secondList = screen.getByRole("list");
+    secondList.scrollTop = 120;
+    fireEvent.scroll(secondList);
 
     expect(secondLoad).toHaveBeenCalledTimes(1);
     resolveFirstLoad?.();

@@ -1128,22 +1128,13 @@ export function TranscriptList(props: TranscriptListProps) {
       data-fade-top={isAtTop ? "hidden" : "visible"}
       data-fade-bottom={hasContentBelow ? "visible" : "hidden"}
     >
-      {canLoadOlder ? (
-        <button
-          className="button button--ghost transcript-list__load-older"
-          type="button"
-          onClick={requestOlderPage}
-        >
-          {props.loadingMore ? "Loading older messages" : "Load older messages"}
-        </button>
-      ) : null}
-
       {props.error ? <p className="transcript-error">{props.error}</p> : null}
 
       <div
         ref={scrollContainerRef}
         className="transcript-list__items"
         role="list"
+        tabIndex={0}
         onWheel={(event) => {
           if (event.deltaY < 0) {
             disableBottomGlue();

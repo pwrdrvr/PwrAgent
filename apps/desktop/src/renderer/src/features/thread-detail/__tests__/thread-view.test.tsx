@@ -626,7 +626,9 @@ describe("ThreadView", () => {
 
     expect(container.querySelectorAll(".transcript-message")).toHaveLength(40);
 
-    fireEvent.click(screen.getByRole("button", { name: "Load older messages" }));
+    const transcriptList = screen.getByRole("list");
+    transcriptList.scrollTop = 120;
+    fireEvent.scroll(transcriptList);
 
     expect(container.querySelectorAll(".transcript-message")).toHaveLength(90);
     expect(loadOlder).not.toHaveBeenCalled();
