@@ -5996,7 +5996,7 @@ export class CodexAppServerClient {
       );
       const helperThreadId = extractThreadIdFromNotification(normalized, params);
       if (helperThreadId && this.helperThreadIds.has(helperThreadId)) {
-        this.handleHelperThreadNotification(method, normalized);
+        this.handleHelperThreadNotification(normalized.method, normalized);
         return;
       }
 

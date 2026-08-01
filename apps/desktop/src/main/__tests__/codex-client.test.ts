@@ -6813,6 +6813,12 @@ describe("CodexAppServerClient", () => {
     expect(requests.map((request) => request.method)).not.toContain(
       "thread/rollback",
     );
+    const tracking = client as unknown as {
+      helperThreadIds: Set<string>;
+      helperThreadPredicates: Map<string, unknown>;
+    };
+    expect(tracking.helperThreadIds.size).toBe(0);
+    expect(tracking.helperThreadPredicates.size).toBe(0);
 
     await client.close();
   });
@@ -7153,6 +7159,127 @@ describe("CodexAppServerClient", () => {
     );
     expect(methods).not.toContain("turn/start");
     expect(methods).toContain("thread/unsubscribe");
+
+    await client.close();
+  });
+
+  it("unsubscribes and releases helper tracking when a title turn fails", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.threadStartResult = {
+      thread: { id: "thread-title-helper" },
+      instructionSources: [],
+    };
+    MockTransport.turnStartResult = {
+      turn: { id: "turn-title-helper" },
+    };
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+    const titlePromise = client.generateTitle({
+      prompt: "Name the thread from this prompt",
+      promptVersion: "thread-title-v1",
+      schema: {
+        type: "object",
+        required: ["title"],
+        properties: { title: { type: "string" } },
+      },
+      schemaName: "thread_title",
+      timeoutMs: 5_000,
+    });
+    const transport = await waitForLatestTransportRequest("turn/start");
+
+    transport.emitInbound({
+      jsonrpc: "2.0",
+      method: "turn/completed",
+      params: {
+        threadId: "thread-title-helper",
+        turn: {
+          id: "turn-title-helper",
+          status: "failed",
+          error: { message: "helper model failed" },
+        },
+      },
+    });
+
+    await expect(titlePromise).resolves.toEqual({
+      status: "failed",
+      reason: "codex_title_turn_failed",
+    });
+    const requests = transport.sentMessages.map(
+      (message) => JSON.parse(message) as { method?: string; params?: unknown },
+    );
+    expect(requests).toContainEqual(
+      expect.objectContaining({
+        method: "thread/unsubscribe",
+        params: { threadId: "thread-title-helper" },
+      }),
+    );
+    const tracking = client as unknown as {
+      helperThreadIds: Set<string>;
+      helperThreadPredicates: Map<string, unknown>;
+      completedHelperTurnResults: Map<string, unknown>;
+      helperTurnTitleObjects: Map<string, unknown>;
+      helperTurnTokenUsage: Map<string, unknown>;
+    };
+    expect(tracking.helperThreadIds.size).toBe(0);
+    expect(tracking.helperThreadPredicates.size).toBe(0);
+    expect(tracking.completedHelperTurnResults.size).toBe(0);
+    expect(tracking.helperTurnTitleObjects.size).toBe(0);
+    expect(tracking.helperTurnTokenUsage.size).toBe(0);
+
+    await client.close();
+  });
+
+  it("unsubscribes and releases helper tracking when a title turn times out", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.threadStartResult = {
+      thread: { id: "thread-title-helper" },
+      instructionSources: [],
+    };
+    MockTransport.turnStartResult = {
+      turn: { id: "turn-title-helper" },
+    };
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    await expect(
+      client.generateTitle({
+        prompt: "Name the thread from this prompt",
+        promptVersion: "thread-title-v1",
+        schema: {
+          type: "object",
+          required: ["title"],
+          properties: { title: { type: "string" } },
+        },
+        schemaName: "thread_title",
+        timeoutMs: 1,
+      }),
+    ).resolves.toEqual({
+      status: "failed",
+      reason: "codex_title_turn_timeout",
+    });
+
+    const transport = MockTransport.instances.at(-1)!;
+    const requests = transport.sentMessages.map(
+      (message) => JSON.parse(message) as { method?: string; params?: unknown },
+    );
+    expect(requests).toContainEqual(
+      expect.objectContaining({
+        method: "thread/unsubscribe",
+        params: { threadId: "thread-title-helper" },
+      }),
+    );
+    const tracking = client as unknown as {
+      helperThreadIds: Set<string>;
+      helperThreadPredicates: Map<string, unknown>;
+      helperTurnWaiters: Map<string, unknown>;
+    };
+    expect(tracking.helperThreadIds.size).toBe(0);
+    expect(tracking.helperThreadPredicates.size).toBe(0);
+    expect(tracking.helperTurnWaiters.size).toBe(0);
 
     await client.close();
   });
