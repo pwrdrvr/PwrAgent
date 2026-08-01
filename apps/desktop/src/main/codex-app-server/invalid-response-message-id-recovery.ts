@@ -362,7 +362,15 @@ async function syncDirectory(directoryPath: string): Promise<void> {
     await handle.sync();
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
-    if (code !== "EINVAL" && code !== "ENOTSUP" && code !== "EISDIR") {
+    const unsupportedOnWindows =
+      process.platform === "win32"
+      && (code === "EACCES" || code === "EPERM");
+    if (
+      code !== "EINVAL"
+      && code !== "ENOTSUP"
+      && code !== "EISDIR"
+      && !unsupportedOnWindows
+    ) {
       throw error;
     }
   } finally {
