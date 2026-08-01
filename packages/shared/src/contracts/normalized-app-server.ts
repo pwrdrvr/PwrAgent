@@ -320,6 +320,21 @@ export type AppServerThreadSummary = {
   };
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   worktreeSnapshots?: WorktreeSnapshotSummary[];
+  /**
+   * Native Codex provenance for a thread created by `spawn_agent`.
+   *
+   * Codex persists these as ordinary agent threads and reports their provider
+   * parent independently from PwrAgent's UI-only `parentThreadId` overlay.
+   * PwrAgent uses this metadata to project the provider tree into its current
+   * one-level child-thread tray without conflating other sub-agent sources
+   * such as review and compaction helpers with visible work threads.
+   */
+  codexNativeSubAgent?: {
+    parentThreadId: ThreadIdentifier;
+    depth?: number;
+    agentNickname?: string;
+    agentRole?: string;
+  };
 };
 
 export type AppServerThreadMessage = {
