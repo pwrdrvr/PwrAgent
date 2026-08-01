@@ -299,6 +299,7 @@ export type SteerTurnRequest = {
   threadId: ThreadIdentifier;
   input: AppServerTurnInputItem[];
   expectedTurnId: string;
+  requestId: string;
 };
 
 export type SteerTurnResponse = {

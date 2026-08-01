@@ -3326,6 +3326,7 @@ export class MessagingController {
         threadId: entry.binding.threadId,
         expectedTurnId: activeTurn.turnId,
         input: entry.input,
+        requestId: entry.id,
         messageOrigin: messageOriginForInboundEvent(entry.event),
       });
     } catch (error) {

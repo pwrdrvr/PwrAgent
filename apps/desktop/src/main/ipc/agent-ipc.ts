@@ -501,6 +501,7 @@ export function registerAgentIpcHandlers(): void {
         backend: request.backend,
         threadId: request.threadId,
         expectedTurnId: request.expectedTurnId,
+        requestId: request.requestId,
         ...summarizeTurnInput(request.input),
       });
 
@@ -511,6 +512,7 @@ export function registerAgentIpcHandlers(): void {
           backend: request.backend,
           threadId: request.threadId,
           expectedTurnId: request.expectedTurnId,
+          requestId: request.requestId,
           error: error instanceof Error ? error.message : String(error),
         });
         throw error;

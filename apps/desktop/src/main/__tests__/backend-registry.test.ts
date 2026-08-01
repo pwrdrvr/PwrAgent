@@ -13682,10 +13682,82 @@ command = "pnpm dev"
         threadId: "thread-1",
         expectedTurnId: "turn-0",
         input: [{ type: "text", text: "Course correct" }],
+        requestId: "steer-error-1",
       }),
     ).rejects.toThrow("expected active turn id `turn-0` but found `turn-1`");
 
     expect(codexClient.steerTurnCallCount).toBe(1);
+
+    await registry.close();
+  });
+
+  it("coalesces concurrent identical steer requests before they reach the backend", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "turn/steer"] },
+    });
+    const steerDeferred = createDeferred<{ threadId: string; turnId: string }>();
+    const steerSpy = vi
+      .spyOn(codexClient, "steerTurn")
+      .mockImplementation(async () => await steerDeferred.promise);
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      overlayStore: createOverlayStoreMock({ executionMode: "full-access" }),
+    });
+    const request = {
+      backend: "codex" as const,
+      threadId: "thread-1",
+      expectedTurnId: "turn-1",
+      input: [{ type: "text" as const, text: "Course correct once" }],
+      requestId: "steer-once-1",
+    };
+
+    const responses = [
+      registry.steerTurn(request),
+      registry.steerTurn(request),
+      registry.steerTurn(request),
+    ];
+    await flushAsync();
+
+    expect(steerSpy).toHaveBeenCalledTimes(1);
+
+    steerDeferred.resolve({ threadId: "thread-1", turnId: "turn-1" });
+    await expect(Promise.all(responses)).resolves.toEqual([
+      { backend: "codex", threadId: "thread-1", turnId: "turn-1" },
+      { backend: "codex", threadId: "thread-1", turnId: "turn-1" },
+      { backend: "codex", threadId: "thread-1", turnId: "turn-1" },
+    ]);
+    await expect(registry.steerTurn(request)).resolves.toEqual({
+      backend: "codex",
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+    expect(steerSpy).toHaveBeenCalledTimes(1);
+
+    await expect(
+      registry.steerTurn({
+        ...request,
+        input: [{ type: "text", text: "Different input" }],
+      }),
+    ).rejects.toThrow("steer-once-1 was reused with different input");
+    expect(steerSpy).toHaveBeenCalledTimes(1);
+
+    await codexClient.emit({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: {
+          id: "turn-1",
+          status: "completed",
+          output: [],
+        },
+      },
+    });
+    await registry.steerTurn(request);
+    expect(steerSpy).toHaveBeenCalledTimes(2);
 
     await registry.close();
   });
@@ -13719,6 +13791,7 @@ command = "pnpm dev"
         threadId: "thread-1",
         expectedTurnId: "turn-1",
         input: [{ type: "text", text: "Course correct from messaging" }],
+        requestId: "messaging-steer-1",
       },
       { kind: "messaging" },
     );

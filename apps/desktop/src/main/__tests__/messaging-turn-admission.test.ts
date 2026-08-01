@@ -118,6 +118,29 @@ describe("MessagingTurnAdmission", () => {
     });
     expect(admission.shiftNextQueued(threadKey)).toBeUndefined();
   });
+
+  it("assigns queued IDs uniquely across independent admissions", () => {
+    const binding = buildBinding();
+    const buildAdmission = () => new MessagingTurnAdmission({
+      debounceMs: 0,
+      now: () => 1000,
+      onBundleReady: vi.fn(),
+    });
+    const firstAdmission = buildAdmission();
+    const secondAdmission = buildAdmission();
+    const enqueue = (admission: MessagingTurnAdmission, text: string) =>
+      admission.enqueue({
+        binding,
+        input: [{ type: "text", text }],
+        preview: text,
+        threadKey: threadKeyForBinding(binding),
+      });
+
+    const first = enqueue(firstAdmission, "from telegram");
+    const second = enqueue(secondAdmission, "from discord");
+
+    expect(first.id).not.toBe(second.id);
+  });
 });
 
 function buildBinding(): MessagingBindingRecord {

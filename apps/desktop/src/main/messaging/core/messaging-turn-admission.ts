@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type {
   AppServerTurnInputItem,
 } from "@pwragent/shared";
@@ -117,7 +118,7 @@ export class MessagingTurnAdmission {
     const queued: MessagingQueuedTurnEntry = {
       ...entry,
       createdAt: now,
-      id: `queued:${++this.sequence}`,
+      id: `queued:${randomUUID()}`,
       status: "queued",
       updatedAt: now,
     };

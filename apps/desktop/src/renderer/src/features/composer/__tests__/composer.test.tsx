@@ -4305,6 +4305,7 @@ describe("Composer", () => {
         threadId: "thread-1",
         expectedTurnId: "turn-1",
         input: [{ type: "text", text: "Change direction" }],
+        requestId: expect.any(String),
       });
     });
     expect(screen.getByText("Steering now")).toBeInTheDocument();
@@ -4441,6 +4442,7 @@ describe("Composer", () => {
             url: expect.stringMatching(/^data:image\/png;base64,/),
           },
         ],
+        requestId: expect.any(String),
       });
     });
     expect(screen.getByText("Steering now")).toBeInTheDocument();
@@ -4595,6 +4597,7 @@ describe("Composer", () => {
         threadId: "thread-1",
         expectedTurnId: "turn-1",
         input: [{ type: "text", text: "Keep steering direction" }],
+        requestId: expect.any(String),
       });
     });
   });
@@ -4920,6 +4923,118 @@ describe("Composer", () => {
     expect(screen.getByText("Pending steer")).toBeInTheDocument();
     expect(screen.getByText("Change direction")).toBeInTheDocument();
     expect(screen.getByText("steer failed")).toBeInTheDocument();
+  });
+
+  it("submits one steer when multiple injection opportunities arrive together", async () => {
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex";
+          notification: {
+            method: string;
+            params: Record<string, unknown>;
+          };
+        }) => void)
+      | undefined;
+    const steerDeferred = createDeferred<{
+      backend: "codex";
+      threadId: string;
+      turnId: string;
+    }>();
+    const steerTurn = vi.fn(() => steerDeferred.promise);
+
+    render(
+      <Composer
+        activeTurnId="turn-1"
+        backends={[
+          {
+            ...backendSummary("codex", {
+              models: [
+                {
+                  id: "gpt-5.5",
+                  label: "GPT-5.5",
+                  current: true,
+                  supportsReasoning: true,
+                  supportsSteering: true,
+                },
+              ],
+            }),
+            capabilities: {
+              ...backendSummary("codex").capabilities,
+              steerTurn: true,
+            },
+          },
+        ]}
+        desktopApi={{
+          onAgentEvent: (callback) => {
+            agentEventHandler = callback as typeof agentEventHandler;
+            return () => undefined;
+          },
+          steerTurn,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Steer collision",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "Change direction once" },
+    });
+    fireEvent.keyDown(screen.getByLabelText("Reply"), {
+      key: "Enter",
+      metaKey: true,
+    });
+
+    expect(screen.getByText("Pending steer")).toBeInTheDocument();
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            item: { type: "commandExecution" },
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "exec_command/ended",
+          params: { threadId: "thread-1" },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            item: { type: "commandExecution" },
+          },
+        },
+      });
+    });
+
+    expect(steerTurn).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      steerDeferred.resolve({
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-1",
+      });
+      await steerDeferred.promise;
+    });
   });
 
   it("sends a pending steer as the next turn when Codex reports no active turn", async () => {

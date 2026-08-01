@@ -10402,6 +10402,7 @@ describe("MessagingController", () => {
       backend: "codex",
       threadId: "thread-1",
       expectedTurnId: "turn-live",
+      requestId: expect.any(String),
       input: [
         {
           type: "text",
@@ -10581,6 +10582,7 @@ describe("MessagingController", () => {
       backend: "codex",
       threadId: "thread-1",
       expectedTurnId: "turn-1",
+      requestId: expect.any(String),
       input: [
         {
           type: "text",
