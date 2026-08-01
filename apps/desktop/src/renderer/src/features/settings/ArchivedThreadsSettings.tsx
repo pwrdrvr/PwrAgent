@@ -3,6 +3,7 @@ import {
   isToolManagedWorktreePath,
   type AppServerThreadSummary,
 } from "@pwragent/shared";
+import { SearchIcon } from "../../icons";
 import type { DesktopApi } from "../../lib/desktop-api";
 import {
   SettingsPanelHead,
@@ -47,6 +48,7 @@ export function ArchivedThreadsSettings(props: {
   });
   const [restoringThreadKey, setRestoringThreadKey] = useState<string>();
   const [restoreMessage, setRestoreMessage] = useState<string>();
+  const [filter, setFilter] = useState("");
   const restoredThreadKeysRef = useRef(new Set<string>());
 
   const loadArchivedThreads = useCallback(async () => {
@@ -88,9 +90,23 @@ export function ArchivedThreadsSettings(props: {
     void loadArchivedThreads();
   }, [loadArchivedThreads]);
 
+  const filterQuery = filter.trim();
+  const isFiltering = filterQuery.length > 0;
   const projectGroups = useMemo(() => {
-    return groupArchivedThreadsByProject(state.threads, state.workspaceRoots);
-  }, [state.threads, state.workspaceRoots]);
+    const groups = groupArchivedThreadsByProject(
+      state.threads,
+      state.workspaceRoots,
+    );
+    return filterQuery ? filterArchivedProjectGroups(groups, filterQuery) : groups;
+  }, [filterQuery, state.threads, state.workspaceRoots]);
+  const visibleThreadCount = useMemo(
+    () =>
+      projectGroups.reduce(
+        (count, group) => count + group.threads.length,
+        0,
+      ),
+    [projectGroups],
+  );
 
   const fetchedAtLabel = useMemo(() => {
     return state.fetchedAt
@@ -155,6 +171,53 @@ export function ArchivedThreadsSettings(props: {
         }
       />
 
+      <div className="settings-archive-filter-control">
+        <div
+          className="settings-archive-filter"
+          role="search"
+          aria-label="Archived thread search"
+        >
+          <SearchIcon
+            aria-hidden
+            className="settings-archive-filter__icon"
+            size={15}
+          />
+          <input
+            className="settings-input settings-archive-filter__input"
+            aria-label="Filter archived threads"
+            placeholder="Filter by title, summary, project, branch, or source"
+            spellCheck={false}
+            type="search"
+            value={filter}
+            onChange={(event) => setFilter(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape" && isFiltering) {
+                event.preventDefault();
+                setFilter("");
+              }
+            }}
+          />
+          {isFiltering ? (
+            <button
+              aria-label="Clear archived thread filter"
+              className="button button--ghost settings-archive-filter__clear"
+              type="button"
+              onClick={() => setFilter("")}
+            >
+              Clear
+            </button>
+          ) : null}
+        </div>
+        {isFiltering && !state.loading && visibleThreadCount > 0 ? (
+          <p className="settings-archive-filter__summary" role="status">
+            Showing {visibleThreadCount} matching archived{" "}
+            {visibleThreadCount === 1 ? "thread" : "threads"} in{" "}
+            {projectGroups.length}{" "}
+            {projectGroups.length === 1 ? "project folder" : "project folders"}.
+          </p>
+        ) : null}
+      </div>
+
       {(state.loading && state.threads.length === 0) ||
       (!state.loading && projectGroups.length === 0) ||
       restoreMessage ||
@@ -172,8 +235,13 @@ export function ArchivedThreadsSettings(props: {
             </p>
           ) : null}
           {!state.loading && projectGroups.length === 0 ? (
-            <p className="settings-empty settings-archive-empty">
-              No archived threads.
+            <p
+              className="settings-empty settings-archive-empty"
+              role={isFiltering ? "status" : undefined}
+            >
+              {isFiltering
+                ? `No archived threads match “${filterQuery}”.`
+                : "No archived threads."}
             </p>
           ) : null}
           {restoreMessage ? (
@@ -193,22 +261,24 @@ export function ArchivedThreadsSettings(props: {
       ) : null}
 
       {projectGroups.map((group) => {
-        const visibleThreads = group.threads.slice(
-          0,
-          ARCHIVED_THREADS_PER_PROJECT_LIMIT,
-        );
+        const visibleThreads = isFiltering
+          ? group.threads
+          : group.threads.slice(0, ARCHIVED_THREADS_PER_PROJECT_LIMIT);
         const hiddenThreadCount = group.threads.length - visibleThreads.length;
+        const groupThreadNoun = isFiltering
+          ? group.threads.length === 1
+            ? "match"
+            : "matches"
+          : group.threads.length === 1
+            ? "thread"
+            : "threads";
         return (
           <SettingsSection
             key={group.key}
             eyebrow="Project folder"
             title={group.label}
             description={group.path}
-            chip={
-              group.threads.length === 1
-                ? "1 thread"
-                : `${group.threads.length} threads`
-            }
+            chip={`${group.threads.length} ${groupThreadNoun}`}
             chipKind="muted"
           >
             <div className="settings-archive-project__threads">
@@ -225,7 +295,7 @@ export function ArchivedThreadsSettings(props: {
                   />
                 );
               })}
-              {hiddenThreadCount > 0 ? (
+              {!isFiltering && hiddenThreadCount > 0 ? (
                 <p className="settings-archive-status">
                   Showing {ARCHIVED_THREADS_PER_PROJECT_LIMIT} of{" "}
                   {group.threads.length} most recent archived threads.
@@ -336,6 +406,54 @@ function groupArchivedThreadsByProject(
       ? timestampDelta
       : left.label.localeCompare(right.label);
   });
+}
+
+function filterArchivedProjectGroups(
+  groups: ArchivedProjectGroup[],
+  query: string,
+): ArchivedProjectGroup[] {
+  const queryTerms = query
+    .toLocaleLowerCase()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (queryTerms.length === 0) {
+    return groups;
+  }
+
+  return groups.flatMap((group) => {
+    const threads = group.threads.filter((thread) =>
+      archivedThreadMatchesFilter(thread, group, queryTerms),
+    );
+    return threads.length > 0 ? [{ ...group, threads }] : [];
+  });
+}
+
+function archivedThreadMatchesFilter(
+  thread: AppServerThreadSummary,
+  group: ArchivedProjectGroup,
+  queryTerms: string[],
+): boolean {
+  const searchText = [
+    group.label,
+    group.path,
+    thread.id,
+    thread.title,
+    thread.summary,
+    thread.projectKey,
+    thread.source,
+    thread.gitBranch,
+    thread.observedGitBranch,
+    ...thread.linkedDirectories.flatMap((directory) => [
+      directory.label,
+      directory.path,
+      directory.worktreePath,
+    ]),
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join("\n")
+    .toLocaleLowerCase();
+
+  return queryTerms.every((term) => searchText.includes(term));
 }
 
 function resolveArchivedProject(

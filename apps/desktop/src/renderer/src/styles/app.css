@@ -7104,6 +7104,69 @@ textarea,
   padding: 14px 18px;
 }
 
+.settings-archive-filter-control {
+  display: grid;
+  gap: 6px;
+  max-width: 640px;
+}
+
+.settings-archive-filter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 0 8px 0 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-muted);
+}
+
+.settings-archive-filter:focus-within {
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 1px var(--accent-shadow);
+}
+
+.settings-archive-filter__icon {
+  flex: 0 0 auto;
+}
+
+.settings-archive-filter__input {
+  flex: 1 1 auto;
+  width: auto;
+  height: 34px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-family: inherit;
+}
+
+.settings-archive-filter__input:focus,
+.settings-archive-filter__input:focus-visible {
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.settings-archive-filter__input::-webkit-search-cancel-button {
+  appearance: none;
+}
+
+.settings-archive-filter__input::placeholder {
+  color: var(--text-muted);
+}
+
+.settings-archive-filter__clear {
+  min-height: 26px;
+  padding: 0 8px;
+}
+
+.settings-archive-filter__summary {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .settings-archive-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
