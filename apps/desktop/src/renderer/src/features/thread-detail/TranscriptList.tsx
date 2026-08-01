@@ -95,6 +95,7 @@ type TranscriptListProps = {
   pendingStatusText?: string;
   runningTurnUsageText?: string;
   pagination?: AppServerThreadReplayPagination;
+  parentThreadId?: string;
   permissionTransitions?: ThreadPermissionTransition[];
   messagingBindingTransitions?: ThreadMessagingBindingTransition[];
   turnFailures?: ThreadTurnFailure[];
@@ -1273,7 +1274,9 @@ export function TranscriptList(props: TranscriptListProps) {
                   expanded={expandedCommentaryGroupIds.has(item.id)}
                   fileViewerContext={props.fileViewerContext}
                   label={item.label}
+                  parentThreadId={props.parentThreadId ?? ""}
                   skills={skills}
+                  subAgents={props.subAgents}
                   onOpenImage={props.onOpenImage}
                   onToggle={() => {
                     toggleCommentaryGroup(item.id);
@@ -1307,6 +1310,7 @@ export function TranscriptList(props: TranscriptListProps) {
                   applications={props.applications}
                   desktopApi={props.desktopApi}
                   message={item.entry}
+                  parentThreadId={props.parentThreadId ?? ""}
                   fileViewerContext={props.fileViewerContext}
                   skills={skills}
                   subAgents={props.subAgents}

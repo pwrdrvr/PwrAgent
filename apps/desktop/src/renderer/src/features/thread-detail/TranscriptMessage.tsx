@@ -39,6 +39,7 @@ type TranscriptMessageProps = {
   >;
   fileViewerContext?: MarkdownFileViewerContext;
   message: AppServerThreadMessageEntry;
+  parentThreadId: string;
   skills: AppServerSkillSummary[];
   subAgents?: ThreadSubAgentSummary[];
   onOpenImage?: (image: AppServerThreadImagePart) => void;
@@ -138,6 +139,7 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
               ?? props.message.origin.sourceThread?.backend
               ?? "codex"
             }
+            parentThreadId={props.parentThreadId}
             subAgent={monitorSubAgent}
             onClose={() => setMonitorDetailsOpen(false)}
           />

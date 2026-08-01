@@ -5,6 +5,7 @@ import type {
   AppServerThreadImagePart,
   DesktopApplicationsSnapshot,
   MarkdownFileViewerContext,
+  ThreadSubAgentSummary,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { TranscriptActivity } from "./TranscriptActivity";
@@ -26,7 +27,9 @@ type TranscriptWorkPhaseGroupProps = {
   expanded: boolean;
   fileViewerContext?: MarkdownFileViewerContext;
   label: string;
+  parentThreadId?: string;
   skills: AppServerSkillSummary[];
+  subAgents?: ThreadSubAgentSummary[];
   onOpenImage?: (image: AppServerThreadImagePart) => void;
   onToggle: () => void;
 };
@@ -73,7 +76,9 @@ export const TranscriptWorkPhaseGroup = memo(function TranscriptWorkPhaseGroup(
               entry,
               fileViewerContext: props.fileViewerContext,
               onOpenImage: props.onOpenImage,
+              parentThreadId: props.parentThreadId ?? "",
               skills: props.skills,
+              subAgents: props.subAgents,
             })
           )}
         </div>
@@ -120,7 +125,9 @@ function renderEntry(params: {
   >;
   entry: AppServerThreadEntry;
   fileViewerContext?: MarkdownFileViewerContext;
+  parentThreadId: string;
   skills: AppServerSkillSummary[];
+  subAgents?: ThreadSubAgentSummary[];
   onOpenImage?: (image: AppServerThreadImagePart) => void;
 }) {
   const entry = params.entry;
@@ -157,7 +164,9 @@ function renderEntry(params: {
       desktopApi={params.desktopApi}
       fileViewerContext={params.fileViewerContext}
       message={entry}
+      parentThreadId={params.parentThreadId}
       skills={params.skills}
+      subAgents={params.subAgents}
       onOpenImage={params.onOpenImage}
     />
   );

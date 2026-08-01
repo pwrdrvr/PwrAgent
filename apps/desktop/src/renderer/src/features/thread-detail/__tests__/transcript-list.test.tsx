@@ -253,6 +253,7 @@ describe("TranscriptList", () => {
         ]}
         loading={false}
         loadingMore={false}
+        parentThreadId="parent-thread"
         subAgents={[subAgent]}
         onLoadOlder={async () => undefined}
       />,

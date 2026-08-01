@@ -204,6 +204,7 @@ export function SubAgentTranscriptWindow() {
             loading={state.loading}
             loadingMore={state.loadingMore}
             pagination={state.response?.replay.pagination}
+            parentThreadId={target?.threadId}
             threadId={targetKey}
             onLoadOlder={loadOlder}
           />

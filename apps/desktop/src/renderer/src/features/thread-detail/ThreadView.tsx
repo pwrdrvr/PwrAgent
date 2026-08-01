@@ -2916,6 +2916,7 @@ export function ThreadView(props: ThreadViewProps) {
               loading={props.loading}
               loadingMore={props.loadingMore}
               pagination={visibleTranscriptPagination}
+              parentThreadId={selectedThread!.id}
               // File-diff activity renders in the LiveWorkRail above
               // the composer (issue #495). Generic tool activity has no
               // rail body, so keep it in the transcript while the turn
