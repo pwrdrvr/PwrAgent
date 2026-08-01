@@ -7338,7 +7338,10 @@ export function Composer(props: ComposerProps) {
     const pasteFileAttachments = fileAttachments;
 
     try {
-      const nextAttachments = await Promise.all(
+      // A clipboard can expose several renditions of the same image. One may
+      // be stale or unsupported while another is usable, so retain successes
+      // instead of letting a failed rendition reject the whole paste.
+      const attachmentResults = await Promise.allSettled(
         files.map(async ({ file, type }, index) => {
           const fallbackName = formatPastedImageName(type, index);
           if (isGifFile(file, type)) {
@@ -7388,6 +7391,15 @@ export function Composer(props: ComposerProps) {
           };
         })
       );
+      const nextAttachments = attachmentResults.flatMap((result) =>
+        result.status === "fulfilled" ? [result.value] : []
+      );
+      if (nextAttachments.length === 0) {
+        const firstFailure = attachmentResults.find(
+          (result): result is PromiseRejectedResult => result.status === "rejected"
+        );
+        throw firstFailure?.reason ?? new Error("The pasted image could not be read.");
+      }
 
       if (activeComposerScopeKeyRef.current !== pasteScope.key) {
         const saved = draftStore.get(pasteScope.key) ?? {
@@ -10884,8 +10896,10 @@ function formatCompactNumber(value: number): string {
 function getImageFilesFromDataTransfer(dataTransfer: DataTransfer): ComposerImageFile[] {
   const files: ComposerImageFile[] = [];
   const seenFiles = new Set<string>();
-  let foundImageItem = false;
 
+  // DataTransfer.items and DataTransfer.files can expose separate clipboard
+  // image renditions. Preserve their order so the item stays preferred when
+  // both work, while allowing the files rendition to be a fallback.
   for (const item of Array.from(dataTransfer.items)) {
     if (item.kind !== "file") {
       continue;
@@ -10901,16 +10915,11 @@ function getImageFilesFromDataTransfer(dataTransfer: DataTransfer): ComposerImag
       continue;
     }
 
-    foundImageItem = true;
     const key = buildFileKey(file);
     if (!seenFiles.has(key)) {
       files.push({ file, type });
       seenFiles.add(key);
     }
-  }
-
-  if (foundImageItem) {
-    return files;
   }
 
   for (const file of Array.from(dataTransfer.files)) {
