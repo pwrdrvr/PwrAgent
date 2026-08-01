@@ -13,11 +13,14 @@ import type { AppServerSkillSummary } from "@pwragent/shared";
  *   - file references (`kind: "file"`): `name` is the file's basename and
  *     `path` its absolute file path; serializes to the same
  *     `[@label](~/path)` markdown as directory references.
+ *   - thread references (`kind: "thread"`): `name` is the resolved thread
+ *     title and `path` its canonical `pwragent://thread/...` URL; serializes
+ *     to the same Markdown link the transcript recognizes as a thread chip.
  */
 export type ComposerSkillToken = AppServerSkillSummary & {
   id: string;
   index: number;
-  kind?: "directory" | "file";
+  kind?: "directory" | "file" | "thread";
 };
 
 export type ComposerInputChangeMetadata = {

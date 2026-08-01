@@ -430,6 +430,7 @@ function hashDraftContent(snapshot: ComposerDraftSnapshot): string {
     skillTokens: snapshot.skillTokens.map((token) => ({
       id: token.id,
       index: token.index,
+      kind: token.kind,
       name: token.name,
       path: token.path,
     })),
