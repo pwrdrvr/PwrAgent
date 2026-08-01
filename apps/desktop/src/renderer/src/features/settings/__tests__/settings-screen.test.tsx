@@ -1543,6 +1543,41 @@ describe("SettingsScreen", () => {
         "Showing 20 of 25 most recent archived threads.",
       ),
     ).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Filter archived threads"), {
+      target: { value: "05" },
+    });
+
+    expect(
+      within(pwrAgentGroup).getByText("Archived thread 05"),
+    ).toBeInTheDocument();
+    expect(
+      within(pwrAgentGroup).queryByText("Archived thread 25"),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText("1 match")).toBeInTheDocument();
+    expect(
+      screen.getByText("Showing 1 matching archived thread in 1 project folder."),
+    ).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Filter archived threads"), {
+      target: { value: "Archived" },
+    });
+
+    expect(screen.getByText("25 matches")).toBeInTheDocument();
+    expect(
+      screen.getByText("Showing 25 matching archived threads in 1 project folder."),
+    ).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Filter archived threads"), {
+      target: { value: "not found" },
+    });
+
+    expect(
+      screen.getByText("No archived threads match “not found”."),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("Showing 0 matching archived threads in 0 project folders."),
+    ).not.toBeInTheDocument();
   });
 
   it("does not re-add a restored thread when a stale archive refresh resolves", async () => {
