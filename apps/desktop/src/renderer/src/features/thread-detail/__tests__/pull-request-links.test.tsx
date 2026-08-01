@@ -440,7 +440,7 @@ describe("pull request links in transcript markdown", () => {
       .toBeInTheDocument();
   });
 
-  it("leaves GitHub review comment permalinks as distinct transcript links", () => {
+  it("renders GitHub review comment permalinks as atomic PR chips", () => {
     const commentUrls = [
       `${PR_URL}#discussion_r3549020872`,
       `${PR_URL}#discussion_r3549020877`,
@@ -448,12 +448,10 @@ describe("pull request links in transcript markdown", () => {
     ];
     renderWithPullRequests(commentUrls.join("\n\n"), [prSummary()]);
 
-    expect(screen.queryByRole("button", {
+    expect(screen.getAllByRole("button", {
       name: /Open Giphy\/giphy-services#13290/,
-    })).not.toBeInTheDocument();
-    for (const url of commentUrls) {
-      expect(screen.getByRole("link", { name: url })).toHaveAttribute("href", url);
-    }
+    })).toHaveLength(3);
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
   });
 
   it("leaves PR links as normal links on surfaces without navigation metadata", () => {
@@ -485,16 +483,16 @@ describe("parseGitHubPullRequestUrl", () => {
     });
   });
 
-  it("rejects GitHub pull request comment permalinks", () => {
+  it("accepts GitHub pull request comment permalinks and preserves the target URL", () => {
     expect(parseGitHubPullRequestUrl(
       `${PR_URL}#discussion_r3549020872`,
-    )).toBeUndefined();
+    )?.url).toBe(`${PR_URL}#discussion_r3549020872`);
     expect(parseGitHubPullRequestUrl(
       `${PR_URL}#issuecomment-3549020872`,
-    )).toBeUndefined();
+    )?.url).toBe(`${PR_URL}#issuecomment-3549020872`);
     expect(parseGitHubPullRequestUrl(
       `${PR_URL}#pullrequestreview-3549020872`,
-    )).toBeUndefined();
+    )?.url).toBe(`${PR_URL}#pullrequestreview-3549020872`);
   });
 
   it("rejects issues, invalid numbers, non-GitHub hosts, and insecure URLs", () => {

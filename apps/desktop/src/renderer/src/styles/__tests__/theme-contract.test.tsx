@@ -418,6 +418,13 @@ describe("Tangerine Terminal theme contract", () => {
     expect(pricingRunningTotalRule).toContain("user-select: text;");
   });
 
+  it("keeps pull request chips atomic instead of text-selectable", () => {
+    const prChipRule = extractRuleBody(css, ".pr-chip");
+
+    expect(prChipRule).toContain("-webkit-user-select: none;");
+    expect(prChipRule).toContain("user-select: none;");
+  });
+
   it("anchors the context rail below the header and reserves one shared width for the chat", () => {
     // The rail is anchored to `.thread-view__layout` (absolute), NOT the
     // window, so it starts below the thread header. The header therefore owns
