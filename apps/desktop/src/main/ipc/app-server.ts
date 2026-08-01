@@ -1046,6 +1046,7 @@ class DesktopAppServerService {
       includeTurns: request.includeTurns,
       before: request.before,
       limit: request.limit,
+      viewOnly: request.viewOnly,
     });
 
     logDebug("readThread", {

@@ -8427,7 +8427,12 @@ export class DesktopBackendRegistry {
             limit: request.limit,
           });
 
-    if (backend === "codex" && !request.before && request.includeTurns !== false) {
+    if (
+      backend === "codex" &&
+      !request.viewOnly &&
+      !request.before &&
+      request.includeTurns !== false
+    ) {
       await this.repairCodexThreadDirectoryRelationship({
         reason: "selected-thread",
         threadId: request.threadId,
@@ -8500,7 +8505,7 @@ export class DesktopBackendRegistry {
       replayWithImmutableUsage,
       messageOrigins,
     );
-    if (!request.before && shouldAppendTranscriptOverlays) {
+    if (!request.viewOnly && !request.before && shouldAppendTranscriptOverlays) {
       await this.persistReplayUsageLines(replayWithEnvironment);
     }
     const pricing =

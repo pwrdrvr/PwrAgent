@@ -4,7 +4,7 @@ import type {
   AppServerThreadSubAgentCallDetail,
 } from "@pwragent/shared";
 import { copyText } from "../../lib/copy-text";
-import { useThreadLinks } from "../../lib/thread-links";
+import { useDesktopApi } from "../../lib/desktop-api";
 
 type TranscriptSubAgentCallProps = {
   detail: AppServerThreadActivityDetail;
@@ -17,13 +17,18 @@ type TranscriptSubAgentCallProps = {
  */
 export function TranscriptSubAgentCall(props: TranscriptSubAgentCallProps) {
   const [showOutput, setShowOutput] = useState(false);
-  const threadLinks = useThreadLinks();
+  const desktopApi = useDesktopApi();
+  const openSubAgentTranscriptWindow = desktopApi?.openSubAgentTranscriptWindow;
   const call = props.detail.command?.subAgent;
   if (!call) {
     return null;
   }
 
-  const origin = call.origin === "codex-native" ? "Codex native agent" : "PwrAgent sub-agent";
+  const canOpenTranscript =
+    call.origin === "codex-native" && call.backend === "codex";
+  const origin = call.origin === "codex-native"
+    ? "Codex native agent"
+    : "PwrAgent sub-agent";
   const operation = operationLabel(call.operation);
   const status = lifecycleStatus(props.detail.status);
   const output = props.detail.command?.output;
@@ -59,12 +64,12 @@ export function TranscriptSubAgentCall(props: TranscriptSubAgentCallProps) {
                 ) : null}
               </div>
               {agent.message ? <p className="transcript-subagent__message">{agent.message}</p> : null}
-              {threadLinks ? (
+              {canOpenTranscript && openSubAgentTranscriptWindow ? (
                 <button
                   className="button button--ghost transcript-subagent__action"
                   type="button"
                   onClick={() => {
-                    threadLinks.show({
+                    void openSubAgentTranscriptWindow({
                       backend: call.backend,
                       threadId: agent.threadId,
                       title: agentLabel,

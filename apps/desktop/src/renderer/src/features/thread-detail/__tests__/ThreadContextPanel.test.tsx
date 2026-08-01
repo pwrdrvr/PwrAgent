@@ -20,7 +20,6 @@ import type {
 import { ThreadContextPanel } from "../ThreadContextPanel";
 import type { ContextTabId } from "../context-panels/context-tab";
 import { collectEditedFileGroups } from "../edited-file-groups";
-import { ThreadLinkProvider } from "../../../lib/thread-links";
 
 const HOVER_RAIL_REVEAL_DELAY_MS = 350;
 
@@ -32,6 +31,7 @@ const REVEALED_SIGNAL = "Execution context";
 
 afterEach(() => {
   cleanup();
+  delete (window as Window & { pwragent?: unknown }).pwragent;
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
@@ -159,14 +159,9 @@ type PanelOverrides = Partial<
   >
 >;
 
-function renderPanel(
-  overrides: PanelOverrides = {},
-  options?: {
-    onShowThread: ComponentProps<typeof ThreadLinkProvider>["onShowThread"];
-  },
-) {
+function renderPanel(overrides: PanelOverrides = {}) {
   const onActiveTabChange = vi.fn<(tab: ContextTabId) => void>();
-  const panel = (
+  const result = render(
     <ThreadContextPanel
       activeTab="info"
       backends={[baseBackend]}
@@ -175,16 +170,6 @@ function renderPanel(
       onActiveTabChange={onActiveTabChange}
       {...overrides}
     />
-  );
-  const result = render(
-    options ? (
-      <ThreadLinkProvider
-        onShowThread={options.onShowThread}
-        threads={[overrides.thread ?? baseThread]}
-      >
-        {panel}
-      </ThreadLinkProvider>
-    ) : panel,
   );
   return { ...result, onActiveTabChange };
 }
@@ -424,7 +409,11 @@ describe("ThreadContextPanel", () => {
     expect(screen.queryByText(/\$0\.024 list price/)).not.toBeInTheDocument();
   });
 
-  it("labels review sub-agent usage separately from monitor usage", () => {
+  it("does not offer the parent transcript for an inline review", () => {
+    const openSubAgentTranscriptWindow = vi.fn(async () => ({ opened: true }));
+    (window as Window & { pwragent?: unknown }).pwragent = {
+      openSubAgentTranscriptWindow,
+    };
     renderPanel({
       activeTab: "subagents",
       pinned: true,
@@ -457,9 +446,56 @@ describe("ThreadContextPanel", () => {
     expect(
       screen.getByText("Review usage: 800 uncached in · 200 cached · 50 out"),
     ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
+
+    expect(
+      within(screen.getByRole("dialog")).queryByRole("button", {
+        name: "Open transcript",
+      }),
+    ).not.toBeInTheDocument();
+    expect(openSubAgentTranscriptWindow).not.toHaveBeenCalled();
+  });
+
+  it("does not offer a transcript for a detached review child", () => {
+    const openSubAgentTranscriptWindow = vi.fn(async () => ({ opened: true }));
+    (window as Window & { pwragent?: unknown }).pwragent = {
+      openSubAgentTranscriptWindow,
+    };
+    renderPanel({
+      activeTab: "subagents",
+      pinned: true,
+      thread: {
+        ...baseThread,
+        subAgents: [
+          {
+            monitorId: "review:turn-review-1",
+            task: "Review changes against main",
+            status: "success",
+            createdAt: 2000,
+            completedAt: 3000,
+            updatedAt: 3000,
+            monitorThreadId: "thread-review",
+            monitorTurnId: "turn-review-1",
+          },
+        ],
+      },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
+    expect(
+      within(screen.getByRole("dialog")).queryByRole("button", {
+        name: "Open transcript",
+      }),
+    ).not.toBeInTheDocument();
+    expect(openSubAgentTranscriptWindow).not.toHaveBeenCalled();
   });
 
   it("labels Codex native sub-agent usage separately from monitor usage", () => {
+    const openSubAgentTranscriptWindow = vi.fn(async () => ({ opened: true }));
+    (window as Window & { pwragent?: unknown }).pwragent = {
+      openSubAgentTranscriptWindow,
+    };
     renderPanel({
       activeTab: "subagents",
       pinned: true,
@@ -509,6 +545,15 @@ describe("ThreadContextPanel", () => {
     const modal = within(screen.getByRole("dialog"));
     expect(modal.getByText("Source")).toBeInTheDocument();
     expect(modal.getByText("Codex native spawnAgent")).toBeInTheDocument();
+    expect(modal.getByRole("button", { name: "Close" })).toBeInTheDocument();
+
+    fireEvent.click(modal.getByRole("button", { name: "Open transcript" }));
+
+    expect(openSubAgentTranscriptWindow).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "019ed7df-5876-7882-9b75-7fd647372da7",
+      title: "Peirce",
+    });
   });
 
   it("labels system title helper usage separately from monitor usage", () => {
@@ -2259,7 +2304,6 @@ describe("ThreadContextPanel", () => {
 
   it("keeps an unpinned rail open while using a portaled sub-agent dialog", async () => {
     vi.useFakeTimers();
-    const onShowThread = vi.fn();
     renderPanel(
       {
         activeTab: "subagents",
@@ -2278,7 +2322,6 @@ describe("ThreadContextPanel", () => {
           ],
         },
       },
-      { onShowThread },
     );
 
     const rail = screen.getByLabelText("Thread context");
@@ -2293,11 +2336,10 @@ describe("ThreadContextPanel", () => {
     });
 
     expect(dialog).toBeInTheDocument();
-    fireEvent.click(within(dialog).getByRole("button", { name: "Open transcript" }));
-    expect(onShowThread).toHaveBeenCalledWith({
-      backend: "codex",
-      threadId: "review-thread-1",
-    });
+    expect(
+      within(dialog).queryByRole("button", { name: "Open transcript" }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 
     fireEvent.mouseMove(document, { clientX: 500, clientY: 380 });

@@ -225,6 +225,8 @@ import type {
   OpenDesktopApplicationResponse,
   OpenMarkdownFileViewerRequest,
   OpenMarkdownFileViewerResponse,
+  OpenSubAgentTranscriptWindowRequest,
+  OpenSubAgentTranscriptWindowResponse,
   OpenPathRequest,
   OpenPathResponse,
   ReadMarkdownFileRequest,
@@ -575,6 +577,9 @@ export type DesktopApi = {
   onMarkdownFileViewerSnapshotChanged?: (
     callback: (snapshot: ReadMarkdownFileViewerSnapshotResponse) => void
   ) => () => void;
+  openSubAgentTranscriptWindow?: (
+    request: OpenSubAgentTranscriptWindowRequest
+  ) => Promise<OpenSubAgentTranscriptWindowResponse>;
   createIntegratedTerminal?: (
     request: IntegratedTerminalCreateRequest,
   ) => Promise<IntegratedTerminalCreateResponse>;

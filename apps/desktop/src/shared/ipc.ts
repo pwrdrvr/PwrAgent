@@ -326,6 +326,8 @@ export const MARKDOWN_FILE_VIEWER_SNAPSHOT_READ_CHANNEL =
   "markdown-file-viewer:read-snapshot";
 export const MARKDOWN_FILE_VIEWER_SNAPSHOT_CHANGED_CHANNEL =
   "markdown-file-viewer:snapshot-changed";
+export const SUB_AGENT_TRANSCRIPT_WINDOW_OPEN_CHANNEL =
+  "sub-agent-transcript:open-window";
 export const INTEGRATED_TERMINAL_CREATE_CHANNEL =
   "integrated-terminal:create";
 export const INTEGRATED_TERMINAL_WRITE_CHANNEL = "integrated-terminal:write";

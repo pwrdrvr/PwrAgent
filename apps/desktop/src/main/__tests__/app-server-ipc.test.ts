@@ -815,14 +815,51 @@ describe("app server ipc", () => {
     expect(readThread).toHaveBeenCalledWith({
       backend: "codex",
       threadId: "thread-large",
+      includeTurns: undefined,
       before: undefined,
       limit: undefined,
+      viewOnly: undefined,
     });
     expect(output.length).toBeLessThan(36_000);
     expect(output).toContain("PwrAgent renderer boundary: truncated");
     expect(output).toContain("$.replay.entries[0].details[0].command.output");
     expect(output).toContain("protocol-tail");
     expect(output).not.toContain("x".repeat(60_000));
+  });
+
+  it("forwards inspection-only transcript reads to the backend registry", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { APP_SERVER_READ_THREAD_CHANNEL } = await import("../../shared/ipc");
+    readThread.mockResolvedValueOnce({
+      backend: "codex",
+      fetchedAt: 1234,
+      threadId: "sub-agent-1",
+      replay: {
+        entries: [],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+      },
+      threadStatus: "idle",
+    } as never);
+
+    registerAppServerIpcHandlers();
+
+    await handlers.get(APP_SERVER_READ_THREAD_CHANNEL)?.(
+      {},
+      { backend: "codex", threadId: "sub-agent-1", viewOnly: true },
+    );
+
+    expect(readThread).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "sub-agent-1",
+      includeTurns: undefined,
+      before: undefined,
+      limit: undefined,
+      viewOnly: true,
+    });
   });
 
   it("strips readThread file diffs behind fetchable refs before crossing IPC", async () => {

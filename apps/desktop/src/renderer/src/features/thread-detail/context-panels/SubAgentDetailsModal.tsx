@@ -1,8 +1,9 @@
 import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import type { AppServerBackendKind, ThreadSubAgentSummary } from "@pwragent/shared";
+import { CloseIcon } from "../../../icons";
 import { formatBackendLabel } from "../../../lib/backend-label";
-import { useThreadLinks } from "../../../lib/thread-links";
+import { useDesktopApi } from "../../../lib/desktop-api";
 import { formatTimestamp } from "./context-rail-shared";
 import {
   formatSubAgentUsageEstimates,
@@ -13,10 +14,11 @@ import {
   subAgentTone,
 } from "./subagent-format";
 import { RailStatusChip } from "./RailStatusChip";
-import { subAgentOriginLabel } from "./subagent-kind";
+import { isCodexNativeSubAgent, subAgentOriginLabel } from "./subagent-kind";
 
 type SubAgentDetailsModalProps = {
   defaultBackend: AppServerBackendKind;
+  parentThreadId: string;
   pricingDisplayOptions?: PricingDisplayOptions;
   subAgent: ThreadSubAgentSummary;
   onClose: () => void;
@@ -32,7 +34,8 @@ type SubAgentDetailsModalProps = {
 export function SubAgentDetailsModal(props: SubAgentDetailsModalProps) {
   const { subAgent } = props;
   const contentRef = useRef<HTMLDivElement>(null);
-  const threadLinks = useThreadLinks();
+  const desktopApi = useDesktopApi();
+  const openSubAgentTranscriptWindow = desktopApi?.openSubAgentTranscriptWindow;
 
   // Dialog focus management: move focus into the dialog on open, keep Tab
   // cycling within it (so focus can't fall behind the scrim), restore focus
@@ -87,7 +90,12 @@ export function SubAgentDetailsModal(props: SubAgentDetailsModalProps) {
   const usage = subAgent.monitorUsage;
   const model = subAgent.preferredModel ?? usage?.model ?? usage?.cost?.model;
   const fastMode = subAgent.preferredFastMode ?? usage?.fastMode;
-  const transcriptThreadId = subAgent.monitorThreadId;
+  const transcriptThreadId =
+    isCodexNativeSubAgent(subAgent) &&
+    subAgent.monitorThreadId &&
+    subAgent.monitorThreadId !== props.parentThreadId
+      ? subAgent.monitorThreadId
+      : undefined;
   const backendLabel = subAgent.backend ? formatBackendLabel(subAgent.backend) : undefined;
   const usageEstimates = usage
     ? formatSubAgentUsageEstimates({
@@ -123,12 +131,12 @@ export function SubAgentDetailsModal(props: SubAgentDetailsModalProps) {
             {subAgentStatusLabel(subAgent.status)}
           </RailStatusChip>
           <div className="subagent-modal__actions">
-            {threadLinks && transcriptThreadId ? (
+            {openSubAgentTranscriptWindow && transcriptThreadId ? (
               <button
                 type="button"
                 className="button button--ghost subagent-modal__open-transcript"
                 onClick={() => {
-                  threadLinks.show({
+                  void openSubAgentTranscriptWindow({
                     backend: subAgent.backend ?? props.defaultBackend,
                     threadId: transcriptThreadId,
                     title: subAgent.agentName ?? subAgent.task,
@@ -141,10 +149,12 @@ export function SubAgentDetailsModal(props: SubAgentDetailsModalProps) {
             ) : null}
             <button
               type="button"
-              className="button button--ghost subagent-modal__close"
+              className="subagent-modal__close"
+              aria-label="Close"
+              title="Close"
               onClick={props.onClose}
             >
-              Close
+              <CloseIcon size={18} aria-hidden="true" />
             </button>
           </div>
         </div>

@@ -718,6 +718,12 @@ export type AppServerReadThreadRequest = {
   includeTurns?: boolean;
   before?: string;
   limit?: number;
+  /**
+   * Reads transcript data without applying PwrAgent's normal selected-thread
+   * enrichment writes. Used by inspection-only secondary windows such as the
+   * native sub-agent transcript viewer.
+   */
+  viewOnly?: boolean;
 };
 
 export type AppServerReadThreadResponse = {

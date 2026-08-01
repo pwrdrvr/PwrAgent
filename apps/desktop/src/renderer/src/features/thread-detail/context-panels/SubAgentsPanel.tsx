@@ -134,6 +134,7 @@ export function SubAgentsPanel(props: SubAgentsPanelProps) {
       {detailsFor ? (
         <SubAgentDetailsModal
           defaultBackend={props.thread.source}
+          parentThreadId={props.thread.id}
           pricingDisplayOptions={props.pricingDisplayOptions}
           subAgent={detailsFor}
           onClose={closeDetails}
