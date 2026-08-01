@@ -574,13 +574,6 @@ describe("SettingsScreen", () => {
       "aria-checked",
       "true",
     );
-    expect(screen.getByRole("switch", { name: "Developer Mode" })).toHaveAttribute(
-      "aria-checked",
-      "false",
-    );
-    expect(
-      screen.getByRole("button", { name: "Start Capture (Immediate)" }),
-    ).toBeInTheDocument();
     expect(
       screen.getByRole("switch", {
         name: "Confirm quit when threads or terminals are active",
@@ -598,6 +591,25 @@ describe("SettingsScreen", () => {
         },
       });
     });
+    expect(
+      screen.queryByRole("switch", { name: "Developer Mode" }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(
+      within(sections).getByRole("button", { name: "Troubleshooting" }),
+    );
+    expect(
+      screen.getByRole("heading", { name: "Chrome DevTools" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "CPU and heap monitoring" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "Developer Mode" })).toHaveAttribute(
+      "aria-checked",
+      "false",
+    );
+    expect(
+      screen.getByRole("button", { name: "Start Capture (Immediate)" }),
+    ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("switch", { name: "Developer Mode" }));
     await waitFor(() => {
@@ -642,6 +654,7 @@ describe("SettingsScreen", () => {
       });
     });
 
+    fireEvent.click(within(sections).getByRole("button", { name: "General" }));
     expect(
       screen.getByRole("switch", { name: "Desktop notifications" }),
     ).toHaveAttribute("aria-checked", "false");
@@ -952,7 +965,13 @@ describe("SettingsScreen", () => {
       }),
     );
 
-    render(<SettingsScreen settings={settings} onClose={() => undefined} />);
+    render(
+      <SettingsScreen
+        initialSection="troubleshooting"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
 
     expect(screen.getByRole("radio", { name: /3 snapshots/ })).not.toBeDisabled();
     fireEvent.click(screen.getByRole("radio", { name: /3 snapshots/ }));
@@ -1054,7 +1073,13 @@ describe("SettingsScreen", () => {
       }),
     );
 
-    render(<SettingsScreen settings={settings} onClose={() => undefined} />);
+    render(
+      <SettingsScreen
+        initialSection="troubleshooting"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
 
     fireEvent.click(
       within(
@@ -3707,6 +3732,7 @@ describe("SettingsScreen", () => {
       "Thread Management",
       "Archived Threads",
       "Experimental",
+      "Troubleshooting",
       "About",
     ]);
     expect(within(nav).getByRole("separator")).toHaveClass(
