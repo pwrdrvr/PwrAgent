@@ -6078,15 +6078,24 @@ export class CodexAppServerClient {
       );
     }
     await this.ensureInitialized();
+    // Codex thread/list searchTerm is title/content search, not an ID lookup.
+    // Walk this profile-scoped app-server's protocol listing and select the
+    // exact ID locally so legacy threads in alternate CODEX_HOME profiles are
+    // resolved without guessing at Codex-owned storage paths.
     const matchingThreads = (
-      await this.listThreadsForMigration({ filter: params.threadId })
+      await requestThreadListPages({
+        archived: false,
+        client: this.connection,
+        requestTimeoutMs:
+          this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      })
     ).filter((thread) => thread.id === params.threadId);
     if (matchingThreads.length !== 1) {
       throw new Error(
         `Codex recovery expected one protocol path for thread ${params.threadId}; found ${matchingThreads.length}`,
       );
     }
-    const rolloutPath = matchingThreads[0]!.rolloutPath?.trim();
+    const rolloutPath = matchingThreads[0]!.path?.trim();
     if (!rolloutPath) {
       throw new Error(
         `Codex App Server did not provide a persisted session path for thread ${params.threadId}`,

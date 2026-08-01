@@ -145,6 +145,7 @@ class MockTransport implements JsonRpcTransport {
   static rateLimitsResult: unknown = {
     rateLimitsByLimitId: {}
   };
+  static unfilteredThreadListResult: unknown[] | undefined;
   static threadListResultBySearchTerm = new Map<string, unknown[]>();
   static turnInterruptResponseMode: "success" | "timeout" = "success";
   static threadResumeError:
@@ -224,6 +225,21 @@ class MockTransport implements JsonRpcTransport {
             id: payload.id,
             result: {
               data: params.params?.archived ? [] : threadListOverride,
+            },
+          }),
+        );
+        return;
+      }
+
+      if (!searchTerm && MockTransport.unfilteredThreadListResult) {
+        this.messageHandler(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: payload.id,
+            result: {
+              data: params.params?.archived
+                ? []
+                : MockTransport.unfilteredThreadListResult,
             },
           }),
         );
@@ -1159,6 +1175,7 @@ describe("CodexAppServerClient", () => {
     MockTransport.rateLimitsResult = {
       rateLimitsByLimitId: {}
     };
+    MockTransport.unfilteredThreadListResult = undefined;
     MockTransport.threadListResultBySearchTerm.clear();
     MockTransport.turnInterruptResponseMode = "success";
     MockTransport.threadResumeError = undefined;
@@ -1988,14 +2005,14 @@ describe("CodexAppServerClient", () => {
         "",
       ].join("\n"),
     );
-    MockTransport.threadListResultBySearchTerm.set(threadId, [
+    MockTransport.unfilteredThreadListResult = [
       {
         id: threadId,
         name: "Poisoned review thread",
         path: rolloutPath,
         updatedAt: 1_775_000_000,
       },
-    ]);
+    ];
     MockTransport.codexHome = codexHome;
 
     const { CodexAppServerClient } = await import("../codex-app-server/client");
@@ -2026,6 +2043,12 @@ describe("CodexAppServerClient", () => {
       const methods = transport.sentMessages.map((message) =>
         (JSON.parse(message) as { method?: string }).method,
       );
+      const threadListRequests = transport.sentMessages
+        .map((message) => JSON.parse(message) as {
+          method?: string;
+          params?: { searchTerm?: string };
+        })
+        .filter((message) => message.method === "thread/list");
 
       expect(result).toMatchObject({
         removedMessageIdCount: 1,
@@ -2038,6 +2061,8 @@ describe("CodexAppServerClient", () => {
         '"id":"review_rollout_user"',
       );
       expect(transport.closeCount).toBe(1);
+      expect(threadListRequests).toHaveLength(1);
+      expect(threadListRequests[0]?.params?.searchTerm).toBeUndefined();
       expect(methods.filter((method) => method === "initialize")).toHaveLength(2);
       expect(methods.at(-1)).toBe("thread/resume");
     } finally {
