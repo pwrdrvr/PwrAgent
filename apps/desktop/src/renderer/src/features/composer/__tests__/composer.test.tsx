@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { StrictMode, useState } from "react";
+import { StrictMode, useState, type ComponentProps } from "react";
 import {
   applyNavigationLaunchpadProviderSettingsPatch,
   type BackendSummary,
@@ -223,6 +223,103 @@ function backendSummary(
     ],
     launchpadOptions,
   };
+}
+
+const retargetingPwrSnap: NavigationDirectorySummary = {
+  key: "directory:/repo/PwrSnap",
+  kind: "directory",
+  label: "PwrSnap",
+  path: "/repo/PwrSnap",
+  threadKeys: [],
+  needsAttentionCount: 0,
+  latestUpdatedAt: 2,
+};
+
+const retargetingPwrGit: NavigationDirectorySummary = {
+  key: "directory:/repo/PwrGit",
+  kind: "directory",
+  label: "PwrGit",
+  path: "/repo/PwrGit",
+  threadKeys: [],
+  needsAttentionCount: 0,
+  latestUpdatedAt: 1,
+};
+
+const retargetingDirectories = [retargetingPwrSnap, retargetingPwrGit];
+
+function createRetargetingLaunchpad(
+  directory: NavigationDirectorySummary,
+  prompt: string,
+): NavigationLaunchpadDraft {
+  return {
+    directoryKey: directory.key,
+    directoryKind: directory.kind,
+    directoryLabel: directory.label,
+    directoryPath: directory.path,
+    backend: "codex",
+    executionMode: "default",
+    prompt,
+    workMode: "local",
+    branchName: "main",
+    createdAt: 1,
+    updatedAt: 1,
+  };
+}
+
+function DraftRetargetingHarness(props: {
+  previousPwrGitDraft: string;
+  onMaterializeLaunchpad?: ComponentProps<
+    typeof Composer
+  >["onMaterializeLaunchpad"];
+}) {
+  const [selectedDirectoryKey, setSelectedDirectoryKey] = useState(
+    retargetingPwrSnap.key,
+  );
+  const [launchpads, setLaunchpads] = useState(
+    () => new Map<string, NavigationLaunchpadDraft>([
+      [
+        retargetingPwrSnap.key,
+        createRetargetingLaunchpad(retargetingPwrSnap, ""),
+      ],
+      [
+        retargetingPwrGit.key,
+        createRetargetingLaunchpad(
+          retargetingPwrGit,
+          props.previousPwrGitDraft,
+        ),
+      ],
+    ]),
+  );
+  const selectedDirectory = retargetingDirectories.find(
+    (directory) => directory.key === selectedDirectoryKey,
+  )!;
+
+  return (
+    <Composer
+      backends={[backendSummary("codex")]}
+      directories={retargetingDirectories}
+      directory={selectedDirectory}
+      launchpad={launchpads.get(selectedDirectoryKey)!}
+      onMaterializeLaunchpad={props.onMaterializeLaunchpad}
+      onPickAndRegisterDirectory={() => undefined}
+      onSelectDirectoryFromPicker={(directory) => {
+        setSelectedDirectoryKey(directory.key);
+      }}
+      onUpdateLaunchpad={async (directoryKey, patch) => {
+        setLaunchpads((current) => {
+          const launchpad = current.get(directoryKey)!;
+          const next = new Map(current);
+          next.set(directoryKey, {
+            ...launchpad,
+            ...patch,
+            updatedAt: launchpad.updatedAt + 1,
+          });
+          return next;
+        });
+      }}
+      skills={[]}
+    />
+  );
 }
 
 function acpGeminiBackendSummary(): BackendSummary {
@@ -10145,6 +10242,93 @@ describe("Composer", () => {
       "Review the pasted mockup"
     );
     expect(screen.getByAltText("mockup.png")).toBeInTheDocument();
+  });
+
+  it("moves the complete active draft onto the project selected from the composer", async () => {
+    render(
+      <DraftRetargetingHarness previousPwrGitDraft="An older PwrGit draft" />,
+    );
+    const imageFile = new File(
+      [new Uint8Array([1, 2, 3])],
+      "wrong-repo-composer.png",
+      { type: "image/png" },
+    );
+    fireEvent.change(screen.getByLabelText("New thread"), {
+      target: { value: "Move this text and image to PwrGit" },
+    });
+    fireEvent.paste(screen.getByLabelText("New thread"), {
+      clipboardData: {
+        files: [],
+        items: [
+          {
+            kind: "file",
+            type: "image/png",
+            getAsFile: () => imageFile,
+          },
+        ],
+      },
+    });
+    expect(
+      await screen.findByAltText("wrong-repo-composer.png"),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Project: PwrSnap" }));
+    fireEvent.click(screen.getByRole("option", { name: /PwrGit/ }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "Project: PwrGit" }),
+      ).toBeInTheDocument();
+    });
+    expect(screen.getByLabelText("New thread")).toHaveValue(
+      "Move this text and image to PwrGit",
+    );
+    expect(screen.getByAltText("wrong-repo-composer.png")).toBeInTheDocument();
+  });
+
+  it("reveals a project's previous draft after submitting the retargeted top draft", async () => {
+    const onMaterializeLaunchpad = vi.fn(async () => undefined);
+    render(
+      <DraftRetargetingHarness
+        previousPwrGitDraft="The PwrGit draft that was already here"
+        onMaterializeLaunchpad={onMaterializeLaunchpad}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText("New thread"), {
+      target: { value: "Submit this newer draft in PwrGit" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Project: PwrSnap" }));
+    fireEvent.click(screen.getByRole("option", { name: /PwrGit/ }));
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("New thread")).toHaveValue(
+        "Submit this newer draft in PwrGit",
+      );
+    });
+    await clickButton("Start thread");
+    expect(onMaterializeLaunchpad).toHaveBeenCalledWith(
+      retargetingPwrGit.key,
+      [{ type: "text", text: "Submit this newer draft in PwrGit" }],
+      undefined,
+      undefined,
+      [],
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Project: PwrGit" }));
+    fireEvent.click(screen.getByRole("option", { name: /PwrSnap/ }));
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "Project: PwrSnap" }),
+      ).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Project: PwrSnap" }));
+    fireEvent.click(screen.getByRole("option", { name: /PwrGit/ }));
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("New thread")).toHaveValue(
+        "The PwrGit draft that was already here",
+      );
+    });
   });
 
   it("persists launchpad pasted images that finish after switching away", async () => {
