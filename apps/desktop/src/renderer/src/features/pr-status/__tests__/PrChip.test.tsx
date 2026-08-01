@@ -92,20 +92,20 @@ describe("PrChip", () => {
     }))).toEqual([
       {
         label: "Copy Full Code Review URL",
-        value: "https://github.com/pwrdrvr/PwrAgent/pull/743/files?diff=split",
+        copyValue: "https://github.com/pwrdrvr/PwrAgent/pull/743/files?diff=split",
       },
       {
         label: "Copy Pull Request URL",
-        value: "https://github.com/pwrdrvr/PwrAgent/pull/743",
+        copyValue: "https://github.com/pwrdrvr/PwrAgent/pull/743",
         separated: true,
       },
       {
         label: "Copy Pull Request Number",
-        value: "743",
+        copyValue: "743",
       },
       {
         label: "Copy Repository URL",
-        value: "https://github.com/pwrdrvr/PwrAgent",
+        copyValue: "https://github.com/pwrdrvr/PwrAgent",
       },
     ]);
   });
@@ -118,20 +118,20 @@ describe("PrChip", () => {
     }))).toEqual([
       {
         label: "Copy Full Code Review URL",
-        value: "https://github.com/pull/merge_requests/pull/743/files?diff=split",
+        copyValue: "https://github.com/pull/merge_requests/pull/743/files?diff=split",
       },
       {
         label: "Copy Pull Request URL",
-        value: "https://github.com/pull/merge_requests/pull/743",
+        copyValue: "https://github.com/pull/merge_requests/pull/743",
         separated: true,
       },
       {
         label: "Copy Pull Request Number",
-        value: "743",
+        copyValue: "743",
       },
       {
         label: "Copy Repository URL",
-        value: "https://github.com/pull/merge_requests",
+        copyValue: "https://github.com/pull/merge_requests",
       },
     ]);
   });

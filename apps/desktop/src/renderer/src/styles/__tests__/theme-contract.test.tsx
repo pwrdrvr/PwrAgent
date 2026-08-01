@@ -420,10 +420,13 @@ describe("Tangerine Terminal theme contract", () => {
 
   it("keeps transcript link chips atomic instead of text-selectable", () => {
     const prChipRule = extractRuleBody(css, ".pr-chip");
+    const skillChipRule = extractRuleBody(css, ".skill-chip--transcript");
     const threadChipRule = extractRuleBody(css, ".thread-chip");
 
     expect(prChipRule).toContain("-webkit-user-select: none;");
     expect(prChipRule).toContain("user-select: none;");
+    expect(skillChipRule).toContain("-webkit-user-select: none;");
+    expect(skillChipRule).toContain("user-select: none;");
     expect(threadChipRule).toContain("-webkit-user-select: none;");
     expect(threadChipRule).toContain("user-select: none;");
   });

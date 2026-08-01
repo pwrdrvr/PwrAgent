@@ -4445,7 +4445,7 @@ textarea,
   box-shadow: var(--shadow-popover);
 }
 
-.chip-copy-context-menu {
+.chip-context-menu {
   min-width: 220px;
 }
 
@@ -11997,6 +11997,22 @@ a.transcript-message__messaging-origin:focus-visible {
   max-width: 100%;
   vertical-align: middle;
   border: 1px solid var(--border-subtle);
+}
+
+.skill-chip--transcript {
+  cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.skill-chip--transcript:hover,
+.skill-chip--transcript:focus-visible {
+  background: var(--accent-soft);
+}
+
+.skill-chip--transcript:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 /* Composer directory-reference mention chip (`@label`). Same silhouette

@@ -1,52 +1,52 @@
 import type { PrSummary } from "@pwragent/shared";
 import {
-  CopyContextMenu,
-  type CopyContextMenuPosition,
-  type CopyContextMenuTarget,
-} from "../chrome/CopyContextMenu";
+  ChipContextMenu,
+  type ChipContextMenuItem,
+  type ChipContextMenuPosition,
+} from "../chrome/ChipContextMenu";
 
 type PrChipContextMenuProps = {
   onClose: () => void;
-  position: CopyContextMenuPosition;
+  position: ChipContextMenuPosition;
   pr: PrSummary;
   returnFocusTo: HTMLElement;
 };
 
 export function PrChipContextMenu(props: PrChipContextMenuProps) {
   return (
-    <CopyContextMenu
+    <ChipContextMenu
+      items={pullRequestCopyTargets(props.pr)}
       onClose={props.onClose}
       position={props.position}
       returnFocusTo={props.returnFocusTo}
-      targets={pullRequestCopyTargets(props.pr)}
     />
   );
 }
 
-export function pullRequestCopyTargets(pr: PrSummary): CopyContextMenuTarget[] {
+export function pullRequestCopyTargets(pr: PrSummary): ChipContextMenuItem[] {
   const urls = pullRequestUrls(pr);
-  const targets: CopyContextMenuTarget[] = [];
+  const targets: ChipContextMenuItem[] = [];
 
   if (urls.fullUrl !== urls.pullRequestUrl) {
     targets.push({
       label: fullUrlCopyLabel(urls.fullUrl),
-      value: urls.fullUrl,
+      copyValue: urls.fullUrl,
     });
   }
 
   targets.push(
     {
       label: "Copy Pull Request URL",
-      value: urls.pullRequestUrl,
+      copyValue: urls.pullRequestUrl,
       separated: targets.length > 0,
     },
     {
       label: "Copy Pull Request Number",
-      value: String(pr.number),
+      copyValue: String(pr.number),
     },
     {
       label: "Copy Repository URL",
-      value: urls.repositoryUrl,
+      copyValue: urls.repositoryUrl,
     },
   );
 

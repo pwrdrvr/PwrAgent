@@ -5,10 +5,10 @@ import { useLiveThreadLink } from "../../lib/thread-links";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import type { ResolvedThreadLink } from "../../lib/thread-links";
 import {
-  CopyContextMenu,
-  type CopyContextMenuPosition,
-  type CopyContextMenuTarget,
-} from "../chrome/CopyContextMenu";
+  ChipContextMenu,
+  type ChipContextMenuItem,
+  type ChipContextMenuPosition,
+} from "../chrome/ChipContextMenu";
 
 type ThreadChipProps = {
   /**
@@ -25,7 +25,7 @@ export function ThreadChip(props: ThreadChipProps) {
   const link = useLiveThreadLink(props.link);
   const contextMenuInvokerRef = useRef<HTMLSpanElement>(null);
   const [contextMenuPosition, setContextMenuPosition] =
-    useState<CopyContextMenuPosition>();
+    useState<ChipContextMenuPosition>();
   const tooltipController = useViewportTooltip({ className: "viewport-tooltip" });
 
   const label = link.title.trim() || props.fallbackLabel?.trim() || link.threadId;
@@ -86,10 +86,10 @@ export function ThreadChip(props: ThreadChipProps) {
       </span>
       {tooltipController.tooltipNode}
       {contextMenuPosition && contextMenuInvokerRef.current ? (
-        <CopyContextMenu
+        <ChipContextMenu
+          items={threadCopyTargets(link, label)}
           position={contextMenuPosition}
           returnFocusTo={contextMenuInvokerRef.current}
-          targets={threadCopyTargets(link, label)}
           onClose={() => setContextMenuPosition(undefined)}
         />
       ) : null}
@@ -100,30 +100,30 @@ export function ThreadChip(props: ThreadChipProps) {
 export function threadCopyTargets(
   link: ResolvedThreadLink,
   label: string,
-): CopyContextMenuTarget[] {
-  const targets: CopyContextMenuTarget[] = [
+): ChipContextMenuItem[] {
+  const targets: ChipContextMenuItem[] = [
     {
       label: "Copy Thread Link",
-      value: buildThreadUrl({
+      copyValue: buildThreadUrl({
         backend: link.backend,
         threadId: link.threadId,
       }),
     },
     {
       label: "Copy Thread ID",
-      value: link.threadId,
+      copyValue: link.threadId,
       separated: true,
     },
     {
       label: "Copy Thread Name",
-      value: label,
+      copyValue: label,
     },
   ];
 
   if (link.gitBranch) {
     targets.push({
       label: "Copy Branch Name",
-      value: link.gitBranch,
+      copyValue: link.gitBranch,
     });
   }
 

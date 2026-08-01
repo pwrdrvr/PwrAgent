@@ -2,27 +2,39 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { createPortal } from "react-dom";
 import { copyText } from "../../lib/copy-text";
 
-export type CopyContextMenuPosition = {
+export type ChipContextMenuPosition = {
   x: number;
   y: number;
   anchorTop?: number;
 };
 
-export type CopyContextMenuTarget = {
+type ChipContextMenuCopyItem = {
+  action?: never;
+  copyValue: string;
   label: string;
-  value: string;
   separated?: boolean;
 };
 
-type CopyContextMenuProps = {
-  onClose: () => void;
-  position: CopyContextMenuPosition;
-  returnFocusTo: HTMLElement;
-  targets: CopyContextMenuTarget[];
+type ChipContextMenuActionItem = {
+  action: () => void;
+  copyValue?: never;
+  label: string;
+  separated?: boolean;
 };
 
-export function CopyContextMenu(props: CopyContextMenuProps) {
-  const { onClose, position: requestedPosition, returnFocusTo, targets } = props;
+export type ChipContextMenuItem =
+  | ChipContextMenuCopyItem
+  | ChipContextMenuActionItem;
+
+type ChipContextMenuProps = {
+  items: ChipContextMenuItem[];
+  onClose: () => void;
+  position: ChipContextMenuPosition;
+  returnFocusTo: HTMLElement;
+};
+
+export function ChipContextMenu(props: ChipContextMenuProps) {
+  const { items, onClose, position: requestedPosition, returnFocusTo } = props;
   const menuRef = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState({
     x: requestedPosition.x,
@@ -65,32 +77,37 @@ export function CopyContextMenu(props: CopyContextMenuProps) {
     menu.querySelector<HTMLButtonElement>("button")?.focus();
   }, [requestedPosition]);
 
-  const copy = (value: string): void => {
+  const select = (item: ChipContextMenuItem): void => {
     close(true);
-    void copyText(value);
+    if (item.action) {
+      item.action();
+      return;
+    }
+
+    void copyText(item.copyValue);
   };
 
   return createPortal(
     <div
       ref={menuRef}
-      className="thread-context-menu chip-copy-context-menu"
+      className="thread-context-menu chip-context-menu"
       role="menu"
       style={{ left: position.x, top: position.y }}
       onClick={(event) => event.stopPropagation()}
       onContextMenu={(event) => event.preventDefault()}
     >
       <div className="thread-context-menu__section">
-        {targets.map((target) => (
-          <div key={target.label}>
-            {target.separated ? (
+        {items.map((item) => (
+          <div key={item.label}>
+            {item.separated ? (
               <div className="thread-context-menu__separator" role="separator" />
             ) : null}
             <button
               role="menuitem"
               type="button"
-              onClick={() => copy(target.value)}
+              onClick={() => select(item)}
             >
-              {target.label}
+              {item.label}
             </button>
           </div>
         ))}
@@ -101,7 +118,7 @@ export function CopyContextMenu(props: CopyContextMenuProps) {
 }
 
 function placeContextMenu(
-  requestedPosition: CopyContextMenuPosition,
+  requestedPosition: ChipContextMenuPosition,
   menuRect: DOMRect,
 ): { x: number; y: number } {
   const viewportMargin = 8;

@@ -190,6 +190,27 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
     [openLocalFileInEditor, props.desktopApi]
   );
 
+  const viewSkillMarkdown = useCallback(
+    (skill: AppServerSkillSummary & { path: string }): void => {
+      if (!props.desktopApi?.readMarkdownFile) {
+        return;
+      }
+
+      setMarkdownViewerTarget({
+        label: `$${skill.name}`,
+        path: skill.path,
+      });
+    },
+    [props.desktopApi]
+  );
+
+  const openSkillMarkdownInEditor = useCallback(
+    (skill: AppServerSkillSummary & { path: string }): void => {
+      openLocalFileInEditor({ path: skill.path });
+    },
+    [openLocalFileInEditor]
+  );
+
   const components = useMemo<Components>(
     () => ({
       a(anchorProps) {
@@ -264,7 +285,20 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
             path: skillPath,
           };
 
-          return <SkillChip label={label || undefined} skill={skill} />;
+          return (
+            <SkillChip
+              editorName={editorApplication?.name}
+              label={label || undefined}
+              onOpenInEditor={editorApplication && props.desktopApi?.openApplication
+                ? openSkillMarkdownInEditor
+                : undefined}
+              onViewMarkdown={props.desktopApi?.readMarkdownFile
+                ? viewSkillMarkdown
+                : undefined}
+              skill={skill}
+              transcript={true}
+            />
+          );
         }
 
         if (!href) {
@@ -466,10 +500,12 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
       markdownText,
       openLocalFileInEditor,
       openLocalFileLink,
+      openSkillMarkdownInEditor,
       props.desktopApi,
       pullRequestLinks,
       skillsByPath,
       threadLinks,
+      viewSkillMarkdown,
     ]
   );
 

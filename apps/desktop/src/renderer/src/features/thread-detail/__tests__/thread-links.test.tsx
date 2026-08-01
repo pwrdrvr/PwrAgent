@@ -129,20 +129,20 @@ describe("thread links in transcript markdown", () => {
     }, "RELATED query deranking issue")).toEqual([
       {
         label: "Copy Thread Link",
-        value: `pwragent://thread/${CHILD_THREAD_ID}?backend=codex`,
+        copyValue: `pwragent://thread/${CHILD_THREAD_ID}?backend=codex`,
       },
       {
         label: "Copy Thread ID",
-        value: CHILD_THREAD_ID,
+        copyValue: CHILD_THREAD_ID,
         separated: true,
       },
       {
         label: "Copy Thread Name",
-        value: "RELATED query deranking issue",
+        copyValue: "RELATED query deranking issue",
       },
       {
         label: "Copy Branch Name",
-        value: "agent/thread-chip-menu",
+        copyValue: "agent/thread-chip-menu",
       },
     ]);
   });
