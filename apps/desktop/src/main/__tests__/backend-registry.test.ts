@@ -7040,7 +7040,13 @@ script = "echo setup"
     });
     await waitForCondition(
       () => codexClient.startTurnCallCount === 2
-        && codexClient.invalidIdRecoveryCalls.length === 1,
+        && codexClient.invalidIdRecoveryCalls.length === 1
+        && events.some(
+          (event) =>
+            event.notification.method
+            === "thread/codexInvalidIdRecovery/updated"
+            && event.notification.params.status === "succeeded",
+        ),
     );
 
     expect(codexClient.invalidIdRecoveryCalls).toEqual([
@@ -7051,6 +7057,32 @@ script = "echo setup"
     ]);
     expect(codexClient.startTurnCalls).toHaveLength(2);
     expect(codexClient.startTurnCalls[1]).toMatchObject({ threadId, input });
+    expect(events).toContainEqual({
+      backend: "codex",
+      notification: {
+        method: "thread/codexInvalidIdRecovery/updated",
+        params: {
+          failureMessage: expect.stringContaining("[invalid_id_prefix]"),
+          status: "repairing",
+          threadId,
+          turnId: "turn-failed-invalid-id",
+        },
+      },
+    });
+    expect(events).toContainEqual({
+      backend: "codex",
+      notification: {
+        method: "thread/codexInvalidIdRecovery/updated",
+        params: {
+          backupPath,
+          failureMessage: expect.stringContaining("[invalid_id_prefix]"),
+          removedMessageIdCount: 2,
+          status: "succeeded",
+          threadId,
+          turnId: "turn-failed-invalid-id",
+        },
+      },
+    });
     expect(events).toContainEqual({
       backend: "codex",
       notification: {
@@ -7082,6 +7114,74 @@ script = "echo setup"
     await flushAsync();
     expect(codexClient.invalidIdRecoveryCalls).toHaveLength(1);
     expect(codexClient.startTurnCallCount).toBe(2);
+
+    await registry.close();
+  });
+
+  it("emits a sticky failure status when invalid message-ID recovery fails", async () => {
+    const threadId = "thread-invalid-id-repair-fails";
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      invalidIdRecoveryError: new Error("rollout path belongs to another thread"),
+      startTurnResults: [{ threadId, turnId: "turn-failed-invalid-id" }],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({}),
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null,
+    });
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
+
+    await registry.startTurn({
+      backend: "codex",
+      threadId,
+      input: [{ type: "text", text: "continue after repair" }],
+    });
+    await codexClient.emit({
+      method: "turn/failed",
+      params: {
+        threadId,
+        turnId: "turn-failed-invalid-id",
+        turn: {
+          id: "turn-failed-invalid-id",
+          status: "failed",
+          error: {
+            message:
+              "[ApiIdParam] [input[2].id] [invalid_id_prefix] "
+              + "Invalid 'input[2].id': 'review_rollout_user'. "
+              + "Expected an ID that begins with 'msg'.",
+          },
+        },
+      },
+    });
+    await waitForCondition(() =>
+      events.some(
+        (event) =>
+          event.notification.method
+          === "thread/codexInvalidIdRecovery/updated"
+          && event.notification.params.status === "failed",
+      ),
+    );
+
+    expect(codexClient.invalidIdRecoveryCalls).toHaveLength(1);
+    expect(codexClient.startTurnCallCount).toBe(1);
+    expect(events).toContainEqual({
+      backend: "codex",
+      notification: {
+        method: "thread/codexInvalidIdRecovery/updated",
+        params: {
+          failureMessage: expect.stringContaining("[invalid_id_prefix]"),
+          recoveryError: "rollout path belongs to another thread",
+          status: "failed",
+          threadId,
+          turnId: "turn-failed-invalid-id",
+        },
+      },
+    });
 
     await registry.close();
   });

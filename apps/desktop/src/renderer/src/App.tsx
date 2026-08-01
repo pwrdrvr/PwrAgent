@@ -437,6 +437,33 @@ function DesktopAppShell(props: {
         );
         return;
       }
+      if (
+        event.notification.method
+        === "thread/codexInvalidIdRecovery/updated"
+      ) {
+        const params = event.notification.params as {
+          threadId: string;
+          turnId?: string;
+          status: "repairing" | "succeeded" | "failed";
+          failureMessage: string;
+          recoveryError?: string;
+        };
+        setBackendErrorNotice((current) =>
+          resolveBackendErrorNotice(
+            {
+              kind: "codex-invalid-id-recovery",
+              failureMessage: params.failureMessage,
+              recoveryError: params.recoveryError,
+              status: params.status,
+              threadId: params.threadId,
+              threadLabel: labelForThread("codex", params.threadId),
+              turnId: params.turnId ?? "unknown",
+            },
+            current,
+          ),
+        );
+        return;
+      }
       if (event.notification.method === "thread/status/changed") {
         const params = event.notification.params as {
           threadId?: string;

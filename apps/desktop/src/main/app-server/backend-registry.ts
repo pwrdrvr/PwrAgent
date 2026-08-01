@@ -13884,7 +13884,36 @@ export class DesktopBackendRegistry {
       threadId: candidate.params.threadId,
       turnId: candidate.turnId ?? null,
     });
+    void this.emitCodexInvalidIdRecoveryUpdate({
+      failureMessage,
+      status: "repairing",
+      threadId: candidate.params.threadId,
+      ...(candidate.turnId ? { turnId: candidate.turnId } : {}),
+    });
     return recovery;
+  }
+
+  private async emitCodexInvalidIdRecoveryUpdate(
+    params: Extract<
+      AppServerNotification,
+      { method: "thread/codexInvalidIdRecovery/updated" }
+    >["params"],
+  ): Promise<void> {
+    try {
+      await this.emit({
+        backend: "codex",
+        notification: {
+          method: "thread/codexInvalidIdRecovery/updated",
+          params,
+        },
+      });
+    } catch (error) {
+      backendRegistryLog.warn("Codex invalid-message-ID status notification failed", {
+        error: error instanceof Error ? error.message : String(error),
+        status: params.status,
+        threadId: params.threadId,
+      });
+    }
   }
 
   private maybeDrainCodexInvalidIdRecoveries(): void {
@@ -13954,6 +13983,14 @@ export class DesktopBackendRegistry {
           ...recovery.params,
           invalidIdRecoveryAttempted: true,
         });
+        await this.emitCodexInvalidIdRecoveryUpdate({
+          backupPath: repaired.backupPath,
+          failureMessage: recovery.failureMessage,
+          removedMessageIdCount: repaired.removedMessageIdCount,
+          status: "succeeded",
+          threadId: repaired.threadId,
+          ...(recovery.turnId ? { turnId: recovery.turnId } : {}),
+        });
         recovery.resolve({
           backend: "codex",
           threadId: retried.threadId,
@@ -13961,6 +13998,13 @@ export class DesktopBackendRegistry {
         });
       } catch (error) {
         recovery.reject(error);
+        await this.emitCodexInvalidIdRecoveryUpdate({
+          failureMessage: recovery.failureMessage,
+          recoveryError: error instanceof Error ? error.message : String(error),
+          status: "failed",
+          threadId: recovery.params.threadId,
+          ...(recovery.turnId ? { turnId: recovery.turnId } : {}),
+        });
         backendRegistryLog.error("Codex invalid-message-ID history recovery failed", {
           error: error instanceof Error ? error.message : String(error),
           threadId: recovery.params.threadId,

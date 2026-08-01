@@ -9,6 +9,15 @@ import type { AppNoticeToastNotice } from "./AppNoticeToast";
  */
 export type BackendErrorSignal =
   | {
+      kind: "codex-invalid-id-recovery";
+      status: "repairing" | "succeeded" | "failed";
+      threadId: string;
+      turnId: string;
+      failureMessage: string;
+      recoveryError?: string;
+      threadLabel: string;
+    }
+  | {
       kind: "turn-failed";
       backend: string;
       threadId: string;
@@ -38,6 +47,53 @@ export function resolveBackendErrorNotice(
   signal: BackendErrorSignal,
   current: AppNoticeToastNotice | undefined,
 ): AppNoticeToastNotice | undefined {
+  if (signal.kind === "codex-invalid-id-recovery") {
+    const baseNotice = {
+      copyText: signal.failureMessage,
+      detail: signal.threadLabel,
+      id:
+        `codex-invalid-id-recovery:codex:${signal.threadId}:${signal.turnId}`,
+      message: signal.failureMessage,
+    };
+    if (signal.status === "repairing") {
+      return {
+        ...baseNotice,
+        autoDismiss: false,
+        status: {
+          label:
+            "PwrAgent is repairing the saved thread history and will retry your message.",
+          state: "progress",
+        },
+        title: "Known Codex issue",
+        tone: "warning",
+      };
+    }
+    if (signal.status === "succeeded") {
+      return {
+        ...baseNotice,
+        autoDismiss: true,
+        status: {
+          label: "Saved history repaired. Your message was retried.",
+          state: "success",
+        },
+        title: "Codex thread repaired",
+        tone: "success",
+      };
+    }
+    return {
+      ...baseNotice,
+      autoDismiss: false,
+      status: {
+        label: signal.recoveryError
+          ? `Automatic repair failed: ${signal.recoveryError}`
+          : "PwrAgent could not complete the automatic repair.",
+        state: "error",
+      },
+      title: "Codex repair failed",
+      tone: "error",
+    };
+  }
+
   if (signal.kind === "turn-failed") {
     return {
       autoDismiss: false,
@@ -52,7 +108,18 @@ export function resolveBackendErrorNotice(
   // Same-thread turn/failed already on screen carries the richer message —
   // don't replace it with the generic system-error copy.
   const sameThreadTurnFailedPrefix = `turn-failed:${signal.backend}:${signal.threadId}:`;
-  if (current && current.id.startsWith(sameThreadTurnFailedPrefix)) {
+  const sameThreadCodexRecoveryPrefix =
+    `codex-invalid-id-recovery:codex:${signal.threadId}:`;
+  if (
+    current
+    && (
+      current.id.startsWith(sameThreadTurnFailedPrefix)
+      || (
+        signal.backend === "codex"
+        && current.id.startsWith(sameThreadCodexRecoveryPrefix)
+      )
+    )
+  ) {
     return current;
   }
 

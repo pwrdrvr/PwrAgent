@@ -281,6 +281,14 @@ describe("Tangerine Terminal theme contract", () => {
       css,
       '.app-notice-toast[data-tone="warning"]',
     );
+    const successNoticeRule = extractRuleBody(
+      css,
+      '.app-notice-toast[data-tone="success"]',
+    );
+    const errorNoticeRule = extractRuleBody(
+      css,
+      '.app-notice-toast[data-tone="error"]',
+    );
 
     expect(warningNoticeRule).toContain(
       "border-color: color-mix(in srgb, var(--status-warning) 52%, var(--border-subtle));",
@@ -290,6 +298,14 @@ describe("Tangerine Terminal theme contract", () => {
     );
     expect(css).toMatch(
       /\.app-notice-toast\[data-tone="warning"\] \.app-notice-toast__eyebrow\s*\{[\s\S]*?color:\s*var\(--status-warning\);[\s\S]*?\}/,
+    );
+    expect(successNoticeRule).toContain("var(--status-ok)");
+    expect(errorNoticeRule).toContain("var(--status-error)");
+    expect(css).toMatch(
+      /\.app-notice-toast\[data-tone="success"\] \.app-notice-toast__eyebrow\s*\{[\s\S]*?color:\s*var\(--status-ok\);[\s\S]*?\}/,
+    );
+    expect(css).toMatch(
+      /\.app-notice-toast\[data-tone="error"\] \.app-notice-toast__eyebrow\s*\{[\s\S]*?color:\s*var\(--status-error\);[\s\S]*?\}/,
     );
   });
 
