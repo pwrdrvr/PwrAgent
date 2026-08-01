@@ -13,8 +13,8 @@ Return only valid JSON. Do not wrap the JSON in markdown fences. Use this exact 
 Requirements:
 
 - Write the title in the same language as the user's prompt.
-- Keep the title under 50 characters when possible.
-- Keep the title to 6 words or fewer when possible.
+- Never exceed 50 characters.
+- Keep the title to 6 words or fewer.
 - Capture the main task, question, bug, artifact, or decision.
 - Prefer specific nouns from the prompt over generic wording.
 - Preserve code identifiers, filenames, product names, and proper nouns when they are central to the request.

@@ -19,6 +19,7 @@ import {
 } from "../../../lib/format-duration";
 import { formatTimestamp } from "./context-rail-shared";
 import { formatTokenCount } from "./subagent-format";
+import { subAgentPricingUsageTitle } from "./subagent-kind";
 
 type PricingPanelProps = {
   activeTurnId?: string;
@@ -45,6 +46,15 @@ const SUBAGENT_TERMINAL_STATUSES: ReadonlySet<ThreadSubAgentStatus> = new Set([
   "failure",
   "cancelled",
 ]);
+
+function isTerminalSubAgent(subAgent: ThreadSubAgentSummary): boolean {
+  return (
+    SUBAGENT_TERMINAL_STATUSES.has(subAgent.status)
+    || subAgent.completedAt !== undefined
+    || subAgent.outcome !== undefined
+    || subAgent.completionSource !== undefined
+  );
+}
 
 type PricingDisplayOptions = {
   codexCredits: boolean;
@@ -315,7 +325,7 @@ export function PricingPanel(props: PricingPanelProps) {
               >
                 <div className="pricing-usage-row__header">
                   <p className="rail-card__title">
-                    {formatUsageLineTitle(line)}
+                    {formatUsageLineTitle(line, subAgent)}
                   </p>
                   {isActive ? (
                     <span className="rail-chip pricing-usage-row__live">
@@ -1153,9 +1163,14 @@ function hasSelectedEstimateUnit(displayOptions: PricingDisplayOptions): boolean
   return displayOptions.usd || displayOptions.codexCredits;
 }
 
-function formatUsageLineTitle(line: PricingUsageLine): string {
+function formatUsageLineTitle(
+  line: PricingUsageLine,
+  subAgent?: ThreadSubAgentSummary,
+): string {
   if (line.scope === "monitor") {
-    return "Sub-agent usage";
+    return subAgent
+      ? subAgentPricingUsageTitle(subAgent)
+      : "Sub-agent usage";
   }
   if (isForkBaselineLine(line)) {
     return "Fork point";
@@ -1253,7 +1268,7 @@ function isActiveUsageLine(params: {
     return false;
   }
   const subAgent = params.subAgentsById.get(params.line.sourceItemId);
-  return Boolean(subAgent && !SUBAGENT_TERMINAL_STATUSES.has(subAgent.status));
+  return Boolean(subAgent && !isTerminalSubAgent(subAgent));
 }
 
 function PricingUsageTimestamp(props: {

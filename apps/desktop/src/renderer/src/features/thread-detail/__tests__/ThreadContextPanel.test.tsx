@@ -1877,33 +1877,161 @@ describe("ThreadContextPanel", () => {
     expect(times?.textContent).toContain("· 1m 5s");
   });
 
-  it("shows a terminal sub-agent's name but no Live chip", () => {
-    const { container } = renderPanel({
+  for (const status of ["success", "failure", "cancelled"] as const) {
+    it(`shows a ${status} sub-agent's name but no Live chip`, () => {
+      const { container } = renderPanel({
+        activeTab: "pricing",
+        pinned: true,
+        thread: {
+          ...baseThread,
+          subAgents: [
+            {
+              monitorId: "mon-1",
+              task: "Review the diff",
+              status,
+              agentName: "Reviewer",
+              createdAt: 1_800_000_000_000,
+              updatedAt: 1_800_000_000_000,
+            },
+          ],
+        },
+        pricing: {
+          lines: [buildMonitorLine({})],
+          summaries: [],
+        },
+        threadPricingSummaryEnabled: true,
+      });
+
+      expect(container.querySelector(".pricing-usage-row--active")).toBeNull();
+      expect(screen.queryByText("Live")).not.toBeInTheDocument();
+      expect(screen.getByText("Reviewer")).toBeInTheDocument();
+    });
+  }
+
+  for (const status of ["failed", "blocked"] as const) {
+    it(`settles a completed ${status} sub-agent in pricing`, () => {
+      const { container } = renderPanel({
+        activeTab: "pricing",
+        pinned: true,
+        thread: {
+          ...baseThread,
+          subAgents: [
+            {
+              monitorId: "mon-1",
+              task: "Review the diff",
+              status,
+              agentName: "Reviewer",
+              completedAt: 1_800_000_001_000,
+              createdAt: 1_800_000_000_000,
+              updatedAt: 1_800_000_001_000,
+            },
+          ],
+        },
+        pricing: {
+          lines: [buildMonitorLine({})],
+          summaries: [],
+        },
+        threadPricingSummaryEnabled: true,
+      });
+
+      expect(container.querySelector(".pricing-usage-row--active")).toBeNull();
+      expect(screen.queryByText("Live")).not.toBeInTheDocument();
+    });
+
+    it(`keeps a progress-only ${status} monitor live`, () => {
+      const startedAt = 1_800_000_000_000;
+      vi.useFakeTimers();
+      vi.setSystemTime(startedAt + 65_000);
+
+      const { container } = renderPanel({
+        activeTab: "pricing",
+        pinned: true,
+        thread: {
+          ...baseThread,
+          subAgents: [
+            {
+              monitorId: "mon-1",
+              task: "Review the diff",
+              status,
+              agentName: "Reviewer",
+              createdAt: startedAt,
+              updatedAt: startedAt + 1_000,
+            },
+          ],
+        },
+        pricing: {
+          lines: [buildMonitorLine({ createdAt: startedAt })],
+          summaries: [],
+        },
+        threadPricingSummaryEnabled: true,
+      });
+
+      const activeRow = container.querySelector(".pricing-usage-row--active");
+      expect(activeRow).not.toBeNull();
+      expect(within(activeRow as HTMLElement).getByText("Live")).toBeInTheDocument();
+      expect(activeRow?.querySelector(".rail-card__times")?.textContent).toContain(
+        "· 1m 5s",
+      );
+    });
+  }
+
+  it("labels known sub-agent pricing rows by purpose", () => {
+    const subAgents = [
+      {
+        monitorId: "system:title-helper:codex:thread-1",
+        task: "Name this thread",
+        status: "success" as const,
+        createdAt: 1_800_000_000_000,
+        updatedAt: 1_800_000_000_000,
+      },
+      {
+        monitorId: "monitor-1",
+        task: "Watch CI",
+        status: "success" as const,
+        createdAt: 1_800_000_000_000,
+        updatedAt: 1_800_000_000_000,
+      },
+      {
+        monitorId: "review:turn-1",
+        task: "Review changes",
+        status: "success" as const,
+        createdAt: 1_800_000_000_000,
+        updatedAt: 1_800_000_000_000,
+      },
+      {
+        monitorId: "codex-native:thread-2",
+        task: "Inspect implementation",
+        status: "success" as const,
+        createdAt: 1_800_000_000_000,
+        updatedAt: 1_800_000_000_000,
+      },
+    ];
+    const pricingLines = subAgents.map((subAgent, index) =>
+      buildMonitorLine({
+        sourceItemId: subAgent.monitorId,
+        usageLineId: `monitor-line-${index}`,
+      })
+    );
+
+    renderPanel({
       activeTab: "pricing",
       pinned: true,
       thread: {
         ...baseThread,
-        subAgents: [
-          {
-            monitorId: "mon-1",
-            task: "Review the diff",
-            status: "success",
-            agentName: "Reviewer",
-            createdAt: 1_800_000_000_000,
-            updatedAt: 1_800_000_000_000,
-          },
-        ],
+        subAgents,
       },
       pricing: {
-        lines: [buildMonitorLine({})],
+        lines: pricingLines,
         summaries: [],
       },
       threadPricingSummaryEnabled: true,
     });
 
-    expect(container.querySelector(".pricing-usage-row--active")).toBeNull();
-    expect(screen.queryByText("Live")).not.toBeInTheDocument();
-    expect(screen.getByText("Reviewer")).toBeInTheDocument();
+    expect(screen.getByText("Thread naming")).toBeInTheDocument();
+    expect(screen.getByText("Monitor usage")).toBeInTheDocument();
+    expect(screen.getByText("Review usage")).toBeInTheDocument();
+    expect(screen.getByText("Codex sub-agent usage")).toBeInTheDocument();
+    expect(screen.queryByText("Sub-agent usage")).not.toBeInTheDocument();
   });
 
   it("marks multiple concurrently-running sub-agents live", () => {

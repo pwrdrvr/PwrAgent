@@ -121,6 +121,25 @@ class MockTransport implements JsonRpcTransport {
     filePath: "/Users/huntharo/.codex/config.toml",
     overriddenMetadata: null,
   };
+  static configReadResult: unknown = {
+    config: {
+      mcp_servers: {
+        context7: {
+          command: "npx",
+          env: { SECRET: "never-forward-me" },
+        },
+        github: {
+          command: "github-mcp-server",
+        },
+      },
+    },
+  };
+  static configReadError: { code?: number; message: string } | undefined;
+  static threadMcpServerStatusResult: unknown = {
+    data: [],
+    nextCursor: null,
+  };
+  static mcpServerStatusError: { code?: number; message: string } | undefined;
   static lastConfigValueWritePayload: unknown;
   static rateLimitsResult: unknown = {
     rateLimitsByLimitId: {}
@@ -155,6 +174,7 @@ class MockTransport implements JsonRpcTransport {
     const payload = JSON.parse(message) as {
       id?: string;
       method?: string;
+      params?: Record<string, unknown>;
     };
 
     if (payload.method === "initialize") {
@@ -610,6 +630,54 @@ class MockTransport implements JsonRpcTransport {
       return;
     }
 
+    if (payload.method === "config/read") {
+      if (MockTransport.configReadError) {
+        this.messageHandler(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: payload.id,
+            error: {
+              code: MockTransport.configReadError.code ?? -32000,
+              message: MockTransport.configReadError.message,
+            },
+          }),
+        );
+        return;
+      }
+      this.messageHandler(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: payload.id,
+          result: MockTransport.configReadResult,
+        }),
+      );
+      return;
+    }
+
+    if (payload.method === "mcpServerStatus/list") {
+      if (MockTransport.mcpServerStatusError) {
+        this.messageHandler(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: payload.id,
+            error: {
+              code: MockTransport.mcpServerStatusError.code ?? -32000,
+              message: MockTransport.mcpServerStatusError.message,
+            },
+          }),
+        );
+        return;
+      }
+      this.messageHandler(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: payload.id,
+          result: MockTransport.threadMcpServerStatusResult,
+        }),
+      );
+      return;
+    }
+
     if (payload.method === "account/rateLimits/read") {
       this.messageHandler(
         JSON.stringify({
@@ -865,6 +933,17 @@ class MockTransport implements JsonRpcTransport {
       return;
     }
 
+    if (payload.method === "thread/unsubscribe") {
+      this.messageHandler(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: payload.id,
+          result: {},
+        }),
+      );
+      return;
+    }
+
     if (payload.method === "thread/settings/update") {
       const result: ThreadSettingsUpdateResponse = {};
       this.messageHandler(
@@ -1052,6 +1131,25 @@ describe("CodexAppServerClient", () => {
       version: "1",
       filePath: "/Users/huntharo/.codex/config.toml",
       overriddenMetadata: null,
+    };
+    MockTransport.configReadResult = {
+      config: {
+        mcp_servers: {
+          context7: {
+            command: "npx",
+            env: { SECRET: "never-forward-me" },
+          },
+          github: {
+            command: "github-mcp-server",
+          },
+        },
+      },
+    };
+    MockTransport.configReadError = undefined;
+    MockTransport.mcpServerStatusError = undefined;
+    MockTransport.threadMcpServerStatusResult = {
+      data: [],
+      nextCursor: null,
     };
     MockTransport.lastConfigValueWritePayload = undefined;
     MockTransport.rateLimitsResult = {
@@ -6448,10 +6546,19 @@ describe("CodexAppServerClient", () => {
 
   it("generates thread titles through an ephemeral Codex helper turn", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const observedMessages: string[] = [];
+    MockTransport.threadMcpServerStatusResult = {
+      data: [
+        { name: "context7", tools: {} },
+        { name: "github", tools: {} },
+      ],
+      nextCursor: null,
+    };
     MockTransport.threadStartResult = {
       thread: {
         id: "thread-title-helper",
       },
+      instructionSources: [],
     };
     MockTransport.turnStartResult = {
       thread: {
@@ -6464,7 +6571,12 @@ describe("CodexAppServerClient", () => {
 
     const client = new CodexAppServerClient({
       command: "codex",
-      directoryResolver: async () => []
+      directoryResolver: async () => [],
+      connectionObserver: {
+        onMessage: (event) => {
+          observedMessages.push(event.raw);
+        },
+      },
     });
     const forwardedNotifications: string[] = [];
     client.onNotification((notification) => {
@@ -6569,18 +6681,63 @@ describe("CodexAppServerClient", () => {
         params: expect.objectContaining({
           cwd: titleHelperWorkspace,
           runtimeWorkspaceRoots: [titleHelperWorkspace],
+          environments: [],
+          baseInstructions: "",
           ephemeral: true,
           model: "gpt-5.6-luna",
           serviceTier: null,
           config: {
             web_search: "disabled",
+            notify: [],
             include_permissions_instructions: false,
             include_apps_instructions: false,
             include_collaboration_mode_instructions: false,
             include_environment_context: false,
+            project_doc_max_bytes: 0,
             skills: {
               include_instructions: false,
               bundled: { enabled: false },
+            },
+            features: {
+              apps: false,
+              code_mode: false,
+              code_mode_only: false,
+              current_time_reminder: false,
+              deferred_executor: false,
+              enable_fanout: false,
+              goals: false,
+              hooks: false,
+              image_generation: false,
+              memories: false,
+              multi_agent: false,
+              multi_agent_v2: false,
+              plugins: false,
+              standalone_web_search: false,
+              token_budget: false,
+              tool_suggest: false,
+            },
+            orchestrator: {
+              mcp: { enabled: false },
+              skills: { enabled: false },
+            },
+            tools: {
+              experimental_request_user_input: { enabled: false },
+            },
+            hooks: {
+              PreToolUse: [],
+              PermissionRequest: [],
+              PostToolUse: [],
+              PreCompact: [],
+              PostCompact: [],
+              SessionStart: [],
+              UserPromptSubmit: [],
+              SubagentStart: [],
+              SubagentStop: [],
+              Stop: [],
+            },
+            mcp_servers: {
+              context7: { enabled: false },
+              github: { enabled: false },
             },
           },
         }),
@@ -6598,6 +6755,33 @@ describe("CodexAppServerClient", () => {
         }),
       ]),
     );
+    for (const request of threadStartRequests) {
+      expect(request.params).not.toHaveProperty("dynamicTools");
+    }
+    expect(
+      requests
+        .filter((request) => request.method === "mcpServerStatus/list")
+        .map((request) => request.params),
+    ).toEqual([
+      {
+        threadId: "thread-title-helper",
+        detail: "toolsAndAuthOnly",
+        limit: 100,
+      },
+    ]);
+    expect(requests).toContainEqual(
+      expect.objectContaining({
+        method: "config/read",
+        params: {
+          includeLayers: false,
+          cwd: titleHelperWorkspace,
+        },
+      }),
+    );
+    expect(observedMessages.join("\n")).not.toContain("never-forward-me");
+    expect(observedMessages.join("\n")).not.toContain("github-mcp-server");
+    expect(observedMessages.join("\n")).toContain('"context7":{}');
+    expect(observedMessages.join("\n")).toContain('"github":{}');
     expect(requests).toContainEqual(
       expect.objectContaining({
         method: "turn/start",
@@ -6620,6 +6804,355 @@ describe("CodexAppServerClient", () => {
         }),
       })
     );
+    expect(requests).toContainEqual(
+      expect.objectContaining({
+        method: "thread/unsubscribe",
+        params: { threadId: "thread-title-helper" },
+      }),
+    );
+    expect(requests.map((request) => request.method)).not.toContain(
+      "thread/rollback",
+    );
+
+    await client.close();
+  });
+
+  it("uses a fresh helper thread for every title and unsubscribes each one", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+    const generate = async (threadId: string, turnId: string, title: string) => {
+      MockTransport.threadStartResult = {
+        thread: { id: threadId },
+        instructionSources: [],
+      };
+      MockTransport.turnStartResult = {
+        thread: { id: threadId },
+        turn: {
+          id: turnId,
+          output: [{ type: "text", text: JSON.stringify({ title }) }],
+        },
+      };
+      return await client.generateTitle({
+        prompt: "Name the thread from this prompt",
+        promptVersion: "thread-title-v1",
+        schema: {
+          type: "object",
+          required: ["title"],
+          properties: { title: { type: "string" } },
+        },
+        schemaName: "thread_title",
+        timeoutMs: 5_000,
+      });
+    };
+
+    const first = await generate(
+      "thread-title-helper-1",
+      "turn-title-helper-1",
+      "First title",
+    );
+    const second = await generate(
+      "thread-title-helper-2",
+      "turn-title-helper-2",
+      "Second title",
+    );
+
+    expect(first).toMatchObject({
+      status: "ok",
+      helperThreadId: "thread-title-helper-1",
+      helperTurnId: "turn-title-helper-1",
+    });
+    expect(second).toMatchObject({
+      status: "ok",
+      helperThreadId: "thread-title-helper-2",
+      helperTurnId: "turn-title-helper-2",
+    });
+
+    const requests = MockTransport.instances.at(-1)!.sentMessages.map(
+      (message) => JSON.parse(message) as { method?: string; params?: Record<string, unknown> },
+    );
+    expect(
+      requests.filter((request) => request.method === "mcpServerStatus/list"),
+    ).toHaveLength(2);
+    expect(
+      requests
+        .filter((request) => request.method === "mcpServerStatus/list")
+        .map((request) => request.params?.threadId)
+        .filter(Boolean),
+    ).toEqual(["thread-title-helper-1", "thread-title-helper-2"]);
+    expect(
+      requests.filter((request) => request.method === "config/read"),
+    ).toHaveLength(2);
+    expect(
+      requests.filter((request) => request.method === "thread/start"),
+    ).toHaveLength(2);
+    expect(
+      requests
+        .filter((request) => request.method === "thread/unsubscribe")
+        .map((request) => request.params?.threadId),
+    ).toEqual(["thread-title-helper-1", "thread-title-helper-2"]);
+    expect(requests.map((request) => request.method)).not.toContain(
+      "thread/rollback",
+    );
+
+    await client.close();
+  });
+
+  it("skips process-wide MCP attestation before Codex 0.144", async () => {
+    MockTransport.serverVersion = "0.143.0";
+    MockTransport.threadMcpServerStatusResult = {
+      data: [
+        {
+          name: "context7",
+          tools: {
+            resolve: {
+              name: "resolve",
+              description: "Resolve documentation",
+              inputSchema: { type: "object" },
+            },
+          },
+        },
+      ],
+      nextCursor: null,
+    };
+    MockTransport.threadStartResult = {
+      thread: { id: "legacy-title-helper" },
+      instructionSources: [],
+    };
+    MockTransport.turnStartResult = {
+      thread: { id: "legacy-title-helper" },
+      turn: {
+        id: "legacy-title-turn",
+        output: [
+          {
+            type: "text",
+            text: JSON.stringify({ title: "Legacy helper title" }),
+          },
+        ],
+      },
+    };
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    await expect(
+      client.generateTitle({
+        prompt: "Name the thread from this prompt",
+        promptVersion: "thread-title-v2",
+        schema: {
+          type: "object",
+          required: ["title"],
+          properties: { title: { type: "string" } },
+        },
+        schemaName: "thread_title",
+        timeoutMs: 5_000,
+      }),
+    ).resolves.toMatchObject({
+      status: "ok",
+      object: { title: "Legacy helper title" },
+      helperThreadId: "legacy-title-helper",
+      helperTurnId: "legacy-title-turn",
+    });
+
+    const requests = MockTransport.instances.at(-1)!.sentMessages.map(
+      (message) => JSON.parse(message) as {
+        method?: string;
+        params?: Record<string, unknown>;
+      },
+    );
+    expect(requests.map((request) => request.method)).not.toContain(
+      "mcpServerStatus/list",
+    );
+    expect(
+      requests.find((request) => request.method === "thread/start")?.params,
+    ).toMatchObject({
+      config: {
+        mcp_servers: {
+          context7: { enabled: false },
+          github: { enabled: false },
+        },
+      },
+    });
+    expect(requests.map((request) => request.method)).toContain("turn/start");
+
+    await client.close();
+  });
+
+  it("fails closed before starting a title helper when MCP inventory inspection fails", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.configReadError = { message: "inventory unavailable" };
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    await expect(
+      client.generateTitle({
+        prompt: "Name the thread from this prompt",
+        promptVersion: "thread-title-v1",
+        schema: {
+          type: "object",
+          required: ["title"],
+          properties: { title: { type: "string" } },
+        },
+        schemaName: "thread_title",
+        timeoutMs: 5_000,
+      }),
+    ).resolves.toEqual({
+      status: "failed",
+      reason: "json-rpc error (-32000): inventory unavailable",
+    });
+
+    const methods = MockTransport.instances.at(-1)!.sentMessages.map(
+      (message) => (JSON.parse(message) as { method?: string }).method,
+    );
+    expect(methods).toContain("config/read");
+    expect(methods).not.toContain("mcpServerStatus/list");
+    expect(methods).not.toContain("thread/start");
+
+    await client.close();
+  });
+
+  it("runs the bounded helper turn when Codex retains global instructions", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.threadStartResult = {
+      thread: { id: "thread-title-helper" },
+      instructionSources: ["/Users/huntharo/.codex/AGENTS.md"],
+    };
+    MockTransport.turnStartResult = {
+      thread: { id: "thread-title-helper" },
+      turn: {
+        id: "turn-title-helper",
+        output: [{ type: "text", text: JSON.stringify({ title: "Paul Revere story" }) }],
+      },
+    };
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    await expect(
+      client.generateTitle({
+        prompt: "Name the thread from this prompt",
+        promptVersion: "thread-title-v1",
+        schema: {
+          type: "object",
+          required: ["title"],
+          properties: { title: { type: "string" } },
+        },
+        schemaName: "thread_title",
+        timeoutMs: 5_000,
+      }),
+    ).resolves.toMatchObject({
+      status: "ok",
+      object: { title: "Paul Revere story" },
+      helperThreadId: "thread-title-helper",
+      helperTurnId: "turn-title-helper",
+    });
+
+    const requests = MockTransport.instances.at(-1)!.sentMessages.map(
+      (message) => JSON.parse(message) as { method?: string; params?: unknown },
+    );
+    expect(requests.map((request) => request.method)).toContain("turn/start");
+    expect(requests).toContainEqual(
+      expect.objectContaining({
+        method: "thread/unsubscribe",
+        params: { threadId: "thread-title-helper" },
+      }),
+    );
+    expect(codexClientLogWarn).toHaveBeenCalledWith(
+      "codex helper thread retained global instruction source",
+      {
+        threadId: "thread-title-helper",
+        instructionSourceCount: 1,
+      },
+    );
+
+    await client.close();
+  });
+
+  it("rejects any MCP tools that survive the helper thread overlay", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.threadStartResult = {
+      thread: { id: "thread-title-helper" },
+      instructionSources: [],
+    };
+    MockTransport.threadMcpServerStatusResult = {
+      data: [{ name: "managed-server", tools: { search: {} } }],
+      nextCursor: null,
+    };
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    await expect(
+      client.generateTitle({
+        prompt: "Name the thread from this prompt",
+        promptVersion: "thread-title-v1",
+        schema: {
+          type: "object",
+          required: ["title"],
+          properties: { title: { type: "string" } },
+        },
+        schemaName: "thread_title",
+        timeoutMs: 5_000,
+      }),
+    ).resolves.toEqual({
+      status: "failed",
+      reason: "codex_title_helper_mcp_tools_present",
+    });
+
+    const requests = MockTransport.instances.at(-1)!.sentMessages.map(
+      (message) => JSON.parse(message) as { method?: string; params?: unknown },
+    );
+    expect(requests.map((request) => request.method)).not.toContain("turn/start");
+    expect(requests).toContainEqual(
+      expect.objectContaining({
+        method: "thread/unsubscribe",
+        params: { threadId: "thread-title-helper" },
+      }),
+    );
+
+    await client.close();
+  });
+
+  it("fails closed when Codex omits the helper instruction-source signal", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.threadStartResult = {
+      thread: { id: "thread-title-helper" },
+    };
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    await expect(
+      client.generateTitle({
+        prompt: "Name the thread from this prompt",
+        promptVersion: "thread-title-v1",
+        schema: {
+          type: "object",
+          required: ["title"],
+          properties: { title: { type: "string" } },
+        },
+        schemaName: "thread_title",
+        timeoutMs: 5_000,
+      }),
+    ).resolves.toEqual({
+      status: "failed",
+      reason: "codex_title_thread_start_missing_instruction_sources",
+    });
+
+    const methods = MockTransport.instances.at(-1)!.sentMessages.map(
+      (message) => (JSON.parse(message) as { method?: string }).method,
+    );
+    expect(methods).not.toContain("turn/start");
+    expect(methods).toContain("thread/unsubscribe");
 
     await client.close();
   });
@@ -6630,6 +7163,7 @@ describe("CodexAppServerClient", () => {
       thread: {
         id: "thread-title-helper",
       },
+      instructionSources: [],
     };
     MockTransport.turnStartResult = {
       thread: {
@@ -6710,6 +7244,7 @@ describe("CodexAppServerClient", () => {
       thread: {
         id: "thread-title-helper",
       },
+      instructionSources: [],
     };
     MockTransport.turnStartResult = {
       thread: {
