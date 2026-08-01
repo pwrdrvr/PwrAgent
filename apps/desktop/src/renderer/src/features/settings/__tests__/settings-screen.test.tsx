@@ -760,15 +760,15 @@ describe("SettingsScreen", () => {
 
     // The snapshot fixture omits `backgroundPrPolling` entirely, which is the
     // real shape an older/stale snapshot has — the toggle must still render
-    // (unchecked, from the shared default) rather than crash.
+    // (checked, from the shared default) rather than crash.
     const backgroundPrPollingSwitch = screen.getByRole("switch", {
       name: "Enable background pull request status",
     });
-    expect(backgroundPrPollingSwitch).toHaveAttribute("aria-checked", "false");
+    expect(backgroundPrPollingSwitch).toHaveAttribute("aria-checked", "true");
     fireEvent.click(backgroundPrPollingSwitch);
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
-        experimental: { backgroundPrPolling: true },
+        experimental: { backgroundPrPolling: false },
       });
     });
 
