@@ -20,7 +20,6 @@ import type {
 import { ThreadContextPanel } from "../ThreadContextPanel";
 import type { ContextTabId } from "../context-panels/context-tab";
 import { collectEditedFileGroups } from "../edited-file-groups";
-import { ThreadLinkProvider } from "../../../lib/thread-links";
 
 const HOVER_RAIL_REVEAL_DELAY_MS = 350;
 
@@ -160,14 +159,9 @@ type PanelOverrides = Partial<
   >
 >;
 
-function renderPanel(
-  overrides: PanelOverrides = {},
-  options?: {
-    onShowThread: ComponentProps<typeof ThreadLinkProvider>["onShowThread"];
-  },
-) {
+function renderPanel(overrides: PanelOverrides = {}) {
   const onActiveTabChange = vi.fn<(tab: ContextTabId) => void>();
-  const panel = (
+  const result = render(
     <ThreadContextPanel
       activeTab="info"
       backends={[baseBackend]}
@@ -176,16 +170,6 @@ function renderPanel(
       onActiveTabChange={onActiveTabChange}
       {...overrides}
     />
-  );
-  const result = render(
-    options ? (
-      <ThreadLinkProvider
-        onShowThread={options.onShowThread}
-        threads={[overrides.thread ?? baseThread]}
-      >
-        {panel}
-      </ThreadLinkProvider>
-    ) : panel,
   );
   return { ...result, onActiveTabChange };
 }
@@ -2320,7 +2304,6 @@ describe("ThreadContextPanel", () => {
 
   it("keeps an unpinned rail open while using a portaled sub-agent dialog", async () => {
     vi.useFakeTimers();
-    const onShowThread = vi.fn();
     renderPanel(
       {
         activeTab: "subagents",
@@ -2339,7 +2322,6 @@ describe("ThreadContextPanel", () => {
           ],
         },
       },
-      { onShowThread },
     );
 
     const rail = screen.getByLabelText("Thread context");
@@ -2354,11 +2336,10 @@ describe("ThreadContextPanel", () => {
     });
 
     expect(dialog).toBeInTheDocument();
-    fireEvent.click(within(dialog).getByRole("button", { name: "Open transcript" }));
-    expect(onShowThread).toHaveBeenCalledWith({
-      backend: "codex",
-      threadId: "review-thread-1",
-    });
+    expect(
+      within(dialog).queryByRole("button", { name: "Open transcript" }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 
     fireEvent.mouseMove(document, { clientX: 500, clientY: 380 });
