@@ -121,6 +121,8 @@ import {
   type SetThreadExecutionModeResponse,
   type SetThreadModelSettingsRequest,
   type SetThreadModelSettingsResponse,
+  type SetThreadPrAutoDispatchRequest,
+  type SetThreadPrAutoDispatchResponse,
   type ApplyThreadModelMigrationRequest,
   type ApplyThreadModelMigrationResponse,
   type TurnOffCodexFastEverywhereResponse,
@@ -9563,7 +9565,10 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind;
     threadId: string;
   }): boolean {
-    return this.threadTurnQueue.canStartImmediately(params);
+    return (
+      !this.threadHasActiveTurn(params.threadId, params.backend)
+      && this.threadTurnQueue.canStartImmediately(params)
+    );
   }
 
   getActiveTurnForThread(params: {
@@ -11981,6 +11986,27 @@ export class DesktopBackendRegistry {
         ? { modelSettingsManuallyUpdatedAt }
         : {}),
     });
+  }
+
+  async setThreadPrAutoDispatch(
+    params: SetThreadPrAutoDispatchRequest,
+  ): Promise<SetThreadPrAutoDispatchResponse> {
+    await this.overlayStore.setThreadPrAutoDispatchEnabled({
+      backend: params.backend,
+      threadId: params.threadId,
+      enabled: params.enabled,
+    });
+    await this.emit({
+      backend: params.backend,
+      notification: {
+        method: "thread/prAutoDispatch/updated",
+        params: {
+          threadId: params.threadId,
+          enabled: params.enabled,
+        },
+      },
+    });
+    return params;
   }
 
   private async setThreadModelSettingsInternal(

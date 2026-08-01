@@ -364,6 +364,14 @@ export type SetThreadModelSettingsRequest = {
 
 export type SetThreadModelSettingsResponse = SetThreadModelSettingsRequest;
 
+export type SetThreadPrAutoDispatchRequest = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  enabled: boolean;
+};
+
+export type SetThreadPrAutoDispatchResponse = SetThreadPrAutoDispatchRequest;
+
 export type ApplyThreadModelMigrationRequest = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;

@@ -237,6 +237,7 @@ export function materializeNavigationThreads(params: {
         overlay?.modelSettingsManuallyUpdatedAt,
       serviceTier: overlay?.serviceTier ?? thread.serviceTier,
       fastMode: overlay?.fastMode ?? thread.fastMode,
+      prAutoDispatchEnabled: overlay?.prAutoDispatchEnabled ?? false,
       codexEnvironmentRuntime:
         overlay?.codexEnvironmentRuntime ?? thread.codexEnvironmentRuntime,
       codexEnvironmentOptions: thread.codexEnvironmentOptions,
@@ -425,6 +426,7 @@ export function buildNavigationSnapshotHash(params: {
       reasoningEffort: thread.reasoningEffort ?? null,
       serviceTier: thread.serviceTier ?? null,
       fastMode: thread.fastMode ?? null,
+      prAutoDispatchEnabled: thread.prAutoDispatchEnabled ?? false,
       codexEnvironmentRuntime: thread.codexEnvironmentRuntime
         ? {
             environmentId: thread.codexEnvironmentRuntime.environmentId,

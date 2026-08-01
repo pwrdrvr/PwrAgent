@@ -347,6 +347,54 @@ function renderComposerWithRegressionSkills(
 }
 
 describe("Composer", () => {
+  it("persists the Auto-fix PR toggle and shows its global polling gate", async () => {
+    const onSetThreadPrAutoDispatch = vi.fn(async () => undefined);
+    const thread: NavigationThreadSummary = {
+      id: "thread-1",
+      title: "Fix CI",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+      prAutoDispatchEnabled: true,
+    };
+    const { rerender } = render(
+      <Composer
+        backgroundPrPollingEnabled
+        disabled={false}
+        onSetThreadPrAutoDispatch={onSetThreadPrAutoDispatch}
+        skills={[]}
+        thread={thread}
+      />,
+    );
+
+    const toggle = screen.getByRole("button", { name: "Auto-fix PR" });
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(toggle);
+    await waitFor(() => {
+      expect(onSetThreadPrAutoDispatch).toHaveBeenCalledWith(false);
+    });
+
+    rerender(
+      <Composer
+        backgroundPrPollingEnabled={false}
+        disabled={false}
+        onSetThreadPrAutoDispatch={onSetThreadPrAutoDispatch}
+        skills={[]}
+        thread={thread}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Auto-fix PR" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Auto-fix PR" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "Auto-fix PR" })).toHaveAttribute(
+      "data-tooltip",
+      expect.stringContaining("paused"),
+    );
+  });
+
   it("lets launchpad errors be copied with the transcript copy control", async () => {
     const copyText = vi.fn(async () => undefined);
     const launchpadError =

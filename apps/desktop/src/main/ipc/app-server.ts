@@ -203,6 +203,7 @@ import type { BranchRef } from "../pr-status/github-graphql-client";
 import { resolveGitHubRepoForDirectory } from "../pr-status/git-remote";
 import { PrPollingScheduler } from "../pr-status/pr-polling-scheduler";
 import type { PrPollTarget } from "../pr-status/pr-polling-scheduler";
+import { PrAutoDispatchCoordinator } from "../pr-status/pr-auto-dispatch";
 import { isTerminalPullRequest, mergeCommitShas } from "../pr-status/pr-derivations";
 import {
   computePrStatusTransition,
@@ -211,7 +212,7 @@ import {
 import type { PrStatusTransition } from "../pr-status/pr-transitions";
 import { selectDiscoveryDueThreadKeys } from "../pr-status/pr-discovery";
 
-/** Listener registered via `onPrStatusTransition` — the future CI-event seam. */
+/** Listener registered via `onPrStatusTransition`. */
 type PrStatusTransitionListener = (transition: PrStatusTransition) => void;
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { resolveScratchProjectsRoots } from "../app-server/scratch-projects";
@@ -586,7 +587,10 @@ function normalizePullRequestProvider(provider: string | undefined): string {
 
 function normalizePrSummary(pr: PrSummary): PrSummary {
   const checkState = normalizePrCheckState(pr.checkState ?? pr.state);
-  return {
+  const headSha = normalizeCommitShas(
+    pr.headSha ? [pr.headSha] : undefined,
+  )?.[0];
+  const normalized: PrSummary = {
     ...pr,
     provider: normalizePullRequestProvider(pr.provider),
     state: checkState,
@@ -596,6 +600,12 @@ function normalizePrSummary(pr: PrSummary): PrSummary {
     mergeState: pr.mergeState ?? "unknown",
     commitShas: normalizeCommitShas(pr.commitShas),
   };
+  if (headSha) {
+    normalized.headSha = headSha;
+  } else {
+    delete normalized.headSha;
+  }
+  return normalized;
 }
 
 function normalizeCommitShas(commitShas: string[] | undefined): string[] | undefined {
@@ -686,6 +696,7 @@ function prSummariesEqual(left: PrSummary[], right: PrSummary[]): boolean {
       candidate.lifecycleState === pr.lifecycleState &&
       candidate.reviewState === pr.reviewState &&
       candidate.mergeState === pr.mergeState &&
+      candidate.headSha === pr.headSha &&
       JSON.stringify(candidate.commitShas ?? []) === JSON.stringify(pr.commitShas ?? []) &&
       candidate.url === pr.url
     );
@@ -869,6 +880,8 @@ class DesktopAppServerService {
   private prLookupRegistryLoaded = false;
   private prGraphqlClient: GithubGraphqlPrClient | undefined;
   private prPollingScheduler: PrPollingScheduler | undefined;
+  private backgroundPrPollingEnabled = false;
+  private prAutoDispatchCoordinator: PrAutoDispatchCoordinator | undefined;
   private prDiscoveryTimer: NodeJS.Timeout | undefined;
   /** Per-thread last discovery branch-lookup time, driving the slow rotation. */
   private readonly prDiscoveryLastRefreshedAt = new Map<string, number>();
@@ -881,7 +894,7 @@ class DesktopAppServerService {
   private prPollingFocusThreadKeys: ReadonlySet<string> = new Set();
   /** prKey → backend to publish its status updates on. Rebuilt per poll pass. */
   private readonly prPollBackendByKey = new Map<string, AppServerBackendKind>();
-  /** Subscribers to PR status transitions (the future CI-event ingestor seam). */
+  /** Subscribers to typed PR status transitions. */
   private readonly prStatusTransitionListeners = new Set<PrStatusTransitionListener>();
   private readonly previousDirectoriesByBackend = new Map<
     AppServerBackendScope,
@@ -3049,10 +3062,8 @@ class DesktopAppServerService {
   }
 
   /**
-   * Subscribe to PR status transitions. This is the seam the future CI-event
-   * ingestor hooks into (brainstorm) — it can turn a `checkState → failing`
-   * into an inbound thread event without the poller knowing it exists. Returns
-   * an unsubscribe function.
+   * Subscribe to PR status transitions without coupling consumers to polling.
+   * Returns an unsubscribe function.
    */
   onPrStatusTransition(listener: PrStatusTransitionListener): () => void {
     this.prStatusTransitionListeners.add(listener);
@@ -3083,6 +3094,27 @@ class DesktopAppServerService {
           });
         }
       }
+      void this.getPrAutoDispatchCoordinator().handleTransition({
+        transition,
+        source: observation.source,
+        observedAt: observation.observedAt,
+        backgroundPollingEnabled: this.backgroundPrPollingEnabled,
+      }).then((outcomes) => {
+        for (const outcome of outcomes) {
+          const log = outcome.status === "failed"
+            ? appServerLog.warn.bind(appServerLog)
+            : appServerLog.info.bind(appServerLog);
+          log("pr auto dispatch", {
+            prKey: transition.prKey,
+            ...outcome,
+          });
+        }
+      }).catch((error) => {
+        appServerLog.warn("pr auto dispatch failed", {
+          prKey: transition.prKey,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
     }
   }
 
@@ -3091,7 +3123,7 @@ class DesktopAppServerService {
    * transition actually fired (rare), so the O(threads) scan is cheap. A PR
    * touched only via a path that has not yet been remembered in a navigation
    * snapshot resolves to `[]` — acceptable for the logging consumer, and the
-   * future ingestor can re-resolve at delivery time.
+   * auto-dispatch coordinator can re-resolve on a later observation.
    */
   private findThreadKeysForPrKey(prKey: string): string[] {
     const threadKeys: string[] = [];
@@ -3328,6 +3360,9 @@ class DesktopAppServerService {
         if (!this.prPollingSettingsUnsubscribe) {
           this.prPollingSettingsUnsubscribe = settingsService.onConfigWritten(
             () => {
+              // Pause dispatch pessimistically while the new snapshot is read.
+              // This closes the settings-write race for the global kill switch.
+              this.backgroundPrPollingEnabled = false;
               this.syncPrPollingSchedulerState();
             },
           );
@@ -3341,6 +3376,8 @@ class DesktopAppServerService {
           error: error instanceof Error ? error.message : String(error),
         });
       }
+
+      this.backgroundPrPollingEnabled = enabled;
 
       if (!enabled) {
         this.stopPrPollingScheduler();
@@ -4397,6 +4434,7 @@ class DesktopAppServerService {
     this.prFetcher = undefined;
     this.prPollingScheduler?.stop();
     this.prPollingScheduler = undefined;
+    this.backgroundPrPollingEnabled = false;
     if (this.prDiscoveryTimer) {
       clearInterval(this.prDiscoveryTimer);
       this.prDiscoveryTimer = undefined;
@@ -4408,6 +4446,7 @@ class DesktopAppServerService {
     this.prPollingFocusThreadKeys = new Set();
     this.prPollBackendByKey.clear();
     this.prStatusTransitionListeners.clear();
+    this.prAutoDispatchCoordinator = undefined;
     this.pendingNavigationSnapshots.clear();
     this.pendingThreadPullRequestRefreshes.clear();
     this.pendingEditCommitResolves.clear();
@@ -4449,6 +4488,17 @@ class DesktopAppServerService {
 
   private getOverlayStore(): AppServerOverlayStoreLike {
     return getDesktopOverlayStore();
+  }
+
+  private getPrAutoDispatchCoordinator(): PrAutoDispatchCoordinator {
+    if (!this.prAutoDispatchCoordinator) {
+      this.prAutoDispatchCoordinator = new PrAutoDispatchCoordinator({
+        store: this.getOverlayStore(),
+        registry: getDesktopBackendRegistry(),
+        isBackgroundPollingEnabled: () => this.backgroundPrPollingEnabled,
+      });
+    }
+    return this.prAutoDispatchCoordinator;
   }
 
   private getFocusedDiffService(modelOverride?: string): FocusedDiffService {

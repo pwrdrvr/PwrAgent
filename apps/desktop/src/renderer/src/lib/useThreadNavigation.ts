@@ -716,6 +716,7 @@ function threadSummariesEqual(
     left.reasoningEffort === right.reasoningEffort &&
     left.serviceTier === right.serviceTier &&
     left.fastMode === right.fastMode &&
+    left.prAutoDispatchEnabled === right.prAutoDispatchEnabled &&
     JSON.stringify(left.acpRuntime ?? {}) === JSON.stringify(right.acpRuntime ?? {}) &&
     JSON.stringify(left.workspaceHandoff ?? {}) ===
       JSON.stringify(right.workspaceHandoff ?? {}) &&
@@ -1605,6 +1606,28 @@ function applyThreadModelSettingsUpdate(
     : snapshot;
 }
 
+function applyThreadPrAutoDispatchUpdate(
+  snapshot: NavigationSnapshot | undefined,
+  params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    enabled: boolean;
+  },
+): NavigationSnapshot | undefined {
+  if (!snapshot) {
+    return snapshot;
+  }
+  let changed = false;
+  const threads = snapshot.threads.map((thread) => {
+    if (thread.source !== params.backend || thread.id !== params.threadId) {
+      return thread;
+    }
+    changed = true;
+    return { ...thread, prAutoDispatchEnabled: params.enabled };
+  });
+  return changed ? { ...snapshot, threads } : snapshot;
+}
+
 function applyThreadAcpRuntimeUpdate(
   snapshot: NavigationSnapshot | undefined,
   params: {
@@ -2318,6 +2341,10 @@ export function useThreadNavigation(
       >
     >
   ) => Promise<void>;
+  setThreadPrAutoDispatch: (
+    thread: NavigationThreadSummary,
+    enabled: boolean,
+  ) => Promise<void>;
   setThreadModelSettingsError?: string;
   updatingThreadExecutionMode?: ThreadExecutionMode;
   updateDirectoryLaunchpad: (
@@ -2404,6 +2431,7 @@ export function useThreadNavigation(
   const cancelThreadExecutionModeQueueRequest =
     desktopApi?.cancelThreadExecutionModeQueue;
   const setThreadModelSettings = desktopApi?.setThreadModelSettings;
+  const setThreadPrAutoDispatchRequest = desktopApi?.setThreadPrAutoDispatch;
   const setNavigationBrowseModeRequest = desktopApi?.setNavigationBrowseMode;
   const enabled = options.enabled ?? true;
   const lightweightNavigationRefresh = options.lightweightNavigationRefresh ?? false;
@@ -3306,6 +3334,26 @@ export function useThreadNavigation(
         setOptimisticThread((current) =>
           current?.source === event.backend && current.id === params.threadId
             ? { ...current, ...modelSettingsPatch }
+            : current
+        );
+        return;
+      }
+
+      if (method === "thread/prAutoDispatch/updated") {
+        const params = event.notification.params as {
+          threadId: string;
+          enabled: boolean;
+        };
+        setState((current) => ({
+          ...current,
+          response: applyThreadPrAutoDispatchUpdate(current.response, {
+            backend: event.backend,
+            ...params,
+          }),
+        }));
+        setOptimisticThread((current) =>
+          current?.source === event.backend && current.id === params.threadId
+            ? { ...current, prAutoDispatchEnabled: params.enabled }
             : current
         );
         return;
@@ -5906,6 +5954,49 @@ export function useThreadNavigation(
     [refresh, setThreadModelSettings]
   );
 
+  const updateThreadPrAutoDispatch = useCallback(
+    async (
+      thread: NavigationThreadSummary,
+      enabled: boolean,
+    ): Promise<void> => {
+      if (!setThreadPrAutoDispatchRequest) {
+        setSetThreadModelSettingsError(
+          "Desktop bridge is missing setThreadPrAutoDispatch().",
+        );
+        return;
+      }
+
+      setSetThreadModelSettingsError(undefined);
+      setOptimisticThread((current) =>
+        current && current.id === thread.id && current.source === thread.source
+          ? { ...current, prAutoDispatchEnabled: enabled }
+          : current
+      );
+      setState((current) => ({
+        ...current,
+        response: applyThreadPrAutoDispatchUpdate(current.response, {
+          backend: thread.source,
+          threadId: thread.id,
+          enabled,
+        }),
+      }));
+
+      try {
+        await setThreadPrAutoDispatchRequest({
+          backend: thread.source,
+          threadId: thread.id,
+          enabled,
+        });
+      } catch (error) {
+        setSetThreadModelSettingsError(
+          error instanceof Error ? error.message : String(error),
+        );
+        await refresh(buildThreadIdentityKey(thread.source, thread.id));
+      }
+    },
+    [refresh, setThreadPrAutoDispatchRequest],
+  );
+
   const updateAcpSessionRuntimeOption = useCallback(
     async (
       thread: NavigationThreadSummary,
@@ -6019,6 +6110,7 @@ export function useThreadNavigation(
     setThreadExecutionModeError,
     cancelThreadExecutionModeQueue,
     setThreadModelSettings: updateThreadModelSettings,
+    setThreadPrAutoDispatch: updateThreadPrAutoDispatch,
     setThreadModelSettingsError,
     updatingThreadExecutionMode,
     updateDirectoryLaunchpad,

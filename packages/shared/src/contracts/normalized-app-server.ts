@@ -1308,6 +1308,13 @@ export type AppServerNotification =
       };
     }
   | {
+      method: "thread/prAutoDispatch/updated";
+      params: {
+        threadId: string;
+        enabled: boolean;
+      };
+    }
+  | {
       method: "thread/codexSettings/observed";
       params: {
         threadId: string;

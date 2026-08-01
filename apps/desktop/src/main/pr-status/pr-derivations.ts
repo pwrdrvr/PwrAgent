@@ -54,6 +54,9 @@ export type GhCheckRunPayload = {
  */
 export function parseGhPrPayload(row: GhPrPayload): PrSummary {
   const checkState = deriveChipState(row);
+  const headSha = normalizeCommitShas([
+    row.commits?.[row.commits.length - 1]?.oid,
+  ])[0];
   return {
     provider: parsePullRequestProvider(row.url),
     number: row.number,
@@ -65,6 +68,7 @@ export function parseGhPrPayload(row: GhPrPayload): PrSummary {
     lifecycleState: deriveLifecycleState(row),
     reviewState: deriveReviewState(row),
     mergeState: deriveMergeState(row),
+    ...(headSha ? { headSha } : {}),
     ...parseCommitShas(row.commits),
     url: row.url,
   };

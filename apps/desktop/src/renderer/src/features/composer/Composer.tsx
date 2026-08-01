@@ -57,6 +57,7 @@ import {
   PlanIcon,
   PlayIcon,
   PlusIcon,
+  PullRequestIcon,
   SearchIcon,
 } from "../../icons";
 import { AppIcon } from "../../components/AppIcon";
@@ -135,6 +136,7 @@ type ComposerProps = {
   backends?: BackendSummary[];
   applications?: DesktopApplicationsSnapshot;
   codexFastAllowed?: boolean;
+  backgroundPrPollingEnabled?: boolean;
   providerModelDefaults?: Record<string, DesktopProviderModelDefaults>;
   desktopApi?: DesktopApi;
   /**
@@ -285,6 +287,7 @@ type ComposerProps = {
       >
     >
   ) => Promise<void>;
+  onSetThreadPrAutoDispatch?: (enabled: boolean) => Promise<void>;
   threadModelSettingsError?: string;
 };
 
@@ -6506,6 +6509,8 @@ export function Composer(props: ComposerProps) {
   };
 
   const currentSettings = props.launchpad ?? props.thread;
+  const backgroundPrPollingEnabled =
+    props.backgroundPrPollingEnabled ?? true;
   const modelOptions = backend?.launchpadOptions?.models ?? [];
   const selectedModelOption =
     modelOptions.find((option) => option.id === currentSettings?.model) ??
@@ -8597,6 +8602,31 @@ export function Composer(props: ComposerProps) {
               onClick={() => setPlanModeEnabled((current) => !current)}
             >
               <PlanIcon size={15} aria-hidden="true" />
+            </button>
+          ) : null}
+
+          {props.thread ? (
+            <button
+              type="button"
+              className={`composer__toggle tooltip-target${
+                props.thread.prAutoDispatchEnabled ? " is-active" : ""
+              }`}
+              aria-label="Auto-fix PR"
+              aria-pressed={Boolean(props.thread.prAutoDispatchEnabled)}
+              data-tooltip={
+                backgroundPrPollingEnabled
+                  ? "Auto-fix PR — handle new CI failures or merge conflicts"
+                  : "Auto-fix PR paused — turn on background PR polling in Settings"
+              }
+              disabled={!backgroundPrPollingEnabled}
+              onClick={() => {
+                if (!backgroundPrPollingEnabled) return;
+                void props.onSetThreadPrAutoDispatch?.(
+                  !props.thread?.prAutoDispatchEnabled,
+                );
+              }}
+            >
+              <PullRequestIcon size={15} aria-hidden="true" />
             </button>
           ) : null}
 

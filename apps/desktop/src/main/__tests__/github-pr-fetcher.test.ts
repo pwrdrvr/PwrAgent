@@ -53,6 +53,7 @@ describe("parseGhPrPayload", () => {
       lifecycleState: "merged",
       reviewState: "ready_for_review",
       mergeState: "unknown",
+      headSha: "b".repeat(40),
       commitShas: ["a".repeat(40), "b".repeat(40)],
       url: "https://github.com/pwrdrvr/PwrAgent/pull/178",
     });
@@ -560,6 +561,7 @@ describe("GithubPrFetcher", () => {
           lifecycleState: "merged",
           reviewState: "ready_for_review",
           mergeState: "unknown",
+          headSha: "b".repeat(40),
           commitShas: ["a".repeat(40), "b".repeat(40)],
           url: "https://github.com/pwrdrvr/PwrAgent/pull/178",
         },
@@ -610,6 +612,7 @@ describe("GithubPrFetcher", () => {
         lifecycleState: "merged",
         reviewState: "ready_for_review",
         mergeState: "unknown",
+        headSha: "b".repeat(40),
         commitShas: ["a".repeat(40), "b".repeat(40)],
         url: "https://github.com/pwrdrvr/PwrAgent/pull/178",
       });

@@ -7137,6 +7137,81 @@ describe("useThreadNavigation", () => {
     expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
   });
 
+  it("persists and patches the per-thread PR auto-dispatch preference", async () => {
+    const listeners = new Set<
+      Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+    >();
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: ["codex:thread-1"],
+      threads: [{
+        id: "thread-1",
+        title: "First thread",
+        titleSource: "explicit" as const,
+        source: "codex" as const,
+        linkedDirectories: [],
+        prAutoDispatchEnabled: false,
+        inbox: { inInbox: true, reason: "new-thread" as const },
+        updatedAt: 1_000,
+      }],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const setThreadPrAutoDispatch = vi.fn(
+      async (
+        request: Parameters<
+          NonNullable<DesktopApi["setThreadPrAutoDispatch"]>
+        >[0],
+      ) => request,
+    );
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      setThreadPrAutoDispatch,
+      onAgentEvent: (callback) => {
+        listeners.add(callback);
+        return () => listeners.delete(callback);
+      },
+    };
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.prAutoDispatchEnabled).toBe(false);
+    });
+    await act(async () => {
+      await result.current.setThreadPrAutoDispatch(
+        result.current.selectedThread!,
+        true,
+      );
+    });
+    expect(setThreadPrAutoDispatch).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      enabled: true,
+    });
+    expect(result.current.selectedThread?.prAutoDispatchEnabled).toBe(true);
+
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "thread/prAutoDispatch/updated",
+            params: { threadId: "thread-1", enabled: false },
+          },
+        });
+      }
+    });
+    await waitFor(() => {
+      expect(result.current.selectedThread?.prAutoDispatchEnabled).toBe(false);
+    });
+    expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
+  });
+
   it("preserves the current thread model when patching non-model settings", async () => {
     const getNavigationSnapshot = vi.fn(async () => ({
       backend: "all" as const,

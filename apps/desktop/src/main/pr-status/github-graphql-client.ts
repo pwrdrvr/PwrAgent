@@ -249,6 +249,7 @@ export function mapGraphqlPrNode(node: GraphqlPrNode): PrSummary {
     mergeStateStatus: null,
   };
   const commitShas = normalizeCommitShas([headCommit?.oid]);
+  const headSha = commitShas[0];
 
   return {
     provider: parsePullRequestProvider(node.url),
@@ -263,6 +264,7 @@ export function mapGraphqlPrNode(node: GraphqlPrNode): PrSummary {
     lifecycleState: deriveLifecycleState(shaped),
     reviewState: deriveReviewState(shaped),
     mergeState: deriveMergeState(shaped),
+    ...(headSha ? { headSha } : {}),
     ...(commitShas.length > 0 ? { commitShas } : {}),
     url: node.url,
   };

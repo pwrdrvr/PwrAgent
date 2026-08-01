@@ -88,7 +88,10 @@ function normalizePullRequestProvider(provider: string | undefined): string {
 
 function normalizePrSummary(pr: PrSummary): PrSummary {
   const checkState = normalizePrCheckState(pr.checkState ?? pr.state);
-  return {
+  const headSha = normalizeCommitShas(
+    pr.headSha ? [pr.headSha] : undefined,
+  )?.[0];
+  const normalized: PrSummary = {
     ...pr,
     provider: normalizePullRequestProvider(pr.provider),
     state: checkState,
@@ -98,6 +101,12 @@ function normalizePrSummary(pr: PrSummary): PrSummary {
     mergeState: pr.mergeState ?? "unknown",
     commitShas: normalizeCommitShas(pr.commitShas),
   };
+  if (headSha) {
+    normalized.headSha = headSha;
+  } else {
+    delete normalized.headSha;
+  }
+  return normalized;
 }
 
 function normalizeDetachedPrKeys(keys: string[] | undefined): string[] {
@@ -2298,6 +2307,87 @@ export class SqliteOverlayStore {
     return nextState;
   }
 
+  async setThreadPrAutoDispatchEnabled(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    enabled: boolean;
+  }): Promise<ThreadOverlayState> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.getThread(threadKey) ?? {
+      backend: params.backend,
+      threadId: params.threadId,
+      executionMode: "default" as const,
+      extraLinkedDirectories: [],
+    };
+    const nextState: ThreadOverlayState = {
+      ...current,
+      prAutoDispatchEnabled: params.enabled,
+    };
+    this.putThread(threadKey, nextState);
+    return nextState;
+  }
+
+  async claimThreadPrAutoDispatch(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    prKey: string;
+    fingerprint: string;
+    maxAttempts: number;
+  }): Promise<{
+    claimed: boolean;
+    reason?: "disabled" | "duplicate" | "attempt-limit";
+    attemptCount: number;
+  }> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.getThread(threadKey);
+    const attemptCount = current?.prAutoDispatchAttemptCounts?.[params.prKey] ?? 0;
+    if (current?.prAutoDispatchEnabled !== true) {
+      return { claimed: false, reason: "disabled", attemptCount };
+    }
+    if (current.prAutoDispatchHandledFingerprints?.includes(params.fingerprint)) {
+      return { claimed: false, reason: "duplicate", attemptCount };
+    }
+    if (attemptCount >= params.maxAttempts) {
+      return { claimed: false, reason: "attempt-limit", attemptCount };
+    }
+
+    const nextAttemptCount = attemptCount + 1;
+    const nextState: ThreadOverlayState = {
+      ...current,
+      prAutoDispatchHandledFingerprints: [
+        ...(current.prAutoDispatchHandledFingerprints ?? []),
+        params.fingerprint,
+      ],
+      prAutoDispatchAttemptCounts: {
+        ...(current.prAutoDispatchAttemptCounts ?? {}),
+        [params.prKey]: nextAttemptCount,
+      },
+    };
+    this.putThread(threadKey, nextState);
+    return { claimed: true, attemptCount: nextAttemptCount };
+  }
+
+  async resetThreadPrAutoDispatchIncident(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    prKey: string;
+  }): Promise<void> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.getThread(threadKey);
+    if (!current?.prAutoDispatchAttemptCounts?.[params.prKey]) {
+      return;
+    }
+    const nextAttemptCounts = { ...current.prAutoDispatchAttemptCounts };
+    delete nextAttemptCounts[params.prKey];
+    this.putThread(threadKey, {
+      ...current,
+      prAutoDispatchAttemptCounts:
+        Object.keys(nextAttemptCounts).length > 0
+          ? nextAttemptCounts
+          : undefined,
+    });
+  }
+
   async setThreadCodexEnvironmentRuntime(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;
@@ -3853,6 +3943,9 @@ export type OverlayStoreLike = Pick<
   | "upsertWorktreeSnapshot"
   | "setThreadExecutionMode"
   | "setThreadModelSettings"
+  | "setThreadPrAutoDispatchEnabled"
+  | "claimThreadPrAutoDispatch"
+  | "resetThreadPrAutoDispatchIncident"
   | "turnOffCodexFastEverywhere"
   | "setThreadExpectedBranch"
   | "setThreadObservedBranch"

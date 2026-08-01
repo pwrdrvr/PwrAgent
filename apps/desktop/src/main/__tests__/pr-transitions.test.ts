@@ -29,10 +29,30 @@ describe("computePrStatusTransition", () => {
   });
 
   it("returns undefined when nothing meaningful changed", () => {
-    // Only the commit SHA moved — a new commit with identical status is not a
+    // Historical commit context moving without an explicit head is not a
     // status transition.
     expect(
       computePrStatusTransition(pr(), pr({ commitShas: ["b".repeat(40)] })),
+    ).toBeUndefined();
+  });
+
+  it("captures a new head SHA so failed-state fingerprints can re-arm", () => {
+    const transition = computePrStatusTransition(
+      pr({ headSha: "a".repeat(40), checkState: "failing" }),
+      pr({ headSha: "b".repeat(40), checkState: "failing" }),
+    );
+    expect(transition?.changed.headSha).toEqual({
+      from: "a".repeat(40),
+      to: "b".repeat(40),
+    });
+  });
+
+  it("treats the first hydrated head SHA as cache enrichment, not an event", () => {
+    expect(
+      computePrStatusTransition(
+        pr({ headSha: undefined, checkState: "failing" }),
+        pr({ headSha: "b".repeat(40), checkState: "failing" }),
+      ),
     ).toBeUndefined();
   });
 

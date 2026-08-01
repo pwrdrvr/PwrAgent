@@ -52,6 +52,8 @@ export type ThreadAgentMetadata = {
 
 export type NavigationThreadSummary = AppServerThreadSummary & {
   inbox: ThreadInboxState;
+  /** Automatically dispatch bounded repair turns for newly failing/conflicting attached PRs. */
+  prAutoDispatchEnabled?: boolean;
   /** Last provider model-migration revision acknowledged by this thread. */
   modelMigrationRevision?: string;
   /** Last explicit model/reasoning change made outside a migration. */
@@ -253,6 +255,8 @@ export type PrSummary = {
   lifecycleState?: PrLifecycleState;
   reviewState?: PrReviewState;
   mergeState?: PrMergeState;
+  /** Head commit observed with this status snapshot. */
+  headSha?: string;
   /**
    * Commit OIDs attached to this PR when the provider returns them. Used to
    * keep merged PR commits from reading as local-only after the remote head
@@ -1247,6 +1251,12 @@ export type ThreadOverlayState = {
   modelSettingsManuallyUpdatedAt?: number;
   serviceTier?: string;
   fastMode?: boolean;
+  /** Saved operator preference; the global background-polling flag gates its effect. */
+  prAutoDispatchEnabled?: boolean;
+  /** Durable one-shot claims that prevent replaying an automatic PR repair after restart. */
+  prAutoDispatchHandledFingerprints?: string[];
+  /** Consecutive automatic attempts per PR identity, reset after the PR becomes healthy. */
+  prAutoDispatchAttemptCounts?: Record<string, number>;
   gitBranch?: string;
   observedGitBranch?: string;
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
