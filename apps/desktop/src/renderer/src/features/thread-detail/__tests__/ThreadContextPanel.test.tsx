@@ -20,6 +20,7 @@ import type {
 import { ThreadContextPanel } from "../ThreadContextPanel";
 import type { ContextTabId } from "../context-panels/context-tab";
 import { collectEditedFileGroups } from "../edited-file-groups";
+import { ThreadLinkProvider } from "../../../lib/thread-links";
 
 const HOVER_RAIL_REVEAL_DELAY_MS = 350;
 
@@ -158,9 +159,14 @@ type PanelOverrides = Partial<
   >
 >;
 
-function renderPanel(overrides: PanelOverrides = {}) {
+function renderPanel(
+  overrides: PanelOverrides = {},
+  options?: {
+    onShowThread: ComponentProps<typeof ThreadLinkProvider>["onShowThread"];
+  },
+) {
   const onActiveTabChange = vi.fn<(tab: ContextTabId) => void>();
-  const result = render(
+  const panel = (
     <ThreadContextPanel
       activeTab="info"
       backends={[baseBackend]}
@@ -168,7 +174,17 @@ function renderPanel(overrides: PanelOverrides = {}) {
       thread={baseThread}
       onActiveTabChange={onActiveTabChange}
       {...overrides}
-    />,
+    />
+  );
+  const result = render(
+    options ? (
+      <ThreadLinkProvider
+        onShowThread={options.onShowThread}
+        threads={[overrides.thread ?? baseThread]}
+      >
+        {panel}
+      </ThreadLinkProvider>
+    ) : panel,
   );
   return { ...result, onActiveTabChange };
 }
@@ -2239,6 +2255,119 @@ describe("ThreadContextPanel", () => {
     });
 
     expect(screen.queryByText(REVEALED_SIGNAL)).not.toBeInTheDocument();
+  });
+
+  it("keeps an unpinned rail open while using a portaled sub-agent dialog", async () => {
+    vi.useFakeTimers();
+    const onShowThread = vi.fn();
+    renderPanel(
+      {
+        activeTab: "subagents",
+        thread: {
+          ...baseThread,
+          subAgents: [
+            {
+              monitorId: "review:turn-review-1",
+              monitorThreadId: "review-thread-1",
+              task: "Review changes against main",
+              status: "success",
+              createdAt: 2_000,
+              completedAt: 3_000,
+              updatedAt: 3_000,
+            },
+          ],
+        },
+      },
+      { onShowThread },
+    );
+
+    const rail = screen.getByLabelText("Thread context");
+    mockRailRect(rail);
+    fireEvent.click(screen.getByRole("tab", { name: "Sub-agents" }));
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
+
+    const dialog = screen.getByRole("dialog");
+    fireEvent.mouseMove(document, { clientX: 500, clientY: 380 });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(301);
+    });
+
+    expect(dialog).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Open transcript" }));
+    expect(onShowThread).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "review-thread-1",
+    });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+    fireEvent.mouseMove(document, { clientX: 500, clientY: 380 });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(301);
+    });
+    expect(screen.queryByRole("tabpanel")).not.toBeInTheDocument();
+  });
+
+  it("does not let cursor polling close a portaled sub-agent dialog", async () => {
+    vi.useFakeTimers();
+    const getWindowPointerSnapshot = vi
+      .fn()
+      .mockResolvedValueOnce({
+        contentBounds: {
+          height: 800,
+          width: 1000,
+          x: 100,
+          y: 100,
+        },
+        cursor: {
+          x: 1080,
+          y: 220,
+        },
+        windowFocused: false,
+      })
+      .mockResolvedValue({
+        contentBounds: {
+          height: 800,
+          width: 1000,
+          x: 100,
+          y: 100,
+        },
+        cursor: {
+          x: 600,
+          y: 480,
+        },
+        windowFocused: false,
+      });
+    renderPanel({
+      activeTab: "subagents",
+      desktopApi: { getWindowPointerSnapshot },
+      thread: {
+        ...baseThread,
+        subAgents: [
+          {
+            monitorId: "review:turn-review-1",
+            monitorThreadId: "review-thread-1",
+            task: "Review changes against main",
+            status: "success",
+            createdAt: 2_000,
+            completedAt: 3_000,
+            updatedAt: 3_000,
+          },
+        ],
+      },
+    });
+
+    const rail = screen.getByLabelText("Thread context");
+    mockRailRect(rail);
+    fireEvent.mouseEnter(rail, { clientX: 980, clientY: 120 });
+    await advanceHoverRevealDelay();
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+
+    expect(getWindowPointerSnapshot).toHaveBeenCalled();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
 
   it("polls the window pointer and closes when the cursor remains outside the rail", async () => {
