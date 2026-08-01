@@ -4747,7 +4747,25 @@ function inferLegacyTaskMonitorMessageOrigins(params: {
         entry.type === "message" && entry.role === "user",
     ),
     ...params.replay.messages.filter((message) => message.role === "user"),
-  ];
+  ]
+    .filter(
+      (message, index, all) =>
+        all.findIndex((candidate) => candidate.id === message.id) === index,
+    )
+    .map((message, index) => ({ message, index }))
+    .sort((left, right) => {
+      const leftTime = left.message.createdAt;
+      const rightTime = right.message.createdAt;
+      if (leftTime !== undefined && rightTime !== undefined) {
+        return rightTime - leftTime;
+      }
+      return right.index - left.index;
+    })
+    .map(({ message }) => message);
+  const availableSubAgents = [...params.subAgents].sort(
+    (left, right) =>
+      taskMonitorCompletionTime(right) - taskMonitorCompletionTime(left),
+  );
   for (const message of messages) {
     if (
       origins[message.id]
@@ -4764,18 +4782,32 @@ function inferLegacyTaskMonitorMessageOrigins(params: {
     if (!task || !outcome) {
       continue;
     }
-    const subAgent = params.subAgents.find(
-      (candidate) =>
+    const candidates = availableSubAgents.filter((candidate) => {
+      const candidateSummary = candidate.lastMessage?.trim();
+      return (
         candidate.task === task
-        && (candidate.outcome === outcome || candidate.status === outcome),
-    );
+        && (candidate.outcome === outcome || candidate.status === outcome)
+        && Boolean(
+          candidateSummary
+          && message.text.includes(`Summary: ${candidateSummary}`),
+        )
+      );
+    });
+    const messageTime = message.createdAt;
+    const subAgent =
+      messageTime === undefined
+        ? candidates[0]
+        : candidates.find(
+            (candidate) => taskMonitorCompletionTime(candidate) <= messageTime,
+          ) ?? candidates[0];
     if (!subAgent) {
       continue;
     }
     const summary = subAgent.lastMessage?.trim();
-    if (!summary || !message.text.includes(`Summary: ${summary}`)) {
+    if (!summary) {
       continue;
     }
+    availableSubAgents.splice(availableSubAgents.indexOf(subAgent), 1);
     origins[message.id] = buildTaskMonitorMessageOrigin({
       monitorId: subAgent.monitorId,
       monitorThreadId: subAgent.monitorThreadId,
@@ -4785,6 +4817,10 @@ function inferLegacyTaskMonitorMessageOrigins(params: {
     });
   }
   return origins;
+}
+
+function taskMonitorCompletionTime(subAgent: ThreadSubAgentSummary): number {
+  return subAgent.completedAt ?? subAgent.updatedAt ?? subAgent.createdAt;
 }
 
 function resolveThreadMessageOrigin(params: {

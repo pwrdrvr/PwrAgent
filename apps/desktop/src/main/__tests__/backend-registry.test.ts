@@ -23368,7 +23368,7 @@ script = "printf setup"
     await registry.close();
   });
 
-  it("reconstructs provenance for monitor handoffs recorded before sub-agent origins", async () => {
+  it("reconstructs repeated legacy monitor handoffs one-to-one", async () => {
     const task = "Monitor GitHub CI for PR #1107 until all checks finish.";
     const summary = "All required checks passed.";
     const text = [
@@ -23384,16 +23384,31 @@ script = "printf setup"
       entries: [
         {
           type: "message",
-          id: "legacy-monitor-handoff",
+          id: "legacy-monitor-handoff-1",
           role: "user",
           text,
+          createdAt: 2_100,
+        },
+        {
+          type: "message",
+          id: "legacy-monitor-handoff-2",
+          role: "user",
+          text,
+          createdAt: 4_100,
         },
       ],
       messages: [
         {
-          id: "legacy-monitor-handoff",
+          id: "legacy-monitor-handoff-1",
           role: "user",
           text,
+          createdAt: 2_100,
+        },
+        {
+          id: "legacy-monitor-handoff-2",
+          role: "user",
+          text,
+          createdAt: 4_100,
         },
       ],
       pagination: {
@@ -23410,8 +23425,20 @@ script = "printf setup"
           extraLinkedDirectories: [],
           subAgents: [
             {
+              monitorId: "monitor-2",
+              monitorThreadId: "monitor-thread-2",
+              task,
+              status: "success",
+              outcome: "success",
+              lastMessage: summary,
+              createdAt: 3_000,
+              updatedAt: 4_000,
+              completedAt: 4_000,
+              backend: "codex",
+            },
+            {
               monitorId: "monitor-1",
-              monitorThreadId: "monitor-thread",
+              monitorThreadId: "monitor-thread-1",
               task,
               status: "success",
               outcome: "success",
@@ -23438,12 +23465,12 @@ script = "printf setup"
     });
 
     expect(response.replay.entries[0]).toMatchObject({
-      id: "legacy-monitor-handoff",
+      id: "legacy-monitor-handoff-1",
       origin: {
         kind: "sub-agent",
         sourceThread: {
           backend: "codex",
-          threadId: "monitor-thread",
+          threadId: "monitor-thread-1",
           title: task,
         },
         subAgent: {
@@ -23456,10 +23483,35 @@ script = "printf setup"
       },
     });
     expect(response.replay.messages[0]).toMatchObject({
-      id: "legacy-monitor-handoff",
+      id: "legacy-monitor-handoff-1",
       origin: {
         kind: "sub-agent",
         subAgent: { monitorId: "monitor-1" },
+      },
+    });
+    expect(response.replay.entries[1]).toMatchObject({
+      id: "legacy-monitor-handoff-2",
+      origin: {
+        kind: "sub-agent",
+        sourceThread: {
+          backend: "codex",
+          threadId: "monitor-thread-2",
+          title: task,
+        },
+        subAgent: {
+          kind: "monitor",
+          monitorId: "monitor-2",
+          outcome: "success",
+          summary,
+          task,
+        },
+      },
+    });
+    expect(response.replay.messages[1]).toMatchObject({
+      id: "legacy-monitor-handoff-2",
+      origin: {
+        kind: "sub-agent",
+        subAgent: { monitorId: "monitor-2" },
       },
     });
 
