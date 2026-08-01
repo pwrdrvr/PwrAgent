@@ -120,6 +120,23 @@ function buildDesktopApi(routes = buildRoutes()) {
 }
 
 describe("MessagingRoutesSettings", () => {
+  it("shows an empty inventory when no messaging routes exist", async () => {
+    const { desktopApi } = buildDesktopApi({
+      eligibleAgents: [],
+      defaultAgents: [],
+      bindings: [],
+    });
+
+    render(<MessagingRoutesSettings desktopApi={desktopApi} />);
+
+    expect(
+      await screen.findByText("No default Agents configured."),
+    ).toBeInTheDocument();
+    expect(screen.getByText("No active bindings.")).toBeInTheDocument();
+    expect(screen.getByText("0 active")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add default" })).toBeDisabled();
+  });
+
   it("shows a complete default and binding inventory", async () => {
     const { desktopApi } = buildDesktopApi();
 
