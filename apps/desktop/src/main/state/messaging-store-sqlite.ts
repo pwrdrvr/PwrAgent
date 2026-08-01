@@ -9,6 +9,7 @@ import type {
   MessagingJsonValue,
   MessagingManagedTopicRecord,
   MessagingMonitorSubscriptionRecord,
+  MessagingObservedSurfaceRecord,
   MessagingPendingIntentRecord,
   MessagingThreadTopicLinkRecord,
   MessagingTopicCleanupProposalRecord,
@@ -54,6 +55,9 @@ export class SqliteMessagingStore {
         sanitized.revokedAt ?? null,
         JSON.stringify(sanitized),
       );
+    if (!sanitized.revokedAt) {
+      await this.upsertObservedSurface(sanitized.channel, sanitized.updatedAt);
+    }
     return structuredClone(sanitized);
   }
 
@@ -62,6 +66,52 @@ export class SqliteMessagingStore {
       .prepare("SELECT payload FROM bindings WHERE binding_id = ?")
       .get(id) as { payload: string } | undefined;
     return row ? JSON.parse(row.payload) : undefined;
+  }
+
+  async upsertObservedSurface(
+    channel: MessagingChannelRef,
+    observedAt = Date.now(),
+  ): Promise<MessagingObservedSurfaceRecord> {
+    const surfaceKey = buildMessagingConversationKey(channel);
+    const row = this.stateDb.raw
+      .prepare(
+        "SELECT payload FROM messaging_observed_surfaces WHERE surface_key = ?",
+      )
+      .get(surfaceKey) as { payload: string } | undefined;
+    const current = row
+      ? JSON.parse(row.payload) as MessagingObservedSurfaceRecord
+      : undefined;
+    const record: MessagingObservedSurfaceRecord = {
+      channel: mergeObservedChannel(current?.channel, channel),
+      firstSeenAt: Math.min(current?.firstSeenAt ?? observedAt, observedAt),
+      lastSeenAt: Math.max(current?.lastSeenAt ?? observedAt, observedAt),
+    };
+    this.stateDb.raw
+      .prepare(
+        `INSERT OR REPLACE INTO messaging_observed_surfaces(surface_key, channel_kind, conversation_kind, conversation_id, first_seen_at, last_seen_at, payload)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        surfaceKey,
+        record.channel.channel,
+        record.channel.conversation.kind,
+        record.channel.conversation.id,
+        record.firstSeenAt,
+        record.lastSeenAt,
+        JSON.stringify(record),
+      );
+    return structuredClone(record);
+  }
+
+  async findObservedSurfaces(): Promise<MessagingObservedSurfaceRecord[]> {
+    const rows = this.stateDb.raw
+      .prepare(
+        "SELECT payload FROM messaging_observed_surfaces ORDER BY last_seen_at DESC, surface_key ASC",
+      )
+      .all() as { payload: string }[];
+    return rows.map((row) => (
+      structuredClone(JSON.parse(row.payload) as MessagingObservedSurfaceRecord)
+    ));
   }
 
   async upsertDefaultAgentAssignment(
@@ -1148,6 +1198,32 @@ function sanitizeBinding(
   };
 }
 
+function mergeObservedChannel(
+  current: MessagingChannelRef | undefined,
+  next: MessagingChannelRef,
+): MessagingChannelRef {
+  const conversation = {
+    ...current?.conversation,
+    id: next.conversation.id,
+    kind: next.conversation.kind,
+  };
+  for (const key of [
+    "ancestorTitle",
+    "parentConversationId",
+    "parentId",
+    "parentTitle",
+    "title",
+    "workspaceId",
+  ] as const) {
+    const value = next.conversation[key];
+    if (value !== undefined) conversation[key] = value;
+  }
+  return {
+    channel: next.channel,
+    conversation,
+  };
+}
+
 function parseDefaultAgentAssignment(
   payload: string,
 ): MessagingDefaultAgentAssignmentRecord | undefined {
@@ -1336,4 +1412,7 @@ export type MessagingStoreLike = Pick<
   | "recordDelivery"
   | "getDelivery"
   | "readSnapshot"
->;
+> & Partial<Pick<
+  SqliteMessagingStore,
+  "upsertObservedSurface"
+>>;

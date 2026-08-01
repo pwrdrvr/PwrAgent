@@ -336,10 +336,27 @@ export type DesktopMessagingBindingRoute = {
   updatedAt: number;
 };
 
+export type DesktopMessagingObservedSurface = {
+  platform: MessagingChannelKind;
+  conversation: {
+    id: string;
+    kind: MessagingConversationKind;
+    parentId?: string;
+    parentConversationId?: string;
+    workspaceId?: string;
+    title?: string;
+    parentTitle?: string;
+    ancestorTitle?: string;
+  };
+  firstSeenAt: number;
+  lastSeenAt: number;
+};
+
 export type ListMessagingRoutesResponse = {
   defaultAgents: DesktopMessagingDefaultAgentRoute[];
   bindings: DesktopMessagingBindingRoute[];
   eligibleAgents: DesktopMessagingAgentRouteTarget[];
+  observedSurfaces: DesktopMessagingObservedSurface[];
 };
 
 export type SetMessagingDefaultAgentRequest = {

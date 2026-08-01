@@ -203,6 +203,88 @@ afterEach(async () => {
 });
 
 describe("SqliteMessagingStore", () => {
+  it("keeps observed surfaces enriched and ordered by recent activity", async () => {
+    const store = await createStore();
+    await store.upsertObservedSurface({
+      channel: "slack",
+      conversation: {
+        id: "C1",
+        kind: "channel",
+        workspaceId: "T1",
+      },
+    }, 2000);
+    await store.upsertObservedSurface({
+      channel: "slack",
+      conversation: {
+        id: "C1",
+        kind: "channel",
+        title: "p-search-signals-project",
+        workspaceId: "T1",
+      },
+    }, 1000);
+    await store.upsertObservedSurface({
+      channel: "telegram",
+      conversation: {
+        id: "42",
+        kind: "topic",
+        parentConversationId: "-1001",
+        parentId: "-1001",
+        parentTitle: "PwrAgent Dev",
+        title: "Releases",
+      },
+    }, 3000);
+
+    await expect(store.findObservedSurfaces()).resolves.toEqual([
+      expect.objectContaining({
+        channel: expect.objectContaining({
+          channel: "telegram",
+          conversation: expect.objectContaining({ id: "42" }),
+        }),
+        firstSeenAt: 3000,
+        lastSeenAt: 3000,
+      }),
+      expect.objectContaining({
+        channel: expect.objectContaining({
+          channel: "slack",
+          conversation: expect.objectContaining({
+            id: "C1",
+            title: "p-search-signals-project",
+            workspaceId: "T1",
+          }),
+        }),
+        firstSeenAt: 1000,
+        lastSeenAt: 2000,
+      }),
+    ]);
+  });
+
+  it("remembers bound conversations as observed surfaces", async () => {
+    const store = await createStore();
+    await store.upsertBinding(buildBinding({
+      channel: {
+        channel: "slack",
+        conversation: {
+          id: "C13056",
+          kind: "channel",
+          title: "p-search-signals-project",
+          workspaceId: "T1",
+        },
+      },
+      createdAt: 1000,
+      updatedAt: 2000,
+    }));
+
+    await expect(store.findObservedSurfaces()).resolves.toEqual([
+      expect.objectContaining({
+        channel: expect.objectContaining({
+          conversation: expect.objectContaining({ id: "C13056" }),
+        }),
+        firstSeenAt: 2000,
+        lastSeenAt: 2000,
+      }),
+    ]);
+  });
+
   it("persists Agent-thread binding targets", async () => {
     const store = await createStore();
     await store.upsertBinding(

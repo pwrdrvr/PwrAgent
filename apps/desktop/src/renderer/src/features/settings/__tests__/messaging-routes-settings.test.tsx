@@ -98,6 +98,30 @@ function buildRoutes(): ListMessagingRoutesResponse {
         updatedAt: 2000,
       },
     ],
+    observedSurfaces: [
+      {
+        platform: "slack",
+        conversation: {
+          id: "C13056",
+          kind: "channel",
+          title: "p-search-signals-project",
+          workspaceId: "T1",
+        },
+        firstSeenAt: 1000,
+        lastSeenAt: 2000,
+      },
+      {
+        platform: "slack",
+        conversation: {
+          id: "C10000",
+          kind: "channel",
+          title: "archived-project",
+          workspaceId: "T1",
+        },
+        firstSeenAt: 500,
+        lastSeenAt: 1000,
+      },
+    ],
   };
 }
 
@@ -155,6 +179,7 @@ describe("MessagingRoutesSettings", () => {
       eligibleAgents: [],
       defaultAgents: [],
       bindings: [],
+      observedSurfaces: [],
     });
 
     renderRoutes(desktopApi);
@@ -318,10 +343,10 @@ describe("MessagingRoutesSettings", () => {
 
     expect(screen.getByLabelText("Default scope")).toHaveValue("conversation");
     expect(screen.getByLabelText("Messaging platform")).toHaveValue("slack");
-    expect(screen.getByLabelText("Conversation ID")).toHaveValue("C200");
-    expect(screen.getByLabelText("Display name (optional)")).toHaveValue(
-      "incident-response",
+    expect(screen.getByLabelText("Messaging surface")).toHaveDisplayValue(
+      "Slack / incident-response - approved configuration",
     );
+    expect(screen.queryByLabelText("Conversation ID")).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Default Agent"), {
       target: { value: JSON.stringify(["codex", "agent-1"]) },
     });
@@ -343,12 +368,86 @@ describe("MessagingRoutesSettings", () => {
     });
   });
 
-  it("adds a conversation default from Settings", async () => {
+  it("adds a conversation default from a recently seen surface", async () => {
     const api = buildDesktopApi();
     renderRoutes(api.desktopApi);
     await screen.findByText("Search Signals Agent");
 
     fireEvent.click(screen.getByRole("button", { name: "Add default" }));
+    fireEvent.change(screen.getByLabelText("Messaging surface"), {
+      target: {
+        value: JSON.stringify([
+          "conversation",
+          "slack",
+          "channel",
+          "",
+          "C13056",
+        ]),
+      },
+    });
+    fireEvent.change(screen.getByLabelText("Default Agent"), {
+      target: { value: JSON.stringify(["acp:grok", "agent-2"]) },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save default" }));
+
+    await waitFor(() => {
+      expect(api.setMessagingDefaultAgent).toHaveBeenCalledWith({
+        scope: {
+          kind: "conversation",
+          platform: "slack",
+          conversation: {
+            id: "C13056",
+            kind: "channel",
+            title: "p-search-signals-project",
+            workspaceId: "T1",
+          },
+        },
+        target: { backend: "acp:grok", threadId: "agent-2" },
+      });
+    });
+  });
+
+  it("orders observed surfaces by recency and derives parent and workspace choices", async () => {
+    const api = buildDesktopApi();
+    renderRoutes(api.desktopApi);
+    await screen.findByText("Search Signals Agent");
+
+    fireEvent.click(screen.getByRole("button", { name: "Add default" }));
+    const surfaceSelect = screen.getByLabelText("Messaging surface");
+    expect(
+      [...surfaceSelect.querySelectorAll("option")].map((option) => option.textContent),
+    ).toEqual([
+      "Choose a recently seen surface...",
+      expect.stringContaining("p-search-signals-project"),
+      expect.stringContaining("archived-project"),
+      "Enter an ID manually...",
+    ]);
+
+    fireEvent.change(screen.getByLabelText("Default scope"), {
+      target: { value: "parent" },
+    });
+    expect(screen.getByLabelText("Messaging surface")).toHaveTextContent(
+      "Slack / p-search-signals-project",
+    );
+
+    fireEvent.change(screen.getByLabelText("Default scope"), {
+      target: { value: "workspace" },
+    });
+    expect(screen.getByLabelText("Messaging surface")).toHaveTextContent(
+      "Slack / T1",
+    );
+  });
+
+  it("keeps manual IDs as an explicit fallback", async () => {
+    const api = buildDesktopApi();
+    renderRoutes(api.desktopApi);
+    await screen.findByText("Search Signals Agent");
+
+    fireEvent.click(screen.getByRole("button", { name: "Add default" }));
+    expect(screen.queryByLabelText("Conversation ID")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Messaging surface"), {
+      target: { value: "manual" },
+    });
     fireEvent.change(screen.getByLabelText("Conversation ID"), {
       target: { value: "C200" },
     });
@@ -356,7 +455,7 @@ describe("MessagingRoutesSettings", () => {
       target: { value: "incident-response" },
     });
     fireEvent.change(screen.getByLabelText("Default Agent"), {
-      target: { value: JSON.stringify(["acp:grok", "agent-2"]) },
+      target: { value: JSON.stringify(["codex", "agent-1"]) },
     });
     fireEvent.click(screen.getByRole("button", { name: "Save default" }));
 
@@ -371,7 +470,7 @@ describe("MessagingRoutesSettings", () => {
             title: "incident-response",
           },
         },
-        target: { backend: "acp:grok", threadId: "agent-2" },
+        target: { backend: "codex", threadId: "agent-1" },
       });
     });
   });

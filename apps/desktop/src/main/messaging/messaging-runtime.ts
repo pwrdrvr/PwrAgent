@@ -1083,9 +1083,13 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       await adapter.start?.(async (event) => {
         // Activity ping fires on every inbound, before authorization checks.
         this.emitPlatformActivity(adapter.channel);
-        if (await this.handlePairingInbound(adapter, event)) {
+        if (await this.handlePairingInbound(adapter, event, store)) {
           return;
         }
+        // Provider adapters admit only conversation-authorized events. Remember
+        // the surface before actor and ambient-message gates so an approved
+        // channel remains selectable even when this sender cannot steer Agents.
+        await this.recordObservedSurface(store, event.channel, event.receivedAt);
         const authorized = authorization.actorIdSet.has(event.actor.platformUserId);
         if (
           authorized &&
@@ -1814,6 +1818,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   private async handlePairingInbound(
     adapter: DesktopMessagingAdapter,
     event: MessagingInboundEvent,
+    messagingStore: MessagingStoreLike,
   ): Promise<boolean> {
     const token = tokenFromInboundEvent(event);
     if (!token) return false;
@@ -1855,6 +1860,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       actor: observedActorFromEvent(event),
       chat: observedChatFromEvent(event),
     }) ?? entry;
+    await this.recordObservedSurface(messagingStore, event.channel, now);
     this.recordPairingActivity(observed, "Observed pairing token");
     this.broadcastPairingChanged(observed);
     await this.deliverPairingReply(
@@ -1863,6 +1869,22 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       "Pairing request received. Approve it in PwrAgent to finish.",
     );
     return true;
+  }
+
+  private async recordObservedSurface(
+    store: MessagingStoreLike,
+    channel: MessagingInboundEvent["channel"],
+    observedAt = Date.now(),
+  ): Promise<void> {
+    try {
+      await store.upsertObservedSurface?.(channel, observedAt);
+    } catch (error) {
+      messagingLog.warn("failed to remember observed messaging surface", {
+        platform: channel.channel,
+        conversationId: channel.conversation.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   private async deliverPairingReply(

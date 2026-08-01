@@ -7,6 +7,7 @@ import type {
 import type {
   MessagingBindingRecord,
   MessagingDefaultAgentAssignmentRecord,
+  MessagingObservedSurfaceRecord,
 } from "@pwragent/messaging-interface";
 import {
   clearDesktopMessagingDefaultAgent,
@@ -116,6 +117,7 @@ function buildDependencies(options: {
   assignments?: MessagingDefaultAgentAssignmentRecord[];
   backends?: BackendSummary[];
   bindings?: MessagingBindingRecord[];
+  observedSurfaces?: MessagingObservedSurfaceRecord[];
   threads?: AppServerThreadSummary[];
 } = {}) {
   const assignments = options.assignments ?? [buildAssignment()];
@@ -127,6 +129,7 @@ function buildDependencies(options: {
   const store = {
     findActiveDefaultAgentAssignments: vi.fn(async () => assignments),
     findActiveBindings: vi.fn(async () => bindings),
+    findObservedSurfaces: vi.fn(async () => options.observedSurfaces ?? []),
     getDefaultAgentAssignment: vi.fn(async (id: string) =>
       assignments.find((assignment) => assignment.id === id)),
     upsertDefaultAgentAssignment: vi.fn(async (assignment) => assignment),
@@ -181,6 +184,44 @@ describe("messaging routes service", () => {
           label: "Issue 13056",
         }),
       }),
+    ]);
+    expect(result.observedSurfaces).toEqual([
+      expect.objectContaining({
+        platform: "slack",
+        conversation: expect.objectContaining({
+          id: "1700000000.000100",
+          title: "13056 investigation",
+        }),
+        firstSeenAt: 1000,
+        lastSeenAt: 2000,
+      }),
+    ]);
+  });
+
+  it("merges durable observations with active binding surfaces by recency", async () => {
+    const dependencies = buildDependencies({
+      observedSurfaces: [
+        {
+          channel: {
+            channel: "slack",
+            conversation: {
+              id: "C13056",
+              kind: "channel",
+              title: "p-search-signals-project",
+              workspaceId: "T1",
+            },
+          },
+          firstSeenAt: 500,
+          lastSeenAt: 3000,
+        },
+      ],
+    });
+
+    const result = await listDesktopMessagingRoutes(dependencies);
+
+    expect(result.observedSurfaces.map((surface) => surface.conversation.id)).toEqual([
+      "C13056",
+      "1700000000.000100",
     ]);
   });
 

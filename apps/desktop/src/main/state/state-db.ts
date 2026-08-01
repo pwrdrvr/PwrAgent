@@ -9,7 +9,7 @@ import {
 } from "@pwragent/shared";
 import { getNativeBinding } from "./native-binding.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 34;
+export const CURRENT_STATE_DB_USER_VERSION = 35;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -440,6 +440,22 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_messaging_default_agent_assignments_active
   WHERE status = 'active';
 CREATE INDEX IF NOT EXISTS idx_messaging_default_agent_assignments_thread
   ON messaging_default_agent_assignments(backend, thread_id, status);
+`;
+
+const MESSAGING_OBSERVED_SURFACE_SCHEMA = `
+CREATE TABLE IF NOT EXISTS messaging_observed_surfaces (
+  surface_key       TEXT PRIMARY KEY,
+  channel_kind      TEXT NOT NULL,
+  conversation_kind TEXT NOT NULL,
+  conversation_id   TEXT NOT NULL,
+  first_seen_at     INTEGER NOT NULL,
+  last_seen_at      INTEGER NOT NULL,
+  payload           TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_messaging_observed_surfaces_recent
+  ON messaging_observed_surfaces(last_seen_at DESC);
+CREATE INDEX IF NOT EXISTS idx_messaging_observed_surfaces_platform_recent
+  ON messaging_observed_surfaces(channel_kind, last_seen_at DESC);
 `;
 
 const THREAD_SEARCH_SCHEMA = `
@@ -1035,6 +1051,13 @@ export class StateDb {
     if ((db.pragma("user_version", { simple: true }) as number) < 34) {
       db.transaction(() => {
         db.exec(PR_AUTO_DISPATCH_SCHEMA);
+        db.pragma("user_version = 34");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 35) {
+      db.transaction(() => {
+        db.exec(MESSAGING_OBSERVED_SURFACE_SCHEMA);
+        backfillObservedMessagingSurfaces(db);
         db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
       })();
     }
@@ -1184,6 +1207,7 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     db.exec(AUTOMATION_SCHEMA);
     db.exec(MESSAGING_ACTIVITY_SUMMARY_SCHEMA);
     db.exec(MESSAGING_DEFAULT_AGENT_ASSIGNMENT_SCHEMA);
+    db.exec(MESSAGING_OBSERVED_SURFACE_SCHEMA);
     db.exec(THREAD_SEARCH_SCHEMA);
     db.exec(PR_STATUS_CACHE_SCHEMA);
     db.exec(PR_LOOKUP_CACHE_SCHEMA);
@@ -1945,6 +1969,180 @@ function tableExists(
     .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?")
     .get(tableName) as { 1: number } | undefined;
   return Boolean(row);
+}
+
+type BackfillObservedSurface = {
+  channel: {
+    channel: string;
+    conversation: {
+      id: string;
+      kind: "channel" | "dm" | "thread" | "topic";
+      parentId?: string;
+      parentConversationId?: string;
+      workspaceId?: string;
+      title?: string;
+      parentTitle?: string;
+      ancestorTitle?: string;
+    };
+  };
+  firstSeenAt: number;
+  lastSeenAt: number;
+};
+
+function backfillObservedMessagingSurfaces(db: BetterSqlite3.Database): void {
+  const surfaces = new Map<string, BackfillObservedSurface>();
+  const remember = (surface: BackfillObservedSurface) => {
+    const conversation = surface.channel.conversation;
+    const key = [
+      surface.channel.channel,
+      conversation.kind,
+      conversation.parentId ?? "",
+      conversation.id,
+    ].join(":");
+    const current = surfaces.get(key);
+    surfaces.set(key, {
+      channel: {
+        channel: surface.channel.channel,
+        conversation: mergeDefinedObject(
+          current?.channel.conversation,
+          conversation,
+        ),
+      },
+      firstSeenAt: Math.min(
+        current?.firstSeenAt ?? surface.firstSeenAt,
+        surface.firstSeenAt,
+      ),
+      lastSeenAt: Math.max(
+        current?.lastSeenAt ?? surface.lastSeenAt,
+        surface.lastSeenAt,
+      ),
+    });
+  };
+
+  const bindingRows = tableExists(db, "bindings")
+    ? db
+        .prepare("SELECT payload FROM bindings ORDER BY updated_at ASC")
+        .all() as Array<{ payload: string }>
+    : [];
+  for (const row of bindingRows) {
+    try {
+      const binding = JSON.parse(row.payload) as {
+        channel?: BackfillObservedSurface["channel"];
+        createdAt?: number;
+        updatedAt?: number;
+      };
+      if (
+        !binding.channel
+        || typeof binding.createdAt !== "number"
+        || typeof binding.updatedAt !== "number"
+      ) {
+        continue;
+      }
+      remember({
+        channel: binding.channel,
+        firstSeenAt: binding.createdAt,
+        lastSeenAt: binding.updatedAt,
+      });
+    } catch {
+      // Ignore malformed legacy binding payloads during best-effort backfill.
+    }
+  }
+
+  const activityRows = tableExists(db, "messaging_activity_log")
+    ? db
+        .prepare(
+          `SELECT platform, conversation_id, conversation_title, created_at, payload
+           FROM messaging_activity_log
+           WHERE conversation_id IS NOT NULL
+             AND kind IN ('inbound-routed', 'inbound-ignored', 'pairing', 'binding')
+           ORDER BY created_at ASC, id ASC`,
+        )
+        .all() as Array<{
+          platform: string;
+          conversation_id: string;
+          conversation_title: string | null;
+          created_at: number;
+          payload: string;
+        }>
+    : [];
+  for (const row of activityRows) {
+    try {
+      const payload = JSON.parse(row.payload) as Record<string, unknown>;
+      const kind = payload.conversationKind;
+      if (
+        kind !== "channel"
+        && kind !== "dm"
+        && kind !== "thread"
+        && kind !== "topic"
+      ) {
+        continue;
+      }
+      const conversation: BackfillObservedSurface["channel"]["conversation"] = {
+        id: row.conversation_id,
+        kind,
+        ...(row.conversation_title ? { title: row.conversation_title } : {}),
+      };
+      copyStringProperty(payload, conversation, "conversationParentId", "parentId");
+      copyStringProperty(
+        payload,
+        conversation,
+        "conversationParentConversationId",
+        "parentConversationId",
+      );
+      copyStringProperty(
+        payload,
+        conversation,
+        "conversationWorkspaceId",
+        "workspaceId",
+      );
+      copyStringProperty(payload, conversation, "parentTitle", "parentTitle");
+      copyStringProperty(payload, conversation, "ancestorTitle", "ancestorTitle");
+      remember({
+        channel: { channel: row.platform, conversation },
+        firstSeenAt: row.created_at,
+        lastSeenAt: row.created_at,
+      });
+    } catch {
+      // Ignore malformed activity payloads during best-effort backfill.
+    }
+  }
+
+  const insert = db.prepare(
+    `INSERT OR REPLACE INTO messaging_observed_surfaces(surface_key, channel_kind, conversation_kind, conversation_id, first_seen_at, last_seen_at, payload)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  );
+  for (const [surfaceKey, surface] of surfaces) {
+    insert.run(
+      surfaceKey,
+      surface.channel.channel,
+      surface.channel.conversation.kind,
+      surface.channel.conversation.id,
+      surface.firstSeenAt,
+      surface.lastSeenAt,
+      JSON.stringify(surface),
+    );
+  }
+}
+
+function mergeDefinedObject<T extends object>(
+  current: T | undefined,
+  next: T,
+): T {
+  const merged = { ...current } as Record<string, unknown>;
+  for (const [key, value] of Object.entries(next)) {
+    if (value !== undefined) merged[key] = value;
+  }
+  return merged as T;
+}
+
+function copyStringProperty<T extends object>(
+  source: Record<string, unknown>,
+  target: T,
+  sourceKey: string,
+  targetKey: keyof T,
+): void {
+  const value = source[sourceKey];
+  if (typeof value === "string" && value) target[targetKey] = value as T[keyof T];
 }
 
 function ensureAutomationRunSourceEventKey(db: BetterSqlite3.Database): void {

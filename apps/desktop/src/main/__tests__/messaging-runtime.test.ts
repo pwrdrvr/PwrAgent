@@ -89,6 +89,18 @@ describe("DesktopMessagingRuntime", () => {
     expect(adapter.delivered.at(-1)).toMatchObject({
       kind: "thread_picker",
     });
+    const { getDesktopMessagingStore } = await import(
+      "../messaging/desktop-messaging-store"
+    );
+    await expect(getDesktopMessagingStore().findObservedSurfaces()).resolves
+      .toEqual([
+        expect.objectContaining({
+          channel: expect.objectContaining({
+            channel: "telegram",
+            conversation: expect.objectContaining({ id: "chat-1" }),
+          }),
+        }),
+      ]);
     // This integration-style startup test imports the runtime module graph and
     // exercises the full adapter-start + inbound-routing path. On the slow
     // shared Windows CI runner that cold path can exceed 15s — not a hang, just
@@ -946,6 +958,18 @@ describe("DesktopMessagingRuntime", () => {
       kind: "error",
       title: "Not authorized",
     });
+    const { getDesktopMessagingStore } = await import(
+      "../messaging/desktop-messaging-store"
+    );
+    await expect(getDesktopMessagingStore().findObservedSurfaces()).resolves
+      .toEqual([
+        expect.objectContaining({
+          channel: expect.objectContaining({
+            channel: "telegram",
+            conversation: expect.objectContaining({ id: "chat-1" }),
+          }),
+        }),
+      ]);
   });
 
   it("keeps other adapters available when one adapter fails during startup", async () => {
@@ -1655,6 +1679,12 @@ describe("DesktopMessagingRuntime", () => {
         reason: "unauthorized-conversation",
       }),
     );
+    const { getDesktopMessagingStore } = await import(
+      "../messaging/desktop-messaging-store"
+    );
+    await expect(
+      getDesktopMessagingStore().findObservedSurfaces(),
+    ).resolves.toEqual([]);
   });
 
   it("records adapter diagnostics in Messaging Activity", async () => {
@@ -1997,6 +2027,22 @@ describe("DesktopMessagingRuntime", () => {
       conversationBucketId: "-1003841603622",
       actorUsername: "huntharo",
     });
+    const { getDesktopMessagingStore } = await import(
+      "../messaging/desktop-messaging-store"
+    );
+    await expect(getDesktopMessagingStore().findObservedSurfaces()).resolves
+      .toEqual([
+        expect.objectContaining({
+          channel: expect.objectContaining({
+            channel: "telegram",
+            conversation: expect.objectContaining({
+              id: "5642",
+              parentId: "-1003841603622",
+              title: "Release",
+            }),
+          }),
+        }),
+      ]);
   });
 
   it("emits health=suspended for each running adapter when stopped", async () => {

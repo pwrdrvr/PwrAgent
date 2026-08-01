@@ -13,6 +13,7 @@ import type {
   DesktopMessagingAgentRouteTarget,
   DesktopMessagingDefaultAgentRoute,
   DesktopMessagingDefaultAgentScope,
+  DesktopMessagingObservedSurface,
   ListMessagingRoutesResponse,
   MessagingChannelKind,
   MessagingConversationKind,
@@ -29,6 +30,7 @@ const EMPTY_ROUTES: ListMessagingRoutesResponse = {
   defaultAgents: [],
   bindings: [],
   eligibleAgents: [],
+  observedSurfaces: [],
 };
 
 const ROUTE_PLATFORMS: MessagingChannelKind[] = [
@@ -271,6 +273,7 @@ export function MessagingRoutesSettings(props: {
             key={`add:${routeState.editorRequest?.id ?? "manual"}`}
             agents={routes.eligibleAgents}
             initialForm={initialForm}
+            observedSurfaces={routes.observedSurfaces ?? []}
             onCancel={() => setShowAdd(false)}
             onSaved={async () => {
               setShowAdd(false);
@@ -286,6 +289,7 @@ export function MessagingRoutesSettings(props: {
             key={`edit:${editing.assignmentId}`}
             agents={routes.eligibleAgents}
             assignment={editing}
+            observedSurfaces={routes.observedSurfaces ?? []}
             onCancel={() => setEditing(null)}
             onSaved={async () => {
               setEditing(null);
@@ -554,12 +558,19 @@ function DefaultAgentEditor(props: {
   assignment?: DesktopMessagingDefaultAgentRoute;
   desktopApi?: DesktopApi;
   initialForm?: NewDefaultForm;
+  observedSurfaces: DesktopMessagingObservedSurface[];
   onCancel: () => void;
   onSaved: () => Promise<void>;
 }) {
   const [form, setForm] = useState<NewDefaultForm>(
     props.initialForm ?? EMPTY_FORM,
   );
+  const [surfaceSelection, setSurfaceSelection] = useState(() =>
+    surfaceSelectionForForm(
+      props.observedSurfaces,
+      props.initialForm ?? EMPTY_FORM,
+    ));
+  const [manualEntry, setManualEntry] = useState(false);
   const [targetValue, setTargetValue] = useState(
     props.assignment?.target.available
       ? encodeTarget(props.assignment.target)
@@ -568,6 +579,14 @@ function DefaultAgentEditor(props: {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const editing = Boolean(props.assignment);
+  const surfaceCandidates = observedSurfaceCandidates(
+    props.observedSurfaces,
+    form,
+  );
+  const hasConfiguredSurface =
+    !manualEntry
+    && surfaceSelection === "configured"
+    && hasSurfaceIdentity(form);
   const scope = useMemo(
     () => props.assignment?.scope ?? buildScope(form),
     [form, props.assignment],
@@ -575,6 +594,10 @@ function DefaultAgentEditor(props: {
 
   const save = async () => {
     if (!props.desktopApi?.setMessagingDefaultAgent) return;
+    if (!props.assignment && !hasSurfaceIdentity(form)) {
+      setError("Choose a recently seen surface or enter its ID manually.");
+      return;
+    }
     const target = decodeTarget(targetValue);
     if (!target) {
       setError("Choose an eligible Agent.");
@@ -612,11 +635,12 @@ function DefaultAgentEditor(props: {
               aria-label="Default scope"
               className="settings-select"
               value={form.scopeKind}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  scopeKind: event.target.value as DefaultScopeKind,
-                }))}
+              onChange={(event) => {
+                const scopeKind = event.target.value as DefaultScopeKind;
+                setForm((current) => resetSurfaceForm(current, { scopeKind }));
+                setSurfaceSelection("");
+                setManualEntry(false);
+              }}
             >
               <option value="conversation">Conversation</option>
               <option value="parent">Parent channel or group</option>
@@ -632,11 +656,12 @@ function DefaultAgentEditor(props: {
                 aria-label="Messaging platform"
                 className="settings-select"
                 value={form.platform}
-                onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    platform: event.target.value as MessagingChannelKind,
-                  }))}
+                onChange={(event) => {
+                  const platform = event.target.value as MessagingChannelKind;
+                  setForm((current) => resetSurfaceForm(current, { platform }));
+                  setSurfaceSelection("");
+                  setManualEntry(false);
+                }}
               >
                 {ROUTE_PLATFORMS.map((platform) => (
                   <option key={platform} value={platform}>
@@ -646,7 +671,56 @@ function DefaultAgentEditor(props: {
               </select>
             </label>
           ) : null}
-          {form.scopeKind === "workspace" ? (
+          {form.scopeKind === "conversation"
+            || form.scopeKind === "parent"
+            || form.scopeKind === "workspace" ? (
+            <label className="messaging-route-editor__surface">
+              <span>Surface</span>
+              <select
+                aria-label="Messaging surface"
+                className="settings-select"
+                value={surfaceSelection}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setSurfaceSelection(value);
+                  if (value === "manual") {
+                    setManualEntry(true);
+                    setForm((current) => resetSurfaceForm(current));
+                    return;
+                  }
+                  setManualEntry(false);
+                  if (!value) {
+                    setForm((current) => resetSurfaceForm(current));
+                    return;
+                  }
+                  const candidate = surfaceCandidates.find(
+                    (surface) => surface.value === value,
+                  );
+                  if (candidate) setForm(candidate.form);
+                }}
+              >
+                <option value="">Choose a recently seen surface...</option>
+                {hasConfiguredSurface ? (
+                  <option value="configured">
+                    {configuredSurfaceLabel(form)} - approved configuration
+                  </option>
+                ) : null}
+                {surfaceCandidates.map((surface) => (
+                  <option key={surface.value} value={surface.value}>
+                    {surface.label} - seen {formatTimestamp(surface.lastSeenAt)}
+                  </option>
+                ))}
+                <option value="manual">Enter an ID manually...</option>
+              </select>
+              {surfaceCandidates.length === 0 && !hasConfiguredSurface ? (
+                <small>
+                  No matching surfaces observed yet. Send the bot a message there,
+                  or enter the ID manually.
+                </small>
+              ) : null}
+            </label>
+          ) : null}
+          {manualEntry && form.scopeKind === "workspace" ? (
             <RouteTextInput
               label={workspaceIdLabel(form.platform)}
               value={form.workspaceId}
@@ -654,7 +728,7 @@ function DefaultAgentEditor(props: {
                 setForm((current) => ({ ...current, workspaceId }))}
             />
           ) : null}
-          {form.scopeKind === "parent" ? (
+          {manualEntry && form.scopeKind === "parent" ? (
             <RouteTextInput
               label={parentIdLabel(form.platform)}
               value={form.parentConversationId}
@@ -662,7 +736,7 @@ function DefaultAgentEditor(props: {
                 setForm((current) => ({ ...current, parentConversationId }))}
             />
           ) : null}
-          {form.scopeKind === "conversation" ? (
+          {manualEntry && form.scopeKind === "conversation" ? (
             <>
               <label>
                 <span>Conversation type</span>
@@ -760,6 +834,171 @@ function DefaultAgentEditor(props: {
       </div>
     </div>
   );
+}
+
+type ObservedSurfaceCandidate = {
+  form: NewDefaultForm;
+  label: string;
+  lastSeenAt: number;
+  value: string;
+};
+
+function observedSurfaceCandidates(
+  surfaces: DesktopMessagingObservedSurface[],
+  form: NewDefaultForm,
+): ObservedSurfaceCandidate[] {
+  if (form.scopeKind === "profile" || form.scopeKind === "provider") return [];
+  const candidates = new Map<string, ObservedSurfaceCandidate>();
+  for (const surface of surfaces) {
+    if (surface.platform !== form.platform) continue;
+    const conversation = surface.conversation;
+    let candidateForm: NewDefaultForm | undefined;
+    let label: string | undefined;
+    if (form.scopeKind === "conversation") {
+      candidateForm = {
+        ...EMPTY_FORM,
+        scopeKind: "conversation",
+        platform: surface.platform,
+        workspaceId: conversation.workspaceId ?? "",
+        parentConversationId: conversation.parentConversationId ?? "",
+        conversationId: conversation.id,
+        conversationKind: conversation.kind,
+        identityParentId: conversation.parentId ?? "",
+        title: conversation.title ?? "",
+      };
+      label = formatConversationLabel(surface.platform, conversation);
+    } else if (form.scopeKind === "parent") {
+      const parentConversationId = conversation.parentConversationId
+        ?? (conversation.kind === "channel" ? conversation.id : undefined);
+      if (!parentConversationId) continue;
+      candidateForm = {
+        ...EMPTY_FORM,
+        scopeKind: "parent",
+        platform: surface.platform,
+        parentConversationId,
+        title:
+          conversation.parentConversationId
+            ? conversation.parentTitle ?? ""
+            : conversation.title ?? "",
+      };
+      label = formatObservedContainerLabel({
+        platform: surface.platform,
+        id: parentConversationId,
+        names: [
+          conversation.ancestorTitle,
+          conversation.parentConversationId
+            ? conversation.parentTitle
+            : conversation.title,
+        ],
+      });
+    } else {
+      const workspaceId = conversation.workspaceId;
+      if (!workspaceId) continue;
+      candidateForm = {
+        ...EMPTY_FORM,
+        scopeKind: "workspace",
+        platform: surface.platform,
+        workspaceId,
+      };
+      label = formatObservedContainerLabel({
+        platform: surface.platform,
+        id: workspaceId,
+        names: [
+          conversation.ancestorTitle,
+          conversation.kind === "thread" || conversation.kind === "topic"
+            ? undefined
+            : conversation.parentTitle,
+        ],
+      });
+    }
+    const value = encodeSurfaceForm(candidateForm);
+    if (candidates.has(value)) continue;
+    candidates.set(value, {
+      form: candidateForm,
+      label,
+      lastSeenAt: surface.lastSeenAt,
+      value,
+    });
+  }
+  return [...candidates.values()].sort((left, right) =>
+    right.lastSeenAt - left.lastSeenAt
+    || left.label.localeCompare(right.label));
+}
+
+function surfaceSelectionForForm(
+  surfaces: DesktopMessagingObservedSurface[],
+  form: NewDefaultForm,
+): string {
+  if (!hasSurfaceIdentity(form)) return "";
+  const value = encodeSurfaceForm(form);
+  return observedSurfaceCandidates(surfaces, form).some(
+    (candidate) => candidate.value === value,
+  )
+    ? value
+    : "configured";
+}
+
+function encodeSurfaceForm(form: NewDefaultForm): string {
+  switch (form.scopeKind) {
+    case "profile": return "profile";
+    case "provider": return `provider:${form.platform}`;
+    case "workspace": return JSON.stringify(["workspace", form.platform, form.workspaceId]);
+    case "parent": return JSON.stringify(["parent", form.platform, form.parentConversationId]);
+    case "conversation":
+      return JSON.stringify([
+        "conversation",
+        form.platform,
+        form.conversationKind,
+        form.identityParentId,
+        form.conversationId,
+      ]);
+  }
+}
+
+function resetSurfaceForm(
+  form: NewDefaultForm,
+  changes: Partial<Pick<NewDefaultForm, "platform" | "scopeKind">> = {},
+): NewDefaultForm {
+  return {
+    ...EMPTY_FORM,
+    platform: changes.platform ?? form.platform,
+    scopeKind: changes.scopeKind ?? form.scopeKind,
+  };
+}
+
+function hasSurfaceIdentity(form: NewDefaultForm): boolean {
+  switch (form.scopeKind) {
+    case "profile":
+    case "provider":
+      return true;
+    case "workspace":
+      return Boolean(form.workspaceId.trim());
+    case "parent":
+      return Boolean(form.parentConversationId.trim());
+    case "conversation":
+      return Boolean(form.conversationId.trim());
+  }
+}
+
+function configuredSurfaceLabel(form: NewDefaultForm): string {
+  if (form.title.trim()) {
+    return `${formatMessagingPlatformName(form.platform)} / ${form.title.trim()}`;
+  }
+  return formatScopeLabel(buildScope(form));
+}
+
+function formatObservedContainerLabel(params: {
+  platform: MessagingChannelKind;
+  id: string;
+  names: Array<string | undefined>;
+}): string {
+  const names = [...new Set(
+    params.names.filter((value): value is string => Boolean(value?.trim())),
+  )];
+  return [
+    formatMessagingPlatformName(params.platform),
+    ...(names.length > 0 ? names : [params.id]),
+  ].join(" / ");
 }
 
 function findApprovedSurfaceAssignment(

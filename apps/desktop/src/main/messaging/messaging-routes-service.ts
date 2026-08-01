@@ -6,6 +6,7 @@ import type {
   DesktopMessagingAgentRouteTarget,
   DesktopMessagingBindingRoute,
   DesktopMessagingDefaultAgentScope,
+  DesktopMessagingObservedSurface,
   ListMessagingRoutesResponse,
   SetMessagingDefaultAgentRequest,
   SetMessagingDefaultAgentResponse,
@@ -17,6 +18,7 @@ import { normalizeMessagingBindingTargetKind } from "@pwragent/shared";
 import type {
   MessagingDefaultAgentAssignmentRecord,
   MessagingDefaultAgentScope,
+  MessagingObservedSurfaceRecord,
 } from "@pwragent/messaging-interface";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { defaultAgentBackendSupport } from "./core/messaging-default-agent";
@@ -26,6 +28,7 @@ type MessagingRoutesStore = Pick<
   ReturnType<typeof getDesktopMessagingStore>,
   | "findActiveBindings"
   | "findActiveDefaultAgentAssignments"
+  | "findObservedSurfaces"
   | "getDefaultAgentAssignment"
   | "revokeDefaultAgentAssignment"
   | "upsertDefaultAgentAssignment"
@@ -57,10 +60,11 @@ export async function listDesktopMessagingRoutes(
 ): Promise<ListMessagingRoutesResponse> {
   const store = dependencies.store ?? getDesktopMessagingStore();
   const registry = dependencies.registry ?? getDesktopBackendRegistry();
-  const [defaultAgents, bindings, backendResult, threadResult] =
+  const [defaultAgents, bindings, observedSurfaces, backendResult, threadResult] =
     await Promise.all([
       store.findActiveDefaultAgentAssignments(),
       store.findActiveBindings(),
+      store.findObservedSurfaces(),
       registry.listBackends({ includeUnavailable: true }).catch(() => ({
         backends: [],
       })),
@@ -158,7 +162,48 @@ export async function listDesktopMessagingRoutes(
       };
     }),
     eligibleAgents,
+    observedSurfaces: mergeObservedSurfaces(observedSurfaces, bindings),
   };
+}
+
+function mergeObservedSurfaces(
+  observed: MessagingObservedSurfaceRecord[],
+  bindings: Awaited<ReturnType<MessagingRoutesStore["findActiveBindings"]>>,
+): DesktopMessagingObservedSurface[] {
+  const surfaces = new Map<string, DesktopMessagingObservedSurface>();
+  const add = (
+    channel: MessagingObservedSurfaceRecord["channel"],
+    firstSeenAt: number,
+    lastSeenAt: number,
+  ) => {
+    const conversation = channel.conversation;
+    const key = [
+      channel.channel,
+      conversation.kind,
+      conversation.parentId ?? "",
+      conversation.id,
+    ].join(":");
+    const current = surfaces.get(key);
+    surfaces.set(key, {
+      platform: channel.channel,
+      conversation: {
+        ...current?.conversation,
+        ...conversation,
+      },
+      firstSeenAt: Math.min(current?.firstSeenAt ?? firstSeenAt, firstSeenAt),
+      lastSeenAt: Math.max(current?.lastSeenAt ?? lastSeenAt, lastSeenAt),
+    });
+  };
+  for (const surface of observed) {
+    add(surface.channel, surface.firstSeenAt, surface.lastSeenAt);
+  }
+  for (const binding of bindings) {
+    add(binding.channel, binding.createdAt, binding.updatedAt);
+  }
+  return [...surfaces.values()].sort((left, right) =>
+    right.lastSeenAt - left.lastSeenAt
+    || left.platform.localeCompare(right.platform)
+    || left.conversation.id.localeCompare(right.conversation.id));
 }
 
 export async function setDesktopMessagingDefaultAgent(

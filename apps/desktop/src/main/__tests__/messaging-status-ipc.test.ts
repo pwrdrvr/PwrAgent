@@ -165,6 +165,7 @@ describe("messaging status ipc", () => {
       defaultAgents: [],
       bindings: [],
       eligibleAgents: [],
+      observedSurfaces: [],
     };
     messagingRoutesServiceMock.listDesktopMessagingRoutes.mockResolvedValue(routes);
     messagingRoutesServiceMock.setDesktopMessagingDefaultAgent.mockResolvedValue({

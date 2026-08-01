@@ -2398,6 +2398,7 @@ describe("SettingsScreen", () => {
         },
       ],
       bindings: [],
+      observedSurfaces: [],
     };
     const snapshot = createSnapshot({
       messaging: {

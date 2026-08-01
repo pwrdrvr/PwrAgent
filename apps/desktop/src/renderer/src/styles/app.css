@@ -6458,6 +6458,17 @@ textarea,
   gap: 10px 12px;
 }
 
+.messaging-route-editor__surface {
+  grid-column: 1 / -1;
+}
+
+.messaging-route-editor__surface small {
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
 .messaging-route-editor label {
   display: flex;
   min-width: 0;
