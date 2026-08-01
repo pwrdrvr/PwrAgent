@@ -183,6 +183,35 @@ function pickNumber(record, keys) {
   return undefined;
 }
 
+function pickBoolean(record, keys) {
+  for (const key of keys) {
+    const value = record?.[key];
+    if (typeof value === "boolean") {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function pickIdentifier(record, keys) {
+  for (const key of keys) {
+    const value = record?.[key];
+    if (typeof value === "string" || (typeof value === "number" && Number.isFinite(value))) {
+      return String(value);
+    }
+  }
+  return undefined;
+}
+
+function pickValue(record, keys) {
+  for (const key of keys) {
+    if (record && record[key] !== undefined && record[key] !== null) {
+      return record[key];
+    }
+  }
+  return undefined;
+}
+
 function readPayloadCommand(payload) {
   const data = asRecord(payload?.data);
   return (
@@ -195,8 +224,8 @@ function readPayloadCommand(payload) {
 function readPayloadOutput(payload) {
   const data = asRecord(payload?.data);
   return (
-    pickString(payload, ["aggregatedOutput", "aggregated_output", "functionCallOutput", "output", "text"])
-    ?? pickString(data ?? {}, ["aggregatedOutput", "aggregated_output", "output", "text"])
+    pickValue(payload, ["aggregatedOutput", "aggregated_output", "functionCallOutput", "output", "text"])
+    ?? pickValue(data ?? {}, ["aggregatedOutput", "aggregated_output", "output", "text"])
     ?? ""
   );
 }
@@ -280,17 +309,92 @@ function classifyOutput(output) {
   };
 }
 
-function parseToolOutputEnvelope(output, explicitExitCode) {
+function collectToolOutput(value, state, seen = new Set()) {
+  if (typeof value === "string") {
+    state.textChunks.push(value);
+    return;
+  }
+  if (!value || typeof value !== "object" || seen.has(value)) {
+    return;
+  }
+  seen.add(value);
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectToolOutput(item, state, seen);
+    }
+    return;
+  }
+
+  state.exitCode ??= pickNumber(value, ["exitCode", "exit_code"]);
+  state.originalTokenCount ??= pickNumber(value, ["originalTokenCount", "original_token_count"]);
+  state.truncatedTokenCount ??= pickNumber(value, ["truncatedTokenCount", "truncated_token_count"]);
+  state.runningSessionId ??= pickIdentifier(value, ["runningSessionId", "running_session_id", "sessionId", "session_id"]);
+  state.runningCellId ??= pickIdentifier(value, ["runningCellId", "running_cell_id", "cellId", "cell_id"]);
+  state.truncated ||= pickBoolean(value, ["truncated", "isTruncated", "is_truncated"]) === true;
+
+  const directText = pickValue(value, ["text"]);
+  if (typeof directText === "string") {
+    state.textChunks.push(directText);
+    return;
+  }
+
+  const output = pickValue(value, [
+    "aggregatedOutput",
+    "aggregated_output",
+    "functionCallOutput",
+    "output",
+  ]);
+  if (output !== undefined) {
+    collectToolOutput(output, state, seen);
+    return;
+  }
+
+  const content = pickValue(value, ["content", "result", "data", "Ok"]);
+  if (content !== undefined) {
+    collectToolOutput(content, state, seen);
+  }
+}
+
+function parseToolOutputEnvelope(output, explicit = {}) {
   const exitCode = output.match(/Process exited with code (-?\d+)/)?.[1];
-  const runningSessionId = output.match(/Process running with session ID (\d+)/)?.[1];
+  const runningSessionId = output.match(/Process running with session ID (\S+)/)?.[1];
+  const runningCellId = output.match(/Script running with cell ID (\S+)/)?.[1];
   const originalTokenCount = output.match(/Original token count: (\d+)/)?.[1];
   const truncatedTokenCount = output.match(/Warning: truncated output \(original token count: (\d+)\)/)?.[1];
   return {
-    exitCode: exitCode === undefined ? explicitExitCode : Number(exitCode),
-    originalTokenCount: originalTokenCount === undefined ? undefined : Number(originalTokenCount),
-    runningSessionId,
-    truncated: /Warning: truncated output/.test(output),
-    truncatedTokenCount: truncatedTokenCount === undefined ? undefined : Number(truncatedTokenCount),
+    exitCode: exitCode === undefined ? explicit.exitCode : Number(exitCode),
+    originalTokenCount: originalTokenCount === undefined
+      ? explicit.originalTokenCount
+      : Number(originalTokenCount),
+    runningCellId: runningCellId ?? explicit.runningCellId,
+    runningSessionId: runningSessionId ?? explicit.runningSessionId,
+    truncated: explicit.truncated === true || /Warning: truncated output/.test(output),
+    truncatedTokenCount: truncatedTokenCount === undefined
+      ? explicit.truncatedTokenCount
+      : Number(truncatedTokenCount),
+  };
+}
+
+function normalizeToolOutput(value, explicitExitCode) {
+  const structured = typeof value !== "string";
+  const state = {
+    exitCode: explicitExitCode,
+    originalTokenCount: undefined,
+    runningCellId: undefined,
+    runningSessionId: undefined,
+    textChunks: [],
+    truncated: false,
+    truncatedTokenCount: undefined,
+  };
+  collectToolOutput(value, state);
+  const text = state.textChunks.join("");
+  return {
+    ...parseToolOutputEnvelope(text, state),
+    nonText: structured && state.textChunks.length === 0,
+    outputChars: text.length,
+    structured,
+    text,
   };
 }
 
@@ -312,6 +416,7 @@ function analyzeRollout(file) {
   const calls = new Map();
   let legacyCommandCount = 0;
   const outputs = [];
+  const cellCommands = new Map();
   const sessionCommands = new Map();
   const tokenCounts = [];
   const userMessages = [];
@@ -334,9 +439,15 @@ function analyzeRollout(file) {
         totalInputTokens: payload.info?.total_token_usage?.input_tokens || 0,
       });
     }
-    if (record?.type === "response_item" && payload?.type === "function_call") {
-      const parsedArgs = parseJson(payload.arguments);
-      const command = parsedArgs?.cmd || parsedArgs?.command || "";
+    if (
+      record?.type === "response_item"
+      && (payload?.type === "function_call" || payload?.type === "custom_tool_call")
+    ) {
+      const parsedArgs = parseJson(payload.arguments) ?? parseJson(payload.input);
+      const command = (
+        pickString(parsedArgs, ["cmd", "command"])
+        ?? (payload.type === "custom_tool_call" && typeof payload.input === "string" ? payload.input : "")
+      );
       const turnId = payload.internal_chat_message_metadata_passthrough?.turn_id;
       calls.set(payload.call_id, {
         args: parsedArgs,
@@ -344,47 +455,66 @@ function analyzeRollout(file) {
         command,
         index,
         name: payload.name,
-        normalizedCommand: normalizeCommand(command, payload.name),
+        normalizedCommand: payload.type === "custom_tool_call"
+          ? payload.name || "custom_tool_call"
+          : normalizeCommand(command, payload.name),
         timestamp: record.timestamp,
         turnId,
       });
     }
-    if (record?.type === "response_item" && payload?.type === "function_call_output") {
+    if (
+      record?.type === "response_item"
+      && (payload?.type === "function_call_output" || payload?.type === "custom_tool_call_output")
+    ) {
       const call = calls.get(payload.call_id);
-      const output = payload.output || "";
-      const envelope = parseToolOutputEnvelope(output);
-      if (envelope.runningSessionId && call?.command) {
-        sessionCommands.set(String(envelope.runningSessionId), {
-          command: call.command,
-          normalizedCommand: call.normalizedCommand,
-          startedAt: call.timestamp,
-          turnId: call.turnId,
-        });
-      }
+      const output = normalizeToolOutput(payload.output);
       let normalizedCommand = call?.normalizedCommand || call?.name || "unknown";
       let command = call?.command || "";
       let pollSessionId;
+      let commandAttribution = call ? {
+        command: call.command,
+        normalizedCommand: call.normalizedCommand,
+        startedAt: call.timestamp,
+        turnId: call.turnId,
+      } : undefined;
       if (call?.name === "write_stdin" && call.args?.session_id !== undefined) {
         pollSessionId = String(call.args.session_id);
         const parent = sessionCommands.get(pollSessionId);
         if (parent) {
+          commandAttribution = parent;
           normalizedCommand = `${parent.normalizedCommand} (poll)`;
           command = parent.command;
         } else {
           normalizedCommand = "write_stdin";
         }
       }
+      if (call?.name === "wait" && call.args?.cell_id !== undefined) {
+        pollSessionId = String(call.args.cell_id);
+        const parent = cellCommands.get(pollSessionId);
+        if (parent) {
+          commandAttribution = parent;
+          normalizedCommand = `${parent.normalizedCommand} (poll)`;
+          command = parent.command;
+        } else {
+          normalizedCommand = "wait";
+        }
+      }
+      if (output.runningCellId && commandAttribution) {
+        cellCommands.set(String(output.runningCellId), commandAttribution);
+      }
+      if (output.runningSessionId && commandAttribution) {
+        sessionCommands.set(String(output.runningSessionId), commandAttribution);
+      }
       outputs.push({
-        ...classifyOutput(output),
-        ...envelope,
+        ...classifyOutput(output.text),
+        ...output,
         callId: payload.call_id,
         command,
         index,
         modelRequestsAfter: 0,
         name: call?.name || "unknown",
         normalizedCommand,
-        outputChars: output.length,
-        outputTokens: estimateTokens(output),
+        outputTokens: estimateTokens(output.text),
         pollSessionId,
         replayInputImpressions: 0,
         timestamp: record.timestamp,
@@ -393,22 +523,19 @@ function analyzeRollout(file) {
     }
     if (record?.type === "event_msg" && payload?.type === "exec_command_end") {
       const command = readPayloadCommand(payload);
-      const output = readPayloadOutput(payload);
+      const output = normalizeToolOutput(readPayloadOutput(payload), readPayloadExitCode(payload));
       const normalizedCommand = normalizeCommand(command, "exec_command");
-      const exitCode = readPayloadExitCode(payload);
-      const envelope = parseToolOutputEnvelope(output, exitCode);
       legacyCommandCount += 1;
       outputs.push({
-        ...classifyOutput(output),
-        ...envelope,
+        ...classifyOutput(output.text),
+        ...output,
         callId: payload.call_id || payload.callId || `exec_command_end:${index}`,
         command,
         index,
         modelRequestsAfter: 0,
         name: "exec_command",
         normalizedCommand,
-        outputChars: output.length,
-        outputTokens: estimateTokens(output),
+        outputTokens: estimateTokens(output.text),
         pollSessionId: undefined,
         replayInputImpressions: 0,
         timestamp: record.timestamp,
@@ -574,9 +701,11 @@ function buildSummary(file, meta, userMessages, tokenCounts, functionCallCount, 
       fileBytes: fs.statSync(file).size,
       functionCalls: functionCallCount,
       functionOutputs: outputs.length,
+      nonTextOutputs: outputs.filter((output) => output.nonText).length,
       outputChars: outputs.reduce((sum, output) => sum + output.outputChars, 0),
       outputTokens: outputs.reduce((sum, output) => sum + output.outputTokens, 0),
       replayInputImpressions: outputs.reduce((sum, output) => sum + output.replayInputImpressions, 0),
+      structuredOutputs: outputs.filter((output) => output.structured).length,
       tokenCountEvents: tokenCounts.length,
       totalCachedInputTokens: lastToken?.totalCachedInputTokens || 0,
       totalInputTokens: lastToken?.totalInputTokens || 0,
@@ -613,7 +742,7 @@ function renderMarkdown(summaries, top) {
       out.push(`First user message: ${summary.meta.firstUser}`);
     }
     out.push("");
-    out.push(`Totals: ${formatNumber(summary.totals.functionOutputs)} outputs, ${formatNumber(summary.totals.outputChars)} chars, ~${formatNumber(summary.totals.outputTokens)} output tokens, ${formatNumber(summary.totals.truncatedOutputs)} truncated outputs, ${formatNumber(summary.totals.tokenCountEvents)} token-count events.`);
+    out.push(`Totals: ${formatNumber(summary.totals.functionOutputs)} outputs, ${formatNumber(summary.totals.outputChars)} chars, ~${formatNumber(summary.totals.outputTokens)} output tokens, ${formatNumber(summary.totals.truncatedOutputs)} truncated outputs, ${formatNumber(summary.totals.structuredOutputs)} structured outputs (${formatNumber(summary.totals.nonTextOutputs)} without text), ${formatNumber(summary.totals.tokenCountEvents)} token-count events.`);
     out.push("");
     out.push("### Tool Output By Command");
     out.push(markdownTable(
