@@ -47,10 +47,10 @@ them.
 
 ## Verification
 
-- [ ] JSON and SQLite stores list only active routes.
-- [ ] Main IPC maps records, filters eligible Agents, and performs mutations.
-- [ ] Renderer tests cover empty, populated, add, retarget, clear, and unbind
+- [x] JSON and SQLite stores list only active routes.
+- [x] Main IPC maps records, filters eligible Agents, and performs mutations.
+- [x] Renderer tests cover empty, populated, add, retarget, clear, and unbind
   states.
-- [ ] Focused tests, typecheck, ESLint, SQL lint, and dependency boundaries pass.
-- [ ] The Settings pane is inspected in a running desktop build at desktop and
+- [x] Focused tests, typecheck, ESLint, SQL lint, and dependency boundaries pass.
+- [x] The Settings pane is inspected in a running desktop build at desktop and
   narrow widths.
