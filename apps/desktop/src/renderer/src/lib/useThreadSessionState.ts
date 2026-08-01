@@ -3235,6 +3235,7 @@ export function useThreadSessionState(params: {
   const lastLiveActivitySignatureRef = useRef<Record<string, string>>({});
   const requestVersionsRef = useRef<Record<string, number>>({});
   const staleThinkingLogKeysRef = useRef<Set<string>>(new Set());
+  const threadStatusSummarySeedRef = useRef<Record<string, string>>({});
   const [sessions, setSessions] = useState<ThreadSessionState>({});
 
   selectedThreadKeyRef.current = threadKey;
@@ -3544,16 +3545,20 @@ export function useThreadSessionState(params: {
     }
 
     if (thread.threadStatus === "active" || thread.threadStatus === "idle") {
-      const backendReportedActive = thread.threadStatus === "active";
-      updateSession(threadKey, (current) =>
-        current.backendReportedActive === backendReportedActive
-          ? current
-          : {
-              ...current,
-              backendReportedActive,
-              lastTouchedAt: Date.now(),
-            }
-      );
+      const summarySeed = `${thread.threadStatus}:${thread.updatedAt ?? "unknown"}`;
+      if (threadStatusSummarySeedRef.current[threadKey] !== summarySeed) {
+        threadStatusSummarySeedRef.current[threadKey] = summarySeed;
+        const backendReportedActive = thread.threadStatus === "active";
+        updateSession(threadKey, (current) =>
+          current.backendReportedActive === backendReportedActive
+            ? current
+            : {
+                ...current,
+                backendReportedActive,
+                lastTouchedAt: Date.now(),
+              }
+        );
+      }
     }
 
     const optimisticUserMessage = thread.optimisticUserMessage;

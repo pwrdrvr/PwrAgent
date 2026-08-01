@@ -9044,10 +9044,13 @@ describe("useThreadSessionState", () => {
       })),
     };
 
-    const { result } = renderHook(() =>
+    const { result, rerender } = renderHook(() =>
       useThreadSessionState({
         desktopApi,
-        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+        thread: {
+          ...buildThread({ id: "thread-1", updatedAt: 1_000 }),
+          threadStatus: "active" as const,
+        },
       })
     );
 
@@ -9061,15 +9064,10 @@ describe("useThreadSessionState", () => {
       agentEventHandler?.({
         backend: "codex",
         notification: {
-          method: "turn/completed",
+          method: "thread/status/changed",
           params: {
             threadId: "thread-1",
-            turnId: "turn-survived-hmr",
-            turn: {
-              id: "turn-survived-hmr",
-              status: "completed",
-              output: [],
-            },
+            status: { type: "idle" },
           },
         },
       });
@@ -9079,6 +9077,12 @@ describe("useThreadSessionState", () => {
       expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBeUndefined();
       expect(result.current.threadBusy).toBe(false);
     });
+
+    rerender();
+
+    expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBeUndefined();
+    expect(result.current.pendingStatusText).toBeUndefined();
+    expect(result.current.threadBusy).toBe(false);
   });
 
   it("renders item/fileChange/outputDelta as a Changed file activity entry", async () => {
