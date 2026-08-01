@@ -129,6 +129,7 @@ type TurnUsageAccumulator = {
 type ThreadSessionEntry = {
   activeTurnId?: string;
   activeTurnStartedAt?: number;
+  backendReportedActive?: boolean;
   completionHydrationRetries: number;
   contextWindow?: ThreadContextWindowState;
   error?: string;
@@ -163,6 +164,7 @@ type ThinkingStateReason = {
   entryType?: AppServerThreadEntry["type"];
   kind:
     | "activeTurn"
+    | "backendActive"
     | "liveOptimisticEntry"
     | "pendingAssistantMessage"
     | "pendingMcpInteraction"
@@ -1307,6 +1309,10 @@ function summarizeOptimisticEntryReason(
 
 function describeThinkingState(session: ThreadSessionEntry): ThinkingStateReason[] {
   const reasons: ThinkingStateReason[] = [];
+
+  if (session.backendReportedActive) {
+    reasons.push({ kind: "backendActive" });
+  }
 
   if (session.activeTurnId) {
     reasons.push({
@@ -3229,6 +3235,7 @@ export function useThreadSessionState(params: {
   const lastLiveActivitySignatureRef = useRef<Record<string, string>>({});
   const requestVersionsRef = useRef<Record<string, number>>({});
   const staleThinkingLogKeysRef = useRef<Set<string>>(new Set());
+  const threadStatusSummarySeedRef = useRef<Record<string, string>>({});
   const [sessions, setSessions] = useState<ThreadSessionState>({});
 
   selectedThreadKeyRef.current = threadKey;
@@ -3402,6 +3409,13 @@ export function useThreadSessionState(params: {
             ? current.completionHydrationRetries + 1
             : 0;
           const thinkingReasons = describeThinkingState(current);
+          const responseThreadStatus = readResponseThreadStatus(response);
+          const backendReportedActive =
+            responseThreadStatus === "active"
+              ? true
+              : responseThreadStatus === "idle"
+                ? false
+                : current.backendReportedActive;
           const now = Date.now();
           const ownUpdateSettlesAt =
             current.lastTouchedAt + OWN_UPDATE_IDLE_GRACE_MS;
@@ -3424,7 +3438,7 @@ export function useThreadSessionState(params: {
             )
             && now < ownUpdateSettlesAt;
           const shouldClearStaleThinking =
-            readResponseThreadStatus(response) === "idle"
+            responseThreadStatus === "idle"
             && thinkingReasons.length > 0
             && !hasPendingInteraction(current)
             && !ownUpdateStillSettling
@@ -3456,6 +3470,7 @@ export function useThreadSessionState(params: {
             activeTurnStartedAt: shouldClearStaleThinking
               ? undefined
               : current.activeTurnStartedAt,
+            backendReportedActive,
             error: undefined,
             expectOwnUpdate: false,
             failedHydrationVersion: undefined,
@@ -3527,6 +3542,23 @@ export function useThreadSessionState(params: {
   useEffect(() => {
     if (!thread || !threadKey) {
       return;
+    }
+
+    if (thread.threadStatus === "active" || thread.threadStatus === "idle") {
+      const summarySeed = `${thread.threadStatus}:${thread.updatedAt ?? "unknown"}`;
+      if (threadStatusSummarySeedRef.current[threadKey] !== summarySeed) {
+        threadStatusSummarySeedRef.current[threadKey] = summarySeed;
+        const backendReportedActive = thread.threadStatus === "active";
+        updateSession(threadKey, (current) =>
+          current.backendReportedActive === backendReportedActive
+            ? current
+            : {
+                ...current,
+                backendReportedActive,
+                lastTouchedAt: Date.now(),
+              }
+        );
+      }
     }
 
     const optimisticUserMessage = thread.optimisticUserMessage;
@@ -4045,6 +4077,7 @@ export function useThreadSessionState(params: {
             ...current,
             activeTurnId: turnId,
             activeTurnStartedAt: startedAt,
+            backendReportedActive: true,
             expectOwnUpdate: true,
             interacted: true,
             lastTouchedAt: nextLastTouchedAt,
@@ -4301,6 +4334,9 @@ export function useThreadSessionState(params: {
               activeTurnStartedAt: completedTurnMatchesActive
                 ? undefined
                 : current.activeTurnStartedAt,
+              backendReportedActive: completedTurnMatchesActive
+                ? false
+                : current.backendReportedActive,
               error: undefined,
               lastTouchedAt: nextLastTouchedAt,
               pendingAssistantMessage: completedTurnMatchesActive
@@ -4461,6 +4497,9 @@ export function useThreadSessionState(params: {
             activeTurnStartedAt: completedTurnMatchesActive
               ? undefined
               : current.activeTurnStartedAt,
+            backendReportedActive: completedTurnMatchesActive
+              ? false
+              : current.backendReportedActive,
             completionHydrationRetries: completedTurnMatchesActive
               ? 0
               : current.completionHydrationRetries,
@@ -4541,6 +4580,7 @@ export function useThreadSessionState(params: {
             ...current,
             activeTurnId: undefined,
             activeTurnStartedAt: undefined,
+            backendReportedActive: false,
             completionHydrationRetries: 0,
             error: undefined,
             expectOwnUpdate: false,
@@ -4575,6 +4615,7 @@ export function useThreadSessionState(params: {
             ...current,
             activeTurnId: undefined,
             activeTurnStartedAt: undefined,
+            backendReportedActive: false,
             completionHydrationRetries: 0,
             error: undefined,
             expectOwnUpdate: false,
@@ -4598,15 +4639,28 @@ export function useThreadSessionState(params: {
               ? event.notification.params.status.type
               : undefined;
 
+          if (statusType === "active") {
+            return {
+              ...current,
+              backendReportedActive: true,
+              lastTouchedAt: nextLastTouchedAt,
+            };
+          }
+
           if (statusType === "idle") {
             if (current.activeTurnId || current.pendingStatusText) {
-              return current;
+              return {
+                ...current,
+                backendReportedActive: false,
+                lastTouchedAt: nextLastTouchedAt,
+              };
             }
 
             return {
               ...current,
               activeTurnId: undefined,
               activeTurnStartedAt: undefined,
+              backendReportedActive: false,
               lastTouchedAt: nextLastTouchedAt,
               pendingAssistantMessage: undefined,
               pendingStatusText: undefined,
@@ -5180,7 +5234,9 @@ export function useThreadSessionState(params: {
   );
   const pendingStatusText =
     selectedSession?.pendingStatusText ??
-    (selectedSession?.activeTurnId ? "Thinking" : undefined);
+    (selectedSession?.activeTurnId || selectedSession?.backendReportedActive
+      ? "Thinking"
+      : undefined);
   const threadBusy = selectedSession ? hasThinkingState(selectedSession) : false;
 
   return {

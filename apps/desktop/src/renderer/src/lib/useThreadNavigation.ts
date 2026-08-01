@@ -4,6 +4,7 @@ import type {
   AppServerCollaborationModeRequest,
   AppServerReviewTarget,
   AppServerThreadImagePart,
+  AppServerThreadStatus,
   AppServerTurnInputItem,
   ArchiveThreadCleanupResult,
   CodexThreadEnvironmentRuntime,
@@ -698,6 +699,7 @@ function threadSummariesEqual(
     left.projectKey === right.projectKey &&
     left.createdAt === right.createdAt &&
     left.updatedAt === right.updatedAt &&
+    left.threadStatus === right.threadStatus &&
     left.gitBranch === right.gitBranch &&
     left.observedGitBranch === right.observedGitBranch &&
     // Working state is probed on its own cadence (background refresh +
@@ -1414,6 +1416,37 @@ function applyThreadNameUpdate(
         threads,
       }
     : snapshot;
+}
+
+function applyThreadStatusUpdate(
+  snapshot: NavigationSnapshot | undefined,
+  params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    threadStatus: AppServerThreadStatus;
+  }
+): NavigationSnapshot | undefined {
+  if (!snapshot) {
+    return snapshot;
+  }
+
+  let changed = false;
+  const threads = snapshot.threads.map((thread) => {
+    if (thread.source !== params.backend || thread.id !== params.threadId) {
+      return thread;
+    }
+    if (thread.threadStatus === params.threadStatus) {
+      return thread;
+    }
+
+    changed = true;
+    return {
+      ...thread,
+      threadStatus: params.threadStatus,
+    };
+  });
+
+  return changed ? { ...snapshot, threads } : snapshot;
 }
 
 function applyThreadPullRequestsUpdate(
@@ -3036,6 +3069,37 @@ export function useThreadNavigation(
           };
         });
         scheduleRefresh();
+        return;
+      }
+
+      if (method === "thread/status/changed") {
+        const { threadId, status } = event.notification.params as {
+          threadId: string;
+          status?: { type?: string };
+        };
+        const threadStatus = status?.type;
+        if (
+          threadStatus !== "active"
+          && threadStatus !== "idle"
+          && threadStatus !== "notLoaded"
+          && threadStatus !== "unknown"
+        ) {
+          return;
+        }
+
+        setState((current) => ({
+          ...current,
+          response: applyThreadStatusUpdate(current.response, {
+            backend: event.backend,
+            threadId,
+            threadStatus,
+          }),
+        }));
+        setOptimisticThread((current) =>
+          current?.source === event.backend && current.id === threadId
+            ? { ...current, threadStatus }
+            : current
+        );
         return;
       }
 

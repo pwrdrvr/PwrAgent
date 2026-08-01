@@ -586,6 +586,7 @@ class MockTransport implements JsonRpcTransport {
                 id: "thread-2",
                 title: "Ship desktop shell",
                 summary: "Hook up Electron and the sidebar",
+                status: { type: "active", activeFlags: [] },
                 updatedAt: 1_763_500_000,
                 session: {
                   cwd: "/Users/huntharo/pwrdrvr/PwrAgent"
@@ -1250,6 +1251,7 @@ describe("CodexAppServerClient", () => {
       id: "thread-2",
       title: "Ship desktop shell",
       titleSource: "explicit",
+      threadStatus: "active",
       source: "codex",
       linkedDirectories: [
         {

@@ -109,6 +109,86 @@ describe("useThreadNavigation", () => {
     });
   });
 
+  it("keeps runtime thread status current across refreshes and lifecycle events", async () => {
+    let threadStatus: "active" | "idle" = "active";
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: ["codex:thread-1"],
+      threads: [
+        {
+          id: "thread-1",
+          title: "Surviving HMR turn",
+          titleSource: "explicit" as const,
+          source: "codex" as const,
+          threadStatus,
+          linkedDirectories: [],
+          inbox: {
+            inInbox: true,
+            reason: "new-thread" as const,
+          },
+          updatedAt: 1_000,
+        },
+      ],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.threads[0]?.threadStatus).toBe("active");
+    });
+
+    threadStatus = "idle";
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(result.current.threads[0]?.threadStatus).toBe("idle");
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/status/changed",
+          params: {
+            threadId: "thread-1",
+            status: { type: "active" },
+          },
+        },
+      });
+    });
+    expect(result.current.threads[0]?.threadStatus).toBe("active");
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/status/changed",
+          params: {
+            threadId: "thread-1",
+            status: { type: "idle" },
+          },
+        },
+      });
+    });
+    expect(result.current.threads[0]?.threadStatus).toBe("idle");
+  });
+
   it("clears a directory attention count after the selected thread is marked seen", async () => {
     const markThreadSeen = vi.fn(async () => ({
       backend: "codex" as const,

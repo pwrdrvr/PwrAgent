@@ -9,7 +9,7 @@ export function getThreadRowStatus(
   thinkingThreadKeys?: Record<string, boolean>
 ): ThreadRowStatusKind | undefined {
   const threadKey = buildThreadIdentityKey(thread.source, thread.id);
-  if (thinkingThreadKeys?.[threadKey]) {
+  if (thread.threadStatus === "active" || thinkingThreadKeys?.[threadKey]) {
     return "thinking";
   }
 

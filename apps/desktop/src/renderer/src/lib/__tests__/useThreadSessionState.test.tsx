@@ -9019,6 +9019,72 @@ describe("useThreadSessionState", () => {
     });
   });
 
+  it("restores thinking from active backend status after renderer HMR", async () => {
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      readThread: vi.fn(async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        threadStatus: "active" as const,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      })),
+    };
+
+    const { result, rerender } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: {
+          ...buildThread({ id: "thread-1", updatedAt: 1_000 }),
+          threadStatus: "active" as const,
+        },
+      })
+    );
+
+    await waitFor(() => {
+      expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBe(true);
+      expect(result.current.pendingStatusText).toBe("Thinking");
+      expect(result.current.threadBusy).toBe(true);
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/status/changed",
+          params: {
+            threadId: "thread-1",
+            status: { type: "idle" },
+          },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBeUndefined();
+      expect(result.current.threadBusy).toBe(false);
+    });
+
+    rerender();
+
+    expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBeUndefined();
+    expect(result.current.pendingStatusText).toBeUndefined();
+    expect(result.current.threadBusy).toBe(false);
+  });
+
   it("renders item/fileChange/outputDelta as a Changed file activity entry", async () => {
     let agentEventHandler:
       | ((event: {

@@ -4966,11 +4966,13 @@ function extractThreadsFromValue(value: unknown): RawCodexThreadSummary[] {
           "first_user_message",
         ])
     );
+    const threadStatus = readThreadStatus(record);
 
     summaries.set(threadId, {
       id: threadId,
       title: titleInfo.title,
       titleSource: titleInfo.titleSource,
+      ...(threadStatus ? { threadStatus } : {}),
       summary:
         summary === titleInfo.title ||
         (titleInfo.titleSource === "derived" &&
