@@ -6214,6 +6214,8 @@ textarea,
 }
 
 .settings-input--readonly {
+  display: flex;
+  align-items: center;
   cursor: default;
 }
 
