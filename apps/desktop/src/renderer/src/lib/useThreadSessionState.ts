@@ -995,16 +995,53 @@ function carryForwardTranscriptEntryOrder(
   let changed = false;
   let entries = response.replay.entries.map((entry) => {
     const source = findUniqueTranscriptOrderSource(entry, sources);
-    if (!source || source.createdAt === entry.createdAt) {
+    if (!source) {
+      return entry;
+    }
+
+    // A read that began before main persisted an injected-message origin can
+    // resolve after the live item/completed event. Keep that richer live
+    // provenance instead of letting the stale response downgrade it to User.
+    const origin =
+      entry.type === "message"
+      && source.type === "message"
+      && !entry.origin
+      && source.origin
+        ? source.origin
+        : undefined;
+    const turn = source.turn && !entry.turn ? source.turn : undefined;
+    const createdAt = source.createdAt !== entry.createdAt
+      ? source.createdAt
+      : undefined;
+    if (!origin && !turn && createdAt === undefined) {
       return entry;
     }
 
     changed = true;
     return {
       ...entry,
-      createdAt: source.createdAt,
-      ...(source.turn && !entry.turn ? { turn: source.turn } : {}),
+      ...(createdAt !== undefined ? { createdAt } : {}),
+      ...(turn ? { turn } : {}),
+      ...(origin ? { origin } : {}),
     };
+  });
+
+  const originsByMessageId = new Map(
+    entries
+      .filter(
+        (entry): entry is AppServerThreadMessageEntry =>
+          entry.type === "message" && Boolean(entry.origin)
+      )
+      .map((entry) => [entry.id, entry.origin] as const)
+  );
+  const messages = response.replay.messages.map((message) => {
+    const origin = originsByMessageId.get(message.id);
+    if (!origin || message.origin) {
+      return message;
+    }
+
+    changed = true;
+    return { ...message, origin };
   });
 
   const freshCurrentTurnId = latestTranscriptTurnId(response.replay.entries);
@@ -1061,6 +1098,7 @@ function carryForwardTranscriptEntryOrder(
         replay: {
           ...response.replay,
           entries,
+          messages,
         },
       }
     : response;
@@ -2889,15 +2927,21 @@ function threadMessageOriginFromUnknown(
     && record.kind !== "automation"
     && record.kind !== "messaging"
     && record.kind !== "pwragent"
+    && record.kind !== "sub-agent"
   ) {
     return undefined;
   }
   const messaging = threadMessageMessagingOriginFromUnknown(record.messaging);
+  const subAgent =
+    record.kind === "sub-agent"
+      ? threadMessageSubAgentOriginFromUnknown(record.subAgent)
+      : undefined;
   const source = record.sourceThread;
   if (!source || typeof source !== "object" || Array.isArray(source)) {
     return {
       kind: record.kind,
       ...(messaging ? { messaging } : {}),
+      ...(subAgent ? { subAgent } : {}),
     };
   }
   const sourceRecord = source as Record<string, unknown>;
@@ -2920,6 +2964,36 @@ function threadMessageOriginFromUnknown(
         : {}),
     },
     ...(messaging ? { messaging } : {}),
+    ...(subAgent ? { subAgent } : {}),
+  };
+}
+
+function threadMessageSubAgentOriginFromUnknown(
+  value: unknown,
+): AppServerThreadMessageOrigin["subAgent"] | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  if (
+    record.kind !== "monitor"
+    || typeof record.monitorId !== "string"
+    || typeof record.task !== "string"
+    || typeof record.summary !== "string"
+    || (
+      record.outcome !== "success"
+      && record.outcome !== "failure"
+      && record.outcome !== "cancelled"
+    )
+  ) {
+    return undefined;
+  }
+  return {
+    kind: "monitor",
+    monitorId: record.monitorId,
+    task: record.task,
+    outcome: record.outcome,
+    summary: record.summary,
   };
 }
 

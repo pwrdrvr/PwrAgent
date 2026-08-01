@@ -797,6 +797,210 @@ describe("useThreadSessionState", () => {
     );
   });
 
+  it("preserves live agent provenance when an earlier hydration finishes later", async () => {
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    let resolveReadThread:
+      | ((response: AppServerReadThreadResponse) => void)
+      | undefined;
+    const readThread = vi.fn(
+      async () =>
+        await new Promise<AppServerReadThreadResponse>((resolve) => {
+          resolveReadThread = resolve;
+        })
+    );
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      readThread,
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(1);
+      expect(agentEventHandler).toBeDefined();
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              id: "injected-message",
+              type: "userMessage",
+              origin: {
+                kind: "agent",
+                sourceThread: {
+                  backend: "codex",
+                  threadId: "source-thread",
+                  title: "Source thread",
+                },
+              },
+              content: [{ type: "text", text: "Please continue the audit." }],
+            },
+          },
+        },
+      });
+    });
+
+    await act(async () => {
+      resolveReadThread?.(
+        readThreadResponse({
+          entries: [
+            {
+              type: "message",
+              id: "injected-message",
+              role: "user",
+              text: "Please continue the audit.",
+            },
+          ],
+          hasPreviousPage: false,
+        })
+      );
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(result.current.response?.threadStatus).toBe("idle");
+    });
+    expect(
+      result.current.response?.replay.entries.find(
+        (entry) => entry.id === "injected-message",
+      ),
+    ).toEqual(
+      expect.objectContaining({
+        origin: {
+          kind: "agent",
+          sourceThread: {
+            backend: "codex",
+            threadId: "source-thread",
+            title: "Source thread",
+          },
+        },
+      }),
+    );
+    expect(
+      result.current.response?.replay.messages.find(
+        (message) => message.id === "injected-message",
+      ),
+    ).toEqual(
+      expect.objectContaining({
+        origin: {
+          kind: "agent",
+          sourceThread: {
+            backend: "codex",
+            threadId: "source-thread",
+            title: "Source thread",
+          },
+        },
+      }),
+    );
+  });
+
+  it("keeps a live sub-agent message attributed to its source thread", async () => {
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitForThreadHydration(result);
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-monitor",
+            item: {
+              id: "monitor-result",
+              type: "userMessage",
+              origin: {
+                kind: "sub-agent",
+                sourceThread: {
+                  backend: "codex",
+                  threadId: "monitor-thread",
+                  title: "Watch CI",
+                },
+                subAgent: {
+                  kind: "monitor",
+                  monitorId: "monitor-1",
+                  task: "Watch CI",
+                  outcome: "success",
+                  summary: "All required checks passed.",
+                },
+              },
+              content: [{ type: "text", text: "All required checks passed." }],
+            },
+          },
+        },
+      });
+    });
+
+    expect(
+      result.current.response?.replay.messages.find(
+        (message) => message.id === "monitor-result",
+      ),
+    ).toEqual(
+      expect.objectContaining({
+        origin: {
+          kind: "sub-agent",
+          sourceThread: {
+            backend: "codex",
+            threadId: "monitor-thread",
+            title: "Watch CI",
+          },
+          subAgent: {
+            kind: "monitor",
+            monitorId: "monitor-1",
+            task: "Watch CI",
+            outcome: "success",
+            summary: "All required checks passed.",
+          },
+        },
+      }),
+    );
+  });
+
   it("keeps an optimistic image user message ahead of a hydrated assistant final", async () => {
     const readThread = vi.fn(
       async ({
