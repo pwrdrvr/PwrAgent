@@ -21,6 +21,7 @@ import { ProfilesSettings } from "./ProfilesSettings";
 import { ApplicationsSettings } from "./ApplicationsSettings";
 import { ArchivedThreadsSettings } from "./ArchivedThreadsSettings";
 import { ThreadManagementSettings } from "./ThreadManagementSettings";
+import { TroubleshootingSettings } from "./TroubleshootingSettings";
 import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import { WorktreesSettings } from "./WorktreesSettings";
 import {
@@ -43,6 +44,7 @@ export type SettingsSection =
   | "worktrees"
   | "thread-management"
   | "archived"
+  | "troubleshooting"
   | "about";
 
 const SECTIONS: Array<{ id: SettingsSection; label: string }> = [
@@ -55,6 +57,7 @@ const SECTIONS: Array<{ id: SettingsSection; label: string }> = [
   { id: "thread-management", label: "Thread Management" },
   { id: "archived", label: "Archived Threads" },
   { id: "experimental", label: "Experimental" },
+  { id: "troubleshooting", label: "Troubleshooting" },
   { id: "about", label: "About" },
 ];
 
@@ -78,6 +81,7 @@ const ORDERED_SECTION_IDS: SettingsSection[] = [
   "thread-management",
   "archived",
   "experimental",
+  "troubleshooting",
   "about",
 ];
 
@@ -318,6 +322,45 @@ function SettingsSectionBody(props: {
         desktopApi={props.desktopApi}
         saving={props.settings.saving}
         snapshot={props.snapshot}
+        onConfirmQuitWithInProgressThreadsChange={async (
+          confirmQuitWithInProgressThreads: boolean,
+        ) => {
+          await props.settings.writeConfig({
+            general: { confirmQuitWithInProgressThreads },
+          });
+        }}
+        onUpdateChannelChange={async (channel: DesktopUpdateChannel) => {
+          await props.settings.writeConfig({
+            updates: { channel },
+          });
+        }}
+        onPastedImageMaxPatchesChange={async (pastedImageMaxPatches) => {
+          await props.settings.writeConfig({
+            imageUploads: {
+              pastedImageMaxPatches,
+            },
+          });
+        }}
+        onNotificationsEnabledChange={async (notificationsEnabled) => {
+          await props.settings.writeConfig({
+            general: { notificationsEnabled },
+          });
+        }}
+        onClearMessagingAcknowledgment={async () => {
+          await props.settings.writeConfig({
+            general: { messagingAcknowledgment: null },
+          });
+        }}
+      />
+    );
+  }
+
+  if (props.section === "troubleshooting") {
+    return (
+      <TroubleshootingSettings
+        desktopApi={props.desktopApi}
+        saving={props.settings.saving}
+        snapshot={props.snapshot}
         onDeveloperModeChange={async (developerMode: boolean) => {
           await props.settings.writeConfig({
             general: { developerMode },
@@ -358,35 +401,6 @@ function SettingsSectionBody(props: {
         ) => {
           await props.settings.writeConfig({
             general: { hotCpuProfilingHeapSnapshotLimit },
-          });
-        }}
-        onConfirmQuitWithInProgressThreadsChange={async (
-          confirmQuitWithInProgressThreads: boolean,
-        ) => {
-          await props.settings.writeConfig({
-            general: { confirmQuitWithInProgressThreads },
-          });
-        }}
-        onUpdateChannelChange={async (channel: DesktopUpdateChannel) => {
-          await props.settings.writeConfig({
-            updates: { channel },
-          });
-        }}
-        onPastedImageMaxPatchesChange={async (pastedImageMaxPatches) => {
-          await props.settings.writeConfig({
-            imageUploads: {
-              pastedImageMaxPatches,
-            },
-          });
-        }}
-        onNotificationsEnabledChange={async (notificationsEnabled) => {
-          await props.settings.writeConfig({
-            general: { notificationsEnabled },
-          });
-        }}
-        onClearMessagingAcknowledgment={async () => {
-          await props.settings.writeConfig({
-            general: { messagingAcknowledgment: null },
           });
         }}
       />
