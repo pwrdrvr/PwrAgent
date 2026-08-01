@@ -106,6 +106,10 @@ export async function listDesktopMessagingRoutes(
           backendLabel:
             backendLabels.get(assignment.target.backend)
             ?? formatBackendLabel(assignment.target.backend),
+          backendAvailable:
+            backendResult.backends.find(
+              (candidate) => candidate.kind === assignment.target.backend,
+            )?.available === true,
           available: false,
         },
         createdAt: assignment.createdAt,
@@ -117,6 +121,9 @@ export async function listDesktopMessagingRoutes(
         ? threadsByKey.get(threadKey(binding.backend, binding.threadId))
         : threadResult.find((candidate) => candidate.id === binding.threadId);
       const backend = binding.backend ?? thread?.source;
+      const backendSummary = backend
+        ? backendResult.backends.find((candidate) => candidate.kind === backend)
+        : undefined;
       return {
         bindingId: binding.id,
         platform: binding.channel.channel,
@@ -135,6 +142,13 @@ export async function listDesktopMessagingRoutes(
         },
         target: {
           ...(backend ? { backend } : {}),
+          ...(backend
+            ? {
+                backendLabel:
+                  backendLabels.get(backend) ?? formatBackendLabel(backend),
+                backendAvailable: backendSummary?.available === true,
+              }
+            : {}),
           threadId: binding.threadId,
           label: thread?.title ?? binding.threadId,
           kind: normalizeMessagingBindingTargetKind(binding.targetKind),
@@ -207,8 +221,15 @@ async function resolveEligibleAgents(params: {
   threads: AppServerThreadSummary[];
 }): Promise<DesktopMessagingAgentRouteTarget[]> {
   const candidates = params.threads.filter(
-    (thread) =>
-      defaultAgentBackendSupport(thread.source, params.backends) === "supported",
+    (thread) => {
+      const backend = params.backends.find(
+        (candidate) => candidate.kind === thread.source,
+      );
+      return (
+        backend?.available === true
+        && defaultAgentBackendSupport(thread.source, params.backends) === "supported"
+      );
+    },
   );
   const metadata = await Promise.all(
     candidates.map(async (thread) => ({
@@ -236,6 +257,7 @@ async function resolveEligibleAgents(params: {
       backendLabel:
         params.backendLabels.get(thread.source)
         ?? formatBackendLabel(thread.source),
+      backendAvailable: true,
       available: true,
     }));
 }

@@ -6344,7 +6344,7 @@ textarea,
 }
 
 .messaging-route-row__title,
-.messaging-route-row__target > span {
+.messaging-route-row__target-title {
   overflow: hidden;
   color: var(--text-primary);
   font-size: 12.5px;
@@ -6361,17 +6361,16 @@ textarea,
   white-space: nowrap;
 }
 
-.messaging-route-row__open:not(:disabled):hover .messaging-route-row__target > span {
+.messaging-route-row__open:not(:disabled):hover .messaging-route-row__target-title {
   color: var(--accent);
   text-decoration-color: currentColor;
 }
 
 .messaging-route-row__meta,
-.messaging-route-row__target code,
-.messaging-route-row__target small {
+.messaging-route-row__target code {
   display: block;
+  min-width: 0;
   overflow: hidden;
-  margin-top: 3px;
   color: var(--text-muted);
   font-family: var(--font-mono);
   font-size: 10.5px;
@@ -6382,12 +6381,36 @@ textarea,
   white-space: nowrap;
 }
 
-.messaging-route-row__target small.is-ok {
-  color: var(--success-text);
+.messaging-route-row__meta {
+  margin-top: 3px;
 }
 
-.messaging-route-row__target small.is-stale {
+.messaging-route-row__target-meta {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  margin-top: 4px;
+}
+
+.messaging-route-row__provider-chip {
+  flex: 0 0 auto;
+  height: 20px;
+  padding: 0 7px;
+  font-size: 10.5px;
+}
+
+.messaging-route-row__provider-chip.is-stale {
+  border-color: var(--danger-border);
   color: var(--danger-text);
+}
+
+.messaging-route-row__target-warning {
+  color: var(--danger-text);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1.2;
 }
 
 .messaging-route-row__actions {

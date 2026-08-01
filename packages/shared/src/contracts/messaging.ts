@@ -302,6 +302,7 @@ export type DesktopMessagingAgentRouteTarget = {
   threadId: ThreadIdentifier;
   label: string;
   backendLabel: string;
+  backendAvailable: boolean;
   available: boolean;
 };
 
@@ -325,6 +326,8 @@ export type DesktopMessagingBindingRoute = {
   };
   target: {
     backend?: AppServerBackendKind;
+    backendLabel?: string;
+    backendAvailable?: boolean;
     threadId: ThreadIdentifier;
     label: string;
     kind: MessagingBindingTargetKind;

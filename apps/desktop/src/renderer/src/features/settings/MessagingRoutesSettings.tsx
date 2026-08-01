@@ -266,8 +266,16 @@ export function MessagingRoutesSettings(props: {
                       </div>
                     </div>
                     <div className="messaging-route-row__target">
-                      <span>{binding.target.label}</span>
-                      <code>{binding.target.threadId}</code>
+                      <span className="messaging-route-row__target-title">
+                        {binding.target.label}
+                      </span>
+                      <div className="messaging-route-row__target-meta">
+                        <ProviderChip
+                          available={binding.target.backendAvailable === true}
+                          label={binding.target.backendLabel ?? "Unknown provider"}
+                        />
+                        <code>{binding.target.threadId}</code>
+                      </div>
                     </div>
                   </button>
                   <div className="messaging-route-row__actions">
@@ -329,12 +337,21 @@ function DefaultAgentRow(props: {
           </div>
         </div>
         <div className="messaging-route-row__target">
-          <span>{props.route.target.label}</span>
-          <small className={props.route.target.available ? "is-ok" : "is-stale"}>
-            {props.route.target.available
-              ? props.route.target.backendLabel
-              : `${props.route.target.backendLabel} unavailable`}
-          </small>
+          <span className="messaging-route-row__target-title">
+            {props.route.target.label}
+          </span>
+          <div className="messaging-route-row__target-meta">
+            <ProviderChip
+              available={props.route.target.backendAvailable}
+              label={props.route.target.backendLabel}
+            />
+            {!props.route.target.available
+              && props.route.target.backendAvailable ? (
+                <span className="messaging-route-row__target-warning">
+                  Agent unavailable
+                </span>
+              ) : null}
+          </div>
         </div>
       </button>
       <div className="messaging-route-row__actions">
@@ -356,6 +373,18 @@ function DefaultAgentRow(props: {
         </button>
       </div>
     </div>
+  );
+}
+
+function ProviderChip(props: { available: boolean; label: string }) {
+  return (
+    <span
+      className={`chip chip--backend messaging-route-row__provider-chip${
+        props.available ? "" : " is-stale"
+      }`}
+    >
+      {props.label}{props.available ? "" : " unavailable"}
+    </span>
   );
 }
 
@@ -642,6 +671,7 @@ function formatConversationLabel(
   platform: MessagingChannelKind,
   conversation: {
     id: string;
+    kind: MessagingConversationKind;
     title?: string;
     parentTitle?: string;
     ancestorTitle?: string;
@@ -652,9 +682,29 @@ function formatConversationLabel(
     conversation.parentTitle,
     conversation.title,
   ].filter((value): value is string => Boolean(value?.trim()));
-  return names.length > 0
-    ? `${formatMessagingPlatformName(platform)} / ${names.join(" / ")}`
-    : `${formatMessagingPlatformName(platform)} / ${conversation.id}`;
+  const identity = formatConversationIdentity(
+    conversation.kind,
+    conversation.id,
+  );
+  if (names.length === 0) {
+    return `${formatMessagingPlatformName(platform)} / ${identity}`;
+  }
+  if (conversation.title?.trim()) {
+    return `${formatMessagingPlatformName(platform)} / ${names.join(" / ")}`;
+  }
+  return `${formatMessagingPlatformName(platform)} / ${names.join(" / ")} / ${identity}`;
+}
+
+function formatConversationIdentity(
+  kind: MessagingConversationKind,
+  id: string,
+): string {
+  switch (kind) {
+    case "dm": return `Direct message ${id}`;
+    case "channel": return `Channel ${id}`;
+    case "thread": return `Thread ${id}`;
+    case "topic": return `Topic ${id}`;
+  }
 }
 
 function formatScopeKind(kind: DefaultScopeKind): string {

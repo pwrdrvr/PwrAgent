@@ -18,6 +18,7 @@ function buildRoutes(): ListMessagingRoutesResponse {
         threadId: "agent-1",
         label: "Search Signals Agent",
         backendLabel: "Codex",
+        backendAvailable: true,
         available: true,
       },
       {
@@ -25,6 +26,7 @@ function buildRoutes(): ListMessagingRoutesResponse {
         threadId: "agent-2",
         label: "Grok Project Agent",
         backendLabel: "Grok Build",
+        backendAvailable: true,
         available: true,
       },
     ],
@@ -46,6 +48,7 @@ function buildRoutes(): ListMessagingRoutesResponse {
           threadId: "agent-1",
           label: "Search Signals Agent",
           backendLabel: "Codex",
+          backendAvailable: true,
           available: true,
         },
         createdAt: 1000,
@@ -59,6 +62,7 @@ function buildRoutes(): ListMessagingRoutesResponse {
           threadId: "missing-agent",
           label: "Missing Agent",
           backendLabel: "Missing",
+          backendAvailable: false,
           available: false,
         },
         createdAt: 1000,
@@ -77,6 +81,8 @@ function buildRoutes(): ListMessagingRoutesResponse {
         },
         target: {
           backend: "codex",
+          backendLabel: "Codex",
+          backendAvailable: true,
           threadId: "work-1",
           label: "Issue 13056",
           kind: "thread",
@@ -149,7 +155,64 @@ describe("MessagingRoutesSettings", () => {
     expect(screen.getByText("Missing unavailable")).toBeInTheDocument();
     expect(screen.getByText(/13056 investigation/)).toBeInTheDocument();
     expect(screen.getByText("Issue 13056")).toBeInTheDocument();
+    expect(screen.getAllByText("Codex")).toHaveLength(2);
     expect(screen.getByText("3 active")).toBeInTheDocument();
+  });
+
+  it("distinguishes untitled topics in the same messaging group", async () => {
+    const routes = buildRoutes();
+    const first = routes.defaultAgents[0]!;
+    const topicScope = {
+      kind: "conversation" as const,
+      platform: "telegram" as const,
+      conversation: {
+        id: "119",
+        kind: "topic" as const,
+        parentId: "-1001",
+        parentTitle: "PwrAgent Mini Dev Group",
+      },
+    };
+    routes.defaultAgents = [
+      { ...first, scope: topicScope },
+      {
+        ...first,
+        assignmentId: "assignment-2",
+        scope: {
+          ...topicScope,
+          conversation: { ...topicScope.conversation, id: "600" },
+        },
+      },
+    ];
+    routes.bindings = [];
+    const { desktopApi } = buildDesktopApi(routes);
+
+    render(<MessagingRoutesSettings desktopApi={desktopApi} />);
+
+    expect(
+      await screen.findByText(
+        "Telegram / PwrAgent Mini Dev Group / Topic 119",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Telegram / PwrAgent Mini Dev Group / Topic 600"),
+    ).toBeInTheDocument();
+  });
+
+  it("shows an unavailable provider chip when a legacy binding is unresolved", async () => {
+    const routes = buildRoutes();
+    routes.defaultAgents = [];
+    routes.bindings[0]!.target = {
+      threadId: "unknown-thread",
+      label: "Unknown thread",
+      kind: "thread",
+    };
+    const { desktopApi } = buildDesktopApi(routes);
+
+    render(<MessagingRoutesSettings desktopApi={desktopApi} />);
+
+    expect(
+      await screen.findByText("Unknown provider unavailable"),
+    ).toHaveClass("chip", "chip--backend", "is-stale");
   });
 
   it("opens default Agent and binding target threads", async () => {

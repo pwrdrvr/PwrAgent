@@ -37,6 +37,33 @@ function buildAgentMetadata(): ThreadAgentMetadata {
   };
 }
 
+function buildBackend(
+  overrides: Partial<BackendSummary> = {},
+): BackendSummary {
+  return {
+    kind: "codex",
+    label: "Codex",
+    available: true,
+    methods: [],
+    capabilities: {
+      listThreads: true,
+      createThread: true,
+      resumeThread: true,
+      renameThread: true,
+      readThread: true,
+      startTurn: true,
+      interruptTurn: true,
+      steerTurn: true,
+      transcriptPagination: true,
+      toolUse: true,
+      approvalRequests: true,
+      multiDirectoryThreads: true,
+    },
+    executionModes: [],
+    ...overrides,
+  };
+}
+
 function buildAssignment(
   overrides: Partial<MessagingDefaultAgentAssignmentRecord> = {},
 ): MessagingDefaultAgentAssignmentRecord {
@@ -87,6 +114,7 @@ function buildBinding(
 
 function buildDependencies(options: {
   assignments?: MessagingDefaultAgentAssignmentRecord[];
+  backends?: BackendSummary[];
   bindings?: MessagingBindingRecord[];
   threads?: AppServerThreadSummary[];
 } = {}) {
@@ -109,29 +137,7 @@ function buildDependencies(options: {
   };
   const registry = {
     listBackends: vi.fn(async () => ({
-      backends: [
-        {
-          kind: "codex",
-          label: "Codex",
-          available: true,
-          methods: [],
-          capabilities: {
-            listThreads: true,
-            createThread: true,
-            resumeThread: true,
-            renameThread: true,
-            readThread: true,
-            startTurn: true,
-            interruptTurn: true,
-            steerTurn: true,
-            transcriptPagination: true,
-            toolUse: true,
-            approvalRequests: true,
-            multiDirectoryThreads: true,
-          },
-          executionModes: [],
-        } satisfies BackendSummary,
-      ],
+      backends: options.backends ?? [buildBackend()],
     })),
     listThreads: vi.fn(async () => threads),
     getThreadAgentMetadata: vi.fn(async ({ threadId }: { threadId: string }) =>
@@ -151,6 +157,7 @@ describe("messaging routes service", () => {
         backend: "codex",
         threadId: "agent-1",
         label: "Search Signals Agent",
+        backendAvailable: true,
         available: true,
       }),
     ]);
@@ -168,9 +175,43 @@ describe("messaging routes service", () => {
       expect.objectContaining({
         bindingId: "binding-1",
         platform: "slack",
-        target: expect.objectContaining({ label: "Issue 13056" }),
+        target: expect.objectContaining({
+          backendAvailable: true,
+          backendLabel: "Codex",
+          label: "Issue 13056",
+        }),
       }),
     ]);
+  });
+
+  it("excludes Agents on unavailable backends and marks routes unavailable", async () => {
+    const dependencies = buildDependencies({
+      backends: [buildBackend({ available: false })],
+    });
+
+    const result = await listDesktopMessagingRoutes(dependencies);
+
+    expect(result.eligibleAgents).toEqual([]);
+    expect(result.defaultAgents[0]?.target).toMatchObject({
+      backend: "codex",
+      backendAvailable: false,
+      backendLabel: "Codex",
+      available: false,
+    });
+    expect(result.bindings[0]?.target).toMatchObject({
+      backend: "codex",
+      backendAvailable: false,
+      backendLabel: "Codex",
+    });
+    await expect(
+      setDesktopMessagingDefaultAgent(
+        {
+          scope: { kind: "profile" },
+          target: { backend: "codex", threadId: "agent-1" },
+        },
+        dependencies,
+      ),
+    ).rejects.toThrow("not an eligible default Agent");
   });
 
   it("keeps stale default targets visible for repair", async () => {
@@ -191,6 +232,7 @@ describe("messaging routes service", () => {
     expect(result.defaultAgents[0]?.target).toMatchObject({
       threadId: "missing-agent",
       label: "missing-agent",
+      backendAvailable: true,
       available: false,
     });
   });
