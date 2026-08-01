@@ -107,6 +107,8 @@ import type {
   GhStatus,
   ApproveMessagingPairingRequest,
   ApproveMessagingPairingResponse,
+  ClearMessagingDefaultAgentRequest,
+  ClearMessagingDefaultAgentResponse,
   GenerateMessagingPairingTokenRequest,
   GenerateMessagingPairingTokenResponse,
   GetMessagingActivitySummaryResponse,
@@ -117,6 +119,7 @@ import type {
   ListMessagingActivityResponse,
   ListMessagingPairingRequestsRequest,
   ListMessagingPairingRequestsResponse,
+  ListMessagingRoutesResponse,
   StartInboundPreviewRequest,
   StartInboundPreviewResponse,
   StopInboundPreviewRequest,
@@ -131,6 +134,8 @@ import type {
   RejectMessagingPairingResponse,
   SetMessagingEnabledRequest,
   SetMessagingEnabledResponse,
+  SetMessagingDefaultAgentRequest,
+  SetMessagingDefaultAgentResponse,
   PickDirectoryFromDiskResponse,
   PickFileFromDiskResponse,
   PickGhCommandResponse,
@@ -382,6 +387,7 @@ import {
   IMAGE_UPLOAD_NORMALIZATION_LOG_CHANNEL,
   MESSAGING_BINDINGS_CHANGED_EVENT_CHANNEL,
   MESSAGING_APPROVE_PAIRING_CHANNEL,
+  MESSAGING_CLEAR_DEFAULT_AGENT_CHANNEL,
   MESSAGING_GENERATE_PAIRING_TOKEN_CHANNEL,
   MESSAGING_GET_ACTIVITY_SUMMARY_CHANNEL,
   MESSAGING_GET_PLATFORM_STATUSES_CHANNEL,
@@ -389,11 +395,13 @@ import {
   MESSAGING_LIST_ACTIVITY_CHANNEL,
   MESSAGING_LIST_INBOUND_TOPICS_CHANNEL,
   MESSAGING_LIST_PAIRING_REQUESTS_CHANNEL,
+  MESSAGING_LIST_ROUTES_CHANNEL,
   MESSAGING_OPEN_ACTIVITY_WINDOW_CHANNEL,
   MESSAGING_PAIRING_CHANGED_EVENT_CHANNEL,
   MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL,
   MESSAGING_REJECT_PAIRING_CHANNEL,
   MESSAGING_SET_ENABLED_CHANNEL,
+  MESSAGING_SET_DEFAULT_AGENT_CHANNEL,
   MESSAGING_SHUTDOWN_RUNTIME_CHANNEL,
   MESSAGING_START_INBOUND_PREVIEW_CHANNEL,
   MESSAGING_STOP_INBOUND_PREVIEW_CHANNEL,
@@ -1502,6 +1510,16 @@ const desktopApi = Object.freeze({
     request: UnbindMessagingThreadRequest,
   ): Promise<UnbindMessagingThreadResponse> =>
     await ipcRenderer.invoke(MESSAGING_UNBIND_THREAD_CHANNEL, request),
+  listMessagingRoutes: async (): Promise<ListMessagingRoutesResponse> =>
+    await ipcRenderer.invoke(MESSAGING_LIST_ROUTES_CHANNEL),
+  setMessagingDefaultAgent: async (
+    request: SetMessagingDefaultAgentRequest,
+  ): Promise<SetMessagingDefaultAgentResponse> =>
+    await ipcRenderer.invoke(MESSAGING_SET_DEFAULT_AGENT_CHANNEL, request),
+  clearMessagingDefaultAgent: async (
+    request: ClearMessagingDefaultAgentRequest,
+  ): Promise<ClearMessagingDefaultAgentResponse> =>
+    await ipcRenderer.invoke(MESSAGING_CLEAR_DEFAULT_AGENT_CHANNEL, request),
   listMessagingActivity: async (
     request?: ListMessagingActivityRequest,
   ): Promise<ListMessagingActivityResponse> =>

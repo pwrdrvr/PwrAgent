@@ -2,6 +2,8 @@ import { BrowserWindow, ipcMain } from "electron";
 import type {
   ApproveMessagingPairingRequest,
   ApproveMessagingPairingResponse,
+  ClearMessagingDefaultAgentRequest,
+  ClearMessagingDefaultAgentResponse,
   DesktopAuthorizedContact,
   DesktopSettingsConfigPatch,
   DesktopSettingsSnapshot,
@@ -11,6 +13,7 @@ import type {
   InboundPreviewMessage,
   ListInboundTopicsRequest,
   ListInboundTopicsResponse,
+  ListMessagingRoutesResponse,
   ListMessagingActivityRequest,
   ListMessagingActivityResponse,
   ListMessagingPairingRequestsRequest,
@@ -23,6 +26,8 @@ import type {
   RejectMessagingPairingResponse,
   SetMessagingEnabledRequest,
   SetMessagingEnabledResponse,
+  SetMessagingDefaultAgentRequest,
+  SetMessagingDefaultAgentResponse,
   StartInboundPreviewRequest,
   StartInboundPreviewResponse,
   StopInboundPreviewRequest,
@@ -49,6 +54,7 @@ import { subscribersForChannel } from "../window-channels";
 import {
   MESSAGING_BINDINGS_CHANGED_EVENT_CHANNEL,
   MESSAGING_APPROVE_PAIRING_CHANNEL,
+  MESSAGING_CLEAR_DEFAULT_AGENT_CHANNEL,
   MESSAGING_GENERATE_PAIRING_TOKEN_CHANNEL,
   MESSAGING_GET_ACTIVITY_SUMMARY_CHANNEL,
   MESSAGING_GET_PLATFORM_STATUSES_CHANNEL,
@@ -56,11 +62,13 @@ import {
   MESSAGING_LIST_ACTIVITY_CHANNEL,
   MESSAGING_LIST_INBOUND_TOPICS_CHANNEL,
   MESSAGING_LIST_PAIRING_REQUESTS_CHANNEL,
+  MESSAGING_LIST_ROUTES_CHANNEL,
   MESSAGING_OPEN_ACTIVITY_WINDOW_CHANNEL,
   MESSAGING_PAIRING_CHANGED_EVENT_CHANNEL,
   MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL,
   MESSAGING_REJECT_PAIRING_CHANNEL,
   MESSAGING_SET_ENABLED_CHANNEL,
+  MESSAGING_SET_DEFAULT_AGENT_CHANNEL,
   MESSAGING_SHUTDOWN_RUNTIME_CHANNEL,
   MESSAGING_START_INBOUND_PREVIEW_CHANNEL,
   MESSAGING_STOP_INBOUND_PREVIEW_CHANNEL,
@@ -72,6 +80,11 @@ import {
   stopInboundPreview,
 } from "../messaging/inbound-preview-bus";
 import { getDesktopMessagingStore } from "../messaging/desktop-messaging-store";
+import {
+  clearDesktopMessagingDefaultAgent,
+  listDesktopMessagingRoutes,
+  setDesktopMessagingDefaultAgent,
+} from "../messaging/messaging-routes-service";
 
 const log = getMainLogger("pwragent:messaging-ipc");
 
@@ -749,6 +762,39 @@ export function registerMessagingStatusIpcHandlers(): void {
     },
   );
 
+  ipcMain.removeHandler(MESSAGING_LIST_ROUTES_CHANNEL);
+  ipcMain.handle(
+    MESSAGING_LIST_ROUTES_CHANNEL,
+    async (): Promise<ListMessagingRoutesResponse> =>
+      await listDesktopMessagingRoutes(),
+  );
+
+  ipcMain.removeHandler(MESSAGING_SET_DEFAULT_AGENT_CHANNEL);
+  ipcMain.handle(
+    MESSAGING_SET_DEFAULT_AGENT_CHANNEL,
+    async (
+      _event,
+      request: SetMessagingDefaultAgentRequest,
+    ): Promise<SetMessagingDefaultAgentResponse> => {
+      const result = await setDesktopMessagingDefaultAgent(request);
+      runtime.notifyBindingsChanged();
+      return result;
+    },
+  );
+
+  ipcMain.removeHandler(MESSAGING_CLEAR_DEFAULT_AGENT_CHANNEL);
+  ipcMain.handle(
+    MESSAGING_CLEAR_DEFAULT_AGENT_CHANNEL,
+    async (
+      _event,
+      request: ClearMessagingDefaultAgentRequest,
+    ): Promise<ClearMessagingDefaultAgentResponse> => {
+      const result = await clearDesktopMessagingDefaultAgent(request);
+      if (result.cleared) runtime.notifyBindingsChanged();
+      return result;
+    },
+  );
+
   ipcMain.removeHandler(MESSAGING_SET_ENABLED_CHANNEL);
   ipcMain.handle(
     MESSAGING_SET_ENABLED_CHANNEL,
@@ -849,6 +895,9 @@ export async function disposeMessagingStatusIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(MESSAGING_APPROVE_PAIRING_CHANNEL);
   ipcMain.removeHandler(MESSAGING_REJECT_PAIRING_CHANNEL);
   ipcMain.removeHandler(MESSAGING_UNBIND_THREAD_CHANNEL);
+  ipcMain.removeHandler(MESSAGING_LIST_ROUTES_CHANNEL);
+  ipcMain.removeHandler(MESSAGING_SET_DEFAULT_AGENT_CHANNEL);
+  ipcMain.removeHandler(MESSAGING_CLEAR_DEFAULT_AGENT_CHANNEL);
   ipcMain.removeHandler(MESSAGING_SET_ENABLED_CHANNEL);
   ipcMain.removeHandler(MESSAGING_OPEN_ACTIVITY_WINDOW_CHANNEL);
   ipcMain.removeHandler(MESSAGING_SHUTDOWN_RUNTIME_CHANNEL);

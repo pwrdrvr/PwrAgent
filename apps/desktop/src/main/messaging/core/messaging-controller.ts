@@ -630,9 +630,9 @@ export type MessagingControllerOptions = {
     threadId?: ThreadIdentifier;
   }) => void | Promise<void>;
   /**
-   * Notification hook invoked after any binding mutation the
-   * controller performs (create, conversation-metadata refresh,
-   * conversation-title sync, detach). The runtime supplies a callback
+   * Notification hook invoked after any persistent route mutation the
+   * controller performs (binding create/refresh/detach or default Agent
+   * assignment changes). The runtime supplies a callback
    * that broadcasts a renderer-bound IPC event so the UI re-fetches the
    * navigation snapshot and the binding chip reflects the new state
    * immediately. Best-effort — exceptions thrown by the listener must
@@ -2488,6 +2488,7 @@ export class MessagingController {
         assignmentId: assignment.id,
         revokedAt: this.now(),
       });
+      this.notifyBindingChanged("default-agent-cleared");
     }
     if (!selected) {
       return false;
@@ -6156,6 +6157,7 @@ export class MessagingController {
           updatedAt: this.now(),
         };
         await this.options.store.upsertDefaultAgentAssignment(assignment);
+        this.notifyBindingChanged("default-agent-assigned");
         await this.options.store.deleteBrowseSession(session.id);
         await this.presentDefaultAgentStatus(event, {
           notice:

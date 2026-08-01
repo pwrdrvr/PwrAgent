@@ -111,6 +111,8 @@ import type {
   GhStatus,
   ApproveMessagingPairingRequest,
   ApproveMessagingPairingResponse,
+  ClearMessagingDefaultAgentRequest,
+  ClearMessagingDefaultAgentResponse,
   GenerateMessagingPairingTokenRequest,
   GenerateMessagingPairingTokenResponse,
   GetMessagingActivitySummaryResponse,
@@ -121,6 +123,7 @@ import type {
   ListMessagingActivityResponse,
   ListMessagingPairingRequestsRequest,
   ListMessagingPairingRequestsResponse,
+  ListMessagingRoutesResponse,
   StartInboundPreviewRequest,
   StartInboundPreviewResponse,
   StopInboundPreviewRequest,
@@ -135,6 +138,8 @@ import type {
   RejectMessagingPairingResponse,
   SetMessagingEnabledRequest,
   SetMessagingEnabledResponse,
+  SetMessagingDefaultAgentRequest,
+  SetMessagingDefaultAgentResponse,
   PickDirectoryFromDiskResponse,
   PickFileFromDiskResponse,
   PickReferenceFromDiskResponse,
@@ -814,6 +819,13 @@ export type DesktopApi = {
   unbindMessagingThread?: (
     request: UnbindMessagingThreadRequest,
   ) => Promise<UnbindMessagingThreadResponse>;
+  listMessagingRoutes?: () => Promise<ListMessagingRoutesResponse>;
+  setMessagingDefaultAgent?: (
+    request: SetMessagingDefaultAgentRequest,
+  ) => Promise<SetMessagingDefaultAgentResponse>;
+  clearMessagingDefaultAgent?: (
+    request: ClearMessagingDefaultAgentRequest,
+  ) => Promise<ClearMessagingDefaultAgentResponse>;
   listMessagingActivity?: (
     request?: ListMessagingActivityRequest,
   ) => Promise<ListMessagingActivityResponse>;

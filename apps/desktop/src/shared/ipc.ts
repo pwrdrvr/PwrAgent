@@ -124,6 +124,11 @@ export const MESSAGING_GET_PLATFORM_STATUSES_CHANNEL =
 export const MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL =
   "messaging:platform-status-event";
 export const MESSAGING_UNBIND_THREAD_CHANNEL = "messaging:unbind-thread";
+export const MESSAGING_LIST_ROUTES_CHANNEL = "messaging:list-routes";
+export const MESSAGING_SET_DEFAULT_AGENT_CHANNEL =
+  "messaging:set-default-agent";
+export const MESSAGING_CLEAR_DEFAULT_AGENT_CHANNEL =
+  "messaging:clear-default-agent";
 export const MESSAGING_SET_ENABLED_CHANNEL = "messaging:set-enabled";
 export const MESSAGING_LIST_ACTIVITY_CHANNEL = "messaging:list-activity";
 export const MESSAGING_GET_ACTIVITY_SUMMARY_CHANNEL =
@@ -193,8 +198,8 @@ export const SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL =
 export const SETTINGS_RESOLVE_MESSAGING_CONTACT_CHANNEL =
   "settings:resolve-messaging-contact";
 /**
- * Fired main → renderer whenever the messaging store has had bindings
- * created, revoked, or had their conversation metadata change. The
+ * Fired main → renderer whenever the messaging store has had bindings or
+ * default Agent assignments created, changed, or revoked. The
  * payload is intentionally minimal — receivers should refetch the
  * navigation snapshot rather than try to apply per-binding diffs from
  * the event itself. See `useThreadNavigation` for the renderer-side
