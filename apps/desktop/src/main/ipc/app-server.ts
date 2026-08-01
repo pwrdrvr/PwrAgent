@@ -2096,10 +2096,16 @@ class DesktopAppServerService {
       });
     }
 
-    if (method === "turn/completed") {
-      // A finished turn is real activity on this thread even when it is off
-      // screen — thaw its PRs if the poller had iceboxed them.
-      this.prPollingScheduler?.noteThreadInteraction([threadKey]);
+    if (method === "turn/completed" || method === "thread/branch/updated") {
+      if (method === "turn/completed") {
+        // A finished turn is real activity on this thread even when it is off
+        // screen — thaw its PRs if the poller had iceboxed them.
+        this.prPollingScheduler?.noteThreadInteraction([threadKey]);
+      }
+
+      // Codex can publish turn/completed before its asynchronous branch
+      // adoption finishes. Refresh again from the causally newer branch event
+      // so a PR created on that branch does not wait for thread selection.
       const prContexts = this.prRefreshContextByThreadKey.get(threadKey);
       if (prContexts?.length) {
         for (const prContext of prContexts) {
@@ -2108,7 +2114,8 @@ class DesktopAppServerService {
             provider: "github.com",
             trigger: "post-turn",
           }).catch((error) => {
-            appServerLog.warn("post-turn PR refresh failed", {
+            appServerLog.warn("turn-boundary PR refresh failed", {
+              method,
               threadId,
               error: error instanceof Error ? error.message : String(error),
             });

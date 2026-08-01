@@ -4281,6 +4281,97 @@ describe("app server ipc", () => {
     });
   });
 
+  it("refreshes pull requests when branch adoption finishes after turn completion", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+    const discoveredPr = githubPr({
+      number: 815,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      title: "Refresh late-adopted branch PRs",
+      state: "pending",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/815",
+    });
+
+    listThreads.mockResolvedValueOnce([
+      {
+        id: "thread-1",
+        title: "Thread one",
+        titleSource: "explicit",
+        source: "codex",
+        projectKey: "/repo/wt",
+        linkedDirectories: [
+          {
+            id: "directory:/repo/app",
+            label: "app",
+            path: "/repo/app",
+            kind: "worktree",
+            worktreePath: "/repo/wt",
+          },
+        ],
+        gitBranch: "HEAD",
+        observedGitBranch: "HEAD",
+        updatedAt: 2000,
+      },
+    ] as never);
+    detectPullRequestsForThread
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([discoveredPr]);
+
+    registerAppServerIpcHandlers();
+    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    await vi.waitFor(() => {
+      expect(writeThreadGitWorkingStateCacheEntry).toHaveBeenCalled();
+    });
+    detectPullRequestsForThread.mockClear();
+
+    emitRegistryEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "t1",
+          turn: { id: "t1", status: "completed" },
+        },
+      },
+    });
+    await vi.waitFor(() => {
+      expect(detectPullRequestsForThread).toHaveBeenCalledWith({
+        fetcher: expect.any(Object),
+        branch: "HEAD",
+        directoryPaths: ["/repo/wt"],
+        allowPrimedBranchLookup: false,
+      });
+    });
+
+    emitRegistryEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/branch/updated",
+        params: {
+          threadId: "thread-1",
+          branch: "fix/adopted-after-completion",
+        },
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(setThreadPullRequests).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        prs: [discoveredPr],
+        fetchedAt: expect.any(Number),
+        refreshKey: buildThreadPrRequestKey({
+          backend: "codex",
+          threadId: "thread-1",
+          branch: "fix/adopted-after-completion",
+          directoryPaths: ["/repo/wt"],
+        }),
+      });
+    });
+  });
+
   it("refreshes post-turn pull requests for a scoped linked worktree branch", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
