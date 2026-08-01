@@ -740,6 +740,85 @@ describe("ThreadRow chip flow", () => {
     );
   });
 
+  it("makes unpublished detached-HEAD work explicit", () => {
+    const { container } = renderRow({
+      thread: {
+        ...baseThread,
+        gitBranch: "HEAD",
+        observedGitBranch: "HEAD",
+        gitWorkingState: {
+          dirtyFiles: 0,
+          dirtyAdditions: 0,
+          dirtyDeletions: 0,
+          untrackedFiles: 0,
+          unpushedCommits: 1,
+          baseBranch: "main",
+          baseAheadCommitCount: 1,
+          baseBehindCommitCount: 3,
+          isBehindBase: true,
+        },
+      },
+    });
+
+    const unpublishedChip = container.querySelector(
+      ".thread-row__chip--unpublished",
+    );
+    expect(unpublishedChip).toHaveTextContent("Unpublished · 1 ahead");
+    expect(unpublishedChip).toHaveAttribute(
+      "aria-label",
+      "Unpublished detached work: 1 commit not on a remote; HEAD is 1 commit ahead of main and 3 commits behind. Create a branch and push it to keep this work.",
+    );
+    expect(container.querySelector(".thread-row__chip--unpushed")).toBeNull();
+  });
+
+  it("keeps the ordinary unpushed count for work on an attached branch", () => {
+    const { container } = renderRow({
+      thread: {
+        ...baseThread,
+        gitBranch: "feature/published-next",
+        observedGitBranch: "feature/published-next",
+        gitWorkingState: {
+          dirtyFiles: 0,
+          dirtyAdditions: 0,
+          dirtyDeletions: 0,
+          untrackedFiles: 0,
+          unpushedCommits: 1,
+          baseBranch: "main",
+          baseAheadCommitCount: 1,
+          baseBehindCommitCount: 0,
+          isBehindBase: false,
+        },
+      },
+    });
+
+    expect(container.querySelector(".thread-row__chip--unpublished")).toBeNull();
+    expect(container.querySelector(".thread-row__chip--unpushed")).toHaveTextContent("↑1");
+  });
+
+  it("does not call detached work unpublished when its commits are on a remote", () => {
+    const { container } = renderRow({
+      thread: {
+        ...baseThread,
+        gitBranch: "HEAD",
+        observedGitBranch: "HEAD",
+        gitWorkingState: {
+          dirtyFiles: 0,
+          dirtyAdditions: 0,
+          dirtyDeletions: 0,
+          untrackedFiles: 0,
+          unpushedCommits: 0,
+          baseBranch: "main",
+          baseAheadCommitCount: 1,
+          baseBehindCommitCount: 0,
+          isBehindBase: false,
+        },
+      },
+    });
+
+    expect(container.querySelector(".thread-row__chip--unpublished")).toBeNull();
+    expect(container.querySelector(".thread-row__chip--unpushed")).toBeNull();
+  });
+
   it("renders an untracked-only dirty chip with +/- stats when available", () => {
     const { container } = renderRow({
       thread: {
