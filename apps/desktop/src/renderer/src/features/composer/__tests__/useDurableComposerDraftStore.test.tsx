@@ -76,6 +76,36 @@ describe("useDurableComposerDraftStore", () => {
     );
   });
 
+  it("parks short stacked drafts in durable recovery history", () => {
+    const recordComposerDraftHistory = vi.fn<
+      NonNullable<DesktopApi["recordComposerDraftHistory"]>
+    >(async (request) => ({ candidate: request.draft }));
+    const desktopApi = {
+      recordComposerDraftHistory,
+    } as Partial<DesktopApi> as DesktopApi;
+    const { result } = renderHook(() =>
+      useDurableComposerDraftStore(useComposerDraftStore(), desktopApi),
+    );
+    const parkedDraft = buildSnapshot("Existing project draft");
+
+    act(() => {
+      result.current.pushDraft("launchpad:directory:/repo", parkedDraft);
+    });
+
+    expect(result.current.popDraft("launchpad:directory:/repo")).toBe(
+      parkedDraft,
+    );
+    expect(recordComposerDraftHistory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        draft: expect.objectContaining({
+          scopeKey: "launchpad:directory:/repo",
+          status: "abandoned",
+          text: "Existing project draft",
+        }),
+      }),
+    );
+  });
+
   it("returns just-recorded sent prompts before durable history finishes", async () => {
     type RecordHistoryResponse = Awaited<
       ReturnType<NonNullable<DesktopApi["recordComposerDraftHistory"]>>

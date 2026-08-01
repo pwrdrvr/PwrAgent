@@ -2498,6 +2498,14 @@ export function Composer(props: ComposerProps) {
         );
   const activeComposerScopeKeyRef = useRef(composerScopeKey);
   const pasteScopeRef = useRef({ key: composerScopeKey, version: 0 });
+  const pendingDraftRetargetRef = useRef<
+    | {
+        snapshot: ComposerDraftSnapshot;
+        sourceScopeKey: string;
+        targetScopeKey: string;
+      }
+    | undefined
+  >(undefined);
   const submittedDraftScopeKeysRef = useRef<Set<string>>(new Set());
   const recoveryCycleRef = useRef<{
     activeIndex?: number;
@@ -2810,6 +2818,33 @@ export function Composer(props: ComposerProps) {
     fileAttachments: [],
     skillTokens: [],
   });
+  const hasComposerDraftSnapshotContent = (
+    snapshot: ComposerDraftSnapshot,
+  ): boolean =>
+    Boolean(
+      snapshot.draft.trim()
+      || snapshot.skillTokens.length > 0
+      || snapshot.imageAttachments.length > 0
+      || (snapshot.fileAttachments?.length ?? 0) > 0,
+    );
+  const prepareDraftRetarget = (directoryKey: string): void => {
+    const targetScopeKey = `launchpad:${directoryKey}`;
+    const latest = latestDraftSnapshotRef.current;
+    if (
+      latest.scopeKey === targetScopeKey
+      || !latest.scopeKey.startsWith("launchpad:")
+      || !hasComposerDraftSnapshotContent(latest.snapshot)
+    ) {
+      pendingDraftRetargetRef.current = undefined;
+      return;
+    }
+
+    pendingDraftRetargetRef.current = {
+      snapshot: latest.snapshot,
+      sourceScopeKey: latest.scopeKey,
+      targetScopeKey,
+    };
+  };
   const resetComposerDraftAndState = (
     scopeKey: string,
   ): void => {
@@ -3373,19 +3408,38 @@ export function Composer(props: ComposerProps) {
     submittedDraftScopeKeysRef.current.delete(scopeKey);
   };
   const clearSubmittedComposerDraft = (scopeKey: string): void => {
-    const emptySnapshot: ComposerDraftSnapshot = {
-      draft: "",
-      editorDocument: undefined,
-      imageAttachments: [],
-      fileAttachments: [],
-      skillTokens: [],
-    };
+    const emptySnapshot = createEmptyComposerDraftSnapshot();
 
     const latest = latestDraftSnapshotRef.current;
     if (latest.scopeKey === scopeKey) {
       recordComposerDraftHistory(scopeKey, latest.snapshot, "sent");
     }
     clearComposerDraftSnapshot(scopeKey);
+    const restoredSnapshot = draftStore.popDraft(scopeKey);
+    submittedDraftScopeKeysRef.current.delete(scopeKey);
+    if (restoredSnapshot) {
+      pendingProgrammaticComposerChangeRef.current = {
+        expectedDraft: restoredSnapshot.draft,
+        expectedSkillTokensSignature: getComposerSkillTokensSignature(
+          restoredSnapshot.skillTokens,
+        ),
+        staleDraft: latest.snapshot.draft,
+        staleSkillTokensSignature: getComposerSkillTokensSignature(
+          latest.snapshot.skillTokens,
+        ),
+      };
+      saveComposerDraftSnapshot(scopeKey, restoredSnapshot);
+      latestDraftSnapshotRef.current = {
+        scopeKey,
+        snapshot: restoredSnapshot,
+      };
+      setDraft(restoredSnapshot.draft);
+      setEditorDocument(restoredSnapshot.editorDocument);
+      setImageAttachments(restoredSnapshot.imageAttachments);
+      setFileAttachments(restoredSnapshot.fileAttachments ?? []);
+      setSkillTokens(restoredSnapshot.skillTokens);
+      return;
+    }
     latestDraftSnapshotRef.current = {
       scopeKey,
       snapshot: emptySnapshot,
@@ -3405,6 +3459,8 @@ export function Composer(props: ComposerProps) {
     }
 
     void updateLaunchpad(directoryKey, {
+      editorDocument:
+        snapshot.editorDocument as Record<string, unknown> | undefined,
       imageAttachments:
         snapshot.imageAttachments.length > 0 ? snapshot.imageAttachments : undefined,
       fileAttachments:
@@ -3712,6 +3768,12 @@ export function Composer(props: ComposerProps) {
   }, []);
 
   useEffect(() => {
+    if (props.launchpadError) {
+      pendingDraftRetargetRef.current = undefined;
+    }
+  }, [props.launchpadError]);
+
+  useEffect(() => {
     const previousScopeKey = activeComposerScopeKeyRef.current;
     if (previousScopeKey === composerScopeKey) {
       return;
@@ -3719,14 +3781,55 @@ export function Composer(props: ComposerProps) {
 
     recoveryEligibilityVersionRef.current += 1;
     recoveryLookupSequenceRef.current += 1;
-    const previousSnapshot = {
+    const pendingRetarget = pendingDraftRetargetRef.current;
+    const retargetingDraft =
+      pendingRetarget?.sourceScopeKey === previousScopeKey
+      && pendingRetarget.targetScopeKey === composerScopeKey
+        ? pendingRetarget
+        : undefined;
+    const previousSnapshot = retargetingDraft?.snapshot ?? {
       draft,
       editorDocument,
       imageAttachments,
       fileAttachments,
       skillTokens,
     };
-    flushComposerDraftSnapshot(previousScopeKey, previousSnapshot);
+    if (retargetingDraft) {
+      pendingDraftRetargetRef.current = undefined;
+      const savedTargetDraft = draftStore.get(composerScopeKey);
+      const hydratedTargetDraft = hydrateComposerDraft(
+        props.launchpad?.prompt ?? "",
+        props.skills,
+        threadLinks,
+      );
+      const parkedTargetDraft = savedTargetDraft ?? {
+        draft: hydratedTargetDraft.draft,
+        editorDocument:
+          props.launchpad?.editorDocument as JSONContent | undefined,
+        imageAttachments: props.launchpad?.imageAttachments ?? [],
+        fileAttachments: props.launchpad?.fileAttachments ?? [],
+        skillTokens: hydratedTargetDraft.skillTokens,
+      };
+      if (hasComposerDraftSnapshotContent(parkedTargetDraft)) {
+        draftStore.pushDraft(composerScopeKey, parkedTargetDraft);
+      }
+
+      clearComposerDraftSnapshot(previousScopeKey);
+      const restoredSourceDraft = draftStore.popDraft(previousScopeKey);
+      if (restoredSourceDraft) {
+        saveComposerDraftSnapshot(previousScopeKey, restoredSourceDraft);
+        persistLaunchpadDraftSnapshot(previousScopeKey, restoredSourceDraft);
+      } else {
+        persistLaunchpadDraftSnapshot(
+          previousScopeKey,
+          createEmptyComposerDraftSnapshot(),
+        );
+      }
+      saveComposerDraftSnapshot(composerScopeKey, previousSnapshot);
+      persistLaunchpadDraftSnapshot(composerScopeKey, previousSnapshot);
+    } else {
+      flushComposerDraftSnapshot(previousScopeKey, previousSnapshot);
+    }
     if (!props.thread && previousScopeKey.startsWith("thread:")) {
       serverQueuedTurnEntryIdsRef.current.delete(previousScopeKey);
       globalQueuedTurnReleaseScopeKeys.delete(previousScopeKey);
@@ -3734,12 +3837,23 @@ export function Composer(props: ComposerProps) {
 
     activeComposerScopeKeyRef.current = composerScopeKey;
     const current = pasteScopeRef.current;
+    if (retargetingDraft && current.key === previousScopeKey) {
+      current.key = composerScopeKey;
+    }
     pasteScopeRef.current = {
       key: composerScopeKey,
       version: current.version + 1,
     };
 
-    if (props.thread) {
+    if (retargetingDraft) {
+      setDraft(previousSnapshot.draft);
+      setEditorDocument(previousSnapshot.editorDocument);
+      setImageAttachments(previousSnapshot.imageAttachments);
+      setFileAttachments(previousSnapshot.fileAttachments ?? []);
+      setSkillTokens(previousSnapshot.skillTokens);
+      setPendingSteerState(undefined);
+      setQueuedTurnsState([]);
+    } else if (props.thread) {
       const saved = draftStore.get(composerScopeKey);
       const savedPendingSteer = draftStore.getPendingSteer(composerScopeKey);
       const savedQueuedTurns = draftStore.getQueuedTurns(composerScopeKey);
@@ -8371,6 +8485,7 @@ export function Composer(props: ComposerProps) {
               picking={props.pickingDirectory}
               onSelect={(directory) => {
                 props.onClearPickDirectoryError?.();
+                prepareDraftRetarget(directory.key);
                 props.onSelectDirectoryFromPicker?.(directory);
               }}
               onSelectNoDirectory={

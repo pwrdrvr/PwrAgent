@@ -44,6 +44,10 @@ export type ComposerPendingSteerSnapshot = {
 export type ComposerDraftStore = {
   delete(scopeKey: string): void;
   get(scopeKey: string): ComposerDraftSnapshot | undefined;
+  /** Remove and return the most recently parked draft beneath this scope. */
+  popDraft(scopeKey: string): ComposerDraftSnapshot | undefined;
+  /** Park a draft beneath this scope's active draft. */
+  pushDraft(scopeKey: string, snapshot: ComposerDraftSnapshot): void;
   hydrationVersion?: number;
   deletePendingSteer(scopeKey: string): void;
   deleteQueuedTurn(scopeKey: string): void;
@@ -96,6 +100,7 @@ export function getNextReleasableQueuedTurn<
 
 export function useComposerDraftStore(): ComposerDraftStore {
   const storeRef = useRef(new Map<string, ComposerDraftSnapshot>());
+  const draftStackStoreRef = useRef(new Map<string, ComposerDraftSnapshot[]>());
   const pendingSteerStoreRef = useRef(new Map<string, ComposerPendingSteerSnapshot>());
   const queuedTurnStoreRef = useRef(new Map<string, ComposerQueuedTurnSnapshot[]>());
   // Reactivity bridge for the queued-turn Map. The Map itself is a ref
@@ -119,6 +124,24 @@ export function useComposerDraftStore(): ComposerDraftStore {
         storeRef.current.delete(scopeKey);
       },
       get: (scopeKey) => storeRef.current.get(scopeKey),
+      popDraft: (scopeKey) => {
+        const current = draftStackStoreRef.current.get(scopeKey) ?? [];
+        const restored = current.at(-1);
+        if (!restored) {
+          return undefined;
+        }
+        const next = current.slice(0, -1);
+        if (next.length === 0) {
+          draftStackStoreRef.current.delete(scopeKey);
+        } else {
+          draftStackStoreRef.current.set(scopeKey, next);
+        }
+        return restored;
+      },
+      pushDraft: (scopeKey, snapshot) => {
+        const current = draftStackStoreRef.current.get(scopeKey) ?? [];
+        draftStackStoreRef.current.set(scopeKey, [...current, snapshot]);
+      },
       deletePendingSteer: (scopeKey) => {
         pendingSteerStoreRef.current.delete(scopeKey);
       },
