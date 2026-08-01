@@ -4,6 +4,7 @@ import type {
   ThreadTurnFailure,
 } from "@pwragent/shared";
 import {
+  CODEX_INVALID_ID_RECOVERY_ENTRY_PREFIX,
   TURN_FAILURE_ENTRY_PREFIX,
   buildTurnFailureActivityEntries,
   injectTurnFailures,
@@ -42,6 +43,37 @@ describe("turn-failure-entries", () => {
     const original: AppServerThreadEntry[] = [];
     expect(injectTurnFailures(original, undefined)).toBe(original);
     expect(injectTurnFailures(original, [])).toBe(original);
+  });
+
+  it("explains repair and one automatic resubmission inline", () => {
+    const recoveryFailure: ThreadTurnFailure = {
+      ...f1,
+      codexInvalidIdRecovery: {
+        attemptId: "repair-1",
+        attemptedAt: 1_001,
+        repairedAt: 1_002,
+        retrySubmittedAt: 1_003,
+        retryTurnId: "turn-retried",
+        removedMessageIdCount: 2,
+      },
+    };
+    const entries = buildTurnFailureActivityEntries([recoveryFailure]);
+
+    expect(entries.map((entry) => entry.id)).toEqual([
+      `${TURN_FAILURE_ENTRY_PREFIX}${f1.turnId}`,
+      `${CODEX_INVALID_ID_RECOVERY_ENTRY_PREFIX}repair-1:repairing`,
+      `${CODEX_INVALID_ID_RECOVERY_ENTRY_PREFIX}repair-1:repaired`,
+      `${CODEX_INVALID_ID_RECOVERY_ENTRY_PREFIX}repair-1:retry`,
+    ]);
+    expect(entries.map((entry) => entry.summary)).toEqual([
+      "Turn failed",
+      "Known Codex issue detected — thread repair attempted",
+      "Thread repair succeeded",
+      "PwrAgent resubmitted the request once",
+    ]);
+    expect(entries[3]?.details[0]?.label).toContain(
+      "not entered again by the user",
+    );
   });
 
   it("orders the failure marker inline at occurredAt", () => {

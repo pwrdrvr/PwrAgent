@@ -1092,6 +1092,40 @@ function createOverlayStoreMock(params?: {
       overlays.set(key, next);
       return next;
     },
+    setTurnFailureCodexInvalidIdRecovery: async ({
+      threadId,
+      turnId,
+      recovery,
+    }: {
+      threadId: string;
+      turnId: string;
+      recovery: NonNullable<
+        import("@pwragent/shared").ThreadTurnFailure["codexInvalidIdRecovery"]
+      >;
+    }) => {
+      const key = `codex:${threadId}`;
+      const current = overlays.get(key);
+      const failureIndex = current?.turnFailureLog?.findIndex(
+        (entry) => entry.turnId === turnId,
+      ) ?? -1;
+      if (!current || failureIndex === -1) {
+        throw new Error(
+          `Cannot record Codex invalid-ID recovery without failed turn ${turnId}`,
+        );
+      }
+      const nextLog = [...current.turnFailureLog!];
+      nextLog[failureIndex] = {
+        ...nextLog[failureIndex]!,
+        codexInvalidIdRecovery: recovery,
+      };
+      const next = {
+        ...current,
+        codexInvalidIdRecoveryLastAttemptedAt: recovery.attemptedAt,
+        turnFailureLog: nextLog,
+      } as ThreadOverlayState;
+      overlays.set(key, next);
+      return next;
+    },
   } as unknown as OverlayStoreLike;
 }
 
@@ -1313,6 +1347,7 @@ class MockBackendClient {
       startThreadResult?: { threadId: string };
       startTurnDelay?: Promise<unknown>;
       startTurnError?: Error;
+      startTurnErrors?: Array<Error | undefined>;
       startTurnResults?: Array<{ threadId: string; turnId: string }>;
       invalidIdRecoveryResult?: {
         backupPath: string;
@@ -1527,6 +1562,10 @@ class MockBackendClient {
   }): Promise<{ threadId: string; turnId: string }> {
     this.startTurnCallCount += 1;
     await this.options.startTurnDelay;
+    const sequencedError = this.options.startTurnErrors?.shift();
+    if (sequencedError) {
+      throw sequencedError;
+    }
     if (this.options.startTurnError) {
       throw this.options.startTurnError;
     }
@@ -7001,10 +7040,11 @@ script = "echo setup"
         threadId,
       },
     });
+    const overlayStore = createOverlayStoreMock();
     const registry = new DesktopBackendRegistry({
       codexClient,
       grokClient: new MockBackendClient({}),
-      overlayStore: createOverlayStoreMock(),
+      overlayStore,
       threadTitleGenerationService: null,
     });
     const events: AgentEvent[] = [];
@@ -7057,6 +7097,23 @@ script = "echo setup"
     ]);
     expect(codexClient.startTurnCalls).toHaveLength(2);
     expect(codexClient.startTurnCalls[1]).toMatchObject({ threadId, input });
+    const recoveryAudit = (
+      await overlayStore.getThreadOverlayState({ backend: "codex", threadId })
+    )?.turnFailureLog?.find(
+      (failure) => failure.turnId === "turn-failed-invalid-id",
+    )?.codexInvalidIdRecovery;
+    expect(recoveryAudit).toMatchObject({
+      attemptedAt: expect.any(Number),
+      repairedAt: expect.any(Number),
+      retrySubmittedAt: expect.any(Number),
+      retryTurnId: "turn-retried-once",
+      removedMessageIdCount: 2,
+      backupPath,
+    });
+    expect(recoveryAudit!.attemptedAt).toBeLessThan(recoveryAudit!.repairedAt!);
+    expect(recoveryAudit!.repairedAt).toBeLessThan(
+      recoveryAudit!.retrySubmittedAt!,
+    );
     expect(events).toContainEqual({
       backend: "codex",
       notification: {
@@ -7095,6 +7152,28 @@ script = "echo setup"
     });
 
     await codexClient.emit({
+      method: "item/completed",
+      params: {
+        threadId,
+        turnId: "turn-retried-once",
+        item: {
+          id: "msg-automatic-retry",
+          type: "userMessage",
+          text: "continue after repair",
+        },
+      },
+    });
+    expect(
+      await overlayStore.readThreadMessageOrigins?.({
+        backend: "codex",
+        threadId,
+        messageIds: ["msg-automatic-retry"],
+      }),
+    ).toEqual({
+      "msg-automatic-retry": { kind: "pwragent" },
+    });
+
+    await codexClient.emit({
       method: "turn/failed",
       params: {
         threadId,
@@ -7114,6 +7193,76 @@ script = "echo setup"
     await flushAsync();
     expect(codexClient.invalidIdRecoveryCalls).toHaveLength(1);
     expect(codexClient.startTurnCallCount).toBe(2);
+
+    await registry.close();
+  });
+
+  it("never repairs again when the automatic resubmission fails immediately", async () => {
+    const threadId = "thread-invalid-id-retry-fails";
+    const invalidIdError = new Error(
+      "[ApiIdParam] [input[2].id] [invalid_id_prefix] "
+      + "Invalid 'input[2].id': 'review_rollout_user'. "
+      + "Expected an ID that begins with 'msg'.",
+    );
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      startTurnErrors: [undefined, invalidIdError],
+      startTurnResults: [{ threadId, turnId: "turn-failed-invalid-id" }],
+    });
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({}),
+      overlayStore,
+      threadTitleGenerationService: null,
+    });
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
+
+    await registry.startTurn({
+      backend: "codex",
+      threadId,
+      input: [{ type: "text", text: "continue after repair" }],
+    });
+    await codexClient.emit({
+      method: "turn/failed",
+      params: {
+        threadId,
+        turnId: "turn-failed-invalid-id",
+        turn: {
+          id: "turn-failed-invalid-id",
+          status: "failed",
+          error: { message: invalidIdError.message },
+        },
+      },
+    });
+    await waitForCondition(() =>
+      events.some(
+        (event) =>
+          event.notification.method
+          === "thread/codexInvalidIdRecovery/updated"
+          && event.notification.params.status === "failed",
+      ),
+    );
+
+    expect(codexClient.invalidIdRecoveryCalls).toHaveLength(1);
+    expect(codexClient.startTurnCallCount).toBe(2);
+    await flushAsync();
+    expect(codexClient.invalidIdRecoveryCalls).toHaveLength(1);
+    expect(codexClient.startTurnCallCount).toBe(2);
+    const audit = (
+      await overlayStore.getThreadOverlayState({ backend: "codex", threadId })
+    )?.turnFailureLog?.find(
+      (failure) => failure.turnId === "turn-failed-invalid-id",
+    )?.codexInvalidIdRecovery;
+    expect(audit).toMatchObject({
+      repairedAt: expect.any(Number),
+      retrySubmittedAt: expect.any(Number),
+      failedAt: expect.any(Number),
+      failure: expect.stringContaining("[invalid_id_prefix]"),
+    });
 
     await registry.close();
   });
@@ -7179,6 +7328,85 @@ script = "echo setup"
           status: "failed",
           threadId,
           turnId: "turn-failed-invalid-id",
+        },
+      },
+    });
+
+    await registry.close();
+  });
+
+  it("honors the persisted recovery cooldown after a registry restart", async () => {
+    const threadId = "thread-invalid-id-cooldown";
+    const priorAttemptedAt = Date.now();
+    const overlayStore = createOverlayStoreMock();
+    await overlayStore.appendTurnFailure({
+      backend: "codex",
+      threadId,
+      failure: {
+        id: "prior-failure",
+        turnId: "prior-turn",
+        error: "invalid message id",
+        occurredAt: priorAttemptedAt - 1,
+      },
+    });
+    await overlayStore.setTurnFailureCodexInvalidIdRecovery({
+      threadId,
+      turnId: "prior-turn",
+      recovery: {
+        attemptId: "prior-attempt",
+        attemptedAt: priorAttemptedAt,
+      },
+    });
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      startTurnResults: [{ threadId, turnId: "new-user-turn" }],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({}),
+      overlayStore,
+      threadTitleGenerationService: null,
+    });
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
+
+    await registry.startTurn({
+      backend: "codex",
+      threadId,
+      input: [{ type: "text", text: "try again" }],
+    });
+    await codexClient.emit({
+      method: "turn/failed",
+      params: {
+        threadId,
+        turnId: "new-user-turn",
+        turn: {
+          id: "new-user-turn",
+          status: "failed",
+          error: {
+            message:
+              "[ApiIdParam] [input[2].id] [invalid_id_prefix] "
+              + "Invalid 'input[2].id': 'review_rollout_user'. "
+              + "Expected an ID that begins with 'msg'.",
+          },
+        },
+      },
+    });
+
+    expect(codexClient.invalidIdRecoveryCalls).toEqual([]);
+    expect(codexClient.startTurnCallCount).toBe(1);
+    expect(events).toContainEqual({
+      backend: "codex",
+      notification: {
+        method: "thread/codexInvalidIdRecovery/updated",
+        params: {
+          failureMessage: expect.stringContaining("[invalid_id_prefix]"),
+          recoveryError: expect.stringContaining("refusing another attempt"),
+          status: "failed",
+          threadId,
+          turnId: "new-user-turn",
         },
       },
     });

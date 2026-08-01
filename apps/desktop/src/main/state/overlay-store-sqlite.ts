@@ -2226,6 +2226,35 @@ export class SqliteOverlayStore {
     return nextState;
   }
 
+  async setTurnFailureCodexInvalidIdRecovery(params: {
+    threadId: string;
+    turnId: string;
+    recovery: NonNullable<ThreadTurnFailure["codexInvalidIdRecovery"]>;
+  }): Promise<ThreadOverlayState> {
+    const threadKey = buildThreadIdentityKey("codex", params.threadId);
+    const current = this.getThread(threadKey);
+    const failureIndex = current?.turnFailureLog?.findIndex(
+      (entry) => entry.turnId === params.turnId,
+    ) ?? -1;
+    if (!current || failureIndex === -1) {
+      throw new Error(
+        `Cannot record Codex invalid-ID recovery without failed turn ${params.turnId}`,
+      );
+    }
+    const nextLog = [...current.turnFailureLog!];
+    nextLog[failureIndex] = {
+      ...nextLog[failureIndex]!,
+      codexInvalidIdRecovery: params.recovery,
+    };
+    const nextState: ThreadOverlayState = {
+      ...current,
+      codexInvalidIdRecoveryLastAttemptedAt: params.recovery.attemptedAt,
+      turnFailureLog: nextLog,
+    };
+    this.putThread(threadKey, nextState);
+    return nextState;
+  }
+
   async setThreadModelSettings(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;
@@ -3831,6 +3860,7 @@ export type OverlayStoreLike = Pick<
   | "appendPermissionTransition"
   | "appendMessagingBindingTransition"
   | "appendTurnFailure"
+  | "setTurnFailureCodexInvalidIdRecovery"
   | "getLaunchpadDefaults"
   | "setLaunchpadDefaults"
   | "getNavigationBrowseMode"

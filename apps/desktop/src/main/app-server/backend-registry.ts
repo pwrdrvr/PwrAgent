@@ -129,6 +129,7 @@ import {
   type CancelThreadExecutionModeQueueRequest,
   type CancelThreadExecutionModeQueueResponse,
   type ThreadMessagingBindingTransition,
+  type ThreadCodexInvalidIdRecovery,
   type ThreadPermissionTransition,
   type ThreadTurnFailure,
   type ThreadAgentMetadata,
@@ -5520,6 +5521,7 @@ type CodexRetryableTurnStart = {
 };
 
 type PendingCodexInvalidIdRecovery = CodexRetryableTurnStart & {
+  audit: ThreadCodexInvalidIdRecovery;
   failureMessage: string;
   completion: Promise<{
     backend: "codex";
@@ -5533,6 +5535,28 @@ type PendingCodexInvalidIdRecovery = CodexRetryableTurnStart & {
     turnId: string;
   }) => void;
 };
+
+const CODEX_INVALID_ID_RECOVERY_COOLDOWN_MS = 5 * 60 * 1000;
+
+function isCodexInvalidIdRecoveryCooldownActive(
+  attemptedAt: number,
+  now: number,
+): boolean {
+  // Epoch milliseconds are independent of time zones and DST. Treat a clock
+  // that moved backwards as still inside the cooldown (the safe direction).
+  return now <= attemptedAt
+    || now - attemptedAt < CODEX_INVALID_ID_RECOVERY_COOLDOWN_MS;
+}
+
+function buildCodexInvalidIdRecoveryCooldownMessage(
+  attemptedAt: number,
+): string {
+  return (
+    "PwrAgent already attempted automatic Codex history recovery for this "
+    + `thread at ${new Date(attemptedAt).toISOString()}; refusing another `
+    + "attempt within five minutes. The request was not resubmitted."
+  );
+}
 
 export class DesktopBackendRegistry {
   private readonly codexClient: BackendClient;
@@ -5625,6 +5649,7 @@ export class DesktopBackendRegistry {
   >();
   private readonly pendingCodexInvalidIdRecoveries:
     PendingCodexInvalidIdRecovery[] = [];
+  private readonly codexInvalidIdRecoveryAttemptedAt = new Map<string, number>();
   private codexInvalidIdRecoveryDrain?: Promise<void>;
   private codexInvalidIdRecoveryBarrier?: Promise<void>;
   private resolveCodexInvalidIdRecoveryBarrier?: () => void;
@@ -9674,6 +9699,7 @@ export class DesktopBackendRegistry {
     const retryableCodexTurnStart: CodexRetryableTurnStart | undefined =
       params.backend === "codex" && !params.invalidIdRecoveryAttempted
         ? {
+            turnId: syntheticStartedTurnId,
             params: {
               backend: "codex",
               threadId: params.threadId,
@@ -9760,12 +9786,25 @@ export class DesktopBackendRegistry {
         && this.codexClient.recoverInvalidPersistedResponseMessageIds
         && isCodexInvalidResponseMessageIdError(error)
       ) {
-        const recovery = this.queueCodexInvalidIdRecovery(
-          retryableCodexTurnStart,
-          error instanceof Error ? error.message : String(error),
-        );
-        this.maybeDrainCodexInvalidIdRecoveries();
-        return await recovery.completion;
+        try {
+          const recovery = await this.queueCodexInvalidIdRecovery(
+            retryableCodexTurnStart,
+            error instanceof Error ? error.message : String(error),
+          );
+          this.maybeDrainCodexInvalidIdRecoveries();
+          return await recovery.completion;
+        } catch (recoveryError) {
+          await this.emitCodexInvalidIdRecoveryUpdate({
+            failureMessage: error instanceof Error ? error.message : String(error),
+            recoveryError:
+              recoveryError instanceof Error
+                ? recoveryError.message
+                : String(recoveryError),
+            status: "failed",
+            threadId: params.threadId,
+            turnId: syntheticStartedTurnId,
+          });
+        }
       }
       if (retryableCodexTurnStart) {
         this.codexRetryableTurnStarts.delete(params.threadId);
@@ -13807,12 +13846,12 @@ export class DesktopBackendRegistry {
     return buildLaunchpadOptions(backend, models);
   }
 
-  private handleCodexTurnTerminalForInvalidIdRecovery(
+  private async handleCodexTurnTerminalForInvalidIdRecovery(
     notification: Extract<
       AppServerNotification,
       { method: "turn/completed" | "turn/failed" | "turn/cancelled" }
     >,
-  ): void {
+  ): Promise<void> {
     const threadId = notification.params.threadId;
     const turnId = turnIdFromTerminalNotification(notification);
     const candidate = this.codexRetryableTurnStarts.get(threadId);
@@ -13829,11 +13868,29 @@ export class DesktopBackendRegistry {
         )
       ) {
         if (this.codexClient.recoverInvalidPersistedResponseMessageIds) {
-          const recovery = this.queueCodexInvalidIdRecovery(
-            candidate,
-            errorMessageFromTerminalNotification(notification)!,
-          );
-          void recovery.completion.catch(() => undefined);
+          try {
+            const recovery = await this.queueCodexInvalidIdRecovery(
+              candidate,
+              errorMessageFromTerminalNotification(notification)!,
+            );
+            void recovery.completion.catch(() => undefined);
+          } catch (error) {
+            await this.emitCodexInvalidIdRecoveryUpdate({
+              failureMessage: errorMessageFromTerminalNotification(notification)!,
+              recoveryError: error instanceof Error ? error.message : String(error),
+              status: "failed",
+              threadId,
+              ...(turnId ? { turnId } : {}),
+            });
+            backendRegistryLog.warn(
+              "Codex invalid-message-ID recovery was not started",
+              {
+                error: error instanceof Error ? error.message : String(error),
+                threadId,
+                turnId: turnId ?? null,
+              },
+            );
+          }
         } else {
           backendRegistryLog.warn(
             "Codex invalid-message-ID recovery is unavailable on this client",
@@ -13845,16 +13902,93 @@ export class DesktopBackendRegistry {
     this.maybeDrainCodexInvalidIdRecoveries();
   }
 
-  private queueCodexInvalidIdRecovery(
+  private async queueCodexInvalidIdRecovery(
     candidate: CodexRetryableTurnStart,
     failureMessage: string,
-  ): PendingCodexInvalidIdRecovery {
+  ): Promise<PendingCodexInvalidIdRecovery> {
     const queued = this.pendingCodexInvalidIdRecoveries.find(
       (entry) => entry.params.threadId === candidate.params.threadId,
     );
     if (queued) {
       return queued;
     }
+
+    const threadId = candidate.params.threadId;
+    const turnId = candidate.turnId;
+    if (!turnId) {
+      throw new Error(
+        `Codex invalid-message-ID recovery requires the failed turn id for thread ${threadId}`,
+      );
+    }
+    const now = Date.now();
+    const reservedAt = this.codexInvalidIdRecoveryAttemptedAt.get(threadId);
+    if (
+      reservedAt !== undefined
+      && isCodexInvalidIdRecoveryCooldownActive(reservedAt, now)
+    ) {
+      throw new Error(buildCodexInvalidIdRecoveryCooldownMessage(reservedAt));
+    }
+    // Reserve in memory before the first await so concurrent observations of
+    // the same failure cannot both pass the persisted cooldown check.
+    this.codexInvalidIdRecoveryAttemptedAt.set(threadId, now);
+
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId,
+    });
+    const failedTurn = overlay?.turnFailureLog?.find(
+      (entry) => entry.turnId === turnId,
+    );
+    if (!failedTurn) {
+      throw new Error(
+        `Codex invalid-message-ID recovery could not find failed turn ${turnId}`,
+      );
+    }
+    const lastPersistedAttemptAt =
+      overlay?.codexInvalidIdRecoveryLastAttemptedAt;
+    if (
+      lastPersistedAttemptAt !== undefined
+      && isCodexInvalidIdRecoveryCooldownActive(lastPersistedAttemptAt, now)
+    ) {
+      this.codexInvalidIdRecoveryAttemptedAt.set(
+        threadId,
+        lastPersistedAttemptAt,
+      );
+      throw new Error(
+        buildCodexInvalidIdRecoveryCooldownMessage(lastPersistedAttemptAt),
+      );
+    }
+    const recentAttempt = [...(overlay?.turnFailureLog ?? [])]
+      .reverse()
+      .find((entry) =>
+        entry.codexInvalidIdRecovery
+        && isCodexInvalidIdRecoveryCooldownActive(
+          entry.codexInvalidIdRecovery.attemptedAt,
+          now,
+        )
+      )?.codexInvalidIdRecovery;
+    if (recentAttempt) {
+      this.codexInvalidIdRecoveryAttemptedAt.set(
+        threadId,
+        recentAttempt.attemptedAt,
+      );
+      throw new Error(
+        buildCodexInvalidIdRecoveryCooldownMessage(recentAttempt.attemptedAt),
+      );
+    }
+
+    const audit: ThreadCodexInvalidIdRecovery = {
+      attemptId: randomUUID(),
+      attemptedAt: Math.max(now, failedTurn.occurredAt + 1),
+    };
+    // Fail closed: the durable marker is the restart-safe loop guard. Never
+    // touch Codex history or resubmit a request if it cannot be persisted.
+    await this.overlayStore.setTurnFailureCodexInvalidIdRecovery({
+      threadId,
+      turnId,
+      recovery: audit,
+    });
+    this.codexInvalidIdRecoveryAttemptedAt.set(threadId, audit.attemptedAt);
 
     let resolve!: PendingCodexInvalidIdRecovery["resolve"];
     let reject!: PendingCodexInvalidIdRecovery["reject"];
@@ -13868,6 +14002,7 @@ export class DesktopBackendRegistry {
     });
     const recovery: PendingCodexInvalidIdRecovery = {
       ...candidate,
+      audit,
       completion,
       failureMessage,
       reject,
@@ -13881,14 +14016,14 @@ export class DesktopBackendRegistry {
       });
     }
     backendRegistryLog.warn("queued Codex invalid-message-ID history recovery", {
-      threadId: candidate.params.threadId,
-      turnId: candidate.turnId ?? null,
+      threadId,
+      turnId,
     });
-    void this.emitCodexInvalidIdRecoveryUpdate({
+    await this.emitCodexInvalidIdRecoveryUpdate({
       failureMessage,
       status: "repairing",
-      threadId: candidate.params.threadId,
-      ...(candidate.turnId ? { turnId: candidate.turnId } : {}),
+      threadId,
+      turnId,
     });
     return recovery;
   }
@@ -13953,10 +14088,22 @@ export class DesktopBackendRegistry {
       && !this.hasActiveCodexWork()
     ) {
       const recovery = this.pendingCodexInvalidIdRecoveries.shift()!;
+      let retrySubmitted = false;
       try {
         const repaired = await recover.call(this.codexClient, {
           failureMessage: recovery.failureMessage,
           threadId: recovery.params.threadId,
+        });
+        recovery.audit = {
+          ...recovery.audit,
+          backupPath: repaired.backupPath,
+          removedMessageIdCount: repaired.removedMessageIdCount,
+          repairedAt: Math.max(Date.now(), recovery.audit.attemptedAt + 1),
+        };
+        await this.overlayStore.setTurnFailureCodexInvalidIdRecovery({
+          threadId: repaired.threadId,
+          turnId: recovery.turnId!,
+          recovery: recovery.audit,
         });
         const statusMessage =
           `PwrAgent repaired ${repaired.removedMessageIdCount} invalid persisted `
@@ -13979,10 +14126,44 @@ export class DesktopBackendRegistry {
             },
           },
         });
+        recovery.audit = {
+          ...recovery.audit,
+          retrySubmittedAt: Math.max(
+            Date.now(),
+            recovery.audit.repairedAt! + 1,
+          ),
+        };
+        await this.overlayStore.setTurnFailureCodexInvalidIdRecovery({
+          threadId: repaired.threadId,
+          turnId: recovery.turnId!,
+          recovery: recovery.audit,
+        });
+        retrySubmitted = true;
         const retried = await this.startTurnNow({
           ...recovery.params,
           invalidIdRecoveryAttempted: true,
+          messageOrigin: { kind: "pwragent" },
         });
+        recovery.audit = {
+          ...recovery.audit,
+          retryTurnId: retried.turnId,
+        };
+        try {
+          await this.overlayStore.setTurnFailureCodexInvalidIdRecovery({
+            threadId: repaired.threadId,
+            turnId: recovery.turnId!,
+            recovery: recovery.audit,
+          });
+        } catch (error) {
+          backendRegistryLog.warn(
+            "failed to persist Codex invalid-message-ID retry turn id",
+            {
+              error: error instanceof Error ? error.message : String(error),
+              threadId: repaired.threadId,
+              turnId: retried.turnId,
+            },
+          );
+        }
         await this.emitCodexInvalidIdRecoveryUpdate({
           backupPath: repaired.backupPath,
           failureMessage: recovery.failureMessage,
@@ -13997,6 +14178,35 @@ export class DesktopBackendRegistry {
           turnId: retried.turnId,
         });
       } catch (error) {
+        recovery.audit = {
+          ...recovery.audit,
+          failedAt: Math.max(
+            Date.now(),
+            (recovery.audit.retrySubmittedAt
+              ?? recovery.audit.repairedAt
+              ?? recovery.audit.attemptedAt) + 1,
+          ),
+          failure: error instanceof Error ? error.message : String(error),
+        };
+        try {
+          await this.overlayStore.setTurnFailureCodexInvalidIdRecovery({
+            threadId: recovery.params.threadId,
+            turnId: recovery.turnId!,
+            recovery: recovery.audit,
+          });
+        } catch (auditError) {
+          backendRegistryLog.error(
+            "failed to persist Codex invalid-message-ID recovery failure",
+            {
+              auditError:
+                auditError instanceof Error
+                  ? auditError.message
+                  : String(auditError),
+              threadId: recovery.params.threadId,
+              turnId: recovery.turnId ?? null,
+            },
+          );
+        }
         recovery.reject(error);
         await this.emitCodexInvalidIdRecoveryUpdate({
           failureMessage: recovery.failureMessage,
@@ -14007,6 +14217,7 @@ export class DesktopBackendRegistry {
         });
         backendRegistryLog.error("Codex invalid-message-ID history recovery failed", {
           error: error instanceof Error ? error.message : String(error),
+          phase: retrySubmitted ? "automatic-retry" : "repair",
           threadId: recovery.params.threadId,
           turnId: recovery.turnId ?? null,
         });
@@ -14078,7 +14289,7 @@ export class DesktopBackendRegistry {
             || notification.method === "turn/cancelled"
           )
         ) {
-          this.handleCodexTurnTerminalForInvalidIdRecovery(
+          await this.handleCodexTurnTerminalForInvalidIdRecovery(
             notification as Extract<
               AppServerNotification,
               { method: "turn/completed" | "turn/failed" | "turn/cancelled" }

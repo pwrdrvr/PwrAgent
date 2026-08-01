@@ -1385,6 +1385,12 @@ export type ThreadOverlayState = {
    * a synthetic `turn-failed:<turnId>` transcript activity entry.
    */
   turnFailureLog?: ThreadTurnFailure[];
+  /**
+   * Most recent automatic Codex invalid-ID repair reservation. Kept outside
+   * the capped failure log so high failure volume cannot evict the durable
+   * five-minute cooldown guard.
+   */
+  codexInvalidIdRecoveryLastAttemptedAt?: number;
 };
 
 /**
@@ -1473,6 +1479,27 @@ export type ThreadMessagingBindingTransition = {
  */
 export const MAX_TURN_FAILURE_LOG_ENTRIES = 100;
 
+export type ThreadCodexInvalidIdRecovery = {
+  /** Stable id shared by every transcript marker for this recovery attempt. */
+  attemptId: string;
+  /** Epoch ms when PwrAgent durably reserved the recovery attempt. */
+  attemptedAt: number;
+  /** Epoch ms when the persisted rollout repair completed successfully. */
+  repairedAt?: number;
+  /** Epoch ms immediately before PwrAgent resubmitted the failed request. */
+  retrySubmittedAt?: number;
+  /** Codex turn id returned for the one automatic resubmission. */
+  retryTurnId?: string;
+  /** Epoch ms when the repair or automatic resubmission failed. */
+  failedAt?: number;
+  /** Failure surfaced while repairing or resubmitting. */
+  failure?: string;
+  /** Durable backup created before the rollout rewrite. */
+  backupPath?: string;
+  /** Number of invalid message ids removed by the repair. */
+  removedMessageIdCount?: number;
+};
+
 /**
  * One entry in the per-thread turn-failure audit log. Persisted via the
  * overlay store and materialized by the renderer into a durable
@@ -1497,6 +1524,12 @@ export type ThreadTurnFailure = {
    * transcript entry timestamp so the warning lands where it happened.
    */
   occurredAt: number;
+  /**
+   * PwrAgent's narrowly scoped Codex history-recovery audit trail for this
+   * failed turn. Persisted before repair begins so cooldown enforcement and
+   * transcript context survive process restarts.
+   */
+  codexInvalidIdRecovery?: ThreadCodexInvalidIdRecovery;
 };
 
 export type ThreadBranchDriftPair = {
