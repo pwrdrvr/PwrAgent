@@ -468,29 +468,20 @@ function analyzeRollout(file) {
     ) {
       const call = calls.get(payload.call_id);
       const output = normalizeToolOutput(payload.output);
-      if (output.runningCellId && call) {
-        cellCommands.set(String(output.runningCellId), {
-          command: call.command,
-          normalizedCommand: call.normalizedCommand,
-          startedAt: call.timestamp,
-          turnId: call.turnId,
-        });
-      }
-      if (output.runningSessionId && call) {
-        sessionCommands.set(String(output.runningSessionId), {
-          command: call.command,
-          normalizedCommand: call.normalizedCommand,
-          startedAt: call.timestamp,
-          turnId: call.turnId,
-        });
-      }
       let normalizedCommand = call?.normalizedCommand || call?.name || "unknown";
       let command = call?.command || "";
       let pollSessionId;
+      let commandAttribution = call ? {
+        command: call.command,
+        normalizedCommand: call.normalizedCommand,
+        startedAt: call.timestamp,
+        turnId: call.turnId,
+      } : undefined;
       if (call?.name === "write_stdin" && call.args?.session_id !== undefined) {
         pollSessionId = String(call.args.session_id);
         const parent = sessionCommands.get(pollSessionId);
         if (parent) {
+          commandAttribution = parent;
           normalizedCommand = `${parent.normalizedCommand} (poll)`;
           command = parent.command;
         } else {
@@ -501,11 +492,18 @@ function analyzeRollout(file) {
         pollSessionId = String(call.args.cell_id);
         const parent = cellCommands.get(pollSessionId);
         if (parent) {
+          commandAttribution = parent;
           normalizedCommand = `${parent.normalizedCommand} (poll)`;
           command = parent.command;
         } else {
           normalizedCommand = "wait";
         }
+      }
+      if (output.runningCellId && commandAttribution) {
+        cellCommands.set(String(output.runningCellId), commandAttribution);
+      }
+      if (output.runningSessionId && commandAttribution) {
+        sessionCommands.set(String(output.runningSessionId), commandAttribution);
       }
       outputs.push({
         ...classifyOutput(output.text),

@@ -54,6 +54,7 @@ export default defineConfig({
           environment: "node",
           include: [
             "scripts/**/*.test.mjs",
+            ".agents/skills/codex-rollout-forensics/tests/**/*.test.mjs",
             "apps/desktop/scripts/**/*.test.mjs",
             "apps/desktop/src/main/__tests__/**/*.test.ts",
             "apps/desktop/src/main/agent-tools/__tests__/**/*.test.ts",
