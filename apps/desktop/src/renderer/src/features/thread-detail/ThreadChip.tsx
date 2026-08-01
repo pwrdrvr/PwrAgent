@@ -1,14 +1,15 @@
 import { useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
-import { buildThreadUrl } from "@pwragent/shared";
 import { ThreadIcon } from "../../icons";
 import { useLiveThreadLink } from "../../lib/thread-links";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import type { ResolvedThreadLink } from "../../lib/thread-links";
 import {
   ChipContextMenu,
-  type ChipContextMenuItem,
   type ChipContextMenuPosition,
 } from "../chrome/ChipContextMenu";
+import { threadCopyTargets } from "../chrome/ThreadChipContextMenu";
+
+export { threadCopyTargets } from "../chrome/ThreadChipContextMenu";
 
 type ThreadChipProps = {
   /**
@@ -95,37 +96,4 @@ export function ThreadChip(props: ThreadChipProps) {
       ) : null}
     </>
   );
-}
-
-export function threadCopyTargets(
-  link: ResolvedThreadLink,
-  label: string,
-): ChipContextMenuItem[] {
-  const targets: ChipContextMenuItem[] = [
-    {
-      label: "Copy Thread Link",
-      copyValue: buildThreadUrl({
-        backend: link.backend,
-        threadId: link.threadId,
-      }),
-    },
-    {
-      label: "Copy Thread ID",
-      copyValue: link.threadId,
-      separated: true,
-    },
-    {
-      label: "Copy Thread Name",
-      copyValue: label,
-    },
-  ];
-
-  if (link.gitBranch) {
-    targets.push({
-      label: "Copy Branch Name",
-      copyValue: link.gitBranch,
-    });
-  }
-
-  return targets;
 }
