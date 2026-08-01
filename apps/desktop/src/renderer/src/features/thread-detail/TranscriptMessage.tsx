@@ -566,9 +566,13 @@ function renderMessageHeader(params: {
     return null;
   }
 
+  const attributionClassName = params.message.origin?.kind === "sub-agent"
+    ? "transcript-message__attribution transcript-message__attribution--stacked"
+    : "transcript-message__attribution";
+
   return (
     <header className="transcript-message__header">
-      <span className="transcript-message__attribution">
+      <span className={attributionClassName}>
         <span className="transcript-message__role">
           {labelForMessage(params.message)}
         </span>

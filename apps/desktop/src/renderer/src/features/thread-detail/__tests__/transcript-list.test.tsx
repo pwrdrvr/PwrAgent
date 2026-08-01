@@ -263,6 +263,11 @@ describe("TranscriptList", () => {
     expect(screen.queryByText("User")).not.toBeInTheDocument();
     expect(screen.getByText("Monitor sub-agent completed")).toBeInTheDocument();
     expect(screen.getByText("Success")).toBeInTheDocument();
+    const attribution = container.querySelector(
+      ".transcript-message__attribution--stacked",
+    );
+    expect(attribution).toContainElement(screen.getByText("Monitor sub-agent"));
+    expect(attribution).toContainElement(screen.getByText(task));
     expect(
       screen.queryByText("Install Dependencies SUCCESS; Desktop E2E SUCCESS."),
     ).not.toBeInTheDocument();
