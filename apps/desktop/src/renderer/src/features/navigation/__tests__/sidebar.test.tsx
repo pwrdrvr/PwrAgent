@@ -1452,6 +1452,40 @@ describe("Sidebar", () => {
     expect(threadButton.querySelector('[data-thread-status="unread"]')).toBeNull();
   });
 
+  it("shows thinking from backend runtime status after renderer HMR", () => {
+    const activeThread = {
+      ...sharedThread,
+      threadStatus: "active" as const,
+    };
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[activeThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey={undefined}
+        threads={[activeThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />
+    );
+
+    const browseSection = screen.getByRole("region", { name: "Thread browser" });
+    const threadButton = within(browseSection as HTMLElement).getByRole("button", {
+      name: /Cross-project cleanup/i,
+    });
+
+    expect(
+      threadButton.querySelector('[data-thread-status="thinking"]')
+    ).not.toBeNull();
+  });
+
   it("shows an approval chip for threads waiting on an approval request", () => {
     render(
       <Sidebar

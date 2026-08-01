@@ -13558,6 +13558,58 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("reattaches active Codex threads from thread-list runtime status", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "turn/start"] },
+      threads: [
+        {
+          id: "thread-reattached",
+          title: "Still working after HMR",
+          titleSource: "explicit",
+          threadStatus: "active",
+          linkedDirectories: [],
+          source: "codex",
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    await registry.listThreads({ backend: "codex" });
+
+    expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
+      count: 1,
+      threadIds: ["codex:thread-reattached"],
+    });
+    await expect(
+      registry.startTurn({
+        backend: "codex",
+        threadId: "thread-reattached",
+        input: [{ type: "text", text: "do not overlap the surviving turn" }],
+      }),
+    ).rejects.toThrow("A turn is already active for this thread.");
+
+    await codexClient.emit({
+      method: "thread/status/changed",
+      params: {
+        threadId: "thread-reattached",
+        status: { type: "idle" },
+      },
+    });
+
+    expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
+      count: 0,
+      threadIds: [],
+    });
+
+    await registry.close();
+  });
+
   it("reserves Codex turn starts before awaited pre-start work", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
@@ -13747,6 +13799,10 @@ command = "pnpm dev"
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: titleService,
     });
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
 
     await expect(
       registry.startTurn({
@@ -13770,6 +13826,23 @@ command = "pnpm dev"
     expect(codexClient.lastRenameThreadParams).toEqual({
       threadId: "thread-title",
       name: "Leopard tea button",
+    });
+    await waitForCondition(() =>
+      events.some(
+        (event) =>
+          event.notification.method === "thread/name/updated"
+          && event.notification.params.threadId === "thread-title",
+      ),
+    );
+    expect(events).toContainEqual({
+      backend: "codex",
+      notification: {
+        method: "thread/name/updated",
+        params: {
+          threadId: "thread-title",
+          threadName: "Leopard tea button",
+        },
+      },
     });
 
     await registry.close();

@@ -5670,6 +5670,13 @@ export class DesktopBackendRegistry {
   private readonly reservedCodexStartThreadIds = new Set<string>();
   private readonly reservedAcpStartThreadKeys = new Set<string>();
   private readonly activeTurnKeys = new Set<string>();
+  /**
+   * Codex runtime activity recovered from `thread/list` / `thread/read`.
+   * The long-lived Codex registry keeps this truth across a desktop
+   * main-process HMR even when the replacement connection never observed the
+   * original `turn/started` notification.
+   */
+  private readonly backendActiveCodexThreadIds = new Set<string>();
   private readonly liveThreadUsageBaselines = new Map<
     string,
     TaskMonitorTokenUsageBreakdown
@@ -8299,6 +8306,18 @@ export class DesktopBackendRegistry {
       );
     }
     this.invalidateThreadListCache(backend);
+    if (!isAcpBackendId(backend)) {
+      await this.emit({
+        backend,
+        notification: {
+          method: "thread/name/updated",
+          params: {
+            threadId: result.threadId,
+            threadName: request.name.trim(),
+          },
+        },
+      });
+    }
 
     return {
       backend,
@@ -8426,6 +8445,10 @@ export class DesktopBackendRegistry {
             before: request.before,
             limit: request.limit,
           });
+
+    if (backend === "codex") {
+      this.reconcileBackendCodexThreadStatus(request.threadId, replay.threadStatus);
+    }
 
     if (
       backend === "codex" &&
@@ -9460,6 +9483,9 @@ export class DesktopBackendRegistry {
     threadIds: string[];
   } {
     const threadKeys = new Set<string>();
+    for (const threadId of this.backendActiveCodexThreadIds) {
+      threadKeys.add(formatQuitThreadKey("codex", threadId));
+    }
     for (const key of this.activeTurnKeys) {
       const parsed = parseActiveTurnKey(key);
       if (parsed) {
@@ -11508,12 +11534,28 @@ export class DesktopBackendRegistry {
    * flight on this thread. `activeCodexTurnModes` is keyed by
    * `${threadId}:${turnId}`; one or more matching keys → active turn.
    */
+  private reconcileBackendCodexThreadStatus(
+    threadId: string,
+    status: string | undefined,
+  ): void {
+    if (status === "active") {
+      this.backendActiveCodexThreadIds.add(threadId);
+      return;
+    }
+    if (status) {
+      this.backendActiveCodexThreadIds.delete(threadId);
+    }
+  }
+
   private threadHasActiveTurn(
     threadId: string,
     backend: AppServerBackendKind = "codex",
   ): boolean {
     if (backend === "codex") {
       if (this.reservedCodexStartThreadIds.has(threadId)) {
+        return true;
+      }
+      if (this.backendActiveCodexThreadIds.has(threadId)) {
         return true;
       }
 
@@ -15289,6 +15331,10 @@ export class DesktopBackendRegistry {
       }),
     );
 
+    for (const thread of enrichedThreads) {
+      this.reconcileBackendCodexThreadStatus(thread.id, thread.threadStatus);
+    }
+
     return enrichedThreads.sort(
       (left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0),
     );
@@ -18578,12 +18624,12 @@ export class DesktopBackendRegistry {
       await this.renameAcpSession(params.backend, params.threadId, params.title, {
         titleSource: "derived",
       });
-    } else if (params.backend === "codex") {
-      await this.withCodexThreadClient(params.threadId, async (client) =>
-        await this.renameWithClient(client, params.threadId, params.title)
-      );
     } else {
-      await this.renameWithClient(this.grokClient, params.threadId, params.title);
+      await this.renameThread({
+        backend: params.backend,
+        threadId: params.threadId,
+        name: params.title,
+      });
     }
   }
 
@@ -23227,6 +23273,16 @@ export class DesktopBackendRegistry {
 
     if (
       event.backend === "codex" &&
+      event.notification.method === "thread/status/changed"
+    ) {
+      this.reconcileBackendCodexThreadStatus(
+        event.notification.params.threadId,
+        readStatusType(event.notification.params.status),
+      );
+    }
+
+    if (
+      event.backend === "codex" &&
       event.notification.method === "thread/status/changed" &&
       readStatusType(event.notification.params.status) === "active"
     ) {
@@ -23254,6 +23310,9 @@ export class DesktopBackendRegistry {
         };
       };
       const turnId = turnIdFromStartedNotification(notification);
+      if (event.backend === "codex") {
+        this.backendActiveCodexThreadIds.add(notification.params.threadId);
+      }
       if (!isAcpBackendId(event.backend)) {
         this.schedulePendingThreadTitleGenerationFromLifecycle({
           backend: event.backend,
@@ -23300,6 +23359,9 @@ export class DesktopBackendRegistry {
         };
       };
       const turnId = turnIdFromTerminalNotification(notification);
+      if (event.backend === "codex") {
+        this.backendActiveCodexThreadIds.delete(notification.params.threadId);
+      }
       const managedReview = turnId
         ? this.findActiveReviewSubAgentForTerminal({
             backend: event.backend,

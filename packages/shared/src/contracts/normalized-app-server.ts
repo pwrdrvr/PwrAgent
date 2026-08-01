@@ -295,6 +295,8 @@ export type AppServerThreadSummary = {
   id: ThreadIdentifier;
   title: string;
   titleSource: AppServerThreadTitleSource;
+  /** Current backend runtime status when exposed by the thread-list protocol. */
+  threadStatus?: AppServerThreadStatus;
   summary?: string;
   projectKey?: string;
   createdAt?: number;
