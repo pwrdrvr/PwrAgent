@@ -1,4 +1,10 @@
-import { useEffect, useState, type KeyboardEvent, type MouseEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type MouseEvent,
+} from "react";
 import type { PrSummary } from "@pwragent/shared";
 import { CloseIcon } from "../../icons";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
@@ -27,6 +33,7 @@ type PrChipProps = {
 
 export function PrChip(props: PrChipProps) {
   const { pr } = props;
+  const contextMenuInvokerRef = useRef<HTMLSpanElement>(null);
   const [contextMenuPosition, setContextMenuPosition] = useState<{
     x: number;
     y: number;
@@ -116,6 +123,7 @@ export function PrChip(props: PrChipProps) {
           if (props.onOpenContextMenu) {
             props.onOpenContextMenu(pr, position);
           } else {
+            contextMenuInvokerRef.current = event.currentTarget;
             setContextMenuPosition(position);
           }
         }}
@@ -151,10 +159,11 @@ export function PrChip(props: PrChipProps) {
         {isDraft ? <span className="pr-chip__draft-bar" aria-hidden="true" /> : null}
       </span>
       {tooltipController.tooltipNode}
-      {contextMenuPosition ? (
+      {contextMenuPosition && contextMenuInvokerRef.current ? (
         <PrChipContextMenu
           position={contextMenuPosition}
           pr={pr}
+          returnFocusTo={contextMenuInvokerRef.current}
           onClose={() => setContextMenuPosition(undefined)}
         />
       ) : null}

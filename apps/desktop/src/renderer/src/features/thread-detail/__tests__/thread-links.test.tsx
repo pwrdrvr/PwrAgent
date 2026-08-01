@@ -87,6 +87,37 @@ describe("thread links in transcript markdown", () => {
       `pwragent://thread/${CHILD_THREAD_ID}?backend=codex`,
     );
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(chip).toHaveFocus();
+  });
+
+  it("keeps one copy menu open and restores focus on Escape", () => {
+    const secondThreadId = "019f5d79-a595-73f2-84d9-a0976762c304";
+    renderWithLinks(
+      [
+        `[first](pwragent://thread/${CHILD_THREAD_ID}?backend=codex)`,
+        `[second](pwragent://thread/${secondThreadId}?backend=codex)`,
+      ].join(" "),
+      {
+        threads: [
+          threadSummary({ title: "First thread" }),
+          threadSummary({ id: secondThreadId, title: "Second thread" }),
+        ],
+      },
+    );
+    const firstChip = screen.getByRole("button", { name: "Open thread First thread" });
+    const secondChip = screen.getByRole("button", { name: "Open thread Second thread" });
+
+    fireEvent.contextMenu(firstChip, { clientX: 80, clientY: 60 });
+    expect(screen.getAllByRole("menu")).toHaveLength(1);
+
+    secondChip.focus();
+    fireEvent.contextMenu(secondChip, { clientX: 160, clientY: 90 });
+    expect(screen.getAllByRole("menu")).toHaveLength(1);
+    expect(screen.getByRole("menuitem", { name: "Copy Thread Link" })).toHaveFocus();
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(secondChip).toHaveFocus();
   });
 
   it("builds exact copy values from live thread metadata", () => {

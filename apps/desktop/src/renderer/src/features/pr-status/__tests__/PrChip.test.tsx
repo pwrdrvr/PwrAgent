@@ -110,6 +110,32 @@ describe("PrChip", () => {
     ]);
   });
 
+  it("ignores marker-like owner and repository names when deriving PR URLs", () => {
+    expect(pullRequestCopyTargets(basePr({
+      org: "pull",
+      repo: "merge_requests",
+      url: "https://github.com/pull/merge_requests/pull/743/files?diff=split",
+    }))).toEqual([
+      {
+        label: "Copy Full Code Review URL",
+        value: "https://github.com/pull/merge_requests/pull/743/files?diff=split",
+      },
+      {
+        label: "Copy Pull Request URL",
+        value: "https://github.com/pull/merge_requests/pull/743",
+        separated: true,
+      },
+      {
+        label: "Copy Pull Request Number",
+        value: "743",
+      },
+      {
+        label: "Copy Repository URL",
+        value: "https://github.com/pull/merge_requests",
+      },
+    ]);
+  });
+
   it("colors the dot by check state with no draft affordance for a ready PR", () => {
     const chip = renderChip(basePr({ checkState: "passing" }));
     expect(chip).toHaveClass("pr-chip--passing");

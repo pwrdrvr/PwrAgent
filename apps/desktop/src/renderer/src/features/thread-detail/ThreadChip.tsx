@@ -1,4 +1,4 @@
-import { useState, type KeyboardEvent, type MouseEvent } from "react";
+import { useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
 import { buildThreadUrl } from "@pwragent/shared";
 import { ThreadIcon } from "../../icons";
 import { useLiveThreadLink } from "../../lib/thread-links";
@@ -23,6 +23,7 @@ type ThreadChipProps = {
 
 export function ThreadChip(props: ThreadChipProps) {
   const link = useLiveThreadLink(props.link);
+  const contextMenuInvokerRef = useRef<HTMLSpanElement>(null);
   const [contextMenuPosition, setContextMenuPosition] =
     useState<CopyContextMenuPosition>();
   const tooltipController = useViewportTooltip({ className: "viewport-tooltip" });
@@ -63,6 +64,7 @@ export function ThreadChip(props: ThreadChipProps) {
           window.getSelection()?.removeAllRanges();
           tooltipController.hide();
           const rect = event.currentTarget.getBoundingClientRect();
+          contextMenuInvokerRef.current = event.currentTarget;
           setContextMenuPosition({
             x: event.clientX,
             y: event.clientY,
@@ -83,9 +85,10 @@ export function ThreadChip(props: ThreadChipProps) {
         <span className="thread-chip__label">{label}</span>
       </span>
       {tooltipController.tooltipNode}
-      {contextMenuPosition ? (
+      {contextMenuPosition && contextMenuInvokerRef.current ? (
         <CopyContextMenu
           position={contextMenuPosition}
+          returnFocusTo={contextMenuInvokerRef.current}
           targets={threadCopyTargets(link, label)}
           onClose={() => setContextMenuPosition(undefined)}
         />

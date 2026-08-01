@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { copyText } from "../../lib/copy-text";
 
@@ -17,32 +17,43 @@ export type CopyContextMenuTarget = {
 type CopyContextMenuProps = {
   onClose: () => void;
   position: CopyContextMenuPosition;
+  returnFocusTo: HTMLElement;
   targets: CopyContextMenuTarget[];
 };
 
 export function CopyContextMenu(props: CopyContextMenuProps) {
-  const { onClose, position: requestedPosition, targets } = props;
+  const { onClose, position: requestedPosition, returnFocusTo, targets } = props;
   const menuRef = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState({
     x: requestedPosition.x,
     y: requestedPosition.y,
   });
 
+  const close = useCallback((restoreFocus: boolean): void => {
+    onClose();
+    if (restoreFocus && returnFocusTo.isConnected) {
+      returnFocusTo.focus({ preventScroll: true });
+    }
+  }, [onClose, returnFocusTo]);
+
   useEffect(() => {
-    const closeOnClick = (): void => onClose();
+    const closeOnClick = (): void => close(false);
     const closeOnEscape = (event: KeyboardEvent): void => {
       if (event.key === "Escape") {
-        onClose();
+        close(true);
       }
     };
+    const closeOnContextMenu = (): void => close(false);
 
     window.addEventListener("click", closeOnClick);
+    window.addEventListener("contextmenu", closeOnContextMenu, true);
     window.addEventListener("keydown", closeOnEscape);
     return () => {
       window.removeEventListener("click", closeOnClick);
+      window.removeEventListener("contextmenu", closeOnContextMenu, true);
       window.removeEventListener("keydown", closeOnEscape);
     };
-  }, [onClose]);
+  }, [close]);
 
   useLayoutEffect(() => {
     const menu = menuRef.current;
@@ -55,7 +66,7 @@ export function CopyContextMenu(props: CopyContextMenuProps) {
   }, [requestedPosition]);
 
   const copy = (value: string): void => {
-    onClose();
+    close(true);
     void copyText(value);
   };
 

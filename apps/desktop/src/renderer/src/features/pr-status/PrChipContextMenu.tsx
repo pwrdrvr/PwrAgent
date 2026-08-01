@@ -9,6 +9,7 @@ type PrChipContextMenuProps = {
   onClose: () => void;
   position: CopyContextMenuPosition;
   pr: PrSummary;
+  returnFocusTo: HTMLElement;
 };
 
 export function PrChipContextMenu(props: PrChipContextMenuProps) {
@@ -16,6 +17,7 @@ export function PrChipContextMenu(props: PrChipContextMenuProps) {
     <CopyContextMenu
       onClose={props.onClose}
       position={props.position}
+      returnFocusTo={props.returnFocusTo}
       targets={pullRequestCopyTargets(props.pr)}
     />
   );
@@ -59,14 +61,9 @@ function pullRequestUrls(pr: PrSummary): {
   try {
     const full = new URL(pr.url);
     const segments = full.pathname.split("/").filter(Boolean);
-    const markerIndex = segments.findIndex(
-      (segment) => segment === "pull" || segment === "merge_requests",
-    );
+    const markerIndex = findPullRequestMarkerIndex(segments, pr.number);
     const numberIndex = markerIndex + 1;
-    if (
-      markerIndex >= 0
-      && segments[numberIndex] === String(pr.number)
-    ) {
+    if (markerIndex >= 0) {
       const repositoryEnd = segments[markerIndex - 1] === "-"
         ? markerIndex - 1
         : markerIndex;
@@ -86,6 +83,23 @@ function pullRequestUrls(pr: PrSummary): {
     pullRequestUrl: pr.url,
     repositoryUrl,
   };
+}
+
+function findPullRequestMarkerIndex(
+  segments: string[],
+  pullRequestNumber: number,
+): number {
+  const numberText = String(pullRequestNumber);
+  for (let index = segments.length - 2; index >= 0; index -= 1) {
+    const segment = segments[index];
+    if (
+      (segment === "pull" || segment === "merge_requests")
+      && segments[index + 1] === numberText
+    ) {
+      return index;
+    }
+  }
+  return -1;
 }
 
 function urlWithPath(source: URL, segments: string[]): string {
