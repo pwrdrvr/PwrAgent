@@ -1,11 +1,18 @@
 import "@testing-library/jest-dom/vitest";
 import type { AppServerBackendKind, NavigationThreadSummary } from "@pwragent/shared";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ThreadLinkProvider } from "../../../lib/thread-links";
+import { threadCopyTargets } from "../ThreadChip";
 import { ThreadMarkdown } from "../ThreadMarkdown";
 
 const CHILD_THREAD_ID = "019f5d79-a595-73f2-84d9-a0976762c303";
+const copyText = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock("../../../lib/copy-text", () => ({ copyText }));
+
+afterEach(() => {
+  copyText.mockClear();
+});
 
 function threadSummary(
   overrides: Partial<NavigationThreadSummary> = {},
@@ -40,6 +47,75 @@ function renderWithLinks(
 }
 
 describe("thread links in transcript markdown", () => {
+  it("replaces partial text selection with thread-specific copy actions", () => {
+    renderWithLinks(
+      `Created [the handoff](pwragent://thread/${CHILD_THREAD_ID}?backend=codex)`,
+      {
+        threads: [threadSummary({ gitBranch: "agent/thread-chip-menu" })],
+      },
+    );
+    const chip = screen.getByRole("button", {
+      name: "Open thread RELATED query deranking issue",
+    });
+    const contextMenuEvent = new MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+      clientX: 120,
+      clientY: 80,
+    });
+
+    fireEvent(chip, contextMenuEvent);
+
+    expect(contextMenuEvent.defaultPrevented).toBe(true);
+    expect(chip).toHaveAttribute("draggable", "false");
+    expect(chip).toHaveAttribute("aria-haspopup", "menu");
+    expect(screen.getByRole("menuitem", {
+      name: "Copy Thread Link",
+    })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", {
+      name: "Copy Thread ID",
+    })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", {
+      name: "Copy Thread Name",
+    })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", {
+      name: "Copy Branch Name",
+    })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Copy Thread Link" }));
+    expect(copyText).toHaveBeenCalledWith(
+      `pwragent://thread/${CHILD_THREAD_ID}?backend=codex`,
+    );
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  it("builds exact copy values from live thread metadata", () => {
+    expect(threadCopyTargets({
+      backend: "codex",
+      threadId: CHILD_THREAD_ID,
+      title: "RELATED query deranking issue",
+      gitBranch: "agent/thread-chip-menu",
+    }, "RELATED query deranking issue")).toEqual([
+      {
+        label: "Copy Thread Link",
+        value: `pwragent://thread/${CHILD_THREAD_ID}?backend=codex`,
+      },
+      {
+        label: "Copy Thread ID",
+        value: CHILD_THREAD_ID,
+        separated: true,
+      },
+      {
+        label: "Copy Thread Name",
+        value: "RELATED query deranking issue",
+      },
+      {
+        label: "Copy Branch Name",
+        value: "agent/thread-chip-menu",
+      },
+    ]);
+  });
+
   it("renders a pwragent thread link as a chip showing the thread's live title", () => {
     renderWithLinks(
       `Created [the handoff](pwragent://thread/${CHILD_THREAD_ID}?backend=codex)`,

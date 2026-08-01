@@ -3808,10 +3808,6 @@ textarea,
     border-color 120ms ease;
 }
 
-.pr-chip-context-menu {
-  min-width: 220px;
-}
-
 .pr-chip:hover,
 .pr-chip:focus-visible {
   border-color: var(--accent-border);
@@ -4447,6 +4443,10 @@ textarea,
   border-radius: 8px;
   background: var(--bg-panel-elevated);
   box-shadow: var(--shadow-popover);
+}
+
+.chip-copy-context-menu {
+  min-width: 220px;
 }
 
 .thread-context-menu button {
@@ -12067,6 +12067,8 @@ a.transcript-message__messaging-origin:focus-visible {
   vertical-align: middle;
   border: 1px solid var(--accent-border);
   cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .thread-chip:hover,

@@ -418,11 +418,14 @@ describe("Tangerine Terminal theme contract", () => {
     expect(pricingRunningTotalRule).toContain("user-select: text;");
   });
 
-  it("keeps pull request chips atomic instead of text-selectable", () => {
+  it("keeps transcript link chips atomic instead of text-selectable", () => {
     const prChipRule = extractRuleBody(css, ".pr-chip");
+    const threadChipRule = extractRuleBody(css, ".thread-chip");
 
     expect(prChipRule).toContain("-webkit-user-select: none;");
     expect(prChipRule).toContain("user-select: none;");
+    expect(threadChipRule).toContain("-webkit-user-select: none;");
+    expect(threadChipRule).toContain("user-select: none;");
   });
 
   it("anchors the context rail below the header and reserves one shared width for the chat", () => {
