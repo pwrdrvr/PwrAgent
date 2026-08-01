@@ -8940,6 +8940,10 @@ textarea,
   border-top: 1px solid var(--border-subtle);
 }
 
+.transcript-monitor-result__content > .transcript-message__text {
+  margin-top: 0;
+}
+
 .transcript-monitor-result__content .transcript-message__text-block:first-child {
   margin-top: 0;
 }

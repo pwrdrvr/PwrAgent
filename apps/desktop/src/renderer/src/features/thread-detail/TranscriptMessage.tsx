@@ -119,17 +119,19 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
         </div>
         {monitorExpanded ? (
           <div className="transcript-monitor-result__content">
-            {messageSegments.map((segment, index) =>
-              renderMessageSegment({
-                segment,
-                index,
-                applications: props.applications,
-                desktopApi: props.desktopApi,
-                fileViewerContext: props.fileViewerContext,
-                onOpenImage: props.onOpenImage,
-                skills: props.skills,
-              }),
-            )}
+            <div className="transcript-message__text">
+              {messageSegments.map((segment, index) =>
+                renderMessageSegment({
+                  segment,
+                  index,
+                  applications: props.applications,
+                  desktopApi: props.desktopApi,
+                  fileViewerContext: props.fileViewerContext,
+                  onOpenImage: props.onOpenImage,
+                  skills: props.skills,
+                }),
+              )}
+            </div>
           </div>
         ) : null}
         {monitorDetailsOpen && monitorSubAgent ? (

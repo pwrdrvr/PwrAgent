@@ -284,6 +284,11 @@ describe("TranscriptList", () => {
     expect(
       container.querySelector(".transcript-monitor-result__content"),
     ).toHaveTextContent("Install Dependencies SUCCESS; Desktop E2E SUCCESS.");
+    expect(
+      container.querySelector(
+        ".transcript-monitor-result__content > .transcript-message__text",
+      ),
+    ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Details" }));
     expect(
