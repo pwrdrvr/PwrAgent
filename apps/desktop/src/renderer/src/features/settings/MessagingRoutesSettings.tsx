@@ -161,6 +161,7 @@ function useMessagingRoutes(): MessagingRoutesContextValue {
 }
 
 export function MessagingRoutesSettings(props: {
+  configuredPlatforms?: readonly MessagingChannelKind[];
   desktopApi?: DesktopApi;
   onOpenThread?: (target: {
     backend: AppServerBackendKind;
@@ -169,10 +170,14 @@ export function MessagingRoutesSettings(props: {
 }) {
   const routeState = useMessagingRoutes();
   const { routes, loading, loadRoutes } = routeState;
+  const configuredPlatforms = props.configuredPlatforms ?? ROUTE_PLATFORMS;
+  const emptyForm = props.configuredPlatforms
+    ? newDefaultForm(configuredPlatforms)
+    : EMPTY_FORM;
   const [mutationError, setMutationError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [showAdd, setShowAdd] = useState(false);
-  const [initialForm, setInitialForm] = useState<NewDefaultForm>(EMPTY_FORM);
+  const [initialForm, setInitialForm] = useState<NewDefaultForm>(emptyForm);
   const [editing, setEditing] = useState<DesktopMessagingDefaultAgentRoute | null>(
     null,
   );
@@ -253,7 +258,7 @@ export function MessagingRoutesSettings(props: {
             type="button"
             onClick={() => {
               setEditing(null);
-              setInitialForm(EMPTY_FORM);
+              setInitialForm(emptyForm);
               setShowAdd((current) => !current);
             }}
           >
@@ -274,6 +279,7 @@ export function MessagingRoutesSettings(props: {
             agents={routes.eligibleAgents}
             initialForm={initialForm}
             observedSurfaces={routes.observedSurfaces ?? []}
+            platforms={platformsForForm(configuredPlatforms, initialForm)}
             onCancel={() => setShowAdd(false)}
             onSaved={async () => {
               setShowAdd(false);
@@ -290,6 +296,7 @@ export function MessagingRoutesSettings(props: {
             agents={routes.eligibleAgents}
             assignment={editing}
             observedSurfaces={routes.observedSurfaces ?? []}
+            platforms={configuredPlatforms}
             onCancel={() => setEditing(null)}
             onSaved={async () => {
               setEditing(null);
@@ -559,6 +566,7 @@ function DefaultAgentEditor(props: {
   desktopApi?: DesktopApi;
   initialForm?: NewDefaultForm;
   observedSurfaces: DesktopMessagingObservedSurface[];
+  platforms: readonly MessagingChannelKind[];
   onCancel: () => void;
   onSaved: () => Promise<void>;
 }) {
@@ -642,10 +650,21 @@ function DefaultAgentEditor(props: {
                 setManualEntry(false);
               }}
             >
-              <option value="conversation">Conversation</option>
-              <option value="parent">Parent channel or group</option>
-              <option value="workspace">Workspace or server</option>
-              <option value="provider">Messaging provider</option>
+              <option
+                disabled={props.platforms.length === 0}
+                value="conversation"
+              >
+                Conversation
+              </option>
+              <option disabled={props.platforms.length === 0} value="parent">
+                Parent channel or group
+              </option>
+              <option disabled={props.platforms.length === 0} value="workspace">
+                Workspace or server
+              </option>
+              <option disabled={props.platforms.length === 0} value="provider">
+                Messaging provider
+              </option>
               <option value="profile">PwrAgent profile</option>
             </select>
           </label>
@@ -663,7 +682,7 @@ function DefaultAgentEditor(props: {
                   setManualEntry(false);
                 }}
               >
-                {ROUTE_PLATFORMS.map((platform) => (
+                {props.platforms.map((platform) => (
                   <option key={platform} value={platform}>
                     {formatMessagingPlatformName(platform)}
                   </option>
@@ -834,6 +853,27 @@ function DefaultAgentEditor(props: {
       </div>
     </div>
   );
+}
+
+function newDefaultForm(
+  platforms: readonly MessagingChannelKind[],
+): NewDefaultForm {
+  const platform = platforms[0];
+  return {
+    ...EMPTY_FORM,
+    scopeKind: platform ? "conversation" : "profile",
+    platform: platform ?? EMPTY_FORM.platform,
+  };
+}
+
+function platformsForForm(
+  configured: readonly MessagingChannelKind[],
+  form: NewDefaultForm,
+): MessagingChannelKind[] {
+  if (form.scopeKind === "profile" || configured.includes(form.platform)) {
+    return [...configured];
+  }
+  return [form.platform, ...configured];
 }
 
 type ObservedSurfaceCandidate = {

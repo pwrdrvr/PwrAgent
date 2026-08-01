@@ -188,6 +188,9 @@ export function MessagingSettings(props: {
     runtimeMessaging.disabledReasonKind === "lease_held"
       ? `Messaging is off here because another PwrAgent instance holds this profile's messaging lease${leaseHolderLabel ? ` (${leaseHolderLabel})` : ""}. Close that instance or wait for its lease to expire, then flip the master toggle to try again.`
       : "Messaging is off because the app was launched with the no-messaging flag. You can override this for the current session by flipping the master toggle below, but make sure messaging is off in any other PwrAgent instances first. The override applies to this session only; the saved default is unchanged.";
+  const configuredRoutePlatforms = configuredMessagingRoutePlatforms(
+    props.snapshot,
+  );
 
   return (
     <MessagingRoutesProvider desktopApi={props.desktopApi}>
@@ -358,6 +361,7 @@ export function MessagingSettings(props: {
       </SettingsSection>
 
       <MessagingRoutesSettings
+        configuredPlatforms={configuredRoutePlatforms}
         desktopApi={props.desktopApi}
         onOpenThread={props.onOpenThread}
       />
@@ -1678,6 +1682,20 @@ export function MessagingSettings(props: {
       </SettingsSectionStack>
     </MessagingRoutesProvider>
   );
+}
+
+function configuredMessagingRoutePlatforms(
+  snapshot: DesktopSettingsSnapshot,
+): MessagingChannelKind[] {
+  const messaging = snapshot.messaging;
+  return [
+    messaging.telegram.botToken.configured ? "telegram" : undefined,
+    messaging.discord.botToken.configured ? "discord" : undefined,
+    messaging.mattermost.botToken.configured ? "mattermost" : undefined,
+    messaging.slack.botToken.configured ? "slack" : undefined,
+    messaging.feishu.appSecret.configured ? "feishu" : undefined,
+    messaging.line.channelAccessToken.configured ? "line" : undefined,
+  ].filter((platform): platform is MessagingChannelKind => Boolean(platform));
 }
 
 const TOOL_UPDATE_MODE_OPTIONS: Array<{

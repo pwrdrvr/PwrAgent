@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   AppServerBackendKind,
   ListMessagingRoutesResponse,
+  MessagingChannelKind,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import {
@@ -162,10 +163,12 @@ function renderRoutes(
     backend: AppServerBackendKind;
     threadId: string;
   }) => void,
+  configuredPlatforms?: readonly MessagingChannelKind[],
 ) {
   return render(
     <MessagingRoutesProvider desktopApi={desktopApi}>
       <MessagingRoutesSettings
+        configuredPlatforms={configuredPlatforms}
         desktopApi={desktopApi}
         onOpenThread={onOpenThread}
       />
@@ -405,6 +408,43 @@ describe("MessagingRoutesSettings", () => {
         target: { backend: "acp:grok", threadId: "agent-2" },
       });
     });
+  });
+
+  it("offers only messaging platforms configured for this instance", async () => {
+    const api = buildDesktopApi();
+    renderRoutes(
+      api.desktopApi,
+      undefined,
+      ["telegram", "mattermost", "line"],
+    );
+    await screen.findByText("Search Signals Agent");
+
+    fireEvent.click(screen.getByRole("button", { name: "Add default" }));
+
+    const platformSelect = screen.getByLabelText("Messaging platform");
+    expect(platformSelect).toHaveValue("telegram");
+    expect(
+      [...platformSelect.querySelectorAll("option")].map(
+        (option) => option.textContent,
+      ),
+    ).toEqual(["Telegram", "Mattermost", "LINE"]);
+  });
+
+  it("keeps profile defaults available without a configured platform", async () => {
+    const api = buildDesktopApi();
+    renderRoutes(api.desktopApi, undefined, []);
+    await screen.findByText("Search Signals Agent");
+
+    fireEvent.click(screen.getByRole("button", { name: "Add default" }));
+
+    expect(screen.getByLabelText("Default scope")).toHaveValue("profile");
+    expect(screen.queryByLabelText("Messaging platform")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("option", { name: "Conversation" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("option", { name: "PwrAgent profile" }),
+    ).toBeEnabled();
   });
 
   it("orders observed surfaces by recency and derives parent and workspace choices", async () => {
