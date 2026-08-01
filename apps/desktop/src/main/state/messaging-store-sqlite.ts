@@ -19,7 +19,10 @@ import type {
   MessagingDeliveryRecord,
   MessagingStoreData,
 } from "../messaging/core/messaging-migrations.js";
-import { CURRENT_MESSAGING_STORE_VERSION } from "../messaging/core/messaging-migrations.js";
+import {
+  CURRENT_MESSAGING_STORE_VERSION,
+  migrateMessagingDefaultAgentAssignmentRecord,
+} from "../messaging/core/messaging-migrations.js";
 import {
   buildDefaultAgentScopeLookup,
   buildMessagingDefaultAgentScopeKey,
@@ -84,9 +87,10 @@ export class SqliteMessagingStore {
             }[];
       for (const row of rowsToRevoke) {
         try {
-          const current = JSON.parse(
-            row.payload,
-          ) as MessagingDefaultAgentAssignmentRecord;
+          const current = parseDefaultAgentAssignment(row.payload);
+          if (!current) {
+            throw new Error("Invalid default Agent assignment payload");
+          }
           const revoked: MessagingDefaultAgentAssignmentRecord = {
             ...current,
             revokedAt: now,
@@ -141,7 +145,7 @@ export class SqliteMessagingStore {
         "SELECT payload FROM messaging_default_agent_assignments WHERE assignment_id = ?",
       )
       .get(id) as { payload: string } | undefined;
-    return row ? JSON.parse(row.payload) : undefined;
+    return row ? parseDefaultAgentAssignment(row.payload) : undefined;
   }
 
   async findActiveDefaultAgentAssignmentForChannel(
@@ -159,7 +163,8 @@ export class SqliteMessagingStore {
       )
       .all() as { payload: string }[];
     return rows
-      .map((row) => JSON.parse(row.payload) as MessagingDefaultAgentAssignmentRecord)
+      .map((row) => parseDefaultAgentAssignment(row.payload))
+      .filter((assignment) => assignment !== undefined)
       .filter((assignment) => !assignment.revokedAt)
       .map((assignment) => structuredClone(assignment));
   }
@@ -175,7 +180,8 @@ export class SqliteMessagingStore {
         )
         .all(scopeKey) as { payload: string }[];
       const match = rows
-        .map((row) => JSON.parse(row.payload) as MessagingDefaultAgentAssignmentRecord)
+        .map((row) => parseDefaultAgentAssignment(row.payload))
+        .filter((assignment) => assignment !== undefined)
         .find((assignment) => !assignment.revokedAt);
       if (match) matches.push(match);
     }
@@ -193,7 +199,8 @@ export class SqliteMessagingStore {
         | { payload: string }
         | undefined;
     if (!row) return undefined;
-    const assignment = JSON.parse(row.payload) as MessagingDefaultAgentAssignmentRecord;
+    const assignment = parseDefaultAgentAssignment(row.payload);
+    if (!assignment) return undefined;
     return assignment.revokedAt ? undefined : assignment;
   }
 
@@ -227,7 +234,8 @@ export class SqliteMessagingStore {
         .all(params.backend, params.threadId) as { payload: string }[];
       const revoked: MessagingDefaultAgentAssignmentRecord[] = [];
       for (const row of rows) {
-        const current = JSON.parse(row.payload) as MessagingDefaultAgentAssignmentRecord;
+        const current = parseDefaultAgentAssignment(row.payload);
+        if (!current) continue;
         const next = {
           ...current,
           revokedAt,
@@ -1138,6 +1146,16 @@ function sanitizeBinding(
     statusSurface: sanitizeSurfaceRef(binding.statusSurface),
     targetKind: normalizeMessagingBindingTargetKind(binding.targetKind),
   };
+}
+
+function parseDefaultAgentAssignment(
+  payload: string,
+): MessagingDefaultAgentAssignmentRecord | undefined {
+  try {
+    return migrateMessagingDefaultAgentAssignmentRecord(JSON.parse(payload));
+  } catch {
+    return undefined;
+  }
 }
 
 function sanitizeDefaultAgentAssignment(

@@ -646,6 +646,38 @@ describe("MessagingStore", () => {
     expect(migrated.version).toBe(3);
   });
 
+  it("migrates pre-merge default Agent assignment records", () => {
+    const channel = buildBinding().channel;
+    const migrated = migrateMessagingStoreData({
+      version: 2,
+      defaultAgentAssignments: {
+        legacy: {
+          id: "legacy",
+          scopeKind: "conversation",
+          backend: "codex",
+          threadId: "agent-legacy",
+          channelKind: "telegram",
+          channel,
+          createdAt: 1000,
+          updatedAt: 2000,
+          routingState: { opaque: { apiToken: "not-retained" } },
+        },
+      },
+    });
+
+    expect(migrated.defaultAgentAssignments.legacy).toEqual({
+      id: "legacy",
+      scope: { kind: "conversation", channel },
+      target: {
+        kind: "agent",
+        backend: "codex",
+        threadId: "agent-legacy",
+      },
+      createdAt: 1000,
+      updatedAt: 2000,
+    });
+  });
+
   it("sweeps binding and channel state when a binding is revoked", async () => {
     const { store } = await createStore();
     await store.upsertBinding(buildBinding());

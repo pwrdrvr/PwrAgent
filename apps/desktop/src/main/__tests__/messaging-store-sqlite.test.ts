@@ -302,6 +302,67 @@ describe("SqliteMessagingStore", () => {
     ]);
   });
 
+  it("reads and lazily rewrites pre-merge default Agent assignments", async () => {
+    const store = await createStore();
+    const db = stateDbs.at(-1)!.raw;
+    const channel = buildBinding().channel;
+    db.prepare(
+      `INSERT INTO messaging_default_agent_assignments
+       (assignment_id, scope_kind, scope_key, channel_kind, backend, thread_id, status, created_at, updated_at, payload)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      "legacy",
+      "conversation",
+      "conversation:telegram:dm::chat-1",
+      "telegram",
+      "codex",
+      "agent-legacy",
+      "active",
+      1000,
+      2000,
+      JSON.stringify({
+        id: "legacy",
+        scopeKind: "conversation",
+        backend: "codex",
+        threadId: "agent-legacy",
+        channelKind: "telegram",
+        channel,
+        createdAt: 1000,
+        updatedAt: 2000,
+        routingState: { opaque: { apiToken: "not-retained" } },
+      }),
+    );
+
+    await expect(store.findActiveDefaultAgentAssignments()).resolves.toEqual([
+      {
+        id: "legacy",
+        scope: { kind: "conversation", channel },
+        target: {
+          kind: "agent",
+          backend: "codex",
+          threadId: "agent-legacy",
+        },
+        createdAt: 1000,
+        updatedAt: 2000,
+      },
+    ]);
+    await store.revokeDefaultAgentAssignment({
+      assignmentId: "legacy",
+      revokedAt: 3000,
+    });
+    const payload = JSON.parse(
+      (db.prepare(
+        "SELECT payload FROM messaging_default_agent_assignments WHERE assignment_id = 'legacy'",
+      ).get() as { payload: string }).payload,
+    );
+    expect(payload).toMatchObject({
+      scope: { kind: "conversation" },
+      target: { kind: "agent", threadId: "agent-legacy" },
+      revokedAt: 3000,
+    });
+    expect(payload).not.toHaveProperty("routingState");
+  });
+
   it("resolves the most specific active default Agent assignment", async () => {
     const store = await createStore();
     await store.upsertDefaultAgentAssignment(
