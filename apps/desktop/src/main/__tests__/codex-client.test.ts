@@ -6900,6 +6900,88 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("skips process-wide MCP attestation before Codex 0.144", async () => {
+    MockTransport.serverVersion = "0.143.0";
+    MockTransport.threadMcpServerStatusResult = {
+      data: [
+        {
+          name: "context7",
+          tools: {
+            resolve: {
+              name: "resolve",
+              description: "Resolve documentation",
+              inputSchema: { type: "object" },
+            },
+          },
+        },
+      ],
+      nextCursor: null,
+    };
+    MockTransport.threadStartResult = {
+      thread: { id: "legacy-title-helper" },
+      instructionSources: [],
+    };
+    MockTransport.turnStartResult = {
+      thread: { id: "legacy-title-helper" },
+      turn: {
+        id: "legacy-title-turn",
+        output: [
+          {
+            type: "text",
+            text: JSON.stringify({ title: "Legacy helper title" }),
+          },
+        ],
+      },
+    };
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    await expect(
+      client.generateTitle({
+        prompt: "Name the thread from this prompt",
+        promptVersion: "thread-title-v2",
+        schema: {
+          type: "object",
+          required: ["title"],
+          properties: { title: { type: "string" } },
+        },
+        schemaName: "thread_title",
+        timeoutMs: 5_000,
+      }),
+    ).resolves.toMatchObject({
+      status: "ok",
+      object: { title: "Legacy helper title" },
+      helperThreadId: "legacy-title-helper",
+      helperTurnId: "legacy-title-turn",
+    });
+
+    const requests = MockTransport.instances.at(-1)!.sentMessages.map(
+      (message) => JSON.parse(message) as {
+        method?: string;
+        params?: Record<string, unknown>;
+      },
+    );
+    expect(requests.map((request) => request.method)).not.toContain(
+      "mcpServerStatus/list",
+    );
+    expect(
+      requests.find((request) => request.method === "thread/start")?.params,
+    ).toMatchObject({
+      config: {
+        mcp_servers: {
+          context7: { enabled: false },
+          github: { enabled: false },
+        },
+      },
+    });
+    expect(requests.map((request) => request.method)).toContain("turn/start");
+
+    await client.close();
+  });
+
   it("fails closed before starting a title helper when MCP inventory inspection fails", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.configReadError = { message: "inventory unavailable" };

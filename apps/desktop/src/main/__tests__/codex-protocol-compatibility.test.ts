@@ -12,6 +12,7 @@ describe("Codex App Server protocol compatibility", () => {
         dynamicToolFormat: "flat",
         includePersistExtendedHistory: true,
         supportsOnFailureApprovalPolicy: true,
+        supportsThreadScopedMcpServerStatus: false,
       },
     },
     {
@@ -20,6 +21,7 @@ describe("Codex App Server protocol compatibility", () => {
         dynamicToolFormat: "flat",
         includePersistExtendedHistory: true,
         supportsOnFailureApprovalPolicy: true,
+        supportsThreadScopedMcpServerStatus: false,
       },
     },
     {
@@ -28,6 +30,7 @@ describe("Codex App Server protocol compatibility", () => {
         dynamicToolFormat: "flat",
         includePersistExtendedHistory: false,
         supportsOnFailureApprovalPolicy: true,
+        supportsThreadScopedMcpServerStatus: false,
       },
     },
     {
@@ -36,6 +39,7 @@ describe("Codex App Server protocol compatibility", () => {
         dynamicToolFormat: "namespaced",
         includePersistExtendedHistory: false,
         supportsOnFailureApprovalPolicy: true,
+        supportsThreadScopedMcpServerStatus: false,
       },
     },
     {
@@ -44,6 +48,16 @@ describe("Codex App Server protocol compatibility", () => {
         dynamicToolFormat: "namespaced",
         includePersistExtendedHistory: false,
         supportsOnFailureApprovalPolicy: false,
+        supportsThreadScopedMcpServerStatus: false,
+      },
+    },
+    {
+      version: "codex-cli 0.144.0",
+      expected: {
+        dynamicToolFormat: "namespaced",
+        includePersistExtendedHistory: false,
+        supportsOnFailureApprovalPolicy: false,
+        supportsThreadScopedMcpServerStatus: true,
       },
     },
   ])("negotiates the wire features for $version", ({ version, expected }) => {

@@ -6946,6 +6946,7 @@ export class CodexAppServerClient {
     let helperTurnCompleted = false;
     const timeoutMs = params.timeoutMs ?? DEFAULT_CODEX_THREAD_TITLE_TIMEOUT_MS;
     const helperWorkspaceDir = await ensureCodexThreadTitleWorkspace();
+    const protocolCompatibility = this.getProtocolCompatibility();
     try {
       const mcpServerNames = await this.readHelperMcpServerNames(
         helperWorkspaceDir,
@@ -6974,7 +6975,7 @@ export class CodexAppServerClient {
               ephemeral: true,
               config: helperConfig,
             },
-            this.getProtocolCompatibility(),
+            protocolCompatibility,
           ),
           buildThreadStartPayload(
             {
@@ -6987,7 +6988,7 @@ export class CodexAppServerClient {
               ephemeral: true,
               config: legacyHelperConfig,
             },
-            this.getProtocolCompatibility(),
+            protocolCompatibility,
           ),
         ],
         timeoutMs,
@@ -7016,10 +7017,20 @@ export class CodexAppServerClient {
           instructionSourceCount: instructionSources.length,
         });
       }
-      await this.attestHelperHasNoMcpTools(
-        helperThreadId,
-        timeoutMs,
-      );
+      if (protocolCompatibility.supportsThreadScopedMcpServerStatus) {
+        await this.attestHelperHasNoMcpTools(
+          helperThreadId,
+          timeoutMs,
+        );
+      } else {
+        // Before 0.144, mcpServerStatus/list is process-wide even when a
+        // threadId is supplied. Configured servers are still disabled in the
+        // helper overlay, but that legacy inventory cannot attest the helper
+        // without falsely rejecting tools active on interactive threads.
+        logCodexClientDebug("codex helper skipped unavailable thread-scoped MCP attestation", {
+          threadId: helperThreadId,
+        });
+      }
       this.helperThreadIds.add(helperThreadId);
       this.helperThreadPredicates.set(helperThreadId, params.isMatch);
 
@@ -7036,7 +7047,7 @@ export class CodexAppServerClient {
               reasoningEffort: "low",
               outputSchema: params.schema as CodexTurnStartParams["outputSchema"],
             },
-            this.getProtocolCompatibility(),
+            protocolCompatibility,
           ),
         ],
         timeoutMs,

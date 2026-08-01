@@ -1877,7 +1877,7 @@ describe("ThreadContextPanel", () => {
     expect(times?.textContent).toContain("· 1m 5s");
   });
 
-  for (const status of ["success", "failure", "failed", "blocked", "cancelled"] as const) {
+  for (const status of ["success", "failure", "cancelled"] as const) {
     it(`shows a ${status} sub-agent's name but no Live chip`, () => {
       const { container } = renderPanel({
         activeTab: "pricing",
@@ -1905,6 +1905,73 @@ describe("ThreadContextPanel", () => {
       expect(container.querySelector(".pricing-usage-row--active")).toBeNull();
       expect(screen.queryByText("Live")).not.toBeInTheDocument();
       expect(screen.getByText("Reviewer")).toBeInTheDocument();
+    });
+  }
+
+  for (const status of ["failed", "blocked"] as const) {
+    it(`settles a completed ${status} sub-agent in pricing`, () => {
+      const { container } = renderPanel({
+        activeTab: "pricing",
+        pinned: true,
+        thread: {
+          ...baseThread,
+          subAgents: [
+            {
+              monitorId: "mon-1",
+              task: "Review the diff",
+              status,
+              agentName: "Reviewer",
+              completedAt: 1_800_000_001_000,
+              createdAt: 1_800_000_000_000,
+              updatedAt: 1_800_000_001_000,
+            },
+          ],
+        },
+        pricing: {
+          lines: [buildMonitorLine({})],
+          summaries: [],
+        },
+        threadPricingSummaryEnabled: true,
+      });
+
+      expect(container.querySelector(".pricing-usage-row--active")).toBeNull();
+      expect(screen.queryByText("Live")).not.toBeInTheDocument();
+    });
+
+    it(`keeps a progress-only ${status} monitor live`, () => {
+      const startedAt = 1_800_000_000_000;
+      vi.useFakeTimers();
+      vi.setSystemTime(startedAt + 65_000);
+
+      const { container } = renderPanel({
+        activeTab: "pricing",
+        pinned: true,
+        thread: {
+          ...baseThread,
+          subAgents: [
+            {
+              monitorId: "mon-1",
+              task: "Review the diff",
+              status,
+              agentName: "Reviewer",
+              createdAt: startedAt,
+              updatedAt: startedAt + 1_000,
+            },
+          ],
+        },
+        pricing: {
+          lines: [buildMonitorLine({ createdAt: startedAt })],
+          summaries: [],
+        },
+        threadPricingSummaryEnabled: true,
+      });
+
+      const activeRow = container.querySelector(".pricing-usage-row--active");
+      expect(activeRow).not.toBeNull();
+      expect(within(activeRow as HTMLElement).getByText("Live")).toBeInTheDocument();
+      expect(activeRow?.querySelector(".rail-card__times")?.textContent).toContain(
+        "· 1m 5s",
+      );
     });
   }
 

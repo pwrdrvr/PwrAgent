@@ -42,12 +42,19 @@ type PricingPanelProps = {
 // running, so its usage row reads as live. Mirrors the main process
 // `codexNativeSubAgentIsTerminal`.
 const SUBAGENT_TERMINAL_STATUSES: ReadonlySet<ThreadSubAgentStatus> = new Set([
-  "blocked",
-  "failed",
   "success",
   "failure",
   "cancelled",
 ]);
+
+function isTerminalSubAgent(subAgent: ThreadSubAgentSummary): boolean {
+  return (
+    SUBAGENT_TERMINAL_STATUSES.has(subAgent.status)
+    || subAgent.completedAt !== undefined
+    || subAgent.outcome !== undefined
+    || subAgent.completionSource !== undefined
+  );
+}
 
 type PricingDisplayOptions = {
   codexCredits: boolean;
@@ -1261,7 +1268,7 @@ function isActiveUsageLine(params: {
     return false;
   }
   const subAgent = params.subAgentsById.get(params.line.sourceItemId);
-  return Boolean(subAgent && !SUBAGENT_TERMINAL_STATUSES.has(subAgent.status));
+  return Boolean(subAgent && !isTerminalSubAgent(subAgent));
 }
 
 function PricingUsageTimestamp(props: {
