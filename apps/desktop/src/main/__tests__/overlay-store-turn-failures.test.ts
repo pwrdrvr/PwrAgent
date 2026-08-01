@@ -72,6 +72,55 @@ describe("SqliteOverlayStore — turn failure log", () => {
     expect(overlay?.turnFailureLog?.[0]?.occurredAt).toBe(1000);
   });
 
+  it("persists Codex recovery audit metadata on the failed turn", async () => {
+    await store.appendTurnFailure({
+      backend: "codex",
+      threadId: "thread-1",
+      failure: buildFailure({ id: "entry-1", turnId: "turn-1" }),
+    });
+    await store.setTurnFailureCodexInvalidIdRecovery({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      recovery: {
+        attemptId: "attempt-1",
+        attemptedAt: 1_001,
+        repairedAt: 1_002,
+        retrySubmittedAt: 1_003,
+        retryTurnId: "turn-retried",
+        removedMessageIdCount: 2,
+        backupPath: "/backups/thread.jsonl.bak",
+      },
+    });
+
+    const overlay = await store.getThreadOverlayState({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(overlay?.turnFailureLog?.[0]?.codexInvalidIdRecovery).toEqual({
+      attemptId: "attempt-1",
+      attemptedAt: 1_001,
+      repairedAt: 1_002,
+      retrySubmittedAt: 1_003,
+      retryTurnId: "turn-retried",
+      removedMessageIdCount: 2,
+      backupPath: "/backups/thread.jsonl.bak",
+    });
+    expect(overlay?.codexInvalidIdRecoveryLastAttemptedAt).toBe(1_001);
+  });
+
+  it("refuses to record recovery without its failed turn", async () => {
+    await expect(
+      store.setTurnFailureCodexInvalidIdRecovery({
+        threadId: "thread-1",
+        turnId: "missing-turn",
+        recovery: {
+          attemptId: "attempt-1",
+          attemptedAt: 1_001,
+        },
+      }),
+    ).rejects.toThrow("without failed turn missing-turn");
+  });
+
   it("evicts the oldest entry when 101 failures are appended", async () => {
     for (let index = 0; index < 101; index += 1) {
       await store.appendTurnFailure({
@@ -108,6 +157,14 @@ describe("SqliteOverlayStore — turn failure log", () => {
         threadId: "thread-1",
         failure: buildFailure({ id: "entry-1", turnId: "turn-1" }),
       });
+      await store.setTurnFailureCodexInvalidIdRecovery({
+        threadId: "thread-1",
+        turnId: "turn-1",
+        recovery: {
+          attemptId: "attempt-persisted",
+          attemptedAt: 1_001,
+        },
+      });
       stateDb.close();
 
       const reopened = StateDb.open(dbPath);
@@ -118,8 +175,16 @@ describe("SqliteOverlayStore — turn failure log", () => {
           threadId: "thread-1",
         });
         expect(overlay?.turnFailureLog).toEqual([
-          buildFailure({ id: "entry-1", turnId: "turn-1" }),
+          buildFailure({
+            id: "entry-1",
+            turnId: "turn-1",
+            codexInvalidIdRecovery: {
+              attemptId: "attempt-persisted",
+              attemptedAt: 1_001,
+            },
+          }),
         ]);
+        expect(overlay?.codexInvalidIdRecoveryLastAttemptedAt).toBe(1_001);
       } finally {
         reopened.close();
       }

@@ -13,6 +13,23 @@ const excludedFiles = new Set([
   "scripts/check-codex-storage-boundary.mjs",
 ]);
 
+// PwrDrvr LLC explicitly authorizes this one recovery module to inspect and
+// rewrite the protocol-identified rollout for a thread that failed with the
+// Responses API invalid message-ID-prefix error. Keep this line-level rather
+// than excluding the file: any new read/stat shape still fails closed and
+// requires deliberate review here.
+const authorizedRecoveryOperations = new Map([
+  [
+    "apps/desktop/src/main/codex-app-server/invalid-response-message-id-recovery.ts",
+    new Set([
+      "const rolloutStat = await stat(rolloutPath);",
+      "const original = await readFile(rolloutPath);",
+      "const current = await readFile(rolloutPath);",
+      "const fileStat = await lstat(resolvedPath);",
+    ]),
+  ],
+]);
+
 const codeExtensions = new Set([
   ".cjs",
   ".js",
@@ -108,12 +125,19 @@ function inspectFile(filePath) {
       codexOwnedStoragePattern.test(context) &&
       (codexContextPattern.test(relPath) || codexContextPattern.test(context))
     ) {
+      if (isAuthorizedRecoveryOperation(relPath, lines[index])) {
+        continue;
+      }
       findings.push({
         location: `${relPath}:${index + 1}`,
         preview: compact(lines[index]),
       });
     }
   }
+}
+
+function isAuthorizedRecoveryOperation(relPath, line) {
+  return authorizedRecoveryOperations.get(relPath)?.has(compact(line)) ?? false;
 }
 
 function contextFor(lines, index) {
@@ -168,6 +192,23 @@ function runSelfTests() {
     line: "fs.writeFileSync(rolloutPath, JSON.stringify(record));",
     context: pwragentRollout,
   });
+
+  const authorizedRecovery = `
+    const rolloutStat = await stat(rolloutPath);
+  `;
+  assertWouldNotFlag({
+    relPath:
+      "apps/desktop/src/main/codex-app-server/invalid-response-message-id-recovery.ts",
+    line: "const rolloutStat = await stat(rolloutPath);",
+    context: authorizedRecovery,
+  });
+
+  assertWouldFlag({
+    relPath:
+      "apps/desktop/src/main/codex-app-server/invalid-response-message-id-recovery.ts",
+    line: "const sessions = await readdir(rolloutPath);",
+    context: "const sessions = await readdir(rolloutPath);",
+  });
 }
 
 function assertWouldFlag(sample) {
@@ -186,6 +227,7 @@ function wouldFlag({ relPath, line, context }) {
   return (
     storageOperationPattern.test(line) &&
     codexOwnedStoragePattern.test(context) &&
-    (codexContextPattern.test(relPath) || codexContextPattern.test(context))
+    (codexContextPattern.test(relPath) || codexContextPattern.test(context)) &&
+    !isAuthorizedRecoveryOperation(relPath, line)
   );
 }

@@ -13,6 +13,106 @@ import type {
  * failure entry under the same id.
  */
 export const TURN_FAILURE_ENTRY_PREFIX = "turn-failed:";
+export const CODEX_INVALID_ID_RECOVERY_ENTRY_PREFIX =
+  "codex-invalid-id-recovery:";
+
+function buildCodexInvalidIdRecoveryActivityEntries(
+  failure: ThreadTurnFailure,
+): AppServerThreadActivityEntry[] {
+  const recovery = failure.codexInvalidIdRecovery;
+  if (!recovery) {
+    return [];
+  }
+  const entries: AppServerThreadActivityEntry[] = [
+    {
+      type: "activity",
+      id:
+        `${CODEX_INVALID_ID_RECOVERY_ENTRY_PREFIX}${recovery.attemptId}`
+        + ":repairing",
+      summary:
+        recovery.repairedAt !== undefined || recovery.failedAt !== undefined
+          ? "Known Codex issue detected — thread repair attempted"
+          : "Known Codex issue detected — repairing thread",
+      createdAt: recovery.attemptedAt,
+      tone: "warning",
+      details: [
+        {
+          id: `${recovery.attemptId}:repairing:detail`,
+          kind: "read",
+          label:
+            "PwrAgent is repairing invalid saved message IDs before retrying the request.",
+          status:
+            recovery.repairedAt !== undefined
+              ? "completed"
+              : recovery.failedAt !== undefined
+                ? "failed"
+                : "in_progress",
+        },
+      ],
+    },
+  ];
+  if (recovery.repairedAt !== undefined) {
+    entries.push({
+      type: "activity",
+      id:
+        `${CODEX_INVALID_ID_RECOVERY_ENTRY_PREFIX}${recovery.attemptId}`
+        + ":repaired",
+      summary: "Thread repair succeeded",
+      createdAt: recovery.repairedAt,
+      details: [
+        {
+          id: `${recovery.attemptId}:repaired:detail`,
+          kind: "read",
+          label:
+            recovery.removedMessageIdCount === undefined
+              ? "Saved thread history was repaired successfully."
+              : `Removed ${recovery.removedMessageIdCount} invalid saved message ID(s).`,
+          status: "completed",
+        },
+      ],
+    });
+  }
+  if (recovery.retrySubmittedAt !== undefined) {
+    entries.push({
+      type: "activity",
+      id:
+        `${CODEX_INVALID_ID_RECOVERY_ENTRY_PREFIX}${recovery.attemptId}`
+        + ":retry",
+      summary: "PwrAgent resubmitted the request once",
+      createdAt: recovery.retrySubmittedAt,
+      details: [
+        {
+          id: `${recovery.attemptId}:retry:detail`,
+          kind: "read",
+          label:
+            "The next request was automatically resubmitted by PwrAgent, not entered again by the user.",
+          status: recovery.failure ? "failed" : "completed",
+        },
+      ],
+      ...(recovery.failure ? { tone: "warning" as const } : {}),
+    });
+  } else if (recovery.failedAt !== undefined) {
+    entries.push({
+      type: "activity",
+      id:
+        `${CODEX_INVALID_ID_RECOVERY_ENTRY_PREFIX}${recovery.attemptId}`
+        + ":failed",
+      summary: "Automatic thread repair failed",
+      createdAt: recovery.failedAt,
+      tone: "warning",
+      status: "failed",
+      details: [
+        {
+          id: `${recovery.attemptId}:failed:detail`,
+          kind: "read",
+          label: recovery.failure ?? "The request was not resubmitted.",
+          status: "failed",
+        },
+      ],
+    });
+  }
+  return entries;
+}
 
 export function buildTurnFailureActivityEntries(
   failures: ThreadTurnFailure[] | undefined,
@@ -20,27 +120,30 @@ export function buildTurnFailureActivityEntries(
   if (!failures || failures.length === 0) {
     return [];
   }
-  return failures.map((failure) => ({
-    type: "activity",
-    id: `${TURN_FAILURE_ENTRY_PREFIX}${failure.turnId}`,
-    summary: "Turn failed",
-    createdAt: failure.occurredAt,
-    tone: "warning",
-    status: "failed",
-    turn: {
-      id: failure.turnId,
-      status: "failed",
-      completedAt: failure.occurredAt,
-    },
-    details: [
-      {
-        id: `${TURN_FAILURE_ENTRY_PREFIX}${failure.turnId}:detail`,
-        kind: "read",
-        label: failure.error,
-        status: "failed",
+  return failures.flatMap((failure) => [
+    {
+      type: "activity" as const,
+      id: `${TURN_FAILURE_ENTRY_PREFIX}${failure.turnId}`,
+      summary: "Turn failed",
+      createdAt: failure.occurredAt,
+      tone: "warning" as const,
+      status: "failed" as const,
+      turn: {
+        id: failure.turnId,
+        status: "failed" as const,
+        completedAt: failure.occurredAt,
       },
-    ],
-  }));
+      details: [
+        {
+          id: `${TURN_FAILURE_ENTRY_PREFIX}${failure.turnId}:detail`,
+          kind: "read" as const,
+          label: failure.error,
+          status: "failed" as const,
+        },
+      ],
+    },
+    ...buildCodexInvalidIdRecoveryActivityEntries(failure),
+  ]);
 }
 
 /**

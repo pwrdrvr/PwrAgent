@@ -405,6 +405,21 @@ export function buildNavigationSnapshotHash(params: {
         turnId: entry.turnId,
         error: entry.error,
         occurredAt: entry.occurredAt,
+        codexInvalidIdRecovery: entry.codexInvalidIdRecovery
+          ? {
+              attemptId: entry.codexInvalidIdRecovery.attemptId,
+              attemptedAt: entry.codexInvalidIdRecovery.attemptedAt,
+              repairedAt: entry.codexInvalidIdRecovery.repairedAt ?? null,
+              retrySubmittedAt:
+                entry.codexInvalidIdRecovery.retrySubmittedAt ?? null,
+              retryTurnId: entry.codexInvalidIdRecovery.retryTurnId ?? null,
+              failedAt: entry.codexInvalidIdRecovery.failedAt ?? null,
+              failure: entry.codexInvalidIdRecovery.failure ?? null,
+              backupPath: entry.codexInvalidIdRecovery.backupPath ?? null,
+              removedMessageIdCount:
+                entry.codexInvalidIdRecovery.removedMessageIdCount ?? null,
+            }
+          : null,
       })),
       model: thread.model ?? null,
       reasoningEffort: thread.reasoningEffort ?? null,

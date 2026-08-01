@@ -3288,6 +3288,14 @@ export function useThreadNavigation(
         return;
       }
 
+      if (method === "thread/codexInvalidIdRecovery/updated") {
+        // Recovery audit metadata is persisted on the failed turn before each
+        // status event. Refresh so repair and automatic-resubmission markers
+        // appear inline and survive transcript reconciliation.
+        scheduleRefresh();
+        return;
+      }
+
       if (
         method === "thread/automations/updated" ||
         method === "automation/run/updated" ||

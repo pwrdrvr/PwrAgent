@@ -24,7 +24,12 @@
   PwrAgent-owned files under `~/.pwragent/` and repo-local test fixtures are
   fine when the feature explicitly owns them. CI enforces common cases with
   `pnpm lint:codex-storage`; do not bypass that check by renaming variables or
-  shelling out.
+  shelling out. The sole exception is
+  `apps/desktop/src/main/codex-app-server/invalid-response-message-id-recovery.ts`,
+  which PwrDrvr LLC explicitly authorizes to repair only protocol-identified
+  rollouts after the exact Responses API invalid message-ID-prefix failure.
+  That module must remain backup-first, atomic, thread-validated, and limited
+  to removing invalid `id` fields from response items whose type is `message`.
 - Use the project-local [desktop E2E fixture seeding skill](.agents/skills/desktop-e2e-fixture-seeding/SKILL.md) when seeding or refreshing desktop replay fixtures from live captured sessions.
 - For reliable desktop E2E runs, prefer `pnpm test:desktop-e2e` from the repo root. The package-level `pnpm --filter @pwragent/desktop test:e2e` path is also safe now because it builds `apps/desktop/out/` before launching Playwright.
 - For manual screenshots of the branch-drift dialog, run `pnpm --filter @pwragent/desktop inspect:e2e:branch-drift`; it opens a replay-backed Electron fixture and waits until you close the app.

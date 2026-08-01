@@ -1,5 +1,5 @@
 import { mkdir } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import {
   estimateTokenUsageCost,
@@ -92,6 +92,11 @@ import {
 } from "../app-server/thread-directory-enricher";
 import { normalizeReviewDisplayText } from "../../shared/review-command";
 import { StdioJsonRpcTransport } from "./stdio-transport";
+import {
+  isCodexInvalidResponseMessageIdError,
+  repairCodexInvalidResponseMessageIds,
+  type CodexInvalidResponseMessageIdRecoveryResult,
+} from "./invalid-response-message-id-recovery";
 import type {
   ThreadTitleAdapterParams,
   ThreadTitleAdapterResult,
@@ -6061,6 +6066,90 @@ export class CodexAppServerClient {
     this.helperTurnTokenUsage.clear();
     this.helperThreadPredicates.clear();
     await this.connection.close();
+  }
+
+  async recoverInvalidPersistedResponseMessageIds(params: {
+    failureMessage: string;
+    threadId: string;
+  }): Promise<CodexInvalidResponseMessageIdRecoveryResult> {
+    if (!isCodexInvalidResponseMessageIdError(params.failureMessage)) {
+      throw new Error(
+        "Codex persisted-message-ID recovery requires the exact invalid ID prefix failure",
+      );
+    }
+    await this.ensureInitialized();
+    // Codex thread/list searchTerm is title/content search, not an ID lookup.
+    // Walk this profile-scoped app-server's protocol listing and select the
+    // exact ID locally so legacy threads in alternate CODEX_HOME profiles are
+    // resolved without guessing at Codex-owned storage paths.
+    const matchingThreads = (
+      await requestThreadListPages({
+        archived: false,
+        client: this.connection,
+        requestTimeoutMs:
+          this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      })
+    ).filter((thread) => thread.id === params.threadId);
+    if (matchingThreads.length !== 1) {
+      throw new Error(
+        `Codex recovery expected one protocol path for thread ${params.threadId}; found ${matchingThreads.length}`,
+      );
+    }
+    const rolloutPath = matchingThreads[0]!.path?.trim();
+    if (!rolloutPath) {
+      throw new Error(
+        `Codex App Server did not provide a persisted session path for thread ${params.threadId}`,
+      );
+    }
+
+    const env = this.options.resolveEnv
+      ? await this.options.resolveEnv()
+      : this.options.env ?? process.env;
+    const codexHome = path.resolve(
+      extractStringProperty(this.initializeResult, "codexHome", "codex_home")
+      || env.CODEX_HOME?.trim()
+      || path.join(homedir(), ".codex"),
+    );
+
+    // The Codex app-server process is the only writer for this profile. Stop
+    // it and wait for process exit before the narrowly authorized repair so
+    // no in-memory writer can race the atomic replacement.
+    await this.close();
+    let recoveryResult: CodexInvalidResponseMessageIdRecoveryResult | undefined;
+    let recoveryError: unknown;
+    try {
+      recoveryResult = await repairCodexInvalidResponseMessageIds({
+        codexHome,
+        rolloutPath,
+        threadId: params.threadId,
+      });
+    } catch (error) {
+      recoveryError = error;
+    }
+
+    try {
+      await this.ensureInitialized();
+    } catch (restartError) {
+      if (recoveryError) {
+        throw new AggregateError(
+          [recoveryError, restartError],
+          `Codex history recovery and app-server restart both failed for thread ${params.threadId}`,
+          { cause: restartError },
+        );
+      }
+      throw restartError;
+    }
+    if (recoveryError) {
+      throw recoveryError;
+    }
+
+    await requestWithFallbacks({
+      client: this.connection,
+      methods: ["thread/resume"],
+      payloads: [{ threadId: params.threadId }],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
+    return recoveryResult!;
   }
 
   onNotification(

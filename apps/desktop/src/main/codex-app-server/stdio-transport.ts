@@ -20,6 +20,8 @@ const codexTransportLog = getMainLogger("pwragent:codex-transport");
 const STDERR_LOG_MAX_LINES_PER_WINDOW = 100;
 const STDERR_LOG_WINDOW_MS = 10_000;
 const STDERR_LOG_MAX_LINE_LENGTH = 4000;
+const PROCESS_CLOSE_TIMEOUT_MS = 5_000;
+const PROCESS_FORCE_CLOSE_TIMEOUT_MS = 5_000;
 
 export type StdioJsonRpcTransportOptions = {
   command: string;
@@ -53,6 +55,7 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
   private messageHandler: (message: string) => void = () => undefined;
   private closeHandler: (error?: Error) => void = () => undefined;
   private closeRequested = false;
+  private closePromise?: Promise<void>;
   private droppedSendAfterCloseLogged = false;
 
   constructor(private readonly options: StdioJsonRpcTransportOptions) {}
@@ -150,31 +153,106 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
       this.closeHandler(error);
     });
     child.on("close", () => {
-      this.childProcess = null;
+      if (this.childProcess === child) {
+        this.childProcess = null;
+      }
       this.closeHandler();
     });
   }
 
   async close(): Promise<void> {
     this.closeRequested = true;
+    if (this.closePromise) {
+      return await this.closePromise;
+    }
     const child = this.childProcess;
-    this.childProcess = null;
     if (!child) {
       return;
     }
-    child.kill();
+    this.closePromise = new Promise<void>((resolve, reject) => {
+      let settled = false;
+      let lastError: Error | undefined;
+      let forceExitTimer: NodeJS.Timeout | undefined;
+      const cleanup = (): void => {
+        clearTimeout(forceKillTimer);
+        if (forceExitTimer) {
+          clearTimeout(forceExitTimer);
+        }
+        child.removeListener("close", onClose);
+        child.removeListener("error", onError);
+      };
+      const onClose = (): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanup();
+        if (this.childProcess === child) {
+          this.childProcess = null;
+        }
+        resolve();
+      };
+      const onError = (error: Error): void => {
+        // An error can mean the termination signal itself failed. It is not
+        // proof that the process exited, so keep waiting for `close` and let
+        // the force-kill deadline decide whether shutdown failed.
+        lastError = error;
+      };
+      const tryKill = (signal: NodeJS.Signals): void => {
+        try {
+          if (!child.kill(signal)) {
+            lastError = new Error(
+              `Codex app-server did not accept ${signal}`,
+            );
+          }
+        } catch (error) {
+          onError(error instanceof Error ? error : new Error(String(error)));
+        }
+      };
+      const forceKillTimer = setTimeout(() => {
+        tryKill("SIGKILL");
+        forceExitTimer = setTimeout(() => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          cleanup();
+          reject(
+            lastError
+            ?? new Error(
+              "Codex app-server did not exit after SIGKILL",
+            ),
+          );
+        }, PROCESS_FORCE_CLOSE_TIMEOUT_MS);
+        forceExitTimer.unref?.();
+      }, PROCESS_CLOSE_TIMEOUT_MS);
+      forceKillTimer.unref?.();
+      child.once("close", onClose);
+      child.on("error", onError);
+      if (child.exitCode !== null || child.signalCode !== null) {
+        onClose();
+        return;
+      }
+      tryKill("SIGTERM");
+    }).finally(() => {
+      this.closePromise = undefined;
+    });
+    return await this.closePromise;
   }
 
   send(message: string): void {
     const child = this.childProcess;
-    if (!child?.stdin) {
-      if (this.closeRequested && isJsonRpcResponseEnvelope(message)) {
+    if (this.closeRequested) {
+      if (isJsonRpcResponseEnvelope(message)) {
         if (!this.droppedSendAfterCloseLogged) {
           this.droppedSendAfterCloseLogged = true;
           codexTransportLog.info("dropped app-server send after close");
         }
         return;
       }
+      throw new Error("codex app server stdio not connected");
+    }
+    if (!child?.stdin) {
       throw new Error("codex app server stdio not connected");
     }
     child.stdin.write(`${message}\n`);

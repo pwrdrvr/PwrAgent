@@ -12,7 +12,11 @@ export type AppNoticeToastNotice = {
   message: string;
   detail?: string;
   copyText?: string;
-  tone?: "neutral" | "warning";
+  tone?: "neutral" | "warning" | "success" | "error";
+  status?: {
+    label: string;
+    state: "progress" | "success" | "error";
+  };
 };
 
 export function AppNoticeToast(props: {
@@ -64,6 +68,12 @@ export function AppNoticeToast(props: {
     [props.notice.title, props.notice.message, props.notice.detail]
       .filter(Boolean)
       .join("\n");
+  const statusDotClass =
+    props.notice.status?.state === "progress"
+      ? "status-dot status-dot--warning status-dot--blink"
+      : props.notice.status?.state === "success"
+        ? "status-dot status-dot--ok"
+        : "status-dot status-dot--error";
 
   return (
     <aside
@@ -82,6 +92,15 @@ export function AppNoticeToast(props: {
     >
       <div className="app-notice-toast__content">
         <p className="app-notice-toast__eyebrow">{props.notice.title}</p>
+        {props.notice.status ? (
+          <p
+            className="app-notice-toast__status"
+            data-state={props.notice.status.state}
+          >
+            <span className={statusDotClass} aria-hidden="true" />
+            <span>{props.notice.status.label}</span>
+          </p>
+        ) : null}
         <p className="app-notice-toast__message">{props.notice.message}</p>
         {props.notice.detail ? (
           <p className="app-notice-toast__detail">{props.notice.detail}</p>

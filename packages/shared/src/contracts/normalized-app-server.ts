@@ -987,6 +987,18 @@ export type AppServerNotification =
       };
     }
   | {
+      method: "thread/codexInvalidIdRecovery/updated";
+      params: {
+        threadId: string;
+        turnId?: string;
+        status: "repairing" | "succeeded" | "failed";
+        failureMessage: string;
+        recoveryError?: string;
+        removedMessageIdCount?: number;
+        backupPath?: string;
+      };
+    }
+  | {
       method: "turn/cancelled";
       params: {
         threadId: string;
