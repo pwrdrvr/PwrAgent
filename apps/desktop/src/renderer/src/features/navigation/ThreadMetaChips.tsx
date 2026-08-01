@@ -303,7 +303,8 @@ export function ThreadMetaChips({
           }
           onMouseLeave={gitStateTooltip.hide}
         >
-          Unpublished · {detachedAheadCount.toLocaleString()} ahead
+          {unpushedCount.toLocaleString()} unpublished ·{" "}
+          {detachedAheadCount.toLocaleString()} ahead
         </span>
       ) : unpushedCount > 0 ? (
         <span
