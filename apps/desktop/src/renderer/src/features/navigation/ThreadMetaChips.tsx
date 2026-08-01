@@ -80,6 +80,21 @@ export function ThreadMetaChips({
   const unpushedTooltip = `${unpushedCount} commit${
     unpushedCount === 1 ? "" : "s"
   } not pushed to a remote`;
+  const currentBranch =
+    thread.observedGitBranch?.trim() || thread.gitBranch?.trim();
+  const detachedAheadCount = gitWorking?.baseAheadCommitCount ?? 0;
+  const hasDetachedUnpublishedWork =
+    currentBranch === "HEAD" &&
+    unpushedCount > 0 &&
+    detachedAheadCount > 0;
+  const detachedUnpublishedTooltip = hasDetachedUnpublishedWork
+    ? formatDetachedUnpublishedTooltip({
+        aheadCount: detachedAheadCount,
+        baseBranch: gitWorking?.baseBranch,
+        behindCount: gitWorking?.baseBehindCommitCount,
+        unpushedCount,
+      })
+    : "";
   const linkedDirectoryChips = includeLinkedDirectories
     ? thread.linkedDirectories.length > 0
       ? linkedDirectoryMode === "kind"
@@ -278,7 +293,20 @@ export function ThreadMetaChips({
         </span>
       ) : null}
 
-      {unpushedCount > 0 ? (
+      {hasDetachedUnpublishedWork ? (
+        <span
+          aria-label={detachedUnpublishedTooltip}
+          role="img"
+          className="thread-row__chip thread-row__chip--unpublished"
+          onMouseEnter={(event) =>
+            gitStateTooltip.show(event.currentTarget, detachedUnpublishedTooltip)
+          }
+          onMouseLeave={gitStateTooltip.hide}
+        >
+          {unpushedCount.toLocaleString()} unpublished ·{" "}
+          {detachedAheadCount.toLocaleString()} ahead
+        </span>
+      ) : unpushedCount > 0 ? (
         <span
           aria-label={unpushedTooltip}
           role="img"
@@ -306,6 +334,32 @@ function formatDirtyFileFallback(
     return `${gitWorking.untrackedFiles.toLocaleString()} new`;
   }
   return `${gitWorking.dirtyFiles.toLocaleString()} changed`;
+}
+
+function formatDetachedUnpublishedTooltip(params: {
+  aheadCount: number;
+  baseBranch?: string;
+  behindCount?: number;
+  unpushedCount: number;
+}): string {
+  const baseBranch = params.baseBranch?.trim();
+  const aheadDescription = baseBranch
+    ? `HEAD is ${params.aheadCount.toLocaleString()} commit${
+        params.aheadCount === 1 ? "" : "s"
+      } ahead of ${baseBranch}`
+    : `HEAD is ${params.aheadCount.toLocaleString()} commit${
+        params.aheadCount === 1 ? "" : "s"
+      } ahead of its base`;
+  const behindDescription =
+    baseBranch && params.behindCount && params.behindCount > 0
+      ? ` and ${params.behindCount.toLocaleString()} commit${
+          params.behindCount === 1 ? "" : "s"
+        } behind`
+      : "";
+
+  return `Unpublished detached work: ${params.unpushedCount.toLocaleString()} commit${
+    params.unpushedCount === 1 ? "" : "s"
+  } not on a remote; ${aheadDescription}${behindDescription}. Create a branch and push it to keep this work.`;
 }
 
 function formatBranchCopyLabel(params: {
