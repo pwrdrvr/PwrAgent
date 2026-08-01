@@ -4372,6 +4372,116 @@ describe("app server ipc", () => {
     });
   });
 
+  it("preserves PR history when late branch adoption overlaps the post-turn lookup", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+    const oldBranchPr = githubPr({
+      number: 816,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      title: "PR discovered from the pre-adoption branch",
+      state: "passing",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/816",
+    });
+    const adoptedBranchPr = githubPr({
+      number: 817,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      title: "PR discovered from the adopted branch",
+      state: "pending",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/817",
+    });
+    let overlayState: Awaited<ReturnType<typeof setThreadPullRequests>> | undefined;
+    const resolveFetches: Array<(prs: PrSummary[]) => void> = [];
+    const persistOverlay = async (
+      request: Parameters<typeof setThreadPullRequests>[0],
+    ): Promise<NonNullable<typeof overlayState>> => {
+      overlayState = {
+        backend: request.backend,
+        threadId: request.threadId,
+        executionMode: "default",
+        extraLinkedDirectories: [],
+        prs: request.prs,
+        prsFetchedAt: request.fetchedAt ?? Date.now(),
+        prsRefreshKey: request.refreshKey,
+      };
+      return overlayState;
+    };
+
+    listThreads.mockResolvedValueOnce([
+      {
+        id: "thread-1",
+        title: "Thread one",
+        titleSource: "explicit",
+        source: "codex",
+        projectKey: "/repo/wt",
+        linkedDirectories: [
+          {
+            id: "directory:/repo/app",
+            label: "app",
+            path: "/repo/app",
+            kind: "worktree",
+            worktreePath: "/repo/wt",
+          },
+        ],
+        gitBranch: "HEAD",
+        observedGitBranch: "HEAD",
+        updatedAt: 2000,
+      },
+    ] as never);
+    getThreadOverlayState.mockImplementation(async () => overlayState);
+    setThreadPullRequests
+      .mockImplementationOnce(persistOverlay)
+      .mockImplementationOnce(persistOverlay);
+    detectPullRequestsForThread.mockImplementation(
+      async () => await new Promise<PrSummary[]>((resolve) => {
+        resolveFetches.push(resolve);
+      }),
+    );
+
+    registerAppServerIpcHandlers();
+    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    await vi.waitFor(() => {
+      expect(writeThreadGitWorkingStateCacheEntry).toHaveBeenCalled();
+    });
+
+    emitRegistryEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "t1",
+          turn: { id: "t1", status: "completed" },
+        },
+      },
+    });
+    await vi.waitFor(() => {
+      expect(resolveFetches).toHaveLength(1);
+    });
+
+    emitRegistryEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/branch/updated",
+        params: {
+          threadId: "thread-1",
+          branch: "fix/adopted-after-completion",
+        },
+      },
+    });
+    await vi.waitFor(() => {
+      expect(resolveFetches).toHaveLength(2);
+    });
+
+    resolveFetches[0]?.([oldBranchPr]);
+    resolveFetches[1]?.([adoptedBranchPr]);
+
+    await vi.waitFor(() => {
+      expect(overlayState?.prs?.map((pr) => pr.number)).toEqual([816, 817]);
+    });
+  });
+
   it("refreshes post-turn pull requests for a scoped linked worktree branch", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
