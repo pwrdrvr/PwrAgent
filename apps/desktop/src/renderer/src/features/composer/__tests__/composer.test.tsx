@@ -117,6 +117,7 @@ async function clickButton(name: string | RegExp): Promise<void> {
 
 function createComposerDraftStore(): ComposerDraftStore {
   const drafts = new Map<string, ComposerDraftSnapshot>();
+  const draftStacks = new Map<string, ComposerDraftSnapshot[]>();
   const pendingSteers = new Map<string, ComposerPendingSteerSnapshot>();
   const queuedTurns = new Map<string, ComposerQueuedTurnSnapshot[]>();
   return {
@@ -124,6 +125,20 @@ function createComposerDraftStore(): ComposerDraftStore {
       drafts.delete(scopeKey);
     },
     get: (scopeKey) => drafts.get(scopeKey),
+    popDraft: (scopeKey) => {
+      const current = draftStacks.get(scopeKey) ?? [];
+      const restored = current.at(-1);
+      const next = current.slice(0, -1);
+      if (next.length > 0) {
+        draftStacks.set(scopeKey, next);
+      } else {
+        draftStacks.delete(scopeKey);
+      }
+      return restored;
+    },
+    pushDraft: (scopeKey, snapshot) => {
+      draftStacks.set(scopeKey, [...(draftStacks.get(scopeKey) ?? []), snapshot]);
+    },
     deletePendingSteer: (scopeKey) => {
       pendingSteers.delete(scopeKey);
     },
@@ -295,30 +310,42 @@ function DraftRetargetingHarness(props: {
   )!;
 
   return (
-    <Composer
-      backends={[backendSummary("codex")]}
-      directories={retargetingDirectories}
-      directory={selectedDirectory}
-      launchpad={launchpads.get(selectedDirectoryKey)!}
-      onMaterializeLaunchpad={props.onMaterializeLaunchpad}
-      onPickAndRegisterDirectory={() => undefined}
-      onSelectDirectoryFromPicker={(directory) => {
-        setSelectedDirectoryKey(directory.key);
-      }}
-      onUpdateLaunchpad={async (directoryKey, patch) => {
-        setLaunchpads((current) => {
-          const launchpad = current.get(directoryKey)!;
-          const next = new Map(current);
-          next.set(directoryKey, {
-            ...launchpad,
-            ...patch,
-            updatedAt: launchpad.updatedAt + 1,
+    <>
+      <button
+        aria-label="Navigate to PwrSnap launchpad"
+        type="button"
+        onClick={() => setSelectedDirectoryKey(retargetingPwrSnap.key)}
+      />
+      <button
+        aria-label="Navigate to PwrGit launchpad"
+        type="button"
+        onClick={() => setSelectedDirectoryKey(retargetingPwrGit.key)}
+      />
+      <Composer
+        backends={[backendSummary("codex")]}
+        directories={retargetingDirectories}
+        directory={selectedDirectory}
+        launchpad={launchpads.get(selectedDirectoryKey)!}
+        onMaterializeLaunchpad={props.onMaterializeLaunchpad}
+        onPickAndRegisterDirectory={() => undefined}
+        onSelectDirectoryFromPicker={(directory) => {
+          setSelectedDirectoryKey(directory.key);
+        }}
+        onUpdateLaunchpad={async (directoryKey, patch) => {
+          setLaunchpads((current) => {
+            const launchpad = current.get(directoryKey)!;
+            const next = new Map(current);
+            next.set(directoryKey, {
+              ...launchpad,
+              ...patch,
+              updatedAt: launchpad.updatedAt + 1,
+            });
+            return next;
           });
-          return next;
-        });
-      }}
-      skills={[]}
-    />
+        }}
+        skills={[]}
+      />
+    </>
   );
 }
 
@@ -492,6 +519,8 @@ describe("Composer", () => {
       delete: deleteDraft,
       recordHistory,
       get: () => undefined,
+      popDraft: () => undefined,
+      pushDraft: vi.fn(),
       deletePendingSteer: vi.fn(),
       deleteQueuedTurn: vi.fn(),
       getPendingSteer: () => undefined,
@@ -10284,6 +10313,16 @@ describe("Composer", () => {
       "Move this text and image to PwrGit",
     );
     expect(screen.getByAltText("wrong-repo-composer.png")).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Navigate to PwrSnap launchpad" }),
+    );
+    await waitFor(() => {
+      expect(screen.getByLabelText("New thread")).toHaveValue("");
+    });
+    expect(
+      screen.queryByAltText("wrong-repo-composer.png"),
+    ).not.toBeInTheDocument();
   });
 
   it("reveals a project's previous draft after submitting the retargeted top draft", async () => {
@@ -10314,15 +10353,17 @@ describe("Composer", () => {
       [],
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Project: PwrGit" }));
-    fireEvent.click(screen.getByRole("option", { name: /PwrSnap/ }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Navigate to PwrSnap launchpad" }),
+    );
     await waitFor(() => {
       expect(
         screen.getByRole("button", { name: "Project: PwrSnap" }),
       ).toBeInTheDocument();
     });
-    fireEvent.click(screen.getByRole("button", { name: "Project: PwrSnap" }));
-    fireEvent.click(screen.getByRole("option", { name: /PwrGit/ }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Navigate to PwrGit launchpad" }),
+    );
 
     await waitFor(() => {
       expect(screen.getByLabelText("New thread")).toHaveValue(

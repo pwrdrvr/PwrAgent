@@ -98,6 +98,28 @@ export function useDurableComposerDraftStore(
     [rememberLocalRecoveryCandidate],
   );
 
+  const persistDraftHistory = useCallback(
+    (
+      scopeKey: string,
+      snapshot: ComposerDraftSnapshot,
+      status: ComposerDraftLifecycle,
+      force = false,
+    ): void => {
+      if (!desktopApi?.recordComposerDraftHistory) {
+        return;
+      }
+      if (!force && !shouldRecordHistory(snapshot, status)) {
+        return;
+      }
+      const record = buildDraftRecord(scopeKey, snapshot, status, createdAtRef);
+      rememberLocalRecoveryCandidate(record);
+      void desktopApi.recordComposerDraftHistory({ draft: record }).catch((error) => {
+        console.warn("Failed to record composer draft history", error);
+      });
+    },
+    [desktopApi, rememberLocalRecoveryCandidate],
+  );
+
   useEffect(() => {
     if (!desktopApi?.listComposerDraftLatest) {
       return;
@@ -169,22 +191,16 @@ export function useDurableComposerDraftStore(
           request,
         );
       },
+      pushDraft: (scopeKey, snapshot) => {
+        baseStore.pushDraft(scopeKey, snapshot);
+        persistDraftHistory(scopeKey, snapshot, "abandoned", true);
+      },
       recordHistory: (
         scopeKey: string,
         snapshot: ComposerDraftSnapshot,
         status: ComposerDraftLifecycle,
       ): void => {
-        if (!desktopApi?.recordComposerDraftHistory) {
-          return;
-        }
-        if (!shouldRecordHistory(snapshot, status)) {
-          return;
-        }
-        const record = buildDraftRecord(scopeKey, snapshot, status, createdAtRef);
-        rememberLocalRecoveryCandidate(record);
-        void desktopApi.recordComposerDraftHistory({ draft: record }).catch((error) => {
-          console.warn("Failed to record composer draft history", error);
-        });
+        persistDraftHistory(scopeKey, snapshot, status);
       },
       set: (scopeKey, snapshot) => {
         baseStore.set(scopeKey, snapshot);
@@ -216,6 +232,7 @@ export function useDurableComposerDraftStore(
       desktopApi,
       flushPendingSave,
       hydrationVersion,
+      persistDraftHistory,
       rememberLocalRecoveryCandidate,
     ],
   );

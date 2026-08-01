@@ -21,6 +21,8 @@ function createComposerDraftStore(): ComposerDraftStore {
   return {
     delete: vi.fn(),
     get: vi.fn(),
+    popDraft: vi.fn(),
+    pushDraft: vi.fn(),
     deletePendingSteer: vi.fn(),
     deleteQueuedTurn: (scopeKey) => {
       queuedTurns.delete(scopeKey);
