@@ -119,6 +119,10 @@ const MarkdownFilesWindow = lazy(async () => ({
   default: (await import("./features/thread-detail/MarkdownFilesWindow"))
     .MarkdownFilesWindow,
 }));
+const SubAgentTranscriptWindow = lazy(async () => ({
+  default: (await import("./features/thread-detail/SubAgentTranscriptWindow"))
+    .SubAgentTranscriptWindow,
+}));
 
 /**
  * Routes recognized by `chooseRoot` below. The Messaging Activity
@@ -155,6 +159,10 @@ const routes: Array<{
   {
     match: (hash) => hash.startsWith("files/"),
     render: () => <MarkdownFilesWindow />,
+  },
+  {
+    match: (hash) => hash.startsWith("sub-agent/"),
+    render: () => <SubAgentTranscriptWindow />,
   },
 ];
 

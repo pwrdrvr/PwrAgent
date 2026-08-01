@@ -18,6 +18,7 @@ export * from "./contracts/messaging";
 export * from "./contracts/messaging-tools";
 export * from "./contracts/navigation";
 export * from "./contracts/settings";
+export * from "./contracts/subagent-transcript";
 export * from "./contracts/thread-link";
 export * from "./contracts/thread-tools";
 export * from "./contracts/thread-search";

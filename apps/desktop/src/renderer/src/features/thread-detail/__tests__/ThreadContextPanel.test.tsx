@@ -32,6 +32,7 @@ const REVEALED_SIGNAL = "Execution context";
 
 afterEach(() => {
   cleanup();
+  delete (window as Window & { pwragent?: unknown }).pwragent;
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
@@ -460,6 +461,10 @@ describe("ThreadContextPanel", () => {
   });
 
   it("labels Codex native sub-agent usage separately from monitor usage", () => {
+    const openSubAgentTranscriptWindow = vi.fn(async () => ({ opened: true }));
+    (window as Window & { pwragent?: unknown }).pwragent = {
+      openSubAgentTranscriptWindow,
+    };
     renderPanel({
       activeTab: "subagents",
       pinned: true,
@@ -509,6 +514,15 @@ describe("ThreadContextPanel", () => {
     const modal = within(screen.getByRole("dialog"));
     expect(modal.getByText("Source")).toBeInTheDocument();
     expect(modal.getByText("Codex native spawnAgent")).toBeInTheDocument();
+    expect(modal.getByRole("button", { name: "Close" })).toBeInTheDocument();
+
+    fireEvent.click(modal.getByRole("button", { name: "Open transcript" }));
+
+    expect(openSubAgentTranscriptWindow).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "019ed7df-5876-7882-9b75-7fd647372da7",
+      title: "Peirce",
+    });
   });
 
   it("labels system title helper usage separately from monitor usage", () => {

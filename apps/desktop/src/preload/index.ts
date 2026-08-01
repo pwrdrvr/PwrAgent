@@ -202,6 +202,8 @@ import type {
   OpenDesktopApplicationResponse,
   OpenMarkdownFileViewerRequest,
   OpenMarkdownFileViewerResponse,
+  OpenSubAgentTranscriptWindowRequest,
+  OpenSubAgentTranscriptWindowResponse,
   OpenPathRequest,
   OpenPathResponse,
   ReadMarkdownFileRequest,
@@ -341,6 +343,7 @@ import {
   MARKDOWN_FILE_VIEWER_OPEN_CHANNEL,
   MARKDOWN_FILE_VIEWER_SNAPSHOT_CHANGED_CHANNEL,
   MARKDOWN_FILE_VIEWER_SNAPSHOT_READ_CHANNEL,
+  SUB_AGENT_TRANSCRIPT_WINDOW_OPEN_CHANNEL,
   DIAGNOSTICS_CAPTURE_HEAP_SNAPSHOT_CHANNEL,
   DIAGNOSTICS_HEAP_SNAPSHOT_CAPTURED_EVENT_CHANNEL,
   INTEGRATED_TERMINAL_CLOSE_CHANNEL,
@@ -849,6 +852,10 @@ const desktopApi = Object.freeze({
       ipcRenderer.off(MARKDOWN_FILE_VIEWER_SNAPSHOT_CHANGED_CHANNEL, listener);
     };
   },
+  openSubAgentTranscriptWindow: async (
+    request: OpenSubAgentTranscriptWindowRequest,
+  ): Promise<OpenSubAgentTranscriptWindowResponse> =>
+    await ipcRenderer.invoke(SUB_AGENT_TRANSCRIPT_WINDOW_OPEN_CHANNEL, request),
   createIntegratedTerminal: async (
     request: IntegratedTerminalCreateRequest,
   ): Promise<IntegratedTerminalCreateResponse> =>

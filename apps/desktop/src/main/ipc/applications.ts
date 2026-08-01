@@ -5,6 +5,8 @@ import type {
   OpenDesktopApplicationResponse,
   OpenMarkdownFileViewerRequest,
   OpenMarkdownFileViewerResponse,
+  OpenSubAgentTranscriptWindowRequest,
+  OpenSubAgentTranscriptWindowResponse,
   OpenPathRequest,
   OpenPathResponse,
   ReadMarkdownFileRequest,
@@ -19,11 +21,13 @@ import {
   MARKDOWN_FILE_VIEWER_SNAPSHOT_READ_CHANNEL,
   PATH_OPEN_CHANNEL,
   PATH_REVEAL_CHANNEL,
+  SUB_AGENT_TRANSCRIPT_WINDOW_OPEN_CHANNEL,
 } from "../../shared/ipc";
 import {
   readMarkdownFileViewerSnapshot,
   showMarkdownFileViewerWindow,
 } from "../markdown-files-window";
+import { showSubAgentTranscriptWindow } from "../subagent-transcript-window";
 import { openDesktopApplication } from "../settings/application-discovery";
 
 const MAX_MARKDOWN_FILE_BYTES = 2 * 1024 * 1024;
@@ -157,6 +161,20 @@ export function registerApplicationIpcHandlers(): void {
     ): Promise<ReadMarkdownFileViewerSnapshotResponse> =>
       readMarkdownFileViewerSnapshot(request.contextKey),
   );
+
+  ipcMain.removeHandler(SUB_AGENT_TRANSCRIPT_WINDOW_OPEN_CHANNEL);
+  ipcMain.handle(
+    SUB_AGENT_TRANSCRIPT_WINDOW_OPEN_CHANNEL,
+    async (
+      event,
+      request: OpenSubAgentTranscriptWindowRequest,
+    ): Promise<OpenSubAgentTranscriptWindowResponse> => {
+      showSubAgentTranscriptWindow(request, {
+        sourceWindow: BrowserWindow.fromWebContents(event.sender),
+      });
+      return { opened: true };
+    },
+  );
 }
 
 export function disposeApplicationIpcHandlers(): void {
@@ -166,4 +184,5 @@ export function disposeApplicationIpcHandlers(): void {
   ipcMain.removeHandler(MARKDOWN_FILE_READ_CHANNEL);
   ipcMain.removeHandler(MARKDOWN_FILE_VIEWER_OPEN_CHANNEL);
   ipcMain.removeHandler(MARKDOWN_FILE_VIEWER_SNAPSHOT_READ_CHANNEL);
+  ipcMain.removeHandler(SUB_AGENT_TRANSCRIPT_WINDOW_OPEN_CHANNEL);
 }

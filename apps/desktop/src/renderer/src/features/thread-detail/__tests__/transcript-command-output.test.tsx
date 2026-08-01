@@ -2,7 +2,6 @@ import "@testing-library/jest-dom/vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TranscriptCommandOutput } from "../TranscriptCommandOutput";
-import { ThreadLinkProvider } from "../../../lib/thread-links";
 
 describe("TranscriptCommandOutput", () => {
   afterEach(() => {
@@ -60,39 +59,40 @@ describe("TranscriptCommandOutput", () => {
   });
 
   it("renders structured native-agent waits as delegated work with transcript access", () => {
-    const onShowThread = vi.fn();
+    const openSubAgentTranscriptWindow = vi.fn(async () => ({ opened: true }));
+    (window as Window & { pwragent?: unknown }).pwragent = {
+      openSubAgentTranscriptWindow,
+    };
     render(
-      <ThreadLinkProvider onShowThread={onShowThread} threads={[]}>
-        <TranscriptCommandOutput
-          detail={{
-            id: "agent-wait-1",
-            kind: "command",
-            label: "Waited on agent 019fb3d1",
-            status: "completed",
-            command: {
-              displayCommand: "wait 019fb3d1",
-              rawCommand: "wait",
-              output: "The agent is still working.",
-              subAgent: {
-                backend: "codex",
-                origin: "codex-native",
-                operation: "wait",
-                model: "gpt-5.6-sol",
-                reasoningEffort: "high",
-                fastMode: true,
-                agents: [
-                  {
-                    threadId: "019fb3d1-28e0-7a30-b964-e93d7a1f3435",
-                    name: "Kieregaard",
-                    status: "running",
-                    message: "Implementing the replacement.",
-                  },
-                ],
-              },
+      <TranscriptCommandOutput
+        detail={{
+          id: "agent-wait-1",
+          kind: "command",
+          label: "Waited on agent 019fb3d1",
+          status: "completed",
+          command: {
+            displayCommand: "wait 019fb3d1",
+            rawCommand: "wait",
+            output: "The agent is still working.",
+            subAgent: {
+              backend: "codex",
+              origin: "codex-native",
+              operation: "wait",
+              model: "gpt-5.6-sol",
+              reasoningEffort: "high",
+              fastMode: true,
+              agents: [
+                {
+                  threadId: "019fb3d1-28e0-7a30-b964-e93d7a1f3435",
+                  name: "Kieregaard",
+                  status: "running",
+                  message: "Implementing the replacement.",
+                },
+              ],
             },
-          }}
-        />
-      </ThreadLinkProvider>,
+          },
+        }}
+      />,
     );
 
     expect(screen.getByText("Codex native agent")).toBeInTheDocument();
@@ -105,9 +105,50 @@ describe("TranscriptCommandOutput", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Open transcript" }));
 
-    expect(onShowThread).toHaveBeenCalledWith({
+    expect(openSubAgentTranscriptWindow).toHaveBeenCalledWith({
       backend: "codex",
       threadId: "019fb3d1-28e0-7a30-b964-e93d7a1f3435",
+      title: "Kieregaard",
+    });
+  });
+
+  it("opens a PwrAgent-managed sub-agent transcript with its source backend", () => {
+    const openSubAgentTranscriptWindow = vi.fn(async () => ({ opened: true }));
+    (window as Window & { pwragent?: unknown }).pwragent = {
+      openSubAgentTranscriptWindow,
+    };
+    render(
+      <TranscriptCommandOutput
+        detail={{
+          id: "agent-monitor-1",
+          kind: "command",
+          label: "Created monitor",
+          status: "completed",
+          command: {
+            displayCommand: "create_monitor",
+            rawCommand: "create_monitor",
+            subAgent: {
+              backend: "acp:gemini",
+              origin: "pwragent",
+              operation: "spawn",
+              agents: [
+                {
+                  threadId: "monitor-thread-1",
+                  name: "Build monitor",
+                },
+              ],
+            },
+          },
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Open transcript" }));
+
+    expect(openSubAgentTranscriptWindow).toHaveBeenCalledWith({
+      backend: "acp:gemini",
+      threadId: "monitor-thread-1",
+      title: "Build monitor",
     });
   });
 

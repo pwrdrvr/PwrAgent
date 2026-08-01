@@ -7981,6 +7981,18 @@ script = "echo setup"
     await registry.readThread({
       backend: "codex",
       threadId: "thread-1",
+      viewOnly: true,
+    });
+
+    expect(enrichThreadDirectories).not.toHaveBeenCalled();
+    await expect(
+      overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }),
+    ).resolves.toBeUndefined();
+    expect(events).toHaveLength(0);
+
+    await registry.readThread({
+      backend: "codex",
+      threadId: "thread-1",
     });
 
     expect(enrichThreadDirectories).toHaveBeenCalledTimes(1);
