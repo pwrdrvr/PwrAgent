@@ -67,6 +67,7 @@ function createModelListResponse(models: Model[]): ModelListResponse {
 class MockTransport implements JsonRpcTransport {
   static instances: MockTransport[] = [];
   static serverVersion = "1.0.0";
+  static codexHome = "/Users/huntharo/.codex";
   static readThreadErrorByThreadId = new Map<string, { code: number; message: string }>();
   static readThreadResultByThreadId = new Map<string, unknown>();
   static threadStartResult: unknown = {
@@ -152,6 +153,7 @@ class MockTransport implements JsonRpcTransport {
 
   readonly sentMessages: string[] = [];
   readonly options?: unknown;
+  closeCount = 0;
   private messageHandler: (message: string) => void = () => undefined;
   private closeHandler: (error?: Error) => void = () => undefined;
 
@@ -165,6 +167,7 @@ class MockTransport implements JsonRpcTransport {
   }
 
   async close(): Promise<void> {
+    this.closeCount += 1;
     this.closeHandler();
   }
 
@@ -181,7 +184,7 @@ class MockTransport implements JsonRpcTransport {
       const result: InitializeResponse = {
         userAgent:
           `codex_cli_rs/${MockTransport.serverVersion} (Mac OS 26.0; arm64)`,
-        codexHome: "/Users/huntharo/.codex",
+        codexHome: MockTransport.codexHome,
         platformFamily: "unix",
         platformOs: "macos",
       };
@@ -1083,6 +1086,7 @@ describe("CodexAppServerClient", () => {
     codexClientLogWarn.mockClear();
     MockTransport.instances.length = 0;
     MockTransport.serverVersion = "1.0.0";
+    MockTransport.codexHome = "/Users/huntharo/.codex";
     MockTransport.readThreadErrorByThreadId.clear();
     MockTransport.readThreadResultByThreadId.clear();
     MockTransport.threadStartResult = {
@@ -1951,6 +1955,95 @@ describe("CodexAppServerClient", () => {
     );
 
     await client.close();
+  });
+
+  it("stops Codex, repairs the protocol-identified rollout, reloads, and resumes", async () => {
+    const threadId = "019fb6c7-1545-77c1-be52-98f86cae3c11";
+    const tempRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "pwragent-codex-client-id-recovery-"),
+    );
+    const codexHome = path.join(tempRoot, "codex-home");
+    const sessionDirectory = path.join(codexHome, "sessions/2026/07/31");
+    const rolloutPath = path.join(
+      sessionDirectory,
+      `rollout-2026-07-31T00-00-00-${threadId}.jsonl`,
+    );
+    await fs.mkdir(sessionDirectory, { recursive: true });
+    await fs.writeFile(
+      rolloutPath,
+      [
+        JSON.stringify({
+          type: "session_meta",
+          payload: { id: threadId, session_id: threadId },
+        }),
+        JSON.stringify({
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "user",
+            id: "review_rollout_user",
+            content: [{ type: "input_text", text: "review" }],
+          },
+        }),
+        "",
+      ].join("\n"),
+    );
+    MockTransport.threadListResultBySearchTerm.set(threadId, [
+      {
+        id: threadId,
+        name: "Poisoned review thread",
+        path: rolloutPath,
+        updatedAt: 1_775_000_000,
+      },
+    ]);
+    MockTransport.codexHome = codexHome;
+
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+      env: {
+        ...process.env,
+        CODEX_HOME: codexHome,
+      },
+    });
+
+    try {
+      await expect(
+        client.recoverInvalidPersistedResponseMessageIds({
+          failureMessage: "stream disconnected before completion",
+          threadId,
+        }),
+      ).rejects.toThrow("requires the exact invalid ID prefix failure");
+      const result = await client.recoverInvalidPersistedResponseMessageIds({
+        failureMessage:
+          "[ApiIdParam] [input[1].id] [invalid_id_prefix] "
+          + "Invalid 'input[1].id': 'review_rollout_user'. "
+          + "Expected an ID that begins with 'msg'.",
+        threadId,
+      });
+      const transport = MockTransport.instances.at(-1)!;
+      const methods = transport.sentMessages.map((message) =>
+        (JSON.parse(message) as { method?: string }).method,
+      );
+
+      expect(result).toMatchObject({
+        removedMessageIdCount: 1,
+        threadId,
+      });
+      expect(await fs.readFile(result.backupPath, "utf8")).toContain(
+        '"id":"review_rollout_user"',
+      );
+      expect(await fs.readFile(result.rolloutPath, "utf8")).not.toContain(
+        '"id":"review_rollout_user"',
+      );
+      expect(transport.closeCount).toBe(1);
+      expect(methods.filter((method) => method === "initialize")).toHaveLength(2);
+      expect(methods.at(-1)).toBe("thread/resume");
+    } finally {
+      await client.close();
+      await fs.rm(tempRoot, { force: true, recursive: true });
+    }
   });
 
   it("follows thread/list pagination for archived codex threads", async () => {

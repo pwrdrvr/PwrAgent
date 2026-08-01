@@ -242,6 +242,10 @@ import {
   CodexAppServerClient,
   DEFAULT_CODEX_THREAD_TITLE_MODEL,
 } from "../codex-app-server/client";
+import {
+  isCodexInvalidResponseMessageIdError,
+  type CodexInvalidResponseMessageIdRecoveryResult,
+} from "../codex-app-server/invalid-response-message-id-recovery";
 import { ProviderTranscriptThreadSearchAdapter } from "../thread-search/thread-search-provider-adapters";
 import { ThreadSearchService } from "../thread-search/thread-search-service";
 import { ThreadSearchStore } from "../thread-search/thread-search-store";
@@ -566,6 +570,10 @@ type BackendClient = {
     threadId: string;
     turnId: string;
   }>;
+  recoverInvalidPersistedResponseMessageIds?(params: {
+    failureMessage: string;
+    threadId: string;
+  }): Promise<CodexInvalidResponseMessageIdRecoveryResult>;
   startReview?(params: {
     threadId: string;
     target: StartReviewRequest["target"];
@@ -5491,6 +5499,41 @@ function buildSteerRequestSignature(
     .digest("hex");
 }
 
+type CodexRetryableTurnStart = {
+  params: {
+    backend: "codex";
+    threadId: string;
+    input: AppServerTurnInputItem[];
+    origin?: ThreadTurnQueueOrigin;
+    executionMode?: ThreadExecutionMode;
+    approvalPolicy?: string;
+    sandbox?: string;
+    model?: string;
+    collaborationMode?: AppServerCollaborationModeRequest;
+    serviceTier?: string;
+    reasoningEffort?: string;
+    fastMode?: boolean;
+    messageOrigin?: AppServerThreadMessageOrigin;
+  };
+  terminalObserved?: boolean;
+  turnId?: string;
+};
+
+type PendingCodexInvalidIdRecovery = CodexRetryableTurnStart & {
+  failureMessage: string;
+  completion: Promise<{
+    backend: "codex";
+    threadId: string;
+    turnId: string;
+  }>;
+  reject: (error: unknown) => void;
+  resolve: (result: {
+    backend: "codex";
+    threadId: string;
+    turnId: string;
+  }) => void;
+};
+
 export class DesktopBackendRegistry {
   private readonly codexClient: BackendClient;
   private readonly grokClient: BackendClient;
@@ -5576,6 +5619,15 @@ export class DesktopBackendRegistry {
     string,
     AcceptedSteerRequest
   >();
+  private readonly codexRetryableTurnStarts = new Map<
+    string,
+    CodexRetryableTurnStart
+  >();
+  private readonly pendingCodexInvalidIdRecoveries:
+    PendingCodexInvalidIdRecovery[] = [];
+  private codexInvalidIdRecoveryDrain?: Promise<void>;
+  private codexInvalidIdRecoveryBarrier?: Promise<void>;
+  private resolveCodexInvalidIdRecoveryBarrier?: () => void;
   private readonly activeCodexTurnModes = new Map<string, ThreadExecutionMode>();
   private readonly activeCodexReviewTurnKeys = new Set<string>();
   private readonly activeCodexReviewInterruptTurnIds = new Map<string, string>();
@@ -9445,8 +9497,12 @@ export class DesktopBackendRegistry {
     reasoningEffort?: string;
     fastMode?: boolean;
     messageOrigin?: AppServerThreadMessageOrigin;
+    invalidIdRecoveryAttempted?: boolean;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
     this.assertNotBootstrap("startTurn");
+    if (params.backend === "codex" && !params.invalidIdRecoveryAttempted) {
+      await this.codexInvalidIdRecoveryBarrier;
+    }
     const migrationResult = await this.applyThreadModelMigration({
       backend: params.backend,
       threadId: params.threadId,
@@ -9615,6 +9671,32 @@ export class DesktopBackendRegistry {
       origin: resolveThreadMessageOrigin(params),
       text: extractFirstMeaningfulTextInput(params.input),
     });
+    const retryableCodexTurnStart: CodexRetryableTurnStart | undefined =
+      params.backend === "codex" && !params.invalidIdRecoveryAttempted
+        ? {
+            params: {
+              backend: "codex",
+              threadId: params.threadId,
+              input: params.input,
+              origin: params.origin,
+              executionMode: params.executionMode,
+              approvalPolicy: params.approvalPolicy,
+              sandbox: params.sandbox,
+              model: params.model,
+              collaborationMode: params.collaborationMode,
+              serviceTier: params.serviceTier,
+              reasoningEffort: params.reasoningEffort,
+              fastMode: params.fastMode,
+              messageOrigin: params.messageOrigin,
+            },
+          }
+        : undefined;
+    if (retryableCodexTurnStart) {
+      this.codexRetryableTurnStarts.set(
+        params.threadId,
+        retryableCodexTurnStart,
+      );
+    }
     try {
       result =
         params.backend === "codex"
@@ -9673,7 +9755,25 @@ export class DesktopBackendRegistry {
       }
       this.pendingTitleGenerationInputs.delete(titleGenerationKey);
       this.forgetPendingThreadMessageOrigin(pendingMessageOriginId);
+      if (
+        retryableCodexTurnStart
+        && this.codexClient.recoverInvalidPersistedResponseMessageIds
+        && isCodexInvalidResponseMessageIdError(error)
+      ) {
+        const recovery = this.queueCodexInvalidIdRecovery(
+          retryableCodexTurnStart,
+          error instanceof Error ? error.message : String(error),
+        );
+        this.maybeDrainCodexInvalidIdRecoveries();
+        return await recovery.completion;
+      }
+      if (retryableCodexTurnStart) {
+        this.codexRetryableTurnStarts.delete(params.threadId);
+      }
       throw error;
+    }
+    if (retryableCodexTurnStart) {
+      retryableCodexTurnStart.turnId = result.turnId;
     }
     this.bindPendingThreadMessageOrigin(pendingMessageOriginId, result.turnId);
     this.rebindPendingReviewStartsForStartedTurn({
@@ -9685,7 +9785,16 @@ export class DesktopBackendRegistry {
     this.activeCodexTurnModes.delete(
       buildActiveTurnModeKey(params.threadId, syntheticStartedTurnId),
     );
-    if (params.backend === "codex" && activeTurnMode) {
+    if (params.backend === "codex") {
+      this.activeTurnKeys.delete(
+        buildActiveTurnKey(params.backend, params.threadId, syntheticStartedTurnId),
+      );
+    }
+    if (
+      params.backend === "codex"
+      && activeTurnMode
+      && !retryableCodexTurnStart?.terminalObserved
+    ) {
       this.activeCodexTurnModes.set(
         buildActiveTurnModeKey(result.threadId, result.turnId),
         activeTurnMode,
@@ -9693,6 +9802,7 @@ export class DesktopBackendRegistry {
     }
     if (reserveCodexStart) {
       this.reservedCodexStartThreadIds.delete(params.threadId);
+      this.maybeDrainCodexInvalidIdRecoveries();
     }
 
     if (
@@ -13697,6 +13807,197 @@ export class DesktopBackendRegistry {
     return buildLaunchpadOptions(backend, models);
   }
 
+  private handleCodexTurnTerminalForInvalidIdRecovery(
+    notification: Extract<
+      AppServerNotification,
+      { method: "turn/completed" | "turn/failed" | "turn/cancelled" }
+    >,
+  ): void {
+    const threadId = notification.params.threadId;
+    const turnId = turnIdFromTerminalNotification(notification);
+    const candidate = this.codexRetryableTurnStarts.get(threadId);
+    if (
+      candidate
+      && (!candidate.turnId || !turnId || candidate.turnId === turnId)
+    ) {
+      candidate.terminalObserved = true;
+      this.codexRetryableTurnStarts.delete(threadId);
+      if (
+        notification.method === "turn/failed"
+        && isCodexInvalidResponseMessageIdError(
+          errorMessageFromTerminalNotification(notification),
+        )
+      ) {
+        if (this.codexClient.recoverInvalidPersistedResponseMessageIds) {
+          const recovery = this.queueCodexInvalidIdRecovery(
+            candidate,
+            errorMessageFromTerminalNotification(notification)!,
+          );
+          void recovery.completion.catch(() => undefined);
+        } else {
+          backendRegistryLog.warn(
+            "Codex invalid-message-ID recovery is unavailable on this client",
+            { threadId, turnId },
+          );
+        }
+      }
+    }
+    this.maybeDrainCodexInvalidIdRecoveries();
+  }
+
+  private queueCodexInvalidIdRecovery(
+    candidate: CodexRetryableTurnStart,
+    failureMessage: string,
+  ): PendingCodexInvalidIdRecovery {
+    const queued = this.pendingCodexInvalidIdRecoveries.find(
+      (entry) => entry.params.threadId === candidate.params.threadId,
+    );
+    if (queued) {
+      return queued;
+    }
+
+    let resolve!: PendingCodexInvalidIdRecovery["resolve"];
+    let reject!: PendingCodexInvalidIdRecovery["reject"];
+    const completion = new Promise<{
+      backend: "codex";
+      threadId: string;
+      turnId: string;
+    }>((promiseResolve, promiseReject) => {
+      resolve = promiseResolve;
+      reject = promiseReject;
+    });
+    const recovery: PendingCodexInvalidIdRecovery = {
+      ...candidate,
+      completion,
+      failureMessage,
+      reject,
+      resolve,
+    };
+    this.codexRetryableTurnStarts.delete(candidate.params.threadId);
+    this.pendingCodexInvalidIdRecoveries.push(recovery);
+    if (!this.codexInvalidIdRecoveryBarrier) {
+      this.codexInvalidIdRecoveryBarrier = new Promise<void>((barrierResolve) => {
+        this.resolveCodexInvalidIdRecoveryBarrier = barrierResolve;
+      });
+    }
+    backendRegistryLog.warn("queued Codex invalid-message-ID history recovery", {
+      threadId: candidate.params.threadId,
+      turnId: candidate.turnId ?? null,
+    });
+    return recovery;
+  }
+
+  private maybeDrainCodexInvalidIdRecoveries(): void {
+    if (
+      this.codexInvalidIdRecoveryDrain
+      || this.pendingCodexInvalidIdRecoveries.length === 0
+      || this.hasActiveCodexWork()
+    ) {
+      return;
+    }
+
+    this.codexInvalidIdRecoveryDrain = this.drainCodexInvalidIdRecoveries()
+      .catch((error) => {
+        backendRegistryLog.error("Codex invalid-message-ID recovery drain failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      })
+      .finally(() => {
+        this.codexInvalidIdRecoveryDrain = undefined;
+        if (this.pendingCodexInvalidIdRecoveries.length === 0) {
+          this.resolveCodexInvalidIdRecoveryBarrier?.();
+          this.resolveCodexInvalidIdRecoveryBarrier = undefined;
+          this.codexInvalidIdRecoveryBarrier = undefined;
+          return;
+        }
+        this.maybeDrainCodexInvalidIdRecoveries();
+      });
+  }
+
+  private async drainCodexInvalidIdRecoveries(): Promise<void> {
+    const recover = this.codexClient.recoverInvalidPersistedResponseMessageIds;
+    if (!recover) {
+      return;
+    }
+    while (
+      this.pendingCodexInvalidIdRecoveries.length > 0
+      && !this.hasActiveCodexWork()
+    ) {
+      const recovery = this.pendingCodexInvalidIdRecoveries.shift()!;
+      try {
+        const repaired = await recover.call(this.codexClient, {
+          failureMessage: recovery.failureMessage,
+          threadId: recovery.params.threadId,
+        });
+        const statusMessage =
+          `PwrAgent repaired ${repaired.removedMessageIdCount} invalid persisted `
+          + `message ID(s) for thread ${repaired.threadId}. `
+          + `Backup: ${repaired.backupPath}. Retrying the failed turn once.`;
+        backendRegistryLog.warn("Codex invalid-message-ID history repaired", {
+          backupPath: repaired.backupPath,
+          removedMessageIdCount: repaired.removedMessageIdCount,
+          rolloutPath: repaired.rolloutPath,
+          threadId: repaired.threadId,
+          turnId: recovery.turnId ?? null,
+        });
+        await this.emit({
+          backend: "codex",
+          notification: {
+            method: "warning",
+            params: {
+              threadId: repaired.threadId,
+              message: statusMessage,
+            },
+          },
+        });
+        const retried = await this.startTurnNow({
+          ...recovery.params,
+          invalidIdRecoveryAttempted: true,
+        });
+        recovery.resolve({
+          backend: "codex",
+          threadId: retried.threadId,
+          turnId: retried.turnId,
+        });
+      } catch (error) {
+        recovery.reject(error);
+        backendRegistryLog.error("Codex invalid-message-ID history recovery failed", {
+          error: error instanceof Error ? error.message : String(error),
+          threadId: recovery.params.threadId,
+          turnId: recovery.turnId ?? null,
+        });
+        await this.emit({
+          backend: "codex",
+          notification: {
+            method: "warning",
+            params: {
+              threadId: recovery.params.threadId,
+              message:
+                `PwrAgent could not repair invalid persisted message IDs for thread `
+                + `${recovery.params.threadId}: `
+                + (error instanceof Error ? error.message : String(error)),
+            },
+          },
+        });
+      }
+    }
+  }
+
+  private hasActiveCodexWork(): boolean {
+    if (
+      this.reservedCodexStartThreadIds.size > 0
+      || this.activeCodexTurnModes.size > 0
+    ) {
+      return true;
+    }
+    for (const key of this.activeTurnKeys) {
+      if (key.startsWith("codex:")) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   private subscribeClient(backend: AppServerBackendKind, client: BackendClient): void {
     this.unsubscribers.push(
       client.onNotification(async (notification) => {
@@ -13725,6 +14026,21 @@ export class DesktopBackendRegistry {
         }
         await this.emitHeadlessAutomationLifecycle(backend, notification);
         await this.emit({ backend, notification });
+        if (
+          backend === "codex"
+          && (
+            notification.method === "turn/completed"
+            || notification.method === "turn/failed"
+            || notification.method === "turn/cancelled"
+          )
+        ) {
+          this.handleCodexTurnTerminalForInvalidIdRecovery(
+            notification as Extract<
+              AppServerNotification,
+              { method: "turn/completed" | "turn/failed" | "turn/cancelled" }
+            >,
+          );
+        }
       }),
     );
 

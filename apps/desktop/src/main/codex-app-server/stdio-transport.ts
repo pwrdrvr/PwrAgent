@@ -20,6 +20,7 @@ const codexTransportLog = getMainLogger("pwragent:codex-transport");
 const STDERR_LOG_MAX_LINES_PER_WINDOW = 100;
 const STDERR_LOG_WINDOW_MS = 10_000;
 const STDERR_LOG_MAX_LINE_LENGTH = 4000;
+const PROCESS_CLOSE_TIMEOUT_MS = 5_000;
 
 export type StdioJsonRpcTransportOptions = {
   command: string;
@@ -162,7 +163,30 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
     if (!child) {
       return;
     }
-    child.kill();
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      const settle = (): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(forceKillTimer);
+        child.removeListener("close", settle);
+        child.removeListener("error", settle);
+        resolve();
+      };
+      const forceKillTimer = setTimeout(() => {
+        child.kill("SIGKILL");
+      }, PROCESS_CLOSE_TIMEOUT_MS);
+      forceKillTimer.unref?.();
+      child.once("close", settle);
+      child.once("error", settle);
+      if (child.exitCode !== null || child.signalCode !== null) {
+        settle();
+        return;
+      }
+      child.kill();
+    });
   }
 
   send(message: string): void {
