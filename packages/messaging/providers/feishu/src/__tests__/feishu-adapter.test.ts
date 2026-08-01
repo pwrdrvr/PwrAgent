@@ -1157,6 +1157,11 @@ describe("FeishuAdapter", () => {
         command: "help",
         args: ["threads"],
         rawText: "/help threads",
+        channel: expect.objectContaining({
+          conversation: expect.objectContaining({
+            workspaceId: "tenant_1",
+          }),
+        }),
       }),
     ]);
   });

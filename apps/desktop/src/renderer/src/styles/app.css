@@ -6684,6 +6684,12 @@ textarea,
   gap: 8px;
 }
 
+.settings-authorized-list__item {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
 .settings-authorized-list__row {
   display: grid;
   grid-template-columns: minmax(150px, 1fr) minmax(150px, 1fr) auto auto;
@@ -6750,6 +6756,43 @@ textarea,
 
 .settings-authorized-list__add {
   align-self: flex-start;
+}
+
+.settings-authorized-list__default-agent {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  padding-left: 2px;
+}
+
+.settings-authorized-list__default-agent-label,
+.settings-authorized-list__default-agent-empty {
+  color: var(--text-muted);
+  font-size: 10.5px;
+  line-height: 1.2;
+}
+
+.settings-authorized-list__default-agent-label {
+  font-weight: 700;
+}
+
+.settings-authorized-list__default-agent strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 11px;
+  letter-spacing: 0;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-authorized-list__default-agent-action {
+  min-height: 24px;
+  margin-left: auto;
+  padding: 3px 8px;
+  font-size: 10.5px;
 }
 
 .settings-pairing {
@@ -6856,6 +6899,10 @@ textarea,
     grid-template-columns: 1fr;
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .settings-authorized-list__default-agent {
+    flex-wrap: wrap;
   }
 }
 

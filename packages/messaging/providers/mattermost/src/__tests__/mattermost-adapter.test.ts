@@ -4,6 +4,7 @@ import type {
   MessagingCallbackHandleRecord,
   MessagingCallbackHandleStore,
   MessagingChannelRef,
+  MessagingInboundEvent,
   MessagingRejectedInboundEvent,
   MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
@@ -182,6 +183,60 @@ describe("MattermostAdapter — capability profile", () => {
     });
     expect(adapter.channel).toBe("mattermost");
     expect(adapter.clientRateLimitStrategy).toBe("direct");
+  });
+
+  it("normalizes team IDs for workspace default routing", async () => {
+    const wsHooks: WebSocketHooks = {
+      fireMessage: () => {},
+      fireClose: () => {},
+    };
+    const actorId = "useruseruseruseruseruser12";
+    const teamId = "teamteamteamteamteamteam12";
+    const events: MessagingInboundEvent[] = [];
+    const adapter = new MattermostAdapter({
+      callbackHandleStore: fakeStore,
+      client: fakeClient4({ createdPosts: [], patchedPosts: [] }),
+      config: {
+        ...baseConfig,
+        authorizedActorIds: [{ id: actorId, displayName: "" }],
+        authorizedTeamIds: [{ id: teamId, displayName: "" }],
+      },
+      logger: silentLogger,
+      websocketClient: fakeWebSocketClient(undefined, wsHooks),
+      callbackServer: {
+        start: async () => {},
+        stop: async () => {},
+        signContext: () => ({ hmac: "x", issuedAt: 0 }),
+      } as never,
+    });
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    wsHooks.fireMessage({
+      event: "posted",
+      data: {
+        channel_type: "O",
+        channel_display_name: "Development",
+        sender_name: "Harold",
+        team_id: teamId,
+        post: JSON.stringify({
+          id: "postpostpostpostpostpost12",
+          channel_id: "channelchannelchannel12345",
+          user_id: actorId,
+          message: "/help",
+        }),
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await adapter.stop();
+
+    expect(events).toHaveLength(1);
+    expect(events[0]?.channel.conversation).toMatchObject({
+      id: "channelchannelchannel12345",
+      kind: "channel",
+      workspaceId: teamId,
+    });
   });
 
   it("emits rejected activity for unauthorized actionable posts", async () => {

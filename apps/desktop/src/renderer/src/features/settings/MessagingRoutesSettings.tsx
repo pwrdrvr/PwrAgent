@@ -1,8 +1,12 @@
 import {
+  createContext,
   useCallback,
+  useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
+  type ReactNode,
 } from "react";
 import type {
   AppServerBackendKind,
@@ -60,21 +64,41 @@ const EMPTY_FORM: NewDefaultForm = {
   title: "",
 };
 
-export function MessagingRoutesSettings(props: {
+type RouteEditorRequest =
+  | {
+      id: number;
+      assignment: DesktopMessagingDefaultAgentRoute;
+    }
+  | {
+      id: number;
+      initialForm: NewDefaultForm;
+    };
+
+type MessagingRoutesContextValue = {
+  routes: ListMessagingRoutesResponse;
+  loading: boolean;
+  error: string | null;
+  editorRequest: RouteEditorRequest | null;
+  loadRoutes: () => Promise<void>;
+  openAssignment: (assignment: DesktopMessagingDefaultAgentRoute) => void;
+  openNewAssignment: (initialForm: NewDefaultForm) => void;
+};
+
+const MessagingRoutesContext = createContext<MessagingRoutesContextValue | null>(
+  null,
+);
+
+export function MessagingRoutesProvider(props: {
+  children: ReactNode;
   desktopApi?: DesktopApi;
-  onOpenThread?: (target: {
-    backend: AppServerBackendKind;
-    threadId: string;
-  }) => void;
 }) {
   const [routes, setRoutes] = useState<ListMessagingRoutesResponse>(EMPTY_ROUTES);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [busyId, setBusyId] = useState<string | null>(null);
-  const [showAdd, setShowAdd] = useState(false);
-  const [editing, setEditing] = useState<DesktopMessagingDefaultAgentRoute | null>(
+  const [editorRequest, setEditorRequest] = useState<RouteEditorRequest | null>(
     null,
   );
+  const requestIdRef = useRef(0);
 
   const loadRoutes = useCallback(async () => {
     if (!props.desktopApi?.listMessagingRoutes) {
@@ -100,6 +124,72 @@ export function MessagingRoutesSettings(props: {
     });
   }, [loadRoutes, props.desktopApi]);
 
+  const value = useMemo<MessagingRoutesContextValue>(
+    () => ({
+      routes,
+      loading,
+      error,
+      editorRequest,
+      loadRoutes,
+      openAssignment: (assignment) => {
+        requestIdRef.current += 1;
+        setEditorRequest({ id: requestIdRef.current, assignment });
+      },
+      openNewAssignment: (initialForm) => {
+        requestIdRef.current += 1;
+        setEditorRequest({ id: requestIdRef.current, initialForm });
+      },
+    }),
+    [editorRequest, error, loadRoutes, loading, routes],
+  );
+
+  return (
+    <MessagingRoutesContext.Provider value={value}>
+      {props.children}
+    </MessagingRoutesContext.Provider>
+  );
+}
+
+function useMessagingRoutes(): MessagingRoutesContextValue {
+  const value = useContext(MessagingRoutesContext);
+  if (!value) {
+    throw new Error("Messaging route controls require MessagingRoutesProvider.");
+  }
+  return value;
+}
+
+export function MessagingRoutesSettings(props: {
+  desktopApi?: DesktopApi;
+  onOpenThread?: (target: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }) => void;
+}) {
+  const routeState = useMessagingRoutes();
+  const { routes, loading, loadRoutes } = routeState;
+  const [mutationError, setMutationError] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [showAdd, setShowAdd] = useState(false);
+  const [initialForm, setInitialForm] = useState<NewDefaultForm>(EMPTY_FORM);
+  const [editing, setEditing] = useState<DesktopMessagingDefaultAgentRoute | null>(
+    null,
+  );
+  const routesRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const request = routeState.editorRequest;
+    if (!request) return;
+    if ("assignment" in request) {
+      setShowAdd(false);
+      setEditing(request.assignment);
+    } else {
+      setEditing(null);
+      setInitialForm(request.initialForm);
+      setShowAdd(true);
+    }
+    routesRef.current?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+  }, [routeState.editorRequest]);
+
   const clearDefault = async (assignmentId: string) => {
     if (!props.desktopApi?.clearMessagingDefaultAgent) return;
     setBusyId(assignmentId);
@@ -108,7 +198,7 @@ export function MessagingRoutesSettings(props: {
       if (editing?.assignmentId === assignmentId) setEditing(null);
       await loadRoutes();
     } catch (mutationError) {
-      setError(
+      setMutationError(
         mutationError instanceof Error
           ? mutationError.message
           : String(mutationError),
@@ -125,7 +215,7 @@ export function MessagingRoutesSettings(props: {
       await props.desktopApi.unbindMessagingThread({ bindingId });
       await loadRoutes();
     } catch (mutationError) {
-      setError(
+      setMutationError(
         mutationError instanceof Error
           ? mutationError.message
           : String(mutationError),
@@ -145,7 +235,7 @@ export function MessagingRoutesSettings(props: {
       chip={`${routeCount} active`}
       chipKind={routeCount > 0 ? "ok" : "muted"}
     >
-      <div className="messaging-routes">
+      <div className="messaging-routes" ref={routesRef}>
         <div className="messaging-routes__toolbar">
           <div>
             <strong>Default Agents</strong>
@@ -161,6 +251,7 @@ export function MessagingRoutesSettings(props: {
             type="button"
             onClick={() => {
               setEditing(null);
+              setInitialForm(EMPTY_FORM);
               setShowAdd((current) => !current);
             }}
           >
@@ -169,16 +260,21 @@ export function MessagingRoutesSettings(props: {
           </button>
         </div>
 
-        {error ? (
-          <p className="messaging-routes__error" role="alert">{error}</p>
+        {mutationError ?? routeState.error ? (
+          <p className="messaging-routes__error" role="alert">
+            {mutationError ?? routeState.error}
+          </p>
         ) : null}
 
         {showAdd ? (
           <DefaultAgentEditor
+            key={`add:${routeState.editorRequest?.id ?? "manual"}`}
             agents={routes.eligibleAgents}
+            initialForm={initialForm}
             onCancel={() => setShowAdd(false)}
             onSaved={async () => {
               setShowAdd(false);
+              setMutationError(null);
               await loadRoutes();
             }}
             desktopApi={props.desktopApi}
@@ -187,11 +283,13 @@ export function MessagingRoutesSettings(props: {
 
         {editing ? (
           <DefaultAgentEditor
+            key={`edit:${editing.assignmentId}`}
             agents={routes.eligibleAgents}
             assignment={editing}
             onCancel={() => setEditing(null)}
             onSaved={async () => {
               setEditing(null);
+              setMutationError(null);
               await loadRoutes();
             }}
             desktopApi={props.desktopApi}
@@ -388,14 +486,80 @@ function ProviderChip(props: { available: boolean; label: string }) {
   );
 }
 
+export function ApprovedSurfaceDefaultAgent(props: {
+  disabled?: boolean;
+  id: string;
+  label: string;
+  platform: MessagingChannelKind;
+  scopeKind: "conversation" | "parent" | "workspace";
+  title?: string;
+}) {
+  const routeState = useMessagingRoutes();
+  const assignment = findApprovedSurfaceAssignment(
+    routeState.routes.defaultAgents,
+    props,
+  );
+  const canOpen =
+    !props.disabled
+    && !routeState.loading
+    && !routeState.error
+    && (Boolean(assignment) || routeState.routes.eligibleAgents.length > 0);
+  const surfaceLabel = props.title?.trim() || props.id;
+
+  return (
+    <div className="settings-authorized-list__default-agent">
+      <span className="settings-authorized-list__default-agent-label">
+        {props.label}
+      </span>
+      {assignment ? (
+        <>
+          <strong>{assignment.target.label}</strong>
+          <ProviderChip
+            available={assignment.target.backendAvailable}
+            label={assignment.target.backendLabel}
+          />
+        </>
+      ) : (
+        <span className="settings-authorized-list__default-agent-empty">
+          {routeState.loading
+            ? "Checking..."
+            : routeState.error
+              ? "Status unavailable"
+              : "No direct default"}
+        </span>
+      )}
+      <button
+        aria-label={`${assignment ? "Change" : "Assign"} default Agent for ${surfaceLabel}`}
+        className="button button--ghost settings-authorized-list__default-agent-action"
+        disabled={!canOpen}
+        type="button"
+        onClick={() => {
+          if (assignment) {
+            routeState.openAssignment(assignment);
+            return;
+          }
+          routeState.openNewAssignment(
+            approvedSurfaceInitialForm(props),
+          );
+        }}
+      >
+        {routeState.loading ? "Checking..." : assignment ? "Change" : "Assign"}
+      </button>
+    </div>
+  );
+}
+
 function DefaultAgentEditor(props: {
   agents: DesktopMessagingAgentRouteTarget[];
   assignment?: DesktopMessagingDefaultAgentRoute;
   desktopApi?: DesktopApi;
+  initialForm?: NewDefaultForm;
   onCancel: () => void;
   onSaved: () => Promise<void>;
 }) {
-  const [form, setForm] = useState<NewDefaultForm>(EMPTY_FORM);
+  const [form, setForm] = useState<NewDefaultForm>(
+    props.initialForm ?? EMPTY_FORM,
+  );
   const [targetValue, setTargetValue] = useState(
     props.assignment?.target.available
       ? encodeTarget(props.assignment.target)
@@ -596,6 +760,43 @@ function DefaultAgentEditor(props: {
       </div>
     </div>
   );
+}
+
+function findApprovedSurfaceAssignment(
+  assignments: DesktopMessagingDefaultAgentRoute[],
+  surface: {
+    id: string;
+    platform: MessagingChannelKind;
+    scopeKind: "conversation" | "parent" | "workspace";
+  },
+): DesktopMessagingDefaultAgentRoute | undefined {
+  return assignments.find((assignment) => {
+    const scope = assignment.scope;
+    if (scope.kind !== surface.scopeKind || scope.platform !== surface.platform) {
+      return false;
+    }
+    if (scope.kind === "workspace") return scope.workspaceId === surface.id;
+    if (scope.kind === "parent") return scope.conversationId === surface.id;
+    return scope.conversation.kind === "channel"
+      && scope.conversation.id === surface.id;
+  });
+}
+
+function approvedSurfaceInitialForm(surface: {
+  id: string;
+  platform: MessagingChannelKind;
+  scopeKind: "conversation" | "parent" | "workspace";
+  title?: string;
+}): NewDefaultForm {
+  return {
+    ...EMPTY_FORM,
+    scopeKind: surface.scopeKind,
+    platform: surface.platform,
+    workspaceId: surface.scopeKind === "workspace" ? surface.id : "",
+    parentConversationId: surface.scopeKind === "parent" ? surface.id : "",
+    conversationId: surface.scopeKind === "conversation" ? surface.id : "",
+    title: surface.title?.trim() ?? "",
+  };
 }
 
 function RouteTextInput(props: {

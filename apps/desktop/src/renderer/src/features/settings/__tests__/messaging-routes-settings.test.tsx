@@ -1,9 +1,16 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ListMessagingRoutesResponse } from "@pwragent/shared";
+import type {
+  AppServerBackendKind,
+  ListMessagingRoutesResponse,
+} from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
-import { MessagingRoutesSettings } from "../MessagingRoutesSettings";
+import {
+  ApprovedSurfaceDefaultAgent,
+  MessagingRoutesProvider,
+  MessagingRoutesSettings,
+} from "../MessagingRoutesSettings";
 
 afterEach(() => {
   cleanup();
@@ -125,6 +132,23 @@ function buildDesktopApi(routes = buildRoutes()) {
   };
 }
 
+function renderRoutes(
+  desktopApi: DesktopApi,
+  onOpenThread?: (target: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }) => void,
+) {
+  return render(
+    <MessagingRoutesProvider desktopApi={desktopApi}>
+      <MessagingRoutesSettings
+        desktopApi={desktopApi}
+        onOpenThread={onOpenThread}
+      />
+    </MessagingRoutesProvider>,
+  );
+}
+
 describe("MessagingRoutesSettings", () => {
   it("shows an empty inventory when no messaging routes exist", async () => {
     const { desktopApi } = buildDesktopApi({
@@ -133,7 +157,7 @@ describe("MessagingRoutesSettings", () => {
       bindings: [],
     });
 
-    render(<MessagingRoutesSettings desktopApi={desktopApi} />);
+    renderRoutes(desktopApi);
 
     expect(
       await screen.findByText("No default Agents configured."),
@@ -146,7 +170,7 @@ describe("MessagingRoutesSettings", () => {
   it("shows a complete default and binding inventory", async () => {
     const { desktopApi } = buildDesktopApi();
 
-    render(<MessagingRoutesSettings desktopApi={desktopApi} />);
+    renderRoutes(desktopApi);
 
     expect(
       await screen.findByText("Slack / p-search-signals-project"),
@@ -186,7 +210,7 @@ describe("MessagingRoutesSettings", () => {
     routes.bindings = [];
     const { desktopApi } = buildDesktopApi(routes);
 
-    render(<MessagingRoutesSettings desktopApi={desktopApi} />);
+    renderRoutes(desktopApi);
 
     expect(
       await screen.findByText(
@@ -208,7 +232,7 @@ describe("MessagingRoutesSettings", () => {
     };
     const { desktopApi } = buildDesktopApi(routes);
 
-    render(<MessagingRoutesSettings desktopApi={desktopApi} />);
+    renderRoutes(desktopApi);
 
     expect(
       await screen.findByText("Unknown provider unavailable"),
@@ -219,12 +243,7 @@ describe("MessagingRoutesSettings", () => {
     const { desktopApi } = buildDesktopApi();
     const onOpenThread = vi.fn();
 
-    render(
-      <MessagingRoutesSettings
-        desktopApi={desktopApi}
-        onOpenThread={onOpenThread}
-      />,
-    );
+    renderRoutes(desktopApi, onOpenThread);
     await screen.findByText("Issue 13056");
 
     fireEvent.click(
@@ -244,9 +263,89 @@ describe("MessagingRoutesSettings", () => {
     });
   });
 
+  it("shows and changes a direct default from an approved surface", async () => {
+    const api = buildDesktopApi();
+
+    render(
+      <MessagingRoutesProvider desktopApi={api.desktopApi}>
+        <ApprovedSurfaceDefaultAgent
+          id="C13056"
+          label="Channel default Agent"
+          platform="slack"
+          scopeKind="conversation"
+          title="p-search-signals-project"
+        />
+        <MessagingRoutesSettings desktopApi={api.desktopApi} />
+      </MessagingRoutesProvider>,
+    );
+
+    expect(await screen.findByText("Channel default Agent")).toBeInTheDocument();
+    expect(screen.getAllByText("Search Signals Agent")).toHaveLength(2);
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Change default Agent for p-search-signals-project",
+      }),
+    );
+
+    expect(screen.getByText("Change default Agent")).toBeInTheDocument();
+    expect(
+      screen.getAllByText("Slack / p-search-signals-project"),
+    ).toHaveLength(2);
+    expect(api.listMessagingRoutes).toHaveBeenCalledTimes(1);
+  });
+
+  it("prefills a new default from an approved surface", async () => {
+    const api = buildDesktopApi();
+
+    render(
+      <MessagingRoutesProvider desktopApi={api.desktopApi}>
+        <ApprovedSurfaceDefaultAgent
+          id="C200"
+          label="Channel default Agent"
+          platform="slack"
+          scopeKind="conversation"
+          title="incident-response"
+        />
+        <MessagingRoutesSettings desktopApi={api.desktopApi} />
+      </MessagingRoutesProvider>,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Assign default Agent for incident-response",
+      }),
+    );
+
+    expect(screen.getByLabelText("Default scope")).toHaveValue("conversation");
+    expect(screen.getByLabelText("Messaging platform")).toHaveValue("slack");
+    expect(screen.getByLabelText("Conversation ID")).toHaveValue("C200");
+    expect(screen.getByLabelText("Display name (optional)")).toHaveValue(
+      "incident-response",
+    );
+    fireEvent.change(screen.getByLabelText("Default Agent"), {
+      target: { value: JSON.stringify(["codex", "agent-1"]) },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save default" }));
+
+    await waitFor(() => {
+      expect(api.setMessagingDefaultAgent).toHaveBeenCalledWith({
+        scope: {
+          kind: "conversation",
+          platform: "slack",
+          conversation: {
+            id: "C200",
+            kind: "channel",
+            title: "incident-response",
+          },
+        },
+        target: { backend: "codex", threadId: "agent-1" },
+      });
+    });
+  });
+
   it("adds a conversation default from Settings", async () => {
     const api = buildDesktopApi();
-    render(<MessagingRoutesSettings desktopApi={api.desktopApi} />);
+    renderRoutes(api.desktopApi);
     await screen.findByText("Search Signals Agent");
 
     fireEvent.click(screen.getByRole("button", { name: "Add default" }));
@@ -279,7 +378,7 @@ describe("MessagingRoutesSettings", () => {
 
   it("retargets and clears defaults and unbinds conversations", async () => {
     const api = buildDesktopApi();
-    render(<MessagingRoutesSettings desktopApi={api.desktopApi} />);
+    renderRoutes(api.desktopApi);
     await screen.findByText("Search Signals Agent");
 
     fireEvent.click(screen.getAllByRole("button", { name: "Change" })[0]!);

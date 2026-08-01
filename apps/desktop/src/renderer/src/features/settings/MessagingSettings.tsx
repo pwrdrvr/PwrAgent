@@ -61,7 +61,11 @@ import {
 } from "./SettingsLayout";
 import { SettingsSwitch } from "./SettingsSwitch";
 import { SettingsTestBlock } from "./SettingsTestBlock";
-import { MessagingRoutesSettings } from "./MessagingRoutesSettings";
+import {
+  ApprovedSurfaceDefaultAgent,
+  MessagingRoutesProvider,
+  MessagingRoutesSettings,
+} from "./MessagingRoutesSettings";
 import {
   formatSourceLabel,
   optionalListSourceBadge,
@@ -186,7 +190,8 @@ export function MessagingSettings(props: {
       : "Messaging is off because the app was launched with the no-messaging flag. You can override this for the current session by flipping the master toggle below, but make sure messaging is off in any other PwrAgent instances first. The override applies to this session only; the saved default is unchanged.";
 
   return (
-    <SettingsSectionStack paneId="messaging" aria-label="Messaging settings">
+    <MessagingRoutesProvider desktopApi={props.desktopApi}>
+      <SettingsSectionStack paneId="messaging" aria-label="Messaging settings">
       <SettingsPanelHead
         eyebrow="Messaging"
         title="Connected chat platforms"
@@ -467,6 +472,11 @@ export function MessagingSettings(props: {
             }}
           />
           <AuthorizedListField
+            defaultAgentSurface={{
+              label: "Topic default Agent",
+              platform: "telegram",
+              scopeKind: "parent",
+            }}
             disabled={props.saving}
             lookup={contactLookup(
               props.desktopApi,
@@ -601,6 +611,11 @@ export function MessagingSettings(props: {
             }}
           />
           <AuthorizedListField
+            defaultAgentSurface={{
+              label: "Server default Agent",
+              platform: "discord",
+              scopeKind: "workspace",
+            }}
             disabled={props.saving}
             lookup={contactLookup(
               props.desktopApi,
@@ -817,6 +832,11 @@ export function MessagingSettings(props: {
             }}
           />
           <AuthorizedListField
+            defaultAgentSurface={{
+              label: "Team default Agent",
+              platform: "mattermost",
+              scopeKind: "workspace",
+            }}
             disabled={props.saving}
             label="Authorized Teams"
             sub="Mattermost team IDs allowed for shared channel access."
@@ -835,6 +855,11 @@ export function MessagingSettings(props: {
             }}
           />
           <AuthorizedListField
+            defaultAgentSurface={{
+              label: "Channel default Agent",
+              platform: "mattermost",
+              scopeKind: "conversation",
+            }}
             disabled={props.saving}
             label="Authorized Conversations"
             sub="Mattermost channel or group DM IDs allowed even without allowing the whole team."
@@ -1023,6 +1048,11 @@ export function MessagingSettings(props: {
           />
           <div className="settings-subfield">
             <AuthorizedListField
+              defaultAgentSurface={{
+                label: "Workspace default Agent",
+                platform: "slack",
+                scopeKind: "workspace",
+              }}
               disabled={props.saving}
               lookup={contactLookup(
                 props.desktopApi,
@@ -1065,6 +1095,11 @@ export function MessagingSettings(props: {
           />
           <div className="settings-subfield">
             <AuthorizedListField
+              defaultAgentSurface={{
+                label: "Channel default Agent",
+                platform: "slack",
+                scopeKind: "conversation",
+              }}
               disabled={props.saving}
               lookup={contactLookup(
                 props.desktopApi,
@@ -1411,6 +1446,11 @@ export function MessagingSettings(props: {
             }}
           />
           <AuthorizedListField
+            defaultAgentSurface={{
+              label: "Chat default Agent",
+              platform: "feishu",
+              scopeKind: "conversation",
+            }}
             disabled={props.saving}
             lookup={contactLookup(props.desktopApi, "feishu", "chat")}
             label="Authorized Chats"
@@ -1430,6 +1470,11 @@ export function MessagingSettings(props: {
             }}
           />
           <AuthorizedListField
+            defaultAgentSurface={{
+              label: "Tenant default Agent",
+              platform: "feishu",
+              scopeKind: "workspace",
+            }}
             disabled={props.saving}
             lookup={contactLookup(props.desktopApi, "feishu", "tenant")}
             label="Authorized Tenants"
@@ -1581,6 +1626,11 @@ export function MessagingSettings(props: {
             }}
           />
           <AuthorizedListField
+            defaultAgentSurface={{
+              label: "Group default Agent",
+              platform: "line",
+              scopeKind: "conversation",
+            }}
             disabled={props.saving}
             lookup={contactLookup(props.desktopApi, "line", "group")}
             label="Authorized Groups"
@@ -1600,6 +1650,11 @@ export function MessagingSettings(props: {
             }}
           />
           <AuthorizedListField
+            defaultAgentSurface={{
+              label: "Room default Agent",
+              platform: "line",
+              scopeKind: "conversation",
+            }}
             disabled={props.saving}
             lookup={contactLookup(props.desktopApi, "line", "room")}
             label="Authorized Rooms"
@@ -1620,7 +1675,8 @@ export function MessagingSettings(props: {
           />
         </div>
       </SettingsSection>
-    </SettingsSectionStack>
+      </SettingsSectionStack>
+    </MessagingRoutesProvider>
   );
 }
 
@@ -2406,6 +2462,11 @@ function pairingEntryDetails(entry: MessagingPairingEntry): string[] {
 }
 
 function AuthorizedListField(props: {
+  defaultAgentSurface?: {
+    label: string;
+    platform: MessagingChannelKind;
+    scopeKind: "conversation" | "parent" | "workspace";
+  };
   disabled?: boolean;
   fullAccessWarningPolicy?: boolean;
   help?: ReactNode;
@@ -2599,16 +2660,16 @@ function AuthorizedListField(props: {
                 && !props.disabled
                 && !lookup?.loading;
               return (
-                <div
-                  key={index}
-                  className={`settings-authorized-list__row${
-                    props.fullAccessWarningPolicy
-                      ? " settings-authorized-list__row--with-warning"
-                      : props.responseModePolicy
-                        ? " settings-authorized-list__row--with-response-mode"
-                      : ""
-                  }`}
-                >
+                <div className="settings-authorized-list__item" key={index}>
+                  <div
+                    className={`settings-authorized-list__row${
+                      props.fullAccessWarningPolicy
+                        ? " settings-authorized-list__row--with-warning"
+                        : props.responseModePolicy
+                          ? " settings-authorized-list__row--with-response-mode"
+                        : ""
+                    }`}
+                  >
                   <div className="settings-authorized-list__field">
                     {showColumnHeaders ? (
                       <span
@@ -2770,15 +2831,26 @@ function AuthorizedListField(props: {
                   >
                     {lookup?.loading ? "Looking..." : "Lookup"}
                   </button>
-                  <button
-                    aria-label={`Remove ${props.label} row ${index + 1}`}
-                    className="button button--ghost settings-authorized-list__remove"
-                    disabled={props.disabled}
-                    type="button"
-                    onClick={() => removeEntry(index)}
-                  >
-                    Remove
-                  </button>
+                    <button
+                      aria-label={`Remove ${props.label} row ${index + 1}`}
+                      className="button button--ghost settings-authorized-list__remove"
+                      disabled={props.disabled}
+                      type="button"
+                      onClick={() => removeEntry(index)}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                  {props.defaultAgentSurface && normalized.id && !invalid ? (
+                    <ApprovedSurfaceDefaultAgent
+                      disabled={props.disabled}
+                      id={normalized.id}
+                      label={props.defaultAgentSurface.label}
+                      platform={props.defaultAgentSurface.platform}
+                      scopeKind={props.defaultAgentSurface.scopeKind}
+                      title={normalized.displayName}
+                    />
+                  ) : null}
                 </div>
               );
             })}

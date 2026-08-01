@@ -15,6 +15,7 @@ import type {
   AppServerThreadSummary,
   BackendSummary,
   DesktopSettingsSnapshot,
+  ListMessagingRoutesResponse,
   MessagingPairingEntry,
   WorktreeSnapshotSummary,
 } from "@pwragent/shared";
@@ -2361,6 +2362,86 @@ describe("SettingsScreen", () => {
         },
       });
     });
+  });
+
+  it("shows direct default Agents on approved messaging surfaces", async () => {
+    const baseSnapshot = createSnapshot();
+    const routes: ListMessagingRoutesResponse = {
+      eligibleAgents: [
+        {
+          backend: "codex",
+          threadId: "agent-1",
+          label: "Jeeves",
+          backendLabel: "OpenAI",
+          backendAvailable: true,
+          available: true,
+        },
+      ],
+      defaultAgents: [
+        {
+          assignmentId: "assignment-1",
+          scope: {
+            kind: "parent",
+            platform: "telegram",
+            conversationId: "-100123",
+          },
+          target: {
+            backend: "codex",
+            threadId: "agent-1",
+            label: "Jeeves",
+            backendLabel: "OpenAI",
+            backendAvailable: true,
+            available: true,
+          },
+          createdAt: 1,
+          updatedAt: 2,
+        },
+      ],
+      bindings: [],
+    };
+    const snapshot = createSnapshot({
+      messaging: {
+        ...baseSnapshot.messaging,
+        telegram: {
+          ...baseSnapshot.messaging.telegram,
+          authorizedUserIds: {
+            value: [{ id: "12345", displayName: "Harold" }],
+            source: "config",
+          },
+          authorizedSupergroups: {
+            value: [{ id: "-100123", displayName: "PwrAgent Dev" }],
+            source: "config",
+          },
+        },
+      },
+    });
+
+    render(
+      <SettingsScreen
+        desktopApi={{
+          listMessagingRoutes: vi.fn(async () => routes),
+          onMessagingBindingsChanged: () => () => undefined,
+        }}
+        initialSection="messaging"
+        settings={createSettingsState(snapshot)}
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(await screen.findByText("Topic default Agent")).toBeInTheDocument();
+    expect(screen.getAllByText("Jeeves")).toHaveLength(2);
+    expect(
+      screen.getAllByText("OpenAI").every(
+        (element) => element.classList.contains("chip--backend"),
+      ),
+    ).toBe(true);
+    expect(
+      screen.getByRole("button", {
+        name: "Change default Agent for PwrAgent Dev",
+      }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Direct message default Agent"))
+      .not.toBeInTheDocument();
   });
 
   it("validates messaging authorized IDs inline and refuses invalid saves", async () => {
