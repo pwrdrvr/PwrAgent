@@ -445,7 +445,8 @@ class MockTransport implements JsonRpcTransport {
         const matchesCodexWindow =
           params.params?.limit === 50 &&
           params.params?.sortKey === "updated_at" &&
-          JSON.stringify(params.params?.sourceKinds) === JSON.stringify(["cli", "vscode"]);
+          JSON.stringify(params.params?.sourceKinds) ===
+          JSON.stringify(["cli", "vscode", "subAgentThreadSpawn"]);
 
         this.messageHandler(
           JSON.stringify({
@@ -1294,7 +1295,7 @@ describe("CodexAppServerClient", () => {
             archived: false,
             limit: 50,
             sortKey: "updated_at",
-            sourceKinds: ["cli", "vscode"],
+            sourceKinds: ["cli", "vscode", "subAgentThreadSpawn"],
             useStateDbOnly: true,
           }
         }),
@@ -1338,6 +1339,67 @@ describe("CodexAppServerClient", () => {
         },
       ],
       source: "codex",
+    });
+
+    await client.close();
+  });
+
+  it("lists spawned agent threads with native parent provenance", async () => {
+    MockTransport.threadListResultBySearchTerm.set("native-subagent-source", [
+      {
+        id: "thread-parent",
+        preview: "Parent thread",
+        threadSource: "cli",
+        updatedAt: 1_777_500_000,
+        cwd: "/repo/app",
+      },
+      {
+        id: "thread-child",
+        preview: "Investigate the child task",
+        threadSource: "subAgentThreadSpawn",
+        parentThreadId: "thread-parent",
+        agentNickname: "route-scout",
+        agentRole: "explorer",
+        source: {
+          subAgent: {
+            thread_spawn: {
+              parent_thread_id: "thread-parent",
+              depth: 1,
+              agent_nickname: "route-scout",
+              agent_role: "explorer",
+            },
+          },
+        },
+        updatedAt: 1_777_500_100,
+        cwd: "/repo/app",
+      },
+      {
+        id: "thread-review-helper",
+        preview: "Review helper",
+        threadSource: "subAgentReview",
+        parentThreadId: "thread-parent",
+        source: { subAgent: "review" },
+        updatedAt: 1_777_500_200,
+        cwd: "/repo/app",
+      },
+    ]);
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const threads = await client.listThreads({ filter: "native-subagent-source" });
+
+    expect(threads.map((thread) => thread.id)).toEqual([
+      "thread-child",
+      "thread-parent",
+    ]);
+    expect(threads[0]?.codexNativeSubAgent).toEqual({
+      parentThreadId: "thread-parent",
+      depth: 1,
+      agentNickname: "route-scout",
+      agentRole: "explorer",
     });
 
     await client.close();
@@ -1966,7 +2028,7 @@ describe("CodexAppServerClient", () => {
             archived: false,
             limit: 50,
             sortKey: "updated_at",
-            sourceKinds: ["cli", "vscode"],
+            sourceKinds: ["cli", "vscode", "subAgentThreadSpawn"],
             useStateDbOnly: true,
           })
         }),
@@ -2281,7 +2343,7 @@ describe("CodexAppServerClient", () => {
           params: expect.objectContaining({
             searchTerm: "updated-at-sort",
             sortKey: "updated_at",
-            sourceKinds: ["cli", "vscode"],
+            sourceKinds: ["cli", "vscode", "subAgentThreadSpawn"],
             useStateDbOnly: true,
           }),
         }),
@@ -2319,7 +2381,7 @@ describe("CodexAppServerClient", () => {
           params: expect.objectContaining({
             searchTerm: "jsonl-mtime-repair",
             sortKey: "updated_at",
-            sourceKinds: ["cli", "vscode"],
+            sourceKinds: ["cli", "vscode", "subAgentThreadSpawn"],
             useStateDbOnly: true,
           }),
         }),
@@ -2390,7 +2452,7 @@ describe("CodexAppServerClient", () => {
             searchTerm: "search-product-parity",
             limit: 50,
             sortKey: "updated_at",
-            sourceKinds: ["cli", "vscode"],
+            sourceKinds: ["cli", "vscode", "subAgentThreadSpawn"],
           }),
         }),
       ]),
