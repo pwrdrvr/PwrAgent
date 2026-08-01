@@ -60,6 +60,7 @@ import {
 } from "./SettingsLayout";
 import { SettingsSwitch } from "./SettingsSwitch";
 import { SettingsTestBlock } from "./SettingsTestBlock";
+import { MessagingRoutesSettings } from "./MessagingRoutesSettings";
 import {
   formatSourceLabel,
   optionalListSourceBadge,
@@ -345,6 +346,8 @@ export function MessagingSettings(props: {
           ) : null}
         </div>
       </SettingsSection>
+
+      <MessagingRoutesSettings desktopApi={props.desktopApi} />
 
       <SettingsSection
         eyebrow="Messaging"

@@ -5,7 +5,6 @@ import type {
   BackendSummary,
   DesktopMessagingAgentRouteTarget,
   DesktopMessagingBindingRoute,
-  DesktopMessagingDefaultAgentRoute,
   DesktopMessagingDefaultAgentScope,
   ListMessagingRoutesResponse,
   SetMessagingDefaultAgentRequest,
