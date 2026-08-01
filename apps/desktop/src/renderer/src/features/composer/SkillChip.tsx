@@ -17,11 +17,22 @@ import {
 type SkillChipProps = {
   editorName?: string;
   label?: string;
-  onOpenInEditor?: (skill: AppServerSkillSummary & { path: string }) => void;
+  onOpenInEditor?: (skill: SkillChipActionTarget) => void;
   onRemove?: () => void;
-  onViewMarkdown?: (skill: AppServerSkillSummary & { path: string }) => void;
+  onViewMarkdown?: (skill: SkillChipActionTarget) => void;
   skill: AppServerSkillSummary;
+  target?: {
+    column?: number;
+    line?: number;
+    path: string;
+  };
   transcript?: boolean;
+};
+
+type SkillChipActionTarget = AppServerSkillSummary & {
+  column?: number;
+  line?: number;
+  path: string;
 };
 
 export function SkillChip(props: SkillChipProps) {
@@ -30,6 +41,14 @@ export function SkillChip(props: SkillChipProps) {
     useState<ChipContextMenuPosition>();
   const tooltipController = useViewportTooltip({ className: "viewport-tooltip" });
   const path = props.skill.path?.trim();
+  const actionTarget = path
+    ? {
+        ...props.skill,
+        column: props.target?.column,
+        line: props.target?.line,
+        path: props.target?.path ?? path,
+      }
+    : undefined;
   const transcriptPath = props.transcript ? path : undefined;
   const isTranscriptSkill = Boolean(transcriptPath);
   const tooltip = transcriptPath
@@ -43,26 +62,26 @@ export function SkillChip(props: SkillChipProps) {
   const handleActivate = (
     event: MouseEvent<HTMLSpanElement> | KeyboardEvent<HTMLSpanElement>,
   ): void => {
-    if (!path || !props.onViewMarkdown) {
+    if (!actionTarget || !props.onViewMarkdown) {
       return;
     }
 
     event.preventDefault();
     event.stopPropagation();
     tooltipController.hide();
-    props.onViewMarkdown({ ...props.skill, path });
+    props.onViewMarkdown(actionTarget);
   };
 
-  const contextMenuItems = path
+  const contextMenuItems = actionTarget
     ? skillContextMenuItems({
         editorName: props.editorName,
         onOpenInEditor: props.onOpenInEditor
-          ? () => props.onOpenInEditor?.({ ...props.skill, path })
+          ? () => props.onOpenInEditor?.(actionTarget)
           : undefined,
         onViewMarkdown: props.onViewMarkdown
-          ? () => props.onViewMarkdown?.({ ...props.skill, path })
+          ? () => props.onViewMarkdown?.(actionTarget)
           : undefined,
-        path,
+        path: actionTarget.path,
       })
     : [];
 

@@ -348,6 +348,7 @@ describe("ThreadMarkdown", () => {
   it("shows skill paths and replaces text selection with skill file actions", async () => {
     const skillPath = "/Users/huntharo/.codex/skills/frontend-design/SKILL.md";
     const openApplication = vi.fn(async () => ({ opened: true as const }));
+    const openMarkdownFileViewer = vi.fn(async () => ({ opened: true as const }));
     const readMarkdownFile = vi.fn(async () => ({
       path: skillPath,
       content: "# Frontend design\n\nVerify renderer UI work.",
@@ -377,7 +378,7 @@ describe("ThreadMarkdown", () => {
             discovery: { candidates: [] },
           },
         }}
-        desktopApi={{ openApplication, readMarkdownFile }}
+        desktopApi={{ openApplication, openMarkdownFileViewer, readMarkdownFile }}
         skills={[
           {
             name: "frontend-design",
@@ -386,7 +387,7 @@ describe("ThreadMarkdown", () => {
             enabled: true,
           },
         ]}
-        text={`Load [$frontend-design](${skillPath})`}
+        text={`Load [$frontend-design](${skillPath}:17:4)`}
       />
     );
 
@@ -430,6 +431,18 @@ describe("ThreadMarkdown", () => {
     expect(screen.getByRole("heading", { name: "Frontend design" }))
       .toBeInTheDocument();
 
+    fireEvent.click(screen.getByRole("button", { name: "Open in detached files window" }));
+    await waitFor(() => {
+      expect(openMarkdownFileViewer).toHaveBeenCalledWith(expect.objectContaining({
+        file: {
+          column: 4,
+          label: "$frontend-design",
+          line: 17,
+          path: skillPath,
+        },
+      }));
+    });
+
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     fireEvent.contextMenu(chip, { clientX: 120, clientY: 80 });
     fireEvent.click(screen.getByRole("menuitem", {
@@ -441,8 +454,8 @@ describe("ThreadMarkdown", () => {
         applicationId: "zed",
         kind: "editor",
         targetPath: skillPath,
-        targetLine: undefined,
-        targetColumn: undefined,
+        targetLine: 17,
+        targetColumn: 4,
       });
     });
   });

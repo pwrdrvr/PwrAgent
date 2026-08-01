@@ -115,6 +115,8 @@ type MarkdownViewerTarget = LocalFileTarget & {
   label: string;
 };
 
+type SkillActionTarget = AppServerSkillSummary & LocalFileTarget;
+
 export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdownProps) {
   const markdownText = useMemo(
     () => protectComposerHyphenListItems(repairNestedLanguageFences(props.text)),
@@ -191,13 +193,15 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
   );
 
   const viewSkillMarkdown = useCallback(
-    (skill: AppServerSkillSummary & { path: string }): void => {
+    (skill: SkillActionTarget): void => {
       if (!props.desktopApi?.readMarkdownFile) {
         return;
       }
 
       setMarkdownViewerTarget({
+        column: skill.column,
         label: `$${skill.name}`,
+        line: skill.line,
         path: skill.path,
       });
     },
@@ -205,8 +209,12 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
   );
 
   const openSkillMarkdownInEditor = useCallback(
-    (skill: AppServerSkillSummary & { path: string }): void => {
-      openLocalFileInEditor({ path: skill.path });
+    (skill: SkillActionTarget): void => {
+      openLocalFileInEditor({
+        column: skill.column,
+        line: skill.line,
+        path: skill.path,
+      });
     },
     [openLocalFileInEditor]
   );
@@ -219,7 +227,7 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
         const isLocalMarkdownFile = Boolean(
           localTarget && isMarkdownFilePath(localTarget.path)
         );
-        const skillPath = normalizeSkillPath(href);
+        const skillPath = localTarget?.path;
         const label = extractTextContent(anchorProps.children).trim();
         const source = sourceForNode(markdownText, anchorProps.node);
 
@@ -300,6 +308,7 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
                 ? viewSkillMarkdown
                 : undefined}
               skill={skill}
+              target={localTarget}
               transcript={true}
             />
           );
@@ -912,18 +921,6 @@ function sourceForNode(
   return markdown.slice(start, end);
 }
 
-function normalizeSkillPath(href: string): string | undefined {
-  if (href.startsWith("file://")) {
-    return stripFileLineSuffix(decodeURIComponent(href.replace(/^file:\/\//, "")));
-  }
-
-  if (href.startsWith("/")) {
-    return stripFileLineSuffix(href);
-  }
-
-  return undefined;
-}
-
 function isSkillMarkdownPath(filePath: string): boolean {
   return /(?:^|\/)SKILL\.md$/i.test(filePath);
 }
@@ -981,10 +978,6 @@ function denormalizeMarkdownUrl(url: string): string {
   }
 
   return url;
-}
-
-function stripFileLineSuffix(filePath: string): string {
-  return splitFileLineSuffix(filePath).path;
 }
 
 function splitFileLineSuffix(filePath: string): {
