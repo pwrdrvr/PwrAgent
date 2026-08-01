@@ -2,6 +2,7 @@ import {
   isThreadLinkId,
   parseThreadUrl,
   type AppServerBackendKind,
+  type LinkedDirectorySummary,
   type NavigationThreadSummary,
   type ThreadLinkRef,
 } from "@pwragent/shared";
@@ -21,6 +22,7 @@ export type ResolvedThreadLink = {
   threadId: string;
   title: string;
   gitBranch?: string;
+  linkedDirectories?: LinkedDirectorySummary[];
 };
 
 export type ThreadLinkContextValue = {
@@ -45,6 +47,7 @@ function threadSummaryLink(thread: NavigationThreadSummary): ResolvedThreadLink 
     threadId: thread.id,
     title: thread.title,
     gitBranch: thread.gitBranch,
+    linkedDirectories: thread.linkedDirectories,
   };
 }
 
@@ -55,7 +58,23 @@ function sameThreadLink(
   return Boolean(
     left
     && left.title === right.title
-    && left.gitBranch === right.gitBranch,
+    && left.gitBranch === right.gitBranch
+    && linkedDirectoryMetadata(left.linkedDirectories)
+      === linkedDirectoryMetadata(right.linkedDirectories)
+  );
+}
+
+function linkedDirectoryMetadata(
+  directories: LinkedDirectorySummary[] | undefined,
+): string {
+  return JSON.stringify(
+    (directories ?? []).map((directory) => [
+      directory.id,
+      directory.label,
+      directory.kind,
+      directory.path,
+      directory.worktreePath ?? null,
+    ]),
   );
 }
 
@@ -66,6 +85,7 @@ function threadLinkMetadataKey(threads: NavigationThreadSummary[]): string {
       thread.id,
       thread.title,
       thread.gitBranch ?? null,
+      linkedDirectoryMetadata(thread.linkedDirectories),
     ]),
   );
 }

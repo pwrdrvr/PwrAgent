@@ -97,8 +97,8 @@ export function ChipContextMenu(props: ChipContextMenuProps) {
       onContextMenu={(event) => event.preventDefault()}
     >
       <div className="thread-context-menu__section">
-        {items.map((item) => (
-          <div key={item.label}>
+        {items.map((item, index) => (
+          <div key={`${item.label}:${index}`}>
             {item.separated ? (
               <div className="thread-context-menu__separator" role="separator" />
             ) : null}

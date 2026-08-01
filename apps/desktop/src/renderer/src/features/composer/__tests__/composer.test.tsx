@@ -12422,7 +12422,15 @@ describe("Composer", () => {
       title: "Lovely child thread",
       titleSource: "explicit",
       source: "codex",
-      linkedDirectories: [],
+      linkedDirectories: [
+        {
+          id: "dir-worktree",
+          kind: "worktree",
+          label: "PwrAgent",
+          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+          worktreePath: "/Users/huntharo/.codex/worktrees/child/PwrAgent",
+        },
+      ],
       inbox: { inInbox: false },
     };
     const startTurn = vi.fn(async () => ({
@@ -12492,6 +12500,8 @@ describe("Composer", () => {
     expect(screen.getByRole("menuitem", { name: "Copy Thread ID" }))
       .toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: "Copy Thread Name" }))
+      .toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Copy Thread Directory" }))
       .toBeInTheDocument();
     fireEvent.keyDown(window, { key: "Escape" });
 

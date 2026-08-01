@@ -36,7 +36,10 @@ import {
   ChipContextMenu,
   type ChipContextMenuPosition,
 } from "../chrome/ChipContextMenu";
-import { threadCopyTargets } from "../chrome/ThreadChipContextMenu";
+import {
+  threadCopyTargets,
+  type ThreadChipMenuLink,
+} from "../chrome/ThreadChipContextMenu";
 import type {
   ComposerInputChangeMetadata,
   ComposerInputHandle,
@@ -63,6 +66,7 @@ type ComposerTiptapInputProps = {
   onKeyDown?: (event: KeyboardEvent<HTMLDivElement>) => void;
   onPaste?: (event: ClipboardEvent<HTMLDivElement>) => void;
   placeholder: string;
+  resolveThreadLink?: (link: ThreadLinkRef) => ThreadChipMenuLink | undefined;
   selectionRequest?: {
     id: string;
     index: number;
@@ -90,7 +94,7 @@ type ControlledHistoryEntry = TiptapReadState & {
 
 type ComposerThreadContextMenuState = {
   label: string;
-  link: ThreadLinkRef;
+  link: ThreadChipMenuLink;
   position: ChipContextMenuPosition;
   returnFocusTo: HTMLElement;
 };
@@ -2687,7 +2691,7 @@ export const ComposerTiptapInput = forwardRef<
         const rect = target.getBoundingClientRect();
         setThreadContextMenu({
           label: target.dataset.skillName || target.textContent || link.threadId,
-          link,
+          link: propsRef.current.resolveThreadLink?.(link) ?? link,
           position: {
             x: event.clientX,
             y: event.clientY,

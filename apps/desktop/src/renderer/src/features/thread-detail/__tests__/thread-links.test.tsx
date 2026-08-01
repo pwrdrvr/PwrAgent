@@ -51,7 +51,18 @@ describe("thread links in transcript markdown", () => {
     renderWithLinks(
       `Created [the handoff](pwragent://thread/${CHILD_THREAD_ID}?backend=codex)`,
       {
-        threads: [threadSummary({ gitBranch: "agent/thread-chip-menu" })],
+        threads: [threadSummary({
+          gitBranch: "agent/thread-chip-menu",
+          linkedDirectories: [
+            {
+              id: "dir-worktree",
+              kind: "worktree",
+              label: "PwrAgent",
+              path: "/Users/huntharo/pwrdrvr/PwrAgent",
+              worktreePath: "/Users/huntharo/.codex/worktrees/thread-menu/PwrAgent",
+            },
+          ],
+        })],
       },
     );
     const chip = screen.getByRole("button", {
@@ -80,6 +91,9 @@ describe("thread links in transcript markdown", () => {
     })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", {
       name: "Copy Branch Name",
+    })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", {
+      name: "Copy Thread Directory",
     })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("menuitem", { name: "Copy Thread Link" }));
@@ -126,6 +140,15 @@ describe("thread links in transcript markdown", () => {
       threadId: CHILD_THREAD_ID,
       title: "RELATED query deranking issue",
       gitBranch: "agent/thread-chip-menu",
+      linkedDirectories: [
+        {
+          id: "dir-worktree",
+          kind: "worktree",
+          label: "PwrAgent",
+          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+          worktreePath: "/Users/huntharo/.codex/worktrees/thread-menu/PwrAgent",
+        },
+      ],
     }, "RELATED query deranking issue")).toEqual([
       {
         label: "Copy Thread Link",
@@ -143,6 +166,47 @@ describe("thread links in transcript markdown", () => {
       {
         label: "Copy Branch Name",
         copyValue: "agent/thread-chip-menu",
+      },
+      {
+        label: "Copy Thread Directory",
+        copyValue: "/Users/huntharo/.codex/worktrees/thread-menu/PwrAgent",
+      },
+    ]);
+  });
+
+  it("offers each distinct thread directory when a thread links several", () => {
+    expect(threadCopyTargets({
+      backend: "codex",
+      threadId: CHILD_THREAD_ID,
+      linkedDirectories: [
+        {
+          id: "dir-local",
+          kind: "local",
+          label: "PwrAgent",
+          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+        },
+        {
+          id: "dir-worktree",
+          kind: "worktree",
+          label: "Docs",
+          path: "/Users/huntharo/pwrdrvr/docs.pwragent.ai",
+          worktreePath: "/Users/huntharo/.codex/worktrees/docs/docs.pwragent.ai",
+        },
+        {
+          id: "dir-duplicate",
+          kind: "local",
+          label: "Duplicate",
+          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+        },
+      ],
+    }, "RELATED query deranking issue").slice(3)).toEqual([
+      {
+        label: "Copy Thread Directory — PwrAgent (local)",
+        copyValue: "/Users/huntharo/pwrdrvr/PwrAgent",
+      },
+      {
+        label: "Copy Thread Directory — Docs (worktree)",
+        copyValue: "/Users/huntharo/.codex/worktrees/docs/docs.pwragent.ai",
       },
     ]);
   });
