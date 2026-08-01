@@ -1,11 +1,18 @@
 import "@testing-library/jest-dom/vitest";
 import type { AppServerBackendKind, NavigationThreadSummary } from "@pwragent/shared";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ThreadLinkProvider } from "../../../lib/thread-links";
+import { threadCopyTargets } from "../ThreadChip";
 import { ThreadMarkdown } from "../ThreadMarkdown";
 
 const CHILD_THREAD_ID = "019f5d79-a595-73f2-84d9-a0976762c303";
+const copyText = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock("../../../lib/copy-text", () => ({ copyText }));
+
+afterEach(() => {
+  copyText.mockClear();
+});
 
 function threadSummary(
   overrides: Partial<NavigationThreadSummary> = {},
@@ -40,6 +47,170 @@ function renderWithLinks(
 }
 
 describe("thread links in transcript markdown", () => {
+  it("replaces partial text selection with thread-specific copy actions", () => {
+    renderWithLinks(
+      `Created [the handoff](pwragent://thread/${CHILD_THREAD_ID}?backend=codex)`,
+      {
+        threads: [threadSummary({
+          gitBranch: "agent/thread-chip-menu",
+          linkedDirectories: [
+            {
+              id: "dir-worktree",
+              kind: "worktree",
+              label: "PwrAgent",
+              path: "/Users/huntharo/pwrdrvr/PwrAgent",
+              worktreePath: "/Users/huntharo/.codex/worktrees/thread-menu/PwrAgent",
+            },
+          ],
+        })],
+      },
+    );
+    const chip = screen.getByRole("button", {
+      name: "Open thread RELATED query deranking issue",
+    });
+    const contextMenuEvent = new MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+      clientX: 120,
+      clientY: 80,
+    });
+
+    fireEvent(chip, contextMenuEvent);
+
+    expect(contextMenuEvent.defaultPrevented).toBe(true);
+    expect(chip).toHaveAttribute("draggable", "false");
+    expect(chip).toHaveAttribute("aria-haspopup", "menu");
+    expect(screen.getByRole("menuitem", {
+      name: "Copy Thread Link",
+    })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", {
+      name: "Copy Thread ID",
+    })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", {
+      name: "Copy Thread Name",
+    })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", {
+      name: "Copy Branch Name",
+    })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", {
+      name: "Copy Thread Directory",
+    })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Copy Thread Link" }));
+    expect(copyText).toHaveBeenCalledWith(
+      `pwragent://thread/${CHILD_THREAD_ID}?backend=codex`,
+    );
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(chip).toHaveFocus();
+  });
+
+  it("keeps one copy menu open and restores focus on Escape", () => {
+    const secondThreadId = "019f5d79-a595-73f2-84d9-a0976762c304";
+    renderWithLinks(
+      [
+        `[first](pwragent://thread/${CHILD_THREAD_ID}?backend=codex)`,
+        `[second](pwragent://thread/${secondThreadId}?backend=codex)`,
+      ].join(" "),
+      {
+        threads: [
+          threadSummary({ title: "First thread" }),
+          threadSummary({ id: secondThreadId, title: "Second thread" }),
+        ],
+      },
+    );
+    const firstChip = screen.getByRole("button", { name: "Open thread First thread" });
+    const secondChip = screen.getByRole("button", { name: "Open thread Second thread" });
+
+    fireEvent.contextMenu(firstChip, { clientX: 80, clientY: 60 });
+    expect(screen.getAllByRole("menu")).toHaveLength(1);
+
+    secondChip.focus();
+    fireEvent.contextMenu(secondChip, { clientX: 160, clientY: 90 });
+    expect(screen.getAllByRole("menu")).toHaveLength(1);
+    expect(screen.getByRole("menuitem", { name: "Copy Thread Link" })).toHaveFocus();
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(secondChip).toHaveFocus();
+  });
+
+  it("builds exact copy values from live thread metadata", () => {
+    expect(threadCopyTargets({
+      backend: "codex",
+      threadId: CHILD_THREAD_ID,
+      title: "RELATED query deranking issue",
+      gitBranch: "agent/thread-chip-menu",
+      linkedDirectories: [
+        {
+          id: "dir-worktree",
+          kind: "worktree",
+          label: "PwrAgent",
+          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+          worktreePath: "/Users/huntharo/.codex/worktrees/thread-menu/PwrAgent",
+        },
+      ],
+    }, "RELATED query deranking issue")).toEqual([
+      {
+        label: "Copy Thread Link",
+        copyValue: `pwragent://thread/${CHILD_THREAD_ID}?backend=codex`,
+      },
+      {
+        label: "Copy Thread ID",
+        copyValue: CHILD_THREAD_ID,
+        separated: true,
+      },
+      {
+        label: "Copy Thread Name",
+        copyValue: "RELATED query deranking issue",
+      },
+      {
+        label: "Copy Branch Name",
+        copyValue: "agent/thread-chip-menu",
+      },
+      {
+        label: "Copy Thread Directory",
+        copyValue: "/Users/huntharo/.codex/worktrees/thread-menu/PwrAgent",
+      },
+    ]);
+  });
+
+  it("offers each distinct thread directory when a thread links several", () => {
+    expect(threadCopyTargets({
+      backend: "codex",
+      threadId: CHILD_THREAD_ID,
+      linkedDirectories: [
+        {
+          id: "dir-local",
+          kind: "local",
+          label: "PwrAgent",
+          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+        },
+        {
+          id: "dir-worktree",
+          kind: "worktree",
+          label: "Docs",
+          path: "/Users/huntharo/pwrdrvr/docs.pwragent.ai",
+          worktreePath: "/Users/huntharo/.codex/worktrees/docs/docs.pwragent.ai",
+        },
+        {
+          id: "dir-duplicate",
+          kind: "local",
+          label: "Duplicate",
+          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+        },
+      ],
+    }, "RELATED query deranking issue").slice(3)).toEqual([
+      {
+        label: "Copy Thread Directory — PwrAgent (local)",
+        copyValue: "/Users/huntharo/pwrdrvr/PwrAgent",
+      },
+      {
+        label: "Copy Thread Directory — Docs (worktree)",
+        copyValue: "/Users/huntharo/.codex/worktrees/docs/docs.pwragent.ai",
+      },
+    ]);
+  });
+
   it("renders a pwragent thread link as a chip showing the thread's live title", () => {
     renderWithLinks(
       `Created [the handoff](pwragent://thread/${CHILD_THREAD_ID}?backend=codex)`,

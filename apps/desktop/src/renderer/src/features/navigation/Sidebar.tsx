@@ -417,9 +417,11 @@ export function Sidebar(props: SidebarProps) {
     };
 
     window.addEventListener("click", closeMenu);
+    window.addEventListener("contextmenu", closeMenu, true);
     window.addEventListener("keydown", closeOnEscape);
     return () => {
       window.removeEventListener("click", closeMenu);
+      window.removeEventListener("contextmenu", closeMenu, true);
       window.removeEventListener("keydown", closeOnEscape);
     };
   }, [contextMenu]);
@@ -437,9 +439,11 @@ export function Sidebar(props: SidebarProps) {
     };
 
     window.addEventListener("click", closeMenu);
+    window.addEventListener("contextmenu", closeMenu, true);
     window.addEventListener("keydown", closeOnEscape);
     return () => {
       window.removeEventListener("click", closeMenu);
+      window.removeEventListener("contextmenu", closeMenu, true);
       window.removeEventListener("keydown", closeOnEscape);
     };
   }, [directoryContextMenu]);
@@ -457,9 +461,11 @@ export function Sidebar(props: SidebarProps) {
     };
 
     window.addEventListener("click", closeMenu);
+    window.addEventListener("contextmenu", closeMenu, true);
     window.addEventListener("keydown", closeOnEscape);
     return () => {
       window.removeEventListener("click", closeMenu);
+      window.removeEventListener("contextmenu", closeMenu, true);
       window.removeEventListener("keydown", closeOnEscape);
     };
   }, [profileMenuOpen]);

@@ -1,7 +1,19 @@
 import "@testing-library/jest-dom/vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ThreadMarkdown } from "../ThreadMarkdown";
+
+const copyText = vi.hoisted(() => vi.fn(async (
+  text: string,
+  desktopApi?: { copyText?: (value: string) => Promise<void> },
+) => {
+  await desktopApi?.copyText?.(text);
+}));
+vi.mock("../../../lib/copy-text", () => ({ copyText }));
+
+afterEach(() => {
+  copyText.mockClear();
+});
 
 const sanitizedReviewFindingsTable = `| # | Sev | File | Issue | Fix |
 |---:|:---:|---|---|---|
@@ -42,16 +54,16 @@ describe("ThreadMarkdown", () => {
   it("renders markdown formatting and local file links", () => {
     render(
       <ThreadMarkdown
-        text={"Use **bold** text and open [`ce:work`](/Users/huntharo/.codex/skills/ce-work/SKILL.md)."}
+        text={"Use **bold** text and open [`AGENTS.md`](/Users/huntharo/PwrAgent/AGENTS.md)."}
       />
     );
 
     expect(screen.getByText("bold", { selector: "strong" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "ce:work" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "AGENTS.md" })).toHaveAttribute(
       "href",
-      "file:///Users/huntharo/.codex/skills/ce-work/SKILL.md"
+      "file:///Users/huntharo/PwrAgent/AGENTS.md"
     );
-    expect(screen.getByRole("link", { name: "ce:work" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "AGENTS.md" })).toHaveAttribute(
       "title",
       "Open in PwrAgent"
     );
@@ -307,6 +319,145 @@ describe("ThreadMarkdown", () => {
 
     expect(screen.getByText("$frontend-design")).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "$frontend-design" })).not.toBeInTheDocument();
+  });
+
+  it("renders explicit SKILL.md links as chips without live skill inventory", () => {
+    const skillPath = [
+      "/Users/huntharo/.codex/plugins/cache/openai-curated-remote/github",
+      "0.1.8-2841cf9749ae/skills/yeet/SKILL.md",
+    ].join("/");
+    const { container } = render(
+      <ThreadMarkdown
+        text={`[Open the GitHub Publish Skill](${skillPath})`}
+      />
+    );
+
+    const chip = screen.getByText("Open the GitHub Publish Skill")
+      .closest("[data-skill-chip]");
+    expect(chip).toBeInTheDocument();
+    expect(chip).toHaveAttribute("draggable", "false");
+    expect(screen.queryByRole("link", { name: "Open the GitHub Publish Skill" }))
+      .not.toBeInTheDocument();
+    expect(container.querySelector(".thread-markdown__editor-link")).toBeNull();
+
+    fireEvent.contextMenu(chip!, { clientX: 120, clientY: 80 });
+    expect(screen.getByRole("menuitem", { name: "Copy Skill Path" }))
+      .toBeInTheDocument();
+  });
+
+  it("shows skill paths and replaces text selection with skill file actions", async () => {
+    const skillPath = "/Users/huntharo/.codex/skills/frontend-design/SKILL.md";
+    const openApplication = vi.fn(async () => ({ opened: true as const }));
+    const openMarkdownFileViewer = vi.fn(async () => ({ opened: true as const }));
+    const readMarkdownFile = vi.fn(async () => ({
+      path: skillPath,
+      content: "# Frontend design\n\nVerify renderer UI work.",
+    }));
+
+    render(
+      <ThreadMarkdown
+        applications={{
+          editors: [
+            {
+              id: "zed",
+              kind: "editor",
+              name: "Zed",
+              source: "application",
+              appPath: "/Applications/Zed.app",
+              canOpenWorkspace: true,
+            },
+          ],
+          terminals: [],
+          preferredEditorId: { value: "zed", source: "config" },
+          preferredTerminalId: { value: "", source: "default" },
+          gh: {
+            path: { value: "", source: "default" },
+            discovery: { candidates: [] },
+          },
+          git: {
+            discovery: { candidates: [] },
+          },
+        }}
+        desktopApi={{ openApplication, openMarkdownFileViewer, readMarkdownFile }}
+        skills={[
+          {
+            name: "frontend-design",
+            description: "Design and verify renderer UI work.",
+            path: skillPath,
+            enabled: true,
+          },
+        ]}
+        text={`Load [$frontend-design](${skillPath}:17:4)`}
+      />
+    );
+
+    const chip = screen.getByRole("button", { name: "View skill frontend-design" });
+    expect(chip).toHaveAttribute("draggable", "false");
+    expect(chip).toHaveAttribute("aria-haspopup", "menu");
+
+    fireEvent.mouseEnter(chip);
+    expect(screen.getByRole("tooltip")).toHaveTextContent(skillPath);
+    expect(screen.getByRole("tooltip")).toHaveTextContent(
+      "Right-click for skill actions",
+    );
+
+    const contextMenuEvent = new MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+      clientX: 120,
+      clientY: 80,
+    });
+    fireEvent(chip, contextMenuEvent);
+
+    expect(contextMenuEvent.defaultPrevented).toBe(true);
+    expect(screen.getByRole("menuitem", { name: "View Skill Markdown" }))
+      .toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Open Skill Markdown in Zed" }))
+      .toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Copy Skill Path" }))
+      .toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Copy Skill Path" }));
+    expect(copyText).toHaveBeenCalledWith(skillPath);
+    expect(chip).toHaveFocus();
+
+    fireEvent.contextMenu(chip, { clientX: 120, clientY: 80 });
+    fireEvent.click(screen.getByRole("menuitem", { name: "View Skill Markdown" }));
+
+    expect(await screen.findByRole("dialog", {
+      name: "Markdown document: $frontend-design",
+    })).toBeInTheDocument();
+    expect(readMarkdownFile).toHaveBeenCalledWith({ path: skillPath });
+    expect(screen.getByRole("heading", { name: "Frontend design" }))
+      .toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Open in detached files window" }));
+    await waitFor(() => {
+      expect(openMarkdownFileViewer).toHaveBeenCalledWith(expect.objectContaining({
+        file: {
+          column: 4,
+          label: "$frontend-design",
+          line: 17,
+          path: skillPath,
+        },
+      }));
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    fireEvent.contextMenu(chip, { clientX: 120, clientY: 80 });
+    fireEvent.click(screen.getByRole("menuitem", {
+      name: "Open Skill Markdown in Zed",
+    }));
+
+    await waitFor(() => {
+      expect(openApplication).toHaveBeenCalledWith({
+        applicationId: "zed",
+        kind: "editor",
+        targetPath: skillPath,
+        targetLine: 17,
+        targetColumn: 4,
+      });
+    });
   });
 
   it("renders emoji, italic, strikethrough, and inline code", () => {

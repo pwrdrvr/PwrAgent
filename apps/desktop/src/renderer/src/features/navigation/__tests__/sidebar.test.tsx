@@ -847,6 +847,30 @@ describe("Sidebar", () => {
     expect(onCreateSubthread).toHaveBeenCalledWith(sharedThread, "same-worktree");
   });
 
+  it("closes its context menu when another renderer menu opens", () => {
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="inbox"
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        loading={false}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Cross-project cleanup" }));
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+
+    fireEvent.contextMenu(document.body);
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
   it("opens a local sub-thread launchpad only for local parent threads", () => {
     const onCreateSubthread = vi.fn(async () => undefined);
     render(

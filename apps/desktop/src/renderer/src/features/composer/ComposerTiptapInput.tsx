@@ -5,6 +5,7 @@ import {
   useLayoutEffect,
   useMemo,
   useRef,
+  useState,
   type ClipboardEvent,
   type DragEvent,
   type KeyboardEvent,
@@ -15,7 +16,11 @@ import Mention from "@tiptap/extension-mention";
 import StarterKit from "@tiptap/starter-kit";
 import { closeHistory } from "prosemirror-history";
 import { EditorContent, useEditor, type JSONContent } from "@tiptap/react";
-import type { AppServerSkillSummary } from "@pwragent/shared";
+import {
+  parseThreadUrl,
+  type AppServerSkillSummary,
+  type ThreadLinkRef,
+} from "@pwragent/shared";
 import {
   parseBacktickFenceLine,
   repairNestedLanguageFences,
@@ -27,6 +32,14 @@ import {
   findDirectoryReferenceTrigger,
 } from "../../lib/directory-references";
 import { tildifyPath } from "../../lib/tildify-path";
+import {
+  ChipContextMenu,
+  type ChipContextMenuPosition,
+} from "../chrome/ChipContextMenu";
+import {
+  threadCopyTargets,
+  type ThreadChipMenuLink,
+} from "../chrome/ThreadChipContextMenu";
 import type {
   ComposerInputChangeMetadata,
   ComposerInputHandle,
@@ -53,6 +66,7 @@ type ComposerTiptapInputProps = {
   onKeyDown?: (event: KeyboardEvent<HTMLDivElement>) => void;
   onPaste?: (event: ClipboardEvent<HTMLDivElement>) => void;
   placeholder: string;
+  resolveThreadLink?: (link: ThreadLinkRef) => ThreadChipMenuLink | undefined;
   selectionRequest?: {
     id: string;
     index: number;
@@ -76,6 +90,13 @@ type DeletedSingleSkillState = TiptapReadState & {
 type ControlledHistoryEntry = TiptapReadState & {
   editorDocument: JSONContent;
   selectionIndex: number;
+};
+
+type ComposerThreadContextMenuState = {
+  label: string;
+  link: ThreadChipMenuLink;
+  position: ChipContextMenuPosition;
+  returnFocusTo: HTMLElement;
 };
 
 type TiptapEditor = NonNullable<ReturnType<typeof useEditor>>;
@@ -139,6 +160,8 @@ const SkillMention = Mention.extend({
           "data-label": label,
           "data-skill-name": label,
           "data-thread-chip": "",
+          "aria-haspopup": "menu",
+          draggable: "false",
           ...(path ? { "data-skill-path": path } : {}),
           ...(path ? { "data-tooltip": `${label}\n${path}` } : {}),
         },
@@ -1926,6 +1949,8 @@ export const ComposerTiptapInput = forwardRef<
 >(function ComposerTiptapInput(props, ref) {
   const propsRef = useRef(props);
   const editorRef = useRef<TiptapEditor | null>(null);
+  const [threadContextMenu, setThreadContextMenu] =
+    useState<ComposerThreadContextMenuState>();
   const selectionIndexRef = useRef(props.value.length);
   const pendingExternalSignatureRef = useRef<string | undefined>(undefined);
   const pendingSelectionIndexRef = useRef<number | undefined>(undefined);
@@ -2647,6 +2672,34 @@ export const ComposerTiptapInput = forwardRef<
       data-placeholder={props.placeholder}
       data-testid="composer-tiptap-input"
       data-value={props.value}
+      onContextMenu={(event) => {
+        const target = event.target instanceof Element
+          ? event.target.closest<HTMLElement>('[data-mention-kind="thread"]')
+          : null;
+        if (!target || !event.currentTarget.contains(target)) {
+          return;
+        }
+
+        const link = parseThreadUrl(target.dataset.skillPath ?? "");
+        if (!link) {
+          return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+        window.getSelection()?.removeAllRanges();
+        const rect = target.getBoundingClientRect();
+        setThreadContextMenu({
+          label: target.dataset.skillName || target.textContent || link.threadId,
+          link: propsRef.current.resolveThreadLink?.(link) ?? link,
+          position: {
+            x: event.clientX,
+            y: event.clientY,
+            anchorTop: rect.top,
+          },
+          returnFocusTo: editor?.view.dom ?? target,
+        });
+      }}
       onKeyDownCapture={(event) => {
         if (!editor || event.defaultPrevented) {
           return;
@@ -2710,6 +2763,17 @@ export const ComposerTiptapInput = forwardRef<
       }}
     >
       <EditorContent editor={editor} />
+      {threadContextMenu ? (
+        <ChipContextMenu
+          items={threadCopyTargets(
+            threadContextMenu.link,
+            threadContextMenu.label,
+          )}
+          onClose={() => setThreadContextMenu(undefined)}
+          position={threadContextMenu.position}
+          returnFocusTo={threadContextMenu.returnFocusTo}
+        />
+      ) : null}
     </div>
   );
 });

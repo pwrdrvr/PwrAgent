@@ -3801,6 +3801,8 @@ textarea,
   font-size: 11px;
   font-weight: 500;
   line-height: 1;
+  -webkit-user-select: none;
+  user-select: none;
   transition:
     background 120ms ease,
     border-color 120ms ease;
@@ -4441,6 +4443,10 @@ textarea,
   border-radius: 8px;
   background: var(--bg-panel-elevated);
   box-shadow: var(--shadow-popover);
+}
+
+.chip-context-menu {
+  min-width: 220px;
 }
 
 .thread-context-menu button {
@@ -12033,6 +12039,22 @@ a.transcript-message__messaging-origin:focus-visible {
   border: 1px solid var(--border-subtle);
 }
 
+.skill-chip--transcript {
+  cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.skill-chip--transcript:hover,
+.skill-chip--transcript:focus-visible {
+  background: var(--accent-soft);
+}
+
+.skill-chip--transcript:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
 /* Composer directory-reference mention chip (`@label`). Same silhouette
    as the skill chip; neutral surface so the accent stays reserved for
    skills, per the one-accent rule. */
@@ -12101,6 +12123,8 @@ a.transcript-message__messaging-origin:focus-visible {
   vertical-align: middle;
   border: 1px solid var(--accent-border);
   cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .thread-chip:hover,

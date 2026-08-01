@@ -12537,7 +12537,15 @@ describe("Composer", () => {
       title: "Lovely child thread",
       titleSource: "explicit",
       source: "codex",
-      linkedDirectories: [],
+      linkedDirectories: [
+        {
+          id: "dir-worktree",
+          kind: "worktree",
+          label: "PwrAgent",
+          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+          worktreePath: "/Users/huntharo/.codex/worktrees/child/PwrAgent",
+        },
+      ],
       inbox: { inInbox: false },
     };
     const startTurn = vi.fn(async () => ({
@@ -12588,8 +12596,29 @@ describe("Composer", () => {
       "data-skill-path",
       `pwragent://thread/${targetThreadId}?backend=codex`,
     );
+    expect(chip).toHaveAttribute("aria-haspopup", "menu");
+    expect(chip).toHaveAttribute("draggable", "false");
     expect(chip?.querySelector("svg")).toHaveAttribute("viewBox", "0 0 24 24");
     expect(screen.getByLabelText("Reply")).toHaveValue(" ");
+
+    const contextMenuEvent = new MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+      clientX: 120,
+      clientY: 80,
+    });
+    fireEvent(chip!, contextMenuEvent);
+
+    expect(contextMenuEvent.defaultPrevented).toBe(true);
+    expect(screen.getByRole("menuitem", { name: "Copy Thread Link" }))
+      .toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Copy Thread ID" }))
+      .toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Copy Thread Name" }))
+      .toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Copy Thread Directory" }))
+      .toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "Escape" });
 
     await clickButton("Send");
 

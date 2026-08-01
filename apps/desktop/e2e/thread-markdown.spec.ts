@@ -32,12 +32,12 @@ test("renders markdown content in thread summaries and transcript messages", asy
     await expect(
       transcript.locator(".skill-chip", { hasText: "$frontend-design" })
     ).toBeVisible();
-    await expect(
-      transcript.getByRole("link", { name: "ce:work" })
-    ).toHaveAttribute(
-      "href",
-      "file:///Users/huntharo/.codex/skills/ce-work/SKILL.md"
-    );
+    const explicitSkillChip = transcript.locator("[data-skill-chip]", {
+      hasText: "ce:work",
+    });
+    await expect(explicitSkillChip).toBeVisible();
+    await expect(explicitSkillChip).toHaveAttribute("draggable", "false");
+    await expect(transcript.getByRole("link", { name: "ce:work" })).toHaveCount(0);
     await expect(
       transcript.locator("strong", { hasText: "markdown" })
     ).toBeVisible();

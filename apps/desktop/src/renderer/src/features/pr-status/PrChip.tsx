@@ -1,7 +1,14 @@
-import { useEffect, type KeyboardEvent, type MouseEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type MouseEvent,
+} from "react";
 import type { PrSummary } from "@pwragent/shared";
 import { CloseIcon } from "../../icons";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
+import { PrChipContextMenu } from "./PrChipContextMenu";
 
 type PrChipProps = {
   pr: PrSummary;
@@ -26,6 +33,12 @@ type PrChipProps = {
 
 export function PrChip(props: PrChipProps) {
   const { pr } = props;
+  const contextMenuInvokerRef = useRef<HTMLSpanElement>(null);
+  const [contextMenuPosition, setContextMenuPosition] = useState<{
+    x: number;
+    y: number;
+    anchorTop?: number;
+  }>();
   const tooltipController = useViewportTooltip({
     className: "viewport-tooltip",
   });
@@ -89,25 +102,32 @@ export function PrChip(props: PrChipProps) {
       <span
         role="button"
         tabIndex={0}
+        aria-haspopup="menu"
         aria-label={`Open ${pr.org}/${pr.repo}#${pr.number} (${status}) in browser`}
         className={className}
         data-pr-chip=""
+        draggable={false}
         onBlur={tooltipController.hide}
         onClick={handleActivate}
         onContextMenu={(event) => {
-          if (!props.onOpenContextMenu) {
-            return;
-          }
           event.preventDefault();
           event.stopPropagation();
+          window.getSelection()?.removeAllRanges();
           tooltipController.hide();
           const rect = event.currentTarget.getBoundingClientRect();
-          props.onOpenContextMenu(pr, {
+          const position = {
             x: event.clientX,
             y: event.clientY,
             anchorTop: rect.top,
-          });
+          };
+          if (props.onOpenContextMenu) {
+            props.onOpenContextMenu(pr, position);
+          } else {
+            contextMenuInvokerRef.current = event.currentTarget;
+            setContextMenuPosition(position);
+          }
         }}
+        onDragStart={(event) => event.preventDefault()}
         onFocus={(event) => tooltipController.show(event.currentTarget, tooltip)}
         onKeyDown={(event) => {
           if (event.key === "Enter" || event.key === " ") {
@@ -139,6 +159,14 @@ export function PrChip(props: PrChipProps) {
         {isDraft ? <span className="pr-chip__draft-bar" aria-hidden="true" /> : null}
       </span>
       {tooltipController.tooltipNode}
+      {contextMenuPosition && contextMenuInvokerRef.current ? (
+        <PrChipContextMenu
+          position={contextMenuPosition}
+          pr={pr}
+          returnFocusTo={contextMenuInvokerRef.current}
+          onClose={() => setContextMenuPosition(undefined)}
+        />
+      ) : null}
     </>
   );
 }

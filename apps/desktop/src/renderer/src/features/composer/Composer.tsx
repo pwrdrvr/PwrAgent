@@ -7958,6 +7958,10 @@ export function Composer(props: ComposerProps) {
             label={isLaunchpad ? "New thread" : "Reply"}
             markdownConversion
             placeholder={composerPlaceholder}
+            resolveThreadLink={(ref) => {
+              const resolved = threadLinks?.resolve(ref);
+              return resolved ? threadLinks?.getSnapshot(resolved) : undefined;
+            }}
             selectionRequest={composerSelectionRequest}
             editorDocument={editorDocument}
             skillTokens={skillTokens}

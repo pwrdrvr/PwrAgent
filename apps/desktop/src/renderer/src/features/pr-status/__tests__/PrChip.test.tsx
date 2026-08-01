@@ -1,10 +1,17 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PrSummary } from "@pwragent/shared";
 import { PrChip } from "../PrChip";
+import { pullRequestCopyTargets } from "../PrChipContextMenu";
 
-afterEach(cleanup);
+const copyText = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock("../../../lib/copy-text", () => ({ copyText }));
+
+afterEach(() => {
+  cleanup();
+  copyText.mockClear();
+});
 
 // New-shape row (post #734): `state` stays check-only while review / lifecycle
 // / merge dimensions ride on their own fields. The chip layers draft + conflict
@@ -38,6 +45,97 @@ function renderChip(pr: PrSummary, opts: { withStatusPills?: boolean } = {}) {
 }
 
 describe("PrChip", () => {
+  it("is a non-draggable atomic control", () => {
+    const chip = renderChip(basePr());
+    expect(chip).toHaveAttribute("draggable", "false");
+    expect(chip).toHaveAttribute("aria-haspopup", "menu");
+  });
+
+  it("replaces the browser selection menu with PR copy actions", () => {
+    const fullUrl =
+      "https://github.com/pwrdrvr/PwrAgent/pull/743#discussion_r1234";
+    const chip = renderChip(basePr({ url: fullUrl }));
+    const contextMenuEvent = new MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+      clientX: 120,
+      clientY: 80,
+    });
+
+    fireEvent(chip, contextMenuEvent);
+
+    expect(contextMenuEvent.defaultPrevented).toBe(true);
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", {
+      name: "Copy Full Comment URL",
+    })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", {
+      name: "Copy Pull Request URL",
+    })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", {
+      name: "Copy Pull Request Number",
+    })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", {
+      name: "Copy Repository URL",
+    })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("menuitem", {
+      name: "Copy Full Comment URL",
+    }));
+    expect(copyText).toHaveBeenCalledWith(fullUrl);
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  it("derives canonical copy values for deep pull request links", () => {
+    expect(pullRequestCopyTargets(basePr({
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/743/files?diff=split",
+    }))).toEqual([
+      {
+        label: "Copy Full Code Review URL",
+        copyValue: "https://github.com/pwrdrvr/PwrAgent/pull/743/files?diff=split",
+      },
+      {
+        label: "Copy Pull Request URL",
+        copyValue: "https://github.com/pwrdrvr/PwrAgent/pull/743",
+        separated: true,
+      },
+      {
+        label: "Copy Pull Request Number",
+        copyValue: "743",
+      },
+      {
+        label: "Copy Repository URL",
+        copyValue: "https://github.com/pwrdrvr/PwrAgent",
+      },
+    ]);
+  });
+
+  it("ignores marker-like owner and repository names when deriving PR URLs", () => {
+    expect(pullRequestCopyTargets(basePr({
+      org: "pull",
+      repo: "merge_requests",
+      url: "https://github.com/pull/merge_requests/pull/743/files?diff=split",
+    }))).toEqual([
+      {
+        label: "Copy Full Code Review URL",
+        copyValue: "https://github.com/pull/merge_requests/pull/743/files?diff=split",
+      },
+      {
+        label: "Copy Pull Request URL",
+        copyValue: "https://github.com/pull/merge_requests/pull/743",
+        separated: true,
+      },
+      {
+        label: "Copy Pull Request Number",
+        copyValue: "743",
+      },
+      {
+        label: "Copy Repository URL",
+        copyValue: "https://github.com/pull/merge_requests",
+      },
+    ]);
+  });
+
   it("colors the dot by check state with no draft affordance for a ready PR", () => {
     const chip = renderChip(basePr({ checkState: "passing" }));
     expect(chip).toHaveClass("pr-chip--passing");
