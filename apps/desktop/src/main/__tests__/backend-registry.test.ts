@@ -2143,6 +2143,7 @@ function rememberCollapsedDirectoryWithPinnedThread(params: {
 describe("DesktopBackendRegistry", () => {
   it("evaluates the current PR state when auto-fix is enabled", async () => {
     const preferenceChanged = vi.fn(async () => undefined);
+    const sendPendingNow = vi.fn(async () => true);
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       grokClient: new MockBackendClient({ threads: [] }),
@@ -2151,6 +2152,7 @@ describe("DesktopBackendRegistry", () => {
     registry.setThreadPrAutoDispatchHandler({
       preferenceChanged,
       cancelPending: vi.fn(async () => true),
+      sendPendingNow,
     });
 
     try {
@@ -2163,6 +2165,21 @@ describe("DesktopBackendRegistry", () => {
         backend: "codex",
         threadId: "thread-1",
         enabled: true,
+      });
+      await expect(registry.sendThreadPrAutoDispatchNow({
+        backend: "codex",
+        threadId: "thread-1",
+        fingerprint: "fingerprint-1",
+      })).resolves.toEqual({
+        backend: "codex",
+        threadId: "thread-1",
+        fingerprint: "fingerprint-1",
+        accepted: true,
+      });
+      expect(sendPendingNow).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        fingerprint: "fingerprint-1",
       });
     } finally {
       await registry.close();

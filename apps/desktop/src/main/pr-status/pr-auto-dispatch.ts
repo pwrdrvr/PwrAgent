@@ -256,6 +256,19 @@ export class PrAutoDispatchCoordinator {
     return cancelled;
   }
 
+  async sendPendingNow(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    fingerprint: string;
+  }): Promise<boolean> {
+    if (this.options.isBackgroundPollingEnabled?.() === false) return false;
+    const record = await this.options.store.getThreadPrAutoDispatchPending(params);
+    if (!record || record.pending.fingerprint !== params.fingerprint) return false;
+    this.clearTimer(this.threadKey(params));
+    await this.dispatchPending(params, params.fingerprint);
+    return true;
+  }
+
   async cancelAllPendingForThread(params: {
     backend: AppServerBackendKind;
     threadId: string;

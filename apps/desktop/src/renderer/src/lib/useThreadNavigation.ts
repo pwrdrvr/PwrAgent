@@ -2371,6 +2371,10 @@ export function useThreadNavigation(
     thread: NavigationThreadSummary,
     fingerprint: string,
   ) => Promise<void>;
+  sendThreadPrAutoDispatchNow: (
+    thread: NavigationThreadSummary,
+    fingerprint: string,
+  ) => Promise<void>;
   setThreadModelSettingsError?: string;
   updatingThreadExecutionMode?: ThreadExecutionMode;
   updateDirectoryLaunchpad: (
@@ -2460,6 +2464,8 @@ export function useThreadNavigation(
   const setThreadPrAutoDispatchRequest = desktopApi?.setThreadPrAutoDispatch;
   const cancelThreadPrAutoDispatchRequest =
     desktopApi?.cancelThreadPrAutoDispatch;
+  const sendThreadPrAutoDispatchNowRequest =
+    desktopApi?.sendThreadPrAutoDispatchNow;
   const setNavigationBrowseModeRequest = desktopApi?.setNavigationBrowseMode;
   const enabled = options.enabled ?? true;
   const lightweightNavigationRefresh = options.lightweightNavigationRefresh ?? false;
@@ -6062,6 +6068,21 @@ export function useThreadNavigation(
     [cancelThreadPrAutoDispatchRequest],
   );
 
+  const sendPendingThreadPrAutoDispatchNow = useCallback(
+    async (
+      thread: NavigationThreadSummary,
+      fingerprint: string,
+    ): Promise<void> => {
+      if (!sendThreadPrAutoDispatchNowRequest) return;
+      await sendThreadPrAutoDispatchNowRequest({
+        backend: thread.source,
+        threadId: thread.id,
+        fingerprint,
+      });
+    },
+    [sendThreadPrAutoDispatchNowRequest],
+  );
+
   const updateAcpSessionRuntimeOption = useCallback(
     async (
       thread: NavigationThreadSummary,
@@ -6177,6 +6198,7 @@ export function useThreadNavigation(
     setThreadModelSettings: updateThreadModelSettings,
     setThreadPrAutoDispatch: updateThreadPrAutoDispatch,
     cancelThreadPrAutoDispatch: cancelPendingThreadPrAutoDispatch,
+    sendThreadPrAutoDispatchNow: sendPendingThreadPrAutoDispatchNow,
     setThreadModelSettingsError,
     updatingThreadExecutionMode,
     updateDirectoryLaunchpad,

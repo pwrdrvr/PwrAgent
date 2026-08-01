@@ -196,6 +196,46 @@ describe("PrAutoDispatchCoordinator", () => {
     ).toBeUndefined();
   });
 
+  it("sends a scheduled repair immediately when the operator chooses Send now", async () => {
+    const harness = createHarness();
+    await observe(harness.coordinator);
+    const pending = await store.getThreadPrAutoDispatchPending({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    expect(await harness.coordinator.sendPendingNow({
+      backend: "codex",
+      threadId: "thread-1",
+      fingerprint: pending!.pending.fingerprint,
+    })).toBe(true);
+    expect(harness.submitTurnIfIdle).toHaveBeenCalledTimes(1);
+
+    await runCountdown();
+    expect(harness.submitTurnIfIdle).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not let Send now bypass the global polling gate", async () => {
+    const harness = createHarness();
+    await observe(harness.coordinator);
+    const pending = await store.getThreadPrAutoDispatchPending({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    harness.setGate(false);
+
+    expect(await harness.coordinator.sendPendingNow({
+      backend: "codex",
+      threadId: "thread-1",
+      fingerprint: pending!.pending.fingerprint,
+    })).toBe(false);
+    expect(harness.submitTurnIfIdle).not.toHaveBeenCalled();
+    expect(await store.getThreadPrAutoDispatchPending({
+      backend: "codex",
+      threadId: "thread-1",
+    })).toBeDefined();
+  });
+
   it("lets the operator cancel and does not recreate the same fingerprint", async () => {
     const harness = createHarness();
     await observe(harness.coordinator);

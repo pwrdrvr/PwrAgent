@@ -289,6 +289,7 @@ type ComposerProps = {
   ) => Promise<void>;
   onSetThreadPrAutoDispatch?: (enabled: boolean) => Promise<void>;
   onCancelThreadPrAutoDispatch?: (fingerprint: string) => Promise<void>;
+  onSendThreadPrAutoDispatchNow?: (fingerprint: string) => Promise<void>;
   threadModelSettingsError?: string;
 };
 
@@ -7647,6 +7648,21 @@ export function Composer(props: ComposerProps) {
             </span>
           </div>
           <div className="composer__queued-actions">
+            <button
+              className="composer__secondary-action"
+              type="button"
+              disabled={
+                !backgroundPrPollingEnabled
+                || !props.onSendThreadPrAutoDispatchNow
+              }
+              onClick={() => {
+                void props.onSendThreadPrAutoDispatchNow?.(
+                  prAutoDispatchPending.fingerprint,
+                );
+              }}
+            >
+              Send now
+            </button>
             <button
               className="composer__secondary-action"
               type="button"

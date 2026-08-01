@@ -397,11 +397,13 @@ describe("Composer", () => {
 
   it("shows a cancellable on-deck countdown for a scheduled PR repair", async () => {
     const onCancelThreadPrAutoDispatch = vi.fn(async () => undefined);
+    const onSendThreadPrAutoDispatchNow = vi.fn(async () => undefined);
     render(
       <Composer
         backgroundPrPollingEnabled
         disabled={false}
         onCancelThreadPrAutoDispatch={onCancelThreadPrAutoDispatch}
+        onSendThreadPrAutoDispatchNow={onSendThreadPrAutoDispatchNow}
         skills={[]}
         thread={{
           id: "thread-1",
@@ -432,6 +434,12 @@ describe("Composer", () => {
     expect(screen.getByLabelText("Scheduled PR auto-fix")).toHaveTextContent(
       "#1105 · CI failed · Fix failed CI",
     );
+    fireEvent.click(screen.getByRole("button", { name: "Send now" }));
+    await waitFor(() => {
+      expect(onSendThreadPrAutoDispatchNow).toHaveBeenCalledWith(
+        "fingerprint-1",
+      );
+    });
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     await waitFor(() => {
       expect(onCancelThreadPrAutoDispatch).toHaveBeenCalledWith(

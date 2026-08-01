@@ -125,6 +125,8 @@ import {
   type SetThreadPrAutoDispatchResponse,
   type CancelThreadPrAutoDispatchRequest,
   type CancelThreadPrAutoDispatchResponse,
+  type SendThreadPrAutoDispatchNowRequest,
+  type SendThreadPrAutoDispatchNowResponse,
   type ApplyThreadModelMigrationRequest,
   type ApplyThreadModelMigrationResponse,
   type TurnOffCodexFastEverywhereResponse,
@@ -1459,6 +1461,9 @@ type ThreadPullRequestStatusToolHandler = (
 type ThreadPrAutoDispatchHandler = {
   preferenceChanged: (request: SetThreadPrAutoDispatchRequest) => Promise<void>;
   cancelPending: (request: CancelThreadPrAutoDispatchRequest) => Promise<boolean>;
+  sendPendingNow: (
+    request: SendThreadPrAutoDispatchNowRequest,
+  ) => Promise<boolean>;
 };
 
 type ThreadTitleGenerationLogStatus =
@@ -12052,6 +12057,15 @@ export class DesktopBackendRegistry {
       await this.threadPrAutoDispatchHandler?.cancelPending(params)
       ?? false;
     return { ...params, cancelled };
+  }
+
+  async sendThreadPrAutoDispatchNow(
+    params: SendThreadPrAutoDispatchNowRequest,
+  ): Promise<SendThreadPrAutoDispatchNowResponse> {
+    const accepted =
+      await this.threadPrAutoDispatchHandler?.sendPendingNow(params)
+      ?? false;
+    return { ...params, accepted };
   }
 
   private async setThreadModelSettingsInternal(

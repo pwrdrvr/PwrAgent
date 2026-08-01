@@ -30,6 +30,7 @@ import {
   type DetachDirectoryFromThreadResponse,
   type CheckThreadPullRequestStatusToolArgs,
   type CancelThreadPrAutoDispatchRequest,
+  type SendThreadPrAutoDispatchNowRequest,
   type SetThreadPrAutoDispatchRequest,
   type ThreadSearchRequest,
   type ThreadSearchResponse,
@@ -3773,6 +3774,12 @@ class DesktopAppServerService {
     return await this.getPrAutoDispatchCoordinator().cancelPending(request);
   }
 
+  async sendThreadPrAutoDispatchNow(
+    request: SendThreadPrAutoDispatchNowRequest,
+  ): Promise<boolean> {
+    return await this.getPrAutoDispatchCoordinator().sendPendingNow(request);
+  }
+
   /**
    * Fold a poll result into the registry + cache, and publish only what
    * actually changed. Returns the changed prKeys so the scheduler can keep its
@@ -4788,6 +4795,8 @@ export function registerAppServerIpcHandlers(): void {
       await appServerService.handleThreadPrAutoDispatchPreference(request),
     cancelPending: async (request) =>
       await appServerService.cancelThreadPrAutoDispatch(request),
+    sendPendingNow: async (request) =>
+      await appServerService.sendThreadPrAutoDispatchNow(request),
   });
 
   ipcMain.removeHandler(APP_SERVER_LIST_SKILLS_CHANNEL);

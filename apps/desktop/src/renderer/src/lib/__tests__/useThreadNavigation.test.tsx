@@ -7176,9 +7176,17 @@ describe("useThreadNavigation", () => {
         >[0],
       ) => ({ ...request, cancelled: true }),
     );
+    const sendThreadPrAutoDispatchNow = vi.fn(
+      async (
+        request: Parameters<
+          NonNullable<DesktopApi["sendThreadPrAutoDispatchNow"]>
+        >[0],
+      ) => ({ ...request, accepted: true }),
+    );
     const desktopApi: DesktopApi = {
       cancelThreadPrAutoDispatch,
       getNavigationSnapshot,
+      sendThreadPrAutoDispatchNow,
       setThreadPrAutoDispatch,
       onAgentEvent: (callback) => {
         listeners.add(callback);
@@ -7241,10 +7249,19 @@ describe("useThreadNavigation", () => {
     });
     expect(result.current.selectedThread?.prAutoDispatchPending).toEqual(pending);
     await act(async () => {
+      await result.current.sendThreadPrAutoDispatchNow(
+        result.current.selectedThread!,
+        pending.fingerprint,
+      );
       await result.current.cancelThreadPrAutoDispatch(
         result.current.selectedThread!,
         pending.fingerprint,
       );
+    });
+    expect(sendThreadPrAutoDispatchNow).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      fingerprint: "fingerprint-1",
     });
     expect(cancelThreadPrAutoDispatch).toHaveBeenCalledWith({
       backend: "codex",

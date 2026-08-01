@@ -898,6 +898,7 @@ export type ThreadViewProps = {
   ) => Promise<void>;
   onSetThreadPrAutoDispatch?: (enabled: boolean) => Promise<void>;
   onCancelThreadPrAutoDispatch?: (fingerprint: string) => Promise<void>;
+  onSendThreadPrAutoDispatchNow?: (fingerprint: string) => Promise<void>;
   onArchiveWorktree?: (
     thread: NavigationThreadSummary,
     directory: NavigationThreadSummary["linkedDirectories"][number]
@@ -3031,6 +3032,7 @@ export function ThreadView(props: ThreadViewProps) {
             onSetThreadModelSettings={props.onSetThreadModelSettings}
             onSetThreadPrAutoDispatch={props.onSetThreadPrAutoDispatch}
             onCancelThreadPrAutoDispatch={props.onCancelThreadPrAutoDispatch}
+            onSendThreadPrAutoDispatchNow={props.onSendThreadPrAutoDispatchNow}
             backgroundPrPollingEnabled={props.backgroundPrPollingEnabled}
             onAttachDirectoryReferences={props.onAttachDirectoryReferences}
             onPickDirectoryForReference={props.onPickDirectoryForReference}
