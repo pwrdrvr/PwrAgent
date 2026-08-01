@@ -202,6 +202,101 @@ describe("TranscriptList", () => {
     });
   });
 
+  it("attributes monitor handoffs and keeps their raw payload collapsed", () => {
+    const task = "Monitor GitHub CI for PR #1107 until all checks finish.";
+    const rawHandoff = [
+      "A lightweight PwrAgent monitor subagent finished a long-running task.",
+      "",
+      `Task: ${task}`,
+      "Outcome: success",
+      "Summary: All required checks passed.",
+      "Details:",
+      "Install Dependencies SUCCESS; Desktop E2E SUCCESS.",
+    ].join("\n");
+    const subAgent = {
+      monitorId: "monitor-1",
+      task,
+      status: "success" as const,
+      createdAt: 1_000,
+      updatedAt: 2_000,
+      completedAt: 2_000,
+      backend: "codex" as const,
+      monitorThreadId: "monitor-thread",
+      outcome: "success" as const,
+      lastMessage: "All required checks passed.",
+    };
+
+    const { container } = render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "monitor-handoff",
+            role: "user",
+            text: rawHandoff,
+            origin: {
+              kind: "sub-agent",
+              sourceThread: {
+                backend: "codex",
+                threadId: "monitor-thread",
+                title: task,
+              },
+              subAgent: {
+                kind: "monitor",
+                monitorId: "monitor-1",
+                task,
+                outcome: "success",
+                summary: "All required checks passed.",
+              },
+            },
+          },
+        ]}
+        loading={false}
+        loadingMore={false}
+        parentThreadId="parent-thread"
+        subAgents={[subAgent]}
+        onLoadOlder={async () => undefined}
+      />,
+    );
+
+    expect(screen.getByText("Monitor sub-agent")).toBeInTheDocument();
+    expect(screen.queryByText("User")).not.toBeInTheDocument();
+    expect(screen.getByText("Monitor sub-agent completed")).toBeInTheDocument();
+    expect(screen.getByText("Success")).toBeInTheDocument();
+    const attribution = container.querySelector(
+      ".transcript-message__attribution--stacked",
+    );
+    expect(attribution).toContainElement(screen.getByText("Monitor sub-agent"));
+    expect(attribution).toContainElement(screen.getByText(task));
+    expect(
+      screen.queryByText("Install Dependencies SUCCESS; Desktop E2E SUCCESS."),
+    ).not.toBeInTheDocument();
+    expect(
+      container.querySelector(".transcript-message--monitor-result"),
+    ).toBeInTheDocument();
+
+    const toggle = screen.getByRole("button", {
+      name: "Monitor sub-agent completed",
+    });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(
+      container.querySelector(".transcript-monitor-result__content"),
+    ).toHaveTextContent("Install Dependencies SUCCESS; Desktop E2E SUCCESS.");
+    expect(
+      container.querySelector(
+        ".transcript-monitor-result__content > .transcript-message__text",
+      ),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
+    expect(
+      screen.getByRole("dialog", { name: `Sub-agent details: ${task}` }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("All required checks passed.")).toBeInTheDocument();
+  });
+
   it("shows a linked messaging origin with its full value in a tooltip", async () => {
     const { container } = render(
       <TranscriptList

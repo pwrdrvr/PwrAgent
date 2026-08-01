@@ -23368,6 +23368,156 @@ script = "printf setup"
     await registry.close();
   });
 
+  it("reconstructs repeated legacy monitor handoffs one-to-one", async () => {
+    const task = "Monitor GitHub CI for PR #1107 until all checks finish.";
+    const summary = "All required checks passed.";
+    const text = [
+      "A lightweight PwrAgent monitor subagent finished a long-running task.",
+      "",
+      `Task: ${task}`,
+      "Outcome: success",
+      `Summary: ${summary}`,
+      "",
+      "Process this final monitor result.",
+    ].join("\n");
+    const replay: AppServerThreadReplay = {
+      entries: [
+        {
+          type: "message",
+          id: "legacy-monitor-handoff-1",
+          role: "user",
+          text,
+          createdAt: 2_100,
+        },
+        {
+          type: "message",
+          id: "legacy-monitor-handoff-2",
+          role: "user",
+          text,
+          createdAt: 4_100,
+        },
+      ],
+      messages: [
+        {
+          id: "legacy-monitor-handoff-1",
+          role: "user",
+          text,
+          createdAt: 2_100,
+        },
+        {
+          id: "legacy-monitor-handoff-2",
+          role: "user",
+          text,
+          createdAt: 4_100,
+        },
+      ],
+      pagination: {
+        supportsPagination: false,
+        hasPreviousPage: false,
+      },
+    };
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          subAgents: [
+            {
+              monitorId: "monitor-2",
+              monitorThreadId: "monitor-thread-2",
+              task,
+              status: "success",
+              outcome: "success",
+              lastMessage: summary,
+              createdAt: 3_000,
+              updatedAt: 4_000,
+              completedAt: 4_000,
+              backend: "codex",
+            },
+            {
+              monitorId: "monitor-1",
+              monitorThreadId: "monitor-thread-1",
+              task,
+              status: "success",
+              outcome: "success",
+              lastMessage: summary,
+              createdAt: 1_000,
+              updatedAt: 2_000,
+              completedAt: 2_000,
+              backend: "codex",
+            },
+          ],
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ replay }),
+      grokClient: new MockBackendClient({}),
+      overlayStore,
+      threadTitleGenerationService: null,
+    });
+
+    const response = await registry.readThread({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    expect(response.replay.entries[0]).toMatchObject({
+      id: "legacy-monitor-handoff-1",
+      origin: {
+        kind: "sub-agent",
+        sourceThread: {
+          backend: "codex",
+          threadId: "monitor-thread-1",
+          title: task,
+        },
+        subAgent: {
+          kind: "monitor",
+          monitorId: "monitor-1",
+          outcome: "success",
+          summary,
+          task,
+        },
+      },
+    });
+    expect(response.replay.messages[0]).toMatchObject({
+      id: "legacy-monitor-handoff-1",
+      origin: {
+        kind: "sub-agent",
+        subAgent: { monitorId: "monitor-1" },
+      },
+    });
+    expect(response.replay.entries[1]).toMatchObject({
+      id: "legacy-monitor-handoff-2",
+      origin: {
+        kind: "sub-agent",
+        sourceThread: {
+          backend: "codex",
+          threadId: "monitor-thread-2",
+          title: task,
+        },
+        subAgent: {
+          kind: "monitor",
+          monitorId: "monitor-2",
+          outcome: "success",
+          summary,
+          task,
+        },
+      },
+    });
+    expect(response.replay.messages[1]).toMatchObject({
+      id: "legacy-monitor-handoff-2",
+      origin: {
+        kind: "sub-agent",
+        subAgent: { monitorId: "monitor-2" },
+      },
+    });
+
+    await registry.close();
+  });
+
   it("does not copy one message origin to another user message in the same turn", async () => {
     const userEntries: AppServerThreadReplay["entries"] = [
       {
@@ -27096,6 +27246,73 @@ script = "printf setup"
     ).toContain(
       "Tell me whether to merge.",
     );
+    const handoffText =
+      codexClient.lastStartTurnParams?.input[0]?.type === "text"
+        ? codexClient.lastStartTurnParams.input[0].text
+        : "";
+    await codexClient.emit({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "monitor-handoff-message",
+          type: "userMessage",
+          text: handoffText,
+        },
+      },
+    });
+    expect(
+      events.find(
+        (event) =>
+          event.notification.method === "item/completed"
+          && (
+            event.notification.params.item as { id?: string } | undefined
+          )?.id === "monitor-handoff-message",
+      ),
+    ).toMatchObject({
+      notification: {
+        params: {
+          item: {
+            origin: {
+              kind: "sub-agent",
+              sourceThread: {
+                backend: "codex",
+                threadId: "monitor-thread",
+                title: "Watch PR #123 checks until they finish.",
+              },
+              subAgent: {
+                kind: "monitor",
+                monitorId,
+                outcome: "failure",
+                summary: "Tests failed in CI.",
+                task: "Watch PR #123 checks until they finish.",
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(overlayStore.upsertThreadMessageOrigin).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      messageId: "monitor-handoff-message",
+      origin: {
+        kind: "sub-agent",
+        sourceThread: {
+          backend: "codex",
+          threadId: "monitor-thread",
+          title: "Watch PR #123 checks until they finish.",
+        },
+        subAgent: {
+          kind: "monitor",
+          monitorId,
+          outcome: "failure",
+          summary: "Tests failed in CI.",
+          task: "Watch PR #123 checks until they finish.",
+        },
+      },
+    });
     expect(completionPayload).toMatchObject({
       monitorId,
       parentThreadId: "thread-1",

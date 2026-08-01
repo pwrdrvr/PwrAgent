@@ -14,6 +14,7 @@ import type {
   AppServerThreadMessageOrigin,
   AppServerThreadMessagePart,
   MarkdownFileViewerContext,
+  ThreadSubAgentSummary,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import {
@@ -26,6 +27,9 @@ import { ThreadChip } from "./ThreadChip";
 import { TranscriptImage } from "./TranscriptImage";
 import { ThreadMarkdown } from "./ThreadMarkdown";
 import { TranscriptCopyButton } from "./TranscriptCopyButton";
+import { SubAgentDetailsModal } from "./context-panels/SubAgentDetailsModal";
+import { RailStatusChip } from "./context-panels/RailStatusChip";
+import { subAgentTone } from "./context-panels/subagent-format";
 
 type TranscriptMessageProps = {
   applications?: DesktopApplicationsSnapshot;
@@ -35,7 +39,9 @@ type TranscriptMessageProps = {
   >;
   fileViewerContext?: MarkdownFileViewerContext;
   message: AppServerThreadMessageEntry;
+  parentThreadId: string;
   skills: AppServerSkillSummary[];
+  subAgents?: ThreadSubAgentSummary[];
   onOpenImage?: (image: AppServerThreadImagePart) => void;
 };
 
@@ -55,6 +61,94 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
     [contentParts, props.message]
   );
   const messageSegments = groupMessageParts(contentParts).flatMap(splitMarkdownTableSegment);
+  const [monitorExpanded, setMonitorExpanded] = useState(false);
+  const [monitorDetailsOpen, setMonitorDetailsOpen] = useState(false);
+  const monitorOrigin = props.message.origin?.subAgent;
+  const monitorSubAgent = useMemo(
+    () => props.subAgents?.find(
+      (subAgent) => subAgent.monitorId === monitorOrigin?.monitorId,
+    ),
+    [monitorOrigin?.monitorId, props.subAgents],
+  );
+
+  if (
+    props.message.origin?.kind === "sub-agent"
+    && monitorOrigin?.kind === "monitor"
+  ) {
+    const statusTone = subAgentTone(monitorSubAgent?.status ?? monitorOrigin.outcome);
+    return (
+      <article
+        className="transcript-message transcript-message--injected transcript-message--monitor-result"
+      >
+        {renderMessageHeader({
+          continuation: false,
+          desktopApi: props.desktopApi,
+          message: props.message,
+          sourceThreadLink,
+          threadLinks,
+          text: messageCopyText,
+        })}
+        <div className="transcript-monitor-result__summary">
+          <button
+            type="button"
+            className="transcript-monitor-result__toggle"
+            aria-expanded={monitorExpanded}
+            onClick={() => setMonitorExpanded((current) => !current)}
+          >
+            <span
+              aria-hidden="true"
+              className="transcript-monitor-result__chevron"
+            />
+            <span>Monitor sub-agent completed</span>
+          </button>
+          <RailStatusChip
+            alert={statusTone === "error"}
+            tone={statusTone}
+          >
+            {monitorOutcomeLabel(monitorOrigin.outcome)}
+          </RailStatusChip>
+          {monitorSubAgent ? (
+            <button
+              type="button"
+              className="button button--ghost transcript-monitor-result__details"
+              onClick={() => setMonitorDetailsOpen(true)}
+            >
+              Details
+            </button>
+          ) : null}
+        </div>
+        {monitorExpanded ? (
+          <div className="transcript-monitor-result__content">
+            <div className="transcript-message__text">
+              {messageSegments.map((segment, index) =>
+                renderMessageSegment({
+                  segment,
+                  index,
+                  applications: props.applications,
+                  desktopApi: props.desktopApi,
+                  fileViewerContext: props.fileViewerContext,
+                  onOpenImage: props.onOpenImage,
+                  skills: props.skills,
+                }),
+              )}
+            </div>
+          </div>
+        ) : null}
+        {monitorDetailsOpen && monitorSubAgent ? (
+          <SubAgentDetailsModal
+            defaultBackend={
+              monitorSubAgent.backend
+              ?? props.message.origin.sourceThread?.backend
+              ?? "codex"
+            }
+            parentThreadId={props.parentThreadId}
+            subAgent={monitorSubAgent}
+            onClose={() => setMonitorDetailsOpen(false)}
+          />
+        ) : null}
+      </article>
+    );
+  }
 
   if (messageSegments.length === 0) {
     return (
@@ -474,9 +568,13 @@ function renderMessageHeader(params: {
     return null;
   }
 
+  const attributionClassName = params.message.origin?.kind === "sub-agent"
+    ? "transcript-message__attribution transcript-message__attribution--stacked"
+    : "transcript-message__attribution";
+
   return (
     <header className="transcript-message__header">
-      <span className="transcript-message__attribution">
+      <span className={attributionClassName}>
         <span className="transcript-message__role">
           {labelForMessage(params.message)}
         </span>
@@ -711,7 +809,25 @@ function labelForOrigin(origin: AppServerThreadMessageOrigin): string {
   if (origin.kind === "messaging") {
     return "Messaging";
   }
+  if (origin.kind === "sub-agent") {
+    return origin.subAgent?.kind === "monitor"
+      ? "Monitor sub-agent"
+      : "Sub-agent";
+  }
   return "PwrAgent";
+}
+
+function monitorOutcomeLabel(
+  outcome: NonNullable<AppServerThreadMessageOrigin["subAgent"]>["outcome"],
+): string {
+  switch (outcome) {
+    case "success":
+      return "Success";
+    case "failure":
+      return "Failed";
+    case "cancelled":
+      return "Cancelled";
+  }
 }
 
 function buildMessageCopyText(
