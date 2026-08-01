@@ -19,7 +19,8 @@ description of that contract.
 
 Permissions are atomic capability IDs. **They are contractually load-bearing:
 once shipped, a permission ID must never change meaning**, because custom role
-definitions persist the IDs in the per-profile `rbac-policy.json`. Add new IDs;
+definitions persist the IDs under `[messaging.rbac]` in the per-profile
+`config.toml`. Add new IDs;
 never repurpose old ones. Keep this table, the `MessagingPermissionId` union,
 and `MESSAGING_PERMISSION_CATALOG` in lockstep (a drift-guard test in
 `apps/desktop/src/main/__tests__/rbac-permission-coverage.test.ts` enforces the
@@ -39,6 +40,7 @@ code side).
 | `thread.settings.fast_mode` | settings | Toggle fast mode. |
 | `thread.settings.tool_updates` | settings | Set how tool activity streams. |
 | `thread.settings.streaming` | settings | Set how responses stream. |
+| `thread.settings.response_mode` | settings | Set whether the bot answers every message or only when mentioned (affects the whole conversation). |
 | `thread.settings.permissions_mode` | settings | Switch the sandbox/default permissions mode (non-full-access targets only). |
 | `thread.settings.execution_mode` | settings | Switch the sandbox/network execution mode (non-full-access targets only). |
 | `thread.settings.name` | settings | Sync the thread name to the conversation. |

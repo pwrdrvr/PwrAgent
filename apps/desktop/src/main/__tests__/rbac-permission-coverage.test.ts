@@ -46,6 +46,8 @@ describe("rbac permission coverage", () => {
       "status:tool-updates",
       "status:set-tool-updates",
       "status:streaming",
+      "status:response-mode",
+      "status:set-response-mode",
       "status:permissions",
       "status:set-permissions",
       "status:runtime-mode",

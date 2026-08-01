@@ -52,6 +52,7 @@ export type MessagingPermissionId =
   | "thread.settings.fast_mode"
   | "thread.settings.tool_updates"
   | "thread.settings.streaming"
+  | "thread.settings.response_mode"
   | "thread.settings.permissions_mode"
   | "thread.settings.execution_mode"
   | "thread.settings.name"
@@ -172,6 +173,13 @@ export const MESSAGING_PERMISSION_CATALOG: readonly MessagingPermissionDescripto
     id: "thread.settings.streaming",
     label: "Change streaming mode",
     description: "Set how responses stream.",
+    group: "settings",
+  },
+  {
+    id: "thread.settings.response_mode",
+    label: "Change response mode",
+    description:
+      "Set whether the bot answers every message or only when mentioned.",
     group: "settings",
   },
   {
@@ -321,6 +329,7 @@ const POWER_USER_PERMISSIONS: MessagingPermissionId[] = [
   "thread.settings.fast_mode",
   "thread.settings.tool_updates",
   "thread.settings.streaming",
+  "thread.settings.response_mode",
   "thread.settings.permissions_mode",
   "thread.settings.execution_mode",
   "thread.settings.name",
@@ -592,6 +601,8 @@ export const STATUS_ACTION_PERMISSIONS: Record<string, MessagingPermissionId> = 
   "status:tool-updates": "thread.settings.tool_updates",
   "status:set-tool-updates": "thread.settings.tool_updates",
   "status:streaming": "thread.settings.streaming",
+  "status:response-mode": "thread.settings.response_mode",
+  "status:set-response-mode": "thread.settings.response_mode",
   "status:permissions": "thread.settings.permissions_mode",
   "status:set-permissions": "thread.settings.permissions_mode",
   "status:runtime-mode": "thread.settings.execution_mode",
