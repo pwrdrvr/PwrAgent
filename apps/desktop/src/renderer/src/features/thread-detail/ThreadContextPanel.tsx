@@ -151,6 +151,10 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   const railRef = useRef<HTMLElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
   const [revealed, setRevealed] = useState(false);
+  // A modal portaled to document.body is outside the rail in DOM and pointer
+  // geometry, but remains part of the same interaction. Keep the panel
+  // mounted while it is open so its own hover-dismissal cannot destroy it.
+  const [portaledInteractionOpen, setPortaledInteractionOpen] = useState(false);
   // Width is owned by ThreadView (single source of truth). Used only for the
   // resize delta math here; the rendered width comes from the inherited
   // `--context-rail-effective` custom property. No local copy → no desync.
@@ -165,10 +169,13 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
     top?: number;
   }>();
   const pinned = props.pinned;
-  const open = pinned || revealed;
+  const open = pinned || revealed || portaledInteractionOpen;
   const hideTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const revealTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const revealIntentRef = useRef(0);
+  // The ref synchronously guards timers and in-flight cursor polls that were
+  // created by the previous render before the state update commits.
+  const portaledInteractionOpenRef = useRef(false);
   const lastMousePositionRef = useRef<{ x: number; y: number } | undefined>(undefined);
   const outsideRailSinceRef = useRef<number | undefined>(undefined);
   const threadPricingSummaryEnabled = props.threadPricingSummaryEnabled ?? true;
@@ -251,6 +258,10 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
 
   const hideRailNow = useCallback(() => {
     clearTimeout(hideTimerRef.current);
+    if (portaledInteractionOpenRef.current) {
+      outsideRailSinceRef.current = undefined;
+      return;
+    }
     clearRevealTimer();
     outsideRailSinceRef.current = undefined;
     setRevealed(false);
@@ -297,7 +308,15 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
     (point?: { x: number; y: number }) => {
       clearTimeout(hideTimerRef.current);
       clearRevealTimer();
+      if (portaledInteractionOpenRef.current) {
+        outsideRailSinceRef.current = undefined;
+        return;
+      }
       hideTimerRef.current = setTimeout(() => {
+        if (portaledInteractionOpenRef.current) {
+          outsideRailSinceRef.current = undefined;
+          return;
+        }
         const latestPoint = lastMousePositionRef.current ?? point;
         if (latestPoint && isMouseInsideRail(latestPoint)) {
           return;
@@ -307,6 +326,20 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
       }, 300);
     },
     [clearRevealTimer, hideRailNow, isMouseInsideRail]
+  );
+
+  const handlePortaledInteractionChange = useCallback(
+    (nextOpen: boolean) => {
+      portaledInteractionOpenRef.current = nextOpen;
+      setPortaledInteractionOpen(nextOpen);
+      if (nextOpen) {
+        clearTimeout(hideTimerRef.current);
+        clearRevealTimer();
+        outsideRailSinceRef.current = undefined;
+        setRevealed(true);
+      }
+    },
+    [clearRevealTimer],
   );
 
   useEffect(() => {
@@ -329,6 +362,12 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
       };
       lastMousePositionRef.current = point;
 
+      if (portaledInteractionOpenRef.current) {
+        clearTimeout(hideTimerRef.current);
+        outsideRailSinceRef.current = undefined;
+        return;
+      }
+
       if (isMouseInsideRail(point)) {
         outsideRailSinceRef.current = undefined;
         return;
@@ -345,7 +384,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
 
   useEffect(() => {
     const readPointerSnapshot = props.desktopApi?.getWindowPointerSnapshot;
-    if (pinned || !revealed || !readPointerSnapshot) {
+    if (pinned || !revealed || portaledInteractionOpen || !readPointerSnapshot) {
       return;
     }
 
@@ -388,6 +427,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
     hideRailNow,
     isScreenCursorInsideRail,
     pinned,
+    portaledInteractionOpen,
     props.desktopApi?.getWindowPointerSnapshot,
     revealed,
   ]);
@@ -491,7 +531,11 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         }
       }}
       onBlurCapture={(event) => {
-        if (!pinned && !event.currentTarget.contains(event.relatedTarget as Node | null)) {
+        if (
+          !pinned
+          && !portaledInteractionOpenRef.current
+          && !event.currentTarget.contains(event.relatedTarget as Node | null)
+        ) {
           hideRail();
         }
       }}
@@ -695,6 +739,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
           <SubAgentsPanel
             pricingDisplayOptions={props.pricingDisplayOptions}
             thread={props.thread}
+            onDetailsModalOpenChange={handlePortaledInteractionChange}
           />
         );
       case "automations":

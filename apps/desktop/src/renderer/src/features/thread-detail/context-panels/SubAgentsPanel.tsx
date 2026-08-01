@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type {
   NavigationThreadSummary,
   ThreadSubAgentSummary,
@@ -20,6 +20,7 @@ import {
 } from "./subagent-kind";
 
 type SubAgentsPanelProps = {
+  onDetailsModalOpenChange?: (open: boolean) => void;
   pricingDisplayOptions?: PricingDisplayOptions;
   thread: NavigationThreadSummary;
 };
@@ -27,7 +28,22 @@ type SubAgentsPanelProps = {
 /** Sub-Agents tab: durable task-monitor cards spawned from this thread. */
 export function SubAgentsPanel(props: SubAgentsPanelProps) {
   const { subAgents, loading } = useSubAgents(props.thread);
+  const { onDetailsModalOpenChange } = props;
   const [detailsFor, setDetailsFor] = useState<ThreadSubAgentSummary | null>(null);
+
+  useEffect(() => {
+    return () => onDetailsModalOpenChange?.(false);
+  }, [onDetailsModalOpenChange]);
+
+  const openDetails = (subAgent: ThreadSubAgentSummary): void => {
+    onDetailsModalOpenChange?.(true);
+    setDetailsFor(subAgent);
+  };
+
+  const closeDetails = (): void => {
+    setDetailsFor(null);
+    onDetailsModalOpenChange?.(false);
+  };
 
   return (
     <section className="context-panel__section">
@@ -101,7 +117,7 @@ export function SubAgentsPanel(props: SubAgentsPanelProps) {
                 <button
                   className="context-list__action"
                   type="button"
-                  onClick={() => setDetailsFor(subAgent)}
+                  onClick={() => openDetails(subAgent)}
                 >
                   Details
                 </button>
@@ -120,7 +136,7 @@ export function SubAgentsPanel(props: SubAgentsPanelProps) {
           defaultBackend={props.thread.source}
           pricingDisplayOptions={props.pricingDisplayOptions}
           subAgent={detailsFor}
-          onClose={() => setDetailsFor(null)}
+          onClose={closeDetails}
         />
       ) : null}
     </section>
