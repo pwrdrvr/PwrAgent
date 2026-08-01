@@ -101,6 +101,17 @@ export class MessagingStore {
     return (await this.findActiveDefaultAgentAssignmentsForChannel(channel))[0];
   }
 
+  async findActiveDefaultAgentAssignments(): Promise<
+    MessagingDefaultAgentAssignmentRecord[]
+  > {
+    return await this.withReadData((data) =>
+      Object.values(data.defaultAgentAssignments)
+        .filter((assignment) => !assignment.revokedAt)
+        .sort((a, b) => b.updatedAt - a.updatedAt || b.createdAt - a.createdAt)
+        .map((assignment) => structuredClone(assignment)),
+    );
+  }
+
   async findActiveDefaultAgentAssignmentsForChannel(
     channel: MessagingChannelRef,
   ): Promise<MessagingDefaultAgentAssignmentRecord[]> {
@@ -204,6 +215,15 @@ export class MessagingStore {
           )
           .sort((a, b) => b.updatedAt - a.updatedAt || b.createdAt - a.createdAt)[0],
       ),
+    );
+  }
+
+  async findActiveBindings(): Promise<MessagingBindingRecord[]> {
+    return await this.withReadData((data) =>
+      Object.values(data.bindings)
+        .filter((binding) => !binding.revokedAt)
+        .sort((a, b) => b.updatedAt - a.updatedAt || b.createdAt - a.createdAt)
+        .map((binding) => structuredClone(binding)),
     );
   }
 

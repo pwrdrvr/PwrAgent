@@ -150,6 +150,20 @@ export class SqliteMessagingStore {
     return (await this.findActiveDefaultAgentAssignmentsForChannel(channel))[0];
   }
 
+  async findActiveDefaultAgentAssignments(): Promise<
+    MessagingDefaultAgentAssignmentRecord[]
+  > {
+    const rows = this.stateDb.raw
+      .prepare(
+        "SELECT payload FROM messaging_default_agent_assignments WHERE status = 'active' ORDER BY updated_at DESC, created_at DESC",
+      )
+      .all() as { payload: string }[];
+    return rows
+      .map((row) => JSON.parse(row.payload) as MessagingDefaultAgentAssignmentRecord)
+      .filter((assignment) => !assignment.revokedAt)
+      .map((assignment) => structuredClone(assignment));
+  }
+
   async findActiveDefaultAgentAssignmentsForChannel(
     channel: MessagingChannelRef,
   ): Promise<MessagingDefaultAgentAssignmentRecord[]> {
@@ -270,6 +284,18 @@ export class SqliteMessagingStore {
       }
     }
     return undefined;
+  }
+
+  async findActiveBindings(): Promise<MessagingBindingRecord[]> {
+    const rows = this.stateDb.raw
+      .prepare(
+        "SELECT payload FROM bindings WHERE status = 'active' ORDER BY updated_at DESC, created_at DESC",
+      )
+      .all() as { payload: string }[];
+    return rows
+      .map((row) => JSON.parse(row.payload) as MessagingBindingRecord)
+      .filter((binding) => !binding.revokedAt)
+      .map((binding) => structuredClone(binding));
   }
 
   async findActiveBindingsForThread(params: {
@@ -1247,11 +1273,13 @@ export type MessagingStoreLike = Pick<
   | "upsertDefaultAgentAssignment"
   | "getDefaultAgentAssignment"
   | "findActiveDefaultAgentAssignmentForChannel"
+  | "findActiveDefaultAgentAssignments"
   | "findActiveDefaultAgentAssignmentsForChannel"
   | "findActiveDefaultAgentAssignmentForScope"
   | "revokeDefaultAgentAssignment"
   | "revokeDefaultAgentAssignmentsForTarget"
   | "findActiveBindingForChannel"
+  | "findActiveBindings"
   | "findActiveBindingsForBackend"
   | "findActiveBindingsForThread"
   | "revokeBinding"

@@ -264,6 +264,103 @@ export type UnbindMessagingThreadResponse = {
   bindingId: string;
 };
 
+export type DesktopMessagingDefaultAgentScope =
+  | {
+      kind: "profile";
+    }
+  | {
+      kind: "provider";
+      platform: MessagingChannelKind;
+    }
+  | {
+      kind: "workspace";
+      platform: MessagingChannelKind;
+      workspaceId: string;
+    }
+  | {
+      kind: "parent";
+      platform: MessagingChannelKind;
+      conversationId: string;
+    }
+  | {
+      kind: "conversation";
+      platform: MessagingChannelKind;
+      conversation: {
+        id: string;
+        kind: MessagingConversationKind;
+        parentId?: string;
+        parentConversationId?: string;
+        workspaceId?: string;
+        title?: string;
+        parentTitle?: string;
+        ancestorTitle?: string;
+      };
+    };
+
+export type DesktopMessagingAgentRouteTarget = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  label: string;
+  backendLabel: string;
+  available: boolean;
+};
+
+export type DesktopMessagingDefaultAgentRoute = {
+  assignmentId: string;
+  scope: DesktopMessagingDefaultAgentScope;
+  target: DesktopMessagingAgentRouteTarget;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type DesktopMessagingBindingRoute = {
+  bindingId: string;
+  platform: MessagingChannelKind;
+  conversation: {
+    id: string;
+    kind: MessagingConversationKind;
+    title?: string;
+    parentTitle?: string;
+    ancestorTitle?: string;
+  };
+  target: {
+    backend?: AppServerBackendKind;
+    threadId: ThreadIdentifier;
+    label: string;
+    kind: MessagingBindingTargetKind;
+  };
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type ListMessagingRoutesResponse = {
+  defaultAgents: DesktopMessagingDefaultAgentRoute[];
+  bindings: DesktopMessagingBindingRoute[];
+  eligibleAgents: DesktopMessagingAgentRouteTarget[];
+};
+
+export type SetMessagingDefaultAgentRequest = {
+  assignmentId?: string;
+  scope: DesktopMessagingDefaultAgentScope;
+  target: {
+    backend: AppServerBackendKind;
+    threadId: ThreadIdentifier;
+  };
+};
+
+export type SetMessagingDefaultAgentResponse = {
+  assignmentId: string;
+};
+
+export type ClearMessagingDefaultAgentRequest = {
+  assignmentId: string;
+};
+
+export type ClearMessagingDefaultAgentResponse = {
+  assignmentId: string;
+  cleared: boolean;
+};
+
 export type SetMessagingEnabledRequest = {
   enabled: boolean;
 };
