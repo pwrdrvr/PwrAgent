@@ -15217,7 +15217,7 @@ describe("Composer", () => {
     await waitFor(() => {
       expect(screen.getAllByRole("img")).toHaveLength(1);
     });
-    expect(normalizeImageFile).toHaveBeenCalledTimes(2);
+    expect(normalizeImageFile).toHaveBeenCalledTimes(1);
 
     await clickButton("Send");
 
@@ -15283,6 +15283,94 @@ describe("Composer", () => {
     expect(
       screen.queryByText("Unsupported or unreadable image format: image/png")
     ).not.toBeInTheDocument();
+  });
+
+  it("keeps a files fallback eligible when one attachment slot remains", async () => {
+    const initialFiles = Array.from(
+      { length: 4 },
+      (_, index) =>
+        new File([new Uint8Array([index])], `existing-${index}.png`, {
+          type: "image/png",
+        })
+    );
+    const itemImageFile = new File([new Uint8Array([4])], "clipboard-item.png", {
+      type: "image/png",
+      lastModified: 111,
+    });
+    const filesImageFile = new File([new Uint8Array([5])], "clipboard-files.png", {
+      type: "image/png",
+      lastModified: 222,
+    });
+
+    for (const file of initialFiles) {
+      vi.mocked(normalizeImageFile).mockImplementationOnce(async () => ({
+        conversionPath: "renderer" as const,
+        dataUrl: `data:image/png;base64,${btoa(file.name)}`,
+        height: 24,
+        mimeType: "image/png" as const,
+        original: {
+          height: 24,
+          mimeType: "image/png",
+          name: file.name,
+          size: file.size,
+          width: 32,
+        },
+        size: 3,
+        width: 32,
+      }));
+    }
+
+    const { container } = render(
+      <Composer
+        desktopApi={{ onAgentEvent: () => () => undefined }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Build Codex client",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.paste(screen.getByLabelText("Reply"), {
+      clipboardData: {
+        files: [],
+        items: initialFiles.map((file) => ({
+          kind: "file",
+          type: "image/png",
+          getAsFile: () => file,
+        })),
+      },
+    });
+
+    await waitFor(() => {
+      expect(container.querySelectorAll(".composer__attachment-preview")).toHaveLength(4);
+    });
+    vi.mocked(normalizeImageFile).mockClear();
+    vi.mocked(normalizeImageFile).mockRejectedValueOnce(
+      new Error("Unsupported or unreadable image format: image/png")
+    );
+
+    fireEvent.paste(screen.getByLabelText("Reply"), {
+      clipboardData: {
+        files: [filesImageFile],
+        items: [
+          {
+            kind: "file",
+            type: "image/png",
+            getAsFile: () => itemImageFile,
+          },
+        ],
+      },
+    });
+
+    expect(await screen.findByAltText("clipboard-files.png")).toBeInTheDocument();
+    expect(normalizeImageFile).toHaveBeenCalledTimes(2);
+    expect(container.querySelectorAll(".composer__attachment-preview")).toHaveLength(5);
   });
 
   it("reports a paste error when no clipboard image rendition can decode", async () => {

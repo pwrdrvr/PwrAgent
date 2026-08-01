@@ -466,6 +466,10 @@ type ComposerImageFile = {
   type: string;
 };
 
+type ComposerImageFileGroup = {
+  candidates: ComposerImageFile[];
+};
+
 type ModelOption = NonNullable<
   NonNullable<BackendSummary["launchpadOptions"]>["models"]
 >[number];
@@ -7134,8 +7138,8 @@ export function Composer(props: ComposerProps) {
    * whenever the per-message limit clamps or blocks the batch.
    */
   const gateImageFilesForAttachment = (
-    files: ComposerImageFile[],
-  ): ComposerImageFile[] | null => {
+    fileGroups: ComposerImageFileGroup[],
+  ): ComposerImageFileGroup[] | null => {
     if (!imagesSupported) {
       showComposerNotice({
         title: "Images not supported",
@@ -7153,15 +7157,15 @@ export function Composer(props: ComposerProps) {
       return null;
     }
 
-    if (files.length > remaining) {
+    if (fileGroups.length > remaining) {
       showComposerNotice({
         title: "Attachment limit reached",
         message: `You can attach up to ${MAX_COMPOSER_IMAGE_ATTACHMENTS} images per message.`,
       });
-      return files.slice(0, remaining);
+      return fileGroups.slice(0, remaining);
     }
 
-    return files;
+    return fileGroups;
   };
 
   /**
@@ -7272,13 +7276,13 @@ export function Composer(props: ComposerProps) {
       return;
     }
 
-    const pastedFiles = getImageFilesFromDataTransfer(event.clipboardData);
+    const pastedFileGroups = getImageFileGroupsFromDataTransfer(event.clipboardData);
     // Non-image FILES only (kind === "file" items) — plain text paste
     // must fall through to the editor untouched.
     const pastedNonImageFiles = getNonImageFilesFromDataTransfer(
       event.clipboardData,
     );
-    if (pastedFiles.length === 0 && pastedNonImageFiles.length === 0) {
+    if (pastedFileGroups.length === 0 && pastedNonImageFiles.length === 0) {
       return;
     }
 
@@ -7287,10 +7291,10 @@ export function Composer(props: ComposerProps) {
     if (pastedNonImageFiles.length > 0) {
       attachFiles(pastedNonImageFiles);
     }
-    if (pastedFiles.length === 0) {
+    if (pastedFileGroups.length === 0) {
       return;
     }
-    const accepted = gateImageFilesForAttachment(pastedFiles);
+    const accepted = gateImageFilesForAttachment(pastedFileGroups);
     if (!accepted || accepted.length === 0) {
       return;
     }
@@ -7307,11 +7311,11 @@ export function Composer(props: ComposerProps) {
   };
 
   const handleDrop = (event: DragEvent<HTMLElement>): void => {
-    const droppedFiles = getImageFilesFromDataTransfer(event.dataTransfer);
+    const droppedFileGroups = getImageFileGroupsFromDataTransfer(event.dataTransfer);
     const droppedNonImageFiles = getNonImageFilesFromDataTransfer(
       event.dataTransfer,
     );
-    if (droppedFiles.length === 0 && droppedNonImageFiles.length === 0) {
+    if (droppedFileGroups.length === 0 && droppedNonImageFiles.length === 0) {
       return;
     }
 
@@ -7320,17 +7324,17 @@ export function Composer(props: ComposerProps) {
     if (droppedNonImageFiles.length > 0) {
       attachFiles(droppedNonImageFiles);
     }
-    if (droppedFiles.length === 0) {
+    if (droppedFileGroups.length === 0) {
       return;
     }
-    const accepted = gateImageFilesForAttachment(droppedFiles);
+    const accepted = gateImageFilesForAttachment(droppedFileGroups);
     if (!accepted || accepted.length === 0) {
       return;
     }
     void attachImages(accepted);
   };
 
-  const attachImages = async (files: ComposerImageFile[]): Promise<void> => {
+  const attachImages = async (fileGroups: ComposerImageFileGroup[]): Promise<void> => {
     const pasteScope = pasteScopeRef.current;
     const pasteDraft = draft;
     const pasteEditorDocument = editorDocument;
@@ -7338,57 +7342,66 @@ export function Composer(props: ComposerProps) {
     const pasteFileAttachments = fileAttachments;
 
     try {
-      // A clipboard can expose several renditions of the same image. One may
-      // be stale or unsupported while another is usable, so retain successes
-      // instead of letting a failed rendition reject the whole paste.
+      // A clipboard can expose several renditions of the same image. Try the
+      // preferred candidate first and fall back when it cannot be read, while
+      // retaining at most one successful attachment per logical image.
       const attachmentResults = await Promise.allSettled(
-        files.map(async ({ file, type }, index) => {
-          const fallbackName = formatPastedImageName(type, index);
-          if (isGifFile(file, type)) {
-            // GIFs skip normalization (to preserve animation), so they have no
-            // measured dimensions — the card shows only the size chip for them.
-            return {
-              id: `pasted-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
-              name: file.name || fallbackName,
-              size: file.size,
-              type: "image/gif",
-              url: await readFileAsImageDataUrl(file, "image/gif"),
-            };
+        fileGroups.map(async ({ candidates }, index) => {
+          let firstFailure: unknown;
+          for (const { file, type } of candidates) {
+            const fallbackName = formatPastedImageName(type, index);
+            try {
+              if (isGifFile(file, type)) {
+                // GIFs skip normalization (to preserve animation), so they have no
+                // measured dimensions — the card shows only the size chip for them.
+                return {
+                  id: `pasted-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
+                  name: file.name || fallbackName,
+                  size: file.size,
+                  type: "image/gif",
+                  url: await readFileAsImageDataUrl(file, "image/gif"),
+                };
+              }
+
+              const normalized = await normalizeImageFile(file, {
+                fallback: props.desktopApi?.normalizeImageForUpload,
+                maxPatchCount: props.pastedImageMaxPatches,
+                sourceMimeType: type,
+              });
+              void props.desktopApi?.recordImageUploadNormalization?.({
+                fileName: file.name || fallbackName,
+                original: {
+                  height: normalized.original.height,
+                  mimeType: normalized.original.mimeType,
+                  size: normalized.original.size,
+                  width: normalized.original.width,
+                },
+                normalized: {
+                  height: normalized.height,
+                  mimeType: normalized.mimeType,
+                  size: normalized.size,
+                  width: normalized.width,
+                },
+                path: normalized.conversionPath,
+                resized:
+                  normalized.original.width !== normalized.width ||
+                  normalized.original.height !== normalized.height,
+              });
+              return {
+                id: `pasted-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
+                name: file.name || fallbackName,
+                size: normalized.size,
+                type: normalized.mimeType,
+                url: normalized.dataUrl,
+                width: normalized.width,
+                height: normalized.height,
+              };
+            } catch (error) {
+              firstFailure ??= error;
+            }
           }
 
-          const normalized = await normalizeImageFile(file, {
-            fallback: props.desktopApi?.normalizeImageForUpload,
-            maxPatchCount: props.pastedImageMaxPatches,
-            sourceMimeType: type,
-          });
-          void props.desktopApi?.recordImageUploadNormalization?.({
-            fileName: file.name || fallbackName,
-            original: {
-              height: normalized.original.height,
-              mimeType: normalized.original.mimeType,
-              size: normalized.original.size,
-              width: normalized.original.width,
-            },
-            normalized: {
-              height: normalized.height,
-              mimeType: normalized.mimeType,
-              size: normalized.size,
-              width: normalized.width,
-            },
-            path: normalized.conversionPath,
-            resized:
-              normalized.original.width !== normalized.width ||
-              normalized.original.height !== normalized.height,
-          });
-          return {
-            id: `pasted-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
-            name: file.name || fallbackName,
-            size: normalized.size,
-            type: normalized.mimeType,
-            url: normalized.dataUrl,
-            width: normalized.width,
-            height: normalized.height,
-          };
+          throw firstFailure ?? new Error("The pasted image could not be read.");
         })
       );
       const nextAttachments = attachmentResults.flatMap((result) =>
@@ -10893,13 +10906,15 @@ function formatCompactNumber(value: number): string {
   return String(Math.round(value));
 }
 
-function getImageFilesFromDataTransfer(dataTransfer: DataTransfer): ComposerImageFile[] {
-  const files: ComposerImageFile[] = [];
-  const seenFiles = new Set<string>();
+function getImageFileGroupsFromDataTransfer(
+  dataTransfer: DataTransfer,
+): ComposerImageFileGroup[] {
+  const fileGroups: ComposerImageFileGroup[] = [];
+  const itemFileKeys = new Set<string>();
 
   // DataTransfer.items and DataTransfer.files can expose separate clipboard
-  // image renditions. Preserve their order so the item stays preferred when
-  // both work, while allowing the files rendition to be a fallback.
+  // renditions of the same image. The collections are ordered, so pair files
+  // with the corresponding item as an alternative rather than a second image.
   for (const item of Array.from(dataTransfer.items)) {
     if (item.kind !== "file") {
       continue;
@@ -10916,12 +10931,14 @@ function getImageFilesFromDataTransfer(dataTransfer: DataTransfer): ComposerImag
     }
 
     const key = buildFileKey(file);
-    if (!seenFiles.has(key)) {
-      files.push({ file, type });
-      seenFiles.add(key);
+    if (!itemFileKeys.has(key)) {
+      fileGroups.push({ candidates: [{ file, type }] });
+      itemFileKeys.add(key);
     }
   }
 
+  const seenFileKeys = new Set<string>();
+  let fileIndex = 0;
   for (const file of Array.from(dataTransfer.files)) {
     const type = inferTransferImageType(file);
     if (!type) {
@@ -10929,13 +10946,24 @@ function getImageFilesFromDataTransfer(dataTransfer: DataTransfer): ComposerImag
     }
 
     const key = buildFileKey(file);
-    if (!seenFiles.has(key)) {
-      files.push({ file, type });
-      seenFiles.add(key);
+    if (seenFileKeys.has(key)) {
+      continue;
+    }
+    seenFileKeys.add(key);
+
+    const correspondingGroup = fileGroups[fileIndex];
+    fileIndex += 1;
+    if (itemFileKeys.has(key)) {
+      continue;
+    }
+    if (correspondingGroup) {
+      correspondingGroup.candidates.push({ file, type });
+    } else {
+      fileGroups.push({ candidates: [{ file, type }] });
     }
   }
 
-  return files;
+  return fileGroups;
 }
 
 /**
