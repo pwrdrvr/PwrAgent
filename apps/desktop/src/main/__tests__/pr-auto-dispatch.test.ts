@@ -263,6 +263,63 @@ describe("PrAutoDispatchCoordinator", () => {
     expect(reenabled[0]?.status).toBe("scheduled");
   });
 
+  it("treats toggling back on as an explicit retry with a fresh attempt budget", async () => {
+    const harness = createHarness();
+    await observe(harness.coordinator);
+    const firstPending = await store.getThreadPrAutoDispatchPending({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    await harness.coordinator.sendPendingNow({
+      backend: "codex",
+      threadId: "thread-1",
+      fingerprint: firstPending!.pending.fingerprint,
+    });
+
+    expect((await observe(harness.coordinator))[0]?.status).toBe("duplicate");
+    expect(await store.getThreadPrAutoDispatchAttemptCount({
+      backend: "codex",
+      threadId: "thread-1",
+      prKey: buildPullRequestStatusKey(pr()),
+    })).toBe(1);
+
+    expect(await harness.coordinator.resetForOperator({
+      backend: "codex",
+      threadId: "thread-1",
+    })).toBe(true);
+    expect(await store.getThreadPrAutoDispatchAttemptCount({
+      backend: "codex",
+      threadId: "thread-1",
+      prKey: buildPullRequestStatusKey(pr()),
+    })).toBe(0);
+
+    const reenabled = await harness.coordinator.handleStatusSnapshot({
+      pr: pr(),
+      threadKeys: ["codex:thread-1"],
+      observedAt: clock,
+      backgroundPollingEnabled: true,
+      operatorInitiated: true,
+    });
+    expect(reenabled[0]?.status).toBe("scheduled");
+    const retryPending = await store.getThreadPrAutoDispatchPending({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    await harness.coordinator.sendPendingNow({
+      backend: "codex",
+      threadId: "thread-1",
+      fingerprint: retryPending!.pending.fingerprint,
+    });
+
+    expect(harness.submitTurnIfIdle).toHaveBeenCalledTimes(2);
+    expect(harness.submitTurnIfIdle.mock.calls[1]?.[0].input[0]).toEqual(
+      expect.objectContaining({
+        type: "text",
+        text: expect.stringContaining("Automatic attempt: 1/2"),
+      }),
+    );
+  });
+
   it("survives restart without replaying or losing a pending repair", async () => {
     const first = createHarness();
     await observe(first.coordinator);

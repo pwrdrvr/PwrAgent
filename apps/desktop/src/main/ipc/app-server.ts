@@ -3725,6 +3725,7 @@ class DesktopAppServerService {
       await coordinator.cancelAllPendingForThread(request);
       return;
     }
+    await coordinator.resetForOperator(request);
     if (!this.backgroundPrPollingEnabled) return;
 
     const overlay = await this.getOverlayStore().getThreadOverlayState(request);

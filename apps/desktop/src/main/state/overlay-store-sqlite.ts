@@ -2377,6 +2377,32 @@ export class SqliteOverlayStore {
     return nextState;
   }
 
+  async resetThreadPrAutoDispatchForOperator(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+  }): Promise<boolean> {
+    const reset = this.stateDb.raw.transaction(() => {
+      // A toggle off -> on is an explicit operator request to retry. Keep a
+      // genuinely in-flight claim so another turn cannot launch alongside it,
+      // but clear completed/failed/cancelled claims and the finite incident
+      // budget so the current provider condition can be scheduled again.
+      const claims = this.stateDb.raw
+        .prepare(
+          `DELETE FROM pr_auto_dispatch_claims
+           WHERE backend = ? AND thread_id = ? AND status != 'dispatching'`,
+        )
+        .run(params.backend, params.threadId);
+      const incidents = this.stateDb.raw
+        .prepare(
+          `DELETE FROM pr_auto_dispatch_incidents
+           WHERE backend = ? AND thread_id = ?`,
+        )
+        .run(params.backend, params.threadId);
+      return claims.changes > 0 || incidents.changes > 0;
+    });
+    return reset();
+  }
+
   async scheduleThreadPrAutoDispatch(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;
@@ -4406,6 +4432,7 @@ export type OverlayStoreLike = Pick<
   | "setThreadExecutionMode"
   | "setThreadModelSettings"
   | "setThreadPrAutoDispatchEnabled"
+  | "resetThreadPrAutoDispatchForOperator"
   | "scheduleThreadPrAutoDispatch"
   | "beginThreadPrAutoDispatch"
   | "restoreThreadPrAutoDispatchAfterBusy"

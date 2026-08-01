@@ -52,6 +52,10 @@ type PrAutoDispatchStore = {
     maxAttempts: number;
     allowCancelledRearm?: boolean;
   }): Promise<PrAutoDispatchScheduleResult>;
+  resetThreadPrAutoDispatchForOperator(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<boolean>;
   beginThreadPrAutoDispatch(params: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -254,6 +258,17 @@ export class PrAutoDispatchCoordinator {
       await this.notifyPending(params, null);
     }
     return cancelled;
+  }
+
+  async resetForOperator(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<boolean> {
+    const reset = await this.options.store
+      .resetThreadPrAutoDispatchForOperator(params);
+    this.clearTimer(this.threadKey(params));
+    if (reset) await this.notifyPending(params, null);
+    return reset;
   }
 
   async sendPendingNow(params: {
