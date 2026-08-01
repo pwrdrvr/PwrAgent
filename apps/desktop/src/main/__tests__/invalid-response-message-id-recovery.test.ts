@@ -39,6 +39,7 @@ describe("invalid persisted Codex response-message ID recovery", () => {
     );
     const target = await createRolloutTarget({ fixture, threadId });
     await chmod(target.rolloutPath, 0o640);
+    const originalMode = (await stat(target.rolloutPath)).mode & 0o7777;
     const expectedRolloutPath = await realpath(target.rolloutPath);
 
     const result = await repairCodexInvalidResponseMessageIds({
@@ -58,7 +59,7 @@ describe("invalid persisted Codex response-message ID recovery", () => {
       threadId,
     });
     expect(await readFile(result.backupPath)).toEqual(fixture);
-    expect((await stat(target.rolloutPath)).mode & 0o7777).toBe(0o640);
+    expect((await stat(target.rolloutPath)).mode & 0o7777).toBe(originalMode);
 
     const records = await readJsonl(target.rolloutPath);
     expect(records).toHaveLength(3);
