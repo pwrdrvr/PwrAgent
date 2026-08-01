@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type {
   AppServerBackendKind,
   AppServerTurnInputItem,
@@ -13,11 +13,16 @@ import {
 } from "@pwragent/shared";
 import type {
   PrAutoDispatchPendingRecord,
+  PrAutoDispatchRecoveryResult,
   PrAutoDispatchScheduleResult,
 } from "../state/overlay-store-sqlite";
+import { isTerminalPullRequest } from "./pr-derivations";
 
 export const MAX_PR_AUTO_DISPATCH_ATTEMPTS_PER_INCIDENT = 2;
 export const PR_AUTO_DISPATCH_DELAY_MS = 30_000;
+export const PR_AUTO_DISPATCH_LEASE_MS = 60_000;
+const PR_AUTO_DISPATCH_LEASE_HEARTBEAT_MS = 20_000;
+const PR_AUTO_DISPATCH_RESUME_RETRY_MS = 15_000;
 
 export type PrAutoDispatchOutcome = {
   threadKey: string;
@@ -60,8 +65,10 @@ type PrAutoDispatchStore = {
     backend: AppServerBackendKind;
     threadId: string;
     fingerprint: string;
+    leaseExpiresAt: number;
     maxAttempts: number;
     now: number;
+    ownerId: string;
   }): Promise<
     | { status: "ready"; attemptCount: number; record: PrAutoDispatchPendingRecord }
     | { status: "disabled" | "stale" | "attempt-limit" }
@@ -70,13 +77,23 @@ type PrAutoDispatchStore = {
     backend: AppServerBackendKind;
     threadId: string;
     fingerprint: string;
+    ownerId: string;
     scheduledAt: number;
     now: number;
   }): Promise<ThreadPrAutoDispatchPending | undefined>;
+  renewThreadPrAutoDispatchLease(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    fingerprint: string;
+    leaseExpiresAt: number;
+    now: number;
+    ownerId: string;
+  }): Promise<boolean>;
   finishThreadPrAutoDispatch(params: {
     backend: AppServerBackendKind;
     threadId: string;
     fingerprint: string;
+    ownerId: string;
     status: "dispatched" | "failed";
     now: number;
   }): Promise<void>;
@@ -110,6 +127,10 @@ type PrAutoDispatchStore = {
       threadId: string;
     }
   >>;
+  recoverOrphanedThreadPrAutoDispatches(params: {
+    now: number;
+    scheduledAt: number;
+  }): Promise<PrAutoDispatchRecoveryResult>;
 };
 
 type PrAutoDispatchRegistry = {
@@ -134,6 +155,10 @@ export type PrAutoDispatchEvent = {
 
 export class PrAutoDispatchCoordinator {
   private readonly timers = new Map<string, NodeJS.Timeout>();
+  private readonly ownerId = randomUUID();
+  private recoveryTimer: NodeJS.Timeout | undefined;
+  private resumePromise: Promise<void> | undefined;
+  private resumed = false;
 
   constructor(
     private readonly options: {
@@ -146,6 +171,9 @@ export class PrAutoDispatchCoordinator {
         prKey: string;
       }) => boolean;
       getCurrentPr?: (prKey: string) => PrSummary | undefined;
+      refreshPendingPrs?: (
+        pending: ThreadPrAutoDispatchPending[],
+      ) => Promise<ReadonlySet<string>>;
       onPendingChanged?: (params: {
         backend: AppServerBackendKind;
         threadId: string;
@@ -298,10 +326,13 @@ export class PrAutoDispatchCoordinator {
 
   async resume(): Promise<void> {
     if (this.options.isBackgroundPollingEnabled?.() === false) return;
-    const records = await this.options.store.listPendingThreadPrAutoDispatches();
-    for (const record of records) {
-      this.arm(record, record.pending);
-    }
+    if (this.resumed) return;
+    if (this.resumePromise) return await this.resumePromise;
+    this.resumePromise = this.resumeFromStore()
+      .finally(() => {
+        this.resumePromise = undefined;
+      });
+    return await this.resumePromise;
   }
 
   pause(): void {
@@ -309,6 +340,9 @@ export class PrAutoDispatchCoordinator {
       clearTimeout(timer);
     }
     this.timers.clear();
+    if (this.recoveryTimer) clearTimeout(this.recoveryTimer);
+    this.recoveryTimer = undefined;
+    this.resumed = false;
   }
 
   close(): void {
@@ -365,8 +399,10 @@ export class PrAutoDispatchCoordinator {
     const begin = await this.options.store.beginThreadPrAutoDispatch({
       ...identity,
       fingerprint,
+      leaseExpiresAt: now + PR_AUTO_DISPATCH_LEASE_MS,
       maxAttempts: MAX_PR_AUTO_DISPATCH_ATTEMPTS_PER_INCIDENT,
       now,
+      ownerId: this.ownerId,
     });
     if (begin.status !== "ready") {
       if (begin.status === "disabled") {
@@ -387,6 +423,7 @@ export class PrAutoDispatchCoordinator {
       return;
     }
 
+    const stopLeaseHeartbeat = this.startLeaseHeartbeat(identity, fingerprint);
     try {
       const submission = await this.options.registry.submitTurnIfIdle({
         ...identity,
@@ -407,6 +444,7 @@ export class PrAutoDispatchCoordinator {
       await this.options.store.finishThreadPrAutoDispatch({
         ...identity,
         fingerprint,
+        ownerId: this.ownerId,
         status: "dispatched",
         now: this.now(),
       });
@@ -415,10 +453,13 @@ export class PrAutoDispatchCoordinator {
       await this.options.store.finishThreadPrAutoDispatch({
         ...identity,
         fingerprint,
+        ownerId: this.ownerId,
         status: "failed",
         now: this.now(),
       });
       await this.notifyPending(identity, null);
+    } finally {
+      stopLeaseHeartbeat();
     }
   }
 
@@ -430,12 +471,89 @@ export class PrAutoDispatchCoordinator {
     const pending = await this.options.store.restoreThreadPrAutoDispatchAfterBusy({
       ...identity,
       fingerprint,
+      ownerId: this.ownerId,
       scheduledAt: now + PR_AUTO_DISPATCH_DELAY_MS,
       now,
     });
     if (!pending) return;
     await this.notifyPending(identity, pending);
     this.arm(identity, pending);
+  }
+
+  private async resumeFromStore(): Promise<void> {
+    const now = this.now();
+    const recovery = await this.options.store.recoverOrphanedThreadPrAutoDispatches({
+      now,
+      scheduledAt: now + PR_AUTO_DISPATCH_DELAY_MS,
+    });
+    let records = await this.options.store.listPendingThreadPrAutoDispatches();
+    let refreshedPrKeys: ReadonlySet<string> | undefined;
+    if (records.length > 0 && this.options.refreshPendingPrs) {
+      try {
+        refreshedPrKeys = await this.options.refreshPendingPrs(
+          records.map((record) => record.pending),
+        );
+        records = await this.options.store.listPendingThreadPrAutoDispatches();
+      } catch {
+        this.armRecovery(this.now() + PR_AUTO_DISPATCH_RESUME_RETRY_MS);
+        return;
+      }
+    }
+    if (this.options.isBackgroundPollingEnabled?.() === false) {
+      this.resumed = false;
+      return;
+    }
+    for (const record of records) {
+      if (refreshedPrKeys && !refreshedPrKeys.has(record.pending.prKey)) {
+        continue;
+      }
+      this.arm(record, record.pending);
+    }
+    const skippedRefresh =
+      refreshedPrKeys
+      && records.some((record) => !refreshedPrKeys.has(record.pending.prKey));
+    this.resumed = !skippedRefresh;
+    this.armRecovery(
+      skippedRefresh
+        ? this.now() + PR_AUTO_DISPATCH_RESUME_RETRY_MS
+        : recovery.nextLeaseExpiresAt
+          ?? this.now() + PR_AUTO_DISPATCH_LEASE_MS,
+    );
+  }
+
+  private armRecovery(at: number | undefined): void {
+    if (this.recoveryTimer) clearTimeout(this.recoveryTimer);
+    this.recoveryTimer = undefined;
+    if (at === undefined || this.options.isBackgroundPollingEnabled?.() === false) {
+      return;
+    }
+    const timer = setTimeout(() => {
+      this.recoveryTimer = undefined;
+      this.resumed = false;
+      void this.resume();
+    }, Math.max(0, at - this.now()));
+    timer.unref?.();
+    this.recoveryTimer = timer;
+  }
+
+  private startLeaseHeartbeat(
+    identity: { backend: AppServerBackendKind; threadId: string },
+    fingerprint: string,
+  ): () => void {
+    const timer = setInterval(() => {
+      const now = this.now();
+      void this.options.store
+        .renewThreadPrAutoDispatchLease({
+          ...identity,
+          fingerprint,
+          leaseExpiresAt: now + PR_AUTO_DISPATCH_LEASE_MS,
+          now,
+          ownerId: this.ownerId,
+        })
+        .catch(() => undefined);
+    }, PR_AUTO_DISPATCH_LEASE_HEARTBEAT_MS);
+    timer.unref?.();
+    return () => clearInterval(timer);
   }
 
   private async notifyPending(
@@ -466,6 +584,7 @@ export class PrAutoDispatchCoordinator {
 export function getPrAutoDispatchEventKinds(
   pr: PrSummary,
 ): ThreadPrAutoDispatchEventKind[] {
+  if (isTerminalPullRequest(pr)) return [];
   const eventKinds: ThreadPrAutoDispatchEventKind[] = [];
   if (pr.checkState === "failing") eventKinds.push("ci-failure");
   if (pr.mergeState === "conflicting") eventKinds.push("merge-conflict");

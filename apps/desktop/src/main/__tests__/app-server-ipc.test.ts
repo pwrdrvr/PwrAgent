@@ -368,12 +368,16 @@ const beginThreadPrAutoDispatch = vi.fn(async () => ({
   status: "disabled" as const,
 }));
 const restoreThreadPrAutoDispatchAfterBusy = vi.fn(async () => undefined);
+const renewThreadPrAutoDispatchLease = vi.fn(async () => false);
 const finishThreadPrAutoDispatch = vi.fn(async () => undefined);
 const cancelThreadPrAutoDispatch = vi.fn(async () => false);
 const cancelPendingThreadPrAutoDispatchForPr = vi.fn(async () => false);
 const resolveThreadPrAutoDispatchIncident = vi.fn(async () => undefined);
 const getThreadPrAutoDispatchPending = vi.fn(async () => undefined);
 const listPendingThreadPrAutoDispatches = vi.fn(async () => []);
+const recoverOrphanedThreadPrAutoDispatches = vi.fn(async () => ({
+  recoveredCount: 0,
+}));
 const isGhAvailable = vi.fn(async () => true);
 const getAuthStatus = vi.fn(async () => ({
   installed: true,
@@ -492,12 +496,14 @@ vi.mock("../app-server/desktop-overlay-store", () => ({
     scheduleThreadPrAutoDispatch,
     beginThreadPrAutoDispatch,
     restoreThreadPrAutoDispatchAfterBusy,
+    renewThreadPrAutoDispatchLease,
     finishThreadPrAutoDispatch,
     cancelThreadPrAutoDispatch,
     cancelPendingThreadPrAutoDispatchForPr,
     resolveThreadPrAutoDispatchIncident,
     getThreadPrAutoDispatchPending,
     listPendingThreadPrAutoDispatches,
+    recoverOrphanedThreadPrAutoDispatches,
     readDirectoryGitStatusCache,
     writeDirectoryGitStatusCacheEntry,
     readThreadGitWorkingStateCache,
@@ -600,12 +606,14 @@ describe("app server ipc", () => {
     scheduleThreadPrAutoDispatch.mockClear();
     beginThreadPrAutoDispatch.mockClear();
     restoreThreadPrAutoDispatchAfterBusy.mockClear();
+    renewThreadPrAutoDispatchLease.mockClear();
     finishThreadPrAutoDispatch.mockClear();
     cancelThreadPrAutoDispatch.mockClear();
     cancelPendingThreadPrAutoDispatchForPr.mockClear();
     resolveThreadPrAutoDispatchIncident.mockClear();
     getThreadPrAutoDispatchPending.mockClear();
     listPendingThreadPrAutoDispatches.mockClear();
+    recoverOrphanedThreadPrAutoDispatches.mockClear();
     isGhAvailable.mockClear();
     isGhAvailable.mockResolvedValue(true);
     getAuthStatus.mockClear();

@@ -14,6 +14,7 @@ import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import {
   MAX_PR_AUTO_DISPATCH_ATTEMPTS_PER_INCIDENT,
   PR_AUTO_DISPATCH_DELAY_MS,
+  PR_AUTO_DISPATCH_LEASE_MS,
   PrAutoDispatchCoordinator,
 } from "../pr-status/pr-auto-dispatch";
 
@@ -72,6 +73,7 @@ function createHarness(options: {
   let busy = options.busy ?? false;
   let gate = options.gate ?? true;
   let currentPr = options.currentPr ?? pr();
+  let refreshedPr: PrSummary | undefined;
   const pendingUpdates: Array<ThreadPrAutoDispatchPending | null> = [];
   const submitTurnIfIdle = vi.fn(async (_request: {
     input: AppServerTurnInputItem[];
@@ -82,6 +84,10 @@ function createHarness(options: {
     store: options.targetStore ?? store,
     registry: { submitTurnIfIdle },
     getCurrentPr: () => currentPr,
+    refreshPendingPrs: async (pending) => {
+      if (refreshedPr) currentPr = refreshedPr;
+      return new Set(pending.map((item) => item.prKey));
+    },
     isPrAttached: () => true,
     isBackgroundPollingEnabled: () => gate,
     now: () => clock,
@@ -100,6 +106,9 @@ function createHarness(options: {
     },
     setGate: (value: boolean) => {
       gate = value;
+    },
+    setRefreshedPr: (value: PrSummary) => {
+      refreshedPr = value;
     },
     submitTurnIfIdle,
   };
@@ -170,6 +179,31 @@ describe("PrAutoDispatchCoordinator", () => {
     expect(thread?.prAutoDispatchPending?.scheduledAt).toBe(
       clock + PR_AUTO_DISPATCH_DELAY_MS,
     );
+  });
+
+  it("does not schedule terminal PRs and cancels a pending repair when one closes", async () => {
+    const harness = createHarness();
+    expect((await observe(
+      harness.coordinator,
+      pr({ lifecycleState: "merged" }),
+    ))[0]?.status).toBe("not-actionable");
+    expect(await store.getThreadPrAutoDispatchPending({
+      backend: "codex",
+      threadId: "thread-1",
+    })).toBeUndefined();
+
+    await observe(harness.coordinator);
+    const closed = pr({ lifecycleState: "closed" });
+    harness.setCurrentPr(closed);
+    expect((await observe(harness.coordinator, closed))[0]?.status).toBe(
+      "not-actionable",
+    );
+    expect(await store.getThreadPrAutoDispatchPending({
+      backend: "codex",
+      threadId: "thread-1",
+    })).toBeUndefined();
+    await runCountdown();
+    expect(harness.submitTurnIfIdle).not.toHaveBeenCalled();
   });
 
   it("dispatches only after the countdown and includes structured PR context", async () => {
@@ -336,6 +370,79 @@ describe("PrAutoDispatchCoordinator", () => {
     await runCountdown();
     expect(afterRestart.submitTurnIfIdle).toHaveBeenCalledTimes(1);
     expect((await observe(afterRestart.coordinator))[0]?.status).toBe("duplicate");
+  });
+
+  it("waits for provider refresh before resuming an overdue paused repair", async () => {
+    const harness = createHarness();
+    await observe(harness.coordinator);
+    harness.coordinator.pause();
+    harness.setGate(false);
+    clock += PR_AUTO_DISPATCH_DELAY_MS;
+    await vi.advanceTimersByTimeAsync(PR_AUTO_DISPATCH_DELAY_MS);
+    harness.setRefreshedPr(pr({
+      state: "passing",
+      checkState: "passing",
+    }));
+    harness.setGate(true);
+
+    await harness.coordinator.resume();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(harness.submitTurnIfIdle).not.toHaveBeenCalled();
+    expect(await store.getThreadPrAutoDispatchPending({
+      backend: "codex",
+      threadId: "thread-1",
+    })).toBeUndefined();
+  });
+
+  it("reclaims an orphaned dispatch lease after restart without double-spending", async () => {
+    const first = createHarness();
+    await observe(first.coordinator);
+    first.coordinator.close();
+    const pending = await store.getThreadPrAutoDispatchPending({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(await store.beginThreadPrAutoDispatch({
+      backend: "codex",
+      threadId: "thread-1",
+      fingerprint: pending!.pending.fingerprint,
+      leaseExpiresAt: clock + PR_AUTO_DISPATCH_LEASE_MS,
+      maxAttempts: MAX_PR_AUTO_DISPATCH_ATTEMPTS_PER_INCIDENT,
+      now: clock,
+      ownerId: "dead-process",
+    })).toMatchObject({ status: "ready", attemptCount: 1 });
+
+    const dbPath = path.join(tempDir, "state.db");
+    stateDb.close();
+    stateDb = StateDb.open(dbPath);
+    store = new SqliteOverlayStore(stateDb);
+    const afterRestart = createHarness();
+    await afterRestart.coordinator.resume();
+
+    clock += PR_AUTO_DISPATCH_LEASE_MS - 1;
+    await vi.advanceTimersByTimeAsync(PR_AUTO_DISPATCH_LEASE_MS - 1);
+    expect(afterRestart.submitTurnIfIdle).not.toHaveBeenCalled();
+    expect(await store.getThreadPrAutoDispatchAttemptCount({
+      backend: "codex",
+      threadId: "thread-1",
+      prKey: buildPullRequestStatusKey(pr()),
+    })).toBe(1);
+
+    clock += 1;
+    await vi.advanceTimersByTimeAsync(1);
+    expect((await store.getThreadPrAutoDispatchPending({
+      backend: "codex",
+      threadId: "thread-1",
+    }))?.pending.scheduledAt).toBe(clock + PR_AUTO_DISPATCH_DELAY_MS);
+    expect(await store.getThreadPrAutoDispatchAttemptCount({
+      backend: "codex",
+      threadId: "thread-1",
+      prKey: buildPullRequestStatusKey(pr()),
+    })).toBe(0);
+
+    await runCountdown();
+    expect(afterRestart.submitTurnIfIdle).toHaveBeenCalledTimes(1);
   });
 
   it("atomically rejects busy submission and restores the countdown without spending an attempt", async () => {

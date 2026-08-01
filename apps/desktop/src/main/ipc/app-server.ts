@@ -114,6 +114,7 @@ import {
   type RestoreThreadResponse,
   type ThreadGitWorkingState,
   type ThreadOverlayState,
+  type ThreadPrAutoDispatchPending,
   type UpdateDirectoryLaunchpadRequest,
   type UpdateDirectoryLaunchpadResponse,
   type UpdateSubthreadOrderRequest,
@@ -3828,6 +3829,33 @@ class DesktopAppServerService {
     return changed.map((pr) => getPrStatusKey(pr));
   }
 
+  private async refreshPendingPrAutoDispatches(
+    pending: ThreadPrAutoDispatchPending[],
+  ): Promise<ReadonlySet<string>> {
+    const refsByPrKey = new Map(
+      pending.flatMap((item) => {
+        const ref = parsePrRefFromUrl(item.prUrl);
+        return ref ? [[item.prKey, ref] as const] : [];
+      }),
+    );
+    if (refsByPrKey.size === 0) {
+      return new Set();
+    }
+    if (!this.prStatusTokenBucket.tryTake()) {
+      throw new Error("PR status refresh budget is temporarily exhausted");
+    }
+    const refreshed = await this.getPrGraphqlClient().fetchPullRequests(
+      [...refsByPrKey.values()],
+    );
+    if (refreshed.length > 0) {
+      await this.applyPolledPrStatuses(
+        refreshed,
+        this.nextPrObservationTimestamp(),
+      );
+    }
+    return new Set(refreshed.map((pr) => getPrStatusKey(pr)));
+  }
+
   async getGhStatus(request: GetGhStatusRequest): Promise<GhStatus> {
     const fetcher = this.getPrFetcher();
     if (request.recheck) {
@@ -4614,6 +4642,8 @@ class DesktopAppServerService {
         registry: getDesktopBackendRegistry(),
         isBackgroundPollingEnabled: () => this.backgroundPrPollingEnabled,
         getCurrentPr: (prKey) => this.prStatusRegistry.get(prKey)?.pr,
+        refreshPendingPrs: async (pending) =>
+          await this.refreshPendingPrAutoDispatches(pending),
         isPrAttached: ({ backend, threadId, prKey }) =>
           this.attachedPrsByThreadKey
             .get(buildThreadIdentityKey(backend, threadId))

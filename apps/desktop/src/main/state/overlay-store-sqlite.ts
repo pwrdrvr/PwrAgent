@@ -75,8 +75,17 @@ export type PrStatusCacheEntry = {
 };
 
 export type PrAutoDispatchPendingRecord = {
+  dispatchLease?: {
+    expiresAt: number;
+    ownerId: string;
+  };
   pending: ThreadPrAutoDispatchPending;
   prompt: string;
+};
+
+export type PrAutoDispatchRecoveryResult = {
+  nextLeaseExpiresAt?: number;
+  recoveredCount: number;
 };
 
 export type PrAutoDispatchScheduleResult = {
@@ -120,6 +129,13 @@ function parsePrAutoDispatchKinds(value: string): ThreadPrAutoDispatchEventKind[
   } catch {
     return [];
   }
+}
+
+function clearPrAutoDispatchLease(
+  record: PrAutoDispatchPendingRecord,
+): PrAutoDispatchPendingRecord {
+  const { dispatchLease: _dispatchLease, ...pendingRecord } = record;
+  return pendingRecord;
 }
 
 export type PrLookupCacheEntry = {
@@ -2552,8 +2568,10 @@ export class SqliteOverlayStore {
     backend: ThreadOverlayState["backend"];
     threadId: string;
     fingerprint: string;
+    leaseExpiresAt: number;
     maxAttempts: number;
     now: number;
+    ownerId: string;
   }): Promise<
     | { status: "ready"; attemptCount: number; record: PrAutoDispatchPendingRecord }
     | { status: "disabled" | "stale" | "attempt-limit" }
@@ -2595,12 +2613,19 @@ export class SqliteOverlayStore {
       const updated = this.stateDb.raw
         .prepare(
           `UPDATE pr_auto_dispatch_claims
-           SET status = 'dispatching', updated_at = ?
+           SET status = 'dispatching', updated_at = ?, payload = ?
            WHERE backend = ? AND thread_id = ? AND fingerprint = ?
              AND status = 'pending'`,
         )
         .run(
           params.now,
+          JSON.stringify({
+            ...record,
+            dispatchLease: {
+              expiresAt: params.leaseExpiresAt,
+              ownerId: params.ownerId,
+            },
+          } satisfies PrAutoDispatchPendingRecord),
           params.backend,
           params.threadId,
           params.fingerprint,
@@ -2631,6 +2656,7 @@ export class SqliteOverlayStore {
     backend: ThreadOverlayState["backend"];
     threadId: string;
     fingerprint: string;
+    ownerId: string;
     scheduledAt: number;
     now: number;
   }): Promise<ThreadPrAutoDispatchPending | undefined> {
@@ -2652,7 +2678,11 @@ export class SqliteOverlayStore {
       if (!claim || claim.status !== "dispatching" || !record) {
         return undefined;
       }
+      if (record.dispatchLease?.ownerId !== params.ownerId) {
+        return undefined;
+      }
       const pending = { ...record.pending, scheduledAt: params.scheduledAt };
+      const pendingRecord = clearPrAutoDispatchLease({ ...record, pending });
       this.stateDb.raw
         .prepare(
           `UPDATE pr_auto_dispatch_claims
@@ -2663,7 +2693,7 @@ export class SqliteOverlayStore {
         .run(
           params.scheduledAt,
           params.now,
-          JSON.stringify({ ...record, pending }),
+          JSON.stringify(pendingRecord),
           params.backend,
           params.threadId,
           params.fingerprint,
@@ -2685,14 +2715,110 @@ export class SqliteOverlayStore {
     return restore();
   }
 
+  async renewThreadPrAutoDispatchLease(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    fingerprint: string;
+    leaseExpiresAt: number;
+    now: number;
+    ownerId: string;
+  }): Promise<boolean> {
+    const renew = this.stateDb.raw.transaction(() => {
+      const claim = this.stateDb.raw
+        .prepare(
+          `SELECT pr_key, status, payload
+           FROM pr_auto_dispatch_claims
+           WHERE backend = ? AND thread_id = ? AND fingerprint = ?`,
+        )
+        .get(
+          params.backend,
+          params.threadId,
+          params.fingerprint,
+        ) as PrAutoDispatchClaimRow | undefined;
+      const record = claim
+        ? parsePrAutoDispatchPendingRecord(claim.payload)
+        : undefined;
+      if (
+        !claim
+        || claim.status !== "dispatching"
+        || !record
+        || record.dispatchLease?.ownerId !== params.ownerId
+      ) {
+        return false;
+      }
+      const result = this.stateDb.raw
+        .prepare(
+          `UPDATE pr_auto_dispatch_claims
+           SET updated_at = ?, payload = ?
+           WHERE backend = ? AND thread_id = ? AND fingerprint = ?
+             AND status = 'dispatching'`,
+        )
+        .run(
+          params.now,
+          JSON.stringify({
+            ...record,
+            dispatchLease: {
+              expiresAt: params.leaseExpiresAt,
+              ownerId: params.ownerId,
+            },
+          } satisfies PrAutoDispatchPendingRecord),
+          params.backend,
+          params.threadId,
+          params.fingerprint,
+        );
+      return result.changes > 0;
+    });
+    return renew();
+  }
+
   async finishThreadPrAutoDispatch(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;
     fingerprint: string;
+    ownerId: string;
     status: "dispatched" | "failed";
     now: number;
   }): Promise<void> {
-    this.updatePrAutoDispatchClaimStatus(params);
+    const finish = this.stateDb.raw.transaction(() => {
+      const claim = this.stateDb.raw
+        .prepare(
+          `SELECT pr_key, status, payload
+           FROM pr_auto_dispatch_claims
+           WHERE backend = ? AND thread_id = ? AND fingerprint = ?`,
+        )
+        .get(
+          params.backend,
+          params.threadId,
+          params.fingerprint,
+        ) as PrAutoDispatchClaimRow | undefined;
+      const record = claim
+        ? parsePrAutoDispatchPendingRecord(claim.payload)
+        : undefined;
+      if (
+        !claim
+        || claim.status !== "dispatching"
+        || !record
+        || record.dispatchLease?.ownerId !== params.ownerId
+      ) {
+        return;
+      }
+      this.stateDb.raw
+        .prepare(
+          `UPDATE pr_auto_dispatch_claims
+           SET status = ?, updated_at = ?, payload = ?
+           WHERE backend = ? AND thread_id = ? AND fingerprint = ?
+             AND status = 'dispatching'`,
+        )
+        .run(
+          params.status,
+          params.now,
+          JSON.stringify(clearPrAutoDispatchLease(record)),
+          params.backend,
+          params.threadId,
+          params.fingerprint,
+        );
+    });
+    finish();
   }
 
   async cancelThreadPrAutoDispatch(params: {
@@ -2803,6 +2929,74 @@ export class SqliteOverlayStore {
         ? [{ ...record, backend: row.backend, threadId: row.thread_id }]
         : [];
     });
+  }
+
+  async recoverOrphanedThreadPrAutoDispatches(params: {
+    now: number;
+    scheduledAt: number;
+  }): Promise<PrAutoDispatchRecoveryResult> {
+    const recover = this.stateDb.raw.transaction((): PrAutoDispatchRecoveryResult => {
+      const rows = this.stateDb.raw
+        .prepare(
+          `SELECT backend, thread_id, pr_key, fingerprint, payload
+           FROM pr_auto_dispatch_claims
+           WHERE status = 'dispatching'`,
+        )
+        .all() as Array<{
+          backend: ThreadOverlayState["backend"];
+          fingerprint: string;
+          payload: string;
+          pr_key: string;
+          thread_id: string;
+        }>;
+      let nextLeaseExpiresAt: number | undefined;
+      let recoveredCount = 0;
+      for (const row of rows) {
+        const record = parsePrAutoDispatchPendingRecord(row.payload);
+        const leaseExpiresAt = record?.dispatchLease?.expiresAt;
+        if (leaseExpiresAt !== undefined && leaseExpiresAt > params.now) {
+          nextLeaseExpiresAt = nextLeaseExpiresAt === undefined
+            ? leaseExpiresAt
+            : Math.min(nextLeaseExpiresAt, leaseExpiresAt);
+          continue;
+        }
+        if (!record) {
+          continue;
+        }
+        const pending = { ...record.pending, scheduledAt: params.scheduledAt };
+        const updated = this.stateDb.raw
+          .prepare(
+            `UPDATE pr_auto_dispatch_claims
+             SET status = 'pending', scheduled_at = ?, updated_at = ?, payload = ?
+             WHERE backend = ? AND thread_id = ? AND fingerprint = ?
+               AND status = 'dispatching'`,
+          )
+          .run(
+            params.scheduledAt,
+            params.now,
+            JSON.stringify(clearPrAutoDispatchLease({ ...record, pending })),
+            row.backend,
+            row.thread_id,
+            row.fingerprint,
+          );
+        if (updated.changes === 0) {
+          continue;
+        }
+        recoveredCount += 1;
+        this.stateDb.raw
+          .prepare(
+            `UPDATE pr_auto_dispatch_incidents
+             SET attempt_count = MAX(0, attempt_count - 1), updated_at = ?
+             WHERE backend = ? AND thread_id = ? AND pr_key = ?`,
+          )
+          .run(params.now, row.backend, row.thread_id, row.pr_key);
+      }
+      return {
+        ...(nextLeaseExpiresAt !== undefined ? { nextLeaseExpiresAt } : {}),
+        recoveredCount,
+      };
+    });
+    return recover();
   }
 
   async getThreadPrAutoDispatchAttemptCount(params: {
@@ -4436,12 +4630,14 @@ export type OverlayStoreLike = Pick<
   | "scheduleThreadPrAutoDispatch"
   | "beginThreadPrAutoDispatch"
   | "restoreThreadPrAutoDispatchAfterBusy"
+  | "renewThreadPrAutoDispatchLease"
   | "finishThreadPrAutoDispatch"
   | "cancelThreadPrAutoDispatch"
   | "cancelPendingThreadPrAutoDispatchForPr"
   | "resolveThreadPrAutoDispatchIncident"
   | "getThreadPrAutoDispatchPending"
   | "listPendingThreadPrAutoDispatches"
+  | "recoverOrphanedThreadPrAutoDispatches"
   | "getThreadPrAutoDispatchAttemptCount"
   | "turnOffCodexFastEverywhere"
   | "setThreadExpectedBranch"
