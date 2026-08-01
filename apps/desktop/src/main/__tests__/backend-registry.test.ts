@@ -16078,13 +16078,21 @@ command = "pnpm dev"
         turnId: "turn-review-1",
         model: "gpt-5.5",
         tokenUsage: {
+          // The review inherits 100k input / 5k output from the parent. Only
+          // the latest request belongs to this review and may be priced here.
           total: {
             fastMode: true,
+            inputTokens: 101_000,
+            cachedInputTokens: 90_200,
+            outputTokens: 5_050,
+            reasoningOutputTokens: 1_010,
+            serviceTier: "priority",
+          },
+          last: {
             inputTokens: 1_000,
             cachedInputTokens: 200,
             outputTokens: 50,
             reasoningOutputTokens: 10,
-            serviceTier: "priority",
           },
         },
       },
@@ -16601,7 +16609,15 @@ command = "pnpm dev"
         turnId: "turn-native-1",
         model: "gpt-5.4-mini",
         tokenUsage: {
+          // Native spawnAgent threads also inherit cumulative parent totals.
+          // The parent already paid for this baseline; the card starts at last.
           total: {
+            inputTokens: 101_000,
+            cachedInputTokens: 90_100,
+            outputTokens: 5_040,
+            reasoningOutputTokens: 1_010,
+          },
+          last: {
             inputTokens: 1_000,
             cachedInputTokens: 100,
             outputTokens: 40,
@@ -16627,11 +16643,52 @@ command = "pnpm dev"
         uncachedInputTokens: 900,
       },
     });
+
+    await codexClient.emit({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: nativeThreadId,
+        turnId: "turn-native-1",
+        model: "gpt-5.4-mini",
+        tokenUsage: {
+          total: {
+            inputTokens: 103_000,
+            cachedInputTokens: 91_600,
+            outputTokens: 5_100,
+            reasoningOutputTokens: 1_020,
+          },
+          last: {
+            inputTokens: 2_000,
+            cachedInputTokens: 1_500,
+            outputTokens: 60,
+            reasoningOutputTokens: 10,
+          },
+        },
+      },
+    });
+
+    const updatedUsageOverlay = await overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: "thread-parent",
+    });
+    expect(updatedUsageOverlay?.subAgents?.[0]?.monitorUsage).toMatchObject({
+      summary: expect.stringContaining(
+        "1,400 uncached in · 1,600 cached · 100 out (20 reasoning)",
+      ),
+      tokenUsage: {
+        cachedInputTokens: 1_600,
+        inputTokens: 3_000,
+        outputTokens: 100,
+        reasoningOutputTokens: 20,
+        totalTokens: 3_120,
+        uncachedInputTokens: 1_400,
+      },
+    });
     const pricing = await overlayStore.readThreadPricing({
       backend: "codex",
       threadId: "thread-parent",
     });
-    expect(upsertThreadUsageLine).toHaveBeenCalledTimes(1);
+    expect(upsertThreadUsageLine).toHaveBeenCalledTimes(2);
     expect(upsertThreadUsageLine).toHaveBeenCalledWith({
       line: expect.objectContaining({
         source: "monitor",
@@ -16650,9 +16707,14 @@ command = "pnpm dev"
       sourceItemId: `codex-native:${nativeThreadId}`,
       threadId: nativeThreadId,
       turnId: "turn-native-1",
+      inputTokens: 3_000,
+      cachedInputTokens: 1_600,
+      uncachedInputTokens: 1_400,
+      outputTokens: 100,
+      reasoningOutputTokens: 20,
     });
     expect(pricing.lines[0]?.totalCostMicros).toBeGreaterThan(0);
-    expect(upsertThreadSubAgent).toHaveBeenCalledTimes(2);
+    expect(upsertThreadSubAgent).toHaveBeenCalledTimes(3);
 
     await registry.close();
   });
