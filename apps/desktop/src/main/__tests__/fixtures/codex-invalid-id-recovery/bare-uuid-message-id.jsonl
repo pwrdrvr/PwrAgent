@@ -1,0 +1,2 @@
+{"timestamp":"2026-07-30T00:00:00.000Z","type":"session_meta","payload":{"id":"019fb19b-637e-72f0-b567-56f624e2ee2c","session_id":"019fb19b-637e-72f0-b567-56f624e2ee2c","cwd":"/repo"}}
+{"timestamp":"2026-07-30T00:01:00.000Z","type":"response_item","payload":{"type":"message","role":"user","id":"2a8713ab-8658-44d6-aac8-066dab8b3df0","content":[{"type":"input_text","text":"hook-injected message"}],"internal_chat_message_metadata_passthrough":{"source":"hook"}}}

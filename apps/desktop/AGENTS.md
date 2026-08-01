@@ -59,7 +59,11 @@ PwrAgent-owned JSONL, sqlite, config, and replay fixture files remain OK when
 the desktop app or test harness owns that data. CI runs
 `pnpm lint:codex-storage` to catch common violations; do not bypass or rename
 around that check. Fix the data flow by using protocol fields or changing the
-protocol.
+protocol. The one PwrDrvr LLC-authorized exception is
+`src/main/codex-app-server/invalid-response-message-id-recovery.ts`: it may
+rewrite only the protocol-identified rollout for the exact Responses API
+invalid message-ID-prefix recovery, after stopping the Codex writer, creating
+a durable backup, and validating the session belongs to the requested thread.
 
 ## Running the App for Development
 

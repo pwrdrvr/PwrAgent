@@ -157,4 +157,55 @@ describe("AppNoticeToast", () => {
     expect(dismissVersion).toHaveBeenCalledOnce();
     expect(onDismiss).not.toHaveBeenCalled();
   });
+  it("starts a hover-paused countdown when repair progress flips to success", () => {
+    vi.useFakeTimers();
+    const onDismiss = vi.fn();
+    const repairingNotice = {
+      ...notice,
+      autoDismiss: false,
+      id: "codex-invalid-id-recovery:codex:thread-1:turn-9",
+      status: {
+        label: "Repairing saved thread history.",
+        state: "progress" as const,
+      },
+      title: "Known Codex issue",
+      tone: "warning" as const,
+    };
+    const { container, rerender } = render(
+      <AppNoticeToast notice={repairingNotice} onDismiss={onDismiss} />,
+    );
+
+    expect(screen.getByText("Repairing saved thread history.")).toBeInTheDocument();
+    expect(container.querySelector(".app-notice-toast__timer")).toBeNull();
+
+    rerender(
+      <AppNoticeToast
+        notice={{
+          ...repairingNotice,
+          autoDismiss: true,
+          status: {
+            label: "Saved history repaired. Your message was retried.",
+            state: "success",
+          },
+          title: "Codex thread repaired",
+          tone: "success",
+        }}
+        onDismiss={onDismiss}
+      />,
+    );
+
+    const toast = screen.getByRole("status");
+    expect(container.querySelector(".app-notice-toast__timer")).not.toBeNull();
+    fireEvent.mouseEnter(toast);
+    act(() => {
+      vi.advanceTimersByTime(10_000);
+    });
+    expect(onDismiss).not.toHaveBeenCalled();
+
+    fireEvent.mouseLeave(toast);
+    act(() => {
+      vi.advanceTimersByTime(9_000);
+    });
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
 });
