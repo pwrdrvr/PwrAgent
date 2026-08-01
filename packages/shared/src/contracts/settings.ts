@@ -22,11 +22,10 @@ export const DESKTOP_WORKTREE_STORAGE_DEFAULT: DesktopWorktreeStorageLocation =
   "user-home";
 
 /**
- * Background PR status polling ships opt-in while it is experimental. With it
- * off, PR chips behave exactly as they did before the poller existed, so the
- * flag is a true kill switch rather than a tuning knob.
+ * Background PR status polling is enabled by default. An explicit false value
+ * remains a kill switch for operators who need to disable the poller.
  */
-export const DEFAULT_BACKGROUND_PR_POLLING = false;
+export const DEFAULT_BACKGROUND_PR_POLLING = true;
 
 export const DESKTOP_UPDATE_CHANNELS = ["latest", "prerelease"] as const;
 

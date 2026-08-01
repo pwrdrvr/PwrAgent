@@ -1819,7 +1819,7 @@ describe("DesktopSettingsService", () => {
     );
   });
 
-  it("defaults background PR polling to off and persists it", async () => {
+  it("defaults background PR polling to on and persists an explicit opt-out", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
     const service = new DesktopSettingsService({
@@ -1828,26 +1828,26 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    // Opt-in: with the flag absent, background polling stays off entirely.
+    // With the flag absent, background polling is enabled by default.
     const initial = await service.readSettings();
     expect(initial.experimental.backgroundPrPolling).toEqual({
-      value: false,
+      value: true,
       source: "default",
     });
 
     await service.writeConfigPatch({
       experimental: {
-        backgroundPrPolling: true,
+        backgroundPrPolling: false,
       },
     });
 
     const updated = await service.readSettings();
     expect(updated.experimental.backgroundPrPolling).toEqual({
-      value: true,
+      value: false,
       source: "config",
     });
     expect(fs.readFileSync(configPath, "utf8")).toContain(
-      "background_pr_polling = true",
+      "background_pr_polling = false",
     );
   });
 
