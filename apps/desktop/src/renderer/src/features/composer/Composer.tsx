@@ -2514,6 +2514,10 @@ export function Composer(props: ComposerProps) {
   };
   const [interrupting, setInterrupting] = useState(false);
   const [steering, setSteering] = useState(false);
+  // React state only drives presentation. This ref synchronously suppresses
+  // duplicate renderer calls; the registry request ID provides the durable
+  // idempotency boundary shared with messaging.
+  const steeringRequestIdRef = useRef<string | undefined>(undefined);
   const [queuedTurns, setQueuedTurnsState] = useState<QueuedTurnDraft[]>(
     savedInitialQueuedTurns ?? []
   );
@@ -3680,6 +3684,7 @@ export function Composer(props: ComposerProps) {
     updateSending(false);
     setInterrupting(false);
     setSteering(false);
+    steeringRequestIdRef.current = undefined;
     setScheduleMenuOpen(false);
     setScheduledDraftSendAt(undefined);
     setScheduleArmed(true);
@@ -3875,6 +3880,7 @@ export function Composer(props: ComposerProps) {
       updateSending(false);
       setInterrupting(false);
       setSteering(false);
+      steeringRequestIdRef.current = undefined;
     }
   }, [props.activeTurnId]);
 
@@ -4012,6 +4018,9 @@ export function Composer(props: ComposerProps) {
         event.notification.method === "item/completed" &&
         notificationIncludesDraftContent(event.notification.params, pendingSteer)
       ) {
+        if (steeringRequestIdRef.current === pendingSteer.id) {
+          steeringRequestIdRef.current = undefined;
+        }
         setPendingSteer(undefined);
         setSteering(false);
         props.onPendingStatusChange?.("Thinking");
@@ -4077,6 +4086,7 @@ export function Composer(props: ComposerProps) {
         updateSending(false);
         setInterrupting(false);
         setSteering(false);
+        steeringRequestIdRef.current = undefined;
         if (pendingSteer?.status === "pending") {
           if (queuedTurn) {
             setComposerDraftFromCanonical(pendingSteer.text);
@@ -4118,6 +4128,7 @@ export function Composer(props: ComposerProps) {
         updateSending(false);
         setInterrupting(false);
         setSteering(false);
+        steeringRequestIdRef.current = undefined;
         setPendingSteer(undefined);
         updateActiveTurnId(undefined);
         props.onActiveTurnIdChange?.(undefined);
@@ -4970,10 +4981,15 @@ export function Composer(props: ComposerProps) {
       pending.imageAttachments,
       pending.fileAttachments,
     );
-    if (payload.input.length === 0 || props.disabled || steering) {
+    if (
+      payload.input.length === 0 ||
+      props.disabled ||
+      steeringRequestIdRef.current !== undefined
+    ) {
       return;
     }
 
+    steeringRequestIdRef.current = pending.id;
     setSendError(undefined);
     setSteering(true);
     updatePendingSteer((current) =>
@@ -4989,8 +5005,12 @@ export function Composer(props: ComposerProps) {
         threadId: props.thread.id,
         expectedTurnId: turnId,
         input: payload.input,
+        requestId: pending.id,
       });
     } catch (error) {
+      if (steeringRequestIdRef.current === pending.id) {
+        steeringRequestIdRef.current = undefined;
+      }
       const staleSteer = parseStaleSteerError(error);
       if (staleSteer) {
         if (queuedTurn) {

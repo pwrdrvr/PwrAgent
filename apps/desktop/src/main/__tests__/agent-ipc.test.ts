@@ -196,6 +196,7 @@ describe("agent ipc", () => {
         threadId: "thread-1",
         expectedTurnId: "turn-1",
         input: [{ type: "text", text: "Course correct" }],
+        requestId: "steer-1",
       }),
     ).toEqual({
       backend: "codex",

@@ -1,6 +1,6 @@
 import { app } from "electron";
 import { execFile as execFileCallback } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -5457,6 +5457,40 @@ type PendingThreadMessageOrigin = {
   turnId?: string;
 };
 
+type AcceptedSteerRequest = {
+  promise: Promise<SteerTurnResponse>;
+  signature: string;
+};
+
+function buildSteerRequestKey(params: SteerTurnRequest): string {
+  return [
+    params.backend,
+    params.threadId,
+    params.expectedTurnId,
+    params.requestId,
+  ].join("\u0000");
+}
+
+function buildSteerTurnKeyPrefix(params: {
+  backend: AppServerBackendKind;
+  threadId: string;
+  turnId: string;
+}): string {
+  return [params.backend, params.threadId, params.turnId, ""].join("\u0000");
+}
+
+function buildSteerRequestSignature(
+  params: SteerTurnRequest,
+  messageOrigin?: AppServerThreadMessageOrigin,
+): string {
+  return createHash("sha256")
+    .update(JSON.stringify({
+      input: params.input,
+      messageOrigin: messageOrigin ?? null,
+    }))
+    .digest("hex");
+}
+
 export class DesktopBackendRegistry {
   private readonly codexClient: BackendClient;
   private readonly grokClient: BackendClient;
@@ -5534,6 +5568,13 @@ export class DesktopBackendRegistry {
   private readonly pendingThreadMessageOrigins = new Map<
     string,
     PendingThreadMessageOrigin
+  >();
+  // Keep accepted requests through the active turn, not just while the RPC is
+  // in flight. The backend can acknowledge a steer before its user item is
+  // observed, and completion signals in that window must not resubmit it.
+  private readonly acceptedSteerRequests = new Map<
+    string,
+    AcceptedSteerRequest
   >();
   private readonly activeCodexTurnModes = new Map<string, ThreadExecutionMode>();
   private readonly activeCodexReviewTurnKeys = new Set<string>();
@@ -10549,6 +10590,34 @@ export class DesktopBackendRegistry {
     params: SteerTurnRequest,
     messageOrigin?: AppServerThreadMessageOrigin,
   ): Promise<SteerTurnResponse> {
+    const requestKey = buildSteerRequestKey(params);
+    const signature = buildSteerRequestSignature(params, messageOrigin);
+    const accepted = this.acceptedSteerRequests.get(requestKey);
+    if (accepted) {
+      if (accepted.signature !== signature) {
+        throw new Error(
+          `Steer request id ${params.requestId} was reused with different input`,
+        );
+      }
+      return await accepted.promise;
+    }
+
+    const promise = this.submitSteerTurn(params, messageOrigin);
+    this.acceptedSteerRequests.set(requestKey, { promise, signature });
+    try {
+      return await promise;
+    } catch (error) {
+      if (this.acceptedSteerRequests.get(requestKey)?.promise === promise) {
+        this.acceptedSteerRequests.delete(requestKey);
+      }
+      throw error;
+    }
+  }
+
+  private async submitSteerTurn(
+    params: SteerTurnRequest,
+    messageOrigin?: AppServerThreadMessageOrigin,
+  ): Promise<SteerTurnResponse> {
     const pendingMessageOriginId = this.registerPendingThreadMessageOrigin({
       backend: params.backend,
       threadId: params.threadId,
@@ -13328,6 +13397,7 @@ export class DesktopBackendRegistry {
 
   async close(): Promise<void> {
     this.closed = true;
+    this.acceptedSteerRequests.clear();
     if (this.taskMonitorWatchdogTimer) {
       clearInterval(this.taskMonitorWatchdogTimer);
     }
@@ -22627,6 +22697,16 @@ export class DesktopBackendRegistry {
         this.activeTurnKeys.delete(
           buildActiveTurnKey(event.backend, notification.params.threadId, turnId),
         );
+        const steerKeyPrefix = buildSteerTurnKeyPrefix({
+          backend: event.backend,
+          threadId: notification.params.threadId,
+          turnId,
+        });
+        for (const key of this.acceptedSteerRequests.keys()) {
+          if (key.startsWith(steerKeyPrefix)) {
+            this.acceptedSteerRequests.delete(key);
+          }
+        }
       }
       if (event.backend === "codex" && turnId) {
         const activeTurnModeKey = buildActiveTurnModeKey(
