@@ -89,6 +89,7 @@ import {
   resolveThreadIdText,
   useThreadLinks,
   type ResolvedThreadLink,
+  type ThreadLinkContextValue,
 } from "../../lib/thread-links";
 import type { ThreadContextWindowState } from "../../lib/useThreadSessionState";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
@@ -1386,6 +1387,7 @@ function serializeDraftWithSkillTokens(
 function hydrateComposerDraft(
   canonicalDraft: string,
   skills: AppServerSkillSummary[],
+  threadLinks: ThreadLinkContextValue | undefined,
 ): {
   draft: string;
   skillTokens: ComposerSkillToken[];
@@ -1393,44 +1395,64 @@ function hydrateComposerDraft(
   let draft = "";
   const skillTokens: ComposerSkillToken[] = [];
 
-  for (const part of parseSkillMentionParts(canonicalDraft)) {
-    if (part.type === "text") {
-      draft += part.text;
-      continue;
-    }
+  const hydrateSkillAndDirectoryParts = (text: string): void => {
+    for (const part of parseSkillMentionParts(text)) {
+      if (part.type === "text") {
+        draft += part.text;
+        continue;
+      }
 
-    if (part.type === "directory") {
-      // Serialized paths are percent-encoded tilde form; the token
-      // carries the decoded absolute path so send-time attach can use
-      // it directly. File-reference chips serialize to the same
-      // `[@label](~/path)` form, so a restored file chip degrades to a
-      // directory-kind chip here — acceptable: the outgoing text is
-      // identical either way.
+      if (part.type === "directory") {
+        // Serialized paths are percent-encoded tilde form; the token
+        // carries the decoded absolute path so send-time attach can use
+        // it directly. File-reference chips serialize to the same
+        // `[@label](~/path)` form, so a restored file chip degrades to a
+        // directory-kind chip here — acceptable: the outgoing text is
+        // identical either way.
+        skillTokens.push(
+          createComposerDirectoryToken(
+            {
+              label: part.name,
+              path: expandTildePath(decodeMarkdownDestination(part.path)),
+            },
+            draft.length,
+          ),
+        );
+        continue;
+      }
+
+      const matchingSkill =
+        skills.find((skill) => skill.path === part.path) ??
+        skills.find((skill) => skill.name === part.name);
       skillTokens.push(
-        createComposerDirectoryToken(
-          {
-            label: part.name,
-            path: expandTildePath(decodeMarkdownDestination(part.path)),
+        createComposerSkillToken(
+          matchingSkill ?? {
+            name: part.name,
+            path: part.path,
           },
           draft.length,
         ),
       );
-      continue;
     }
+  };
 
-    const matchingSkill =
-      skills.find((skill) => skill.path === part.path) ??
-      skills.find((skill) => skill.name === part.name);
-    skillTokens.push(
-      createComposerSkillToken(
-        matchingSkill ?? {
-          name: part.name,
-          path: part.path,
-        },
-        draft.length,
-      ),
-    );
+  // Thread titles may legitimately begin with `$` or `@`, so recognize the
+  // destination before passing surrounding Markdown through the skill and
+  // directory parser. Unknown thread links remain literal Markdown.
+  const threadLinkPattern = /\[((?:\\.|[^\]\\\r\n])*)\]\((pwragent:\/\/thread\/[^)\s]+)\)/gi;
+  let cursor = 0;
+  for (const match of canonicalDraft.matchAll(threadLinkPattern)) {
+    const matchIndex = match.index ?? 0;
+    hydrateSkillAndDirectoryParts(canonicalDraft.slice(cursor, matchIndex));
+    const resolvedThread = resolveThreadHref(match[2] ?? "", threadLinks);
+    if (resolvedThread) {
+      skillTokens.push(createComposerThreadToken(resolvedThread, draft.length));
+    } else {
+      draft += match[0];
+    }
+    cursor = matchIndex + match[0].length;
   }
+  hydrateSkillAndDirectoryParts(canonicalDraft.slice(cursor));
 
   return { draft, skillTokens };
 }
@@ -2463,7 +2485,11 @@ export function Composer(props: ComposerProps) {
   const hydratedInitialLaunchpad =
     savedInitialDraft || !props.launchpad
       ? undefined
-      : hydrateComposerDraft(props.launchpad.prompt ?? "", props.skills);
+      : hydrateComposerDraft(
+          props.launchpad.prompt ?? "",
+          props.skills,
+          threadLinks,
+        );
   const activeComposerScopeKeyRef = useRef(composerScopeKey);
   const pasteScopeRef = useRef({ key: composerScopeKey, version: 0 });
   const submittedDraftScopeKeysRef = useRef<Set<string>>(new Set());
@@ -2757,7 +2783,7 @@ export function Composer(props: ComposerProps) {
   const setComposerDraftFromCanonical = (nextDraft: string): void => {
     deletedSkillTokenHistoryRef.current = [];
     setEditorDocument(undefined);
-    const hydrated = hydrateComposerDraft(nextDraft, props.skills);
+    const hydrated = hydrateComposerDraft(nextDraft, props.skills, threadLinks);
     setDraft(hydrated.draft);
     setSkillTokens(hydrated.skillTokens);
   };
@@ -3776,13 +3802,13 @@ export function Composer(props: ComposerProps) {
   useEffect(() => {
     deletedSkillTokenHistoryRef.current = [];
     if (skillTokens.length === 0 && draft.includes("](")) {
-      const hydrated = hydrateComposerDraft(draft, props.skills);
+      const hydrated = hydrateComposerDraft(draft, props.skills, threadLinks);
       if (hydrated.skillTokens.length > 0) {
         setDraft(hydrated.draft);
         setSkillTokens(hydrated.skillTokens);
       }
     }
-  }, [draft, props.skills, skillTokens.length]);
+  }, [draft, props.skills, skillTokens.length, threadLinks]);
 
   useEffect(() => {
     if (!autocompleteKind) {
@@ -5537,45 +5563,7 @@ export function Composer(props: ComposerProps) {
     if (!inputRef.current) {
       return;
     }
-
-    const selectionStart = Math.min(
-      inputRef.current.selectionStart ?? draft.length,
-      draft.length,
-    );
-    const selectionEnd = Math.min(
-      inputRef.current.selectionEnd ?? selectionStart,
-      draft.length,
-    );
-    const before = draft.slice(0, selectionStart);
-    const after = draft.slice(selectionEnd);
-    const nextAfter = /^\s/.test(after) ? after : ` ${after}`;
-    const nextDraft = `${before}${nextAfter}`;
-    const tokenIndex = before.length;
-    const nextSelection = tokenIndex + 1;
-    const nextSkillTokens = [
-      ...adjustSkillTokenIndexesForTextChange({
-        currentDraft: draft,
-        nextDraft,
-        skillTokens,
-      }),
-      createComposerThreadToken(thread, tokenIndex),
-    ];
-
-    pendingProgrammaticComposerChangeRef.current = {
-      expectedDraft: nextDraft,
-      expectedSkillTokensSignature:
-        getComposerSkillTokensSignature(nextSkillTokens),
-      staleDraft: draft,
-      staleSkillTokensSignature: getComposerSkillTokensSignature(skillTokens),
-    };
-    flushSync(() => {
-      setSkillTokens(nextSkillTokens);
-      setDraft(nextDraft);
-    });
-    requestAnimationFrame(() => {
-      inputRef.current?.focus();
-      inputRef.current?.setSelectionRange(nextSelection, nextSelection);
-    });
+    inputRef.current.insertMentionToken(createComposerThreadToken(thread, 0));
   };
 
   /**

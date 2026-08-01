@@ -1802,6 +1802,50 @@ function closeEditorHistory(editor: TiptapEditor): void {
   editor.view.dispatch(closeHistory(editor.state.tr));
 }
 
+function getSelectionDraftRange(
+  editor: TiptapEditor,
+  readMode: TiptapReadMode,
+): { end: number; start: number } {
+  return {
+    end: getDraftIndexAtPosition(
+      editor,
+      editor.state.selection.to,
+      readMode,
+    ),
+    start: getDraftIndexAtPosition(
+      editor,
+      editor.state.selection.from,
+      readMode,
+    ),
+  };
+}
+
+function insertMentionTokenAtSelection(params: {
+  editor: TiptapEditor;
+  readMode: TiptapReadMode;
+  token: ComposerSkillToken;
+}): boolean {
+  const { editor, readMode, token } = params;
+  const { from, to } = editor.state.selection;
+  const current = readTiptapContent(editor, readMode);
+  const selection = getSelectionDraftRange(editor, readMode);
+  const insertedContent: JSONContent[] = [
+    {
+      type: "mention",
+      attrs: getSkillMentionAttrs(token),
+    },
+  ];
+  if (!/^\s/.test(current.value.slice(selection.end))) {
+    insertedContent.push({ type: "text", text: " " });
+  }
+
+  return editor.commands.insertContentAt(
+    { from, to },
+    insertedContent,
+    { updateSelection: true },
+  );
+}
+
 function applyExternalSkillInsertion(params: {
   current: TiptapReadState;
   editor: TiptapEditor;
@@ -2364,11 +2408,11 @@ export const ComposerTiptapInput = forwardRef<
     });
     Object.defineProperty(editorDom, "selectionStart", {
       configurable: true,
-      get: () => selectionIndexRef.current,
+      get: () => getSelectionDraftRange(editor, readMode).start,
     });
     Object.defineProperty(editorDom, "selectionEnd", {
       configurable: true,
-      get: () => selectionIndexRef.current,
+      get: () => getSelectionDraftRange(editor, readMode).end,
     });
     Object.defineProperty(editorDom, "setSelectionRange", {
       configurable: true,
@@ -2557,11 +2601,21 @@ export const ComposerTiptapInput = forwardRef<
       }
       editor?.commands.focus();
     },
+    insertMentionToken: (token) => {
+      if (!editor) {
+        return false;
+      }
+      return insertMentionTokenAtSelection({ editor, readMode, token });
+    },
     get selectionEnd() {
-      return selectionIndexRef.current;
+      return editor
+        ? getSelectionDraftRange(editor, readMode).end
+        : selectionIndexRef.current;
     },
     get selectionStart() {
-      return selectionIndexRef.current;
+      return editor
+        ? getSelectionDraftRange(editor, readMode).start
+        : selectionIndexRef.current;
     },
     get skillTokenCount() {
       return editor

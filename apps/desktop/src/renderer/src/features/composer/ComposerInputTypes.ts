@@ -30,6 +30,7 @@ export type ComposerInputChangeMetadata = {
 export type ComposerInputHandle = {
   deleteSelection: () => void;
   focus: () => void;
+  insertMentionToken: (token: ComposerSkillToken) => boolean;
   readonly selectionEnd: number;
   readonly selectionStart: number;
   readonly skillTokenCount: number;
