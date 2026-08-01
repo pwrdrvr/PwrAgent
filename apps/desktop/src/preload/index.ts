@@ -42,6 +42,12 @@ import type {
   SetThreadAgentResponse,
   SetThreadModelSettingsRequest,
   SetThreadModelSettingsResponse,
+  SetThreadPrAutoDispatchRequest,
+  SetThreadPrAutoDispatchResponse,
+  CancelThreadPrAutoDispatchRequest,
+  CancelThreadPrAutoDispatchResponse,
+  SendThreadPrAutoDispatchNowRequest,
+  SendThreadPrAutoDispatchNowResponse,
   TurnOffCodexFastEverywhereResponse,
   SteerTurnRequest,
   SteerTurnResponse,
@@ -291,6 +297,9 @@ import {
   AGENT_SET_ACP_SESSION_RUNTIME_OPTION_CHANNEL,
   AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL,
   AGENT_SET_THREAD_MODEL_SETTINGS_CHANNEL,
+  AGENT_SET_THREAD_PR_AUTO_DISPATCH_CHANNEL,
+  AGENT_CANCEL_THREAD_PR_AUTO_DISPATCH_CHANNEL,
+  AGENT_SEND_THREAD_PR_AUTO_DISPATCH_NOW_CHANNEL,
   AGENT_TURN_OFF_CODEX_FAST_EVERYWHERE_CHANNEL,
   AGENT_START_THREAD_CHANNEL,
   AGENT_START_REVIEW_CHANNEL,
@@ -1086,6 +1095,27 @@ const desktopApi = Object.freeze({
     request: SetThreadModelSettingsRequest
   ): Promise<SetThreadModelSettingsResponse> =>
     await ipcRenderer.invoke(AGENT_SET_THREAD_MODEL_SETTINGS_CHANNEL, request),
+  setThreadPrAutoDispatch: async (
+    request: SetThreadPrAutoDispatchRequest,
+  ): Promise<SetThreadPrAutoDispatchResponse> =>
+    await ipcRenderer.invoke(
+      AGENT_SET_THREAD_PR_AUTO_DISPATCH_CHANNEL,
+      request,
+    ),
+  cancelThreadPrAutoDispatch: async (
+    request: CancelThreadPrAutoDispatchRequest,
+  ): Promise<CancelThreadPrAutoDispatchResponse> =>
+    await ipcRenderer.invoke(
+      AGENT_CANCEL_THREAD_PR_AUTO_DISPATCH_CHANNEL,
+      request,
+    ),
+  sendThreadPrAutoDispatchNow: async (
+    request: SendThreadPrAutoDispatchNowRequest,
+  ): Promise<SendThreadPrAutoDispatchNowResponse> =>
+    await ipcRenderer.invoke(
+      AGENT_SEND_THREAD_PR_AUTO_DISPATCH_NOW_CHANNEL,
+      request,
+    ),
   applyThreadModelMigration: async (
     request: ApplyThreadModelMigrationRequest,
   ): Promise<ApplyThreadModelMigrationResponse> =>

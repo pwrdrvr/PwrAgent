@@ -143,6 +143,7 @@ describe("mapGraphqlPrNode", () => {
       lifecycleState: "open",
       reviewState: "ready_for_review",
       mergeState: "mergeable",
+      headSha: "a".repeat(40),
       commitShas: ["a".repeat(40)],
       url: "https://github.com/pwrdrvr/PwrAgent/pull/12",
     });

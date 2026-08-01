@@ -57,6 +57,7 @@ import {
   PlanIcon,
   PlayIcon,
   PlusIcon,
+  PullRequestIcon,
   SearchIcon,
 } from "../../icons";
 import { AppIcon } from "../../components/AppIcon";
@@ -135,6 +136,7 @@ type ComposerProps = {
   backends?: BackendSummary[];
   applications?: DesktopApplicationsSnapshot;
   codexFastAllowed?: boolean;
+  backgroundPrPollingEnabled?: boolean;
   providerModelDefaults?: Record<string, DesktopProviderModelDefaults>;
   desktopApi?: DesktopApi;
   /**
@@ -285,6 +287,9 @@ type ComposerProps = {
       >
     >
   ) => Promise<void>;
+  onSetThreadPrAutoDispatch?: (enabled: boolean) => Promise<void>;
+  onCancelThreadPrAutoDispatch?: (fingerprint: string) => Promise<void>;
+  onSendThreadPrAutoDispatchNow?: (fingerprint: string) => Promise<void>;
   threadModelSettingsError?: string;
 };
 
@@ -2472,6 +2477,7 @@ export function Composer(props: ComposerProps) {
     : props.thread
       ? `thread:${props.thread.source}:${props.thread.id}`
       : "empty";
+  const prAutoDispatchPending = props.thread?.prAutoDispatchPending;
   const localDraftStore = useComposerDraftStore();
   const draftStore = props.draftStore ?? localDraftStore;
   const draftStoreHydrationVersion = draftStore.hydrationVersion ?? 0;
@@ -3327,7 +3333,15 @@ export function Composer(props: ComposerProps) {
     const hasFutureScheduledQueue = queuedTurns.some((entry) =>
       Boolean(getFutureScheduledSendAt(entry.scheduledSendAt))
     );
-    if (!futureScheduledDraftSendAt && !hasFutureScheduledQueue) {
+    const hasPendingPrAutoDispatch = Boolean(
+      prAutoDispatchPending
+      && getFutureScheduledSendAt(prAutoDispatchPending.scheduledAt),
+    );
+    if (
+      !futureScheduledDraftSendAt
+      && !hasFutureScheduledQueue
+      && !hasPendingPrAutoDispatch
+    ) {
       return;
     }
 
@@ -3338,7 +3352,7 @@ export function Composer(props: ComposerProps) {
     return () => {
       window.clearInterval(timer);
     };
-  }, [futureScheduledDraftSendAt, queuedTurns]);
+  }, [futureScheduledDraftSendAt, prAutoDispatchPending, queuedTurns]);
 
   useEffect(() => {
     if (scheduledDraftSendAt && !futureScheduledDraftSendAt) {
@@ -6506,6 +6520,8 @@ export function Composer(props: ComposerProps) {
   };
 
   const currentSettings = props.launchpad ?? props.thread;
+  const backgroundPrPollingEnabled =
+    props.backgroundPrPollingEnabled ?? true;
   const modelOptions = backend?.launchpadOptions?.models ?? [];
   const selectedModelOption =
     modelOptions.find((option) => option.id === currentSettings?.model) ??
@@ -7606,6 +7622,63 @@ export function Composer(props: ComposerProps) {
         </div>
       ) : null}
 
+      {prAutoDispatchPending ? (
+        <div
+          className="composer__queued composer__queued--scheduled"
+          aria-label="Scheduled PR auto-fix"
+        >
+          <div className="composer__queued-copy">
+            <span className="composer__queued-label">
+              {!backgroundPrPollingEnabled
+                ? "Auto-fix PR paused"
+                : `Auto-fix PR in ${formatScheduledSendCountdown(
+                    prAutoDispatchPending.scheduledAt,
+                    scheduleTick,
+                  )}`}
+            </span>
+            <span className="composer__queued-text">
+              #{prAutoDispatchPending.prNumber} · {prAutoDispatchPending.eventKinds
+                .map((kind) =>
+                  kind === "ci-failure" ? "CI failed" : "merge conflict",
+                )
+                .join(" + ")}
+              {prAutoDispatchPending.prTitle
+                ? ` · ${prAutoDispatchPending.prTitle}`
+                : ""}
+            </span>
+          </div>
+          <div className="composer__queued-actions">
+            <button
+              className="composer__secondary-action"
+              type="button"
+              disabled={
+                !backgroundPrPollingEnabled
+                || !props.onSendThreadPrAutoDispatchNow
+              }
+              onClick={() => {
+                void props.onSendThreadPrAutoDispatchNow?.(
+                  prAutoDispatchPending.fingerprint,
+                );
+              }}
+            >
+              Send now
+            </button>
+            <button
+              className="composer__secondary-action"
+              type="button"
+              disabled={!props.onCancelThreadPrAutoDispatch}
+              onClick={() => {
+                void props.onCancelThreadPrAutoDispatch?.(
+                  prAutoDispatchPending.fingerprint,
+                );
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       {queuedTurns.map((queued, index) => {
         const scheduledSendAt = getFutureScheduledSendAt(
           queued.scheduledSendAt,
@@ -8597,6 +8670,31 @@ export function Composer(props: ComposerProps) {
               onClick={() => setPlanModeEnabled((current) => !current)}
             >
               <PlanIcon size={15} aria-hidden="true" />
+            </button>
+          ) : null}
+
+          {props.thread ? (
+            <button
+              type="button"
+              className={`composer__toggle tooltip-target${
+                props.thread.prAutoDispatchEnabled ? " is-active" : ""
+              }`}
+              aria-label="Auto-fix PR"
+              aria-pressed={Boolean(props.thread.prAutoDispatchEnabled)}
+              data-tooltip={
+                backgroundPrPollingEnabled
+                  ? "Auto-fix PR — handle new CI failures or merge conflicts"
+                  : "Auto-fix PR paused — turn on background PR polling in Settings"
+              }
+              disabled={!backgroundPrPollingEnabled}
+              onClick={() => {
+                if (!backgroundPrPollingEnabled) return;
+                void props.onSetThreadPrAutoDispatch?.(
+                  !props.thread?.prAutoDispatchEnabled,
+                );
+              }}
+            >
+              <PullRequestIcon size={15} aria-hidden="true" />
             </button>
           ) : null}
 

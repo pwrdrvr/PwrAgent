@@ -16572,7 +16572,7 @@ a.transcript-message__messaging-origin:focus-visible {
   accent-color: var(--accent);
 }
 
-/* Icon toggle chips (Fast / Plan). Square pill the same height as the
+/* Icon toggle chips (Fast / Plan / Auto-fix PR). Square pill the same height as the
    setting chips; only shown for models that support the feature. The
    "on" state carries the single accent so it reads as enabled at a glance;
    the name + description live in the hover tooltip. */

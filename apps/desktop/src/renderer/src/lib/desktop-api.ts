@@ -101,6 +101,12 @@ import type {
   SetThreadParentResponse,
   SetThreadPinRequest,
   SetThreadPinResponse,
+  SetThreadPrAutoDispatchRequest,
+  SetThreadPrAutoDispatchResponse,
+  CancelThreadPrAutoDispatchRequest,
+  CancelThreadPrAutoDispatchResponse,
+  SendThreadPrAutoDispatchNowRequest,
+  SendThreadPrAutoDispatchNowResponse,
   GetGhStatusRequest,
   GhStatus,
   ApproveMessagingPairingRequest,
@@ -630,6 +636,15 @@ export type DesktopApi = {
   setThreadPin?: (
     request: SetThreadPinRequest
   ) => Promise<SetThreadPinResponse>;
+  setThreadPrAutoDispatch?: (
+    request: SetThreadPrAutoDispatchRequest,
+  ) => Promise<SetThreadPrAutoDispatchResponse>;
+  cancelThreadPrAutoDispatch?: (
+    request: CancelThreadPrAutoDispatchRequest,
+  ) => Promise<CancelThreadPrAutoDispatchResponse>;
+  sendThreadPrAutoDispatchNow?: (
+    request: SendThreadPrAutoDispatchNowRequest,
+  ) => Promise<SendThreadPrAutoDispatchNowResponse>;
   setThreadAgent?: (
     request: SetThreadAgentRequest
   ) => Promise<SetThreadAgentResponse>;

@@ -7137,6 +7137,153 @@ describe("useThreadNavigation", () => {
     expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
   });
 
+  it("persists and patches the per-thread PR auto-dispatch preference", async () => {
+    const listeners = new Set<
+      Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+    >();
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: ["codex:thread-1"],
+      threads: [{
+        id: "thread-1",
+        title: "First thread",
+        titleSource: "explicit" as const,
+        source: "codex" as const,
+        linkedDirectories: [],
+        prAutoDispatchEnabled: false,
+        inbox: { inInbox: true, reason: "new-thread" as const },
+        updatedAt: 1_000,
+      }],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const setThreadPrAutoDispatch = vi.fn(
+      async (
+        request: Parameters<
+          NonNullable<DesktopApi["setThreadPrAutoDispatch"]>
+        >[0],
+      ) => request,
+    );
+    const cancelThreadPrAutoDispatch = vi.fn(
+      async (
+        request: Parameters<
+          NonNullable<DesktopApi["cancelThreadPrAutoDispatch"]>
+        >[0],
+      ) => ({ ...request, cancelled: true }),
+    );
+    const sendThreadPrAutoDispatchNow = vi.fn(
+      async (
+        request: Parameters<
+          NonNullable<DesktopApi["sendThreadPrAutoDispatchNow"]>
+        >[0],
+      ) => ({ ...request, accepted: true }),
+    );
+    const desktopApi: DesktopApi = {
+      cancelThreadPrAutoDispatch,
+      getNavigationSnapshot,
+      sendThreadPrAutoDispatchNow,
+      setThreadPrAutoDispatch,
+      onAgentEvent: (callback) => {
+        listeners.add(callback);
+        return () => listeners.delete(callback);
+      },
+    };
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.prAutoDispatchEnabled).toBe(false);
+    });
+    await act(async () => {
+      await result.current.setThreadPrAutoDispatch(
+        result.current.selectedThread!,
+        true,
+      );
+    });
+    expect(setThreadPrAutoDispatch).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      enabled: true,
+    });
+    expect(result.current.selectedThread?.prAutoDispatchEnabled).toBe(true);
+
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "thread/prAutoDispatch/updated",
+            params: { threadId: "thread-1", enabled: false },
+          },
+        });
+      }
+    });
+    await waitFor(() => {
+      expect(result.current.selectedThread?.prAutoDispatchEnabled).toBe(false);
+    });
+
+    const pending = {
+      fingerprint: "fingerprint-1",
+      prKey: "github.com/pwrdrvr/PwrAgent#1105",
+      prNumber: 1105,
+      prUrl: "https://github.com/pwrdrvr/PwrAgent/pull/1105",
+      headSha: "a".repeat(40),
+      eventKinds: ["ci-failure" as const],
+      createdAt: 1_000,
+      scheduledAt: 31_000,
+    };
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "thread/prAutoDispatch/pendingUpdated",
+            params: { threadId: "thread-1", pending },
+          },
+        });
+      }
+    });
+    expect(result.current.selectedThread?.prAutoDispatchPending).toEqual(pending);
+    await act(async () => {
+      await result.current.sendThreadPrAutoDispatchNow(
+        result.current.selectedThread!,
+        pending.fingerprint,
+      );
+      await result.current.cancelThreadPrAutoDispatch(
+        result.current.selectedThread!,
+        pending.fingerprint,
+      );
+    });
+    expect(sendThreadPrAutoDispatchNow).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      fingerprint: "fingerprint-1",
+    });
+    expect(cancelThreadPrAutoDispatch).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      fingerprint: "fingerprint-1",
+    });
+
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "thread/prAutoDispatch/pendingUpdated",
+            params: { threadId: "thread-1", pending: null },
+          },
+        });
+      }
+    });
+    expect(result.current.selectedThread?.prAutoDispatchPending).toBeUndefined();
+    expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
+  });
+
   it("preserves the current thread model when patching non-model settings", async () => {
     const getNavigationSnapshot = vi.fn(async () => ({
       backend: "all" as const,

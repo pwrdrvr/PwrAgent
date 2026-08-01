@@ -52,6 +52,10 @@ export type ThreadAgentMetadata = {
 
 export type NavigationThreadSummary = AppServerThreadSummary & {
   inbox: ThreadInboxState;
+  /** Automatically dispatch bounded repair turns for newly failing/conflicting attached PRs. */
+  prAutoDispatchEnabled?: boolean;
+  /** Durable, cancellable PR repair waiting for its main-process send time. */
+  prAutoDispatchPending?: ThreadPrAutoDispatchPending;
   /** Last provider model-migration revision acknowledged by this thread. */
   modelMigrationRevision?: string;
   /** Last explicit model/reasoning change made outside a migration. */
@@ -253,6 +257,8 @@ export type PrSummary = {
   lifecycleState?: PrLifecycleState;
   reviewState?: PrReviewState;
   mergeState?: PrMergeState;
+  /** Head commit observed with this status snapshot. */
+  headSha?: string;
   /**
    * Commit OIDs attached to this PR when the provider returns them. Used to
    * keep merged PR commits from reading as local-only after the remote head
@@ -260,6 +266,22 @@ export type PrSummary = {
    */
   commitShas?: string[];
   url: string;
+};
+
+export type ThreadPrAutoDispatchEventKind =
+  | "ci-failure"
+  | "merge-conflict";
+
+export type ThreadPrAutoDispatchPending = {
+  fingerprint: string;
+  prKey: string;
+  prNumber: number;
+  prTitle?: string;
+  prUrl: string;
+  headSha: string;
+  eventKinds: ThreadPrAutoDispatchEventKind[];
+  createdAt: number;
+  scheduledAt: number;
 };
 
 export function normalizePullRequestProvider(
@@ -1247,6 +1269,10 @@ export type ThreadOverlayState = {
   modelSettingsManuallyUpdatedAt?: number;
   serviceTier?: string;
   fastMode?: boolean;
+  /** Saved operator preference; the global background-polling flag gates its effect. */
+  prAutoDispatchEnabled?: boolean;
+  /** Joined from the durable dispatch table for navigation; never stored in overlay JSON. */
+  prAutoDispatchPending?: ThreadPrAutoDispatchPending;
   gitBranch?: string;
   observedGitBranch?: string;
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;

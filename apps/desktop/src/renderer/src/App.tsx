@@ -12,6 +12,7 @@ import {
 } from "react";
 import {
   buildThreadIdentityKey,
+  DEFAULT_BACKGROUND_PR_POLLING,
   parseThreadIdentityKey,
   type AppServerBackendKind,
   type DesktopBootInfo,
@@ -1074,6 +1075,11 @@ function DesktopAppShell(props: {
     directories: navigation.directories,
     fullAccessRiskWarningDismissed:
       settings.snapshot?.experimental.fullAccessRiskWarningDismissed.value ?? false,
+    backgroundPrPollingEnabled:
+      settings.snapshot
+        ? settings.snapshot.experimental.backgroundPrPolling?.value
+          ?? DEFAULT_BACKGROUND_PR_POLLING
+        : false,
     pickDirectoryError: navigation.pickDirectoryError,
     pickingDirectory: navigation.pickingDirectory,
     onSelectDirectoryFromPicker: (directory) => {
@@ -1198,6 +1204,27 @@ function DesktopAppShell(props: {
     onSetThreadModelSettings: navigation.selectedThread
       ? async (patch) =>
           await navigation.setThreadModelSettings(navigation.selectedThread!, patch)
+      : undefined,
+    onSetThreadPrAutoDispatch: navigation.selectedThread
+      ? async (enabled) =>
+          await navigation.setThreadPrAutoDispatch(
+            navigation.selectedThread!,
+            enabled,
+          )
+      : undefined,
+    onCancelThreadPrAutoDispatch: navigation.selectedThread
+      ? async (fingerprint) =>
+          await navigation.cancelThreadPrAutoDispatch(
+            navigation.selectedThread!,
+            fingerprint,
+          )
+      : undefined,
+    onSendThreadPrAutoDispatchNow: navigation.selectedThread
+      ? async (fingerprint) =>
+          await navigation.sendThreadPrAutoDispatchNow(
+            navigation.selectedThread!,
+            fingerprint,
+          )
       : undefined,
     onRestoreWorktree: navigation.restoreWorktree,
     onTranscriptViewportChange: session.setViewport,

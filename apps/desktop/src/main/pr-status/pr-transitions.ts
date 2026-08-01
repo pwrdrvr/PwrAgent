@@ -11,13 +11,11 @@ import { buildPullRequestStatusKey } from "@pwragent/shared";
  * A PR status transition — the typed record of a meaningful field flipping
  * between two observations of the same PR.
  *
- * This is the SEAM for the future "CI event → start a turn" feature (see the
- * brainstorm). Today the only consumer logs it. Tomorrow an ingestor can
- * subscribe and, on `checkState: pending → failing`, synthesize an inbound
- * thread event that starts a turn — WITHOUT the poller changing, and with the
- * source swappable from polling to real webhooks. Everything a webhook payload
- * would need (which field flipped, from/to, the PR, its commits, the threads it
- * touches) is captured here so the future feature does not have to re-fetch.
+ * This is the seam between PR observation and event consumers. The bounded
+ * auto-dispatch coordinator consumes actionable background-poll transitions;
+ * other subscribers can observe the same record without coupling policy to
+ * the poller. The source can later move from polling to webhooks without
+ * changing fingerprint or dispatch semantics.
  */
 
 export type PrStatusFieldChange<T> = {
@@ -32,6 +30,7 @@ export type PrStatusFieldChange<T> = {
  */
 export type PrStatusTransitionChanges = {
   checkState?: PrStatusFieldChange<PrChipState | undefined>;
+  headSha?: PrStatusFieldChange<string | undefined>;
   lifecycleState?: PrStatusFieldChange<PrLifecycleState | undefined>;
   mergeState?: PrStatusFieldChange<PrMergeState | undefined>;
   reviewState?: PrStatusFieldChange<PrReviewState | undefined>;
@@ -43,11 +42,14 @@ export type PrStatusTransition = {
   prKey: string;
   url: string;
   title?: string;
+  /** Full current status snapshot used to derive fingerprints and repair prompts. */
+  pr: PrSummary;
+  /** Exact head commit for this observation. Missing heads are not auto-dispatched. */
+  headSha?: string;
   /**
    * Commits known for this PR. The poller only fetches the head commit, so
-   * this is usually a single SHA; the `gh` path can carry more. The future CI
-   * ingestor will widen the GraphQL fragment to per-check detail when it needs
-   * the exact head SHA the checks ran on (brainstorm Open Decision 5).
+   * this is usually a single SHA; the `gh` path can carry more. `headSha`
+   * separately identifies the exact commit used by auto-dispatch fingerprints.
    */
   commitShas?: string[];
   changed: PrStatusTransitionChanges;
@@ -56,12 +58,14 @@ export type PrStatusTransition = {
 };
 
 /**
- * The PR fields a transition tracks. `commitShas` is deliberately NOT here: a
- * new commit with unchanged status is not a status transition (the fast poll
- * fetches only the head commit anyway, and the sha rides along as context).
+ * The PR fields a transition tracks. `headSha` is included because a new head
+ * materially re-arms bounded auto-dispatch even when a poll misses the brief
+ * pending-check state between two failing observations. Historical
+ * `commitShas` remain context only.
  */
 const TRACKED_FIELDS = [
   "checkState",
+  "headSha",
   "lifecycleState",
   "mergeState",
   "reviewState",
@@ -114,6 +118,12 @@ export function computePrStatusTransition(
   for (const field of TRACKED_FIELDS) {
     const from = readField(previous, field);
     const to = readField(next, field);
+    // Older durable cache rows predate `headSha`. Treat the first populated
+    // head as hydration, not a new event, so an upgrade cannot auto-dispatch
+    // every already-failing PR on its first poll.
+    if (field === "headSha" && (!from || !to)) {
+      continue;
+    }
     if (from !== to) {
       // The union type is safe here: `field` selects matching from/to types.
       (changed as Record<string, PrStatusFieldChange<unknown>>)[field] = { from, to };
@@ -128,6 +138,8 @@ export function computePrStatusTransition(
     prKey: buildPullRequestStatusKey(next),
     url: next.url,
     ...(next.title ? { title: next.title } : {}),
+    pr: next,
+    ...(next.headSha ? { headSha: next.headSha } : {}),
     ...(next.commitShas && next.commitShas.length > 0
       ? { commitShas: next.commitShas }
       : {}),

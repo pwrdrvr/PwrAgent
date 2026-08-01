@@ -767,6 +767,7 @@ export type ThreadViewProps = {
   pendingForkEnvironmentSetup?: PendingForkEnvironmentSetup;
   suppressBranchDriftDialog?: boolean;
   fullAccessRiskWarningDismissed?: boolean;
+  backgroundPrPollingEnabled?: boolean;
   /**
    * Project-directory picker (issue #223) — surfaced in the launchpad
    * composer when no thread is selected yet. Rendering happens inside
@@ -895,6 +896,9 @@ export type ThreadViewProps = {
       >
     >
   ) => Promise<void>;
+  onSetThreadPrAutoDispatch?: (enabled: boolean) => Promise<void>;
+  onCancelThreadPrAutoDispatch?: (fingerprint: string) => Promise<void>;
+  onSendThreadPrAutoDispatchNow?: (fingerprint: string) => Promise<void>;
   onArchiveWorktree?: (
     thread: NavigationThreadSummary,
     directory: NavigationThreadSummary["linkedDirectories"][number]
@@ -3026,6 +3030,10 @@ export function ThreadView(props: ThreadViewProps) {
             onSetAcpRuntimeOption={props.onSetAcpRuntimeOption}
             onCancelExecutionModeQueue={props.onCancelExecutionModeQueue}
             onSetThreadModelSettings={props.onSetThreadModelSettings}
+            onSetThreadPrAutoDispatch={props.onSetThreadPrAutoDispatch}
+            onCancelThreadPrAutoDispatch={props.onCancelThreadPrAutoDispatch}
+            onSendThreadPrAutoDispatchNow={props.onSendThreadPrAutoDispatchNow}
+            backgroundPrPollingEnabled={props.backgroundPrPollingEnabled}
             onAttachDirectoryReferences={props.onAttachDirectoryReferences}
             onPickDirectoryForReference={props.onPickDirectoryForReference}
             pendingRequestActive={Boolean(props.pendingRequest)}

@@ -83,6 +83,24 @@ describe("useThreadQueuedMessageIndicators", () => {
     expect(result.current.indicators).toEqual({ "codex:a": "scheduled" });
   });
 
+  it("classifies a durable PR auto-fix countdown as scheduled", () => {
+    const thread = {
+      ...makeThread("a"),
+      prAutoDispatchPending: {
+        fingerprint: "fingerprint-1",
+        prKey: "github.com/pwrdrvr/PwrAgent#1105",
+        prNumber: 1105,
+        prUrl: "https://github.com/pwrdrvr/PwrAgent/pull/1105",
+        headSha: "a".repeat(40),
+        eventKinds: ["ci-failure" as const],
+        createdAt: Date.now(),
+        scheduledAt: Date.now() + 30_000,
+      },
+    };
+    const { result } = renderIndicators([thread]);
+    expect(result.current.indicators).toEqual({ "codex:a": "scheduled" });
+  });
+
   it("prefers 'scheduled' when a thread has both a scheduled and a plain queued turn", () => {
     const thread = makeThread("a");
     const { result } = renderIndicators([thread]);

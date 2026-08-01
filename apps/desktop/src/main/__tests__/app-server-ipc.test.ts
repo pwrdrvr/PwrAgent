@@ -250,6 +250,7 @@ function emitRegistryEvent(event: unknown): void {
 }
 const publishLocalEvent = vi.fn(async () => undefined);
 const setThreadPullRequestStatusToolHandler = vi.fn();
+const setThreadPrAutoDispatchHandler = vi.fn();
 const ensureDirectoryLaunchpad = vi.fn(async (request: {
   directoryKey: string;
   directoryKind: string;
@@ -359,6 +360,24 @@ const readPrStatusCache = vi.fn(async () => ({}));
 const writePrStatusCacheEntries = vi.fn(async () => undefined);
 const readPrLookupCache = vi.fn(async () => ({}));
 const writePrLookupCacheEntry = vi.fn(async () => undefined);
+const resetThreadPrAutoDispatchForOperator = vi.fn(async () => false);
+const scheduleThreadPrAutoDispatch = vi.fn(async () => ({
+  status: "disabled" as const,
+}));
+const beginThreadPrAutoDispatch = vi.fn(async () => ({
+  status: "disabled" as const,
+}));
+const restoreThreadPrAutoDispatchAfterBusy = vi.fn(async () => undefined);
+const renewThreadPrAutoDispatchLease = vi.fn(async () => false);
+const finishThreadPrAutoDispatch = vi.fn(async () => undefined);
+const cancelThreadPrAutoDispatch = vi.fn(async () => false);
+const cancelPendingThreadPrAutoDispatchForPr = vi.fn(async () => false);
+const resolveThreadPrAutoDispatchIncident = vi.fn(async () => undefined);
+const getThreadPrAutoDispatchPending = vi.fn(async () => undefined);
+const listPendingThreadPrAutoDispatches = vi.fn(async () => []);
+const recoverOrphanedThreadPrAutoDispatches = vi.fn(async () => ({
+  recoveredCount: 0,
+}));
 const isGhAvailable = vi.fn(async () => true);
 const getAuthStatus = vi.fn(async () => ({
   installed: true,
@@ -473,6 +492,18 @@ vi.mock("../app-server/desktop-overlay-store", () => ({
     writePrStatusCacheEntries,
     readPrLookupCache,
     writePrLookupCacheEntry,
+    resetThreadPrAutoDispatchForOperator,
+    scheduleThreadPrAutoDispatch,
+    beginThreadPrAutoDispatch,
+    restoreThreadPrAutoDispatchAfterBusy,
+    renewThreadPrAutoDispatchLease,
+    finishThreadPrAutoDispatch,
+    cancelThreadPrAutoDispatch,
+    cancelPendingThreadPrAutoDispatchForPr,
+    resolveThreadPrAutoDispatchIncident,
+    getThreadPrAutoDispatchPending,
+    listPendingThreadPrAutoDispatches,
+    recoverOrphanedThreadPrAutoDispatches,
     readDirectoryGitStatusCache,
     writeDirectoryGitStatusCacheEntry,
     readThreadGitWorkingStateCache,
@@ -503,6 +534,7 @@ vi.mock("../app-server/backend-registry", () => ({
     onEvent,
     publishLocalEvent,
     setThreadPullRequestStatusToolHandler,
+    setThreadPrAutoDispatchHandler,
     ensureDirectoryLaunchpad,
     getQueuedExecutionModesSnapshot: () => ({}),
     rememberCompleteNavigationSnapshot,
@@ -552,6 +584,7 @@ describe("app server ipc", () => {
     registryEventListeners.length = 0;
     publishLocalEvent.mockClear();
     setThreadPullRequestStatusToolHandler.mockClear();
+    setThreadPrAutoDispatchHandler.mockClear();
     ensureDirectoryLaunchpad.mockClear();
     markThreadSeen.mockClear();
     registerDirectoryFromDiskService.mockClear();
@@ -569,6 +602,18 @@ describe("app server ipc", () => {
     readPrLookupCache.mockReset();
     readPrLookupCache.mockResolvedValue({});
     writePrLookupCacheEntry.mockClear();
+    resetThreadPrAutoDispatchForOperator.mockClear();
+    scheduleThreadPrAutoDispatch.mockClear();
+    beginThreadPrAutoDispatch.mockClear();
+    restoreThreadPrAutoDispatchAfterBusy.mockClear();
+    renewThreadPrAutoDispatchLease.mockClear();
+    finishThreadPrAutoDispatch.mockClear();
+    cancelThreadPrAutoDispatch.mockClear();
+    cancelPendingThreadPrAutoDispatchForPr.mockClear();
+    resolveThreadPrAutoDispatchIncident.mockClear();
+    getThreadPrAutoDispatchPending.mockClear();
+    listPendingThreadPrAutoDispatches.mockClear();
+    recoverOrphanedThreadPrAutoDispatches.mockClear();
     isGhAvailable.mockClear();
     isGhAvailable.mockResolvedValue(true);
     getAuthStatus.mockClear();
@@ -585,6 +630,18 @@ describe("app server ipc", () => {
   afterEach(async () => {
     const { disposeAppServerIpcHandlers } = await import("../ipc/app-server");
     await disposeAppServerIpcHandlers();
+  });
+
+  it("registers main-process PR auto-dispatch handlers", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+
+    registerAppServerIpcHandlers();
+
+    expect(setThreadPrAutoDispatchHandler).toHaveBeenCalledWith({
+      preferenceChanged: expect.any(Function),
+      cancelPending: expect.any(Function),
+      sendPendingNow: expect.any(Function),
+    });
   });
 
   it("aggregates navigation snapshots across backends by default", async () => {

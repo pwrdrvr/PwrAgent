@@ -121,6 +121,12 @@ import {
   type SetThreadExecutionModeResponse,
   type SetThreadModelSettingsRequest,
   type SetThreadModelSettingsResponse,
+  type SetThreadPrAutoDispatchRequest,
+  type SetThreadPrAutoDispatchResponse,
+  type CancelThreadPrAutoDispatchRequest,
+  type CancelThreadPrAutoDispatchResponse,
+  type SendThreadPrAutoDispatchNowRequest,
+  type SendThreadPrAutoDispatchNowResponse,
   type ApplyThreadModelMigrationRequest,
   type ApplyThreadModelMigrationResponse,
   type TurnOffCodexFastEverywhereResponse,
@@ -379,6 +385,7 @@ import {
   ThreadTurnQueue,
   type ThreadTurnQueueLifecycleEvent,
   type ThreadTurnQueueOrigin,
+  type ThreadTurnQueueImmediateSubmissionResult,
   type ThreadTurnQueueSubmissionResult,
 } from "./thread-turn-queue";
 import { materializeLocalImageInputs } from "./image-input-files";
@@ -1450,6 +1457,14 @@ type ThreadTitleService = Pick<ThreadTitleGenerationService, "generateTitle"> & 
 type ThreadPullRequestStatusToolHandler = (
   args: CheckThreadPullRequestStatusToolArgs,
 ) => PwrAgentThreadInspectionResponse | Promise<PwrAgentThreadInspectionResponse>;
+
+type ThreadPrAutoDispatchHandler = {
+  preferenceChanged: (request: SetThreadPrAutoDispatchRequest) => Promise<void>;
+  cancelPending: (request: CancelThreadPrAutoDispatchRequest) => Promise<boolean>;
+  sendPendingNow: (
+    request: SendThreadPrAutoDispatchNowRequest,
+  ) => Promise<boolean>;
+};
 
 type ThreadTitleGenerationLogStatus =
   | ThreadTitleGenerationResult["status"]
@@ -4685,15 +4700,33 @@ function mergeThreadMessageOrigins(
   if (Object.keys(originsByMessageId).length === 0) {
     return replay;
   }
+  const firstUserMessageTurnIds = new Set<string>();
+  const resolvedOriginsByMessageId: Record<string, AppServerThreadMessageOrigin> = {};
   const entries = replay.entries.map((entry): AppServerThreadEntry => {
     if (entry.type !== "message" || entry.role !== "user") {
       return entry;
     }
-    const origin = originsByMessageId[entry.id];
+    const turnId = entry.turn?.id;
+    const isFirstUserMessageForTurn = Boolean(
+      turnId && !firstUserMessageTurnIds.has(turnId),
+    );
+    if (turnId) {
+      firstUserMessageTurnIds.add(turnId);
+    }
+    const origin =
+      originsByMessageId[entry.id]
+      ?? (turnId && isFirstUserMessageForTurn
+        ? originsByMessageId[buildTurnUserMessageOriginId(turnId)]
+        : undefined);
+    if (origin) {
+      resolvedOriginsByMessageId[entry.id] = origin;
+    }
     return origin ? { ...entry, origin } : entry;
   });
   const messages = replay.messages.map((message) => {
-    const origin = originsByMessageId[message.id];
+    const origin =
+      originsByMessageId[message.id]
+      ?? resolvedOriginsByMessageId[message.id];
     return origin && message.role === "user" ? { ...message, origin } : message;
   });
   return {
@@ -4821,6 +4854,10 @@ function inferLegacyTaskMonitorMessageOrigins(params: {
 
 function taskMonitorCompletionTime(subAgent: ThreadSubAgentSummary): number {
   return subAgent.completedAt ?? subAgent.updatedAt ?? subAgent.createdAt;
+}
+
+function buildTurnUserMessageOriginId(turnId: string): string {
+  return `user:${turnId}`;
 }
 
 function resolveThreadMessageOrigin(params: {
@@ -5858,6 +5895,7 @@ export class DesktopBackendRegistry {
   private threadPullRequestStatusToolHandler:
     | ThreadPullRequestStatusToolHandler
     | undefined;
+  private threadPrAutoDispatchHandler: ThreadPrAutoDispatchHandler | undefined;
   private threadInspectionSearchService: ThreadSearchService | null | undefined;
   private readonly headlessAutomationTurns = new Map<
     string,
@@ -6271,8 +6309,8 @@ export class DesktopBackendRegistry {
       startTurn: async (entry) => await this.startTurnNow(entry),
       isThreadActive: ({ backend, threadId }) =>
         backend === "codex"
-          ? this.threadHasActiveTurn(threadId) ||
-            this.threadHasBlockingWorkspaceMove({ backend, threadId })
+          ? this.threadHasActiveTurn(threadId)
+            || this.threadHasBlockingWorkspaceMove({ backend, threadId })
           : false,
       onLifecycle: async (event) => await this.emitTurnQueueLifecycle(event),
     });
@@ -6469,6 +6507,12 @@ export class DesktopBackendRegistry {
     handler: ThreadPullRequestStatusToolHandler | null | undefined,
   ): void {
     this.threadPullRequestStatusToolHandler = handler ?? undefined;
+  }
+
+  setThreadPrAutoDispatchHandler(
+    handler: ThreadPrAutoDispatchHandler | null | undefined,
+  ): void {
+    this.threadPrAutoDispatchHandler = handler ?? undefined;
   }
 
   /**
@@ -8640,7 +8684,14 @@ export class DesktopBackendRegistry {
           });
     const messageIds = [
       ...replayWithImmutableUsage.entries.flatMap((entry) =>
-        entry.type === "message" && entry.role === "user" ? [entry.id] : [],
+        entry.type === "message" && entry.role === "user"
+          ? [
+              entry.id,
+              ...(entry.turn?.id
+                ? [buildTurnUserMessageOriginId(entry.turn.id)]
+                : []),
+            ]
+          : [],
       ),
       ...replayWithImmutableUsage.messages.flatMap((message) =>
         message.role === "user" ? [message.id] : [],
@@ -9548,6 +9599,26 @@ export class DesktopBackendRegistry {
     });
   }
 
+  async submitTurnIfIdle(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    input: AppServerTurnInputItem[];
+    origin?: ThreadTurnQueueOrigin;
+    messageOrigin?: AppServerThreadMessageOrigin;
+  }): Promise<ThreadTurnQueueImmediateSubmissionResult> {
+    const { origin = "manual", ...entry } = params;
+    if (
+      this.threadHasActiveTurn(params.threadId, params.backend)
+      || this.threadHasBlockingWorkspaceMove(params)
+    ) {
+      return { status: "busy" };
+    }
+    return await this.threadTurnQueue.submitIfIdle({
+      ...entry,
+      origin,
+    });
+  }
+
   cancelQueuedTurn(entryId: string, reason?: string): void {
     this.threadTurnQueue.cancelEntry(entryId, reason);
   }
@@ -9563,7 +9634,10 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind;
     threadId: string;
   }): boolean {
-    return this.threadTurnQueue.canStartImmediately(params);
+    return (
+      !this.threadHasActiveTurn(params.threadId, params.backend)
+      && this.threadTurnQueue.canStartImmediately(params)
+    );
   }
 
   getActiveTurnForThread(params: {
@@ -9785,7 +9859,7 @@ export class DesktopBackendRegistry {
         await this.persistThreadMessageOrigin({
           backend: params.backend,
           threadId: result.threadId,
-          messageId: `user:${result.turnId}`,
+          messageId: buildTurnUserMessageOriginId(result.turnId),
           origin: resolveThreadMessageOrigin(params),
         });
         this.forgetPendingThreadMessageOrigin(pendingMessageOriginId);
@@ -10011,6 +10085,12 @@ export class DesktopBackendRegistry {
       retryableCodexTurnStart.turnId = result.turnId;
     }
     this.bindPendingThreadMessageOrigin(pendingMessageOriginId, result.turnId);
+    await this.persistThreadMessageOrigin({
+      backend: params.backend,
+      threadId: result.threadId,
+      messageId: buildTurnUserMessageOriginId(result.turnId),
+      origin: resolveThreadMessageOrigin(params),
+    });
     this.rebindPendingReviewStartsForStartedTurn({
       backend: params.backend,
       threadId: params.threadId,
@@ -10185,11 +10265,14 @@ export class DesktopBackendRegistry {
       }
       return event;
     }
-    if (event.notification.method !== "item/completed") {
+    if (
+      event.notification.method !== "item/started"
+      && event.notification.method !== "item/completed"
+    ) {
       return event;
     }
     const notification = event.notification as {
-      method: "item/completed";
+      method: "item/started" | "item/completed";
       params: {
         threadId: string;
         turnId?: string;
@@ -10219,7 +10302,9 @@ export class DesktopBackendRegistry {
       messageId: notification.params.item.id,
       origin: pending.origin,
     });
-    this.pendingThreadMessageOrigins.delete(pending.id);
+    if (event.notification.method === "item/completed") {
+      this.pendingThreadMessageOrigins.delete(pending.id);
+    }
     return {
       ...event,
       notification: {
@@ -11981,6 +12066,46 @@ export class DesktopBackendRegistry {
         ? { modelSettingsManuallyUpdatedAt }
         : {}),
     });
+  }
+
+  async setThreadPrAutoDispatch(
+    params: SetThreadPrAutoDispatchRequest,
+  ): Promise<SetThreadPrAutoDispatchResponse> {
+    await this.overlayStore.setThreadPrAutoDispatchEnabled({
+      backend: params.backend,
+      threadId: params.threadId,
+      enabled: params.enabled,
+    });
+    await this.emit({
+      backend: params.backend,
+      notification: {
+        method: "thread/prAutoDispatch/updated",
+        params: {
+          threadId: params.threadId,
+          enabled: params.enabled,
+        },
+      },
+    });
+    await this.threadPrAutoDispatchHandler?.preferenceChanged(params);
+    return params;
+  }
+
+  async cancelThreadPrAutoDispatch(
+    params: CancelThreadPrAutoDispatchRequest,
+  ): Promise<CancelThreadPrAutoDispatchResponse> {
+    const cancelled =
+      await this.threadPrAutoDispatchHandler?.cancelPending(params)
+      ?? false;
+    return { ...params, cancelled };
+  }
+
+  async sendThreadPrAutoDispatchNow(
+    params: SendThreadPrAutoDispatchNowRequest,
+  ): Promise<SendThreadPrAutoDispatchNowResponse> {
+    const accepted =
+      await this.threadPrAutoDispatchHandler?.sendPendingNow(params)
+      ?? false;
+    return { ...params, accepted };
   }
 
   private async setThreadModelSettingsInternal(

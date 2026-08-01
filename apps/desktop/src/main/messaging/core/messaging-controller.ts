@@ -1158,6 +1158,8 @@ export class MessagingController {
     if (
       event.notification.method === "thread/executionMode/updated" ||
       event.notification.method === "thread/modelSettings/updated" ||
+      event.notification.method === "thread/prAutoDispatch/updated" ||
+      event.notification.method === "thread/prAutoDispatch/pendingUpdated" ||
       event.notification.method === "thread/codexEnvironment/updated" ||
       event.notification.method === "thread/parent/set" ||
       event.notification.method === "thread/parent/cleared" ||

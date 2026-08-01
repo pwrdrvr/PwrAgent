@@ -36,6 +36,12 @@ import {
   type SetThreadExecutionModeResponse,
   type SetThreadModelSettingsRequest,
   type SetThreadModelSettingsResponse,
+  type SetThreadPrAutoDispatchRequest,
+  type SetThreadPrAutoDispatchResponse,
+  type CancelThreadPrAutoDispatchRequest,
+  type CancelThreadPrAutoDispatchResponse,
+  type SendThreadPrAutoDispatchNowRequest,
+  type SendThreadPrAutoDispatchNowResponse,
   type TurnOffCodexFastEverywhereResponse,
   type SteerTurnRequest,
   type SteerTurnResponse,
@@ -73,6 +79,9 @@ import {
   AGENT_SET_ACP_SESSION_RUNTIME_OPTION_CHANNEL,
   AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL,
   AGENT_SET_THREAD_MODEL_SETTINGS_CHANNEL,
+  AGENT_SET_THREAD_PR_AUTO_DISPATCH_CHANNEL,
+  AGENT_CANCEL_THREAD_PR_AUTO_DISPATCH_CHANNEL,
+  AGENT_SEND_THREAD_PR_AUTO_DISPATCH_NOW_CHANNEL,
   AGENT_TURN_OFF_CODEX_FAST_EVERYWHERE_CHANNEL,
   AGENT_START_THREAD_CHANNEL,
   AGENT_START_REVIEW_CHANNEL,
@@ -311,6 +320,28 @@ export function registerAgentIpcHandlers(): void {
         },
         operation: async () => await registry.listBackends(request),
       });
+    },
+  );
+
+  ipcMain.removeHandler(AGENT_CANCEL_THREAD_PR_AUTO_DISPATCH_CHANNEL);
+  ipcMain.handle(
+    AGENT_CANCEL_THREAD_PR_AUTO_DISPATCH_CHANNEL,
+    async (
+      _event,
+      request: CancelThreadPrAutoDispatchRequest,
+    ): Promise<CancelThreadPrAutoDispatchResponse> => {
+      return await registry.cancelThreadPrAutoDispatch(request);
+    },
+  );
+
+  ipcMain.removeHandler(AGENT_SEND_THREAD_PR_AUTO_DISPATCH_NOW_CHANNEL);
+  ipcMain.handle(
+    AGENT_SEND_THREAD_PR_AUTO_DISPATCH_NOW_CHANNEL,
+    async (
+      _event,
+      request: SendThreadPrAutoDispatchNowRequest,
+    ): Promise<SendThreadPrAutoDispatchNowResponse> => {
+      return await registry.sendThreadPrAutoDispatchNow(request);
     },
   );
 
@@ -572,6 +603,17 @@ export function registerAgentIpcHandlers(): void {
       request: SetThreadModelSettingsRequest
     ): Promise<SetThreadModelSettingsResponse> => {
       return await registry.setThreadModelSettings(request);
+    },
+  );
+
+  ipcMain.removeHandler(AGENT_SET_THREAD_PR_AUTO_DISPATCH_CHANNEL);
+  ipcMain.handle(
+    AGENT_SET_THREAD_PR_AUTO_DISPATCH_CHANNEL,
+    async (
+      _event,
+      request: SetThreadPrAutoDispatchRequest,
+    ): Promise<SetThreadPrAutoDispatchResponse> => {
+      return await registry.setThreadPrAutoDispatch(request);
     },
   );
 

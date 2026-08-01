@@ -347,6 +347,107 @@ function renderComposerWithRegressionSkills(
 }
 
 describe("Composer", () => {
+  it("persists the Auto-fix PR toggle and shows its global polling gate", async () => {
+    const onSetThreadPrAutoDispatch = vi.fn(async () => undefined);
+    const thread: NavigationThreadSummary = {
+      id: "thread-1",
+      title: "Fix CI",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+      prAutoDispatchEnabled: true,
+    };
+    const { rerender } = render(
+      <Composer
+        backgroundPrPollingEnabled
+        disabled={false}
+        onSetThreadPrAutoDispatch={onSetThreadPrAutoDispatch}
+        skills={[]}
+        thread={thread}
+      />,
+    );
+
+    const toggle = screen.getByRole("button", { name: "Auto-fix PR" });
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(toggle);
+    await waitFor(() => {
+      expect(onSetThreadPrAutoDispatch).toHaveBeenCalledWith(false);
+    });
+
+    rerender(
+      <Composer
+        backgroundPrPollingEnabled={false}
+        disabled={false}
+        onSetThreadPrAutoDispatch={onSetThreadPrAutoDispatch}
+        skills={[]}
+        thread={thread}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Auto-fix PR" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Auto-fix PR" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "Auto-fix PR" })).toHaveAttribute(
+      "data-tooltip",
+      expect.stringContaining("paused"),
+    );
+  });
+
+  it("shows a cancellable on-deck countdown for a scheduled PR repair", async () => {
+    const onCancelThreadPrAutoDispatch = vi.fn(async () => undefined);
+    const onSendThreadPrAutoDispatchNow = vi.fn(async () => undefined);
+    render(
+      <Composer
+        backgroundPrPollingEnabled
+        disabled={false}
+        onCancelThreadPrAutoDispatch={onCancelThreadPrAutoDispatch}
+        onSendThreadPrAutoDispatchNow={onSendThreadPrAutoDispatchNow}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Fix CI",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+          prAutoDispatchEnabled: true,
+          prAutoDispatchPending: {
+            fingerprint: "fingerprint-1",
+            prKey: "github.com/pwrdrvr/PwrAgent#1105",
+            prNumber: 1105,
+            prTitle: "Fix failed CI",
+            prUrl: "https://github.com/pwrdrvr/PwrAgent/pull/1105",
+            headSha: "a".repeat(40),
+            eventKinds: ["ci-failure"],
+            createdAt: Date.now(),
+            scheduledAt: Date.now() + 30_000,
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByLabelText("Scheduled PR auto-fix")).toHaveTextContent(
+      "Auto-fix PR in",
+    );
+    expect(screen.getByLabelText("Scheduled PR auto-fix")).toHaveTextContent(
+      "#1105 · CI failed · Fix failed CI",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Send now" }));
+    await waitFor(() => {
+      expect(onSendThreadPrAutoDispatchNow).toHaveBeenCalledWith(
+        "fingerprint-1",
+      );
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => {
+      expect(onCancelThreadPrAutoDispatch).toHaveBeenCalledWith(
+        "fingerprint-1",
+      );
+    });
+  });
+
   it("lets launchpad errors be copied with the transcript copy control", async () => {
     const copyText = vi.fn(async () => undefined);
     const launchpadError =

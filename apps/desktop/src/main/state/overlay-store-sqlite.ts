@@ -25,6 +25,8 @@ import type {
   ThreadToolInvocationSummary,
   ThreadPermissionTransition,
   ThreadPricingSummary,
+  ThreadPrAutoDispatchEventKind,
+  ThreadPrAutoDispatchPending,
   ThreadSubAgentSummary,
   ThreadTurnFailure,
   ThreadUsageLineRecord,
@@ -72,6 +74,70 @@ export type PrStatusCacheEntry = {
   pr: PrSummary;
 };
 
+export type PrAutoDispatchPendingRecord = {
+  dispatchLease?: {
+    expiresAt: number;
+    ownerId: string;
+  };
+  pending: ThreadPrAutoDispatchPending;
+  prompt: string;
+};
+
+export type PrAutoDispatchRecoveryResult = {
+  nextLeaseExpiresAt?: number;
+  recoveredCount: number;
+};
+
+export type PrAutoDispatchScheduleResult = {
+  status: "scheduled" | "disabled" | "duplicate" | "attempt-limit" | "pending";
+  pending?: ThreadPrAutoDispatchPending;
+};
+
+type PrAutoDispatchClaimRow = {
+  payload: string;
+  pr_key: string;
+  status: string;
+};
+
+type PrAutoDispatchIncidentRow = {
+  active_kinds: string;
+  attempt_count: number;
+};
+
+function parsePrAutoDispatchPendingRecord(
+  payload: string,
+): PrAutoDispatchPendingRecord | undefined {
+  try {
+    const parsed = JSON.parse(payload) as PrAutoDispatchPendingRecord;
+    return parsed?.pending?.fingerprint && typeof parsed.prompt === "string"
+      ? parsed
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function parsePrAutoDispatchKinds(value: string): ThreadPrAutoDispatchEventKind[] {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed)
+      ? parsed.filter(
+          (kind): kind is ThreadPrAutoDispatchEventKind =>
+            kind === "ci-failure" || kind === "merge-conflict",
+        )
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function clearPrAutoDispatchLease(
+  record: PrAutoDispatchPendingRecord,
+): PrAutoDispatchPendingRecord {
+  const { dispatchLease: _dispatchLease, ...pendingRecord } = record;
+  return pendingRecord;
+}
+
 export type PrLookupCacheEntry = {
   lookupKey: string;
   provider: string;
@@ -88,7 +154,10 @@ function normalizePullRequestProvider(provider: string | undefined): string {
 
 function normalizePrSummary(pr: PrSummary): PrSummary {
   const checkState = normalizePrCheckState(pr.checkState ?? pr.state);
-  return {
+  const headSha = normalizeCommitShas(
+    pr.headSha ? [pr.headSha] : undefined,
+  )?.[0];
+  const normalized: PrSummary = {
     ...pr,
     provider: normalizePullRequestProvider(pr.provider),
     state: checkState,
@@ -98,6 +167,12 @@ function normalizePrSummary(pr: PrSummary): PrSummary {
     mergeState: pr.mergeState ?? "unknown",
     commitShas: normalizeCommitShas(pr.commitShas),
   };
+  if (headSha) {
+    normalized.headSha = headSha;
+  } else {
+    delete normalized.headSha;
+  }
+  return normalized;
 }
 
 function normalizeDetachedPrKeys(keys: string[] | undefined): string[] {
@@ -2298,6 +2373,640 @@ export class SqliteOverlayStore {
     return nextState;
   }
 
+  async setThreadPrAutoDispatchEnabled(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    enabled: boolean;
+  }): Promise<ThreadOverlayState> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.getThread(threadKey) ?? {
+      backend: params.backend,
+      threadId: params.threadId,
+      executionMode: "default" as const,
+      extraLinkedDirectories: [],
+    };
+    const nextState: ThreadOverlayState = {
+      ...current,
+      prAutoDispatchEnabled: params.enabled,
+    };
+    this.putThread(threadKey, nextState);
+    return nextState;
+  }
+
+  async resetThreadPrAutoDispatchForOperator(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+  }): Promise<boolean> {
+    const reset = this.stateDb.raw.transaction(() => {
+      // A toggle off -> on is an explicit operator request to retry. Keep a
+      // genuinely in-flight claim so another turn cannot launch alongside it,
+      // but clear completed/failed/cancelled claims and the finite incident
+      // budget so the current provider condition can be scheduled again.
+      const claims = this.stateDb.raw
+        .prepare(
+          `DELETE FROM pr_auto_dispatch_claims
+           WHERE backend = ? AND thread_id = ? AND status != 'dispatching'`,
+        )
+        .run(params.backend, params.threadId);
+      const incidents = this.stateDb.raw
+        .prepare(
+          `DELETE FROM pr_auto_dispatch_incidents
+           WHERE backend = ? AND thread_id = ?`,
+        )
+        .run(params.backend, params.threadId);
+      return claims.changes > 0 || incidents.changes > 0;
+    });
+    return reset();
+  }
+
+  async scheduleThreadPrAutoDispatch(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    pending: ThreadPrAutoDispatchPending;
+    prompt: string;
+    maxAttempts: number;
+    allowCancelledRearm?: boolean;
+  }): Promise<PrAutoDispatchScheduleResult> {
+    const schedule = this.stateDb.raw.transaction((): PrAutoDispatchScheduleResult => {
+      const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+      const current = this.getThread(threadKey);
+      if (current?.prAutoDispatchEnabled !== true) {
+        return { status: "disabled" };
+      }
+
+      const duplicate = this.stateDb.raw
+        .prepare(
+          `SELECT pr_key, status, payload
+           FROM pr_auto_dispatch_claims
+           WHERE backend = ? AND thread_id = ? AND fingerprint = ?`,
+        )
+        .get(
+          params.backend,
+          params.threadId,
+          params.pending.fingerprint,
+        ) as PrAutoDispatchClaimRow | undefined;
+      if (duplicate) {
+        if (
+          params.allowCancelledRearm
+          && ["cancelled", "resolved", "superseded"].includes(duplicate.status)
+        ) {
+          this.stateDb.raw
+            .prepare(
+              `DELETE FROM pr_auto_dispatch_claims
+               WHERE backend = ? AND thread_id = ? AND fingerprint = ?`,
+            )
+            .run(
+              params.backend,
+              params.threadId,
+              params.pending.fingerprint,
+            );
+        } else {
+          const record = parsePrAutoDispatchPendingRecord(duplicate.payload);
+          return {
+            status: duplicate.status === "pending" ? "pending" : "duplicate",
+            ...(record ? { pending: record.pending } : {}),
+          };
+        }
+      }
+
+      const incident = this.readPrAutoDispatchIncident({
+        backend: params.backend,
+        threadId: params.threadId,
+        prKey: params.pending.prKey,
+      });
+      if ((incident?.attempt_count ?? 0) >= params.maxAttempts) {
+        return { status: "attempt-limit" };
+      }
+
+      const activeClaim = this.stateDb.raw
+        .prepare(
+          `SELECT pr_key, status, payload
+           FROM pr_auto_dispatch_claims
+           WHERE backend = ? AND thread_id = ?
+             AND status IN ('pending', 'dispatching')
+           LIMIT 1`,
+        )
+        .get(params.backend, params.threadId) as PrAutoDispatchClaimRow | undefined;
+      if (activeClaim) {
+        const activeRecord = parsePrAutoDispatchPendingRecord(activeClaim.payload);
+        if (activeClaim.pr_key !== params.pending.prKey) {
+          return {
+            status: "pending",
+            ...(activeRecord ? { pending: activeRecord.pending } : {}),
+          };
+        }
+        if (activeClaim.status === "dispatching") {
+          return { status: "pending" };
+        }
+        this.stateDb.raw
+          .prepare(
+            `UPDATE pr_auto_dispatch_claims
+             SET status = 'superseded', updated_at = ?
+             WHERE backend = ? AND thread_id = ? AND status = 'pending'`,
+          )
+          .run(
+            params.pending.createdAt,
+            params.backend,
+            params.threadId,
+          );
+      }
+
+      const payload = JSON.stringify({
+        pending: params.pending,
+        prompt: params.prompt,
+      } satisfies PrAutoDispatchPendingRecord);
+      const inserted = this.stateDb.raw
+        .prepare(
+          `INSERT OR IGNORE INTO pr_auto_dispatch_claims(
+             backend, thread_id, pr_key, fingerprint, status,
+             scheduled_at, created_at, updated_at, payload
+           ) VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?)`,
+        )
+        .run(
+          params.backend,
+          params.threadId,
+          params.pending.prKey,
+          params.pending.fingerprint,
+          params.pending.scheduledAt,
+          params.pending.createdAt,
+          params.pending.createdAt,
+          payload,
+        );
+      if (inserted.changes === 0) {
+        return { status: "duplicate" };
+      }
+
+      const activeKinds = [
+        ...new Set([
+          ...parsePrAutoDispatchKinds(incident?.active_kinds ?? "[]"),
+          ...params.pending.eventKinds,
+        ]),
+      ];
+      this.stateDb.raw
+        .prepare(
+          `INSERT INTO pr_auto_dispatch_incidents(
+             backend, thread_id, pr_key, attempt_count, active_kinds, updated_at
+           ) VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(backend, thread_id, pr_key) DO UPDATE SET
+             active_kinds = excluded.active_kinds,
+             updated_at = excluded.updated_at`,
+        )
+        .run(
+          params.backend,
+          params.threadId,
+          params.pending.prKey,
+          incident?.attempt_count ?? 0,
+          JSON.stringify(activeKinds),
+          params.pending.createdAt,
+        );
+      return { status: "scheduled", pending: params.pending };
+    });
+    return schedule();
+  }
+
+  async beginThreadPrAutoDispatch(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    fingerprint: string;
+    leaseExpiresAt: number;
+    maxAttempts: number;
+    now: number;
+    ownerId: string;
+  }): Promise<
+    | { status: "ready"; attemptCount: number; record: PrAutoDispatchPendingRecord }
+    | { status: "disabled" | "stale" | "attempt-limit" }
+  > {
+    const begin = this.stateDb.raw.transaction(() => {
+      const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+      if (this.getThread(threadKey)?.prAutoDispatchEnabled !== true) {
+        return { status: "disabled" as const };
+      }
+      const claim = this.stateDb.raw
+        .prepare(
+          `SELECT pr_key, status, payload
+           FROM pr_auto_dispatch_claims
+           WHERE backend = ? AND thread_id = ? AND fingerprint = ?`,
+        )
+        .get(
+          params.backend,
+          params.threadId,
+          params.fingerprint,
+        ) as PrAutoDispatchClaimRow | undefined;
+      const record = claim
+        ? parsePrAutoDispatchPendingRecord(claim.payload)
+        : undefined;
+      if (!claim || claim.status !== "pending" || !record) {
+        return { status: "stale" as const };
+      }
+      const incident = this.readPrAutoDispatchIncident({
+        backend: params.backend,
+        threadId: params.threadId,
+        prKey: claim.pr_key,
+      });
+      if ((incident?.attempt_count ?? 0) >= params.maxAttempts) {
+        this.updatePrAutoDispatchClaimStatus({
+          ...params,
+          status: "attempt-limit",
+        });
+        return { status: "attempt-limit" as const };
+      }
+      const updated = this.stateDb.raw
+        .prepare(
+          `UPDATE pr_auto_dispatch_claims
+           SET status = 'dispatching', updated_at = ?, payload = ?
+           WHERE backend = ? AND thread_id = ? AND fingerprint = ?
+             AND status = 'pending'`,
+        )
+        .run(
+          params.now,
+          JSON.stringify({
+            ...record,
+            dispatchLease: {
+              expiresAt: params.leaseExpiresAt,
+              ownerId: params.ownerId,
+            },
+          } satisfies PrAutoDispatchPendingRecord),
+          params.backend,
+          params.threadId,
+          params.fingerprint,
+        );
+      if (updated.changes === 0) {
+        return { status: "stale" as const };
+      }
+      const attemptCount = (incident?.attempt_count ?? 0) + 1;
+      this.stateDb.raw
+        .prepare(
+          `UPDATE pr_auto_dispatch_incidents
+           SET attempt_count = ?, updated_at = ?
+           WHERE backend = ? AND thread_id = ? AND pr_key = ?`,
+        )
+        .run(
+          attemptCount,
+          params.now,
+          params.backend,
+          params.threadId,
+          claim.pr_key,
+        );
+      return { status: "ready" as const, attemptCount, record };
+    });
+    return begin();
+  }
+
+  async restoreThreadPrAutoDispatchAfterBusy(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    fingerprint: string;
+    ownerId: string;
+    scheduledAt: number;
+    now: number;
+  }): Promise<ThreadPrAutoDispatchPending | undefined> {
+    const restore = this.stateDb.raw.transaction(() => {
+      const claim = this.stateDb.raw
+        .prepare(
+          `SELECT pr_key, status, payload
+           FROM pr_auto_dispatch_claims
+           WHERE backend = ? AND thread_id = ? AND fingerprint = ?`,
+        )
+        .get(
+          params.backend,
+          params.threadId,
+          params.fingerprint,
+        ) as PrAutoDispatchClaimRow | undefined;
+      const record = claim
+        ? parsePrAutoDispatchPendingRecord(claim.payload)
+        : undefined;
+      if (!claim || claim.status !== "dispatching" || !record) {
+        return undefined;
+      }
+      if (record.dispatchLease?.ownerId !== params.ownerId) {
+        return undefined;
+      }
+      const pending = { ...record.pending, scheduledAt: params.scheduledAt };
+      const pendingRecord = clearPrAutoDispatchLease({ ...record, pending });
+      this.stateDb.raw
+        .prepare(
+          `UPDATE pr_auto_dispatch_claims
+           SET status = 'pending', scheduled_at = ?, updated_at = ?, payload = ?
+           WHERE backend = ? AND thread_id = ? AND fingerprint = ?
+             AND status = 'dispatching'`,
+        )
+        .run(
+          params.scheduledAt,
+          params.now,
+          JSON.stringify(pendingRecord),
+          params.backend,
+          params.threadId,
+          params.fingerprint,
+        );
+      this.stateDb.raw
+        .prepare(
+          `UPDATE pr_auto_dispatch_incidents
+           SET attempt_count = MAX(0, attempt_count - 1), updated_at = ?
+           WHERE backend = ? AND thread_id = ? AND pr_key = ?`,
+        )
+        .run(
+          params.now,
+          params.backend,
+          params.threadId,
+          claim.pr_key,
+        );
+      return pending;
+    });
+    return restore();
+  }
+
+  async renewThreadPrAutoDispatchLease(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    fingerprint: string;
+    leaseExpiresAt: number;
+    now: number;
+    ownerId: string;
+  }): Promise<boolean> {
+    const renew = this.stateDb.raw.transaction(() => {
+      const claim = this.stateDb.raw
+        .prepare(
+          `SELECT pr_key, status, payload
+           FROM pr_auto_dispatch_claims
+           WHERE backend = ? AND thread_id = ? AND fingerprint = ?`,
+        )
+        .get(
+          params.backend,
+          params.threadId,
+          params.fingerprint,
+        ) as PrAutoDispatchClaimRow | undefined;
+      const record = claim
+        ? parsePrAutoDispatchPendingRecord(claim.payload)
+        : undefined;
+      if (
+        !claim
+        || claim.status !== "dispatching"
+        || !record
+        || record.dispatchLease?.ownerId !== params.ownerId
+      ) {
+        return false;
+      }
+      const result = this.stateDb.raw
+        .prepare(
+          `UPDATE pr_auto_dispatch_claims
+           SET updated_at = ?, payload = ?
+           WHERE backend = ? AND thread_id = ? AND fingerprint = ?
+             AND status = 'dispatching'`,
+        )
+        .run(
+          params.now,
+          JSON.stringify({
+            ...record,
+            dispatchLease: {
+              expiresAt: params.leaseExpiresAt,
+              ownerId: params.ownerId,
+            },
+          } satisfies PrAutoDispatchPendingRecord),
+          params.backend,
+          params.threadId,
+          params.fingerprint,
+        );
+      return result.changes > 0;
+    });
+    return renew();
+  }
+
+  async finishThreadPrAutoDispatch(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    fingerprint: string;
+    ownerId: string;
+    status: "dispatched" | "failed";
+    now: number;
+  }): Promise<void> {
+    const finish = this.stateDb.raw.transaction(() => {
+      const claim = this.stateDb.raw
+        .prepare(
+          `SELECT pr_key, status, payload
+           FROM pr_auto_dispatch_claims
+           WHERE backend = ? AND thread_id = ? AND fingerprint = ?`,
+        )
+        .get(
+          params.backend,
+          params.threadId,
+          params.fingerprint,
+        ) as PrAutoDispatchClaimRow | undefined;
+      const record = claim
+        ? parsePrAutoDispatchPendingRecord(claim.payload)
+        : undefined;
+      if (
+        !claim
+        || claim.status !== "dispatching"
+        || !record
+        || record.dispatchLease?.ownerId !== params.ownerId
+      ) {
+        return;
+      }
+      this.stateDb.raw
+        .prepare(
+          `UPDATE pr_auto_dispatch_claims
+           SET status = ?, updated_at = ?, payload = ?
+           WHERE backend = ? AND thread_id = ? AND fingerprint = ?
+             AND status = 'dispatching'`,
+        )
+        .run(
+          params.status,
+          params.now,
+          JSON.stringify(clearPrAutoDispatchLease(record)),
+          params.backend,
+          params.threadId,
+          params.fingerprint,
+        );
+    });
+    finish();
+  }
+
+  async cancelThreadPrAutoDispatch(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    fingerprint: string;
+    now?: number;
+    status?: "cancelled" | "resolved" | "superseded";
+  }): Promise<boolean> {
+    const result = this.stateDb.raw
+      .prepare(
+        `UPDATE pr_auto_dispatch_claims
+         SET status = ?, updated_at = ?
+         WHERE backend = ? AND thread_id = ? AND fingerprint = ?
+           AND status = 'pending'`,
+      )
+      .run(
+        params.status ?? "cancelled",
+        params.now ?? Date.now(),
+        params.backend,
+        params.threadId,
+        params.fingerprint,
+      );
+    return result.changes > 0;
+  }
+
+  async cancelPendingThreadPrAutoDispatchForPr(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    prKey: string;
+    now: number;
+  }): Promise<boolean> {
+    const result = this.stateDb.raw
+      .prepare(
+        `UPDATE pr_auto_dispatch_claims
+         SET status = 'superseded', updated_at = ?
+         WHERE backend = ? AND thread_id = ? AND pr_key = ?
+           AND status = 'pending'`,
+      )
+      .run(params.now, params.backend, params.threadId, params.prKey);
+    return result.changes > 0;
+  }
+
+  async resolveThreadPrAutoDispatchIncident(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    prKey: string;
+    resolvedKinds: ThreadPrAutoDispatchEventKind[];
+    now: number;
+  }): Promise<void> {
+    if (params.resolvedKinds.length === 0) return;
+    const resolve = this.stateDb.raw.transaction(() => {
+      const incident = this.readPrAutoDispatchIncident(params);
+      if (!incident) return;
+      const resolved = new Set(params.resolvedKinds);
+      const activeKinds = parsePrAutoDispatchKinds(incident.active_kinds)
+        .filter((kind) => !resolved.has(kind));
+      if (activeKinds.length === 0) {
+        this.stateDb.raw
+          .prepare(
+            `DELETE FROM pr_auto_dispatch_incidents
+             WHERE backend = ? AND thread_id = ? AND pr_key = ?`,
+          )
+          .run(params.backend, params.threadId, params.prKey);
+        return;
+      }
+      this.stateDb.raw
+        .prepare(
+          `UPDATE pr_auto_dispatch_incidents
+           SET active_kinds = ?, updated_at = ?
+           WHERE backend = ? AND thread_id = ? AND pr_key = ?`,
+        )
+        .run(
+          JSON.stringify(activeKinds),
+          params.now,
+          params.backend,
+          params.threadId,
+          params.prKey,
+        );
+    });
+    resolve();
+  }
+
+  async getThreadPrAutoDispatchPending(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+  }): Promise<PrAutoDispatchPendingRecord | undefined> {
+    return this.readThreadPrAutoDispatchPending(params);
+  }
+
+  async listPendingThreadPrAutoDispatches(): Promise<Array<
+    PrAutoDispatchPendingRecord & {
+      backend: ThreadOverlayState["backend"];
+      threadId: string;
+    }
+  >> {
+    const rows = this.stateDb.raw
+      .prepare(
+        `SELECT backend, thread_id, payload
+         FROM pr_auto_dispatch_claims
+         WHERE status = 'pending'
+         ORDER BY scheduled_at ASC`,
+      )
+      .all() as Array<{ backend: ThreadOverlayState["backend"]; thread_id: string; payload: string }>;
+    return rows.flatMap((row) => {
+      const record = parsePrAutoDispatchPendingRecord(row.payload);
+      return record
+        ? [{ ...record, backend: row.backend, threadId: row.thread_id }]
+        : [];
+    });
+  }
+
+  async recoverOrphanedThreadPrAutoDispatches(params: {
+    now: number;
+    scheduledAt: number;
+  }): Promise<PrAutoDispatchRecoveryResult> {
+    const recover = this.stateDb.raw.transaction((): PrAutoDispatchRecoveryResult => {
+      const rows = this.stateDb.raw
+        .prepare(
+          `SELECT backend, thread_id, pr_key, fingerprint, payload
+           FROM pr_auto_dispatch_claims
+           WHERE status = 'dispatching'`,
+        )
+        .all() as Array<{
+          backend: ThreadOverlayState["backend"];
+          fingerprint: string;
+          payload: string;
+          pr_key: string;
+          thread_id: string;
+        }>;
+      let nextLeaseExpiresAt: number | undefined;
+      let recoveredCount = 0;
+      for (const row of rows) {
+        const record = parsePrAutoDispatchPendingRecord(row.payload);
+        const leaseExpiresAt = record?.dispatchLease?.expiresAt;
+        if (leaseExpiresAt !== undefined && leaseExpiresAt > params.now) {
+          nextLeaseExpiresAt = nextLeaseExpiresAt === undefined
+            ? leaseExpiresAt
+            : Math.min(nextLeaseExpiresAt, leaseExpiresAt);
+          continue;
+        }
+        if (!record) {
+          continue;
+        }
+        const pending = { ...record.pending, scheduledAt: params.scheduledAt };
+        const updated = this.stateDb.raw
+          .prepare(
+            `UPDATE pr_auto_dispatch_claims
+             SET status = 'pending', scheduled_at = ?, updated_at = ?, payload = ?
+             WHERE backend = ? AND thread_id = ? AND fingerprint = ?
+               AND status = 'dispatching'`,
+          )
+          .run(
+            params.scheduledAt,
+            params.now,
+            JSON.stringify(clearPrAutoDispatchLease({ ...record, pending })),
+            row.backend,
+            row.thread_id,
+            row.fingerprint,
+          );
+        if (updated.changes === 0) {
+          continue;
+        }
+        recoveredCount += 1;
+        this.stateDb.raw
+          .prepare(
+            `UPDATE pr_auto_dispatch_incidents
+             SET attempt_count = MAX(0, attempt_count - 1), updated_at = ?
+             WHERE backend = ? AND thread_id = ? AND pr_key = ?`,
+          )
+          .run(params.now, row.backend, row.thread_id, row.pr_key);
+      }
+      return {
+        ...(nextLeaseExpiresAt !== undefined ? { nextLeaseExpiresAt } : {}),
+        recoveredCount,
+      };
+    });
+    return recover();
+  }
+
+  async getThreadPrAutoDispatchAttemptCount(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    prKey: string;
+  }): Promise<number> {
+    return this.readPrAutoDispatchIncident(params)?.attempt_count ?? 0;
+  }
+
   async setThreadCodexEnvironmentRuntime(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;
@@ -2669,11 +3378,72 @@ export class SqliteOverlayStore {
       );
   }
 
+  private readPrAutoDispatchIncident(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    prKey: string;
+  }): PrAutoDispatchIncidentRow | undefined {
+    return this.stateDb.raw
+      .prepare(
+        `SELECT attempt_count, active_kinds
+         FROM pr_auto_dispatch_incidents
+         WHERE backend = ? AND thread_id = ? AND pr_key = ?`,
+      )
+      .get(params.backend, params.threadId, params.prKey) as
+        | PrAutoDispatchIncidentRow
+        | undefined;
+  }
+
+  private readThreadPrAutoDispatchPending(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+  }): PrAutoDispatchPendingRecord | undefined {
+    const row = this.stateDb.raw
+      .prepare(
+        `SELECT payload
+         FROM pr_auto_dispatch_claims
+         WHERE backend = ? AND thread_id = ? AND status = 'pending'
+         LIMIT 1`,
+      )
+      .get(params.backend, params.threadId) as { payload: string } | undefined;
+    return row ? parsePrAutoDispatchPendingRecord(row.payload) : undefined;
+  }
+
+  private updatePrAutoDispatchClaimStatus(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    fingerprint: string;
+    status: "attempt-limit" | "dispatched" | "failed";
+    now: number;
+  }): void {
+    this.stateDb.raw
+      .prepare(
+        `UPDATE pr_auto_dispatch_claims
+         SET status = ?, updated_at = ?
+         WHERE backend = ? AND thread_id = ? AND fingerprint = ?`,
+      )
+      .run(
+        params.status,
+        params.now,
+        params.backend,
+        params.threadId,
+        params.fingerprint,
+      );
+  }
+
   private getThread(threadKey: string): ThreadOverlayState | undefined {
     const row = this.stateDb.raw
       .prepare("SELECT payload FROM threads WHERE thread_id = ?")
       .get(threadKey) as { payload: string } | undefined;
-    return row ? normalizeThreadOverlayState(JSON.parse(row.payload)) : undefined;
+    if (!row) return undefined;
+    const overlay = normalizeThreadOverlayState(JSON.parse(row.payload));
+    const pending = this.readThreadPrAutoDispatchPending({
+      backend: overlay.backend,
+      threadId: overlay.threadId,
+    });
+    return pending
+      ? { ...overlay, prAutoDispatchPending: pending.pending }
+      : overlay;
   }
 
   /**
@@ -2706,11 +3476,13 @@ export class SqliteOverlayStore {
   }
 
   private putThread(threadKey: string, state: ThreadOverlayState): void {
-    // Queue-only fields are registry-memory state; never persist them.
-    // They reset to undefined on app restart by design.
+    // Execution-mode queue fields are registry-memory state. PR auto-dispatch
+    // pending state is durable too, but its transactional claim table is the
+    // source of truth; never duplicate either category in overlay JSON.
     const {
       queuedExecutionMode: _queuedExecutionMode,
       queuedExecutionModeAt: _queuedExecutionModeAt,
+      prAutoDispatchPending: _prAutoDispatchPending,
       ...persistable
     } = state;
     this.stateDb.raw
@@ -3853,6 +4625,20 @@ export type OverlayStoreLike = Pick<
   | "upsertWorktreeSnapshot"
   | "setThreadExecutionMode"
   | "setThreadModelSettings"
+  | "setThreadPrAutoDispatchEnabled"
+  | "resetThreadPrAutoDispatchForOperator"
+  | "scheduleThreadPrAutoDispatch"
+  | "beginThreadPrAutoDispatch"
+  | "restoreThreadPrAutoDispatchAfterBusy"
+  | "renewThreadPrAutoDispatchLease"
+  | "finishThreadPrAutoDispatch"
+  | "cancelThreadPrAutoDispatch"
+  | "cancelPendingThreadPrAutoDispatchForPr"
+  | "resolveThreadPrAutoDispatchIncident"
+  | "getThreadPrAutoDispatchPending"
+  | "listPendingThreadPrAutoDispatches"
+  | "recoverOrphanedThreadPrAutoDispatches"
+  | "getThreadPrAutoDispatchAttemptCount"
   | "turnOffCodexFastEverywhere"
   | "setThreadExpectedBranch"
   | "setThreadObservedBranch"

@@ -48,6 +48,10 @@ export function useThreadQueuedMessageIndicators(params: {
     const indicators: Record<string, ThreadQueuedMessageState> = {};
     const now = Date.now();
     for (const thread of threads) {
+      if (thread.prAutoDispatchPending) {
+        indicators[buildThreadIdentityKey(thread.source, thread.id)] =
+          "scheduled";
+      }
       const queuedTurns = composerDraftStore.getQueuedTurns(
         getThreadScopeKey(thread),
       );
@@ -60,9 +64,11 @@ export function useThreadQueuedMessageIndicators(params: {
           && Number.isFinite(turn.scheduledSendAt)
           && turn.scheduledSendAt > now,
       );
-      indicators[buildThreadIdentityKey(thread.source, thread.id)] = hasScheduled
-        ? "scheduled"
-        : "queued";
+      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+      indicators[threadKey] =
+        hasScheduled || indicators[threadKey] === "scheduled"
+          ? "scheduled"
+          : "queued";
     }
     return indicators;
     // `version` is intentionally a dependency (not referenced in the body):
