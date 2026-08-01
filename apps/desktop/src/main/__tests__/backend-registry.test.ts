@@ -23656,6 +23656,119 @@ script = "printf setup"
     await registry.close();
   });
 
+  it("keeps an injected turn origin when replay arrives before its user item event", async () => {
+    const userEntry: AppServerThreadReplay["entries"][number] = {
+      type: "message",
+      id: "message-provider-assigned",
+      role: "user",
+      text: "Repair the attached PR.",
+      turn: { id: "turn-1", status: "failed" },
+    };
+    const replay: AppServerThreadReplay = {
+      entries: [userEntry],
+      messages: [
+        {
+          id: "message-provider-assigned",
+          role: "user",
+          text: "Repair the attached PR.",
+        },
+      ],
+      pagination: {
+        supportsPagination: false,
+        hasPreviousPage: false,
+      },
+    };
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ replay }),
+      grokClient: new MockBackendClient({}),
+      overlayStore,
+      threadTitleGenerationService: null,
+    });
+
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "target-thread",
+      input: [{ type: "text", text: "Repair the attached PR." }],
+      messageOrigin: { kind: "pwragent" },
+    });
+    const response = await registry.readThread({
+      backend: "codex",
+      threadId: "target-thread",
+    });
+
+    expect(overlayStore.upsertThreadMessageOrigin).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "target-thread",
+      messageId: "user:turn-1",
+      origin: { kind: "pwragent" },
+    });
+    expect(response.replay.entries[0]).toMatchObject({
+      id: "message-provider-assigned",
+      origin: { kind: "pwragent" },
+    });
+    expect(response.replay.messages[0]).toMatchObject({
+      id: "message-provider-assigned",
+      origin: { kind: "pwragent" },
+    });
+
+    await registry.close();
+  });
+
+  it("persists an injected origin from a started user item", async () => {
+    const codexClient = new MockBackendClient({});
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({}),
+      overlayStore,
+      threadTitleGenerationService: null,
+    });
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
+
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "target-thread",
+      input: [{ type: "text", text: "Repair the attached PR." }],
+      messageOrigin: { kind: "pwragent" },
+    });
+    await codexClient.emit({
+      method: "item/started",
+      params: {
+        threadId: "target-thread",
+        turnId: "turn-1",
+        item: {
+          id: "message-provider-assigned",
+          type: "userMessage",
+          text: "Repair the attached PR.",
+        },
+      },
+    });
+
+    expect(overlayStore.upsertThreadMessageOrigin).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "target-thread",
+      messageId: "message-provider-assigned",
+      origin: { kind: "pwragent" },
+    });
+    expect(events.at(-1)).toMatchObject({
+      notification: {
+        method: "item/started",
+        params: {
+          item: {
+            id: "message-provider-assigned",
+            origin: { kind: "pwragent" },
+          },
+        },
+      },
+    });
+
+    await registry.close();
+  });
+
   it("does not copy one message origin to another user message in the same turn", async () => {
     const userEntries: AppServerThreadReplay["entries"] = [
       {
@@ -23694,7 +23807,7 @@ script = "printf setup"
     await overlayStore.upsertThreadMessageOrigin!({
       backend: "codex",
       threadId: "target-thread",
-      messageId: "message-injected",
+      messageId: "user:turn-1",
       origin: { kind: "automation" },
     });
     const registry = new DesktopBackendRegistry({
