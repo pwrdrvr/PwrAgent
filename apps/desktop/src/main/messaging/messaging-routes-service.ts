@@ -116,6 +116,7 @@ export async function listDesktopMessagingRoutes(
       const thread = binding.backend
         ? threadsByKey.get(threadKey(binding.backend, binding.threadId))
         : threadResult.find((candidate) => candidate.id === binding.threadId);
+      const backend = binding.backend ?? thread?.source;
       return {
         bindingId: binding.id,
         platform: binding.channel.channel,
@@ -133,7 +134,7 @@ export async function listDesktopMessagingRoutes(
             : {}),
         },
         target: {
-          ...(binding.backend ? { backend: binding.backend } : {}),
+          ...(backend ? { backend } : {}),
           threadId: binding.threadId,
           label: thread?.title ?? binding.threadId,
           kind: normalizeMessagingBindingTargetKind(binding.targetKind),

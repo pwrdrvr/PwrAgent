@@ -23,6 +23,7 @@ import {
   validateTelegramGroupChatId,
   validateTelegramPositiveId,
   type DesktopAuthorizedContact,
+  type AppServerBackendKind,
   type DesktopMessagingAuthorizationMode,
   type DesktopMessagingSlackChannelUserAccessMode,
   type DesktopMessagingSlackDmAccessMode,
@@ -70,6 +71,10 @@ import {
 
 export function MessagingSettings(props: {
   desktopApi?: DesktopApi;
+  onOpenThread?: (target: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }) => void;
   saving: boolean;
   snapshot: DesktopSettingsSnapshot;
   onClearSecret: (secret: DesktopSettingsSecretName) => Promise<boolean>;
@@ -347,7 +352,10 @@ export function MessagingSettings(props: {
         </div>
       </SettingsSection>
 
-      <MessagingRoutesSettings desktopApi={props.desktopApi} />
+      <MessagingRoutesSettings
+        desktopApi={props.desktopApi}
+        onOpenThread={props.onOpenThread}
+      />
 
       <SettingsSection
         eyebrow="Messaging"

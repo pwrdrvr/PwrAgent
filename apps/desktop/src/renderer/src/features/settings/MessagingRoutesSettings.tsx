@@ -5,6 +5,7 @@ import {
   useState,
 } from "react";
 import type {
+  AppServerBackendKind,
   DesktopMessagingAgentRouteTarget,
   DesktopMessagingDefaultAgentRoute,
   DesktopMessagingDefaultAgentScope,
@@ -59,7 +60,13 @@ const EMPTY_FORM: NewDefaultForm = {
   title: "",
 };
 
-export function MessagingRoutesSettings(props: { desktopApi?: DesktopApi }) {
+export function MessagingRoutesSettings(props: {
+  desktopApi?: DesktopApi;
+  onOpenThread?: (target: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }) => void;
+}) {
   const [routes, setRoutes] = useState<ListMessagingRoutesResponse>(EMPTY_ROUTES);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -207,6 +214,7 @@ export function MessagingRoutesSettings(props: { desktopApi?: DesktopApi }) {
                   setEditing(route);
                 }}
                 onClear={() => void clearDefault(route.assignmentId)}
+                onOpenThread={props.onOpenThread}
               />
             ))
           )}
@@ -224,27 +232,44 @@ export function MessagingRoutesSettings(props: { desktopApi?: DesktopApi }) {
           ) : (
             routes.bindings.map((binding) => {
               const Icon = MESSAGING_PLATFORM_ICONS[binding.platform];
+              const backend = binding.target.backend;
+              const onOpenThread = props.onOpenThread;
+              const openTarget = backend && onOpenThread
+                ? () => onOpenThread({
+                    backend,
+                    threadId: binding.target.threadId,
+                  })
+                : undefined;
               return (
                 <div className="messaging-route-row" key={binding.bindingId}>
-                  <div className="messaging-route-row__platform" aria-hidden="true">
-                    {Icon ? <Icon size={16} /> : null}
-                  </div>
-                  <div className="messaging-route-row__main">
-                    <div className="messaging-route-row__title">
-                      {formatConversationLabel(binding.platform, binding.conversation)}
+                  <button
+                    aria-label={`Open thread ${binding.target.label}`}
+                    className="messaging-route-row__open"
+                    disabled={!openTarget}
+                    title={openTarget ? `Open ${binding.target.label}` : undefined}
+                    type="button"
+                    onClick={openTarget}
+                  >
+                    <div className="messaging-route-row__platform" aria-hidden="true">
+                      {Icon ? <Icon size={16} /> : null}
                     </div>
-                    <div className="messaging-route-row__meta">
-                      {formatMessagingPlatformName(binding.platform)}
-                      {" / "}
-                      {formatConversationKind(binding.conversation.kind)}
-                      {" / "}
-                      {binding.target.kind === "agent_thread" ? "Agent" : "Thread"}
+                    <div className="messaging-route-row__main">
+                      <div className="messaging-route-row__title">
+                        {formatConversationLabel(binding.platform, binding.conversation)}
+                      </div>
+                      <div className="messaging-route-row__meta">
+                        {formatMessagingPlatformName(binding.platform)}
+                        {" / "}
+                        {formatConversationKind(binding.conversation.kind)}
+                        {" / "}
+                        {binding.target.kind === "agent_thread" ? "Agent" : "Thread"}
+                      </div>
                     </div>
-                  </div>
-                  <div className="messaging-route-row__target">
-                    <span>{binding.target.label}</span>
-                    <code>{binding.target.threadId}</code>
-                  </div>
+                    <div className="messaging-route-row__target">
+                      <span>{binding.target.label}</span>
+                      <code>{binding.target.threadId}</code>
+                    </div>
+                  </button>
                   <div className="messaging-route-row__actions">
                     <button
                       className="button button--ghost"
@@ -270,32 +295,48 @@ function DefaultAgentRow(props: {
   busy: boolean;
   onChange: () => void;
   onClear: () => void;
+  onOpenThread?: (target: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }) => void;
 }) {
   const platform = platformForScope(props.route.scope);
   const Icon = platform ? MESSAGING_PLATFORM_ICONS[platform] : undefined;
   return (
     <div className="messaging-route-row">
-      <div className="messaging-route-row__platform" aria-hidden="true">
-        {Icon ? <Icon size={16} /> : <span className="messaging-route-row__profile">P</span>}
-      </div>
-      <div className="messaging-route-row__main">
-        <div className="messaging-route-row__title">
-          {formatScopeLabel(props.route.scope)}
+      <button
+        aria-label={`Open thread ${props.route.target.label}`}
+        className="messaging-route-row__open"
+        disabled={!props.onOpenThread}
+        title={props.onOpenThread ? `Open ${props.route.target.label}` : undefined}
+        type="button"
+        onClick={() => props.onOpenThread?.({
+          backend: props.route.target.backend,
+          threadId: props.route.target.threadId,
+        })}
+      >
+        <div className="messaging-route-row__platform" aria-hidden="true">
+          {Icon ? <Icon size={16} /> : <span className="messaging-route-row__profile">P</span>}
         </div>
-        <div className="messaging-route-row__meta">
-          {formatScopeKind(props.route.scope.kind)}
-          {" / Updated "}
-          {formatTimestamp(props.route.updatedAt)}
+        <div className="messaging-route-row__main">
+          <div className="messaging-route-row__title">
+            {formatScopeLabel(props.route.scope)}
+          </div>
+          <div className="messaging-route-row__meta">
+            {formatScopeKind(props.route.scope.kind)}
+            {" / Updated "}
+            {formatTimestamp(props.route.updatedAt)}
+          </div>
         </div>
-      </div>
-      <div className="messaging-route-row__target">
-        <span>{props.route.target.label}</span>
-        <small className={props.route.target.available ? "is-ok" : "is-stale"}>
-          {props.route.target.available
-            ? props.route.target.backendLabel
-            : `${props.route.target.backendLabel} unavailable`}
-        </small>
-      </div>
+        <div className="messaging-route-row__target">
+          <span>{props.route.target.label}</span>
+          <small className={props.route.target.available ? "is-ok" : "is-stale"}>
+            {props.route.target.available
+              ? props.route.target.backendLabel
+              : `${props.route.target.backendLabel} unavailable`}
+          </small>
+        </div>
+      </button>
       <div className="messaging-route-row__actions">
         <button
           className="button button--secondary"

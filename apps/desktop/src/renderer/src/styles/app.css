@@ -6281,7 +6281,7 @@ textarea,
 .messaging-route-row {
   display: grid;
   min-width: 0;
-  grid-template-columns: 24px minmax(180px, 1.4fr) minmax(160px, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 12px;
   padding: 12px 18px;
@@ -6290,6 +6290,31 @@ textarea,
 
 .messaging-route-row:first-child {
   border-top: 0;
+}
+
+.messaging-route-row__open {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 24px minmax(180px, 1.4fr) minmax(160px, 1fr);
+  align-items: center;
+  gap: 12px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.messaging-route-row__open:disabled {
+  cursor: default;
+}
+
+.messaging-route-row__open:not(:disabled):focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 4px;
 }
 
 .messaging-route-row__platform {
@@ -6327,7 +6352,18 @@ textarea,
   letter-spacing: 0;
   line-height: 1.35;
   text-overflow: ellipsis;
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  text-underline-offset: 2px;
+  transition:
+    color 120ms ease,
+    text-decoration-color 120ms ease;
   white-space: nowrap;
+}
+
+.messaging-route-row__open:not(:disabled):hover .messaging-route-row__target > span {
+  color: var(--accent);
+  text-decoration-color: currentColor;
 }
 
 .messaging-route-row__meta,
@@ -6420,17 +6456,12 @@ textarea,
 }
 
 @media (max-width: 900px) {
-  .messaging-route-row {
-    grid-template-columns: 24px minmax(0, 1fr) auto;
+  .messaging-route-row__open {
+    grid-template-columns: 24px minmax(0, 1fr);
   }
 
   .messaging-route-row__target {
     grid-column: 2 / 3;
-  }
-
-  .messaging-route-row__actions {
-    grid-column: 3;
-    grid-row: 1 / span 2;
   }
 }
 
@@ -6445,17 +6476,18 @@ textarea,
   }
 
   .messaging-route-row {
-    grid-template-columns: 24px minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
   }
 
-  .messaging-route-row__target,
-  .messaging-route-row__actions {
+  .messaging-route-row__target {
     grid-column: 2;
     grid-row: auto;
   }
 
   .messaging-route-row__actions {
+    grid-column: 1;
     justify-content: flex-start;
+    padding-left: 36px;
   }
 }
 

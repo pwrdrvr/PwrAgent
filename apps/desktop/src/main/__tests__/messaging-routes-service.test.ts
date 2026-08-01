@@ -61,7 +61,9 @@ function buildAssignment(
   };
 }
 
-function buildBinding(): MessagingBindingRecord {
+function buildBinding(
+  overrides: Partial<MessagingBindingRecord> = {},
+): MessagingBindingRecord {
   return {
     id: "binding-1",
     channel: {
@@ -79,6 +81,7 @@ function buildBinding(): MessagingBindingRecord {
     authorizedActorIds: ["U1"],
     createdAt: 1000,
     updatedAt: 2000,
+    ...overrides,
   };
 }
 
@@ -189,6 +192,19 @@ describe("messaging routes service", () => {
       threadId: "missing-agent",
       label: "missing-agent",
       available: false,
+    });
+  });
+
+  it("resolves a legacy binding backend from its thread", async () => {
+    const dependencies = buildDependencies({
+      bindings: [buildBinding({ backend: undefined })],
+    });
+
+    const result = await listDesktopMessagingRoutes(dependencies);
+
+    expect(result.bindings[0]?.target).toMatchObject({
+      backend: "codex",
+      threadId: "work-1",
     });
   });
 

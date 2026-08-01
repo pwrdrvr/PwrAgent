@@ -152,6 +152,35 @@ describe("MessagingRoutesSettings", () => {
     expect(screen.getByText("3 active")).toBeInTheDocument();
   });
 
+  it("opens default Agent and binding target threads", async () => {
+    const { desktopApi } = buildDesktopApi();
+    const onOpenThread = vi.fn();
+
+    render(
+      <MessagingRoutesSettings
+        desktopApi={desktopApi}
+        onOpenThread={onOpenThread}
+      />,
+    );
+    await screen.findByText("Issue 13056");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open thread Search Signals Agent" }),
+    );
+    expect(onOpenThread).toHaveBeenLastCalledWith({
+      backend: "codex",
+      threadId: "agent-1",
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open thread Issue 13056" }),
+    );
+    expect(onOpenThread).toHaveBeenLastCalledWith({
+      backend: "codex",
+      threadId: "work-1",
+    });
+  });
+
   it("adds a conversation default from Settings", async () => {
     const api = buildDesktopApi();
     render(<MessagingRoutesSettings desktopApi={api.desktopApi} />);
