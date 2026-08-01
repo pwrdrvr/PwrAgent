@@ -15768,11 +15768,14 @@ export class DesktopBackendRegistry {
         readTaskMonitorUsageFastMode(notification.params.tokenUsage) ??
         reviewRecord?.fastMode ??
         completedReviewRecord?.fastMode;
-      const usageSnapshot = buildTaskMonitorUsageSnapshot({
+      const usageSnapshot = this.buildIncrementalSubAgentUsageSnapshot({
+        backend: event.backend,
         fastMode,
         model,
         serviceTier,
+        threadId: notification.params.threadId,
         tokenUsage: notification.params.tokenUsage,
+        turnId: notification.params.turnId,
       });
       if (!usageSnapshot) {
         return;
@@ -15975,6 +15978,40 @@ export class DesktopBackendRegistry {
         records.totalUsage,
       ...(seededBaselineTokenUsage ? { seededBaselineTokenUsage } : {}),
     };
+  }
+
+  /**
+   * Build usage for a forked sub-agent turn without charging the child for the
+   * cumulative history inherited from its parent. Codex reports both the
+   * session-wide `total` and the latest request; the first observation seeds a
+   * stable `total - latest` baseline, and subsequent observations report only
+   * the child turn's growth beyond that baseline.
+   *
+   * When the protocol cannot provide a latest-request breakdown, derivation
+   * retains the existing whole-total fallback rather than inventing a fork
+   * baseline that cannot be measured safely.
+   */
+  private buildIncrementalSubAgentUsageSnapshot(params: {
+    backend: AppServerBackendKind;
+    fastMode?: boolean;
+    model?: string;
+    serviceTier?: string;
+    threadId: string;
+    tokenUsage: unknown;
+    turnId?: string;
+  }): TaskMonitorUsageSnapshot | undefined {
+    const derivedUsage = this.deriveLiveThreadTokenUsage({
+      backend: params.backend,
+      threadId: params.threadId,
+      tokenUsage: params.tokenUsage,
+      turnId: params.turnId,
+    });
+    return buildTaskMonitorUsageSnapshot({
+      fastMode: params.fastMode,
+      model: params.model,
+      serviceTier: params.serviceTier,
+      tokenUsage: derivedUsage.turnTokenUsage,
+    });
   }
 
   // Observe one `thread/tokenUsage/updated` and fold any newly-completed model
@@ -16375,18 +16412,21 @@ export class DesktopBackendRegistry {
       event.notification.params.tokenUsage,
     );
     const model = notificationModel ?? existing.preferredModel;
-    const usageSnapshot = buildTaskMonitorUsageSnapshot({
+    const monitorTurnId =
+      readOptionalString(notificationParams, ["turnId", "turn_id"]) ??
+      existing.monitorTurnId;
+    const usageSnapshot = this.buildIncrementalSubAgentUsageSnapshot({
+      backend: "codex",
       fastMode,
       model,
       serviceTier,
+      threadId: event.notification.params.threadId,
       tokenUsage: event.notification.params.tokenUsage,
+      turnId: monitorTurnId,
     });
     if (!usageSnapshot) {
       return;
     }
-    const monitorTurnId =
-      readOptionalString(notificationParams, ["turnId", "turn_id"]) ??
-      existing.monitorTurnId;
     const observedReplays = this.observeLiveThreadContextReplay({
       backend: "codex",
       threadId: event.notification.params.threadId,
