@@ -7169,7 +7169,15 @@ describe("useThreadNavigation", () => {
         >[0],
       ) => request,
     );
+    const cancelThreadPrAutoDispatch = vi.fn(
+      async (
+        request: Parameters<
+          NonNullable<DesktopApi["cancelThreadPrAutoDispatch"]>
+        >[0],
+      ) => ({ ...request, cancelled: true }),
+    );
     const desktopApi: DesktopApi = {
+      cancelThreadPrAutoDispatch,
       getNavigationSnapshot,
       setThreadPrAutoDispatch,
       onAgentEvent: (callback) => {
@@ -7209,6 +7217,53 @@ describe("useThreadNavigation", () => {
     await waitFor(() => {
       expect(result.current.selectedThread?.prAutoDispatchEnabled).toBe(false);
     });
+
+    const pending = {
+      fingerprint: "fingerprint-1",
+      prKey: "github.com/pwrdrvr/PwrAgent#1105",
+      prNumber: 1105,
+      prUrl: "https://github.com/pwrdrvr/PwrAgent/pull/1105",
+      headSha: "a".repeat(40),
+      eventKinds: ["ci-failure" as const],
+      createdAt: 1_000,
+      scheduledAt: 31_000,
+    };
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "thread/prAutoDispatch/pendingUpdated",
+            params: { threadId: "thread-1", pending },
+          },
+        });
+      }
+    });
+    expect(result.current.selectedThread?.prAutoDispatchPending).toEqual(pending);
+    await act(async () => {
+      await result.current.cancelThreadPrAutoDispatch(
+        result.current.selectedThread!,
+        pending.fingerprint,
+      );
+    });
+    expect(cancelThreadPrAutoDispatch).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      fingerprint: "fingerprint-1",
+    });
+
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "thread/prAutoDispatch/pendingUpdated",
+            params: { threadId: "thread-1", pending: null },
+          },
+        });
+      }
+    });
+    expect(result.current.selectedThread?.prAutoDispatchPending).toBeUndefined();
     expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
   });
 

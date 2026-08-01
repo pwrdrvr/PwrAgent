@@ -1212,6 +1212,13 @@ function DesktopAppShell(props: {
             enabled,
           )
       : undefined,
+    onCancelThreadPrAutoDispatch: navigation.selectedThread
+      ? async (fingerprint) =>
+          await navigation.cancelThreadPrAutoDispatch(
+            navigation.selectedThread!,
+            fingerprint,
+          )
+      : undefined,
     onRestoreWorktree: navigation.restoreWorktree,
     onTranscriptViewportChange: session.setViewport,
     onUpdateLaunchpad: navigation.updateDirectoryLaunchpad,

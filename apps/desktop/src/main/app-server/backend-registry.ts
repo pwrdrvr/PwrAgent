@@ -123,6 +123,8 @@ import {
   type SetThreadModelSettingsResponse,
   type SetThreadPrAutoDispatchRequest,
   type SetThreadPrAutoDispatchResponse,
+  type CancelThreadPrAutoDispatchRequest,
+  type CancelThreadPrAutoDispatchResponse,
   type ApplyThreadModelMigrationRequest,
   type ApplyThreadModelMigrationResponse,
   type TurnOffCodexFastEverywhereResponse,
@@ -381,6 +383,7 @@ import {
   ThreadTurnQueue,
   type ThreadTurnQueueLifecycleEvent,
   type ThreadTurnQueueOrigin,
+  type ThreadTurnQueueImmediateSubmissionResult,
   type ThreadTurnQueueSubmissionResult,
 } from "./thread-turn-queue";
 import { materializeLocalImageInputs } from "./image-input-files";
@@ -1452,6 +1455,11 @@ type ThreadTitleService = Pick<ThreadTitleGenerationService, "generateTitle"> & 
 type ThreadPullRequestStatusToolHandler = (
   args: CheckThreadPullRequestStatusToolArgs,
 ) => PwrAgentThreadInspectionResponse | Promise<PwrAgentThreadInspectionResponse>;
+
+type ThreadPrAutoDispatchHandler = {
+  preferenceChanged: (request: SetThreadPrAutoDispatchRequest) => Promise<void>;
+  cancelPending: (request: CancelThreadPrAutoDispatchRequest) => Promise<boolean>;
+};
 
 type ThreadTitleGenerationLogStatus =
   | ThreadTitleGenerationResult["status"]
@@ -5860,6 +5868,7 @@ export class DesktopBackendRegistry {
   private threadPullRequestStatusToolHandler:
     | ThreadPullRequestStatusToolHandler
     | undefined;
+  private threadPrAutoDispatchHandler: ThreadPrAutoDispatchHandler | undefined;
   private threadInspectionSearchService: ThreadSearchService | null | undefined;
   private readonly headlessAutomationTurns = new Map<
     string,
@@ -6273,8 +6282,8 @@ export class DesktopBackendRegistry {
       startTurn: async (entry) => await this.startTurnNow(entry),
       isThreadActive: ({ backend, threadId }) =>
         backend === "codex"
-          ? this.threadHasActiveTurn(threadId) ||
-            this.threadHasBlockingWorkspaceMove({ backend, threadId })
+          ? this.threadHasActiveTurn(threadId)
+            || this.threadHasBlockingWorkspaceMove({ backend, threadId })
           : false,
       onLifecycle: async (event) => await this.emitTurnQueueLifecycle(event),
     });
@@ -6471,6 +6480,12 @@ export class DesktopBackendRegistry {
     handler: ThreadPullRequestStatusToolHandler | null | undefined,
   ): void {
     this.threadPullRequestStatusToolHandler = handler ?? undefined;
+  }
+
+  setThreadPrAutoDispatchHandler(
+    handler: ThreadPrAutoDispatchHandler | null | undefined,
+  ): void {
+    this.threadPrAutoDispatchHandler = handler ?? undefined;
   }
 
   /**
@@ -9550,6 +9565,26 @@ export class DesktopBackendRegistry {
     });
   }
 
+  async submitTurnIfIdle(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    input: AppServerTurnInputItem[];
+    origin?: ThreadTurnQueueOrigin;
+    messageOrigin?: AppServerThreadMessageOrigin;
+  }): Promise<ThreadTurnQueueImmediateSubmissionResult> {
+    const { origin = "manual", ...entry } = params;
+    if (
+      this.threadHasActiveTurn(params.threadId, params.backend)
+      || this.threadHasBlockingWorkspaceMove(params)
+    ) {
+      return { status: "busy" };
+    }
+    return await this.threadTurnQueue.submitIfIdle({
+      ...entry,
+      origin,
+    });
+  }
+
   cancelQueuedTurn(entryId: string, reason?: string): void {
     this.threadTurnQueue.cancelEntry(entryId, reason);
   }
@@ -12006,7 +12041,17 @@ export class DesktopBackendRegistry {
         },
       },
     });
+    await this.threadPrAutoDispatchHandler?.preferenceChanged(params);
     return params;
+  }
+
+  async cancelThreadPrAutoDispatch(
+    params: CancelThreadPrAutoDispatchRequest,
+  ): Promise<CancelThreadPrAutoDispatchResponse> {
+    const cancelled =
+      await this.threadPrAutoDispatchHandler?.cancelPending(params)
+      ?? false;
+    return { ...params, cancelled };
   }
 
   private async setThreadModelSettingsInternal(

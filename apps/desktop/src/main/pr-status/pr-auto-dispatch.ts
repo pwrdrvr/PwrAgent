@@ -2,16 +2,27 @@ import { createHash } from "node:crypto";
 import type {
   AppServerBackendKind,
   AppServerTurnInputItem,
+  PrSummary,
   ThreadOverlayState,
+  ThreadPrAutoDispatchEventKind,
+  ThreadPrAutoDispatchPending,
 } from "@pwragent/shared";
-import { parseThreadIdentityKey } from "@pwragent/shared";
-import type { PrStatusTransition } from "./pr-transitions";
+import {
+  buildPullRequestStatusKey,
+  parseThreadIdentityKey,
+} from "@pwragent/shared";
+import type {
+  PrAutoDispatchPendingRecord,
+  PrAutoDispatchScheduleResult,
+} from "../state/overlay-store-sqlite";
 
 export const MAX_PR_AUTO_DISPATCH_ATTEMPTS_PER_INCIDENT = 2;
+export const PR_AUTO_DISPATCH_DELAY_MS = 30_000;
 
 export type PrAutoDispatchOutcome = {
   threadKey: string;
   status:
+    | "scheduled"
     | "dispatched"
     | "gate-off"
     | "not-actionable"
@@ -21,6 +32,8 @@ export type PrAutoDispatchOutcome = {
     | "pending"
     | "duplicate"
     | "attempt-limit"
+    | "cancelled"
+    | "stale"
     | "failed";
   fingerprint?: string;
   error?: string;
@@ -31,275 +44,460 @@ type PrAutoDispatchStore = {
     backend: AppServerBackendKind;
     threadId: string;
   }): Promise<ThreadOverlayState | undefined>;
-  claimThreadPrAutoDispatch(params: {
+  scheduleThreadPrAutoDispatch(params: {
     backend: AppServerBackendKind;
     threadId: string;
-    prKey: string;
+    pending: ThreadPrAutoDispatchPending;
+    prompt: string;
+    maxAttempts: number;
+    allowCancelledRearm?: boolean;
+  }): Promise<PrAutoDispatchScheduleResult>;
+  beginThreadPrAutoDispatch(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
     fingerprint: string;
     maxAttempts: number;
-  }): Promise<{
-    claimed: boolean;
-    reason?: "disabled" | "duplicate" | "attempt-limit";
-    attemptCount: number;
-  }>;
-  resetThreadPrAutoDispatchIncident(params: {
+    now: number;
+  }): Promise<
+    | { status: "ready"; attemptCount: number; record: PrAutoDispatchPendingRecord }
+    | { status: "disabled" | "stale" | "attempt-limit" }
+  >;
+  restoreThreadPrAutoDispatchAfterBusy(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    fingerprint: string;
+    scheduledAt: number;
+    now: number;
+  }): Promise<ThreadPrAutoDispatchPending | undefined>;
+  finishThreadPrAutoDispatch(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    fingerprint: string;
+    status: "dispatched" | "failed";
+    now: number;
+  }): Promise<void>;
+  cancelThreadPrAutoDispatch(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    fingerprint: string;
+    now?: number;
+    status?: "cancelled" | "resolved" | "superseded";
+  }): Promise<boolean>;
+  cancelPendingThreadPrAutoDispatchForPr(params: {
     backend: AppServerBackendKind;
     threadId: string;
     prKey: string;
+    now: number;
+  }): Promise<boolean>;
+  resolveThreadPrAutoDispatchIncident(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    prKey: string;
+    resolvedKinds: ThreadPrAutoDispatchEventKind[];
+    now: number;
   }): Promise<void>;
+  getThreadPrAutoDispatchPending(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<PrAutoDispatchPendingRecord | undefined>;
+  listPendingThreadPrAutoDispatches(): Promise<Array<
+    PrAutoDispatchPendingRecord & {
+      backend: AppServerBackendKind;
+      threadId: string;
+    }
+  >>;
 };
 
 type PrAutoDispatchRegistry = {
-  canStartThreadTurnImmediately(params: {
-    backend: AppServerBackendKind;
-    threadId: string;
-  }): boolean;
-  submitTurn(params: {
+  submitTurnIfIdle(params: {
     backend: AppServerBackendKind;
     threadId: string;
     input: AppServerTurnInputItem[];
     origin: "automation";
     messageOrigin: { kind: "pwragent" };
-  }): Promise<unknown>;
+  }): Promise<
+    | { status: "started"; turnId: string }
+    | { status: "busy" }
+  >;
 };
 
-type PrAutoDispatchEvent = {
-  eventKinds: Array<"ci-failure" | "merge-conflict">;
+export type PrAutoDispatchEvent = {
+  eventKinds: ThreadPrAutoDispatchEventKind[];
   fingerprint: string;
   headSha: string;
+  prKey: string;
 };
 
 export class PrAutoDispatchCoordinator {
-  private readonly pendingThreadKeys = new Set<string>();
+  private readonly timers = new Map<string, NodeJS.Timeout>();
 
   constructor(
     private readonly options: {
       store: PrAutoDispatchStore;
       registry: PrAutoDispatchRegistry;
       isBackgroundPollingEnabled?: () => boolean;
+      isPrAttached?: (params: {
+        backend: AppServerBackendKind;
+        threadId: string;
+        prKey: string;
+      }) => boolean;
+      getCurrentPr?: (prKey: string) => PrSummary | undefined;
+      onPendingChanged?: (params: {
+        backend: AppServerBackendKind;
+        threadId: string;
+        pending: ThreadPrAutoDispatchPending | null;
+      }) => void | Promise<void>;
+      now?: () => number;
     },
   ) {}
 
-  async handleTransition(params: {
-    transition: PrStatusTransition;
-    source: string;
+  async handleStatusSnapshot(params: {
+    pr: PrSummary;
+    threadKeys: string[];
     observedAt: number;
     backgroundPollingEnabled: boolean;
+    operatorInitiated?: boolean;
   }): Promise<PrAutoDispatchOutcome[]> {
-    const threadKeys = params.transition.threadKeys;
-    if (
-      !params.backgroundPollingEnabled
-      || params.source !== "background-poll"
-    ) {
-      return threadKeys.map((threadKey) => ({ threadKey, status: "gate-off" }));
-    }
-
-    if (prIsHealthy(params.transition)) {
-      await Promise.all(
-        threadKeys.map(async (threadKey) => {
-          const identity = parseThreadIdentityKey(threadKey);
-          if (!identity) return;
-          await this.options.store.resetThreadPrAutoDispatchIncident({
-            ...identity,
-            prKey: params.transition.prKey,
-          });
-        }),
-      );
-    }
-
-    const event = buildPrAutoDispatchEvent(params.transition);
-    if (!event) {
-      const becameActionable =
-        params.transition.changed.checkState?.to === "failing"
-        || params.transition.changed.mergeState?.to === "conflicting";
-      const status = becameActionable ? "missing-head" : "not-actionable";
-      return threadKeys.map((threadKey) => ({ threadKey, status }));
-    }
-
-    const outcomes: PrAutoDispatchOutcome[] = [];
-    for (const threadKey of threadKeys) {
-      outcomes.push(await this.dispatchForThread({
-        event,
-        observedAt: params.observedAt,
+    if (!params.backgroundPollingEnabled) {
+      return params.threadKeys.map((threadKey) => ({
         threadKey,
-        transition: params.transition,
+        status: "gate-off",
       }));
+    }
+
+    const eventKinds = getPrAutoDispatchEventKinds(params.pr);
+    const event = buildPrAutoDispatchEvent(params.pr);
+    const prKey = buildPullRequestStatusKey(params.pr);
+    const resolvedKinds = getDefinitivelyResolvedEventKinds(params.pr);
+    const outcomes: PrAutoDispatchOutcome[] = [];
+
+    for (const threadKey of params.threadKeys) {
+      const identity = parseThreadIdentityKey(threadKey);
+      if (!identity) {
+        outcomes.push({ threadKey, status: "disabled" });
+        continue;
+      }
+
+      await this.options.store.resolveThreadPrAutoDispatchIncident({
+        ...identity,
+        prKey,
+        resolvedKinds,
+        now: params.observedAt,
+      });
+
+      if (!event) {
+        const cancelled = await this.options.store
+          .cancelPendingThreadPrAutoDispatchForPr({
+            ...identity,
+            prKey,
+            now: params.observedAt,
+          });
+        if (cancelled) {
+          this.clearTimer(threadKey);
+          await this.notifyPending(identity, null);
+        }
+        outcomes.push({
+          threadKey,
+          status: eventKinds.length > 0 ? "missing-head" : "not-actionable",
+        });
+        continue;
+      }
+
+      const pending: ThreadPrAutoDispatchPending = {
+        fingerprint: event.fingerprint,
+        prKey: event.prKey,
+        prNumber: params.pr.number,
+        ...(params.pr.title ? { prTitle: params.pr.title } : {}),
+        prUrl: params.pr.url,
+        headSha: event.headSha,
+        eventKinds: event.eventKinds,
+        createdAt: params.observedAt,
+        scheduledAt: params.observedAt + PR_AUTO_DISPATCH_DELAY_MS,
+      };
+      const result = await this.options.store.scheduleThreadPrAutoDispatch({
+        ...identity,
+        pending,
+        prompt: buildPrAutoDispatchPrompt({
+          event,
+          observedAt: params.observedAt,
+          pr: params.pr,
+        }),
+        maxAttempts: MAX_PR_AUTO_DISPATCH_ATTEMPTS_PER_INCIDENT,
+        allowCancelledRearm: params.operatorInitiated,
+      });
+      outcomes.push({
+        threadKey,
+        status: result.status,
+        fingerprint: event.fingerprint,
+      });
+      if (result.pending) {
+        this.arm(identity, result.pending);
+      }
+      if (result.status === "scheduled") {
+        await this.notifyPending(identity, pending);
+      }
     }
     return outcomes;
   }
 
-  private async dispatchForThread(params: {
-    event: PrAutoDispatchEvent;
-    observedAt: number;
-    threadKey: string;
-    transition: PrStatusTransition;
-  }): Promise<PrAutoDispatchOutcome> {
-    const identity = parseThreadIdentityKey(params.threadKey);
-    if (!identity) {
-      return { threadKey: params.threadKey, status: "disabled" };
+  async cancelPending(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    fingerprint: string;
+  }): Promise<boolean> {
+    const cancelled = await this.options.store.cancelThreadPrAutoDispatch({
+      ...params,
+      now: this.now(),
+    });
+    if (cancelled) {
+      this.clearTimer(this.threadKey(params));
+      await this.notifyPending(params, null);
     }
-    if (this.pendingThreadKeys.has(params.threadKey)) {
-      return {
-        threadKey: params.threadKey,
-        status: "pending",
-        fingerprint: params.event.fingerprint,
-      };
+    return cancelled;
+  }
+
+  async cancelAllPendingForThread(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<boolean> {
+    const record = await this.options.store.getThreadPrAutoDispatchPending(params);
+    if (!record) return false;
+    return await this.cancelPending({
+      ...params,
+      fingerprint: record.pending.fingerprint,
+    });
+  }
+
+  async resume(): Promise<void> {
+    if (this.options.isBackgroundPollingEnabled?.() === false) return;
+    const records = await this.options.store.listPendingThreadPrAutoDispatches();
+    for (const record of records) {
+      this.arm(record, record.pending);
     }
+  }
 
-    this.pendingThreadKeys.add(params.threadKey);
-    try {
-      if (this.options.isBackgroundPollingEnabled?.() === false) {
-        return { threadKey: params.threadKey, status: "gate-off" };
-      }
-      const overlay = await this.options.store.getThreadOverlayState(identity);
-      if (overlay?.prAutoDispatchEnabled !== true) {
-        return { threadKey: params.threadKey, status: "disabled" };
-      }
-      if (!this.options.registry.canStartThreadTurnImmediately(identity)) {
-        return {
-          threadKey: params.threadKey,
-          status: "busy",
-          fingerprint: params.event.fingerprint,
-        };
-      }
-      if (this.options.isBackgroundPollingEnabled?.() === false) {
-        return { threadKey: params.threadKey, status: "gate-off" };
-      }
+  pause(): void {
+    for (const timer of this.timers.values()) {
+      clearTimeout(timer);
+    }
+    this.timers.clear();
+  }
 
-      const claim = await this.options.store.claimThreadPrAutoDispatch({
+  close(): void {
+    this.pause();
+  }
+
+  private arm(
+    identity: { backend: AppServerBackendKind; threadId: string },
+    pending: ThreadPrAutoDispatchPending,
+  ): void {
+    if (this.options.isBackgroundPollingEnabled?.() === false) return;
+    const threadKey = this.threadKey(identity);
+    this.clearTimer(threadKey);
+    const timer = setTimeout(() => {
+      this.timers.delete(threadKey);
+      void this.dispatchPending(identity, pending.fingerprint);
+    }, Math.max(0, pending.scheduledAt - this.now()));
+    timer.unref?.();
+    this.timers.set(threadKey, timer);
+  }
+
+  private async dispatchPending(
+    identity: { backend: AppServerBackendKind; threadId: string },
+    fingerprint: string,
+  ): Promise<void> {
+    if (this.options.isBackgroundPollingEnabled?.() === false) return;
+    const record = await this.options.store.getThreadPrAutoDispatchPending(identity);
+    if (!record || record.pending.fingerprint !== fingerprint) return;
+
+    const currentPr = this.options.getCurrentPr?.(record.pending.prKey);
+    const currentEvent = currentPr
+      ? buildPrAutoDispatchEvent(currentPr)
+      : undefined;
+    const attached = this.options.isPrAttached?.({
+      ...identity,
+      prKey: record.pending.prKey,
+    }) ?? true;
+    if (
+      !attached
+      || !currentEvent
+      || currentEvent.fingerprint !== fingerprint
+    ) {
+      await this.options.store.cancelThreadPrAutoDispatch({
         ...identity,
-        prKey: params.transition.prKey,
-        fingerprint: params.event.fingerprint,
-        maxAttempts: MAX_PR_AUTO_DISPATCH_ATTEMPTS_PER_INCIDENT,
+        fingerprint,
+        now: this.now(),
+        status: "superseded",
       });
-      if (!claim.claimed) {
-        return {
-          threadKey: params.threadKey,
-          status: claim.reason ?? "disabled",
-          fingerprint: params.event.fingerprint,
-        };
-      }
-
-      try {
-        if (this.options.isBackgroundPollingEnabled?.() === false) {
-          return {
-            threadKey: params.threadKey,
-            status: "gate-off",
-            fingerprint: params.event.fingerprint,
-          };
-        }
-        await this.options.registry.submitTurn({
-          ...identity,
-          input: [{
-            type: "text",
-            text: buildPrAutoDispatchPrompt({
-              ...params,
-              attemptCount: claim.attemptCount,
-            }),
-          }],
-          origin: "automation",
-          messageOrigin: { kind: "pwragent" },
-        });
-        return {
-          threadKey: params.threadKey,
-          status: "dispatched",
-          fingerprint: params.event.fingerprint,
-        };
-      } catch (error) {
-        return {
-          threadKey: params.threadKey,
-          status: "failed",
-          fingerprint: params.event.fingerprint,
-          error: error instanceof Error ? error.message : String(error),
-        };
-      }
-    } finally {
-      this.pendingThreadKeys.delete(params.threadKey);
+      await this.notifyPending(identity, null);
+      return;
     }
+
+    const now = this.now();
+    const begin = await this.options.store.beginThreadPrAutoDispatch({
+      ...identity,
+      fingerprint,
+      maxAttempts: MAX_PR_AUTO_DISPATCH_ATTEMPTS_PER_INCIDENT,
+      now,
+    });
+    if (begin.status !== "ready") {
+      if (begin.status === "disabled") {
+        await this.options.store.cancelThreadPrAutoDispatch({
+          ...identity,
+          fingerprint,
+          now,
+        });
+      }
+      if (begin.status !== "stale") {
+        await this.notifyPending(identity, null);
+      }
+      return;
+    }
+
+    if (this.options.isBackgroundPollingEnabled?.() === false) {
+      await this.restoreAfterBusy(identity, fingerprint, now);
+      return;
+    }
+
+    try {
+      const submission = await this.options.registry.submitTurnIfIdle({
+        ...identity,
+        input: [{
+          type: "text",
+          text: [
+            begin.record.prompt,
+            `- Automatic attempt: ${begin.attemptCount}/${MAX_PR_AUTO_DISPATCH_ATTEMPTS_PER_INCIDENT}`,
+          ].join("\n"),
+        }],
+        origin: "automation",
+        messageOrigin: { kind: "pwragent" },
+      });
+      if (submission.status === "busy") {
+        await this.restoreAfterBusy(identity, fingerprint, now);
+        return;
+      }
+      await this.options.store.finishThreadPrAutoDispatch({
+        ...identity,
+        fingerprint,
+        status: "dispatched",
+        now: this.now(),
+      });
+      await this.notifyPending(identity, null);
+    } catch {
+      await this.options.store.finishThreadPrAutoDispatch({
+        ...identity,
+        fingerprint,
+        status: "failed",
+        now: this.now(),
+      });
+      await this.notifyPending(identity, null);
+    }
+  }
+
+  private async restoreAfterBusy(
+    identity: { backend: AppServerBackendKind; threadId: string },
+    fingerprint: string,
+    now: number,
+  ): Promise<void> {
+    const pending = await this.options.store.restoreThreadPrAutoDispatchAfterBusy({
+      ...identity,
+      fingerprint,
+      scheduledAt: now + PR_AUTO_DISPATCH_DELAY_MS,
+      now,
+    });
+    if (!pending) return;
+    await this.notifyPending(identity, pending);
+    this.arm(identity, pending);
+  }
+
+  private async notifyPending(
+    identity: { backend: AppServerBackendKind; threadId: string },
+    pending: ThreadPrAutoDispatchPending | null,
+  ): Promise<void> {
+    await this.options.onPendingChanged?.({ ...identity, pending });
+  }
+
+  private clearTimer(threadKey: string): void {
+    const timer = this.timers.get(threadKey);
+    if (timer) clearTimeout(timer);
+    this.timers.delete(threadKey);
+  }
+
+  private threadKey(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): string {
+    return `${params.backend}:${params.threadId}`;
+  }
+
+  private now(): number {
+    return this.options.now?.() ?? Date.now();
   }
 }
 
-export function buildPrAutoDispatchEvent(
-  transition: PrStatusTransition,
-): PrAutoDispatchEvent | undefined {
-  const eventKinds: PrAutoDispatchEvent["eventKinds"] = [];
-  const headChanged = transition.changed.headSha !== undefined;
-  if (
-    transition.changed.checkState?.to === "failing"
-    || (headChanged && transition.pr.checkState === "failing")
-  ) {
-    eventKinds.push("ci-failure");
-  }
-  if (
-    transition.changed.mergeState?.to === "conflicting"
-    || (headChanged && transition.pr.mergeState === "conflicting")
-  ) {
-    eventKinds.push("merge-conflict");
-  }
-  if (eventKinds.length === 0) {
-    return undefined;
-  }
+export function getPrAutoDispatchEventKinds(
+  pr: PrSummary,
+): ThreadPrAutoDispatchEventKind[] {
+  const eventKinds: ThreadPrAutoDispatchEventKind[] = [];
+  if (pr.checkState === "failing") eventKinds.push("ci-failure");
+  if (pr.mergeState === "conflicting") eventKinds.push("merge-conflict");
+  return eventKinds;
+}
 
-  const headSha = transition.headSha ?? transition.pr.headSha;
-  if (!headSha) {
-    return undefined;
-  }
+export function buildPrAutoDispatchEvent(
+  pr: PrSummary,
+): PrAutoDispatchEvent | undefined {
+  const eventKinds = getPrAutoDispatchEventKinds(pr);
+  if (eventKinds.length === 0 || !pr.headSha) return undefined;
+  const prKey = buildPullRequestStatusKey(pr);
   const fingerprintPayload = {
-    version: 1,
-    prKey: transition.prKey,
-    headSha,
+    version: 2,
+    prKey,
+    headSha: pr.headSha,
     eventKinds,
-    checkState: eventKinds.includes("ci-failure")
-      ? transition.pr.checkState
-      : undefined,
-    mergeState: eventKinds.includes("merge-conflict")
-      ? transition.pr.mergeState
-      : undefined,
+    checkState: eventKinds.includes("ci-failure") ? pr.checkState : undefined,
+    mergeState: eventKinds.includes("merge-conflict") ? pr.mergeState : undefined,
   };
   return {
     eventKinds,
-    headSha,
+    headSha: pr.headSha,
+    prKey,
     fingerprint: createHash("sha256")
       .update(JSON.stringify(fingerprintPayload))
       .digest("hex"),
   };
 }
 
-function prIsHealthy(transition: PrStatusTransition): boolean {
-  return (
-    transition.pr.checkState !== "failing"
-    && transition.pr.mergeState !== "conflicting"
-  );
+function getDefinitivelyResolvedEventKinds(
+  pr: PrSummary,
+): ThreadPrAutoDispatchEventKind[] {
+  const resolved: ThreadPrAutoDispatchEventKind[] = [];
+  // Pending/unknown are intentionally not healthy: a repair push normally
+  // passes through pending before it can fail, and resetting here would turn
+  // the finite attempt budget into an unbounded loop.
+  if (pr.checkState === "passing") resolved.push("ci-failure");
+  if (pr.mergeState === "mergeable") resolved.push("merge-conflict");
+  return resolved;
 }
 
 function buildPrAutoDispatchPrompt(params: {
-  attemptCount: number;
   event: PrAutoDispatchEvent;
   observedAt: number;
-  transition: PrStatusTransition;
+  pr: PrSummary;
 }): string {
-  const changes = Object.entries(params.transition.changed)
-    .map(([field, change]) =>
-      `${field}: ${String(change?.from ?? "unknown")} -> ${String(change?.to ?? "unknown")}`,
-    )
-    .join("\n");
   return [
-    "PwrAgent automatically dispatched this bounded repair turn because an attached pull request entered an actionable state.",
+    "PwrAgent scheduled this bounded repair turn because an attached pull request needs attention.",
     "",
     "Pull request event",
-    `- PR: ${params.transition.prKey}`,
-    `- URL: ${params.transition.url}`,
-    `- Title: ${params.transition.title ?? "(untitled)"}`,
+    `- PR: ${params.event.prKey}`,
+    `- URL: ${params.pr.url}`,
+    `- Title: ${params.pr.title ?? "(untitled)"}`,
     `- Head SHA: ${params.event.headSha}`,
     `- Event kinds: ${params.event.eventKinds.join(", ")}`,
-    `- Check state: ${params.transition.pr.checkState ?? "unknown"}`,
-    `- Merge state: ${params.transition.pr.mergeState ?? "unknown"}`,
+    `- Check state: ${params.pr.checkState ?? "unknown"}`,
+    `- Merge state: ${params.pr.mergeState ?? "unknown"}`,
     `- Observed at: ${new Date(params.observedAt).toISOString()}`,
-    `- Automatic attempt: ${params.attemptCount}/${MAX_PR_AUTO_DISPATCH_ATTEMPTS_PER_INCIDENT}`,
     `- Dedupe fingerprint: ${params.event.fingerprint}`,
-    "",
-    "Observed transition",
-    changes || "(no details)",
     "",
     "Investigate the current PR checks or merge conflict, make only scoped fixes, run relevant validation, and update the attached PR when appropriate. Verify current provider state before changing code. If the condition is external, transient, or no safe fix is available, explain that and stop; do not create another retry loop.",
   ].join("\n");

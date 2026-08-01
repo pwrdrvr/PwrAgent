@@ -574,6 +574,26 @@ function createOverlayStoreMock(params?: {
       overlays.set(key, next);
       return next;
     },
+    setThreadPrAutoDispatchEnabled: async ({
+      backend,
+      threadId,
+      enabled,
+    }: {
+      backend: AppServerBackendKind;
+      threadId: string;
+      enabled: boolean;
+    }) => {
+      const key = `${backend}:${threadId}`;
+      const current = overlays.get(key) ?? {
+        backend,
+        threadId,
+        executionMode: "default" as const,
+        extraLinkedDirectories: [],
+      };
+      const next = { ...current, prAutoDispatchEnabled: enabled };
+      overlays.set(key, next);
+      return next;
+    },
     turnOffCodexFastEverywhere: async () => {
       let threadCount = 0;
       const updatedThreadIds: string[] = [];
@@ -2121,6 +2141,34 @@ function rememberCollapsedDirectoryWithPinnedThread(params: {
 }
 
 describe("DesktopBackendRegistry", () => {
+  it("evaluates the current PR state when auto-fix is enabled", async () => {
+    const preferenceChanged = vi.fn(async () => undefined);
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+    });
+    registry.setThreadPrAutoDispatchHandler({
+      preferenceChanged,
+      cancelPending: vi.fn(async () => true),
+    });
+
+    try {
+      await registry.setThreadPrAutoDispatch({
+        backend: "codex",
+        threadId: "thread-1",
+        enabled: true,
+      });
+      expect(preferenceChanged).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        enabled: true,
+      });
+    } finally {
+      await registry.close();
+    }
+  });
+
   it("routes structured generation to the configured Codex backend", async () => {
     const codexClient = new MockBackendClient({ threads: [] });
     const generateStructuredObject = vi.fn(async () => ({

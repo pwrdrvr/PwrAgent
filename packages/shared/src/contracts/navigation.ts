@@ -54,6 +54,8 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
   inbox: ThreadInboxState;
   /** Automatically dispatch bounded repair turns for newly failing/conflicting attached PRs. */
   prAutoDispatchEnabled?: boolean;
+  /** Durable, cancellable PR repair waiting for its main-process send time. */
+  prAutoDispatchPending?: ThreadPrAutoDispatchPending;
   /** Last provider model-migration revision acknowledged by this thread. */
   modelMigrationRevision?: string;
   /** Last explicit model/reasoning change made outside a migration. */
@@ -264,6 +266,22 @@ export type PrSummary = {
    */
   commitShas?: string[];
   url: string;
+};
+
+export type ThreadPrAutoDispatchEventKind =
+  | "ci-failure"
+  | "merge-conflict";
+
+export type ThreadPrAutoDispatchPending = {
+  fingerprint: string;
+  prKey: string;
+  prNumber: number;
+  prTitle?: string;
+  prUrl: string;
+  headSha: string;
+  eventKinds: ThreadPrAutoDispatchEventKind[];
+  createdAt: number;
+  scheduledAt: number;
 };
 
 export function normalizePullRequestProvider(
@@ -1253,10 +1271,8 @@ export type ThreadOverlayState = {
   fastMode?: boolean;
   /** Saved operator preference; the global background-polling flag gates its effect. */
   prAutoDispatchEnabled?: boolean;
-  /** Durable one-shot claims that prevent replaying an automatic PR repair after restart. */
-  prAutoDispatchHandledFingerprints?: string[];
-  /** Consecutive automatic attempts per PR identity, reset after the PR becomes healthy. */
-  prAutoDispatchAttemptCounts?: Record<string, number>;
+  /** Joined from the durable dispatch table for navigation; never stored in overlay JSON. */
+  prAutoDispatchPending?: ThreadPrAutoDispatchPending;
   gitBranch?: string;
   observedGitBranch?: string;
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;

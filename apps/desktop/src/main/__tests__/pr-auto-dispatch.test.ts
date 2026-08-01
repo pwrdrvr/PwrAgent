@@ -3,23 +3,29 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  buildPullRequestStatusKey,
   materializeNavigationThreads,
   type AppServerTurnInputItem,
   type PrSummary,
+  type ThreadPrAutoDispatchPending,
 } from "@pwragent/shared";
 import { StateDb } from "../state/state-db";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import {
   MAX_PR_AUTO_DISPATCH_ATTEMPTS_PER_INCIDENT,
+  PR_AUTO_DISPATCH_DELAY_MS,
   PrAutoDispatchCoordinator,
 } from "../pr-status/pr-auto-dispatch";
-import { computePrStatusTransition } from "../pr-status/pr-transitions";
 
 let stateDb: StateDb;
 let store: SqliteOverlayStore;
 let tempDir: string;
+let clock: number;
+const extraDbs: StateDb[] = [];
 
 beforeEach(async () => {
+  vi.useFakeTimers();
+  clock = 1_000;
   tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-pr-auto-dispatch-"));
   stateDb = StateDb.open(path.join(tempDir, "state.db"));
   store = new SqliteOverlayStore(stateDb);
@@ -31,8 +37,10 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  for (const db of extraDbs.splice(0)) db.close();
   stateDb.close();
   rmSync(tempDir, { recursive: true, force: true });
+  vi.useRealTimers();
 });
 
 function pr(overrides: Partial<PrSummary> = {}): PrSummary {
@@ -43,8 +51,8 @@ function pr(overrides: Partial<PrSummary> = {}): PrSummary {
     org: "pwrdrvr",
     repo: "PwrAgent",
     title: "Auto-fix attached PR failures",
-    state: "pending",
-    checkState: "pending",
+    state: "failing",
+    checkState: "failing",
     lifecycleState: "open",
     reviewState: "ready_for_review",
     mergeState: "mergeable",
@@ -55,79 +63,75 @@ function pr(overrides: Partial<PrSummary> = {}): PrSummary {
   };
 }
 
-function failingTransition(headSha = "a".repeat(40)) {
-  return computePrStatusTransition(
-    pr({ headSha, checkState: "pending", state: "pending" }),
-    pr({ headSha, checkState: "failing", state: "failing" }),
-    ["codex:thread-1"],
-  )!;
-}
-
-function passingTransition(headSha = "a".repeat(40)) {
-  return computePrStatusTransition(
-    pr({ headSha, checkState: "failing", state: "failing" }),
-    pr({ headSha, checkState: "passing", state: "passing" }),
-    ["codex:thread-1"],
-  )!;
-}
-
-function conflictingTransition(headSha = "a".repeat(40)) {
-  return computePrStatusTransition(
-    pr({ headSha, mergeState: "mergeable" }),
-    pr({ headSha, mergeState: "conflicting" }),
-    ["codex:thread-1"],
-  )!;
-}
-
-function newFailingHeadTransition(previousHead: string, nextHead: string) {
-  return computePrStatusTransition(
-    pr({
-      headSha: previousHead,
-      commitShas: [previousHead],
-      checkState: "failing",
-      state: "failing",
-    }),
-    pr({
-      headSha: nextHead,
-      commitShas: [nextHead],
-      checkState: "failing",
-      state: "failing",
-    }),
-    ["codex:thread-1"],
-  )!;
-}
-
-function createHarness(options: { busy?: boolean } = {}) {
-  const submitTurn = vi.fn(async (_request: {
+function createHarness(options: {
+  targetStore?: SqliteOverlayStore;
+  busy?: boolean;
+  gate?: boolean;
+  currentPr?: PrSummary;
+} = {}) {
+  let busy = options.busy ?? false;
+  let gate = options.gate ?? true;
+  let currentPr = options.currentPr ?? pr();
+  const pendingUpdates: Array<ThreadPrAutoDispatchPending | null> = [];
+  const submitTurnIfIdle = vi.fn(async (_request: {
     input: AppServerTurnInputItem[];
-  }) => ({
-    status: "started" as const,
-    turnId: "turn-auto-1",
-  }));
+  }) => busy
+    ? { status: "busy" as const }
+    : { status: "started" as const, turnId: "turn-auto-1" });
   const coordinator = new PrAutoDispatchCoordinator({
-    store,
-    registry: {
-      canStartThreadTurnImmediately: () => !options.busy,
-      submitTurn,
+    store: options.targetStore ?? store,
+    registry: { submitTurnIfIdle },
+    getCurrentPr: () => currentPr,
+    isPrAttached: () => true,
+    isBackgroundPollingEnabled: () => gate,
+    now: () => clock,
+    onPendingChanged: ({ pending }) => {
+      pendingUpdates.push(pending);
     },
   });
-  return { coordinator, submitTurn };
+  return {
+    coordinator,
+    pendingUpdates,
+    setBusy: (value: boolean) => {
+      busy = value;
+    },
+    setCurrentPr: (value: PrSummary) => {
+      currentPr = value;
+    },
+    setGate: (value: boolean) => {
+      gate = value;
+    },
+    submitTurnIfIdle,
+  };
+}
+
+async function observe(
+  coordinator: PrAutoDispatchCoordinator,
+  currentPr = pr(),
+  backgroundPollingEnabled = true,
+) {
+  return await coordinator.handleStatusSnapshot({
+    pr: currentPr,
+    threadKeys: ["codex:thread-1"],
+    observedAt: clock,
+    backgroundPollingEnabled,
+  });
+}
+
+async function runCountdown(): Promise<void> {
+  clock += PR_AUTO_DISPATCH_DELAY_MS;
+  await vi.advanceTimersByTimeAsync(PR_AUTO_DISPATCH_DELAY_MS);
 }
 
 describe("PrAutoDispatchCoordinator", () => {
-  it("does nothing when the global background-polling gate is off", async () => {
-    const { coordinator, submitTurn } = createHarness();
-    const outcomes = await coordinator.handleTransition({
-      transition: failingTransition(),
-      source: "background-poll",
-      observedAt: 1_000,
-      backgroundPollingEnabled: false,
-    });
+  it("keeps the saved preference but schedules nothing while the global gate is off", async () => {
+    const harness = createHarness({ gate: false });
+    const outcomes = await observe(harness.coordinator, pr(), false);
 
     expect(outcomes).toEqual([
       { threadKey: "codex:thread-1", status: "gate-off" },
     ]);
-    expect(submitTurn).not.toHaveBeenCalled();
+    expect(harness.submitTurnIfIdle).not.toHaveBeenCalled();
     expect(
       (await store.getThreadOverlayState({
         backend: "codex",
@@ -136,73 +140,24 @@ describe("PrAutoDispatchCoordinator", () => {
     ).toBe(true);
   });
 
-  it("rechecks the global gate before claiming a dispatch", async () => {
-    let backgroundPollingEnabled = true;
-    const submitTurn = vi.fn(async () => ({
-      status: "started" as const,
-      turnId: "turn-auto-1",
-    }));
-    const coordinator = new PrAutoDispatchCoordinator({
-      store,
-      registry: {
-        canStartThreadTurnImmediately: () => {
-          backgroundPollingEnabled = false;
-          return true;
-        },
-        submitTurn,
-      },
-      isBackgroundPollingEnabled: () => backgroundPollingEnabled,
-    });
+  it("schedules the current failed PR immediately and exposes a 30-second on-deck item", async () => {
+    const harness = createHarness();
+    const outcomes = await observe(harness.coordinator);
 
-    const outcomes = await coordinator.handleTransition({
-      transition: failingTransition(),
-      source: "background-poll",
-      observedAt: 1_000,
-      backgroundPollingEnabled: true,
-    });
-
-    expect(outcomes).toEqual([
-      { threadKey: "codex:thread-1", status: "gate-off" },
-    ]);
-    expect(submitTurn).not.toHaveBeenCalled();
+    expect(outcomes[0]).toMatchObject({ status: "scheduled" });
+    expect(harness.submitTurnIfIdle).not.toHaveBeenCalled();
     const overlay = await store.getThreadOverlayState({
       backend: "codex",
       threadId: "thread-1",
     });
-    expect(overlay?.prAutoDispatchHandledFingerprints).toBeUndefined();
-    expect(overlay?.prAutoDispatchAttemptCounts).toBeUndefined();
-  });
-
-  it("claims before dispatch and never replays the same fingerprint after restart", async () => {
-    const first = createHarness();
-    const transition = failingTransition();
-    const firstOutcomes = await first.coordinator.handleTransition({
-      transition,
-      source: "background-poll",
-      observedAt: 1_000,
-      backgroundPollingEnabled: true,
+    expect(overlay?.prAutoDispatchPending).toMatchObject({
+      prNumber: 1105,
+      eventKinds: ["ci-failure"],
+      scheduledAt: clock + PR_AUTO_DISPATCH_DELAY_MS,
     });
-
-    expect(firstOutcomes[0]?.status).toBe("dispatched");
-    expect(first.submitTurn).toHaveBeenCalledTimes(1);
-    expect(first.submitTurn.mock.calls[0]?.[0].input[0]).toEqual(
-      expect.objectContaining({
-        type: "text",
-        text: expect.stringContaining(`- Head SHA: ${"a".repeat(40)}`),
-      }),
-    );
-
-    const dbPath = path.join(tempDir, "state.db");
-    stateDb.close();
-    stateDb = StateDb.open(dbPath);
-    store = new SqliteOverlayStore(stateDb);
-    const restoredOverlay = await store.getThreadOverlayState({
-      backend: "codex",
-      threadId: "thread-1",
-    });
-    const restoredThread = materializeNavigationThreads({
+    const thread = materializeNavigationThreads({
       firstSnapshot: true,
-      overlayByThreadKey: { "codex:thread-1": restoredOverlay },
+      overlayByThreadKey: { "codex:thread-1": overlay },
       previousKnownThreadKeys: [],
       threads: [{
         id: "thread-1",
@@ -212,123 +167,209 @@ describe("PrAutoDispatchCoordinator", () => {
         linkedDirectories: [],
       }],
     })[0];
-    expect(restoredThread?.prAutoDispatchEnabled).toBe(true);
-    const afterRestart = createHarness();
-    const replayOutcomes = await afterRestart.coordinator.handleTransition({
-      transition,
-      source: "background-poll",
-      observedAt: 2_000,
-      backgroundPollingEnabled: true,
-    });
-
-    expect(replayOutcomes[0]?.status).toBe("duplicate");
-    expect(afterRestart.submitTurn).not.toHaveBeenCalled();
-  });
-
-  it("does not queue an automatic turn while the thread is active or queued", async () => {
-    const busy = createHarness({ busy: true });
-    const transition = failingTransition();
-    const busyOutcomes = await busy.coordinator.handleTransition({
-      transition,
-      source: "background-poll",
-      observedAt: 1_000,
-      backgroundPollingEnabled: true,
-    });
-
-    expect(busyOutcomes[0]?.status).toBe("busy");
-    expect(busy.submitTurn).not.toHaveBeenCalled();
-
-    const idle = createHarness();
-    const idleOutcomes = await idle.coordinator.handleTransition({
-      transition,
-      source: "background-poll",
-      observedAt: 2_000,
-      backgroundPollingEnabled: true,
-    });
-    expect(idleOutcomes[0]?.status).toBe("dispatched");
-    expect(idle.submitTurn).toHaveBeenCalledTimes(1);
-  });
-
-  it("single-flights concurrent observations while dispatch is pending", async () => {
-    let releaseSubmit!: () => void;
-    const submitPending = new Promise<void>((resolve) => {
-      releaseSubmit = resolve;
-    });
-    const submitTurn = vi.fn(async (_request: {
-      input: AppServerTurnInputItem[];
-    }) => {
-      await submitPending;
-      return { status: "started" as const, turnId: "turn-auto-1" };
-    });
-    const coordinator = new PrAutoDispatchCoordinator({
-      store,
-      registry: {
-        canStartThreadTurnImmediately: () => true,
-        submitTurn,
-      },
-    });
-    const request = {
-      transition: conflictingTransition(),
-      source: "background-poll",
-      observedAt: 1_000,
-      backgroundPollingEnabled: true,
-    };
-    const first = coordinator.handleTransition(request);
-    await vi.waitFor(() => expect(submitTurn).toHaveBeenCalledTimes(1));
-    const second = await coordinator.handleTransition(request);
-
-    expect(second[0]?.status).toBe("pending");
-    releaseSubmit();
-    expect((await first)[0]?.status).toBe("dispatched");
-    expect(submitTurn).toHaveBeenCalledTimes(1);
-    expect(submitTurn.mock.calls[0]?.[0].input[0]).toEqual(
-      expect.objectContaining({
-        text: expect.stringContaining("- Event kinds: merge-conflict"),
-      }),
+    expect(thread?.prAutoDispatchPending?.scheduledAt).toBe(
+      clock + PR_AUTO_DISPATCH_DELAY_MS,
     );
   });
 
-  it("re-arms for a new head fingerprint but caps a continuous failure incident", async () => {
-    const { coordinator, submitTurn } = createHarness();
-    const heads = ["a", "b", "c"].map((value) => value.repeat(40));
-    const transitions = [
-      failingTransition(heads[0]!),
-      newFailingHeadTransition(heads[0]!, heads[1]!),
-    ];
-    for (const [index, transition] of transitions.entries()) {
-      const outcomes = await coordinator.handleTransition({
-        transition,
-        source: "background-poll",
-        observedAt: 1_000 + index,
-        backgroundPollingEnabled: true,
-      });
-      expect(outcomes[0]?.status).toBe("dispatched");
-    }
+  it("dispatches only after the countdown and includes structured PR context", async () => {
+    const harness = createHarness();
+    await observe(harness.coordinator);
 
-    const capped = await coordinator.handleTransition({
-      transition: newFailingHeadTransition(heads[1]!, heads[2]!),
-      source: "background-poll",
-      observedAt: 2_000,
-      backgroundPollingEnabled: true,
+    await vi.advanceTimersByTimeAsync(PR_AUTO_DISPATCH_DELAY_MS - 1);
+    expect(harness.submitTurnIfIdle).not.toHaveBeenCalled();
+    clock += PR_AUTO_DISPATCH_DELAY_MS;
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(harness.submitTurnIfIdle).toHaveBeenCalledTimes(1);
+    expect(harness.submitTurnIfIdle.mock.calls[0]?.[0].input[0]).toEqual(
+      expect.objectContaining({
+        type: "text",
+        text: expect.stringContaining(`- Head SHA: ${"a".repeat(40)}`),
+      }),
+    );
+    expect(
+      await store.getThreadPrAutoDispatchPending({
+        backend: "codex",
+        threadId: "thread-1",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("lets the operator cancel and does not recreate the same fingerprint", async () => {
+    const harness = createHarness();
+    await observe(harness.coordinator);
+    const pending = await store.getThreadPrAutoDispatchPending({
+      backend: "codex",
+      threadId: "thread-1",
     });
-    expect(capped[0]?.status).toBe("attempt-limit");
-    expect(submitTurn).toHaveBeenCalledTimes(
+
+    expect(await harness.coordinator.cancelPending({
+      backend: "codex",
+      threadId: "thread-1",
+      fingerprint: pending!.pending.fingerprint,
+    })).toBe(true);
+    expect((await observe(harness.coordinator))[0]?.status).toBe("duplicate");
+    await runCountdown();
+    expect(harness.submitTurnIfIdle).not.toHaveBeenCalled();
+
+    const reenabled = await harness.coordinator.handleStatusSnapshot({
+      pr: pr(),
+      threadKeys: ["codex:thread-1"],
+      observedAt: clock,
+      backgroundPollingEnabled: true,
+      operatorInitiated: true,
+    });
+    expect(reenabled[0]?.status).toBe("scheduled");
+  });
+
+  it("survives restart without replaying or losing a pending repair", async () => {
+    const first = createHarness();
+    await observe(first.coordinator);
+    first.coordinator.close();
+
+    const dbPath = path.join(tempDir, "state.db");
+    stateDb.close();
+    stateDb = StateDb.open(dbPath);
+    store = new SqliteOverlayStore(stateDb);
+    const afterRestart = createHarness();
+    await afterRestart.coordinator.resume();
+    expect((await observe(afterRestart.coordinator))[0]?.status).toBe("pending");
+
+    await runCountdown();
+    expect(afterRestart.submitTurnIfIdle).toHaveBeenCalledTimes(1);
+    expect((await observe(afterRestart.coordinator))[0]?.status).toBe("duplicate");
+  });
+
+  it("atomically rejects busy submission and restores the countdown without spending an attempt", async () => {
+    const harness = createHarness({ busy: true });
+    await observe(harness.coordinator);
+    await runCountdown();
+
+    expect(harness.submitTurnIfIdle).toHaveBeenCalledTimes(1);
+    expect(await store.getThreadPrAutoDispatchAttemptCount({
+      backend: "codex",
+      threadId: "thread-1",
+      prKey: buildPullRequestStatusKey(pr()),
+    })).toBe(0);
+    expect((await store.getThreadPrAutoDispatchPending({
+      backend: "codex",
+      threadId: "thread-1",
+    }))?.pending.scheduledAt).toBe(clock + PR_AUTO_DISPATCH_DELAY_MS);
+
+    harness.setBusy(false);
+    await runCountdown();
+    expect(harness.submitTurnIfIdle).toHaveBeenCalledTimes(2);
+    expect(await store.getThreadPrAutoDispatchAttemptCount({
+      backend: "codex",
+      threadId: "thread-1",
+      prKey: buildPullRequestStatusKey(pr()),
+    })).toBe(1);
+  });
+
+  it("does not reset the finite incident budget while a repair head is pending", async () => {
+    const harness = createHarness();
+    const heads = ["a", "b", "c", "d"].map((value) => value.repeat(40));
+
+    harness.setCurrentPr(pr({ headSha: heads[0] }));
+    await observe(harness.coordinator, pr({ headSha: heads[0] }));
+    await runCountdown();
+
+    const pendingB = pr({
+      headSha: heads[1],
+      state: "pending",
+      checkState: "pending",
+    });
+    harness.setCurrentPr(pendingB);
+    await observe(harness.coordinator, pendingB);
+    expect(await store.getThreadPrAutoDispatchAttemptCount({
+      backend: "codex",
+      threadId: "thread-1",
+      prKey: buildPullRequestStatusKey(pr()),
+    })).toBe(1);
+
+    const failingB = pr({ headSha: heads[1] });
+    harness.setCurrentPr(failingB);
+    await observe(harness.coordinator, failingB);
+    await runCountdown();
+
+    const pendingC = pr({
+      headSha: heads[2],
+      state: "pending",
+      checkState: "pending",
+    });
+    harness.setCurrentPr(pendingC);
+    await observe(harness.coordinator, pendingC);
+    const failingC = pr({ headSha: heads[2] });
+    harness.setCurrentPr(failingC);
+    expect((await observe(harness.coordinator, failingC))[0]?.status).toBe(
+      "attempt-limit",
+    );
+    expect(harness.submitTurnIfIdle).toHaveBeenCalledTimes(
       MAX_PR_AUTO_DISPATCH_ATTEMPTS_PER_INCIDENT,
     );
 
-    await coordinator.handleTransition({
-      transition: passingTransition("c".repeat(40)),
-      source: "background-poll",
-      observedAt: 3_000,
-      backgroundPollingEnabled: true,
+    const passingC = pr({
+      headSha: heads[2],
+      state: "passing",
+      checkState: "passing",
     });
-    const rearmed = await coordinator.handleTransition({
-      transition: failingTransition("d".repeat(40)),
-      source: "background-poll",
-      observedAt: 4_000,
-      backgroundPollingEnabled: true,
+    harness.setCurrentPr(passingC);
+    await observe(harness.coordinator, passingC);
+    const failingD = pr({ headSha: heads[3] });
+    harness.setCurrentPr(failingD);
+    expect((await observe(harness.coordinator, failingD))[0]?.status).toBe(
+      "scheduled",
+    );
+  });
+
+  it("uses a unique SQLite claim across two app instances", async () => {
+    const secondDb = StateDb.open(path.join(tempDir, "state.db"));
+    extraDbs.push(secondDb);
+    const secondStore = new SqliteOverlayStore(secondDb);
+    const first = createHarness();
+    const second = createHarness({ targetStore: secondStore });
+
+    const [firstOutcome, secondOutcome] = await Promise.all([
+      observe(first.coordinator),
+      observe(second.coordinator),
+    ]);
+    expect([firstOutcome[0]?.status, secondOutcome[0]?.status].sort()).toEqual([
+      "pending",
+      "scheduled",
+    ]);
+
+    await runCountdown();
+    expect(
+      first.submitTurnIfIdle.mock.calls.length
+      + second.submitTurnIfIdle.mock.calls.length,
+    ).toBe(1);
+  });
+
+  it("drops a scheduled repair when the PR recovers or is detached before send", async () => {
+    let attached = true;
+    let currentPr = pr();
+    const submitTurnIfIdle = vi.fn(async () => ({
+      status: "started" as const,
+      turnId: "turn-auto-1",
+    }));
+    const coordinator = new PrAutoDispatchCoordinator({
+      store,
+      registry: { submitTurnIfIdle },
+      getCurrentPr: () => currentPr,
+      isPrAttached: () => attached,
+      isBackgroundPollingEnabled: () => true,
+      now: () => clock,
     });
-    expect(rearmed[0]?.status).toBe("dispatched");
-    expect(submitTurn).toHaveBeenCalledTimes(3);
+    await observe(coordinator, currentPr);
+    currentPr = pr({ state: "passing", checkState: "passing" });
+    await runCountdown();
+    expect(submitTurnIfIdle).not.toHaveBeenCalled();
+
+    currentPr = pr({ headSha: "b".repeat(40) });
+    await observe(coordinator, currentPr);
+    attached = false;
+    await runCountdown();
+    expect(submitTurnIfIdle).not.toHaveBeenCalled();
   });
 });

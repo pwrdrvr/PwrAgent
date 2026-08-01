@@ -3,7 +3,10 @@ import type {
   MessagingChannelKind,
   MessagingConversationKind,
 } from "./messaging";
-import type { PrSummary } from "./navigation";
+import type {
+  PrSummary,
+  ThreadPrAutoDispatchPending,
+} from "./navigation";
 import type { ThreadPricingSummary, ThreadUsageLineRecord } from "../token-usage-pricing";
 
 export type AppServerBuiltinBackendKind = "codex" | "grok";
@@ -1312,6 +1315,13 @@ export type AppServerNotification =
       params: {
         threadId: string;
         enabled: boolean;
+      };
+    }
+  | {
+      method: "thread/prAutoDispatch/pendingUpdated";
+      params: {
+        threadId: string;
+        pending: ThreadPrAutoDispatchPending | null;
       };
     }
   | {

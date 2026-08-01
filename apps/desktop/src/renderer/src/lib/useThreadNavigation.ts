@@ -717,6 +717,8 @@ function threadSummariesEqual(
     left.serviceTier === right.serviceTier &&
     left.fastMode === right.fastMode &&
     left.prAutoDispatchEnabled === right.prAutoDispatchEnabled &&
+    JSON.stringify(left.prAutoDispatchPending ?? null) ===
+      JSON.stringify(right.prAutoDispatchPending ?? null) &&
     JSON.stringify(left.acpRuntime ?? {}) === JSON.stringify(right.acpRuntime ?? {}) &&
     JSON.stringify(left.workspaceHandoff ?? {}) ===
       JSON.stringify(right.workspaceHandoff ?? {}) &&
@@ -1628,6 +1630,26 @@ function applyThreadPrAutoDispatchUpdate(
   return changed ? { ...snapshot, threads } : snapshot;
 }
 
+function applyThreadPrAutoDispatchPendingUpdate(
+  snapshot: NavigationSnapshot | undefined,
+  params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    pending: NavigationThreadSummary["prAutoDispatchPending"];
+  },
+): NavigationSnapshot | undefined {
+  if (!snapshot) return snapshot;
+  let changed = false;
+  const threads = snapshot.threads.map((thread) => {
+    if (thread.source !== params.backend || thread.id !== params.threadId) {
+      return thread;
+    }
+    changed = true;
+    return { ...thread, prAutoDispatchPending: params.pending };
+  });
+  return changed ? { ...snapshot, threads } : snapshot;
+}
+
 function applyThreadAcpRuntimeUpdate(
   snapshot: NavigationSnapshot | undefined,
   params: {
@@ -2345,6 +2367,10 @@ export function useThreadNavigation(
     thread: NavigationThreadSummary,
     enabled: boolean,
   ) => Promise<void>;
+  cancelThreadPrAutoDispatch: (
+    thread: NavigationThreadSummary,
+    fingerprint: string,
+  ) => Promise<void>;
   setThreadModelSettingsError?: string;
   updatingThreadExecutionMode?: ThreadExecutionMode;
   updateDirectoryLaunchpad: (
@@ -2432,6 +2458,8 @@ export function useThreadNavigation(
     desktopApi?.cancelThreadExecutionModeQueue;
   const setThreadModelSettings = desktopApi?.setThreadModelSettings;
   const setThreadPrAutoDispatchRequest = desktopApi?.setThreadPrAutoDispatch;
+  const cancelThreadPrAutoDispatchRequest =
+    desktopApi?.cancelThreadPrAutoDispatch;
   const setNavigationBrowseModeRequest = desktopApi?.setNavigationBrowseMode;
   const enabled = options.enabled ?? true;
   const lightweightNavigationRefresh = options.lightweightNavigationRefresh ?? false;
@@ -3354,6 +3382,28 @@ export function useThreadNavigation(
         setOptimisticThread((current) =>
           current?.source === event.backend && current.id === params.threadId
             ? { ...current, prAutoDispatchEnabled: params.enabled }
+            : current
+        );
+        return;
+      }
+
+      if (method === "thread/prAutoDispatch/pendingUpdated") {
+        const params = event.notification.params as {
+          threadId: string;
+          pending: NavigationThreadSummary["prAutoDispatchPending"] | null;
+        };
+        const pending = params.pending ?? undefined;
+        setState((current) => ({
+          ...current,
+          response: applyThreadPrAutoDispatchPendingUpdate(current.response, {
+            backend: event.backend,
+            threadId: params.threadId,
+            pending,
+          }),
+        }));
+        setOptimisticThread((current) =>
+          current?.source === event.backend && current.id === params.threadId
+            ? { ...current, prAutoDispatchPending: pending }
             : current
         );
         return;
@@ -5997,6 +6047,21 @@ export function useThreadNavigation(
     [refresh, setThreadPrAutoDispatchRequest],
   );
 
+  const cancelPendingThreadPrAutoDispatch = useCallback(
+    async (
+      thread: NavigationThreadSummary,
+      fingerprint: string,
+    ): Promise<void> => {
+      if (!cancelThreadPrAutoDispatchRequest) return;
+      await cancelThreadPrAutoDispatchRequest({
+        backend: thread.source,
+        threadId: thread.id,
+        fingerprint,
+      });
+    },
+    [cancelThreadPrAutoDispatchRequest],
+  );
+
   const updateAcpSessionRuntimeOption = useCallback(
     async (
       thread: NavigationThreadSummary,
@@ -6111,6 +6176,7 @@ export function useThreadNavigation(
     cancelThreadExecutionModeQueue,
     setThreadModelSettings: updateThreadModelSettings,
     setThreadPrAutoDispatch: updateThreadPrAutoDispatch,
+    cancelThreadPrAutoDispatch: cancelPendingThreadPrAutoDispatch,
     setThreadModelSettingsError,
     updatingThreadExecutionMode,
     updateDirectoryLaunchpad,

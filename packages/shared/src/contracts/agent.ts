@@ -372,6 +372,15 @@ export type SetThreadPrAutoDispatchRequest = {
 
 export type SetThreadPrAutoDispatchResponse = SetThreadPrAutoDispatchRequest;
 
+export type CancelThreadPrAutoDispatchRequest = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  fingerprint: string;
+};
+
+export type CancelThreadPrAutoDispatchResponse =
+  CancelThreadPrAutoDispatchRequest & { cancelled: boolean };
+
 export type ApplyThreadModelMigrationRequest = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;

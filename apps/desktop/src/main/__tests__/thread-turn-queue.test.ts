@@ -100,6 +100,57 @@ describe("ThreadTurnQueue", () => {
     ]);
   });
 
+  it("rejects an immediate-only submission without placing it on the queue", async () => {
+    const events: ThreadTurnQueueLifecycleEvent[] = [];
+    const queue = new ThreadTurnQueue({
+      isThreadActive: () => true,
+      startTurn: async (entry) => ({
+        backend: entry.backend,
+        threadId: entry.threadId,
+        turnId: `turn-${entry.id}`,
+      }),
+      onLifecycle: (event) => {
+        events.push(event);
+      },
+    });
+
+    await expect(queue.submitIfIdle(buildEntry({ origin: "automation" })))
+      .resolves.toEqual({ status: "busy" });
+    expect(queue.getQueuedEntries({ backend: "codex", threadId: "thread-1" }))
+      .toEqual([]);
+    expect(events).toEqual([]);
+  });
+
+  it("claims the starting slot before another submission can race it", async () => {
+    let releaseStart!: () => void;
+    const starting = new Promise<void>((resolve) => {
+      releaseStart = resolve;
+    });
+    const queue = new ThreadTurnQueue({
+      startTurn: async (entry) => {
+        await starting;
+        return {
+          backend: entry.backend,
+          threadId: entry.threadId,
+          turnId: `turn-${entry.id}`,
+        };
+      },
+    });
+
+    const automatic = queue.submitIfIdle(buildEntry({
+      id: "automatic",
+      origin: "automation",
+    }));
+    const manual = await queue.submit(buildEntry({ id: "manual" }));
+    expect(manual).toMatchObject({ status: "queued", position: 1 });
+
+    releaseStart();
+    await expect(automatic).resolves.toMatchObject({
+      status: "started",
+      turnId: "turn-automatic",
+    });
+  });
+
   it("guards duplicate terminal release signals", async () => {
     let active = true;
     const startedEntries: string[] = [];

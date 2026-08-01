@@ -48,6 +48,10 @@ export type ThreadTurnQueueSubmissionResult =
       position: number;
     };
 
+export type ThreadTurnQueueImmediateSubmissionResult =
+  | Extract<ThreadTurnQueueSubmissionResult, { status: "started" }>
+  | { status: "busy" };
+
 export type ThreadTurnQueueLifecycleEvent =
   | {
       type: "queued";
@@ -118,6 +122,34 @@ export class ThreadTurnQueue {
       return { status: "queued", entry, position };
     }
 
+    const started = await this.startEntry(entry);
+    return {
+      status: "started",
+      entry,
+      turnId: started.turnId,
+    };
+  }
+
+  /**
+   * Atomically reject instead of queueing when the thread is busy. The
+   * availability check and `startingKeys` claim happen in the same JS turn,
+   * so another submit cannot slip between them and push this entry on deck.
+   */
+  async submitIfIdle(
+    input: Omit<ThreadTurnQueueEntry, "id" | "createdAt"> &
+      Partial<Pick<ThreadTurnQueueEntry, "id" | "createdAt">>,
+  ): Promise<ThreadTurnQueueImmediateSubmissionResult> {
+    const entry: ThreadTurnQueueEntry = {
+      ...input,
+      id: input.id ?? `thread-turn:${randomUUID()}`,
+      createdAt: input.createdAt ?? this.now(),
+    };
+    if (!this.canStartImmediately({
+      backend: entry.backend,
+      threadId: entry.threadId,
+    })) {
+      return { status: "busy" };
+    }
     const started = await this.startEntry(entry);
     return {
       status: "started",

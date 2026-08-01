@@ -29,6 +29,8 @@ import {
   type DetachDirectoryFromThreadRequest,
   type DetachDirectoryFromThreadResponse,
   type CheckThreadPullRequestStatusToolArgs,
+  type CancelThreadPrAutoDispatchRequest,
+  type SetThreadPrAutoDispatchRequest,
   type ThreadSearchRequest,
   type ThreadSearchResponse,
   type PersistThreadUsageActivityRequest,
@@ -198,6 +200,7 @@ import { detectPullRequestsForThread } from "../pr-status/pr-detection";
 import {
   GithubGraphqlPrClient,
   branchRefKey,
+  parsePrRefFromUrl,
 } from "../pr-status/github-graphql-client";
 import type { BranchRef } from "../pr-status/github-graphql-client";
 import { resolveGitHubRepoForDirectory } from "../pr-status/git-remote";
@@ -882,6 +885,11 @@ class DesktopAppServerService {
   private prPollingScheduler: PrPollingScheduler | undefined;
   private backgroundPrPollingEnabled = false;
   private prAutoDispatchCoordinator: PrAutoDispatchCoordinator | undefined;
+  /** Visible thread→PR attachments, including explicit directoryless refs. */
+  private readonly attachedPrsByThreadKey = new Map<
+    string,
+    { backend: AppServerBackendKind; prs: PrSummary[] }
+  >();
   private prDiscoveryTimer: NodeJS.Timeout | undefined;
   /** Per-thread last discovery branch-lookup time, driving the slow rotation. */
   private readonly prDiscoveryLastRefreshedAt = new Map<string, number>();
@@ -1296,6 +1304,10 @@ class DesktopAppServerService {
     await this.loadPrLookupRegistry();
     this.seedPrStatusRegistryFromThreads(snapshot.threads);
     const canonicalSnapshot = this.applyCanonicalPrStatuses(snapshot.threads);
+    this.rememberThreadPrAttachments(canonicalSnapshot.threads, {
+      replace: backend === "all" && !request.filter?.trim() && !activeRecentRefresh,
+    });
+    void this.getPrAutoDispatchCoordinator().resume();
     await this.loadDirectoryGitStatusCache();
     for (const directory of snapshot.directories) {
       this.lastDirectoriesByKey.set(directory.key, directory);
@@ -1440,6 +1452,54 @@ class DesktopAppServerService {
         continue;
       }
       this.prRefreshContextByThreadKey.set(threadKey, contexts);
+    }
+  }
+
+  private rememberThreadPrAttachments(
+    threads: NavigationSnapshot["threads"],
+    options: { replace: boolean },
+  ): void {
+    const liveThreadKeys = new Set<string>();
+    for (const thread of threads) {
+      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+      liveThreadKeys.add(threadKey);
+      this.attachedPrsByThreadKey.set(threadKey, {
+        backend: thread.source,
+        prs: thread.prs ?? [],
+      });
+    }
+    if (options.replace) {
+      for (const threadKey of this.attachedPrsByThreadKey.keys()) {
+        if (!liveThreadKeys.has(threadKey)) {
+          this.attachedPrsByThreadKey.delete(threadKey);
+        }
+      }
+    }
+  }
+
+  private rememberThreadPrAttachmentUpdate(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    prs: PrSummary[];
+  }): void {
+    this.attachedPrsByThreadKey.set(
+      buildThreadIdentityKey(params.backend, params.threadId),
+      { backend: params.backend, prs: params.prs },
+    );
+  }
+
+  private applyPrStatusToAttachments(pr: PrSummary): void {
+    const prKey = getPrStatusKey(pr);
+    for (const [threadKey, attachment] of this.attachedPrsByThreadKey) {
+      let changed = false;
+      const prs = attachment.prs.map((candidate) => {
+        if (getPrStatusKey(candidate) !== prKey) return candidate;
+        changed = true;
+        return pr;
+      });
+      if (changed) {
+        this.attachedPrsByThreadKey.set(threadKey, { ...attachment, prs });
+      }
     }
   }
 
@@ -2138,6 +2198,19 @@ class DesktopAppServerService {
         }
       }
     }
+  }
+
+  handleAgentEventForPrAttachments(event: AgentEvent): void {
+    if (event.notification.method !== "thread/pullRequests/updated") return;
+    const params = event.notification.params as {
+      threadId: string;
+      prs: PrSummary[];
+    };
+    this.rememberThreadPrAttachmentUpdate({
+      backend: event.backend,
+      threadId: params.threadId,
+      prs: params.prs,
+    });
   }
 
   async markThreadSeen(
@@ -3045,6 +3118,7 @@ class DesktopAppServerService {
         pr,
         fetchedAt,
       });
+      this.applyPrStatusToAttachments(pr);
     }
     if (transitions.length > 0) {
       this.emitPrStatusTransitions(transitions, { observedAt: fetchedAt, source });
@@ -3094,51 +3168,14 @@ class DesktopAppServerService {
           });
         }
       }
-      void this.getPrAutoDispatchCoordinator().handleTransition({
-        transition,
-        source: observation.source,
-        observedAt: observation.observedAt,
-        backgroundPollingEnabled: this.backgroundPrPollingEnabled,
-      }).then((outcomes) => {
-        for (const outcome of outcomes) {
-          const log = outcome.status === "failed"
-            ? appServerLog.warn.bind(appServerLog)
-            : appServerLog.info.bind(appServerLog);
-          log("pr auto dispatch", {
-            prKey: transition.prKey,
-            ...outcome,
-          });
-        }
-      }).catch((error) => {
-        appServerLog.warn("pr auto dispatch failed", {
-          prKey: transition.prKey,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      });
     }
   }
 
-  /**
-   * Best-effort: which threads currently display this PR. Only runs when a
-   * transition actually fired (rare), so the O(threads) scan is cheap. A PR
-   * touched only via a path that has not yet been remembered in a navigation
-   * snapshot resolves to `[]` — acceptable for the logging consumer, and the
-   * auto-dispatch coordinator can re-resolve on a later observation.
-   */
+  /** Resolve only visible attachments; detached lookup history never qualifies. */
   private findThreadKeysForPrKey(prKey: string): string[] {
     const threadKeys: string[] = [];
-    for (const [threadKey, contexts] of this.prRefreshContextByThreadKey) {
-      const displays = contexts.some((context) => {
-        const lookup = this.prLookupRegistry.get(
-          getPullRequestLookupKey({
-            provider: DEFAULT_PULL_REQUEST_PROVIDER,
-            branch: context.branch,
-            directoryPaths: context.directoryPaths,
-          }),
-        );
-        return lookup?.prs.some((pr) => getPrStatusKey(pr) === prKey) ?? false;
-      });
-      if (displays) {
+    for (const [threadKey, attachment] of this.attachedPrsByThreadKey) {
+      if (attachment.prs.some((pr) => getPrStatusKey(pr) === prKey)) {
         threadKeys.push(threadKey);
       }
     }
@@ -3274,6 +3311,7 @@ class DesktopAppServerService {
     prs: PrSummary[];
     detachedPrs?: PrSummary[];
   }): Promise<void> {
+    this.rememberThreadPrAttachmentUpdate(params);
     const worktreePath = this.rememberMergedPrCommitShasForThread({
       ...params,
       prs: [...params.prs, ...(params.detachedPrs ?? [])],
@@ -3380,10 +3418,12 @@ class DesktopAppServerService {
       this.backgroundPrPollingEnabled = enabled;
 
       if (!enabled) {
+        this.prAutoDispatchCoordinator?.pause();
         this.stopPrPollingScheduler();
         return;
       }
       this.ensurePrPollingSchedulerStarted();
+      void this.getPrAutoDispatchCoordinator().resume();
     })();
   }
 
@@ -3622,49 +3662,115 @@ class DesktopAppServerService {
    * Every tracked, non-terminal PR the poller should keep fresh, with the
    * threads that display it.
    *
-   * Walks the remembered per-thread refresh contexts (populated on every
-   * navigation snapshot) back through the lookup registry. That pairing is
-   * what lets the poller cover EVERY open project rather than only whichever
-   * thread the renderer happens to have selected.
+   * Uses the visible per-thread attachment set populated by navigation and
+   * attachment events. This includes explicit PRs on directoryless threads
+   * and excludes detached PRs even though lookup history retains them for
+   * non-UI bookkeeping.
    */
   private collectPrPollTargets(): PrPollTarget[] {
     const byKey = new Map<string, PrPollTarget>();
     this.prPollBackendByKey.clear();
 
-    for (const [threadKey, contexts] of this.prRefreshContextByThreadKey) {
-      for (const context of contexts) {
-        const lookup = this.prLookupRegistry.get(
-          getPullRequestLookupKey({
-            provider: DEFAULT_PULL_REQUEST_PROVIDER,
-            branch: context.branch,
-            directoryPaths: context.directoryPaths,
-          }),
-        );
-        if (!lookup) {
+    for (const [threadKey, attachment] of this.attachedPrsByThreadKey) {
+      for (const pr of attachment.prs) {
+        const prKey = getPrStatusKey(pr);
+        const latest = this.prStatusRegistry.get(prKey)?.pr ?? pr;
+        if (isTerminalPullRequest(latest)) continue;
+        this.prPollBackendByKey.set(prKey, attachment.backend);
+        const existing = byKey.get(prKey);
+        if (existing) {
+          if (!existing.threadKeys.includes(threadKey)) {
+            existing.threadKeys.push(threadKey);
+          }
           continue;
         }
-        for (const pr of lookup.prs) {
-          const prKey = getPrStatusKey(pr);
-          // The lookup entry holds the PRs as of its own fetch; the status
-          // registry holds the newest state for each one. Trust the latter.
-          const latest = this.prStatusRegistry.get(prKey)?.pr ?? pr;
-          if (isTerminalPullRequest(latest)) {
-            continue;
-          }
-          this.prPollBackendByKey.set(prKey, context.backend);
-
-          const existing = byKey.get(prKey);
-          if (existing) {
-            if (!existing.threadKeys.includes(threadKey)) {
-              existing.threadKeys.push(threadKey);
-            }
-            continue;
-          }
-          byKey.set(prKey, { prKey, pr: latest, threadKeys: [threadKey] });
-        }
+        byKey.set(prKey, { prKey, pr: latest, threadKeys: [threadKey] });
       }
     }
     return [...byKey.values()];
+  }
+
+  private async handlePrAutoDispatchSnapshots(
+    prs: PrSummary[],
+    observedAt: number,
+    onlyThreadKey?: string,
+    operatorInitiated = false,
+  ): Promise<void> {
+    const coordinator = this.getPrAutoDispatchCoordinator();
+    for (const pr of prs) {
+      const prKey = getPrStatusKey(pr);
+      const threadKeys = onlyThreadKey
+        ? [onlyThreadKey]
+        : this.findThreadKeysForPrKey(prKey);
+      if (threadKeys.length === 0) continue;
+      const outcomes = await coordinator.handleStatusSnapshot({
+        pr,
+        threadKeys,
+        observedAt,
+        backgroundPollingEnabled: this.backgroundPrPollingEnabled,
+        operatorInitiated,
+      });
+      for (const outcome of outcomes) {
+        appServerLog.info("pr auto dispatch", { prKey, ...outcome });
+      }
+    }
+  }
+
+  async handleThreadPrAutoDispatchPreference(
+    request: SetThreadPrAutoDispatchRequest,
+  ): Promise<void> {
+    const coordinator = this.getPrAutoDispatchCoordinator();
+    if (!request.enabled) {
+      await coordinator.cancelAllPendingForThread(request);
+      return;
+    }
+    if (!this.backgroundPrPollingEnabled) return;
+
+    const overlay = await this.getOverlayStore().getThreadOverlayState(request);
+    const prs = this.canonicalizePrs(overlay?.prs ?? []);
+    const threadKey = buildThreadIdentityKey(request.backend, request.threadId);
+    this.rememberThreadPrAttachmentUpdate({ ...request, prs });
+    await this.handlePrAutoDispatchSnapshots(
+      prs,
+      this.nextPrObservationTimestamp(),
+      threadKey,
+      true,
+    );
+
+    const refs = [
+      ...new Map(
+        prs.flatMap((pr) => {
+          const ref = parsePrRefFromUrl(pr.url);
+          return ref ? [[`${ref.owner}/${ref.repo}#${ref.number}`, ref] as const] : [];
+        }),
+      ).values(),
+    ];
+    if (refs.length === 0) return;
+    const refreshed = await this.getPrGraphqlClient().fetchPullRequests(refs);
+    if (refreshed.length === 0) return;
+    const fetchedAt = this.nextPrObservationTimestamp();
+    const changed = this.rememberPrStatuses(
+      refreshed,
+      fetchedAt,
+      "auto-fix-enable",
+    );
+    await this.writePrStatusesToCache(refreshed, fetchedAt);
+    await this.publishPullRequestStatusUpdates({
+      backend: request.backend,
+      prs: changed,
+    });
+    await this.handlePrAutoDispatchSnapshots(
+      refreshed,
+      fetchedAt,
+      threadKey,
+      true,
+    );
+  }
+
+  async cancelThreadPrAutoDispatch(
+    request: CancelThreadPrAutoDispatchRequest,
+  ): Promise<boolean> {
+    return await this.getPrAutoDispatchCoordinator().cancelPending(request);
   }
 
   /**
@@ -3687,6 +3793,7 @@ class DesktopAppServerService {
     });
 
     const changed = this.rememberPrStatuses(merged, fetchedAt, "background-poll");
+    await this.handlePrAutoDispatchSnapshots(merged, fetchedAt);
     if (changed.length === 0) {
       return [];
     }
@@ -4446,7 +4553,9 @@ class DesktopAppServerService {
     this.prPollingFocusThreadKeys = new Set();
     this.prPollBackendByKey.clear();
     this.prStatusTransitionListeners.clear();
+    this.prAutoDispatchCoordinator?.close();
     this.prAutoDispatchCoordinator = undefined;
+    this.attachedPrsByThreadKey.clear();
     this.pendingNavigationSnapshots.clear();
     this.pendingThreadPullRequestRefreshes.clear();
     this.pendingEditCommitResolves.clear();
@@ -4496,6 +4605,20 @@ class DesktopAppServerService {
         store: this.getOverlayStore(),
         registry: getDesktopBackendRegistry(),
         isBackgroundPollingEnabled: () => this.backgroundPrPollingEnabled,
+        getCurrentPr: (prKey) => this.prStatusRegistry.get(prKey)?.pr,
+        isPrAttached: ({ backend, threadId, prKey }) =>
+          this.attachedPrsByThreadKey
+            .get(buildThreadIdentityKey(backend, threadId))
+            ?.prs.some((pr) => getPrStatusKey(pr) === prKey) ?? false,
+        onPendingChanged: async ({ backend, threadId, pending }) => {
+          await getDesktopBackendRegistry().publishLocalEvent({
+            backend,
+            notification: {
+              method: "thread/prAutoDispatch/pendingUpdated",
+              params: { threadId, pending },
+            },
+          });
+        },
       });
     }
     return this.prAutoDispatchCoordinator;
@@ -4655,10 +4778,17 @@ export function registerAppServerIpcHandlers(): void {
   unsubscribeWorkingStateEvents?.();
   unsubscribeWorkingStateEvents = getDesktopBackendRegistry().onEvent((event) => {
     appServerService.handleAgentEventForWorkingState(event);
+    appServerService.handleAgentEventForPrAttachments(event);
   });
   getDesktopBackendRegistry().setThreadPullRequestStatusToolHandler(
     async (args) => await appServerService.checkThreadPullRequestStatusForTool(args),
   );
+  getDesktopBackendRegistry().setThreadPrAutoDispatchHandler({
+    preferenceChanged: async (request) =>
+      await appServerService.handleThreadPrAutoDispatchPreference(request),
+    cancelPending: async (request) =>
+      await appServerService.cancelThreadPrAutoDispatch(request),
+  });
 
   ipcMain.removeHandler(APP_SERVER_LIST_SKILLS_CHANNEL);
   ipcMain.handle(
@@ -5229,6 +5359,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   unsubscribeWorkingStateEvents?.();
   unsubscribeWorkingStateEvents = undefined;
   getDesktopBackendRegistry().setThreadPullRequestStatusToolHandler(undefined);
+  getDesktopBackendRegistry().setThreadPrAutoDispatchHandler(undefined);
   await appServerService.close();
 }
 

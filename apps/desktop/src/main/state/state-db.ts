@@ -9,7 +9,7 @@ import {
 } from "@pwragent/shared";
 import { getNativeBinding } from "./native-binding.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 33;
+export const CURRENT_STATE_DB_USER_VERSION = 34;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -511,6 +511,36 @@ CREATE INDEX IF NOT EXISTS idx_pr_lookup_cache_fetched
   ON pr_lookup_cache(fetched_at DESC);
 `;
 
+const PR_AUTO_DISPATCH_SCHEMA = `
+CREATE TABLE IF NOT EXISTS pr_auto_dispatch_claims (
+  backend       TEXT NOT NULL,
+  thread_id     TEXT NOT NULL,
+  pr_key        TEXT NOT NULL,
+  fingerprint   TEXT NOT NULL,
+  status        TEXT NOT NULL,
+  scheduled_at  INTEGER NOT NULL,
+  created_at    INTEGER NOT NULL,
+  updated_at    INTEGER NOT NULL,
+  payload       TEXT NOT NULL,
+  PRIMARY KEY (backend, thread_id, fingerprint)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_pr_auto_dispatch_active_thread
+  ON pr_auto_dispatch_claims(backend, thread_id)
+  WHERE status IN ('pending', 'dispatching');
+CREATE INDEX IF NOT EXISTS idx_pr_auto_dispatch_pending_schedule
+  ON pr_auto_dispatch_claims(status, scheduled_at);
+
+CREATE TABLE IF NOT EXISTS pr_auto_dispatch_incidents (
+  backend       TEXT NOT NULL,
+  thread_id     TEXT NOT NULL,
+  pr_key        TEXT NOT NULL,
+  attempt_count INTEGER NOT NULL,
+  active_kinds  TEXT NOT NULL,
+  updated_at    INTEGER NOT NULL,
+  PRIMARY KEY (backend, thread_id, pr_key)
+);
+`;
+
 const THREAD_USAGE_PRICING_SCHEMA = `
 CREATE TABLE IF NOT EXISTS pricing_catalog_versions (
   catalog_id      TEXT NOT NULL,
@@ -999,6 +1029,12 @@ export class StateDb {
     if ((db.pragma("user_version", { simple: true }) as number) < 33) {
       db.transaction(() => {
         db.exec(MESSAGING_DEFAULT_AGENT_ASSIGNMENT_SCHEMA);
+        db.pragma("user_version = 33");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 34) {
+      db.transaction(() => {
+        db.exec(PR_AUTO_DISPATCH_SCHEMA);
         db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
       })();
     }
@@ -1151,6 +1187,7 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     db.exec(THREAD_SEARCH_SCHEMA);
     db.exec(PR_STATUS_CACHE_SCHEMA);
     db.exec(PR_LOOKUP_CACHE_SCHEMA);
+    db.exec(PR_AUTO_DISPATCH_SCHEMA);
     ensureThreadSearchFtsThreadIdColumn(db);
     ensurePullRequestProviderColumns(db);
     ensureThreadUsagePricingProviderScope(db);

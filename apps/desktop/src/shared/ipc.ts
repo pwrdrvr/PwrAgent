@@ -39,6 +39,8 @@ export const AGENT_SET_ACP_SESSION_RUNTIME_OPTION_CHANNEL =
 export const AGENT_SET_THREAD_MODEL_SETTINGS_CHANNEL = "agent:set-thread-model-settings";
 export const AGENT_SET_THREAD_PR_AUTO_DISPATCH_CHANNEL =
   "agent:set-thread-pr-auto-dispatch";
+export const AGENT_CANCEL_THREAD_PR_AUTO_DISPATCH_CHANNEL =
+  "agent:cancel-thread-pr-auto-dispatch";
 export const AGENT_APPLY_THREAD_MODEL_MIGRATION_CHANNEL =
   "agent:apply-thread-model-migration";
 export const AGENT_TURN_OFF_CODEX_FAST_EVERYWHERE_CHANNEL =
