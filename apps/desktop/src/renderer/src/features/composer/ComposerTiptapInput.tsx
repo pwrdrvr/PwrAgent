@@ -125,6 +125,51 @@ const SkillMention = Mention.extend({
     class: "chip skill-chip composer-tiptap-input__mention",
   },
   renderHTML: ({ node }) => {
+    if (node.attrs.kind === "thread") {
+      const label = String(node.attrs.name ?? "thread");
+      const path = typeof node.attrs.path === "string" ? node.attrs.path : "";
+      return [
+        "span",
+        {
+          class: "chip thread-chip composer-tiptap-input__mention",
+          "data-type": "mention",
+          "data-mention-kind": "thread",
+          "data-composer-skill-token-id": String(node.attrs.id ?? ""),
+          "data-id": String(node.attrs.id ?? ""),
+          "data-label": label,
+          "data-skill-name": label,
+          "data-thread-chip": "",
+          ...(path ? { "data-skill-path": path } : {}),
+          ...(path ? { "data-tooltip": `${label}\n${path}` } : {}),
+        },
+        // Tiptap DOM specs cannot render React components. Keep these paths
+        // in sync with the canonical ThreadIcon used by transcript chips.
+        [
+          "http://www.w3.org/2000/svg svg",
+          {
+            "aria-hidden": "true",
+            class: "thread-chip__icon",
+            fill: "none",
+            height: "1em",
+            stroke: "currentColor",
+            "stroke-linecap": "round",
+            "stroke-linejoin": "round",
+            "stroke-width": "2",
+            viewBox: "0 0 24 24",
+            width: "1em",
+          },
+          [
+            "path",
+            {
+              d: "M20 14a2 2 0 0 1-2 2H8l-4 3.5V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2Z",
+            },
+          ],
+          ["path", { d: "M8 8.5h8" }],
+          ["path", { d: "M8 12h5" }],
+        ],
+        ["span", { class: "thread-chip__label" }, label],
+      ];
+    }
     if (node.attrs.kind === "directory" || node.attrs.kind === "file") {
       // Directory-reference chip: `name` is the tracked directory's
       // label, `path` its absolute path. File-reference chips are the
@@ -180,10 +225,15 @@ const SkillMention = Mention.extend({
       `$${skill.name}`,
     ];
   },
-  renderText: ({ node }) =>
-    node.attrs.kind === "directory" || node.attrs.kind === "file"
-      ? tildifyPath(String(node.attrs.path ?? node.attrs.name ?? ""))
-      : `$${String(node.attrs.name ?? node.attrs.id ?? "")}`,
+  renderText: ({ node }) => {
+    if (node.attrs.kind === "thread") {
+      return String(node.attrs.path ?? node.attrs.name ?? "");
+    }
+    if (node.attrs.kind === "directory" || node.attrs.kind === "file") {
+      return tildifyPath(String(node.attrs.path ?? node.attrs.name ?? ""));
+    }
+    return `$${String(node.attrs.name ?? node.attrs.id ?? "")}`;
+  },
   suggestion: {
     char: "\uFFFF",
     items: () => [],
@@ -835,6 +885,12 @@ function mentionAttrsToSkill(
   index: number,
 ): ComposerSkillToken {
   const name = typeof attrs.name === "string" ? attrs.name : String(attrs.id ?? "skill");
+  const kind =
+    attrs.kind === "directory"
+    || attrs.kind === "file"
+    || attrs.kind === "thread"
+      ? attrs.kind
+      : undefined;
   return {
     id: typeof attrs.id === "string" ? attrs.id : `${name}:${index}`,
     index,
@@ -846,11 +902,7 @@ function mentionAttrsToSkill(
       typeof attrs.shortDescription === "string"
         ? attrs.shortDescription
         : undefined,
-    ...(attrs.kind === "directory"
-      ? { kind: "directory" as const }
-      : attrs.kind === "file"
-        ? { kind: "file" as const }
-        : {}),
+    ...(kind ? { kind } : {}),
   };
 }
 
@@ -1750,6 +1802,50 @@ function closeEditorHistory(editor: TiptapEditor): void {
   editor.view.dispatch(closeHistory(editor.state.tr));
 }
 
+function getSelectionDraftRange(
+  editor: TiptapEditor,
+  readMode: TiptapReadMode,
+): { end: number; start: number } {
+  return {
+    end: getDraftIndexAtPosition(
+      editor,
+      editor.state.selection.to,
+      readMode,
+    ),
+    start: getDraftIndexAtPosition(
+      editor,
+      editor.state.selection.from,
+      readMode,
+    ),
+  };
+}
+
+function insertMentionTokenAtSelection(params: {
+  editor: TiptapEditor;
+  readMode: TiptapReadMode;
+  token: ComposerSkillToken;
+}): boolean {
+  const { editor, readMode, token } = params;
+  const { from, to } = editor.state.selection;
+  const current = readTiptapContent(editor, readMode);
+  const selection = getSelectionDraftRange(editor, readMode);
+  const insertedContent: JSONContent[] = [
+    {
+      type: "mention",
+      attrs: getSkillMentionAttrs(token),
+    },
+  ];
+  if (!/^\s/.test(current.value.slice(selection.end))) {
+    insertedContent.push({ type: "text", text: " " });
+  }
+
+  return editor.commands.insertContentAt(
+    { from, to },
+    insertedContent,
+    { updateSelection: true },
+  );
+}
+
 function applyExternalSkillInsertion(params: {
   current: TiptapReadState;
   editor: TiptapEditor;
@@ -2312,11 +2408,11 @@ export const ComposerTiptapInput = forwardRef<
     });
     Object.defineProperty(editorDom, "selectionStart", {
       configurable: true,
-      get: () => selectionIndexRef.current,
+      get: () => getSelectionDraftRange(editor, readMode).start,
     });
     Object.defineProperty(editorDom, "selectionEnd", {
       configurable: true,
-      get: () => selectionIndexRef.current,
+      get: () => getSelectionDraftRange(editor, readMode).end,
     });
     Object.defineProperty(editorDom, "setSelectionRange", {
       configurable: true,
@@ -2471,6 +2567,15 @@ export const ComposerTiptapInput = forwardRef<
           }
           return;
         }
+        if (attrs["data-mention-kind"] === "thread") {
+          const label =
+            attrs["data-skill-name"] || node.textContent || "Thread";
+          const path = attrs["data-skill-path"];
+          if (path) {
+            node.setAttribute("data-tooltip", `${label}\n${path}`);
+          }
+          return;
+        }
         const tooltip = buildSkillTooltip(
           getSkillSummary({
             name: node.textContent?.replace(/^\$/, ""),
@@ -2496,11 +2601,21 @@ export const ComposerTiptapInput = forwardRef<
       }
       editor?.commands.focus();
     },
+    insertMentionToken: (token) => {
+      if (!editor) {
+        return false;
+      }
+      return insertMentionTokenAtSelection({ editor, readMode, token });
+    },
     get selectionEnd() {
-      return selectionIndexRef.current;
+      return editor
+        ? getSelectionDraftRange(editor, readMode).end
+        : selectionIndexRef.current;
     },
     get selectionStart() {
-      return selectionIndexRef.current;
+      return editor
+        ? getSelectionDraftRange(editor, readMode).start
+        : selectionIndexRef.current;
     },
     get skillTokenCount() {
       return editor

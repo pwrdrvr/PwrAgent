@@ -14315,6 +14315,10 @@ a.transcript-message__messaging-origin:focus-visible {
   vertical-align: 0.13em;
 }
 
+.composer-tiptap-input__mention.thread-chip {
+  cursor: default;
+}
+
 .composer__mentioned-skills {
   display: flex;
   flex-wrap: wrap;

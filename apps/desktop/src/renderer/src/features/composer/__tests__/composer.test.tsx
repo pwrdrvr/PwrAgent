@@ -17,6 +17,7 @@ import type { JSONContent } from "@tiptap/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { normalizeImageFile } from "../../../lib/image-normalization";
+import { ThreadLinkProvider } from "../../../lib/thread-links";
 import { Composer } from "../Composer";
 import type {
   ComposerDraftSnapshot,
@@ -12399,6 +12400,396 @@ describe("Composer", () => {
         ],
       });
     });
+  });
+
+  it.each([
+    "019fbbbe-ad52-77c2-b7f7-28182d9a6f83",
+    "pwragent://thread/019fbbbe-ad52-77c2-b7f7-28182d9a6f83",
+  ])("chipifies a pasted known thread reference and sends its canonical link: %s", async (
+    pastedReference,
+  ) => {
+    const targetThreadId = "019fbbbe-ad52-77c2-b7f7-28182d9a6f83";
+    const currentThread: NavigationThreadSummary = {
+      id: "thread-1",
+      title: "Current thread",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const targetThread: NavigationThreadSummary = {
+      id: targetThreadId,
+      title: "Lovely child thread",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const startTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: currentThread.id,
+      turnId: "turn-1",
+    }));
+
+    render(
+      <ThreadLinkProvider
+        onShowThread={() => undefined}
+        threads={[currentThread, targetThread]}
+      >
+        <Composer
+          desktopApi={{
+            onAgentEvent: () => () => undefined,
+            startTurn,
+          }}
+          disabled={false}
+          skills={[]}
+          thread={currentThread}
+        />
+      </ThreadLinkProvider>,
+    );
+
+    fireEvent.paste(screen.getByLabelText("Reply"), {
+      clipboardData: {
+        files: [],
+        getData: (type: string) =>
+          type === "text/plain" ? pastedReference : "",
+        items: [],
+        types: ["text/plain"],
+      },
+    });
+
+    const richInput = screen.getByTestId("composer-tiptap-input");
+    const chip = await waitFor(() => {
+      const currentChip = within(richInput)
+        .getByText("Lovely child thread")
+        .closest("[data-mention-kind]");
+      expect(currentChip).toHaveAttribute(
+        "data-mention-kind",
+        "thread",
+      );
+      return currentChip;
+    });
+    expect(chip).toHaveAttribute(
+      "data-skill-path",
+      `pwragent://thread/${targetThreadId}?backend=codex`,
+    );
+    expect(chip?.querySelector("svg")).toHaveAttribute("viewBox", "0 0 24 24");
+    expect(screen.getByLabelText("Reply")).toHaveValue(" ");
+
+    await clickButton("Send");
+
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: currentThread.id,
+        input: [
+          {
+            type: "text",
+            text: `[Lovely child thread](pwragent://thread/${targetThreadId}?backend=codex)`,
+          },
+        ],
+      });
+    });
+  });
+
+  it("replaces the selected composer text with a pasted thread chip", async () => {
+    const targetThreadId = "019fbbbe-ad52-77c2-b7f7-28182d9a6f83";
+    const currentThread: NavigationThreadSummary = {
+      id: "thread-1",
+      title: "Current thread",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const targetThread: NavigationThreadSummary = {
+      id: targetThreadId,
+      title: "Lovely child thread",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+
+    render(
+      <ThreadLinkProvider
+        onShowThread={() => undefined}
+        threads={[currentThread, targetThread]}
+      >
+        <Composer
+          desktopApi={{ onAgentEvent: () => () => undefined }}
+          disabled={false}
+          skills={[]}
+          thread={currentThread}
+        />
+      </ThreadLinkProvider>,
+    );
+
+    const textbox = screen.getByRole("textbox", { name: "Reply" });
+    fireEvent.change(textbox, { target: { value: "keep replace tail" } });
+    const textNode = textbox.querySelector("p")?.firstChild;
+    expect(textNode).toBeInstanceOf(Text);
+    textbox.focus();
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.setStart(textNode!, 5);
+    range.setEnd(textNode!, 12);
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    document.dispatchEvent(new Event("selectionchange"));
+
+    fireEvent.paste(textbox, {
+      clipboardData: {
+        files: [],
+        getData: (type: string) => type === "text/plain" ? targetThreadId : "",
+        items: [],
+        types: ["text/plain"],
+      },
+    });
+
+    await waitFor(() => {
+      expect(textbox).toHaveValue("keep  tail");
+      expect(
+        within(textbox)
+          .getByText("Lovely child thread")
+          .closest("[data-mention-kind]"),
+      ).toHaveAttribute(
+        "data-mention-kind",
+        "thread",
+      );
+    });
+    expect(textbox).not.toHaveTextContent("replace");
+  });
+
+  it("preserves rich composer blocks and marks when pasting a thread chip", async () => {
+    const targetThreadId = "019fbbbe-ad52-77c2-b7f7-28182d9a6f83";
+    const currentThread: NavigationThreadSummary = {
+      id: "thread-1",
+      title: "Current thread",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const targetThread: NavigationThreadSummary = {
+      id: targetThreadId,
+      title: "Lovely child thread",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const draftStore = createComposerDraftStore();
+    draftStore.set("thread:codex:thread-1", {
+      draft: "## Heading\n\n- List item\n\n**keep bold** replace me",
+      editorDocument: {
+        type: "doc",
+        content: [
+          {
+            type: "heading",
+            attrs: { level: 2 },
+            content: [{ type: "text", text: "Heading" }],
+          },
+          {
+            type: "bulletList",
+            content: [
+              {
+                type: "listItem",
+                content: [
+                  {
+                    type: "paragraph",
+                    content: [{ type: "text", text: "List item" }],
+                  },
+                ],
+              },
+            ],
+          },
+          {
+            type: "paragraph",
+            content: [
+              {
+                type: "text",
+                text: "keep bold",
+                marks: [{ type: "bold" }],
+              },
+              { type: "text", text: " replace me" },
+            ],
+          },
+        ],
+      },
+      imageAttachments: [],
+      skillTokens: [],
+    });
+
+    render(
+      <ThreadLinkProvider
+        onShowThread={() => undefined}
+        threads={[currentThread, targetThread]}
+      >
+        <Composer
+          composerImplementation="tiptap-wysiwyg-markdown-chips"
+          desktopApi={{ onAgentEvent: () => () => undefined }}
+          disabled={false}
+          draftStore={draftStore}
+          skills={[]}
+          thread={currentThread}
+        />
+      </ThreadLinkProvider>,
+    );
+
+    const textbox = screen.getByRole("textbox", { name: "Reply" });
+    const finalParagraph = textbox.querySelectorAll("p").item(1);
+    const replaceTextNode = finalParagraph.lastChild;
+    expect(replaceTextNode).toBeInstanceOf(Text);
+    textbox.focus();
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.setStart(replaceTextNode!, 1);
+    range.setEnd(replaceTextNode!, " replace me".length);
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    document.dispatchEvent(new Event("selectionchange"));
+
+    fireEvent.paste(textbox, {
+      clipboardData: {
+        files: [],
+        getData: (type: string) => type === "text/plain" ? targetThreadId : "",
+        items: [],
+        types: ["text/plain"],
+      },
+    });
+
+    await waitFor(() => {
+      expect(within(textbox).getByText("Lovely child thread")).toBeInTheDocument();
+    });
+    expect(textbox.querySelector("h2")).toHaveTextContent("Heading");
+    expect(textbox.querySelector("ul li")).toHaveTextContent("List item");
+    expect(textbox.querySelector("strong")).toHaveTextContent("keep bold");
+    expect(textbox).not.toHaveTextContent("replace me");
+  });
+
+  it("rehydrates an edited pending thread link as a thread chip", async () => {
+    const targetThreadId = "019fbbbe-ad52-77c2-b7f7-28182d9a6f83";
+    const currentThread: NavigationThreadSummary = {
+      id: "thread-1",
+      title: "Current thread",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const targetThread: NavigationThreadSummary = {
+      id: targetThreadId,
+      title: "$Lovely child thread",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+
+    render(
+      <ThreadLinkProvider
+        onShowThread={() => undefined}
+        threads={[currentThread, targetThread]}
+      >
+        <Composer
+          activeTurnId="turn-1"
+          backends={[
+            {
+              ...backendSummary("codex", {
+                models: [
+                  {
+                    id: "gpt-5.5",
+                    label: "GPT-5.5",
+                    current: true,
+                    supportsReasoning: true,
+                    supportsSteering: true,
+                  },
+                ],
+              }),
+              capabilities: {
+                ...backendSummary("codex").capabilities,
+                steerTurn: true,
+              },
+            },
+          ]}
+          desktopApi={{
+            onAgentEvent: () => () => undefined,
+            steerTurn: vi.fn(),
+          }}
+          disabled={false}
+          skills={[]}
+          thread={currentThread}
+        />
+      </ThreadLinkProvider>,
+    );
+
+    const textbox = screen.getByRole("textbox", { name: "Reply" });
+    fireEvent.paste(textbox, {
+      clipboardData: {
+        files: [],
+        getData: (type: string) => type === "text/plain" ? targetThreadId : "",
+        items: [],
+        types: ["text/plain"],
+      },
+    });
+    fireEvent.keyDown(textbox, { key: "Enter", metaKey: true });
+
+    expect(screen.getByText("Pending steer")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+
+    await waitFor(() => {
+      expect(
+        within(textbox)
+          .getByText("$Lovely child thread")
+          .closest("[data-mention-kind]"),
+      ).toHaveAttribute(
+        "data-mention-kind",
+        "thread",
+      );
+    });
+    expect(textbox).toHaveValue(" ");
+  });
+
+  it("leaves an unknown pasted thread-shaped id as plain text", async () => {
+    const currentThread: NavigationThreadSummary = {
+      id: "thread-1",
+      title: "Current thread",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    render(
+      <ThreadLinkProvider
+        onShowThread={() => undefined}
+        threads={[currentThread]}
+      >
+        <Composer
+          desktopApi={{ onAgentEvent: () => () => undefined }}
+          disabled={false}
+          skills={[]}
+          thread={currentThread}
+        />
+      </ThreadLinkProvider>,
+    );
+
+    const unknownId = "019f0000-0000-7000-8000-000000000000";
+    fireEvent.paste(screen.getByLabelText("Reply"), {
+      clipboardData: {
+        files: [],
+        getData: (type: string) => type === "text/plain" ? unknownId : "",
+        items: [],
+        types: ["text/plain"],
+      },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Reply")).toHaveValue(unknownId);
+    });
+    expect(
+      screen.getByTestId("composer-tiptap-input").querySelector(".thread-chip"),
+    ).not.toBeInTheDocument();
   });
 
   it("sends the reply when Enter is pressed without Shift", async () => {

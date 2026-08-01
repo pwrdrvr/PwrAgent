@@ -40,7 +40,10 @@ import type {
   ThreadExecutionMode,
 } from "@pwragent/shared";
 import {
+  buildThreadMarkdownLink,
+  buildThreadUrl,
   buildReviewBranchOptions,
+  parseThreadUrl,
   readCodexEnvironmentActionRuns,
 } from "@pwragent/shared";
 import {
@@ -81,6 +84,13 @@ import {
 } from "../../lib/directory-references";
 import { expandTildePath } from "../../lib/tildify-path";
 import { normalizeImageFile } from "../../lib/image-normalization";
+import {
+  resolveThreadHref,
+  resolveThreadIdText,
+  useThreadLinks,
+  type ResolvedThreadLink,
+  type ThreadLinkContextValue,
+} from "../../lib/thread-links";
 import type { ThreadContextWindowState } from "../../lib/useThreadSessionState";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import {
@@ -1273,6 +1283,23 @@ export function createComposerFileToken(
   };
 }
 
+function createComposerThreadToken(
+  thread: ResolvedThreadLink,
+  index: number,
+): ComposerSkillToken {
+  const path = buildThreadUrl({
+    backend: thread.backend,
+    threadId: thread.threadId,
+  });
+  return {
+    kind: "thread",
+    name: thread.title.trim() || thread.threadId,
+    path,
+    id: `${path}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
+    index,
+  };
+}
+
 /**
  * Append path-only file references to outgoing text as one
  * `[@label](~/path)` line per file, separated from the typed draft by a
@@ -1337,12 +1364,19 @@ function serializeDraftWithSkillTokens(
     // onto it, the transcript renders it back as a chip, and
     // hydrateComposerDraft rebuilds the token from a prompt-only restore.
     // Skills keep their `[$name](path)` markdown.
-    output += token.kind === "directory" || token.kind === "file"
-      ? buildDirectoryReferenceMarkdown({
-          label: token.name,
-          path: token.path ?? "",
-        })
-      : buildSkillMentionMarkdown(token);
+    if (token.kind === "directory" || token.kind === "file") {
+      output += buildDirectoryReferenceMarkdown({
+        label: token.name,
+        path: token.path ?? "",
+      });
+    } else if (token.kind === "thread") {
+      const ref = parseThreadUrl(token.path ?? "");
+      output += ref
+        ? buildThreadMarkdownLink({ ...ref, title: token.name })
+        : token.path ?? token.name;
+    } else {
+      output += buildSkillMentionMarkdown(token);
+    }
     cursor = index;
   }
 
@@ -1353,6 +1387,7 @@ function serializeDraftWithSkillTokens(
 function hydrateComposerDraft(
   canonicalDraft: string,
   skills: AppServerSkillSummary[],
+  threadLinks: ThreadLinkContextValue | undefined,
 ): {
   draft: string;
   skillTokens: ComposerSkillToken[];
@@ -1360,44 +1395,64 @@ function hydrateComposerDraft(
   let draft = "";
   const skillTokens: ComposerSkillToken[] = [];
 
-  for (const part of parseSkillMentionParts(canonicalDraft)) {
-    if (part.type === "text") {
-      draft += part.text;
-      continue;
-    }
+  const hydrateSkillAndDirectoryParts = (text: string): void => {
+    for (const part of parseSkillMentionParts(text)) {
+      if (part.type === "text") {
+        draft += part.text;
+        continue;
+      }
 
-    if (part.type === "directory") {
-      // Serialized paths are percent-encoded tilde form; the token
-      // carries the decoded absolute path so send-time attach can use
-      // it directly. File-reference chips serialize to the same
-      // `[@label](~/path)` form, so a restored file chip degrades to a
-      // directory-kind chip here — acceptable: the outgoing text is
-      // identical either way.
+      if (part.type === "directory") {
+        // Serialized paths are percent-encoded tilde form; the token
+        // carries the decoded absolute path so send-time attach can use
+        // it directly. File-reference chips serialize to the same
+        // `[@label](~/path)` form, so a restored file chip degrades to a
+        // directory-kind chip here — acceptable: the outgoing text is
+        // identical either way.
+        skillTokens.push(
+          createComposerDirectoryToken(
+            {
+              label: part.name,
+              path: expandTildePath(decodeMarkdownDestination(part.path)),
+            },
+            draft.length,
+          ),
+        );
+        continue;
+      }
+
+      const matchingSkill =
+        skills.find((skill) => skill.path === part.path) ??
+        skills.find((skill) => skill.name === part.name);
       skillTokens.push(
-        createComposerDirectoryToken(
-          {
-            label: part.name,
-            path: expandTildePath(decodeMarkdownDestination(part.path)),
+        createComposerSkillToken(
+          matchingSkill ?? {
+            name: part.name,
+            path: part.path,
           },
           draft.length,
         ),
       );
-      continue;
     }
+  };
 
-    const matchingSkill =
-      skills.find((skill) => skill.path === part.path) ??
-      skills.find((skill) => skill.name === part.name);
-    skillTokens.push(
-      createComposerSkillToken(
-        matchingSkill ?? {
-          name: part.name,
-          path: part.path,
-        },
-        draft.length,
-      ),
-    );
+  // Thread titles may legitimately begin with `$` or `@`, so recognize the
+  // destination before passing surrounding Markdown through the skill and
+  // directory parser. Unknown thread links remain literal Markdown.
+  const threadLinkPattern = /\[((?:\\.|[^\]\\\r\n])*)\]\((pwragent:\/\/thread\/[^)\s]+)\)/gi;
+  let cursor = 0;
+  for (const match of canonicalDraft.matchAll(threadLinkPattern)) {
+    const matchIndex = match.index ?? 0;
+    hydrateSkillAndDirectoryParts(canonicalDraft.slice(cursor, matchIndex));
+    const resolvedThread = resolveThreadHref(match[2] ?? "", threadLinks);
+    if (resolvedThread) {
+      skillTokens.push(createComposerThreadToken(resolvedThread, draft.length));
+    } else {
+      draft += match[0];
+    }
+    cursor = matchIndex + match[0].length;
   }
+  hydrateSkillAndDirectoryParts(canonicalDraft.slice(cursor));
 
   return { draft, skillTokens };
 }
@@ -2389,6 +2444,7 @@ function CopyableComposerError(props: {
 }
 
 export function Composer(props: ComposerProps) {
+  const threadLinks = useThreadLinks();
   const inputRef = useRef<ComposerInputHandle>(null);
   const inputWrapRef = useRef<HTMLDivElement>(null);
   const autocompleteListRef = useRef<HTMLDivElement>(null);
@@ -2429,7 +2485,11 @@ export function Composer(props: ComposerProps) {
   const hydratedInitialLaunchpad =
     savedInitialDraft || !props.launchpad
       ? undefined
-      : hydrateComposerDraft(props.launchpad.prompt ?? "", props.skills);
+      : hydrateComposerDraft(
+          props.launchpad.prompt ?? "",
+          props.skills,
+          threadLinks,
+        );
   const activeComposerScopeKeyRef = useRef(composerScopeKey);
   const pasteScopeRef = useRef({ key: composerScopeKey, version: 0 });
   const submittedDraftScopeKeysRef = useRef<Set<string>>(new Set());
@@ -2723,7 +2783,7 @@ export function Composer(props: ComposerProps) {
   const setComposerDraftFromCanonical = (nextDraft: string): void => {
     deletedSkillTokenHistoryRef.current = [];
     setEditorDocument(undefined);
-    const hydrated = hydrateComposerDraft(nextDraft, props.skills);
+    const hydrated = hydrateComposerDraft(nextDraft, props.skills, threadLinks);
     setDraft(hydrated.draft);
     setSkillTokens(hydrated.skillTokens);
   };
@@ -2874,6 +2934,7 @@ export function Composer(props: ComposerProps) {
       })),
       skillTokens: snapshot.skillTokens.map((token) => ({
         index: token.index,
+        kind: token.kind,
         name: token.name,
         path: token.path,
       })),
@@ -3741,13 +3802,13 @@ export function Composer(props: ComposerProps) {
   useEffect(() => {
     deletedSkillTokenHistoryRef.current = [];
     if (skillTokens.length === 0 && draft.includes("](")) {
-      const hydrated = hydrateComposerDraft(draft, props.skills);
+      const hydrated = hydrateComposerDraft(draft, props.skills, threadLinks);
       if (hydrated.skillTokens.length > 0) {
         setDraft(hydrated.draft);
         setSkillTokens(hydrated.skillTokens);
       }
     }
-  }, [draft, props.skills, skillTokens.length]);
+  }, [draft, props.skills, skillTokens.length, threadLinks]);
 
   useEffect(() => {
     if (!autocompleteKind) {
@@ -5498,6 +5559,13 @@ export function Composer(props: ComposerProps) {
     });
   };
 
+  const applyThreadReference = (thread: ResolvedThreadLink): void => {
+    if (!inputRef.current) {
+      return;
+    }
+    inputRef.current.insertMentionToken(createComposerThreadToken(thread, 0));
+  };
+
   /**
    * "@ → Add directory…" / "+"-menu action: run the OS picker (which also
    * registers the pick as a tracked directory, without navigating) and
@@ -5906,6 +5974,21 @@ export function Composer(props: ComposerProps) {
   };
 
   const handlePaste = (event: ClipboardEvent<HTMLElement>): void => {
+    // Browser DataTransfer always exposes getData. A few renderer tests use a
+    // deliberately file-only clipboard stub, so keep that path compatible too.
+    const pastedText = typeof event.clipboardData.getData === "function"
+      ? event.clipboardData.getData("text/plain").trim()
+      : "";
+    const pastedThread =
+      resolveThreadHref(pastedText, threadLinks)
+      ?? resolveThreadIdText(pastedText, threadLinks);
+    if (pastedThread) {
+      event.preventDefault();
+      setSendError(undefined);
+      applyThreadReference(pastedThread);
+      return;
+    }
+
     const pastedFiles = getImageFilesFromDataTransfer(event.clipboardData);
     // Non-image FILES only (kind === "file" items) — plain text paste
     // must fall through to the editor untouched.

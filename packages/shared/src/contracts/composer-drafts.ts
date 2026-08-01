@@ -29,9 +29,11 @@ export type ComposerDraftSkillToken = {
    * composer directory-reference chip: `name` is the tracked directory's
    * label and `path` its absolute path. "file" marks a file-reference
    * chip: `name` is the file's basename and `path` its absolute file
-   * path. Both serialize to the same `[@label](~/path)` markdown.
+   * path. Both serialize to the same `[@label](~/path)` markdown. "thread"
+   * marks a known-thread reference: `name` is its display title and `path`
+   * is its canonical `pwragent://thread/...` URL.
    */
-  kind?: "directory" | "file";
+  kind?: "directory" | "file" | "thread";
 };
 
 export type ComposerDraftSnapshotRecord = {
