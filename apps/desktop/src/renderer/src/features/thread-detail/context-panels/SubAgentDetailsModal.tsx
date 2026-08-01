@@ -14,7 +14,7 @@ import {
   subAgentTone,
 } from "./subagent-format";
 import { RailStatusChip } from "./RailStatusChip";
-import { subAgentOriginLabel } from "./subagent-kind";
+import { isCodexNativeSubAgent, subAgentOriginLabel } from "./subagent-kind";
 
 type SubAgentDetailsModalProps = {
   defaultBackend: AppServerBackendKind;
@@ -91,7 +91,9 @@ export function SubAgentDetailsModal(props: SubAgentDetailsModalProps) {
   const model = subAgent.preferredModel ?? usage?.model ?? usage?.cost?.model;
   const fastMode = subAgent.preferredFastMode ?? usage?.fastMode;
   const transcriptThreadId =
-    subAgent.monitorThreadId && subAgent.monitorThreadId !== props.parentThreadId
+    isCodexNativeSubAgent(subAgent) &&
+    subAgent.monitorThreadId &&
+    subAgent.monitorThreadId !== props.parentThreadId
       ? subAgent.monitorThreadId
       : undefined;
   const backendLabel = subAgent.backend ? formatBackendLabel(subAgent.backend) : undefined;
