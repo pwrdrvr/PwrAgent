@@ -54,16 +54,16 @@ describe("ThreadMarkdown", () => {
   it("renders markdown formatting and local file links", () => {
     render(
       <ThreadMarkdown
-        text={"Use **bold** text and open [`ce:work`](/Users/huntharo/.codex/skills/ce-work/SKILL.md)."}
+        text={"Use **bold** text and open [`AGENTS.md`](/Users/huntharo/PwrAgent/AGENTS.md)."}
       />
     );
 
     expect(screen.getByText("bold", { selector: "strong" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "ce:work" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "AGENTS.md" })).toHaveAttribute(
       "href",
-      "file:///Users/huntharo/.codex/skills/ce-work/SKILL.md"
+      "file:///Users/huntharo/PwrAgent/AGENTS.md"
     );
-    expect(screen.getByRole("link", { name: "ce:work" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "AGENTS.md" })).toHaveAttribute(
       "title",
       "Open in PwrAgent"
     );
@@ -319,6 +319,30 @@ describe("ThreadMarkdown", () => {
 
     expect(screen.getByText("$frontend-design")).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "$frontend-design" })).not.toBeInTheDocument();
+  });
+
+  it("renders explicit SKILL.md links as chips without live skill inventory", () => {
+    const skillPath = [
+      "/Users/huntharo/.codex/plugins/cache/openai-curated-remote/github",
+      "0.1.8-2841cf9749ae/skills/yeet/SKILL.md",
+    ].join("/");
+    const { container } = render(
+      <ThreadMarkdown
+        text={`[Open the GitHub Publish Skill](${skillPath})`}
+      />
+    );
+
+    const chip = screen.getByText("Open the GitHub Publish Skill")
+      .closest("[data-skill-chip]");
+    expect(chip).toBeInTheDocument();
+    expect(chip).toHaveAttribute("draggable", "false");
+    expect(screen.queryByRole("link", { name: "Open the GitHub Publish Skill" }))
+      .not.toBeInTheDocument();
+    expect(container.querySelector(".thread-markdown__editor-link")).toBeNull();
+
+    fireEvent.contextMenu(chip!, { clientX: 120, clientY: 80 });
+    expect(screen.getByRole("menuitem", { name: "Copy Skill Path" }))
+      .toBeInTheDocument();
   });
 
   it("shows skill paths and replaces text selection with skill file actions", async () => {
