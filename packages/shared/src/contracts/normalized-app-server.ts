@@ -333,7 +333,8 @@ export type AppServerThreadMessageOriginKind =
   | "agent"
   | "automation"
   | "messaging"
-  | "pwragent";
+  | "pwragent"
+  | "sub-agent";
 
 export type AppServerThreadMessageOrigin = {
   kind: AppServerThreadMessageOriginKind;
@@ -358,6 +359,13 @@ export type AppServerThreadMessageOrigin = {
       phoneNumber?: string;
       username?: string;
     };
+  };
+  subAgent?: {
+    kind: "monitor";
+    monitorId: string;
+    task: string;
+    outcome: "success" | "failure" | "cancelled";
+    summary: string;
   };
 };
 

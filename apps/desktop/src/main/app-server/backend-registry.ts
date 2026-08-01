@@ -4703,6 +4703,90 @@ function mergeThreadMessageOrigins(
   };
 }
 
+function buildTaskMonitorMessageOrigin(params: {
+  monitorId: string;
+  monitorThreadId?: string;
+  outcome: CompleteMonitoringToolArgs["outcome"];
+  summary: string;
+  task: string;
+}): AppServerThreadMessageOrigin {
+  return {
+    kind: "sub-agent",
+    ...(params.monitorThreadId
+      ? {
+          sourceThread: {
+            backend: "codex",
+            threadId: params.monitorThreadId,
+            title: params.task,
+          },
+        }
+      : {}),
+    subAgent: {
+      kind: "monitor",
+      monitorId: params.monitorId,
+      outcome: params.outcome,
+      summary: params.summary,
+      task: params.task,
+    },
+  };
+}
+
+function inferLegacyTaskMonitorMessageOrigins(params: {
+  origins: Record<string, AppServerThreadMessageOrigin>;
+  replay: AppServerThreadReplay;
+  subAgents?: ThreadSubAgentSummary[];
+}): Record<string, AppServerThreadMessageOrigin> {
+  if (!params.subAgents?.length) {
+    return params.origins;
+  }
+
+  const origins = { ...params.origins };
+  const messages = [
+    ...params.replay.entries.filter(
+      (entry): entry is Extract<AppServerThreadEntry, { type: "message" }> =>
+        entry.type === "message" && entry.role === "user",
+    ),
+    ...params.replay.messages.filter((message) => message.role === "user"),
+  ];
+  for (const message of messages) {
+    if (
+      origins[message.id]
+      || !message.text.startsWith(
+        "A lightweight PwrAgent monitor subagent finished a long-running task.",
+      )
+    ) {
+      continue;
+    }
+    const task = message.text.match(/(?:^|\n)Task: ([^\n]+)/)?.[1]?.trim();
+    const outcome = message.text.match(
+      /(?:^|\n)Outcome: (success|failure|cancelled)(?:\n|$)/,
+    )?.[1] as CompleteMonitoringToolArgs["outcome"] | undefined;
+    if (!task || !outcome) {
+      continue;
+    }
+    const subAgent = params.subAgents.find(
+      (candidate) =>
+        candidate.task === task
+        && (candidate.outcome === outcome || candidate.status === outcome),
+    );
+    if (!subAgent) {
+      continue;
+    }
+    const summary = subAgent.lastMessage?.trim();
+    if (!summary || !message.text.includes(`Summary: ${summary}`)) {
+      continue;
+    }
+    origins[message.id] = buildTaskMonitorMessageOrigin({
+      monitorId: subAgent.monitorId,
+      monitorThreadId: subAgent.monitorThreadId,
+      outcome,
+      summary,
+      task,
+    });
+  }
+  return origins;
+}
+
 function resolveThreadMessageOrigin(params: {
   origin?: ThreadTurnQueueOrigin;
   messageOrigin?: AppServerThreadMessageOrigin;
@@ -7164,6 +7248,35 @@ export class DesktopBackendRegistry {
       await this.acpBackend.readReplay(backend, request.threadId),
       request,
     );
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend,
+      threadId: request.threadId,
+    });
+    const messageIds = [
+      ...replay.entries.flatMap((entry) =>
+        entry.type === "message" && entry.role === "user" ? [entry.id] : [],
+      ),
+      ...replay.messages.flatMap((message) =>
+        message.role === "user" ? [message.id] : [],
+      ),
+    ];
+    const persistedMessageOrigins =
+      typeof this.overlayStore.readThreadMessageOrigins === "function"
+        ? await this.overlayStore.readThreadMessageOrigins({
+            backend,
+            threadId: request.threadId,
+            messageIds,
+          })
+        : {};
+    const messageOrigins = inferLegacyTaskMonitorMessageOrigins({
+      origins: persistedMessageOrigins,
+      replay,
+      subAgents: overlay?.subAgents,
+    });
+    const replayWithMessageOrigins = mergeThreadMessageOrigins(
+      replay,
+      messageOrigins,
+    );
     const pricing =
       typeof this.overlayStore.readThreadPricing === "function"
         ? await this.overlayStore.readThreadPricing({
@@ -7176,8 +7289,10 @@ export class DesktopBackendRegistry {
       fetchedAt: Date.now(),
       pricing,
       threadId: request.threadId,
-      ...(replay.threadStatus ? { threadStatus: replay.threadStatus } : {}),
-      replay,
+      ...(replayWithMessageOrigins.threadStatus
+        ? { threadStatus: replayWithMessageOrigins.threadStatus }
+        : {}),
+      replay: replayWithMessageOrigins,
     };
   }
 
@@ -8480,7 +8595,7 @@ export class DesktopBackendRegistry {
             messageIds,
           })
         : {};
-    const messageOrigins = { ...persistedMessageOrigins };
+    let messageOrigins = { ...persistedMessageOrigins };
     const firstUserMessage = replayWithImmutableUsage.entries.find(
       (entry) => entry.type === "message" && entry.role === "user",
     );
@@ -8501,6 +8616,11 @@ export class DesktopBackendRegistry {
         },
       };
     }
+    messageOrigins = inferLegacyTaskMonitorMessageOrigins({
+      origins: messageOrigins,
+      replay: replayWithImmutableUsage,
+      subAgents: overlay?.subAgents,
+    });
     const replayWithMessageOrigins = mergeThreadMessageOrigins(
       replayWithImmutableUsage,
       messageOrigins,
@@ -21426,6 +21546,13 @@ export class DesktopBackendRegistry {
         }
       | undefined;
     if (params.triggerParentTurn) {
+      const messageOrigin = buildTaskMonitorMessageOrigin({
+        monitorId: params.record.monitorId,
+        monitorThreadId: params.record.monitorThreadId,
+        outcome: params.outcome,
+        summary: params.summary,
+        task: params.record.task,
+      });
       const submitted = await this.submitTurn({
         backend: params.record.parentBackend,
         threadId: params.record.parentThreadId,
@@ -21443,6 +21570,7 @@ export class DesktopBackendRegistry {
           },
         ],
         origin: "manual",
+        messageOrigin,
       });
       parentTurn =
         submitted.status === "started"

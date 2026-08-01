@@ -26,6 +26,7 @@ import type {
   ThreadMessagingBindingTransition,
   ThreadPermissionTransition,
   ThreadTurnFailure,
+  ThreadSubAgentSummary,
   MarkdownFileViewerContext,
 } from "@pwragent/shared";
 import {
@@ -102,6 +103,7 @@ type TranscriptListProps = {
   threadId?: string;
   fileViewerContext?: MarkdownFileViewerContext;
   skills?: AppServerSkillSummary[];
+  subAgents?: ThreadSubAgentSummary[];
   onOpenImage?: (image: AppServerThreadImagePart) => void;
   onViewportChange?: (viewport?: TranscriptViewport) => void;
   onRespondToPendingRequest?: (action: PendingRequestAction) => Promise<void>;
@@ -1307,6 +1309,7 @@ export function TranscriptList(props: TranscriptListProps) {
                   message={item.entry}
                   fileViewerContext={props.fileViewerContext}
                   skills={skills}
+                  subAgents={props.subAgents}
                   onOpenImage={props.onOpenImage}
                 />
               );

@@ -2933,6 +2933,7 @@ export function ThreadView(props: ThreadViewProps) {
               restoredViewport={props.transcriptViewport}
               reglueRequestKey={transcriptReglueRequestKey}
               skills={props.skills}
+              subAgents={selectedThread!.subAgents}
               pendingProtocolActivityEntry={pendingProtocolActivityEntry}
               pendingUsageActivityEntry={pendingUsageActivityEntry}
               threadId={`${selectedThread!.source}:${selectedThread!.id}`}
