@@ -1237,6 +1237,7 @@ class MockBackendClient {
   };
   startTurnCalls: Array<NonNullable<MockBackendClient["lastStartTurnParams"]>> = [];
   startTurnCallCount = 0;
+  closeCallCount = 0;
   invalidIdRecoveryCalls: Array<{ failureMessage: string; threadId: string }> = [];
   lastSteerTurnParams?: {
     threadId: string;
@@ -1355,6 +1356,7 @@ class MockBackendClient {
         rolloutPath: string;
         threadId: string;
       };
+      invalidIdRecoveryDelay?: Promise<unknown>;
       invalidIdRecoveryError?: Error;
       steerTurnError?: Error;
       setThreadPermissionsError?: Error;
@@ -1369,7 +1371,7 @@ class MockBackendClient {
   ) {}
 
   async close(): Promise<void> {
-    return;
+    this.closeCallCount += 1;
   }
 
   async getInitializeResult() {
@@ -1587,6 +1589,7 @@ class MockBackendClient {
     threadId: string;
   }> {
     this.invalidIdRecoveryCalls.push(params);
+    await this.options.invalidIdRecoveryDelay;
     if (this.options.invalidIdRecoveryError) {
       throw this.options.invalidIdRecoveryError;
     }
@@ -7197,6 +7200,76 @@ script = "echo setup"
     await registry.close();
   });
 
+  it("repairs when the terminal failure arrives before turn/start responds", async () => {
+    const threadId = "thread-terminal-before-start-response";
+    const startTurnDelay = createDeferred<void>();
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      startTurnDelay: startTurnDelay.promise,
+      startTurnResults: [
+        { threadId, turnId: "turn-failed-before-response" },
+        { threadId, turnId: "turn-retried" },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({}),
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null,
+    });
+
+    const startPromise = registry.startTurn({
+      backend: "codex",
+      threadId,
+      input: [{ type: "text", text: "continue" }],
+    });
+    await waitForCondition(() => codexClient.startTurnCallCount === 1);
+    await codexClient.emit({
+      method: "turn/failed",
+      params: {
+        threadId,
+        turnId: "turn-failed-before-response",
+        turn: {
+          id: "turn-failed-before-response",
+          status: "failed",
+          error: {
+            message:
+              "[ApiIdParam] [input[2].id] [invalid_id_prefix] "
+              + "Invalid 'input[2].id': 'review_rollout_user'. "
+              + "Expected an ID that begins with 'msg'.",
+          },
+        },
+      },
+    });
+    startTurnDelay.resolve();
+    await expect(startPromise).resolves.toEqual({
+      backend: "codex",
+      threadId,
+      turnId: "turn-failed-before-response",
+    });
+    await waitForCondition(() => codexClient.startTurnCallCount === 2);
+
+    expect(codexClient.invalidIdRecoveryCalls).toHaveLength(1);
+    await codexClient.emit({
+      method: "turn/completed",
+      params: {
+        threadId,
+        turnId: "turn-retried",
+        turn: {
+          id: "turn-retried",
+          status: "completed",
+          output: [],
+        },
+      },
+    });
+    expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
+      count: 0,
+      threadIds: [],
+    });
+
+    await registry.close();
+  });
+
   it("never repairs again when the automatic resubmission fails immediately", async () => {
     const threadId = "thread-invalid-id-retry-fails";
     const invalidIdError = new Error(
@@ -7265,6 +7338,65 @@ script = "echo setup"
     });
 
     await registry.close();
+  });
+
+  it("waits for an in-flight repair and does not retry after registry close", async () => {
+    const threadId = "thread-close-during-invalid-id-repair";
+    const recoveryDelay = createDeferred<void>();
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      invalidIdRecoveryDelay: recoveryDelay.promise,
+      startTurnResults: [{ threadId, turnId: "turn-failed-invalid-id" }],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({}),
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null,
+    });
+
+    await registry.startTurn({
+      backend: "codex",
+      threadId,
+      input: [{ type: "text", text: "continue" }],
+    });
+    await codexClient.emit({
+      method: "turn/failed",
+      params: {
+        threadId,
+        turnId: "turn-failed-invalid-id",
+        turn: {
+          id: "turn-failed-invalid-id",
+          status: "failed",
+          error: {
+            message:
+              "[ApiIdParam] [input[2].id] [invalid_id_prefix] "
+              + "Invalid 'input[2].id': 'review_rollout_user'. "
+              + "Expected an ID that begins with 'msg'.",
+          },
+        },
+      },
+    });
+    await waitForCondition(
+      () => codexClient.invalidIdRecoveryCalls.length === 1,
+    );
+
+    let closeSettled = false;
+    const closePromise = registry.close().finally(() => {
+      closeSettled = true;
+    });
+    await Promise.resolve();
+    expect(closeSettled).toBe(false);
+    expect(codexClient.closeCallCount).toBe(0);
+
+    recoveryDelay.resolve();
+    await closePromise;
+    expect(codexClient.startTurnCallCount).toBe(1);
+    expect(codexClient.closeCallCount).toBe(1);
+
+    await flushAsync();
+    expect(codexClient.invalidIdRecoveryCalls).toHaveLength(1);
+    expect(codexClient.startTurnCallCount).toBe(1);
   });
 
   it("emits a sticky failure status when invalid message-ID recovery fails", async () => {

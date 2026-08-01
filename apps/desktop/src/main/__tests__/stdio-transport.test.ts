@@ -47,10 +47,11 @@ class MockCodexChildProcess extends EventEmitter {
   signalCode: NodeJS.Signals | null = null;
   killCalled = false;
 
-  kill(signal: NodeJS.Signals = "SIGTERM"): void {
+  kill(signal: NodeJS.Signals = "SIGTERM"): boolean {
     this.killCalled = true;
     this.signalCode = signal;
     this.emit("close");
+    return true;
   }
 }
 
@@ -107,6 +108,54 @@ describe("StdioJsonRpcTransport", () => {
       transport.send(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "thread/list" })),
     ).toThrow("codex app server stdio not connected");
     expect(child.writes).toHaveLength(0);
+  });
+
+  it("does not treat a child error as proof that the process exited", async () => {
+    const child = new MockCodexChildProcess();
+    child.kill = vi.fn(() => {
+      child.emit("error", Object.assign(new Error("kill EPERM"), { code: "EPERM" }));
+      return false;
+    });
+    spawnMock.mockReturnValue(child);
+    const transport = new StdioJsonRpcTransport({
+      command: "codex",
+      env: { PATH: process.env.PATH ?? "" },
+    });
+
+    await transport.connect();
+    let closeSettled = false;
+    const closePromise = transport.close().finally(() => {
+      closeSettled = true;
+    });
+    await Promise.resolve();
+
+    expect(closeSettled).toBe(false);
+    child.exitCode = 1;
+    child.emit("close");
+    await closePromise;
+    expect(closeSettled).toBe(true);
+  });
+
+  it("rejects close when no process exit is observed after SIGKILL", async () => {
+    vi.useFakeTimers();
+    try {
+      const child = new MockCodexChildProcess();
+      child.kill = vi.fn(() => false);
+      spawnMock.mockReturnValue(child);
+      const transport = new StdioJsonRpcTransport({
+        command: "codex",
+        env: { PATH: process.env.PATH ?? "" },
+      });
+
+      await transport.connect();
+      const closeResult = expect(transport.close()).rejects.toThrow(
+        "Codex app-server did not accept SIGKILL",
+      );
+      await vi.advanceTimersByTimeAsync(10_000);
+      await closeResult;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("still throws when the app-server exits unexpectedly", async () => {

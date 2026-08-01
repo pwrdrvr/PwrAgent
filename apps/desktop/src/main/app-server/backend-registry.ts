@@ -9525,8 +9525,14 @@ export class DesktopBackendRegistry {
     invalidIdRecoveryAttempted?: boolean;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
     this.assertNotBootstrap("startTurn");
+    if (this.closed) {
+      throw new Error("Desktop backend registry is closed");
+    }
     if (params.backend === "codex" && !params.invalidIdRecoveryAttempted) {
       await this.codexInvalidIdRecoveryBarrier;
+      if (this.closed) {
+        throw new Error("Desktop backend registry closed before turn start");
+      }
     }
     const migrationResult = await this.applyThreadModelMigration({
       backend: params.backend,
@@ -9727,6 +9733,9 @@ export class DesktopBackendRegistry {
       result =
         params.backend === "codex"
           ? await this.withCodexThreadClient(params.threadId, async (client, mode) => {
+              if (this.closed) {
+                throw new Error("Desktop backend registry closed before turn start");
+              }
               const effectiveMode = params.executionMode ?? mode;
               const modeSettings = EXECUTION_MODE_SUMMARIES[effectiveMode];
               const started = await client.startTurn({
@@ -13565,6 +13574,22 @@ export class DesktopBackendRegistry {
       this.pendingServerRequests.delete(key);
     }
 
+    const recoveryCloseError = new Error(
+      "Desktop backend registry closed before Codex history recovery completed",
+    );
+    for (const recovery of this.pendingCodexInvalidIdRecoveries.splice(0)) {
+      recovery.reject(recoveryCloseError);
+    }
+    if (!this.codexInvalidIdRecoveryDrain) {
+      this.resolveCodexInvalidIdRecoveryBarrier?.();
+      this.resolveCodexInvalidIdRecoveryBarrier = undefined;
+      this.codexInvalidIdRecoveryBarrier = undefined;
+    }
+    const recoveryDrain = this.codexInvalidIdRecoveryDrain;
+    if (recoveryDrain) {
+      await recoveryDrain;
+    }
+
     await this.acpBackend.close();
     await this.codexClient.close();
     await this.grokClient.close();
@@ -13857,8 +13882,16 @@ export class DesktopBackendRegistry {
     const candidate = this.codexRetryableTurnStarts.get(threadId);
     if (
       candidate
-      && (!candidate.turnId || !turnId || candidate.turnId === turnId)
+      && (
+        !candidate.turnId
+        || candidate.turnId.startsWith("pending:")
+        || !turnId
+        || candidate.turnId === turnId
+      )
     ) {
+      if (turnId && candidate.turnId?.startsWith("pending:")) {
+        candidate.turnId = turnId;
+      }
       candidate.terminalObserved = true;
       this.codexRetryableTurnStarts.delete(threadId);
       if (
@@ -13906,6 +13939,9 @@ export class DesktopBackendRegistry {
     candidate: CodexRetryableTurnStart,
     failureMessage: string,
   ): Promise<PendingCodexInvalidIdRecovery> {
+    if (this.closed) {
+      throw new Error("Desktop backend registry is closed");
+    }
     const queued = this.pendingCodexInvalidIdRecoveries.find(
       (entry) => entry.params.threadId === candidate.params.threadId,
     );
@@ -14053,7 +14089,8 @@ export class DesktopBackendRegistry {
 
   private maybeDrainCodexInvalidIdRecoveries(): void {
     if (
-      this.codexInvalidIdRecoveryDrain
+      this.closed
+      || this.codexInvalidIdRecoveryDrain
       || this.pendingCodexInvalidIdRecoveries.length === 0
       || this.hasActiveCodexWork()
     ) {
@@ -14084,7 +14121,8 @@ export class DesktopBackendRegistry {
       return;
     }
     while (
-      this.pendingCodexInvalidIdRecoveries.length > 0
+      !this.closed
+      && this.pendingCodexInvalidIdRecoveries.length > 0
       && !this.hasActiveCodexWork()
     ) {
       const recovery = this.pendingCodexInvalidIdRecoveries.shift()!;
@@ -14094,6 +14132,11 @@ export class DesktopBackendRegistry {
           failureMessage: recovery.failureMessage,
           threadId: recovery.params.threadId,
         });
+        if (this.closed) {
+          throw new Error(
+            "Desktop backend registry closed during Codex history recovery; request was not resubmitted",
+          );
+        }
         recovery.audit = {
           ...recovery.audit,
           backupPath: repaired.backupPath,
@@ -14105,6 +14148,11 @@ export class DesktopBackendRegistry {
           turnId: recovery.turnId!,
           recovery: recovery.audit,
         });
+        if (this.closed) {
+          throw new Error(
+            "Desktop backend registry closed after Codex history repair; request was not resubmitted",
+          );
+        }
         const statusMessage =
           `PwrAgent repaired ${repaired.removedMessageIdCount} invalid persisted `
           + `message ID(s) for thread ${repaired.threadId}. `
@@ -14138,6 +14186,11 @@ export class DesktopBackendRegistry {
           turnId: recovery.turnId!,
           recovery: recovery.audit,
         });
+        if (this.closed) {
+          throw new Error(
+            "Desktop backend registry closed before the repaired request could be resubmitted",
+          );
+        }
         retrySubmitted = true;
         const retried = await this.startTurnNow({
           ...recovery.params,
@@ -14208,32 +14261,36 @@ export class DesktopBackendRegistry {
           );
         }
         recovery.reject(error);
-        await this.emitCodexInvalidIdRecoveryUpdate({
-          failureMessage: recovery.failureMessage,
-          recoveryError: error instanceof Error ? error.message : String(error),
-          status: "failed",
-          threadId: recovery.params.threadId,
-          ...(recovery.turnId ? { turnId: recovery.turnId } : {}),
-        });
+        if (!this.closed) {
+          await this.emitCodexInvalidIdRecoveryUpdate({
+            failureMessage: recovery.failureMessage,
+            recoveryError: error instanceof Error ? error.message : String(error),
+            status: "failed",
+            threadId: recovery.params.threadId,
+            ...(recovery.turnId ? { turnId: recovery.turnId } : {}),
+          });
+        }
         backendRegistryLog.error("Codex invalid-message-ID history recovery failed", {
           error: error instanceof Error ? error.message : String(error),
           phase: retrySubmitted ? "automatic-retry" : "repair",
           threadId: recovery.params.threadId,
           turnId: recovery.turnId ?? null,
         });
-        await this.emit({
-          backend: "codex",
-          notification: {
-            method: "warning",
-            params: {
-              threadId: recovery.params.threadId,
-              message:
-                `PwrAgent could not repair invalid persisted message IDs for thread `
-                + `${recovery.params.threadId}: `
-                + (error instanceof Error ? error.message : String(error)),
+        if (!this.closed) {
+          await this.emit({
+            backend: "codex",
+            notification: {
+              method: "warning",
+              params: {
+                threadId: recovery.params.threadId,
+                message:
+                  `PwrAgent could not repair invalid persisted message IDs for thread `
+                  + `${recovery.params.threadId}: `
+                  + (error instanceof Error ? error.message : String(error)),
+              },
             },
-          },
-        });
+          });
+        }
       }
     }
   }
