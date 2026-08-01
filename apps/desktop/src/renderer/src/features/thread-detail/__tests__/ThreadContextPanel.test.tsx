@@ -425,7 +425,11 @@ describe("ThreadContextPanel", () => {
     expect(screen.queryByText(/\$0\.024 list price/)).not.toBeInTheDocument();
   });
 
-  it("labels review sub-agent usage separately from monitor usage", () => {
+  it("does not offer the parent transcript for an inline review", () => {
+    const openSubAgentTranscriptWindow = vi.fn(async () => ({ opened: true }));
+    (window as Window & { pwragent?: unknown }).pwragent = {
+      openSubAgentTranscriptWindow,
+    };
     renderPanel({
       activeTab: "subagents",
       pinned: true,
@@ -458,6 +462,54 @@ describe("ThreadContextPanel", () => {
     expect(
       screen.getByText("Review usage: 800 uncached in · 200 cached · 50 out"),
     ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
+
+    expect(
+      within(screen.getByRole("dialog")).queryByRole("button", {
+        name: "Open transcript",
+      }),
+    ).not.toBeInTheDocument();
+    expect(openSubAgentTranscriptWindow).not.toHaveBeenCalled();
+  });
+
+  it("opens a detached review's distinct child transcript", () => {
+    const openSubAgentTranscriptWindow = vi.fn(async () => ({ opened: true }));
+    (window as Window & { pwragent?: unknown }).pwragent = {
+      openSubAgentTranscriptWindow,
+    };
+    renderPanel({
+      activeTab: "subagents",
+      pinned: true,
+      thread: {
+        ...baseThread,
+        subAgents: [
+          {
+            monitorId: "review:turn-review-1",
+            task: "Review changes against main",
+            status: "success",
+            createdAt: 2000,
+            completedAt: 3000,
+            updatedAt: 3000,
+            monitorThreadId: "thread-review",
+            monitorTurnId: "turn-review-1",
+          },
+        ],
+      },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
+    fireEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", {
+        name: "Open transcript",
+      }),
+    );
+
+    expect(openSubAgentTranscriptWindow).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-review",
+      title: "Review changes against main",
+    });
   });
 
   it("labels Codex native sub-agent usage separately from monitor usage", () => {

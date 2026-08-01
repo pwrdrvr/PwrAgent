@@ -18,6 +18,7 @@ import { subAgentOriginLabel } from "./subagent-kind";
 
 type SubAgentDetailsModalProps = {
   defaultBackend: AppServerBackendKind;
+  parentThreadId: string;
   pricingDisplayOptions?: PricingDisplayOptions;
   subAgent: ThreadSubAgentSummary;
   onClose: () => void;
@@ -89,7 +90,10 @@ export function SubAgentDetailsModal(props: SubAgentDetailsModalProps) {
   const usage = subAgent.monitorUsage;
   const model = subAgent.preferredModel ?? usage?.model ?? usage?.cost?.model;
   const fastMode = subAgent.preferredFastMode ?? usage?.fastMode;
-  const transcriptThreadId = subAgent.monitorThreadId;
+  const transcriptThreadId =
+    subAgent.monitorThreadId && subAgent.monitorThreadId !== props.parentThreadId
+      ? subAgent.monitorThreadId
+      : undefined;
   const backendLabel = subAgent.backend ? formatBackendLabel(subAgent.backend) : undefined;
   const usageEstimates = usage
     ? formatSubAgentUsageEstimates({
