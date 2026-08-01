@@ -862,6 +862,7 @@ class DesktopAppServerService {
     string,
     Map<string, PrLookupSubscriber>
   >();
+  private readonly pendingPrOverlayWrites = new Map<string, Promise<void>>();
   private readonly prStatusTokenBucket = new PrStatusTokenBucket();
   private lastPrObservationTimestamp = 0;
   private prStatusRegistryLoaded = false;
@@ -2096,10 +2097,16 @@ class DesktopAppServerService {
       });
     }
 
-    if (method === "turn/completed") {
-      // A finished turn is real activity on this thread even when it is off
-      // screen — thaw its PRs if the poller had iceboxed them.
-      this.prPollingScheduler?.noteThreadInteraction([threadKey]);
+    if (method === "turn/completed" || method === "thread/branch/updated") {
+      if (method === "turn/completed") {
+        // A finished turn is real activity on this thread even when it is off
+        // screen — thaw its PRs if the poller had iceboxed them.
+        this.prPollingScheduler?.noteThreadInteraction([threadKey]);
+      }
+
+      // Codex can publish turn/completed before its asynchronous branch
+      // adoption finishes. Refresh again from the causally newer branch event
+      // so a PR created on that branch does not wait for thread selection.
       const prContexts = this.prRefreshContextByThreadKey.get(threadKey);
       if (prContexts?.length) {
         for (const prContext of prContexts) {
@@ -2108,7 +2115,8 @@ class DesktopAppServerService {
             provider: "github.com",
             trigger: "post-turn",
           }).catch((error) => {
-            appServerLog.warn("post-turn PR refresh failed", {
+            appServerLog.warn("turn-boundary PR refresh failed", {
+              method,
               threadId,
               error: error instanceof Error ? error.message : String(error),
             });
@@ -2811,39 +2819,83 @@ class DesktopAppServerService {
     let changedThreadCount = 0;
     await Promise.all(
       [...subscribers.values()].map(async (subscriber) => {
-        const nextPrs = this.mergePrHistory(subscriber.previousPrs, params.prs);
-        const updated = await this.getOverlayStore().setThreadPullRequests({
+        await this.enqueuePullRequestOverlayWrite({
           backend: subscriber.backend,
           threadId: subscriber.threadId,
-          prs: nextPrs,
-          fetchedAt: params.fetchedAt,
-          refreshKey: subscriber.requestKey,
-        });
-        const persistedPrs = updated.prs ?? [];
-        if ((updated.prsFetchedAt ?? 0) > params.fetchedAt) {
-          appServerLog.info("thread PR overlay observation ignored", {
-            backend: subscriber.backend,
-            threadId: subscriber.threadId,
-            requestKey: subscriber.requestKey,
-            observedAt: params.fetchedAt,
-            currentObservedAt: updated.prsFetchedAt,
-            currentRequestKey: updated.prsRefreshKey,
-          });
-          return;
-        }
+          write: async () => {
+            const overlay = this.getOverlayStore();
+            // Branch changes use a different lookup key, so their refresh can
+            // overlap the preceding branch's lookup. Re-read inside the
+            // per-thread write queue to retain history from either lookup.
+            const latest = await overlay.getThreadOverlayState({
+              backend: subscriber.backend,
+              threadId: subscriber.threadId,
+            });
+            const previousPersistedPrs = latest?.prs ?? subscriber.previousPrs;
+            const latestPrs = this.mergePrHistory(
+              latest?.prs ?? [],
+              latest?.detachedPrs ?? [],
+            );
+            const previousPrs = this.mergePrHistory(
+              subscriber.previousPrs,
+              latestPrs,
+            );
+            const nextPrs = this.mergePrHistory(previousPrs, params.prs);
+            const updated = await overlay.setThreadPullRequests({
+              backend: subscriber.backend,
+              threadId: subscriber.threadId,
+              prs: nextPrs,
+              fetchedAt: params.fetchedAt,
+              refreshKey: subscriber.requestKey,
+            });
+            const persistedPrs = updated.prs ?? [];
+            if ((updated.prsFetchedAt ?? 0) > params.fetchedAt) {
+              appServerLog.info("thread PR overlay observation ignored", {
+                backend: subscriber.backend,
+                threadId: subscriber.threadId,
+                requestKey: subscriber.requestKey,
+                observedAt: params.fetchedAt,
+                currentObservedAt: updated.prsFetchedAt,
+                currentRequestKey: updated.prsRefreshKey,
+              });
+              return;
+            }
 
-        if (!prSummariesEqual(subscriber.previousPrs, persistedPrs)) {
-          changedThreadCount += 1;
-          await this.publishThreadPullRequestsUpdated({
-            backend: subscriber.backend,
-            threadId: subscriber.threadId,
-            prs: persistedPrs,
-            detachedPrs: updated.detachedPrs ?? [],
-          });
-        }
+            if (!prSummariesEqual(previousPersistedPrs, persistedPrs)) {
+              changedThreadCount += 1;
+              await this.publishThreadPullRequestsUpdated({
+                backend: subscriber.backend,
+                threadId: subscriber.threadId,
+                prs: persistedPrs,
+                detachedPrs: updated.detachedPrs ?? [],
+              });
+            }
+          },
+        });
       }),
     );
     return { changedThreadCount, subscriberCount: subscribers.size };
+  }
+
+  private enqueuePullRequestOverlayWrite<T>(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    write: () => Promise<T>;
+  }): Promise<T> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const previous = this.pendingPrOverlayWrites.get(threadKey) ?? Promise.resolve();
+    const result = previous.then(params.write);
+    const settled = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.pendingPrOverlayWrites.set(threadKey, settled);
+    void settled.then(() => {
+      if (this.pendingPrOverlayWrites.get(threadKey) === settled) {
+        this.pendingPrOverlayWrites.delete(threadKey);
+      }
+    });
+    return result;
   }
 
   private async persistPullRequestLookupHit(params: {
@@ -4364,6 +4416,7 @@ class DesktopAppServerService {
     this.pendingPrLookupRefreshes.clear();
     this.queuedAuthoritativePrLookupRefreshes.clear();
     this.prLookupSubscribers.clear();
+    this.pendingPrOverlayWrites.clear();
     this.prStatusRegistryLoaded = false;
     this.prLookupRegistryLoaded = false;
     this.pendingDirectoryGitStatusRefreshes.clear();
