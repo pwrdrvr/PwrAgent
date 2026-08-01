@@ -43,10 +43,13 @@ class MockCodexChildProcess extends EventEmitter {
   });
   readonly stdout = new PassThrough();
   readonly stderr = new PassThrough();
+  exitCode: number | null = null;
+  signalCode: NodeJS.Signals | null = null;
   killCalled = false;
 
-  kill(): void {
+  kill(signal: NodeJS.Signals = "SIGTERM"): void {
     this.killCalled = true;
+    this.signalCode = signal;
     this.emit("close");
   }
 }
