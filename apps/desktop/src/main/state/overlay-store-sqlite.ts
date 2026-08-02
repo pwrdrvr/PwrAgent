@@ -488,6 +488,28 @@ export class SqliteOverlayStore {
       }
     }
 
+    // Agent names originate from the thread title when a thread is promoted
+    // or created as an Agent. Keep that invariant across older builds that
+    // renamed only the provider thread and left the overlay name stale.
+    for (const thread of params.threads) {
+      const threadTitle = thread.title.trim();
+      if (!threadTitle) {
+        continue;
+      }
+      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+      const current = this.getThread(threadKey);
+      if (current?.agent && current.agent.name !== threadTitle) {
+        this.putThread(threadKey, {
+          ...current,
+          agent: {
+            ...current.agent,
+            name: threadTitle,
+            updatedAt: params.fetchedAt,
+          },
+        });
+      }
+    }
+
     const overlayByThreadKey = Object.fromEntries(
       params.threads.map((thread) => {
         const threadKey = buildThreadIdentityKey(thread.source, thread.id);

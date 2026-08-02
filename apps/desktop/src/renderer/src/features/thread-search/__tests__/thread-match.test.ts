@@ -6,6 +6,7 @@ import type {
   ThreadSearchResult,
 } from "@pwragent/shared";
 import {
+  mergeAgentMatches,
   mergePrNumberMatches,
   parsePrNumberQuery,
   threadMatchesQuery,
@@ -109,6 +110,54 @@ describe("mergePrNumberMatches", () => {
   });
 });
 
+describe("mergeAgentMatches", () => {
+  const agentThread = thread({
+    id: "agent-1",
+    title: "You are Jeeves",
+    agent: {
+      name: "Jeeves",
+      instructions: "Help people decide what to do next.",
+      instructionLineCount: 1,
+      instructionsTooLong: false,
+      updatedAt: 1_000,
+    },
+  });
+
+  it("prepends Agent threads when the backend search has no metadata hit", () => {
+    const merged = mergeAgentMatches(response(), "Agent", [agentThread]);
+
+    expect(merged.results).toHaveLength(1);
+    expect(merged.results[0]).toMatchObject({
+      threadId: "agent-1",
+      confidence: "high",
+      matchReasons: [{ kind: "agent_match", value: "Jeeves" }],
+    });
+  });
+
+  it("deduplicates backend hits and promotes the Agent reason", () => {
+    const existing: ThreadSearchResult = {
+      backend: "codex",
+      threadId: "agent-1",
+      identityKey: "codex:agent-1",
+      title: "You are Jeeves",
+      linkedDirectories: [],
+      source: "codex",
+      score: 0.5,
+      confidence: "medium",
+      matchReasons: [{ kind: "title_token_overlap" }],
+      snippets: [],
+    };
+    const merged = mergeAgentMatches(response([existing]), "Jeeves", [agentThread]);
+
+    expect(merged.results).toHaveLength(1);
+    expect(merged.results[0]?.confidence).toBe("high");
+    expect(merged.results[0]?.matchReasons.map((reason) => reason.kind)).toEqual([
+      "agent_match",
+      "title_token_overlap",
+    ]);
+  });
+});
+
 describe("threadMatchesQuery", () => {
   const t = thread({
     id: "7f2f4bd1-8e7b-4d3b-92e5-0e9ef15c9c84",
@@ -178,5 +227,25 @@ describe("threadMatchesQuery", () => {
   it("returns false for non-matches and empty queries", () => {
     expect(threadMatchesQuery(t, "zzz")).toBe(false);
     expect(threadMatchesQuery(t, "   ")).toBe(false);
+  });
+
+  it("matches Agent role, persona name, and instructions only for Agent threads", () => {
+    const agentThread = thread({
+      title: "Housekeeping",
+      agent: {
+        name: "Jeeves",
+        instructions: "Help people decide what to do next.",
+        instructionLineCount: 1,
+        instructionsTooLong: false,
+        updatedAt: 1_000,
+      },
+    });
+
+    expect(threadMatchesQuery(agentThread, "Agent")).toBe(true);
+    expect(threadMatchesQuery(agentThread, "jeeves")).toBe(true);
+    expect(threadMatchesQuery(agentThread, "decide next")).toBe(true);
+    expect(threadMatchesQuery(thread({ title: "Housekeeping" }), "Agent")).toBe(
+      false,
+    );
   });
 });

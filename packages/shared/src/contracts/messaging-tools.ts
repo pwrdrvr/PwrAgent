@@ -106,7 +106,7 @@ export type PwrAgentMessagingManagedConversationSummary = {
 
 export type PwrAgentMessagingLocationSummary = {
   actor?: PwrAgentMessagingActorSummary;
-  binding: PwrAgentMessagingBindingSummary;
+  binding?: PwrAgentMessagingBindingSummary;
   channel: MessagingChannelKind;
   conversation: PwrAgentMessagingConversationSummary;
   managedConversation: PwrAgentMessagingManagedConversationSummary;

@@ -13,12 +13,41 @@ import {
   buildHandoffConfirmationIntent,
   buildHandoffOverviewIntent,
   handoffRequestFromValue,
+  resolveMessagingToolUpdateMode,
   type MessagingWorkspaceHandoffContext,
 } from "../messaging/core/messaging-status-card";
 import { resolveMessagingThreadState } from "../messaging/core/messaging-thread-state";
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+describe("resolveMessagingToolUpdateMode", () => {
+  it("defaults Agent threads to None without overriding an explicit preference", () => {
+    const agentBinding = {
+      ...buildBinding(),
+      targetKind: "agent_thread",
+    } satisfies MessagingBindingRecord;
+
+    expect(resolveMessagingToolUpdateMode(agentBinding, "show_all")).toBe(
+      "show_none",
+    );
+    expect(
+      resolveMessagingToolUpdateMode(
+        {
+          ...agentBinding,
+          preferences: {
+            toolUpdateMode: "show_all",
+            updatedAt: 1000,
+          },
+        },
+        "show_some",
+      ),
+    ).toBe("show_all");
+    expect(resolveMessagingToolUpdateMode(buildBinding(), "show_all")).toBe(
+      "show_all",
+    );
+  });
 });
 
 describe("buildBindingStatusIntent", () => {

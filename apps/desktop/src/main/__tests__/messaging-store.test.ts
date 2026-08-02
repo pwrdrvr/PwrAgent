@@ -475,6 +475,43 @@ describe("MessagingStore", () => {
     });
   });
 
+  it("lists only active default Agent assignments and bindings", async () => {
+    const { store } = await createStore();
+    await store.upsertDefaultAgentAssignment(buildDefaultAgentAssignment());
+    await store.upsertDefaultAgentAssignment(
+      buildDefaultAgentAssignment({
+        id: "profile-default",
+        scope: { kind: "profile" },
+        createdAt: 2000,
+        updatedAt: 2000,
+      }),
+    );
+    await store.revokeDefaultAgentAssignment({
+      assignmentId: "default-agent-1",
+      revokedAt: 3000,
+    });
+    await store.upsertBinding(buildBinding());
+    await store.upsertBinding(
+      buildBinding({
+        id: "binding-2",
+        channel: {
+          channel: "slack",
+          conversation: { id: "channel-2", kind: "channel" },
+        },
+        createdAt: 2000,
+        updatedAt: 2000,
+      }),
+    );
+    await store.revokeBinding({ bindingId: "binding-1", revokedAt: 3000 });
+
+    await expect(store.findActiveDefaultAgentAssignments()).resolves.toEqual([
+      expect.objectContaining({ id: "profile-default" }),
+    ]);
+    await expect(store.findActiveBindings()).resolves.toEqual([
+      expect.objectContaining({ id: "binding-2" }),
+    ]);
+  });
+
   it("resolves the most specific active default Agent assignment", async () => {
     const { store } = await createStore();
     await store.upsertDefaultAgentAssignment(
@@ -607,6 +644,38 @@ describe("MessagingStore", () => {
 
     expect(migrated.defaultAgentAssignments).toEqual({});
     expect(migrated.version).toBe(3);
+  });
+
+  it("migrates pre-merge default Agent assignment records", () => {
+    const channel = buildBinding().channel;
+    const migrated = migrateMessagingStoreData({
+      version: 2,
+      defaultAgentAssignments: {
+        legacy: {
+          id: "legacy",
+          scopeKind: "conversation",
+          backend: "codex",
+          threadId: "agent-legacy",
+          channelKind: "telegram",
+          channel,
+          createdAt: 1000,
+          updatedAt: 2000,
+          routingState: { opaque: { apiToken: "not-retained" } },
+        },
+      },
+    });
+
+    expect(migrated.defaultAgentAssignments.legacy).toEqual({
+      id: "legacy",
+      scope: { kind: "conversation", channel },
+      target: {
+        kind: "agent",
+        backend: "codex",
+        threadId: "agent-legacy",
+      },
+      createdAt: 1000,
+      updatedAt: 2000,
+    });
   });
 
   it("sweeps binding and channel state when a binding is revoked", async () => {

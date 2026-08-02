@@ -12,6 +12,7 @@ import {
 } from "@pwragent/shared";
 import { SearchIcon } from "../../icons";
 import { threadMatchesQuery } from "../thread-search/thread-match";
+import { AgentThreadChip } from "./AgentThreadChip";
 
 const MAX_RESULTS = 8;
 
@@ -111,29 +112,35 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
       {trimmed ? (
         results.length > 0 ? (
           <ul className="sidebar-search__results" role="listbox">
-            {results.map((thread, index) => (
-              <li
-                key={buildThreadIdentityKey(thread.source, thread.id)}
-                role="option"
-                aria-selected={index === activeIndex}
-              >
-                <button
-                  type="button"
-                  className={`sidebar-search__result${
-                    index === activeIndex ? " is-active" : ""
-                  }`}
-                  onMouseEnter={() => setActiveIndex(index)}
-                  onClick={() => jump(thread)}
+            {results.map((thread, index) => {
+              const description = describeThread(thread);
+              return (
+                <li
+                  key={buildThreadIdentityKey(thread.source, thread.id)}
+                  role="option"
+                  aria-selected={index === activeIndex}
                 >
-                  <span className="sidebar-search__result-title">{thread.title}</span>
-                  {describeThread(thread) ? (
-                    <span className="sidebar-search__result-meta">
-                      {describeThread(thread)}
+                  <button
+                    type="button"
+                    className={`sidebar-search__result${
+                      index === activeIndex ? " is-active" : ""
+                    }`}
+                    onMouseEnter={() => setActiveIndex(index)}
+                    onClick={() => jump(thread)}
+                  >
+                    <span className="sidebar-search__result-title">
+                      {thread.title}
                     </span>
-                  ) : null}
-                </button>
-              </li>
-            ))}
+                    {thread.agent || description ? (
+                      <span className="sidebar-search__result-meta">
+                        {thread.agent ? <AgentThreadChip /> : null}
+                        {description ? <span>{description}</span> : null}
+                      </span>
+                    ) : null}
+                  </button>
+                </li>
+              );
+            })}
           </ul>
         ) : (
           <p className="sidebar-search__empty">No threads match</p>

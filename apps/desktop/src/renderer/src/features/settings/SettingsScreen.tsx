@@ -1,4 +1,5 @@
 import type {
+  AppServerBackendKind,
   BackendSummary,
   DesktopHotCpuProfileStartDelayMs,
   DesktopHotCpuProfileTriggerMode,
@@ -104,6 +105,10 @@ export function SettingsScreen(props: {
   /** Initial section to render. Defaults to Applications. */
   initialSection?: SettingsSection;
   onClose?: () => void;
+  onOpenThread?: (target: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }) => void;
   /** Fired from the title-bar messaging controller.
    *  The App-level handler closes the Settings overlay and opens the
    *  Messaging Activity overlay (its own top-level mainView). */
@@ -285,6 +290,7 @@ export function SettingsScreen(props: {
               appearanceController={props.appearanceController}
               cachedBackends={props.cachedBackends}
               desktopApi={props.desktopApi}
+              onOpenThread={props.onOpenThread}
               profiles={props.profiles}
               section={section}
               settings={props.settings}
@@ -306,6 +312,10 @@ function SettingsSectionBody(props: {
   appearanceController?: AppearanceController;
   cachedBackends?: BackendSummary[];
   desktopApi?: DesktopApi;
+  onOpenThread?: (target: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }) => void;
   profiles?: PwrAgentProfilesState;
   section: SettingsSection;
   settings: DesktopSettingsState;
@@ -480,6 +490,7 @@ function SettingsSectionBody(props: {
     return (
       <MessagingSettings
         desktopApi={props.desktopApi}
+        onOpenThread={props.onOpenThread}
         saving={props.settings.saving}
         snapshot={props.snapshot}
         onPairingSettingsChanged={props.settings.refresh}

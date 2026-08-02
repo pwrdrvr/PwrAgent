@@ -31908,6 +31908,53 @@ script = "printf setup"
     await registry.close();
   });
 
+  it("keeps Agent metadata synchronized when its thread is renamed", async () => {
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          agent: {
+            name: "Old Agent name",
+            instructions: "Keep the existing personality.",
+            instructionLineCount: 1,
+            instructionsTooLong: false,
+            updatedAt: 1_000,
+          },
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/name/set"] },
+      }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore,
+    });
+
+    await registry.renameThread({
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Jeeves Reborn",
+    });
+
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-1",
+      }),
+    ).resolves.toMatchObject({
+      agent: {
+        name: "Jeeves Reborn",
+        instructions: "Keep the existing personality.",
+      },
+    });
+
+    await registry.close();
+  });
+
   it("renames ACP threads in the local session store", async () => {
     const acpBackendId = "acp:gemini" as AcpBackendId;
     const sessions: AcpSessionMetadata[] = [

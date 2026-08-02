@@ -203,6 +203,88 @@ afterEach(async () => {
 });
 
 describe("SqliteMessagingStore", () => {
+  it("keeps observed surfaces enriched and ordered by recent activity", async () => {
+    const store = await createStore();
+    await store.upsertObservedSurface({
+      channel: "slack",
+      conversation: {
+        id: "C1",
+        kind: "channel",
+        workspaceId: "T1",
+      },
+    }, 2000);
+    await store.upsertObservedSurface({
+      channel: "slack",
+      conversation: {
+        id: "C1",
+        kind: "channel",
+        title: "p-search-signals-project",
+        workspaceId: "T1",
+      },
+    }, 1000);
+    await store.upsertObservedSurface({
+      channel: "telegram",
+      conversation: {
+        id: "42",
+        kind: "topic",
+        parentConversationId: "-1001",
+        parentId: "-1001",
+        parentTitle: "PwrAgent Dev",
+        title: "Releases",
+      },
+    }, 3000);
+
+    await expect(store.findObservedSurfaces()).resolves.toEqual([
+      expect.objectContaining({
+        channel: expect.objectContaining({
+          channel: "telegram",
+          conversation: expect.objectContaining({ id: "42" }),
+        }),
+        firstSeenAt: 3000,
+        lastSeenAt: 3000,
+      }),
+      expect.objectContaining({
+        channel: expect.objectContaining({
+          channel: "slack",
+          conversation: expect.objectContaining({
+            id: "C1",
+            title: "p-search-signals-project",
+            workspaceId: "T1",
+          }),
+        }),
+        firstSeenAt: 1000,
+        lastSeenAt: 2000,
+      }),
+    ]);
+  });
+
+  it("remembers bound conversations as observed surfaces", async () => {
+    const store = await createStore();
+    await store.upsertBinding(buildBinding({
+      channel: {
+        channel: "slack",
+        conversation: {
+          id: "C13056",
+          kind: "channel",
+          title: "p-search-signals-project",
+          workspaceId: "T1",
+        },
+      },
+      createdAt: 1000,
+      updatedAt: 2000,
+    }));
+
+    await expect(store.findObservedSurfaces()).resolves.toEqual([
+      expect.objectContaining({
+        channel: expect.objectContaining({
+          conversation: expect.objectContaining({ id: "C13056" }),
+        }),
+        firstSeenAt: 2000,
+        lastSeenAt: 2000,
+      }),
+    ]);
+  });
+
   it("persists Agent-thread binding targets", async () => {
     const store = await createStore();
     await store.upsertBinding(
@@ -263,6 +345,104 @@ describe("SqliteMessagingStore", () => {
       id: "default-agent-1",
       target: { threadId: "agent-thread-1" },
     });
+  });
+
+  it("lists only active default Agent assignments and bindings", async () => {
+    const store = await createStore();
+    await store.upsertDefaultAgentAssignment(buildDefaultAgentAssignment());
+    await store.upsertDefaultAgentAssignment(
+      buildDefaultAgentAssignment({
+        id: "profile-default",
+        scope: { kind: "profile" },
+        createdAt: 2000,
+        updatedAt: 2000,
+      }),
+    );
+    await store.revokeDefaultAgentAssignment({
+      assignmentId: "default-agent-1",
+      revokedAt: 3000,
+    });
+    await store.upsertBinding(buildBinding());
+    await store.upsertBinding(
+      buildBinding({
+        id: "binding-2",
+        channel: {
+          channel: "slack",
+          conversation: { id: "channel-2", kind: "channel" },
+        },
+        createdAt: 2000,
+        updatedAt: 2000,
+      }),
+    );
+    await store.revokeBinding({ bindingId: "binding-1", revokedAt: 3000 });
+
+    await expect(store.findActiveDefaultAgentAssignments()).resolves.toEqual([
+      expect.objectContaining({ id: "profile-default" }),
+    ]);
+    await expect(store.findActiveBindings()).resolves.toEqual([
+      expect.objectContaining({ id: "binding-2" }),
+    ]);
+  });
+
+  it("reads and lazily rewrites pre-merge default Agent assignments", async () => {
+    const store = await createStore();
+    const db = stateDbs.at(-1)!.raw;
+    const channel = buildBinding().channel;
+    db.prepare(
+      `INSERT INTO messaging_default_agent_assignments
+       (assignment_id, scope_kind, scope_key, channel_kind, backend, thread_id, status, created_at, updated_at, payload)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      "legacy",
+      "conversation",
+      "conversation:telegram:dm::chat-1",
+      "telegram",
+      "codex",
+      "agent-legacy",
+      "active",
+      1000,
+      2000,
+      JSON.stringify({
+        id: "legacy",
+        scopeKind: "conversation",
+        backend: "codex",
+        threadId: "agent-legacy",
+        channelKind: "telegram",
+        channel,
+        createdAt: 1000,
+        updatedAt: 2000,
+        routingState: { opaque: { apiToken: "not-retained" } },
+      }),
+    );
+
+    await expect(store.findActiveDefaultAgentAssignments()).resolves.toEqual([
+      {
+        id: "legacy",
+        scope: { kind: "conversation", channel },
+        target: {
+          kind: "agent",
+          backend: "codex",
+          threadId: "agent-legacy",
+        },
+        createdAt: 1000,
+        updatedAt: 2000,
+      },
+    ]);
+    await store.revokeDefaultAgentAssignment({
+      assignmentId: "legacy",
+      revokedAt: 3000,
+    });
+    const payload = JSON.parse(
+      (db.prepare(
+        "SELECT payload FROM messaging_default_agent_assignments WHERE assignment_id = 'legacy'",
+      ).get() as { payload: string }).payload,
+    );
+    expect(payload).toMatchObject({
+      scope: { kind: "conversation" },
+      target: { kind: "agent", threadId: "agent-legacy" },
+      revokedAt: 3000,
+    });
+    expect(payload).not.toHaveProperty("routingState");
   });
 
   it("resolves the most specific active default Agent assignment", async () => {

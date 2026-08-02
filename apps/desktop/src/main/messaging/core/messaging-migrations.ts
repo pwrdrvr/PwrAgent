@@ -2,6 +2,8 @@ import type {
   MessagingBindingRecord,
   MessagingBrowseSessionRecord,
   MessagingCallbackHandleRecord,
+  MessagingChannelKind,
+  MessagingChannelRef,
   MessagingDefaultAgentAssignmentRecord,
   MessagingDeliveryResult,
   MessagingManagedTopicRecord,
@@ -67,9 +69,8 @@ export function migrateMessagingStoreData(raw: unknown): MessagingStoreData {
     version: CURRENT_MESSAGING_STORE_VERSION,
     browseSessions: migrateRecord(record.browseSessions, isMessagingBrowseSessionRecord),
     bindings: migrateBindingRecords(record.bindings),
-    defaultAgentAssignments: migrateRecord(
+    defaultAgentAssignments: migrateDefaultAgentAssignmentRecords(
       record.defaultAgentAssignments,
-      isMessagingDefaultAgentAssignmentRecord,
     ),
     callbackHandles: migrateRecord(record.callbackHandles, isMessagingCallbackHandleRecord),
     monitorSubscriptions: migrateRecord(
@@ -87,22 +88,101 @@ export function migrateMessagingStoreData(raw: unknown): MessagingStoreData {
   };
 }
 
-function isMessagingDefaultAgentAssignmentRecord(
+export function migrateMessagingDefaultAgentAssignmentRecord(
   value: unknown,
-): value is MessagingDefaultAgentAssignmentRecord {
+): MessagingDefaultAgentAssignmentRecord | undefined {
   const record = asRecord(value);
   const scope = asRecord(record?.scope);
   const target = asRecord(record?.target);
-  return Boolean(
+  if (
     record &&
-      typeof record.id === "string" &&
-      isMessagingDefaultAgentScope(scope) &&
-      target?.kind === "agent" &&
-      typeof target.backend === "string" &&
-      typeof target.threadId === "string" &&
-      typeof record.createdAt === "number" &&
-      typeof record.updatedAt === "number",
+    typeof record.id === "string" &&
+    isMessagingDefaultAgentScope(scope) &&
+    target?.kind === "agent" &&
+    typeof target.backend === "string" &&
+    typeof target.threadId === "string" &&
+    typeof record.createdAt === "number" &&
+    typeof record.updatedAt === "number"
+  ) {
+    return value as MessagingDefaultAgentAssignmentRecord;
+  }
+
+  if (
+    !record ||
+    typeof record.id !== "string" ||
+    typeof record.backend !== "string" ||
+    typeof record.threadId !== "string" ||
+    typeof record.createdAt !== "number" ||
+    typeof record.updatedAt !== "number"
+  ) {
+    return undefined;
+  }
+  const legacyScope = migrateLegacyDefaultAgentScope(record);
+  if (!legacyScope) {
+    return undefined;
+  }
+  return {
+    id: record.id,
+    scope: legacyScope,
+    target: {
+      kind: "agent",
+      backend: record.backend,
+      threadId: record.threadId,
+    },
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+    ...(typeof record.revokedAt === "number"
+      ? { revokedAt: record.revokedAt }
+      : {}),
+  } as MessagingDefaultAgentAssignmentRecord;
+}
+
+function migrateDefaultAgentAssignmentRecords(
+  value: unknown,
+): Record<string, MessagingDefaultAgentAssignmentRecord> {
+  const record = asRecord(value);
+  if (!record) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(record).flatMap(([id, assignment]) => {
+      const migrated = migrateMessagingDefaultAgentAssignmentRecord(assignment);
+      return migrated ? [[id, migrated]] : [];
+    }),
   );
+}
+
+function migrateLegacyDefaultAgentScope(
+  record: Record<string, unknown>,
+): MessagingDefaultAgentAssignmentRecord["scope"] | undefined {
+  if (record.scopeKind === "profile") {
+    return { kind: "profile" };
+  }
+  if (
+    record.scopeKind === "provider" &&
+    typeof record.channelKind === "string"
+  ) {
+    return {
+      kind: "provider",
+      channel: record.channelKind as MessagingChannelKind,
+    };
+  }
+  if (record.scopeKind !== "conversation") {
+    return undefined;
+  }
+  const channel = asRecord(record.channel);
+  const conversation = asRecord(channel?.conversation);
+  if (
+    typeof channel?.channel !== "string" ||
+    typeof conversation?.id !== "string" ||
+    typeof conversation.kind !== "string"
+  ) {
+    return undefined;
+  }
+  return {
+    kind: "conversation",
+    channel: record.channel as MessagingChannelRef,
+  };
 }
 
 function isMessagingDefaultAgentScope(

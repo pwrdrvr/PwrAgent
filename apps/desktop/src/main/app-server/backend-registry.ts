@@ -8580,6 +8580,20 @@ export class DesktopBackendRegistry {
         request.name,
       );
     }
+    const agent = await this.getThreadAgentMetadata({
+      backend,
+      threadId: result.threadId,
+    });
+    if (agent) {
+      await this.overlayStore.setThreadAgent({
+        backend,
+        threadId: result.threadId,
+        agent: {
+          name: request.name.trim(),
+          ...(agent.instructions ? { instructions: agent.instructions } : {}),
+        },
+      });
+    }
     this.invalidateThreadListCache(backend);
     if (!isAcpBackendId(backend)) {
       await this.emit({

@@ -122,6 +122,91 @@ describe("StateDb", () => {
     );
   });
 
+  it("creates the observed messaging surface catalog", () => {
+    const table = stateDb.raw
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+      )
+      .get("messaging_observed_surfaces") as { name: string } | undefined;
+
+    expect(table?.name).toBe("messaging_observed_surfaces");
+    expect(indexNames("messaging_observed_surfaces")).toEqual(
+      expect.arrayContaining([
+        "idx_messaging_observed_surfaces_recent",
+        "idx_messaging_observed_surfaces_platform_recent",
+      ]),
+    );
+  });
+
+  it("backfills observed surfaces from recent messaging activity", () => {
+    stateDb.raw.prepare(
+      `INSERT INTO messaging_activity_log(
+         platform, kind, conversation_id, conversation_title,
+         summary, created_at, payload
+       ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      "slack",
+      "inbound-routed",
+      "C13056",
+      "p-search-signals-project",
+      "Inbound from Harold",
+      2000,
+      JSON.stringify({
+        conversationKind: "channel",
+        conversationWorkspaceId: "T1",
+      }),
+    );
+    stateDb.raw.prepare(
+      `INSERT INTO messaging_activity_log(
+         platform, kind, conversation_id, conversation_title,
+         summary, created_at, payload
+       ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      "discord",
+      "inbound-rejected",
+      "unapproved-channel",
+      "Unapproved",
+      "Rejected inbound",
+      3000,
+      JSON.stringify({
+        conversationKind: "channel",
+        rejectionReason: "unauthorized-conversation",
+      }),
+    );
+    stateDb.raw.exec("DROP TABLE messaging_observed_surfaces");
+    stateDb.raw.pragma("user_version = 33");
+    stateDb.close();
+    stateDb = StateDb.open(path.join(tempDir, "state.db"));
+
+    const row = stateDb.raw
+      .prepare(
+        "SELECT first_seen_at, last_seen_at, payload FROM messaging_observed_surfaces",
+      )
+      .get() as {
+        first_seen_at: number;
+        last_seen_at: number;
+        payload: string;
+      };
+    expect(row.first_seen_at).toBe(2000);
+    expect(row.last_seen_at).toBe(2000);
+    expect(JSON.parse(row.payload)).toMatchObject({
+      channel: {
+        channel: "slack",
+        conversation: {
+          id: "C13056",
+          kind: "channel",
+          title: "p-search-signals-project",
+          workspaceId: "T1",
+        },
+      },
+    });
+    expect(
+      stateDb.raw
+        .prepare("SELECT COUNT(*) AS count FROM messaging_observed_surfaces")
+        .get(),
+    ).toEqual({ count: 1 });
+  });
+
   it("carries observed context-replay columns on both the turn and the line", () => {
     // The tally's source of truth is thread_usage_turns. The line columns are a
     // DEPRECATED dual-write (issue #947) kept so older locally-run builds — which
@@ -1420,6 +1505,7 @@ function columnNames(
 
 function indexNames(
   tableName:
+    | "messaging_observed_surfaces"
     | "thread_message_origins"
     | "thread_tool_invocations"
     | "thread_usage_lines",

@@ -1467,6 +1467,12 @@ export type MessagingBindingRecord = {
   threadDisplay?: MessagingThreadDisplaySummary;
 };
 
+export type MessagingObservedSurfaceRecord = {
+  channel: MessagingChannelRef;
+  firstSeenAt: number;
+  lastSeenAt: number;
+};
+
 export type MessagingDefaultAgentTarget = {
   kind: "agent";
   backend: AppServerBackendKind;

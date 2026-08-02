@@ -1551,6 +1551,10 @@ function DesktopAppShell(props: {
                 settings={settings}
                 onClose={() => setMainView("thread")}
                 onOpenMessagingActivity={openMessagingActivityWindow}
+                onOpenThread={(target) => {
+                  setMainView("thread");
+                  void navigation.showThread(target);
+                }}
               />
             </Suspense>
           </div>

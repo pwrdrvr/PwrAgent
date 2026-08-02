@@ -5,19 +5,21 @@ import {
   type ReactElement,
   type ReactNode,
 } from "react";
-import type {
-  AppServerBackendKind,
-  MessagingChannelKind,
-  NavigationThreadSummary,
-  ThreadSearchMatchReasonKind,
-  ThreadSearchResponse,
-  ThreadSearchResult,
+import {
+  buildThreadIdentityKey,
+  type AppServerBackendKind,
+  type MessagingChannelKind,
+  type NavigationThreadSummary,
+  type ThreadSearchMatchReasonKind,
+  type ThreadSearchResponse,
+  type ThreadSearchResult,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { HistoryNavControls } from "../chrome/HistoryNavButtons";
 import type { MastheadActionsProps } from "../chrome/MastheadActions";
 import { ThreadPlaceholderHeader } from "../thread-detail/ThreadPlaceholderHeader";
-import { mergePrNumberMatches } from "./thread-match";
+import { AgentThreadChip } from "../navigation/AgentThreadChip";
+import { mergeAgentMatches, mergePrNumberMatches } from "./thread-match";
 import { BranchIcon, FolderIcon, SearchIcon, WorktreeIcon } from "../../icons";
 
 /**
@@ -75,8 +77,8 @@ type ThreadSearchPanelProps = {
   history?: HistoryNavControls;
   /**
    * The full navigation thread list, used to resolve bare PR-number queries
-   * ("#779" / "779") against persisted overlay PRs — those aren't in the FTS
-   * index, so the matches are merged in client-side.
+   * ("#779" / "779") and Agent metadata. Those aren't in the FTS index, so
+   * the matches are merged in client-side.
    */
   threads?: readonly NavigationThreadSummary[];
   /**
@@ -99,6 +101,7 @@ const MATCH_REASON_LABELS: Record<ThreadSearchMatchReasonKind, string> = {
   backend_match: "Backend match",
   model_match: "Model match",
   pr_number_match: "PR match",
+  agent_match: "Agent match",
   time_filter: "Recent",
   archive_filter: "Archived",
   provider_content_match: "Message content",
@@ -155,6 +158,7 @@ export function highlightSnippet(text: string, query: string): ReactNode[] {
 
 function ThreadSearchResultRow(props: {
   result: ThreadSearchResult;
+  isAgent: boolean;
   query: string;
   onOpen: () => void;
 }): ReactElement {
@@ -178,6 +182,7 @@ function ThreadSearchResultRow(props: {
         <span className="thread-search-result__title">{result.title}</span>
         <span className="thread-search-result__meta">
           <span className="chip chip--backend">{result.backend}</span>
+          {props.isAgent ? <AgentThreadChip /> : null}
           {workspaceLabel ? (
             <span className="thread-search-result__meta-item">
               <WorkspaceIcon size={13} aria-hidden />
@@ -237,6 +242,15 @@ export function ThreadSearchPanel(props: ThreadSearchPanelProps) {
   const [error, setError] = useState<string>();
 
   const searchUnavailable = !props.desktopApi?.searchThreads;
+  const agentThreadKeys = useMemo(
+    () =>
+      new Set(
+        (props.threads ?? [])
+          .filter((thread) => Boolean(thread.agent))
+          .map((thread) => buildThreadIdentityKey(thread.source, thread.id)),
+      ),
+    [props.threads],
+  );
 
   const submit = async (event: FormEvent): Promise<void> => {
     event.preventDefault();
@@ -252,7 +266,13 @@ export function ThreadSearchPanel(props: ThreadSearchPanelProps) {
         limit: 25,
         query: trimmed,
       });
-      setResponse(mergePrNumberMatches(result, trimmed, props.threads));
+      setResponse(
+        mergeAgentMatches(
+          mergePrNumberMatches(result, trimmed, props.threads),
+          trimmed,
+          props.threads,
+        ),
+      );
     } catch (searchError) {
       setError(searchError instanceof Error ? searchError.message : String(searchError));
     } finally {
@@ -350,6 +370,7 @@ export function ThreadSearchPanel(props: ThreadSearchPanelProps) {
                 <div key={result.identityKey} role="listitem">
                   <ThreadSearchResultRow
                     result={result}
+                    isAgent={agentThreadKeys.has(result.identityKey)}
                     query={response.query}
                     onOpen={() => {
                       void props.onOpenResult({

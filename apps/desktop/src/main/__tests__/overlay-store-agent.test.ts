@@ -100,6 +100,48 @@ describe("SqliteOverlayStore - thread Agent metadata", () => {
     reopenedDb.close();
   });
 
+  it("reconciles a stale Agent name to the current thread title", async () => {
+    await store.setThreadAgent({
+      backend: "codex",
+      threadId: "thread-1",
+      agent: {
+        name: "Old Agent name",
+        instructions: "Keep the existing personality.",
+      },
+      now: 3_000,
+    });
+
+    const snapshot = await store.reconcileNavigationSnapshot({
+      backend: "all",
+      fetchedAt: 4_000,
+      threads: [
+        {
+          id: "thread-1",
+          title: "Jeeves Reborn",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+        },
+      ],
+    });
+
+    expect(snapshot.threads[0]?.agent).toMatchObject({
+      name: "Jeeves Reborn",
+      instructions: "Keep the existing personality.",
+    });
+    await expect(
+      store.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-1",
+      }),
+    ).resolves.toMatchObject({
+      agent: {
+        name: "Jeeves Reborn",
+        instructions: "Keep the existing personality.",
+      },
+    });
+  });
+
   it("drops legacy auto-created handoff Agent metadata on read", async () => {
     await store.setThreadAgent({
       backend: "codex",

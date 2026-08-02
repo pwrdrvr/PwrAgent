@@ -2,7 +2,10 @@
 import "@testing-library/jest-dom/vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type { ThreadSearchResponse } from "@pwragent/shared";
+import type {
+  NavigationThreadSummary,
+  ThreadSearchResponse,
+} from "@pwragent/shared";
 import { basename, highlightSnippet, ThreadSearchPanel } from "../ThreadSearchPanel";
 import type { DesktopApi } from "../../../lib/desktop-api";
 
@@ -71,6 +74,54 @@ describe("ThreadSearchPanel", () => {
     fireEvent.keyDown(input, { key: "Escape" });
 
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("finds and marks Agent threads from navigation metadata", async () => {
+    const searchThreads = vi.fn(async (): Promise<ThreadSearchResponse> => ({
+      backend: "all",
+      contentMode: "available",
+      fetchedAt: 1_000,
+      filters: {},
+      query: "Agent",
+      results: [],
+      searchedScopes: ["metadata"],
+      semanticMode: "disabled",
+      unavailableScopes: [],
+    }));
+    const threads: NavigationThreadSummary[] = [
+      {
+        id: "agent-1",
+        title: "You are Jeeves",
+        titleSource: "explicit",
+        source: "codex",
+        inbox: { inInbox: true },
+        linkedDirectories: [],
+        agent: {
+          name: "Jeeves",
+          instructions: "Help people decide what to do next.",
+          instructionLineCount: 1,
+          instructionsTooLong: false,
+          updatedAt: 1_000,
+        },
+      },
+    ];
+
+    render(
+      <ThreadSearchPanel
+        desktopApi={{ searchThreads } as DesktopApi}
+        onOpenResult={vi.fn()}
+        threads={threads}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Search threads"), {
+      target: { value: "Agent" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+
+    expect(await screen.findByText("You are Jeeves")).toBeInTheDocument();
+    expect(screen.getByLabelText("Agent thread")).toHaveTextContent("Agent");
+    expect(screen.getByText("Agent match")).toBeInTheDocument();
   });
 });
 

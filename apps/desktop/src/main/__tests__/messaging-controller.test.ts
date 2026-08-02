@@ -1130,11 +1130,10 @@ describe("MessagingController", () => {
 
     await expect(
       harness.store.findActiveBindingForChannel(command.channel),
-    ).resolves.toMatchObject({
-      backend: "acp:kimi",
-      targetKind: "agent_thread",
-      threadId: "kimi-agent",
-    });
+    ).resolves.toBeUndefined();
+    expect(harness.delivered).not.toContainEqual(
+      expect.objectContaining({ kind: "status" }),
+    );
     expect(harness.startTurn).toHaveBeenCalledWith(
       expect.objectContaining({
         backend: "acp:kimi",
@@ -1183,7 +1182,7 @@ describe("MessagingController", () => {
     });
   });
 
-  it("binds an addressed unbound topic to its default Agent and admits the turn there", async () => {
+  it("routes an addressed unbound topic to its default Agent without binding it", async () => {
     const navigation = buildNavigationSnapshot();
     navigation.threads[0] = {
       ...navigation.threads[0]!,
@@ -1203,6 +1202,7 @@ describe("MessagingController", () => {
     const harness = await createHarness({
       createManagedConversation,
       navigation,
+      toolUpdateDefaultMode: "show_all",
     });
     const channel = buildTopicChannel("13056");
     const event = buildTextEvent("find the thread for 13056", {
@@ -1222,12 +1222,12 @@ describe("MessagingController", () => {
     expect(createManagedConversation).not.toHaveBeenCalled();
     await expect(
       harness.store.findActiveBindingForChannel(channel),
-    ).resolves.toMatchObject({
-      backend: "codex",
-      channel,
-      targetKind: "agent_thread",
-      threadId: "thread-1",
-    });
+    ).resolves.toBeUndefined();
+    expect(harness.recordMessagingBindingTransition).not.toHaveBeenCalled();
+    expect(harness.onBindingChanged).not.toHaveBeenCalled();
+    expect(harness.delivered).not.toContainEqual(
+      expect.objectContaining({ kind: "status" }),
+    );
     expect(harness.startTurn).toHaveBeenCalledWith(
       expect.objectContaining({
         backend: "codex",
@@ -1235,9 +1235,314 @@ describe("MessagingController", () => {
         threadId: "thread-1",
       }),
     );
+
+    const location = await harness.controller.handlePwrAgentMessagingRequest({
+      operation: "get_current_messaging_surface",
+      args: {},
+      context: {
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-1",
+      },
+    });
+    expect(location).toMatchObject({
+      ok: true,
+      data: {
+        location: {
+          channel: "telegram",
+          conversation: {
+            id: "13056",
+            kind: "topic",
+          },
+        },
+      },
+    });
+    if (!location.ok) {
+      throw new Error("Expected the transparent Agent route location");
+    }
+    expect(location.data.location.binding).toBeUndefined();
+
+    harness.delivered.length = 0;
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "assistant-commentary",
+            type: "agentMessage",
+            phase: "commentary",
+            text: "I am searching for the thread now.",
+          },
+        },
+      },
+    });
+    await harness.controller.handleBackendEvent(
+      buildToolCompletedEvent("tool-1", "find the thread"),
+    );
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "assistant-1",
+            type: "agentMessage",
+            text: "I found it.",
+          },
+        },
+      },
+    });
+
+    expect(harness.delivered).toContainEqual(
+      expect.objectContaining({
+        kind: "message",
+        role: "assistant",
+        parts: [expect.objectContaining({ text: "I found it." })],
+      }),
+    );
+    expect(JSON.stringify(harness.delivered)).not.toContain(
+      "I am searching for the thread now.",
+    );
+    expect(JSON.stringify(harness.delivered)).not.toContain("find the thread");
   });
 
-  it("creates a child for an addressed unbound root and admits the default Agent turn there", async () => {
+  it("routes an accepted every-message topic to its default Agent without binding it", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      title: "Topic Agent",
+      agent: {
+        name: "Topic Agent",
+        instructionLineCount: 1,
+        instructionsTooLong: false,
+        updatedAt: 1500,
+      },
+    };
+    const harness = await createHarness({
+      navigation,
+      responseModeForConversation: () => "every_message",
+    });
+    const channel = buildTopicChannel("13056");
+    const event = buildTextEvent("who are you?", { channel });
+    await harness.store.upsertDefaultAgentAssignment({
+      id: "default-agent:telegram-provider",
+      scope: {
+        kind: "provider",
+        channel: "telegram",
+      },
+      target: {
+        kind: "agent",
+        backend: "codex",
+        threadId: "thread-1",
+      },
+      createdAt: 1000,
+      updatedAt: 1000,
+    });
+
+    await harness.controller.handleInboundEvent(event);
+
+    await expect(
+      harness.store.findActiveBindingForChannel(channel),
+    ).resolves.toBeUndefined();
+    expect(harness.recordMessagingBindingTransition).not.toHaveBeenCalled();
+    expect(harness.onBindingChanged).not.toHaveBeenCalled();
+    expect(harness.delivered).not.toContainEqual(
+      expect.objectContaining({ kind: "status" }),
+    );
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        input: [{ type: "text", text: "who are you?" }],
+        threadId: "thread-1",
+      }),
+    );
+    expect(harness.delivered).not.toContainEqual(
+      expect.objectContaining({ title: "PwrAgent commands" }),
+    );
+  });
+
+  it("preserves a transparent default Agent route while its turn is queued", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      title: "Topic Agent",
+      agent: {
+        name: "Topic Agent",
+        instructionLineCount: 1,
+        instructionsTooLong: false,
+        updatedAt: 1500,
+      },
+    };
+    const harness = await createHarness({
+      navigation,
+      responseModeForConversation: () => "every_message",
+      startTurn: async (request) => ({
+        backend: request.backend,
+        threadId: request.threadId,
+        turnId: "queue-1",
+        queueEntryId: "queue-1",
+        queueStatus: "queued",
+      }),
+    });
+    const channel = buildTopicChannel("13056");
+    await seedConversationDefaultAgent(harness.store, channel);
+
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("who are you?", { channel }),
+    );
+
+    await expect(
+      harness.store.findActiveBindingForChannel(channel),
+    ).resolves.toBeUndefined();
+    expect(harness.delivered).not.toContainEqual(
+      expect.objectContaining({ kind: "status" }),
+    );
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/turnQueue/updated",
+        params: {
+          threadId: "thread-1",
+          queueEntryId: "queue-1",
+          origin: "messaging",
+          status: "started",
+          turnId: "turn-2",
+        },
+      },
+    });
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-2",
+          item: {
+            id: "assistant-queued",
+            type: "agentMessage",
+            text: "Jeeves, at your service.",
+          },
+        },
+      },
+    });
+
+    expect(harness.delivered).toContainEqual(
+      expect.objectContaining({
+        kind: "message",
+        role: "assistant",
+        parts: [expect.objectContaining({ text: "Jeeves, at your service." })],
+      }),
+    );
+  });
+
+  it("delivers a default Agent reply only to the requesting surface", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      title: "Topic Agent",
+      agent: {
+        name: "Topic Agent",
+        instructionLineCount: 1,
+        instructionsTooLong: false,
+        updatedAt: 1500,
+      },
+    };
+    const harness = await createHarness({ navigation });
+    await bindThread(harness);
+    harness.delivered.length = 0;
+    const channel = buildTopicChannel("13056");
+    await seedConversationDefaultAgent(harness.store, channel);
+
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("answer over here", {
+        botMention: true,
+        channel,
+      }),
+    );
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "assistant-origin",
+            type: "agentMessage",
+            text: "Only over here.",
+          },
+        },
+      },
+    });
+
+    const assistantReplies = harness.delivered.filter(
+      (intent) => intent.kind === "message" && intent.role === "assistant",
+    );
+    expect(assistantReplies).toHaveLength(1);
+    expect(assistantReplies[0]?.bindingId).toMatch(/^default-agent-route:/);
+  });
+
+  it("lets a default Agent explicitly attach a thread to its unbound source", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      title: "Topic Agent",
+      agent: {
+        name: "Topic Agent",
+        instructionLineCount: 1,
+        instructionsTooLong: false,
+        updatedAt: 1500,
+      },
+    };
+    const harness = await createHarness({ navigation });
+    const channel = buildTopicChannel("13056");
+    await seedConversationDefaultAgent(harness.store, channel);
+
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("attach the right thread here", {
+        botMention: true,
+        channel,
+      }),
+    );
+    const attached = await harness.controller.handlePwrAgentMessagingRequest({
+      operation: "attach_thread_here",
+      context: {
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-1",
+      },
+      args: {
+        backend: "codex",
+        threadId: "thread-1",
+        placement: "auto",
+        targetKind: "thread",
+      },
+    });
+
+    expect(attached).toMatchObject({
+      ok: true,
+      data: {
+        outcome: "attached",
+        placement: "current_conversation",
+      },
+    });
+    await expect(
+      harness.store.findActiveBindingForChannel(channel),
+    ).resolves.toMatchObject({
+      backend: "codex",
+      targetKind: "thread",
+      threadId: "thread-1",
+    });
+  });
+
+  it("routes an addressed unbound root without creating or binding a child", async () => {
     const navigation = buildNavigationSnapshot();
     navigation.threads[0] = {
       ...navigation.threads[0]!,
@@ -1258,18 +1563,6 @@ describe("MessagingController", () => {
         workspaceId: "T012WORKSPACE",
       },
     };
-    const childChannel = {
-      channel: "slack" as const,
-      conversation: {
-        id: "C012SIGNALS",
-        kind: "thread" as const,
-        parentId: "1712023030.000000",
-        parentConversationId: "C012SIGNALS",
-        parentTitle: "p-search-signals-project",
-        title: "Search Signals Agent",
-        workspaceId: "T012WORKSPACE",
-      },
-    };
     const getManagedConversationRights = vi.fn(async () => ({
       channel: "slack" as const,
       conversation: rootChannel.conversation,
@@ -1284,15 +1577,7 @@ describe("MessagingController", () => {
     }));
     const createManagedConversation = vi.fn(async () => ({
       channel: "slack" as const,
-      conversation: childChannel.conversation,
-      outcome: "created" as const,
-      routingState: {
-        opaque: {
-          channelId: "C012SIGNALS",
-          teamId: "T012WORKSPACE",
-          threadTs: "1712023030.000000",
-        },
-      },
+      outcome: "unsupported" as const,
       updatedAt: 1000,
     }));
     const harness = await createHarness({
@@ -1319,25 +1604,14 @@ describe("MessagingController", () => {
 
     await harness.controller.handleInboundEvent(event);
 
-    expect(getManagedConversationRights).toHaveBeenCalledWith({
-      actor: event.actor,
-      channel: rootChannel,
-      routingState: event.routingState,
-    });
-    expect(createManagedConversation).toHaveBeenCalledWith({
-      actor: event.actor,
-      parent: rootChannel,
-      routingState: event.routingState,
-      title: "Search Signals Agent",
-    });
+    expect(getManagedConversationRights).not.toHaveBeenCalled();
+    expect(createManagedConversation).not.toHaveBeenCalled();
     await expect(
-      harness.store.findActiveBindingForChannel(childChannel),
-    ).resolves.toMatchObject({
-      backend: "codex",
-      channel: childChannel,
-      targetKind: "agent_thread",
-      threadId: "thread-1",
-    });
+      harness.store.findActiveBindingForChannel(rootChannel),
+    ).resolves.toBeUndefined();
+    expect(harness.delivered).not.toContainEqual(
+      expect.objectContaining({ kind: "status" }),
+    );
     expect(harness.startTurn).toHaveBeenCalledWith(
       expect.objectContaining({
         input: [
@@ -1351,7 +1625,7 @@ describe("MessagingController", () => {
     );
   });
 
-  it("reports a capability error when an addressed root cannot create a child", async () => {
+  it("routes an addressed root when its adapter cannot create a child", async () => {
     const navigation = buildNavigationSnapshot();
     navigation.threads[0] = {
       ...navigation.threads[0]!,
@@ -1379,15 +1653,19 @@ describe("MessagingController", () => {
 
     await harness.controller.handleInboundEvent(event);
 
-    expect(harness.startTurn).not.toHaveBeenCalled();
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        input: [{ type: "text", text: "handle this" }],
+        threadId: "thread-1",
+      }),
+    );
     await expect(
       harness.store.findActiveBindingForChannel(channel),
     ).resolves.toBeUndefined();
-    expect(harness.delivered.at(-1)).toMatchObject({
-      kind: "error",
-      title: "Default Agent cannot start here",
-      body: expect.stringContaining("cannot safely create a child conversation"),
-    });
+    expect(harness.delivered).not.toContainEqual(
+      expect.objectContaining({ kind: "status" }),
+    );
   });
 
   it("does not bootstrap a default for an unaddressed ambient root message", async () => {
@@ -1410,6 +1688,7 @@ describe("MessagingController", () => {
       channel: "slack",
       createManagedConversation,
       navigation,
+      responseModeForConversation: () => "mention_only",
     });
     const channel = {
       channel: "slack" as const,
@@ -1427,10 +1706,7 @@ describe("MessagingController", () => {
 
     expect(createManagedConversation).not.toHaveBeenCalled();
     expect(harness.startTurn).not.toHaveBeenCalled();
-    expect(harness.delivered.at(-1)).toMatchObject({
-      kind: "confirmation",
-      title: "PwrAgent commands",
-    });
+    expect(harness.delivered).toHaveLength(0);
   });
 
   it("revokes a stale specific default and continues to a valid broader default", async () => {
@@ -1489,10 +1765,14 @@ describe("MessagingController", () => {
     });
     await expect(
       harness.store.findActiveBindingForChannel(channel),
-    ).resolves.toMatchObject({
-      targetKind: "agent_thread",
-      threadId: "thread-1",
-    });
+    ).resolves.toBeUndefined();
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        input: [{ type: "text", text: "use the available Agent" }],
+        threadId: "thread-1",
+      }),
+    );
   });
 
   it("revokes default assignments when their Agent thread is archived", async () => {
@@ -1544,6 +1824,9 @@ describe("MessagingController", () => {
       kind: "confirmation",
       title: "Ready to start",
       body: expect.stringContaining("Agent: Messaging Agent"),
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      body: expect.stringContaining("Working Updates: None"),
     });
 
     await harness.controller.handleInboundEvent(buildTextEvent("Check the queue"));
@@ -17940,6 +18223,7 @@ async function createHarness(options?: {
   >;
   setConversationTitle?: MessagingAdapter["setConversationTitle"];
   startThread?: NonNullable<MessagingBackendBridge["startThread"]>;
+  startTurn?: NonNullable<MessagingBackendBridge["startTurn"]>;
   submitReview?: NonNullable<MessagingBackendBridge["submitReview"]>;
   toolUpdateDefaultMode?: MessagingToolUpdateMode;
   showStreamingOption?: boolean;
@@ -18101,11 +18385,14 @@ async function createHarness(options?: {
         workMode: request.launchpad?.workMode ?? "local",
       })),
   );
-  const startTurn = vi.fn(async (request: StartTurnRequest) => ({
-    backend: request.backend,
-    threadId: request.threadId,
-    turnId: "turn-1",
-  }));
+  const startTurn = vi.fn(
+    options?.startTurn ??
+      (async (request: StartTurnRequest) => ({
+        backend: request.backend,
+        threadId: request.threadId,
+        turnId: "turn-1",
+      })),
+  );
   const steerTurn = vi.fn(async (request: SteerTurnRequest) => ({
     backend: request.backend,
     threadId: request.threadId,

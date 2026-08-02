@@ -875,6 +875,7 @@ export class FeishuAdapter implements FeishuProviderAdapter {
         id: conversationKind === "dm" ? ids.openId : ids.chatId,
         kind: conversationKind,
         ...(conversationKind !== "dm" ? { parentId: ids.tenantKey } : {}),
+        ...(conversationKind !== "dm" ? { workspaceId: ids.tenantKey } : {}),
       },
     };
     const actor: MessagingActorIdentity = {
@@ -1435,6 +1436,7 @@ export class FeishuAdapter implements FeishuProviderAdapter {
           id: params.chatId as string,
           kind: "channel",
           ...(params.tenantKey ? { parentId: params.tenantKey as string } : {}),
+          ...(params.tenantKey ? { workspaceId: params.tenantKey as string } : {}),
         },
       };
     }
@@ -2203,6 +2205,9 @@ function channelRefFromSignedCallbackChannel(
       id: channel.i,
       kind: channel.k,
       ...(channel.p ? { parentId: channel.p } : {}),
+      ...(channel.k === "channel" && channel.p
+        ? { workspaceId: channel.p }
+        : {}),
     },
   };
 }

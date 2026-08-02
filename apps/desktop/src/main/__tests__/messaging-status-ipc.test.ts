@@ -7,6 +7,7 @@ const runtimeMock = vi.hoisted(() => ({
   getPlatformStatuses: vi.fn(() => []),
   isEnabled: vi.fn(() => true),
   listPairingRequests: vi.fn((): { entries: unknown[] } => ({ entries: [] })),
+  notifyBindingsChanged: vi.fn(),
   onBindingsChanged: vi.fn(() => vi.fn()),
   onPairingChanged: vi.fn(() => vi.fn()),
   onPlatformStatus: vi.fn(() => vi.fn()),
@@ -53,6 +54,11 @@ const leaseCoordinatorMock = vi.hoisted(() => ({
 }));
 const slackProviderMock = vi.hoisted(() => ({
   resolveContact: vi.fn(),
+}));
+const messagingRoutesServiceMock = vi.hoisted(() => ({
+  clearDesktopMessagingDefaultAgent: vi.fn(),
+  listDesktopMessagingRoutes: vi.fn(),
+  setDesktopMessagingDefaultAgent: vi.fn(),
 }));
 
 vi.mock("electron", () => ({
@@ -114,6 +120,10 @@ vi.mock("../messaging-activity-window", () => ({
 
 vi.mock("@pwragent/messaging-provider-slack", () => slackProviderMock);
 
+vi.mock("../messaging/messaging-routes-service", () =>
+  messagingRoutesServiceMock,
+);
+
 describe("messaging status ipc", () => {
   beforeEach(() => {
     handlers.clear();
@@ -124,6 +134,7 @@ describe("messaging status ipc", () => {
     runtimeMock.isEnabled.mockReturnValue(true);
     runtimeMock.listPairingRequests.mockClear();
     runtimeMock.listPairingRequests.mockReturnValue({ entries: [] });
+    runtimeMock.notifyBindingsChanged.mockClear();
     runtimeMock.onBindingsChanged.mockClear();
     runtimeMock.onPairingChanged.mockClear();
     runtimeMock.onPlatformStatus.mockClear();
@@ -144,6 +155,63 @@ describe("messaging status ipc", () => {
     leaseCoordinatorMock.disableForSession.mockClear();
     leaseCoordinatorMock.shutdown.mockClear();
     slackProviderMock.resolveContact.mockReset();
+    messagingRoutesServiceMock.clearDesktopMessagingDefaultAgent.mockReset();
+    messagingRoutesServiceMock.listDesktopMessagingRoutes.mockReset();
+    messagingRoutesServiceMock.setDesktopMessagingDefaultAgent.mockReset();
+  });
+
+  it("lists and mutates default Agent routes through IPC", async () => {
+    const routes = {
+      defaultAgents: [],
+      bindings: [],
+      eligibleAgents: [],
+      observedSurfaces: [],
+    };
+    messagingRoutesServiceMock.listDesktopMessagingRoutes.mockResolvedValue(routes);
+    messagingRoutesServiceMock.setDesktopMessagingDefaultAgent.mockResolvedValue({
+      assignmentId: "assignment-1",
+    });
+    messagingRoutesServiceMock.clearDesktopMessagingDefaultAgent
+      .mockResolvedValueOnce({ assignmentId: "assignment-1", cleared: true })
+      .mockResolvedValueOnce({ assignmentId: "missing", cleared: false });
+    const { registerMessagingStatusIpcHandlers } = await import(
+      "../ipc/messaging-status"
+    );
+    const {
+      MESSAGING_CLEAR_DEFAULT_AGENT_CHANNEL,
+      MESSAGING_LIST_ROUTES_CHANNEL,
+      MESSAGING_SET_DEFAULT_AGENT_CHANNEL,
+    } = await import("../../shared/ipc");
+    const setRequest = {
+      scope: { kind: "provider" as const, platform: "slack" as const },
+      target: { backend: "codex" as const, threadId: "agent-1" },
+    };
+
+    registerMessagingStatusIpcHandlers();
+
+    await expect(
+      handlers.get(MESSAGING_LIST_ROUTES_CHANNEL)?.({}),
+    ).resolves.toBe(routes);
+    await expect(
+      handlers.get(MESSAGING_SET_DEFAULT_AGENT_CHANNEL)?.({}, setRequest),
+    ).resolves.toEqual({ assignmentId: "assignment-1" });
+    await expect(
+      handlers.get(MESSAGING_CLEAR_DEFAULT_AGENT_CHANNEL)?.(
+        {},
+        { assignmentId: "assignment-1" },
+      ),
+    ).resolves.toEqual({ assignmentId: "assignment-1", cleared: true });
+    await expect(
+      handlers.get(MESSAGING_CLEAR_DEFAULT_AGENT_CHANNEL)?.(
+        {},
+        { assignmentId: "missing" },
+      ),
+    ).resolves.toEqual({ assignmentId: "missing", cleared: false });
+
+    expect(
+      messagingRoutesServiceMock.setDesktopMessagingDefaultAgent,
+    ).toHaveBeenCalledWith(setRequest);
+    expect(runtimeMock.notifyBindingsChanged).toHaveBeenCalledTimes(2);
   });
 
   it("loads startup eligibility diagnostics when enabling messaging at runtime", async () => {
