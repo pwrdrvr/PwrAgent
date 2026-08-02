@@ -7416,6 +7416,54 @@ describe("useThreadNavigation", () => {
     expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
   });
 
+  it("reconciles a primary workspace repository resolved after an earlier refresh", async () => {
+    const snapshotState: { primaryGitRepository?: string } = {};
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: ["codex:thread-1"],
+      threads: [{
+        id: "thread-1",
+        title: "First thread",
+        titleSource: "explicit" as const,
+        source: "codex" as const,
+        linkedDirectories: [],
+        ...(snapshotState.primaryGitRepository
+          ? { primaryGitRepository: snapshotState.primaryGitRepository }
+          : {}),
+        inbox: { inInbox: true, reason: "new-thread" as const },
+        // Remote resolution can change without the app-server thread record.
+        updatedAt: 1_000,
+      }],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.id).toBe("thread-1");
+    });
+    expect(result.current.selectedThread?.primaryGitRepository).toBeUndefined();
+
+    snapshotState.primaryGitRepository = "github.com/pwrdrvr/pwragent";
+    await act(async () => {
+      await result.current.refresh();
+    });
+
+    expect(result.current.selectedThread?.primaryGitRepository).toBe(
+      "github.com/pwrdrvr/pwragent",
+    );
+  });
+
   it("preserves the current thread model when patching non-model settings", async () => {
     const getNavigationSnapshot = vi.fn(async () => ({
       backend: "all" as const,

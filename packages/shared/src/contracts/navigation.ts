@@ -52,6 +52,11 @@ export type ThreadAgentMetadata = {
 
 export type NavigationThreadSummary = AppServerThreadSummary & {
   inbox: ThreadInboxState;
+  /**
+   * Normalized host/owner/repository identity resolved from the thread's
+   * primary workspace by the desktop main process.
+   */
+  primaryGitRepository?: string;
   /** Automatically dispatch bounded repair turns for newly failing/conflicting attached PRs. */
   prAutoDispatchEnabled?: boolean;
   /** Durable, cancellable PR repair waiting for its main-process send time. */

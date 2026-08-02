@@ -6888,7 +6888,7 @@ export function Composer(props: ComposerProps) {
   );
   const threadWorkspace = props.thread ? getThreadWorkspace(props.thread) : undefined;
   const showPrAutoDispatchToggle = Boolean(
-    normalizeGitOriginUrl(props.thread?.gitOriginUrl),
+    props.thread && getPrimaryWorkspaceRepository(props.thread),
   );
   const hasAttachedPullRequest = props.thread
     ? hasPrimaryWorkspacePullRequest(props.thread)
@@ -9982,11 +9982,20 @@ function getThreadWorkspace(thread: NavigationThreadSummary): ThreadWorkspace | 
 function hasPrimaryWorkspacePullRequest(
   thread: NavigationThreadSummary,
 ): boolean {
-  const primaryRepository = normalizeGitOriginUrl(thread.gitOriginUrl);
+  const primaryRepository = getPrimaryWorkspaceRepository(thread);
   if (!primaryRepository) return false;
   return (thread.prs ?? []).some((pr) =>
     normalizeGitOriginUrl(`${pr.provider}/${pr.org}/${pr.repo}`)
       === primaryRepository,
+  );
+}
+
+function getPrimaryWorkspaceRepository(
+  thread: NavigationThreadSummary,
+): string | undefined {
+  return (
+    normalizeGitOriginUrl(thread.primaryGitRepository)
+    ?? normalizeGitOriginUrl(thread.gitOriginUrl)
   );
 }
 

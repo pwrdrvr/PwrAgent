@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type {
   AppServerThreadSummary,
   AutomationThreadSummary,
+  NavigationThreadSummary,
   PrSummary,
 } from "@pwragent/shared";
 
@@ -111,6 +112,31 @@ describe("navigation execution mode authority", () => {
     });
 
     expect(thread?.executionMode).toBe("default");
+  });
+});
+
+describe("navigation primary repository", () => {
+  it("includes the primary workspace repository in the snapshot hash", () => {
+    const threadWithoutPrimaryRepository: NavigationThreadSummary = {
+      ...buildThread(),
+      inbox: { inInbox: false },
+    };
+    const threadWithPrimaryRepository: NavigationThreadSummary = {
+      ...threadWithoutPrimaryRepository,
+      primaryGitRepository: "github.com/pwrdrvr/pwragent",
+    };
+
+    expect(
+      buildNavigationSnapshotHash({
+        backend: "codex",
+        threads: [threadWithoutPrimaryRepository],
+      }),
+    ).not.toBe(
+      buildNavigationSnapshotHash({
+        backend: "codex",
+        threads: [threadWithPrimaryRepository],
+      }),
+    );
   });
 });
 

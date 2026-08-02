@@ -703,6 +703,7 @@ function threadSummariesEqual(
     left.threadStatus === right.threadStatus &&
     left.gitBranch === right.gitBranch &&
     left.observedGitBranch === right.observedGitBranch &&
+    left.primaryGitRepository === right.primaryGitRepository &&
     // Working state is probed on its own cadence (background refresh +
     // post-turn invalidation), independent of `updatedAt` — like PRs and
     // messaging bindings below. Without this check the reconciler would
