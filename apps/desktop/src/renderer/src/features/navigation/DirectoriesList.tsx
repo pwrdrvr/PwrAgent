@@ -124,6 +124,10 @@ type DirectoriesListProps = {
     emoji: string,
     present: boolean,
   ) => Promise<void>;
+  onSetThreadPin?: (
+    thread: NavigationThreadSummary,
+    pinned: boolean,
+  ) => Promise<void>;
   onUnbindMessagingBinding?: (
     thread: NavigationThreadSummary,
     binding: MessagingThreadBindingSummary,
@@ -760,6 +764,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
               }
               onSelectThread={props.onSelectThread}
               onSetReaction={props.onSetReaction}
+              onSetThreadPin={props.onSetThreadPin}
               onUnbindMessagingBinding={props.onUnbindMessagingBinding}
             />
             );
@@ -860,6 +865,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
             onRevealSelectedThreadComplete={props.onRevealSelectedThreadComplete}
             onSelectThread={props.onSelectThread}
             onSetReaction={props.onSetReaction}
+            onSetThreadPin={props.onSetThreadPin}
             onUnbindMessagingBinding={props.onUnbindMessagingBinding}
           />
           {renderStaticSubthreads(thread)}
@@ -1248,6 +1254,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                           }
                           onSelectThread={props.onSelectThread}
                           onSetReaction={props.onSetReaction}
+                          onSetThreadPin={props.onSetThreadPin}
 	                          onUnbindMessagingBinding={props.onUnbindMessagingBinding}
 	                        />
                               {renderStaticSubthreads(thread)}

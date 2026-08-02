@@ -197,6 +197,37 @@ describe("ThreadRow chip flow", () => {
     expect(onUnbindMessagingBinding).not.toHaveBeenCalled();
   });
 
+  it("unpins only when the pin click finishes on the marker", () => {
+    const onSetThreadPin = vi.fn(async () => undefined);
+    const { onSelectThread } = renderRow({
+      thread: {
+        ...baseThread,
+        pinnedRank: "1024",
+        reactions: [],
+      },
+      onSetThreadPin,
+    });
+
+    const pin = screen.getByRole("button", { name: "Unpin thread" });
+    const rowButton = screen.getByRole("button", { name: /Chip flow thread/i });
+    expect(pin.tagName).toBe("SPAN");
+    expect(pin).toHaveClass("thread-row__chip--pin");
+
+    // The marker mutates on click, not press: releasing on the surrounding
+    // row after leaving the pin must leave the thread pinned.
+    fireEvent.mouseDown(pin);
+    fireEvent.mouseLeave(pin);
+    fireEvent.mouseUp(rowButton);
+    expect(onSetThreadPin).not.toHaveBeenCalled();
+
+    fireEvent.click(pin);
+    expect(onSetThreadPin).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "thread-chips" }),
+      false,
+    );
+    expect(onSelectThread).not.toHaveBeenCalled();
+  });
+
   it("does not invoke onSelectThread when the add-reaction smiley is clicked", () => {
     const { container, onSelectThread } = renderRow();
     const addReaction = container.querySelector(

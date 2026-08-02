@@ -12,6 +12,8 @@ type ThreadMetaChipsProps = {
   /** A shell is alive for this thread — the row is how you find it again. */
   hasIntegratedTerminal?: boolean;
   hasInputRequest?: boolean;
+  /** Removes this top-level thread from the pinned section. */
+  onUnpin?: () => void;
   /**
    * When set, renders the "Scheduled" (future send time) or "Queued"
    * (waiting on the active turn) chip. Resolved upstream so a thread with
@@ -27,6 +29,7 @@ export function ThreadMetaChips({
   hasApprovalRequest = false,
   hasIntegratedTerminal = false,
   hasInputRequest = false,
+  onUnpin,
   queuedMessageState,
   includeLinkedDirectories = false,
   linkedDirectoryMode = "label",
@@ -43,6 +46,8 @@ export function ThreadMetaChips({
   // edge-clipped — the viewport tooltip is what the neighbouring chips use.
   const terminalTooltip = useViewportTooltip({ className: "viewport-tooltip" });
   const branchDrifted = isBranchDrifted(thread.gitBranch, thread.observedGitBranch);
+  const pinIsActionable = Boolean(onUnpin);
+  const pinTooltipText = pinIsActionable ? "Click to unpin" : "Pinned";
   const branchChip = thread.gitBranch ?? thread.observedGitBranch;
   const gitWorking = thread.gitWorkingState;
   const hasDirtyState = Boolean(
@@ -220,11 +225,47 @@ export function ThreadMetaChips({
 
       {thread.pinnedRank && !thread.parentThreadId ? (
         <span
-          aria-label="Pinned"
-          role="img"
+          aria-label={pinIsActionable ? "Unpin thread" : "Pinned"}
+          role={pinIsActionable ? "button" : "img"}
+          tabIndex={pinIsActionable ? 0 : undefined}
           className="thread-row__chip thread-row__chip--pin"
-          onMouseEnter={(event) => pinTooltip.show(event.currentTarget, "Pinned")}
+          // Deliberately use click, rather than pointer-down: the browser only
+          // dispatches click here when the pointer is released over the pin.
+          // Moving off the marker before release therefore leaves it pinned.
+          onClick={
+            pinIsActionable
+              ? (event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  pinTooltip.hide();
+                  onUnpin?.();
+                }
+              : undefined
+          }
+          onKeyDown={
+            pinIsActionable
+              ? (event) => {
+                  if (event.key !== "Enter" && event.key !== " ") {
+                    return;
+                  }
+
+                  event.preventDefault();
+                  event.stopPropagation();
+                  pinTooltip.hide();
+                  onUnpin?.();
+                }
+              : undefined
+          }
+          onMouseEnter={(event) =>
+            pinTooltip.show(event.currentTarget, pinTooltipText)
+          }
           onMouseLeave={pinTooltip.hide}
+          onFocus={
+            pinIsActionable
+              ? (event) => pinTooltip.show(event.currentTarget, pinTooltipText)
+              : undefined
+          }
+          onBlur={pinIsActionable ? pinTooltip.hide : undefined}
         >
           <span aria-hidden="true" className="thread-row__chip-icon">
             <PinIcon size={12} />
