@@ -86,6 +86,7 @@ export type DesktopSettingsConfig = {
   general?: {
     confirmQuitWithInProgressThreads?: boolean;
     attentionPromoteOnTurnEnd?: boolean;
+    taskMonitorOverlapWarningDismissed?: boolean;
     pdfAnalysisEnabled?: boolean;
     developerMode?: boolean;
     hotCpuProfilingEnabled?: boolean;
@@ -622,6 +623,12 @@ export function desktopSettingsPatchToEdits(
     set(
       ["general", "attention_promote_on_turn_end"],
       patch.general.attentionPromoteOnTurnEnd,
+    );
+  }
+  if (patch.general?.taskMonitorOverlapWarningDismissed !== undefined) {
+    set(
+      ["general", "task_monitor_overlap_warning_dismissed"],
+      patch.general.taskMonitorOverlapWarningDismissed,
     );
   }
   if (patch.general?.pdfAnalysisEnabled !== undefined) {
@@ -1538,6 +1545,9 @@ function normalizeDesktopConfig(
       attentionPromoteOnTurnEnd: readBoolean(
         general?.attention_promote_on_turn_end,
       ),
+      taskMonitorOverlapWarningDismissed: readBoolean(
+        general?.task_monitor_overlap_warning_dismissed,
+      ),
       pdfAnalysisEnabled: readBoolean(general?.pdf_analysis_enabled),
       developerMode: readBoolean(general?.developer_mode),
       hotCpuProfilingEnabled: readBoolean(general?.hot_cpu_profiling_enabled),
@@ -1876,6 +1886,8 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const confirmQuitWithInProgressThreads =
     config.general?.confirmQuitWithInProgressThreads;
   const attentionPromoteOnTurnEnd = config.general?.attentionPromoteOnTurnEnd;
+  const taskMonitorOverlapWarningDismissed =
+    config.general?.taskMonitorOverlapWarningDismissed;
   const pdfAnalysisEnabled = config.general?.pdfAnalysisEnabled;
   const notificationsEnabled = config.general?.notificationsEnabled;
   const appearance = config.general?.appearance;
@@ -1892,6 +1904,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     hotCpuProfilingHeapSnapshotLimit !== undefined ||
     confirmQuitWithInProgressThreads !== undefined ||
     attentionPromoteOnTurnEnd !== undefined ||
+    taskMonitorOverlapWarningDismissed !== undefined ||
     pdfAnalysisEnabled !== undefined ||
     notificationsEnabled !== undefined ||
     appearanceDefined ||
@@ -1929,6 +1942,10 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     }
     if (attentionPromoteOnTurnEnd !== undefined) {
       pruned.general.attentionPromoteOnTurnEnd = attentionPromoteOnTurnEnd;
+    }
+    if (taskMonitorOverlapWarningDismissed !== undefined) {
+      pruned.general.taskMonitorOverlapWarningDismissed =
+        taskMonitorOverlapWarningDismissed;
     }
     if (pdfAnalysisEnabled !== undefined) {
       pruned.general.pdfAnalysisEnabled = pdfAnalysisEnabled;

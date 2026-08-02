@@ -367,6 +367,7 @@ export type DesktopAppearanceSnapshot = {
 
 export type DesktopGeneralSettingsSnapshot = {
   confirmQuitWithInProgressThreads: DesktopSettingsValue<boolean>;
+  taskMonitorOverlapWarningDismissed?: DesktopSettingsValue<boolean>;
   /**
    * Attention-lens ordering is pinned to the start of a thread's turn so a
    * streaming turn cannot re-sort the queue under the operator. This controls
@@ -891,6 +892,7 @@ export type DesktopSettingsConfigPatch = {
   general?: {
     confirmQuitWithInProgressThreads?: boolean;
     attentionPromoteOnTurnEnd?: boolean;
+    taskMonitorOverlapWarningDismissed?: boolean;
     pdfAnalysisEnabled?: boolean;
     developerMode?: boolean;
     hotCpuProfilingEnabled?: boolean;

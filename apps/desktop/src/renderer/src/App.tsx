@@ -1517,6 +1517,8 @@ function DesktopAppShell(props: {
     directories: navigation.directories,
     fullAccessRiskWarningDismissed:
       settings.snapshot?.experimental.fullAccessRiskWarningDismissed.value ?? false,
+    taskMonitorOverlapWarningDismissed:
+      settings.snapshot?.general.taskMonitorOverlapWarningDismissed?.value ?? false,
     backgroundPrPollingEnabled:
       settings.snapshot
         ? settings.snapshot.git?.backgroundPrPolling?.value
@@ -1584,6 +1586,16 @@ function DesktopAppShell(props: {
     },
     onOpenAutomations: () => {
       setMainView("automations");
+    },
+    onDismissTaskMonitorOverlapWarning: async () => {
+      const saved = await settings.writeConfig({
+        general: {
+          taskMonitorOverlapWarningDismissed: true,
+        },
+      });
+      if (!saved) {
+        throw new Error("Could not save the task monitor warning preference.");
+      }
     },
     onOpenMessagingActivity: openMessagingActivityWindow,
     onOpenMessagingSettings: openMessagingSettings,

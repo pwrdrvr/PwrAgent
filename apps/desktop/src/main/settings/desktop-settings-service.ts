@@ -604,6 +604,10 @@ export class DesktopSettingsService {
           config.general?.attentionPromoteOnTurnEnd,
           true,
         ),
+        taskMonitorOverlapWarningDismissed: this.resolveConfigBoolean(
+          config.general?.taskMonitorOverlapWarningDismissed,
+          false,
+        ),
         pdfAnalysisEnabled: this.resolveConfigBoolean(
           config.general?.pdfAnalysisEnabled,
           true,

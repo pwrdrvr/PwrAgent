@@ -91,6 +91,22 @@ describe("desktopSettingsPatchToEdits — general", () => {
     ]);
   });
 
+  it("writes the task monitor overlap warning dismissal flag", () => {
+    const edits = desktopSettingsPatchToEdits({
+      general: {
+        taskMonitorOverlapWarningDismissed: true,
+      },
+    });
+
+    expect(edits).toEqual([
+      {
+        op: "set",
+        path: ["general", "task_monitor_overlap_warning_dismissed"],
+        value: true,
+      },
+    ]);
+  });
+
   it("persists only the PDF analysis opt-out", () => {
     expect(
       desktopSettingsPatchToEdits({

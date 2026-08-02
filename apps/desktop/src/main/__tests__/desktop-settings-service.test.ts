@@ -663,7 +663,7 @@ describe("DesktopSettingsService", () => {
     expect(service.resolveConfirmQuitWithInProgressThreads()).toBe(false);
   });
 
-  it("defaults the Attention end-of-turn promotion on and persists overrides", async () => {
+  it("persists attention promotion and monitor warning preferences", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
     const service = new DesktopSettingsService({
@@ -677,20 +677,29 @@ describe("DesktopSettingsService", () => {
       value: true,
       source: "default",
     });
+    expect(initial.general.taskMonitorOverlapWarningDismissed).toEqual({
+      value: false,
+      source: "default",
+    });
 
     await service.writeConfigPatch({
       general: {
         attentionPromoteOnTurnEnd: false,
+        taskMonitorOverlapWarningDismissed: true,
       },
     });
 
     const saved = fs.readFileSync(configPath, "utf8");
-    expect(saved).toContain("[general]");
     expect(saved).toContain("attention_promote_on_turn_end = false");
-    expect(
-      (await service.readSettings()).general.attentionPromoteOnTurnEnd,
-    ).toEqual({
+    expect(saved).toContain("task_monitor_overlap_warning_dismissed = true");
+    expect((await service.readSettings()).general.attentionPromoteOnTurnEnd).toEqual({
       value: false,
+      source: "config",
+    });
+    expect(
+      (await service.readSettings()).general.taskMonitorOverlapWarningDismissed,
+    ).toEqual({
+      value: true,
       source: "config",
     });
   });

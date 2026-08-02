@@ -13,7 +13,8 @@ export type ThreadTurnQueueOrigin =
   | "manual"
   | "automation"
   | "messaging"
-  | "scheduled";
+  | "scheduled"
+  | "monitor";
 
 export type ThreadTurnQueueEntry = {
   id: string;

@@ -231,7 +231,7 @@ export type ThreadScheduledStart = {
 export type ThreadQueuedTurnSummary = {
   /** Registry queue entry id — matches thread/turnQueue/updated events. */
   queueEntryId: string;
-  origin: "manual" | "automation" | "messaging" | "scheduled";
+  origin: "manual" | "automation" | "messaging" | "scheduled" | "monitor";
   /** First text item of the queued input, truncated for display. */
   displayText: string;
   createdAt: number;

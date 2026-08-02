@@ -28165,12 +28165,18 @@ script = "printf setup"
     await registry.close();
   });
 
-  it("emits a terminal outcome when a deferred review cannot start", async () => {
+  it("keeps monitor follow-up eligible when a deferred review cannot start", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: {
         methods: ["turn/start", "review/start", "thread/resume"],
       },
+      models: TEST_TASK_MONITOR_MODELS,
       startReviewError: new Error("Codex disconnected"),
+      startThreadResult: { threadId: "monitor-thread" },
+      startTurnResults: [
+        { threadId: "monitor-thread", turnId: "monitor-turn" },
+        { threadId: "parent-thread", turnId: "monitor-follow-up" },
+      ],
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
@@ -28192,6 +28198,24 @@ script = "printf setup"
         },
       },
     });
+    const delegationResponse = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "parent-thread",
+        turnId: "turn-1",
+        callId: "call-create-monitor",
+        requestId: "call-create-monitor",
+        namespace: "pwragent_task_monitors",
+        tool: "create_monitor_delegation",
+        arguments: {
+          task: "Watch the deferred review outcome.",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+    const monitorId = JSON.parse(
+      (delegationResponse as { contentItems: Array<{ text: string }> })
+        .contentItems[0]?.text ?? "{}",
+    ).monitorId as string;
     await registry.submitReview({
       backend: "codex",
       threadId: "parent-thread",
@@ -28208,6 +28232,27 @@ script = "printf setup"
       },
     });
 
+    const completionResponse = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "monitor-thread",
+        turnId: "monitor-turn",
+        callId: "call-complete-monitor",
+        requestId: "call-complete-monitor",
+        namespace: "pwragent_task_monitors",
+        tool: "complete_monitoring",
+        arguments: {
+          monitorId,
+          outcome: "success",
+          summary: "The monitor completed after the rejected review.",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+    const completionPayload = JSON.parse(
+      (completionResponse as { contentItems: Array<{ text: string }> })
+        .contentItems[0]?.text ?? "{}",
+    ) as Record<string, unknown>;
+
     expect(events).toContainEqual({
       backend: "codex",
       notification: {
@@ -28219,6 +28264,14 @@ script = "printf setup"
         }),
       },
     });
+    expect(completionResponse).toMatchObject({ success: true });
+    expect(completionPayload).toMatchObject({
+      parentTurn: {
+        status: "started",
+        turnId: "monitor-follow-up",
+      },
+    });
+    expect(codexClient.startTurnCallCount).toBe(2);
 
     await registry.close();
   });
@@ -33418,7 +33471,9 @@ script = "printf setup"
     expect(String(payload.parentAgentGuidance)).toContain("local verification commands");
     expect(String(payload.parentAgentGuidance)).toContain("long-running command");
     expect(String(payload.parentAgentGuidance)).toContain("remain idle");
-    expect(String(payload.parentAgentGuidance)).toContain("only event that should wake");
+    expect(String(payload.parentAgentGuidance)).toContain(
+      "only when no newer parent turn or review has superseded the monitor",
+    );
     expect(codexClient.lastStartThreadParams).toMatchObject({
       ephemeral: true,
       model: "gpt-5.6-luna",
@@ -34078,6 +34133,12 @@ script = "printf setup"
       codexClient.lastStartTurnParams?.input[0]?.type === "text"
         ? codexClient.lastStartTurnParams.input[0].text
         : "";
+    expect(handoffText).toContain(
+      "Use this result only to continue parent work that directly depended on this monitor.",
+    );
+    expect(handoffText).toContain(
+      "Do not apply unrelated review findings",
+    );
     await codexClient.emit({
       method: "item/completed",
       params: {
@@ -34182,7 +34243,234 @@ script = "printf setup"
     await registry.close();
   });
 
-  it("queues task monitor handoffs behind an active parent without transcript injection", async () => {
+  it("keeps a monitor result report-only after an accepted review starts", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      models: TEST_TASK_MONITOR_MODELS,
+      startThreadResult: { threadId: "monitor-thread" },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "parent-turn",
+          turn: { id: "parent-turn" },
+        },
+      },
+    });
+    const delegationResponse = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "parent-turn",
+        callId: "call-create",
+        requestId: "call-create",
+        namespace: "pwragent_task_monitors",
+        tool: "create_monitor_delegation",
+        arguments: {
+          task: "Watch an asynchronous task until it finishes.",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+    const monitorId = JSON.parse(
+      (delegationResponse as { contentItems: Array<{ text: string }> })
+        .contentItems[0]?.text ?? "{}",
+    ).monitorId as string;
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "parent-turn",
+          turn: { id: "parent-turn", status: "completed", output: [] },
+        },
+      },
+    });
+
+    await registry.startReview({
+      backend: "codex",
+      threadId: "thread-1",
+      target: { type: "uncommittedChanges" },
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-review-1",
+          turn: { id: "turn-review-1", status: "completed", output: [] },
+        },
+      },
+    });
+
+    const completionResponse = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "monitor-thread",
+        turnId: "monitor-turn",
+        callId: "call-complete",
+        requestId: "call-complete",
+        namespace: "pwragent_task_monitors",
+        tool: "complete_monitoring",
+        arguments: {
+          monitorId,
+          outcome: "failure",
+          summary: "The monitored task failed.",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+    const completionPayload = JSON.parse(
+      (completionResponse as { contentItems: Array<{ text: string }> })
+        .contentItems[0]?.text ?? "{}",
+    ) as Record<string, unknown>;
+
+    expect(completionResponse).toMatchObject({ success: true });
+    expect(completionPayload).not.toHaveProperty("parentTurn");
+    expect(codexClient.startTurnCallCount).toBe(1);
+    expect(codexClient.injectedThreadItems).toMatchObject([
+      {
+        threadId: "thread-1",
+        items: [
+          {
+            content: [
+              {
+                text: expect.stringContaining(
+                  "Automatic parent follow-up was withheld because a review started after this monitor.",
+                ),
+              },
+            ],
+          },
+        ],
+      },
+    ]);
+
+    await registry.close();
+  });
+
+  it("keeps a monitor result report-only after newer parent work starts", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      models: TEST_TASK_MONITOR_MODELS,
+      startThreadResult: { threadId: "monitor-thread" },
+      startTurnResults: [
+        { threadId: "monitor-thread", turnId: "monitor-turn" },
+        { threadId: "thread-1", turnId: "newer-turn" },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "parent-turn",
+          turn: { id: "parent-turn" },
+        },
+      },
+    });
+    const delegationResponse = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "parent-turn",
+        callId: "call-create",
+        requestId: "call-create",
+        namespace: "pwragent_task_monitors",
+        tool: "create_monitor_delegation",
+        arguments: {
+          task: "Watch an asynchronous task until it finishes.",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+    const monitorId = JSON.parse(
+      (delegationResponse as { contentItems: Array<{ text: string }> })
+        .contentItems[0]?.text ?? "{}",
+    ).monitorId as string;
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "parent-turn",
+          turn: { id: "parent-turn", status: "completed", output: [] },
+        },
+      },
+    });
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "thread-1",
+      input: [{ type: "text", text: "Start newer work." }],
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "newer-turn",
+          turn: { id: "newer-turn", status: "completed", output: [] },
+        },
+      },
+    });
+
+    const completionResponse = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "monitor-thread",
+        turnId: "monitor-turn",
+        callId: "call-complete",
+        requestId: "call-complete",
+        namespace: "pwragent_task_monitors",
+        tool: "complete_monitoring",
+        arguments: {
+          monitorId,
+          outcome: "success",
+          summary: "The monitored task succeeded.",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+    const completionPayload = JSON.parse(
+      (completionResponse as { contentItems: Array<{ text: string }> })
+        .contentItems[0]?.text ?? "{}",
+    ) as Record<string, unknown>;
+
+    expect(completionResponse).toMatchObject({ success: true });
+    expect(completionPayload).not.toHaveProperty("parentTurn");
+    expect(codexClient.startTurnCallCount).toBe(2);
+    expect(codexClient.injectedThreadItems).toMatchObject([
+      {
+        threadId: "thread-1",
+        items: [
+          {
+            content: [
+              {
+                text: expect.stringContaining(
+                  "Automatic parent follow-up was withheld because newer work started after this monitor.",
+                ),
+              },
+            ],
+          },
+        ],
+      },
+    ]);
+
+    await registry.close();
+  });
+
+  it("keeps a monitor handoff report-only when the parent is busy", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
       models: TEST_TASK_MONITOR_MODELS,
@@ -34266,12 +34554,7 @@ script = "printf setup"
     ) as Record<string, unknown>;
 
     expect(completionResponse).toMatchObject({ success: true });
-    expect(completionPayload).toMatchObject({
-      parentTurn: {
-        status: "queued",
-        position: 1,
-      },
-    });
+    expect(completionPayload).not.toHaveProperty("parentTurn");
     expect(codexClient.injectedThreadItems).toHaveLength(0);
     expect(codexClient.startTurnCallCount).toBe(1);
 
@@ -34287,16 +34570,97 @@ script = "printf setup"
       },
     });
 
-    await expect.poll(() => codexClient.startTurnCallCount).toBe(2);
-    expect(codexClient.lastStartTurnParams).toMatchObject({
-      threadId: "thread-1",
-      input: [
-        {
-          type: "text",
-          text: expect.stringContaining("The monitored task failed."),
-        },
-      ],
+    expect(codexClient.startTurnCallCount).toBe(1);
+    await registry.close();
+  });
+
+  it("keeps monitor follow-up eligible after a rejected review start", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      models: TEST_TASK_MONITOR_MODELS,
+      startThreadResult: { threadId: "monitor-thread" },
     });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "parent-turn",
+          turn: { id: "parent-turn" },
+        },
+      },
+    });
+    const delegationResponse = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "parent-turn",
+        callId: "call-create",
+        requestId: "call-create",
+        namespace: "pwragent_task_monitors",
+        tool: "create_monitor_delegation",
+        arguments: {
+          task: "Watch an asynchronous task until it finishes.",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+    const monitorId = JSON.parse(
+      (delegationResponse as { contentItems: Array<{ text: string }> })
+        .contentItems[0]?.text ?? "{}",
+    ).monitorId as string;
+
+    await expect(
+      registry.startReview({
+        backend: "codex",
+        threadId: "thread-1",
+        target: { type: "uncommittedChanges" },
+      }),
+    ).rejects.toThrow("Thread already has an active turn in progress: thread-1");
+
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "parent-turn",
+          turn: { id: "parent-turn", status: "completed", output: [] },
+        },
+      },
+    });
+    const completionResponse = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "monitor-thread",
+        turnId: "monitor-turn",
+        callId: "call-complete",
+        requestId: "call-complete",
+        namespace: "pwragent_task_monitors",
+        tool: "complete_monitoring",
+        arguments: {
+          monitorId,
+          outcome: "success",
+          summary: "The monitored task succeeded.",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+    const completionPayload = JSON.parse(
+      (completionResponse as { contentItems: Array<{ text: string }> })
+        .contentItems[0]?.text ?? "{}",
+    ) as Record<string, unknown>;
+
+    expect(completionResponse).toMatchObject({ success: true });
+    expect(completionPayload).toMatchObject({
+      parentTurn: { status: "started" },
+    });
+    expect(codexClient.startTurnCallCount).toBe(2);
+    expect(codexClient.injectedThreadItems).toHaveLength(0);
+
     await registry.close();
   });
 

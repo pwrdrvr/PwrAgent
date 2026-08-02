@@ -77,7 +77,7 @@ export function buildTaskMonitorDynamicToolSpecs(
       type: "function",
       name: "complete_monitoring",
       description:
-        "Finish a monitor delegation, inject the final result, and by default trigger exactly one parent turn with the final context.",
+        "Finish a monitor delegation and inject its final result. PwrAgent may start one parent follow-up only when no newer turn or review has superseded the monitor; otherwise the result is report-only.",
       inputSchema: {
         type: "object",
         properties: {
@@ -287,7 +287,7 @@ export function buildMonitorDelegationPrompt(params: {
     "- Progress injections are non-waking: they must not ask the parent agent to act.",
     "- Do not include the parent transcript or broad repository context in progress updates.",
     "- When the task reaches success, failure, or cancellation, call pwragent.complete_monitoring exactly once.",
-    "- The completion call is the only handoff that should trigger the parent agent.",
+    "- The completion call may hand the result back to the parent agent only when no newer parent turn or review has superseded this monitor. If it is report-only, the final result is still shown in the parent thread.",
     "</progress_protocol>",
     params.finalHandoffPrompt?.trim()
       ? ["", "<final_handoff_guidance>", params.finalHandoffPrompt.trim(), "</final_handoff_guidance>"].join("\n")
@@ -323,7 +323,7 @@ export function buildMonitorParentAgentGuidance(params: {
     "If the tool fails or no startup progress injection appears within the startup window, tell the user the monitor did not start and fall back to parent-side monitoring.",
     `After startup is confirmed, do not poll the task from the parent. The monitor should poll and inject a non-waking progress update or heartbeat about every ${heartbeatIntervalSeconds} seconds while work is still running.`,
     "If the parent has no unrelated work, it should end its turn and remain idle. If it has unrelated work, it may continue that work without waiting on the monitor.",
-    "The monitor's complete_monitoring call is the only event that should wake, start, or queue a parent turn with the final success/failure/cancelled result.",
+    "The monitor's complete_monitoring call may wake the parent with the final result only when no newer parent turn or review has superseded the monitor. Otherwise PwrAgent records the result as report-only and does not wake or queue a parent turn.",
   ].join("\n");
 }
 
