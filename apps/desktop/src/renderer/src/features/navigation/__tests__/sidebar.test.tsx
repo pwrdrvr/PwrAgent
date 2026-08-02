@@ -856,6 +856,14 @@ describe("Sidebar", () => {
           agentRole: "reviewer",
           threadStatus: "active",
         },
+        {
+          threadId: "thread-native-worker-not-loaded",
+          title: "Review the archived brief",
+          depth: 1,
+          agentNickname: "archive-scout",
+          agentRole: "researcher",
+          threadStatus: "notLoaded",
+        },
       ],
     };
     const renderSidebar = (thread: NavigationThreadSummary) => (
@@ -880,14 +888,18 @@ describe("Sidebar", () => {
     expect(screen.queryByText("launch-scout")).not.toBeInTheDocument();
 
     const nativeSubAgentsToggle = screen.getByRole("button", {
-      name: "Expand 2 native Codex sub-agents",
+      name: "Expand 3 native Codex sub-agents",
     });
     expect(screen.queryByText("launch-scout")).not.toBeInTheDocument();
 
     fireEvent.click(nativeSubAgentsToggle);
 
     expect(container.querySelectorAll(".native-subagents__list")).toHaveLength(1);
-    expect(container.querySelectorAll(".native-subagents__agent")).toHaveLength(2);
+    expect(container.querySelectorAll(".native-subagents__agent")).toHaveLength(3);
+    expect(container.querySelectorAll(".native-subagents__status")).toHaveLength(1);
+    expect(screen.getByLabelText("Working")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Idle")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Not loaded")).not.toBeInTheDocument();
     fireEvent.click(
       screen.getByRole("button", { name: "Open transcript for link-checker" }),
     );

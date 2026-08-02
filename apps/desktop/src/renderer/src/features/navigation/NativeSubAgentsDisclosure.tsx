@@ -1,8 +1,5 @@
 import { useState } from "react";
-import type {
-  AppServerThreadStatus,
-  NavigationThreadSummary,
-} from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared";
 import { SubAgentsIcon } from "../../icons";
 import { useDesktopApi } from "../../lib/desktop-api";
 
@@ -74,7 +71,6 @@ export function NativeSubAgentsDisclosure(props: NativeSubAgentsDisclosureProps)
         >
           {nativeSubAgents.map((subAgent) => {
             const label = subAgent.agentNickname ?? subAgent.title;
-            const status = nativeSubAgentStatusLabel(subAgent.threadStatus);
             return (
               <button
                 key={subAgent.threadId}
@@ -94,13 +90,13 @@ export function NativeSubAgentsDisclosure(props: NativeSubAgentsDisclosureProps)
                   });
                 }}
               >
-                <span
-                  aria-label={status}
-                  className={`native-subagents__status native-subagents__status--${
-                    subAgent.threadStatus ?? "unknown"
-                  }`}
-                  role="img"
-                />
+                {subAgent.threadStatus === "active" ? (
+                  <span
+                    aria-label="Working"
+                    className="native-subagents__status"
+                    role="img"
+                  />
+                ) : null}
                 <span className="native-subagents__agent-label">{label}</span>
                 {subAgent.agentRole ? (
                   <span className="native-subagents__agent-role">
@@ -114,18 +110,4 @@ export function NativeSubAgentsDisclosure(props: NativeSubAgentsDisclosureProps)
       ) : null}
     </div>
   );
-}
-
-function nativeSubAgentStatusLabel(status: AppServerThreadStatus | undefined): string {
-  switch (status) {
-    case "active":
-      return "Working";
-    case "idle":
-      return "Idle";
-    case "notLoaded":
-      return "Not loaded";
-    case "unknown":
-    default:
-      return "Status unknown";
-  }
 }

@@ -3072,20 +3072,8 @@ textarea,
   height: 7px;
   flex: 0 0 auto;
   border-radius: 999px;
-  background: var(--status-suspended);
-}
-
-.native-subagents__status--active {
   background: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
-}
-
-.native-subagents__status--idle {
-  background: var(--status-ok);
-}
-
-.native-subagents__status--notLoaded {
-  background: var(--status-warning);
 }
 
 .native-subagents__agent-label {
