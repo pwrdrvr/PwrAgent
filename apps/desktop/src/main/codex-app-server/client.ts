@@ -117,11 +117,6 @@ const DEFAULT_CODEX_COLLABORATION_MODEL = "gpt-5.5";
 export const DEFAULT_CODEX_THREAD_TITLE_MODEL = "gpt-5.6-luna";
 const DEFAULT_CODEX_THREAD_TITLE_TIMEOUT_MS = 20_000;
 const CODEX_THREAD_TITLE_CONFIG_READ_REASON = "thread-title-mcp-inventory";
-const CODEX_VISIBLE_THREAD_SOURCE_KINDS = [
-  "cli",
-  "vscode",
-  "subAgentThreadSpawn",
-] as const;
 const CODEX_THREAD_TITLE_WORKSPACE_DIR = path.join(
   tmpdir(),
   "pwragent",
@@ -1453,10 +1448,9 @@ function isKnownCompanionAppCodexThread(thread: RawCodexThreadSummary): boolean 
 
 function isVisibleCodexThreadSource(thread: RawCodexThreadSummary): boolean {
   const sourceKind = thread.codexThreadSourceKind?.trim();
-  return (
-    !sourceKind?.startsWith("subAgent")
-    || sourceKind === "subAgentThreadSpawn"
-  );
+  // Native Codex subagents appear on their originating thread as activity and
+  // have an inspection-only transcript. They are not durable navigation threads.
+  return !sourceKind?.startsWith("subAgent");
 }
 
 function filterVisibleCodexThreads(
@@ -4959,50 +4953,6 @@ function readCodexThreadSourceKind(
   return "subAgentOther";
 }
 
-function readCodexNativeSubAgent(
-  record: Record<string, unknown>,
-  sessionRecord: Record<string, unknown> | null,
-  sourceKind: string | undefined,
-): AppServerThreadSummary["codexNativeSubAgent"] {
-  const source =
-    asRecord(record.source) ??
-    asRecord(sessionRecord?.source);
-  const subAgent =
-    asRecord(source?.subAgent) ??
-    asRecord(source?.sub_agent);
-  const spawn =
-    asRecord(subAgent?.thread_spawn) ??
-    asRecord(subAgent?.threadSpawn);
-  if (sourceKind !== "subAgentThreadSpawn" && !spawn) {
-    return undefined;
-  }
-
-  const parentThreadId =
-    pickString(spawn ?? {}, ["parentThreadId", "parent_thread_id"]) ??
-    pickString(record, ["parentThreadId", "parent_thread_id"]) ??
-    pickString(sessionRecord ?? {}, ["parentThreadId", "parent_thread_id"]);
-  if (!parentThreadId) {
-    return undefined;
-  }
-
-  const depth = pickNumber(spawn ?? {}, ["depth"]);
-  const agentNickname =
-    pickString(record, ["agentNickname", "agent_nickname"]) ??
-    pickString(sessionRecord ?? {}, ["agentNickname", "agent_nickname"]) ??
-    pickString(spawn ?? {}, ["agentNickname", "agent_nickname"]);
-  const agentRole =
-    pickString(record, ["agentRole", "agent_role"]) ??
-    pickString(sessionRecord ?? {}, ["agentRole", "agent_role"]) ??
-    pickString(spawn ?? {}, ["agentRole", "agent_role"]);
-
-  return {
-    parentThreadId,
-    ...(depth !== undefined ? { depth } : {}),
-    ...(agentNickname ? { agentNickname } : {}),
-    ...(agentRole ? { agentRole } : {}),
-  };
-}
-
 function isRequestTimeoutError(error: unknown, method: string): boolean {
   const text = error instanceof Error ? error.message : String(error);
   return text.toLowerCase().includes(`json-rpc timeout: ${method.toLowerCase()}`);
@@ -5023,11 +4973,6 @@ function extractThreadsFromValue(value: unknown): RawCodexThreadSummary[] {
 
     const sessionRecord = asRecord(record.session);
     const codexThreadSourceKind = readCodexThreadSourceKind(record, sessionRecord);
-    const codexNativeSubAgent = readCodexNativeSubAgent(
-      record,
-      sessionRecord,
-      codexThreadSourceKind,
-    );
     const gitInfoRecord =
       asRecord(record.gitInfo) ??
       asRecord(record.git_info) ??
@@ -5118,7 +5063,6 @@ function extractThreadsFromValue(value: unknown): RawCodexThreadSummary[] {
         "remote_url",
       ]),
       codexThreadSourceKind,
-      codexNativeSubAgent,
     });
   }
 
@@ -5149,7 +5093,7 @@ function buildThreadDiscoveryPayloads(
     cursor,
     limit,
     sortKey: "updated_at",
-    sourceKinds: [...CODEX_VISIBLE_THREAD_SOURCE_KINDS],
+    sourceKinds: ["cli", "vscode"],
     useStateDbOnly: true,
   };
 

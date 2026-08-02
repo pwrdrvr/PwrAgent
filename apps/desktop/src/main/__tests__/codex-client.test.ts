@@ -446,7 +446,7 @@ class MockTransport implements JsonRpcTransport {
           params.params?.limit === 50 &&
           params.params?.sortKey === "updated_at" &&
           JSON.stringify(params.params?.sourceKinds) ===
-          JSON.stringify(["cli", "vscode", "subAgentThreadSpawn"]);
+          JSON.stringify(["cli", "vscode"]);
 
         this.messageHandler(
           JSON.stringify({
@@ -1295,7 +1295,7 @@ describe("CodexAppServerClient", () => {
             archived: false,
             limit: 50,
             sortKey: "updated_at",
-            sourceKinds: ["cli", "vscode", "subAgentThreadSpawn"],
+            sourceKinds: ["cli", "vscode"],
             useStateDbOnly: true,
           }
         }),
@@ -1344,7 +1344,7 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
-  it("lists spawned agent threads with native parent provenance", async () => {
+  it("keeps spawned agents out of navigation when a fallback ignores source filtering", async () => {
     MockTransport.threadListResultBySearchTerm.set("native-subagent-source", [
       {
         id: "thread-parent",
@@ -1391,16 +1391,7 @@ describe("CodexAppServerClient", () => {
 
     const threads = await client.listThreads({ filter: "native-subagent-source" });
 
-    expect(threads.map((thread) => thread.id)).toEqual([
-      "thread-child",
-      "thread-parent",
-    ]);
-    expect(threads[0]?.codexNativeSubAgent).toEqual({
-      parentThreadId: "thread-parent",
-      depth: 1,
-      agentNickname: "route-scout",
-      agentRole: "explorer",
-    });
+    expect(threads.map((thread) => thread.id)).toEqual(["thread-parent"]);
 
     await client.close();
   });
@@ -2028,7 +2019,7 @@ describe("CodexAppServerClient", () => {
             archived: false,
             limit: 50,
             sortKey: "updated_at",
-            sourceKinds: ["cli", "vscode", "subAgentThreadSpawn"],
+            sourceKinds: ["cli", "vscode"],
             useStateDbOnly: true,
           })
         }),
@@ -2343,7 +2334,7 @@ describe("CodexAppServerClient", () => {
           params: expect.objectContaining({
             searchTerm: "updated-at-sort",
             sortKey: "updated_at",
-            sourceKinds: ["cli", "vscode", "subAgentThreadSpawn"],
+            sourceKinds: ["cli", "vscode"],
             useStateDbOnly: true,
           }),
         }),
@@ -2381,7 +2372,7 @@ describe("CodexAppServerClient", () => {
           params: expect.objectContaining({
             searchTerm: "jsonl-mtime-repair",
             sortKey: "updated_at",
-            sourceKinds: ["cli", "vscode", "subAgentThreadSpawn"],
+            sourceKinds: ["cli", "vscode"],
             useStateDbOnly: true,
           }),
         }),
@@ -2452,7 +2443,7 @@ describe("CodexAppServerClient", () => {
             searchTerm: "search-product-parity",
             limit: 50,
             sortKey: "updated_at",
-            sourceKinds: ["cli", "vscode", "subAgentThreadSpawn"],
+            sourceKinds: ["cli", "vscode"],
           }),
         }),
       ]),

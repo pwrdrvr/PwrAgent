@@ -15563,14 +15563,6 @@ export class DesktopBackendRegistry {
       backend: "codex",
       threadIds: threadsWithPending.map((thread) => thread.id),
     });
-    if (!params.archived && !params.filter?.trim()) {
-      const nativeSubAgentOverlays =
-        await this.reconcileCodexNativeSubAgentRelationships({
-          overlaysByThreadId,
-          threads: threadsWithPending,
-        });
-      Object.assign(overlaysByThreadId, nativeSubAgentOverlays);
-    }
     const visibleThreads = threadsWithPending.filter(
       (thread) => overlaysByThreadId[thread.id]?.archiveTombstonedAt === undefined,
     );
@@ -15627,109 +15619,6 @@ export class DesktopBackendRegistry {
     return enrichedThreads.sort(
       (left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0),
     );
-  }
-
-  private async reconcileCodexNativeSubAgentRelationships(params: {
-    overlaysByThreadId: Record<string, ThreadOverlayState | undefined>;
-    threads: AppServerThreadSummary[];
-  }): Promise<Record<string, ThreadOverlayState | undefined>> {
-    const setThreadParent = this.overlayStore.setThreadParent;
-    const updateSubthreadOrder = this.overlayStore.updateSubthreadOrder;
-    if (!setThreadParent || !updateSubthreadOrder) {
-      return {};
-    }
-
-    const updatedOverlaysByThreadId: Record<
-      string,
-      ThreadOverlayState | undefined
-    > = {};
-    const spawnedThreads = params.threads
-      .filter(
-        (thread) =>
-          thread.source === "codex" && Boolean(thread.codexNativeSubAgent),
-      )
-      .sort((left, right) => {
-        const depthDifference =
-          (left.codexNativeSubAgent?.depth ?? Number.MAX_SAFE_INTEGER)
-          - (right.codexNativeSubAgent?.depth ?? Number.MAX_SAFE_INTEGER);
-        if (depthDifference !== 0) {
-          return depthDifference;
-        }
-        return (left.createdAt ?? 0) - (right.createdAt ?? 0);
-      });
-
-    for (const thread of spawnedThreads) {
-      const sourceThreadId = thread.codexNativeSubAgent?.parentThreadId.trim();
-      if (!sourceThreadId || sourceThreadId === thread.id) {
-        continue;
-      }
-      const sourceOverlay =
-        updatedOverlaysByThreadId[sourceThreadId]
-        ?? params.overlaysByThreadId[sourceThreadId]
-        ?? await this.overlayStore.getThreadOverlayState({
-          backend: "codex",
-          threadId: sourceThreadId,
-        })
-        ?? {
-          backend: "codex" as const,
-          threadId: sourceThreadId,
-          executionMode: "default" as const,
-          extraLinkedDirectories: [],
-        };
-      const groupParentThreadId = await this.resolveHandoffGroupParentThreadId({
-        backend: "codex",
-        sourceOverlay,
-        sourceThreadId,
-      });
-      const currentOverlay =
-        updatedOverlaysByThreadId[thread.id]
-        ?? params.overlaysByThreadId[thread.id];
-      const relationshipChanged =
-        currentOverlay?.parentThreadId !== groupParentThreadId;
-      if (relationshipChanged) {
-        updatedOverlaysByThreadId[thread.id] = await setThreadParent.call(
-          this.overlayStore,
-          {
-            backend: "codex",
-            threadId: thread.id,
-            parentThreadId: groupParentThreadId,
-          },
-        );
-      }
-
-      const parentOverlay = await this.overlayStore.getThreadOverlayState({
-        backend: "codex",
-        threadId: groupParentThreadId,
-      });
-      if (
-        !relationshipChanged
-        && parentOverlay?.subthreadOrder?.includes(thread.id)
-      ) {
-        continue;
-      }
-      const currentOrder =
-        groupParentThreadId === sourceThreadId
-        || parentOverlay?.subthreadOrder?.includes(sourceThreadId)
-          ? (parentOverlay?.subthreadOrder ?? [])
-          : [...(parentOverlay?.subthreadOrder ?? []), sourceThreadId];
-      const nextOrder = insertSubthreadIdAfter(
-        currentOrder,
-        sourceThreadId,
-        thread.id,
-      );
-      await updateSubthreadOrder.call(this.overlayStore, {
-        backend: "codex",
-        parentThreadId: groupParentThreadId,
-        threadIds: nextOrder,
-      });
-      updatedOverlaysByThreadId[groupParentThreadId] =
-        await this.overlayStore.getThreadOverlayState({
-          backend: "codex",
-          threadId: groupParentThreadId,
-        });
-    }
-
-    return updatedOverlaysByThreadId;
   }
 
   private async reconcileCodexDirectoryRelationshipsFromSource(params: {
