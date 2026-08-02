@@ -24,6 +24,8 @@ import type {
   MessagingPlatformStatusEvent,
   RejectMessagingPairingRequest,
   RejectMessagingPairingResponse,
+  ResetMessagingToolUpdateBindingsRequest,
+  ResetMessagingToolUpdateBindingsResponse,
   SetMessagingEnabledRequest,
   SetMessagingEnabledResponse,
   SetMessagingDefaultAgentRequest,
@@ -67,6 +69,7 @@ import {
   MESSAGING_PAIRING_CHANGED_EVENT_CHANNEL,
   MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL,
   MESSAGING_REJECT_PAIRING_CHANNEL,
+  MESSAGING_RESET_TOOL_UPDATE_BINDINGS_CHANNEL,
   MESSAGING_SET_ENABLED_CHANNEL,
   MESSAGING_SET_DEFAULT_AGENT_CHANNEL,
   MESSAGING_SHUTDOWN_RUNTIME_CHANNEL,
@@ -83,6 +86,7 @@ import { getDesktopMessagingStore } from "../messaging/desktop-messaging-store";
 import {
   clearDesktopMessagingDefaultAgent,
   listDesktopMessagingRoutes,
+  resetDesktopMessagingToolUpdateBindings,
   setDesktopMessagingDefaultAgent,
 } from "../messaging/messaging-routes-service";
 
@@ -762,6 +766,21 @@ export function registerMessagingStatusIpcHandlers(): void {
     },
   );
 
+  ipcMain.removeHandler(MESSAGING_RESET_TOOL_UPDATE_BINDINGS_CHANNEL);
+  ipcMain.handle(
+    MESSAGING_RESET_TOOL_UPDATE_BINDINGS_CHANNEL,
+    async (
+      _event,
+      request: ResetMessagingToolUpdateBindingsRequest,
+    ): Promise<ResetMessagingToolUpdateBindingsResponse> => {
+      const result = await resetDesktopMessagingToolUpdateBindings(request);
+      if (result.bindingCount > 0) {
+        runtime.notifyBindingsChanged();
+      }
+      return result;
+    },
+  );
+
   ipcMain.removeHandler(MESSAGING_LIST_ROUTES_CHANNEL);
   ipcMain.handle(
     MESSAGING_LIST_ROUTES_CHANNEL,
@@ -895,6 +914,7 @@ export async function disposeMessagingStatusIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(MESSAGING_APPROVE_PAIRING_CHANNEL);
   ipcMain.removeHandler(MESSAGING_REJECT_PAIRING_CHANNEL);
   ipcMain.removeHandler(MESSAGING_UNBIND_THREAD_CHANNEL);
+  ipcMain.removeHandler(MESSAGING_RESET_TOOL_UPDATE_BINDINGS_CHANNEL);
   ipcMain.removeHandler(MESSAGING_LIST_ROUTES_CHANNEL);
   ipcMain.removeHandler(MESSAGING_SET_DEFAULT_AGENT_CHANNEL);
   ipcMain.removeHandler(MESSAGING_CLEAR_DEFAULT_AGENT_CHANNEL);

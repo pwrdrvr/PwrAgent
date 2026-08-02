@@ -1025,8 +1025,12 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
           adapter.channel,
           channel,
         ),
-      toolUpdateDefaultMode: async () =>
-        (await this.loadConfig()).toolUpdateDefaultMode ?? "show_some",
+      toolUpdateDefaultMode: async (targetKind) => {
+        const config = await this.loadConfig();
+        return targetKind === "agent_thread"
+          ? config.managerToolUpdateDefaultMode ?? "show_none"
+          : config.toolUpdateDefaultMode ?? "show_some";
+      },
       fullAccessControls: async () =>
         (await this.loadConfig()).fullAccessControls,
       onBindingChanged: () => this.broadcastBindingsChanged(),

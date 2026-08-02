@@ -132,6 +132,8 @@ import type {
   MessagingPairingEntry,
   RejectMessagingPairingRequest,
   RejectMessagingPairingResponse,
+  ResetMessagingToolUpdateBindingsRequest,
+  ResetMessagingToolUpdateBindingsResponse,
   SetMessagingEnabledRequest,
   SetMessagingEnabledResponse,
   SetMessagingDefaultAgentRequest,
@@ -400,6 +402,7 @@ import {
   MESSAGING_PAIRING_CHANGED_EVENT_CHANNEL,
   MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL,
   MESSAGING_REJECT_PAIRING_CHANNEL,
+  MESSAGING_RESET_TOOL_UPDATE_BINDINGS_CHANNEL,
   MESSAGING_SET_ENABLED_CHANNEL,
   MESSAGING_SET_DEFAULT_AGENT_CHANNEL,
   MESSAGING_SHUTDOWN_RUNTIME_CHANNEL,
@@ -1510,6 +1513,13 @@ const desktopApi = Object.freeze({
     request: UnbindMessagingThreadRequest,
   ): Promise<UnbindMessagingThreadResponse> =>
     await ipcRenderer.invoke(MESSAGING_UNBIND_THREAD_CHANNEL, request),
+  resetMessagingToolUpdateBindings: async (
+    request: ResetMessagingToolUpdateBindingsRequest,
+  ): Promise<ResetMessagingToolUpdateBindingsResponse> =>
+    await ipcRenderer.invoke(
+      MESSAGING_RESET_TOOL_UPDATE_BINDINGS_CHANNEL,
+      request,
+    ),
   listMessagingRoutes: async (): Promise<ListMessagingRoutesResponse> =>
     await ipcRenderer.invoke(MESSAGING_LIST_ROUTES_CHANNEL),
   setMessagingDefaultAgent: async (

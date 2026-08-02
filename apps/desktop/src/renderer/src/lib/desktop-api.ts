@@ -136,6 +136,8 @@ import type {
   MessagingPlatformStatusEvent,
   RejectMessagingPairingRequest,
   RejectMessagingPairingResponse,
+  ResetMessagingToolUpdateBindingsRequest,
+  ResetMessagingToolUpdateBindingsResponse,
   SetMessagingEnabledRequest,
   SetMessagingEnabledResponse,
   SetMessagingDefaultAgentRequest,
@@ -819,6 +821,9 @@ export type DesktopApi = {
   unbindMessagingThread?: (
     request: UnbindMessagingThreadRequest,
   ) => Promise<UnbindMessagingThreadResponse>;
+  resetMessagingToolUpdateBindings?: (
+    request: ResetMessagingToolUpdateBindingsRequest,
+  ) => Promise<ResetMessagingToolUpdateBindingsResponse>;
   listMessagingRoutes?: () => Promise<ListMessagingRoutesResponse>;
   setMessagingDefaultAgent?: (
     request: SetMessagingDefaultAgentRequest,

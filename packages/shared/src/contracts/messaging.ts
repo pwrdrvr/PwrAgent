@@ -264,6 +264,19 @@ export type UnbindMessagingThreadResponse = {
   bindingId: string;
 };
 
+/**
+ * Clear the per-binding Working Updates selection so bound conversations
+ * inherit the profile default for their thread kind again.
+ */
+export type ResetMessagingToolUpdateBindingsRequest = {
+  targetKind: MessagingBindingTargetKind;
+};
+
+export type ResetMessagingToolUpdateBindingsResponse = {
+  /** Number of active bindings whose explicit Working Updates selection cleared. */
+  bindingCount: number;
+};
+
 export type DesktopMessagingDefaultAgentScope =
   | {
       kind: "profile";

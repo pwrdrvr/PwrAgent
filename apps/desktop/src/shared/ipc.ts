@@ -124,6 +124,8 @@ export const MESSAGING_GET_PLATFORM_STATUSES_CHANNEL =
 export const MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL =
   "messaging:platform-status-event";
 export const MESSAGING_UNBIND_THREAD_CHANNEL = "messaging:unbind-thread";
+export const MESSAGING_RESET_TOOL_UPDATE_BINDINGS_CHANNEL =
+  "messaging:reset-tool-update-bindings";
 export const MESSAGING_LIST_ROUTES_CHANNEL = "messaging:list-routes";
 export const MESSAGING_SET_DEFAULT_AGENT_CHANNEL =
   "messaging:set-default-agent";

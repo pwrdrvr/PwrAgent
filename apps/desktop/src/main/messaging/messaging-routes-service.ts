@@ -12,6 +12,8 @@ import type {
   SetMessagingDefaultAgentResponse,
   ClearMessagingDefaultAgentRequest,
   ClearMessagingDefaultAgentResponse,
+  ResetMessagingToolUpdateBindingsRequest,
+  ResetMessagingToolUpdateBindingsResponse,
   ThreadAgentMetadata,
 } from "@pwragent/shared";
 import { normalizeMessagingBindingTargetKind } from "@pwragent/shared";
@@ -31,6 +33,7 @@ type MessagingRoutesStore = Pick<
   | "findObservedSurfaces"
   | "getDefaultAgentAssignment"
   | "revokeDefaultAgentAssignment"
+  | "upsertBinding"
   | "upsertDefaultAgentAssignment"
 >;
 
@@ -257,6 +260,48 @@ export async function clearDesktopMessagingDefaultAgent(
     assignmentId: request.assignmentId,
     cleared: Boolean(revoked?.revokedAt),
   };
+}
+
+/**
+ * Return active bindings of one thread kind to their profile-wide Working
+ * Updates default. The explicit per-binding preference is deliberately
+ * removed rather than overwritten so a later default change reaches these
+ * bindings too.
+ */
+export async function resetDesktopMessagingToolUpdateBindings(
+  request: ResetMessagingToolUpdateBindingsRequest,
+  dependencies: MessagingRoutesServiceDependencies = {},
+): Promise<ResetMessagingToolUpdateBindingsResponse> {
+  const store = dependencies.store ?? getDesktopMessagingStore();
+  const now = (dependencies.now ?? Date.now)();
+  const bindings = await store.findActiveBindings();
+  let bindingCount = 0;
+
+  for (const binding of bindings) {
+    if (
+      normalizeMessagingBindingTargetKind(binding.targetKind) !== request.targetKind
+      || binding.preferences?.toolUpdateMode === undefined
+    ) {
+      continue;
+    }
+
+    const {
+      toolUpdateMode: _toolUpdateMode,
+      updatedAt: _updatedAt,
+      ...preferences
+    } = binding.preferences;
+    await store.upsertBinding({
+      ...binding,
+      preferences:
+        Object.keys(preferences).length > 0
+          ? { ...preferences, updatedAt: now }
+          : undefined,
+      updatedAt: now,
+    });
+    bindingCount += 1;
+  }
+
+  return { bindingCount };
 }
 
 async function resolveEligibleAgents(params: {

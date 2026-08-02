@@ -196,6 +196,7 @@ function createSnapshot(
       fullAccessWarning: { value: "dismissable", source: "default" },
       inputDebounceMs: { value: 500, source: "default" },
       toolUpdateMode: { value: "show_some", source: "default" },
+      managerToolUpdateMode: { value: "show_none", source: "default" },
       showStreamingOption: { value: false, source: "default" },
       telegram: {
         enabled: { value: false, source: "default" },
@@ -838,15 +839,38 @@ describe("SettingsScreen", () => {
         },
       });
     });
-    expect(screen.getByRole("radio", { name: "Show Some" })).toHaveAttribute(
+    const developmentWorkingUpdates = screen.getByRole("radiogroup", {
+      name: "Development thread Working Updates",
+    });
+    expect(
+      within(developmentWorkingUpdates).getByRole("radio", { name: "Show Some" }),
+    ).toHaveAttribute(
       "aria-checked",
       "true",
     );
-    fireEvent.click(screen.getByRole("radio", { name: "Show All" }));
+    fireEvent.click(
+      within(developmentWorkingUpdates).getByRole("radio", { name: "Show All" }),
+    );
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         messaging: {
           toolUpdateMode: "show_all",
+        },
+      });
+    });
+    const managerWorkingUpdates = screen.getByRole("radiogroup", {
+      name: "Manager agent Working Updates",
+    });
+    expect(
+      within(managerWorkingUpdates).getByRole("radio", { name: "Show None" }),
+    ).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(
+      within(managerWorkingUpdates).getByRole("radio", { name: "Show More" }),
+    );
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        messaging: {
+          managerToolUpdateMode: "show_more",
         },
       });
     });
@@ -960,6 +984,88 @@ describe("SettingsScreen", () => {
       "page",
     );
   }, 15_000);
+
+  it("resets bound Working Updates separately for Development threads and manager agents", async () => {
+    const settings = createSettingsState();
+    const listMessagingRoutes = vi.fn(async () => ({
+      defaultAgents: [],
+      bindings: [
+        {
+          bindingId: "development-binding",
+          platform: "slack" as const,
+          conversation: { id: "C1", kind: "channel" as const },
+          target: {
+            backend: "codex" as const,
+            threadId: "thread-1",
+            label: "Development work",
+            kind: "thread" as const,
+          },
+          createdAt: 1,
+          updatedAt: 1,
+        },
+        {
+          bindingId: "manager-binding",
+          platform: "slack" as const,
+          conversation: { id: "C2", kind: "channel" as const },
+          target: {
+            backend: "codex" as const,
+            threadId: "agent-1",
+            label: "Queue manager",
+            kind: "agent_thread" as const,
+          },
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      ],
+      eligibleAgents: [],
+      observedSurfaces: [],
+    }));
+    const resetMessagingToolUpdateBindings = vi.fn(async () => ({
+      bindingCount: 1,
+    }));
+
+    render(
+      <SettingsScreen
+        desktopApi={{
+          listMessagingRoutes,
+          resetMessagingToolUpdateBindings,
+        }}
+        initialSection="messaging"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Reset bound Development thread bindings",
+      }),
+    );
+    expect(
+      await screen.findByText("Reset 1 bound Development thread binding?"),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Reset bindings" }));
+    await waitFor(() => {
+      expect(resetMessagingToolUpdateBindings).toHaveBeenCalledWith({
+        targetKind: "thread",
+      });
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Reset bound manager agent bindings",
+      }),
+    );
+    expect(
+      await screen.findByText("Reset 1 bound manager agent binding?"),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Reset bindings" }));
+    await waitFor(() => {
+      expect(resetMessagingToolUpdateBindings).toHaveBeenLastCalledWith({
+        targetKind: "agent_thread",
+      });
+    });
+  });
 
   it("saves the hot CPU heap snapshot limit when heap capture is armed", async () => {
     const baseSnapshot = createSnapshot();

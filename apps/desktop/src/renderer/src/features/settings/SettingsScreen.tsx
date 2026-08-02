@@ -502,6 +502,13 @@ function SettingsSectionBody(props: {
             },
           });
         }}
+        onManagerToolUpdateModeChange={async (managerToolUpdateMode) => {
+          await props.settings.writeConfig({
+            messaging: {
+              managerToolUpdateMode,
+            },
+          });
+        }}
         onShowStreamingOptionChange={async (showStreamingOption) => {
           await props.settings.writeConfig({
             messaging: {

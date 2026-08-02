@@ -140,6 +140,7 @@ export type DesktopSettingsConfig = {
     fullAccessWarning?: DesktopMessagingFullAccessWarningGlobalPolicy;
     inputDebounceMs?: number;
     toolUpdateMode?: MessagingToolUpdateMode;
+    managerToolUpdateMode?: MessagingToolUpdateMode;
     showStreamingOption?: boolean;
     attachments?: {
       imageProfile?: DesktopMessagingImageProfile;
@@ -899,6 +900,12 @@ export function desktopSettingsPatchToEdits(
   if (patch.messaging?.toolUpdateMode !== undefined) {
     set(["messaging", "tool_update_mode"], patch.messaging.toolUpdateMode);
   }
+  if (patch.messaging?.managerToolUpdateMode !== undefined) {
+    set(
+      ["messaging", "manager_tool_update_mode"],
+      patch.messaging.managerToolUpdateMode,
+    );
+  }
   if (patch.messaging?.showStreamingOption !== undefined) {
     set(["messaging", "show_streaming_option"], patch.messaging.showStreamingOption);
   }
@@ -1479,6 +1486,9 @@ function normalizeDesktopConfig(
       ),
       inputDebounceMs: readNumber(messaging?.input_debounce_ms),
       toolUpdateMode: readToolUpdateMode(messaging?.tool_update_mode),
+      managerToolUpdateMode: readToolUpdateMode(
+        messaging?.manager_tool_update_mode,
+      ),
       showStreamingOption: readBoolean(messaging?.show_streaming_option),
       attachments: {
         imageProfile: readImageProfile(attachments?.image_profile),
@@ -1800,6 +1810,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const allowFullAccessThreadResume = config.messaging?.allowFullAccessThreadResume;
   const fullAccessWarning = config.messaging?.fullAccessWarning;
   const toolUpdateMode = config.messaging?.toolUpdateMode;
+  const managerToolUpdateMode = config.messaging?.managerToolUpdateMode;
   const showStreamingOption = config.messaging?.showStreamingOption;
   if (
     enabled !== undefined ||
@@ -1808,6 +1819,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     fullAccessWarning !== undefined ||
     inputDebounceMs !== undefined ||
     toolUpdateMode !== undefined ||
+    managerToolUpdateMode !== undefined ||
     showStreamingOption !== undefined ||
     (attachments && hasDefinedValue(attachments))
     || (telegram && hasDefinedValue(telegram))
@@ -1838,6 +1850,9 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     }
     if (toolUpdateMode !== undefined) {
       pruned.messaging.toolUpdateMode = toolUpdateMode;
+    }
+    if (managerToolUpdateMode !== undefined) {
+      pruned.messaging.managerToolUpdateMode = managerToolUpdateMode;
     }
     if (attachments && hasDefinedValue(attachments)) {
       pruned.messaging.attachments = attachments;
