@@ -1247,7 +1247,7 @@ describe("Sidebar", () => {
     expect(within(threadButton).queryByText("worktree")).not.toBeInTheDocument();
   });
 
-  it("shows local versus worktree location chips in directory rows", () => {
+  it("keeps kind chips for single-directory rows", () => {
     const localThread = {
       ...sharedThread,
       id: "thread-local",
@@ -1300,6 +1300,83 @@ describe("Sidebar", () => {
     expect(within(worktreeThreadButton).getByText("worktree")).toBeInTheDocument();
     expect(within(worktreeThreadButton).queryByText("PwrAgent")).not.toBeInTheDocument();
     expect(within(localThreadButton).getByText("local")).toBeInTheDocument();
+  });
+
+  it("names every linked project in multi-directory rows", () => {
+    const multiDirectoryThread = {
+      ...sharedThread,
+      id: "thread-multiple-directories",
+      title: "Prepare PwrGit branding assets",
+      linkedDirectories: [
+        {
+          id: "dir-pwrgit",
+          label: "PwrGit",
+          path: "/Users/huntharo/github/PwrGit",
+          worktreePath: "/Users/huntharo/.codex/worktrees/pwrgit/PwrGit",
+          kind: "worktree" as const,
+        },
+        {
+          id: "dir-pwragnt",
+          label: "PwrAgnt",
+          path: "/Users/huntharo/github/PwrAgnt",
+          kind: "local" as const,
+        },
+        {
+          id: "dir-pwrsnap",
+          label: "PwrSnap",
+          path: "/Users/huntharo/github/PwrSnap",
+          kind: "local" as const,
+        },
+      ],
+    };
+    const pwrGitDirectory: NavigationDirectorySummary = {
+      key: "directory:/Users/huntharo/github/PwrGit",
+      kind: "directory",
+      label: "PwrGit",
+      path: "/Users/huntharo/github/PwrGit",
+      threadKeys: ["codex:thread-multiple-directories"],
+      needsAttentionCount: 0,
+      latestUpdatedAt: multiDirectoryThread.updatedAt,
+    };
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        createThreadError={undefined}
+        directories={[pwrGitDirectory]}
+        inboxThreads={[multiDirectoryThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey={undefined}
+        threads={[multiDirectoryThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    const browseSection = screen.getByRole("region", { name: "Thread browser" });
+    fireEvent.click(
+      within(browseSection as HTMLElement).getByRole("button", { name: "PwrGit" }),
+    );
+    const threadButton = within(browseSection as HTMLElement).getByRole("button", {
+      name: "Prepare PwrGit branding assets",
+    });
+
+    expect(
+      within(threadButton).getByLabelText("Copy path for worktree PwrGit"),
+    ).toHaveTextContent("PwrGit");
+    expect(
+      within(threadButton).getByLabelText("Copy path for PwrAgnt"),
+    ).toHaveTextContent("PwrAgnt");
+    expect(
+      within(threadButton).getByLabelText("Copy path for PwrSnap"),
+    ).toHaveTextContent("PwrSnap");
+    expect(within(threadButton).queryByText("worktree")).not.toBeInTheDocument();
+    expect(within(threadButton).queryByText("local")).not.toBeInTheDocument();
   });
 
   it("opens the directory launchpad from the plus button", () => {

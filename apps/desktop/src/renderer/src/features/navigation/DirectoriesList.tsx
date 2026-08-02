@@ -175,6 +175,16 @@ function hasPendingLaunchpadState(directory: NavigationDirectorySummary): boolea
  */
 const UNPINNED_THREAD_CAP = 10;
 
+function getDirectoryRowLinkedDirectoryMode(
+  thread: NavigationThreadSummary,
+): "kind" | "label" {
+  // A literal "worktree" or "local" chip is useful for a thread with one
+  // workspace. Once a thread spans projects, collapsing by kind hides the
+  // additional roots (and makes one root stand in for all of them). Reuse the
+  // label chips from Updated/Created so every linked project stays visible.
+  return thread.linkedDirectories.length > 1 ? "label" : "kind";
+}
+
 export function DirectoriesList(props: DirectoriesListProps) {
   const [expandedByKey, setExpandedByKey] = useState<Record<string, boolean>>({});
   // Per-directory "show all unpinned threads" toggle, keyed by directory.key.
@@ -639,7 +649,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                   : undefined
               }
               includeLinkedDirectories
-              linkedDirectoryMode="kind"
+              linkedDirectoryMode={getDirectoryRowLinkedDirectoryMode(child)}
               nested
               revealSelectedThreadRequest={props.revealSelectedThreadRequest}
               selectedThreadKey={props.selectedItemKey}
@@ -774,7 +784,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
             compact
             draggable={Boolean(props.onReorderThreadPins)}
             includeLinkedDirectories
-            linkedDirectoryMode="kind"
+            linkedDirectoryMode={getDirectoryRowLinkedDirectoryMode(thread)}
             revealSelectedThreadRequest={props.revealSelectedThreadRequest}
             selectedThreadKey={props.selectedItemKey}
             subthreadCount={subthreadCount}
@@ -1088,7 +1098,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                           }
                           draggable={Boolean(props.onReorderThreadPins)}
                           includeLinkedDirectories
-                          linkedDirectoryMode="kind"
+                          linkedDirectoryMode={getDirectoryRowLinkedDirectoryMode(thread)}
                           revealSelectedThreadRequest={
                             props.revealSelectedThreadRequest
                           }
