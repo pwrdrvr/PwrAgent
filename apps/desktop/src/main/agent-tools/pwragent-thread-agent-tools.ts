@@ -81,7 +81,7 @@ function descriptionForOperation(
     case "check_thread_pull_request_status":
       return "Run a user-invoked pull request status check for a thread using PwrAgent's provider integration instead of shelling out. Omit backend and threadId to check the current thread. Returns PR status with freshness metadata plus live prAutomation state. When prAutomation.autoFixActive is true, do not poll CI and do not create a monitor thread; end the turn and let PwrAgent start a follow-up turn on failure or conflict. Use watch_thread_pull_request when the thread should also wake on successful completion.";
     case "watch_thread_pull_request":
-      return "Create a durable one-shot watch for an attached pull request's current head. PwrAgent starts a follow-up turn on the first requested terminal outcome: an early CI failure or merge conflict, or full CI success. If the current provider snapshot is already terminal, the result returns currentOutcome immediately without creating a watch. Omit backend and threadId for the current thread, and omit url only when exactly one PR is attached. After a watch is created, end the current turn—do not poll CI and do not create a monitor thread. When Auto-fix PR is active at failure time, its repair dispatch satisfies the failure wake-up so the watch does not create a duplicate turn.";
+      return "Create a durable one-shot watch for a pull request attached to the thread's primary workspace at its current head. PwrAgent starts one follow-up turn on the first requested terminal outcome: an early CI failure or merge conflict, or full CI success. Informational PRs from secondary linked repositories are not eligible. If several threads watch the same PR and head, the oldest watch receives the result and the others are satisfied without duplicate turns. If the current provider snapshot is already terminal, the result returns currentOutcome immediately without creating a watch. Omit backend and threadId for the current thread, and omit url only when exactly one eligible PR is attached. After a watch is created, end the current turn—do not poll CI and do not create a monitor thread. When Auto-fix PR is active at failure time, its repair dispatch satisfies the failure wake-up so the watch does not create a duplicate turn.";
     case "mutate_thread":
       return "Mutate guarded PwrAgent thread settings such as the PwrAgent thread title, model settings, or execution mode. This does not rename any attached Telegram topic, Discord thread, or other messaging surface.";
   }
@@ -325,7 +325,7 @@ function inputSchemaForOperation(
           url: {
             type: "string",
             description:
-              "Full attached PR/MR URL. Omit only when the thread has exactly one attached pull request.",
+              "Full PR/MR URL attached to the primary workspace. Omit only when the thread has exactly one eligible pull request.",
           },
           notifyOn: {
             type: "array",

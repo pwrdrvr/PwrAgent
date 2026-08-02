@@ -133,6 +133,7 @@ import {
   buildThreadIdentityKey,
   isAppServerBackendKind,
   normalizePullRequestProvider as normalizeSharedPullRequestProvider,
+  parseThreadIdentityKey,
 } from "@pwragent/shared";
 import { registerDirectoryFromDisk } from "../app-server/directory-registration-service";
 import {
@@ -210,10 +211,17 @@ import {
   parsePrRefFromUrl,
 } from "../pr-status/github-graphql-client";
 import type { BranchRef } from "../pr-status/github-graphql-client";
-import { resolveGitHubRepoForDirectory } from "../pr-status/git-remote";
+import {
+  parseGitHubRemote,
+  resolveGitHubRepoForDirectory,
+} from "../pr-status/git-remote";
 import { PrPollingScheduler } from "../pr-status/pr-polling-scheduler";
 import type { PrPollTarget } from "../pr-status/pr-polling-scheduler";
-import { PrAutoDispatchCoordinator } from "../pr-status/pr-auto-dispatch";
+import {
+  PrAutoDispatchCoordinator,
+  buildPrRepositoryKey,
+  pullRequestMatchesRepositoryKey,
+} from "../pr-status/pr-auto-dispatch";
 import {
   PrStatusWatchCoordinator,
   getPrStatusWatchOutcome,
@@ -919,10 +927,14 @@ class DesktopAppServerService {
   private backgroundPrPollingEnabled = false;
   private prAutoDispatchCoordinator: PrAutoDispatchCoordinator | undefined;
   private prStatusWatchCoordinator: PrStatusWatchCoordinator | undefined;
-  /** Visible thread→PR attachments, including explicit directoryless refs. */
+  /** Visible thread→PR attachments plus the primary workspace's repository. */
   private readonly attachedPrsByThreadKey = new Map<
     string,
-    { backend: AppServerBackendKind; prs: PrSummary[] }
+    {
+      backend: AppServerBackendKind;
+      primaryRepoKey?: string;
+      prs: PrSummary[];
+    }
   >();
   private prDiscoveryTimer: NodeJS.Timeout | undefined;
   /** Per-thread last discovery branch-lookup time, driving the slow rotation. */
@@ -1338,7 +1350,7 @@ class DesktopAppServerService {
     await this.loadPrLookupRegistry();
     this.seedPrStatusRegistryFromThreads(snapshot.threads);
     const canonicalSnapshot = this.applyCanonicalPrStatuses(snapshot.threads);
-    this.rememberThreadPrAttachments(canonicalSnapshot.threads, {
+    await this.rememberThreadPrAttachments(canonicalSnapshot.threads, {
       replace: backend === "all" && !request.filter?.trim() && !activeRecentRefresh,
     });
     void this.getPrAutoDispatchCoordinator().resume();
@@ -1489,37 +1501,116 @@ class DesktopAppServerService {
     }
   }
 
-  private rememberThreadPrAttachments(
+  private async rememberThreadPrAttachments(
     threads: NavigationSnapshot["threads"],
     options: { replace: boolean },
-  ): void {
+  ): Promise<void> {
+    const primaryRepoResolutionByPath = new Map<
+      string,
+      Promise<string | undefined>
+    >();
+    const primaryRepoKeys = await Promise.all(
+      threads.map(async (thread) =>
+        await resolvePrimaryThreadRepoKey(
+          thread,
+          primaryRepoResolutionByPath,
+        ),
+      ),
+    );
     const liveThreadKeys = new Set<string>();
-    for (const thread of threads) {
+    for (const [index, thread] of threads.entries()) {
       const threadKey = buildThreadIdentityKey(thread.source, thread.id);
       liveThreadKeys.add(threadKey);
+      const primaryRepoKey = primaryRepoKeys[index];
       this.attachedPrsByThreadKey.set(threadKey, {
         backend: thread.source,
+        ...(primaryRepoKey ? { primaryRepoKey } : {}),
         prs: thread.prs ?? [],
+      });
+      await this.syncThreadPrAutoDispatchCandidates({
+        backend: thread.source,
+        threadId: thread.id,
       });
     }
     if (options.replace) {
       for (const threadKey of this.attachedPrsByThreadKey.keys()) {
         if (!liveThreadKeys.has(threadKey)) {
           this.attachedPrsByThreadKey.delete(threadKey);
+          const identity = parseThreadIdentityKey(threadKey);
+          if (identity) {
+            await this.syncThreadPrAutoDispatchCandidates(identity);
+          }
         }
       }
     }
   }
 
-  private rememberThreadPrAttachmentUpdate(params: {
+  private async rememberThreadPrAttachmentUpdate(params: {
     backend: AppServerBackendKind;
     threadId: string;
     prs: PrSummary[];
-  }): void {
+  }): Promise<void> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.attachedPrsByThreadKey.get(threadKey);
     this.attachedPrsByThreadKey.set(
-      buildThreadIdentityKey(params.backend, params.threadId),
-      { backend: params.backend, prs: params.prs },
+      threadKey,
+      {
+        backend: params.backend,
+        ...(current?.primaryRepoKey
+          ? { primaryRepoKey: current.primaryRepoKey }
+          : {}),
+        prs: params.prs,
+      },
     );
+    await this.syncThreadPrAutoDispatchCandidates(params);
+  }
+
+  private async syncThreadPrAutoDispatchCandidates(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<void> {
+    const attachment = this.attachedPrsByThreadKey.get(
+      buildThreadIdentityKey(params.backend, params.threadId),
+    );
+    const prKeys = attachment
+      ? attachment.prs
+          .filter((pr) =>
+            pullRequestMatchesRepositoryKey(pr, attachment.primaryRepoKey),
+          )
+          .map(getPrStatusKey)
+      : [];
+    await this.getOverlayStore().syncThreadPrAutoDispatchCandidates({
+      ...params,
+      prKeys,
+      now: Date.now(),
+    });
+  }
+
+  private primaryAttachedPrsForThread(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    prs: PrSummary[];
+  }): PrSummary[] {
+    const attachment = this.attachedPrsByThreadKey.get(
+      buildThreadIdentityKey(params.backend, params.threadId),
+    );
+    return params.prs.filter((pr) =>
+      pullRequestMatchesRepositoryKey(pr, attachment?.primaryRepoKey),
+    );
+  }
+
+  private isPrimaryPrAttached(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    prKey: string;
+  }): boolean {
+    const attachment = this.attachedPrsByThreadKey.get(
+      buildThreadIdentityKey(params.backend, params.threadId),
+    );
+    return attachment?.prs.some((pr) =>
+      getPrStatusKey(pr) === params.prKey
+      && pullRequestMatchesRepositoryKey(pr, attachment.primaryRepoKey),
+    ) ?? false;
   }
 
   private applyPrStatusToAttachments(pr: PrSummary): void {
@@ -2240,10 +2331,16 @@ class DesktopAppServerService {
       threadId: string;
       prs: PrSummary[];
     };
-    this.rememberThreadPrAttachmentUpdate({
+    void this.rememberThreadPrAttachmentUpdate({
       backend: event.backend,
       threadId: params.threadId,
       prs: params.prs,
+    }).catch((error) => {
+      appServerLog.warn("failed to reconcile PR automation candidates", {
+        backend: event.backend,
+        threadId: params.threadId,
+        error: error instanceof Error ? error.message : String(error),
+      });
     });
   }
 
@@ -2440,16 +2537,20 @@ class DesktopAppServerService {
       backend: args.backend,
       threadId,
     });
-    const attachedPrs = this.canonicalizePrs(overlay?.prs ?? []);
+    const attachedPrs = this.primaryAttachedPrsForThread({
+      backend: args.backend,
+      threadId,
+      prs: this.canonicalizePrs(overlay?.prs ?? []),
+    });
     const requestedUrl = normalizePrWatchUrl(args.url);
     const matches = requestedUrl
       ? attachedPrs.filter((pr) => normalizePrWatchUrl(pr.url) === requestedUrl)
       : attachedPrs;
     if (matches.length !== 1) {
       const message = requestedUrl
-        ? "The requested pull request is not attached to this thread."
+        ? "The requested pull request is not attached to this thread's primary workspace."
         : attachedPrs.length === 0
-          ? "This thread does not have an attached pull request to watch."
+          ? "This thread's primary workspace does not have an attached pull request to watch."
           : "url is required when a thread has more than one attached pull request.";
       return {
         ok: false,
@@ -2555,14 +2656,36 @@ class DesktopAppServerService {
   }): Promise<ThreadPullRequestAutomationStatus> {
     const overlay = await this.getOverlayStore().getThreadOverlayState(params);
     const autoFixEnabled = overlay?.prAutoDispatchEnabled === true;
-    const autoFixActive = autoFixEnabled && this.backgroundPrPollingEnabled;
+    const primaryPrs = this.primaryAttachedPrsForThread({
+      ...params,
+      prs: this.canonicalizePrs(overlay?.prs ?? []),
+    });
+    const winners = await Promise.all(
+      primaryPrs.map(async (pr) =>
+        await this.getOverlayStore().getPrAutoDispatchCandidateWinner({
+          prKey: getPrStatusKey(pr),
+        }),
+      ),
+    );
+    const ownsAttachedPr = winners.some((winner) =>
+      winner?.backend === params.backend && winner.threadId === params.threadId,
+    );
+    const waitingForPr = primaryPrs.length === 0;
+    const autoFixActive =
+      autoFixEnabled
+      && this.backgroundPrPollingEnabled
+      && (waitingForPr || ownsAttachedPr);
     const watches = await this.getOverlayStore().listActiveThreadPrStatusWatches(
       params,
     );
-    const guidance = autoFixActive
+    const guidance = autoFixActive && waitingForPr
+      ? "Auto-fix PR is armed. This primary workspace has no linked PR yet; PwrAgent will begin monitoring when one is linked. Do not poll CI or create a monitor thread after a PR is linked."
+      : autoFixActive
       ? "Auto-fix PR is active. Do not poll CI and do not create a monitor thread for this PR. End the turn; PwrAgent will start a repair turn on a CI failure or merge conflict. Use watch_thread_pull_request before ending when the thread should also wake on successful completion."
       : autoFixEnabled
-        ? "Auto-fix PR is saved but paused because background PR polling is off. Do not assume PwrAgent will wake this thread until polling is enabled."
+        ? this.backgroundPrPollingEnabled
+          ? "Auto-fix PR is enabled, but an older eligible thread owns monitoring for this PR. Do not poll CI or create another monitor; the elected thread receives the PR event."
+          : "Auto-fix PR is saved but paused because background PR polling is off. Do not assume PwrAgent will wake this thread until polling is enabled."
         : this.backgroundPrPollingEnabled
           ? "Background PR polling is active, but Auto-fix PR is off for this thread. Use watch_thread_pull_request for a bounded one-shot success/failure notification instead of polling or creating a monitor thread."
           : "Background PR polling and Auto-fix PR are off. PwrAgent will not wake this thread for PR status changes.";
@@ -2582,6 +2705,8 @@ class DesktopAppServerService {
     request: DetachThreadPullRequestRequest,
   ): Promise<DetachThreadPullRequestResponse> {
     const backend = request.backend ?? "codex";
+    const prKey = getPrStatusKey(request.pr);
+    const currentPr = this.prStatusRegistry.get(prKey)?.pr;
     const overlay = await this.getOverlayStore().detachThreadPullRequest({
       backend,
       threadId: request.threadId,
@@ -2590,7 +2715,7 @@ class DesktopAppServerService {
     await this.getOverlayStore().cancelThreadPrStatusWatchesForPr({
       backend,
       threadId: request.threadId,
-      prKey: getPrStatusKey(request.pr),
+      prKey,
       now: Date.now(),
     });
     const prs = overlay.prs ?? [];
@@ -2600,6 +2725,18 @@ class DesktopAppServerService {
       prs,
       detachedPrs: overlay.detachedPrs ?? [],
     });
+    await this.getPrAutoDispatchCoordinator().cancelPendingForPr({
+      backend,
+      threadId: request.threadId,
+      prKey,
+    });
+    if (currentPr && this.backgroundPrPollingEnabled) {
+      await this.handlePrAutoDispatchSnapshots(
+        [currentPr],
+        this.nextPrObservationTimestamp(),
+        true,
+      );
+    }
     return {
       backend,
       threadId: request.threadId,
@@ -3541,7 +3678,7 @@ class DesktopAppServerService {
     prs: PrSummary[];
     detachedPrs?: PrSummary[];
   }): Promise<void> {
-    this.rememberThreadPrAttachmentUpdate(params);
+    await this.rememberThreadPrAttachmentUpdate(params);
     const worktreePath = this.rememberMergedPrCommitShasForThread({
       ...params,
       prs: [...params.prs, ...(params.detachedPrs ?? [])],
@@ -3924,15 +4061,16 @@ class DesktopAppServerService {
   private async handlePrAutoDispatchSnapshots(
     prs: PrSummary[],
     observedAt: number,
-    onlyThreadKey?: string,
     operatorInitiated = false,
   ): Promise<void> {
     const coordinator = this.getPrAutoDispatchCoordinator();
     for (const pr of prs) {
       const prKey = getPrStatusKey(pr);
-      const threadKeys = onlyThreadKey
-        ? [onlyThreadKey]
-        : this.findThreadKeysForPrKey(prKey);
+      const winner = await this.getOverlayStore()
+        .getPrAutoDispatchCandidateWinner({ prKey });
+      const threadKeys = winner
+        ? [buildThreadIdentityKey(winner.backend, winner.threadId)]
+        : [];
       const outcomes = threadKeys.length > 0
         ? await coordinator.handleStatusSnapshot({
             pr,
@@ -3971,26 +4109,39 @@ class DesktopAppServerService {
   ): Promise<void> {
     const coordinator = this.getPrAutoDispatchCoordinator();
     if (!request.enabled) {
+      const attachment = this.attachedPrsByThreadKey.get(
+        buildThreadIdentityKey(request.backend, request.threadId),
+      );
+      const previouslyEligiblePrs = (attachment?.prs ?? []).filter((pr) =>
+        pullRequestMatchesRepositoryKey(pr, attachment?.primaryRepoKey),
+      );
       await coordinator.cancelAllPendingForThread(request);
+      await this.syncThreadPrAutoDispatchCandidates(request);
+      if (this.backgroundPrPollingEnabled && previouslyEligiblePrs.length > 0) {
+        await this.handlePrAutoDispatchSnapshots(
+          previouslyEligiblePrs,
+          this.nextPrObservationTimestamp(),
+          true,
+        );
+      }
       return;
     }
-    await coordinator.resetForOperator(request);
-    if (!this.backgroundPrPollingEnabled) return;
 
     const overlay = await this.getOverlayStore().getThreadOverlayState(request);
     const prs = this.canonicalizePrs(overlay?.prs ?? []);
-    const threadKey = buildThreadIdentityKey(request.backend, request.threadId);
-    this.rememberThreadPrAttachmentUpdate({ ...request, prs });
+    await this.rememberThreadPrAttachmentUpdate({ ...request, prs });
+    await coordinator.resetForOperator(request);
+    if (!this.backgroundPrPollingEnabled) return;
+    const primaryPrs = this.primaryAttachedPrsForThread({ ...request, prs });
     await this.handlePrAutoDispatchSnapshots(
-      prs,
+      primaryPrs,
       this.nextPrObservationTimestamp(),
-      threadKey,
       true,
     );
 
     const refs = [
       ...new Map(
-        prs.flatMap((pr) => {
+        primaryPrs.flatMap((pr) => {
           const ref = parsePrRefFromUrl(pr.url);
           return ref ? [[`${ref.owner}/${ref.repo}#${ref.number}`, ref] as const] : [];
         }),
@@ -4013,7 +4164,6 @@ class DesktopAppServerService {
     await this.handlePrAutoDispatchSnapshots(
       refreshed,
       fetchedAt,
-      threadKey,
       true,
     );
   }
@@ -4894,9 +5044,7 @@ class DesktopAppServerService {
         refreshPendingPrs: async (pending) =>
           await this.refreshPendingPrAutoDispatches(pending),
         isPrAttached: ({ backend, threadId, prKey }) =>
-          this.attachedPrsByThreadKey
-            .get(buildThreadIdentityKey(backend, threadId))
-            ?.prs.some((pr) => getPrStatusKey(pr) === prKey) ?? false,
+          this.isPrimaryPrAttached({ backend, threadId, prKey }),
         onPendingChanged: async ({ backend, threadId, pending }) => {
           await getDesktopBackendRegistry().publishLocalEvent({
             backend,
@@ -4952,6 +5100,33 @@ function isFreshWorktreeWorkingStateCacheEntry(
   entry: WorktreeGitWorkingStateCacheEntry,
 ): boolean {
   return Date.now() - entry.fetchedAt < WORKTREE_WORKING_STATE_CACHE_MAX_AGE_MS;
+}
+
+async function resolvePrimaryThreadRepoKey(
+  thread: Pick<
+    NavigationSnapshot["threads"][number],
+    "gitOriginUrl" | "linkedDirectories"
+  >,
+  resolutionByPath = new Map<string, Promise<string | undefined>>(),
+): Promise<string | undefined> {
+  const origin = thread.gitOriginUrl
+    ? parseGitHubRemote(thread.gitOriginUrl)
+    : undefined;
+  if (origin) return buildPrRepositoryKey(origin.host, origin.owner, origin.repo);
+
+  const primaryDirectory = thread.linkedDirectories[0];
+  const primaryPath = primaryDirectory
+    ? resolvePullRequestDirectoryPath(primaryDirectory)
+    : undefined;
+  if (!primaryPath) return undefined;
+  const existing = resolutionByPath.get(primaryPath);
+  if (existing) return await existing;
+  const resolution = resolveGitHubRepoForDirectory(primaryPath)
+    .then((resolved) => resolved
+      ? buildPrRepositoryKey(resolved.host, resolved.owner, resolved.repo)
+      : undefined);
+  resolutionByPath.set(primaryPath, resolution);
+  return await resolution;
 }
 
 function resolveThreadPullRequestContexts(

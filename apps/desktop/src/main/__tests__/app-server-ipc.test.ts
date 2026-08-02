@@ -361,6 +361,8 @@ const readPrStatusCache = vi.fn(async () => ({}));
 const writePrStatusCacheEntries = vi.fn(async () => undefined);
 const readPrLookupCache = vi.fn(async () => ({}));
 const writePrLookupCacheEntry = vi.fn(async () => undefined);
+const syncThreadPrAutoDispatchCandidates = vi.fn(async () => undefined);
+const getPrAutoDispatchCandidateWinner = vi.fn(async () => undefined);
 const resetThreadPrAutoDispatchForOperator = vi.fn(async () => false);
 const scheduleThreadPrAutoDispatch = vi.fn(async () => ({
   status: "disabled" as const,
@@ -504,6 +506,8 @@ vi.mock("../app-server/desktop-overlay-store", () => ({
     writePrStatusCacheEntries,
     readPrLookupCache,
     writePrLookupCacheEntry,
+    syncThreadPrAutoDispatchCandidates,
+    getPrAutoDispatchCandidateWinner,
     resetThreadPrAutoDispatchForOperator,
     scheduleThreadPrAutoDispatch,
     beginThreadPrAutoDispatch,

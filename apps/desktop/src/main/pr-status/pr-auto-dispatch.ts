@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type {
   AppServerBackendKind,
+  AppServerThreadMessageOrigin,
   AppServerTurnInputItem,
   PrSummary,
   ThreadOverlayState,
@@ -139,7 +140,7 @@ type PrAutoDispatchRegistry = {
     threadId: string;
     input: AppServerTurnInputItem[];
     origin: "automation";
-    messageOrigin: { kind: "pwragent" };
+    messageOrigin: AppServerThreadMessageOrigin;
   }): Promise<
     | { status: "started"; turnId: string }
     | { status: "busy" }
@@ -324,6 +325,20 @@ export class PrAutoDispatchCoordinator {
     });
   }
 
+  async cancelPendingForPr(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    prKey: string;
+  }): Promise<boolean> {
+    const record = await this.options.store.getThreadPrAutoDispatchPending(params);
+    if (!record || record.pending.prKey !== params.prKey) return false;
+    return await this.cancelPending({
+      backend: params.backend,
+      threadId: params.threadId,
+      fingerprint: record.pending.fingerprint,
+    });
+  }
+
   async resume(): Promise<void> {
     if (this.options.isBackgroundPollingEnabled?.() === false) return;
     if (this.resumed) return;
@@ -435,7 +450,19 @@ export class PrAutoDispatchCoordinator {
           ].join("\n"),
         }],
         origin: "automation",
-        messageOrigin: { kind: "pwragent" },
+        messageOrigin: {
+          kind: "pwragent",
+          prAutomation: {
+            kind: "auto-fix",
+            prKey: begin.record.pending.prKey,
+            prNumber: begin.record.pending.prNumber,
+            ...(begin.record.pending.prTitle
+              ? { prTitle: begin.record.pending.prTitle }
+              : {}),
+            headSha: begin.record.pending.headSha,
+            eventKinds: begin.record.pending.eventKinds,
+          },
+        },
       });
       if (submission.status === "busy") {
         await this.restoreAfterBusy(identity, fingerprint, now);
@@ -589,6 +616,26 @@ export function getPrAutoDispatchEventKinds(
   if (pr.checkState === "failing") eventKinds.push("ci-failure");
   if (pr.mergeState === "conflicting") eventKinds.push("merge-conflict");
   return eventKinds;
+}
+
+export function buildPrRepositoryKey(
+  host: string,
+  owner: string,
+  repo: string,
+): string {
+  return [host, owner, repo]
+    .map((part) => part.trim().toLowerCase())
+    .join("/");
+}
+
+export function pullRequestMatchesRepositoryKey(
+  pr: PrSummary,
+  repositoryKey: string | undefined,
+): boolean {
+  return Boolean(
+    repositoryKey
+    && buildPrRepositoryKey(pr.provider, pr.org, pr.repo) === repositoryKey,
+  );
 }
 
 export function buildPrAutoDispatchEvent(

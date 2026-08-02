@@ -46,7 +46,7 @@ function normalizeComparablePath(value?: string): string | undefined {
   return normalized ? canonicalizeNavigationPath(normalized) || undefined : undefined;
 }
 
-function normalizeGitOriginUrl(value?: string): string | undefined {
+export function normalizeGitOriginUrl(value?: string): string | undefined {
   const trimmed = value?.trim();
   if (!trimmed) {
     return undefined;

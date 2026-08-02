@@ -66,12 +66,13 @@ function pr(overrides: Partial<PrSummary> = {}): PrSummary {
 async function registerWatch(
   targetStore = store,
   notifyOn: ThreadPullRequestWatchEvent[] = ["success", "failure"],
+  threadId = "thread-1",
 ): Promise<ThreadPullRequestWatchSummary> {
   const target = pr();
   const watch: ThreadPullRequestWatchSummary = {
     watchId: `watch-${Math.random()}`,
     backend: "codex",
-    threadId: "thread-1",
+    threadId,
     prKey: buildPullRequestStatusKey(target),
     prUrl: target.url,
     prNumber: target.number,
@@ -129,6 +130,16 @@ describe("PrStatusWatchCoordinator", () => {
     expect(harness.submitTurnIfIdle.mock.calls[0]?.[0].input[0]).toMatchObject({
       type: "text",
       text: expect.stringContaining("- Outcome: success"),
+    });
+    expect(harness.submitTurnIfIdle.mock.calls[0]?.[0]).toMatchObject({
+      messageOrigin: {
+        kind: "pwragent",
+        prAutomation: {
+          kind: "watch",
+          prNumber: 1105,
+          outcome: "success",
+        },
+      },
     });
   });
 
@@ -241,6 +252,50 @@ describe("PrStatusWatchCoordinator", () => {
       first.submitTurnIfIdle.mock.calls.length
       + second.submitTurnIfIdle.mock.calls.length,
     ).toBe(1);
+  });
+
+  it("notifies only the oldest thread watching the same PR head", async () => {
+    await registerWatch(store, ["success"], "thread-1");
+    now += 1;
+    await registerWatch(store, ["success"], "thread-2");
+    const harness = createHarness();
+
+    await expect(harness.coordinator.handleStatusSnapshot(pr({
+      state: "passing",
+      checkState: "passing",
+    }), now)).resolves.toBe(1);
+
+    expect(harness.submitTurnIfIdle).toHaveBeenCalledTimes(1);
+    expect(harness.submitTurnIfIdle.mock.calls[0]?.[0]).toMatchObject({
+      threadId: "thread-1",
+    });
+    expect(await store.listActiveThreadPrStatusWatches({
+      backend: "codex",
+      threadId: "thread-2",
+    })).toEqual([]);
+  });
+
+  it("promotes the next-oldest watch when the first thread detaches", async () => {
+    await registerWatch(store, ["success"], "thread-1");
+    now += 1;
+    await registerWatch(store, ["success"], "thread-2");
+    await store.cancelThreadPrStatusWatchesForPr({
+      backend: "codex",
+      threadId: "thread-1",
+      prKey: buildPullRequestStatusKey(pr()),
+      now,
+    });
+    const harness = createHarness();
+
+    await harness.coordinator.handleStatusSnapshot(pr({
+      state: "passing",
+      checkState: "passing",
+    }), now);
+
+    expect(harness.submitTurnIfIdle).toHaveBeenCalledTimes(1);
+    expect(harness.submitTurnIfIdle.mock.calls[0]?.[0]).toMatchObject({
+      threadId: "thread-2",
+    });
   });
 
   it("supersedes a watch when the pull request head changes", async () => {

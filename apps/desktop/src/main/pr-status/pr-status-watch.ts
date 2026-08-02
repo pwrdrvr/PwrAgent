@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type {
   AppServerBackendKind,
+  AppServerThreadMessageOrigin,
   AppServerTurnInputItem,
   PrSummary,
   ThreadPullRequestWatchSummary,
 } from "@pwragent/shared";
 import { buildPullRequestStatusKey } from "@pwragent/shared";
-import { buildThreadIdentityKey } from "@pwragent/shared";
 import type {
   OverlayStoreLike,
   PrStatusWatchClaim,
@@ -31,7 +31,7 @@ type PrStatusWatchRegistry = {
     threadId: string;
     input: AppServerTurnInputItem[];
     origin: "automation";
-    messageOrigin: { kind: "pwragent" };
+    messageOrigin: AppServerThreadMessageOrigin;
   }): Promise<{ status: "started" | "busy"; turnId?: string }>;
 };
 
@@ -109,14 +109,14 @@ export class PrStatusWatchCoordinator {
     }
     if (
       outcome === "failure"
-      && failureCoveredThreadKeys.has(buildThreadIdentityKey(
-        claim.watch.backend,
-        claim.watch.threadId,
-      ))
+      && failureCoveredThreadKeys.size > 0
     ) {
       await this.options.store.finishThreadPrStatusWatch({
         watchId: claim.watch.watchId,
         ownerId: this.ownerId,
+        prKey: claim.watch.prKey,
+        headSha: claim.watch.headSha,
+        outcome,
         now: this.now(),
       });
       return;
@@ -136,7 +136,19 @@ export class PrStatusWatchCoordinator {
           }),
         }],
         origin: "automation",
-        messageOrigin: { kind: "pwragent" },
+        messageOrigin: {
+          kind: "pwragent",
+          prAutomation: {
+            kind: "watch",
+            prKey: claim.watch.prKey,
+            prNumber: claim.watch.prNumber,
+            ...(claim.watch.prTitle
+              ? { prTitle: claim.watch.prTitle }
+              : {}),
+            headSha: claim.watch.headSha,
+            outcome,
+          },
+        },
       });
       if (submission.status === "busy") {
         await this.options.store.releaseThreadPrStatusWatch({
@@ -151,6 +163,9 @@ export class PrStatusWatchCoordinator {
       await this.options.store.finishThreadPrStatusWatch({
         watchId: claim.watch.watchId,
         ownerId: this.ownerId,
+        prKey: claim.watch.prKey,
+        headSha: claim.watch.headSha,
+        outcome,
         now: this.now(),
       });
     } catch {

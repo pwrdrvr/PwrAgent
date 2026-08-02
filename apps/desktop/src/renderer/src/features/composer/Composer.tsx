@@ -44,6 +44,7 @@ import {
   buildThreadUrl,
   buildReviewBranchOptions,
   findPreferredReviewWorkspaceCwd,
+  normalizeGitOriginUrl,
   parseThreadUrl,
   readCodexEnvironmentActionRuns,
 } from "@pwragent/shared";
@@ -6887,12 +6888,14 @@ export function Composer(props: ComposerProps) {
   );
   const threadWorkspace = props.thread ? getThreadWorkspace(props.thread) : undefined;
   const showPrAutoDispatchToggle = threadWorkspace?.gitBacked === true;
-  const hasAttachedPullRequest = (props.thread?.prs?.length ?? 0) > 0;
+  const hasAttachedPullRequest = props.thread
+    ? hasPrimaryWorkspacePullRequest(props.thread)
+    : false;
   const prAutoDispatchTooltip = !backgroundPrPollingEnabled
     ? "Auto-fix PR paused — turn on background PR polling in Settings"
     : hasAttachedPullRequest
       ? "Auto-fix PR — handle new CI failures or merge conflicts"
-      : "Auto-fix PR — starts monitoring when a PR is linked";
+      : "Auto-fix PR — starts when a PR for this workspace is linked";
   const workspaceOpenPath = getComposerWorkspaceOpenPath({
     directory: props.directory,
     launchpad: props.launchpad,
@@ -9972,6 +9975,17 @@ function getThreadWorkspace(thread: NavigationThreadSummary): ThreadWorkspace | 
   }
 
   return undefined;
+}
+
+function hasPrimaryWorkspacePullRequest(
+  thread: NavigationThreadSummary,
+): boolean {
+  const primaryRepository = normalizeGitOriginUrl(thread.gitOriginUrl);
+  if (!primaryRepository) return false;
+  return (thread.prs ?? []).some((pr) =>
+    normalizeGitOriginUrl(`${pr.provider}/${pr.org}/${pr.repo}`)
+      === primaryRepository,
+  );
 }
 
 function isThreadWorkspaceHandoffEligible(params: {

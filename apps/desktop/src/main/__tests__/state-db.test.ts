@@ -89,6 +89,26 @@ describe("StateDb", () => {
     );
   });
 
+  it("creates durable PR auto-dispatch ownership storage", () => {
+    const table = stateDb.raw
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+      )
+      .get("pr_auto_dispatch_candidates") as { name: string } | undefined;
+    expect(table?.name).toBe("pr_auto_dispatch_candidates");
+
+    const fingerprintIndex = stateDb.raw
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?",
+      )
+      .get("idx_pr_auto_dispatch_pr_fingerprint") as
+        | { name: string }
+        | undefined;
+    expect(fingerprintIndex?.name).toBe(
+      "idx_pr_auto_dispatch_pr_fingerprint",
+    );
+  });
+
   it("creates thread usage pricing ledger tables", () => {
     const tables = stateDb.raw
       .prepare(

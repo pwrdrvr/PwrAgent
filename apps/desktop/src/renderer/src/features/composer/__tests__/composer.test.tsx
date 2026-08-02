@@ -503,7 +503,7 @@ describe("Composer", () => {
     expect(toggle).toHaveAttribute("aria-pressed", "true");
     expect(toggle).toHaveAttribute(
       "data-tooltip",
-      "Auto-fix PR — starts monitoring when a PR is linked",
+      "Auto-fix PR — starts when a PR for this workspace is linked",
     );
     fireEvent.click(toggle);
     await waitFor(() => {
@@ -564,6 +564,7 @@ describe("Composer", () => {
           title: "Fix CI",
           titleSource: "explicit",
           source: "codex",
+          gitOriginUrl: "git@github.com:pwrdrvr/PwrAgent.git",
           linkedDirectories: [
             {
               id: "directory-1",
@@ -590,6 +591,53 @@ describe("Composer", () => {
     expect(screen.getByRole("button", { name: "Auto-fix PR" })).toHaveAttribute(
       "data-tooltip",
       "Auto-fix PR — handle new CI failures or merge conflicts",
+    );
+  });
+
+  it("treats PRs from secondary linked repositories as informational", () => {
+    render(
+      <Composer
+        backgroundPrPollingEnabled
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Cross-repo work",
+          titleSource: "explicit",
+          source: "codex",
+          gitOriginUrl: "git@github.com:pwrdrvr/PwrAgent.git",
+          linkedDirectories: [
+            {
+              id: "directory-1",
+              kind: "local",
+              label: "PwrAgent",
+              path: "/repo/PwrAgent",
+            },
+            {
+              id: "directory-2",
+              kind: "local",
+              label: "Docs",
+              path: "/repo/docs.pwragent.ai",
+            },
+          ],
+          inbox: { inInbox: false },
+          prs: [
+            {
+              provider: "github.com",
+              number: 42,
+              org: "pwrdrvr",
+              repo: "docs.pwragent.ai",
+              state: "failing",
+              url: "https://github.com/pwrdrvr/docs.pwragent.ai/pull/42",
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Auto-fix PR" })).toHaveAttribute(
+      "data-tooltip",
+      "Auto-fix PR — starts when a PR for this workspace is linked",
     );
   });
 

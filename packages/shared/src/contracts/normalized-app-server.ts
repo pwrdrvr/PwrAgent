@@ -5,6 +5,7 @@ import type {
 } from "./messaging";
 import type {
   PrSummary,
+  ThreadPrAutoDispatchEventKind,
   ThreadPrAutoDispatchPending,
 } from "./navigation";
 import type { ThreadPricingSummary, ThreadUsageLineRecord } from "../token-usage-pricing";
@@ -401,6 +402,15 @@ export type AppServerThreadMessageOrigin = {
     task: string;
     outcome: "success" | "failure" | "cancelled";
     summary: string;
+  };
+  prAutomation?: {
+    kind: "auto-fix" | "watch";
+    prKey: string;
+    prNumber: number;
+    prTitle?: string;
+    headSha: string;
+    eventKinds?: ThreadPrAutoDispatchEventKind[];
+    outcome?: "success" | "failure";
   };
 };
 

@@ -545,6 +545,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_pr_auto_dispatch_active_thread
   WHERE status IN ('pending', 'dispatching');
 CREATE INDEX IF NOT EXISTS idx_pr_auto_dispatch_pending_schedule
   ON pr_auto_dispatch_claims(status, scheduled_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_pr_auto_dispatch_pr_fingerprint
+  ON pr_auto_dispatch_claims(pr_key, fingerprint);
 
 CREATE TABLE IF NOT EXISTS pr_auto_dispatch_incidents (
   backend       TEXT NOT NULL,
@@ -555,6 +557,17 @@ CREATE TABLE IF NOT EXISTS pr_auto_dispatch_incidents (
   updated_at    INTEGER NOT NULL,
   PRIMARY KEY (backend, thread_id, pr_key)
 );
+
+CREATE TABLE IF NOT EXISTS pr_auto_dispatch_candidates (
+  pr_key         TEXT NOT NULL,
+  backend        TEXT NOT NULL,
+  thread_id      TEXT NOT NULL,
+  eligible_since INTEGER NOT NULL,
+  updated_at     INTEGER NOT NULL,
+  PRIMARY KEY (pr_key, backend, thread_id)
+);
+CREATE INDEX IF NOT EXISTS idx_pr_auto_dispatch_candidate_winner
+  ON pr_auto_dispatch_candidates(pr_key, eligible_since, backend, thread_id);
 `;
 
 const PR_STATUS_WATCH_SCHEMA = `
@@ -1089,6 +1102,20 @@ export class StateDb {
     if ((db.pragma("user_version", { simple: true }) as number) < 36) {
       db.transaction(() => {
         db.exec(PR_STATUS_WATCH_SCHEMA);
+        db.pragma("user_version = 35");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 36) {
+      db.transaction(() => {
+        db.exec(`
+          DELETE FROM pr_auto_dispatch_claims
+          WHERE rowid NOT IN (
+            SELECT MIN(rowid)
+            FROM pr_auto_dispatch_claims
+            GROUP BY pr_key, fingerprint
+          );
+        `);
+        db.exec(PR_AUTO_DISPATCH_SCHEMA);
         db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
       })();
     }

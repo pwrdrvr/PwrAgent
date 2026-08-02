@@ -94,6 +94,13 @@ export type PrAutoDispatchScheduleResult = {
   pending?: ThreadPrAutoDispatchPending;
 };
 
+export type PrAutoDispatchCandidate = {
+  backend: ThreadOverlayState["backend"];
+  eligibleSince: number;
+  prKey: string;
+  threadId: string;
+};
+
 export type PrStatusWatchClaim = {
   attemptCount: number;
   watch: ThreadPullRequestWatchSummary;
@@ -2444,6 +2451,93 @@ export class SqliteOverlayStore {
     return nextState;
   }
 
+  async syncThreadPrAutoDispatchCandidates(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    prKeys: string[];
+    now: number;
+  }): Promise<void> {
+    const sync = this.stateDb.raw.transaction(() => {
+      const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+      const enabled = this.getThread(threadKey)?.prAutoDispatchEnabled === true;
+      const prKeys = enabled ? [...new Set(params.prKeys)] : [];
+      if (prKeys.length === 0) {
+        this.stateDb.raw
+          .prepare(
+            `DELETE FROM pr_auto_dispatch_candidates
+             WHERE backend = ? AND thread_id = ?`,
+          )
+          .run(params.backend, params.threadId);
+        return;
+      }
+
+      const retainedPrKeys = new Set(prKeys);
+      const existingCandidates = this.stateDb.raw
+        .prepare(
+          `SELECT pr_key
+           FROM pr_auto_dispatch_candidates
+           WHERE backend = ? AND thread_id = ?`,
+        )
+        .all(params.backend, params.threadId) as Array<{ pr_key: string }>;
+      const removeCandidate = this.stateDb.raw.prepare(
+        `DELETE FROM pr_auto_dispatch_candidates
+         WHERE pr_key = ? AND backend = ? AND thread_id = ?`,
+      );
+      for (const candidate of existingCandidates) {
+        if (!retainedPrKeys.has(candidate.pr_key)) {
+          removeCandidate.run(candidate.pr_key, params.backend, params.threadId);
+        }
+      }
+      const insert = this.stateDb.raw.prepare(
+        `INSERT INTO pr_auto_dispatch_candidates(
+           pr_key, backend, thread_id, eligible_since, updated_at
+         ) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(pr_key, backend, thread_id) DO UPDATE SET
+           updated_at = excluded.updated_at`,
+      );
+      for (const prKey of prKeys) {
+        insert.run(
+          prKey,
+          params.backend,
+          params.threadId,
+          params.now,
+          params.now,
+        );
+      }
+    });
+    sync();
+  }
+
+  async getPrAutoDispatchCandidateWinner(params: {
+    prKey: string;
+  }): Promise<PrAutoDispatchCandidate | undefined> {
+    const rows = this.stateDb.raw
+      .prepare(
+        `SELECT pr_key, backend, thread_id, eligible_since
+         FROM pr_auto_dispatch_candidates
+         WHERE pr_key = ?
+         ORDER BY eligible_since ASC, backend ASC, thread_id ASC`,
+      )
+      .all(params.prKey) as Array<{
+        backend: ThreadOverlayState["backend"];
+        eligible_since: number;
+        pr_key: string;
+        thread_id: string;
+      }>;
+    for (const row of rows) {
+      const threadKey = buildThreadIdentityKey(row.backend, row.thread_id);
+      if (this.getThread(threadKey)?.prAutoDispatchEnabled === true) {
+        return {
+          backend: row.backend,
+          eligibleSince: row.eligible_since,
+          prKey: row.pr_key,
+          threadId: row.thread_id,
+        };
+      }
+    }
+    return undefined;
+  }
+
   async resetThreadPrAutoDispatchForOperator(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;
@@ -2487,15 +2581,17 @@ export class SqliteOverlayStore {
 
       const duplicate = this.stateDb.raw
         .prepare(
-          `SELECT pr_key, status, payload
+          `SELECT backend, thread_id, pr_key, status, payload
            FROM pr_auto_dispatch_claims
-           WHERE backend = ? AND thread_id = ? AND fingerprint = ?`,
+           WHERE pr_key = ? AND fingerprint = ?`,
         )
         .get(
-          params.backend,
-          params.threadId,
+          params.pending.prKey,
           params.pending.fingerprint,
-        ) as PrAutoDispatchClaimRow | undefined;
+        ) as (PrAutoDispatchClaimRow & {
+          backend: ThreadOverlayState["backend"];
+          thread_id: string;
+        }) | undefined;
       if (duplicate) {
         if (
           params.allowCancelledRearm
@@ -2504,18 +2600,23 @@ export class SqliteOverlayStore {
           this.stateDb.raw
             .prepare(
               `DELETE FROM pr_auto_dispatch_claims
-               WHERE backend = ? AND thread_id = ? AND fingerprint = ?`,
+               WHERE pr_key = ? AND fingerprint = ?`,
             )
             .run(
-              params.backend,
-              params.threadId,
+              params.pending.prKey,
               params.pending.fingerprint,
             );
         } else {
           const record = parsePrAutoDispatchPendingRecord(duplicate.payload);
+          const sameThread =
+            duplicate.backend === params.backend
+            && duplicate.thread_id === params.threadId;
           return {
-            status: duplicate.status === "pending" ? "pending" : "duplicate",
-            ...(record ? { pending: record.pending } : {}),
+            status:
+              sameThread && duplicate.status === "pending"
+                ? "pending"
+                : "duplicate",
+            ...(sameThread && record ? { pending: record.pending } : {}),
           };
         }
       }
@@ -3148,6 +3249,18 @@ export class SqliteOverlayStore {
     maxAttempts: number;
   }): Promise<PrStatusWatchClaim[]> {
     const claim = this.stateDb.raw.transaction(() => {
+      const activeDispatch = this.stateDb.raw
+        .prepare(
+          `SELECT 1
+           FROM pr_status_watches
+           WHERE pr_key = ? AND head_sha = ?
+             AND status = 'dispatching'
+             AND COALESCE(lease_expires_at, 0) > ?
+           LIMIT 1`,
+        )
+        .get(params.prKey, params.headSha, params.now);
+      if (activeDispatch) return [];
+
       const rows = this.stateDb.raw
         .prepare(
           `SELECT watch_id, attempt_count, payload
@@ -3164,7 +3277,9 @@ export class SqliteOverlayStore {
                  status = 'dispatching'
                  AND COALESCE(lease_expires_at, 0) <= ?
                )
-             )`,
+             )
+           ORDER BY created_at ASC, watch_id ASC
+           LIMIT 1`,
         )
         .all(
           params.prKey,
@@ -3275,16 +3390,46 @@ export class SqliteOverlayStore {
   async finishThreadPrStatusWatch(params: {
     watchId: string;
     ownerId: string;
+    prKey: string;
+    headSha: string;
+    outcome: "success" | "failure";
     now: number;
   }): Promise<void> {
-    this.stateDb.raw
-      .prepare(
-        `UPDATE pr_status_watches
-         SET status = 'dispatched', lease_owner = NULL,
-             lease_expires_at = NULL, updated_at = ?
-         WHERE watch_id = ? AND status = 'dispatching' AND lease_owner = ?`,
-      )
-      .run(params.now, params.watchId, params.ownerId);
+    const finish = this.stateDb.raw.transaction(() => {
+      const claimed = this.stateDb.raw
+        .prepare(
+          `SELECT 1
+           FROM pr_status_watches
+           WHERE watch_id = ? AND status = 'dispatching' AND lease_owner = ?`,
+        )
+        .get(params.watchId, params.ownerId);
+      if (!claimed) return;
+      this.stateDb.raw
+        .prepare(
+          `UPDATE pr_status_watches
+           SET status = 'dispatched', lease_owner = NULL,
+               lease_expires_at = NULL, updated_at = ?
+           WHERE pr_key = ? AND head_sha = ?
+             AND (
+               (? = 'success' AND notify_on_success = 1)
+               OR (? = 'failure' AND notify_on_failure = 1)
+             )
+             AND (
+               status = 'watching'
+               OR (watch_id = ? AND status = 'dispatching' AND lease_owner = ?)
+             )`,
+        )
+        .run(
+          params.now,
+          params.prKey,
+          params.headSha,
+          params.outcome,
+          params.outcome,
+          params.watchId,
+          params.ownerId,
+        );
+    });
+    finish();
   }
 
   async supersedeThreadPrStatusWatches(params: {
@@ -4978,6 +5123,8 @@ export type OverlayStoreLike = Pick<
   | "setThreadExecutionMode"
   | "setThreadModelSettings"
   | "setThreadPrAutoDispatchEnabled"
+  | "syncThreadPrAutoDispatchCandidates"
+  | "getPrAutoDispatchCandidateWinner"
   | "resetThreadPrAutoDispatchForOperator"
   | "scheduleThreadPrAutoDispatch"
   | "beginThreadPrAutoDispatch"
