@@ -104,11 +104,117 @@ export function mergePrNumberMatches(
   return { ...response, results: [...prResults, ...response.results] };
 }
 
+export function agentMetadataMatchesQuery(
+  thread: NavigationThreadSummary,
+  query: string,
+): boolean {
+  if (!thread.agent) {
+    return false;
+  }
+  const tokens = query
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (tokens.length === 0) {
+    return false;
+  }
+  const haystack = [
+    "agent",
+    "agent thread",
+    thread.agent.name,
+    thread.agent.instructions,
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join(" ")
+    .toLowerCase();
+  return tokens.every((token) => haystack.includes(token));
+}
+
+type AgentNavigationThread = NavigationThreadSummary & {
+  agent: NonNullable<NavigationThreadSummary["agent"]>;
+};
+
+function agentMatchToSearchResult(thread: AgentNavigationThread): ThreadSearchResult {
+  return {
+    backend: thread.source,
+    threadId: thread.id,
+    identityKey: buildThreadIdentityKey(thread.source, thread.id),
+    title: thread.title,
+    ...(thread.titleSource ? { titleSource: thread.titleSource } : {}),
+    ...(thread.summary ? { summary: thread.summary } : {}),
+    ...(thread.projectKey ? { projectKey: thread.projectKey } : {}),
+    ...(thread.createdAt !== undefined ? { createdAt: thread.createdAt } : {}),
+    ...(thread.updatedAt !== undefined ? { updatedAt: thread.updatedAt } : {}),
+    linkedDirectories: thread.linkedDirectories ?? [],
+    source: thread.source,
+    ...(thread.gitBranch ? { gitBranch: thread.gitBranch } : {}),
+    ...(thread.model ? { model: thread.model } : {}),
+    score: 1,
+    confidence: "high",
+    matchReasons: [
+      { kind: "agent_match", field: "agent", value: thread.agent.name },
+    ],
+    snippets: [
+      {
+        scope: "metadata",
+        field: "agent",
+        text: `Agent: ${thread.agent.name}`,
+      },
+    ],
+  };
+}
+
+export function mergeAgentMatches(
+  response: ThreadSearchResponse,
+  query: string,
+  threads: readonly NavigationThreadSummary[] | undefined,
+): ThreadSearchResponse {
+  const matchingThreads = (threads ?? []).filter(
+    (thread): thread is AgentNavigationThread =>
+      Boolean(thread.agent) && agentMetadataMatchesQuery(thread, query),
+  );
+  if (matchingThreads.length === 0) {
+    return response;
+  }
+  const existingByKey = new Map(
+    response.results.map((result) => [result.identityKey, result]),
+  );
+  const matchedKeys = new Set<string>();
+  const agentResults = matchingThreads.map((thread) => {
+    const identityKey = buildThreadIdentityKey(thread.source, thread.id);
+    matchedKeys.add(identityKey);
+    const existing = existingByKey.get(identityKey);
+    if (!existing) {
+      return agentMatchToSearchResult(thread);
+    }
+    return {
+      ...existing,
+      confidence: "high" as const,
+      matchReasons: [
+        {
+          kind: "agent_match" as const,
+          field: "agent",
+          value: thread.agent.name,
+        },
+        ...existing.matchReasons.filter((reason) => reason.kind !== "agent_match"),
+      ],
+    };
+  });
+  return {
+    ...response,
+    results: [
+      ...agentResults,
+      ...response.results.filter((result) => !matchedKeys.has(result.identityKey)),
+    ],
+  };
+}
+
 /**
  * Client-side relevance test for the thread-list quick search: matches title,
- * thread id, linked PR number, git branch, and linked-directory label. PR
- * numbers match with or without the leading "#"; thread ids only match
- * sufficiently deliberate UUID-like fragments or longer pasted ids.
+ * Agent metadata, thread id, linked PR number, git branch, and linked-directory
+ * label. PR numbers match with or without the leading "#"; thread ids only
+ * match sufficiently deliberate UUID-like fragments or longer pasted ids.
  */
 export function threadMatchesQuery(
   thread: NavigationThreadSummary,
@@ -119,6 +225,9 @@ export function threadMatchesQuery(
     return false;
   }
   if (thread.title.toLowerCase().includes(needle)) {
+    return true;
+  }
+  if (agentMetadataMatchesQuery(thread, needle)) {
     return true;
   }
   if (threadIdMatchesQuery(thread.id, needle)) {

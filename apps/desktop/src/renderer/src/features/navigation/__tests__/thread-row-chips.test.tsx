@@ -426,6 +426,32 @@ describe("ThreadRow chip flow", () => {
     );
   });
 
+  it("marks Agent threads and explains their messaging role", () => {
+    const { container } = renderRow({
+      thread: {
+        ...baseThread,
+        agent: {
+          name: "Jeeves",
+          instructions: "Help people decide what to do next.",
+          instructionLineCount: 1,
+          instructionsTooLong: false,
+          updatedAt: 1_000,
+        },
+      },
+    });
+
+    const chip = container.querySelector<HTMLElement>(".thread-row__chip--agent");
+    expect(chip).toHaveTextContent("Agent");
+    expect(chip).toHaveAttribute("aria-label", "Agent thread");
+
+    fireEvent.mouseEnter(chip!);
+
+    const tooltip = screen.getByRole("tooltip");
+    expect(tooltip).toHaveClass("viewport-tooltip");
+    expect(tooltip).toHaveTextContent("default target");
+    expect(tooltip).toHaveTextContent("personality");
+  });
+
   it("qualifies a PR from outside the thread's primary repository", () => {
     renderRow({
       thread: {

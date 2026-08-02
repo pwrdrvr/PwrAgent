@@ -6,6 +6,7 @@ import { formatBackendLabel } from "../../lib/backend-label";
 import { copyText } from "../../lib/copy-text";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
+import { AgentThreadChip } from "./AgentThreadChip";
 
 type ThreadMetaChipsProps = {
   hasApprovalRequest?: boolean;
@@ -161,6 +162,8 @@ export function ThreadMetaChips({
       <span className="thread-row__chip thread-row__chip--backend">
         {formatBackendLabel(thread.source)}
       </span>
+
+      {thread.agent ? <AgentThreadChip threadRow /> : null}
 
       {queuedMessageState === "scheduled" ? (
         <span
