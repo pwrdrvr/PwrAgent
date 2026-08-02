@@ -713,7 +713,7 @@ function localImageLinkPath(destination: string): string | undefined {
     }
   }
 
-  if (trimmed.startsWith("/")) {
+  if (path.isAbsolute(trimmed)) {
     return safelyDecodeUriComponent(trimmed);
   }
 
