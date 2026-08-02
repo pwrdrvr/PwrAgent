@@ -1287,9 +1287,11 @@ describe("Sidebar", () => {
     );
 
     const browseSection = screen.getByRole("region", { name: "Thread browser" });
-    fireEvent.click(
-      within(browseSection as HTMLElement).getByRole("button", { name: "PwrAgent1" })
-    );
+    const directorySummary = within(browseSection as HTMLElement)
+      .getAllByRole("button", { name: /PwrAgent/i })
+      .find((button) => button.hasAttribute("aria-expanded"));
+    expect(directorySummary).toBeDefined();
+    fireEvent.click(directorySummary!);
     const worktreeThreadButton = within(browseSection as HTMLElement).getByRole("button", {
       name: /Cross-project cleanup/i,
     });
@@ -1486,7 +1488,7 @@ describe("Sidebar", () => {
     ).not.toBeNull();
   });
 
-  it("shows live-thread counts in the Directories tab and each directory", () => {
+  it("separates active and reviewable threads in directory counts", () => {
     const backendActiveThread = {
       ...sharedThread,
       id: "thread-backend-active",
@@ -1503,10 +1505,17 @@ describe("Sidebar", () => {
       id: "thread-idle",
       title: "Idle thread",
       threadStatus: "idle" as const,
+      inbox: {
+        inInbox: true,
+        reason: "updated-since-seen" as const,
+        lastSeenUpdatedAt: sharedThread.updatedAt - 1,
+      },
     };
     const directory: NavigationDirectorySummary = {
       ...directories[0]!,
-      needsAttentionCount: 0,
+      // The summary's persisted Inbox aggregate includes all three threads,
+      // but the renderer must not count the two active ones again as review.
+      needsAttentionCount: 3,
       threadKeys: [
         "codex:thread-backend-active",
         "codex:thread-locally-thinking",
@@ -1545,6 +1554,9 @@ describe("Sidebar", () => {
     const activeCount = within(summary!).getByTitle("2 active threads");
     expect(activeCount).toHaveAttribute("data-active-thread-count", "2");
     expect(activeCount).toHaveTextContent("2 active");
+    const reviewCount = within(summary!).getByTitle("1 thread to review");
+    expect(reviewCount).toHaveAttribute("data-review-thread-count", "1");
+    expect(reviewCount).toHaveTextContent("1 to review");
   });
 
   it("shows an approval chip for threads waiting on an approval request", () => {

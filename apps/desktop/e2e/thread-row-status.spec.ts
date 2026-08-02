@@ -249,6 +249,12 @@ test("shows initiated background turns as thinking, then unread once they finish
         .filter({ hasText: "Thread row status fixture" })
         .getByTitle("1 active thread"),
     ).toBeVisible();
+    await expect(
+      app.window
+        .locator(".directory-row__summary")
+        .filter({ hasText: "Thread row status fixture" })
+        .getByTitle("1 thread to review"),
+    ).toHaveCount(0);
 
     await app.advance({ stepId: "turn-started-1" });
     await expect(initiatedRow.locator('[data-thread-status="thinking"]')).toBeVisible();
@@ -262,6 +268,12 @@ test("shows initiated background turns as thinking, then unread once they finish
     await expect(
       app.window.locator('[data-active-thread-count="1"]'),
     ).toHaveCount(0);
+    await expect(
+      app.window
+        .locator(".directory-row__summary")
+        .filter({ hasText: "Thread row status fixture" })
+        .getByTitle("1 thread to review"),
+    ).toBeVisible();
   } finally {
     await app.close();
     await fixture.cleanup();

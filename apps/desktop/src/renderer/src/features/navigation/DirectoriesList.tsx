@@ -41,7 +41,9 @@ import { ThinkingScanner } from "../thread-detail/ThinkingScanner";
 import { ThreadRow } from "./ThreadRow";
 import {
   formatActiveThreadCount,
+  formatReviewThreadCount,
   isThreadActive,
+  isThreadAwaitingReview,
 } from "./ThreadRowStatus";
 
 type DirectoriesListProps = {
@@ -595,6 +597,21 @@ export function DirectoriesList(props: DirectoriesListProps) {
     const activeThreadCount = visibleThreads.filter((thread) =>
       isThreadActive(thread, props.thinkingThreadKeys),
     ).length;
+    // A live turn can also be in the Inbox after emitting new output. Keep it
+    // in the activity count only, so a directory never reports the same thread
+    // as both active and waiting to be reviewed.
+    const reviewThreadCount = visibleThreads.filter(
+      (thread) =>
+        isThreadAwaitingReview(thread)
+        && !isThreadActive(thread, props.thinkingThreadKeys),
+    ).length;
+    const directorySummaryLabel = [
+      directory.label,
+      activeThreadCount > 0 ? formatActiveThreadCount(activeThreadCount) : undefined,
+      reviewThreadCount > 0 ? formatReviewThreadCount(reviewThreadCount) : undefined,
+    ]
+      .filter((label): label is string => Boolean(label))
+      .join(", ");
     const visibleThreadKeys = new Set(
       visibleThreads.map((thread) => buildThreadIdentityKey(thread.source, thread.id)),
     );
@@ -985,6 +1002,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
           }
         >
           <button
+            aria-label={directorySummaryLabel}
             aria-expanded={expanded}
             className={`thread-row thread-row--compact directory-row__summary${
               selectedLaunchpad ? " is-selected" : ""
@@ -1058,9 +1076,14 @@ export function DirectoriesList(props: DirectoriesListProps) {
                   <span>{activeThreadCount} active</span>
                 </span>
               ) : null}
-              {directory.needsAttentionCount > 0 ? (
-                <span className="count-pill directory-row__attention">
-                  {directory.needsAttentionCount}
+              {reviewThreadCount > 0 ? (
+                <span
+                  className="directory-row__review-count"
+                  data-review-thread-count={reviewThreadCount}
+                  title={formatReviewThreadCount(reviewThreadCount)}
+                >
+                  <span aria-hidden="true" className="thread-row__status-cookie" />
+                  <span>{reviewThreadCount} to review</span>
                 </span>
               ) : null}
             </span>

@@ -25,6 +25,19 @@ export function formatActiveThreadCount(count: number): string {
   return `${count} active thread${count === 1 ? "" : "s"}`;
 }
 
+/**
+ * Inbox membership includes both a thread that is new to the operator and an
+ * existing thread updated since it was last seen. Directory summaries call
+ * this "to review" rather than collapsing it into the live-turn count.
+ */
+export function isThreadAwaitingReview(thread: NavigationThreadSummary): boolean {
+  return thread.inbox.inInbox;
+}
+
+export function formatReviewThreadCount(count: number): string {
+  return `${count} thread${count === 1 ? "" : "s"} to review`;
+}
+
 export function getThreadRowStatus(
   thread: NavigationThreadSummary,
   thinkingThreadKeys?: Record<string, boolean>
