@@ -89,6 +89,7 @@ import {
 const SETTINGS_SECTIONS = new Set<SettingsSection>([
   "general",
   "applications",
+  "git",
   "profiles",
   "worktrees",
   "messaging",

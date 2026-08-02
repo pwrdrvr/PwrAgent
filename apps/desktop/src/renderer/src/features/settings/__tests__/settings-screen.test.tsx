@@ -708,6 +708,9 @@ describe("SettingsScreen", () => {
     expect(screen.getByText("/System/Applications/Utilities/Terminal.app")).toBeInTheDocument();
     expect(screen.getByText("Ghostty")).toBeInTheDocument();
     expect(screen.getByText("/Applications/Ghostty.app")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "GitHub CLI (gh)" }),
+    ).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Use" }));
     await waitFor(() => {
@@ -720,8 +723,32 @@ describe("SettingsScreen", () => {
       });
     });
 
+    fireEvent.click(within(sections).getByRole("button", { name: "Git" }));
+    expect(
+      screen.getByRole("heading", { name: "Repository & pull requests" }),
+    ).toBeInTheDocument();
+
+    // The snapshot fixture omits `backgroundPrPolling` entirely, which is the
+    // real shape an older/stale snapshot has — the toggle must still render
+    // (checked, from the shared default) rather than crash.
+    const backgroundPrPollingSwitch = screen.getByRole("switch", {
+      name: "Enable background pull request status",
+    });
+    expect(backgroundPrPollingSwitch).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(backgroundPrPollingSwitch);
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        experimental: { backgroundPrPolling: false },
+      });
+    });
+
     fireEvent.click(within(sections).getByRole("button", { name: "Experimental" }));
     expect(screen.queryByRole("radiogroup", { name: "Chat Reply Composer" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("switch", {
+        name: "Enable background pull request status",
+      }),
+    ).not.toBeInTheDocument();
     openDiscontinuedDrawer();
     fireEvent.click(screen.getByRole("switch", { name: "Enable diff condensation" }));
     await waitFor(() => {
@@ -769,20 +796,6 @@ describe("SettingsScreen", () => {
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         experimental: { lightweightNavigationRefresh: true },
-      });
-    });
-
-    // The snapshot fixture omits `backgroundPrPolling` entirely, which is the
-    // real shape an older/stale snapshot has — the toggle must still render
-    // (checked, from the shared default) rather than crash.
-    const backgroundPrPollingSwitch = screen.getByRole("switch", {
-      name: "Enable background pull request status",
-    });
-    expect(backgroundPrPollingSwitch).toHaveAttribute("aria-checked", "true");
-    fireEvent.click(backgroundPrPollingSwitch);
-    await waitFor(() => {
-      expect(settings.writeConfig).toHaveBeenCalledWith({
-        experimental: { backgroundPrPolling: false },
       });
     });
 
@@ -2234,7 +2247,7 @@ describe("SettingsScreen", () => {
     render(
       <SettingsScreen
         desktopApi={{ getGhStatus }}
-        initialSection="applications"
+        initialSection="git"
         settings={settings}
         onClose={() => undefined}
       />,
@@ -2298,7 +2311,7 @@ describe("SettingsScreen", () => {
     render(
       <SettingsScreen
         desktopApi={{ copyText: copyTextMock }}
-        initialSection="applications"
+        initialSection="git"
         settings={settings}
         onClose={() => undefined}
       />,
@@ -3826,7 +3839,7 @@ describe("SettingsScreen", () => {
     expect(label?.textContent?.toLowerCase()).toBe("general");
   });
 
-  it("orders settings nav sections with worktree settings separated", () => {
+  it("orders Git and worktree settings after the primary navigation group", () => {
     render(
       <SettingsScreen
         settings={createSettingsState()}
@@ -3845,6 +3858,7 @@ describe("SettingsScreen", () => {
       "Profiles",
       "AI Providers",
       "Messaging",
+      "Git",
       "Worktrees",
       "Thread Management",
       "Archived Threads",

@@ -16,6 +16,7 @@ import type { DesktopSettingsState } from "./useDesktopSettings";
 import { AboutSettings } from "./AboutSettings";
 import { ExperimentalSettings } from "./ExperimentalSettings";
 import { GeneralSettings } from "./GeneralSettings";
+import { GitSettings } from "./GitSettings";
 import { MessagingSettings } from "./MessagingSettings";
 import { ModelsSettings } from "./ModelsSettings";
 import { ProfilesSettings } from "./ProfilesSettings";
@@ -37,6 +38,7 @@ import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 
 export type SettingsSection =
   | "general"
+  | "git"
   | "experimental"
   | "messaging"
   | "models"
@@ -54,6 +56,7 @@ const SECTIONS: Array<{ id: SettingsSection; label: string }> = [
   { id: "profiles", label: "Profiles" },
   { id: "models", label: "AI Providers" },
   { id: "messaging", label: "Messaging" },
+  { id: "git", label: "Git" },
   { id: "worktrees", label: "Worktrees" },
   { id: "thread-management", label: "Thread Management" },
   { id: "archived", label: "Archived Threads" },
@@ -78,6 +81,7 @@ const SECTION_LABELS = new Map(
 
 const ORDERED_SECTION_IDS: SettingsSection[] = [
   ...PRIMARY_SECTIONS,
+  "git",
   "worktrees",
   "thread-management",
   "archived",
@@ -442,11 +446,6 @@ function SettingsSectionBody(props: {
             experimental: { lightweightNavigationRefresh: enabled },
           });
         }}
-        onBackgroundPrPollingChange={async (enabled: boolean) => {
-          await props.settings.writeConfig({
-            experimental: { backgroundPrPolling: enabled },
-          });
-        }}
         onThreadPricingSummaryChange={async (enabled: boolean) => {
           await props.settings.writeConfig({
             experimental: { threadPricingSummary: enabled },
@@ -634,7 +633,6 @@ function SettingsSectionBody(props: {
   if (props.section === "applications") {
     return (
       <ApplicationsSettings
-        desktopApi={props.desktopApi}
         saving={props.settings.saving}
         snapshot={props.snapshot}
         onPreferredApplicationChange={async (kind, preferredId) => {
@@ -643,6 +641,24 @@ function SettingsSectionBody(props: {
               kind === "editor"
                 ? { editor: { preferredId } }
                 : { terminal: { preferredId } },
+          });
+        }}
+      />
+    );
+  }
+
+  if (props.section === "git") {
+    return (
+      <GitSettings
+        desktopApi={props.desktopApi}
+        saving={props.settings.saving}
+        snapshot={props.snapshot}
+        onBackgroundPrPollingChange={async (enabled: boolean) => {
+          // The Git pane replaces the experimental UI surface, not the stable
+          // TOML key. Keeping the existing key avoids a config migration and
+          // preserves explicit opt-outs from earlier releases.
+          await props.settings.writeConfig({
+            experimental: { backgroundPrPolling: enabled },
           });
         }}
         onRefresh={props.settings.refresh}
