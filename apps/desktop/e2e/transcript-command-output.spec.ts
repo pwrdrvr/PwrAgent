@@ -13,7 +13,10 @@ test("captured command output is inspectable from transcript work", async () => 
     ),
     windowSize: {
       width: 1280,
-      height: 900,
+      // This command-output interaction does not depend on viewport height.
+      // Keep it below Linux CI's observed 873px content cap so the shared
+      // launcher can assert the requested viewport exactly.
+      height: 860,
     },
   });
 

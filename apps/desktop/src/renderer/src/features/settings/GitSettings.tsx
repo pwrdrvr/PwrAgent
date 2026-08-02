@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   DEFAULT_BACKGROUND_PR_POLLING,
+  DEFAULT_PR_AUTO_DISPATCH_ALLOWED,
+  DEFAULT_PR_AUTO_DISPATCH_ENABLED_FOR_NEW_THREADS,
   type DesktopGitDiscoveryCandidate,
   type DesktopGhDiscoveryCandidate,
   type DesktopSettingsSnapshot,
@@ -26,17 +28,160 @@ const DEFAULT_BACKGROUND_PR_POLLING_VALUE = {
   source: "default" as const,
 };
 
+const DEFAULT_PR_AUTO_DISPATCH_ALLOWED_VALUE = {
+  value: DEFAULT_PR_AUTO_DISPATCH_ALLOWED,
+  source: "default" as const,
+};
+
+const DEFAULT_PR_AUTO_DISPATCH_ENABLED_VALUE = {
+  value: DEFAULT_PR_AUTO_DISPATCH_ENABLED_FOR_NEW_THREADS,
+  source: "default" as const,
+};
+
 export function GitSettings(props: {
   desktopApi?: DesktopApi;
   saving: boolean;
   snapshot: DesktopSettingsSnapshot;
   onBackgroundPrPollingChange: (enabled: boolean) => Promise<void>;
+  onPrAutoDispatchAllowedChange: (enabled: boolean) => Promise<void>;
+  onDefaultPrAutoDispatchEnabledChange: (enabled: boolean) => Promise<void>;
   onRefresh: () => Promise<void>;
   onSaveGhPath: (path: string) => Promise<void>;
 }) {
   const backgroundPrPolling =
     props.snapshot.git?.backgroundPrPolling ??
     DEFAULT_BACKGROUND_PR_POLLING_VALUE;
+  const prAutoDispatchAllowed =
+    props.snapshot.git?.prAutoDispatchAllowed ??
+    DEFAULT_PR_AUTO_DISPATCH_ALLOWED_VALUE;
+  const defaultPrAutoDispatchEnabled =
+    props.snapshot.git?.defaultPrAutoDispatchEnabled ??
+    DEFAULT_PR_AUTO_DISPATCH_ENABLED_VALUE;
+  const [pendingLaunchpadApply, setPendingLaunchpadApply] = useState<{
+    directoryKeys: string[];
+    enabled: boolean;
+  }>();
+  const [pendingThreadEnable, setPendingThreadEnable] = useState<{
+    eligibleThreadCount: number;
+    updatedThreadCount: number;
+  }>();
+  const [checkingThreadEnable, setCheckingThreadEnable] = useState(false);
+  const [applying, setApplying] = useState(false);
+  const [bulkStatus, setBulkStatus] = useState<string | undefined>();
+  const automationAvailable =
+    backgroundPrPolling.value && prAutoDispatchAllowed.value;
+  const hasPendingBulkAction = Boolean(
+    pendingLaunchpadApply || pendingThreadEnable,
+  );
+  const actionsDisabled = props.saving || applying || !automationAvailable;
+
+  const previewLaunchpadApply = async (): Promise<void> => {
+    if (!props.desktopApi?.getNavigationSnapshot) {
+      setBulkStatus("Launchpad updates are unavailable in this build.");
+      return;
+    }
+    try {
+      const navigation = await props.desktopApi.getNavigationSnapshot();
+      const directoryKeys = navigation.directories
+        .filter((directory) => Boolean(directory.launchpad))
+        .map((directory) => directory.key);
+      if (directoryKeys.length === 0) {
+        setBulkStatus("No launchpads are available to update.");
+        return;
+      }
+      setBulkStatus(undefined);
+      setPendingThreadEnable(undefined);
+      setPendingLaunchpadApply({
+        directoryKeys,
+        enabled: defaultPrAutoDispatchEnabled.value,
+      });
+    } catch (error) {
+      setBulkStatus(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const applyToLaunchpads = async (): Promise<void> => {
+    if (!pendingLaunchpadApply || !props.desktopApi?.updateDirectoryLaunchpad) {
+      return;
+    }
+    setApplying(true);
+    try {
+      for (const directoryKey of pendingLaunchpadApply.directoryKeys) {
+        await props.desktopApi.updateDirectoryLaunchpad({
+          directoryKey,
+          patch: { prAutoDispatchEnabled: pendingLaunchpadApply.enabled },
+          stickySettingsChanged: true,
+        });
+      }
+      setBulkStatus(
+        `${pendingLaunchpadApply.enabled ? "Enabled" : "Turned off"} Auto-fix PR for ${pendingLaunchpadApply.directoryKeys.length} launchpad${
+          pendingLaunchpadApply.directoryKeys.length === 1 ? "" : "s"
+        }. Existing threads were not changed.`,
+      );
+      setPendingLaunchpadApply(undefined);
+    } catch (error) {
+      setBulkStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setApplying(false);
+    }
+  };
+
+  const previewExistingThreadEnable = async (): Promise<void> => {
+    if (!props.desktopApi?.setEligibleThreadsPrAutoDispatch) {
+      setBulkStatus("Existing thread updates are unavailable in this build.");
+      return;
+    }
+    setCheckingThreadEnable(true);
+    try {
+      const response = await props.desktopApi.setEligibleThreadsPrAutoDispatch({
+        enabled: true,
+        dryRun: true,
+      });
+      if (response.eligibleThreadCount === 0) {
+        setBulkStatus("No existing threads have an open PR attached to their primary workspace.");
+        return;
+      }
+      if (response.updatedThreadCount === 0) {
+        setBulkStatus(
+          `Auto-fix PR is already enabled for all ${response.eligibleThreadCount} eligible existing thread${
+            response.eligibleThreadCount === 1 ? "" : "s"
+          }.`,
+        );
+        return;
+      }
+      setBulkStatus(undefined);
+      setPendingLaunchpadApply(undefined);
+      setPendingThreadEnable(response);
+    } catch (error) {
+      setBulkStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setCheckingThreadEnable(false);
+    }
+  };
+
+  const enableExistingThreads = async (): Promise<void> => {
+    if (!pendingThreadEnable || !props.desktopApi?.setEligibleThreadsPrAutoDispatch) {
+      return;
+    }
+    setApplying(true);
+    try {
+      const response = await props.desktopApi.setEligibleThreadsPrAutoDispatch({
+        enabled: true,
+      });
+      setBulkStatus(
+        response.updatedThreadCount > 0
+          ? `Enabled Auto-fix PR for ${response.updatedThreadCount} existing thread${
+              response.updatedThreadCount === 1 ? "" : "s"
+            } with a primary attached pull request.`
+          : "No existing thread preferences needed updating.",
+      );
+      setPendingThreadEnable(undefined);
+    } catch (error) {
+      setBulkStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setApplying(false);
+    }
+  };
 
   return (
     <SettingsSectionStack paneId="git" aria-label="Git settings">
@@ -83,7 +228,170 @@ export function GitSettings(props: {
           />
         </div>
       </SettingsSection>
+      <SettingsSection
+        eyebrow="GitHub"
+        title="Pull request automation"
+        description="Control whether PwrAgent can schedule a bounded repair turn for a linked pull request that fails CI or becomes conflicted."
+        chip={prAutoDispatchAllowed.value ? "Allowed" : "Off"}
+        chipKind={prAutoDispatchAllowed.value ? "ok" : "default"}
+      >
+        <div className="settings-fields">
+          <SettingsField
+            label="Allow Auto-fix PR"
+            sub={
+              backgroundPrPolling.value
+                ? "When enabled, a thread with Auto-fix PR on can receive one bounded repair turn for a newly failing or conflicting pull request."
+                : "Turn on background pull request status above before allowing automatic PR repairs."
+            }
+            source={sourceBadge(prAutoDispatchAllowed)}
+            control={
+              <SettingsSwitch
+                checked={prAutoDispatchAllowed.value}
+                disabled={props.saving || !backgroundPrPolling.value}
+                label="Allow Auto-fix PR"
+                onChange={(enabled) => {
+                  void props.onPrAutoDispatchAllowedChange(enabled);
+                }}
+              />
+            }
+          />
+          <SettingsField
+            label="Enable Auto-fix PR for new threads and launchpads"
+            sub={
+              backgroundPrPolling.value && prAutoDispatchAllowed.value
+                ? "New threads and launchpads start with this choice. Existing launchpads and threads keep their saved choice."
+                : "This default is available when background pull request status and Auto-fix PR are allowed."
+            }
+            source={sourceBadge(defaultPrAutoDispatchEnabled)}
+            control={
+              <>
+                <SettingsSwitch
+                  checked={defaultPrAutoDispatchEnabled.value}
+                  disabled={actionsDisabled || checkingThreadEnable || hasPendingBulkAction}
+                  label="Enable Auto-fix PR for new threads and launchpads"
+                  onChange={(enabled) => {
+                    void props.onDefaultPrAutoDispatchEnabledChange(enabled);
+                  }}
+                />
+                {pendingLaunchpadApply ? (
+                  <GitActionConfirmation
+                    applying={applying}
+                    confirmLabel="Apply"
+                    label={`Apply to ${pendingLaunchpadApply.directoryKeys.length} launchpad${
+                      pendingLaunchpadApply.directoryKeys.length === 1 ? "" : "s"
+                    }?`}
+                    sub="This saves the selected Auto-fix PR choice for each launchpad. Existing threads stay unchanged."
+                    onCancel={() => setPendingLaunchpadApply(undefined)}
+                    onConfirm={() => void applyToLaunchpads()}
+                  />
+                ) : (
+                  <div className="settings-inline-actions">
+                    <button
+                      className="button button--secondary"
+                      disabled={
+                        actionsDisabled
+                        || hasPendingBulkAction
+                        || !props.desktopApi?.getNavigationSnapshot
+                        || !props.desktopApi?.updateDirectoryLaunchpad
+                      }
+                      type="button"
+                      onClick={() => void previewLaunchpadApply()}
+                    >
+                      Apply to launchpads
+                    </button>
+                  </div>
+                )}
+              </>
+            }
+          />
+          <SettingsField
+            label="Enable Auto-fix PR for existing threads"
+            sub={
+              automationAvailable
+                ? "Enable it only for threads with an open pull request attached to their primary workspace. Informational and detached PR links are left alone."
+                : "This bulk action is available when background pull request status and Auto-fix PR are allowed."
+            }
+            control={
+              <>
+                {pendingThreadEnable ? (
+                  <GitActionConfirmation
+                    applying={applying}
+                    confirmLabel="Enable"
+                    label={`Enable Auto-fix PR for ${pendingThreadEnable.updatedThreadCount} existing thread${
+                      pendingThreadEnable.updatedThreadCount === 1 ? "" : "s"
+                    }?`}
+                    sub={`Only ${pendingThreadEnable.eligibleThreadCount} thread${
+                      pendingThreadEnable.eligibleThreadCount === 1 ? " has" : "s have"
+                    } an eligible primary attached PR. Other saved thread choices stay unchanged.`}
+                    onCancel={() => setPendingThreadEnable(undefined)}
+                    onConfirm={() => void enableExistingThreads()}
+                  />
+                ) : (
+                  <div className="settings-inline-actions">
+                    <button
+                      className="button button--secondary"
+                      disabled={
+                        actionsDisabled
+                        || checkingThreadEnable
+                        || hasPendingBulkAction
+                        || !props.desktopApi?.setEligibleThreadsPrAutoDispatch
+                      }
+                      type="button"
+                      onClick={() => void previewExistingThreadEnable()}
+                    >
+                      {checkingThreadEnable
+                        ? "Checking…"
+                        : "Enable existing PR threads…"}
+                    </button>
+                  </div>
+                )}
+                {bulkStatus ? (
+                  <p className="settings-empty" role="status">
+                    {bulkStatus}
+                  </p>
+                ) : null}
+              </>
+            }
+          />
+        </div>
+      </SettingsSection>
     </SettingsSectionStack>
+  );
+}
+
+function GitActionConfirmation(props: {
+  applying: boolean;
+  confirmLabel: string;
+  label: string;
+  sub: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div aria-live="polite" className="settings-action-confirmation">
+      <div className="settings-action-confirmation__copy">
+        <strong>{props.label}</strong>
+        <span>{props.sub}</span>
+      </div>
+      <div className="settings-inline-actions">
+        <button
+          className="button button--primary"
+          disabled={props.applying}
+          type="button"
+          onClick={props.onConfirm}
+        >
+          {props.applying ? "Updating…" : props.confirmLabel}
+        </button>
+        <button
+          className="button button--ghost"
+          disabled={props.applying}
+          type="button"
+          onClick={props.onCancel}
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
   );
 }
 

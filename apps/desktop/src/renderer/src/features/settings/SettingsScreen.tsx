@@ -665,6 +665,16 @@ function SettingsSectionBody(props: {
             git: { backgroundPrPolling: enabled },
           });
         }}
+        onPrAutoDispatchAllowedChange={async (enabled: boolean) => {
+          await props.settings.writeConfig({
+            git: { prAutoDispatchAllowed: enabled },
+          });
+        }}
+        onDefaultPrAutoDispatchEnabledChange={async (enabled: boolean) => {
+          await props.settings.writeConfig({
+            git: { defaultPrAutoDispatchEnabled: enabled },
+          });
+        }}
         onRefresh={props.settings.refresh}
         onSaveGhPath={async (path) => {
           await props.settings.writeConfig({

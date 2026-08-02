@@ -27,6 +27,19 @@ export const DESKTOP_WORKTREE_STORAGE_DEFAULT: DesktopWorktreeStorageLocation =
  */
 export const DEFAULT_BACKGROUND_PR_POLLING = true;
 
+/**
+ * Automatic pull-request repair is available by default whenever background
+ * PR monitoring is enabled. An explicit false value is a separate operator
+ * kill switch that preserves each thread's saved preference.
+ */
+export const DEFAULT_PR_AUTO_DISPATCH_ALLOWED = true;
+
+/**
+ * New ordinary threads and launchpads start with Auto-fix PR enabled by
+ * default. Existing threads retain their saved per-thread preference.
+ */
+export const DEFAULT_PR_AUTO_DISPATCH_ENABLED_FOR_NEW_THREADS = true;
+
 export const DESKTOP_UPDATE_CHANNELS = ["latest", "prerelease"] as const;
 
 export type DesktopUpdateChannel = (typeof DESKTOP_UPDATE_CHANNELS)[number];
@@ -761,6 +774,13 @@ export type DesktopSettingsSnapshot = {
      * pull requests.
      */
     backgroundPrPolling: DesktopSettingsValue<boolean>;
+    /**
+     * Global permission for automatic repair turns. Background PR monitoring
+     * remains the prerequisite kill switch for this behavior.
+     */
+    prAutoDispatchAllowed: DesktopSettingsValue<boolean>;
+    /** Default Auto-fix PR preference seeded only onto newly created threads. */
+    defaultPrAutoDispatchEnabled: DesktopSettingsValue<boolean>;
   };
   applications: DesktopApplicationsSnapshot;
   worktrees: {
@@ -937,6 +957,8 @@ export type DesktopSettingsConfigPatch = {
   };
   git?: {
     backgroundPrPolling?: boolean;
+    prAutoDispatchAllowed?: boolean;
+    defaultPrAutoDispatchEnabled?: boolean;
   };
   applications?: {
     editor?: {

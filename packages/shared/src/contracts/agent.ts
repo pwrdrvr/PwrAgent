@@ -370,6 +370,26 @@ export type SetThreadPrAutoDispatchRequest = {
 
 export type SetThreadPrAutoDispatchResponse = SetThreadPrAutoDispatchRequest;
 
+/**
+ * Applies an Auto-fix PR preference only to existing threads that have an
+ * open pull request attached to their primary GitHub workspace. The main
+ * process resolves eligibility so detached and informational PR links never
+ * become automation targets.
+ */
+export type SetEligibleThreadsPrAutoDispatchRequest = {
+  enabled: boolean;
+  /** Preview the authoritative target set without changing any thread. */
+  dryRun?: boolean;
+};
+
+export type SetEligibleThreadsPrAutoDispatchResponse = {
+  enabled: boolean;
+  /** Threads with an eligible primary attached PR at the time of the request. */
+  eligibleThreadCount: number;
+  /** Threads whose saved preference was actually changed. */
+  updatedThreadCount: number;
+};
+
 export type CancelThreadPrAutoDispatchRequest = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
@@ -538,6 +558,7 @@ export type UpdateDirectoryLaunchpadRequest = {
       | "serviceTier"
       | "fastMode"
       | "acpRuntime"
+      | "prAutoDispatchEnabled"
       | "messagingToolUpdateMode"
       | "workMode"
       | "branchName"

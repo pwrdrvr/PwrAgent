@@ -146,6 +146,7 @@ type ComposerProps = {
   applications?: DesktopApplicationsSnapshot;
   codexFastAllowed?: boolean;
   backgroundPrPollingEnabled?: boolean;
+  prAutoDispatchAllowed?: boolean;
   providerModelDefaults?: Record<string, DesktopProviderModelDefaults>;
   desktopApi?: DesktopApi;
   /**
@@ -6777,6 +6778,9 @@ export function Composer(props: ComposerProps) {
   const currentSettings = props.launchpad ?? props.thread;
   const backgroundPrPollingEnabled =
     props.backgroundPrPollingEnabled ?? true;
+  const prAutoDispatchAllowed = props.prAutoDispatchAllowed ?? true;
+  const prAutoDispatchAvailable =
+    backgroundPrPollingEnabled && prAutoDispatchAllowed;
   const modelOptions = backend?.launchpadOptions?.models ?? [];
   const selectedModelOption =
     modelOptions.find((option) => option.id === currentSettings?.model) ??
@@ -7028,9 +7032,11 @@ export function Composer(props: ComposerProps) {
     : false;
   const prAutoDispatchTooltip = !backgroundPrPollingEnabled
     ? "Auto-fix PR paused — turn on background PR polling in Settings"
-    : hasAttachedPullRequest
-      ? "Auto-fix PR — handle new CI failures or merge conflicts"
-      : "Auto-fix PR — starts when a PR for this workspace is linked";
+    : !prAutoDispatchAllowed
+      ? "Auto-fix PR disabled globally — allow it in Git settings"
+      : hasAttachedPullRequest
+        ? "Auto-fix PR — handle new CI failures or merge conflicts"
+        : "Auto-fix PR — starts when a PR for this workspace is linked";
   const workspaceOpenPath = getComposerWorkspaceOpenPath({
     directory: props.directory,
     launchpad: props.launchpad,
@@ -7897,10 +7903,12 @@ export function Composer(props: ComposerProps) {
             <span className="composer__queued-label">
               {!backgroundPrPollingEnabled
                 ? "Auto-fix PR paused"
-                : `Auto-fix PR in ${formatScheduledSendCountdown(
-                    prAutoDispatchPending.scheduledAt,
-                    scheduleNow,
-                  )}`}
+                : !prAutoDispatchAllowed
+                  ? "Auto-fix PR disabled"
+                  : `Auto-fix PR in ${formatScheduledSendCountdown(
+                      prAutoDispatchPending.scheduledAt,
+                      scheduleNow,
+                    )}`}
             </span>
             <span className="composer__queued-text">
               #{prAutoDispatchPending.prNumber} · {prAutoDispatchPending.eventKinds
@@ -7918,7 +7926,7 @@ export function Composer(props: ComposerProps) {
               className="composer__secondary-action"
               type="button"
               disabled={
-                !backgroundPrPollingEnabled
+                !prAutoDispatchAvailable
                 || !props.onSendThreadPrAutoDispatchNow
               }
               onClick={() => {
@@ -8949,9 +8957,9 @@ export function Composer(props: ComposerProps) {
               aria-label="Auto-fix PR"
               aria-pressed={Boolean(props.thread.prAutoDispatchEnabled)}
               data-tooltip={prAutoDispatchTooltip}
-              disabled={!backgroundPrPollingEnabled}
+              disabled={!prAutoDispatchAvailable}
               onClick={() => {
-                if (!backgroundPrPollingEnabled) return;
+                if (!prAutoDispatchAvailable) return;
                 void props.onSetThreadPrAutoDispatch?.(
                   !props.thread?.prAutoDispatchEnabled,
                 );

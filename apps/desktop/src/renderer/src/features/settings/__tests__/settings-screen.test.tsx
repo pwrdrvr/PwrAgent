@@ -346,6 +346,8 @@ function createSnapshot(
     },
     git: {
       backgroundPrPolling: { value: true, source: "default" },
+      prAutoDispatchAllowed: { value: true, source: "default" },
+      defaultPrAutoDispatchEnabled: { value: true, source: "default" },
     },
     applications: {
       editors: [
@@ -4182,6 +4184,203 @@ describe("SettingsScreen", () => {
       await screen.findByText(/Update available: v1.0.0-beta.8/),
     ).toBeInTheDocument();
     expect(desktopApi.readAppUpdateStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it("configures GitHub Auto-fix PR and gates it on background PR status", async () => {
+    const settings = createSettingsState();
+    render(
+      <SettingsScreen
+        initialSection="git"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    const allowAutoFix = screen.getByRole("switch", {
+      name: "Allow Auto-fix PR",
+    });
+    const defaultAutoFix = screen.getByRole("switch", {
+      name: "Enable Auto-fix PR for new threads and launchpads",
+    });
+    expect(allowAutoFix).toHaveAttribute("aria-checked", "true");
+    expect(defaultAutoFix).toHaveAttribute("aria-checked", "true");
+
+    fireEvent.click(allowAutoFix);
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        git: { prAutoDispatchAllowed: false },
+      });
+    });
+    fireEvent.click(defaultAutoFix);
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        git: { defaultPrAutoDispatchEnabled: false },
+      });
+    });
+
+    const baseSnapshot = createSnapshot();
+    const backgroundOffSettings = createSettingsState(
+      createSnapshot({
+        git: {
+          ...baseSnapshot.git,
+          backgroundPrPolling: { value: false, source: "config" },
+        },
+      }),
+    );
+    cleanup();
+    render(
+      <SettingsScreen
+        initialSection="git"
+        settings={backgroundOffSettings}
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(
+      screen.getByRole("switch", { name: "Allow Auto-fix PR" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("switch", {
+        name: "Enable Auto-fix PR for new threads and launchpads",
+      }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Apply to launchpads" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Enable existing PR threads…" }),
+    ).toBeDisabled();
+  });
+
+  it("applies Auto-fix PR defaults to launchpads and eligible existing threads", async () => {
+    const settings = createSettingsState();
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: 1_000,
+      unchanged: false,
+      directories: [
+        {
+          key: "directory:/repo-a",
+          kind: "directory" as const,
+          label: "Repo A",
+          threadKeys: [],
+          needsAttentionCount: 0,
+          launchpad: {
+            directoryKey: "directory:/repo-a",
+            directoryKind: "directory" as const,
+            directoryLabel: "Repo A",
+            backend: "codex" as const,
+            executionMode: "default" as const,
+            workMode: "local" as const,
+            prompt: "",
+            createdAt: 1,
+            updatedAt: 1,
+          },
+        },
+        {
+          key: "directory:/repo-b",
+          kind: "directory" as const,
+          label: "Repo B",
+          threadKeys: [],
+          needsAttentionCount: 0,
+          launchpad: {
+            directoryKey: "directory:/repo-b",
+            directoryKind: "directory" as const,
+            directoryLabel: "Repo B",
+            backend: "codex" as const,
+            executionMode: "default" as const,
+            workMode: "local" as const,
+            prompt: "",
+            createdAt: 1,
+            updatedAt: 1,
+          },
+        },
+      ],
+      inboxThreadKeys: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+      threads: [],
+    }));
+    const updateDirectoryLaunchpad = vi.fn(async (request) => ({
+      launchpad: {
+        directoryKey: request.directoryKey,
+        directoryKind: "directory" as const,
+        directoryLabel: request.directoryKey,
+        backend: "codex" as const,
+        executionMode: "default" as const,
+        workMode: "local" as const,
+        prompt: "",
+        prAutoDispatchEnabled: request.patch.prAutoDispatchEnabled,
+        createdAt: 1,
+        updatedAt: 2,
+      },
+      defaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const setEligibleThreadsPrAutoDispatch = vi.fn(async (request) => ({
+      enabled: request.enabled,
+      eligibleThreadCount: 3,
+      updatedThreadCount: request.dryRun ? 2 : 2,
+    }));
+    const desktopApi = {
+      getNavigationSnapshot,
+      updateDirectoryLaunchpad,
+      setEligibleThreadsPrAutoDispatch,
+    } as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"];
+
+    render(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        initialSection="git"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Apply to launchpads" }));
+    expect(await screen.findByText("Apply to 2 launchpads?")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await waitFor(() => {
+      expect(updateDirectoryLaunchpad).toHaveBeenCalledTimes(2);
+    });
+    expect(updateDirectoryLaunchpad).toHaveBeenNthCalledWith(1, {
+      directoryKey: "directory:/repo-a",
+      patch: { prAutoDispatchEnabled: true },
+      stickySettingsChanged: true,
+    });
+    expect(updateDirectoryLaunchpad).toHaveBeenNthCalledWith(2, {
+      directoryKey: "directory:/repo-b",
+      patch: { prAutoDispatchEnabled: true },
+      stickySettingsChanged: true,
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Enable existing PR threads…" }),
+    );
+    await waitFor(() => {
+      expect(setEligibleThreadsPrAutoDispatch).toHaveBeenCalledWith({
+        enabled: true,
+        dryRun: true,
+      });
+    });
+    expect(
+      await screen.findByText("Enable Auto-fix PR for 2 existing threads?"),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Enable" }));
+    await waitFor(() => {
+      expect(setEligibleThreadsPrAutoDispatch).toHaveBeenLastCalledWith({
+        enabled: true,
+      });
+    });
+    expect(
+      screen.getByText(
+        "Enabled Auto-fix PR for 2 existing threads with a primary attached pull request.",
+      ),
+    ).toBeInTheDocument();
   });
 
   it("blocks settings edits when the config file cannot be parsed", () => {

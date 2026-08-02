@@ -2203,6 +2203,47 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
+  it("coalesces bulk Auto-fix PR preferences before coordinator evaluation", async () => {
+    const overlayStore = createOverlayStoreMock();
+    const preferenceChanged = vi.fn(async () => undefined);
+    const preferencesChanged = vi.fn(async () => undefined);
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore,
+    });
+    registry.setThreadPrAutoDispatchHandler({
+      preferenceChanged,
+      preferencesChanged,
+      cancelPending: vi.fn(async () => true),
+      sendPendingNow: vi.fn(async () => true),
+    });
+
+    try {
+      await registry.setThreadPrAutoDispatchBatch([
+        { backend: "codex", threadId: "thread-1", enabled: true },
+        { backend: "codex", threadId: "thread-2", enabled: true },
+      ]);
+
+      expect(preferenceChanged).not.toHaveBeenCalled();
+      expect(preferencesChanged).toHaveBeenCalledTimes(1);
+      expect(preferencesChanged).toHaveBeenCalledWith([
+        { backend: "codex", threadId: "thread-1", enabled: true },
+        { backend: "codex", threadId: "thread-2", enabled: true },
+      ]);
+      await expect(overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-1",
+      })).resolves.toMatchObject({ prAutoDispatchEnabled: true });
+      await expect(overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-2",
+      })).resolves.toMatchObject({ prAutoDispatchEnabled: true });
+    } finally {
+      await registry.close();
+    }
+  });
+
   it("routes structured generation to the configured Codex backend", async () => {
     const codexClient = new MockBackendClient({ threads: [] });
     const generateStructuredObject = vi.fn(async () => ({
@@ -2261,6 +2302,92 @@ describe("DesktopBackendRegistry", () => {
       expect(codexClient.lastStartTurnParams?.defaultModeRequestUserInput).toBe(
         true,
       );
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("seeds Auto-fix PR for new threads from the configured default", async () => {
+    const defaultOverlayStore = createOverlayStoreMock();
+    const defaultRegistry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: defaultOverlayStore,
+    });
+    const disabledOverlayStore = createOverlayStoreMock();
+    const disabledRegistry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: disabledOverlayStore,
+      resolveDefaultPrAutoDispatchEnabled: () => false,
+    });
+
+    try {
+      await defaultRegistry.startThread({
+        backend: "codex",
+        cwd: process.cwd(),
+      });
+      expect(
+        (await defaultOverlayStore.getThreadOverlayState({
+          backend: "codex",
+          threadId: "thread-1",
+        }))?.prAutoDispatchEnabled,
+      ).toBe(true);
+
+      await disabledRegistry.startThread({
+        backend: "codex",
+        cwd: process.cwd(),
+      });
+      expect(
+        (await disabledOverlayStore.getThreadOverlayState({
+          backend: "codex",
+          threadId: "thread-1",
+        }))?.prAutoDispatchEnabled,
+      ).toBe(false);
+    } finally {
+      await Promise.all([defaultRegistry.close(), disabledRegistry.close()]);
+    }
+  });
+
+  it("saves the launchpad Auto-fix PR choice through materialization", async () => {
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/start"] },
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+      createScratchProjectDirectory: async () => "/tmp/pwragent-launchpad-test",
+      resolveDefaultPrAutoDispatchEnabled: () => false,
+    });
+
+    try {
+      const created = await registry.ensureDirectoryLaunchpad({
+        directoryKey: "workspace:/tmp/pwragent-launchpad-test",
+        directoryKind: "workspace",
+        directoryLabel: "Workspaces",
+      });
+      expect(created.launchpad.prAutoDispatchEnabled).toBe(false);
+
+      const updated = await registry.updateDirectoryLaunchpad({
+        directoryKey: created.launchpad.directoryKey,
+        patch: { prAutoDispatchEnabled: true },
+        stickySettingsChanged: true,
+      });
+      expect(updated.launchpad.prAutoDispatchEnabled).toBe(true);
+
+      const materialized = await registry.materializeDirectoryLaunchpad({
+        directoryKey: updated.launchpad.directoryKey,
+        launchpad: updated.launchpad,
+      });
+      expect(
+        (await overlayStore.getThreadOverlayState({
+          backend: materialized.backend,
+          threadId: materialized.threadId,
+        }))?.prAutoDispatchEnabled,
+      ).toBe(true);
     } finally {
       await registry.close();
     }
@@ -10519,6 +10646,7 @@ command = "pnpm grok"
       reasoningEffort: "high",
       serviceTier: "priority",
       fastMode: true,
+      prAutoDispatchEnabled: true,
     });
 
     await registry.close();
@@ -24744,6 +24872,7 @@ script = "printf setup"
       sendPendingNow: vi.fn(async () => false),
       inspect: vi.fn(async () => ({
         backgroundPollingEnabled: true,
+        autoFixAllowed: true,
         autoFixEnabled: true,
         autoFixActive: true,
         guidance: "End the turn and let PwrAgent watch CI.",
@@ -24784,6 +24913,7 @@ script = "printf setup"
       status: "idle",
       prAutomation: {
         backgroundPollingEnabled: true,
+        autoFixAllowed: true,
         autoFixEnabled: true,
         autoFixActive: true,
       },
@@ -26064,6 +26194,7 @@ script = "printf setup"
           directoryPaths: args.directoryPaths ?? ["/repo"],
           prAutomation: {
             backgroundPollingEnabled: true,
+            autoFixAllowed: true,
             autoFixEnabled: true,
             autoFixActive: true,
             guidance: "End the turn and let PwrAgent watch the PR.",
@@ -26152,6 +26283,7 @@ script = "printf setup"
           directoryPaths: args.directoryPaths ?? [],
           prAutomation: {
             backgroundPollingEnabled: true,
+            autoFixAllowed: true,
             autoFixEnabled: false,
             autoFixActive: false,
             guidance: "Use a one-shot PR watch.",
@@ -26227,6 +26359,7 @@ script = "printf setup"
           coveredByAutoFix: ["failure" as const],
           prAutomation: {
             backgroundPollingEnabled: true,
+            autoFixAllowed: true,
             autoFixEnabled: true,
             autoFixActive: true,
             guidance: "End the turn.",

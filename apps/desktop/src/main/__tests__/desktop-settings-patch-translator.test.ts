@@ -219,6 +219,28 @@ describe("desktopSettingsPatchToEdits — Git", () => {
     ]);
   });
 
+  it("writes the GitHub PR automation controls", () => {
+    expect(
+      desktopSettingsPatchToEdits({
+        git: {
+          prAutoDispatchAllowed: false,
+          defaultPrAutoDispatchEnabled: false,
+        },
+      }),
+    ).toEqual([
+      {
+        op: "set",
+        path: ["git", "pr_auto_dispatch_allowed"],
+        value: false,
+      },
+      {
+        op: "set",
+        path: ["git", "default_pr_auto_dispatch_enabled"],
+        value: false,
+      },
+    ]);
+  });
+
   it("preserves and mirrors a recognized experimental polling key", () => {
     const edits = desktopSettingsPatchToEdits(
       {

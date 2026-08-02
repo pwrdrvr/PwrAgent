@@ -37,6 +37,8 @@ import {
   type CancelThreadPrAutoDispatchRequest,
   type SendThreadPrAutoDispatchNowRequest,
   type SetThreadPrAutoDispatchRequest,
+  type SetEligibleThreadsPrAutoDispatchRequest,
+  type SetEligibleThreadsPrAutoDispatchResponse,
   type ThreadSearchRequest,
   type ThreadSearchResponse,
   type PersistThreadUsageActivityRequest,
@@ -128,6 +130,7 @@ import {
 } from "@pwragent/shared";
 import {
   DEFAULT_BACKGROUND_PR_POLLING,
+  DEFAULT_PR_AUTO_DISPATCH_ALLOWED,
   DEFAULT_PULL_REQUEST_PROVIDER,
   buildPullRequestStatusKey,
   buildThreadIdentityKey,
@@ -186,6 +189,7 @@ import {
   NAVIGATION_SET_THREAD_AGENT_CHANNEL,
   NAVIGATION_SET_THREAD_PIN_CHANNEL,
   NAVIGATION_SET_THREAD_REACTION_CHANNEL,
+  NAVIGATION_SET_ELIGIBLE_THREADS_PR_AUTO_DISPATCH_CHANNEL,
   NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL,
   NAVIGATION_LIST_RECENT_FILE_REFERENCES_CHANNEL,
   NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL,
@@ -925,6 +929,7 @@ class DesktopAppServerService {
   private prGraphqlClient: GithubGraphqlPrClient | undefined;
   private prPollingScheduler: PrPollingScheduler | undefined;
   private backgroundPrPollingEnabled = false;
+  private prAutoDispatchAllowed = false;
   private prAutoDispatchCoordinator: PrAutoDispatchCoordinator | undefined;
   private prStatusWatchCoordinator: PrStatusWatchCoordinator | undefined;
   /** Visible thread→PR attachments plus the primary workspace's repository. */
@@ -949,6 +954,8 @@ class DesktopAppServerService {
   private readonly prDiscoveryLastRefreshedAt = new Map<string, number>();
   /** Set once we subscribe to settings writes for live flag re-sync. */
   private prPollingSettingsUnsubscribe: (() => void) | undefined;
+  /** Monotonically increases so an older settings read cannot overwrite a newer one. */
+  private prPollingSettingsSyncGeneration = 0;
   /**
    * Threads the operator currently has selected / on screen, pushed from the
    * renderer. Drives the poller's fast tier — main cannot infer selection.
@@ -2757,7 +2764,7 @@ class DesktopAppServerService {
     const waitingForPr = hasPrimaryRepo && primaryPrs.length === 0;
     const autoFixActive =
       autoFixEnabled
-      && this.backgroundPrPollingEnabled
+      && this.isPrAutoDispatchAvailable()
       && (waitingForPr || ownsAttachedPr);
     const watches = await this.getOverlayStore().listActiveThreadPrStatusWatches(
       params,
@@ -2768,15 +2775,20 @@ class DesktopAppServerService {
       ? "Auto-fix PR is active. Do not poll CI and do not create a monitor thread for this PR. End the turn; PwrAgent will start a repair turn on a CI failure or merge conflict. Use watch_thread_pull_request before ending when the thread should also wake on successful completion."
       : autoFixEnabled
         ? this.backgroundPrPollingEnabled
-          ? hasPrimaryRepo
-            ? "Auto-fix PR is enabled, but an older eligible thread owns monitoring for this PR. Do not poll CI or create another monitor; the elected thread receives the PR event."
-            : "Auto-fix PR is enabled, but this thread has no GitHub primary workspace. PwrAgent cannot monitor PR automation for it; check the PR directly until the thread is attached to a Git workspace."
+          ? this.prAutoDispatchAllowed
+            ? hasPrimaryRepo
+              ? "Auto-fix PR is enabled, but an older eligible thread owns monitoring for this PR. Do not poll CI or create another monitor; the elected thread receives the PR event."
+              : "Auto-fix PR is enabled, but this thread has no GitHub primary workspace. PwrAgent cannot monitor PR automation for it; check the PR directly until the thread is attached to a Git workspace."
+            : "Auto-fix PR is saved but disabled globally in Git settings. Do not assume PwrAgent will wake this thread until automatic PR repair is allowed again."
           : "Auto-fix PR is saved but paused because background PR polling is off. Do not assume PwrAgent will wake this thread until polling is enabled."
         : this.backgroundPrPollingEnabled
-          ? "Background PR polling is active, but Auto-fix PR is off for this thread. Use watch_thread_pull_request for a bounded one-shot success/failure notification instead of polling or creating a monitor thread."
+          ? this.prAutoDispatchAllowed
+            ? "Background PR polling is active, but Auto-fix PR is off for this thread. Use watch_thread_pull_request for a bounded one-shot success/failure notification instead of polling or creating a monitor thread."
+            : "Background PR polling is active, but automatic PR repair is disabled globally in Git settings. Use watch_thread_pull_request for a bounded one-shot success/failure notification instead of polling or creating a monitor thread."
           : "Background PR polling and Auto-fix PR are off. PwrAgent will not wake this thread for PR status changes.";
     return {
       backgroundPollingEnabled: this.backgroundPrPollingEnabled,
+      autoFixAllowed: this.prAutoDispatchAllowed,
       autoFixEnabled,
       autoFixActive,
       ...(overlay?.prAutoDispatchPending
@@ -3624,11 +3636,14 @@ class DesktopAppServerService {
     }
   }
 
-  /** Resolve only visible attachments; detached lookup history never qualifies. */
+  /** Resolve only primary visible attachments; detached and informational links never qualify. */
   private findThreadKeysForPrKey(prKey: string): string[] {
     const threadKeys: string[] = [];
     for (const [threadKey, attachment] of this.attachedPrsByThreadKey) {
-      if (attachment.prs.some((pr) => getPrStatusKey(pr) === prKey)) {
+      if (attachment.prs.some((pr) =>
+        getPrStatusKey(pr) === prKey
+        && pullRequestMatchesRepositoryKey(pr, attachment.primaryRepoKey)
+      )) {
         threadKeys.push(threadKey);
       }
     }
@@ -3828,20 +3843,15 @@ class DesktopAppServerService {
   }
 
   /**
-   * Start or stop the background poller to match the experimental setting.
-   *
-   * Called on every navigation snapshot, so toggling the setting takes effect
-   * without an app restart. With the flag off nothing is scheduled and PR chips
-   * behave exactly as they did before the poller existed.
-   */
-  /**
-   * Start or stop the background PR poller to match the experimental flag.
-   * Public + idempotent: called on every navigation snapshot AND the moment the
-   * setting is written, so toggling takes effect without a restart.
+   * Start or stop background PR polling and automatic repair dispatch to match
+   * the Git settings. Public + idempotent: called on every navigation snapshot
+   * and after every settings write, so both gates take effect without a restart.
    */
   syncPrPollingSchedulerState(): void {
+    const settingsSyncGeneration = ++this.prPollingSettingsSyncGeneration;
     void (async () => {
-      let enabled = DEFAULT_BACKGROUND_PR_POLLING;
+      let backgroundPollingEnabled = DEFAULT_BACKGROUND_PR_POLLING;
+      let prAutoDispatchAllowed = DEFAULT_PR_AUTO_DISPATCH_ALLOWED;
       try {
         const settingsService = getDesktopSettingsService();
         // Subscribe lazily on the first sync (which the first navigation
@@ -3852,30 +3862,46 @@ class DesktopAppServerService {
           this.prPollingSettingsUnsubscribe = settingsService.onConfigWritten(
             () => {
               // Pause dispatch pessimistically while the new snapshot is read.
-              // This closes the settings-write race for the global kill switch.
+              // This closes settings-write races for both global kill switches.
               this.backgroundPrPollingEnabled = false;
+              this.prAutoDispatchAllowed = false;
+              this.prAutoDispatchCoordinator?.pause();
               this.syncPrPollingSchedulerState();
             },
           );
         }
         const settings = await settingsService.readSettings();
-        enabled = settings.git.backgroundPrPolling.value;
+        backgroundPollingEnabled = settings.git.backgroundPrPolling.value;
+        prAutoDispatchAllowed = settings.git.prAutoDispatchAllowed.value;
       } catch (error) {
-        appServerLog.warn("failed to read background PR polling setting", {
+        appServerLog.warn("failed to read GitHub PR automation settings", {
           error: error instanceof Error ? error.message : String(error),
         });
       }
 
-      this.backgroundPrPollingEnabled = enabled;
+      if (settingsSyncGeneration !== this.prPollingSettingsSyncGeneration) {
+        return;
+      }
 
-      if (!enabled) {
+      this.backgroundPrPollingEnabled = backgroundPollingEnabled;
+      this.prAutoDispatchAllowed = prAutoDispatchAllowed;
+
+      if (!backgroundPollingEnabled) {
         this.prAutoDispatchCoordinator?.pause();
         this.stopPrPollingScheduler();
         return;
       }
       this.ensurePrPollingSchedulerStarted();
+      if (!this.isPrAutoDispatchAvailable()) {
+        this.prAutoDispatchCoordinator?.pause();
+        return;
+      }
       void this.getPrAutoDispatchCoordinator().resume();
     })();
+  }
+
+  private isPrAutoDispatchAvailable(): boolean {
+    return this.backgroundPrPollingEnabled && this.prAutoDispatchAllowed;
   }
 
   private stopPrPollingScheduler(): void {
@@ -4124,7 +4150,9 @@ class DesktopAppServerService {
     this.prPollBackendByKey.clear();
 
     for (const [threadKey, attachment] of this.attachedPrsByThreadKey) {
-      for (const pr of attachment.prs) {
+      for (const pr of attachment.prs.filter((candidate) =>
+        pullRequestMatchesRepositoryKey(candidate, attachment.primaryRepoKey)
+      )) {
         const prKey = getPrStatusKey(pr);
         const latest = this.prStatusRegistry.get(prKey)?.pr ?? pr;
         if (isTerminalPullRequest(latest)) continue;
@@ -4160,7 +4188,7 @@ class DesktopAppServerService {
             pr,
             threadKeys,
             observedAt,
-            backgroundPollingEnabled: this.backgroundPrPollingEnabled,
+            backgroundPollingEnabled: this.isPrAutoDispatchAvailable(),
             operatorInitiated,
           })
         : [];
@@ -4191,49 +4219,85 @@ class DesktopAppServerService {
   async handleThreadPrAutoDispatchPreference(
     request: SetThreadPrAutoDispatchRequest,
   ): Promise<void> {
-    const coordinator = this.getPrAutoDispatchCoordinator();
-    if (!request.enabled) {
-      const attachment = this.attachedPrsByThreadKey.get(
-        buildThreadIdentityKey(request.backend, request.threadId),
-      );
-      const previouslyEligiblePrs = (attachment?.prs ?? []).filter((pr) =>
-        pullRequestMatchesRepositoryKey(pr, attachment?.primaryRepoKey),
-      );
-      await coordinator.cancelAllPendingForThread(request);
-      await this.syncThreadPrAutoDispatchCandidates(request);
-      if (this.backgroundPrPollingEnabled && previouslyEligiblePrs.length > 0) {
-        await this.handlePrAutoDispatchSnapshots(
-          previouslyEligiblePrs,
-          this.nextPrObservationTimestamp(),
-          true,
-        );
-      }
+    await this.handleThreadPrAutoDispatchPreferences([request]);
+  }
+
+  /**
+   * Coalesce an operator's bulk preference change before reading provider
+   * state. Several threads can attach the same PR; evaluating the final
+   * candidate set once keeps the first eligible thread authoritative and
+   * avoids a GraphQL request per thread.
+   */
+  async handleThreadPrAutoDispatchPreferences(
+    requests: SetThreadPrAutoDispatchRequest[],
+  ): Promise<void> {
+    if (requests.length === 0) {
       return;
     }
 
-    const overlay = await this.getOverlayStore().getThreadOverlayState(request);
-    const prs = this.canonicalizePrs(overlay?.prs ?? []);
-    await this.rememberThreadPrAttachmentUpdate({ ...request, prs });
-    await coordinator.resetForOperator(request);
-    if (!this.backgroundPrPollingEnabled) return;
-    const primaryPrs = this.primaryAttachedPrsForThread({ ...request, prs });
+    const coordinator = this.getPrAutoDispatchCoordinator();
+    const disabledRequests = requests.filter((request) => !request.enabled);
+    const enabledRequests = requests.filter((request) => request.enabled);
+
+    const previouslyEligiblePrs: PrSummary[] = [];
+    for (const request of disabledRequests) {
+      const attachment = this.attachedPrsByThreadKey.get(
+        buildThreadIdentityKey(request.backend, request.threadId),
+      );
+      previouslyEligiblePrs.push(
+        ...(attachment?.prs ?? []).filter((pr) =>
+          pullRequestMatchesRepositoryKey(pr, attachment?.primaryRepoKey),
+        ),
+      );
+      await coordinator.cancelAllPendingForThread(request);
+      await this.syncThreadPrAutoDispatchCandidates(request);
+    }
+    if (this.isPrAutoDispatchAvailable() && previouslyEligiblePrs.length > 0) {
+      await this.handlePrAutoDispatchSnapshots(
+        dedupePrsByStatusKey(previouslyEligiblePrs),
+        this.nextPrObservationTimestamp(),
+        true,
+      );
+    }
+
+    if (enabledRequests.length === 0) {
+      return;
+    }
+
+    const primaryPrs: PrSummary[] = [];
+    for (const request of enabledRequests) {
+      const overlay = await this.getOverlayStore().getThreadOverlayState(request);
+      const prs = this.canonicalizePrs(overlay?.prs ?? []);
+      await this.rememberThreadPrAttachmentUpdate({ ...request, prs });
+      await coordinator.resetForOperator(request);
+      primaryPrs.push(...this.primaryAttachedPrsForThread({ ...request, prs }));
+    }
+    if (!this.isPrAutoDispatchAvailable()) {
+      return;
+    }
+
+    const uniquePrimaryPrs = dedupePrsByStatusKey(primaryPrs);
     await this.handlePrAutoDispatchSnapshots(
-      primaryPrs,
+      uniquePrimaryPrs,
       this.nextPrObservationTimestamp(),
       true,
     );
 
     const refs = [
       ...new Map(
-        primaryPrs.flatMap((pr) => {
+        uniquePrimaryPrs.flatMap((pr) => {
           const ref = parsePrRefFromUrl(pr.url);
           return ref ? [[`${ref.owner}/${ref.repo}#${ref.number}`, ref] as const] : [];
         }),
       ).values(),
     ];
-    if (refs.length === 0) return;
+    if (refs.length === 0) {
+      return;
+    }
     const refreshed = await this.getPrGraphqlClient().fetchPullRequests(refs);
-    if (refreshed.length === 0) return;
+    if (refreshed.length === 0) {
+      return;
+    }
     const fetchedAt = this.nextPrObservationTimestamp();
     const changed = this.rememberPrStatuses(
       refreshed,
@@ -4242,7 +4306,7 @@ class DesktopAppServerService {
     );
     await this.writePrStatusesToCache(refreshed, fetchedAt);
     await this.publishPullRequestStatusUpdates({
-      backend: request.backend,
+      backend: enabledRequests[0]!.backend,
       prs: changed,
     });
     await this.handlePrAutoDispatchSnapshots(
@@ -4250,6 +4314,50 @@ class DesktopAppServerService {
       fetchedAt,
       true,
     );
+  }
+
+  /**
+   * The Settings bulk action refreshes the complete attachment view before it
+   * decides which saved preferences to change. Detached and informational PR
+   * links are never eligible because primary-workspace matching happens here
+   * in the main process.
+   */
+  async setEligibleThreadsPrAutoDispatch(
+    request: SetEligibleThreadsPrAutoDispatchRequest,
+  ): Promise<SetEligibleThreadsPrAutoDispatchResponse> {
+    const snapshot = await this.getNavigationSnapshot({
+      backend: "all",
+      refreshMode: "full",
+    });
+    const eligibleThreads = snapshot.threads.filter((thread) => {
+      const attachment = this.attachedPrsByThreadKey.get(
+        buildThreadIdentityKey(thread.source, thread.id),
+      );
+      return Boolean(
+        attachment?.primaryRepoKey
+        && attachment.prs.some((pr) =>
+          pullRequestMatchesRepositoryKey(pr, attachment.primaryRepoKey)
+          && !isTerminalPullRequest(pr)
+        ),
+      );
+    });
+    const updates = eligibleThreads
+      .filter((thread) => thread.prAutoDispatchEnabled !== request.enabled)
+      .map((thread) => ({
+        backend: thread.source,
+        threadId: thread.id,
+        enabled: request.enabled,
+      }));
+
+    if (!request.dryRun && updates.length > 0) {
+      await getDesktopBackendRegistry().setThreadPrAutoDispatchBatch(updates);
+    }
+
+    return {
+      enabled: request.enabled,
+      eligibleThreadCount: eligibleThreads.length,
+      updatedThreadCount: updates.length,
+    };
   }
 
   async cancelThreadPrAutoDispatch(
@@ -5059,7 +5167,9 @@ class DesktopAppServerService {
     this.prFetcher = undefined;
     this.prPollingScheduler?.stop();
     this.prPollingScheduler = undefined;
+    this.prPollingSettingsSyncGeneration += 1;
     this.backgroundPrPollingEnabled = false;
+    this.prAutoDispatchAllowed = false;
     if (this.prDiscoveryTimer) {
       clearInterval(this.prDiscoveryTimer);
       this.prDiscoveryTimer = undefined;
@@ -5124,7 +5234,7 @@ class DesktopAppServerService {
       this.prAutoDispatchCoordinator = new PrAutoDispatchCoordinator({
         store: this.getOverlayStore(),
         registry: getDesktopBackendRegistry(),
-        isBackgroundPollingEnabled: () => this.backgroundPrPollingEnabled,
+        isBackgroundPollingEnabled: () => this.isPrAutoDispatchAvailable(),
         getCurrentPr: (prKey) => this.prStatusRegistry.get(prKey)?.pr,
         refreshPendingPrs: async (pending) =>
           await this.refreshPendingPrAutoDispatches(pending),
@@ -5347,6 +5457,8 @@ export function registerAppServerIpcHandlers(): void {
   getDesktopBackendRegistry().setThreadPrAutoDispatchHandler({
     preferenceChanged: async (request) =>
       await appServerService.handleThreadPrAutoDispatchPreference(request),
+    preferencesChanged: async (requests) =>
+      await appServerService.handleThreadPrAutoDispatchPreferences(requests),
     cancelPending: async (request) =>
       await appServerService.cancelThreadPrAutoDispatch(request),
     sendPendingNow: async (request) =>
@@ -5792,6 +5904,16 @@ export function registerAppServerIpcHandlers(): void {
       return await appServerService.updateDirectoryLaunchpad(request);
     },
   );
+  ipcMain.removeHandler(NAVIGATION_SET_ELIGIBLE_THREADS_PR_AUTO_DISPATCH_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_SET_ELIGIBLE_THREADS_PR_AUTO_DISPATCH_CHANNEL,
+    async (
+      _event,
+      request: SetEligibleThreadsPrAutoDispatchRequest,
+    ): Promise<SetEligibleThreadsPrAutoDispatchResponse> => {
+      return await appServerService.setEligibleThreadsPrAutoDispatch(request);
+    },
+  );
   ipcMain.removeHandler(NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL);
   ipcMain.handle(
     NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
@@ -5916,6 +6038,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(NAVIGATION_GET_GH_STATUS_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_SET_ELIGIBLE_THREADS_PR_AUTO_DISPATCH_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL);

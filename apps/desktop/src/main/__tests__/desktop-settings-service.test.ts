@@ -1886,6 +1886,48 @@ describe("DesktopSettingsService", () => {
     expect(contents).not.toContain("[experimental]");
   });
 
+  it("defaults GitHub PR automation to on and persists its global choices", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    const initial = await service.readSettings();
+    expect(initial.git.prAutoDispatchAllowed).toEqual({
+      value: true,
+      source: "default",
+    });
+    expect(initial.git.defaultPrAutoDispatchEnabled).toEqual({
+      value: true,
+      source: "default",
+    });
+    expect(service.resolveDefaultPrAutoDispatchEnabled()).toBe(true);
+
+    await service.writeConfigPatch({
+      git: {
+        prAutoDispatchAllowed: false,
+        defaultPrAutoDispatchEnabled: false,
+      },
+    });
+
+    const updated = await service.readSettings();
+    expect(updated.git.prAutoDispatchAllowed).toEqual({
+      value: false,
+      source: "config",
+    });
+    expect(updated.git.defaultPrAutoDispatchEnabled).toEqual({
+      value: false,
+      source: "config",
+    });
+    expect(service.resolveDefaultPrAutoDispatchEnabled()).toBe(false);
+    const contents = fs.readFileSync(configPath, "utf8");
+    expect(contents).toContain("pr_auto_dispatch_allowed = false");
+    expect(contents).toContain("default_pr_auto_dispatch_enabled = false");
+  });
+
   it("reads the canonical Git background PR polling key", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");

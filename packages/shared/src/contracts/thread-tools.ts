@@ -218,6 +218,8 @@ export type CheckThreadPullRequestStatusResult =
 
 export type ThreadPullRequestAutomationStatus = {
   backgroundPollingEnabled: boolean;
+  /** Global Git setting that permits automatic PR repair turns. */
+  autoFixAllowed: boolean;
   autoFixEnabled: boolean;
   autoFixActive: boolean;
   autoFixPending?: ThreadPrAutoDispatchPending;

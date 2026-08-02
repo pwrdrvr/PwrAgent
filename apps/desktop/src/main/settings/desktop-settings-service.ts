@@ -31,6 +31,8 @@ import type {
 import { execFile } from "node:child_process";
 import {
   DEFAULT_BACKGROUND_PR_POLLING,
+  DEFAULT_PR_AUTO_DISPATCH_ALLOWED,
+  DEFAULT_PR_AUTO_DISPATCH_ENABLED_FOR_NEW_THREADS,
   DESKTOP_APPEARANCE_DENSITY_DEFAULT,
   DESKTOP_APPEARANCE_THEME_DEFAULT,
   DESKTOP_CHAT_REPLY_COMPOSER_DEFAULT,
@@ -1014,6 +1016,14 @@ export class DesktopSettingsService {
           config.git?.backgroundPrPolling,
           DEFAULT_BACKGROUND_PR_POLLING,
         ),
+        prAutoDispatchAllowed: this.resolveConfigBoolean(
+          config.git?.prAutoDispatchAllowed,
+          DEFAULT_PR_AUTO_DISPATCH_ALLOWED,
+        ),
+        defaultPrAutoDispatchEnabled: this.resolveConfigBoolean(
+          config.git?.defaultPrAutoDispatchEnabled,
+          DEFAULT_PR_AUTO_DISPATCH_ENABLED_FOR_NEW_THREADS,
+        ),
       },
       worktrees: this.resolveWorktrees(config.worktrees?.storage),
     };
@@ -1150,6 +1160,13 @@ export class DesktopSettingsService {
     return this.resolveConfigBoolean(
       this.readConfig().config.experimental?.managedReview,
       false,
+    ).value;
+  }
+
+  resolveDefaultPrAutoDispatchEnabled(): boolean {
+    return this.resolveConfigBoolean(
+      this.readConfig().config.git?.defaultPrAutoDispatchEnabled,
+      DEFAULT_PR_AUTO_DISPATCH_ENABLED_FOR_NEW_THREADS,
     ).value;
   }
 
