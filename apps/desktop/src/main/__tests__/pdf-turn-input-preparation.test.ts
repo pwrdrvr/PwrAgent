@@ -56,6 +56,9 @@ describe("preparePdfTurnInput", () => {
         text: expect.stringContaining("inspect_messaging_pdfs"),
       },
     ]);
+    expect(prepared.input).not.toContainEqual(
+      expect.objectContaining({ type: "localFile", path: pdfPath }),
+    );
     expect(prepared.pdfAttachments).toEqual([
       expect.objectContaining({
         attachmentId: "jeep-pdf",

@@ -8,6 +8,7 @@ import {
   applyNavigationLaunchpadProviderSettingsPatch,
   buildNavigationSnapshot,
   buildThreadIdentityKey,
+  PWRAGENT_MESSAGING_PDF_TOOL_CATALOG_VERSION,
 } from "@pwragent/shared";
 import type {
   AcpBackendId,
@@ -7057,6 +7058,55 @@ script = "echo setup"
     ).resolves.toBe(false);
 
     await registry.close();
+  });
+
+  it("uses model-directed PDF preparation for an extensionless Composer reference", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-registry-pdf-"));
+    const pdfPath = path.join(root, "Jeep");
+    await writeFile(pdfPath, "%PDF-1.7\n");
+    const codexClient = new MockBackendClient({ threads: [] });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:thread-1": {
+            backend: "codex",
+            threadId: "thread-1",
+            executionMode: "default",
+            extraLinkedDirectories: [],
+            messagingPdfToolCatalogVersion:
+              PWRAGENT_MESSAGING_PDF_TOOL_CATALOG_VERSION,
+          },
+        },
+      }),
+      resolvePdfAnalysisEnabled: () => true,
+    });
+
+    try {
+      await registry.startTurn({
+        backend: "codex",
+        threadId: "thread-1",
+        input: [
+          { type: "text", text: "Compare [@Jeep](~/Downloads/Jeep)" },
+          { type: "localFile", name: "Jeep", path: pdfPath },
+        ],
+      });
+
+      expect(codexClient.lastStartTurnParams?.input).toEqual([
+        { type: "text", text: "Compare [@Jeep](~/Downloads/Jeep)" },
+        {
+          type: "text",
+          text: expect.stringContaining("inspect_messaging_pdfs"),
+        },
+      ]);
+      expect(codexClient.lastStartTurnParams?.input).not.toContainEqual(
+        expect.objectContaining({ type: "localFile", path: pdfPath }),
+      );
+    } finally {
+      await registry.close();
+      await rm(root, { force: true, recursive: true });
+    }
   });
 
   it("passes Agent dynamic tools when starting Agent Codex threads", async () => {

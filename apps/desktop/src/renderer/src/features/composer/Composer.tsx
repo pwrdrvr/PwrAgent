@@ -4,6 +4,7 @@ import {
   type DragEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type Ref,
+  useCallback,
   useEffect,
   useId,
   useLayoutEffect,
@@ -329,6 +330,25 @@ type ComposerImageAttachment = NavigationLaunchpadImageAttachment;
 
 type ComposerFileAttachment = NavigationLaunchpadFileAttachment;
 
+type ComposerReferenceInspection = {
+  filePaths: string[];
+  pdfPaths: string[];
+};
+
+type ComposerReferencePathInspection = {
+  isFile: boolean;
+  isPdf: boolean;
+};
+
+const EMPTY_COMPOSER_REFERENCE_INSPECTION: ComposerReferenceInspection = {
+  filePaths: [],
+  pdfPaths: [],
+};
+
+function isPromiseLike<T>(value: T | Promise<T>): value is Promise<T> {
+  return value instanceof Promise;
+}
+
 /**
  * Maximum number of image attachments allowed on a single message. No
  * provider currently advertises its own per-message image limit, so this is
@@ -386,6 +406,12 @@ type QueuedTurnDraft = {
 
 type PendingSteerDraft = QueuedTurnDraft & {
   status: "pending" | "steering";
+};
+
+type ComposerTurnPayload = {
+  displayText: string;
+  imageParts: AppServerThreadImagePart[];
+  input: AppServerTurnInputItem[];
 };
 
 type DeletedSkillTokenHistoryEntry = {
@@ -1334,19 +1360,57 @@ function appendFileReferenceMarkdown(
 }
 
 /**
+ * Paths carried by an explicit Composer reference. We intentionally do not
+ * scan arbitrary text for filesystem-looking values: a tray attachment or an
+ * `@` reference token is the user action that authorizes local inspection.
+ */
+function listExplicitComposerReferencePaths(
+  fileRefs: ComposerFileAttachment[],
+  skillTokens: ComposerSkillToken[],
+): string[] {
+  const paths = new Set<string>();
+  const add = (rawPath: string | undefined): void => {
+    const filePath = rawPath?.trim();
+    if (
+      filePath
+      && (
+        filePath.startsWith("/")
+        || filePath.startsWith("\\\\")
+        || /^[A-Za-z]:[\\/]/u.test(filePath)
+      )
+    ) {
+      paths.add(filePath);
+    }
+  };
+
+  for (const fileRef of fileRefs) {
+    add(fileRef.path);
+  }
+  for (const token of skillTokens) {
+    if (token.kind === "file" || token.kind === "directory") {
+      add(token.path);
+    }
+  }
+  return [...paths].sort();
+}
+
+/**
  * Keep the normal markdown reference visible in the transcript, while also
  * preserving the explicit user selection for main-process document handling.
- * Do not derive these from free-form draft text: only the file tray and `@`
- * file tokens grant PwrAgent permission to inspect a local path.
+ * File-tray entries and file chips are known local files; a hydrated generic
+ * `@` chip joins them only after the bounded main-process inspection confirms
+ * it is a regular file.
  */
 function buildLocalFileInputs(
   fileRefs: ComposerFileAttachment[],
   skillTokens: ComposerSkillToken[],
+  inspectedFilePaths: Iterable<string> = [],
 ): Extract<AppServerTurnInputItem, { type: "localFile" }>[] {
   const inputsByPath = new Map<
     string,
     Extract<AppServerTurnInputItem, { type: "localFile" }>
   >();
+  const inspectedPaths = new Set(inspectedFilePaths);
   const add = (name: string | undefined, rawPath: string | undefined): void => {
     const filePath = rawPath?.trim();
     if (!filePath || inputsByPath.has(filePath)) {
@@ -1364,11 +1428,42 @@ function buildLocalFileInputs(
     add(fileRef.label, fileRef.path);
   }
   for (const token of skillTokens) {
-    if (token.kind === "file") {
+    if (
+      token.kind === "file"
+      || (token.kind === "directory" && inspectedPaths.has(token.path ?? ""))
+    ) {
       add(token.name, token.path);
     }
   }
   return [...inputsByPath.values()];
+}
+
+function mergeDerivedLocalFileInputs(
+  existingInput: AppServerTurnInputItem[] | undefined,
+  derivedInput: AppServerTurnInputItem[],
+): AppServerTurnInputItem[] {
+  if (!existingInput?.length) {
+    return derivedInput;
+  }
+
+  const localFilePaths = new Set<string>();
+  const merged = existingInput.filter((item) => {
+    if (item.type !== "localFile") {
+      return true;
+    }
+    if (localFilePaths.has(item.path)) {
+      return false;
+    }
+    localFilePaths.add(item.path);
+    return true;
+  });
+  for (const item of derivedInput) {
+    if (item.type === "localFile" && !localFilePaths.has(item.path)) {
+      localFilePaths.add(item.path);
+      merged.push(item);
+    }
+  }
+  return merged;
 }
 
 function getComposerSkillTokensSignature(skillTokens: ComposerSkillToken[]): string {
@@ -1454,9 +1549,10 @@ function hydrateComposerDraft(
         // Serialized paths are percent-encoded tilde form; the token
         // carries the decoded absolute path so send-time attach can use
         // it directly. File-reference chips serialize to the same
-        // `[@label](~/path)` form, so a restored file chip degrades to a
-        // directory-kind chip here — acceptable: the outgoing text is
-        // identical either way.
+        // `[@label](~/path)` form, so restored Markdown starts as a
+        // generic reference chip. The bounded main-process inspection
+        // upgrades regular files to `kind: "file"` without ever scanning
+        // free-form typed paths.
         skillTokens.push(
           createComposerDirectoryToken(
             {
@@ -2513,6 +2609,9 @@ export function Composer(props: ComposerProps) {
   const latestLaunchpadRef =
     useRef<NavigationLaunchpadDraft | undefined>(props.launchpad);
   latestLaunchpadRef.current = props.launchpad;
+  const desktopApiRef = useRef(props.desktopApi);
+  desktopApiRef.current = props.desktopApi;
+  const referenceInspector = props.desktopApi?.inspectPdfReferencePaths;
   const pendingProgrammaticComposerChangeRef =
     useRef<PendingProgrammaticComposerChange | undefined>(undefined);
   const composerScopeKey = props.launchpad
@@ -2643,6 +2742,9 @@ export function Composer(props: ComposerProps) {
     savedInitialQueuedTurns ?? []
   );
   const queuedAutoReleaseAttemptIdRef = useRef<string | undefined>(undefined);
+  const queueCurrentDraftInFlightRef = useRef(false);
+  const pendingSteerCreationInFlightRef = useRef(false);
+  const turnPayloadPreparationInFlightRef = useRef(false);
   const serverQueuedTurnEntryIdsRef = useRef(new Map<string, string>());
   const [serverQueuedTurnEntryId, setServerQueuedTurnEntryIdState] =
     useState<string>();
@@ -2705,7 +2807,12 @@ export function Composer(props: ComposerProps) {
   const [skillTokens, setSkillTokens] = useState<ComposerSkillToken[]>(
     latestDraftSnapshotRef.current.snapshot.skillTokens
   );
-  const [pdfReferencePaths, setPdfReferencePaths] = useState<string[]>([]);
+  const referenceInspectionCacheRef = useRef(
+    new Map<string, ComposerReferencePathInspection>(),
+  );
+  const referenceInspectionInFlightRef = useRef(new Map<string, Promise<void>>());
+  const [inspectedPdfReferencePaths, setInspectedPdfReferencePaths] =
+    useState<string[]>([]);
   const [composerSelectionRequest, setComposerSelectionRequest] = useState<{
     id: string;
     index: number;
@@ -2827,47 +2934,164 @@ export function Composer(props: ComposerProps) {
     () => serializeDraftWithSkillTokens(draft, skillTokens),
     [draft, skillTokens]
   );
-  const explicitFileReferencePaths = useMemo(
+  const canonicalReferenceTokens = useMemo(
+    () => hydrateComposerDraft(canonicalDraft, props.skills, threadLinks).skillTokens,
+    [canonicalDraft, props.skills, threadLinks],
+  );
+  const explicitReferencePaths = useMemo(
     () =>
-      buildLocalFileInputs(fileAttachments, skillTokens)
-        .map((input) => input.path)
-        .sort(),
-    [fileAttachments, skillTokens],
+      listExplicitComposerReferencePaths(fileAttachments, [
+        ...skillTokens,
+        ...canonicalReferenceTokens,
+      ]),
+    [canonicalReferenceTokens, fileAttachments, skillTokens],
+  );
+  const explicitReferencePathsKey = explicitReferencePaths.join("\u0000");
+  const explicitReferenceTokenKey = useMemo(
+    () =>
+      [...skillTokens, ...canonicalReferenceTokens]
+        .filter(
+          (token) => token.kind === "file" || token.kind === "directory",
+        )
+        .map(
+          (token) =>
+            [token.kind, token.name, token.path ?? ""].join("\u0001"),
+        )
+        .sort()
+        .join("\u0000"),
+    [canonicalReferenceTokens, skillTokens],
+  );
+  const explicitReferencePathsRef = useRef(explicitReferencePaths);
+  explicitReferencePathsRef.current = explicitReferencePaths;
+  // Only the main-process magic-byte check identifies a PDF. In particular,
+  // a regular file named `.pdf` must not opt into PDF preparation by suffix.
+  const pdfReferencePaths = inspectedPdfReferencePaths;
+  const inspectExplicitReferencePaths = useCallback(
+    (
+      paths: string[],
+    ): ComposerReferenceInspection | Promise<ComposerReferenceInspection> => {
+      const candidates = [...new Set(
+        paths
+          .map((path) => path.trim())
+          .filter(Boolean),
+      )].sort();
+      if (candidates.length === 0) {
+        return EMPTY_COMPOSER_REFERENCE_INSPECTION;
+      }
+
+      const cache = referenceInspectionCacheRef.current;
+      const inFlight = referenceInspectionInFlightRef.current;
+      const inspector = desktopApiRef.current?.inspectPdfReferencePaths;
+      const pathsToInspect: string[] = [];
+      for (const candidate of candidates) {
+        if (!cache.has(candidate) && !inFlight.has(candidate)) {
+          pathsToInspect.push(candidate);
+        }
+      }
+
+      if (inspector && pathsToInspect.length > 0) {
+        const requestedPaths = [...pathsToInspect];
+        const requestedPathSet = new Set(requestedPaths);
+        const inspection = Promise.resolve()
+          .then(async () => await inspector({ paths: requestedPaths }))
+          .then((response) => {
+            // `pdfPaths` is necessarily a file subset. Accepting it here also
+            // keeps a renderer/main pair from adjacent app builds graceful
+            // while the richer `filePaths` response rolls out.
+            const returnedFilePaths = new Set(
+              [
+                ...(response.filePaths ?? []),
+                ...response.pdfPaths,
+              ].filter((path) => requestedPathSet.has(path)),
+            );
+            const returnedPdfPaths = new Set(
+              response.pdfPaths.filter((path) => requestedPathSet.has(path)),
+            );
+            for (const path of requestedPaths) {
+              cache.set(path, {
+                isFile: returnedFilePaths.has(path),
+                isPdf: returnedPdfPaths.has(path),
+              });
+            }
+          })
+          .catch(() => {
+            for (const path of requestedPaths) {
+              cache.set(path, { isFile: false, isPdf: false });
+            }
+          })
+          .finally(() => {
+            for (const path of requestedPaths) {
+              if (inFlight.get(path) === inspection) {
+                inFlight.delete(path);
+              }
+            }
+          });
+        for (const path of requestedPaths) {
+          inFlight.set(path, inspection);
+        }
+      }
+
+      const pendingInspections = [
+        ...new Set(
+          candidates
+            .map((path) => inFlight.get(path))
+            .filter((inspection): inspection is Promise<void> => Boolean(inspection)),
+        ),
+      ];
+      const readCachedInspection = (): ComposerReferenceInspection => ({
+        filePaths: candidates.filter((path) => cache.get(path)?.isFile),
+        pdfPaths: candidates.filter((path) => cache.get(path)?.isPdf),
+      });
+      return pendingInspections.length > 0
+        ? Promise.all(pendingInspections).then(readCachedInspection)
+        : readCachedInspection();
+    },
+    [],
   );
   useEffect(() => {
-    const extensionPdfPaths = explicitFileReferencePaths.filter((filePath) =>
-      /\.pdf$/iu.test(filePath),
-    );
-    if (explicitFileReferencePaths.length === 0) {
-      setPdfReferencePaths([]);
-      return;
-    }
-    if (!props.desktopApi?.inspectPdfReferencePaths) {
-      setPdfReferencePaths(extensionPdfPaths);
+    if (!explicitReferencePathsKey) {
+      setInspectedPdfReferencePaths([]);
       return;
     }
 
+    setInspectedPdfReferencePaths([]);
     let cancelled = false;
-    void props.desktopApi.inspectPdfReferencePaths({
-      paths: explicitFileReferencePaths,
-    }).then(
-      ({ pdfPaths }) => {
-        if (!cancelled) {
-          setPdfReferencePaths([
-            ...new Set([...extensionPdfPaths, ...pdfPaths]),
-          ]);
-        }
-      },
-      () => {
-        if (!cancelled) {
-          setPdfReferencePaths(extensionPdfPaths);
-        }
-      },
-    );
+    void Promise.resolve(
+      inspectExplicitReferencePaths(explicitReferencePathsRef.current),
+    ).then((inspection) => {
+      if (cancelled) {
+        return;
+      }
+      setInspectedPdfReferencePaths(inspection.pdfPaths);
+      if (inspection.filePaths.length === 0) {
+        return;
+      }
+      const filePaths = new Set(inspection.filePaths);
+      setSkillTokens((current) => {
+        let changed = false;
+        const next = current.map((token) => {
+          if (
+            token.kind !== "directory"
+            || !token.path
+            || !filePaths.has(token.path)
+          ) {
+            return token;
+          }
+          changed = true;
+          return { ...token, kind: "file" as const };
+        });
+        return changed ? next : current;
+      });
+    });
     return () => {
       cancelled = true;
     };
-  }, [explicitFileReferencePaths, props.desktopApi]);
+  }, [
+    explicitReferencePathsKey,
+    explicitReferenceTokenKey,
+    inspectExplicitReferencePaths,
+    referenceInspector,
+  ]);
   const hasComposerContent =
     draft.trim().length > 0 || skillTokens.length > 0;
   const queuedTurn = queuedTurns[0];
@@ -4026,6 +4250,10 @@ export function Composer(props: ComposerProps) {
     if (skillTokens.length === 0 && draft.includes("](")) {
       const hydrated = hydrateComposerDraft(draft, props.skills, threadLinks);
       if (hydrated.skillTokens.length > 0) {
+        // The paste update retained a rich document without mention nodes.
+        // Let the controlled editor rebuild it from the hydrated tokens so
+        // the visual chips and canonical draft remain in lockstep.
+        setEditorDocument(undefined);
         setDraft(hydrated.draft);
         setSkillTokens(hydrated.skillTokens);
       }
@@ -4854,41 +5082,77 @@ export function Composer(props: ComposerProps) {
     attachments: ComposerImageAttachment[],
     fileRefs: ComposerFileAttachment[],
     fileSkillTokens: ComposerSkillToken[] = [],
-  ): {
-    displayText: string;
-    imageParts: AppServerThreadImagePart[];
-    input: AppServerTurnInputItem[];
-  } => {
-    const turnSkills = listMentionedSkills(textDraft, props.skills);
-    // File-reference pills ride the outgoing text as `[@label](~/path)`
-    // markdown appended after the typed draft — part of BOTH the display
-    // text and the text input item, so the agent and the transcript see
-    // the same message.
-    const displayText = appendFileReferenceMarkdown(
-      hydrateSkillLabelsWithMarkdown(textDraft.trim(), turnSkills),
-      fileRefs,
-    );
-    const imageParts = attachments.map((attachment, index) => ({
-      type: "image" as const,
-      url: attachment.url,
-      alt: formatPastedImageAlt(attachment, index),
-    }));
-    const input: AppServerTurnInputItem[] = [
-      ...(displayText ? [{ type: "text" as const, text: displayText }] : []),
-      ...attachments.map((attachment) => ({
-        type: "image" as const,
-        name: attachment.name,
-        url: attachment.url,
-      })),
-      ...buildLocalFileInputs(fileRefs, fileSkillTokens),
+  ): ComposerTurnPayload | Promise<ComposerTurnPayload> => {
+    // Text-only pasted/restored `[@label](path)` links do not have a prior
+    // in-memory token, so hydrate their explicit reference form here too.
+    // This keeps a fast Start/Send from bypassing the same inspection that
+    // normally runs as the Composer paints its chips.
+    const hydratedReferenceTokens = hydrateComposerDraft(
+      textDraft,
+      props.skills,
+      threadLinks,
+    ).skillTokens;
+    const localReferenceTokens = [
+      ...fileSkillTokens,
+      ...hydratedReferenceTokens,
     ];
+    const inspection = inspectExplicitReferencePaths(
+      listExplicitComposerReferencePaths(fileRefs, localReferenceTokens),
+    );
+    const build = (
+      resolvedInspection: ComposerReferenceInspection,
+    ): ComposerTurnPayload => {
+      const turnSkills = listMentionedSkills(textDraft, props.skills);
+      // File-reference pills ride the outgoing text as `[@label](~/path)`
+      // markdown appended after the typed draft — part of BOTH the display
+      // text and the text input item, so the agent and the transcript see
+      // the same message.
+      const displayText = appendFileReferenceMarkdown(
+        hydrateSkillLabelsWithMarkdown(textDraft.trim(), turnSkills),
+        fileRefs,
+      );
+      const imageParts = attachments.map((attachment, index) => ({
+        type: "image" as const,
+        url: attachment.url,
+        alt: formatPastedImageAlt(attachment, index),
+      }));
+      const input: AppServerTurnInputItem[] = [
+        ...(displayText ? [{ type: "text" as const, text: displayText }] : []),
+        ...attachments.map((attachment) => ({
+          type: "image" as const,
+          name: attachment.name,
+          url: attachment.url,
+        })),
+        ...buildLocalFileInputs(
+          fileRefs,
+          localReferenceTokens,
+          resolvedInspection.filePaths,
+        ),
+      ];
 
-    return { displayText, imageParts, input };
+      return { displayText, imageParts, input };
+    };
+    return isPromiseLike(inspection) ? inspection.then(build) : build(inspection);
+  };
+
+  const buildQueuedTurnPayload = (
+    queued: QueuedTurnDraft,
+  ): ComposerTurnPayload | Promise<ComposerTurnPayload> => {
+    const payload = buildTurnPayload(
+      queued.text,
+      queued.imageAttachments,
+      queued.fileAttachments,
+    );
+    const merge = (derived: ComposerTurnPayload): ComposerTurnPayload => ({
+      ...derived,
+      input: mergeDerivedLocalFileInputs(queued.input, derived.input),
+    });
+    return isPromiseLike(payload) ? payload.then(merge) : merge(payload);
   };
 
   const sendThreadTurn = async (
     queued?: QueuedTurnDraft,
-    options?: { queueClaimed?: boolean },
+    options?: { payload?: ComposerTurnPayload; queueClaimed?: boolean },
   ): Promise<void> => {
     if (!props.thread || !props.desktopApi?.startTurn) {
       restoreQueuedTurnIfClaimed(queued, options?.queueClaimed);
@@ -4898,21 +5162,19 @@ export function Composer(props: ComposerProps) {
       return;
     }
 
-    const builtPayload = queued
-      ? buildTurnPayload(
-          queued.text,
-          queued.imageAttachments,
-          queued.fileAttachments ?? [],
-        )
-      : buildTurnPayload(
-          canonicalDraft,
-          imageAttachments,
-          fileAttachments,
-          skillTokens,
-        );
-    const payload = queued?.input?.length
-      ? { ...builtPayload, input: queued.input }
-      : builtPayload;
+    const payloadOrPromise =
+      options?.payload
+      ?? (queued
+        ? buildQueuedTurnPayload(queued)
+        : buildTurnPayload(
+            canonicalDraft,
+            imageAttachments,
+            fileAttachments,
+            skillTokens,
+          ));
+    const payload = isPromiseLike(payloadOrPromise)
+      ? await payloadOrPromise
+      : payloadOrPromise;
     if (payload.input.length === 0 || props.disabled) {
       restoreQueuedTurnIfClaimed(queued, options?.queueClaimed);
       if (queued && options?.queueClaimed) {
@@ -5132,48 +5394,66 @@ export function Composer(props: ComposerProps) {
     setPendingSteer(undefined);
   }, [activeTurnId, pendingSteer, props.launchpad, queuedTurn]);
 
-  const queueCurrentDraft = (options?: { scheduledSendAt?: number }): void => {
+  const queueCurrentDraft = (
+    options?: { scheduledSendAt?: number },
+  ): Promise<void> | undefined => {
     if (
-      !hasComposerContent &&
-      imageAttachments.length === 0 &&
-      fileAttachments.length === 0
+      queueCurrentDraftInFlightRef.current
+      || (
+        !hasComposerContent
+        && imageAttachments.length === 0
+        && fileAttachments.length === 0
+      )
     ) {
       return;
     }
 
+    queueCurrentDraftInFlightRef.current = true;
+    const complete = (payload: ComposerTurnPayload): void => {
+      try {
+        if (payload.input.length === 0) {
+          return;
+        }
+
+        enqueueQueuedTurn({
+          id: createQueuedTurnId(),
+          input: payload.input,
+          text: canonicalDraft,
+          imageAttachments,
+          fileAttachments,
+          ...(options?.scheduledSendAt
+            ? { scheduledSendAt: options.scheduledSendAt }
+            : {}),
+        });
+        recordComposerDraftHistory(
+          composerScopeKey,
+          latestDraftSnapshotRef.current.snapshot,
+          "unsent",
+        );
+        clearComposerDraftSnapshot(composerScopeKey);
+        clearComposerDraft();
+        setImageAttachments([]);
+        setFileAttachments([]);
+        setScheduledDraftSendAt(undefined);
+        setScheduleArmed(true);
+        setReviewConfig(undefined);
+        setSendError(undefined);
+      } finally {
+        queueCurrentDraftInFlightRef.current = false;
+      }
+    };
     const payload = buildTurnPayload(
       canonicalDraft,
       imageAttachments,
       fileAttachments,
       skillTokens,
     );
-    if (payload.input.length === 0) {
-      return;
+    if (isPromiseLike(payload)) {
+      return payload.then(complete, () => {
+        queueCurrentDraftInFlightRef.current = false;
+      });
     }
-
-    enqueueQueuedTurn({
-      id: createQueuedTurnId(),
-      input: payload.input,
-      text: canonicalDraft,
-      imageAttachments,
-      fileAttachments,
-      ...(options?.scheduledSendAt
-        ? { scheduledSendAt: options.scheduledSendAt }
-        : {}),
-    });
-    recordComposerDraftHistory(
-      composerScopeKey,
-      latestDraftSnapshotRef.current.snapshot,
-      "unsent",
-    );
-    clearComposerDraftSnapshot(composerScopeKey);
-    clearComposerDraft();
-    setImageAttachments([]);
-    setFileAttachments([]);
-    setScheduledDraftSendAt(undefined);
-    setScheduleArmed(true);
-    setReviewConfig(undefined);
-    setSendError(undefined);
+    complete(payload);
   };
 
   const queueReviewCommand = (
@@ -5257,7 +5537,7 @@ export function Composer(props: ComposerProps) {
       return;
     }
 
-    queueCurrentDraft({ scheduledSendAt });
+    void queueCurrentDraft({ scheduledSendAt });
   };
 
   const submitPendingSteer = async (pending: QueuedTurnDraft): Promise<void> => {
@@ -5271,24 +5551,10 @@ export function Composer(props: ComposerProps) {
       return;
     }
 
-    const payload = pending.input?.length
-      ? {
-          displayText: appendFileReferenceMarkdown(
-            pending.text,
-            pending.fileAttachments,
-          ),
-          imageParts: pending.imageAttachments.map((attachment, index) => ({
-            type: "image" as const,
-            url: attachment.url,
-            alt: formatPastedImageAlt(attachment, index),
-          })),
-          input: pending.input,
-        }
-      : buildTurnPayload(
-          pending.text,
-          pending.imageAttachments,
-          pending.fileAttachments,
-        );
+    const payloadOrPromise = buildQueuedTurnPayload(pending);
+    const payload = isPromiseLike(payloadOrPromise)
+      ? await payloadOrPromise
+      : payloadOrPromise;
     if (
       payload.input.length === 0 ||
       props.disabled ||
@@ -5355,84 +5621,113 @@ export function Composer(props: ComposerProps) {
     }
   };
 
-  const createPendingSteer = (pending: QueuedTurnDraft): boolean => {
+  const createPendingSteer = (
+    pending: QueuedTurnDraft,
+  ): boolean | Promise<boolean> => {
     const turnId = activeTurnIdRef.current;
-    if (!props.thread || !turnId || !props.desktopApi?.steerTurn || !supportsSteering) {
+    if (pendingSteerCreationInFlightRef.current) {
+      return false;
+    }
+    if (
+      !props.thread
+      || !turnId
+      || !props.desktopApi?.steerTurn
+      || !supportsSteering
+    ) {
       setSendError("Steering is not available for this model.");
       return false;
     }
 
-    const payload = pending.input?.length
-      ? { input: pending.input }
-      : buildTurnPayload(
-          pending.text,
-          pending.imageAttachments,
-          pending.fileAttachments,
-        );
-    if (payload.input.length === 0 || props.disabled || pendingSteer) {
-      return false;
-    }
+    pendingSteerCreationInFlightRef.current = true;
+    const inputOrPayload = buildQueuedTurnPayload(pending);
+    const complete = (input: AppServerTurnInputItem[]): boolean => {
+      try {
+        if (input.length === 0 || props.disabled || pendingSteer) {
+          return false;
+        }
 
-    setSendError(undefined);
-    setPendingSteer({
-      id: pending.id,
-      input: payload.input,
-      text: pending.text,
-      imageAttachments: pending.imageAttachments,
-      fileAttachments: pending.fileAttachments,
-      status: "pending",
-    });
-    recordComposerDraftHistory(
-      composerScopeKey,
-      latestDraftSnapshotRef.current.snapshot,
-      "unsent",
-    );
-    clearComposerDraftSnapshot(composerScopeKey);
-    clearComposerDraft();
-    setImageAttachments([]);
-    setFileAttachments([]);
-    setReviewConfig(undefined);
-    return true;
+        setSendError(undefined);
+        setPendingSteer({
+          id: pending.id,
+          input,
+          text: pending.text,
+          imageAttachments: pending.imageAttachments,
+          fileAttachments: pending.fileAttachments,
+          status: "pending",
+        });
+        recordComposerDraftHistory(
+          composerScopeKey,
+          latestDraftSnapshotRef.current.snapshot,
+          "unsent",
+        );
+        clearComposerDraftSnapshot(composerScopeKey);
+        clearComposerDraft();
+        setImageAttachments([]);
+        setFileAttachments([]);
+        setReviewConfig(undefined);
+        return true;
+      } finally {
+        pendingSteerCreationInFlightRef.current = false;
+      }
+    };
+    if (isPromiseLike(inputOrPayload)) {
+      return inputOrPayload.then(
+        (payload) => complete(payload.input),
+        () => {
+          pendingSteerCreationInFlightRef.current = false;
+          return false;
+        },
+      );
+    }
+    return complete(inputOrPayload.input);
   };
 
-  const steerCurrentDraft = (): void => {
+  const steerCurrentDraft = (): Promise<void> | undefined => {
     if (!props.thread || !activeTurnIdRef.current || !props.desktopApi?.steerTurn) {
-      queueCurrentDraft();
+      void queueCurrentDraft();
       setSendError("Steering is not available for this backend.");
       return;
     }
     if (!supportsSteering) {
-      queueCurrentDraft();
+      void queueCurrentDraft();
       setSendError("Steering is not available for this model.");
       return;
     }
 
-    createPendingSteer({
+    const created = createPendingSteer({
       id: createQueuedTurnId(),
-      input: buildTurnPayload(
-        canonicalDraft,
-        imageAttachments,
-        fileAttachments,
-        skillTokens,
-      ).input,
       text: canonicalDraft,
       imageAttachments,
       fileAttachments,
     });
+    return isPromiseLike(created)
+      ? created.then(() => undefined)
+      : undefined;
   };
 
   const steerQueuedTurn = (queued: QueuedTurnDraft): void => {
-    if (!createPendingSteer(queued)) {
-      return;
-    }
-    removeQueuedTurn(queued);
-    if (activeTurnIdRef.current) {
-      void submitPendingSteer(queued);
+    const continueSteering = (created: boolean): void => {
+      if (!created) {
+        return;
+      }
+      removeQueuedTurn(queued);
+      if (activeTurnIdRef.current) {
+        void submitPendingSteer(queued);
+      }
+    };
+    const created = createPendingSteer(queued);
+    if (isPromiseLike(created)) {
+      void created.then(continueSteering);
+    } else {
+      continueSteering(created);
     }
   };
 
   const submitTurn = async (mode: "default" | "steer" = "default"): Promise<void> => {
     const reviewCommand = parsedReviewCommand;
+    if (turnPayloadPreparationInFlightRef.current) {
+      return;
+    }
     if (
       reviewCommand &&
       sendingRef.current &&
@@ -5447,7 +5742,10 @@ export function Composer(props: ComposerProps) {
 
     if (shouldQueueThreadSubmit()) {
       if (activeTurnIdRef.current && mode === "steer") {
-        steerCurrentDraft();
+        const steering = steerCurrentDraft();
+        if (steering) {
+          await steering;
+        }
       } else if (reviewCommand && isBareReviewCommand) {
         setReviewConfig(
           reviewConfig ??
@@ -5480,11 +5778,14 @@ export function Composer(props: ComposerProps) {
             : undefined,
         );
       } else {
-        queueCurrentDraft(
+        const queued = queueCurrentDraft(
           effectiveScheduledSendAt
             ? { scheduledSendAt: effectiveScheduledSendAt }
             : undefined,
         );
+        if (queued) {
+          await queued;
+        }
       }
       return;
     }
@@ -5518,7 +5819,12 @@ export function Composer(props: ComposerProps) {
     }
 
     if (effectiveScheduledSendAt) {
-      queueCurrentDraft({ scheduledSendAt: effectiveScheduledSendAt });
+      const queued = queueCurrentDraft({
+        scheduledSendAt: effectiveScheduledSendAt,
+      });
+      if (queued) {
+        await queued;
+      }
       return;
     }
 
@@ -5526,12 +5832,28 @@ export function Composer(props: ComposerProps) {
     // pending time so the toggle doesn't reappear after the immediate send.
     setScheduledDraftSendAt(undefined);
     setScheduleArmed(true);
-    const payload = buildTurnPayload(
+    const payloadOrPromise = buildTurnPayload(
       canonicalDraft,
       imageAttachments,
       fileAttachments,
       skillTokens,
     );
+    let payload: ComposerTurnPayload;
+    if (isPromiseLike(payloadOrPromise)) {
+      turnPayloadPreparationInFlightRef.current = true;
+      updateSending(true);
+      try {
+        payload = await payloadOrPromise;
+      } catch (error) {
+        updateSending(false);
+        setSendError(error instanceof Error ? error.message : String(error));
+        return;
+      } finally {
+        turnPayloadPreparationInFlightRef.current = false;
+      }
+    } else {
+      payload = payloadOrPromise;
+    }
     const collaborationMode = planModeEnabled && supportsPlanMode
       ? ({
           mode: "plan",
@@ -5542,6 +5864,7 @@ export function Composer(props: ComposerProps) {
       : undefined;
 
     if (payload.input.length === 0 || props.disabled) {
+      updateSending(false);
       return;
     }
 
@@ -5590,7 +5913,7 @@ export function Composer(props: ComposerProps) {
       return;
     }
 
-    await sendThreadTurn();
+    await sendThreadTurn(undefined, { payload });
   };
 
   const stopTurn = async (): Promise<void> => {
@@ -5704,7 +6027,7 @@ export function Composer(props: ComposerProps) {
     }
 
     if (shouldQueueThreadSubmit()) {
-      queueCurrentDraft();
+      void queueCurrentDraft();
       return;
     }
 
