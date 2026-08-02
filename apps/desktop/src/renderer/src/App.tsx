@@ -1430,6 +1430,9 @@ function DesktopAppShell(props: {
             requestAnimationFrame(() => revealSelectedThreadInList({ instant }));
           }}
           onArchiveThread={navigation.archiveThread}
+          onMarkThreadsSeen={
+            desktopApi?.markThreadSeen ? navigation.markThreadsSeen : undefined
+          }
           onRenameThread={navigation.renameThread}
           onSetThreadReaction={navigation.setThreadReaction}
           onSetThreadPin={navigation.setThreadPin}

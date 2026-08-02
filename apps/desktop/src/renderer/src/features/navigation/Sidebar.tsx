@@ -130,6 +130,7 @@ type SidebarProps = {
   onOpenSettings?: () => void;
   onOpenProfile?: (profile: string) => Promise<void>;
   onSelectThread: (thread: NavigationThreadSummary) => void;
+  onMarkThreadsSeen?: (threads: NavigationThreadSummary[]) => Promise<void>;
   onArchiveThread?: (
     thread: NavigationThreadSummary,
     options?: ArchiveThreadOptions,
@@ -232,6 +233,10 @@ function formatThreadCount(count: number): string {
   return `${count} ${count === 1 ? "Thread" : "Threads"}`;
 }
 
+function formatDirectoryCount(count: number): string {
+  return `${count} ${count === 1 ? "Directory" : "Directories"}`;
+}
+
 function uniqueContextMenuValues(
   values: Array<string | undefined>,
 ): string[] {
@@ -246,6 +251,7 @@ export function Sidebar(props: SidebarProps) {
   const selectionAnchorKeyRef = useRef<string | undefined>(
     props.selectedItemKey,
   );
+  const directorySelectionAnchorKeyRef = useRef<string | undefined>(undefined);
   const previousSelectedItemKeyRef = useRef<string | undefined>(
     props.selectedItemKey,
   );
@@ -255,6 +261,9 @@ export function Sidebar(props: SidebarProps) {
       props.selectedItemKey
         ? new Set([props.selectedItemKey])
         : new Set<string>(),
+  );
+  const [selectedDirectoryKeys, setSelectedDirectoryKeys] = useState<Set<string>>(
+    () => new Set<string>(),
   );
   const [contextMenu, setContextMenu] = useState<
     | {
@@ -268,9 +277,9 @@ export function Sidebar(props: SidebarProps) {
   >();
   /**
    * Directory context menu — parallel to `contextMenu` (the thread
-   * context menu) but only carries a "Pin Directory" / "Unpin
-   * Directory" action today. Kept as its own state instead of
-   * polymorphizing the thread menu because the thread menu has many
+   * context menu) but carries directory-specific actions such as
+   * marking contained threads read and pinning. Kept as its own state
+   * instead of polymorphizing the thread menu because the thread menu has many
    * thread-shaped actions (Rename / Archive / Copy / Unbind) that
    * don't make sense on directories. Plan 2026-05-09-002 Unit M.
    */
@@ -279,6 +288,7 @@ export function Sidebar(props: SidebarProps) {
         requestedPosition: ThreadContextMenuPosition;
         position?: { x: number; y: number };
         directory: NavigationDirectorySummary;
+        directories: NavigationDirectorySummary[];
       }
     | undefined
   >();
@@ -352,8 +362,12 @@ export function Sidebar(props: SidebarProps) {
 
     previousSelectedItemKeyRef.current = selectedItemKey;
     selectionAnchorKeyRef.current = selectedItemKey;
+    directorySelectionAnchorKeyRef.current = undefined;
     setSelectedThreadKeys(
       selectedItemKey ? new Set([selectedItemKey]) : new Set<string>(),
+    );
+    setSelectedDirectoryKeys((current) =>
+      current.size === 0 ? current : new Set<string>(),
     );
   }, [selectedItemKey]);
 
@@ -376,6 +390,42 @@ export function Sidebar(props: SidebarProps) {
       return next.size === current.size ? current : next;
     });
   }, [navigationThreads]);
+
+  // Directory refreshes can remove summary rows while the Directories lens
+  // remains mounted. Keep the separate directory selection scoped to rows that
+  // still exist, rather than letting a later context-menu action reach a stale
+  // project key.
+  useEffect(() => {
+    const availableDirectoryKeys = new Set(
+      props.directories.map((directory) => directory.key),
+    );
+    if (
+      !availableDirectoryKeys.has(directorySelectionAnchorKeyRef.current ?? "")
+    ) {
+      directorySelectionAnchorKeyRef.current = undefined;
+    }
+    setSelectedDirectoryKeys((current) => {
+      const next = new Set(
+        [...current].filter((directoryKey) =>
+          availableDirectoryKeys.has(directoryKey),
+        ),
+      );
+      return next.size === current.size ? current : next;
+    });
+  }, [props.directories]);
+
+  // Directory selection is a local batch operation, not navigation state. Do
+  // not carry its highlighted rows into a different lens where they are no
+  // longer actionable or visible.
+  useEffect(() => {
+    if (browseMode === "directories") {
+      return;
+    }
+    directorySelectionAnchorKeyRef.current = undefined;
+    setSelectedDirectoryKeys((current) =>
+      current.size === 0 ? current : new Set<string>(),
+    );
+  }, [browseMode]);
 
   const selectThreadFromList = (
     thread: NavigationThreadSummary,
@@ -425,6 +475,58 @@ export function Sidebar(props: SidebarProps) {
         next.delete(threadKey);
       } else {
         next.add(threadKey);
+      }
+      return next;
+    });
+  };
+
+  const selectDirectoryFromList = (
+    directory: NavigationDirectorySummary,
+    event: ReactMouseEvent<HTMLButtonElement>,
+    selectionOrder: string[],
+  ): void => {
+    const directoryKey = directory.key;
+
+    if (!event.metaKey && !event.shiftKey) {
+      directorySelectionAnchorKeyRef.current = directoryKey;
+      setSelectedDirectoryKeys(new Set([directoryKey]));
+      return;
+    }
+
+    if (event.shiftKey) {
+      const anchorKey = directorySelectionAnchorKeyRef.current;
+      const anchorIndex = anchorKey ? selectionOrder.indexOf(anchorKey) : -1;
+      const targetIndex = selectionOrder.indexOf(directoryKey);
+      if (anchorIndex < 0 || targetIndex < 0) {
+        directorySelectionAnchorKeyRef.current = directoryKey;
+        setSelectedDirectoryKeys((current) => {
+          const next = event.metaKey ? new Set(current) : new Set<string>();
+          next.add(directoryKey);
+          return next;
+        });
+        return;
+      }
+
+      const rangeStart = Math.min(anchorIndex, targetIndex);
+      const rangeEnd = Math.max(anchorIndex, targetIndex);
+      const range = selectionOrder.slice(rangeStart, rangeEnd + 1);
+      setSelectedDirectoryKeys((current) => {
+        const next = event.metaKey ? new Set(current) : new Set<string>();
+        for (const key of range) {
+          next.add(key);
+        }
+        return next;
+      });
+      return;
+    }
+
+    directorySelectionAnchorKeyRef.current = directoryKey;
+    setSelectedDirectoryKeys((current) => {
+      const next = new Set(current);
+      if (next.has(directoryKey)) {
+        next.delete(directoryKey);
+      } else {
+        next.add(directoryKey);
       }
       return next;
     });
@@ -680,6 +782,22 @@ export function Sidebar(props: SidebarProps) {
     return selectedThreads.length > 0 ? selectedThreads : [thread];
   };
 
+  const resolveDirectoryContextMenuDirectories = (
+    directory: NavigationDirectorySummary,
+  ): NavigationDirectorySummary[] => {
+    if (!selectedDirectoryKeys.has(directory.key)) {
+      directorySelectionAnchorKeyRef.current = directory.key;
+      setSelectedDirectoryKeys(new Set([directory.key]));
+      return [directory];
+    }
+
+    const selectedDirectories = props.directories.filter((candidate) =>
+      selectedDirectoryKeys.has(candidate.key),
+    );
+
+    return selectedDirectories.length > 0 ? selectedDirectories : [directory];
+  };
+
   const openThreadContextMenu = (
     thread: NavigationThreadSummary,
     position: ThreadContextMenuPosition
@@ -765,7 +883,11 @@ export function Sidebar(props: SidebarProps) {
   ): void => {
     setContextMenu(undefined);
     setRenameThread(undefined);
-    setDirectoryContextMenu({ requestedPosition: position, directory });
+    setDirectoryContextMenu({
+      requestedPosition: position,
+      directory,
+      directories: resolveDirectoryContextMenuDirectories(directory),
+    });
   };
 
   const togglePinDirectoryFromContextMenu = (
@@ -780,6 +902,26 @@ export function Sidebar(props: SidebarProps) {
   ): void => {
     setDirectoryContextMenu(undefined);
     props.onRemoveDirectory?.(directory);
+  };
+
+  const markSelectedDirectoryThreadsRead = (): void => {
+    if (!directoryContextMenu) {
+      return;
+    }
+
+    const directoryThreadKeys = new Set(
+      directoryContextMenu.directories.flatMap(
+        (directory) => directory.threadKeys,
+      ),
+    );
+    const unreadThreads = props.threads.filter(
+      (thread) =>
+        directoryThreadKeys.has(
+          buildThreadIdentityKey(thread.source, thread.id),
+        ) && thread.inbox.inInbox,
+    );
+    setDirectoryContextMenu(undefined);
+    void props.onMarkThreadsSeen?.(unreadThreads);
   };
 
   /**
@@ -1091,12 +1233,43 @@ export function Sidebar(props: SidebarProps) {
     contextMenuThreads.map((thread) => thread.gitBranch),
   );
 
+  const directoryContextMenuDirectories =
+    directoryContextMenu?.directories ?? [];
+  const directoryContextMenuIsBulk =
+    directoryContextMenuDirectories.length > 1;
+  const directoryMenuThreadKeys = new Set(
+    directoryContextMenuDirectories.flatMap(
+      (directory) => directory.threadKeys,
+    ),
+  );
+  const directoryMenuUnreadThreads = props.threads.filter(
+    (thread) =>
+      directoryMenuThreadKeys.has(
+        buildThreadIdentityKey(thread.source, thread.id),
+      ) && thread.inbox.inInbox,
+  );
+  const directoryMenuCanMarkRead = Boolean(
+    props.onMarkThreadsSeen && directoryMenuUnreadThreads.length > 0,
+  );
+  const directoryMenuCanPin = Boolean(
+    !directoryContextMenuIsBulk
+      && directoryContextMenu
+      && props.onSetDirectoryPin,
+  );
+  const directoryMenuCanRemove = Boolean(
+    !directoryContextMenuIsBulk
+      && props.onRemoveDirectory
+      && directoryContextMenu?.directory.kind === "directory"
+      && directoryContextMenu.directory.threadKeys.length === 0,
+  );
+
   // Same shape as the thread context menu's "Move" items, applied
   // to the directory context menu. Directory pinning is global so
   // a single sorted array drives both adjacency checks.
   const directoryMenuShowMoveItems = Boolean(
-    directoryContextMenu?.directory.pinnedRank &&
-      props.onReorderDirectoryPins,
+    !directoryContextMenuIsBulk
+      && directoryContextMenu?.directory.pinnedRank
+      && props.onReorderDirectoryPins,
   );
   const directoryMenuPinnedIndex = directoryContextMenu
     ? pinnedDirectoryKeysInOrder.indexOf(directoryContextMenu.directory.key)
@@ -1107,6 +1280,8 @@ export function Sidebar(props: SidebarProps) {
     directoryMenuShowMoveItems &&
     directoryMenuPinnedIndex >= 0 &&
     directoryMenuPinnedIndex < pinnedDirectoryKeysInOrder.length - 1;
+  const directoryMenuHasPinActions =
+    directoryMenuCanPin || directoryMenuShowMoveItems;
 
   return (
     <aside className="sidebar" aria-label="Threads">
@@ -1299,6 +1474,7 @@ export function Sidebar(props: SidebarProps) {
               directories={props.directories}
               revealSelectedThreadRequest={directoryRevealRequest}
               selectedItemKey={props.selectedItemKey}
+              selectedDirectoryKeys={selectedDirectoryKeys}
               selectedThreadKeys={selectedThreadKeys}
               thinkingThreadKeys={props.thinkingThreadKeys}
               threads={props.threads}
@@ -1318,9 +1494,12 @@ export function Sidebar(props: SidebarProps) {
                 props.onSetDirectoryThreadsCollapsed
               }
               onOpenDirectoryContextMenu={
-                props.onSetDirectoryPin ? openDirectoryContextMenu : undefined
+                props.onSetDirectoryPin || props.onMarkThreadsSeen
+                  ? openDirectoryContextMenu
+                  : undefined
               }
               onOpenPullRequestContextMenu={openPullRequestContextMenu}
+              onSelectDirectory={selectDirectoryFromList}
               onSelectThread={selectThreadFromList}
               onSetReaction={props.onSetThreadReaction}
               onSetThreadPin={props.onSetThreadPin}
@@ -1818,6 +1997,13 @@ export function Sidebar(props: SidebarProps) {
           ref={directoryContextMenuRef}
           className="thread-context-menu"
           role="menu"
+          aria-label={
+            directoryContextMenuIsBulk
+              ? `Actions for ${formatDirectoryCount(
+                  directoryContextMenuDirectories.length,
+                ).toLowerCase()} selected`
+              : undefined
+          }
           style={{
             left:
               directoryContextMenu.position?.x ??
@@ -1829,80 +2015,97 @@ export function Sidebar(props: SidebarProps) {
           }}
           onClick={(event) => event.stopPropagation()}
         >
-          <div className="thread-context-menu__section">
-            <button
-              role="menuitem"
-              type="button"
-              onClick={() =>
-                togglePinDirectoryFromContextMenu(directoryContextMenu.directory)
-              }
-            >
-              {directoryContextMenu.directory.pinnedRank
-                ? "Unpin Directory"
-                : "Pin Directory"}
-            </button>
-            {directoryMenuShowMoveItems ? (
-              <>
+          {directoryMenuCanMarkRead ? (
+            <div className="thread-context-menu__section">
+              <button
+                role="menuitem"
+                type="button"
+                onClick={markSelectedDirectoryThreadsRead}
+              >
+                Mark Read
+              </button>
+            </div>
+          ) : null}
+          {directoryMenuCanMarkRead && directoryMenuHasPinActions ? (
+            <div className="thread-context-menu__separator" role="separator" />
+          ) : null}
+          {directoryMenuHasPinActions ? (
+            <div className="thread-context-menu__section">
+              {directoryMenuCanPin ? (
                 <button
                   role="menuitem"
                   type="button"
-                  aria-keyshortcuts="Meta+Shift+ArrowUp"
-                  disabled={!directoryMenuCanMoveUp}
                   onClick={() =>
-                    moveDirectoryFromContextMenu(
-                      directoryContextMenu.directory,
-                      "up",
-                    )
+                    togglePinDirectoryFromContextMenu(directoryContextMenu.directory)
                   }
                 >
-                  <span>Move Up</span>
-                  <span
-                    className="thread-context-menu__shortcut"
-                    aria-hidden="true"
+                  {directoryContextMenu.directory.pinnedRank
+                    ? "Unpin Directory"
+                    : "Pin Directory"}
+                </button>
+              ) : null}
+              {directoryMenuShowMoveItems ? (
+                <>
+                  <button
+                    role="menuitem"
+                    type="button"
+                    aria-keyshortcuts="Meta+Shift+ArrowUp"
+                    disabled={!directoryMenuCanMoveUp}
+                    onClick={() =>
+                      moveDirectoryFromContextMenu(
+                        directoryContextMenu.directory,
+                        "up",
+                      )
+                    }
                   >
-                    {"⌘⇧↑"}
-                  </span>
-                </button>
-                <button
-                  role="menuitem"
-                  type="button"
-                  aria-keyshortcuts="Meta+Shift+ArrowDown"
-                  disabled={!directoryMenuCanMoveDown}
-                  onClick={() =>
-                    moveDirectoryFromContextMenu(
-                      directoryContextMenu.directory,
-                      "down",
-                    )
-                  }
-                >
-                  <span>Move Down</span>
-                  <span
-                    className="thread-context-menu__shortcut"
-                    aria-hidden="true"
+                    <span>Move Up</span>
+                    <span
+                      className="thread-context-menu__shortcut"
+                      aria-hidden="true"
+                    >
+                      {"⌘⇧↑"}
+                    </span>
+                  </button>
+                  <button
+                    role="menuitem"
+                    type="button"
+                    aria-keyshortcuts="Meta+Shift+ArrowDown"
+                    disabled={!directoryMenuCanMoveDown}
+                    onClick={() =>
+                      moveDirectoryFromContextMenu(
+                        directoryContextMenu.directory,
+                        "down",
+                      )
+                    }
                   >
-                    {"⌘⇧↓"}
-                  </span>
-                </button>
-              </>
-            ) : null}
-          </div>
-          {props.onRemoveDirectory
-            && directoryContextMenu.directory.kind === "directory"
-            && directoryContextMenu.directory.threadKeys.length === 0 ? (
-            <>
-              <div className="thread-context-menu__separator" role="separator" />
-              <div className="thread-context-menu__section">
-                <button
-                  role="menuitem"
-                  type="button"
-                  onClick={() =>
-                    removeDirectoryFromContextMenu(directoryContextMenu.directory)
-                  }
-                >
-                  Remove Directory
-                </button>
-              </div>
-            </>
+                    <span>Move Down</span>
+                    <span
+                      className="thread-context-menu__shortcut"
+                      aria-hidden="true"
+                    >
+                      {"⌘⇧↓"}
+                    </span>
+                  </button>
+                </>
+              ) : null}
+            </div>
+          ) : null}
+          {directoryMenuCanRemove
+            && (directoryMenuCanMarkRead || directoryMenuHasPinActions) ? (
+            <div className="thread-context-menu__separator" role="separator" />
+          ) : null}
+          {directoryMenuCanRemove ? (
+            <div className="thread-context-menu__section">
+              <button
+                role="menuitem"
+                type="button"
+                onClick={() =>
+                  removeDirectoryFromContextMenu(directoryContextMenu.directory)
+                }
+              >
+                Remove Directory
+              </button>
+            </div>
           ) : null}
         </div>
       ) : null}
