@@ -1444,6 +1444,7 @@ describe("app server ipc", () => {
             {
               prKey: "github.com/pwrdrvr/pwragent#845",
               checkState: "passing",
+              checksStillRunning: false,
               lifecycleState: "open",
               mergeState: "unknown",
               reviewState: "ready_for_review",
