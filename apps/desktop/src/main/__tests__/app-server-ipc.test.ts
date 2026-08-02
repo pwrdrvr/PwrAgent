@@ -932,6 +932,83 @@ describe("app server ipc", () => {
     });
   });
 
+  it("invalidates unchanged snapshots when primary repository resolution recovers", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+    const thread = {
+      id: "thread-1",
+      title: "Clipboard fallback",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      linkedDirectories: [
+        {
+          id: "directory:/repo/PwrAgent",
+          kind: "worktree" as const,
+          label: "PwrAgent",
+          path: "/repo/PwrAgent",
+          worktreePath: "/repo/.worktrees/clipboard-fallback",
+        },
+      ],
+      updatedAt: 2_000,
+    };
+    const snapshot = (fetchedAt: number, unchanged: boolean) => ({
+      backend: "all" as const,
+      fetchedAt,
+      unchanged,
+      threads: [thread],
+      inboxThreadKeys: ["codex:thread-1"],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    });
+    listThreads
+      .mockResolvedValueOnce([thread] as never)
+      .mockResolvedValueOnce([thread] as never)
+      .mockResolvedValueOnce([thread] as never);
+    reconcileNavigationSnapshot
+      .mockResolvedValueOnce(snapshot(1_234, false))
+      .mockResolvedValueOnce(snapshot(5_678, true))
+      .mockResolvedValueOnce(snapshot(9_012, true));
+    resolveGitHubRepoForDirectory
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce({
+        host: "github.com",
+        owner: "pwrdrvr",
+        repo: "PwrAgent",
+      })
+      .mockResolvedValueOnce({
+        host: "github.com",
+        owner: "pwrdrvr",
+        repo: "PwrAgent",
+      });
+
+    registerAppServerIpcHandlers();
+    const first = await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    const recovered = await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    const stable = await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+
+    expect(first).toMatchObject({
+      unchanged: false,
+      threads: [{ id: "thread-1" }],
+    });
+    expect(recovered).toMatchObject({
+      unchanged: false,
+      threads: [{
+        id: "thread-1",
+        primaryGitRepository: "github.com/pwrdrvr/pwragent",
+      }],
+    });
+    expect(stable).toMatchObject({
+      unchanged: true,
+      threads: [{
+        id: "thread-1",
+        primaryGitRepository: "github.com/pwrdrvr/pwragent",
+      }],
+    });
+  });
+
   it("uses one active recent page for lightweight navigation refreshes", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");

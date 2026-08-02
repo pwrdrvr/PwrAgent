@@ -936,6 +936,14 @@ class DesktopAppServerService {
       prs: PrSummary[];
     }
   >();
+  /**
+   * This enrichment follows overlay snapshot hashing, so retain the last value
+   * sent to the renderer and invalidate when repository resolution changes.
+   */
+  private readonly publishedPrimaryGitRepositoriesByThreadKey = new Map<
+    string,
+    string | undefined
+  >();
   private prDiscoveryTimer: NodeJS.Timeout | undefined;
   /** Per-thread last discovery branch-lookup time, driving the slow rotation. */
   private readonly prDiscoveryLastRefreshedAt = new Map<string, number>();
@@ -1350,11 +1358,18 @@ class DesktopAppServerService {
     await this.loadPrLookupRegistry();
     this.seedPrStatusRegistryFromThreads(snapshot.threads);
     const canonicalSnapshot = this.applyCanonicalPrStatuses(snapshot.threads);
+    const replaceThreadPrAttachments =
+      backend === "all" && !request.filter?.trim() && !activeRecentRefresh;
     await this.rememberThreadPrAttachments(canonicalSnapshot.threads, {
-      replace: backend === "all" && !request.filter?.trim() && !activeRecentRefresh,
+      replace: replaceThreadPrAttachments,
     });
     const threadsWithPrimaryGitRepositories =
       this.applyPrimaryGitRepositories(canonicalSnapshot.threads);
+    const primaryGitRepositoriesChanged =
+      this.rememberPublishedPrimaryGitRepositories(
+        threadsWithPrimaryGitRepositories,
+        { replace: replaceThreadPrAttachments },
+      );
     void this.getPrAutoDispatchCoordinator().resume();
     await this.loadDirectoryGitStatusCache();
     for (const directory of snapshot.directories) {
@@ -1405,7 +1420,10 @@ class DesktopAppServerService {
       threads: threadsWithWorkingState,
       directories,
       unchanged:
-        snapshot.unchanged && directoriesUnchanged && !canonicalSnapshot.changed,
+        snapshot.unchanged
+        && directoriesUnchanged
+        && !canonicalSnapshot.changed
+        && !primaryGitRepositoriesChanged,
     };
   }
 
@@ -1579,6 +1597,39 @@ class DesktopAppServerService {
         ? { ...thread, primaryGitRepository }
         : thread;
     });
+  }
+
+  private rememberPublishedPrimaryGitRepositories(
+    threads: NavigationSnapshot["threads"],
+    options: { replace: boolean },
+  ): boolean {
+    const liveThreadKeys = new Set<string>();
+    let changed = false;
+    for (const thread of threads) {
+      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+      const primaryGitRepository = thread.primaryGitRepository;
+      liveThreadKeys.add(threadKey);
+      if (
+        !this.publishedPrimaryGitRepositoriesByThreadKey.has(threadKey)
+        || this.publishedPrimaryGitRepositoriesByThreadKey.get(threadKey) !==
+          primaryGitRepository
+      ) {
+        changed = true;
+        this.publishedPrimaryGitRepositoriesByThreadKey.set(
+          threadKey,
+          primaryGitRepository,
+        );
+      }
+    }
+    if (options.replace) {
+      for (const threadKey of this.publishedPrimaryGitRepositoriesByThreadKey.keys()) {
+        if (!liveThreadKeys.has(threadKey)) {
+          changed = true;
+          this.publishedPrimaryGitRepositoriesByThreadKey.delete(threadKey);
+        }
+      }
+    }
+    return changed;
   }
 
   private async syncThreadPrAutoDispatchCandidates(params: {
@@ -5015,6 +5066,7 @@ class DesktopAppServerService {
     this.prAutoDispatchCoordinator = undefined;
     this.prStatusWatchCoordinator = undefined;
     this.attachedPrsByThreadKey.clear();
+    this.publishedPrimaryGitRepositoriesByThreadKey.clear();
     this.pendingNavigationSnapshots.clear();
     this.pendingThreadPullRequestRefreshes.clear();
     this.pendingEditCommitResolves.clear();

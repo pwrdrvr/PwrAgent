@@ -347,6 +347,7 @@ export function buildNavigationSnapshotHash(params: {
       updatedAt: thread.updatedAt ?? null,
       gitBranch: thread.gitBranch ?? null,
       gitOriginUrl: thread.gitOriginUrl ?? null,
+      primaryGitRepository: thread.primaryGitRepository ?? null,
       observedGitBranch: thread.observedGitBranch ?? null,
       retainedBranchDriftPairs: (thread.retainedBranchDriftPairs ?? []).map((pair) => ({
         expectedBranch: pair.expectedBranch,
