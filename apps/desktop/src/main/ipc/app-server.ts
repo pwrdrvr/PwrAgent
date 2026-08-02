@@ -951,6 +951,8 @@ class DesktopAppServerService {
   private readonly prDiscoveryLastRefreshedAt = new Map<string, number>();
   /** Set once we subscribe to settings writes for live flag re-sync. */
   private prPollingSettingsUnsubscribe: (() => void) | undefined;
+  /** Monotonically increases so an older settings read cannot overwrite a newer one. */
+  private prPollingSettingsSyncGeneration = 0;
   /**
    * Threads the operator currently has selected / on screen, pushed from the
    * renderer. Drives the poller's fast tier — main cannot infer selection.
@@ -3829,6 +3831,7 @@ class DesktopAppServerService {
    * and after every settings write, so both gates take effect without a restart.
    */
   syncPrPollingSchedulerState(): void {
+    const settingsSyncGeneration = ++this.prPollingSettingsSyncGeneration;
     void (async () => {
       let backgroundPollingEnabled = DEFAULT_BACKGROUND_PR_POLLING;
       let prAutoDispatchAllowed = DEFAULT_PR_AUTO_DISPATCH_ALLOWED;
@@ -3857,6 +3860,10 @@ class DesktopAppServerService {
         appServerLog.warn("failed to read GitHub PR automation settings", {
           error: error instanceof Error ? error.message : String(error),
         });
+      }
+
+      if (settingsSyncGeneration !== this.prPollingSettingsSyncGeneration) {
+        return;
       }
 
       this.backgroundPrPollingEnabled = backgroundPollingEnabled;
@@ -5061,6 +5068,7 @@ class DesktopAppServerService {
     this.prFetcher = undefined;
     this.prPollingScheduler?.stop();
     this.prPollingScheduler = undefined;
+    this.prPollingSettingsSyncGeneration += 1;
     this.backgroundPrPollingEnabled = false;
     this.prAutoDispatchAllowed = false;
     if (this.prDiscoveryTimer) {

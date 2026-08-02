@@ -29,9 +29,19 @@ const prAutomationSettings = vi.hoisted(() => {
     backgroundPrPollingEnabled: true,
     prAutoDispatchAllowed: true,
   };
+  const configWrittenListeners = new Set<() => void>();
   return {
     state,
-    onConfigWritten: vi.fn(() => () => undefined),
+    onConfigWritten: vi.fn((listener: () => void) => {
+      configWrittenListeners.add(listener);
+      return () => configWrittenListeners.delete(listener);
+    }),
+    emitConfigWritten: () => {
+      for (const listener of configWrittenListeners) {
+        listener();
+      }
+    },
+    resetConfigWrittenListeners: () => configWrittenListeners.clear(),
     readSettings: vi.fn(async () => ({
       git: {
         backgroundPrPolling: {
@@ -630,6 +640,7 @@ describe("app server ipc", () => {
   beforeEach(() => {
     prAutomationSettings.state.backgroundPrPollingEnabled = true;
     prAutomationSettings.state.prAutoDispatchAllowed = true;
+    prAutomationSettings.resetConfigWrittenListeners();
     prAutomationSettings.onConfigWritten.mockClear();
     prAutomationSettings.readSettings.mockClear();
     handlers.clear();
@@ -815,6 +826,75 @@ describe("app server ipc", () => {
       backend: "codex",
       threadId: "thread-1",
       enabled: true,
+    });
+    expect(scheduleThreadPrAutoDispatch).not.toHaveBeenCalled();
+  });
+
+  it("does not let a stale settings read re-enable Auto-fix PR", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+    let resolveStaleRead:
+      | ((settings: {
+          git: {
+            backgroundPrPolling: { value: boolean };
+            prAutoDispatchAllowed: { value: boolean };
+          };
+        }) => void)
+      | undefined;
+    prAutomationSettings.readSettings.mockImplementationOnce(
+      () => new Promise((resolve) => {
+        resolveStaleRead = resolve;
+      }),
+    );
+    getThreadOverlayState.mockResolvedValue({
+      backend: "codex",
+      threadId: "thread-1",
+      executionMode: "default",
+      extraLinkedDirectories: [],
+      prAutoDispatchEnabled: true,
+    });
+
+    registerAppServerIpcHandlers();
+    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    await vi.waitFor(() => {
+      expect(prAutomationSettings.readSettings).toHaveBeenCalledTimes(1);
+    });
+    expect(resolveStaleRead).toEqual(expect.any(Function));
+
+    prAutomationSettings.state.prAutoDispatchAllowed = false;
+    prAutomationSettings.emitConfigWritten();
+    await vi.waitFor(() => {
+      expect(prAutomationSettings.readSettings).toHaveBeenCalledTimes(2);
+    });
+
+    const autoDispatchHandlers = setThreadPrAutoDispatchHandler.mock.calls.at(-1)?.[0];
+    expect(autoDispatchHandlers).toBeDefined();
+    await vi.waitFor(async () => {
+      const status = await autoDispatchHandlers?.inspect({
+        backend: "codex",
+        threadId: "thread-1",
+      });
+      expect(status).toMatchObject({
+        backgroundPollingEnabled: true,
+        autoFixAllowed: false,
+      });
+    });
+
+    resolveStaleRead?.({
+      git: {
+        backgroundPrPolling: { value: true },
+        prAutoDispatchAllowed: { value: true },
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const status = await autoDispatchHandlers?.inspect({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(status).toMatchObject({
+      backgroundPollingEnabled: true,
+      autoFixAllowed: false,
     });
     expect(scheduleThreadPrAutoDispatch).not.toHaveBeenCalled();
   });
