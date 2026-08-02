@@ -4855,7 +4855,6 @@ describe("DesktopBackendRegistry", () => {
         configValues: expect.objectContaining({ mode: "auto" }),
       }),
     });
-
     await registry.close();
   });
 
@@ -24697,6 +24696,17 @@ script = "printf setup"
         },
       }),
     });
+    registry.setThreadPrAutoDispatchHandler({
+      preferenceChanged: vi.fn(async () => undefined),
+      cancelPending: vi.fn(async () => false),
+      sendPendingNow: vi.fn(async () => false),
+      inspect: vi.fn(async () => ({
+        backgroundPollingEnabled: true,
+        autoFixEnabled: true,
+        autoFixActive: true,
+        guidance: "End the turn and let PwrAgent watch CI.",
+      })),
+    });
     await registry.publishLocalEvent({
       backend: "codex",
       notification: {
@@ -24730,6 +24740,11 @@ script = "printf setup"
       threadId: "agent-thread",
       title: "Sit tight",
       status: "idle",
+      prAutomation: {
+        backgroundPollingEnabled: true,
+        autoFixEnabled: true,
+        autoFixActive: true,
+      },
     });
     expect(payload.thread.linkedDirectories).toEqual([
       expect.objectContaining({
@@ -26005,6 +26020,12 @@ script = "printf setup"
           requestedAt: 1_250,
           branch: args.branch ?? "main",
           directoryPaths: args.directoryPaths ?? ["/repo"],
+          prAutomation: {
+            backgroundPollingEnabled: true,
+            autoFixEnabled: true,
+            autoFixActive: true,
+            guidance: "End the turn and let PwrAgent watch the PR.",
+          },
         },
       },
     }));
@@ -26087,6 +26108,12 @@ script = "printf setup"
           requestedAt: 1_250,
           branch: args.branch ?? "HEAD",
           directoryPaths: args.directoryPaths ?? [],
+          prAutomation: {
+            backgroundPollingEnabled: true,
+            autoFixEnabled: false,
+            autoFixActive: false,
+            guidance: "Use a one-shot PR watch.",
+          },
         },
       },
     }));
@@ -26132,6 +26159,85 @@ script = "printf setup"
       threadId: "agent-thread",
       branch: "feature/pr",
     });
+
+    await registry.close();
+  });
+
+  it("routes one-shot PR watches with invoking thread defaults", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:agent-thread": createAgentOverlay(),
+        },
+      }),
+    });
+    const handler = vi.fn(async (args) => ({
+      ok: true as const,
+      data: {
+        pullRequestWatch: {
+          coveredByAutoFix: ["failure" as const],
+          prAutomation: {
+            backgroundPollingEnabled: true,
+            autoFixEnabled: true,
+            autoFixActive: true,
+            guidance: "End the turn.",
+          },
+          watch: {
+            watchId: "watch-1",
+            backend: args.backend ?? "codex",
+            threadId: args.threadId ?? "agent-thread",
+            prKey: "github.com/pwrdrvr/pwragent#1105",
+            prUrl: args.url ?? "https://github.com/pwrdrvr/PwrAgent/pull/1105",
+            prNumber: 1105,
+            headSha: "a".repeat(40),
+            notifyOn: ["success" as const],
+            createdAt: 1_000,
+            failureHandledByAutoFix: true,
+          },
+        },
+      },
+    }));
+    registry.setThreadPullRequestWatchToolHandler(handler);
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "agent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "agent-thread",
+        turnId: "turn-1",
+        callId: "call-watch-1",
+        requestId: "call-watch-1",
+        namespace: "pwragent",
+        tool: "watch_thread_pull_request",
+        arguments: {
+          url: "https://github.com/pwrdrvr/PwrAgent/pull/1105",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(handler).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "agent-thread",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/1105",
+    });
+    expect(response).toMatchObject({ success: true });
 
     await registry.close();
   });

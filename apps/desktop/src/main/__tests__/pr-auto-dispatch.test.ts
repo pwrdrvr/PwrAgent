@@ -16,6 +16,8 @@ import {
   PR_AUTO_DISPATCH_DELAY_MS,
   PR_AUTO_DISPATCH_LEASE_MS,
   PrAutoDispatchCoordinator,
+  buildPrRepositoryKey,
+  pullRequestMatchesRepositoryKey,
 } from "../pr-status/pr-auto-dispatch";
 
 let stateDb: StateDb;
@@ -133,6 +135,96 @@ async function runCountdown(): Promise<void> {
 }
 
 describe("PrAutoDispatchCoordinator", () => {
+  it("treats PRs from secondary repositories as informational", () => {
+    const primaryRepoKey = buildPrRepositoryKey(
+      "github.com",
+      "pwrdrvr",
+      "PwrAgent",
+    );
+
+    expect(pullRequestMatchesRepositoryKey(pr(), primaryRepoKey)).toBe(true);
+    expect(pullRequestMatchesRepositoryKey(pr({
+      org: "pwrdrvr",
+      repo: "docs.pwragent.ai",
+    }), primaryRepoKey)).toBe(false);
+    expect(pullRequestMatchesRepositoryKey(pr(), undefined)).toBe(false);
+  });
+
+  it("elects the oldest enabled primary attachment and reorders after detach", async () => {
+    const prKey = buildPullRequestStatusKey(pr());
+    await store.setThreadPrAutoDispatchEnabled({
+      backend: "codex",
+      threadId: "thread-2",
+      enabled: true,
+    });
+    await store.syncThreadPrAutoDispatchCandidates({
+      backend: "codex",
+      threadId: "thread-1",
+      prKeys: [prKey],
+      now: clock,
+    });
+    await store.syncThreadPrAutoDispatchCandidates({
+      backend: "codex",
+      threadId: "thread-2",
+      prKeys: [prKey],
+      now: clock + 1,
+    });
+
+    expect(await store.getPrAutoDispatchCandidateWinner({ prKey })).toMatchObject({
+      threadId: "thread-1",
+    });
+
+    stateDb.close();
+    stateDb = StateDb.open(path.join(tempDir, "state.db"));
+    store = new SqliteOverlayStore(stateDb);
+    expect(await store.getPrAutoDispatchCandidateWinner({ prKey })).toMatchObject({
+      threadId: "thread-1",
+    });
+
+    await store.syncThreadPrAutoDispatchCandidates({
+      backend: "codex",
+      threadId: "thread-1",
+      prKeys: [],
+      now: clock + 2,
+    });
+    expect(await store.getPrAutoDispatchCandidateWinner({ prKey })).toMatchObject({
+      threadId: "thread-2",
+    });
+
+    await store.syncThreadPrAutoDispatchCandidates({
+      backend: "codex",
+      threadId: "thread-1",
+      prKeys: [prKey],
+      now: clock + 3,
+    });
+    expect(await store.getPrAutoDispatchCandidateWinner({ prKey })).toMatchObject({
+      threadId: "thread-2",
+    });
+  });
+
+  it("creates only one durable repair claim when the same PR reaches many threads", async () => {
+    await store.setThreadPrAutoDispatchEnabled({
+      backend: "codex",
+      threadId: "thread-2",
+      enabled: true,
+    });
+    const harness = createHarness();
+
+    const outcomes = await harness.coordinator.handleStatusSnapshot({
+      pr: pr(),
+      threadKeys: ["codex:thread-1", "codex:thread-2"],
+      observedAt: clock,
+      backgroundPollingEnabled: true,
+    });
+
+    expect(outcomes.map((outcome) => outcome.status)).toEqual([
+      "scheduled",
+      "duplicate",
+    ]);
+    await runCountdown();
+    expect(harness.submitTurnIfIdle).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps the saved preference but schedules nothing while the global gate is off", async () => {
     const harness = createHarness({ gate: false });
     const outcomes = await observe(harness.coordinator, pr(), false);
@@ -222,6 +314,16 @@ describe("PrAutoDispatchCoordinator", () => {
         text: expect.stringContaining(`- Head SHA: ${"a".repeat(40)}`),
       }),
     );
+    expect(harness.submitTurnIfIdle.mock.calls[0]?.[0]).toMatchObject({
+      messageOrigin: {
+        kind: "pwragent",
+        prAutomation: {
+          kind: "auto-fix",
+          prNumber: 1105,
+          eventKinds: ["ci-failure"],
+        },
+      },
+    });
     expect(
       await store.getThreadPrAutoDispatchPending({
         backend: "codex",

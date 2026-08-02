@@ -478,7 +478,15 @@ describe("Composer", () => {
       title: "Fix CI",
       titleSource: "explicit",
       source: "codex",
-      linkedDirectories: [],
+      gitOriginUrl: "git@github.com:pwrdrvr/PwrAgent.git",
+      linkedDirectories: [
+        {
+          id: "directory-1",
+          kind: "local",
+          label: "PwrAgent",
+          path: "/repo/PwrAgent",
+        },
+      ],
       inbox: { inInbox: false },
       prAutoDispatchEnabled: true,
     };
@@ -494,6 +502,10 @@ describe("Composer", () => {
 
     const toggle = screen.getByRole("button", { name: "Auto-fix PR" });
     expect(toggle).toHaveAttribute("aria-pressed", "true");
+    expect(toggle).toHaveAttribute(
+      "data-tooltip",
+      "Auto-fix PR — starts when a PR for this workspace is linked",
+    );
     fireEvent.click(toggle);
     await waitFor(() => {
       expect(onSetThreadPrAutoDispatch).toHaveBeenCalledWith(false);
@@ -516,6 +528,146 @@ describe("Composer", () => {
     expect(screen.getByRole("button", { name: "Auto-fix PR" })).toHaveAttribute(
       "data-tooltip",
       expect.stringContaining("paused"),
+    );
+  });
+
+  it("hides Auto-fix PR when the thread is not backed by a Git repository", () => {
+    render(
+      <Composer
+        backgroundPrPollingEnabled
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Scratch work",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          projectKey: "/projects/scratch",
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: "Auto-fix PR" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("hides Auto-fix PR for a fallback local directory without Git evidence", () => {
+    render(
+      <Composer
+        backgroundPrPollingEnabled
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Local scratch directory",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [
+            {
+              id: "directory-1",
+              kind: "local",
+              label: "Scratch",
+              path: "/projects/scratch",
+            },
+          ],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: "Auto-fix PR" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows the failure-monitoring tooltip when a Git thread has a linked PR", () => {
+    render(
+      <Composer
+        backgroundPrPollingEnabled
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Fix CI",
+          titleSource: "explicit",
+          source: "codex",
+          gitOriginUrl: "git@github.com:pwrdrvr/PwrAgent.git",
+          linkedDirectories: [
+            {
+              id: "directory-1",
+              kind: "local",
+              label: "PwrAgent",
+              path: "/repo/PwrAgent",
+            },
+          ],
+          inbox: { inInbox: false },
+          prs: [
+            {
+              provider: "github.com",
+              number: 1128,
+              org: "pwrdrvr",
+              repo: "PwrAgent",
+              state: "passing",
+              url: "https://github.com/pwrdrvr/PwrAgent/pull/1128",
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Auto-fix PR" })).toHaveAttribute(
+      "data-tooltip",
+      "Auto-fix PR — handle new CI failures or merge conflicts",
+    );
+  });
+
+  it("treats PRs from secondary linked repositories as informational", () => {
+    render(
+      <Composer
+        backgroundPrPollingEnabled
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Cross-repo work",
+          titleSource: "explicit",
+          source: "codex",
+          gitOriginUrl: "git@github.com:pwrdrvr/PwrAgent.git",
+          linkedDirectories: [
+            {
+              id: "directory-1",
+              kind: "local",
+              label: "PwrAgent",
+              path: "/repo/PwrAgent",
+            },
+            {
+              id: "directory-2",
+              kind: "local",
+              label: "Docs",
+              path: "/repo/docs.pwragent.ai",
+            },
+          ],
+          inbox: { inInbox: false },
+          prs: [
+            {
+              provider: "github.com",
+              number: 42,
+              org: "pwrdrvr",
+              repo: "docs.pwragent.ai",
+              state: "failing",
+              url: "https://github.com/pwrdrvr/docs.pwragent.ai/pull/42",
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Auto-fix PR" })).toHaveAttribute(
+      "data-tooltip",
+      "Auto-fix PR — starts when a PR for this workspace is linked",
     );
   });
 

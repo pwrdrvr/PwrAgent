@@ -44,6 +44,7 @@ import {
   buildThreadUrl,
   buildReviewBranchOptions,
   findPreferredReviewWorkspaceCwd,
+  normalizeGitOriginUrl,
   parseThreadUrl,
   readCodexEnvironmentActionRuns,
 } from "@pwragent/shared";
@@ -6886,6 +6887,17 @@ export function Composer(props: ComposerProps) {
     currentThreadEnvActionStartingKey,
   );
   const threadWorkspace = props.thread ? getThreadWorkspace(props.thread) : undefined;
+  const showPrAutoDispatchToggle = Boolean(
+    normalizeGitOriginUrl(props.thread?.gitOriginUrl),
+  );
+  const hasAttachedPullRequest = props.thread
+    ? hasPrimaryWorkspacePullRequest(props.thread)
+    : false;
+  const prAutoDispatchTooltip = !backgroundPrPollingEnabled
+    ? "Auto-fix PR paused — turn on background PR polling in Settings"
+    : hasAttachedPullRequest
+      ? "Auto-fix PR — handle new CI failures or merge conflicts"
+      : "Auto-fix PR — starts when a PR for this workspace is linked";
   const workspaceOpenPath = getComposerWorkspaceOpenPath({
     directory: props.directory,
     launchpad: props.launchpad,
@@ -8795,7 +8807,7 @@ export function Composer(props: ComposerProps) {
             </button>
           ) : null}
 
-          {props.thread ? (
+          {props.thread && showPrAutoDispatchToggle ? (
             <button
               type="button"
               className={`composer__toggle tooltip-target${
@@ -8803,11 +8815,7 @@ export function Composer(props: ComposerProps) {
               }`}
               aria-label="Auto-fix PR"
               aria-pressed={Boolean(props.thread.prAutoDispatchEnabled)}
-              data-tooltip={
-                backgroundPrPollingEnabled
-                  ? "Auto-fix PR — handle new CI failures or merge conflicts"
-                  : "Auto-fix PR paused — turn on background PR polling in Settings"
-              }
+              data-tooltip={prAutoDispatchTooltip}
               disabled={!backgroundPrPollingEnabled}
               onClick={() => {
                 if (!backgroundPrPollingEnabled) return;
@@ -9969,6 +9977,17 @@ function getThreadWorkspace(thread: NavigationThreadSummary): ThreadWorkspace | 
   }
 
   return undefined;
+}
+
+function hasPrimaryWorkspacePullRequest(
+  thread: NavigationThreadSummary,
+): boolean {
+  const primaryRepository = normalizeGitOriginUrl(thread.gitOriginUrl);
+  if (!primaryRepository) return false;
+  return (thread.prs ?? []).some((pr) =>
+    normalizeGitOriginUrl(`${pr.provider}/${pr.org}/${pr.repo}`)
+      === primaryRepository,
+  );
 }
 
 function isThreadWorkspaceHandoffEligible(params: {

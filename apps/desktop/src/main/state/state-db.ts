@@ -9,7 +9,7 @@ import {
 } from "@pwragent/shared";
 import { getNativeBinding } from "./native-binding.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 35;
+export const CURRENT_STATE_DB_USER_VERSION = 36;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -555,6 +555,46 @@ CREATE TABLE IF NOT EXISTS pr_auto_dispatch_incidents (
   updated_at    INTEGER NOT NULL,
   PRIMARY KEY (backend, thread_id, pr_key)
 );
+
+CREATE TABLE IF NOT EXISTS pr_auto_dispatch_candidates (
+  pr_key         TEXT NOT NULL,
+  backend        TEXT NOT NULL,
+  thread_id      TEXT NOT NULL,
+  eligible_since INTEGER NOT NULL,
+  updated_at     INTEGER NOT NULL,
+  PRIMARY KEY (pr_key, backend, thread_id)
+);
+CREATE INDEX IF NOT EXISTS idx_pr_auto_dispatch_candidate_winner
+  ON pr_auto_dispatch_candidates(pr_key, eligible_since, backend, thread_id);
+`;
+
+const PR_AUTO_DISPATCH_GLOBAL_FINGERPRINT_INDEX = `
+CREATE UNIQUE INDEX IF NOT EXISTS idx_pr_auto_dispatch_pr_fingerprint
+  ON pr_auto_dispatch_claims(pr_key, fingerprint);
+`;
+
+const PR_STATUS_WATCH_SCHEMA = `
+CREATE TABLE IF NOT EXISTS pr_status_watches (
+  watch_id           TEXT PRIMARY KEY,
+  backend            TEXT NOT NULL,
+  thread_id          TEXT NOT NULL,
+  pr_key             TEXT NOT NULL,
+  head_sha           TEXT NOT NULL,
+  notify_on_success  INTEGER NOT NULL,
+  notify_on_failure  INTEGER NOT NULL,
+  status             TEXT NOT NULL,
+  attempt_count      INTEGER NOT NULL DEFAULT 0,
+  lease_owner        TEXT,
+  lease_expires_at   INTEGER,
+  created_at         INTEGER NOT NULL,
+  updated_at         INTEGER NOT NULL,
+  payload            TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_pr_status_watches_active_target
+  ON pr_status_watches(backend, thread_id, pr_key, head_sha)
+  WHERE status IN ('watching', 'dispatching');
+CREATE INDEX IF NOT EXISTS idx_pr_status_watches_active_pr
+  ON pr_status_watches(pr_key, status, lease_expires_at);
 `;
 
 const THREAD_USAGE_PRICING_SCHEMA = `
@@ -790,6 +830,7 @@ const REVOKED_BINDINGS_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 const APP_RUNTIME_INSTANCE_RETENTION_MS = 60 * 60 * 1000;
 const COMPOSER_DRAFT_JOURNAL_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const COMPOSER_DRAFT_JOURNAL_CAP = 300;
+const PR_STATUS_WATCH_HISTORY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 /**
  * Per-platform cap for the messaging activity log. Older rows are
  * evicted FIFO so the table stays small even on busy platforms. Tuned
@@ -1058,9 +1099,33 @@ export class StateDb {
       db.transaction(() => {
         db.exec(MESSAGING_OBSERVED_SURFACE_SCHEMA);
         backfillObservedMessagingSurfaces(db);
+        db.pragma("user_version = 35");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 36) {
+      db.transaction(() => {
+        db.exec(PR_STATUS_WATCH_SCHEMA);
+        db.pragma("user_version = 35");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 36) {
+      db.transaction(() => {
+        db.exec(`
+          DELETE FROM pr_auto_dispatch_claims
+          WHERE rowid NOT IN (
+            SELECT MIN(rowid)
+            FROM pr_auto_dispatch_claims
+            GROUP BY pr_key, fingerprint
+          );
+        `);
+        db.exec(PR_AUTO_DISPATCH_SCHEMA);
+        db.exec(PR_AUTO_DISPATCH_GLOBAL_FINGERPRINT_INDEX);
         db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
       })();
     }
+    // Keep current-version databases converged without asking pre-v36 profiles
+    // to install the unique index before the migration above removes duplicates.
+    db.exec(PR_AUTO_DISPATCH_GLOBAL_FINGERPRINT_INDEX);
     return new StateDb(db);
   }
 
@@ -1148,6 +1213,13 @@ export class StateDb {
         .run(now - COMPOSER_DRAFT_JOURNAL_RETENTION_MS);
       this.db
         .prepare(
+          `DELETE FROM pr_status_watches
+           WHERE status NOT IN ('watching', 'dispatching')
+             AND updated_at < ?`,
+        )
+        .run(now - PR_STATUS_WATCH_HISTORY_RETENTION_MS);
+      this.db
+        .prepare(
           `DELETE FROM composer_draft_journal
            WHERE id IN (
              SELECT id FROM composer_draft_journal
@@ -1212,6 +1284,7 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     db.exec(PR_STATUS_CACHE_SCHEMA);
     db.exec(PR_LOOKUP_CACHE_SCHEMA);
     db.exec(PR_AUTO_DISPATCH_SCHEMA);
+    db.exec(PR_STATUS_WATCH_SCHEMA);
     ensureThreadSearchFtsThreadIdColumn(db);
     ensurePullRequestProviderColumns(db);
     ensureThreadUsagePricingProviderScope(db);

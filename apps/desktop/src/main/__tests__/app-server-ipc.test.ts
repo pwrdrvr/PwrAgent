@@ -250,6 +250,7 @@ function emitRegistryEvent(event: unknown): void {
 }
 const publishLocalEvent = vi.fn(async () => undefined);
 const setThreadPullRequestStatusToolHandler = vi.fn();
+const setThreadPullRequestWatchToolHandler = vi.fn();
 const setThreadPrAutoDispatchHandler = vi.fn();
 const ensureDirectoryLaunchpad = vi.fn(async (request: {
   directoryKey: string;
@@ -360,6 +361,8 @@ const readPrStatusCache = vi.fn(async () => ({}));
 const writePrStatusCacheEntries = vi.fn(async () => undefined);
 const readPrLookupCache = vi.fn(async () => ({}));
 const writePrLookupCacheEntry = vi.fn(async () => undefined);
+const syncThreadPrAutoDispatchCandidates = vi.fn(async () => undefined);
+const getPrAutoDispatchCandidateWinner = vi.fn(async () => undefined);
 const resetThreadPrAutoDispatchForOperator = vi.fn(async () => false);
 const scheduleThreadPrAutoDispatch = vi.fn(async () => ({
   status: "disabled" as const,
@@ -378,6 +381,17 @@ const listPendingThreadPrAutoDispatches = vi.fn(async () => []);
 const recoverOrphanedThreadPrAutoDispatches = vi.fn(async () => ({
   recoveredCount: 0,
 }));
+const registerThreadPrStatusWatch = vi.fn(async ({ watch }) => ({
+  status: "watching" as const,
+  watch,
+}));
+const claimThreadPrStatusWatches = vi.fn(async () => []);
+const releaseThreadPrStatusWatch = vi.fn(async () => undefined);
+const renewThreadPrStatusWatchLease = vi.fn(async () => false);
+const finishThreadPrStatusWatch = vi.fn(async () => undefined);
+const supersedeThreadPrStatusWatches = vi.fn(async () => 0);
+const listActiveThreadPrStatusWatches = vi.fn(async () => []);
+const cancelThreadPrStatusWatchesForPr = vi.fn(async () => 0);
 const isGhAvailable = vi.fn(async () => true);
 const getAuthStatus = vi.fn(async () => ({
   installed: true,
@@ -492,6 +506,8 @@ vi.mock("../app-server/desktop-overlay-store", () => ({
     writePrStatusCacheEntries,
     readPrLookupCache,
     writePrLookupCacheEntry,
+    syncThreadPrAutoDispatchCandidates,
+    getPrAutoDispatchCandidateWinner,
     resetThreadPrAutoDispatchForOperator,
     scheduleThreadPrAutoDispatch,
     beginThreadPrAutoDispatch,
@@ -504,6 +520,14 @@ vi.mock("../app-server/desktop-overlay-store", () => ({
     getThreadPrAutoDispatchPending,
     listPendingThreadPrAutoDispatches,
     recoverOrphanedThreadPrAutoDispatches,
+    registerThreadPrStatusWatch,
+    claimThreadPrStatusWatches,
+    releaseThreadPrStatusWatch,
+    renewThreadPrStatusWatchLease,
+    finishThreadPrStatusWatch,
+    supersedeThreadPrStatusWatches,
+    listActiveThreadPrStatusWatches,
+    cancelThreadPrStatusWatchesForPr,
     readDirectoryGitStatusCache,
     writeDirectoryGitStatusCacheEntry,
     readThreadGitWorkingStateCache,
@@ -534,6 +558,7 @@ vi.mock("../app-server/backend-registry", () => ({
     onEvent,
     publishLocalEvent,
     setThreadPullRequestStatusToolHandler,
+    setThreadPullRequestWatchToolHandler,
     setThreadPrAutoDispatchHandler,
     ensureDirectoryLaunchpad,
     getQueuedExecutionModesSnapshot: () => ({}),
@@ -584,6 +609,7 @@ describe("app server ipc", () => {
     registryEventListeners.length = 0;
     publishLocalEvent.mockClear();
     setThreadPullRequestStatusToolHandler.mockClear();
+    setThreadPullRequestWatchToolHandler.mockClear();
     setThreadPrAutoDispatchHandler.mockClear();
     ensureDirectoryLaunchpad.mockClear();
     markThreadSeen.mockClear();
@@ -614,6 +640,14 @@ describe("app server ipc", () => {
     getThreadPrAutoDispatchPending.mockClear();
     listPendingThreadPrAutoDispatches.mockClear();
     recoverOrphanedThreadPrAutoDispatches.mockClear();
+    registerThreadPrStatusWatch.mockClear();
+    claimThreadPrStatusWatches.mockClear();
+    releaseThreadPrStatusWatch.mockClear();
+    renewThreadPrStatusWatchLease.mockClear();
+    finishThreadPrStatusWatch.mockClear();
+    supersedeThreadPrStatusWatches.mockClear();
+    listActiveThreadPrStatusWatches.mockClear();
+    cancelThreadPrStatusWatchesForPr.mockClear();
     isGhAvailable.mockClear();
     isGhAvailable.mockResolvedValue(true);
     getAuthStatus.mockClear();
@@ -641,7 +675,136 @@ describe("app server ipc", () => {
       preferenceChanged: expect.any(Function),
       cancelPending: expect.any(Function),
       sendPendingNow: expect.any(Function),
+      inspect: expect.any(Function),
     });
+    expect(setThreadPullRequestWatchToolHandler).toHaveBeenCalledWith(
+      expect.any(Function),
+    );
+  });
+
+  it("does not advertise Auto-fix as active without a primary Git repository", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+    listThreads.mockResolvedValueOnce([
+      {
+        id: "thread-1",
+        title: "Local scratch directory",
+        titleSource: "explicit",
+        source: "codex",
+        linkedDirectories: [
+          {
+            id: "directory:/projects/scratch",
+            kind: "local",
+            label: "Scratch",
+            path: "/projects/scratch",
+          },
+        ],
+        updatedAt: 2000,
+      },
+    ] as never);
+    getThreadOverlayState.mockResolvedValue({
+      backend: "codex",
+      threadId: "thread-1",
+      executionMode: "default",
+      extraLinkedDirectories: [],
+      prAutoDispatchEnabled: true,
+    });
+
+    registerAppServerIpcHandlers();
+    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    const autoDispatchHandlers = setThreadPrAutoDispatchHandler.mock.calls.at(-1)?.[0];
+    expect(autoDispatchHandlers).toBeDefined();
+    await vi.waitFor(async () => {
+      const status = await autoDispatchHandlers?.inspect({
+        backend: "codex",
+        threadId: "thread-1",
+      });
+      expect(status).toMatchObject({
+        backgroundPollingEnabled: true,
+        autoFixEnabled: true,
+        autoFixActive: false,
+        guidance: expect.stringContaining("no GitHub primary workspace"),
+      });
+    });
+  });
+
+  it("keeps a new PR watch pending when the cached outcome is stale", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+    const stalePr = githubPr({
+      number: 1128,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      title: "PR automation",
+      state: "failing",
+      headSha: "a".repeat(40),
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/1128",
+    });
+    readPrStatusCache.mockResolvedValueOnce({
+      "github.com/pwrdrvr/pwragent#1128": {
+        provider: "github.com",
+        prKey: "github.com/pwrdrvr/pwragent#1128",
+        fetchedAt: Date.now() - 60_000,
+        pr: stalePr,
+      },
+    });
+    listThreads.mockResolvedValueOnce([
+      {
+        id: "thread-1",
+        title: "PR automation",
+        titleSource: "explicit",
+        source: "codex",
+        gitOriginUrl: "git@github.com:pwrdrvr/PwrAgent.git",
+        linkedDirectories: [
+          {
+            id: "directory:/repo/PwrAgent",
+            kind: "local",
+            label: "PwrAgent",
+            path: "/repo/PwrAgent",
+          },
+        ],
+        prs: [stalePr],
+        updatedAt: 2000,
+      },
+    ] as never);
+    getThreadOverlayState.mockResolvedValue({
+      backend: "codex",
+      threadId: "thread-1",
+      executionMode: "default",
+      extraLinkedDirectories: [],
+      prs: [stalePr],
+    });
+
+    registerAppServerIpcHandlers();
+    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    const autoDispatchHandlers = setThreadPrAutoDispatchHandler.mock.calls.at(-1)?.[0];
+    await vi.waitFor(async () => {
+      const status = await autoDispatchHandlers?.inspect({
+        backend: "codex",
+        threadId: "thread-1",
+      });
+      expect(status?.backgroundPollingEnabled).toBe(true);
+    });
+    const watchHandler = setThreadPullRequestWatchToolHandler.mock.calls.at(-1)?.[0];
+    const response = await watchHandler?.({
+      backend: "codex",
+      threadId: "thread-1",
+      notifyOn: ["failure"],
+    });
+
+    expect(response).toMatchObject({
+      ok: true,
+      data: {
+        pullRequestWatch: {
+          watch: {
+            prKey: "github.com/pwrdrvr/pwragent#1128",
+            notifyOn: ["failure"],
+          },
+        },
+      },
+    });
+    expect(registerThreadPrStatusWatch).toHaveBeenCalledOnce();
+    expect(claimThreadPrStatusWatches).not.toHaveBeenCalled();
   });
 
   it("aggregates navigation snapshots across backends by default", async () => {
@@ -4053,6 +4216,11 @@ describe("app server ipc", () => {
           lastStatusCheckAt: fetchedAt,
           branch: "feat/status-tool",
           directoryPaths: ["/repo/wt"],
+          prAutomation: {
+            backgroundPollingEnabled: false,
+            autoFixEnabled: false,
+            autoFixActive: false,
+          },
         },
       },
     });

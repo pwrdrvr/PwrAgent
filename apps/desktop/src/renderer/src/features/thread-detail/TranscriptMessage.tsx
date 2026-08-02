@@ -64,12 +64,77 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
   const [monitorExpanded, setMonitorExpanded] = useState(false);
   const [monitorDetailsOpen, setMonitorDetailsOpen] = useState(false);
   const monitorOrigin = props.message.origin?.subAgent;
+  const prAutomationOrigin = props.message.origin?.prAutomation;
   const monitorSubAgent = useMemo(
     () => props.subAgents?.find(
       (subAgent) => subAgent.monitorId === monitorOrigin?.monitorId,
     ),
     [monitorOrigin?.monitorId, props.subAgents],
   );
+
+  if (
+    props.message.origin?.kind === "pwragent"
+    && prAutomationOrigin
+  ) {
+    const outcomeTone = prAutomationOrigin.kind === "watch"
+      ? prAutomationOrigin.outcome === "success" ? "ok" : "error"
+      : "error";
+    return (
+      <article
+        className="transcript-message transcript-message--injected transcript-message--monitor-result transcript-message--pr-automation"
+      >
+        {renderMessageHeader({
+          continuation: false,
+          desktopApi: props.desktopApi,
+          message: props.message,
+          sourceThreadLink,
+          threadLinks,
+          text: messageCopyText,
+        })}
+        <div className="transcript-monitor-result__summary">
+          <button
+            type="button"
+            className="transcript-monitor-result__toggle"
+            aria-expanded={monitorExpanded}
+            onClick={() => setMonitorExpanded((current) => !current)}
+          >
+            <span
+              aria-hidden="true"
+              className="transcript-monitor-result__chevron"
+            />
+            <span>
+              {prAutomationOrigin.kind === "auto-fix"
+                ? "Auto-fix PR started"
+                : "PR watch completed"}
+            </span>
+          </button>
+          <RailStatusChip
+            alert={outcomeTone === "error"}
+            tone={outcomeTone}
+          >
+            {prAutomationResultLabel(prAutomationOrigin)}
+          </RailStatusChip>
+        </div>
+        {monitorExpanded ? (
+          <div className="transcript-monitor-result__content">
+            <div className="transcript-message__text">
+              {messageSegments.map((segment, index) =>
+                renderMessageSegment({
+                  segment,
+                  index,
+                  applications: props.applications,
+                  desktopApi: props.desktopApi,
+                  fileViewerContext: props.fileViewerContext,
+                  onOpenImage: props.onOpenImage,
+                  skills: props.skills,
+                }),
+              )}
+            </div>
+          </div>
+        ) : null}
+      </article>
+    );
+  }
 
   if (
     props.message.origin?.kind === "sub-agent"
@@ -568,7 +633,9 @@ function renderMessageHeader(params: {
     return null;
   }
 
-  const attributionClassName = params.message.origin?.kind === "sub-agent"
+  const attributionClassName =
+    params.message.origin?.kind === "sub-agent"
+    || params.message.origin?.prAutomation
     ? "transcript-message__attribution transcript-message__attribution--stacked"
     : "transcript-message__attribution";
 
@@ -587,6 +654,10 @@ function renderMessageHeader(params: {
         ) : params.message.origin?.sourceThread?.title ? (
           <span className="transcript-message__source">
             {params.message.origin.sourceThread.title}
+          </span>
+        ) : params.message.origin?.prAutomation ? (
+          <span className="transcript-message__source">
+            {formatPrAutomationSource(params.message.origin.prAutomation)}
           </span>
         ) : null}
         {params.message.origin?.kind === "messaging"
@@ -828,6 +899,28 @@ function monitorOutcomeLabel(
     case "cancelled":
       return "Cancelled";
   }
+}
+
+function formatPrAutomationSource(
+  origin: NonNullable<AppServerThreadMessageOrigin["prAutomation"]>,
+): string {
+  return origin.prTitle
+    ? `${origin.prKey} · ${origin.prTitle}`
+    : origin.prKey;
+}
+
+function prAutomationResultLabel(
+  origin: NonNullable<AppServerThreadMessageOrigin["prAutomation"]>,
+): string {
+  if (origin.kind === "watch") {
+    return origin.outcome === "success" ? "Success" : "Failed";
+  }
+  const eventKinds = origin.eventKinds ?? [];
+  if (eventKinds.includes("ci-failure") && eventKinds.includes("merge-conflict")) {
+    return "CI failed + conflict";
+  }
+  if (eventKinds.includes("merge-conflict")) return "Conflict";
+  return "CI failed";
 }
 
 function buildMessageCopyText(

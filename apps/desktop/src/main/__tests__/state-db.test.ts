@@ -64,6 +64,89 @@ describe("StateDb", () => {
     expect(prLookupColumns.map((column) => column.name)).toContain("provider");
   });
 
+  it("creates durable pull request status watch storage", () => {
+    const table = stateDb.raw
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+      )
+      .get("pr_status_watches") as { name: string } | undefined;
+    expect(table?.name).toBe("pr_status_watches");
+
+    const columns = stateDb.raw
+      .prepare("PRAGMA table_info(pr_status_watches)")
+      .all() as Array<{ name: string }>;
+    expect(columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining([
+        "watch_id",
+        "backend",
+        "thread_id",
+        "pr_key",
+        "head_sha",
+        "status",
+        "lease_owner",
+        "lease_expires_at",
+      ]),
+    );
+  });
+
+  it("creates durable PR auto-dispatch ownership storage", () => {
+    const table = stateDb.raw
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+      )
+      .get("pr_auto_dispatch_candidates") as { name: string } | undefined;
+    expect(table?.name).toBe("pr_auto_dispatch_candidates");
+
+    const fingerprintIndex = stateDb.raw
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?",
+      )
+      .get("idx_pr_auto_dispatch_pr_fingerprint") as
+        | { name: string }
+        | undefined;
+    expect(fingerprintIndex?.name).toBe(
+      "idx_pr_auto_dispatch_pr_fingerprint",
+    );
+  });
+
+  it("deduplicates legacy PR claims before creating the global fingerprint index", () => {
+    const dbPath = path.join(tempDir, "state.db");
+    stateDb.close();
+    const raw = openRawDb(dbPath);
+    raw.exec(`
+      DROP INDEX idx_pr_auto_dispatch_pr_fingerprint;
+      INSERT INTO pr_auto_dispatch_claims(
+        backend, thread_id, pr_key, fingerprint, status,
+        scheduled_at, created_at, updated_at, payload
+      ) VALUES
+        ('codex', 'thread-1', 'github.com/pwrdrvr/pwragent#1128', 'same-event', 'cancelled', 1, 1, 1, '{}'),
+        ('codex', 'thread-2', 'github.com/pwrdrvr/pwragent#1128', 'same-event', 'cancelled', 2, 2, 2, '{}');
+      PRAGMA user_version = 35;
+    `);
+    raw.close();
+
+    stateDb = StateDb.open(dbPath);
+
+    const claims = stateDb.raw
+      .prepare(
+        `SELECT backend, thread_id
+         FROM pr_auto_dispatch_claims
+         WHERE pr_key = ? AND fingerprint = ?`,
+      )
+      .all("github.com/pwrdrvr/pwragent#1128", "same-event");
+    expect(claims).toHaveLength(1);
+    const fingerprintIndex = stateDb.raw
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?",
+      )
+      .get("idx_pr_auto_dispatch_pr_fingerprint") as
+        | { name: string }
+        | undefined;
+    expect(fingerprintIndex?.name).toBe(
+      "idx_pr_auto_dispatch_pr_fingerprint",
+    );
+  });
+
   it("creates thread usage pricing ledger tables", () => {
     const tables = stateDb.raw
       .prepare(

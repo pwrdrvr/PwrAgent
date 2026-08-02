@@ -39,6 +39,19 @@ describe("PwrAgent thread agent tools", () => {
         ]),
       }),
     ]);
+    const namespace = router.buildDynamicToolSpecs()[0];
+    expect(namespace?.type).toBe("namespace");
+    if (!namespace || namespace.type !== "namespace") {
+      throw new Error("Expected PwrAgent namespace tool spec.");
+    }
+    const tools = namespace.tools;
+    expect(tools.find((tool) => tool.name === "check_thread_pull_request_status")
+      ?.description).toContain("do not poll CI");
+    expect(tools.find((tool) => tool.name === "watch_thread_pull_request"))
+      .toMatchObject({
+        name: "watch_thread_pull_request",
+        description: expect.stringContaining("end the current turn"),
+      });
 
     await expect(
       router.handleDynamicToolCall({

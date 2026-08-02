@@ -17,6 +17,7 @@ import type {
   PrSummary,
   RefreshThreadPullRequestsResponse,
   ThreadAgentMetadata,
+  ThreadPrAutoDispatchPending,
 } from "./navigation";
 import type {
   HandoffTaskGroupingMode,
@@ -46,6 +47,7 @@ export const PWRAGENT_THREAD_INSPECTION_OPERATION_NAMES = [
   "get_thread_status",
   "attach_thread_pull_request",
   "check_thread_pull_request_status",
+  "watch_thread_pull_request",
   "mutate_thread",
 ] as const;
 
@@ -211,7 +213,51 @@ export type CheckThreadPullRequestStatusResult =
     requestedAt: number;
     branch: string;
     directoryPaths: string[];
+    prAutomation: ThreadPullRequestAutomationStatus;
   };
+
+export type ThreadPullRequestAutomationStatus = {
+  backgroundPollingEnabled: boolean;
+  autoFixEnabled: boolean;
+  autoFixActive: boolean;
+  autoFixPending?: ThreadPrAutoDispatchPending;
+  watches?: ThreadPullRequestWatchSummary[];
+  guidance: string;
+};
+
+export type ThreadPullRequestWatchEvent = "success" | "failure";
+
+export type WatchThreadPullRequestToolArgs = {
+  /** Defaults to the invoking PwrAgent thread's backend when omitted. */
+  backend?: AppServerBackendKind;
+  /** Defaults to the invoking PwrAgent thread id when omitted. */
+  threadId?: ThreadIdentifier;
+  /** Full PR/MR URL. Omit only when the thread has exactly one attached PR. */
+  url?: string;
+  /** Events that should wake the thread. Defaults to both success and failure. */
+  notifyOn?: ThreadPullRequestWatchEvent[];
+};
+
+export type ThreadPullRequestWatchSummary = {
+  watchId: string;
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  prKey: string;
+  prUrl: string;
+  prNumber: number;
+  prTitle?: string;
+  headSha: string;
+  notifyOn: ThreadPullRequestWatchEvent[];
+  createdAt: number;
+  failureHandledByAutoFix: boolean;
+};
+
+export type WatchThreadPullRequestResult = {
+  watch?: ThreadPullRequestWatchSummary;
+  currentOutcome?: ThreadPullRequestWatchEvent;
+  coveredByAutoFix: ThreadPullRequestWatchEvent[];
+  prAutomation: ThreadPullRequestAutomationStatus;
+};
 
 export type ThreadMutationField =
   | "title"
@@ -255,6 +301,7 @@ export type ThreadInspectionSummary = {
   linkedDirectories: LinkedDirectorySummary[];
   linkedRepositories?: ThreadLinkedRepositorySummary[];
   pullRequests?: PrSummary[];
+  prAutomation?: ThreadPullRequestAutomationStatus;
   score?: number;
   confidence?: ThreadSearchConfidenceBand;
   matchReasons?: ThreadSearchMatchReason[];
@@ -430,6 +477,7 @@ export type PwrAgentThreadInspectionToolArgsByOperation = {
   get_thread_status: GetThreadStatusToolArgs;
   attach_thread_pull_request: AttachThreadPullRequestToolArgs;
   check_thread_pull_request_status: CheckThreadPullRequestStatusToolArgs;
+  watch_thread_pull_request: WatchThreadPullRequestToolArgs;
   mutate_thread: MutateThreadToolArgs;
 };
 
@@ -477,6 +525,9 @@ export type PwrAgentThreadInspectionResponse =
           }
         | {
             pullRequestStatus: CheckThreadPullRequestStatusResult;
+          }
+        | {
+            pullRequestWatch: WatchThreadPullRequestResult;
           }
         | {
             mutation: ThreadMutationResult;

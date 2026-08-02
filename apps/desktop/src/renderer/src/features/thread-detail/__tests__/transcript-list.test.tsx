@@ -297,6 +297,95 @@ describe("TranscriptList", () => {
     expect(screen.getByText("All required checks passed.")).toBeInTheDocument();
   });
 
+  it("renders PR automation prompts as compact expandable PwrAgent cards", () => {
+    const rawPrompt = [
+      "PwrAgent scheduled this bounded repair turn because an attached pull request needs attention.",
+      "",
+      "Pull request event",
+      "- PR: github.com/pwrdrvr/pwragent#1128",
+      "- Event kinds: ci-failure",
+      "- Dedupe fingerprint: fingerprint-1",
+    ].join("\n");
+    const { container } = render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "pr-auto-fix",
+            role: "user",
+            text: rawPrompt,
+            origin: {
+              kind: "pwragent",
+              prAutomation: {
+                kind: "auto-fix",
+                prKey: "github.com/pwrdrvr/pwragent#1128",
+                prNumber: 1128,
+                prTitle: "Wake threads on PR completion",
+                headSha: "a".repeat(40),
+                eventKinds: ["ci-failure"],
+              },
+            },
+          },
+        ]}
+        loading={false}
+        loadingMore={false}
+        onLoadOlder={async () => undefined}
+      />,
+    );
+
+    expect(screen.getByText("PwrAgent")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "github.com/pwrdrvr/pwragent#1128 · Wake threads on PR completion",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText("CI failed")).toBeInTheDocument();
+    expect(
+      screen.queryByText("Pull request event"),
+    ).not.toBeInTheDocument();
+    expect(
+      container.querySelector(".transcript-message--pr-automation"),
+    ).toBeInTheDocument();
+
+    const toggle = screen.getByRole("button", { name: "Auto-fix PR started" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("Pull request event")).toBeInTheDocument();
+    expect(screen.getByText(/Dedupe fingerprint/)).toBeInTheDocument();
+  });
+
+  it("renders a completed PR watch with its result pill", () => {
+    render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "pr-watch",
+            role: "user",
+            text: "PwrAgent resumed this thread because its one-shot pull request watch completed.",
+            origin: {
+              kind: "pwragent",
+              prAutomation: {
+                kind: "watch",
+                prKey: "github.com/pwrdrvr/pwragent#1128",
+                prNumber: 1128,
+                headSha: "a".repeat(40),
+                outcome: "success",
+              },
+            },
+          },
+        ]}
+        loading={false}
+        loadingMore={false}
+        onLoadOlder={async () => undefined}
+      />,
+    );
+
+    expect(screen.getByText("PR watch completed")).toBeInTheDocument();
+    expect(screen.getByText("Success")).toBeInTheDocument();
+  });
+
   it("shows a linked messaging origin with its full value in a tooltip", async () => {
     const { container } = render(
       <TranscriptList
