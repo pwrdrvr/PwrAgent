@@ -478,7 +478,14 @@ describe("Composer", () => {
       title: "Fix CI",
       titleSource: "explicit",
       source: "codex",
-      linkedDirectories: [],
+      linkedDirectories: [
+        {
+          id: "directory-1",
+          kind: "local",
+          label: "PwrAgent",
+          path: "/repo/PwrAgent",
+        },
+      ],
       inbox: { inInbox: false },
       prAutoDispatchEnabled: true,
     };
@@ -494,6 +501,10 @@ describe("Composer", () => {
 
     const toggle = screen.getByRole("button", { name: "Auto-fix PR" });
     expect(toggle).toHaveAttribute("aria-pressed", "true");
+    expect(toggle).toHaveAttribute(
+      "data-tooltip",
+      "Auto-fix PR — starts monitoring when a PR is linked",
+    );
     fireEvent.click(toggle);
     await waitFor(() => {
       expect(onSetThreadPrAutoDispatch).toHaveBeenCalledWith(false);
@@ -516,6 +527,69 @@ describe("Composer", () => {
     expect(screen.getByRole("button", { name: "Auto-fix PR" })).toHaveAttribute(
       "data-tooltip",
       expect.stringContaining("paused"),
+    );
+  });
+
+  it("hides Auto-fix PR when the thread is not backed by a Git repository", () => {
+    render(
+      <Composer
+        backgroundPrPollingEnabled
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Scratch work",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          projectKey: "/projects/scratch",
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: "Auto-fix PR" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows the failure-monitoring tooltip when a Git thread has a linked PR", () => {
+    render(
+      <Composer
+        backgroundPrPollingEnabled
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Fix CI",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [
+            {
+              id: "directory-1",
+              kind: "local",
+              label: "PwrAgent",
+              path: "/repo/PwrAgent",
+            },
+          ],
+          inbox: { inInbox: false },
+          prs: [
+            {
+              provider: "github.com",
+              number: 1128,
+              org: "pwrdrvr",
+              repo: "PwrAgent",
+              state: "passing",
+              url: "https://github.com/pwrdrvr/PwrAgent/pull/1128",
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Auto-fix PR" })).toHaveAttribute(
+      "data-tooltip",
+      "Auto-fix PR — handle new CI failures or merge conflicts",
     );
   });
 
