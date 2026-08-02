@@ -707,8 +707,17 @@ function runShellCommand(
           if (signal === "SIGKILL") {
             taskkillArgs.push("/f");
           }
-          spawnSync("taskkill", taskkillArgs, {
-            env: buildPwrAgentChildProcessEnv(process.env),
+          const taskkillEnv = buildPwrAgentChildProcessEnv(process.env);
+          const systemRoot = Object.entries(taskkillEnv).find(
+            ([key]) => key.toUpperCase() === "SYSTEMROOT",
+          )?.[1];
+          // The explicit environment is necessary to keep the renderer URL out
+          // of the helper, so resolve taskkill without relying on its PATH.
+          const taskkill = systemRoot
+            ? path.join(systemRoot, "System32", "taskkill.exe")
+            : "taskkill";
+          spawnSync(taskkill, taskkillArgs, {
+            env: taskkillEnv,
             stdio: "ignore",
           });
         }

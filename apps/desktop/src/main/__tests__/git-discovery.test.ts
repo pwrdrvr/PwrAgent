@@ -136,6 +136,7 @@ describe("Git discovery", () => {
     missingError.code = "ENOENT";
     const hydratedEnv = {
       PATH: "/nix/profile/bin:/usr/bin",
+      ELECTRON_RENDERER_URL: "http://localhost:5175",
     } as NodeJS.ProcessEnv;
     execFileMock.mockImplementation(
       (
@@ -147,7 +148,11 @@ describe("Git discovery", () => {
           result?: { stdout: string; stderr?: string },
         ) => void,
       ) => {
-        if (command === "git" && options.env === hydratedEnv) {
+        if (
+          command === "git"
+          && options.env?.PATH === hydratedEnv.PATH
+          && options.env?.ELECTRON_RENDERER_URL === undefined
+        ) {
           callback(null, {
             stdout: args[0] === "--version" ? "git version 2.49.0\n" : "ok\n",
           });
@@ -167,15 +172,24 @@ describe("Git discovery", () => {
     expect(execFileMock).toHaveBeenCalledWith(
       "git",
       ["--version"],
-      expect.objectContaining({ env: hydratedEnv }),
+      expect.objectContaining({
+        env: expect.objectContaining({ PATH: hydratedEnv.PATH }),
+      }),
       expect.any(Function),
     );
     expect(execFileMock).toHaveBeenCalledWith(
       "git",
       ["-C", "/repo", "status", "--short"],
-      expect.objectContaining({ env: hydratedEnv }),
+      expect.objectContaining({
+        env: expect.objectContaining({ PATH: hydratedEnv.PATH }),
+      }),
       expect.any(Function),
     );
+    for (const [, , options] of execFileMock.mock.calls) {
+      expect((options as { env?: NodeJS.ProcessEnv }).env).not.toHaveProperty(
+        "ELECTRON_RENDERER_URL",
+      );
+    }
   });
 
   it.skipIf(process.platform === "win32")("does not reuse app-server git resolution across different PATH values", async () => {
@@ -184,6 +198,7 @@ describe("Git discovery", () => {
     const finderEnv = { PATH: "/usr/bin:/bin" } as NodeJS.ProcessEnv;
     const hydratedEnv = {
       PATH: "/custom/bin:/usr/bin:/bin",
+      ELECTRON_RENDERER_URL: "http://localhost:5175",
     } as NodeJS.ProcessEnv;
     execFileMock.mockImplementation(
       (
@@ -196,9 +211,10 @@ describe("Git discovery", () => {
         ) => void,
       ) => {
         if (
-          command === "git" &&
-          args[0] === "--version" &&
-          options.env === hydratedEnv
+          command === "git"
+          && args[0] === "--version"
+          && options.env?.PATH === hydratedEnv.PATH
+          && options.env?.ELECTRON_RENDERER_URL === undefined
         ) {
           callback(null, { stdout: "git version 2.49.0\n" });
           return;
