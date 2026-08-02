@@ -390,6 +390,10 @@ describe("App", () => {
           value: false,
           source: "default",
         },
+        pdfAnalysisEnabled: {
+          value: true,
+          source: "default",
+        },
         hotCpuProfilingEnabled: {
           value: false,
           source: "default",

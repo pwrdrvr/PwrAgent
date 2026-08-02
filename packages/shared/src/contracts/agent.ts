@@ -709,6 +709,19 @@ export type PickReferenceFromDiskResponse =
     };
 
 /**
+ * A bounded main-process PDF check for explicitly selected local-file
+ * references. The check reads only the `%PDF-` signature, so it works for
+ * extensionless Finder files without transporting document bytes to a model.
+ */
+export type InspectPdfReferencePathsRequest = {
+  paths: string[];
+};
+
+export type InspectPdfReferencePathsResponse = {
+  pdfPaths: string[];
+};
+
+/**
  * Recently referenced files for the composer's reference picker. The main
  * process persists a small most-recent-first list of paths (capped,
  * deduped by path) and computes each label from the path's basename.

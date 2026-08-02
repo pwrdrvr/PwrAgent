@@ -123,6 +123,7 @@ export function GeneralSettings(props: {
   saving: boolean;
   snapshot: DesktopSettingsSnapshot;
   onConfirmQuitWithInProgressThreadsChange: (value: boolean) => Promise<void>;
+  onPdfAnalysisEnabledChange: (value: boolean) => Promise<void>;
   onPastedImageMaxPatchesChange: (value: number) => Promise<void>;
   onUpdateChannelChange: (value: DesktopUpdateChannel) => Promise<void>;
   onNotificationsEnabledChange: (value: boolean) => Promise<void>;
@@ -146,6 +147,7 @@ export function GeneralSettings(props: {
     props.snapshot.imageUploads.pastedImageMaxPatches;
   const confirmQuitWithInProgressThreads =
     props.snapshot.general.confirmQuitWithInProgressThreads;
+  const pdfAnalysisEnabled = props.snapshot.general.pdfAnalysisEnabled;
   const notificationsEnabled = props.snapshot.general.notificationsEnabled;
   const updateChannel = props.snapshot.updates.channel;
   const messagingAcknowledgment =
@@ -512,6 +514,31 @@ export function GeneralSettings(props: {
                   </button>
                 ))}
               </div>
+            }
+          />
+        </div>
+      </SettingsSection>
+
+      <SettingsSection
+        eyebrow="General"
+        title="PDF analysis"
+        chip={sourceBadge(pdfAnalysisEnabled)}
+      >
+        <div className="settings-fields">
+          <SettingsField
+            label="Use PwrAgent PDF analysis"
+            sub="Use local PDF tools to select pages on supported Codex threads, or render a bounded page set when a backend requires image input. This preserves visual layout while avoiding raw PDF input overhead."
+            help="Turn this off to leave PDFs as normal local-file references for model-directed code or manual inspection."
+            source={sourceBadge(pdfAnalysisEnabled)}
+            control={
+              <SettingsSwitch
+                checked={pdfAnalysisEnabled.value}
+                disabled={props.saving}
+                label="Use PwrAgent PDF analysis"
+                onChange={(value) => {
+                  void props.onPdfAnalysisEnabledChange(value);
+                }}
+              />
             }
           />
         </div>

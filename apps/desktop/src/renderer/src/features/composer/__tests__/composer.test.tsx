@@ -5250,6 +5250,97 @@ describe("Composer", () => {
     expect(screen.queryByLabelText("Pending steer message")).not.toBeInTheDocument();
   });
 
+  it("keeps a pending steer local-file reference when a terminal event queues it", async () => {
+    const draftStore = createComposerDraftStore();
+    draftStore.setPendingSteer("thread:codex:thread-1", {
+      id: "pending-jeep",
+      input: [
+        { type: "text", text: "Compare [@Jeep](~/Downloads/Jeep)" },
+        {
+          type: "localFile",
+          name: "Jeep",
+          path: "/Users/huntharo/Downloads/Jeep",
+          pdfRenderProfile: "high",
+        },
+      ],
+      text: "Compare [@Jeep](~/Downloads/Jeep)",
+      imageAttachments: [],
+      fileAttachments: [],
+    });
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex";
+          notification: {
+            method: string;
+            params: Record<string, unknown>;
+          };
+        }) => void)
+      | undefined;
+    const startTurn = vi.fn(async (request: StartTurnRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: "turn-2",
+    }));
+
+    render(
+      <Composer
+        activeTurnId="turn-1"
+        backends={[backendSummary("codex")]}
+        desktopApi={{
+          onAgentEvent: (callback) => {
+            agentEventHandler = callback as typeof agentEventHandler;
+            return () => undefined;
+          },
+          startTurn,
+        }}
+        disabled={false}
+        draftStore={draftStore}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Steerable thread",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            turn: { id: "turn-1", status: "completed" },
+          },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          backend: "codex",
+          threadId: "thread-1",
+          input: [
+            { type: "text", text: "Compare [@Jeep](~/Downloads/Jeep)" },
+            {
+              type: "localFile",
+              name: "Jeep",
+              path: "/Users/huntharo/Downloads/Jeep",
+              pdfRenderProfile: "high",
+            },
+          ],
+        }),
+      );
+    });
+  });
+
   it("lets pending steers be edited before they are injected", async () => {
     const steerTurn = vi.fn(async () => ({
       backend: "codex" as const,
@@ -11503,6 +11594,11 @@ describe("Composer", () => {
           type: "text",
           text: "Check [@spec.md](~/notes/spec.md)",
         },
+        {
+          type: "localFile",
+          name: "spec.md",
+          path: "/Users/huntharo/notes/spec.md",
+        },
       ]);
     } finally {
       delete (window as unknown as { __pwragentHomeDir?: string })
@@ -14392,6 +14488,11 @@ describe("Composer", () => {
                 type: "text",
                 text: "Look at this\n\n[@notes.txt](~/notes/notes.txt)",
               },
+              {
+                type: "localFile",
+                name: "notes.txt",
+                path: "/Users/huntharo/notes/notes.txt",
+              },
             ],
           })
         );
@@ -14400,6 +14501,62 @@ describe("Composer", () => {
       await waitFor(() =>
         expect(screen.queryByText("notes.txt")).not.toBeInTheDocument()
       );
+    } finally {
+      delete (window as unknown as { __pwragentHomeDir?: string })
+        .__pwragentHomeDir;
+    }
+  });
+
+  it("shows the PDF analysis indicator for an extensionless explicit file reference", async () => {
+    (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
+      "/Users/huntharo";
+    try {
+      const inspectPdfReferencePaths = vi.fn(async ({ paths }: { paths: string[] }) => ({
+        pdfPaths: paths,
+      }));
+      const jeepFile = new File(["%PDF-1.7"], "Jeep", {
+        type: "application/octet-stream",
+      });
+
+      render(
+        <Composer
+          desktopApi={{
+            onAgentEvent: () => () => undefined,
+            getPathForFile: () => "/Users/huntharo/Downloads/Jeep",
+            inspectPdfReferencePaths,
+          }}
+          disabled={false}
+          skills={[]}
+          thread={{
+            id: "thread-1",
+            title: "Compare window stickers",
+            titleSource: "explicit",
+            source: "codex",
+            linkedDirectories: [],
+            inbox: { inInbox: false },
+          }}
+        />
+      );
+
+      fireEvent.drop(screen.getByLabelText("Reply"), {
+        dataTransfer: {
+          files: [],
+          items: [
+            {
+              kind: "file",
+              type: "application/octet-stream",
+              getAsFile: () => jeepFile,
+            },
+          ],
+        },
+      });
+
+      await waitFor(() => {
+        expect(inspectPdfReferencePaths).toHaveBeenCalledWith({
+          paths: ["/Users/huntharo/Downloads/Jeep"],
+        });
+      });
+      expect(await screen.findByText(/PDF analysis is on\./)).toBeInTheDocument();
     } finally {
       delete (window as unknown as { __pwragentHomeDir?: string })
         .__pwragentHomeDir;
@@ -14455,6 +14612,11 @@ describe("Composer", () => {
           expect.objectContaining({
             input: [
               { type: "text", text: "[@notes.txt](~/notes/notes.txt)" },
+              {
+                type: "localFile",
+                name: "notes.txt",
+                path: "/Users/huntharo/notes/notes.txt",
+              },
             ],
           })
         );

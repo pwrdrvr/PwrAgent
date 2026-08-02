@@ -59,6 +59,8 @@ import {
   type PickDirectoryFromDiskResponse,
   type PickFileFromDiskResponse,
   type PickReferenceFromDiskResponse,
+  type InspectPdfReferencePathsRequest,
+  type InspectPdfReferencePathsResponse,
   type RecordRecentFileReferencesRequest,
   type DetachThreadPullRequestRequest,
   type DetachThreadPullRequestResponse,
@@ -191,6 +193,7 @@ import {
   NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL,
   NAVIGATION_PICK_FILE_FROM_DISK_CHANNEL,
   NAVIGATION_PICK_REFERENCE_FROM_DISK_CHANNEL,
+  NAVIGATION_INSPECT_PDF_REFERENCE_PATHS_CHANNEL,
   NAVIGATION_RECORD_RECENT_FILE_REFERENCES_CHANNEL,
   NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL,
   NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
@@ -339,6 +342,33 @@ function classifyReferencePaths(
     }
   }
   return entries;
+}
+
+const PDF_MAGIC = Buffer.from("%PDF-");
+const MAX_PDF_REFERENCE_PATHS = 20;
+
+function inspectPdfReferencePaths(paths: string[]): string[] {
+  const pdfPaths: string[] = [];
+  const candidates = [...new Set(paths.filter((candidate) => candidate.trim()))]
+    .slice(0, MAX_PDF_REFERENCE_PATHS);
+  for (const candidate of candidates) {
+    let descriptor: number | undefined;
+    try {
+      descriptor = fs.openSync(candidate, "r");
+      const header = Buffer.alloc(PDF_MAGIC.byteLength);
+      const bytesRead = fs.readSync(descriptor, header, 0, header.byteLength, 0);
+      if (bytesRead === PDF_MAGIC.byteLength && header.equals(PDF_MAGIC)) {
+        pdfPaths.push(candidate);
+      }
+    } catch {
+      // The path may have been removed or be an unreadable non-file.
+    } finally {
+      if (descriptor !== undefined) {
+        fs.closeSync(descriptor);
+      }
+    }
+  }
+  return pdfPaths;
 }
 
 function logDebug(event: string, payload: Record<string, unknown>): void {
@@ -5823,6 +5853,16 @@ export function registerAppServerIpcHandlers(): void {
         senderWindow ?? undefined,
       );
     },
+  );
+  ipcMain.removeHandler(NAVIGATION_INSPECT_PDF_REFERENCE_PATHS_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_INSPECT_PDF_REFERENCE_PATHS_CHANNEL,
+    async (
+      _event,
+      request: InspectPdfReferencePathsRequest,
+    ): Promise<InspectPdfReferencePathsResponse> => ({
+      pdfPaths: inspectPdfReferencePaths(request.paths ?? []),
+    }),
   );
   ipcMain.removeHandler(NAVIGATION_LIST_RECENT_FILE_REFERENCES_CHANNEL);
   ipcMain.handle(
