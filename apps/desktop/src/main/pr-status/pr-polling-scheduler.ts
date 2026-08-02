@@ -18,10 +18,10 @@ const schedulerLog = getMainLogger("pwragent:pr-poller");
  * AppServerService — that keeps it unit-testable without booting the app, and
  * keeps the module graph acyclic.
  *
- * Budget shape: one GraphQL request covers up to `BATCH_SIZE` PRs across
- * arbitrary repos for ~1 rate-limit point, and we take one token bucket slot
- * per request (not per PR), so a full sweep of a few hundred PRs is a handful
- * of points.
+ * Budget shape: one admitted GraphQL batch covers up to `BATCH_SIZE` PRs
+ * across arbitrary repos. PRs with more than 100 status contexts can require
+ * paginated follow-ups, but those are coalesced per page and stop as soon as a
+ * running check is found.
  */
 
 /**

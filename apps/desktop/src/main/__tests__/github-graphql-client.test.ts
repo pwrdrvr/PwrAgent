@@ -3,6 +3,7 @@ import {
   GithubGraphqlPrClient,
   branchRefKey,
   buildBatchedPrQuery,
+  buildBatchedStatusContextQuery,
   buildBranchPrQuery,
   mapGraphqlPrNode,
   parsePrRefFromUrl,
@@ -24,8 +25,15 @@ function node(overrides: Partial<GraphqlPrNode> = {}): GraphqlPrNode {
       nodes: [
         {
           commit: {
+            id: "commit-a",
             oid: "a".repeat(40),
-            statusCheckRollup: { state: "SUCCESS" },
+            statusCheckRollup: {
+              state: "SUCCESS",
+              contexts: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [],
+              },
+            },
           },
         },
       ],
@@ -65,6 +73,7 @@ describe("buildBatchedPrQuery", () => {
     expect(query).toContain("pullRequest(number: $p1)");
     expect(query.match(/repository\(/g)).toHaveLength(2);
     expect(query).toContain("contexts(first: 100)");
+    expect(query).toContain("pageInfo { hasNextPage endCursor }");
   });
 
   it("passes every input as a variable rather than interpolating it", () => {
@@ -86,6 +95,26 @@ describe("buildBatchedPrQuery", () => {
       o1: "other",
       n1: "infra",
       p1: 7,
+    });
+  });
+});
+
+describe("buildBatchedStatusContextQuery", () => {
+  it("uses commit ids and pagination cursors as variables", () => {
+    const { query, variables } = buildBatchedStatusContextQuery([
+      { commitId: "commit-1", cursor: "cursor-1" },
+      { commitId: "commit-2", cursor: "cursor-2" },
+    ]);
+
+    expect(query).toContain("r0: node(id: $id0)");
+    expect(query).toContain("r1: node(id: $id1)");
+    expect(query).toContain("contexts(first: 100, after: $c0)");
+    expect(query).toContain("contexts(first: 100, after: $c1)");
+    expect(variables).toEqual({
+      id0: "commit-1",
+      c0: "cursor-1",
+      id1: "commit-2",
+      c1: "cursor-2",
     });
   });
 });
@@ -325,6 +354,112 @@ describe("GithubGraphqlPrClient", () => {
 
     expect(request).toHaveBeenCalledTimes(1);
     expect(prs.map((pr) => pr.number)).toEqual([12, 7]);
+  });
+
+  it("paginates contexts before clearing a failed PR's running marker", async () => {
+    const truncated = node({
+      commits: {
+        nodes: [{
+          commit: {
+            id: "commit-12",
+            oid: "b".repeat(40),
+            statusCheckRollup: {
+              state: "FAILURE",
+              contexts: {
+                pageInfo: { hasNextPage: true, endCursor: "page-1" },
+                nodes: [{
+                  __typename: "CheckRun",
+                  conclusion: "FAILURE",
+                  status: "COMPLETED",
+                }],
+              },
+            },
+          },
+        }],
+      },
+    });
+    const continuationCursors: string[] = [];
+    const request = vi.fn(async (
+      query: string,
+      variables: Record<string, string | number>,
+    ) => {
+      if (query.includes("PollStatusContextPages")) {
+        continuationCursors.push(String(variables.c0));
+        if (variables.c0 === "page-1") {
+          return {
+            r0: {
+              statusCheckRollup: {
+                contexts: {
+                  pageInfo: { hasNextPage: true, endCursor: "page-2" },
+                  nodes: [{
+                    __typename: "CheckRun",
+                    conclusion: "FAILURE",
+                    status: "COMPLETED",
+                  }],
+                },
+              },
+            },
+          };
+        }
+        return {
+          r0: {
+            statusCheckRollup: {
+              contexts: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [{
+                  __typename: "CheckRun",
+                  conclusion: null,
+                  status: "IN_PROGRESS",
+                }],
+              },
+            },
+          },
+        };
+      }
+      return { r0: { pullRequest: truncated } };
+    });
+
+    const [pr] = await client(request).fetchPullRequests([refs[0]!]);
+
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(continuationCursors).toEqual(["page-1", "page-2"]);
+    expect(pr).toMatchObject({
+      checkState: "failing",
+      checksStillRunning: true,
+    });
+  });
+
+  it("keeps cached status when a later context page cannot be resolved", async () => {
+    const truncated = node({
+      commits: {
+        nodes: [{
+          commit: {
+            id: "commit-12",
+            oid: "b".repeat(40),
+            statusCheckRollup: {
+              state: "FAILURE",
+              contexts: {
+                pageInfo: { hasNextPage: true, endCursor: "page-1" },
+                nodes: [{
+                  __typename: "CheckRun",
+                  conclusion: "FAILURE",
+                  status: "COMPLETED",
+                }],
+              },
+            },
+          },
+        }],
+      },
+    });
+    const request = vi.fn(async (query: string) => {
+      if (query.includes("PollStatusContextPages")) {
+        throw Object.assign(new Error("forbidden"), { status: 403 });
+      }
+      return { r0: { pullRequest: truncated } };
+    });
+
+    await expect(client(request).fetchPullRequests([refs[0]!])).resolves.toEqual([]);
+    expect(request).toHaveBeenCalledTimes(2);
   });
 
   it("chunks into separate requests once past the batch size", async () => {

@@ -28,9 +28,10 @@ const graphqlLog = getMainLogger("pwragent:pr-graphql");
  * GraphQL can: aliased top-level `repository(...)` selections put N PRs from
  * arbitrary repos into ONE request. GitHub bills GraphQL on a node/point model
  * against 5,000 points/hr. The query keeps its connections bounded to one head
- * commit and at most 100 status contexts per PR, which lets it preserve
- * failure-while-running state without returning check output. That is the
- * entire reason the poller does not shell out to `gh`.
+ * commit and pages status contexts in batches of 100, stopping as soon as it
+ * finds a running check. That lets it preserve failure-while-running state
+ * without returning check output. That is the entire reason the poller does
+ * not shell out to `gh`.
  *
  * Auth is still `gh`'s: we mint a token with `gh auth token` rather than asking
  * the operator for a PAT, so there is no new credential to store.
@@ -38,6 +39,8 @@ const graphqlLog = getMainLogger("pwragent:pr-graphql");
 
 /** How many aliased PR lookups go into one GraphQL request. */
 const DEFAULT_BATCH_SIZE = 40;
+/** GitHub's maximum page size for status check contexts. */
+const STATUS_CONTEXT_PAGE_SIZE = 100;
 /** Retries per request before giving up on a batch. */
 const MAX_RETRIES = 4;
 /** Upper bound on any single backoff wait. */
@@ -83,6 +86,8 @@ export function parsePrRefFromUrl(url: string): PrRef | undefined {
  * The PullRequest fields the poller reads. `contexts` carries only enough
  * state to distinguish a completed failure from a failure while sibling
  * checks still run; we deliberately do not fetch names, URLs, or output.
+ * Later pages are fetched only when this page cannot already prove a check is
+ * running.
  */
 const PR_STATUS_FRAGMENT = `
 fragment PrStatus on PullRequest {
@@ -97,10 +102,12 @@ fragment PrStatus on PullRequest {
   commits(last: 1) {
     nodes {
       commit {
+        id
         oid
         statusCheckRollup {
           state
-          contexts(first: 100) {
+          contexts(first: ${STATUS_CONTEXT_PAGE_SIZE}) {
+            pageInfo { hasNextPage endCursor }
             nodes {
               __typename
               ... on CheckRun { conclusion status }
@@ -112,6 +119,30 @@ fragment PrStatus on PullRequest {
     }
   }
 }`;
+
+type GraphqlCheckContext = {
+  __typename?: string;
+  conclusion?: string | null;
+  status?: string | null;
+  state?: string | null;
+};
+
+type GraphqlStatusContextPage = {
+  nodes?: (GraphqlCheckContext | null)[] | null;
+  pageInfo?: {
+    hasNextPage?: boolean | null;
+    endCursor?: string | null;
+  } | null;
+};
+
+type GraphqlCommit = {
+  id?: string | null;
+  oid?: string | null;
+  statusCheckRollup?: {
+    state?: string | null;
+    contexts?: GraphqlStatusContextPage | null;
+  } | null;
+};
 
 export type GraphqlPrNode = {
   number: number;
@@ -125,26 +156,11 @@ export type GraphqlPrNode = {
   commits?: {
     nodes?: (
       | {
-        commit?: {
-          oid?: string | null;
-          statusCheckRollup?: {
-            state?: string | null;
-            contexts?: {
-              nodes?: (GraphqlCheckContext | null)[] | null;
-            } | null;
-          } | null;
-        } | null;
+        commit?: GraphqlCommit | null;
       }
       | null
     )[] | null;
   } | null;
-};
-
-type GraphqlCheckContext = {
-  __typename?: string;
-  conclusion?: string | null;
-  status?: string | null;
-  state?: string | null;
 };
 
 /** A single aliased `repository { pullRequest }` selection in the response. */
@@ -152,6 +168,11 @@ type BatchedPrResponse = Record<
   string,
   { pullRequest?: GraphqlPrNode | null } | null
 >;
+
+type StatusContextPageRef = {
+  commitId: string;
+  cursor: string;
+};
 
 /**
  * Build one GraphQL document that looks up every ref by number, each under its
@@ -190,6 +211,52 @@ ${selections.join("\n")}
 ${PR_STATUS_FRAGMENT}`;
 
   return { query, variables };
+}
+
+/**
+ * Fetch one later page of status contexts for every supplied head commit.
+ *
+ * The initial PR query has already established these are `Commit` nodes, so
+ * this can use the global node ID instead of repeating repository/PR lookups.
+ * As with the primary batch, only generated aliases and variable names enter
+ * the document text; commit IDs and cursors remain variables.
+ */
+export function buildBatchedStatusContextQuery(refs: StatusContextPageRef[]): {
+  query: string;
+  variables: Record<string, string | number>;
+} {
+  const variableDecls: string[] = [];
+  const selections: string[] = [];
+  const variables: Record<string, string | number> = {};
+
+  refs.forEach((ref, index) => {
+    const id = `id${index}`;
+    const cursor = `c${index}`;
+    variableDecls.push(`$${id}: ID!`, `$${cursor}: String!`);
+    selections.push(`
+  r${index}: node(id: $${id}) {
+    ... on Commit {
+      statusCheckRollup {
+        contexts(first: ${STATUS_CONTEXT_PAGE_SIZE}, after: $${cursor}) {
+          pageInfo { hasNextPage endCursor }
+          nodes {
+            __typename
+            ... on CheckRun { conclusion status }
+            ... on StatusContext { state }
+          }
+        }
+      }
+    }
+  }`);
+    variables[id] = ref.commitId;
+    variables[cursor] = ref.cursor;
+  });
+
+  return {
+    query: `query PollStatusContextPages(${variableDecls.join(", ")}) {${selections.join("\n")}
+}`,
+    variables,
+  };
 }
 
 /**
@@ -261,17 +328,22 @@ ${PR_STATUS_FRAGMENT}`;
 }
 
 /** Map one GraphQL PullRequest node onto our shared PrSummary. */
-export function mapGraphqlPrNode(node: GraphqlPrNode): PrSummary {
-  const headCommit = node.commits?.nodes?.[0]?.commit ?? undefined;
+export function mapGraphqlPrNode(
+  node: GraphqlPrNode,
+  checksStillRunningOverride?: boolean,
+): PrSummary {
+  const headCommit = getHeadCommit(node);
   const checkContexts = headCommit?.statusCheckRollup?.contexts?.nodes ?? [];
   const checkState = deriveChipStateFromRollup(
     headCommit?.statusCheckRollup?.state,
   );
-  const checksStillRunning = hasChecksStillRunning(
-    checkContexts.filter(
-      (context): context is GraphqlCheckContext => context !== null,
-    ),
-  );
+  const checksStillRunning =
+    checksStillRunningOverride
+    ?? hasChecksStillRunning(
+      checkContexts.filter(
+        (context): context is GraphqlCheckContext => context !== null,
+      ),
+    );
   // `mergeStateStatus` is deliberately absent: GraphQL gates it behind a preview
   // Accept header, and `mergeable` alone already answers mergeable/conflicting.
   const shaped = {
@@ -301,6 +373,19 @@ export function mapGraphqlPrNode(node: GraphqlPrNode): PrSummary {
     ...(commitShas.length > 0 ? { commitShas } : {}),
     url: node.url,
   };
+}
+
+function getHeadCommit(node: GraphqlPrNode): GraphqlCommit | undefined {
+  return node.commits?.nodes?.[0]?.commit ?? undefined;
+}
+
+function readCheckContexts(
+  page: GraphqlStatusContextPage | null | undefined,
+): GraphqlCheckContext[] | undefined {
+  const nodes = page?.nodes;
+  return nodes?.filter(
+    (context): context is GraphqlCheckContext => context !== null,
+  );
 }
 
 /**
@@ -460,25 +545,148 @@ export class GithubGraphqlPrClient {
       if (!data) {
         continue;
       }
-      batch.forEach((ref, index) => {
+      const answers = batch.map((ref, index) => {
         const repository = data[`r${index}`] as
           | { pullRequests?: { nodes?: (GraphqlPrNode | null)[] | null } | null }
           | null
           | undefined;
-        if (!repository) {
-          // Alias did not resolve — leave the key absent so the caller falls back.
+        return {
+          ref,
+          repository,
+          nodes: (repository?.pullRequests?.nodes ?? []).filter(
+            (node): node is GraphqlPrNode => Boolean(node),
+          ),
+        };
+      });
+      const checksStillRunning = await this.resolveChecksStillRunning(
+        answers.flatMap((answer) => answer.nodes),
+        token,
+      );
+      answers.forEach(({ ref, repository, nodes }) => {
+        if (!repository || nodes.some((node) => !checksStillRunning.has(node))) {
+          // An unresolved alias or context page is not an authoritative answer;
+          // leave the key absent so the caller falls back to `gh`.
           return;
         }
-        const nodes = repository.pullRequests?.nodes ?? [];
         results.set(
           branchRefKey(ref),
-          nodes
-            .filter((node): node is GraphqlPrNode => Boolean(node))
-            .map(mapGraphqlPrNode),
+          nodes.map((node) => mapGraphqlPrNode(node, checksStillRunning.get(node)!)),
         );
       });
     }
     return results;
+  }
+
+  /**
+   * Resolve whether each PR has a running check without treating the first
+   * context page as terminal. A failed follow-up page leaves that PR unresolved
+   * so callers retain the last known status instead of clearing its indicator.
+   */
+  private async resolveChecksStillRunning(
+    nodes: GraphqlPrNode[],
+    token: string,
+  ): Promise<Map<GraphqlPrNode, boolean>> {
+    const resolved = new Map<GraphqlPrNode, boolean>();
+    const pendingNodes = new Map<GraphqlPrNode, string>();
+    const pendingByCommitId = new Map<string, StatusContextPageRef>();
+    const seenCursorsByCommitId = new Map<string, Set<string>>();
+
+    const queueNextPage = (commitId: string, cursor: string): boolean => {
+      if (pendingByCommitId.has(commitId)) {
+        return true;
+      }
+      const seen = seenCursorsByCommitId.get(commitId) ?? new Set<string>();
+      if (seen.has(cursor)) {
+        return false;
+      }
+      seen.add(cursor);
+      seenCursorsByCommitId.set(commitId, seen);
+      pendingByCommitId.set(commitId, { commitId, cursor });
+      return true;
+    };
+
+    for (const node of nodes) {
+      const headCommit = getHeadCommit(node);
+      const rollup = headCommit?.statusCheckRollup;
+      if (!rollup) {
+        resolved.set(node, false);
+        continue;
+      }
+      const contexts = readCheckContexts(rollup.contexts);
+      if (!contexts) {
+        continue;
+      }
+      if (hasChecksStillRunning(contexts)) {
+        resolved.set(node, true);
+        continue;
+      }
+      const pageInfo = rollup.contexts?.pageInfo;
+      if (pageInfo?.hasNextPage === false) {
+        resolved.set(node, false);
+        continue;
+      }
+      const commitId = headCommit?.id?.trim();
+      const cursor = pageInfo?.endCursor?.trim();
+      if (
+        pageInfo?.hasNextPage === true
+        && commitId
+        && cursor
+        && queueNextPage(commitId, cursor)
+      ) {
+        pendingNodes.set(node, commitId);
+      }
+    }
+
+    const completedByCommitId = new Map<string, boolean>();
+    while (pendingByCommitId.size > 0) {
+      const pending = [...pendingByCommitId.values()];
+      pendingByCommitId.clear();
+      for (const batch of chunk(pending, this.batchSize)) {
+        const data = await this.runBatchQuery(
+          buildBatchedStatusContextQuery(batch),
+          token,
+          batch.length,
+        );
+        if (!data) {
+          continue;
+        }
+        batch.forEach((ref, index) => {
+          const page = (data[`r${index}`] as GraphqlCommit | null | undefined)
+            ?.statusCheckRollup?.contexts;
+          const contexts = readCheckContexts(page);
+          if (!contexts) {
+            return;
+          }
+          if (hasChecksStillRunning(contexts)) {
+            completedByCommitId.set(ref.commitId, true);
+            return;
+          }
+          const pageInfo = page?.pageInfo;
+          if (pageInfo?.hasNextPage === false) {
+            completedByCommitId.set(ref.commitId, false);
+            return;
+          }
+          const cursor = pageInfo?.endCursor?.trim();
+          if (pageInfo?.hasNextPage === true && cursor) {
+            queueNextPage(ref.commitId, cursor);
+          }
+        });
+      }
+    }
+
+    for (const [node, commitId] of pendingNodes) {
+      if (completedByCommitId.has(commitId)) {
+        resolved.set(node, completedByCommitId.get(commitId)!);
+      }
+    }
+
+    if (resolved.size < nodes.length) {
+      graphqlLog.debug("PR status context pagination incomplete; retaining prior state", {
+        prCount: nodes.length,
+        unresolved: nodes.length - resolved.size,
+      });
+    }
+    return resolved;
   }
 
   /**
@@ -561,23 +769,33 @@ export class GithubGraphqlPrClient {
       return [];
     }
 
+    const nodes = refs
+      .map((_, index) => data![`r${index}`]?.pullRequest)
+      .filter((node): node is GraphqlPrNode => Boolean(node));
+    const checksStillRunning = await this.resolveChecksStillRunning(nodes, token);
     const prs: PrSummary[] = [];
     let dropped = 0;
+    let incompleteContexts = 0;
     refs.forEach((ref, index) => {
       const node = data[`r${index}`]?.pullRequest;
       if (!node) {
         dropped += 1;
         return;
       }
-      prs.push(mapGraphqlPrNode(node));
+      if (!checksStillRunning.has(node)) {
+        incompleteContexts += 1;
+        return;
+      }
+      prs.push(mapGraphqlPrNode(node, checksStillRunning.get(node)!));
     });
 
-    if (dropped > 0) {
-      // Never silently truncate — a dropped alias means we polled a PR and got
-      // nothing back, which is a real (if benign) coverage gap worth seeing.
-      graphqlLog.debug("PR poll batch dropped unresolved aliases", {
+    if (dropped > 0 || incompleteContexts > 0) {
+      // Never silently clear a status: an unresolved alias or incomplete
+      // context pagination is a coverage gap, so callers keep cached state.
+      graphqlLog.debug("PR poll batch skipped incomplete status results", {
         refCount: refs.length,
         dropped,
+        incompleteContexts,
       });
     }
     return prs;
