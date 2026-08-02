@@ -738,6 +738,9 @@ export type InspectPdfReferencePathsRequest = {
 };
 
 export type InspectPdfReferencePathsResponse = {
+  /** Explicit reference paths that resolved to regular files. */
+  filePaths: string[];
+  /** The regular-file subset whose first bytes are `%PDF-`. */
   pdfPaths: string[];
 };
 

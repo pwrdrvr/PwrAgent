@@ -5492,6 +5492,71 @@ describe("Composer", () => {
     });
   });
 
+  it("hydrates a restored queued PDF reference before releasing it", async () => {
+    (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
+      "/Users/huntharo";
+    try {
+      const draftStore = createComposerDraftStore();
+      draftStore.setQueuedTurn("thread:codex:thread-1", {
+        id: "queued-jeep",
+        input: [{ type: "text", text: "Compare [@Jeep](~/Downloads/Jeep)" }],
+        text: "Compare [@Jeep](~/Downloads/Jeep)",
+        imageAttachments: [],
+        fileAttachments: [],
+      });
+      const inspectPdfReferencePaths = vi.fn(async () => ({
+        filePaths: ["/Users/huntharo/Downloads/Jeep"],
+        pdfPaths: ["/Users/huntharo/Downloads/Jeep"],
+      }));
+      const startTurn = vi.fn(async (request: StartTurnRequest) => ({
+        backend: request.backend,
+        threadId: request.threadId,
+        turnId: "turn-2",
+      }));
+
+      render(
+        <Composer
+          desktopApi={{
+            inspectPdfReferencePaths,
+            onAgentEvent: () => () => undefined,
+            startTurn,
+          }}
+          disabled={false}
+          draftStore={draftStore}
+          skills={[]}
+          thread={{
+            id: "thread-1",
+            title: "Queued window sticker",
+            titleSource: "explicit",
+            source: "codex",
+            executionMode: "default",
+            linkedDirectories: [],
+            inbox: { inInbox: false },
+          }}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(startTurn).toHaveBeenCalledWith(
+          expect.objectContaining({
+            input: [
+              { type: "text", text: "Compare [@Jeep](~/Downloads/Jeep)" },
+              {
+                type: "localFile",
+                name: "Jeep",
+                path: "/Users/huntharo/Downloads/Jeep",
+              },
+            ],
+          }),
+        );
+      });
+      expect(inspectPdfReferencePaths).toHaveBeenCalledTimes(1);
+    } finally {
+      delete (window as unknown as { __pwragentHomeDir?: string })
+        .__pwragentHomeDir;
+    }
+  });
+
   it("lets pending steers be edited before they are injected", async () => {
     const steerTurn = vi.fn(async () => ({
       backend: "codex" as const,
@@ -5549,6 +5614,88 @@ describe("Composer", () => {
     expect(textarea).toHaveValue("Revise the plan");
     expect(screen.queryByText("Pending steer")).not.toBeInTheDocument();
     expect(steerTurn).not.toHaveBeenCalled();
+  });
+
+  it("hydrates local PDF references when queued and steer drafts return to Composer", async () => {
+    (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
+      "/Users/huntharo";
+    try {
+      const draftStore = createComposerDraftStore();
+      draftStore.setQueuedTurn("thread:codex:thread-1", {
+        id: "queued-jeep",
+        input: [{ type: "text", text: "Compare [@QueuedJeep](~/Downloads/Jeep)" }],
+        text: "Compare [@QueuedJeep](~/Downloads/Jeep)",
+        imageAttachments: [],
+        fileAttachments: [],
+      });
+      draftStore.setPendingSteer("thread:codex:thread-1", {
+        id: "steer-jeep",
+        input: [{ type: "text", text: "Compare [@SteerJeep](~/Downloads/Jeep)" }],
+        text: "Compare [@SteerJeep](~/Downloads/Jeep)",
+        imageAttachments: [],
+        fileAttachments: [],
+      });
+      const inspectPdfReferencePaths = vi.fn(async () => ({
+        filePaths: ["/Users/huntharo/Downloads/Jeep"],
+        pdfPaths: ["/Users/huntharo/Downloads/Jeep"],
+      }));
+
+      render(
+        <Composer
+          activeTurnId="turn-1"
+          desktopApi={{
+            inspectPdfReferencePaths,
+            onAgentEvent: () => () => undefined,
+          }}
+          disabled={false}
+          draftStore={draftStore}
+          skills={[]}
+          thread={{
+            id: "thread-1",
+            title: "Steerable thread",
+            titleSource: "explicit",
+            source: "codex",
+            linkedDirectories: [],
+            inbox: { inInbox: false },
+          }}
+        />,
+      );
+
+      fireEvent.click(
+        within(screen.getByLabelText("Queued message")).getByRole("button", {
+          name: "Edit",
+        }),
+      );
+
+      await waitFor(() => {
+        expect(inspectPdfReferencePaths).toHaveBeenCalledWith({
+          paths: ["/Users/huntharo/Downloads/Jeep"],
+        });
+        expect(
+          within(screen.getByTestId("composer-tiptap-input"))
+            .getByText("@QueuedJeep")
+            .closest("[data-mention-kind]"),
+        ).toHaveAttribute("data-mention-kind", "file");
+      });
+
+      fireEvent.click(
+        within(screen.getByLabelText("Pending steer message")).getByRole("button", {
+          name: "Edit",
+        }),
+      );
+
+      await waitFor(() => {
+        expect(
+          within(screen.getByTestId("composer-tiptap-input"))
+            .getByText("@SteerJeep")
+            .closest("[data-mention-kind]"),
+        ).toHaveAttribute("data-mention-kind", "file");
+      });
+      expect(inspectPdfReferencePaths).toHaveBeenCalledTimes(1);
+    } finally {
+      delete (window as unknown as { __pwragentHomeDir?: string })
+        .__pwragentHomeDir;
+    }
   });
 
   it("does not acknowledge matching steer text before the steer is sent", async () => {
@@ -14663,6 +14810,7 @@ describe("Composer", () => {
       "/Users/huntharo";
     try {
       const inspectPdfReferencePaths = vi.fn(async ({ paths }: { paths: string[] }) => ({
+        filePaths: paths,
         pdfPaths: paths,
       }));
       const jeepFile = new File(["%PDF-1.7"], "Jeep", {
@@ -14708,6 +14856,374 @@ describe("Composer", () => {
         });
       });
       expect(await screen.findByText(/PDF analysis is on\./)).toBeInTheDocument();
+    } finally {
+      delete (window as unknown as { __pwragentHomeDir?: string })
+        .__pwragentHomeDir;
+    }
+  });
+
+  it("does not infer PDF analysis from a reference filename suffix", async () => {
+    (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
+      "/Users/huntharo";
+    try {
+      const inspectPdfReferencePaths = vi.fn(async () => ({
+        filePaths: ["/Users/huntharo/Downloads/not-a-pdf.pdf"],
+        pdfPaths: [],
+      }));
+
+      render(
+        <Composer
+          desktopApi={{
+            inspectPdfReferencePaths,
+            onAgentEvent: () => () => undefined,
+          }}
+          disabled={false}
+          skills={[]}
+          thread={{
+            id: "thread-1",
+            title: "Compare window stickers",
+            titleSource: "explicit",
+            source: "codex",
+            linkedDirectories: [],
+            inbox: { inInbox: false },
+          }}
+        />,
+      );
+
+      fireEvent.paste(screen.getByRole("textbox", { name: "Reply" }), {
+        clipboardData: {
+          files: [],
+          getData: (type: string) =>
+            type === "text/plain"
+              ? "Compare [@not-a-pdf.pdf](~/Downloads/not-a-pdf.pdf)"
+              : "",
+          items: [],
+          types: ["text/plain"],
+        },
+      });
+
+      await waitFor(() => {
+        expect(inspectPdfReferencePaths).toHaveBeenCalledWith({
+          paths: ["/Users/huntharo/Downloads/not-a-pdf.pdf"],
+        });
+        expect(
+          within(screen.getByTestId("composer-tiptap-input"))
+            .getByText("@not-a-pdf.pdf")
+            .closest("[data-mention-kind]"),
+        ).toHaveAttribute("data-mention-kind", "file");
+      });
+      expect(screen.queryByText(/PDF analysis is on\./)).not.toBeInTheDocument();
+    } finally {
+      delete (window as unknown as { __pwragentHomeDir?: string })
+        .__pwragentHomeDir;
+    }
+  });
+
+  it("hydrates pasted local PDF references before Send without duplicate attachments", async () => {
+    (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
+      "/Users/huntharo";
+    try {
+      const referencedPaths = [
+        "/Users/huntharo/Downloads/Jeep",
+        "/Users/huntharo/Downloads/JeepRubicon.pdf",
+      ];
+      const inspectPdfReferencePaths = vi.fn(async () => ({
+        filePaths: referencedPaths,
+        pdfPaths: referencedPaths,
+      }));
+      const startTurn = vi.fn(async (request: StartTurnRequest) => ({
+        backend: request.backend,
+        threadId: request.threadId,
+        turnId: "turn-1",
+      }));
+
+      render(
+        <Composer
+          desktopApi={{
+            onAgentEvent: () => () => undefined,
+            inspectPdfReferencePaths,
+            startTurn,
+          }}
+          disabled={false}
+          skills={[]}
+          thread={{
+            id: "thread-1",
+            title: "Compare window stickers",
+            titleSource: "explicit",
+            source: "codex",
+            linkedDirectories: [],
+            inbox: { inInbox: false },
+          }}
+        />,
+      );
+
+      const pastedText = [
+        "Help me compare these two Jeeps. What are the key feature differences and cost drivers?",
+        "",
+        "[@JeepRubicon.pdf](~/Downloads/JeepRubicon.pdf) [@Jeep](~/Downloads/Jeep)",
+      ].join("\n");
+      const textbox = screen.getByRole("textbox", { name: "Reply" });
+      fireEvent.paste(textbox, {
+        clipboardData: {
+          files: [],
+          getData: (type: string) => type === "text/plain" ? pastedText : "",
+          items: [],
+          types: ["text/plain"],
+        },
+      });
+
+      await waitFor(() => {
+        expect(inspectPdfReferencePaths).toHaveBeenCalledWith({
+          paths: referencedPaths,
+        });
+      });
+      const richInput = screen.getByTestId("composer-tiptap-input");
+      await waitFor(() => {
+        expect(
+          within(richInput)
+            .getByText("@JeepRubicon.pdf")
+            .closest("[data-mention-kind]"),
+        ).toHaveAttribute("data-mention-kind", "file");
+        expect(
+          within(richInput).getByText("@Jeep").closest("[data-mention-kind]"),
+        ).toHaveAttribute("data-mention-kind", "file");
+      });
+      expect(
+        await screen.findByText(/PDF analysis is on\./),
+      ).toBeInTheDocument();
+
+      await clickButton("Send");
+
+      await waitFor(() => {
+        expect(startTurn).toHaveBeenCalledWith(
+          expect.objectContaining({
+            backend: "codex",
+            threadId: "thread-1",
+          }),
+        );
+      });
+      const request = startTurn.mock.calls[0]?.[0];
+      const localFiles = request?.input.filter(
+        (item: { type: string }) => item.type === "localFile",
+      );
+      expect(localFiles).toEqual([
+        {
+          type: "localFile",
+          name: "JeepRubicon.pdf",
+          path: "/Users/huntharo/Downloads/JeepRubicon.pdf",
+        },
+        {
+          type: "localFile",
+          name: "Jeep",
+          path: "/Users/huntharo/Downloads/Jeep",
+        },
+      ]);
+      expect(request?.input[0]).toEqual({
+        type: "text",
+        text: pastedText,
+      });
+      expect(inspectPdfReferencePaths).toHaveBeenCalledTimes(1);
+    } finally {
+      delete (window as unknown as { __pwragentHomeDir?: string })
+        .__pwragentHomeDir;
+    }
+  });
+
+  it("shares a pending pasted-reference inspection with an immediate Send", async () => {
+    (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
+      "/Users/huntharo";
+    try {
+      const inspection = createDeferred<{
+        filePaths: string[];
+        pdfPaths: string[];
+      }>();
+      const inspectPdfReferencePaths = vi.fn(() => inspection.promise);
+      const startTurn = vi.fn(async () => ({
+        backend: "codex" as const,
+        threadId: "thread-1",
+        turnId: "turn-1",
+      }));
+
+      render(
+        <Composer
+          desktopApi={{
+            onAgentEvent: () => () => undefined,
+            inspectPdfReferencePaths,
+            startTurn,
+          }}
+          disabled={false}
+          skills={[]}
+          thread={{
+            id: "thread-1",
+            title: "Compare window stickers",
+            titleSource: "explicit",
+            source: "codex",
+            linkedDirectories: [],
+            inbox: { inInbox: false },
+          }}
+        />,
+      );
+
+      const textbox = screen.getByRole("textbox", { name: "Reply" });
+      fireEvent.paste(textbox, {
+        clipboardData: {
+          files: [],
+          getData: (type: string) =>
+            type === "text/plain" ? "Compare [@Jeep](~/Downloads/Jeep)" : "",
+          items: [],
+          types: ["text/plain"],
+        },
+      });
+
+      await waitFor(() => {
+        expect(inspectPdfReferencePaths).toHaveBeenCalledWith({
+          paths: ["/Users/huntharo/Downloads/Jeep"],
+        });
+      });
+      const form = screen.getByTestId("composer-tiptap-input").closest("form");
+      fireEvent.submit(form!);
+      fireEvent.submit(form!);
+      await flushReactUpdates();
+      expect(startTurn).not.toHaveBeenCalled();
+      expect(inspectPdfReferencePaths).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        inspection.resolve({
+          filePaths: ["/Users/huntharo/Downloads/Jeep"],
+          pdfPaths: ["/Users/huntharo/Downloads/Jeep"],
+        });
+        await inspection.promise;
+      });
+
+      await waitFor(() => {
+        expect(startTurn).toHaveBeenCalledWith(
+          expect.objectContaining({
+            input: [
+              { type: "text", text: "Compare [@Jeep](~/Downloads/Jeep)" },
+              {
+                type: "localFile",
+                name: "Jeep",
+                path: "/Users/huntharo/Downloads/Jeep",
+              },
+            ],
+          }),
+        );
+      });
+      expect(startTurn).toHaveBeenCalledTimes(1);
+      expect(inspectPdfReferencePaths).toHaveBeenCalledTimes(1);
+    } finally {
+      delete (window as unknown as { __pwragentHomeDir?: string })
+        .__pwragentHomeDir;
+    }
+  });
+
+  it("does not inspect a plain typed filesystem path", async () => {
+    const inspectPdfReferencePaths = vi.fn(async () => ({
+      filePaths: [],
+      pdfPaths: [],
+    }));
+
+    render(
+      <Composer
+        desktopApi={{
+          inspectPdfReferencePaths,
+          onAgentEvent: () => () => undefined,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Compare window stickers",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Reply" }), {
+      target: { value: "Compare /Users/huntharo/Downloads/Jeep" },
+    });
+    await flushReactUpdates();
+
+    expect(inspectPdfReferencePaths).not.toHaveBeenCalled();
+  });
+
+  it("hydrates a restored extensionless PDF reference before sending", async () => {
+    (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
+      "/Users/huntharo";
+    try {
+      const draftStore = createComposerDraftStore();
+      draftStore.set("thread:codex:thread-1", {
+        draft: "Compare [@Jeep](~/Downloads/Jeep)",
+        editorDocument: undefined,
+        imageAttachments: [],
+        fileAttachments: [],
+        skillTokens: [],
+      });
+      const inspectPdfReferencePaths = vi.fn(async () => ({
+        filePaths: ["/Users/huntharo/Downloads/Jeep"],
+        pdfPaths: ["/Users/huntharo/Downloads/Jeep"],
+      }));
+      const startTurn = vi.fn(async () => ({
+        backend: "codex" as const,
+        threadId: "thread-1",
+        turnId: "turn-1",
+      }));
+
+      render(
+        <Composer
+          desktopApi={{
+            onAgentEvent: () => () => undefined,
+            inspectPdfReferencePaths,
+            startTurn,
+          }}
+          disabled={false}
+          draftStore={draftStore}
+          skills={[]}
+          thread={{
+            id: "thread-1",
+            title: "Compare window stickers",
+            titleSource: "explicit",
+            source: "codex",
+            linkedDirectories: [],
+            inbox: { inInbox: false },
+          }}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(inspectPdfReferencePaths).toHaveBeenCalledWith({
+          paths: ["/Users/huntharo/Downloads/Jeep"],
+        });
+      });
+      const richInput = screen.getByTestId("composer-tiptap-input");
+      await waitFor(() => {
+        expect(
+          within(richInput).getByText("@Jeep").closest("[data-mention-kind]"),
+        ).toHaveAttribute("data-mention-kind", "file");
+      });
+      expect(
+        await screen.findByText(/PDF analysis is on\./),
+      ).toBeInTheDocument();
+
+      await clickButton("Send");
+
+      await waitFor(() => {
+        expect(startTurn).toHaveBeenCalledWith(
+          expect.objectContaining({
+            input: [
+              { type: "text", text: "Compare [@Jeep](~/Downloads/Jeep)" },
+              {
+                type: "localFile",
+                name: "Jeep",
+                path: "/Users/huntharo/Downloads/Jeep",
+              },
+            ],
+          }),
+        );
+      });
     } finally {
       delete (window as unknown as { __pwragentHomeDir?: string })
         .__pwragentHomeDir;

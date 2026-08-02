@@ -351,7 +351,11 @@ function classifyReferencePaths(
 const PDF_MAGIC = Buffer.from("%PDF-");
 const MAX_PDF_REFERENCE_PATHS = 20;
 
-function inspectPdfReferencePaths(paths: string[]): string[] {
+function inspectPdfReferencePaths(paths: string[]): {
+  filePaths: string[];
+  pdfPaths: string[];
+} {
+  const filePaths: string[] = [];
   const pdfPaths: string[] = [];
   const candidates = [...new Set(paths.filter((candidate) => candidate.trim()))]
     .slice(0, MAX_PDF_REFERENCE_PATHS);
@@ -359,6 +363,10 @@ function inspectPdfReferencePaths(paths: string[]): string[] {
     let descriptor: number | undefined;
     try {
       descriptor = fs.openSync(candidate, "r");
+      if (!fs.fstatSync(descriptor).isFile()) {
+        continue;
+      }
+      filePaths.push(candidate);
       const header = Buffer.alloc(PDF_MAGIC.byteLength);
       const bytesRead = fs.readSync(descriptor, header, 0, header.byteLength, 0);
       if (bytesRead === PDF_MAGIC.byteLength && header.equals(PDF_MAGIC)) {
@@ -372,7 +380,7 @@ function inspectPdfReferencePaths(paths: string[]): string[] {
       }
     }
   }
-  return pdfPaths;
+  return { filePaths, pdfPaths };
 }
 
 function logDebug(event: string, payload: Record<string, unknown>): void {
@@ -5993,9 +6001,8 @@ export function registerAppServerIpcHandlers(): void {
     async (
       _event,
       request: InspectPdfReferencePathsRequest,
-    ): Promise<InspectPdfReferencePathsResponse> => ({
-      pdfPaths: inspectPdfReferencePaths(request.paths ?? []),
-    }),
+    ): Promise<InspectPdfReferencePathsResponse> =>
+      inspectPdfReferencePaths(request.paths ?? []),
   );
   ipcMain.removeHandler(NAVIGATION_LIST_RECENT_FILE_REFERENCES_CHANNEL);
   ipcMain.handle(

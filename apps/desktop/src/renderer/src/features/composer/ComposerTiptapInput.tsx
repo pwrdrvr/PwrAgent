@@ -1815,6 +1815,7 @@ function getContentSignature(params: {
     value: params.value,
     tokens: params.skillTokens.map((token) => ({
       index: token.index,
+      kind: token.kind,
       name: token.name,
       path: token.path,
     })),
