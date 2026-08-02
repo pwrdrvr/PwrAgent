@@ -117,11 +117,6 @@ const DEFAULT_CODEX_COLLABORATION_MODEL = "gpt-5.5";
 export const DEFAULT_CODEX_THREAD_TITLE_MODEL = "gpt-5.6-luna";
 const DEFAULT_CODEX_THREAD_TITLE_TIMEOUT_MS = 20_000;
 const CODEX_THREAD_TITLE_CONFIG_READ_REASON = "thread-title-mcp-inventory";
-const CODEX_VISIBLE_THREAD_SOURCE_KINDS = [
-  "cli",
-  "vscode",
-  "subAgentThreadSpawn",
-] as const;
 const CODEX_THREAD_TITLE_WORKSPACE_DIR = path.join(
   tmpdir(),
   "pwragent",
@@ -1453,10 +1448,9 @@ function isKnownCompanionAppCodexThread(thread: RawCodexThreadSummary): boolean 
 
 function isVisibleCodexThreadSource(thread: RawCodexThreadSummary): boolean {
   const sourceKind = thread.codexThreadSourceKind?.trim();
-  return (
-    !sourceKind?.startsWith("subAgent")
-    || sourceKind === "subAgentThreadSpawn"
-  );
+  // Native Codex subagents appear on their originating thread as activity and
+  // have an inspection-only transcript. They are not durable navigation threads.
+  return !sourceKind?.startsWith("subAgent");
 }
 
 function filterVisibleCodexThreads(
@@ -5141,7 +5135,8 @@ function buildThreadDiscoveryPayloads(
   filter?: string,
   archived?: boolean,
   cursor?: string,
-  limit = 50
+  limit = 50,
+  sourceKinds?: CodexThreadListParams["sourceKinds"],
 ): CodexThreadListParams[] {
   const searchTerm = filter?.trim() || undefined;
   const baseParams: CodexThreadListParams = {
@@ -5149,7 +5144,7 @@ function buildThreadDiscoveryPayloads(
     cursor,
     limit,
     sortKey: "updated_at",
-    sourceKinds: [...CODEX_VISIBLE_THREAD_SOURCE_KINDS],
+    sourceKinds: sourceKinds ?? ["cli", "vscode"],
     useStateDbOnly: true,
   };
 
@@ -5919,6 +5914,7 @@ async function requestThreadListPages(params: {
   limit?: number;
   maxPages?: number;
   requestTimeoutMs: number;
+  sourceKinds?: CodexThreadListParams["sourceKinds"];
 }): Promise<RawCodexThreadSummary[]> {
   const pages: RawCodexThreadSummary[] = [];
   const seenCursors = new Set<string>();
@@ -5946,6 +5942,7 @@ async function requestThreadListPages(params: {
         params.archived,
         cursor,
         requestedLimit,
+        params.sourceKinds,
       ),
       timeoutMs: params.requestTimeoutMs,
     });
@@ -6574,6 +6571,34 @@ export class CodexAppServerClient {
     return await this.enrichThreads(threads, {
       enrichDirectories: params?.enrichDirectories ?? true,
     });
+  }
+
+  /**
+   * Lists native Codex `spawn_agent` workers for parent-scoped disclosure.
+   * Callers must not add these summaries to ordinary navigation.
+   */
+  async listNativeSubAgentThreads(params?: {
+    filter?: string;
+    limit?: number;
+    maxPages?: number;
+  }, diagnostics?: JsonRpcObserverDiagnostics): Promise<AppServerThreadSummary[]> {
+    await this.ensureInitialized();
+
+    const nativeThreads = await requestThreadListPages({
+      archived: false,
+      client: this.connection,
+      diagnostics,
+      filter: params?.filter,
+      limit: params?.limit,
+      maxPages: params?.maxPages,
+      requestTimeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      sourceKinds: ["subAgentThreadSpawn"],
+    });
+
+    return await this.enrichThreads(
+      nativeThreads.filter((thread) => Boolean(thread.codexNativeSubAgent)),
+      { enrichDirectories: false },
+    );
   }
 
   async listThreadsForMigration(params?: {

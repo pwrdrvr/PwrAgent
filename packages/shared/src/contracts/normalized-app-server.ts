@@ -254,6 +254,29 @@ export const CODEX_ENVIRONMENT_ACTION_RUNS_MAX = 10;
 export type AppServerThreadTitleSource = "explicit" | "derived" | "fallback";
 export type AppServerThreadStatus = "active" | "idle" | "notLoaded" | "unknown";
 
+/** Provider provenance carried by a native Codex `spawn_agent` thread. */
+export type CodexNativeSubAgentProvenance = {
+  parentThreadId: ThreadIdentifier;
+  depth?: number;
+  agentNickname?: string;
+  agentRole?: string;
+};
+
+/**
+ * A native Codex worker grouped under its ordinary parent for on-demand
+ * navigation disclosure. It is intentionally not a navigable thread row.
+ */
+export type CodexNativeSubAgentSummary = {
+  threadId: ThreadIdentifier;
+  title: string;
+  createdAt?: number;
+  updatedAt?: number;
+  threadStatus?: AppServerThreadStatus;
+  depth?: number;
+  agentNickname?: string;
+  agentRole?: string;
+};
+
 export type AppServerAcpSessionRuntimeState = {
   configValues?: Record<string, string>;
   currentModeId?: string;
@@ -323,21 +346,13 @@ export type AppServerThreadSummary = {
   };
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   worktreeSnapshots?: WorktreeSnapshotSummary[];
+  /** Native Codex provenance when this summary itself is a spawned worker. */
+  codexNativeSubAgent?: CodexNativeSubAgentProvenance;
   /**
-   * Native Codex provenance for a thread created by `spawn_agent`.
-   *
-   * Codex persists these as ordinary agent threads and reports their provider
-   * parent independently from PwrAgent's UI-only `parentThreadId` overlay.
-   * PwrAgent uses this metadata to project the provider tree into its current
-   * one-level child-thread tray without conflating other sub-agent sources
-   * such as review and compaction helpers with visible work threads.
+   * Native Codex workers grouped below this ordinary parent. Rendered only
+   * through the parent-scoped, on-demand Sub-agents disclosure.
    */
-  codexNativeSubAgent?: {
-    parentThreadId: ThreadIdentifier;
-    depth?: number;
-    agentNickname?: string;
-    agentRole?: string;
-  };
+  codexNativeSubAgents?: CodexNativeSubAgentSummary[];
 };
 
 export type AppServerThreadMessage = {

@@ -18,6 +18,11 @@ import {
   type DropIndicatorState,
 } from "./drag-drop";
 import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
+import {
+  getSubthreadDisclosureCount,
+  isSubthreadSectionCollapsed,
+  NativeSubAgentsDisclosure,
+} from "./NativeSubAgentsDisclosure";
 import { ThreadRow } from "./ThreadRow";
 
 type RecentsListProps = {
@@ -133,7 +138,12 @@ export function RecentsList(props: RecentsListProps) {
   const renderSubthreads = (parent: NavigationThreadSummary) => {
     const parentKey = buildThreadIdentityKey(parent.source, parent.id);
     const children = sortSubthreadSummaries(parent, childrenByParentKey.get(parentKey) ?? []);
-    if (children.length === 0 || parent.subthreadsCollapsed) {
+    const nativeSubAgentCount = parent.codexNativeSubAgents?.length ?? 0;
+    const subthreadsCollapsed = isSubthreadSectionCollapsed(parent);
+    if (
+      (children.length === 0 && nativeSubAgentCount === 0)
+      || subthreadsCollapsed
+    ) {
       return null;
     }
 
@@ -232,6 +242,9 @@ export function RecentsList(props: RecentsListProps) {
             />
           );
         })}
+        {nativeSubAgentCount > 0 ? (
+          <NativeSubAgentsDisclosure thread={parent} />
+        ) : null}
       </div>
     );
   };
@@ -239,6 +252,8 @@ export function RecentsList(props: RecentsListProps) {
   const renderThreadGroup = (thread: NavigationThreadSummary) => {
     const key = buildThreadIdentityKey(thread.source, thread.id);
     const children = sortSubthreadSummaries(thread, childrenByParentKey.get(key) ?? []);
+    const subthreadCount = getSubthreadDisclosureCount(thread, children.length);
+    const subthreadsCollapsed = isSubthreadSectionCollapsed(thread);
     const pinned = isPinnedThread(thread);
     return (
       <div key={key} className="thread-group">
@@ -257,16 +272,16 @@ export function RecentsList(props: RecentsListProps) {
           includeLinkedDirectories
           revealSelectedThreadRequest={props.revealSelectedThreadRequest}
           selectedThreadKey={props.selectedThreadKey}
-          subthreadCount={children.length}
-          subthreadsCollapsed={thread.subthreadsCollapsed === true}
+          subthreadCount={subthreadCount}
+          subthreadsCollapsed={subthreadsCollapsed}
           thinkingThreadKeys={props.thinkingThreadKeys}
           thread={thread}
           onToggleSubthreads={
-            children.length > 0 && props.onSetSubthreadsCollapsed
+            subthreadCount > 0 && props.onSetSubthreadsCollapsed
               ? () =>
                   void props.onSetSubthreadsCollapsed!(
                     thread,
-                    thread.subthreadsCollapsed !== true,
+                    !subthreadsCollapsed,
                   )
               : undefined
           }

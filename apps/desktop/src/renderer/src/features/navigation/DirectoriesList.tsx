@@ -38,6 +38,11 @@ import {
 } from "./drag-drop";
 import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
 import { ThinkingScanner } from "../thread-detail/ThinkingScanner";
+import {
+  getSubthreadDisclosureCount,
+  isSubthreadSectionCollapsed,
+  NativeSubAgentsDisclosure,
+} from "./NativeSubAgentsDisclosure";
 import { ThreadRow } from "./ThreadRow";
 import {
   formatActiveThreadCount,
@@ -631,7 +636,12 @@ export function DirectoriesList(props: DirectoriesListProps) {
     const renderStaticSubthreads = (parent: NavigationThreadSummary): ReactElement | null => {
       const parentKey = buildThreadIdentityKey(parent.source, parent.id);
       const children = sortSubthreadSummaries(parent, childThreadsByParentKey.get(parentKey) ?? []);
-      if (children.length === 0 || parent.subthreadsCollapsed) {
+      const nativeSubAgentCount = parent.codexNativeSubAgents?.length ?? 0;
+      const subthreadsCollapsed = isSubthreadSectionCollapsed(parent);
+      if (
+        (children.length === 0 && nativeSubAgentCount === 0)
+        || subthreadsCollapsed
+      ) {
         return null;
       }
       // The child tray is a user-ordered "pinned" section (subthreadOrder).
@@ -744,6 +754,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
             />
             );
           })}
+          {nativeSubAgentCount > 0 ? (
+            <NativeSubAgentsDisclosure compact thread={parent} />
+          ) : null}
         </div>
       );
     };
@@ -785,8 +798,13 @@ export function DirectoriesList(props: DirectoriesListProps) {
       thread: NavigationThreadSummary,
     ): ReactElement => {
       const threadKey = buildThreadIdentityKey(thread.source, thread.id);
-      const subthreadCount =
+      const ordinarySubthreadCount =
         childThreadsByParentKey.get(threadKey)?.length ?? 0;
+      const subthreadCount = getSubthreadDisclosureCount(
+        thread,
+        ordinarySubthreadCount,
+      );
+      const subthreadsCollapsed = isSubthreadSectionCollapsed(thread);
       return (
         <Fragment key={`${directory.key}:${threadKey}`}>
           <ThreadRow
@@ -803,7 +821,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
             revealSelectedThreadRequest={props.revealSelectedThreadRequest}
             selectedThreadKey={props.selectedItemKey}
             subthreadCount={subthreadCount}
-            subthreadsCollapsed={thread.subthreadsCollapsed === true}
+            subthreadsCollapsed={subthreadsCollapsed}
             thinkingThreadKeys={props.thinkingThreadKeys}
             thread={thread}
             onToggleSubthreads={
@@ -811,7 +829,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 ? () =>
                     void props.onSetSubthreadsCollapsed!(
                       thread,
-                      thread.subthreadsCollapsed !== true,
+                      !subthreadsCollapsed,
                     )
                 : undefined
             }
@@ -1110,8 +1128,13 @@ export function DirectoriesList(props: DirectoriesListProps) {
                     {directoryPinnedThreads.map((thread) => {
 	                      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
 	                      const rowDropKey = `${directory.key}:${threadKey}`;
-                          const subthreadCount =
+                          const ordinarySubthreadCount =
                             childThreadsByParentKey.get(threadKey)?.length ?? 0;
+                          const subthreadCount = getSubthreadDisclosureCount(
+                            thread,
+                            ordinarySubthreadCount,
+                          );
+                          const subthreadsCollapsed = isSubthreadSectionCollapsed(thread);
 	                      return (
                             <Fragment key={`${directory.key}:${threadKey}`}>
 	                        <ThreadRow
@@ -1135,7 +1158,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                           }
 	                          selectedThreadKey={props.selectedItemKey}
                               subthreadCount={subthreadCount}
-                              subthreadsCollapsed={thread.subthreadsCollapsed === true}
+                              subthreadsCollapsed={subthreadsCollapsed}
 	                          thinkingThreadKeys={props.thinkingThreadKeys}
 	                          thread={thread}
                               onToggleSubthreads={
@@ -1143,7 +1166,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                                   ? () =>
                                       void props.onSetSubthreadsCollapsed!(
                                         thread,
-                                        thread.subthreadsCollapsed !== true,
+                                        !subthreadsCollapsed,
                                       )
                                   : undefined
                               }
