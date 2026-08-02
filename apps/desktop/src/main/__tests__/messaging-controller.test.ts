@@ -51,6 +51,7 @@ import {
 import type { MessagingAdapter, MessagingBackendBridge } from "../messaging/core/messaging-adapter";
 import { MessagingDeliveryBudget } from "../messaging/core/messaging-delivery-budget";
 import { MessagingStore } from "../messaging/core/messaging-store";
+import { renderPdfPages } from "../messaging/pdf-page-renderer";
 
 const tempDirs: string[] = [];
 
@@ -61,6 +62,10 @@ vi.mock("../messaging/attachment-image-normalization", () => ({
     mimeType: "image/png",
     width: 1,
   })),
+}));
+
+vi.mock("../messaging/pdf-page-renderer", () => ({
+  renderPdfPages: vi.fn(),
 }));
 
 async function createStore(): Promise<MessagingStore> {
@@ -10391,8 +10396,16 @@ describe("MessagingController", () => {
     );
   });
 
-  it("routes inbound PDFs into bound thread turns as file input", async () => {
+  it("routes inbound PDFs into bound thread turns as rendered page images", async () => {
     const pdfData = new TextEncoder().encode("%PDF-1.7\n/image data\n");
+    vi.mocked(renderPdfPages).mockResolvedValueOnce([
+      {
+        dataUrl: "data:image/png;base64,rendered-pdf-page",
+        height: 1988,
+        pageNumber: 1,
+        width: 3072,
+      },
+    ]);
     const harness = await createHarness({
       downloadAttachment: vi.fn(async ({ attachment }) => ({
         data: pdfData,
@@ -10434,18 +10447,23 @@ describe("MessagingController", () => {
         input: [
           {
             type: "text",
-            text: "What's in this?",
+            text: [
+              "What's in this?",
+              "Attachment `Bullstrap-2024-10-05.pdf` was rendered into 1 page image for model input.",
+            ].join("\n\n"),
           },
           {
-            type: "file",
-            name: "Bullstrap-2024-10-05.pdf",
-            mimeType: "application/pdf",
-            data: Buffer.from(pdfData).toString("base64"),
-            sizeBytes: pdfData.byteLength,
+            type: "image",
+            name: "Bullstrap-2024-10-05-page-1.png",
+            url: "data:image/png;base64,rendered-pdf-page",
           },
         ],
       }),
     );
+    expect(renderPdfPages).toHaveBeenCalledWith({
+      data: pdfData,
+      profile: "high",
+    });
   });
 
   it("debounces split text messages into one agent turn", async () => {
