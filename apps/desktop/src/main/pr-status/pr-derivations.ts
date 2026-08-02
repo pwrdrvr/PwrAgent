@@ -15,13 +15,15 @@ import { DEFAULT_PULL_REQUEST_PROVIDER } from "@pwragent/shared";
  *  - `github-pr-fetcher.ts` — the `gh pr list --json …` subprocess, used for
  *    on-selection / hover / post-turn detail fetches. Its `statusCheckRollup`
  *    is an ARRAY of individual check runs.
- *  - `github-graphql-client.ts` — the in-process batched poller. Its
- *    `statusCheckRollup` is GitHub's single pre-aggregated rollup ENUM.
+ *  - `github-graphql-client.ts` — the in-process batched poller. It reads
+ *    GitHub's pre-aggregated rollup ENUM plus minimal per-context activity so
+ *    a failed check can remain visibly in flight while sibling checks run.
  *
  * The lifecycle/review/merge derivations are shape-compatible and shared
- * verbatim. Only the check-state derivation differs, so it has one function
- * per transport (`deriveChipState` vs `deriveChipStateFromRollup`) and they
- * are held to the same outputs by a parity test.
+ * verbatim. The check-state derivation differs by transport
+ * (`deriveChipState` vs `deriveChipStateFromRollup`), while
+ * `hasChecksStillRunning` reads the individual contexts both transports
+ * expose.
  */
 
 /** Subset of fields returned by `gh pr list --json …` that we actually read. */
@@ -44,7 +46,8 @@ export type GhPrPayload = {
 export type GhCheckRunPayload = {
   __typename?: string;
   conclusion?: string | null;
-  status?: string;
+  status?: string | null;
+  state?: string | null;
   name?: string;
 };
 
@@ -54,6 +57,7 @@ export type GhCheckRunPayload = {
  */
 export function parseGhPrPayload(row: GhPrPayload): PrSummary {
   const checkState = deriveChipState(row);
+  const checksStillRunning = hasChecksStillRunning(row.statusCheckRollup ?? []);
   const headSha = normalizeCommitShas([
     row.commits?.[row.commits.length - 1]?.oid,
   ])[0];
@@ -65,6 +69,7 @@ export function parseGhPrPayload(row: GhPrPayload): PrSummary {
     ...(row.title?.trim() ? { title: row.title.trim() } : {}),
     state: checkState,
     checkState,
+    ...(checksStillRunning ? { checksStillRunning: true } : {}),
     lifecycleState: deriveLifecycleState(row),
     reviewState: deriveReviewState(row),
     mergeState: deriveMergeState(row),
@@ -146,23 +151,61 @@ export function deriveChipState(row: GhPrPayload): PrChipState {
     "STALE",
   ]);
 
-  let pendingCount = 0;
+  let hasFailure = false;
+  let hasPending = false;
+  let hasUnknown = false;
   for (const check of checks) {
-    if (check.conclusion && failingConclusions.has(check.conclusion)) {
-      return "failing";
-    }
-    if (check.conclusion && passingConclusions.has(check.conclusion)) {
+    const conclusion = check.conclusion?.trim();
+    if (conclusion && failingConclusions.has(conclusion)) {
+      hasFailure = true;
       continue;
     }
-    if (!check.conclusion) {
-      pendingCount += 1;
+    if (conclusion && passingConclusions.has(conclusion)) {
+      continue;
+    }
+    if (check.state) {
+      const state = deriveChipStateFromRollup(check.state);
+      if (state === "failing") {
+        hasFailure = true;
+      } else if (state === "pending") {
+        hasPending = true;
+      } else if (state === "unknown") {
+        hasUnknown = true;
+      }
+      continue;
+    }
+    if (isCheckStillRunning(check)) {
+      hasPending = true;
       continue;
     }
     // Conclusion we don't recognize as either pass or fail — be conservative.
-    return "unknown";
+    hasUnknown = true;
   }
-  if (pendingCount > 0) return "pending";
+  if (hasFailure) return "failing";
+  if (hasPending) return "pending";
+  if (hasUnknown) return "unknown";
   return "passing";
+}
+
+/**
+ * True only when a rollup context is still non-terminal. A check conclusion
+ * wins over a stale `status` value — GitHub can transiently return a completed
+ * conclusion alongside an old IN_PROGRESS status.
+ */
+export function hasChecksStillRunning(
+  checks: readonly GhCheckRunPayload[],
+): boolean {
+  return checks.some(isCheckStillRunning);
+}
+
+function isCheckStillRunning(check: GhCheckRunPayload): boolean {
+  if (check.conclusion?.trim()) {
+    return false;
+  }
+  if (check.state) {
+    return check.state === "PENDING" || check.state === "EXPECTED";
+  }
+  return check.status !== "COMPLETED";
 }
 
 /**

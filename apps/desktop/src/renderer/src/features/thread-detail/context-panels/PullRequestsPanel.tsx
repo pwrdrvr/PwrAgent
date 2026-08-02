@@ -91,8 +91,12 @@ export function PullRequestsPanel(props: PullRequestsPanelProps) {
                     <RailStatusChip
                       tone={checkTone(checkState)}
                       alert={checkState === "failing"}
+                      blink={
+                        checkState === "failing"
+                        && pr.checksStillRunning === true
+                      }
                     >
-                      {checkLabel(checkState)}
+                      {checkLabel(checkState, pr.checksStillRunning)}
                     </RailStatusChip>
                   ) : null}
                 </p>
@@ -149,12 +153,17 @@ function checkTone(state: CheckState): RailChipTone {
   }
 }
 
-function checkLabel(state: CheckState): string {
+function checkLabel(
+  state: CheckState,
+  checksStillRunning: boolean | undefined,
+): string {
   switch (state) {
     case "passing":
       return "Checks passing";
     case "failing":
-      return "Checks failing";
+      return checksStillRunning
+        ? "Checks failing · still running"
+        : "Checks failing";
     case "pending":
       return "Checks pending";
     case "unknown":

@@ -64,6 +64,7 @@ describe("buildBatchedPrQuery", () => {
     expect(query).toContain("pullRequest(number: $p0)");
     expect(query).toContain("pullRequest(number: $p1)");
     expect(query.match(/repository\(/g)).toHaveLength(2);
+    expect(query).toContain("contexts(first: 100)");
   });
 
   it("passes every input as a variable rather than interpolating it", () => {
@@ -167,6 +168,42 @@ describe("mapGraphqlPrNode", () => {
     expect(summary.checkState).toBe(chip);
     // `state` is the deprecated alias and must stay in lockstep with checkState.
     expect(summary.state).toBe(chip);
+  });
+
+  it("records checks still running alongside a failing rollup", () => {
+    const summary = mapGraphqlPrNode(
+      node({
+        commits: {
+          nodes: [{
+            commit: {
+              oid: "b".repeat(40),
+              statusCheckRollup: {
+                state: "FAILURE",
+                contexts: {
+                  nodes: [
+                    {
+                      __typename: "CheckRun",
+                      conclusion: "FAILURE",
+                      status: "COMPLETED",
+                    },
+                    {
+                      __typename: "CheckRun",
+                      conclusion: null,
+                      status: "IN_PROGRESS",
+                    },
+                  ],
+                },
+              },
+            },
+          }],
+        },
+      }),
+    );
+
+    expect(summary).toMatchObject({
+      checkState: "failing",
+      checksStillRunning: true,
+    });
   });
 
   it("treats a missing rollup (no checks configured) as unknown, not passing", () => {

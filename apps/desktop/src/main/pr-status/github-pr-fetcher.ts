@@ -19,6 +19,7 @@ export {
   deriveLifecycleState,
   deriveMergeState,
   deriveReviewState,
+  hasChecksStillRunning,
   parseGhPrPayload,
 } from "./pr-derivations";
 export type { GhCheckRunPayload, GhPrPayload } from "./pr-derivations";

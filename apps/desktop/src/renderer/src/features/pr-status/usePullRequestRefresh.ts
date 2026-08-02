@@ -227,6 +227,7 @@ function prSummariesEqual(
       candidate.title === pr.title &&
       candidate.state === pr.state &&
       candidate.checkState === pr.checkState &&
+      candidate.checksStillRunning === pr.checksStillRunning &&
       candidate.lifecycleState === pr.lifecycleState &&
       candidate.reviewState === pr.reviewState &&
       candidate.mergeState === pr.mergeState &&

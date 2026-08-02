@@ -698,6 +698,7 @@ function prSummariesEqual(left: PrSummary[], right: PrSummary[]): boolean {
       candidate.title === pr.title &&
       candidate.state === pr.state &&
       candidate.checkState === pr.checkState &&
+      candidate.checksStillRunning === pr.checksStillRunning &&
       candidate.lifecycleState === pr.lifecycleState &&
       candidate.reviewState === pr.reviewState &&
       candidate.mergeState === pr.mergeState &&
@@ -791,6 +792,7 @@ function prLogStatuses(prs: PrSummary[]): Record<string, unknown>[] {
     return {
       prKey: getPrStatusKey(normalized),
       checkState: normalized.checkState,
+      checksStillRunning: normalized.checksStillRunning ?? false,
       lifecycleState: normalized.lifecycleState,
       mergeState: normalized.mergeState,
       reviewState: normalized.reviewState,

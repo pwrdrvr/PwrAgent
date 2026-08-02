@@ -8,6 +8,7 @@ import {
   deriveLifecycleState,
   deriveMergeState,
   deriveReviewState,
+  hasChecksStillRunning,
   normalizeCommitShas,
   parsePullRequestProvider,
 } from "./pr-derivations";
@@ -26,10 +27,10 @@ const graphqlLog = getMainLogger("pwragent:pr-graphql");
  *
  * GraphQL can: aliased top-level `repository(...)` selections put N PRs from
  * arbitrary repos into ONE request. GitHub bills GraphQL on a node/point model
- * against 5,000 points/hr with a floor of 1 point per request, and every field
- * we select is a single node (or a `commits(last: 1)` connection), so a batch
- * of ~40 PRs across ~40 repos costs about the floor. That is the entire reason
- * the poller does not shell out to `gh`.
+ * against 5,000 points/hr. The query keeps its connections bounded to one head
+ * commit and at most 100 status contexts per PR, which lets it preserve
+ * failure-while-running state without returning check output. That is the
+ * entire reason the poller does not shell out to `gh`.
  *
  * Auth is still `gh`'s: we mint a token with `gh auth token` rather than asking
  * the operator for a PAT, so there is no new credential to store.
@@ -78,7 +79,11 @@ export function parsePrRefFromUrl(url: string): PrRef | undefined {
   return { owner: match[1]!, repo: match[2]!, number };
 }
 
-/** The PullRequest fields the poller reads. Kept minimal — see the cost note above. */
+/**
+ * The PullRequest fields the poller reads. `contexts` carries only enough
+ * state to distinguish a completed failure from a failure while sibling
+ * checks still run; we deliberately do not fetch names, URLs, or output.
+ */
 const PR_STATUS_FRAGMENT = `
 fragment PrStatus on PullRequest {
   number
@@ -93,7 +98,16 @@ fragment PrStatus on PullRequest {
     nodes {
       commit {
         oid
-        statusCheckRollup { state }
+        statusCheckRollup {
+          state
+          contexts(first: 100) {
+            nodes {
+              __typename
+              ... on CheckRun { conclusion status }
+              ... on StatusContext { state }
+            }
+          }
+        }
       }
     }
   }
@@ -113,12 +127,24 @@ export type GraphqlPrNode = {
       | {
         commit?: {
           oid?: string | null;
-          statusCheckRollup?: { state?: string | null } | null;
+          statusCheckRollup?: {
+            state?: string | null;
+            contexts?: {
+              nodes?: (GraphqlCheckContext | null)[] | null;
+            } | null;
+          } | null;
         } | null;
       }
       | null
     )[] | null;
   } | null;
+};
+
+type GraphqlCheckContext = {
+  __typename?: string;
+  conclusion?: string | null;
+  status?: string | null;
+  state?: string | null;
 };
 
 /** A single aliased `repository { pullRequest }` selection in the response. */
@@ -237,8 +263,14 @@ ${PR_STATUS_FRAGMENT}`;
 /** Map one GraphQL PullRequest node onto our shared PrSummary. */
 export function mapGraphqlPrNode(node: GraphqlPrNode): PrSummary {
   const headCommit = node.commits?.nodes?.[0]?.commit ?? undefined;
+  const checkContexts = headCommit?.statusCheckRollup?.contexts?.nodes ?? [];
   const checkState = deriveChipStateFromRollup(
     headCommit?.statusCheckRollup?.state,
+  );
+  const checksStillRunning = hasChecksStillRunning(
+    checkContexts.filter(
+      (context): context is GraphqlCheckContext => context !== null,
+    ),
   );
   // `mergeStateStatus` is deliberately absent: GraphQL gates it behind a preview
   // Accept header, and `mergeable` alone already answers mergeable/conflicting.
@@ -261,6 +293,7 @@ export function mapGraphqlPrNode(node: GraphqlPrNode): PrSummary {
     ...(node.title?.trim() ? { title: node.title.trim() } : {}),
     state: checkState,
     checkState,
+    ...(checksStillRunning ? { checksStillRunning: true } : {}),
     lifecycleState: deriveLifecycleState(shaped),
     reviewState: deriveReviewState(shaped),
     mergeState: deriveMergeState(shaped),

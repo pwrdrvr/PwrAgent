@@ -35,6 +35,7 @@ function samePullRequestChip(
     && left.title === right.title
     && left.state === right.state
     && left.checkState === right.checkState
+    && left.checksStillRunning === right.checksStillRunning
     && left.lifecycleState === right.lifecycleState
     && left.reviewState === right.reviewState
     && left.mergeState === right.mergeState

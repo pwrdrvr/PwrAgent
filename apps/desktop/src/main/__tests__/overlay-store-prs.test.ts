@@ -39,6 +39,16 @@ const prPassing: PrSummary = pr({
   url: "https://github.com/pwrdrvr/PwrAgent/pull/179",
 });
 
+const prFailingWithRunningChecks: PrSummary = pr({
+  provider: "github.com",
+  number: 180,
+  org: "pwrdrvr",
+  repo: "PwrAgent",
+  state: "failing",
+  checksStillRunning: true,
+  url: "https://github.com/pwrdrvr/PwrAgent/pull/180",
+});
+
 const enterprisePrPassing: PrSummary = pr({
   provider: "ghe.pwrdrvr.test",
   number: 179,
@@ -107,6 +117,20 @@ describe("SqliteOverlayStore — thread PRs", () => {
     });
     expect(overlay?.prs).toEqual([prPassing]);
     expect(overlay?.prsRefreshKey).toBe("codex:thread-1:feat/pr-chip:/repo");
+  });
+
+  it("preserves a failure that still has running checks", async () => {
+    await store.setThreadPullRequests({
+      backend: "codex",
+      threadId: "thread-1",
+      prs: [prFailingWithRunningChecks],
+    });
+
+    const overlay = await store.getThreadOverlayState({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(overlay?.prs).toEqual([prFailingWithRunningChecks]);
   });
 
   it("replaces prs (last write wins) so state transitions land", async () => {
