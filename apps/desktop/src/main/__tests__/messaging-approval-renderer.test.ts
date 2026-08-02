@@ -308,7 +308,13 @@ describe("buildApprovalIntent", () => {
         response: { decision: structuredDecision },
       }),
       expect.objectContaining({
+        decision: "decline",
+        fallbackText: "3",
+        response: { decision: "decline" },
+      }),
+      expect.objectContaining({
         decision: "cancel",
+        fallbackText: "4",
       }),
     ]);
     expect(intent.body).toContain(
@@ -353,7 +359,12 @@ describe("buildApprovalIntent", () => {
         description: "pnpm lint",
         response: { decision: secondDecision },
       }),
-      expect.objectContaining({ decision: "cancel" }),
+      expect.objectContaining({
+        decision: "decline",
+        fallbackText: "4",
+        response: { decision: "decline" },
+      }),
+      expect.objectContaining({ decision: "cancel", fallbackText: "5" }),
     ]);
     expect(intent.body).toContain("Persistent prefixes:");
     expect(intent.body).toContain(
