@@ -12417,6 +12417,36 @@ a.transcript-message__messaging-origin:focus-visible {
   transition: transform 120ms ease;
 }
 
+.transcript-activity__images {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  gap: 10px;
+  margin: 10px 12px 0;
+}
+
+.transcript-activity__image-button {
+  display: block;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: zoom-in;
+}
+
+.transcript-activity__image-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.transcript-activity__image {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  max-height: min(70vh, 560px);
+  object-fit: contain;
+}
+
 .transcript-activity__toggle[aria-expanded="true"] .transcript-activity__chevron {
   transform: rotate(45deg);
 }

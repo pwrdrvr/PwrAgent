@@ -69,13 +69,19 @@ vi.mock("../messaging/attachment-image-normalization", () => ({
 
 vi.mock("../messaging/pdf-page-renderer", () => ({
   DEFAULT_PDF_RENDER_LIMITS: {
-    maxEncodedBytes: 24 * 1024 * 1024,
+    maxEncodedBytes: 18 * 1024 * 1024,
+    maxPageEncodedBytes: 6 * 1024 * 1024,
     maxPages: 5,
     maxPagePixels: 8 * 1024 * 1024,
     maxPixels: 32 * 1024 * 1024,
+    maxWireBytes: 24 * 1024 * 1024,
   },
   inspectPdfDocument: vi.fn(),
   renderPdfPages: vi.fn(),
+  renderedPdfPageDataUrl: (page: { base64: string; mimeType: string }) =>
+    `data:${page.mimeType};base64,${page.base64}`,
+  renderedPdfPageWireBytes: (page: { base64: string; mimeType: string }) =>
+    `data:${page.mimeType};base64,`.length + page.base64.length,
 }));
 
 async function createStore(): Promise<MessagingStore> {
@@ -10410,9 +10416,10 @@ describe("MessagingController", () => {
     const pdfData = new TextEncoder().encode("%PDF-1.7\n/image data\n");
     vi.mocked(renderPdfPages).mockResolvedValueOnce([
       {
-        dataUrl: "data:image/png;base64,rendered-pdf-page",
+        base64: "rendered-pdf-page",
         encodedBytes: 1,
         height: 1988,
+        mimeType: "image/png",
         pageNumber: 1,
         width: 3072,
       },
@@ -10474,10 +10481,12 @@ describe("MessagingController", () => {
     expect(renderPdfPages).toHaveBeenCalledWith({
       data: pdfData,
       limits: {
-        maxEncodedBytes: 24 * 1024 * 1024,
+        maxEncodedBytes: 18 * 1024 * 1024,
+        maxPageEncodedBytes: 6 * 1024 * 1024,
         maxPages: 5,
         maxPagePixels: 8 * 1024 * 1024,
         maxPixels: 32 * 1024 * 1024,
+        maxWireBytes: 24 * 1024 * 1024,
       },
       profile: "high",
     });
@@ -10498,9 +10507,10 @@ describe("MessagingController", () => {
     });
     vi.mocked(renderPdfPages).mockResolvedValueOnce([
       {
-        dataUrl: "data:image/png;base64,rendered-pdf-page",
+        base64: "rendered-pdf-page",
         encodedBytes: 1,
         height: 1988,
+        mimeType: "image/png",
         pageNumber: 3,
         width: 3072,
       },
@@ -10563,10 +10573,12 @@ describe("MessagingController", () => {
             name: "window-sticker.pdf",
             pageCount: 12,
             renderLimits: {
-              maxEncodedBytes: 24 * 1024 * 1024,
+              maxEncodedBytes: 18 * 1024 * 1024,
+              maxPageEncodedBytes: 6 * 1024 * 1024,
               maxPages: 5,
               maxPagePixels: 8 * 1024 * 1024,
               maxPixels: 32 * 1024 * 1024,
+              maxWireBytes: 24 * 1024 * 1024,
             },
           }),
         ],
@@ -10598,7 +10610,8 @@ describe("MessagingController", () => {
       },
       imageContent: [
         {
-          dataUrl: "data:image/png;base64,rendered-pdf-page",
+          base64: "rendered-pdf-page",
+          mimeType: "image/png",
           pageNumber: 3,
         },
       ],

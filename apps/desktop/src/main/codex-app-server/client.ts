@@ -1805,6 +1805,27 @@ function buildImagePartFromUrl(value: string | undefined): AppServerThreadImageP
   return url ? { type: "image", url } : undefined;
 }
 
+function extractDynamicToolCallImageParts(
+  item: Record<string, unknown>,
+  toolName: string,
+): AppServerThreadImagePart[] {
+  const contentItems = Array.isArray(item.contentItems)
+    ? item.contentItems
+    : Array.isArray(item.content_items)
+      ? item.content_items
+      : [];
+  return contentItems.flatMap((value): AppServerThreadImagePart[] => {
+    const contentItem = asRecord(value);
+    if (normalizeItemType(pickString(contentItem ?? {}, ["type"])) !== "inputimage") {
+      return [];
+    }
+    const image = buildImagePartFromUrl(
+      pickString(contentItem ?? {}, ["imageUrl", "image_url"]),
+    );
+    return image ? [{ ...image, alt: `${toolName} result` }] : [];
+  });
+}
+
 function extractImagePartsFromValue(value: unknown): AppServerThreadImagePart[] {
   if (typeof value === "string") {
     const part = buildImagePartFromUrl(value);
@@ -3739,6 +3760,10 @@ function summarizeActivityItems(
         pickString(item, ["tool", "toolName", "tool_name", "name"]) ??
         (normalizedItemType === "websearch" ? "web search" : undefined);
       const query = pickString(item, ["query"]);
+      const images =
+        normalizedItemType === "dynamictoolcall"
+          ? extractDynamicToolCallImageParts(item, toolName ?? "Tool")
+          : [];
       pushActivityDetail(details, {
         id: itemId,
         kind: normalizedItemType === "websearch" ? "read" : "command",
@@ -3746,6 +3771,7 @@ function summarizeActivityItems(
           appendElapsedLabel(toolName ?? "Used tool", elapsedMs),
           query ? `: ${query}` : "",
         ].join(""),
+        ...(images.length > 0 ? { images } : {}),
         status: itemStatus
       });
     }

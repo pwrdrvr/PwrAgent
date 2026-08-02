@@ -117,16 +117,18 @@ describe("processMessagingAttachments", () => {
     });
     const renderPdfPages = vi.fn(async () => [
       {
-        dataUrl: "data:image/png;base64,first-page",
+        base64: "first-page",
         encodedBytes: 1,
         height: 1988,
+        mimeType: "image/png" as const,
         pageNumber: 1,
         width: 3072,
       },
       {
-        dataUrl: "data:image/png;base64,second-page",
+        base64: "second-page",
         encodedBytes: 1,
         height: 1988,
+        mimeType: "image/png" as const,
         pageNumber: 2,
         width: 3072,
       },
@@ -149,10 +151,12 @@ describe("processMessagingAttachments", () => {
     expect(renderPdfPages).toHaveBeenCalledWith({
       data: bytes("%PDF-1.7\n(hello pdf) Tj\n"),
       limits: {
-        maxEncodedBytes: 24 * 1024 * 1024,
+        maxEncodedBytes: 18 * 1024 * 1024,
+        maxPageEncodedBytes: 6 * 1024 * 1024,
         maxPages: 5,
         maxPagePixels: 8 * 1024 * 1024,
         maxPixels: 32 * 1024 * 1024,
+        maxWireBytes: 24 * 1024 * 1024,
       },
       profile: "high",
     });
@@ -221,9 +225,10 @@ describe("processMessagingAttachments", () => {
     const secondPdf = bytes("%PDF-1.7\n(second) Tj\n");
     const renderPdfPages = vi.fn(async () =>
       Array.from({ length: 5 }, (_, index) => ({
-        dataUrl: `data:image/png;base64,page-${index + 1}`,
+        base64: `page-${index + 1}`,
         encodedBytes: 1,
         height: 1,
+        mimeType: "image/png" as const,
         pageNumber: index + 1,
         width: 1,
       })),

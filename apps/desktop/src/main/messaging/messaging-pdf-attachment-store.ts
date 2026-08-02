@@ -11,6 +11,7 @@ import {
   DEFAULT_PDF_RENDER_LIMITS,
   inspectPdfDocument,
   renderPdfPages,
+  renderedPdfPageWireBytes,
   searchPdfText,
 } from "./pdf-page-renderer";
 
@@ -36,6 +37,7 @@ export class MessagingPdfAttachmentStore {
       renderedBytes: number;
       renderedPages: number;
       renderedPixels: number;
+      renderedWireBytes: number;
     }
   >();
 
@@ -51,6 +53,7 @@ export class MessagingPdfAttachmentStore {
       renderedBytes: 0,
       renderedPages: 0,
       renderedPixels: 0,
+      renderedWireBytes: 0,
     });
   }
 
@@ -112,14 +115,17 @@ export class MessagingPdfAttachmentStore {
     const remainingLimits = {
       maxEncodedBytes:
         DEFAULT_PDF_RENDER_LIMITS.maxEncodedBytes - turn.renderedBytes,
+      maxPageEncodedBytes: DEFAULT_PDF_RENDER_LIMITS.maxPageEncodedBytes,
       maxPages: DEFAULT_PDF_RENDER_LIMITS.maxPages - turn.renderedPages,
       maxPagePixels: DEFAULT_PDF_RENDER_LIMITS.maxPagePixels,
       maxPixels: DEFAULT_PDF_RENDER_LIMITS.maxPixels - turn.renderedPixels,
+      maxWireBytes: DEFAULT_PDF_RENDER_LIMITS.maxWireBytes - turn.renderedWireBytes,
     };
     if (
       remainingLimits.maxEncodedBytes < 1 ||
       remainingLimits.maxPages < 1 ||
-      remainingLimits.maxPixels < 1
+      remainingLimits.maxPixels < 1 ||
+      remainingLimits.maxWireBytes < 1
     ) {
       throw new Error("PDF rendering budget is exhausted for this messaging turn.");
     }
@@ -138,9 +144,14 @@ export class MessagingPdfAttachmentStore {
       (total, page) => total + page.width * page.height,
       0,
     );
+    turn.renderedWireBytes += pages.reduce(
+      (total, page) => total + renderedPdfPageWireBytes(page),
+      0,
+    );
     return {
       imageContent: pages.map((page) => ({
-        dataUrl: page.dataUrl,
+        base64: page.base64,
+        mimeType: page.mimeType,
         pageNumber: page.pageNumber,
       })),
       result: {
@@ -168,6 +179,7 @@ export class MessagingPdfAttachmentStore {
     renderedBytes: number;
     renderedPages: number;
     renderedPixels: number;
+    renderedWireBytes: number;
   } {
     const turn = this.attachmentsByTurnKey.get(turnKey(context));
     if (!turn?.attachments.length) {

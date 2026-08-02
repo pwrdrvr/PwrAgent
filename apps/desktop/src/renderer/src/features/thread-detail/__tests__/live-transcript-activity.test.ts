@@ -185,6 +185,40 @@ describe("buildLiveToolDetails", () => {
     ]);
     expect(details[0]?.command?.output).toContain("Still running reviewer output.");
   });
+
+  it("surfaces dynamic tool result images without adding their base64 to the label", () => {
+    const details = buildLiveToolDetails({
+      type: "dynamicToolCall",
+      id: "pdf-render-1",
+      tool: "render_messaging_pdf_pages",
+      status: "completed",
+      contentItems: [
+        {
+          type: "inputText",
+          text: JSON.stringify({ pages: [{ pageNumber: 3 }] }),
+        },
+        {
+          type: "inputImage",
+          imageUrl: "data:image/png;base64,AQID",
+        },
+      ],
+    });
+
+    expect(details).toEqual([
+      expect.objectContaining({
+        id: "pdf-render-1",
+        label: expect.stringContaining("pageNumber"),
+        images: [
+          {
+            type: "image",
+            url: "data:image/png;base64,AQID",
+            alt: "render_messaging_pdf_pages result",
+          },
+        ],
+      }),
+    ]);
+    expect(details[0]?.label).not.toContain("AQID");
+  });
 });
 
 describe("appendCommandOutputDelta", () => {

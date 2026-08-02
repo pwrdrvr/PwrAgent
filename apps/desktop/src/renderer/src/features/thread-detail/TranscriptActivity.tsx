@@ -2,6 +2,7 @@ import { useId, useState } from "react";
 import type {
   AppServerSkillSummary,
   AppServerThreadActivityEntry,
+  AppServerThreadImagePart,
   DesktopApplicationsSnapshot,
   MarkdownFileViewerContext,
 } from "@pwragent/shared";
@@ -10,6 +11,7 @@ import { ThreadMarkdown } from "./ThreadMarkdown";
 import { TranscriptCommandOutput } from "./TranscriptCommandOutput";
 import { TranscriptCopyButton } from "./TranscriptCopyButton";
 import { TranscriptDiff } from "./TranscriptDiff";
+import { TranscriptImage } from "./TranscriptImage";
 
 type TranscriptActivityProps = {
   applications?: DesktopApplicationsSnapshot;
@@ -19,6 +21,7 @@ type TranscriptActivityProps = {
   >;
   entry: AppServerThreadActivityEntry;
   fileViewerContext?: MarkdownFileViewerContext;
+  onOpenImage?: (image: AppServerThreadImagePart) => void;
   skills?: AppServerSkillSummary[];
 };
 
@@ -28,6 +31,7 @@ export function TranscriptActivity(props: TranscriptActivityProps) {
   const [expandedDetailIds, setExpandedDetailIds] = useState(() => new Set<string>());
   const hasDetails = props.entry.details.length > 0;
   const directDetail = singleDirectDetail(props.entry);
+  const images = props.entry.details.flatMap((detail) => detail.images ?? []);
   const activityCopyText = buildActivityCopyText(props.entry);
   const className =
     props.entry.tone === "warning"
@@ -96,6 +100,29 @@ export function TranscriptActivity(props: TranscriptActivityProps) {
           </>
         )}
       </header>
+
+      {images.length > 0 ? (
+        <div className="transcript-activity__images">
+          {images.map((image, index) => (
+            <button
+              key={`${index}:${image.url.slice(0, 80)}`}
+              type="button"
+              className="transcript-activity__image-button"
+              aria-label={`Expand tool result image ${index + 1}`}
+              onClick={() => {
+                props.onOpenImage?.(image);
+              }}
+            >
+              <TranscriptImage
+                className="transcript-activity__image"
+                src={image.url}
+                alt={image.alt ?? "Tool result"}
+                loading="lazy"
+              />
+            </button>
+          ))}
+        </div>
+      ) : null}
 
       {directDetail && isExpanded ? (
         <div id={detailsId} className="transcript-activity__detail-body">

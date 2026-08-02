@@ -104,9 +104,22 @@ function isRendererImageUrlField(
   if (key === "url" && type === "image") {
     return isRendererImageUrl(value);
   }
+  if (key === "data" && type === "image") {
+    const mimeType =
+      typeof record.mimeType === "string"
+        ? record.mimeType
+        : typeof record.mime_type === "string"
+          ? record.mime_type
+          : undefined;
+    return mimeType?.startsWith("image/") === true;
+  }
   if (
-    key === "image_url" &&
-    (type === "image" || type === "input_image" || type === "image_url")
+    (key === "image_url" || key === "imageUrl") &&
+    (type === "image" ||
+      type === "input_image" ||
+      type === "inputImage" ||
+      type === "image_url" ||
+      type === "imageUrl")
   ) {
     return isRendererImageUrl(value);
   }

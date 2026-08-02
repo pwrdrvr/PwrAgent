@@ -51,7 +51,10 @@ describe("PDF page renderer", () => {
         width: 3072,
       }),
     ]);
-    expect(pages[0]?.dataUrl).toMatch(/^data:image\/png;base64,/);
+    expect(pages[0]).toMatchObject({
+      base64: expect.any(String),
+      mimeType: "image/png",
+    });
   });
 
   it("rejects a render before allocating a page canvas when the pixel budget is too small", async () => {
@@ -74,5 +77,27 @@ describe("PDF page renderer", () => {
         profile: "high",
       }),
     ).rejects.toThrow("image-data limit");
+  });
+
+  it("rejects a render when one rendered page exceeds the per-image limit", async () => {
+    await expect(
+      renderPdfPages({
+        data: await readFile(jeepStickerPageFixture),
+        limits: { maxPageEncodedBytes: 1 },
+        pageNumbers: [1],
+        profile: "high",
+      }),
+    ).rejects.toThrow("per-image limit");
+  });
+
+  it("rejects a render when base64 expansion exceeds the model-input limit", async () => {
+    await expect(
+      renderPdfPages({
+        data: await readFile(jeepStickerPageFixture),
+        limits: { maxWireBytes: 1 },
+        pageNumbers: [1],
+        profile: "high",
+      }),
+    ).rejects.toThrow("model-input limit");
   });
 });

@@ -2285,6 +2285,23 @@ function activityCommandDetailsEqual(
   );
 }
 
+function activityImagesEqual(
+  left: AppServerThreadActivityDetail["images"],
+  right: AppServerThreadActivityDetail["images"],
+): boolean {
+  if (left?.length !== right?.length) {
+    return false;
+  }
+  return (left ?? []).every((leftImage, index) => {
+    const rightImage = right?.[index];
+    return (
+      leftImage.type === rightImage?.type &&
+      leftImage.url === rightImage.url &&
+      leftImage.alt === rightImage.alt
+    );
+  });
+}
+
 function activityDetailsEqual(
   left: AppServerThreadActivityDetail[],
   right: AppServerThreadActivityDetail[]
@@ -2304,6 +2321,7 @@ function activityDetailsEqual(
       leftDetail.status === rightDetail.status &&
       leftDetail.url === rightDetail.url &&
       leftDetail.fileDiff === rightDetail.fileDiff &&
+      activityImagesEqual(leftDetail.images, rightDetail.images) &&
       activityCommandDetailsEqual(leftDetail.command, rightDetail.command)
     );
   });
