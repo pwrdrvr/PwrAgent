@@ -3153,6 +3153,176 @@ describe("useThreadSessionState", () => {
     });
   });
 
+  it("keeps an observed prompt above hydrated work after a completed-turn refresh", async () => {
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const liveTurn = {
+      id: "turn-1",
+      status: "in_progress" as const,
+      startedAt: 1_000,
+    };
+    const completedTurn = {
+      id: "turn-1",
+      status: "completed" as const,
+      startedAt: 1_000,
+      completedAt: 5_000,
+      durationMs: 4_000,
+    };
+    const readThread = vi
+      .fn()
+      .mockImplementationOnce(async ({ threadId }) =>
+        readThreadResponse({
+          entries: [],
+          hasPreviousPage: false,
+          supportsPagination: false,
+          threadId,
+        })
+      )
+      .mockImplementationOnce(async ({ threadId }) =>
+        readThreadResponse({
+          // Codex can return the just-finished tool aggregate before the
+          // initiating prompt. The renderer had already observed the prompt
+          // before the work, so this weaker hydration order must not win.
+          entries: [
+            {
+              type: "activity" as const,
+              id: "hydrated-tools",
+              summary: "Used 1 tool",
+              createdAt: 2_000,
+              details: [
+                {
+                  id: "tool-1",
+                  kind: "command" as const,
+                  label: "Read the latest screenshot",
+                  status: "completed" as const,
+                },
+              ],
+              turn: completedTurn,
+            },
+            {
+              type: "message" as const,
+              id: "hydrated-user",
+              role: "user" as const,
+              text: "Show me the latest screenshot.",
+              createdAt: 1_000,
+              turn: completedTurn,
+            },
+            {
+              type: "message" as const,
+              id: "hydrated-commentary",
+              role: "assistant" as const,
+              phase: "commentary" as const,
+              text: "I will fetch the latest capture.",
+              createdAt: 1_500,
+              turn: completedTurn,
+            },
+            {
+              type: "message" as const,
+              id: "hydrated-final",
+              role: "assistant" as const,
+              phase: "final" as const,
+              text: "Here it is.",
+              createdAt: 5_000,
+              turn: completedTurn,
+            },
+          ],
+          hasPreviousPage: false,
+          supportsPagination: false,
+          threadId,
+        })
+    );
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      readThread,
+    };
+
+    const { result } = renderHook(
+      ({ thread }) => useThreadSessionState({ desktopApi, thread }),
+      {
+        initialProps: {
+          thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+        },
+      }
+    );
+
+    await waitForThreadHydration(result);
+
+    act(() => {
+      result.current.upsertLiveTranscriptEntry({
+        type: "message",
+        id: "optimistic-user",
+        role: "user",
+        text: "Show me the latest screenshot.",
+        createdAt: 1_000,
+        turn: liveTurn,
+      });
+      result.current.upsertLiveTranscriptEntry({
+        type: "message",
+        id: "live-commentary",
+        role: "assistant",
+        phase: "commentary",
+        text: "I will fetch the latest capture.",
+        createdAt: 1_500,
+        turn: liveTurn,
+      });
+      result.current.upsertLiveTranscriptEntry({
+        type: "activity",
+        id: "live-tools",
+        summary: "Used 1 tool",
+        createdAt: 2_000,
+        details: [
+          {
+            id: "tool-1",
+            kind: "command",
+            label: "Read the latest screenshot",
+            status: "completed",
+          },
+        ],
+        turn: liveTurn,
+      });
+    });
+
+    expect(transcriptLabels(result.current.entries)).toEqual([
+      "message:Show me the latest screenshot.",
+      "message:I will fetch the latest capture.",
+      "activity:Used 1 tool",
+    ]);
+
+    act(() => {
+      result.current.setActiveTurnId("turn-1");
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            turn: {
+              ...completedTurn,
+              output: [],
+            },
+          },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(transcriptLabels(result.current.entries)).toEqual([
+        "message:Show me the latest screenshot.",
+        "message:I will fetch the latest capture.",
+        "activity:Used 1 tool",
+        "message:Here it is.",
+      ]);
+    });
+  });
+
   it("does not delete edited file diffs when a later hydration omits them", async () => {
     let now = 40_000;
     vi.spyOn(Date, "now").mockImplementation(() => now++);

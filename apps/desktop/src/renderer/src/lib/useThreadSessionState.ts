@@ -457,18 +457,22 @@ function mergeTranscriptEntries(
             ) {
               return false;
             }
+            const entrySequence = readRendererSequence(entry);
+            if (
+              typeof entrySequence === "number" &&
+              typeof optimisticSequence === "number"
+            ) {
+              // Completion can restamp an earlier message. The live sequence
+              // is the more precise record of the order the renderer observed.
+              return entrySequence > optimisticSequence;
+            }
             if (entryCreatedAt > optimisticCreatedAt) {
               return true;
             }
             if (entryCreatedAt < optimisticCreatedAt) {
               return false;
             }
-            const entrySequence = readRendererSequence(entry);
-            return (
-              typeof entrySequence === "number" &&
-              typeof optimisticSequence === "number" &&
-              entrySequence > optimisticSequence
-            );
+            return false;
           })
         : -1;
 
@@ -983,6 +987,73 @@ function findUniqueTranscriptOrderSource(
   return logicalMatches.length === 1 ? logicalMatches[0] : undefined;
 }
 
+type HydratedEntryOrderMatch = {
+  entry: AppServerThreadEntry;
+  hydrationIndex: number;
+  sourceIndex?: number;
+};
+
+type MatchedHydratedEntry = HydratedEntryOrderMatch & {
+  sourceIndex: number;
+};
+
+function reorderHydratedEntriesByKnownOrder(
+  entries: AppServerThreadEntry[],
+  sources: AppServerThreadEntry[]
+): AppServerThreadEntry[] {
+  if (entries.length < 2 || sources.length === 0) {
+    return entries;
+  }
+
+  const sourceIndexes = new Map<AppServerThreadEntry, number>();
+  sources.forEach((source, index) => {
+    sourceIndexes.set(source, index);
+  });
+  const hydratedEntries: HydratedEntryOrderMatch[] = entries.map(
+    (entry, hydrationIndex) => {
+      const source = findUniqueTranscriptOrderSource(entry, sources);
+      const sourceIndex = source ? sourceIndexes.get(source) : undefined;
+      return {
+        entry,
+        hydrationIndex,
+        ...(sourceIndex !== undefined ? { sourceIndex } : {}),
+      };
+    }
+  );
+  const matchedEntries = hydratedEntries.filter(
+    (entry): entry is MatchedHydratedEntry => typeof entry.sourceIndex === "number"
+  );
+  if (matchedEntries.length < 2) {
+    return entries;
+  }
+
+  const sourceOrderAlreadyMatches = matchedEntries.every(
+    (entry, index) =>
+      index === 0
+      || matchedEntries[index - 1]!.sourceIndex <= entry.sourceIndex
+  );
+  if (sourceOrderAlreadyMatches) {
+    return entries;
+  }
+
+  // Do not invent positions for newly hydrated entries. Refill only the slots
+  // for entries the live ledger can identify, preserving their observed order.
+  const orderedMatches = [...matchedEntries].sort(
+    (left, right) =>
+      left.sourceIndex - right.sourceIndex || left.hydrationIndex - right.hydrationIndex
+  );
+  let orderedMatchIndex = 0;
+  return hydratedEntries.map((entry) => {
+    if (entry.sourceIndex === undefined) {
+      return entry.entry;
+    }
+
+    const orderedEntry = orderedMatches[orderedMatchIndex]?.entry;
+    orderedMatchIndex += 1;
+    return orderedEntry ?? entry.entry;
+  });
+}
+
 function carryForwardTranscriptEntryOrder(
   response: AppServerReadThreadResponse,
   sources: AppServerThreadEntry[],
@@ -1025,6 +1096,11 @@ function carryForwardTranscriptEntryOrder(
       ...(origin ? { origin } : {}),
     };
   });
+  const reorderedEntries = reorderHydratedEntriesByKnownOrder(entries, sources);
+  if (reorderedEntries !== entries) {
+    changed = true;
+    entries = reorderedEntries;
+  }
 
   const originsByMessageId = new Map(
     entries
@@ -3463,9 +3539,13 @@ export function useThreadSessionState(params: {
             ...current.optimisticEntries,
             ...(current.pendingAssistantMessage ? [current.pendingAssistantMessage] : []),
           ];
+          const transcriptOrderSources = mergeTranscriptEntries(
+            current.response?.replay.entries ?? [],
+            liveTranscriptSources
+          );
           const orderedResponse = carryForwardTranscriptEntryOrder(
             response,
-            [...(current.response?.replay.entries ?? []), ...liveTranscriptSources],
+            transcriptOrderSources,
             liveTranscriptSources
           );
           const responseWithLoadedHistory = preserveLoadedTranscriptHistory(
