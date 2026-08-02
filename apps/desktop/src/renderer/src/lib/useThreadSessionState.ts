@@ -457,18 +457,22 @@ function mergeTranscriptEntries(
             ) {
               return false;
             }
+            const entrySequence = readRendererSequence(entry);
+            if (
+              typeof entrySequence === "number" &&
+              typeof optimisticSequence === "number"
+            ) {
+              // Completion can restamp an earlier message. The live sequence
+              // is the more precise record of the order the renderer observed.
+              return entrySequence > optimisticSequence;
+            }
             if (entryCreatedAt > optimisticCreatedAt) {
               return true;
             }
             if (entryCreatedAt < optimisticCreatedAt) {
               return false;
             }
-            const entrySequence = readRendererSequence(entry);
-            return (
-              typeof entrySequence === "number" &&
-              typeof optimisticSequence === "number" &&
-              entrySequence > optimisticSequence
-            );
+            return false;
           })
         : -1;
 
