@@ -10189,12 +10189,15 @@ export class DesktopBackendRegistry {
       params.backend,
       params.threadId,
     );
-    this.pendingTitleGenerationInputs.set(titleGenerationKey, params.input);
+    // Title generation can be scheduled from a lifecycle event before this
+    // turn/start call resolves. It must receive the same prepared input that
+    // goes to the agent, not raw local PDF references from the composer.
+    this.pendingTitleGenerationInputs.set(titleGenerationKey, input);
     const pendingMessageOriginId = this.registerPendingThreadMessageOrigin({
       backend: params.backend,
       threadId: params.threadId,
       origin: resolveThreadMessageOrigin(params),
-      text: extractFirstMeaningfulTextInput(params.input),
+      text: extractFirstMeaningfulTextInput(input),
     });
     const retryableCodexTurnStart: CodexRetryableTurnStart | undefined =
       params.backend === "codex" && !params.invalidIdRecoveryAttempted
@@ -10395,7 +10398,7 @@ export class DesktopBackendRegistry {
       this.scheduleThreadTitleGeneration({
         backend: params.backend,
         threadId: result.threadId,
-        input: params.input,
+        input,
       });
     }
 
