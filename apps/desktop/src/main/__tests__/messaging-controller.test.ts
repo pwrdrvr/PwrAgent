@@ -1306,10 +1306,10 @@ describe("MessagingController", () => {
         parts: [expect.objectContaining({ text: "I found it." })],
       }),
     );
-    expect(JSON.stringify(harness.delivered)).not.toContain(
+    expect(JSON.stringify(harness.delivered)).toContain(
       "I am searching for the thread now.",
     );
-    expect(JSON.stringify(harness.delivered)).not.toContain("find the thread");
+    expect(JSON.stringify(harness.delivered)).toContain("find the thread");
   });
 
   it("routes an accepted every-message topic to its default Agent without binding it", async () => {

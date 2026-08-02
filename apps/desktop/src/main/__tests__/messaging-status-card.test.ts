@@ -23,14 +23,14 @@ afterEach(() => {
 });
 
 describe("resolveMessagingToolUpdateMode", () => {
-  it("defaults Agent threads to None without overriding an explicit preference", () => {
+  it("uses the Agent default when available and preserves an explicit preference", () => {
     const agentBinding = {
       ...buildBinding(),
       targetKind: "agent_thread",
     } satisfies MessagingBindingRecord;
 
     expect(resolveMessagingToolUpdateMode(agentBinding, "show_all")).toBe(
-      "show_none",
+      "show_all",
     );
     expect(
       resolveMessagingToolUpdateMode(
@@ -44,6 +44,9 @@ describe("resolveMessagingToolUpdateMode", () => {
         "show_some",
       ),
     ).toBe("show_all");
+    expect(resolveMessagingToolUpdateMode(agentBinding, undefined)).toBe(
+      "show_none",
+    );
     expect(resolveMessagingToolUpdateMode(buildBinding(), "show_all")).toBe(
       "show_all",
     );
