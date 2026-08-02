@@ -64,6 +64,7 @@ import {
   type RecordRecentFileReferencesRequest,
   type DetachThreadPullRequestRequest,
   type DetachThreadPullRequestResponse,
+  type DesktopSettingsSnapshot,
   type RefreshDirectoryGitStatusesRequest,
   type RefreshDirectoryGitStatusesResponse,
   type RefreshThreadPullRequestsRequest,
@@ -3861,6 +3862,24 @@ class DesktopAppServerService {
     return this.prGraphqlClient;
   }
 
+  private getPrAutoDispatchBudgetConfigFromSettings(
+    settings: Pick<DesktopSettingsSnapshot, "git">,
+  ): PrAutoDispatchBudgetConfig {
+    return {
+      capacity: settings.git.prAutoDispatchBudgetCapacity.value,
+      refillPerMinute:
+        settings.git.prAutoDispatchBudgetRefillPerMinute.value,
+      pauseWhenEmpty:
+        settings.git.pausePrAutoDispatchWhenBudgetEmpty.value,
+    };
+  }
+
+  private async readPrAutoDispatchBudgetConfig(): Promise<PrAutoDispatchBudgetConfig> {
+    return this.getPrAutoDispatchBudgetConfigFromSettings(
+      await getDesktopSettingsService().readSettings(),
+    );
+  }
+
   /**
    * Start or stop background PR polling and automatic repair dispatch to match
    * the Git settings. Public + idempotent: called on every navigation snapshot
@@ -3898,13 +3917,7 @@ class DesktopAppServerService {
         const settings = await settingsService.readSettings();
         backgroundPollingEnabled = settings.git.backgroundPrPolling.value;
         prAutoDispatchAllowed = settings.git.prAutoDispatchAllowed.value;
-        budgetConfig = {
-          capacity: settings.git.prAutoDispatchBudgetCapacity.value,
-          refillPerMinute:
-            settings.git.prAutoDispatchBudgetRefillPerMinute.value,
-          pauseWhenEmpty:
-            settings.git.pausePrAutoDispatchWhenBudgetEmpty.value,
-        };
+        budgetConfig = this.getPrAutoDispatchBudgetConfigFromSettings(settings);
         budgetStatus = await this.getOverlayStore().getPrAutoDispatchBudgetStatus({
           config: budgetConfig,
           now: Date.now(),
@@ -3949,8 +3962,13 @@ class DesktopAppServerService {
   }
 
   async getPrAutoDispatchBudgetStatus(): Promise<PrAutoDispatchBudgetStatus> {
+    // The renderer requests this while mounting, before a navigation snapshot
+    // necessarily synchronizes the cached config. Reading bucket status applies
+    // refill durably, so it must use the profile settings rather than defaults.
+    const budgetConfig = await this.readPrAutoDispatchBudgetConfig();
+    this.prAutoDispatchBudgetConfig = budgetConfig;
     const status = await this.getOverlayStore().getPrAutoDispatchBudgetStatus({
-      config: this.prAutoDispatchBudgetConfig,
+      config: budgetConfig,
       now: Date.now(),
     });
     if (status.paused) {
@@ -3960,8 +3978,10 @@ class DesktopAppServerService {
   }
 
   async resumePrAutoDispatchBudget(): Promise<PrAutoDispatchBudgetStatus> {
+    const budgetConfig = await this.readPrAutoDispatchBudgetConfig();
+    this.prAutoDispatchBudgetConfig = budgetConfig;
     const status = await this.getOverlayStore().resumePrAutoDispatchBudget({
-      config: this.prAutoDispatchBudgetConfig,
+      config: budgetConfig,
       now: Date.now(),
     });
     this.updatePrAutoDispatchBudgetStatus(status, { allowResume: true });

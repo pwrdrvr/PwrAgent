@@ -419,7 +419,11 @@ const syncThreadPrAutoDispatchCandidates = vi.fn(async () => undefined);
 const getPrAutoDispatchCandidateWinner = vi.fn(async () => undefined);
 const resetThreadPrAutoDispatchForOperator = vi.fn(async () => false);
 const getPrAutoDispatchBudgetStatus = vi.fn(async (params: {
-  config: { capacity: number; refillPerMinute: number };
+  config: {
+    capacity: number;
+    refillPerMinute: number;
+    pauseWhenEmpty: boolean;
+  };
 }) => ({
   availableTokens: prAutomationSettings.state.budgetPaused ? 0 : params.config.capacity,
   capacity: params.config.capacity,
@@ -428,7 +432,11 @@ const getPrAutoDispatchBudgetStatus = vi.fn(async (params: {
   ...(prAutomationSettings.state.budgetPaused ? { pausedAt: 1_000 } : {}),
 }));
 const resumePrAutoDispatchBudget = vi.fn(async (params: {
-  config: { capacity: number; refillPerMinute: number };
+  config: {
+    capacity: number;
+    refillPerMinute: number;
+    pauseWhenEmpty: boolean;
+  };
 }) => {
   prAutomationSettings.state.budgetPaused = false;
   return {
@@ -987,6 +995,33 @@ describe("app server ipc", () => {
       enabled: true,
     });
     expect(scheduleThreadPrAutoDispatch).not.toHaveBeenCalled();
+  });
+
+  it("loads configured budget limits before serving a startup status request", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { APP_SERVER_GET_PR_AUTO_DISPATCH_BUDGET_STATUS_CHANNEL } =
+      await import("../../shared/ipc");
+    prAutomationSettings.state.budgetCapacity = 1_000;
+    prAutomationSettings.state.budgetRefillPerMinute = 60;
+    prAutomationSettings.state.pauseWhenBudgetEmpty = false;
+
+    registerAppServerIpcHandlers();
+
+    expect(await handlers.get(
+      APP_SERVER_GET_PR_AUTO_DISPATCH_BUDGET_STATUS_CHANNEL,
+    )?.()).toMatchObject({
+      capacity: 1_000,
+      refillPerMinute: 60,
+    });
+    expect(prAutomationSettings.readSettings).toHaveBeenCalledTimes(1);
+    expect(getPrAutoDispatchBudgetStatus).toHaveBeenCalledWith({
+      config: {
+        capacity: 1_000,
+        refillPerMinute: 60,
+        pauseWhenEmpty: false,
+      },
+      now: expect.any(Number),
+    });
   });
 
   it("keeps thread preferences intact while a durable budget safety stop pauses Auto-fix PR", async () => {
