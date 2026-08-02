@@ -3823,6 +3823,98 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("projects typed MCP resource links into transcript image parts", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const imageUrl =
+      "http://127.0.0.1:51729/media?grant=full-image&signature=signed-media";
+    MockTransport.readThreadResultByThreadId.set("thread-mcp-resource-link", {
+      thread: {
+        turns: [
+          {
+            id: "turn-mcp-resource-link",
+            startedAt: 1_763_500_150,
+            items: [
+              {
+                type: "mcpToolCall",
+                id: "mcp-capture-resource",
+                server: "pwrsnap",
+                tool: "pwrsnap_capture_resource",
+                status: "completed",
+                result: {
+                  structuredContent: {
+                    resourceUri: "pwrsnap://capture/example/composite",
+                    signedUrl: imageUrl,
+                    mimeType: "image/png",
+                    widthPx: 2_880,
+                    heightPx: 1_920,
+                  },
+                  content: [
+                    {
+                      type: "text",
+                      text: "PwrSnap capture resource.",
+                    },
+                    {
+                      type: "resource_link",
+                      uri: imageUrl,
+                      name: "composite capture",
+                      mimeType: "image/png",
+                      size: 10,
+                    },
+                  ],
+                },
+              },
+              {
+                type: "agentMessage",
+                id: "assistant-final",
+                phase: "final_answer",
+                text: "There it is.",
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const replay = await client.readThread({ threadId: "thread-mcp-resource-link" });
+    const finalEntry = replay.entries.find(
+      (entry) => entry.type === "message" && entry.id === "assistant-final",
+    );
+    const finalMessage = replay.messages.find((message) => message.id === "assistant-final");
+
+    expect(finalEntry).toMatchObject({
+      type: "message",
+      role: "assistant",
+      text: "There it is.",
+      parts: [
+        { type: "text", text: "There it is." },
+        {
+          type: "image",
+          url: imageUrl,
+          alt: "composite capture",
+        },
+      ],
+    });
+    expect(finalMessage).toMatchObject({
+      role: "assistant",
+      text: "There it is.",
+      parts: [
+        { type: "text", text: "There it is." },
+        {
+          type: "image",
+          url: imageUrl,
+          alt: "composite capture",
+        },
+      ],
+    });
+
+    await client.close();
+  });
+
   it("attaches images embedded in MCP resource result text to the final assistant message", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     const imageBlob = "AQID";

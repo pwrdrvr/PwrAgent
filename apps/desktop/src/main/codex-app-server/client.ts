@@ -3472,9 +3472,11 @@ function extractMcpToolResultImagePartsFromReplayItem(
       const signedImagePart = structuredContent
         ? buildMcpSignedImagePart(structuredContent)
         : undefined;
+      const resourceLinkImageParts = extractMcpResourceLinkImageParts(result?.content);
       const resourceImageParts = extractMcpResourceImageParts(result?.content);
       return [
         ...structuredImageParts,
+        ...resourceLinkImageParts,
         ...(signedImagePart ? [signedImagePart] : []),
         ...resourceImageParts,
       ];
@@ -3487,7 +3489,11 @@ function buildMcpSignedImagePart(
 ): AppServerThreadImagePart | undefined {
   const signedUrl = pickString(structuredContent, ["signedUrl", "signed_url"]);
   const mimeType = pickString(structuredContent, ["mimeType", "mime_type"]);
-  if (!signedUrl || !mimeType?.toLowerCase().startsWith("image/") || !isLoopbackUrl(signedUrl)) {
+  if (
+    !signedUrl
+    || !mimeType?.toLowerCase().startsWith("image/")
+    || !isPwrSnapSignedMediaUrl(signedUrl)
+  ) {
     return undefined;
   }
 
@@ -3501,6 +3507,45 @@ function buildMcpSignedImagePart(
     imagePart.alt = alt;
   }
   return imagePart;
+}
+
+function extractMcpResourceLinkImageParts(content: unknown): AppServerThreadImagePart[] {
+  const contentBlocks = Array.isArray(content) ? content : [content];
+  return dedupeImageParts(
+    contentBlocks.flatMap((contentBlock) => {
+      const resourceLink = asRecord(contentBlock);
+      if (!resourceLink) {
+        return [];
+      }
+      const type = normalizeItemType(
+        pickString(resourceLink, ["type", "contentType", "content_type"]),
+      );
+      const uri = pickString(resourceLink, ["uri", "url"]);
+      const mimeType = pickString(resourceLink, ["mimeType", "mime_type"]);
+      if (
+        type !== "resourcelink"
+        || !uri
+        || !mimeType?.toLowerCase().startsWith("image/")
+        || !isPwrSnapSignedMediaUrl(uri)
+      ) {
+        return [];
+      }
+
+      const imagePart = buildImagePartFromUrl(uri);
+      if (!imagePart) {
+        return [];
+      }
+
+      const alt = pickString(resourceLink, [
+        "name",
+        "title",
+        "alt",
+        "altText",
+        "alt_text",
+      ]);
+      return [{ ...imagePart, ...(alt ? { alt } : {}) }];
+    }),
+  );
 }
 
 function extractMcpResourceImageParts(content: unknown): AppServerThreadImagePart[] {
@@ -3560,7 +3605,7 @@ function buildMcpResourceImagePart(
   };
 }
 
-function isLoopbackUrl(value: string): boolean {
+function isPwrSnapSignedMediaUrl(value: string): boolean {
   let parsed: URL;
   try {
     parsed = new URL(value);
@@ -3568,17 +3613,21 @@ function isLoopbackUrl(value: string): boolean {
     return false;
   }
 
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+  if (
+    (parsed.protocol !== "http:" && parsed.protocol !== "https:")
+    || parsed.pathname !== "/media"
+  ) {
     return false;
   }
 
   const hostname = parsed.hostname.toLowerCase();
-  return (
+  const isLoopback = (
     hostname === "localhost"
     || hostname === "127.0.0.1"
     || hostname === "::1"
     || hostname.endsWith(".localhost")
   );
+  return isLoopback && Boolean(parsed.searchParams.get("grant"));
 }
 
 function dedupeImageParts(

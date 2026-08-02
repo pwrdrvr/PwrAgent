@@ -39,7 +39,8 @@ const DATA_IMAGE_EXTENSIONS = new Map<string, string>([
 ]);
 
 const MARKDOWN_LINKED_IMAGE_PATTERN = /!?\[([^\]\r\n]*)\]\(\s*(?:<([^>\r\n]+)>|([^\s)]+))[^)]*\)/g;
-const MAX_FETCHED_TRANSCRIPT_IMAGE_BYTES = 16 * 1024 * 1024;
+// PwrSnap links can point to full-resolution captures, not just UI-sized previews.
+const MAX_FETCHED_TRANSCRIPT_IMAGE_BYTES = 64 * 1024 * 1024;
 const FETCHED_TRANSCRIPT_IMAGE_TIMEOUT_MS = 10_000;
 
 export type TranscriptImageProtocolOptions = {
