@@ -204,6 +204,7 @@ type ComposerProps = {
   onPendingStatusChange?: (status?: string) => void;
   onRefreshNavigation?: () => Promise<void>;
   pastedImageMaxPatches?: number;
+  pdfAnalysisEnabled?: boolean;
   onUpdateLaunchpad?: (
     directoryKey: string,
     patch: Partial<
@@ -1339,6 +1340,44 @@ function appendFileReferenceMarkdown(
     )
     .join("\n");
   return text ? `${text}\n\n${referenceBlock}` : referenceBlock;
+}
+
+/**
+ * Keep the normal markdown reference visible in the transcript, while also
+ * preserving the explicit user selection for main-process document handling.
+ * Do not derive these from free-form draft text: only the file tray and `@`
+ * file tokens grant PwrAgent permission to inspect a local path.
+ */
+function buildLocalFileInputs(
+  fileRefs: ComposerFileAttachment[],
+  skillTokens: ComposerSkillToken[],
+): Extract<AppServerTurnInputItem, { type: "localFile" }>[] {
+  const inputsByPath = new Map<
+    string,
+    Extract<AppServerTurnInputItem, { type: "localFile" }>
+  >();
+  const add = (name: string | undefined, rawPath: string | undefined): void => {
+    const filePath = rawPath?.trim();
+    if (!filePath || inputsByPath.has(filePath)) {
+      return;
+    }
+    const label = name?.trim();
+    inputsByPath.set(filePath, {
+      type: "localFile",
+      ...(label ? { name: label } : {}),
+      path: filePath,
+    });
+  };
+
+  for (const fileRef of fileRefs) {
+    add(fileRef.label, fileRef.path);
+  }
+  for (const token of skillTokens) {
+    if (token.kind === "file") {
+      add(token.name, token.path);
+    }
+  }
+  return [...inputsByPath.values()];
 }
 
 function getComposerSkillTokensSignature(skillTokens: ComposerSkillToken[]): string {
@@ -2751,6 +2790,7 @@ export function Composer(props: ComposerProps) {
   const [skillTokens, setSkillTokens] = useState<ComposerSkillToken[]>(
     latestDraftSnapshotRef.current.snapshot.skillTokens
   );
+  const [pdfReferencePaths, setPdfReferencePaths] = useState<string[]>([]);
   const [composerSelectionRequest, setComposerSelectionRequest] = useState<{
     id: string;
     index: number;
@@ -2877,6 +2917,47 @@ export function Composer(props: ComposerProps) {
     () => serializeDraftWithSkillTokens(draft, skillTokens),
     [draft, skillTokens]
   );
+  const explicitFileReferencePaths = useMemo(
+    () =>
+      buildLocalFileInputs(fileAttachments, skillTokens)
+        .map((input) => input.path)
+        .sort(),
+    [fileAttachments, skillTokens],
+  );
+  useEffect(() => {
+    const extensionPdfPaths = explicitFileReferencePaths.filter((filePath) =>
+      /\.pdf$/iu.test(filePath),
+    );
+    if (explicitFileReferencePaths.length === 0) {
+      setPdfReferencePaths([]);
+      return;
+    }
+    if (!props.desktopApi?.inspectPdfReferencePaths) {
+      setPdfReferencePaths(extensionPdfPaths);
+      return;
+    }
+
+    let cancelled = false;
+    void props.desktopApi.inspectPdfReferencePaths({
+      paths: explicitFileReferencePaths,
+    }).then(
+      ({ pdfPaths }) => {
+        if (!cancelled) {
+          setPdfReferencePaths([
+            ...new Set([...extensionPdfPaths, ...pdfPaths]),
+          ]);
+        }
+      },
+      () => {
+        if (!cancelled) {
+          setPdfReferencePaths(extensionPdfPaths);
+        }
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [explicitFileReferencePaths, props.desktopApi]);
   const hasComposerContent =
     draft.trim().length > 0 || skillTokens.length > 0;
   const queuedTurn = queuedTurns[0];
@@ -4382,6 +4463,7 @@ export function Composer(props: ComposerProps) {
           } else {
             setQueuedTurn({
               id: createQueuedTurnId(),
+              input: pendingSteer.input,
               text: pendingSteer.text,
               imageAttachments: pendingSteer.imageAttachments,
               fileAttachments: pendingSteer.fileAttachments,
@@ -4861,6 +4943,7 @@ export function Composer(props: ComposerProps) {
     textDraft: string,
     attachments: ComposerImageAttachment[],
     fileRefs: ComposerFileAttachment[],
+    fileSkillTokens: ComposerSkillToken[] = [],
   ): {
     displayText: string;
     imageParts: AppServerThreadImagePart[];
@@ -4887,6 +4970,7 @@ export function Composer(props: ComposerProps) {
         name: attachment.name,
         url: attachment.url,
       })),
+      ...buildLocalFileInputs(fileRefs, fileSkillTokens),
     ];
 
     return { displayText, imageParts, input };
@@ -4904,13 +4988,21 @@ export function Composer(props: ComposerProps) {
       return;
     }
 
-    const payload = queued
+    const builtPayload = queued
       ? buildTurnPayload(
           queued.text,
           queued.imageAttachments,
           queued.fileAttachments ?? [],
         )
-      : buildTurnPayload(canonicalDraft, imageAttachments, fileAttachments);
+      : buildTurnPayload(
+          canonicalDraft,
+          imageAttachments,
+          fileAttachments,
+          skillTokens,
+        );
+    const payload = queued?.input?.length
+      ? { ...builtPayload, input: queued.input }
+      : builtPayload;
     if (payload.input.length === 0 || props.disabled) {
       restoreQueuedTurnIfClaimed(queued, options?.queueClaimed);
       if (queued && options?.queueClaimed) {
@@ -5121,6 +5213,7 @@ export function Composer(props: ComposerProps) {
     } else {
       setQueuedTurn({
         id: createQueuedTurnId(),
+        input: pendingSteer.input,
         text: pendingSteer.text,
         imageAttachments: pendingSteer.imageAttachments,
         fileAttachments: pendingSteer.fileAttachments,
@@ -5138,7 +5231,12 @@ export function Composer(props: ComposerProps) {
       return;
     }
 
-    const payload = buildTurnPayload(canonicalDraft, imageAttachments, fileAttachments);
+    const payload = buildTurnPayload(
+      canonicalDraft,
+      imageAttachments,
+      fileAttachments,
+      skillTokens,
+    );
     if (payload.input.length === 0) {
       return;
     }
@@ -5263,11 +5361,24 @@ export function Composer(props: ComposerProps) {
       return;
     }
 
-    const payload = buildTurnPayload(
-      pending.text,
-      pending.imageAttachments,
-      pending.fileAttachments,
-    );
+    const payload = pending.input?.length
+      ? {
+          displayText: appendFileReferenceMarkdown(
+            pending.text,
+            pending.fileAttachments,
+          ),
+          imageParts: pending.imageAttachments.map((attachment, index) => ({
+            type: "image" as const,
+            url: attachment.url,
+            alt: formatPastedImageAlt(attachment, index),
+          })),
+          input: pending.input,
+        }
+      : buildTurnPayload(
+          pending.text,
+          pending.imageAttachments,
+          pending.fileAttachments,
+        );
     if (
       payload.input.length === 0 ||
       props.disabled ||
@@ -5307,6 +5418,7 @@ export function Composer(props: ComposerProps) {
         } else {
           setQueuedTurn({
             id: createQueuedTurnId(),
+            input: pending.input,
             text: pending.text,
             imageAttachments: pending.imageAttachments,
             fileAttachments: pending.fileAttachments,
@@ -5340,11 +5452,13 @@ export function Composer(props: ComposerProps) {
       return false;
     }
 
-    const payload = buildTurnPayload(
-      pending.text,
-      pending.imageAttachments,
-      pending.fileAttachments,
-    );
+    const payload = pending.input?.length
+      ? { input: pending.input }
+      : buildTurnPayload(
+          pending.text,
+          pending.imageAttachments,
+          pending.fileAttachments,
+        );
     if (payload.input.length === 0 || props.disabled || pendingSteer) {
       return false;
     }
@@ -5352,6 +5466,7 @@ export function Composer(props: ComposerProps) {
     setSendError(undefined);
     setPendingSteer({
       id: pending.id,
+      input: payload.input,
       text: pending.text,
       imageAttachments: pending.imageAttachments,
       fileAttachments: pending.fileAttachments,
@@ -5384,6 +5499,12 @@ export function Composer(props: ComposerProps) {
 
     createPendingSteer({
       id: createQueuedTurnId(),
+      input: buildTurnPayload(
+        canonicalDraft,
+        imageAttachments,
+        fileAttachments,
+        skillTokens,
+      ).input,
       text: canonicalDraft,
       imageAttachments,
       fileAttachments,
@@ -5495,7 +5616,12 @@ export function Composer(props: ComposerProps) {
     // pending time so the toggle doesn't reappear after the immediate send.
     setScheduledDraftSendAt(undefined);
     setScheduleArmed(true);
-    const payload = buildTurnPayload(canonicalDraft, imageAttachments, fileAttachments);
+    const payload = buildTurnPayload(
+      canonicalDraft,
+      imageAttachments,
+      fileAttachments,
+      skillTokens,
+    );
     const collaborationMode = planModeEnabled && supportsPlanMode
       ? ({
           mode: "plan",
@@ -8117,6 +8243,14 @@ export function Composer(props: ComposerProps) {
         <p className="composer__meta composer__meta--warning" role="status">
           {imagesUnsupportedLabel} doesn&apos;t support image attachments —
           remove them or switch models before sending.
+        </p>
+      ) : null}
+
+      {pdfReferencePaths.length > 0 ? (
+        <p className="composer__meta" role="status">
+          {props.pdfAnalysisEnabled !== false
+            ? "PDF analysis is on. PwrAgent uses local PDF tools for supported Codex threads and renders bounded page images when needed, preserving visual layout with less input overhead. Turn it off in Settings > General to leave PDFs as normal local-file references."
+            : "PDF analysis is off. This PDF will be sent as a normal local-file reference for the model to inspect with code or its own tools."}
         </p>
       ) : null}
 

@@ -36,6 +36,7 @@ export type ComposerQueuedTurnSnapshot = {
 
 export type ComposerPendingSteerSnapshot = {
   id: string;
+  input?: AppServerTurnInputItem[];
   text: string;
   imageAttachments: NavigationLaunchpadImageAttachment[];
   fileAttachments: NavigationLaunchpadFileAttachment[];

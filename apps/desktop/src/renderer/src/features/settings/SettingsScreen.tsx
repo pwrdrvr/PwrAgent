@@ -343,6 +343,11 @@ function SettingsSectionBody(props: {
             general: { confirmQuitWithInProgressThreads },
           });
         }}
+        onPdfAnalysisEnabledChange={async (pdfAnalysisEnabled) => {
+          await props.settings.writeConfig({
+            general: { pdfAnalysisEnabled },
+          });
+        }}
         onUpdateChannelChange={async (channel: DesktopUpdateChannel) => {
           await props.settings.writeConfig({
             updates: { channel },

@@ -91,6 +91,10 @@ function createSnapshot(
         value: false,
         source: "default",
       },
+      pdfAnalysisEnabled: {
+        value: true,
+        source: "default",
+      },
       hotCpuProfilingEnabled: {
         value: false,
         source: "default",
@@ -596,6 +600,19 @@ describe("SettingsScreen", () => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         general: {
           confirmQuitWithInProgressThreads: false,
+        },
+      });
+    });
+    expect(
+      screen.getByRole("switch", { name: "Use PwrAgent PDF analysis" }),
+    ).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Use PwrAgent PDF analysis" }),
+    );
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: {
+          pdfAnalysisEnabled: false,
         },
       });
     });

@@ -255,6 +255,8 @@ export const NAVIGATION_PICK_FILE_FROM_DISK_CHANNEL =
  */
 export const NAVIGATION_PICK_REFERENCE_FROM_DISK_CHANNEL =
   "navigation:pick-reference-from-disk";
+export const NAVIGATION_INSPECT_PDF_REFERENCE_PATHS_CHANNEL =
+  "navigation:inspect-pdf-reference-paths";
 /**
  * Recently referenced files for the reference picker's Files tab —
  * `list` reads the persisted most-recent-first list; `record` is a
