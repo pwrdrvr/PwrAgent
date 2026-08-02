@@ -930,6 +930,7 @@ export type ThreadViewProps = {
         | "directoryLabel"
         | "directoryPath"
         | "imageAttachments"
+        | "agent"
       >
     >,
     options?: { stickySettingsChanged?: boolean }

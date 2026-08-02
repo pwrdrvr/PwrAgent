@@ -4,6 +4,11 @@ import type { DesktopApi } from "../../../lib/desktop-api";
 import { formatBackendLabel } from "../../../lib/backend-label";
 import { formatExecutionModeLabel } from "../../../lib/execution-mode";
 import {
+  CODEX_AGENT_THREAD_CREATION_NOTE,
+  canChangeExistingThreadAgentDesignation,
+  createDesktopAgentThread,
+} from "../../../lib/agent-thread";
+import {
   CopyValueButton,
   formatAgentInstructionSummary,
   formatTimestamp,
@@ -31,14 +36,19 @@ type ThreadInfoPanelProps = {
 export function ThreadInfoPanel(props: ThreadInfoPanelProps) {
   const [agentSaving, setAgentSaving] = useState(false);
   const [agentError, setAgentError] = useState<string>();
+  const canChangeAgentDesignation = canChangeExistingThreadAgentDesignation(
+    props.thread,
+  );
 
   useEffect(() => {
     setAgentError(undefined);
     setAgentSaving(false);
   }, [props.thread.id, props.thread.source]);
 
-  const setThreadAgent = async (agent: { name: string } | null): Promise<void> => {
-    if (!props.desktopApi?.setThreadAgent) {
+  const setThreadAgent = async (
+    agent: { name: string; instructions?: string } | null,
+  ): Promise<void> => {
+    if (!canChangeAgentDesignation || !props.desktopApi?.setThreadAgent) {
       return;
     }
     setAgentSaving(true);
@@ -68,27 +78,40 @@ export function ThreadInfoPanel(props: ThreadInfoPanelProps) {
               <p className="context-list__meta">
                 {formatAgentInstructionSummary(props.thread.agent.instructionLineCount)}
               </p>
+              {!canChangeAgentDesignation ? (
+                <p className="context-list__meta context-list__agent-note">
+                  {CODEX_AGENT_THREAD_CREATION_NOTE}
+                </p>
+              ) : null}
             </div>
-            <button
-              className="context-list__action"
-              disabled={agentSaving || !props.desktopApi?.setThreadAgent}
-              type="button"
-              onClick={() => void setThreadAgent(null)}
-            >
-              Clear
-            </button>
+            {canChangeAgentDesignation ? (
+              <button
+                className="context-list__action"
+                disabled={agentSaving || !props.desktopApi?.setThreadAgent}
+                type="button"
+                onClick={() => void setThreadAgent(null)}
+              >
+                Clear
+              </button>
+            ) : null}
           </div>
         ) : (
           <div className="context-list__item">
-            <p className="context-empty">Ordinary work thread</p>
-            <button
-              className="context-list__action"
-              disabled={agentSaving || !props.desktopApi?.setThreadAgent}
-              type="button"
-              onClick={() => void setThreadAgent({ name: props.thread.title })}
-            >
-              Mark as Agent
-            </button>
+            <p className="context-empty">
+              {canChangeAgentDesignation
+                ? "Ordinary work thread"
+                : CODEX_AGENT_THREAD_CREATION_NOTE}
+            </p>
+            {canChangeAgentDesignation ? (
+              <button
+                className="context-list__action"
+                disabled={agentSaving || !props.desktopApi?.setThreadAgent}
+                type="button"
+                onClick={() => void setThreadAgent(createDesktopAgentThread())}
+              >
+                Mark as Agent
+              </button>
+            ) : null}
           </div>
         )}
         {agentError ? (

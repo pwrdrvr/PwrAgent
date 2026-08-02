@@ -13897,7 +13897,7 @@ export class DesktopBackendRegistry {
     const startThreadResponse = await this.startThread({
       backend: launchpad.backend,
       executionMode: launchpad.executionMode,
-      agent: request.agent,
+      agent: request.agent ?? launchpad.agent,
       cwd: workspace.cwd,
       linkedDirectories,
       model: launchpad.model,

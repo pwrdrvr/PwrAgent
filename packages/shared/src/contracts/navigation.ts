@@ -50,6 +50,15 @@ export type ThreadAgentMetadata = {
   updatedAt: number;
 };
 
+/**
+ * Agent metadata selected before a launchpad has materialized a thread.
+ * The overlay store normalizes this into `ThreadAgentMetadata` after start.
+ */
+export type NavigationLaunchpadAgent = Pick<
+  ThreadAgentMetadata,
+  "name" | "instructions"
+>;
+
 export type NavigationThreadSummary = AppServerThreadSummary & {
   inbox: ThreadInboxState;
   /**
@@ -560,6 +569,12 @@ export type NavigationLaunchpadDraft = NavigationLaunchpadDefaults & {
   editorDocument?: Record<string, unknown>;
   imageAttachments?: NavigationLaunchpadImageAttachment[];
   fileAttachments?: NavigationLaunchpadFileAttachment[];
+  /**
+   * Creates the materialized thread as an Agent. This is launchpad-specific
+   * rather than a sticky provider default: ordinary threads remain the
+   * default for each new draft.
+   */
+  agent?: NavigationLaunchpadAgent;
   prompt: string;
   registeredAt?: number;
   settingsTouchedAt?: number;

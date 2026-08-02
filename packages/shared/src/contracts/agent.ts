@@ -20,6 +20,7 @@ import type {
   DirectorySummaryKind,
   LaunchpadWorkMode,
   NavigationDirectoryGitStatus,
+  NavigationLaunchpadAgent,
   NavigationLaunchpadDraft,
   NavigationLaunchpadDefaults,
 } from "./navigation";
@@ -29,10 +30,7 @@ export type StartThreadRequest = {
   /**
    * When present, start the thread with Agent/persona metadata.
    */
-  agent?: {
-    name: string;
-    instructions?: string;
-  };
+  agent?: NavigationLaunchpadAgent;
   executionMode?: ThreadExecutionMode;
   cwd?: string;
   directoryKey?: string;
@@ -550,6 +548,7 @@ export type UpdateDirectoryLaunchpadRequest = {
       | "codexEnvironmentActionId"
       | "directoryLabel"
       | "directoryPath"
+      | "agent"
     >
   >;
   stickySettingsChanged?: boolean;
