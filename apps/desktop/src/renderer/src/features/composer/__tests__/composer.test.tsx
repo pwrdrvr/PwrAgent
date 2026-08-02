@@ -572,6 +572,55 @@ describe("Composer", () => {
     });
   });
 
+  it("renders a newly received PR repair countdown from the current clock", () => {
+    const mountedAt = new Date("2026-08-01T12:00:00.000Z").getTime();
+    vi.useFakeTimers();
+    vi.setSystemTime(mountedAt);
+    const thread: NavigationThreadSummary = {
+      id: "thread-1",
+      title: "Fix CI",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+      prAutoDispatchEnabled: true,
+    };
+    const { rerender } = render(
+      <Composer
+        backgroundPrPollingEnabled
+        disabled={false}
+        skills={[]}
+        thread={thread}
+      />,
+    );
+
+    vi.setSystemTime(mountedAt + 90_000);
+    rerender(
+      <Composer
+        backgroundPrPollingEnabled
+        disabled={false}
+        skills={[]}
+        thread={{
+          ...thread,
+          prAutoDispatchPending: {
+            fingerprint: "fingerprint-1",
+            prKey: "github.com/pwrdrvr/PwrAgent#1105",
+            prNumber: 1105,
+            prUrl: "https://github.com/pwrdrvr/PwrAgent/pull/1105",
+            headSha: "a".repeat(40),
+            eventKinds: ["ci-failure"],
+            createdAt: mountedAt + 90_000,
+            scheduledAt: mountedAt + 120_000,
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByLabelText("Scheduled PR auto-fix")).toHaveTextContent(
+      "Auto-fix PR in 30s",
+    );
+  });
+
   it("lets launchpad errors be copied with the transcript copy control", async () => {
     const copyText = vi.fn(async () => undefined);
     const launchpadError =
