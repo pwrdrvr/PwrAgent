@@ -1,6 +1,7 @@
 import { createCanvas } from "@napi-rs/canvas";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import * as pdfjs from "pdfjs-dist/legacy/build/pdf.mjs";
 import {
   IMAGE_UPLOAD_QUALITY_PROFILES,
@@ -15,7 +16,9 @@ export type RenderedPdfPage = {
 };
 
 const require = createRequire(import.meta.url);
-const wasmUrl = `${path.dirname(require.resolve("pdfjs-dist/wasm/openjpeg.wasm"))}${path.sep}`;
+const wasmUrl = pathToFileURL(
+  `${path.dirname(require.resolve("pdfjs-dist/wasm/openjpeg.wasm"))}${path.sep}`,
+).href;
 
 /**
  * PDFs describe a page in points, not pixels. Render into the selected
