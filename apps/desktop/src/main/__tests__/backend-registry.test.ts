@@ -1311,6 +1311,7 @@ class MockBackendClient {
     configPath?: string;
   };
   listThreadsCallCount = 0;
+  listNativeSubAgentThreadsCallCount = 0;
   listModelsCallCount = 0;
   steerTurnCallCount = 0;
   setThreadPermissionsCallCount = 0;
@@ -1326,6 +1327,11 @@ class MockBackendClient {
     archived?: boolean;
     enrichDirectories?: boolean;
     filter?: string;
+  };
+  lastListNativeSubAgentThreadsParams?: {
+    filter?: string;
+    limit?: number;
+    maxPages?: number;
   };
   listThreadsCalls: Array<{
     diagnostics?: {
@@ -1350,6 +1356,7 @@ class MockBackendClient {
       };
       initializeError?: Error;
       threads?: AppServerThreadSummary[];
+      nativeSubAgentThreads?: AppServerThreadSummary[];
       replay?: AppServerThreadReplay;
       readThreadReplays?: AppServerThreadReplay[];
       skills?: Array<{
@@ -1424,6 +1431,16 @@ class MockBackendClient {
       return this.options.archivedThreads;
     }
     return this.options.threads ?? [];
+  }
+
+  async listNativeSubAgentThreads(params?: {
+    filter?: string;
+    limit?: number;
+    maxPages?: number;
+  }): Promise<AppServerThreadSummary[]> {
+    this.listNativeSubAgentThreadsCallCount += 1;
+    this.lastListNativeSubAgentThreadsParams = params;
+    return this.options.nativeSubAgentThreads ?? [];
   }
 
   setThreads(threads: AppServerThreadSummary[]): void {
@@ -17310,107 +17327,6 @@ command = "pnpm dev"
     await registry.close();
   });
 
-  it("projects Codex spawned agent threads into the one-level child tree", async () => {
-    const codexClient = new MockBackendClient({
-      initializeResult: { methods: ["thread/list"] },
-      threads: [
-        {
-          id: "thread-root",
-          title: "Root thread",
-          titleSource: "explicit",
-          source: "codex",
-          linkedDirectories: [],
-          createdAt: 1_000,
-          updatedAt: 4_000,
-        },
-        {
-          id: "thread-child",
-          title: "First spawned agent",
-          titleSource: "derived",
-          source: "codex",
-          linkedDirectories: [],
-          createdAt: 2_000,
-          updatedAt: 3_000,
-          codexNativeSubAgent: {
-            parentThreadId: "thread-root",
-            depth: 1,
-            agentNickname: "first-child",
-          },
-        },
-        {
-          id: "thread-grandchild",
-          title: "Nested spawned agent",
-          titleSource: "derived",
-          source: "codex",
-          linkedDirectories: [],
-          createdAt: 3_000,
-          updatedAt: 2_000,
-          codexNativeSubAgent: {
-            parentThreadId: "thread-child",
-            depth: 2,
-            agentNickname: "nested-child",
-          },
-        },
-      ],
-    });
-    const overlayStore = createOverlayStoreMock();
-    const registry = new DesktopBackendRegistry({
-      codexClient,
-      grokClient: new MockBackendClient({
-        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
-      }),
-      overlayStore,
-    });
-
-    const threads = await registry.listThreads({
-      backend: "codex",
-      enrichDirectories: false,
-      forceRefresh: true,
-    });
-
-    expect(threads.map((thread) => thread.id)).toEqual([
-      "thread-root",
-      "thread-child",
-      "thread-grandchild",
-    ]);
-    await expect(
-      overlayStore.getThreadOverlayState({
-        backend: "codex",
-        threadId: "thread-child",
-      }),
-    ).resolves.toMatchObject({ parentThreadId: "thread-root" });
-    await expect(
-      overlayStore.getThreadOverlayState({
-        backend: "codex",
-        threadId: "thread-grandchild",
-      }),
-    ).resolves.toMatchObject({ parentThreadId: "thread-root" });
-    await expect(
-      overlayStore.getThreadOverlayState({
-        backend: "codex",
-        threadId: "thread-root",
-      }),
-    ).resolves.toMatchObject({
-      subthreadOrder: ["thread-child", "thread-grandchild"],
-    });
-
-    await registry.listThreads({
-      backend: "codex",
-      enrichDirectories: false,
-      forceRefresh: true,
-    });
-    await expect(
-      overlayStore.getThreadOverlayState({
-        backend: "codex",
-        threadId: "thread-root",
-      }),
-    ).resolves.toMatchObject({
-      subthreadOrder: ["thread-child", "thread-grandchild"],
-    });
-
-    await registry.close();
-  });
-
   it("persists Codex native spawnAgent calls as sub-agent summaries", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
@@ -28406,6 +28322,117 @@ script = "printf setup"
       enrichDirectories: true,
       filter: "thread",
     });
+
+    await registry.close();
+  });
+
+  it("groups native Codex workers below their ordinary parent without making rows", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list"] },
+      threads: [
+        {
+          id: "thread-parent",
+          title: "Plan the release",
+          titleSource: "explicit",
+          linkedDirectories: [],
+          source: "codex",
+          updatedAt: 100,
+        },
+      ],
+      nativeSubAgentThreads: [
+        {
+          id: "thread-worker-b",
+          title: "Review release notes",
+          titleSource: "explicit",
+          linkedDirectories: [],
+          source: "codex",
+          createdAt: 30,
+          updatedAt: 30,
+          threadStatus: "idle",
+          codexNativeSubAgent: {
+            parentThreadId: "thread-parent",
+            depth: 1,
+            agentNickname: "release-reviewer",
+            agentRole: "reviewer",
+          },
+        },
+        {
+          id: "thread-worker-a-child",
+          title: "Check release links",
+          titleSource: "explicit",
+          linkedDirectories: [],
+          source: "codex",
+          createdAt: 20,
+          updatedAt: 20,
+          threadStatus: "active",
+          codexNativeSubAgent: {
+            parentThreadId: "thread-worker-a",
+            depth: 2,
+            agentNickname: "link-checker",
+            agentRole: "researcher",
+          },
+        },
+        {
+          id: "thread-worker-a",
+          title: "Draft release notes",
+          titleSource: "explicit",
+          linkedDirectories: [],
+          source: "codex",
+          createdAt: 10,
+          updatedAt: 10,
+          threadStatus: "idle",
+          codexNativeSubAgent: {
+            parentThreadId: "thread-parent",
+            depth: 1,
+            agentNickname: "release-writer",
+            agentRole: "writer",
+          },
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock({ executionMode: "default" }),
+    });
+
+    const threads = await registry.listThreads({ backend: "codex" });
+
+    expect(threads.map((thread) => thread.id)).toEqual(["thread-parent"]);
+    expect(threads[0]?.codexNativeSubAgents).toEqual([
+      {
+        threadId: "thread-worker-a",
+        title: "Draft release notes",
+        createdAt: 10,
+        updatedAt: 10,
+        threadStatus: "idle",
+        depth: 1,
+        agentNickname: "release-writer",
+        agentRole: "writer",
+      },
+      {
+        threadId: "thread-worker-a-child",
+        title: "Check release links",
+        createdAt: 20,
+        updatedAt: 20,
+        threadStatus: "active",
+        depth: 2,
+        agentNickname: "link-checker",
+        agentRole: "researcher",
+      },
+      {
+        threadId: "thread-worker-b",
+        title: "Review release notes",
+        createdAt: 30,
+        updatedAt: 30,
+        threadStatus: "idle",
+        depth: 1,
+        agentNickname: "release-reviewer",
+        agentRole: "reviewer",
+      },
+    ]);
+    expect(codexClient.listNativeSubAgentThreadsCallCount).toBe(1);
+    expect(codexClient.lastListNativeSubAgentThreadsParams).toEqual({});
 
     await registry.close();
   });

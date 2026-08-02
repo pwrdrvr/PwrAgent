@@ -829,6 +829,131 @@ describe("Sidebar", () => {
     expect(onSetSubthreadsCollapsed).toHaveBeenCalledWith(sharedThread, true);
   });
 
+  it("keeps native Codex workers in an on-demand sub-agent disclosure", () => {
+    const openSubAgentTranscriptWindow = vi.fn(async () => ({ opened: true }));
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: { openSubAgentTranscriptWindow },
+    });
+    const parentThread: NavigationThreadSummary = {
+      ...sharedThread,
+      id: "thread-native-parent",
+      title: "Coordinate the launch",
+      codexNativeSubAgents: [
+        {
+          threadId: "thread-native-worker",
+          title: "Investigate the launch plan",
+          depth: 1,
+          agentNickname: "launch-scout",
+          agentRole: "researcher",
+          threadStatus: "idle",
+        },
+        {
+          threadId: "thread-native-worker-child",
+          title: "Verify the source links",
+          depth: 2,
+          agentNickname: "link-checker",
+          agentRole: "reviewer",
+          threadStatus: "active",
+        },
+        {
+          threadId: "thread-native-worker-not-loaded",
+          title: "Review the archived brief",
+          depth: 1,
+          agentNickname: "archive-scout",
+          agentRole: "researcher",
+          threadStatus: "notLoaded",
+        },
+      ],
+    };
+    const renderSidebar = (thread: NavigationThreadSummary) => (
+      <Sidebar
+        backends={backends}
+        browseMode="inbox"
+        directories={directories}
+        inboxThreads={[thread]}
+        loading={false}
+        selectedItemKey="codex:thread-native-parent"
+        threads={[thread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />
+    );
+
+    const { container } = render(renderSidebar(parentThread));
+
+    expect(screen.getByRole("button", { name: "Coordinate the launch" })).toBeInTheDocument();
+    expect(screen.queryByText("launch-scout")).not.toBeInTheDocument();
+
+    const nativeSubAgentsToggle = screen.getByRole("button", {
+      name: "Expand 3 native Codex sub-agents",
+    });
+    expect(screen.queryByText("launch-scout")).not.toBeInTheDocument();
+
+    fireEvent.click(nativeSubAgentsToggle);
+
+    expect(container.querySelectorAll(".native-subagents__list")).toHaveLength(1);
+    expect(container.querySelectorAll(".native-subagents__agent")).toHaveLength(3);
+    expect(container.querySelectorAll(".native-subagents__status")).toHaveLength(1);
+    expect(screen.getByLabelText("Working")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Idle")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Not loaded")).not.toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open transcript for link-checker" }),
+    );
+    expect(openSubAgentTranscriptWindow).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-native-worker-child",
+      title: "link-checker",
+    });
+
+    delete (window as Window & { pwragent?: unknown }).pwragent;
+  });
+
+  it("keeps native Codex workers out of directory thread rows", () => {
+    const parentThread: NavigationThreadSummary = {
+      ...sharedThread,
+      id: "thread-directory-native-parent",
+      title: "Coordinate the directory launch",
+      codexNativeSubAgents: [
+        {
+          threadId: "thread-directory-native-worker",
+          title: "Inspect the directory plan",
+          depth: 1,
+          agentNickname: "directory-scout",
+          threadStatus: "idle",
+        },
+      ],
+    };
+    const directory: NavigationDirectorySummary = {
+      ...directories[0]!,
+      threadKeys: ["codex:thread-directory-native-parent"],
+    };
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        directories={[directory]}
+        inboxThreads={[parentThread]}
+        loading={false}
+        selectedItemKey="codex:thread-directory-native-parent"
+        threads={[parentThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Expand 1 native Codex sub-agents" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("directory-scout")).not.toBeInTheDocument();
+  });
+
   it("opens worktree sub-thread launchpads from the thread context menu", () => {
     const onCreateSubthread = vi.fn(async () => undefined);
     render(

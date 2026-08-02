@@ -446,7 +446,7 @@ class MockTransport implements JsonRpcTransport {
           params.params?.limit === 50 &&
           params.params?.sortKey === "updated_at" &&
           JSON.stringify(params.params?.sourceKinds) ===
-          JSON.stringify(["cli", "vscode", "subAgentThreadSpawn"]);
+          JSON.stringify(["cli", "vscode"]);
 
         this.messageHandler(
           JSON.stringify({
@@ -1295,7 +1295,7 @@ describe("CodexAppServerClient", () => {
             archived: false,
             limit: 50,
             sortKey: "updated_at",
-            sourceKinds: ["cli", "vscode", "subAgentThreadSpawn"],
+            sourceKinds: ["cli", "vscode"],
             useStateDbOnly: true,
           }
         }),
@@ -1344,7 +1344,7 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
-  it("lists spawned agent threads with native parent provenance", async () => {
+  it("keeps spawned agents out of navigation and exposes them for parent disclosure", async () => {
     MockTransport.threadListResultBySearchTerm.set("native-subagent-source", [
       {
         id: "thread-parent",
@@ -1390,17 +1390,39 @@ describe("CodexAppServerClient", () => {
     });
 
     const threads = await client.listThreads({ filter: "native-subagent-source" });
-
-    expect(threads.map((thread) => thread.id)).toEqual([
-      "thread-child",
-      "thread-parent",
-    ]);
-    expect(threads[0]?.codexNativeSubAgent).toEqual({
-      parentThreadId: "thread-parent",
-      depth: 1,
-      agentNickname: "route-scout",
-      agentRole: "explorer",
+    const nativeSubAgentThreads = await client.listNativeSubAgentThreads({
+      filter: "native-subagent-source",
     });
+
+    expect(threads.map((thread) => thread.id)).toEqual(["thread-parent"]);
+    expect(nativeSubAgentThreads).toEqual([
+      expect.objectContaining({
+        id: "thread-child",
+        codexNativeSubAgent: {
+          parentThreadId: "thread-parent",
+          depth: 1,
+          agentNickname: "route-scout",
+          agentRole: "explorer",
+        },
+      }),
+    ]);
+
+    const transport = MockTransport.instances.at(-1);
+    const threadListRequests = transport!.sentMessages
+      .map((message) => JSON.parse(message) as {
+        method?: string;
+        params?: { sourceKinds?: string[] };
+      })
+      .filter((message) => message.method === "thread/list");
+    expect(threadListRequests).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          params: expect.objectContaining({
+            sourceKinds: ["subAgentThreadSpawn"],
+          }),
+        }),
+      ]),
+    );
 
     await client.close();
   });
@@ -2028,7 +2050,7 @@ describe("CodexAppServerClient", () => {
             archived: false,
             limit: 50,
             sortKey: "updated_at",
-            sourceKinds: ["cli", "vscode", "subAgentThreadSpawn"],
+            sourceKinds: ["cli", "vscode"],
             useStateDbOnly: true,
           })
         }),
@@ -2343,7 +2365,7 @@ describe("CodexAppServerClient", () => {
           params: expect.objectContaining({
             searchTerm: "updated-at-sort",
             sortKey: "updated_at",
-            sourceKinds: ["cli", "vscode", "subAgentThreadSpawn"],
+            sourceKinds: ["cli", "vscode"],
             useStateDbOnly: true,
           }),
         }),
@@ -2381,7 +2403,7 @@ describe("CodexAppServerClient", () => {
           params: expect.objectContaining({
             searchTerm: "jsonl-mtime-repair",
             sortKey: "updated_at",
-            sourceKinds: ["cli", "vscode", "subAgentThreadSpawn"],
+            sourceKinds: ["cli", "vscode"],
             useStateDbOnly: true,
           }),
         }),
@@ -2452,7 +2474,7 @@ describe("CodexAppServerClient", () => {
             searchTerm: "search-product-parity",
             limit: 50,
             sortKey: "updated_at",
-            sourceKinds: ["cli", "vscode", "subAgentThreadSpawn"],
+            sourceKinds: ["cli", "vscode"],
           }),
         }),
       ]),

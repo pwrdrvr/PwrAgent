@@ -53,6 +53,7 @@ import {
   type AppServerThreadStatus,
   type AppServerThreadSummary,
   type AppServerThreadTitleSource,
+  type CodexNativeSubAgentSummary,
   type AppServerTurnInputItem,
   type AppServerAvailableCommandSummary,
   type AppServerBackendKind,
@@ -489,6 +490,14 @@ type BackendClient = {
       limit?: number;
       maxPages?: number;
       skipArchivedMetadataRefresh?: boolean;
+    },
+    diagnostics?: { callerReason?: string; ownerId?: string },
+  ): Promise<AppServerThreadSummary[]>;
+  listNativeSubAgentThreads?(
+    params?: {
+      filter?: string;
+      limit?: number;
+      maxPages?: number;
     },
     diagnostics?: { callerReason?: string; ownerId?: string },
   ): Promise<AppServerThreadSummary[]>;
@@ -2382,6 +2391,76 @@ function isCodexNativeSubAgentTool(tool: string): tool is CodexNativeSubAgentToo
 
 function codexNativeSubAgentId(threadId: string): string {
   return `codex-native:${threadId}`;
+}
+
+/**
+ * Projects native Codex worker threads into a one-level disclosure owned by
+ * their nearest ordinary thread. Nested workers are deliberately flattened:
+ * the UI only supports one nesting level, but a worker still immediately
+ * follows the worker that spawned it.
+ */
+function groupCodexNativeSubAgents(params: {
+  nativeThreads: AppServerThreadSummary[];
+  parentThreads: AppServerThreadSummary[];
+}): AppServerThreadSummary[] {
+  const childrenByParentThreadId = new Map<string, AppServerThreadSummary[]>();
+
+  for (const thread of params.nativeThreads) {
+    const provenance = thread.codexNativeSubAgent;
+    const parentThreadId = provenance?.parentThreadId.trim();
+    if (
+      thread.source !== "codex"
+      || !parentThreadId
+      || parentThreadId === thread.id
+    ) {
+      continue;
+    }
+    const children = childrenByParentThreadId.get(parentThreadId) ?? [];
+    children.push(thread);
+    childrenByParentThreadId.set(parentThreadId, children);
+  }
+
+  const sortNativeThreads = (
+    left: AppServerThreadSummary,
+    right: AppServerThreadSummary,
+  ): number =>
+    (left.createdAt ?? 0) - (right.createdAt ?? 0)
+    || (left.updatedAt ?? 0) - (right.updatedAt ?? 0)
+    || left.id.localeCompare(right.id);
+  for (const children of childrenByParentThreadId.values()) {
+    children.sort(sortNativeThreads);
+  }
+
+  return params.parentThreads.map((parent) => {
+    const nativeSubAgents: CodexNativeSubAgentSummary[] = [];
+    const emittedThreadIds = new Set<string>();
+
+    const appendChildren = (parentThreadId: string, inferredDepth: number): void => {
+      for (const child of childrenByParentThreadId.get(parentThreadId) ?? []) {
+        if (emittedThreadIds.has(child.id)) {
+          continue;
+        }
+        emittedThreadIds.add(child.id);
+        const provenance = child.codexNativeSubAgent;
+        nativeSubAgents.push({
+          threadId: child.id,
+          title: child.title,
+          createdAt: child.createdAt,
+          updatedAt: child.updatedAt,
+          threadStatus: child.threadStatus,
+          depth: provenance?.depth ?? inferredDepth,
+          agentNickname: provenance?.agentNickname,
+          agentRole: provenance?.agentRole,
+        });
+        appendChildren(child.id, inferredDepth + 1);
+      }
+    };
+
+    appendChildren(parent.id, 1);
+    return nativeSubAgents.length > 0
+      ? { ...parent, codexNativeSubAgents: nativeSubAgents }
+      : parent;
+  });
 }
 
 function shortCodexNativeAgentId(threadId: string): string {
@@ -15549,7 +15628,25 @@ export class DesktopBackendRegistry {
 
         return [];
       });
-    const allThreads = defaultThreads.map((thread) => ({
+    const nativeSubAgentThreads =
+      !params.archived &&
+      !params.filter?.trim() &&
+      defaultThreads.length > 0 &&
+      this.codexClient.listNativeSubAgentThreads
+        ? await this.codexClient.listNativeSubAgentThreads({
+            ...(params.limit !== undefined ? { limit: params.limit } : {}),
+            ...(params.maxPages !== undefined ? { maxPages: params.maxPages } : {}),
+          }, diagnostics).catch((error) => {
+            backendRegistryLog.debug("native Codex sub-agent discovery failed", {
+              error: error instanceof Error ? error.message : String(error),
+            });
+            return [];
+          })
+        : [];
+    const allThreads = groupCodexNativeSubAgents({
+      nativeThreads: nativeSubAgentThreads,
+      parentThreads: defaultThreads,
+    }).map((thread) => ({
       ...thread,
       executionMode: "default" as const,
     }));
@@ -15563,14 +15660,6 @@ export class DesktopBackendRegistry {
       backend: "codex",
       threadIds: threadsWithPending.map((thread) => thread.id),
     });
-    if (!params.archived && !params.filter?.trim()) {
-      const nativeSubAgentOverlays =
-        await this.reconcileCodexNativeSubAgentRelationships({
-          overlaysByThreadId,
-          threads: threadsWithPending,
-        });
-      Object.assign(overlaysByThreadId, nativeSubAgentOverlays);
-    }
     const visibleThreads = threadsWithPending.filter(
       (thread) => overlaysByThreadId[thread.id]?.archiveTombstonedAt === undefined,
     );
@@ -15627,109 +15716,6 @@ export class DesktopBackendRegistry {
     return enrichedThreads.sort(
       (left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0),
     );
-  }
-
-  private async reconcileCodexNativeSubAgentRelationships(params: {
-    overlaysByThreadId: Record<string, ThreadOverlayState | undefined>;
-    threads: AppServerThreadSummary[];
-  }): Promise<Record<string, ThreadOverlayState | undefined>> {
-    const setThreadParent = this.overlayStore.setThreadParent;
-    const updateSubthreadOrder = this.overlayStore.updateSubthreadOrder;
-    if (!setThreadParent || !updateSubthreadOrder) {
-      return {};
-    }
-
-    const updatedOverlaysByThreadId: Record<
-      string,
-      ThreadOverlayState | undefined
-    > = {};
-    const spawnedThreads = params.threads
-      .filter(
-        (thread) =>
-          thread.source === "codex" && Boolean(thread.codexNativeSubAgent),
-      )
-      .sort((left, right) => {
-        const depthDifference =
-          (left.codexNativeSubAgent?.depth ?? Number.MAX_SAFE_INTEGER)
-          - (right.codexNativeSubAgent?.depth ?? Number.MAX_SAFE_INTEGER);
-        if (depthDifference !== 0) {
-          return depthDifference;
-        }
-        return (left.createdAt ?? 0) - (right.createdAt ?? 0);
-      });
-
-    for (const thread of spawnedThreads) {
-      const sourceThreadId = thread.codexNativeSubAgent?.parentThreadId.trim();
-      if (!sourceThreadId || sourceThreadId === thread.id) {
-        continue;
-      }
-      const sourceOverlay =
-        updatedOverlaysByThreadId[sourceThreadId]
-        ?? params.overlaysByThreadId[sourceThreadId]
-        ?? await this.overlayStore.getThreadOverlayState({
-          backend: "codex",
-          threadId: sourceThreadId,
-        })
-        ?? {
-          backend: "codex" as const,
-          threadId: sourceThreadId,
-          executionMode: "default" as const,
-          extraLinkedDirectories: [],
-        };
-      const groupParentThreadId = await this.resolveHandoffGroupParentThreadId({
-        backend: "codex",
-        sourceOverlay,
-        sourceThreadId,
-      });
-      const currentOverlay =
-        updatedOverlaysByThreadId[thread.id]
-        ?? params.overlaysByThreadId[thread.id];
-      const relationshipChanged =
-        currentOverlay?.parentThreadId !== groupParentThreadId;
-      if (relationshipChanged) {
-        updatedOverlaysByThreadId[thread.id] = await setThreadParent.call(
-          this.overlayStore,
-          {
-            backend: "codex",
-            threadId: thread.id,
-            parentThreadId: groupParentThreadId,
-          },
-        );
-      }
-
-      const parentOverlay = await this.overlayStore.getThreadOverlayState({
-        backend: "codex",
-        threadId: groupParentThreadId,
-      });
-      if (
-        !relationshipChanged
-        && parentOverlay?.subthreadOrder?.includes(thread.id)
-      ) {
-        continue;
-      }
-      const currentOrder =
-        groupParentThreadId === sourceThreadId
-        || parentOverlay?.subthreadOrder?.includes(sourceThreadId)
-          ? (parentOverlay?.subthreadOrder ?? [])
-          : [...(parentOverlay?.subthreadOrder ?? []), sourceThreadId];
-      const nextOrder = insertSubthreadIdAfter(
-        currentOrder,
-        sourceThreadId,
-        thread.id,
-      );
-      await updateSubthreadOrder.call(this.overlayStore, {
-        backend: "codex",
-        parentThreadId: groupParentThreadId,
-        threadIds: nextOrder,
-      });
-      updatedOverlaysByThreadId[groupParentThreadId] =
-        await this.overlayStore.getThreadOverlayState({
-          backend: "codex",
-          threadId: groupParentThreadId,
-        });
-    }
-
-    return updatedOverlaysByThreadId;
   }
 
   private async reconcileCodexDirectoryRelationshipsFromSource(params: {
