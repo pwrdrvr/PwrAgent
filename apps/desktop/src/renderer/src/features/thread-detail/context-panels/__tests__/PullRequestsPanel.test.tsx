@@ -87,6 +87,34 @@ describe("PullRequestsPanel", () => {
     expect(screen.getByText("Checks failing")).toHaveClass("rail-chip--alert");
   });
 
+  it("labels and pulses a failure while checks are still running", () => {
+    render(
+      <PullRequestsPanel
+        thread={threadWithPrs([
+          {
+            provider: "github.com",
+            number: 13,
+            org: "pwrdrvr",
+            repo: "PwrAgent",
+            title: "mixed CI state",
+            state: "failing",
+            checkState: "failing",
+            checksStillRunning: true,
+            lifecycleState: "open",
+            reviewState: "ready_for_review",
+            url: "https://github.com/pwrdrvr/PwrAgent/pull/13",
+          },
+        ])}
+      />,
+    );
+
+    const checksPill = screen.getByText("Checks failing · still running");
+    expect(checksPill.querySelector(".rail-chip__dot--blink")).not.toBeNull();
+    expect(screen.getByRole("button", {
+      name: /checks failing · checks still running/,
+    })).toHaveClass("pr-chip--checks-running");
+  });
+
   it("defers draft + conflict to the pills — the card's chip stays check-state", () => {
     // Regression guard for `withStatusPills`: a draft + conflicting PR whose
     // checks pass would, on a standalone chip, render a red dot + draft bar.

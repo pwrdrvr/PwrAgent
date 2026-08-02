@@ -68,9 +68,14 @@ export function PrChip(props: PrChipProps) {
   const surfaceAffordances = isOpen && !props.withStatusPills;
   const isDraft = surfaceAffordances && pr.reviewState === "draft";
   const isConflicting = surfaceAffordances && pr.mergeState === "conflicting";
+  const hasFailingChecksStillRunning =
+    isOpen
+    && resolveCheckState(pr) === "failing"
+    && pr.checksStillRunning === true;
   const className = [
     "pr-chip",
     `pr-chip--${chipState}`,
+    hasFailingChecksStillRunning ? "pr-chip--checks-running" : "",
     isDraft ? "pr-chip--draft" : "",
     isConflicting ? "pr-chip--conflicting" : "",
   ]
@@ -200,7 +205,7 @@ function prStatusLabel(pr: PrSummary): string {
     parts.push("merge conflict");
   }
 
-  parts.push(checkStateTooltipLabel(resolveCheckState(pr)));
+  parts.push(checkStateTooltipLabel(resolveCheckState(pr), pr.checksStillRunning));
   return parts.join(" · ");
 }
 
@@ -240,12 +245,17 @@ function normalizeLegacyCheckState(state: PrSummary["state"]): NonNullable<PrSum
   return "unknown";
 }
 
-function checkStateTooltipLabel(state: NonNullable<PrSummary["checkState"]>): string {
+function checkStateTooltipLabel(
+  state: NonNullable<PrSummary["checkState"]>,
+  checksStillRunning: boolean | undefined,
+): string {
   switch (state) {
     case "passing":
       return "checks passing";
     case "failing":
-      return "checks failing";
+      return checksStillRunning
+        ? "checks failing · checks still running"
+        : "checks failing";
     case "pending":
       return "checks pending";
     case "unknown":

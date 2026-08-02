@@ -145,6 +145,21 @@ describe("PrChip", () => {
     expect(chip).toHaveAttribute("aria-label", expect.stringContaining("checks passing"));
   });
 
+  it("pulses only a failed-check dot while sibling checks are still running", () => {
+    const chip = renderChip(basePr({
+      state: "failing",
+      checkState: "failing",
+      checksStillRunning: true,
+    }));
+
+    expect(chip).toHaveClass("pr-chip--failing");
+    expect(chip).toHaveClass("pr-chip--checks-running");
+    expect(chip).toHaveAttribute(
+      "aria-label",
+      expect.stringContaining("checks failing · checks still running"),
+    );
+  });
+
   it("keeps the check-state dot color and adds a bar for an open draft", () => {
     const chip = renderChip(
       basePr({ reviewState: "draft", checkState: "passing" }),

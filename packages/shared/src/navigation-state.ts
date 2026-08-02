@@ -553,6 +553,7 @@ export function buildNavigationSnapshotHash(params: {
         title: pr.title ?? null,
         state: pr.state,
         checkState: pr.checkState ?? null,
+        checksStillRunning: pr.checksStillRunning ?? null,
         lifecycleState: pr.lifecycleState ?? null,
         reviewState: pr.reviewState ?? null,
         mergeState: pr.mergeState ?? null,

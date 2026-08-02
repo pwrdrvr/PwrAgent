@@ -698,6 +698,7 @@ function prSummariesEqual(left: PrSummary[], right: PrSummary[]): boolean {
       candidate.title === pr.title &&
       candidate.state === pr.state &&
       candidate.checkState === pr.checkState &&
+      candidate.checksStillRunning === pr.checksStillRunning &&
       candidate.lifecycleState === pr.lifecycleState &&
       candidate.reviewState === pr.reviewState &&
       candidate.mergeState === pr.mergeState &&
@@ -791,6 +792,7 @@ function prLogStatuses(prs: PrSummary[]): Record<string, unknown>[] {
     return {
       prKey: getPrStatusKey(normalized),
       checkState: normalized.checkState,
+      checksStillRunning: normalized.checksStillRunning ?? false,
       lifecycleState: normalized.lifecycleState,
       mergeState: normalized.mergeState,
       reviewState: normalized.reviewState,
@@ -3464,8 +3466,9 @@ class DesktopAppServerService {
           (window) =>
             !window.isDestroyed() && window.isVisible() && !window.isMinimized(),
         ),
-      // One token per GraphQL REQUEST (which covers up to a batch of PRs), not
-      // per PR — the same bucket the on-demand scheduled refreshes draw from.
+      // One token per admitted GraphQL batch (which covers up to a batch of
+      // PRs), not per PR. Any paginated status-context reads stay within that
+      // admitted batch.
       tryTakeToken: () => this.prStatusTokenBucket.tryTake(),
       fetchPullRequests: async (refs) =>
         await this.getPrGraphqlClient().fetchPullRequests(refs),

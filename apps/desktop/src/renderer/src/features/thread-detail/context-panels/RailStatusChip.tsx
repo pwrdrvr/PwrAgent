@@ -15,6 +15,8 @@ type RailStatusChipProps = {
    * sub-agents and failing/conflicting PR checks.
    */
   alert?: boolean;
+  /** Pulse just the leading dot while this status is actively changing. */
+  blink?: boolean;
   children: ReactNode;
 };
 
@@ -31,7 +33,11 @@ export function RailStatusChip(props: RailStatusChipProps) {
     <span className={`rail-chip${props.alert ? " rail-chip--alert" : ""}`}>
       <span
         aria-hidden="true"
-        className={`rail-chip__dot rail-chip__dot--${props.tone}`}
+        className={[
+          "rail-chip__dot",
+          `rail-chip__dot--${props.tone}`,
+          props.blink ? "rail-chip__dot--blink" : "",
+        ].filter(Boolean).join(" ")}
       />
       {props.children}
     </span>

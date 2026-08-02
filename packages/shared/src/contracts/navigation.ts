@@ -254,6 +254,12 @@ export type PrSummary = {
    */
   state: PrChipState | PrLegacyChipState;
   checkState?: PrChipState;
+  /**
+   * GitHub reported at least one non-terminal check in the same status
+   * snapshot. This is intentionally separate from `checkState`: a PR can
+   * have a failed check while other checks are still running.
+   */
+  checksStillRunning?: boolean;
   lifecycleState?: PrLifecycleState;
   reviewState?: PrReviewState;
   mergeState?: PrMergeState;

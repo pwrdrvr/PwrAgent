@@ -105,6 +105,34 @@ describe("usePullRequestRefresh", () => {
     expect(onRefreshNavigation).not.toHaveBeenCalled();
   });
 
+  it("refreshes navigation when a failing PR gains running-check metadata", async () => {
+    const currentPr = {
+      ...buildResponse().prs[0]!,
+      state: "failing" as const,
+      checkState: "failing" as const,
+    };
+    const response = buildResponse({
+      prs: [{ ...currentPr, checksStillRunning: true }],
+    });
+    const onRefreshNavigation = vi.fn(async () => undefined);
+    const refreshThreadPullRequests = vi.fn(async () => response);
+    const desktopApi = {
+      refreshThreadPullRequests,
+    } satisfies DesktopApi;
+
+    renderHook(() =>
+      usePullRequestRefresh({
+        desktopApi,
+        onRefreshNavigation,
+        selectedThread: buildThread({ prs: [currentPr] }),
+      }),
+    );
+
+    await waitFor(() => {
+      expect(onRefreshNavigation).toHaveBeenCalledOnce();
+    });
+  });
+
   it("does not refresh again when the selected thread object is replaced", async () => {
     const response = buildResponse({ prs: [] });
     const refreshThreadPullRequests = vi.fn(async () => response);

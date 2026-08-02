@@ -4025,6 +4025,13 @@ textarea,
   background: var(--status-error);
 }
 
+/* A failed check does not make its sibling jobs terminal. Keep the error hue,
+   but use the existing gentle status pulse to say that the rollup is still
+   moving. Only the dot animates — the PR chip stays still and legible. */
+.pr-chip--checks-running .pr-chip__dot {
+  animation: status-blink 1.6s ease-in-out infinite;
+}
+
 .pr-chip--pending .pr-chip__dot {
   background: var(--status-warning);
 }
@@ -14045,6 +14052,10 @@ a.transcript-message__messaging-origin:focus-visible {
   background: var(--status-suspended);
 }
 
+.rail-chip__dot--blink {
+  animation: status-blink 1.6s ease-in-out infinite;
+}
+
 /* Title sits on its own row, full width, and wraps (clamped) instead of
    truncating mid-word in a shared flex row. */
 .rail-card__title {
@@ -18128,7 +18139,9 @@ a.transcript-message__messaging-origin:focus-visible {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .status-dot--blink {
+  .status-dot--blink,
+  .pr-chip--checks-running .pr-chip__dot,
+  .rail-chip__dot--blink {
     animation: none;
   }
 }

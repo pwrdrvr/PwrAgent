@@ -24699,6 +24699,7 @@ function toThreadInspectionSearchSummary(
             number: pr.number,
             state: pr.state,
             ...(pr.checkState ? { checkState: pr.checkState } : {}),
+            ...(pr.checksStillRunning ? { checksStillRunning: true } : {}),
             ...(pr.lifecycleState ? { lifecycleState: pr.lifecycleState } : {}),
             ...(pr.reviewState ? { reviewState: pr.reviewState } : {}),
             ...(pr.mergeState ? { mergeState: pr.mergeState } : {}),

@@ -5,6 +5,7 @@ import {
   deriveLifecycleState,
   deriveMergeState,
   deriveReviewState,
+  hasChecksStillRunning,
   parseGhAuthStatus,
   parseGhPrPayload,
 } from "../pr-status/github-pr-fetcher";
@@ -208,6 +209,34 @@ describe("derive PR states", () => {
     }
   });
 
+  it("keeps a failure while sibling checks are still running", () => {
+    const row = {
+      ...rawMergedPr(),
+      state: "OPEN",
+      statusCheckRollup: [
+        {
+          __typename: "CheckRun",
+          conclusion: "FAILURE",
+          status: "COMPLETED",
+          name: "Lint",
+        },
+        {
+          __typename: "CheckRun",
+          conclusion: null,
+          status: "IN_PROGRESS",
+          name: "Desktop E2E",
+        },
+      ],
+    };
+
+    expect(deriveChipState(row)).toBe("failing");
+    expect(hasChecksStillRunning(row.statusCheckRollup ?? [])).toBe(true);
+    expect(parseGhPrPayload(row)).toMatchObject({
+      checkState: "failing",
+      checksStillRunning: true,
+    });
+  });
+
   it("returns pending when any check is still running", () => {
     expect(
       deriveChipState({
@@ -229,6 +258,30 @@ describe("derive PR states", () => {
         ],
       }),
     ).toBe("pending");
+  });
+
+  it("derives status-context failures independently from pending siblings", () => {
+    const row = {
+      ...rawMergedPr(),
+      state: "OPEN",
+      statusCheckRollup: [
+        { __typename: "StatusContext", state: "FAILURE" },
+        { __typename: "StatusContext", state: "PENDING" },
+      ],
+    };
+
+    expect(deriveChipState(row)).toBe("failing");
+    expect(hasChecksStillRunning(row.statusCheckRollup ?? [])).toBe(true);
+  });
+
+  it("does not mistake a completed conclusion with a stale progress status for work in flight", () => {
+    expect(hasChecksStillRunning([
+      {
+        __typename: "CheckRun",
+        conclusion: "SUCCESS",
+        status: "IN_PROGRESS",
+      },
+    ])).toBe(false);
   });
 
   it("returns unknown when an OPEN PR has no checks at all", () => {
