@@ -1215,38 +1215,47 @@ function updateDirectoryThreadsCollapsedInSnapshot(
   return changed ? { ...snapshot, directories } : snapshot;
 }
 
-function markThreadSeenInSnapshot(
+function markThreadsSeenInSnapshot(
   snapshot: NavigationSnapshot | undefined,
-  params: {
+  params: Array<{
     backend: AppServerBackendKind;
     threadId: string;
     seenUpdatedAt?: number;
-  }
+  }>,
 ): NavigationSnapshot | undefined {
-  if (!snapshot) {
+  if (!snapshot || params.length === 0) {
     return snapshot;
   }
 
-  const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+  const seenUpdatedAtByThreadKey = new Map(
+    params.map((entry) => [
+      buildThreadIdentityKey(entry.backend, entry.threadId),
+      entry.seenUpdatedAt,
+    ]),
+  );
+  const markedThreadKeys = new Set<string>();
   let changed = false;
   const threads = snapshot.threads.map((thread) => {
-    if (buildThreadIdentityKey(thread.source, thread.id) !== threadKey) {
+    const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+    if (!seenUpdatedAtByThreadKey.has(threadKey)) {
       return thread;
     }
+    const seenUpdatedAt = seenUpdatedAtByThreadKey.get(threadKey);
 
     if (
-      params.seenUpdatedAt !== undefined &&
+      seenUpdatedAt !== undefined &&
       thread.updatedAt !== undefined &&
-      thread.updatedAt > params.seenUpdatedAt
+      thread.updatedAt > seenUpdatedAt
     ) {
       return thread;
     }
 
-    if (!thread.inbox.inInbox && thread.inbox.lastSeenUpdatedAt === params.seenUpdatedAt) {
+    if (!thread.inbox.inInbox && thread.inbox.lastSeenUpdatedAt === seenUpdatedAt) {
       return thread;
     }
 
     changed = true;
+    markedThreadKeys.add(threadKey);
     return {
       ...thread,
       inbox: {
@@ -1254,7 +1263,7 @@ function markThreadSeenInSnapshot(
         inInbox: false,
         reason: undefined,
         lastSeenAt: Date.now(),
-        lastSeenUpdatedAt: params.seenUpdatedAt,
+        lastSeenUpdatedAt: seenUpdatedAt,
       },
     };
   });
@@ -1280,9 +1289,22 @@ function markThreadSeenInSnapshot(
         0
       ),
     })),
-    inboxThreadKeys: snapshot.inboxThreadKeys.filter((candidate) => candidate !== threadKey),
+    inboxThreadKeys: snapshot.inboxThreadKeys.filter(
+      (candidate) => !markedThreadKeys.has(candidate),
+    ),
     threads,
   };
+}
+
+function markThreadSeenInSnapshot(
+  snapshot: NavigationSnapshot | undefined,
+  params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    seenUpdatedAt?: number;
+  },
+): NavigationSnapshot | undefined {
+  return markThreadsSeenInSnapshot(snapshot, [params]);
 }
 
 function removeThreadFromSnapshot(
@@ -2385,6 +2407,7 @@ export function useThreadNavigation(
   ) => Promise<void>;
   setBrowseMode: (browseMode: BrowseMode) => void;
   selectThread: (thread: NavigationThreadSummary) => void;
+  markThreadsSeen: (threads: NavigationThreadSummary[]) => Promise<void>;
   showThread: (params: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -3975,6 +3998,83 @@ export function useThreadNavigation(
       setRetainedUnreadThread(thread);
     }
   }, [refreshThreadDirectoryGitStatuses, releaseRetainedUnreadThread]);
+
+  const markThreadsSeen = useCallback(
+    async (candidateThreads: NavigationThreadSummary[]): Promise<void> => {
+      if (!markThreadSeen) {
+        return;
+      }
+
+      const unreadThreadsByKey = new Map<string, NavigationThreadSummary>();
+      for (const thread of candidateThreads) {
+        if (!thread.inbox.inInbox) {
+          continue;
+        }
+        unreadThreadsByKey.set(
+          buildThreadIdentityKey(thread.source, thread.id),
+          thread,
+        );
+      }
+      const unreadThreads = [...unreadThreadsByKey.values()];
+      if (unreadThreads.length === 0) {
+        return;
+      }
+
+      for (const thread of unreadThreads) {
+        submittedSeenUpdatedAtByThreadKeyRef.current.set(
+          buildThreadIdentityKey(thread.source, thread.id),
+          thread.updatedAt,
+        );
+      }
+
+      const results = await Promise.allSettled(
+        unreadThreads.map(async (thread) => {
+          await markThreadSeen({
+            backend: thread.source,
+            threadId: thread.id,
+            seenUpdatedAt: thread.updatedAt,
+          });
+          return thread;
+        }),
+      );
+      const markedThreads = results.flatMap((result) =>
+        result.status === "fulfilled" ? [result.value] : [],
+      );
+      if (!mountedRef.current || markedThreads.length === 0) {
+        return;
+      }
+
+      const markedThreadKeys = new Set(
+        markedThreads.map((thread) =>
+          buildThreadIdentityKey(thread.source, thread.id),
+        ),
+      );
+      const seenThreads = markedThreads.map((thread) => ({
+        backend: thread.source,
+        threadId: thread.id,
+        seenUpdatedAt: thread.updatedAt,
+      }));
+      setState((current) => ({
+        ...current,
+        response: markThreadsSeenInSnapshot(current.response, seenThreads),
+      }));
+      setRetainedUnreadThread((current) => {
+        if (
+          current
+          && markedThreadKeys.has(
+            buildThreadIdentityKey(current.source, current.id),
+          )
+        ) {
+          return undefined;
+        }
+        return current;
+      });
+      setPendingSeenThreadKey((current) =>
+        current && markedThreadKeys.has(current) ? undefined : current,
+      );
+    },
+    [markThreadSeen],
+  );
 
   const showThread = useCallback(
     async (params: {
@@ -6205,6 +6305,7 @@ export function useThreadNavigation(
     updateDirectoryLaunchpad,
     setBrowseMode: updateBrowseMode,
     selectThread,
+    markThreadsSeen,
     showThread,
     archiveThread,
     archiveWorktree,

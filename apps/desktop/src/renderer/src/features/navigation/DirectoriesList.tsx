@@ -62,6 +62,7 @@ type DirectoriesListProps = {
   directories: NavigationDirectorySummary[];
   revealSelectedThreadRequest?: number;
   selectedItemKey?: string;
+  selectedDirectoryKeys?: ReadonlySet<string>;
   selectedThreadKeys?: ReadonlySet<string>;
   thinkingThreadKeys?: Record<string, boolean>;
   threads: NavigationThreadSummary[];
@@ -81,6 +82,11 @@ type DirectoriesListProps = {
   onRevealSelectedThreadComplete?: (request: number) => void;
   onSelectThread: (
     thread: NavigationThreadSummary,
+    event: MouseEvent<HTMLButtonElement>,
+    selectionOrder: string[],
+  ) => void;
+  onSelectDirectory?: (
+    directory: NavigationDirectorySummary,
     event: MouseEvent<HTMLButtonElement>,
     selectionOrder: string[],
   ) => void;
@@ -330,6 +336,13 @@ export function DirectoriesList(props: DirectoriesListProps) {
   const unpinnedDirectories = useMemo(
     () => visibleDirectories.filter((directory) => !isPinnedDirectory(directory)),
     [visibleDirectories],
+  );
+  const directorySelectionOrder = useMemo(
+    () =>
+      [...pinnedDirectories, ...unpinnedDirectories].map(
+        (directory) => directory.key,
+      ),
+    [pinnedDirectories, unpinnedDirectories],
   );
   const directoryByKey = useMemo(
     () => new Map(visibleDirectories.map((directory) => [directory.key, directory])),
@@ -610,6 +623,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
 
     const selectedLaunchpad =
       props.selectedItemKey === buildLaunchpadSelectionKey(directory.key);
+    const selectedDirectory = selectedLaunchpad || Boolean(
+      props.selectedDirectoryKeys?.has(directory.key),
+    );
     const selectedThreadInDirectory = directory.threadKeys.includes(
       props.selectedItemKey ?? ""
     );
@@ -1080,11 +1096,12 @@ export function DirectoriesList(props: DirectoriesListProps) {
           <button
             aria-label={directorySummaryLabel}
             aria-expanded={expanded}
+            aria-pressed={selectedDirectory}
             className={`thread-row thread-row--compact directory-row__summary${
-              selectedLaunchpad ? " is-selected" : ""
+              selectedDirectory ? " is-selected" : ""
             }`}
             type="button"
-            onClick={() => {
+            onClick={(event) => {
               // Suppress the synthetic post-drop click that the
               // browser fires on the element under the mouse when
               // a drag releases. The timestamp comparison expires
@@ -1094,6 +1111,14 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 Date.now() - lastDirectoryDragEndedAtRef.current <
                 POST_DRAG_CLICK_SUPPRESS_MS
               ) {
+                return;
+              }
+              props.onSelectDirectory?.(
+                directory,
+                event,
+                directorySelectionOrder,
+              );
+              if (event.metaKey || event.shiftKey) {
                 return;
               }
               setExpandedByKey((current) => ({

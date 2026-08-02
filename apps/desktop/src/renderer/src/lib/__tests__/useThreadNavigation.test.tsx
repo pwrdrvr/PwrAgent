@@ -270,6 +270,138 @@ describe("useThreadNavigation", () => {
     });
   });
 
+  it("marks each unread thread in a selected directory batch seen once", async () => {
+    const markThreadSeen = vi.fn(async (
+      request: Parameters<NonNullable<DesktopApi["markThreadSeen"]>>[0],
+    ) => ({
+      backend: request.backend ?? "codex",
+      threadId: request.threadId,
+      seenAt: Date.now(),
+      seenUpdatedAt: request.seenUpdatedAt,
+    }));
+    const firstThread = {
+      id: "thread-directory-first",
+      title: "First unread thread",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      linkedDirectories: [],
+      inbox: {
+        inInbox: true,
+        reason: "new-thread" as const,
+      },
+      updatedAt: 1_000,
+    };
+    const sharedThread = {
+      ...firstThread,
+      id: "thread-directory-shared",
+      title: "Shared unread thread",
+      updatedAt: 2_000,
+    };
+    const lastThread = {
+      ...firstThread,
+      id: "thread-directory-last",
+      title: "Last unread thread",
+      updatedAt: 3_000,
+    };
+    const alreadyReadThread = {
+      ...firstThread,
+      id: "thread-directory-read",
+      title: "Already read thread",
+      inbox: {
+        inInbox: false,
+      },
+      updatedAt: 4_000,
+    };
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [
+        `codex:${firstThread.id}`,
+        `codex:${sharedThread.id}`,
+        `codex:${lastThread.id}`,
+      ],
+      threads: [firstThread, sharedThread, lastThread, alreadyReadThread],
+      directories: [
+        {
+          key: "directory:/tmp/first",
+          kind: "directory" as const,
+          label: "First directory",
+          path: "/tmp/first",
+          threadKeys: [
+            `codex:${firstThread.id}`,
+            `codex:${sharedThread.id}`,
+          ],
+          needsAttentionCount: 2,
+        },
+        {
+          key: "directory:/tmp/last",
+          kind: "directory" as const,
+          label: "Last directory",
+          path: "/tmp/last",
+          threadKeys: [
+            `codex:${sharedThread.id}`,
+            `codex:${lastThread.id}`,
+            `codex:${alreadyReadThread.id}`,
+          ],
+          needsAttentionCount: 2,
+        },
+      ],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      markThreadSeen,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.threads).toHaveLength(4);
+    });
+
+    await act(async () => {
+      await result.current.markThreadsSeen([
+        result.current.threads[0]!,
+        result.current.threads[1]!,
+        result.current.threads[1]!,
+        result.current.threads[2]!,
+        result.current.threads[3]!,
+      ]);
+    });
+
+    expect(markThreadSeen).toHaveBeenCalledTimes(3);
+    expect(markThreadSeen).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: firstThread.id,
+      seenUpdatedAt: firstThread.updatedAt,
+    });
+    expect(markThreadSeen).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: sharedThread.id,
+      seenUpdatedAt: sharedThread.updatedAt,
+    });
+    expect(markThreadSeen).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: lastThread.id,
+      seenUpdatedAt: lastThread.updatedAt,
+    });
+
+    await waitFor(() => {
+      expect(
+        result.current.threads.map((thread) => thread.inbox.inInbox),
+      ).toEqual([false, false, false, false]);
+      expect(result.current.snapshot?.inboxThreadKeys).toEqual([]);
+      expect(
+        result.current.directories.map((directory) => directory.needsAttentionCount),
+      ).toEqual([0, 0]);
+    });
+  });
+
   it("refreshes selected thread directory git status on demand", async () => {
     const refreshDirectoryGitStatuses = vi.fn(async () => ({ scheduledCount: 1 }));
     const getNavigationSnapshot = vi.fn(async () => ({

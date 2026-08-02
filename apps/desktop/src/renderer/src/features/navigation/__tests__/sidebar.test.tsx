@@ -2254,6 +2254,140 @@ describe("Sidebar", () => {
     expect(secondButton).toHaveAttribute("aria-pressed", "true");
   });
 
+  it("marks unread threads read across a Shift-selected range of collapsed directories", () => {
+    const onMarkThreadsSeen = vi.fn(async () => undefined);
+    const onSetDirectoryPin = vi.fn(async () => undefined);
+    const firstThread = {
+      ...sharedThread,
+      id: "thread-directory-first",
+      title: "Directory first unread thread",
+    };
+    const sharedUnreadThread = {
+      ...sharedThread,
+      id: "thread-directory-shared",
+      title: "Shared unread thread",
+    };
+    const lastThread = {
+      ...sharedThread,
+      id: "thread-directory-last",
+      title: "Directory last unread thread",
+    };
+    const alreadyReadThread = {
+      ...sharedThread,
+      id: "thread-directory-read",
+      title: "Already read thread",
+      inbox: {
+        inInbox: false,
+      },
+    };
+    const firstDirectory: NavigationDirectorySummary = {
+      key: "directory:/tmp/directory-first",
+      kind: "directory",
+      label: "Directory first",
+      path: "/tmp/directory-first",
+      threadKeys: [
+        `codex:${firstThread.id}`,
+        `codex:${sharedUnreadThread.id}`,
+      ],
+      needsAttentionCount: 2,
+      latestUpdatedAt: firstThread.updatedAt,
+    };
+    const middleDirectory: NavigationDirectorySummary = {
+      key: "directory:/tmp/directory-middle",
+      kind: "directory",
+      label: "Directory middle",
+      path: "/tmp/directory-middle",
+      threadKeys: [
+        `codex:${sharedUnreadThread.id}`,
+        `codex:${lastThread.id}`,
+      ],
+      needsAttentionCount: 2,
+      latestUpdatedAt: sharedUnreadThread.updatedAt,
+    };
+    const lastDirectory: NavigationDirectorySummary = {
+      key: "directory:/tmp/directory-last",
+      kind: "directory",
+      label: "Directory last",
+      path: "/tmp/directory-last",
+      threadKeys: [`codex:${alreadyReadThread.id}`],
+      needsAttentionCount: 0,
+      latestUpdatedAt: alreadyReadThread.updatedAt,
+    };
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        directories={[firstDirectory, middleDirectory, lastDirectory]}
+        inboxThreads={[
+          firstThread,
+          sharedUnreadThread,
+          lastThread,
+          alreadyReadThread,
+        ]}
+        loading={false}
+        threads={[
+          firstThread,
+          sharedUnreadThread,
+          lastThread,
+          alreadyReadThread,
+        ]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onMarkThreadsSeen={onMarkThreadsSeen}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onSetDirectoryPin={onSetDirectoryPin}
+      />,
+    );
+
+    const getDirectorySummary = (name: string): HTMLElement => {
+      const summary = screen
+        .getAllByRole("button", { name })
+        .find((button) => button.hasAttribute("aria-expanded"));
+      if (!summary) {
+        throw new Error(`Could not find ${name} directory summary`);
+      }
+      return summary;
+    };
+    const firstSummary = getDirectorySummary(
+      "Directory first, 2 threads to review",
+    );
+    const middleSummary = getDirectorySummary(
+      "Directory middle, 2 threads to review",
+    );
+    const lastSummary = getDirectorySummary("Directory last");
+
+    // Modified clicks leave the collapsed directory list stable while building
+    // a range. The shared thread appears in two selected directories but must
+    // be passed to the bulk action only once.
+    fireEvent.click(firstSummary, { metaKey: true });
+    fireEvent.click(lastSummary, { shiftKey: true });
+
+    expect(firstSummary).toHaveAttribute("aria-expanded", "false");
+    expect(middleSummary).toHaveAttribute("aria-expanded", "false");
+    expect(lastSummary).toHaveAttribute("aria-expanded", "false");
+    expect(firstSummary).toHaveAttribute("aria-pressed", "true");
+    expect(middleSummary).toHaveAttribute("aria-pressed", "true");
+    expect(lastSummary).toHaveAttribute("aria-pressed", "true");
+
+    fireEvent.contextMenu(middleSummary, { clientX: 48, clientY: 64 });
+    const menu = screen.getByRole("menu", {
+      name: "Actions for 3 directories selected",
+    });
+    expect(
+      within(menu).queryByRole("menuitem", { name: "Pin Directory" }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Mark Read" }));
+
+    expect(onMarkThreadsSeen).toHaveBeenCalledWith([
+      firstThread,
+      sharedUnreadThread,
+      lastThread,
+    ]);
+    expect(onSetDirectoryPin).not.toHaveBeenCalled();
+  });
+
   it("separates pinning, creation, management, and copy thread actions", () => {
     const forkBackends = backends.map((backend) =>
       backend.kind === "codex"
