@@ -18,6 +18,7 @@ import type {
   ReadDesktopSettingsResponse,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
+import { CODEX_AGENT_THREAD_CREATION_NOTE } from "../../../lib/agent-thread";
 import { AutomationEditor } from "../AutomationEditor";
 
 afterEach(() => {
@@ -959,7 +960,7 @@ describe("AutomationEditor", () => {
             id: "ordinary-thread",
             inbox: { inInbox: false },
             linkedDirectories: [],
-            source: "codex",
+            source: "acp:gemini",
             title: "Ordinary work",
             titleSource: "explicit",
             updatedAt: 1,
@@ -1093,14 +1094,39 @@ describe("AutomationEditor", () => {
     });
   });
 
+  it("does not offer existing Codex threads for Agent promotion", () => {
+    const ordinaryCodexThread = buildThread({
+      id: "ordinary-thread",
+      title: "Incident triage",
+    });
+
+    render(
+      <AutomationEditor
+        mode={{ kind: "create" }}
+        threads={[ordinaryCodexThread]}
+        onCancel={() => undefined}
+        onSubmit={vi.fn(async () => undefined)}
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText("Agent"));
+    fireEvent.click(screen.getByRole("tab", { name: "Threads" }));
+
+    expect(screen.getByText(CODEX_AGENT_THREAD_CREATION_NOTE)).toBeInTheDocument();
+    expect(
+      screen.queryByRole("option", { name: /Incident triage/ }),
+    ).not.toBeInTheDocument();
+  });
+
   it("promotes a regular thread to an Agent and selects it", async () => {
     const onPromoteThread = vi.fn(async () => ({
-      backend: "codex" as const,
+      backend: "acp:gemini" as const,
       threadId: "ordinary-thread",
     }));
     const onSubmit = vi.fn(async () => undefined);
     const ordinaryThread = buildThread({
       id: "ordinary-thread",
+      source: "acp:gemini",
       title: "Incident triage",
     });
 
@@ -1134,7 +1160,7 @@ describe("AutomationEditor", () => {
     expect(onSubmit).toHaveBeenCalledWith({
       kind: "create",
       request: expect.objectContaining({
-        backend: "codex",
+        backend: "acp:gemini",
         threadId: "ordinary-thread",
       }),
     });
