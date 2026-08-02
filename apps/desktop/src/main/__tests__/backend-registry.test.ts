@@ -14308,6 +14308,93 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("redacts managed local PDF paths before lifecycle title generation", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-title-pdf-"));
+    const pdfPath = path.join(root, "roadster.pdf");
+    await writeFile(pdfPath, "%PDF-1.7\n", "utf8");
+    const startTurnDelay = createDeferred<void>();
+    const titleService = {
+      generateTitle: vi.fn(async () => {
+        return {
+          status: "generated" as const,
+          title: "Roadster roof equipment",
+        };
+      }),
+    };
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "thread/name/set"] },
+      startTurnDelay: startTurnDelay.promise,
+      threads: [],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:thread-title-pdf": {
+            backend: "codex",
+            executionMode: "default",
+            extraLinkedDirectories: [],
+            messagingPdfToolCatalogVersion: 1,
+            threadId: "thread-title-pdf",
+          },
+        },
+      }),
+      resolvePdfAnalysisEnabled: () => true,
+      threadTitleGenerationService: titleService,
+    });
+
+    try {
+      const startTurnPromise = registry.startTurn({
+        backend: "codex",
+        threadId: "thread-title-pdf",
+        input: [
+          {
+            type: "text",
+            text: `Compare [@roadster.pdf](${pdfPath}).`,
+          },
+          { type: "localFile", name: "roadster.pdf", path: pdfPath },
+        ],
+      });
+      await waitForCondition(() => codexClient.startTurnCallCount === 1);
+      expect(codexClient.startTurnCallCount).toBe(1);
+      await (
+        registry as unknown as { emit(event: AgentEvent): Promise<void> }
+      ).emit({
+        backend: "codex",
+        notification: {
+          method: "thread/status/changed",
+          params: {
+            threadId: "thread-title-pdf",
+            status: { type: "active" },
+          },
+        },
+      });
+      await waitForCondition(() => titleService.generateTitle.mock.calls.length === 1);
+
+      expect(titleService.generateTitle).toHaveBeenCalledWith(expect.objectContaining({
+        backend: "codex",
+        threadId: "thread-title-pdf",
+        userPrompt: expect.stringContaining("Compare @roadster.pdf."),
+      }));
+      expect(titleService.generateTitle).not.toHaveBeenCalledWith(
+        expect.objectContaining({ userPrompt: expect.stringContaining(pdfPath) }),
+      );
+
+      startTurnDelay.resolve();
+      await expect(startTurnPromise).resolves.toEqual({
+        backend: "codex",
+        threadId: "thread-title-pdf",
+        turnId: "turn-1",
+      });
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("persists the Codex title helper as a system sub-agent with usage", async () => {
     const titleService = {
       generateTitle: vi.fn(async () => ({
