@@ -331,6 +331,10 @@ describe("codex environment runtime", () => {
           environmentName: "Env",
           executionTarget: "local",
           cwd: root,
+          shellEnvironment: {
+            ELECTRON_RENDERER_URL: "http://127.0.0.1:5175",
+            PWRAGENT_TEST_HYDRATED_ENV: "hydrated-override",
+          },
           actions: [
             {
               id: "start-dev",
@@ -353,7 +357,7 @@ describe("codex environment runtime", () => {
         "renderer=unset",
         "run_as_node=unset",
         "vite=unset",
-        "hydrated=hydrated",
+        "hydrated=hydrated-override",
         "",
       ].join("\n");
       await expect(
@@ -509,6 +513,40 @@ describe("codex environment runtime", () => {
         await expect(readFile(markerPath, "utf8")).resolves.toBe("shell-used");
       }
       await expect(readFile(outputPath, "utf8")).resolves.toBe("setup");
+    } finally {
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+
+  it("does not pass PwrAgent's renderer URL to environment setup commands", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-setup-renderer-"));
+    const outputPath = path.join(root, "renderer-url.txt");
+
+    try {
+      await expect(
+        applyLocalCodexEnvironmentSelection({
+          cwd: root,
+          env: {
+            ...process.env,
+            ELECTRON_RENDERER_URL: "http://localhost:5175",
+            SHELL: spawnableShell("/bin/sh"),
+          },
+          selection: {
+            environment: {
+              id: "env",
+              name: "Env",
+              sourcePath: path.join(root, "environment.toml"),
+              setupScript:
+                `printf '%s' "\${ELECTRON_RENDERER_URL-unset}" > ${JSON.stringify(outputPath)}`,
+              actions: [],
+            },
+            executionTarget: "local",
+            runSetup: true,
+          },
+        }),
+      ).resolves.toMatchObject({ setupStatus: "completed" });
+
+      await expect(readFile(outputPath, "utf8")).resolves.toBe("unset");
     } finally {
       await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }

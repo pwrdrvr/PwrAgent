@@ -22,6 +22,7 @@ import {
   type ThreadMigrationSourceThreadSummary,
   type NavigationThreadSummary,
 } from "@pwragent/shared";
+import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { getMainLogger } from "../log";
 import { normalizeProfileName } from "../profile";
 import type { DesktopSettingsService } from "../settings/desktop-settings-service";
@@ -1008,7 +1009,9 @@ async function gitBranchExists(
       "rev-parse",
       "--verify",
       `${branchName}^{commit}`,
-    ]);
+    ], {
+      env: buildPwrAgentChildProcessEnv(process.env),
+    });
     return true;
   } catch {
     return false;

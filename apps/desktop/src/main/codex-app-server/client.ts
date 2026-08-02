@@ -49,6 +49,10 @@ import type {
   LinkedDirectorySummary,
 } from "@pwragent/shared";
 import { getMainLogger } from "../log";
+import {
+  buildPwrAgentChildProcessEnv,
+  ELECTRON_RENDERER_URL_ENV,
+} from "../child-process-env";
 import type {
   ClientRequest as CodexClientRequest,
   InitializeParams as CodexInitializeParams,
@@ -5196,11 +5200,12 @@ function mergeCodexShellEnvironmentPolicyConfig(
   config: CodexThreadStartParams["config"] | undefined,
   runtime: CodexThreadEnvironmentRuntime | undefined,
 ): CodexThreadStartParams["config"] | undefined {
+  const sanitizedConfig = sanitizeCodexShellEnvironmentPolicyConfig(config);
   if (runtime?.executionTarget !== "local" || !runtime.shellEnvironment) {
-    return config;
+    return sanitizedConfig;
   }
   const shellEnvironment = Object.fromEntries(
-    Object.entries(runtime.shellEnvironment).filter(
+    Object.entries(buildPwrAgentChildProcessEnv(runtime.shellEnvironment)).filter(
       (entry): entry is [string, string] =>
         typeof entry[0] === "string" &&
         entry[0].length > 0 &&
@@ -5208,9 +5213,9 @@ function mergeCodexShellEnvironmentPolicyConfig(
     ),
   );
   if (!Object.keys(shellEnvironment).length) {
-    return config;
+    return sanitizedConfig;
   }
-  const baseConfig = isPlainRecord(config) ? config : {};
+  const baseConfig = isPlainRecord(sanitizedConfig) ? sanitizedConfig : {};
   return Object.entries(shellEnvironment).reduce<Record<string, unknown>>(
     (nextConfig, [key, value]) => {
       if (isShellEnvironmentVariableName(key)) {
@@ -5220,6 +5225,24 @@ function mergeCodexShellEnvironmentPolicyConfig(
     },
     { ...baseConfig },
   ) as CodexThreadStartParams["config"];
+}
+
+function sanitizeCodexShellEnvironmentPolicyConfig(
+  config: CodexThreadStartParams["config"] | undefined,
+): CodexThreadStartParams["config"] | undefined {
+  if (!isPlainRecord(config)) {
+    return config;
+  }
+  const sanitized = { ...config };
+  for (const key of Object.keys(sanitized)) {
+    const environmentKey = key.startsWith("shell_environment_policy.set.")
+      ? key.slice("shell_environment_policy.set.".length)
+      : undefined;
+    if (environmentKey?.toUpperCase() === ELECTRON_RENDERER_URL_ENV) {
+      delete sanitized[key];
+    }
+  }
+  return sanitized as CodexThreadStartParams["config"];
 }
 
 function mergeCodexDefaultModeRequestUserInputConfig(

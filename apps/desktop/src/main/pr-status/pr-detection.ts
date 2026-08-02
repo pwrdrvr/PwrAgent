@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { LinkedDirectorySummary, PrSummary } from "@pwragent/shared";
+import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import type { GithubPrFetcher } from "./github-pr-fetcher";
 
 const execFileAsync = promisify(execFile);
@@ -129,6 +130,7 @@ async function readTrackedRemoteBranch(params: {
       ],
       {
         cwd: params.cwd,
+        env: buildPwrAgentChildProcessEnv(process.env),
         maxBuffer: 64 * 1024,
         timeout: GIT_BRANCH_LOOKUP_TIMEOUT_MS,
       },
@@ -182,6 +184,7 @@ async function readRemoteDefaultBranches(cwd: string): Promise<{
 }> {
   const { stdout } = await execFileAsync("git", ["remote"], {
     cwd,
+    env: buildPwrAgentChildProcessEnv(process.env),
     maxBuffer: 64 * 1024,
     timeout: GIT_BRANCH_LOOKUP_TIMEOUT_MS,
   });
@@ -233,6 +236,7 @@ async function readGitLine(
   try {
     const { stdout } = await execFileAsync("git", args, {
       cwd,
+      env: buildPwrAgentChildProcessEnv(process.env),
       maxBuffer: 64 * 1024,
       timeout: GIT_BRANCH_LOOKUP_TIMEOUT_MS,
     });

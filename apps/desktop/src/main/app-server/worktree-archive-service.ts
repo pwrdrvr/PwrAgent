@@ -8,6 +8,7 @@ import type {
   AppServerBackendKind,
   WorktreeSnapshotSummary,
 } from "@pwragent/shared";
+import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 
 const execFileAsync = promisify(execFile);
 
@@ -63,10 +64,7 @@ async function runGit(
 ): Promise<GitResult> {
   return await execFileAsync("git", args, {
     cwd,
-    env: {
-      ...process.env,
-      ...options.env,
-    },
+    env: buildPwrAgentChildProcessEnv(process.env, options.env),
     maxBuffer: 1024 * 1024 * 10,
   });
 }

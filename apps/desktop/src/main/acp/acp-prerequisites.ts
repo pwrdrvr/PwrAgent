@@ -1,5 +1,6 @@
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
+import { buildPwrAgentChildProcessEnv } from "../child-process-env.js";
 
 const execFile = promisify(execFileCallback);
 
@@ -61,7 +62,10 @@ async function defaultProbe(
   command: string,
   args: string[],
 ): Promise<{ stdout?: string; stderr?: string }> {
-  return await execFile(command, args, { timeout: 2_000 });
+  return await execFile(command, args, {
+    env: buildPwrAgentChildProcessEnv(process.env),
+    timeout: 2_000,
+  });
 }
 
 function parseVersion(output: string): string | undefined {

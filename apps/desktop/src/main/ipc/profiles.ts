@@ -155,6 +155,9 @@ export function openDesktopPwrAgentProfile(
     process.defaultApp ? process.argv.slice(1) : [],
     profile,
   );
+  // Deliberately retain ELECTRON_RENDERER_URL here. This is not a general
+  // child execution context: it relaunches PwrAgent itself, whose development
+  // main process needs electron-vite's renderer endpoint to render correctly.
   const child = spawn(process.execPath, args, {
     detached: true,
     env: {
