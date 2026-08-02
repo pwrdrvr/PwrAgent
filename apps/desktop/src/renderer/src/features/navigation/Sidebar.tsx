@@ -1048,6 +1048,7 @@ export function Sidebar(props: SidebarProps) {
               onOpenPullRequestContextMenu={openPullRequestContextMenu}
               onSelectThread={props.onSelectThread}
               onSetReaction={props.onSetThreadReaction}
+              onSetThreadPin={props.onSetThreadPin}
               onUnbindMessagingBinding={props.onUnbindMessagingBinding}
             />
           ) : (
@@ -1076,6 +1077,7 @@ export function Sidebar(props: SidebarProps) {
                 onSetSubthreadsCollapsed={props.onSetSubthreadsCollapsed}
                 onSelectThread={props.onSelectThread}
                 onSetReaction={props.onSetThreadReaction}
+                onSetThreadPin={props.onSetThreadPin}
                 onUnbindMessagingBinding={props.onUnbindMessagingBinding}
               />
             )

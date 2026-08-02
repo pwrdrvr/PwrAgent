@@ -1864,7 +1864,7 @@ describe("Sidebar", () => {
     });
     expect(rows[0]).toHaveTextContent("Updated thread");
     expect(
-      within(rows[0]).getByRole("img", { name: "Pinned" }),
+      within(rows[0]).getByRole("button", { name: "Unpin thread" }),
     ).toBeInTheDocument();
     expect(screen.getByRole("separator", { name: "Unpinned threads" })).toBeInTheDocument();
 

@@ -103,6 +103,10 @@ type ThreadRowProps = {
     emoji: string,
     present: boolean,
   ) => Promise<void>;
+  onSetThreadPin?: (
+    thread: NavigationThreadSummary,
+    pinned: boolean,
+  ) => Promise<void>;
   onOpenPullRequest?: (url: string) => void;
 };
 
@@ -121,6 +125,7 @@ export function ThreadRow(props: ThreadRowProps) {
   const addReactionRef = useRef<HTMLSpanElement>(null);
   const reactions = props.thread.reactions ?? [];
   const canReact = Boolean(props.onSetReaction);
+  const onSetThreadPin = props.onSetThreadPin;
   const bindings = props.thread.messagingBindings ?? [];
   // Pull straight from the navigation snapshot — main persists PR state
   // to the overlay store and surfaces it through the snapshot, so the
@@ -293,6 +298,13 @@ export function ThreadRow(props: ThreadRowProps) {
             hasApprovalRequest={props.approvalRequestThreadKeys?.[threadKey] === true}
             hasIntegratedTerminal={props.terminalThreadKeys?.[threadKey] === true}
             hasInputRequest={props.inputRequestThreadKeys?.[threadKey] === true}
+            onUnpin={
+              onSetThreadPin
+                ? () => {
+                    void onSetThreadPin(props.thread, false);
+                  }
+                : undefined
+            }
             queuedMessageState={props.queuedMessageThreadKeys?.[threadKey]}
             includeLinkedDirectories={props.includeLinkedDirectories}
             linkedDirectoryMode={props.linkedDirectoryMode}

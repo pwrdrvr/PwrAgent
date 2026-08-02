@@ -3622,10 +3622,10 @@ textarea,
 }
 
 /* Pin marker — an icon-only orange pill. The pushpin glyph + the accent
-   tint carry the "pinned" signal without spending a word of row width;
-   the literal label lives in aria-label / title for assistive tech and
-   hover. Square-ish (min-width == height) so it reads as a marker, not a
-   text chip. */
+   tint carry the "pinned" signal without spending a word of row width.
+   When it has an unpin callback, it becomes an explicit click target;
+   its hover label explains the action. Square-ish (min-width == height)
+   so it reads as a marker, not a text chip. */
 .thread-row__chip--pin {
   min-width: 24px;
   justify-content: center;
@@ -3633,6 +3633,16 @@ textarea,
   border: 1px solid var(--accent-border);
   background: var(--accent-soft);
   color: var(--accent-bright);
+}
+
+.thread-row__chip--pin[role="button"] {
+  cursor: pointer;
+}
+
+.thread-row__chip--pin[role="button"]:hover,
+.thread-row__chip--pin[role="button"]:focus-visible {
+  border-color: var(--accent-strong);
+  background: var(--bg-row-active);
 }
 
 .thread-row__chip--approval,
