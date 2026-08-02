@@ -95,6 +95,9 @@ describe("preparePdfTurnInput", () => {
     expect((prepared.input[0] as { text: string }).text).toContain(
       "Do not call inspect_messaging_pdfs or search_messaging_pdf_text for a one-page PDF.",
     );
+    expect((prepared.input[0] as { text: string }).text).toContain(
+      "Do not use web search or other external sources for questions about these PDFs",
+    );
   });
 
   it("keeps an explicit local PDF reference intact when analysis is disabled", async () => {
