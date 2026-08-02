@@ -29,7 +29,7 @@ async function makeExtensionlessFixture(): Promise<string> {
 }
 
 describe("preparePdfTurnInput", () => {
-  it("recognizes an extensionless explicit local PDF and keeps it local for page tools", async () => {
+  it("renders an extensionless explicit one-page local PDF as a normal image input", async () => {
     const pdfPath = await makeExtensionlessFixture();
     const inspectPdfDocument = vi.fn(async () => ({
       firstPage: {
@@ -40,7 +40,17 @@ describe("preparePdfTurnInput", () => {
       },
       pageCount: 1,
     }));
-    const renderPdfPages = vi.fn();
+    const renderPdfPages = vi.fn(async () => [
+      {
+        base64: "rendered-page",
+        encodedBytes: 1,
+        height: 1988,
+        mimeType: "image/png" as const,
+        pageNumber: 1,
+        width: 3072,
+      },
+    ]);
+    const createAttachmentId = vi.fn(() => "jeep-pdf");
 
     const prepared = await preparePdfTurnInput({
       handling: "model_directed",
@@ -52,14 +62,27 @@ describe("preparePdfTurnInput", () => {
         { type: "localFile", name: "Jeep", path: pdfPath },
       ],
       dependencies: {
-        createAttachmentId: () => "jeep-pdf",
+        createAttachmentId,
         inspectPdfDocument,
         renderPdfPages,
       },
     });
 
     expect(inspectPdfDocument).toHaveBeenCalledTimes(1);
-    expect(renderPdfPages).not.toHaveBeenCalled();
+    expect(createAttachmentId).not.toHaveBeenCalled();
+    expect(renderPdfPages).toHaveBeenCalledWith({
+      data: expect.any(Uint8Array),
+      limits: {
+        maxEncodedBytes: 18 * 1024 * 1024,
+        maxPageEncodedBytes: 6 * 1024 * 1024,
+        maxPages: 5,
+        maxPagePixels: 8 * 1024 * 1024,
+        maxPixels: 32 * 1024 * 1024,
+        maxWireBytes: 24 * 1024 * 1024,
+      },
+      pageNumbers: [1],
+      profile: "high",
+    });
     expect(prepared.input).toEqual([
       {
         type: "text",
@@ -67,37 +90,69 @@ describe("preparePdfTurnInput", () => {
           "Compare @Jeep and keep [@notes](/tmp/notes.txt).",
         ),
       },
+      {
+        type: "image",
+        name: "Jeep-page-1.png",
+        url: "data:image/png;base64,rendered-page",
+      },
     ]);
+    expect(prepared.pdfAttachments).toEqual([]);
+    expect((prepared.input[0] as { text: string }).text).toContain(
+      "PwrAgent rendered PDF attachment `Jeep` into its only page image for visual analysis.",
+    );
+    expect((prepared.input[0] as { text: string }).text).not.toContain(
+      "<pwragent-pdf-context>",
+    );
+  });
+
+  it("retains an explicit multi-page local PDF for bounded page selection", async () => {
+    const pdfPath = await makeExtensionlessFixture();
+    const inspectPdfDocument = vi.fn(async () => ({
+      firstPage: {
+        height: 792,
+        renderHeight: 1988,
+        renderWidth: 3072,
+        width: 1224,
+      },
+      pageCount: 3,
+    }));
+    const renderPdfPages = vi.fn();
+    const createAttachmentId = vi.fn(() => "jeep-pdf");
+
+    const prepared = await preparePdfTurnInput({
+      handling: "model_directed",
+      input: [
+        { type: "text", text: `Compare [@Jeep](${pdfPath}).` },
+        { type: "localFile", name: "Jeep", path: pdfPath },
+      ],
+      dependencies: {
+        createAttachmentId,
+        inspectPdfDocument,
+        renderPdfPages,
+      },
+    });
+
+    expect(renderPdfPages).not.toHaveBeenCalled();
+    expect(createAttachmentId).toHaveBeenCalledTimes(1);
+    expect(prepared.input).toEqual([
+      {
+        type: "text",
+        text: expect.stringContaining("Compare @Jeep."),
+      },
+    ]);
+    expect((prepared.input[0] as { text: string }).text).toContain(
+      "<pwragent-pdf-context>",
+    );
+    expect((prepared.input[0] as { text: string }).text).toContain(
+      "3 pages; page 1 renders at 3072x1988.",
+    );
     expect(prepared.pdfAttachments).toEqual([
       expect.objectContaining({
         attachmentId: "jeep-pdf",
-        inspection: {
-          firstPage: {
-            height: 792,
-            renderHeight: 1988,
-            renderWidth: 3072,
-            width: 1224,
-          },
-          pageCount: 1,
-        },
+        inspection: expect.objectContaining({ pageCount: 3 }),
         name: "Jeep",
-        profile: "high",
-        sizeBytes: expect.any(Number),
       }),
     ]);
-    expect(prepared.input[0]).toMatchObject({
-      type: "text",
-      text: expect.stringContaining("<pwragent-pdf-context>"),
-    });
-    expect(prepared.input[0]).toMatchObject({
-      text: expect.stringContaining("render_messaging_pdf_pages exactly once"),
-    });
-    expect((prepared.input[0] as { text: string }).text).toContain(
-      "Do not call inspect_messaging_pdfs or search_messaging_pdf_text for a one-page PDF.",
-    );
-    expect((prepared.input[0] as { text: string }).text).toContain(
-      "Do not use web search or other external sources for questions about these PDFs",
-    );
   });
 
   it("keeps an explicit local PDF reference intact when analysis is disabled", async () => {

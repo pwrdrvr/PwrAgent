@@ -180,7 +180,7 @@ describe("processMessagingAttachments", () => {
     expect(result.pdfAttachments).toEqual([]);
   });
 
-  it("retains PDFs locally for model-directed page tools", async () => {
+  it("renders known one-page PDFs as ordinary model image input", async () => {
     const pdfData = bytes("%PDF-1.7\n(local only) Tj\n");
     const inspectPdfDocument = vi.fn(async () => ({
       firstPage: {
@@ -191,7 +191,17 @@ describe("processMessagingAttachments", () => {
       },
       pageCount: 1,
     }));
-    const renderPdfPages = vi.fn();
+    const renderPdfPages = vi.fn(async () => [
+      {
+        base64: "rendered-page",
+        encodedBytes: 1,
+        height: 1988,
+        mimeType: "image/png" as const,
+        pageNumber: 1,
+        width: 3072,
+      },
+    ]);
+    const createPdfAttachmentId = vi.fn(() => "local-pdf-1");
 
     const result = await processMessagingAttachments({
       adapter: createAdapter({ "window-sticker.pdf": pdfData }),
@@ -205,7 +215,7 @@ describe("processMessagingAttachments", () => {
         },
       ],
       dependencies: {
-        createPdfAttachmentId: () => "local-pdf-1",
+        createPdfAttachmentId,
         inspectPdfDocument,
         renderPdfPages,
       },
@@ -213,16 +223,75 @@ describe("processMessagingAttachments", () => {
     });
 
     expect(inspectPdfDocument).toHaveBeenCalledTimes(1);
-    expect(renderPdfPages).not.toHaveBeenCalled();
+    expect(createPdfAttachmentId).not.toHaveBeenCalled();
+    expect(renderPdfPages).toHaveBeenCalledWith({
+      data: pdfData,
+      limits: {
+        maxEncodedBytes: 18 * 1024 * 1024,
+        maxPageEncodedBytes: 6 * 1024 * 1024,
+        maxPages: 5,
+        maxPagePixels: 8 * 1024 * 1024,
+        maxPixels: 32 * 1024 * 1024,
+        maxWireBytes: 24 * 1024 * 1024,
+      },
+      pageNumbers: [1],
+      profile: "high",
+    });
     expect(result.input).toEqual([
       {
         type: "text",
-        text: expect.stringContaining("render_messaging_pdf_pages exactly once"),
+        text: "Attachment `window-sticker.pdf` was rendered into its only page image for model input.",
+      },
+      {
+        type: "image",
+        name: "window-sticker-page-1.png",
+        url: "data:image/png;base64,rendered-page",
       },
     ]);
-    expect((result.input[0] as { text: string }).text).toContain(
-      "Do not call inspect_messaging_pdfs or search_messaging_pdf_text for a one-page PDF.",
-    );
+    expect(result.pdfAttachments).toEqual([]);
+  });
+
+  it("retains multi-page PDFs locally for bounded page selection", async () => {
+    const pdfData = bytes("%PDF-1.7\n(local only) Tj\n");
+    const inspectPdfDocument = vi.fn(async () => ({
+      firstPage: {
+        height: 792,
+        renderHeight: 1988,
+        renderWidth: 3072,
+        width: 1224,
+      },
+      pageCount: 3,
+    }));
+    const renderPdfPages = vi.fn();
+    const createPdfAttachmentId = vi.fn(() => "local-pdf-1");
+
+    const result = await processMessagingAttachments({
+      adapter: createAdapter({ "window-sticker.pdf": pdfData }),
+      attachments: [
+        {
+          id: "pdf-1",
+          kind: "file",
+          name: "window-sticker.pdf",
+          disposition: "available",
+          mimeType: "application/pdf",
+        },
+      ],
+      dependencies: {
+        createPdfAttachmentId,
+        inspectPdfDocument,
+        renderPdfPages,
+      },
+      pdfHandling: "model_directed",
+    });
+
+    expect(renderPdfPages).not.toHaveBeenCalled();
+    expect(createPdfAttachmentId).toHaveBeenCalledTimes(1);
+    expect(result.input).toEqual([
+      {
+        type: "text",
+        text: expect.stringContaining("3 pages; page 1 renders at 3072x1988."),
+      },
+    ]);
     expect(result.pdfAttachments).toEqual([
       {
         attachmentId: "local-pdf-1",
@@ -234,7 +303,7 @@ describe("processMessagingAttachments", () => {
             renderWidth: 3072,
             width: 1224,
           },
-          pageCount: 1,
+          pageCount: 3,
         },
         name: "window-sticker.pdf",
         profile: "high",

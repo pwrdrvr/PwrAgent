@@ -195,15 +195,9 @@ export async function processMessagingAttachments(params: {
           continue;
         }
         if (params.pdfHandling === "model_directed") {
-          const pdfAttachment: PendingPdfAttachment = {
-            attachmentId: dependencies.createPdfAttachmentId(),
-            data: downloaded.data,
-            name: downloaded.fileName,
-            profile: policy.pdfProfile,
-            sizeBytes: downloaded.sizeBytes,
-          };
+          let inspection: PdfDocumentInspection | undefined;
           try {
-            pdfAttachment.inspection = await dependencies.inspectPdfDocument({
+            inspection = await dependencies.inspectPdfDocument({
               data: downloaded.data,
               profile: policy.pdfProfile,
             });
@@ -211,25 +205,51 @@ export async function processMessagingAttachments(params: {
             // The dynamic inspection tool remains available as a fallback for
             // PDFs whose metadata cannot be probed at attachment time.
           }
-          pdfAttachments.push(pdfAttachment);
+          if (inspection?.pageCount === 1) {
+            const remainingPdfRenderLimits = remainingPdfRenderLimitsForBudget(
+              renderedPdfBudget,
+            );
+            if (hasRemainingPdfRenderBudget(remainingPdfRenderLimits)) {
+              try {
+                const pages = await dependencies.renderPdfPages({
+                  data: downloaded.data,
+                  limits: remainingPdfRenderLimits,
+                  pageNumbers: [1],
+                  profile: policy.pdfProfile,
+                });
+                if (pages.length !== 1) {
+                  throw new Error("PDF did not render exactly one page.");
+                }
+                recordRenderedPdfBudget(renderedPdfBudget, pages);
+                textInput.push(
+                  `Attachment \`${downloaded.fileName}\` was rendered into its only page image for model input.`,
+                );
+                mediaInput.push({
+                  type: "image",
+                  name: pdfPageImageName(downloaded.fileName, pages[0]!.pageNumber),
+                  url: renderedPdfPageDataUrl(pages[0]!),
+                });
+                continue;
+              } catch {
+                // Keep the managed attachment available as a bounded fallback
+                // when initial one-page rendering cannot be completed.
+              }
+            }
+          }
+          pdfAttachments.push({
+            attachmentId: dependencies.createPdfAttachmentId(),
+            data: downloaded.data,
+            inspection,
+            name: downloaded.fileName,
+            profile: policy.pdfProfile,
+            sizeBytes: downloaded.sizeBytes,
+          });
           continue;
         }
-        const remainingPdfRenderLimits = {
-          maxEncodedBytes:
-            DEFAULT_PDF_RENDER_LIMITS.maxEncodedBytes - renderedPdfBudget.bytes,
-          maxPageEncodedBytes: DEFAULT_PDF_RENDER_LIMITS.maxPageEncodedBytes,
-          maxPages: DEFAULT_PDF_RENDER_LIMITS.maxPages - renderedPdfBudget.pages,
-          maxPagePixels: DEFAULT_PDF_RENDER_LIMITS.maxPagePixels,
-          maxPixels: DEFAULT_PDF_RENDER_LIMITS.maxPixels - renderedPdfBudget.pixels,
-          maxWireBytes:
-            DEFAULT_PDF_RENDER_LIMITS.maxWireBytes - renderedPdfBudget.wireBytes,
-        };
-        if (
-          remainingPdfRenderLimits.maxEncodedBytes < 1 ||
-          remainingPdfRenderLimits.maxPages < 1 ||
-          remainingPdfRenderLimits.maxPixels < 1 ||
-          remainingPdfRenderLimits.maxWireBytes < 1
-        ) {
+        const remainingPdfRenderLimits = remainingPdfRenderLimitsForBudget(
+          renderedPdfBudget,
+        );
+        if (!hasRemainingPdfRenderBudget(remainingPdfRenderLimits)) {
           rejections.push({
             name: attachment.name,
             reason: "PDF rendering budget was exhausted by earlier attachments.",
@@ -244,19 +264,7 @@ export async function processMessagingAttachments(params: {
         if (pages.length === 0) {
           throw new Error("PDF has no renderable pages.");
         }
-        renderedPdfBudget.bytes += pages.reduce(
-          (total, page) => total + page.encodedBytes,
-          0,
-        );
-        renderedPdfBudget.pages += pages.length;
-        renderedPdfBudget.pixels += pages.reduce(
-          (total, page) => total + page.width * page.height,
-          0,
-        );
-        renderedPdfBudget.wireBytes += pages.reduce(
-          (total, page) => total + renderedPdfPageWireBytes(page),
-          0,
-        );
+        recordRenderedPdfBudget(renderedPdfBudget, pages);
         textInput.push(
           `Attachment \`${downloaded.fileName}\` was rendered into ${pages.length} page image${pages.length === 1 ? "" : "s"} for model input.`,
         );
@@ -323,6 +331,59 @@ export async function processMessagingAttachments(params: {
 function pdfPageImageName(fileName: string, pageNumber: number): string {
   const baseName = fileName.replace(/\.pdf$/i, "") || fileName;
   return `${baseName}-page-${pageNumber}.png`;
+}
+
+function remainingPdfRenderLimitsForBudget(budget: {
+  bytes: number;
+  pages: number;
+  pixels: number;
+  wireBytes: number;
+}): {
+  maxEncodedBytes: number;
+  maxPageEncodedBytes: number;
+  maxPages: number;
+  maxPagePixels: number;
+  maxPixels: number;
+  maxWireBytes: number;
+} {
+  return {
+    maxEncodedBytes: DEFAULT_PDF_RENDER_LIMITS.maxEncodedBytes - budget.bytes,
+    maxPageEncodedBytes: DEFAULT_PDF_RENDER_LIMITS.maxPageEncodedBytes,
+    maxPages: DEFAULT_PDF_RENDER_LIMITS.maxPages - budget.pages,
+    maxPagePixels: DEFAULT_PDF_RENDER_LIMITS.maxPagePixels,
+    maxPixels: DEFAULT_PDF_RENDER_LIMITS.maxPixels - budget.pixels,
+    maxWireBytes: DEFAULT_PDF_RENDER_LIMITS.maxWireBytes - budget.wireBytes,
+  };
+}
+
+function hasRemainingPdfRenderBudget(limits: {
+  maxEncodedBytes: number;
+  maxPages: number;
+  maxPixels: number;
+  maxWireBytes: number;
+}): boolean {
+  return (
+    limits.maxEncodedBytes > 0
+    && limits.maxPages > 0
+    && limits.maxPixels > 0
+    && limits.maxWireBytes > 0
+  );
+}
+
+function recordRenderedPdfBudget(
+  budget: { bytes: number; pages: number; pixels: number; wireBytes: number },
+  pages: RenderedPdfPage[],
+): void {
+  budget.bytes += pages.reduce((total, page) => total + page.encodedBytes, 0);
+  budget.pages += pages.length;
+  budget.pixels += pages.reduce(
+    (total, page) => total + page.width * page.height,
+    0,
+  );
+  budget.wireBytes += pages.reduce(
+    (total, page) => total + renderedPdfPageWireBytes(page),
+    0,
+  );
 }
 
 function formatAttachmentText(params: {

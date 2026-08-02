@@ -89,6 +89,7 @@ export async function preparePdfTurnInput(params: {
   const pdfAttachments: PendingPdfAttachment[] = [];
   const consumedLocalPdfPaths = new Set<string>();
   const notes: string[] = [];
+  let handledPdfCount = 0;
   const renderedBudget = {
     bytes: 0,
     pages: 0,
@@ -121,25 +122,20 @@ export async function preparePdfTurnInput(params: {
       continue;
     }
 
-    if (pdfAttachments.length >= maxAttachmentCount) {
+    if (handledPdfCount >= maxAttachmentCount) {
       input.push(item);
       notes.push(
         `PwrAgent left PDF attachment \`${candidate.name}\` as a normal file reference because this turn is limited to ${maxAttachmentCount} PDFs.`,
       );
       continue;
     }
+    handledPdfCount += 1;
 
     const profile = resolvePdfProfile(item, defaultProfile);
     if (params.handling === "model_directed") {
-      const pdfAttachment: PendingPdfAttachment = {
-        attachmentId: dependencies.createAttachmentId(),
-        data: candidate.data,
-        name: candidate.name,
-        profile,
-        sizeBytes: candidate.data.byteLength,
-      };
+      let inspection: PdfDocumentInspection | undefined;
       try {
-        pdfAttachment.inspection = await dependencies.inspectPdfDocument({
+        inspection = await dependencies.inspectPdfDocument({
           data: candidate.data,
           profile,
         });
@@ -147,21 +143,53 @@ export async function preparePdfTurnInput(params: {
         // Keep the attachment available for the dynamic inspection tool when
         // metadata probing cannot read an otherwise recognized PDF.
       }
-      pdfAttachments.push(pdfAttachment);
+      if (inspection?.pageCount === 1) {
+        const remainingLimits = remainingPdfRenderLimits(renderedBudget);
+        if (hasRemainingRenderBudget(remainingLimits)) {
+          try {
+            const pages = await dependencies.renderPdfPages({
+              data: candidate.data,
+              limits: remainingLimits,
+              pageNumbers: [1],
+              profile,
+            });
+            if (pages.length !== 1) {
+              throw new Error("PDF did not render exactly one page.");
+            }
+            recordRenderedBudget(renderedBudget, pages);
+            input.push({
+              type: "image",
+              name: pdfPageImageName(candidate.name, pages[0]!.pageNumber),
+              url: renderedPdfPageDataUrl(pages[0]!),
+            });
+            notes.push(
+              `PwrAgent rendered PDF attachment \`${candidate.name}\` into its only page image for visual analysis.`,
+            );
+            if (item.type === "localFile") {
+              consumedLocalPdfPaths.add(normalizeLocalPdfPath(item.path));
+            }
+            continue;
+          } catch {
+            // Keep the managed attachment available as a bounded fallback if
+            // initial rendering fails despite a successful inspection.
+          }
+        }
+      }
+      pdfAttachments.push({
+        attachmentId: dependencies.createAttachmentId(),
+        data: candidate.data,
+        inspection,
+        name: candidate.name,
+        profile,
+        sizeBytes: candidate.data.byteLength,
+      });
       if (item.type === "localFile") {
         consumedLocalPdfPaths.add(normalizeLocalPdfPath(item.path));
       }
       continue;
     }
 
-    const remainingLimits = {
-      maxEncodedBytes: DEFAULT_PDF_RENDER_LIMITS.maxEncodedBytes - renderedBudget.bytes,
-      maxPageEncodedBytes: DEFAULT_PDF_RENDER_LIMITS.maxPageEncodedBytes,
-      maxPages: DEFAULT_PDF_RENDER_LIMITS.maxPages - renderedBudget.pages,
-      maxPagePixels: DEFAULT_PDF_RENDER_LIMITS.maxPagePixels,
-      maxPixels: DEFAULT_PDF_RENDER_LIMITS.maxPixels - renderedBudget.pixels,
-      maxWireBytes: DEFAULT_PDF_RENDER_LIMITS.maxWireBytes - renderedBudget.wireBytes,
-    };
+    const remainingLimits = remainingPdfRenderLimits(renderedBudget);
     if (!hasRemainingRenderBudget(remainingLimits)) {
       input.push(item);
       notes.push(
@@ -325,6 +353,29 @@ function hasRemainingRenderBudget(limits: {
     limits.maxPixels > 0 &&
     limits.maxWireBytes > 0
   );
+}
+
+function remainingPdfRenderLimits(budget: {
+  bytes: number;
+  pages: number;
+  pixels: number;
+  wireBytes: number;
+}): {
+  maxEncodedBytes: number;
+  maxPageEncodedBytes: number;
+  maxPages: number;
+  maxPagePixels: number;
+  maxPixels: number;
+  maxWireBytes: number;
+} {
+  return {
+    maxEncodedBytes: DEFAULT_PDF_RENDER_LIMITS.maxEncodedBytes - budget.bytes,
+    maxPageEncodedBytes: DEFAULT_PDF_RENDER_LIMITS.maxPageEncodedBytes,
+    maxPages: DEFAULT_PDF_RENDER_LIMITS.maxPages - budget.pages,
+    maxPagePixels: DEFAULT_PDF_RENDER_LIMITS.maxPagePixels,
+    maxPixels: DEFAULT_PDF_RENDER_LIMITS.maxPixels - budget.pixels,
+    maxWireBytes: DEFAULT_PDF_RENDER_LIMITS.maxWireBytes - budget.wireBytes,
+  };
 }
 
 function recordRenderedBudget(
