@@ -23,6 +23,7 @@ apps/desktop/src/main/pr-status/github-pr-fetcher.ts text eol=lf diff
 **/*.jpeg binary
 **/*.ico binary
 **/*.icns binary
+**/*.pdf binary
 **/*.webp binary
 
 # Vendor brand-kit SVGs — verbatim files from each vendor's brand
