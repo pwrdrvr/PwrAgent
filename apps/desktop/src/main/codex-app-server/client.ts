@@ -209,6 +209,17 @@ const SUPPORTED_CODEX_MODEL_ORDER = [
 ] as const;
 const SUPPORTED_CODEX_MODELS = new Set<string>(SUPPORTED_CODEX_MODEL_ORDER);
 const MAX_INLINE_FILE_DIFF_CHARS = 512 * 1024;
+const MAX_MCP_RESOURCE_IMAGE_BASE64_CHARS = Math.ceil((16 * 1024 * 1024) / 3) * 4;
+const MCP_RESOURCE_IMAGE_MIME_TYPES = new Set([
+  "image/avif",
+  "image/bmp",
+  "image/gif",
+  "image/jpeg",
+  "image/jpg",
+  "image/png",
+  "image/webp",
+]);
+const BASE64_IMAGE_BLOB_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/;
 
 type CodexReviewStartPayload = CodexReviewStartParams & {
   cwd?: string;
@@ -3453,17 +3464,20 @@ function extractMcpToolResultImagePartsFromReplayItem(
       const structuredContent =
         asRecord(result?.structuredContent) ??
         asRecord(result?.structured_content);
-      if (!structuredContent) {
-        return [];
-      }
-
-      const structuredImageParts = extractStructuredMessageParts(structuredContent).filter(
-        (part): part is AppServerThreadImagePart => part.type === "image",
-      );
-      const signedImagePart = buildMcpSignedImagePart(structuredContent);
-      return signedImagePart
-        ? [...structuredImageParts, signedImagePart]
-        : structuredImageParts;
+      const structuredImageParts = structuredContent
+        ? extractStructuredMessageParts(structuredContent).filter(
+            (part): part is AppServerThreadImagePart => part.type === "image",
+          )
+        : [];
+      const signedImagePart = structuredContent
+        ? buildMcpSignedImagePart(structuredContent)
+        : undefined;
+      const resourceImageParts = extractMcpResourceImageParts(result?.content);
+      return [
+        ...structuredImageParts,
+        ...(signedImagePart ? [signedImagePart] : []),
+        ...resourceImageParts,
+      ];
     }),
   );
 }
@@ -3487,6 +3501,63 @@ function buildMcpSignedImagePart(
     imagePart.alt = alt;
   }
   return imagePart;
+}
+
+function extractMcpResourceImageParts(content: unknown): AppServerThreadImagePart[] {
+  const contentBlocks = Array.isArray(content) ? content : [content];
+  return dedupeImageParts(
+    contentBlocks.flatMap((contentBlock) => {
+      const contentRecord = asRecord(contentBlock);
+      const parsedText = parseStructuredValue(
+        typeof contentBlock === "string"
+          ? contentBlock
+          : pickString(contentRecord ?? {}, ["text"]),
+      );
+      const resourceCandidates = [
+        contentRecord,
+        asRecord(contentRecord?.resource),
+        asRecord(parsedText),
+      ];
+
+      return resourceCandidates.flatMap((candidate) => {
+        if (!candidate) {
+          return [];
+        }
+
+        const resources = Array.isArray(candidate.contents)
+          ? candidate.contents
+          : [candidate];
+        return resources.flatMap((resource) => {
+          const imagePart = buildMcpResourceImagePart(asRecord(resource) ?? undefined);
+          return imagePart ? [imagePart] : [];
+        });
+      });
+    }),
+  );
+}
+
+function buildMcpResourceImagePart(
+  resource: Record<string, unknown> | undefined,
+): AppServerThreadImagePart | undefined {
+  const mimeType = pickString(resource ?? {}, ["mimeType", "mime_type"])
+    ?.trim()
+    .toLowerCase();
+  const blob = pickString(resource ?? {}, ["blob"]);
+  if (
+    !mimeType
+    || !MCP_RESOURCE_IMAGE_MIME_TYPES.has(mimeType)
+    || !blob
+    || blob.length > MAX_MCP_RESOURCE_IMAGE_BASE64_CHARS
+    || blob.length % 4 === 1
+    || !BASE64_IMAGE_BLOB_PATTERN.test(blob)
+  ) {
+    return undefined;
+  }
+
+  return {
+    type: "image",
+    url: `data:${mimeType};base64,${blob}`,
+  };
 }
 
 function isLoopbackUrl(value: string): boolean {

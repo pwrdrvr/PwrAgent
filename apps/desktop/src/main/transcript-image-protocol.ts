@@ -39,13 +39,26 @@ const DATA_IMAGE_EXTENSIONS = new Map<string, string>([
 ]);
 
 const MARKDOWN_LINKED_IMAGE_PATTERN = /!?\[([^\]\r\n]*)\]\(\s*(?:<([^>\r\n]+)>|([^\s)]+))[^)]*\)/g;
+const MAX_FETCHED_TRANSCRIPT_IMAGE_BYTES = 16 * 1024 * 1024;
+const FETCHED_TRANSCRIPT_IMAGE_TIMEOUT_MS = 10_000;
 
 export type TranscriptImageProtocolOptions = {
   env?: NodeJS.ProcessEnv;
   homeDir?: string;
 };
 
+type TranscriptImageFetchResponse = {
+  ok: boolean;
+  headers: { get: (name: string) => string | null };
+  body?: ReadableStream<Uint8Array> | null;
+  arrayBuffer: () => Promise<ArrayBuffer>;
+};
+
 export type TranscriptImageMaterializerDependencies = {
+  fetch: (
+    url: string,
+    init: { signal: AbortSignal },
+  ) => Promise<TranscriptImageFetchResponse>;
   resolveRoot: (request: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -59,7 +72,14 @@ export type TranscriptImageFileResolution =
   | { ok: true; path: string; mimeType: string }
   | { ok: false; status: number; message: string };
 
+type MaterializedTranscriptImage = {
+  buffer: Buffer;
+  extension: string;
+  sha256: string;
+};
+
 const defaultMaterializerDependencies: TranscriptImageMaterializerDependencies = {
+  fetch: async (url, init) => await globalThis.fetch(url, init),
   resolveRoot: ({ backend, threadId }) =>
     resolveActiveProfilePath(
       path.join(
@@ -97,6 +117,10 @@ export async function materializeTranscriptImageUrlsForRenderer(
 ): Promise<AppServerReadThreadResponse> {
   const deps = { ...defaultMaterializerDependencies, ...dependencies };
   const materializedFileWrites = new Map<string, Promise<void>>();
+  const fetchedLoopbackImages = new Map<
+    string,
+    Promise<MaterializedTranscriptImage | undefined>
+  >();
   const markdownLinkImageResolutions = new Map<
     string,
     Promise<TranscriptImageFileResolution>
@@ -113,6 +137,7 @@ export async function materializeTranscriptImageUrlsForRenderer(
             response,
             deps,
             materializedFileWrites,
+            fetchedLoopbackImages,
             markdownLinkImageResolutions,
           ),
         ),
@@ -124,6 +149,7 @@ export async function materializeTranscriptImageUrlsForRenderer(
             response,
             deps,
             materializedFileWrites,
+            fetchedLoopbackImages,
             markdownLinkImageResolutions,
           ),
         ),
@@ -150,6 +176,7 @@ async function materializeTranscriptEntryImageUrls(
   response: AppServerReadThreadResponse,
   deps: TranscriptImageMaterializerDependencies,
   materializedFileWrites: Map<string, Promise<void>>,
+  fetchedLoopbackImages: Map<string, Promise<MaterializedTranscriptImage | undefined>>,
   markdownLinkImageResolutions: Map<string, Promise<TranscriptImageFileResolution>>,
 ): Promise<AppServerThreadEntry> {
   if (entry.type !== "message") {
@@ -161,6 +188,7 @@ async function materializeTranscriptEntryImageUrls(
     response,
     deps,
     materializedFileWrites,
+    fetchedLoopbackImages,
     markdownLinkImageResolutions,
   )) as AppServerThreadMessageEntry;
 }
@@ -170,6 +198,7 @@ async function materializeTranscriptMessageImageUrls<T extends AppServerThreadMe
   response: AppServerReadThreadResponse,
   deps: TranscriptImageMaterializerDependencies,
   materializedFileWrites: Map<string, Promise<void>>,
+  fetchedLoopbackImages: Map<string, Promise<MaterializedTranscriptImage | undefined>>,
   markdownLinkImageResolutions: Map<string, Promise<TranscriptImageFileResolution>>,
 ): Promise<T> {
   const messageWithMarkdownLinkImages = await appendMarkdownLinkImageParts(
@@ -194,6 +223,7 @@ async function materializeTranscriptMessageImageUrls<T extends AppServerThreadMe
           response,
           deps,
           materializedFileWrites,
+          fetchedLoopbackImages,
         ),
       ),
     ),
@@ -205,6 +235,7 @@ async function materializeTranscriptMessagePartImageUrl(
   response: AppServerReadThreadResponse,
   deps: TranscriptImageMaterializerDependencies,
   materializedFileWrites: Map<string, Promise<void>>,
+  fetchedLoopbackImages: Map<string, Promise<MaterializedTranscriptImage | undefined>>,
 ): Promise<AppServerThreadMessagePart> {
   if (part.type !== "image") {
     return part;
@@ -218,20 +249,51 @@ async function materializeTranscriptMessagePartImageUrl(
   }
 
   const dataImage = parseSupportedImageDataUrl(part.url);
-  if (!dataImage) {
+  if (dataImage) {
+    return await materializeTranscriptImagePart(
+      part,
+      dataImage,
+      response,
+      deps,
+      materializedFileWrites,
+    );
+  }
+
+  const fetchedImage = await fetchLoopbackSignedImage(
+    part.url,
+    deps,
+    fetchedLoopbackImages,
+  );
+  if (!fetchedImage) {
     return part;
   }
 
+  return await materializeTranscriptImagePart(
+    part,
+    fetchedImage,
+    response,
+    deps,
+    materializedFileWrites,
+  );
+}
+
+async function materializeTranscriptImagePart(
+  part: AppServerThreadImagePart,
+  image: MaterializedTranscriptImage,
+  response: AppServerReadThreadResponse,
+  deps: TranscriptImageMaterializerDependencies,
+  materializedFileWrites: Map<string, Promise<void>>,
+): Promise<AppServerThreadImagePart> {
   const root = deps.resolveRoot({
     backend: response.backend,
     threadId: response.threadId,
   });
   try {
     await deps.mkdir(root, { recursive: true });
-    const filePath = path.join(root, `${dataImage.sha256}.${dataImage.extension}`);
+    const filePath = path.join(root, `${image.sha256}.${image.extension}`);
     let writePromise = materializedFileWrites.get(filePath);
     if (!writePromise) {
-      writePromise = deps.writeFile(filePath, dataImage.buffer).then(() => undefined);
+      writePromise = deps.writeFile(filePath, image.buffer).then(() => undefined);
       materializedFileWrites.set(filePath, writePromise);
     }
     await writePromise;
@@ -243,6 +305,138 @@ async function materializeTranscriptMessagePartImageUrl(
   } catch {
     return part;
   }
+}
+
+async function fetchLoopbackSignedImage(
+  url: string,
+  deps: TranscriptImageMaterializerDependencies,
+  fetchedImages: Map<string, Promise<MaterializedTranscriptImage | undefined>>,
+): Promise<MaterializedTranscriptImage | undefined> {
+  if (!isPwrSnapSignedMediaUrl(url)) {
+    return undefined;
+  }
+
+  let fetchPromise = fetchedImages.get(url);
+  if (!fetchPromise) {
+    fetchPromise = fetchLoopbackSignedImageOnce(url, deps);
+    fetchedImages.set(url, fetchPromise);
+  }
+  return await fetchPromise;
+}
+
+async function fetchLoopbackSignedImageOnce(
+  url: string,
+  deps: TranscriptImageMaterializerDependencies,
+): Promise<MaterializedTranscriptImage | undefined> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), FETCHED_TRANSCRIPT_IMAGE_TIMEOUT_MS);
+  try {
+    const response = await deps.fetch(url, { signal: controller.signal });
+    if (!response.ok) {
+      return undefined;
+    }
+
+    const declaredLength = Number(response.headers.get("content-length"));
+    if (
+      Number.isFinite(declaredLength)
+      && declaredLength > MAX_FETCHED_TRANSCRIPT_IMAGE_BYTES
+    ) {
+      return undefined;
+    }
+
+    const mimeType = response.headers
+      .get("content-type")
+      ?.split(";", 1)[0]
+      ?.trim()
+      .toLowerCase();
+    const extension = mimeType ? DATA_IMAGE_EXTENSIONS.get(mimeType) : undefined;
+    if (!extension) {
+      return undefined;
+    }
+
+    const buffer = await readFetchedTranscriptImageBuffer(response, controller);
+    if (!buffer) {
+      return undefined;
+    }
+
+    return {
+      buffer,
+      extension,
+      sha256: createHash("sha256").update(buffer).digest("hex"),
+    };
+  } catch {
+    return undefined;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function readFetchedTranscriptImageBuffer(
+  response: TranscriptImageFetchResponse,
+  controller: AbortController,
+): Promise<Buffer | undefined> {
+  const reader = response.body?.getReader();
+  if (!reader) {
+    const buffer = Buffer.from(await response.arrayBuffer());
+    if (buffer.byteLength === 0 || buffer.byteLength > MAX_FETCHED_TRANSCRIPT_IMAGE_BYTES) {
+      return undefined;
+    }
+    return buffer;
+  }
+
+  const chunks: Uint8Array[] = [];
+  let byteLength = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      if (!value) {
+        continue;
+      }
+
+      byteLength += value.byteLength;
+      if (byteLength > MAX_FETCHED_TRANSCRIPT_IMAGE_BYTES) {
+        controller.abort();
+        return undefined;
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  return byteLength > 0 ? Buffer.concat(chunks, byteLength) : undefined;
+}
+
+function isPwrSnapSignedMediaUrl(value: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return false;
+  }
+
+  if (
+    (parsed.protocol !== "http:" && parsed.protocol !== "https:")
+    || !isLoopbackHostname(parsed.hostname)
+    || parsed.pathname !== "/media"
+  ) {
+    return false;
+  }
+
+  return Boolean(parsed.searchParams.get("grant"));
+}
+
+function isLoopbackHostname(hostname: string): boolean {
+  const normalized = hostname.toLowerCase();
+  return (
+    normalized === "localhost"
+    || normalized === "127.0.0.1"
+    || normalized === "::1"
+    || normalized.endsWith(".localhost")
+  );
 }
 
 async function appendMarkdownLinkImageParts<T extends AppServerThreadMessage>(
@@ -452,7 +646,11 @@ function isFileImageUrl(url: string): boolean {
 }
 
 function isMaterializableImageUrl(url: string): boolean {
-  return isFileImageUrl(url) || url.startsWith("data:image/");
+  return (
+    isFileImageUrl(url)
+    || url.startsWith("data:image/")
+    || isPwrSnapSignedMediaUrl(url)
+  );
 }
 
 export function installTranscriptImageProtocol(): void {
