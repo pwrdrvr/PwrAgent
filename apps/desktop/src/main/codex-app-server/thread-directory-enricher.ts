@@ -4,6 +4,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import type { LinkedDirectorySummary } from "@pwragent/shared";
 import { isToolManagedWorktreePath } from "@pwragent/shared";
+import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { getMainLogger } from "../log";
 
 const execFile = promisify(execFileCallback);
@@ -42,7 +43,7 @@ type GitMetadataEvidence = {
 
 async function runGit(projectKey: string, args: string[]): Promise<string> {
   const result = await execFile("git", ["-C", projectKey, ...args], {
-    env: process.env,
+    env: buildPwrAgentChildProcessEnv(process.env),
   });
   return result.stdout.trim();
 }

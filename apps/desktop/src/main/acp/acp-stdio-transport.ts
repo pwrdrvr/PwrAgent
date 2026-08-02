@@ -13,6 +13,7 @@ import {
   type JsonRpcObserver,
   type JsonRpcTransport,
 } from "@pwrdrvr/agent-transport";
+import { buildPwrAgentChildProcessEnv } from "../child-process-env.js";
 import { getMainLogger } from "../log.js";
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 10 * 60_000;
@@ -181,7 +182,11 @@ class AcpLineStdioTransport implements JsonRpcTransport {
     }
 
     const descriptor = normalizeAcpLaunchDescriptor(this.options.launchDescriptor);
-    const env = appendExecutableSearchPaths({ ...process.env, ...descriptor.env });
+    const env = buildPwrAgentChildProcessEnv(
+      appendExecutableSearchPaths(
+        buildPwrAgentChildProcessEnv(process.env, descriptor.env),
+      ),
+    );
     const spawnProcess = this.options.spawn ?? spawn;
     acpTransportLog.info("launch ACP agent", {
       backendId: descriptor.backendId,

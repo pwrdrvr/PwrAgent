@@ -1,5 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import type { AutomationGateConfig, AutomationGateRunResult } from "@pwragent/shared";
+import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { resolveWindowsBashShell } from "../windows-shell";
 
 const DEFAULT_GATE_TIMEOUT_MS = 60_000;
@@ -37,15 +38,16 @@ function runShellGate(config: AutomationGateConfig): Promise<AutomationGateRunRe
   const startedAt = Date.now();
   const timeoutMs = config.timeoutMs ?? DEFAULT_GATE_TIMEOUT_MS;
   const outputLimit = config.outputLimitChars ?? DEFAULT_GATE_OUTPUT_LIMIT_CHARS;
+  const childEnv = buildPwrAgentChildProcessEnv(process.env);
   const shell =
-    process.env.SHELL?.trim() ||
+    childEnv.SHELL?.trim() ||
     (process.platform === "win32" ? resolveWindowsBashShell() : "/bin/sh");
 
   return new Promise((resolve) => {
     const child = spawn(shell, ["-lc", command], {
       cwd: config.cwd,
       detached: Boolean(timeoutMs),
-      env: process.env,
+      env: childEnv,
       stdio: "pipe",
     });
 
@@ -87,6 +89,7 @@ function runShellGate(config: AutomationGateConfig): Promise<AutomationGateRunRe
           // workspace. Kill the whole process tree, matching the timeout path in
           // codex-environment-runtime.
           spawnSync("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
+            env: buildPwrAgentChildProcessEnv(process.env),
             stdio: "ignore",
           });
         }

@@ -1160,6 +1160,35 @@ describe("DesktopSettingsService", () => {
     expect(service.resolveCodexSpawnEnv().NVM_DIR).toBe("/Users/alice/.nvm");
   });
 
+  it("keeps the PwrAgent renderer URL out of Codex and terminal child environments", async () => {
+    const service = new DesktopSettingsService({
+      env: {
+        ELECTRON_RENDERER_URL: "http://localhost:5173",
+        PATH: "/usr/bin:/bin",
+      } as NodeJS.ProcessEnv,
+      secretStore: new MemoryDesktopSecretStore(),
+      resolveCodexShellEnv: () => ({
+        ELECTRON_RENDERER_URL: "http://localhost:5175",
+        PATH: "/opt/homebrew/bin:/usr/bin",
+        NVM_DIR: "/Users/alice/.nvm",
+      }),
+    });
+
+    const codexEnv = service.resolveCodexSpawnEnv();
+    const terminalEnv = await service.resolveTerminalSpawnEnvAsync();
+
+    expect(codexEnv).not.toHaveProperty("ELECTRON_RENDERER_URL");
+    expect(terminalEnv).not.toHaveProperty("ELECTRON_RENDERER_URL");
+    expect(codexEnv).toMatchObject({
+      PATH: "/opt/homebrew/bin:/usr/bin",
+      NVM_DIR: "/Users/alice/.nvm",
+    });
+    expect(terminalEnv).toMatchObject({
+      PATH: "/opt/homebrew/bin:/usr/bin",
+      NVM_DIR: "/Users/alice/.nvm",
+    });
+  });
+
   it("applies env overrides above TOML and keeps the Grok API key in keychain", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");

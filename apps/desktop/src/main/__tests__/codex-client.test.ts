@@ -5927,6 +5927,7 @@ describe("CodexAppServerClient", () => {
         environmentName: "PwrAgent",
         executionTarget: "local",
         shellEnvironment: {
+          ELECTRON_RENDERER_URL: "http://localhost:5175",
           PATH: "/Users/huntharo/.nvm/versions/node/v24.14.1/bin:/usr/bin",
           NVM_DIR: "/Users/huntharo/.nvm",
         },
@@ -5955,6 +5956,11 @@ describe("CodexAppServerClient", () => {
       excludeTurns: true,
       threadSource: "user",
     });
+    expect(
+      (request?.params as { config?: Record<string, unknown> } | undefined)?.config?.[
+        "shell_environment_policy.set.ELECTRON_RENDERER_URL"
+      ],
+    ).toBeUndefined();
 
     await client.close();
   });
@@ -6230,6 +6236,7 @@ describe("CodexAppServerClient", () => {
         executionTarget: "local",
         cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
         shellEnvironment: {
+          ELECTRON_RENDERER_URL: "http://localhost:5175",
           PATH: "/Users/huntharo/.nvm/versions/node/v26.0.0/bin:/usr/bin",
           NVM_DIR: "/Users/huntharo/.nvm",
         },
@@ -6250,6 +6257,11 @@ describe("CodexAppServerClient", () => {
         "shell_environment_policy.set.NVM_DIR": "/Users/huntharo/.nvm",
       },
     });
+    expect(
+      (startPayload?.params as { config?: Record<string, unknown> } | undefined)?.config?.[
+        "shell_environment_policy.set.ELECTRON_RENDERER_URL"
+      ],
+    ).toBeUndefined();
 
     await client.close();
   });
@@ -7683,6 +7695,7 @@ describe("CodexAppServerClient", () => {
         executionTarget: "local",
         cwd: "/repo/app/.worktrees/thread-2/app",
         shellEnvironment: {
+          ELECTRON_RENDERER_URL: "http://localhost:5175",
           PATH: "/Users/huntharo/.nvm/versions/node/v24.14.1/bin:/usr/bin",
           NVM_DIR: "/Users/huntharo/.nvm",
         },
@@ -7724,6 +7737,11 @@ describe("CodexAppServerClient", () => {
         "shell_environment_policy.set.NVM_DIR": "/Users/huntharo/.nvm",
       },
     });
+    expect(
+      (resumePayload?.params as { config?: Record<string, unknown> } | undefined)?.config?.[
+        "shell_environment_policy.set.ELECTRON_RENDERER_URL"
+      ],
+    ).toBeUndefined();
     expect(turnStartPayload?.params).toMatchObject({
       threadId: "thread-2",
       cwd: "/repo/app/.worktrees/thread-2/app",

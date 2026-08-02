@@ -5,6 +5,7 @@ import type {
   GhStatus,
   PrSummary,
 } from "@pwragent/shared";
+import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { getMainLogger } from "../log";
 import { discoverGhCommands } from "../settings/gh-discovery";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
@@ -528,6 +529,7 @@ function defaultExec(
     const command = await resolveGhCommand();
     const result = await execFileAsync(command, args, {
       cwd,
+      env: buildPwrAgentChildProcessEnv(process.env),
       timeout: timeoutMs,
       maxBuffer: 1024 * 1024,
       encoding: "utf8",
@@ -545,7 +547,11 @@ function defaultRunGhAuthStatus(
       const result = await execFileAsync(
         command,
         ["auth", "status", "--hostname", "github.com"],
-        { timeout: 5_000, encoding: "utf8" },
+        {
+          env: buildPwrAgentChildProcessEnv(process.env),
+          timeout: 5_000,
+          encoding: "utf8",
+        },
       );
       return { stdout: result.stdout, stderr: result.stderr, ok: true };
     } catch (error) {

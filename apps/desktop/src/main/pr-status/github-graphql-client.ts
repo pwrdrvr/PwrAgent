@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { graphql } from "@octokit/graphql";
 import type { PrSummary } from "@pwragent/shared";
+import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { getMainLogger } from "../log";
 import {
   deriveChipStateFromRollup,
@@ -844,13 +845,14 @@ export class GithubGraphqlPrClient {
         ]);
       const discovery = await discoverGhCommands({
         configuredCommand: getDesktopSettingsService().resolveGhCommandPreference(),
-        env: process.env,
+        env: buildPwrAgentChildProcessEnv(process.env),
       });
       const command = discovery.selectedCommand;
       if (!command) {
         return null;
       }
       const { stdout } = await execFileAsync(command, ["auth", "token"], {
+        env: buildPwrAgentChildProcessEnv(process.env),
         timeout: 10_000,
         encoding: "utf8",
       });

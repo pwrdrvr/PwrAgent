@@ -40,6 +40,27 @@ describe("ShellAutomationGateRunner", () => {
     });
   });
 
+  it.skipIf(process.platform === "win32")(
+    "does not pass PwrAgent's renderer URL to automation gates",
+    async () => {
+      const originalRendererUrl = process.env.ELECTRON_RENDERER_URL;
+      process.env.ELECTRON_RENDERER_URL = "http://localhost:5175";
+      try {
+        const result = await new ShellAutomationGateRunner().runGate({
+          command: 'printf "%s" "${ELECTRON_RENDERER_URL-unset}"',
+        });
+
+        expect(result).toMatchObject({ status: "proceed", output: "unset" });
+      } finally {
+        if (originalRendererUrl === undefined) {
+          delete process.env.ELECTRON_RENDERER_URL;
+        } else {
+          process.env.ELECTRON_RENDERER_URL = originalRendererUrl;
+        }
+      }
+    },
+  );
+
   it("kills a runaway command on timeout and never hangs the caller", async () => {
     const startedAt = Date.now();
     const result = await new ShellAutomationGateRunner().runGate({

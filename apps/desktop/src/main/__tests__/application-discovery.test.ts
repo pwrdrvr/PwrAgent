@@ -194,6 +194,36 @@ describe("application discovery", () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
+  it.skipIf(process.platform === "win32")("does not pass the renderer URL to launched workspace apps", async () => {
+    blockHostIntelliJDiscoveryPaths();
+    const binDir = path.join(tempDir, "bin");
+    const ideaPath = path.join(binDir, "idea");
+    const targetPath = path.join(tempDir, "source.kt");
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(ideaPath, "#!/bin/sh\nexit 0\n", "utf8");
+    chmodSync(ideaPath, 0o755);
+    writeFileSync(targetPath, "line 1\n", "utf8");
+
+    await openDesktopApplication(
+      {
+        applicationId: "intellijidea",
+        kind: "editor",
+        targetPath,
+      },
+      {
+        env: {
+          ELECTRON_RENDERER_URL: "http://localhost:5175",
+          KEEP_APPLICATION_ENV: "yes",
+          PATH: binDir,
+        },
+      },
+    );
+
+    const options = spawnMock.mock.calls[0]?.[2];
+    expect(options.env).toMatchObject({ KEEP_APPLICATION_ENV: "yes" });
+    expect(options.env).not.toHaveProperty("ELECTRON_RENDERER_URL");
+  });
+
   it.skipIf(process.platform === "win32")("resolves the bundled VS Code CLI from an app-only install", async () => {
     const appPath = path.join(tempDir, "Visual Studio Code.app");
     const bundledCodePath = path.join(

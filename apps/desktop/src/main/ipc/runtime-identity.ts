@@ -1,5 +1,6 @@
 import { ipcMain } from "electron";
 import { execFileSync } from "node:child_process";
+import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { RUNTIME_IDENTITY_CHANNEL } from "../../shared/ipc";
 import type { RuntimeIdentity } from "../../shared/runtime-identity";
 
@@ -7,6 +8,7 @@ function readGitValue(cwd: string, args: string[]): string | undefined {
   try {
     const value = execFileSync("git", ["-C", cwd, ...args], {
       encoding: "utf8",
+      env: buildPwrAgentChildProcessEnv(process.env),
       stdio: ["ignore", "pipe", "ignore"],
     }).trim();
 

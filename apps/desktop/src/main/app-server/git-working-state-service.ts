@@ -10,6 +10,7 @@ import type {
   WorktreeOtherChangeEntry,
   WorktreeOtherChangeStatus,
 } from "@pwragent/shared";
+import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { resolveGitExecutable, runGitCommand } from "./git-executable";
 
 function normalizeAbsolutePath(value: string): string {
@@ -602,7 +603,8 @@ async function listUntrackedDirectoryFilesLimited(
     return { repoPaths: [], truncated: true };
   }
 
-  const git = await resolveGitExecutable(gitEnv ?? process.env);
+  const childEnv = buildPwrAgentChildProcessEnv(gitEnv ?? process.env);
+  const git = await resolveGitExecutable(childEnv);
   return await new Promise((resolve) => {
     const repoPaths: string[] = [];
     let pending = "";
@@ -623,7 +625,7 @@ async function listUntrackedDirectoryFilesLimited(
         "--",
         repoPath,
       ],
-      { env: gitEnv ?? process.env },
+      { env: childEnv },
     );
 
     const finish = () => {
