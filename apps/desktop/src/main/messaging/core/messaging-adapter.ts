@@ -176,6 +176,10 @@ export type MessagingBackendBridge = {
   startTurn(
     request: StartTurnRequest & { messageOrigin?: AppServerThreadMessageOrigin },
   ): Promise<StartTurnResponse>;
+  supportsMessagingPdfTools?(request: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<boolean>;
   steerTurn?(
     request: SteerTurnRequest & { messageOrigin?: AppServerThreadMessageOrigin },
   ): Promise<SteerTurnResponse>;

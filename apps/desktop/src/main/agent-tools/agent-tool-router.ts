@@ -10,6 +10,7 @@ import type {
 } from "@pwrdrvr/codex-app-server-protocol/v2";
 import type {
   AgentToolCallContext,
+  AgentToolCallContentItems,
   AgentToolDefinition,
   AgentToolDispatchFailure,
   AgentToolDispatchResult,
@@ -32,10 +33,17 @@ export type AgentMcpTool = {
 };
 
 export type AgentMcpToolCallResponse = {
-  content: Array<{
-    type: "text";
-    text: string;
-  }>;
+  content: Array<
+    | {
+        type: "text";
+        text: string;
+      }
+    | {
+        type: "image";
+        data: string;
+        mimeType: string;
+      }
+  >;
   structuredContent?: Record<string, unknown>;
   isError?: boolean;
 };
@@ -239,13 +247,38 @@ export function toMcpToolResponse(
   return {
     isError: result.ok ? undefined : true,
     structuredContent: toStructuredContent(payload),
-    content: [
-      {
-        type: "text",
-        text: JSON.stringify(payload, null, 2),
-      },
-    ],
+    content: result.contentItems
+      ? toMcpContentItems(result.contentItems)
+      : [
+          {
+            type: "text",
+            text: JSON.stringify(payload, null, 2),
+          },
+        ],
   };
+}
+
+function toMcpContentItems(
+  contentItems: AgentToolCallContentItems,
+): AgentMcpToolCallResponse["content"] {
+  return contentItems.map((item) => {
+    if (item.type === "inputText") {
+      return { type: "text", text: item.text };
+    }
+    const dataUrlMatch = /^data:([^;,]+);base64,([A-Za-z0-9+/=]+)$/u.exec(
+      item.imageUrl,
+    );
+    return dataUrlMatch
+      ? {
+          type: "image",
+          data: dataUrlMatch[2]!,
+          mimeType: dataUrlMatch[1]!,
+        }
+      : {
+          type: "text",
+          text: "PwrAgent returned an image with an unsupported data URL.",
+        };
+  });
 }
 
 function toStructuredContent(payload: unknown): Record<string, unknown> {

@@ -55,6 +55,9 @@ describe("PwrAgent messaging agent tools", () => {
       .toEqual([
       "get_current_messaging_surface",
       "attach_thread_here",
+      "inspect_messaging_pdfs",
+      "search_messaging_pdf_text",
+      "render_messaging_pdf_pages",
     ]);
     expect(
       isPwrAgentMessagingDynamicToolCall({
@@ -119,6 +122,81 @@ describe("PwrAgent messaging agent tools", () => {
         turnId: "turn-1",
       },
       args: {},
+    });
+  });
+
+  it("returns rendered PDF pages as image input for Codex dynamic tools", async () => {
+    const handler = vi.fn(async () => ({
+      ok: true as const,
+      data: {
+        attachmentId: "pdf-1",
+        name: "window-sticker.pdf",
+        pages: [{ height: 1988, pageNumber: 3, width: 3072 }],
+      },
+      imageContent: [
+        {
+          dataUrl: "data:image/png;base64,AQID",
+          pageNumber: 3,
+        },
+      ],
+    }));
+    const router = buildPwrAgentMessagingToolRouter(handler);
+
+    await expect(
+      router.handleDynamicToolCall({
+        backend: "codex",
+        call: {
+          threadId: "agent-thread",
+          turnId: "turn-1",
+          callId: "call-1",
+          namespace: "pwragent",
+          tool: "render_messaging_pdf_pages",
+          arguments: {
+            attachmentId: "pdf-1",
+            pageNumbers: [3],
+          },
+        },
+      }),
+    ).resolves.toEqual({
+      success: true,
+      contentItems: [
+        {
+          type: "inputText",
+          text: JSON.stringify({
+            attachmentId: "pdf-1",
+            name: "window-sticker.pdf",
+            pages: [{ height: 1988, pageNumber: 3, width: 3072 }],
+          }, null, 2),
+        },
+        {
+          type: "inputImage",
+          imageUrl: "data:image/png;base64,AQID",
+        },
+      ],
+    });
+
+    await expect(
+      router.handleMcpToolCall({
+        backend: "codex",
+        threadId: "agent-thread",
+        turnId: "turn-1",
+        tool: "render_messaging_pdf_pages",
+        args: {
+          attachmentId: "pdf-1",
+          pageNumbers: [3],
+        },
+      }),
+    ).resolves.toMatchObject({
+      content: [
+        {
+          type: "text",
+        },
+        {
+          type: "image",
+          data: "AQID",
+          mimeType: "image/png",
+        },
+      ],
     });
   });
 });

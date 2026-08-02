@@ -521,6 +521,26 @@ function createOverlayStoreMock(params?: {
       overlays.set(key, next);
       return next;
     },
+    setThreadMessagingPdfToolCatalogVersion: async ({
+      backend,
+      threadId,
+      version,
+    }: {
+      backend: ThreadOverlayState["backend"];
+      threadId: string;
+      version: number;
+    }) => {
+      const key = `${backend}:${threadId}`;
+      const next = {
+        ...overlays.get(key),
+        backend,
+        threadId,
+        messagingPdfToolCatalogVersion: version,
+        extraLinkedDirectories: overlays.get(key)?.extraLinkedDirectories ?? [],
+      } as ThreadOverlayState;
+      overlays.set(key, next);
+      return next;
+    },
     setThreadArchiveTombstone: async ({
       backend,
       threadId,
@@ -7129,6 +7149,39 @@ script = "echo setup"
       "start_review",
       "create_monitor_delegation",
     ]);
+
+    await registry.close();
+  });
+
+  it("records PDF dynamic-tool support for newly created Codex threads", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: {
+          serverInfo: { name: "Codex App Server", version: "1.0.0" },
+          methods: ["thread/start", "turn/start"],
+        },
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      createScratchProjectDirectory: async () => "/tmp/pwragent-scratch",
+    });
+
+    await registry.startThread({ backend: "codex" });
+
+    await expect(
+      registry.supportsMessagingPdfTools({
+        backend: "codex",
+        threadId: "thread-1",
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      registry.supportsMessagingPdfTools({
+        backend: "grok",
+        threadId: "thread-1",
+      }),
+    ).resolves.toBe(false);
 
     await registry.close();
   });

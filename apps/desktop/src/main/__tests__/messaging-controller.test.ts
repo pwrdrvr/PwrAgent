@@ -51,7 +51,10 @@ import {
 import type { MessagingAdapter, MessagingBackendBridge } from "../messaging/core/messaging-adapter";
 import { MessagingDeliveryBudget } from "../messaging/core/messaging-delivery-budget";
 import { MessagingStore } from "../messaging/core/messaging-store";
-import { renderPdfPages } from "../messaging/pdf-page-renderer";
+import {
+  inspectPdfDocument,
+  renderPdfPages,
+} from "../messaging/pdf-page-renderer";
 
 const tempDirs: string[] = [];
 
@@ -65,6 +68,13 @@ vi.mock("../messaging/attachment-image-normalization", () => ({
 }));
 
 vi.mock("../messaging/pdf-page-renderer", () => ({
+  DEFAULT_PDF_RENDER_LIMITS: {
+    maxEncodedBytes: 24 * 1024 * 1024,
+    maxPages: 5,
+    maxPagePixels: 8 * 1024 * 1024,
+    maxPixels: 32 * 1024 * 1024,
+  },
+  inspectPdfDocument: vi.fn(),
   renderPdfPages: vi.fn(),
 }));
 
@@ -1262,7 +1272,7 @@ describe("MessagingController", () => {
         },
       },
     });
-    if (!location.ok) {
+    if (!location.ok || !("location" in location.data)) {
       throw new Error("Expected the transparent Agent route location");
     }
     expect(location.data.location.binding).toBeUndefined();
@@ -10401,6 +10411,7 @@ describe("MessagingController", () => {
     vi.mocked(renderPdfPages).mockResolvedValueOnce([
       {
         dataUrl: "data:image/png;base64,rendered-pdf-page",
+        encodedBytes: 1,
         height: 1988,
         pageNumber: 1,
         width: 3072,
@@ -10462,7 +10473,135 @@ describe("MessagingController", () => {
     );
     expect(renderPdfPages).toHaveBeenCalledWith({
       data: pdfData,
+      limits: {
+        maxEncodedBytes: 24 * 1024 * 1024,
+        maxPages: 5,
+        maxPagePixels: 8 * 1024 * 1024,
+        maxPixels: 32 * 1024 * 1024,
+      },
       profile: "high",
+    });
+  });
+
+  it("keeps PDFs local and exposes bounded page tools to model-directed Codex turns", async () => {
+    const pdfData = new TextEncoder().encode("%PDF-1.7\n/local PDF\n");
+    vi.mocked(renderPdfPages).mockClear();
+    vi.mocked(inspectPdfDocument).mockClear();
+    vi.mocked(inspectPdfDocument).mockResolvedValueOnce({
+      firstPage: {
+        height: 792,
+        renderHeight: 1988,
+        renderWidth: 3072,
+        width: 1224,
+      },
+      pageCount: 12,
+    });
+    vi.mocked(renderPdfPages).mockResolvedValueOnce([
+      {
+        dataUrl: "data:image/png;base64,rendered-pdf-page",
+        encodedBytes: 1,
+        height: 1988,
+        pageNumber: 3,
+        width: 3072,
+      },
+    ]);
+    const harness = await createHarness({
+      downloadAttachment: vi.fn(async ({ attachment }) => ({
+        data: pdfData,
+        fileName: attachment.name,
+        mimeType: attachment.mimeType,
+        sizeBytes: pdfData.byteLength,
+      })),
+      supportsMessagingPdfTools: async () => true,
+    });
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent({
+      ...buildTextEvent("Does this have a soft top?"),
+      id: "event-model-directed-pdf",
+      kind: "media",
+      text: "Does this have a soft top?",
+      attachments: [
+        {
+          id: "pdf-1",
+          kind: "file",
+          name: "window-sticker.pdf",
+          disposition: "available",
+          mimeType: "application/pdf",
+          sizeBytes: pdfData.byteLength,
+        },
+      ],
+      disposition: "available",
+    });
+
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: [
+          {
+            type: "text",
+            text: expect.stringContaining("inspect_messaging_pdfs"),
+          },
+        ],
+      }),
+    );
+    expect(renderPdfPages).not.toHaveBeenCalled();
+
+    const inspection = await harness.controller.handlePwrAgentMessagingRequest({
+      operation: "inspect_messaging_pdfs",
+      context: {
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-1",
+      },
+      args: {},
+    });
+    expect(inspection).toMatchObject({
+      ok: true,
+      data: {
+        attachments: [
+          expect.objectContaining({
+            name: "window-sticker.pdf",
+            pageCount: 12,
+            renderLimits: {
+              maxEncodedBytes: 24 * 1024 * 1024,
+              maxPages: 5,
+              maxPagePixels: 8 * 1024 * 1024,
+              maxPixels: 32 * 1024 * 1024,
+            },
+          }),
+        ],
+      },
+    });
+    if (!inspection.ok || !("attachments" in inspection.data)) {
+      throw new Error("Expected PDF inspection metadata.");
+    }
+    const attachmentId = inspection.data.attachments[0]?.attachmentId;
+    expect(attachmentId).toBeTruthy();
+
+    await expect(
+      harness.controller.handlePwrAgentMessagingRequest({
+        operation: "render_messaging_pdf_pages",
+        context: {
+          backend: "codex",
+          threadId: "thread-1",
+          turnId: "turn-1",
+        },
+        args: {
+          attachmentId: attachmentId!,
+          pageNumbers: [3],
+        },
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      data: {
+        pages: [{ pageNumber: 3 }],
+      },
+      imageContent: [
+        {
+          dataUrl: "data:image/png;base64,rendered-pdf-page",
+          pageNumber: 3,
+        },
+      ],
     });
   });
 
@@ -18390,6 +18529,9 @@ async function createHarness(options?: {
     MessagingBackendBridge["setAcpSessionRuntimeOption"]
   >;
   setConversationTitle?: MessagingAdapter["setConversationTitle"];
+  supportsMessagingPdfTools?: NonNullable<
+    MessagingBackendBridge["supportsMessagingPdfTools"]
+  >;
   startThread?: NonNullable<MessagingBackendBridge["startThread"]>;
   startTurn?: NonNullable<MessagingBackendBridge["startTurn"]>;
   submitReview?: NonNullable<MessagingBackendBridge["submitReview"]>;
@@ -18787,6 +18929,9 @@ async function createHarness(options?: {
     setThreadExecutionMode,
     setThreadModelSettings,
     startThread,
+    ...(options?.supportsMessagingPdfTools
+      ? { supportsMessagingPdfTools: options.supportsMessagingPdfTools }
+      : {}),
     submitReview,
     startTurn,
     steerTurn,

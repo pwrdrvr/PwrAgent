@@ -25,7 +25,7 @@ describe("PwrAgent task monitor agent tools", () => {
       .flatMap((catalog) => catalog.router.buildMcpTools())
       .sort((left, right) => left.name.localeCompare(right.name));
 
-    expect(dynamicTools).toHaveLength(22);
+    expect(dynamicTools).toHaveLength(25);
     expect(mcpTools).toEqual(dynamicTools);
     expect(mcpTools.map((tool) => tool.name))
       .toContain("create_monitor_delegation");
