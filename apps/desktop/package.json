@@ -37,6 +37,8 @@
     "preeval:smoke": "node scripts/ensure-electron-runtime.mjs && node scripts/rebuild-native-for-electron.mjs && pnpm build",
     "eval:smoke": "tsx eval/smoke.ts",
     "eval:smoke:ui": "EVAL_DRIVE_UI=1 tsx eval/smoke.ts",
+    "preeval:pdf": "node scripts/ensure-electron-runtime.mjs && node scripts/rebuild-native-for-electron.mjs && pnpm build",
+    "eval:pdf": "tsx eval/pdf.ts",
     "eval:typecheck": "tsc --noEmit -p eval/tsconfig.json",
     "preview": "electron-vite preview",
     "test:e2e": "playwright test -c playwright.config.ts",
