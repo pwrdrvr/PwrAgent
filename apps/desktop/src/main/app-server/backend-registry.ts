@@ -395,6 +395,17 @@ import {
 } from "./thread-turn-queue";
 import { materializeLocalImageInputs } from "./image-input-files";
 import type { MessagingStoreLike } from "../state/messaging-store-sqlite";
+import {
+  PdfAttachmentStore,
+  type PendingPdfAttachment,
+} from "../pdf/pdf-attachment-store";
+import {
+  handlePwrAgentPdfToolRequest,
+} from "../pdf/pwragent-pdf-agent-tools";
+import {
+  preparePdfTurnInput,
+  type PdfTurnInputHandling,
+} from "../pdf/pdf-turn-input-preparation";
 
 type InitializeResult = {
   serverInfo?: {
@@ -461,6 +472,23 @@ async function pathExists(filePath: string): Promise<boolean> {
 
     throw error;
   }
+}
+
+function localFilesAsTextInput(
+  input: AppServerTurnInputItem[],
+): AppServerTurnInputItem[] {
+  return input.flatMap((item) => {
+    if (item.type !== "localFile") {
+      return [item];
+    }
+    const name = item.name?.trim() || path.basename(item.path);
+    return [
+      {
+        type: "text" as const,
+        text: `[Local file reference: ${name} (${item.path})]`,
+      },
+    ];
+  });
 }
 
 function assistantOutputForTurn(
@@ -5966,6 +5994,13 @@ export class DesktopBackendRegistry {
   private messagingAgentToolService?: MessagingAgentToolService;
   private readonly messagingHandler: PwrAgentMessagingHandler =
     async (request) => {
+      const pdfResponse = await handlePwrAgentPdfToolRequest({
+        request,
+        store: this.pdfAttachmentStore,
+      });
+      if (pdfResponse) {
+        return pdfResponse;
+      }
       if (!this.messagingAgentToolService) {
         return {
           ok: false,
@@ -6072,6 +6107,8 @@ export class DesktopBackendRegistry {
     DesktopProviderThreadModelMigration
   >;
   private readonly resolveCodexFastAllowedFn: () => boolean;
+  private readonly resolvePdfAnalysisEnabledFn: () => boolean;
+  private readonly pdfAttachmentStore = new PdfAttachmentStore();
   /**
    * Reports whether the registry is running inside the throwaway
    * bootstrap profile (`.bootstrap/`). When `true`, `listThreads`
@@ -6121,6 +6158,7 @@ export class DesktopBackendRegistry {
       DesktopProviderThreadModelMigration
     >;
     resolveCodexFastAllowed?: () => boolean;
+    resolvePdfAnalysisEnabled?: () => boolean;
     resolveGrokApiKey?: () => string | undefined;
     acpWorktreeRepositoryResolver?: (
       cwd: string,
@@ -6207,6 +6245,20 @@ export class DesktopBackendRegistry {
     this.resolveCodexFastAllowedFn =
       options?.resolveCodexFastAllowed ??
       (() => settingsService?.resolveCodexFastAllowed() ?? true);
+    this.resolvePdfAnalysisEnabledFn =
+      options?.resolvePdfAnalysisEnabled ??
+      (() => {
+        try {
+          return (
+            settingsService ?? getDesktopSettingsService()
+          ).resolvePdfAnalysisEnabled();
+        } catch (error) {
+          backendRegistryLog.warn("failed to resolve PDF analysis setting", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return true;
+        }
+      });
     const codexCommand = settingsService?.resolveCodexCommandPreference();
     const codexEnv =
       typeof settingsService?.resolveCodexSpawnEnv === "function"
@@ -9888,6 +9940,23 @@ export class DesktopBackendRegistry {
     );
   }
 
+  private resolvePdfTurnInputHandling(params: {
+    backend: AppServerBackendKind;
+    overlay?: ThreadOverlayState;
+  }): PdfTurnInputHandling {
+    if (!this.resolvePdfAnalysisEnabledFn()) {
+      return "pass_through";
+    }
+    return (
+      params.backend === "codex"
+      && params.overlay?.messagingPdfToolCatalogVersion !== undefined
+      && params.overlay.messagingPdfToolCatalogVersion >=
+        PWRAGENT_MESSAGING_PDF_TOOL_CATALOG_VERSION
+    )
+      ? "model_directed"
+      : "render_initial_pages";
+  }
+
   async startTurn(params: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -9960,6 +10029,16 @@ export class DesktopBackendRegistry {
       this.reservedAcpStartThreadKeys.add(reservationKey);
       let pendingMessageOriginId: string | undefined;
       try {
+        const preparedPdfInput = await preparePdfTurnInput({
+          handling: this.resolvePdfTurnInputHandling({
+            backend: params.backend,
+            overlay,
+          }),
+          input: params.input,
+        });
+        // ACP adapters already accept data-URL image parts. Keeping those
+        // intact avoids changing their established image payload contract.
+        const input = preparedPdfInput.input;
         if (this.usesSlashControlledAcpExecutionModes(params.backend)) {
           await this.flushQueuedExecutionModeIfPresent(
             params.threadId,
@@ -9979,14 +10058,22 @@ export class DesktopBackendRegistry {
         const result = await this.startAcpTurn({
           backend: params.backend,
           threadId: params.threadId,
-          input: params.input,
+          input,
           model: modelSettings.model,
           reasoningEffort: modelSettings.reasoningEffort,
         });
+        this.pdfAttachmentStore.bindTurn(
+          {
+            backend: params.backend,
+            threadId: result.threadId,
+            turnId: result.turnId,
+          },
+          preparedPdfInput.pdfAttachments,
+        );
         this.scheduleThreadTitleGeneration({
           backend: params.backend,
           threadId: result.threadId,
-          input: params.input,
+          input,
         });
         this.bindPendingThreadMessageOrigin(
           pendingMessageOriginId,
@@ -10008,7 +10095,8 @@ export class DesktopBackendRegistry {
       }
     }
 
-    const input = await materializeLocalImageInputs(params.input);
+    let input: AppServerTurnInputItem[] = [];
+    let pdfAttachments: PendingPdfAttachment[];
     const reserveCodexStart = params.backend === "codex";
     if (reserveCodexStart) {
       if (this.threadHasActiveTurn(params.threadId)) {
@@ -10037,6 +10125,15 @@ export class DesktopBackendRegistry {
         backend: params.backend,
         threadId: params.threadId,
       });
+      const preparedPdfInput = await preparePdfTurnInput({
+        handling: this.resolvePdfTurnInputHandling({
+          backend: params.backend,
+          overlay,
+        }),
+        input: params.input,
+      });
+      pdfAttachments = preparedPdfInput.pdfAttachments;
+      input = await materializeLocalImageInputs(preparedPdfInput.input);
       turnParams = await this.resolveModelSettings(params.backend, {
         ...params,
         model: migrationApplied
@@ -10154,7 +10251,7 @@ export class DesktopBackendRegistry {
             }, params.executionMode)
           : await this.grokClient.startTurn({
               threadId: params.threadId,
-              input,
+              input: localFilesAsTextInput(input),
               model: turnParams.model,
               serviceTier: turnParams.serviceTier,
               reasoningEffort: turnParams.reasoningEffort,
@@ -10220,6 +10317,14 @@ export class DesktopBackendRegistry {
     if (retryableCodexTurnStart) {
       retryableCodexTurnStart.turnId = result.turnId;
     }
+    this.pdfAttachmentStore.bindTurn(
+      {
+        backend: params.backend,
+        threadId: result.threadId,
+        turnId: result.turnId,
+      },
+      pdfAttachments,
+    );
     this.bindPendingThreadMessageOrigin(pendingMessageOriginId, result.turnId);
     await this.persistThreadMessageOrigin({
       backend: params.backend,
@@ -23862,6 +23967,13 @@ export class DesktopBackendRegistry {
         };
       };
       const turnId = turnIdFromTerminalNotification(notification);
+      if (turnId) {
+        this.pdfAttachmentStore.releaseTurn({
+          backend: event.backend,
+          threadId: notification.params.threadId,
+          turnId,
+        });
+      }
       if (event.backend === "codex") {
         this.backendActiveCodexThreadIds.delete(notification.params.threadId);
       }

@@ -130,6 +130,30 @@ describe("buildAiSdkMessages", () => {
     ]);
   });
 
+  it("keeps local file references as text instead of reading their bytes", async () => {
+    await expect(
+      buildAiSdkMessages({
+        input: [
+          { type: "text", text: "Compare this document." },
+          {
+            type: "localFile",
+            name: "Jeep",
+            path: "/tmp/Jeep",
+            pdfRenderProfile: "high",
+          },
+        ],
+      }),
+    ).resolves.toEqual([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "Compare this document." },
+          { type: "text", text: "[Local file reference: Jeep (/tmp/Jeep)]" },
+        ],
+      },
+    ]);
+  });
+
   it("rejects file URLs because remote xAI cannot access them", async () => {
     await expect(
       buildAiSdkMessages({

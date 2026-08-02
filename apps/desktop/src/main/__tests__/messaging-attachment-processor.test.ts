@@ -220,6 +220,43 @@ describe("processMessagingAttachments", () => {
     ]);
   });
 
+  it("passes PDFs through as normal file input when analysis is disabled", async () => {
+    const pdfData = bytes("%PDF-1.7\n(pass through) Tj\n");
+    const renderPdfPages = vi.fn();
+
+    const result = await processMessagingAttachments({
+      adapter: createAdapter({ "window-sticker.pdf": pdfData }),
+      attachments: [
+        {
+          id: "pdf-1",
+          kind: "file",
+          name: "window-sticker.pdf",
+          disposition: "available",
+          mimeType: "application/pdf",
+        },
+      ],
+      dependencies: { renderPdfPages },
+      pdfHandling: "pass_through",
+    });
+
+    expect(renderPdfPages).not.toHaveBeenCalled();
+    expect(result.pdfAttachments).toEqual([]);
+    expect(result.input).toEqual([
+      {
+        type: "text",
+        text: "PDF attachment `window-sticker.pdf` was left as a normal file attachment.",
+      },
+      {
+        type: "file",
+        name: "window-sticker.pdf",
+        mimeType: "application/pdf",
+        data: Buffer.from(pdfData).toString("base64"),
+        sizeBytes: pdfData.byteLength,
+        pdfRenderProfile: "high",
+      },
+    ]);
+  });
+
   it("shares the direct-image PDF rendering budget across attachments", async () => {
     const firstPdf = bytes("%PDF-1.7\n(first) Tj\n");
     const secondPdf = bytes("%PDF-1.7\n(second) Tj\n");

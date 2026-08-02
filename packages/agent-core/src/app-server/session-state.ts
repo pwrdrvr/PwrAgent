@@ -227,11 +227,11 @@ export class AppServerSessionState {
 
   appendInput(threadId: string, input: AppServerTurnInputItem[]): void {
     const parts = input.flatMap(toReplayMessagePart);
-    const text = input
-      .filter(
-        (item): item is Extract<AppServerTurnInputItem, { type: "text" }> => item.type === "text",
+    const text = parts
+      .filter((item): item is Extract<AppServerThreadMessagePart, { type: "text" }> =>
+        item.type === "text"
       )
-      .map((item) => item.text.trim())
+      .map((item) => item.text)
       .filter(Boolean)
       .join("\n");
     if (!text && parts.length === 0) {
@@ -624,6 +624,10 @@ function toReplayMessagePart(item: AppServerTurnInputItem): AppServerThreadMessa
   }
   if (item.type === "localImage") {
     return [{ type: "image", url: pathToFileURL(item.path).toString() }];
+  }
+  if (item.type === "localFile") {
+    const name = item.name?.trim() || item.path;
+    return [{ type: "text", text: `[Local file reference: ${name} (${item.path})]` }];
   }
   return [
     {

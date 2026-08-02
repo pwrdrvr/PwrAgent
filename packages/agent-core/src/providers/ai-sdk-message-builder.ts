@@ -42,6 +42,14 @@ export async function buildAiSdkMessages(params: {
       content.push(parseFileInput(item));
       continue;
     }
+    if (item.type === "localFile") {
+      const name = item.name?.trim() || path.basename(item.path);
+      content.push({
+        type: "text",
+        text: `[Local file reference: ${name} (${item.path})]`,
+      });
+      continue;
+    }
     const name = item.name?.trim();
     if (name) {
       content.push({ type: "text", text: `Attached image filename: ${name}` });

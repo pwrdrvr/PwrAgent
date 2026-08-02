@@ -18,6 +18,7 @@ import {
 import type {
   AppServerAvailableCommandSummary,
   AppServerFileInputItem,
+  AppServerLocalFileInputItem,
   AppServerNotification,
   AppServerPendingRequestNotification,
   AppServerThreadCommandDetail,
@@ -5787,7 +5788,10 @@ function buildCollaborationModeOverrides(params: {
 }
 
 function toCodexUserInput(
-  input: Exclude<AppServerTurnInputItem, AppServerFileInputItem>,
+  input: Exclude<
+    AppServerTurnInputItem,
+    AppServerFileInputItem | AppServerLocalFileInputItem
+  >,
 ): CodexUserInput {
   if (input.type === "text") {
     return {
@@ -5818,6 +5822,17 @@ async function prepareCodexUserInput(params: {
   const fileReferences: string[] = [];
 
   for (const input of params.input) {
+    if (input.type === "localFile") {
+      const name = input.name?.trim() || path.basename(input.path);
+      fileReferences.push(formatCodexFileReference({ name }, input.path));
+      prepared.push({
+        type: "mention",
+        name,
+        path: input.path,
+      });
+      continue;
+    }
+
     if (input.type !== "file") {
       prepared.push(toCodexUserInput(input));
       continue;
@@ -5843,7 +5858,7 @@ async function prepareCodexUserInput(params: {
     {
       type: "text",
       text: [
-        "Files attached from the messaging platform were saved locally for this turn:",
+        "Files attached or referenced from PwrAgent are available locally for this turn:",
         ...fileReferences,
         "Use local tools to inspect these files as needed.",
       ].join("\n"),
@@ -5869,9 +5884,19 @@ async function persistCodexFileInput(params: {
   return filePath;
 }
 
-function formatCodexFileReference(file: AppServerFileInputItem, filePath: string): string {
-  const size = typeof file.sizeBytes === "number" ? ` | Size: ${formatByteSize(file.sizeBytes)}` : "";
-  return `- ${file.name}: ${filePath} (Type: ${file.mimeType}${size})`;
+function formatCodexFileReference(
+  file: Pick<AppServerFileInputItem, "name" | "mimeType" | "sizeBytes">
+    | Pick<AppServerLocalFileInputItem, "name">,
+  filePath: string,
+): string {
+  const type = "mimeType" in file ? file.mimeType : undefined;
+  const size =
+    "sizeBytes" in file && typeof file.sizeBytes === "number"
+      ? ` | Size: ${formatByteSize(file.sizeBytes)}`
+      : "";
+  return type
+    ? `- ${file.name}: ${filePath} (Type: ${type}${size})`
+    : `- ${file.name}: ${filePath}`;
 }
 
 function sanitizePathSegment(value: string): string {

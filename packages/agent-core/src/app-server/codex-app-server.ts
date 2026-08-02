@@ -540,8 +540,25 @@ function normalizeTurnInput(value: unknown): AppServerTurnInputItem[] {
         path: asRequiredString(record.path, "localImage input requires path"),
       };
     }
+    if (type === "localFile") {
+      const pdfRenderProfile = record.pdfRenderProfile;
+      return {
+        type: "localFile",
+        ...(typeof record.name === "string" && record.name.trim()
+          ? { name: record.name.trim() }
+          : {}),
+        path: asRequiredString(record.path, "localFile input requires path"),
+        ...(pdfRenderProfile === "low"
+          || pdfRenderProfile === "medium"
+          || pdfRenderProfile === "high"
+          || pdfRenderProfile === "actual"
+          ? { pdfRenderProfile }
+          : {}),
+      };
+    }
     if (type === "file") {
       const sizeBytes = record.sizeBytes;
+      const pdfRenderProfile = record.pdfRenderProfile;
       return {
         type: "file",
         name: asRequiredString(record.name, "file input requires name"),
@@ -549,6 +566,12 @@ function normalizeTurnInput(value: unknown): AppServerTurnInputItem[] {
         data: asRequiredString(record.data, "file input requires data"),
         ...(typeof sizeBytes === "number" && Number.isFinite(sizeBytes)
           ? { sizeBytes }
+          : {}),
+        ...(pdfRenderProfile === "low"
+          || pdfRenderProfile === "medium"
+          || pdfRenderProfile === "high"
+          || pdfRenderProfile === "actual"
+          ? { pdfRenderProfile }
           : {}),
       };
     }

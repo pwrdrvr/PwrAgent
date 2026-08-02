@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   calculatePdfRenderDimensions,
   renderPdfPages,
-} from "../messaging/pdf-page-renderer";
+} from "../pdf/pdf-page-renderer";
 
 const jeepStickerPageFixture = fileURLToPath(
   new URL("./fixtures/pdf/jeep-sticker-page-size.pdf", import.meta.url),

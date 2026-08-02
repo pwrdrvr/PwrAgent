@@ -6496,7 +6496,7 @@ describe("CodexAppServerClient", () => {
     expect(turnStart?.params?.input).toEqual([
       expect.objectContaining({
         type: "text",
-        text: expect.stringContaining("Files attached from the messaging platform"),
+        text: expect.stringContaining("Files attached or referenced from PwrAgent"),
       }),
       {
         type: "text",
@@ -6527,6 +6527,60 @@ describe("CodexAppServerClient", () => {
       force: true,
       recursive: true,
     });
+    await client.close();
+  });
+
+  it("sends explicit local file references as Codex mentions", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.turnStartResult = {
+      thread: {
+        id: "thread-3",
+      },
+      turn: {
+        id: "turn-1",
+      },
+    };
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    await client.startTurn({
+      threadId: "thread-3",
+      input: [
+        { type: "text", text: "What is in this local file?" },
+        {
+          type: "localFile",
+          name: "Jeep",
+          path: "/Users/huntharo/Downloads/Jeep",
+        },
+      ],
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    const turnStart = transport!.sentMessages
+      .map((message) => JSON.parse(message) as { method?: string; params?: { input?: unknown[] } })
+      .find((payload) => payload.method === "turn/start");
+    expect(turnStart?.params?.input).toEqual([
+      expect.objectContaining({
+        type: "text",
+        text: expect.stringContaining("Files attached or referenced from PwrAgent"),
+      }),
+      {
+        type: "text",
+        text: "What is in this local file?",
+        text_elements: [],
+      },
+      {
+        type: "mention",
+        name: "Jeep",
+        path: "/Users/huntharo/Downloads/Jeep",
+      },
+    ]);
+    expect(turnStart?.params?.input).not.toContainEqual(
+      expect.objectContaining({ type: "file" }),
+    );
+
     await client.close();
   });
 

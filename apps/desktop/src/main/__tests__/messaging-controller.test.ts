@@ -54,7 +54,7 @@ import { MessagingStore } from "../messaging/core/messaging-store";
 import {
   inspectPdfDocument,
   renderPdfPages,
-} from "../messaging/pdf-page-renderer";
+} from "../pdf/pdf-page-renderer";
 
 const tempDirs: string[] = [];
 
@@ -67,7 +67,7 @@ vi.mock("../messaging/attachment-image-normalization", () => ({
   })),
 }));
 
-vi.mock("../messaging/pdf-page-renderer", () => ({
+vi.mock("../pdf/pdf-page-renderer", () => ({
   DEFAULT_PDF_RENDER_LIMITS: {
     maxEncodedBytes: 18 * 1024 * 1024,
     maxPageEncodedBytes: 6 * 1024 * 1024,
@@ -10618,6 +10618,65 @@ describe("MessagingController", () => {
     });
   });
 
+  it("leaves messaging PDFs as normal file input when PDF analysis is disabled", async () => {
+    const pdfData = new TextEncoder().encode("%PDF-1.7\n/pass through\n");
+    const supportsMessagingPdfTools = vi.fn(async () => true);
+    vi.mocked(renderPdfPages).mockClear();
+    const harness = await createHarness({
+      downloadAttachment: vi.fn(async ({ attachment }) => ({
+        data: pdfData,
+        fileName: attachment.name,
+        mimeType: attachment.mimeType,
+        sizeBytes: pdfData.byteLength,
+      })),
+      pdfAnalysisEnabled: false,
+      supportsMessagingPdfTools,
+    });
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent({
+      ...buildTextEvent("Inspect this PDF without PwrAgent analysis."),
+      id: "event-pdf-pass-through",
+      kind: "media",
+      text: "Inspect this PDF without PwrAgent analysis.",
+      attachments: [
+        {
+          id: "pdf-1",
+          kind: "file",
+          name: "window-sticker.pdf",
+          disposition: "available",
+          mimeType: "application/pdf",
+          sizeBytes: pdfData.byteLength,
+        },
+      ],
+      disposition: "available",
+    });
+
+    expect(supportsMessagingPdfTools).not.toHaveBeenCalled();
+    expect(renderPdfPages).not.toHaveBeenCalled();
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: [
+          {
+            type: "text",
+            text: [
+              "Inspect this PDF without PwrAgent analysis.",
+              "PDF attachment `window-sticker.pdf` was left as a normal file attachment.",
+            ].join("\n\n"),
+          },
+          {
+            type: "file",
+            name: "window-sticker.pdf",
+            mimeType: "application/pdf",
+            data: Buffer.from(pdfData).toString("base64"),
+            sizeBytes: pdfData.byteLength,
+            pdfRenderProfile: "high",
+          },
+        ],
+      }),
+    );
+  });
+
   it("debounces split text messages into one agent turn", async () => {
     vi.useFakeTimers();
     const harness = await createHarness({ inputDebounceMs: 500 });
@@ -18502,6 +18561,7 @@ async function createHarness(options?: {
   navigation?: NavigationSnapshot;
   now?: () => number;
   pendingIntentTtlMs?: number;
+  pdfAnalysisEnabled?: MessagingControllerOptions["pdfAnalysisEnabled"];
   channel?: MessagingChannelKind;
   capabilityProfile?: MessagingCapabilityProfile;
   sleepUntil?: MessagingControllerOptions["sleepUntil"];
@@ -18964,6 +19024,7 @@ async function createHarness(options?: {
     logger: options?.logger,
     now: options?.now ?? (() => 1000),
     pendingIntentTtlMs: options?.pendingIntentTtlMs,
+    pdfAnalysisEnabled: options?.pdfAnalysisEnabled,
     sleepUntil: options?.sleepUntil,
     fullAccessControls: options?.fullAccessControls ?? {
       allowEscalation: true,

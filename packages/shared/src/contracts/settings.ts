@@ -302,6 +302,11 @@ export type DesktopAppearanceSnapshot = {
 
 export type DesktopGeneralSettingsSnapshot = {
   confirmQuitWithInProgressThreads: DesktopSettingsValue<boolean>;
+  /**
+   * Prefer PwrAgent's bounded, visual PDF analysis flow over handing a raw
+   * local PDF reference to the model.
+   */
+  pdfAnalysisEnabled: DesktopSettingsValue<boolean>;
   developerMode: DesktopSettingsValue<boolean>;
   hotCpuProfilingEnabled: DesktopSettingsValue<boolean>;
   hotCpuProfilingStartDelayMs: DesktopSettingsValue<DesktopHotCpuProfileStartDelayMs>;
@@ -773,6 +778,7 @@ export type DesktopSettingsSnapshot = {
 export type DesktopSettingsConfigPatch = {
   general?: {
     confirmQuitWithInProgressThreads?: boolean;
+    pdfAnalysisEnabled?: boolean;
     developerMode?: boolean;
     hotCpuProfilingEnabled?: boolean;
     hotCpuProfilingStartDelayMs?: DesktopHotCpuProfileStartDelayMs;
