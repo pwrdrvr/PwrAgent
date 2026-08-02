@@ -51,7 +51,9 @@ describe("pwragent thread orchestration agent tools", () => {
           expect.objectContaining({
             type: "function",
             name: "handoff_task",
-            description: expect.stringContaining("cross-project handoffs are created ungrouped"),
+            description: expect.stringMatching(
+              /Prefer this over backend-native sub-agent spawning.*cross-project handoffs are created ungrouped/,
+            ),
             deferLoading: false,
             inputSchema: expect.objectContaining({
               required: ["task"],

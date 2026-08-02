@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { agentToolFailure, agentToolSuccess } from "../agent-tool-definition";
-import { AgentToolRouter, readAgentDynamicToolCall } from "../agent-tool-router";
+import {
+  AgentToolRouter,
+  PWRAGENT_AGENT_TOOL_NAMESPACE_DESCRIPTION,
+  readAgentDynamicToolCall,
+} from "../agent-tool-router";
 
 describe("AgentToolRouter", () => {
   it("projects agent tool definitions into Codex dynamic tool specs", () => {
@@ -19,7 +23,7 @@ describe("AgentToolRouter", () => {
       {
         type: "namespace",
         name: "pwragent_test",
-        description: "PwrAgent tools.",
+        description: PWRAGENT_AGENT_TOOL_NAMESPACE_DESCRIPTION,
         tools: [
           {
             type: "function",
