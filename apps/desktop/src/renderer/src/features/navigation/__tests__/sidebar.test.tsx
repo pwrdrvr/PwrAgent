@@ -1486,6 +1486,67 @@ describe("Sidebar", () => {
     ).not.toBeNull();
   });
 
+  it("shows live-thread counts in the Directories tab and each directory", () => {
+    const backendActiveThread = {
+      ...sharedThread,
+      id: "thread-backend-active",
+      title: "Backend-reported active thread",
+      threadStatus: "active" as const,
+    };
+    const locallyThinkingThread = {
+      ...sharedThread,
+      id: "thread-locally-thinking",
+      title: "Locally initiated active thread",
+    };
+    const idleThread = {
+      ...sharedThread,
+      id: "thread-idle",
+      title: "Idle thread",
+      threadStatus: "idle" as const,
+    };
+    const directory: NavigationDirectorySummary = {
+      ...directories[0]!,
+      needsAttentionCount: 0,
+      threadKeys: [
+        "codex:thread-backend-active",
+        "codex:thread-locally-thinking",
+        "codex:thread-idle",
+      ],
+    };
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        createThreadError={undefined}
+        directories={[directory]}
+        inboxThreads={[backendActiveThread, locallyThinkingThread, idleThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey={undefined}
+        thinkingThreadKeys={{ "codex:thread-locally-thinking": true }}
+        threads={[backendActiveThread, locallyThinkingThread, idleThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    expect(
+      screen.getByRole("tab", { name: "Directories, 2 active threads" }),
+    ).toBeInTheDocument();
+
+    const summary = screen
+      .getAllByRole("button", { name: /PwrAgent/i })
+      .find((button) => button.hasAttribute("aria-expanded"));
+    expect(summary).toBeDefined();
+    const activeCount = within(summary!).getByTitle("2 active threads");
+    expect(activeCount).toHaveAttribute("data-active-thread-count", "2");
+    expect(activeCount).toHaveTextContent("2 active");
+  });
+
   it("shows an approval chip for threads waiting on an approval request", () => {
     render(
       <Sidebar

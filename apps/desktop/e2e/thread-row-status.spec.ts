@@ -10,6 +10,12 @@ async function createThreadRowStatusFixture(): Promise<{
 }> {
   const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-thread-row-status-"));
   const fixturePath = path.join(rootDir, "thread-row-status.fixture.json");
+  const linkedDirectory = {
+    id: "thread-row-status-directory",
+    label: "Thread row status fixture",
+    path: rootDir,
+    kind: "local",
+  };
 
   await writeFile(
     fixturePath,
@@ -45,7 +51,7 @@ async function createThreadRowStatusFixture(): Promise<{
                 summary: "A thread we start from the app",
                 source: "codex",
                 executionMode: "default",
-                linkedDirectories: [],
+                linkedDirectories: [linkedDirectory],
                 updatedAt: 1_000,
               },
               {
@@ -55,7 +61,7 @@ async function createThreadRowStatusFixture(): Promise<{
                 summary: "A thread we switch to while the first one runs",
                 source: "codex",
                 executionMode: "default",
-                linkedDirectories: [],
+                linkedDirectories: [linkedDirectory],
                 updatedAt: 1_500,
               },
             ],
@@ -170,7 +176,7 @@ async function createThreadRowStatusFixture(): Promise<{
                 summary: "A thread we start from the app",
                 source: "codex",
                 executionMode: "default",
-                linkedDirectories: [],
+                linkedDirectories: [linkedDirectory],
                 updatedAt: 2_000,
               },
               {
@@ -180,7 +186,7 @@ async function createThreadRowStatusFixture(): Promise<{
                 summary: "A thread we switch to while the first one runs",
                 source: "codex",
                 executionMode: "default",
-                linkedDirectories: [],
+                linkedDirectories: [linkedDirectory],
                 updatedAt: 1_500,
               },
             ],
@@ -232,6 +238,18 @@ test("shows initiated background turns as thinking, then unread once they finish
     await expect(initiatedRow.locator('[data-thread-status="thinking"]')).toBeVisible();
     await expect(initiatedRow.locator('[data-thread-status="unread"]')).toHaveCount(0);
 
+    const directoriesTab = app.window.getByRole("tab", {
+      name: "Directories, 1 active thread",
+    });
+    await expect(directoriesTab).toBeVisible();
+    await directoriesTab.click();
+    await expect(
+      app.window
+        .locator(".directory-row__summary")
+        .filter({ hasText: "Thread row status fixture" })
+        .getByTitle("1 active thread"),
+    ).toBeVisible();
+
     await app.advance({ stepId: "turn-started-1" });
     await expect(initiatedRow.locator('[data-thread-status="thinking"]')).toBeVisible();
 
@@ -240,6 +258,10 @@ test("shows initiated background turns as thinking, then unread once they finish
     await expect(initiatedRow.locator('[data-thread-status="thinking"]')).toHaveCount(0);
     await expect(initiatedRow.locator('[data-thread-status="unread"]')).toBeVisible();
     await expect(initiatedRow.locator(".thread-row__status-cookie")).toBeVisible();
+    await expect(app.window.getByRole("tab", { name: "Directories" })).toBeVisible();
+    await expect(
+      app.window.locator('[data-active-thread-count="1"]'),
+    ).toHaveCount(0);
   } finally {
     await app.close();
     await fixture.cleanup();

@@ -37,7 +37,12 @@ import {
   type DropIndicatorState,
 } from "./drag-drop";
 import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
+import { ThinkingScanner } from "../thread-detail/ThinkingScanner";
 import { ThreadRow } from "./ThreadRow";
+import {
+  formatActiveThreadCount,
+  isThreadActive,
+} from "./ThreadRowStatus";
 
 type DirectoriesListProps = {
   approvalRequestThreadKeys?: Record<string, boolean>;
@@ -587,6 +592,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
     const visibleThreads = directory.threadKeys
       .map((threadKey) => threadsByKey.get(threadKey))
       .filter((thread): thread is NavigationThreadSummary => Boolean(thread));
+    const activeThreadCount = visibleThreads.filter((thread) =>
+      isThreadActive(thread, props.thinkingThreadKeys),
+    ).length;
     const visibleThreadKeys = new Set(
       visibleThreads.map((thread) => buildThreadIdentityKey(thread.source, thread.id)),
     );
@@ -1040,6 +1048,16 @@ export function DirectoriesList(props: DirectoriesListProps) {
             </span>
 
             <span className="directory-row__summary-meta">
+              {activeThreadCount > 0 ? (
+                <span
+                  className="directory-row__active-count"
+                  data-active-thread-count={activeThreadCount}
+                  title={formatActiveThreadCount(activeThreadCount)}
+                >
+                  <ThinkingScanner compact />
+                  <span>{activeThreadCount} active</span>
+                </span>
+              ) : null}
               {directory.needsAttentionCount > 0 ? (
                 <span className="count-pill directory-row__attention">
                   {directory.needsAttentionCount}

@@ -53,6 +53,11 @@ import {
 } from "../../lib/backend-status-format";
 import { DirectoriesList } from "./DirectoriesList";
 import { RecentsList } from "./RecentsList";
+import {
+  formatActiveThreadCount,
+  isThreadActive,
+} from "./ThreadRowStatus";
+import { ThinkingScanner } from "../thread-detail/ThinkingScanner";
 
 type ThreadContextMenuPosition = {
   x: number;
@@ -301,6 +306,13 @@ export function Sidebar(props: SidebarProps) {
     props.browseMode === "recents"
       ? props.recentThreads ?? props.threads
       : props.inboxThreads ?? props.threads;
+  const activeThreadCount = useMemo(
+    () =>
+      props.threads.filter((thread) =>
+        isThreadActive(thread, props.thinkingThreadKeys),
+      ).length,
+    [props.thinkingThreadKeys, props.threads],
+  );
   const revealSelectedThreadRequest = props.revealSelectedThreadRequest;
   const selectedItemKey = props.selectedItemKey;
   const navigationThreads = props.threads;
@@ -1004,7 +1016,14 @@ export function Sidebar(props: SidebarProps) {
               key={mode}
               mode={mode}
               active={props.browseMode === mode}
-              tooltipText={browseModeTooltips[mode]}
+              activeThreadCount={
+                mode === "directories" ? activeThreadCount : undefined
+              }
+              tooltipText={
+                mode === "directories" && activeThreadCount > 0
+                  ? `${browseModeTooltips[mode]} · ${formatActiveThreadCount(activeThreadCount)}`
+                  : browseModeTooltips[mode]
+              }
               onSelect={() => props.onBrowseModeChange(mode)}
             />
           ))}
@@ -1702,10 +1721,14 @@ function ProfileIdentityButton(props: {
 function LensTab(props: {
   mode: BrowseMode;
   active: boolean;
+  activeThreadCount?: number;
   tooltipText: string;
   onSelect: () => void;
 }) {
   const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
+  const activeThreadLabel = props.activeThreadCount
+    ? formatActiveThreadCount(props.activeThreadCount)
+    : undefined;
 
   return (
     <>
@@ -1715,6 +1738,11 @@ function LensTab(props: {
         // button) since browsers don't auto-wire arrow-key navigation from role
         // alone — adding role here only changes how screen readers announce it.
         role="tab"
+        aria-label={
+          activeThreadLabel
+            ? `${browseModeLabels[props.mode]}, ${activeThreadLabel}`
+            : undefined
+        }
         aria-selected={props.active}
         className={`lens-switch__button${props.active ? " is-active" : ""}`}
         type="button"
@@ -1743,6 +1771,12 @@ function LensTab(props: {
         ) : (
           <span className="lens-switch__label">{browseModeLabels[props.mode]}</span>
         )}
+        {props.activeThreadCount ? (
+          <span aria-hidden="true" className="lens-switch__active-count">
+            <ThinkingScanner compact />
+            <span>{props.activeThreadCount}</span>
+          </span>
+        ) : null}
       </button>
       {tooltip.tooltipNode}
     </>

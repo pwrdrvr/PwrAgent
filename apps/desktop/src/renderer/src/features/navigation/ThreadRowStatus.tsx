@@ -4,12 +4,32 @@ import { ThinkingScanner } from "../thread-detail/ThinkingScanner";
 
 export type ThreadRowStatusKind = "thinking" | "unread";
 
+/**
+ * A thread is live when the backend reports an active turn or the renderer has
+ * just initiated one and is waiting for that status to round-trip. Keep this
+ * predicate shared with aggregate activity counts so their numbers match the
+ * animated thread-row marker exactly.
+ */
+export function isThreadActive(
+  thread: NavigationThreadSummary,
+  thinkingThreadKeys?: Record<string, boolean>,
+): boolean {
+  const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+  return (
+    thread.threadStatus === "active"
+    || thinkingThreadKeys?.[threadKey] === true
+  );
+}
+
+export function formatActiveThreadCount(count: number): string {
+  return `${count} active thread${count === 1 ? "" : "s"}`;
+}
+
 export function getThreadRowStatus(
   thread: NavigationThreadSummary,
   thinkingThreadKeys?: Record<string, boolean>
 ): ThreadRowStatusKind | undefined {
-  const threadKey = buildThreadIdentityKey(thread.source, thread.id);
-  if (thread.threadStatus === "active" || thinkingThreadKeys?.[threadKey]) {
+  if (isThreadActive(thread, thinkingThreadKeys)) {
     return "thinking";
   }
 
