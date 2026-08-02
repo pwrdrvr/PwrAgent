@@ -165,7 +165,7 @@ describe("adaptGrammyBot", () => {
 });
 
 describe("TelegramAdapter callback persistence", () => {
-  it("registers Monitor with Telegram bot commands", async () => {
+  it("registers Agent and Monitor with Telegram bot commands", async () => {
     const grammyBot = createGrammyBot();
     const adapter = new TelegramAdapter({
       api: adaptGrammyBot(grammyBot).api,
@@ -184,6 +184,10 @@ describe("TelegramAdapter callback persistence", () => {
       {
         command: "resume",
         description: "Resume or start a PwrAgent thread",
+      },
+      {
+        command: "agent",
+        description: "Choose or create a PwrAgent Agent",
       },
       {
         command: "new",
