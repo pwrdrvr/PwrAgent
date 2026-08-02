@@ -141,3 +141,56 @@ export function buildReviewBranchOptions(params: {
   }
   return [...options];
 }
+
+/**
+ * Chooses the thread's primary workspace when it is a linked project with
+ * reviewable changes against its inferred base. This keeps multi-project
+ * reviews unambiguous by default without guessing for a clean primary
+ * workspace.
+ */
+export function findPreferredReviewWorkspaceCwd(
+  thread?: Pick<
+    NavigationThreadSummary,
+    "gitWorkingState" | "linkedDirectories" | "projectKey"
+  >,
+): string | undefined {
+  const projectKey = normalizeReviewWorkspacePath(thread?.projectKey);
+  const gitWorkingState = thread?.gitWorkingState;
+  if (
+    !projectKey ||
+    !gitWorkingState?.baseBranch ||
+    (
+      (gitWorkingState.baseAheadCommitCount ?? 0) <= 0 &&
+      gitWorkingState.dirtyFiles <= 0 &&
+      gitWorkingState.untrackedFiles <= 0
+    )
+  ) {
+    return undefined;
+  }
+
+  return (thread?.linkedDirectories ?? [])
+    .flatMap((directory) => {
+      const cwd = (directory.worktreePath ?? directory.path).trim();
+      const workspacePath = normalizeReviewWorkspacePath(cwd);
+      return workspacePath && reviewWorkspaceContains(workspacePath, projectKey)
+        ? [{ cwd, workspacePath }]
+        : [];
+    })
+    .sort((left, right) => right.workspacePath.length - left.workspacePath.length)[0]
+    ?.cwd;
+}
+
+function normalizeReviewWorkspacePath(value?: string): string | undefined {
+  const normalized = value?.trim().replace(/\\/g, "/").replace(/\/+$/, "");
+  return normalized || undefined;
+}
+
+function reviewWorkspaceContains(
+  workspacePath: string,
+  projectPath: string,
+): boolean {
+  return (
+    workspacePath === projectPath ||
+    projectPath.startsWith(`${workspacePath}/`)
+  );
+}

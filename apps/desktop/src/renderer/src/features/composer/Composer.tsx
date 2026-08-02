@@ -43,6 +43,7 @@ import {
   buildThreadMarkdownLink,
   buildThreadUrl,
   buildReviewBranchOptions,
+  findPreferredReviewWorkspaceCwd,
   parseThreadUrl,
   readCodexEnvironmentActionRuns,
 } from "@pwragent/shared";
@@ -727,6 +728,7 @@ function createReviewConfig(params: {
   };
 }): ReviewConfigState {
   const workspaceOptions = buildReviewWorkspaceOptions(params.thread);
+  const preferredWorkspaceCwd = findPreferredReviewWorkspaceCwd(params.thread);
   const config: ReviewConfigState = {
     branch: buildReviewBranchOptions(params)[0] ?? "main",
     branchSource: "auto",
@@ -734,7 +736,8 @@ function createReviewConfig(params: {
     customInstructions: "",
     target: "baseBranch",
     workspaceCwd: params.reviewCommand?.cwd ?? (
-      workspaceOptions.length === 1 ? workspaceOptions[0]?.cwd : undefined
+      preferredWorkspaceCwd ??
+      (workspaceOptions.length === 1 ? workspaceOptions[0]?.cwd : undefined)
     ),
   };
   const target = params.reviewCommand?.target;
