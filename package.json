@@ -32,7 +32,7 @@
     "eval:smoke:ui": "pnpm --filter @pwragent/desktop eval:smoke:ui",
     "eval:smoke:build:ui": "pnpm --filter @pwragent/desktop preeval:smoke && pnpm --filter @pwragent/desktop eval:smoke:ui",
     "eval:pdf": "pnpm --filter @pwragent/desktop eval:pdf",
-    "eval:pdf:build": "pnpm --filter @pwragent/desktop preeval:pdf && pnpm --filter @pwragent/desktop eval:pdf",
+    "eval:pdf:build": "pnpm --filter @pwragent/desktop prepare:eval-pdf && pnpm --filter @pwragent/desktop eval:pdf",
     "test": "vitest run --config vitest.workspace.ts",
     "test:nice": "node ./scripts/nice-run.mjs pnpm test",
     "test:watch": "vitest --config vitest.workspace.ts",

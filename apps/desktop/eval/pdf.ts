@@ -52,6 +52,8 @@ type Result = {
   condition: InputCondition;
   outcome: TurnOutcome;
   grade: Grade;
+  elapsedMs: number;
+  commandOutputDeltas: number;
 };
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -135,6 +137,10 @@ function truncate(value: string, length = 120): string {
   return flat.length > length ? `${flat.slice(0, length - 1)}…` : flat;
 }
 
+function formatDuration(elapsedMs: number): string {
+  return `${(elapsedMs / 1000).toFixed(elapsedMs < 10_000 ? 1 : 0)}s`;
+}
+
 function fixturePath(name: string): string {
   const result = path.join(fixturesDir, name);
   if (!existsSync(result)) {
@@ -211,7 +217,8 @@ function printResult(result: Result): void {
   const mark = result.grade.passed ? "pass" : "fail";
   console.log(
     `  ${result.condition.padEnd(12)} ${mark.padEnd(4)} ` +
-      `${String(result.grade.earned).padStart(2)}/${result.grade.possible}  ${result.grade.note}`,
+      `${String(result.grade.earned).padStart(2)}/${result.grade.possible}  ` +
+      `${formatDuration(result.elapsedMs)}; ${result.commandOutputDeltas} command-output event(s); ${result.grade.note}`,
   );
   if (!result.grade.passed && result.outcome.answer) {
     console.log(`    answer: ${truncate(result.outcome.answer, 220)}`);
@@ -274,6 +281,7 @@ async function main(): Promise<void> {
           defaultModel,
         );
         await app.focusThread("codex", threadId);
+        const startedAt = Date.now();
         const turnId = await driver.startTurnWithInput(
           "codex",
           threadId,
@@ -285,12 +293,17 @@ async function main(): Promise<void> {
           timeoutMs: turnTimeoutMs,
           onLog: (message) => console.log(message),
         });
+        const commandOutputDeltas = outcome.methods.filter(
+          (method) => method === "item/commandExecution/outputDelta",
+        ).length;
         const result: Result = {
           caseId: caseDef.id,
           fixture: fixture.id,
           condition,
           outcome,
           grade: grade(caseDef, outcome),
+          elapsedMs: Date.now() - startedAt,
+          commandOutputDeltas,
         };
         results.push(result);
         printResult(result);
@@ -309,9 +322,28 @@ async function main(): Promise<void> {
         );
     const raw = byCondition("pdf-file");
     const images = byCondition("page-images");
+    const metrics = (condition: InputCondition): { averageElapsedMs: number; commandOutputDeltas: number } => {
+      const matching = results.filter((result) => result.condition === condition);
+      return {
+        averageElapsedMs:
+          matching.reduce((total, result) => total + result.elapsedMs, 0) / matching.length,
+        commandOutputDeltas: matching.reduce(
+          (total, result) => total + result.commandOutputDeltas,
+          0,
+        ),
+      };
+    };
+    const rawMetrics = metrics("pdf-file");
+    const imageMetrics = metrics("page-images");
     console.log("\n┌─ Comparison ──────────────────────────────────────────");
-    console.log(`│ PDF file reference  ${raw.earned}/${raw.possible}`);
-    console.log(`│ Page images         ${images.earned}/${images.possible}`);
+    console.log(
+      `│ PDF file reference  ${raw.earned}/${raw.possible}; avg ${formatDuration(rawMetrics.averageElapsedMs)}; ` +
+        `${rawMetrics.commandOutputDeltas} command-output event(s)`,
+    );
+    console.log(
+      `│ Page images         ${images.earned}/${images.possible}; avg ${formatDuration(imageMetrics.averageElapsedMs)}; ` +
+        `${imageMetrics.commandOutputDeltas} command-output event(s)`,
+    );
     console.log(
       `│ ${images.earned > raw.earned ? "Image condition scored higher." : images.earned < raw.earned ? "Raw PDF condition scored higher." : "Conditions tied; inspect the answers and event logs."}`,
     );
@@ -325,6 +357,7 @@ async function main(): Promise<void> {
           generatedAt: new Date().toISOString(),
           results,
           totals: { pdfFile: raw, pageImages: images },
+          operations: { pdfFile: rawMetrics, pageImages: imageMetrics },
         },
         null,
         2,

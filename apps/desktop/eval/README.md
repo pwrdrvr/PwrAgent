@@ -52,11 +52,12 @@ pnpm eval:pdf
 EVAL_PDF_CASES=roof-state EVAL_KEEP_TEMP=1 pnpm eval:pdf
 ```
 
-The eval prints a marker score for each condition and writes detailed answers,
-event methods, and totals to `captures/pdf-eval-results.json` under the
-temporary eval directory. Use `EVAL_KEEP_TEMP=1` to retain that JSON and the
-raw protocol captures. It reports model misses without a non-zero exit by
-default because these are paid, non-deterministic calls; use
+The eval prints a marker score, elapsed time, and command-output count for each
+condition, then writes detailed answers, event methods, and totals to
+`captures/pdf-eval-results.json` under the temporary eval directory. Use
+`EVAL_KEEP_TEMP=1` to retain that JSON and the raw protocol captures. It
+reports model misses without a non-zero exit by default because these are paid,
+non-deterministic calls; use
 `EVAL_PDF_STRICT=1` to gate every expected marker or
 `EVAL_PDF_REQUIRE_IMAGE_WIN=1` to fail unless the page-image total is greater
 than the PDF-reference total.
