@@ -25,12 +25,21 @@ describe("PwrAgent task monitor agent tools", () => {
       .flatMap((catalog) => catalog.router.buildMcpTools())
       .sort((left, right) => left.name.localeCompare(right.name));
 
+    const dynamicOnlyToolNames = new Set([
+      "inspect_messaging_pdfs",
+      "render_messaging_pdf_pages",
+      "search_messaging_pdf_text",
+    ]);
     expect(dynamicTools).toHaveLength(25);
-    expect(mcpTools).toEqual(dynamicTools);
+    expect(mcpTools).toEqual(
+      dynamicTools.filter((tool) => !dynamicOnlyToolNames.has(tool.name)),
+    );
     expect(mcpTools.map((tool) => tool.name))
       .toContain("create_monitor_delegation");
     expect(mcpTools.map((tool) => tool.name))
       .toContain("start_review");
+    expect(mcpTools.map((tool) => tool.name))
+      .not.toEqual(expect.arrayContaining([...dynamicOnlyToolNames]));
     const createMonitorTool = mcpTools.find(
       (tool) => tool.name === "create_monitor_delegation",
     );
