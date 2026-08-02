@@ -1500,6 +1500,89 @@ describe("useThreadSessionState", () => {
     });
   });
 
+  it("reconciles redacted PDF file references and hidden PDF context to the Composer entry", async () => {
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex" | "grok";
+          notification: {
+            method: string;
+            params: Record<string, unknown>;
+          };
+        }) => void)
+      | undefined;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback as typeof agentEventHandler;
+        return () => undefined;
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitForThreadHydration(result);
+
+    const composerText = "Compare [@Jeep](~/Downloads/Jeep).";
+    act(() => {
+      result.current.addOptimisticUserMessage(composerText);
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              type: "userMessage",
+              id: "user-message-1",
+              content: [
+                {
+                  type: "text",
+                  text: [
+                    "Compare @Jeep.",
+                    "<pwragent-pdf-context>",
+                    "PwrAgent owns this local PDF.",
+                    "</pwragent-pdf-context>",
+                  ].join("\n\n"),
+                },
+              ],
+            },
+          },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.entries).toEqual([
+        expect.objectContaining({
+          id: "user-message-1",
+          role: "user",
+          text: composerText,
+          parts: [{ type: "text", text: composerText }],
+        }),
+      ]);
+    });
+  });
+
   it("keeps live protocol activity before hydrated review output after completion", async () => {
     let agentEventHandler:
       | ((event: {

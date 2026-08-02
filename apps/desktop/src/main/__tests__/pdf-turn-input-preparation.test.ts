@@ -31,6 +31,15 @@ async function makeExtensionlessFixture(): Promise<string> {
 describe("preparePdfTurnInput", () => {
   it("recognizes an extensionless explicit local PDF and keeps it local for page tools", async () => {
     const pdfPath = await makeExtensionlessFixture();
+    const inspectPdfDocument = vi.fn(async () => ({
+      firstPage: {
+        height: 792,
+        renderHeight: 1988,
+        renderWidth: 3072,
+        width: 1224,
+      },
+      pageCount: 1,
+    }));
     const renderPdfPages = vi.fn();
 
     const prepared = await preparePdfTurnInput({
@@ -44,30 +53,48 @@ describe("preparePdfTurnInput", () => {
       ],
       dependencies: {
         createAttachmentId: () => "jeep-pdf",
+        inspectPdfDocument,
         renderPdfPages,
       },
     });
 
+    expect(inspectPdfDocument).toHaveBeenCalledTimes(1);
     expect(renderPdfPages).not.toHaveBeenCalled();
     expect(prepared.input).toEqual([
-      { type: "text", text: "Compare @Jeep and keep [@notes](/tmp/notes.txt)." },
       {
         type: "text",
-        text: expect.stringContaining("inspect_messaging_pdfs"),
+        text: expect.stringContaining(
+          "Compare @Jeep and keep [@notes](/tmp/notes.txt).",
+        ),
       },
     ]);
     expect(prepared.pdfAttachments).toEqual([
       expect.objectContaining({
         attachmentId: "jeep-pdf",
+        inspection: {
+          firstPage: {
+            height: 792,
+            renderHeight: 1988,
+            renderWidth: 3072,
+            width: 1224,
+          },
+          pageCount: 1,
+        },
         name: "Jeep",
         profile: "high",
         sizeBytes: expect.any(Number),
       }),
     ]);
-    expect(prepared.input[1]).toMatchObject({
+    expect(prepared.input[0]).toMatchObject({
       type: "text",
-      text: expect.stringContaining("already adds those images to model context"),
+      text: expect.stringContaining("<pwragent-pdf-context>"),
     });
+    expect(prepared.input[0]).toMatchObject({
+      text: expect.stringContaining("render_messaging_pdf_pages exactly once"),
+    });
+    expect((prepared.input[0] as { text: string }).text).toContain(
+      "Do not call inspect_messaging_pdfs or search_messaging_pdf_text for a one-page PDF.",
+    );
   });
 
   it("keeps an explicit local PDF reference intact when analysis is disabled", async () => {

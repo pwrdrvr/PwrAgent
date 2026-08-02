@@ -7,12 +7,15 @@ import type { ImageUploadQualityProfile } from "../../../shared/image-normalizat
 import { normalizeMessagingImageAttachment } from "../attachment-image-normalization";
 import {
   DEFAULT_PDF_RENDER_LIMITS,
+  inspectPdfDocument,
   renderPdfPages,
   renderedPdfPageDataUrl,
   renderedPdfPageWireBytes,
+  type PdfDocumentInspection,
   type RenderedPdfPage,
 } from "../../pdf/pdf-page-renderer";
 import type { PendingPdfAttachment } from "../../pdf/pdf-attachment-store";
+import { formatPdfAttachmentModelGuidance } from "../../pdf/pdf-turn-guidance";
 import type { MessagingAdapter } from "./messaging-adapter";
 import {
   classifyMessagingAttachment,
@@ -48,6 +51,10 @@ export const DEFAULT_MESSAGING_ATTACHMENT_POLICY: MessagingAttachmentPolicy = {
 
 export type MessagingAttachmentProcessingDependencies = {
   createPdfAttachmentId: () => string;
+  inspectPdfDocument: (params: {
+    data: Uint8Array;
+    profile: ImageUploadQualityProfile;
+  }) => Promise<PdfDocumentInspection>;
   renderPdfPages: (params: {
     data: Uint8Array;
     limits?: {
@@ -65,6 +72,7 @@ export type MessagingAttachmentProcessingDependencies = {
 
 const DEFAULT_DEPENDENCIES: MessagingAttachmentProcessingDependencies = {
   createPdfAttachmentId: randomUUID,
+  inspectPdfDocument,
   renderPdfPages,
 };
 
@@ -187,16 +195,23 @@ export async function processMessagingAttachments(params: {
           continue;
         }
         if (params.pdfHandling === "model_directed") {
-          pdfAttachments.push({
+          const pdfAttachment: PendingPdfAttachment = {
             attachmentId: dependencies.createPdfAttachmentId(),
             data: downloaded.data,
             name: downloaded.fileName,
             profile: policy.pdfProfile,
             sizeBytes: downloaded.sizeBytes,
-          });
-          textInput.push(
-            `PDF attachment \`${downloaded.fileName}\` is available through PwrAgent's local PDF tools. Call inspect_messaging_pdfs first, use search_messaging_pdf_text for bounded navigation, then use render_messaging_pdf_pages to request only the pages needed for visual analysis.`,
-          );
+          };
+          try {
+            pdfAttachment.inspection = await dependencies.inspectPdfDocument({
+              data: downloaded.data,
+              profile: policy.pdfProfile,
+            });
+          } catch {
+            // The dynamic inspection tool remains available as a fallback for
+            // PDFs whose metadata cannot be probed at attachment time.
+          }
+          pdfAttachments.push(pdfAttachment);
           continue;
         }
         const remainingPdfRenderLimits = {
@@ -284,6 +299,10 @@ export async function processMessagingAttachments(params: {
         reason: error instanceof Error ? error.message : "Attachment could not be read.",
       });
     }
+  }
+
+  if (pdfAttachments.length > 0) {
+    textInput.push(formatPdfAttachmentModelGuidance(pdfAttachments));
   }
 
   const input: AppServerTurnInputItem[] = [

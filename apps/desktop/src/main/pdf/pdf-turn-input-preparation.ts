@@ -13,11 +13,14 @@ import type { ImageUploadQualityProfile } from "../../shared/image-normalization
 import type { PendingPdfAttachment } from "./pdf-attachment-store";
 import {
   DEFAULT_PDF_RENDER_LIMITS,
+  inspectPdfDocument,
   renderPdfPages,
   renderedPdfPageDataUrl,
   renderedPdfPageWireBytes,
+  type PdfDocumentInspection,
   type RenderedPdfPage,
 } from "./pdf-page-renderer";
+import { formatPdfAttachmentModelGuidance } from "./pdf-turn-guidance";
 
 const PDF_MAGIC = Buffer.from("%PDF-");
 
@@ -36,6 +39,10 @@ export type PdfTurnInputPreparation = {
 
 export type PdfTurnInputPreparationDependencies = {
   createAttachmentId: () => string;
+  inspectPdfDocument: (params: {
+    data: Uint8Array;
+    profile: ImageUploadQualityProfile;
+  }) => Promise<PdfDocumentInspection>;
   renderPdfPages: (params: {
     data: Uint8Array;
     limits?: Partial<typeof DEFAULT_PDF_RENDER_LIMITS>;
@@ -46,6 +53,7 @@ export type PdfTurnInputPreparationDependencies = {
 
 const DEFAULT_DEPENDENCIES: PdfTurnInputPreparationDependencies = {
   createAttachmentId: randomUUID,
+  inspectPdfDocument,
   renderPdfPages,
 };
 
@@ -123,13 +131,23 @@ export async function preparePdfTurnInput(params: {
 
     const profile = resolvePdfProfile(item, defaultProfile);
     if (params.handling === "model_directed") {
-      pdfAttachments.push({
+      const pdfAttachment: PendingPdfAttachment = {
         attachmentId: dependencies.createAttachmentId(),
         data: candidate.data,
         name: candidate.name,
         profile,
         sizeBytes: candidate.data.byteLength,
-      });
+      };
+      try {
+        pdfAttachment.inspection = await dependencies.inspectPdfDocument({
+          data: candidate.data,
+          profile,
+        });
+      } catch {
+        // Keep the attachment available for the dynamic inspection tool when
+        // metadata probing cannot read an otherwise recognized PDF.
+      }
+      pdfAttachments.push(pdfAttachment);
       if (item.type === "localFile") {
         consumedLocalPdfPaths.add(normalizeLocalPdfPath(item.path));
       }
@@ -181,9 +199,7 @@ export async function preparePdfTurnInput(params: {
   }
 
   if (pdfAttachments.length > 0) {
-    notes.unshift(
-      `PDF attachment${pdfAttachments.length === 1 ? "" : "s"} ${pdfAttachments.map((attachment) => `\`${attachment.name}\``).join(", ")} ${pdfAttachments.length === 1 ? "is" : "are"} available only through PwrAgent's local PDF tools. Call inspect_messaging_pdfs first, use search_messaging_pdf_text for bounded navigation, then use render_messaging_pdf_pages to request only the pages needed for visual analysis. Do not use exec, shell, filesystem, OCR, or conversion tools to access the source PDFs or rendered pages. A successful render already adds those images to model context: analyze them directly instead of serializing the result or calling image().`,
-    );
+    notes.unshift(formatPdfAttachmentModelGuidance(pdfAttachments));
   }
 
   return {
@@ -393,13 +409,19 @@ function insertPdfNotes(
   if (notes.length === 0) {
     return input;
   }
-  const firstNonText = input.findIndex((item) => item.type !== "text");
-  const insertAt = firstNonText === -1 ? input.length : firstNonText;
-  return [
-    ...input.slice(0, insertAt),
-    { type: "text", text: notes.join("\n\n") },
-    ...input.slice(insertAt),
-  ];
+  const noteText = notes.join("\n\n");
+  const firstTextIndex = input.findIndex((item) => item.type === "text");
+  if (firstTextIndex === -1) {
+    return [{ type: "text", text: noteText }, ...input];
+  }
+  return input.map((item, index) =>
+    index === firstTextIndex && item.type === "text"
+      ? {
+          ...item,
+          text: [item.text, noteText].filter(Boolean).join("\n\n"),
+        }
+      : item
+  );
 }
 
 function pdfPageImageName(fileName: string, pageNumber: number): string {
