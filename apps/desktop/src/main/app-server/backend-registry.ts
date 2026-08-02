@@ -219,6 +219,7 @@ import {
   DEFAULT_TASK_MONITOR_POLL_INTERVAL_SECONDS,
   DEFAULT_TASK_MONITOR_REASONING_EFFORT,
   DEFAULT_TASK_MONITOR_STARTUP_TIMEOUT_SECONDS,
+  PWRAGENT_MESSAGING_PDF_TOOL_CATALOG_VERSION,
   type CompleteMonitoringToolArgs,
   type CreateMonitorDelegationToolArgs,
   type InjectMonitorProgressToolArgs,
@@ -9315,6 +9316,13 @@ export class DesktopBackendRegistry {
         threadId: result.threadId,
         executionMode: effectiveExecutionMode,
       });
+      if (typeof this.overlayStore.setThreadMessagingPdfToolCatalogVersion === "function") {
+        await this.overlayStore.setThreadMessagingPdfToolCatalogVersion({
+          backend,
+          threadId: result.threadId,
+          version: PWRAGENT_MESSAGING_PDF_TOOL_CATALOG_VERSION,
+        });
+      }
       await this.updateThreadGitBranchMetadata({
         backend,
         threadId: result.threadId,
@@ -9863,6 +9871,21 @@ export class DesktopBackendRegistry {
       count: threadIds.length,
       threadIds,
     };
+  }
+
+  async supportsMessagingPdfTools(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<boolean> {
+    if (params.backend !== "codex") {
+      return false;
+    }
+    const overlay = await this.overlayStore.getThreadOverlayState(params);
+    return (
+      overlay?.messagingPdfToolCatalogVersion !== undefined &&
+      overlay.messagingPdfToolCatalogVersion >=
+        PWRAGENT_MESSAGING_PDF_TOOL_CATALOG_VERSION
+    );
   }
 
   async startTurn(params: {

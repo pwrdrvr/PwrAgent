@@ -79,6 +79,12 @@ function descriptionForOperation(operation: PwrAgentMessagingOperationName): str
       return "Inspect the messaging platform, actor, conversation, binding, compact bound-thread identity, and native thread/topic creation capability for the surface that started this Agent turn.";
     case "attach_thread_here":
       return "Attach a known PwrAgent thread to the current messaging surface, creating a native child thread/topic when the provider supports it. This does not rename the PwrAgent thread.";
+    case "inspect_messaging_pdfs":
+      return "List PDF attachments available only for the current active messaging turn. Returns local metadata and render limits, not PDF bytes or extracted document text.";
+    case "search_messaging_pdf_text":
+      return "Search embedded text in a bounded page range of a PDF attached to the current active messaging turn. Use returned page-number snippets only to navigate, then render pages for visual analysis.";
+    case "render_messaging_pdf_pages":
+      return "Render explicitly selected PDF pages from the current active messaging turn into image input. This is capped by page count, total pixels, and encoded image bytes; request fewer pages when a cap is exceeded.";
   }
 }
 
@@ -122,6 +128,59 @@ function inputSchemaForOperation(
           },
         },
       };
+    case "inspect_messaging_pdfs":
+      return {
+        type: "object",
+        additionalProperties: false,
+        properties: {},
+      };
+    case "search_messaging_pdf_text":
+      return {
+        type: "object",
+        additionalProperties: false,
+        required: ["attachmentId", "query"],
+        properties: {
+          attachmentId: {
+            type: "string",
+            description: "Opaque attachmentId returned by inspect_messaging_pdfs.",
+          },
+          query: {
+            type: "string",
+            description: "Text to locate in the PDF's embedded text layer.",
+          },
+          pageStart: {
+            type: "integer",
+            minimum: 1,
+            description: "First page to search, inclusive. Defaults to page 1.",
+          },
+          pageEnd: {
+            type: "integer",
+            minimum: 1,
+            description: "Last page to search, inclusive. The range is capped at 25 pages.",
+          },
+        },
+      };
+    case "render_messaging_pdf_pages":
+      return {
+        type: "object",
+        additionalProperties: false,
+        required: ["attachmentId", "pageNumbers"],
+        properties: {
+          attachmentId: {
+            type: "string",
+            description: "Opaque attachmentId returned by inspect_messaging_pdfs.",
+          },
+          pageNumbers: {
+            type: "array",
+            minItems: 1,
+            items: {
+              type: "integer",
+              minimum: 1,
+            },
+            description: "Specific page numbers to render. Start with the smallest useful batch.",
+          },
+        },
+      };
   }
 }
 
@@ -129,6 +188,20 @@ function messagingResponseToAgentToolResult(
   response: PwrAgentMessagingResponse,
 ): AgentToolDispatchResult {
   if (response.ok) {
+    if (response.imageContent) {
+      return agentToolSuccess(response.data, {
+        contentItems: [
+          {
+            type: "inputText",
+            text: JSON.stringify(response.data, null, 2),
+          },
+          ...response.imageContent.map((image) => ({
+            type: "inputImage" as const,
+            imageUrl: image.dataUrl,
+          })),
+        ],
+      });
+    }
     return agentToolSuccess(response.data);
   }
   return agentToolFailure({

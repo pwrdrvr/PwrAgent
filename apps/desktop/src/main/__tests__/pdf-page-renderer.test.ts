@@ -53,4 +53,26 @@ describe("PDF page renderer", () => {
     ]);
     expect(pages[0]?.dataUrl).toMatch(/^data:image\/png;base64,/);
   });
+
+  it("rejects a render before allocating a page canvas when the pixel budget is too small", async () => {
+    await expect(
+      renderPdfPages({
+        data: await readFile(jeepStickerPageFixture),
+        limits: { maxPixels: 1 },
+        pageNumbers: [1],
+        profile: "high",
+      }),
+    ).rejects.toThrow("pixel limit");
+  });
+
+  it("rejects a render when the encoded image budget is exceeded", async () => {
+    await expect(
+      renderPdfPages({
+        data: await readFile(jeepStickerPageFixture),
+        limits: { maxEncodedBytes: 1 },
+        pageNumbers: [1],
+        profile: "high",
+      }),
+    ).rejects.toThrow("image-data limit");
+  });
 });

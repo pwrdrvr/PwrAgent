@@ -1287,6 +1287,12 @@ export type ThreadOverlayState = {
   gitBranch?: string;
   observedGitBranch?: string;
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+  /**
+   * Version of the PwrAgent messaging PDF dynamic-tool catalog supplied when
+   * this Codex thread was created. Unknown older threads use a bounded image
+   * fallback because Codex cannot add dynamic tools on thread resume.
+   */
+  messagingPdfToolCatalogVersion?: number;
   lastSeenAt?: number;
   lastSeenUpdatedAt?: number;
   dismissedAt?: number;

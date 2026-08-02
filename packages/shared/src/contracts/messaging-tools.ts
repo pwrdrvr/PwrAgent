@@ -15,7 +15,16 @@ export const PWRAGENT_MESSAGING_TOOL_NAMESPACE = "pwragent_messaging";
 export const PWRAGENT_MESSAGING_OPERATION_NAMES = [
   "get_current_messaging_surface",
   "attach_thread_here",
+  "inspect_messaging_pdfs",
+  "search_messaging_pdf_text",
+  "render_messaging_pdf_pages",
 ] as const;
+
+/**
+ * Codex persists dynamic tools when a thread is created. This version records
+ * the first catalog that includes the model-directed messaging PDF tools.
+ */
+export const PWRAGENT_MESSAGING_PDF_TOOL_CATALOG_VERSION = 1;
 
 export const PWRAGENT_MESSAGING_LEGACY_OPERATION_NAMES = [
   "get_current_location",
@@ -127,6 +136,20 @@ export type AttachThreadHereToolArgs = {
   title?: string;
 };
 
+export type InspectMessagingPdfsToolArgs = Record<string, never>;
+
+export type SearchMessagingPdfTextToolArgs = {
+  attachmentId: string;
+  pageEnd?: number;
+  pageStart?: number;
+  query: string;
+};
+
+export type RenderMessagingPdfPagesToolArgs = {
+  attachmentId: string;
+  pageNumbers: number[];
+};
+
 export type AttachThreadHereResult = {
   binding: PwrAgentMessagingBindingSummary;
   channel: MessagingChannelKind;
@@ -137,10 +160,59 @@ export type AttachThreadHereResult = {
   placement: Exclude<AttachThreadHerePlacement, "auto">;
 };
 
+export type PwrAgentMessagingPdfAttachmentSummary = {
+  attachmentId: string;
+  name: string;
+  sizeBytes: number;
+  pageCount: number;
+  firstPage: {
+    height: number;
+    width: number;
+    renderHeight: number;
+    renderWidth: number;
+  };
+  renderLimits: {
+    maxEncodedBytes: number;
+    maxPages: number;
+    maxPagePixels: number;
+    maxPixels: number;
+  };
+};
+
+export type PwrAgentMessagingPdfTextSearchResult = {
+  attachmentId: string;
+  matches: Array<{
+    pageNumber: number;
+    snippet: string;
+  }>;
+  pageEnd: number;
+  pageStart: number;
+  query: string;
+  totalPageCount: number;
+};
+
+export type PwrAgentMessagingRenderedPdfPagesResult = {
+  attachmentId: string;
+  name: string;
+  pages: Array<{
+    height: number;
+    pageNumber: number;
+    width: number;
+  }>;
+};
+
+export type PwrAgentMessagingToolImage = {
+  dataUrl: string;
+  pageNumber: number;
+};
+
 export type PwrAgentMessagingToolArgsByOperation = {
   get_current_messaging_surface: GetCurrentMessagingSurfaceToolArgs;
   get_current_location: GetCurrentMessagingSurfaceToolArgs;
   attach_thread_here: AttachThreadHereToolArgs;
+  inspect_messaging_pdfs: InspectMessagingPdfsToolArgs;
+  search_messaging_pdf_text: SearchMessagingPdfTextToolArgs;
+  render_messaging_pdf_pages: RenderMessagingPdfPagesToolArgs;
 };
 
 export type PwrAgentMessagingToolArgs<
@@ -166,7 +238,13 @@ export type PwrAgentMessagingResponse =
         | {
             location: PwrAgentMessagingLocationSummary;
           }
-        | AttachThreadHereResult;
+        | AttachThreadHereResult
+        | {
+            attachments: PwrAgentMessagingPdfAttachmentSummary[];
+          }
+        | PwrAgentMessagingPdfTextSearchResult
+        | PwrAgentMessagingRenderedPdfPagesResult;
+      imageContent?: PwrAgentMessagingToolImage[];
     }
   | {
       ok: false;
