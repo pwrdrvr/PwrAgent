@@ -231,7 +231,7 @@ describe("buildPendingRequestResponse", () => {
     });
   });
 
-  it("exposes structured execpolicy amendment decisions", () => {
+  it("adds a non-terminal decline to structured Codex command approvals", () => {
     const structuredDecision = {
       acceptWithExecpolicyAmendment: {
         execpolicy_amendment: ["pnpm", "test"],
@@ -259,11 +259,43 @@ describe("buildPendingRequestResponse", () => {
         style: "secondary",
       }),
       expect.objectContaining({
+        decision: "decline",
+        fallbackText: "3",
+        response: { decision: "decline" },
+      }),
+      expect.objectContaining({
         decision: "cancel",
+        fallbackText: "4",
       }),
     ]);
     expect(buildPendingRequestResponse(request, actions[1]!)).toEqual({
       decision: structuredDecision,
+    });
+    expect(buildPendingRequestResponse(request, actions[2]!)).toEqual({
+      decision: "decline",
+    });
+  });
+
+  it("adds a non-terminal decline to advertised Codex file-change approvals", () => {
+    const request = createRequest({
+      method: "item/fileChange/requestApproval",
+      params: {
+        threadId: "thread-1",
+        requestId: "request-1",
+        availableDecisions: ["accept", "cancel"],
+      },
+    });
+
+    const actions = buildPendingRequestActions(request);
+
+    expect(actions.map((action) => action.decision)).toEqual([
+      "accept",
+      "decline",
+      "cancel",
+    ]);
+    expect(actions.map((action) => action.fallbackText)).toEqual(["1", "2", "3"]);
+    expect(buildPendingRequestResponse(request, actions[1]!)).toEqual({
+      decision: "decline",
     });
   });
 
@@ -348,6 +380,10 @@ describe("buildPendingRequestResponse", () => {
         decision: "apply_network_policy_amendment",
         label: "Block api.example.com",
         style: "danger",
+      }),
+      expect.objectContaining({
+        decision: "decline",
+        response: { decision: "decline" },
       }),
     ]);
   });

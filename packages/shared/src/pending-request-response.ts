@@ -420,10 +420,56 @@ export function buildPendingRequestActions(
     )
     .filter((entry): entry is PendingRequestAction => Boolean(entry));
   if (provided?.length) {
-    return provided;
+    return ensureCodexDeclineAction(request, provided);
   }
 
   return defaultPendingRequestActions(request);
+}
+
+function ensureCodexDeclineAction(
+  request: AppServerPendingRequestNotification,
+  actions: PendingRequestAction[],
+): PendingRequestAction[] {
+  if (
+    !isCodexCommandOrFileApproval(request)
+    || actions.some((action) => action.decision === "decline")
+  ) {
+    return actions;
+  }
+
+  // Codex accepts `decline` for native command and file approvals even when
+  // the advertised choices only include allow variants and `cancel`.
+  const declineAction = buildAction({
+    decision: "decline",
+    fallbackText: String(actions.length + 1),
+    id: "approval:decline",
+    label: "Decline",
+    responseDecision: "decline",
+    style: "danger",
+  });
+  const cancelIndex = actions.findIndex((action) => action.decision === "cancel");
+  const actionsWithDecline = cancelIndex < 0
+    ? [...actions, declineAction]
+    : [
+        ...actions.slice(0, cancelIndex),
+        declineAction,
+        ...actions.slice(cancelIndex),
+      ];
+
+  return actionsWithDecline.map((action, index) =>
+    /^\d+$/.test(action.fallbackText)
+      ? { ...action, fallbackText: String(index + 1) }
+      : action,
+  );
+}
+
+function isCodexCommandOrFileApproval(
+  request: AppServerPendingRequestNotification,
+): boolean {
+  return (
+    request.method === "item/commandExecution/requestApproval"
+    || request.method === "item/fileChange/requestApproval"
+  );
 }
 
 function selectAvailableAction(

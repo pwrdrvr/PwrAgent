@@ -3472,7 +3472,7 @@ describe("ThreadView", () => {
     ).toBeInTheDocument();
   });
 
-  it("maps command approval actions to native decision values and dismisses the approval card", async () => {
+  it("submits a non-terminal decline for an incomplete Codex approval list", async () => {
     const submitServerRequest = vi.fn(async () => ({
       backend: "codex" as const,
       threadId: "thread-2",
@@ -3483,7 +3483,7 @@ describe("ThreadView", () => {
       params: {
         threadId: "thread-2",
         requestId: "req-1",
-        availableDecisions: ["accept", "decline", "cancel"],
+        availableDecisions: ["accept", "cancel"],
         command: "npm view dive",
       },
     };
@@ -3644,7 +3644,7 @@ describe("ThreadView", () => {
 
     expect(screen.getByRole("group", { name: "Pending approval" })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Approve Once" }));
+    fireEvent.click(screen.getByRole("button", { name: "Decline" }));
 
     await waitFor(() => {
       expect(submitServerRequest).toHaveBeenCalledWith({
@@ -3652,7 +3652,7 @@ describe("ThreadView", () => {
         threadId: "thread-2",
         turnId: undefined,
         requestId: "req-1",
-        response: { decision: "accept" },
+        response: { decision: "decline" },
       });
     });
 
@@ -3661,7 +3661,7 @@ describe("ThreadView", () => {
         screen.queryByRole("group", { name: "Pending approval" })
       ).not.toBeInTheDocument();
     });
-    expect(clearPendingRequest).toHaveBeenCalledWith("req-1", "Thinking");
+    expect(clearPendingRequest).toHaveBeenCalledWith("req-1", undefined);
   });
 
   it("submits pending questionnaire answers with the request_user_input response shape", async () => {

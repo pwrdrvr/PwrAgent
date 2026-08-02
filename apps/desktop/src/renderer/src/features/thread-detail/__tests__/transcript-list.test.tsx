@@ -3430,6 +3430,7 @@ describe("TranscriptList", () => {
     expect(action.querySelector(".transcript-request__action-detail")).toHaveTextContent(
       "python -m unittest package.tests.test_first package.tests.test_second"
     );
+    expect(screen.getByRole("button", { name: "Decline" })).toBeInTheDocument();
   });
 
   it("derives Kimi approval commands from prompt text when command is a shell title", () => {
