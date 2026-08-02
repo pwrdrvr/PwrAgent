@@ -247,6 +247,9 @@ export type DesktopSettingsConfig = {
     backgroundPrPolling?: boolean;
     prAutoDispatchAllowed?: boolean;
     defaultPrAutoDispatchEnabled?: boolean;
+    prAutoDispatchBudgetCapacity?: number;
+    prAutoDispatchBudgetRefillPerMinute?: number;
+    pausePrAutoDispatchWhenBudgetEmpty?: boolean;
   };
   applications?: {
     editor?: {
@@ -1342,6 +1345,24 @@ export function desktopSettingsPatchToEdits(
       patch.git.defaultPrAutoDispatchEnabled,
     );
   }
+  if (patch.git?.prAutoDispatchBudgetCapacity !== undefined) {
+    set(
+      ["git", "pr_auto_dispatch_budget_capacity"],
+      patch.git.prAutoDispatchBudgetCapacity,
+    );
+  }
+  if (patch.git?.prAutoDispatchBudgetRefillPerMinute !== undefined) {
+    set(
+      ["git", "pr_auto_dispatch_budget_refill_per_minute"],
+      patch.git.prAutoDispatchBudgetRefillPerMinute,
+    );
+  }
+  if (patch.git?.pausePrAutoDispatchWhenBudgetEmpty !== undefined) {
+    set(
+      ["git", "pause_pr_auto_dispatch_when_budget_empty"],
+      patch.git.pausePrAutoDispatchWhenBudgetEmpty,
+    );
+  }
 
   if (patch.applications?.editor?.preferredId !== undefined) {
     set(["applications", "editor", "preferred_id"], patch.applications.editor.preferredId);
@@ -1675,6 +1696,15 @@ function normalizeDesktopConfig(
       prAutoDispatchAllowed: readBoolean(git?.pr_auto_dispatch_allowed),
       defaultPrAutoDispatchEnabled: readBoolean(
         git?.default_pr_auto_dispatch_enabled,
+      ),
+      prAutoDispatchBudgetCapacity: readNumber(
+        git?.pr_auto_dispatch_budget_capacity,
+      ),
+      prAutoDispatchBudgetRefillPerMinute: readNumber(
+        git?.pr_auto_dispatch_budget_refill_per_minute,
+      ),
+      pausePrAutoDispatchWhenBudgetEmpty: readBoolean(
+        git?.pause_pr_auto_dispatch_when_budget_empty,
       ),
     },
     applications: {

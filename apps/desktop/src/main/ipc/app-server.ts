@@ -79,6 +79,8 @@ import {
   type NavigationSnapshot,
   type AutomationThreadSummary,
   type PrSummary,
+  type PrAutoDispatchBudgetConfig,
+  type PrAutoDispatchBudgetStatus,
   type ReorderDirectoryPinsRequest,
   type ReorderDirectoryPinsResponse,
   type ReorderThreadPinsRequest,
@@ -131,6 +133,9 @@ import {
 import {
   DEFAULT_BACKGROUND_PR_POLLING,
   DEFAULT_PR_AUTO_DISPATCH_ALLOWED,
+  DEFAULT_PAUSE_PR_AUTO_DISPATCH_WHEN_BUDGET_EMPTY,
+  DEFAULT_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
+  DEFAULT_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
   DEFAULT_PULL_REQUEST_PROVIDER,
   buildPullRequestStatusKey,
   buildThreadIdentityKey,
@@ -153,6 +158,9 @@ import {
 } from "../state/recent-file-references-store";
 import {
   APP_SERVER_LIST_SKILLS_CHANNEL,
+  APP_SERVER_GET_PR_AUTO_DISPATCH_BUDGET_STATUS_CHANNEL,
+  APP_SERVER_RESUME_PR_AUTO_DISPATCH_BUDGET_CHANNEL,
+  PR_AUTO_DISPATCH_BUDGET_CHANGED_EVENT_CHANNEL,
   APP_SERVER_LIST_THREADS_CHANNEL,
   THREAD_SEARCH_CHANNEL,
   APP_SERVER_ARCHIVE_THREAD_CHANNEL,
@@ -203,6 +211,7 @@ import {
   NAVIGATION_UPDATE_SUBTHREAD_ORDER_CHANNEL,
   NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL,
 } from "../../shared/ipc";
+import { subscribersForChannel } from "../window-channels";
 import { FocusedDiffService } from "../diff-focus/focused-diff-service";
 import { getMainLogger } from "../log";
 import { buildMessagingBindingsByThreadKey } from "../messaging/messaging-bindings-snapshot";
@@ -930,6 +939,12 @@ class DesktopAppServerService {
   private prPollingScheduler: PrPollingScheduler | undefined;
   private backgroundPrPollingEnabled = false;
   private prAutoDispatchAllowed = false;
+  private prAutoDispatchBudgetConfig: PrAutoDispatchBudgetConfig = {
+    capacity: DEFAULT_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
+    refillPerMinute: DEFAULT_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
+    pauseWhenEmpty: DEFAULT_PAUSE_PR_AUTO_DISPATCH_WHEN_BUDGET_EMPTY,
+  };
+  private prAutoDispatchBudgetPaused = false;
   private prAutoDispatchCoordinator: PrAutoDispatchCoordinator | undefined;
   private prStatusWatchCoordinator: PrStatusWatchCoordinator | undefined;
   /** Visible thread→PR attachments plus the primary workspace's repository. */
@@ -2776,14 +2791,18 @@ class DesktopAppServerService {
       : autoFixEnabled
         ? this.backgroundPrPollingEnabled
           ? this.prAutoDispatchAllowed
-            ? hasPrimaryRepo
-              ? "Auto-fix PR is enabled, but an older eligible thread owns monitoring for this PR. Do not poll CI or create another monitor; the elected thread receives the PR event."
-              : "Auto-fix PR is enabled, but this thread has no GitHub primary workspace. PwrAgent cannot monitor PR automation for it; check the PR directly until the thread is attached to a Git workspace."
+            ? this.prAutoDispatchBudgetPaused
+              ? "Auto-fix PR is paused because the profile's automatic repair budget is empty. Thread-level preferences were left unchanged; resume it from the safety notice when you are ready."
+              : hasPrimaryRepo
+                ? "Auto-fix PR is enabled, but an older eligible thread owns monitoring for this PR. Do not poll CI or create another monitor; the elected thread receives the PR event."
+                : "Auto-fix PR is enabled, but this thread has no GitHub primary workspace. PwrAgent cannot monitor PR automation for it; check the PR directly until the thread is attached to a Git workspace."
             : "Auto-fix PR is saved but disabled globally in Git settings. Do not assume PwrAgent will wake this thread until automatic PR repair is allowed again."
           : "Auto-fix PR is saved but paused because background PR polling is off. Do not assume PwrAgent will wake this thread until polling is enabled."
         : this.backgroundPrPollingEnabled
           ? this.prAutoDispatchAllowed
-            ? "Background PR polling is active, but Auto-fix PR is off for this thread. Use watch_thread_pull_request for a bounded one-shot success/failure notification instead of polling or creating a monitor thread."
+            ? this.prAutoDispatchBudgetPaused
+              ? "Background PR polling is active, but Auto-fix PR is paused because the profile's automatic repair budget is empty. Resume it from the safety notice when you are ready."
+              : "Background PR polling is active, but Auto-fix PR is off for this thread. Use watch_thread_pull_request for a bounded one-shot success/failure notification instead of polling or creating a monitor thread."
             : "Background PR polling is active, but automatic PR repair is disabled globally in Git settings. Use watch_thread_pull_request for a bounded one-shot success/failure notification instead of polling or creating a monitor thread."
           : "Background PR polling and Auto-fix PR are off. PwrAgent will not wake this thread for PR status changes.";
     return {
@@ -3852,6 +3871,12 @@ class DesktopAppServerService {
     void (async () => {
       let backgroundPollingEnabled = DEFAULT_BACKGROUND_PR_POLLING;
       let prAutoDispatchAllowed = DEFAULT_PR_AUTO_DISPATCH_ALLOWED;
+      let budgetConfig: PrAutoDispatchBudgetConfig = {
+        capacity: DEFAULT_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
+        refillPerMinute: DEFAULT_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
+        pauseWhenEmpty: DEFAULT_PAUSE_PR_AUTO_DISPATCH_WHEN_BUDGET_EMPTY,
+      };
+      let budgetStatus: PrAutoDispatchBudgetStatus | undefined;
       try {
         const settingsService = getDesktopSettingsService();
         // Subscribe lazily on the first sync (which the first navigation
@@ -3873,6 +3898,17 @@ class DesktopAppServerService {
         const settings = await settingsService.readSettings();
         backgroundPollingEnabled = settings.git.backgroundPrPolling.value;
         prAutoDispatchAllowed = settings.git.prAutoDispatchAllowed.value;
+        budgetConfig = {
+          capacity: settings.git.prAutoDispatchBudgetCapacity.value,
+          refillPerMinute:
+            settings.git.prAutoDispatchBudgetRefillPerMinute.value,
+          pauseWhenEmpty:
+            settings.git.pausePrAutoDispatchWhenBudgetEmpty.value,
+        };
+        budgetStatus = await this.getOverlayStore().getPrAutoDispatchBudgetStatus({
+          config: budgetConfig,
+          now: Date.now(),
+        });
       } catch (error) {
         appServerLog.warn("failed to read GitHub PR automation settings", {
           error: error instanceof Error ? error.message : String(error),
@@ -3885,6 +3921,10 @@ class DesktopAppServerService {
 
       this.backgroundPrPollingEnabled = backgroundPollingEnabled;
       this.prAutoDispatchAllowed = prAutoDispatchAllowed;
+      this.prAutoDispatchBudgetConfig = budgetConfig;
+      if (budgetStatus?.paused) {
+        this.updatePrAutoDispatchBudgetStatus(budgetStatus);
+      }
 
       if (!backgroundPollingEnabled) {
         this.prAutoDispatchCoordinator?.pause();
@@ -3901,7 +3941,81 @@ class DesktopAppServerService {
   }
 
   private isPrAutoDispatchAvailable(): boolean {
-    return this.backgroundPrPollingEnabled && this.prAutoDispatchAllowed;
+    return (
+      this.backgroundPrPollingEnabled
+      && this.prAutoDispatchAllowed
+      && !this.prAutoDispatchBudgetPaused
+    );
+  }
+
+  async getPrAutoDispatchBudgetStatus(): Promise<PrAutoDispatchBudgetStatus> {
+    const status = await this.getOverlayStore().getPrAutoDispatchBudgetStatus({
+      config: this.prAutoDispatchBudgetConfig,
+      now: Date.now(),
+    });
+    if (status.paused) {
+      this.updatePrAutoDispatchBudgetStatus(status);
+    }
+    return status;
+  }
+
+  async resumePrAutoDispatchBudget(): Promise<PrAutoDispatchBudgetStatus> {
+    const status = await this.getOverlayStore().resumePrAutoDispatchBudget({
+      config: this.prAutoDispatchBudgetConfig,
+      now: Date.now(),
+    });
+    this.updatePrAutoDispatchBudgetStatus(status, { allowResume: true });
+    if (this.isPrAutoDispatchAvailable()) {
+      void this.getPrAutoDispatchCoordinator().resume();
+    }
+    return status;
+  }
+
+  private async refreshPrAutoDispatchBudgetSafetyStop(): Promise<void> {
+    if (!this.prAutoDispatchBudgetPaused) return;
+    try {
+      const status = await this.getOverlayStore().getPrAutoDispatchBudgetStatus({
+        config: this.prAutoDispatchBudgetConfig,
+        now: Date.now(),
+      });
+      if (status.paused) return;
+      this.updatePrAutoDispatchBudgetStatus(status, { allowResume: true });
+      if (this.isPrAutoDispatchAvailable()) {
+        void this.getPrAutoDispatchCoordinator().resume();
+      }
+    } catch (error) {
+      appServerLog.warn("failed to refresh automatic PR repair budget", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private updatePrAutoDispatchBudgetStatus(
+    status: PrAutoDispatchBudgetStatus,
+    options?: { allowResume?: boolean },
+  ): void {
+    const previousPaused = this.prAutoDispatchBudgetPaused;
+    if (status.paused) {
+      this.prAutoDispatchBudgetPaused = true;
+      this.prAutoDispatchCoordinator?.pause();
+    } else if (options?.allowResume) {
+      this.prAutoDispatchBudgetPaused = false;
+    }
+    if (previousPaused !== this.prAutoDispatchBudgetPaused || status.paused) {
+      this.broadcastPrAutoDispatchBudgetStatus(status);
+    }
+  }
+
+  private broadcastPrAutoDispatchBudgetStatus(
+    status: PrAutoDispatchBudgetStatus,
+  ): void {
+    for (const webContents of subscribersForChannel(
+      PR_AUTO_DISPATCH_BUDGET_CHANGED_EVENT_CHANNEL,
+    )) {
+      if (!webContents.isDestroyed()) {
+        webContents.send(PR_AUTO_DISPATCH_BUDGET_CHANGED_EVENT_CHANNEL, status);
+      }
+    }
   }
 
   private stopPrPollingScheduler(): void {
@@ -4175,6 +4289,7 @@ class DesktopAppServerService {
     observedAt: number,
     operatorInitiated = false,
   ): Promise<void> {
+    await this.refreshPrAutoDispatchBudgetSafetyStop();
     const coordinator = this.getPrAutoDispatchCoordinator();
     for (const pr of prs) {
       const prKey = getPrStatusKey(pr);
@@ -5170,6 +5285,7 @@ class DesktopAppServerService {
     this.prPollingSettingsSyncGeneration += 1;
     this.backgroundPrPollingEnabled = false;
     this.prAutoDispatchAllowed = false;
+    this.prAutoDispatchBudgetPaused = false;
     if (this.prDiscoveryTimer) {
       clearInterval(this.prDiscoveryTimer);
       this.prDiscoveryTimer = undefined;
@@ -5235,6 +5351,7 @@ class DesktopAppServerService {
         store: this.getOverlayStore(),
         registry: getDesktopBackendRegistry(),
         isBackgroundPollingEnabled: () => this.isPrAutoDispatchAvailable(),
+        getBudgetConfig: () => this.prAutoDispatchBudgetConfig,
         getCurrentPr: (prKey) => this.prStatusRegistry.get(prKey)?.pr,
         refreshPendingPrs: async (pending) =>
           await this.refreshPendingPrAutoDispatches(pending),
@@ -5248,6 +5365,9 @@ class DesktopAppServerService {
               params: { threadId, pending },
             },
           });
+        },
+        onBudgetStatusChanged: (status) => {
+          this.updatePrAutoDispatchBudgetStatus(status);
         },
       });
     }
@@ -5466,6 +5586,19 @@ export function registerAppServerIpcHandlers(): void {
     inspect: async (request) =>
       await appServerService.getThreadPullRequestAutomationStatus(request),
   });
+
+  ipcMain.removeHandler(APP_SERVER_GET_PR_AUTO_DISPATCH_BUDGET_STATUS_CHANNEL);
+  ipcMain.handle(
+    APP_SERVER_GET_PR_AUTO_DISPATCH_BUDGET_STATUS_CHANNEL,
+    async (): Promise<PrAutoDispatchBudgetStatus> =>
+      await appServerService.getPrAutoDispatchBudgetStatus(),
+  );
+  ipcMain.removeHandler(APP_SERVER_RESUME_PR_AUTO_DISPATCH_BUDGET_CHANNEL);
+  ipcMain.handle(
+    APP_SERVER_RESUME_PR_AUTO_DISPATCH_BUDGET_CHANNEL,
+    async (): Promise<PrAutoDispatchBudgetStatus> =>
+      await appServerService.resumePrAutoDispatchBudget(),
+  );
 
   ipcMain.removeHandler(APP_SERVER_LIST_SKILLS_CHANNEL);
   ipcMain.handle(

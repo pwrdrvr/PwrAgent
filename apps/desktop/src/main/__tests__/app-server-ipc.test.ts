@@ -27,7 +27,11 @@ const mockAppServerLog = vi.hoisted(() => ({
 const prAutomationSettings = vi.hoisted(() => {
   const state = {
     backgroundPrPollingEnabled: true,
+    budgetPaused: false,
+    pauseWhenBudgetEmpty: true,
     prAutoDispatchAllowed: true,
+    budgetCapacity: 30,
+    budgetRefillPerMinute: 1,
   };
   const configWrittenListeners = new Set<() => void>();
   return {
@@ -49,6 +53,15 @@ const prAutomationSettings = vi.hoisted(() => {
         },
         prAutoDispatchAllowed: {
           value: state.prAutoDispatchAllowed,
+        },
+        prAutoDispatchBudgetCapacity: {
+          value: state.budgetCapacity,
+        },
+        prAutoDispatchBudgetRefillPerMinute: {
+          value: state.budgetRefillPerMinute,
+        },
+        pausePrAutoDispatchWhenBudgetEmpty: {
+          value: state.pauseWhenBudgetEmpty,
         },
       },
     })),
@@ -405,6 +418,26 @@ const writePrLookupCacheEntry = vi.fn(async () => undefined);
 const syncThreadPrAutoDispatchCandidates = vi.fn(async () => undefined);
 const getPrAutoDispatchCandidateWinner = vi.fn(async () => undefined);
 const resetThreadPrAutoDispatchForOperator = vi.fn(async () => false);
+const getPrAutoDispatchBudgetStatus = vi.fn(async (params: {
+  config: { capacity: number; refillPerMinute: number };
+}) => ({
+  availableTokens: prAutomationSettings.state.budgetPaused ? 0 : params.config.capacity,
+  capacity: params.config.capacity,
+  refillPerMinute: params.config.refillPerMinute,
+  paused: prAutomationSettings.state.budgetPaused,
+  ...(prAutomationSettings.state.budgetPaused ? { pausedAt: 1_000 } : {}),
+}));
+const resumePrAutoDispatchBudget = vi.fn(async (params: {
+  config: { capacity: number; refillPerMinute: number };
+}) => {
+  prAutomationSettings.state.budgetPaused = false;
+  return {
+    availableTokens: 0,
+    capacity: params.config.capacity,
+    refillPerMinute: params.config.refillPerMinute,
+    paused: false,
+  };
+});
 const scheduleThreadPrAutoDispatch = vi.fn(async () => ({
   status: "disabled" as const,
 }));
@@ -557,6 +590,8 @@ vi.mock("../app-server/desktop-overlay-store", () => ({
     syncThreadPrAutoDispatchCandidates,
     getPrAutoDispatchCandidateWinner,
     resetThreadPrAutoDispatchForOperator,
+    getPrAutoDispatchBudgetStatus,
+    resumePrAutoDispatchBudget,
     scheduleThreadPrAutoDispatch,
     beginThreadPrAutoDispatch,
     restoreThreadPrAutoDispatchAfterBusy,
@@ -643,7 +678,11 @@ vi.mock("../pr-status/git-remote", async () => {
 describe("app server ipc", () => {
   beforeEach(() => {
     prAutomationSettings.state.backgroundPrPollingEnabled = true;
+    prAutomationSettings.state.budgetPaused = false;
+    prAutomationSettings.state.pauseWhenBudgetEmpty = true;
     prAutomationSettings.state.prAutoDispatchAllowed = true;
+    prAutomationSettings.state.budgetCapacity = 30;
+    prAutomationSettings.state.budgetRefillPerMinute = 1;
     prAutomationSettings.resetConfigWrittenListeners();
     prAutomationSettings.onConfigWritten.mockClear();
     prAutomationSettings.readSettings.mockClear();
@@ -696,6 +735,8 @@ describe("app server ipc", () => {
     readPrLookupCache.mockResolvedValue({});
     writePrLookupCacheEntry.mockClear();
     resetThreadPrAutoDispatchForOperator.mockClear();
+    getPrAutoDispatchBudgetStatus.mockClear();
+    resumePrAutoDispatchBudget.mockClear();
     scheduleThreadPrAutoDispatch.mockClear();
     beginThreadPrAutoDispatch.mockClear();
     restoreThreadPrAutoDispatchAfterBusy.mockClear();
@@ -948,6 +989,51 @@ describe("app server ipc", () => {
     expect(scheduleThreadPrAutoDispatch).not.toHaveBeenCalled();
   });
 
+  it("keeps thread preferences intact while a durable budget safety stop pauses Auto-fix PR", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const {
+      APP_SERVER_GET_PR_AUTO_DISPATCH_BUDGET_STATUS_CHANNEL,
+      APP_SERVER_RESUME_PR_AUTO_DISPATCH_BUDGET_CHANNEL,
+      NAVIGATION_SNAPSHOT_CHANNEL,
+    } = await import("../../shared/ipc");
+    prAutomationSettings.state.budgetPaused = true;
+    getThreadOverlayState.mockResolvedValue({
+      backend: "codex",
+      threadId: "thread-1",
+      executionMode: "default",
+      extraLinkedDirectories: [],
+      prAutoDispatchEnabled: true,
+    });
+
+    registerAppServerIpcHandlers();
+    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    const autoDispatchHandlers = setThreadPrAutoDispatchHandler.mock.calls.at(-1)?.[0];
+    await vi.waitFor(async () => {
+      const status = await autoDispatchHandlers?.inspect({
+        backend: "codex",
+        threadId: "thread-1",
+      });
+      expect(status).toMatchObject({
+        autoFixAllowed: true,
+        autoFixEnabled: true,
+        autoFixActive: false,
+        guidance: expect.stringContaining("automatic repair budget is empty"),
+      });
+    });
+
+    expect(await handlers.get(
+      APP_SERVER_GET_PR_AUTO_DISPATCH_BUDGET_STATUS_CHANNEL,
+    )?.()).toMatchObject({ paused: true });
+    expect(await handlers.get(
+      APP_SERVER_RESUME_PR_AUTO_DISPATCH_BUDGET_CHANNEL,
+    )?.()).toMatchObject({ paused: false });
+    expect(resumePrAutoDispatchBudget).toHaveBeenCalledTimes(1);
+    expect(await autoDispatchHandlers?.inspect({
+      backend: "codex",
+      threadId: "thread-1",
+    })).toMatchObject({ autoFixEnabled: true });
+  });
+
   it("does not let a stale settings read re-enable Auto-fix PR", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
@@ -956,6 +1042,9 @@ describe("app server ipc", () => {
           git: {
             backgroundPrPolling: { value: boolean };
             prAutoDispatchAllowed: { value: boolean };
+            prAutoDispatchBudgetCapacity: { value: number };
+            prAutoDispatchBudgetRefillPerMinute: { value: number };
+            pausePrAutoDispatchWhenBudgetEmpty: { value: boolean };
           };
         }) => void)
       | undefined;
@@ -1002,6 +1091,9 @@ describe("app server ipc", () => {
       git: {
         backgroundPrPolling: { value: true },
         prAutoDispatchAllowed: { value: true },
+        prAutoDispatchBudgetCapacity: { value: 30 },
+        prAutoDispatchBudgetRefillPerMinute: { value: 1 },
+        pausePrAutoDispatchWhenBudgetEmpty: { value: true },
       },
     });
     await new Promise((resolve) => setTimeout(resolve, 0));

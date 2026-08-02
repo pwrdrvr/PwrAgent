@@ -1,8 +1,15 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import {
   DEFAULT_BACKGROUND_PR_POLLING,
   DEFAULT_PR_AUTO_DISPATCH_ALLOWED,
+  DEFAULT_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
+  DEFAULT_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
   DEFAULT_PR_AUTO_DISPATCH_ENABLED_FOR_NEW_THREADS,
+  DEFAULT_PAUSE_PR_AUTO_DISPATCH_WHEN_BUDGET_EMPTY,
+  MAX_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
+  MAX_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
+  MIN_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
+  MIN_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
   type DesktopGitDiscoveryCandidate,
   type DesktopGhDiscoveryCandidate,
   type DesktopSettingsSnapshot,
@@ -38,6 +45,21 @@ const DEFAULT_PR_AUTO_DISPATCH_ENABLED_VALUE = {
   source: "default" as const,
 };
 
+const DEFAULT_PR_AUTO_DISPATCH_BUDGET_CAPACITY_VALUE = {
+  value: DEFAULT_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
+  source: "default" as const,
+};
+
+const DEFAULT_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE_VALUE = {
+  value: DEFAULT_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
+  source: "default" as const,
+};
+
+const DEFAULT_PAUSE_PR_AUTO_DISPATCH_WHEN_BUDGET_EMPTY_VALUE = {
+  value: DEFAULT_PAUSE_PR_AUTO_DISPATCH_WHEN_BUDGET_EMPTY,
+  source: "default" as const,
+};
+
 export function GitSettings(props: {
   desktopApi?: DesktopApi;
   saving: boolean;
@@ -45,6 +67,13 @@ export function GitSettings(props: {
   onBackgroundPrPollingChange: (enabled: boolean) => Promise<void>;
   onPrAutoDispatchAllowedChange: (enabled: boolean) => Promise<void>;
   onDefaultPrAutoDispatchEnabledChange: (enabled: boolean) => Promise<void>;
+  onPrAutoDispatchBudgetCapacityChange: (capacity: number) => Promise<void>;
+  onPrAutoDispatchBudgetRefillPerMinuteChange: (
+    refillPerMinute: number,
+  ) => Promise<void>;
+  onPausePrAutoDispatchWhenBudgetEmptyChange: (
+    enabled: boolean,
+  ) => Promise<void>;
   onRefresh: () => Promise<void>;
   onSaveGhPath: (path: string) => Promise<void>;
 }) {
@@ -57,6 +86,15 @@ export function GitSettings(props: {
   const defaultPrAutoDispatchEnabled =
     props.snapshot.git?.defaultPrAutoDispatchEnabled ??
     DEFAULT_PR_AUTO_DISPATCH_ENABLED_VALUE;
+  const prAutoDispatchBudgetCapacity =
+    props.snapshot.git?.prAutoDispatchBudgetCapacity ??
+    DEFAULT_PR_AUTO_DISPATCH_BUDGET_CAPACITY_VALUE;
+  const prAutoDispatchBudgetRefillPerMinute =
+    props.snapshot.git?.prAutoDispatchBudgetRefillPerMinute ??
+    DEFAULT_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE_VALUE;
+  const pausePrAutoDispatchWhenBudgetEmpty =
+    props.snapshot.git?.pausePrAutoDispatchWhenBudgetEmpty ??
+    DEFAULT_PAUSE_PR_AUTO_DISPATCH_WHEN_BUDGET_EMPTY_VALUE;
   const [pendingLaunchpadApply, setPendingLaunchpadApply] = useState<{
     directoryKeys: string[];
     enabled: boolean;
@@ -353,6 +391,49 @@ export function GitSettings(props: {
               </>
             }
           />
+          <BudgetNumberField
+            disabled={props.saving}
+            label="Automatic repair capacity"
+            max={MAX_PR_AUTO_DISPATCH_BUDGET_CAPACITY}
+            min={MIN_PR_AUTO_DISPATCH_BUDGET_CAPACITY}
+            source={sourceBadge(prAutoDispatchBudgetCapacity)}
+            sub="Maximum automatic repair dispatches retained for this PwrAgent profile."
+            suffix="dispatches"
+            value={prAutoDispatchBudgetCapacity.value}
+            onSave={(capacity) => {
+              void props.onPrAutoDispatchBudgetCapacityChange(capacity);
+            }}
+          />
+          <BudgetNumberField
+            disabled={props.saving}
+            label="Automatic repair refill rate"
+            max={MAX_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE}
+            min={MIN_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE}
+            source={sourceBadge(prAutoDispatchBudgetRefillPerMinute)}
+            sub="Dispatch capacity restored each minute for this PwrAgent profile."
+            suffix="per minute"
+            value={prAutoDispatchBudgetRefillPerMinute.value}
+            onSave={(refillPerMinute) => {
+              void props.onPrAutoDispatchBudgetRefillPerMinuteChange(
+                refillPerMinute,
+              );
+            }}
+          />
+          <SettingsField
+            label="Pause Auto-fix PR when the budget is empty"
+            sub="Pause automatic PR repairs until you acknowledge the safety stop. Thread-level Auto-fix PR choices are left unchanged."
+            source={sourceBadge(pausePrAutoDispatchWhenBudgetEmpty)}
+            control={
+              <SettingsSwitch
+                checked={pausePrAutoDispatchWhenBudgetEmpty.value}
+                disabled={props.saving}
+                label="Pause Auto-fix PR when the budget is empty"
+                onChange={(enabled) => {
+                  void props.onPausePrAutoDispatchWhenBudgetEmptyChange(enabled);
+                }}
+              />
+            }
+          />
         </div>
       </SettingsSection>
     </SettingsSectionStack>
@@ -392,6 +473,56 @@ function GitActionConfirmation(props: {
         </button>
       </div>
     </div>
+  );
+}
+
+function BudgetNumberField(props: {
+  disabled?: boolean;
+  label: string;
+  max: number;
+  min: number;
+  source: string;
+  sub?: ReactNode;
+  suffix: string;
+  value: number;
+  onSave: (value: number) => void;
+}) {
+  const [value, setValue] = useState(String(props.value));
+
+  return (
+    <SettingsField
+      label={props.label}
+      sub={props.sub}
+      source={props.source}
+      control={
+        <span className="settings-number">
+          <input
+            aria-label={props.label}
+            className="settings-input settings-input--inline"
+            disabled={props.disabled}
+            max={props.max}
+            min={props.min}
+            type="number"
+            value={value}
+            onBlur={() => {
+              const parsed = Number(value);
+              if (!Number.isFinite(parsed)) {
+                setValue(String(props.value));
+                return;
+              }
+              const clamped = Math.min(
+                Math.max(Math.trunc(parsed), props.min),
+                props.max,
+              );
+              setValue(String(clamped));
+              props.onSave(clamped);
+            }}
+            onChange={(event) => setValue(event.currentTarget.value)}
+          />
+          <span className="settings-source">{props.suffix}</span>
+        </span>
+      }
+    />
   );
 }
 

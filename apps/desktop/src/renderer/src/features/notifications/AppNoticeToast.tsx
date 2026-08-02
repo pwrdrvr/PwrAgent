@@ -6,6 +6,11 @@ import type { DesktopApi } from "../../lib/desktop-api";
 const AUTO_DISMISS_MS = 9_000;
 
 export type AppNoticeToastNotice = {
+  actions?: readonly {
+    label: string;
+    onClick: () => void;
+    tone?: "primary" | "secondary";
+  }[];
   autoDismiss?: boolean;
   id: string;
   title: string;
@@ -68,6 +73,7 @@ export function AppNoticeToast(props: {
     [props.notice.title, props.notice.message, props.notice.detail]
       .filter(Boolean)
       .join("\n");
+  const customActions = props.notice.actions ?? [];
   const statusDotClass =
     props.notice.status?.state === "progress"
       ? "status-dot status-dot--warning status-dot--blink"
@@ -107,26 +113,39 @@ export function AppNoticeToast(props: {
         ) : null}
       </div>
       <div className="app-notice-toast__actions">
-        <button
-          className="app-notice-toast__icon-button"
-          type="button"
-          aria-label="Copy notice"
-          title="Copy notice"
-          onClick={() => {
-            void copyText(copyValue, props.desktopApi);
-          }}
-        >
-          <CopyIcon size={14} aria-hidden="true" />
-        </button>
-        <button
-          className="app-notice-toast__icon-button"
-          type="button"
-          aria-label="Dismiss notice"
-          title="Dismiss notice"
-          onClick={props.onDismiss}
-        >
-          <CloseIcon size={14} aria-hidden="true" />
-        </button>
+        {customActions.length > 0
+          ? customActions.map((action) => (
+              <button
+                key={action.label}
+                className={`button button--${action.tone ?? "secondary"}`}
+                type="button"
+                onClick={action.onClick}
+              >
+                {action.label}
+              </button>
+            ))
+          : <>
+              <button
+                className="app-notice-toast__icon-button"
+                type="button"
+                aria-label="Copy notice"
+                title="Copy notice"
+                onClick={() => {
+                  void copyText(copyValue, props.desktopApi);
+                }}
+              >
+                <CopyIcon size={14} aria-hidden="true" />
+              </button>
+              <button
+                className="app-notice-toast__icon-button"
+                type="button"
+                aria-label="Dismiss notice"
+                title="Dismiss notice"
+                onClick={props.onDismiss}
+              >
+                <CloseIcon size={14} aria-hidden="true" />
+              </button>
+            </>}
       </div>
       {autoDismiss ? (
         <span

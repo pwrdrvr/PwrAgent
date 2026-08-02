@@ -9,7 +9,7 @@ import {
 } from "@pwragent/shared";
 import { getNativeBinding } from "./native-binding.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 36;
+export const CURRENT_STATE_DB_USER_VERSION = 37;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -573,6 +573,23 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_pr_auto_dispatch_pr_fingerprint
   ON pr_auto_dispatch_claims(pr_key, fingerprint);
 `;
 
+const PR_AUTO_DISPATCH_BUDGET_SCHEMA = `
+CREATE TABLE IF NOT EXISTS pr_auto_dispatch_budget (
+  scope      TEXT PRIMARY KEY,
+  tokens     REAL NOT NULL,
+  updated_at INTEGER NOT NULL,
+  paused_at  INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS pr_auto_dispatch_budget_reservations (
+  backend    TEXT NOT NULL,
+  thread_id  TEXT NOT NULL,
+  fingerprint TEXT NOT NULL,
+  reserved_at INTEGER NOT NULL,
+  PRIMARY KEY (backend, thread_id, fingerprint)
+);
+`;
+
 const PR_STATUS_WATCH_SCHEMA = `
 CREATE TABLE IF NOT EXISTS pr_status_watches (
   watch_id           TEXT PRIMARY KEY,
@@ -1105,11 +1122,6 @@ export class StateDb {
     if ((db.pragma("user_version", { simple: true }) as number) < 36) {
       db.transaction(() => {
         db.exec(PR_STATUS_WATCH_SCHEMA);
-        db.pragma("user_version = 35");
-      })();
-    }
-    if ((db.pragma("user_version", { simple: true }) as number) < 36) {
-      db.transaction(() => {
         db.exec(`
           DELETE FROM pr_auto_dispatch_claims
           WHERE rowid NOT IN (
@@ -1120,7 +1132,13 @@ export class StateDb {
         `);
         db.exec(PR_AUTO_DISPATCH_SCHEMA);
         db.exec(PR_AUTO_DISPATCH_GLOBAL_FINGERPRINT_INDEX);
-        db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
+        db.pragma("user_version = 36");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 37) {
+      db.transaction(() => {
+        db.exec(PR_AUTO_DISPATCH_BUDGET_SCHEMA);
+        db.pragma("user_version = 37");
       })();
     }
     // Keep current-version databases converged without asking pre-v36 profiles
@@ -1284,6 +1302,7 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     db.exec(PR_STATUS_CACHE_SCHEMA);
     db.exec(PR_LOOKUP_CACHE_SCHEMA);
     db.exec(PR_AUTO_DISPATCH_SCHEMA);
+    db.exec(PR_AUTO_DISPATCH_BUDGET_SCHEMA);
     db.exec(PR_STATUS_WATCH_SCHEMA);
     ensureThreadSearchFtsThreadIdColumn(db);
     ensurePullRequestProviderColumns(db);

@@ -3,6 +3,8 @@ import type {
   AppServerBackendKind,
   AppServerThreadMessageOrigin,
   AppServerTurnInputItem,
+  PrAutoDispatchBudgetConfig,
+  PrAutoDispatchBudgetStatus,
   PrSummary,
   ThreadOverlayState,
   ThreadPrAutoDispatchEventKind,
@@ -10,9 +12,14 @@ import type {
 } from "@pwragent/shared";
 import {
   buildPullRequestStatusKey,
+  DEFAULT_PAUSE_PR_AUTO_DISPATCH_WHEN_BUDGET_EMPTY,
+  DEFAULT_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
+  DEFAULT_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
   parseThreadIdentityKey,
 } from "@pwragent/shared";
 import type {
+  PrAutoDispatchBudgetCompletionResult,
+  PrAutoDispatchBudgetReservationResult,
   PrAutoDispatchPendingRecord,
   PrAutoDispatchRecoveryResult,
   PrAutoDispatchScheduleResult,
@@ -74,8 +81,24 @@ type PrAutoDispatchStore = {
     | { status: "ready"; attemptCount: number; record: PrAutoDispatchPendingRecord }
     | { status: "disabled" | "stale" | "attempt-limit" }
   >;
+  reserveThreadPrAutoDispatchBudget(params: {
+    backend: AppServerBackendKind;
+    config: PrAutoDispatchBudgetConfig;
+    fingerprint: string;
+    now: number;
+    ownerId: string;
+    threadId: string;
+  }): Promise<PrAutoDispatchBudgetReservationResult>;
+  rejectThreadPrAutoDispatchForBudget(params: {
+    backend: AppServerBackendKind;
+    fingerprint: string;
+    now: number;
+    ownerId: string;
+    threadId: string;
+  }): Promise<boolean>;
   restoreThreadPrAutoDispatchAfterBusy(params: {
     backend: AppServerBackendKind;
+    budgetConfig: PrAutoDispatchBudgetConfig;
     threadId: string;
     fingerprint: string;
     ownerId: string;
@@ -92,12 +115,14 @@ type PrAutoDispatchStore = {
   }): Promise<boolean>;
   finishThreadPrAutoDispatch(params: {
     backend: AppServerBackendKind;
+    budgetConfig: PrAutoDispatchBudgetConfig;
     threadId: string;
     fingerprint: string;
     ownerId: string;
+    refundBudgetReservation?: boolean;
     status: "dispatched" | "failed";
     now: number;
-  }): Promise<void>;
+  }): Promise<PrAutoDispatchBudgetCompletionResult | undefined>;
   cancelThreadPrAutoDispatch(params: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -129,6 +154,7 @@ type PrAutoDispatchStore = {
     }
   >>;
   recoverOrphanedThreadPrAutoDispatches(params: {
+    budgetConfig: PrAutoDispatchBudgetConfig;
     now: number;
     scheduledAt: number;
   }): Promise<PrAutoDispatchRecoveryResult>;
@@ -180,6 +206,10 @@ export class PrAutoDispatchCoordinator {
         threadId: string;
         pending: ThreadPrAutoDispatchPending | null;
       }) => void | Promise<void>;
+      getBudgetConfig?: () => PrAutoDispatchBudgetConfig;
+      onBudgetStatusChanged?: (
+        status: PrAutoDispatchBudgetStatus,
+      ) => void | Promise<void>;
       now?: () => number;
     },
   ) {}
@@ -438,6 +468,29 @@ export class PrAutoDispatchCoordinator {
       return;
     }
 
+    const reservation = await this.options.store.reserveThreadPrAutoDispatchBudget({
+      ...identity,
+      config: this.budgetConfig(),
+      fingerprint,
+      now: this.now(),
+      ownerId: this.ownerId,
+    });
+    if (reservation.budget.paused) {
+      await this.notifyBudgetStatus(reservation.budget);
+    }
+    if (reservation.status !== "reserved") {
+      if (reservation.status !== "stale") {
+        await this.options.store.rejectThreadPrAutoDispatchForBudget({
+          ...identity,
+          fingerprint,
+          now: this.now(),
+          ownerId: this.ownerId,
+        });
+        await this.notifyPending(identity, null);
+      }
+      return;
+    }
+
     const stopLeaseHeartbeat = this.startLeaseHeartbeat(identity, fingerprint);
     try {
       const submission = await this.options.registry.submitTurnIfIdle({
@@ -468,22 +521,31 @@ export class PrAutoDispatchCoordinator {
         await this.restoreAfterBusy(identity, fingerprint, now);
         return;
       }
-      await this.options.store.finishThreadPrAutoDispatch({
+      const completion = await this.options.store.finishThreadPrAutoDispatch({
         ...identity,
+        budgetConfig: this.budgetConfig(),
         fingerprint,
         ownerId: this.ownerId,
         status: "dispatched",
         now: this.now(),
       });
+      if (completion?.budget.paused) {
+        await this.notifyBudgetStatus(completion.budget);
+      }
       await this.notifyPending(identity, null);
     } catch {
-      await this.options.store.finishThreadPrAutoDispatch({
+      const completion = await this.options.store.finishThreadPrAutoDispatch({
         ...identity,
+        budgetConfig: this.budgetConfig(),
         fingerprint,
         ownerId: this.ownerId,
+        refundBudgetReservation: true,
         status: "failed",
         now: this.now(),
       });
+      if (completion?.budget.paused) {
+        await this.notifyBudgetStatus(completion.budget);
+      }
       await this.notifyPending(identity, null);
     } finally {
       stopLeaseHeartbeat();
@@ -497,6 +559,7 @@ export class PrAutoDispatchCoordinator {
   ): Promise<void> {
     const pending = await this.options.store.restoreThreadPrAutoDispatchAfterBusy({
       ...identity,
+      budgetConfig: this.budgetConfig(),
       fingerprint,
       ownerId: this.ownerId,
       scheduledAt: now + PR_AUTO_DISPATCH_DELAY_MS,
@@ -510,6 +573,7 @@ export class PrAutoDispatchCoordinator {
   private async resumeFromStore(): Promise<void> {
     const now = this.now();
     const recovery = await this.options.store.recoverOrphanedThreadPrAutoDispatches({
+      budgetConfig: this.budgetConfig(),
       now,
       scheduledAt: now + PR_AUTO_DISPATCH_DELAY_MS,
     });
@@ -590,6 +654,12 @@ export class PrAutoDispatchCoordinator {
     await this.options.onPendingChanged?.({ ...identity, pending });
   }
 
+  private async notifyBudgetStatus(
+    status: PrAutoDispatchBudgetStatus,
+  ): Promise<void> {
+    await this.options.onBudgetStatusChanged?.(status);
+  }
+
   private clearTimer(threadKey: string): void {
     const timer = this.timers.get(threadKey);
     if (timer) clearTimeout(timer);
@@ -605,6 +675,14 @@ export class PrAutoDispatchCoordinator {
 
   private now(): number {
     return this.options.now?.() ?? Date.now();
+  }
+
+  private budgetConfig(): PrAutoDispatchBudgetConfig {
+    return this.options.getBudgetConfig?.() ?? {
+      capacity: DEFAULT_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
+      refillPerMinute: DEFAULT_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
+      pauseWhenEmpty: DEFAULT_PAUSE_PR_AUTO_DISPATCH_WHEN_BUDGET_EMPTY,
+    };
   }
 }
 

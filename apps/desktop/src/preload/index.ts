@@ -71,6 +71,7 @@ import type {
   GetThreadFileDiffResponse,
   PersistThreadUsageActivityRequest,
   PersistThreadUsageActivityResponse,
+  PrAutoDispatchBudgetStatus,
   CheckThreadBranchDriftRequest,
   CheckThreadBranchDriftResponse,
   CompactThreadRequest,
@@ -345,6 +346,9 @@ import {
   APP_UPDATE_STATUS_EVENT_CHANNEL,
   APP_UPDATE_STATUS_READ_CHANNEL,
   APP_SERVER_LIST_SKILLS_CHANNEL,
+  APP_SERVER_GET_PR_AUTO_DISPATCH_BUDGET_STATUS_CHANNEL,
+  APP_SERVER_RESUME_PR_AUTO_DISPATCH_BUDGET_CHANNEL,
+  PR_AUTO_DISPATCH_BUDGET_CHANGED_EVENT_CHANNEL,
   APP_SERVER_LIST_THREADS_CHANNEL,
   THREAD_SEARCH_CHANNEL,
   APP_SERVER_ARCHIVE_THREAD_CHANNEL,
@@ -765,6 +769,10 @@ const desktopApi = Object.freeze({
     request?: AppServerListSkillsRequest
   ): Promise<AppServerListSkillsResponse> =>
     await ipcRenderer.invoke(APP_SERVER_LIST_SKILLS_CHANNEL, request),
+  getPrAutoDispatchBudgetStatus: async (): Promise<PrAutoDispatchBudgetStatus> =>
+    await ipcRenderer.invoke(APP_SERVER_GET_PR_AUTO_DISPATCH_BUDGET_STATUS_CHANNEL),
+  resumePrAutoDispatchBudget: async (): Promise<PrAutoDispatchBudgetStatus> =>
+    await ipcRenderer.invoke(APP_SERVER_RESUME_PR_AUTO_DISPATCH_BUDGET_CHANNEL),
   listBackends: async (
     request?: ListBackendsRequest
   ): Promise<ListBackendsResponse> =>
@@ -1478,6 +1486,18 @@ const desktopApi = Object.freeze({
     ipcRenderer.on(AGENT_EVENT_CHANNEL, listener);
     return () => {
       ipcRenderer.off(AGENT_EVENT_CHANNEL, listener);
+    };
+  },
+  onPrAutoDispatchBudgetChanged: (
+    callback: (status: PrAutoDispatchBudgetStatus) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      status: PrAutoDispatchBudgetStatus,
+    ) => callback(status);
+    ipcRenderer.on(PR_AUTO_DISPATCH_BUDGET_CHANGED_EVENT_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(PR_AUTO_DISPATCH_BUDGET_CHANGED_EVENT_CHANNEL, listener);
     };
   },
   onAppearanceChanged: (

@@ -14,6 +14,8 @@ import type {
   NavigationLaunchpadDefaults,
   NavigationSnapshot,
   PrSummary,
+  PrAutoDispatchBudgetConfig,
+  PrAutoDispatchBudgetStatus,
   ThreadExecutionMode,
   ThreadGitWorkingState,
   ThreadMessagingBindingTransition,
@@ -94,6 +96,21 @@ export type PrAutoDispatchScheduleResult = {
   pending?: ThreadPrAutoDispatchPending;
 };
 
+export type PrAutoDispatchBudgetReservationResult =
+  | {
+      budget: PrAutoDispatchBudgetStatus;
+      status: "reserved";
+    }
+  | {
+      budget: PrAutoDispatchBudgetStatus;
+      status: "empty" | "paused" | "stale";
+    };
+
+export type PrAutoDispatchBudgetCompletionResult = {
+  budget: PrAutoDispatchBudgetStatus;
+  pausedNow: boolean;
+};
+
 export type PrAutoDispatchCandidate = {
   backend: ThreadOverlayState["backend"];
   eligibleSince: number;
@@ -120,6 +137,21 @@ type PrAutoDispatchClaimRow = {
 type PrAutoDispatchIncidentRow = {
   active_kinds: string;
   attempt_count: number;
+};
+
+type PrAutoDispatchBudgetRow = {
+  paused_at: number | null;
+  tokens: number;
+  updated_at: number;
+};
+
+type PrAutoDispatchBudgetReservationRow = {
+  reserved_at: number;
+};
+
+type PrAutoDispatchBudgetState = {
+  pausedAt?: number;
+  tokens: number;
 };
 
 type PrStatusWatchRow = {
@@ -2713,7 +2745,7 @@ export class SqliteOverlayStore {
         );
       return { status: "scheduled", pending: params.pending };
     });
-    return schedule();
+    return schedule.immediate();
   }
 
   async beginThreadPrAutoDispatch(params: {
@@ -2801,11 +2833,231 @@ export class SqliteOverlayStore {
         );
       return { status: "ready" as const, attemptCount, record };
     });
-    return begin();
+    return begin.immediate();
+  }
+
+  async getPrAutoDispatchBudgetStatus(params: {
+    config: PrAutoDispatchBudgetConfig;
+    now: number;
+  }): Promise<PrAutoDispatchBudgetStatus> {
+    const read = this.stateDb.raw.transaction(() => {
+      const budget = this.readPrAutoDispatchBudget({
+        config: params.config,
+        now: params.now,
+      });
+      this.writePrAutoDispatchBudget({ budget, now: params.now });
+      return this.toPrAutoDispatchBudgetStatus({
+        budget,
+        config: params.config,
+      });
+    });
+    return read.immediate();
+  }
+
+  async resumePrAutoDispatchBudget(params: {
+    config: PrAutoDispatchBudgetConfig;
+    now: number;
+  }): Promise<PrAutoDispatchBudgetStatus> {
+    const resume = this.stateDb.raw.transaction(() => {
+      const budget = this.readPrAutoDispatchBudget({
+        config: params.config,
+        now: params.now,
+      });
+      budget.pausedAt = undefined;
+      this.writePrAutoDispatchBudget({ budget, now: params.now });
+      return this.toPrAutoDispatchBudgetStatus({
+        budget,
+        config: params.config,
+      });
+    });
+    return resume.immediate();
+  }
+
+  async reserveThreadPrAutoDispatchBudget(params: {
+    backend: ThreadOverlayState["backend"];
+    config: PrAutoDispatchBudgetConfig;
+    fingerprint: string;
+    now: number;
+    ownerId: string;
+    threadId: string;
+  }): Promise<PrAutoDispatchBudgetReservationResult> {
+    const reserve = this.stateDb.raw.transaction((): PrAutoDispatchBudgetReservationResult => {
+      const claim = this.stateDb.raw
+        .prepare(
+          `SELECT status, payload
+           FROM pr_auto_dispatch_claims
+           WHERE backend = ? AND thread_id = ? AND fingerprint = ?`,
+        )
+        .get(
+          params.backend,
+          params.threadId,
+          params.fingerprint,
+        ) as Pick<PrAutoDispatchClaimRow, "status" | "payload"> | undefined;
+      const record = claim
+        ? parsePrAutoDispatchPendingRecord(claim.payload)
+        : undefined;
+      const budget = this.readPrAutoDispatchBudget({
+        config: params.config,
+        now: params.now,
+      });
+      const status = this.toPrAutoDispatchBudgetStatus({
+        budget,
+        config: params.config,
+      });
+      if (
+        !claim
+        || claim.status !== "dispatching"
+        || !record
+        || record.dispatchLease?.ownerId !== params.ownerId
+      ) {
+        return { budget: status, status: "stale" };
+      }
+      if (budget.pausedAt !== undefined) {
+        this.writePrAutoDispatchBudget({ budget, now: params.now });
+        return {
+          budget: this.toPrAutoDispatchBudgetStatus({
+            budget,
+            config: params.config,
+          }),
+          status: "paused",
+        };
+      }
+      const existingReservation = this.stateDb.raw
+        .prepare(
+          `SELECT reserved_at
+           FROM pr_auto_dispatch_budget_reservations
+           WHERE backend = ? AND thread_id = ? AND fingerprint = ?`,
+        )
+        .get(
+          params.backend,
+          params.threadId,
+          params.fingerprint,
+        ) as PrAutoDispatchBudgetReservationRow | undefined;
+      if (existingReservation) {
+        this.writePrAutoDispatchBudget({ budget, now: params.now });
+        return {
+          budget: this.toPrAutoDispatchBudgetStatus({
+            budget,
+            config: params.config,
+          }),
+          status: "stale",
+        };
+      }
+      if (budget.tokens < 1) {
+        const activeReservations = this.stateDb.raw
+          .prepare(
+            `SELECT COUNT(*) AS count
+             FROM pr_auto_dispatch_budget_reservations`,
+          )
+          .get() as { count: number };
+        if (
+          params.config.pauseWhenEmpty
+          && activeReservations.count === 0
+          && budget.pausedAt === undefined
+        ) {
+          budget.pausedAt = params.now;
+        }
+        this.writePrAutoDispatchBudget({ budget, now: params.now });
+        return {
+          budget: this.toPrAutoDispatchBudgetStatus({
+            budget,
+            config: params.config,
+          }),
+          status: budget.pausedAt !== undefined ? "paused" : "empty",
+        };
+      }
+      budget.tokens -= 1;
+      this.writePrAutoDispatchBudget({ budget, now: params.now });
+      this.stateDb.raw
+        .prepare(
+          `INSERT INTO pr_auto_dispatch_budget_reservations(
+             backend, thread_id, fingerprint, reserved_at
+           ) VALUES (?, ?, ?, ?)`,
+        )
+        .run(
+          params.backend,
+          params.threadId,
+          params.fingerprint,
+          params.now,
+        );
+      return {
+        budget: this.toPrAutoDispatchBudgetStatus({
+          budget,
+          config: params.config,
+        }),
+        status: "reserved",
+      };
+    });
+    return reserve.immediate();
+  }
+
+  async rejectThreadPrAutoDispatchForBudget(params: {
+    backend: ThreadOverlayState["backend"];
+    fingerprint: string;
+    now: number;
+    ownerId: string;
+    threadId: string;
+  }): Promise<boolean> {
+    const reject = this.stateDb.raw.transaction(() => {
+      const claim = this.stateDb.raw
+        .prepare(
+          `SELECT pr_key, status, payload
+           FROM pr_auto_dispatch_claims
+           WHERE backend = ? AND thread_id = ? AND fingerprint = ?`,
+        )
+        .get(
+          params.backend,
+          params.threadId,
+          params.fingerprint,
+        ) as PrAutoDispatchClaimRow | undefined;
+      const record = claim
+        ? parsePrAutoDispatchPendingRecord(claim.payload)
+        : undefined;
+      if (
+        !claim
+        || claim.status !== "dispatching"
+        || !record
+        || record.dispatchLease?.ownerId !== params.ownerId
+      ) {
+        return false;
+      }
+      const updated = this.stateDb.raw
+        .prepare(
+          `UPDATE pr_auto_dispatch_claims
+           SET status = 'budget-exhausted', updated_at = ?, payload = ?
+           WHERE backend = ? AND thread_id = ? AND fingerprint = ?
+             AND status = 'dispatching'`,
+        )
+        .run(
+          params.now,
+          JSON.stringify(clearPrAutoDispatchLease(record)),
+          params.backend,
+          params.threadId,
+          params.fingerprint,
+        );
+      if (updated.changes === 0) {
+        return false;
+      }
+      this.stateDb.raw
+        .prepare(
+          `UPDATE pr_auto_dispatch_incidents
+           SET attempt_count = MAX(0, attempt_count - 1), updated_at = ?
+           WHERE backend = ? AND thread_id = ? AND pr_key = ?`,
+        )
+        .run(
+          params.now,
+          params.backend,
+          params.threadId,
+          claim.pr_key,
+        );
+      return true;
+    });
+    return reject.immediate();
   }
 
   async restoreThreadPrAutoDispatchAfterBusy(params: {
     backend: ThreadOverlayState["backend"];
+    budgetConfig: PrAutoDispatchBudgetConfig;
     threadId: string;
     fingerprint: string;
     ownerId: string;
@@ -2862,9 +3114,16 @@ export class SqliteOverlayStore {
           params.threadId,
           claim.pr_key,
         );
+      this.refundPrAutoDispatchBudgetReservation({
+        backend: params.backend,
+        config: params.budgetConfig,
+        fingerprint: params.fingerprint,
+        now: params.now,
+        threadId: params.threadId,
+      });
       return pending;
     });
-    return restore();
+    return restore.immediate();
   }
 
   async renewThreadPrAutoDispatchLease(params: {
@@ -2925,13 +3184,15 @@ export class SqliteOverlayStore {
 
   async finishThreadPrAutoDispatch(params: {
     backend: ThreadOverlayState["backend"];
+    budgetConfig: PrAutoDispatchBudgetConfig;
     threadId: string;
     fingerprint: string;
     ownerId: string;
+    refundBudgetReservation?: boolean;
     status: "dispatched" | "failed";
     now: number;
-  }): Promise<void> {
-    const finish = this.stateDb.raw.transaction(() => {
+  }): Promise<PrAutoDispatchBudgetCompletionResult | undefined> {
+    const finish = this.stateDb.raw.transaction((): PrAutoDispatchBudgetCompletionResult | undefined => {
       const claim = this.stateDb.raw
         .prepare(
           `SELECT pr_key, status, payload
@@ -2952,8 +3213,41 @@ export class SqliteOverlayStore {
         || !record
         || record.dispatchLease?.ownerId !== params.ownerId
       ) {
-        return;
+        return undefined;
       }
+      const budget = params.refundBudgetReservation
+        ? this.refundPrAutoDispatchBudgetReservation({
+            backend: params.backend,
+            config: params.budgetConfig,
+            fingerprint: params.fingerprint,
+            now: params.now,
+            threadId: params.threadId,
+          })
+        : this.readPrAutoDispatchBudget({
+            config: params.budgetConfig,
+            now: params.now,
+          });
+      if (!params.refundBudgetReservation) {
+        this.stateDb.raw
+          .prepare(
+            `DELETE FROM pr_auto_dispatch_budget_reservations
+             WHERE backend = ? AND thread_id = ? AND fingerprint = ?`,
+          )
+          .run(
+            params.backend,
+            params.threadId,
+            params.fingerprint,
+          );
+      }
+      const pausedNow =
+        params.status === "dispatched"
+        && params.budgetConfig.pauseWhenEmpty
+        && budget.tokens < 1
+        && budget.pausedAt === undefined;
+      if (pausedNow) {
+        budget.pausedAt = params.now;
+      }
+      this.writePrAutoDispatchBudget({ budget, now: params.now });
       this.stateDb.raw
         .prepare(
           `UPDATE pr_auto_dispatch_claims
@@ -2969,8 +3263,15 @@ export class SqliteOverlayStore {
           params.threadId,
           params.fingerprint,
         );
+      return {
+        budget: this.toPrAutoDispatchBudgetStatus({
+          budget,
+          config: params.budgetConfig,
+        }),
+        pausedNow,
+      };
     });
-    finish();
+    return finish.immediate();
   }
 
   async cancelThreadPrAutoDispatch(params: {
@@ -3084,6 +3385,7 @@ export class SqliteOverlayStore {
   }
 
   async recoverOrphanedThreadPrAutoDispatches(params: {
+    budgetConfig: PrAutoDispatchBudgetConfig;
     now: number;
     scheduledAt: number;
   }): Promise<PrAutoDispatchRecoveryResult> {
@@ -3134,6 +3436,13 @@ export class SqliteOverlayStore {
         if (updated.changes === 0) {
           continue;
         }
+        this.refundPrAutoDispatchBudgetReservation({
+          backend: row.backend,
+          config: params.budgetConfig,
+          fingerprint: row.fingerprint,
+          now: params.now,
+          threadId: row.thread_id,
+        });
         recoveredCount += 1;
         this.stateDb.raw
           .prepare(
@@ -3148,7 +3457,7 @@ export class SqliteOverlayStore {
         recoveredCount,
       };
     });
-    return recover();
+    return recover.immediate();
   }
 
   async getThreadPrAutoDispatchAttemptCount(params: {
@@ -3888,7 +4197,129 @@ export class SqliteOverlayStore {
       )
       .get(params.backend, params.threadId, params.prKey) as
         | PrAutoDispatchIncidentRow
-        | undefined;
+      | undefined;
+  }
+
+  private readPrAutoDispatchBudget(params: {
+    config: PrAutoDispatchBudgetConfig;
+    now: number;
+  }): PrAutoDispatchBudgetState {
+    const row = this.stateDb.raw
+      .prepare(
+        `SELECT tokens, updated_at, paused_at
+         FROM pr_auto_dispatch_budget
+         WHERE scope = 'profile'`,
+      )
+      .get() as PrAutoDispatchBudgetRow | undefined;
+    const { capacity, refillPerMinute } = this.getPrAutoDispatchBudgetLimits(
+      params.config,
+    );
+    const previousTokens = Math.max(0, row?.tokens ?? capacity);
+    const elapsedMs = Math.max(0, params.now - (row?.updated_at ?? params.now));
+    return {
+      ...(row?.paused_at !== null && row?.paused_at !== undefined
+        ? { pausedAt: row.paused_at }
+        : {}),
+      tokens: Math.min(
+        capacity,
+        previousTokens + (elapsedMs * refillPerMinute) / 60_000,
+      ),
+    };
+  }
+
+  private writePrAutoDispatchBudget(params: {
+    budget: PrAutoDispatchBudgetState;
+    now: number;
+  }): void {
+    this.stateDb.raw
+      .prepare(
+        `INSERT INTO pr_auto_dispatch_budget(scope, tokens, updated_at, paused_at)
+         VALUES ('profile', ?, ?, ?)
+         ON CONFLICT(scope) DO UPDATE SET
+           tokens = excluded.tokens,
+           updated_at = excluded.updated_at,
+           paused_at = excluded.paused_at`,
+      )
+      .run(
+        params.budget.tokens,
+        params.now,
+        params.budget.pausedAt ?? null,
+      );
+  }
+
+  private refundPrAutoDispatchBudgetReservation(params: {
+    backend: ThreadOverlayState["backend"];
+    config: PrAutoDispatchBudgetConfig;
+    fingerprint: string;
+    now: number;
+    threadId: string;
+  }): PrAutoDispatchBudgetState {
+    const budget = this.readPrAutoDispatchBudget({
+      config: params.config,
+      now: params.now,
+    });
+    const reservation = this.stateDb.raw
+      .prepare(
+        `SELECT reserved_at
+         FROM pr_auto_dispatch_budget_reservations
+         WHERE backend = ? AND thread_id = ? AND fingerprint = ?`,
+      )
+      .get(
+        params.backend,
+        params.threadId,
+        params.fingerprint,
+      ) as PrAutoDispatchBudgetReservationRow | undefined;
+    if (reservation) {
+      this.stateDb.raw
+        .prepare(
+          `DELETE FROM pr_auto_dispatch_budget_reservations
+           WHERE backend = ? AND thread_id = ? AND fingerprint = ?`,
+        )
+        .run(
+          params.backend,
+          params.threadId,
+          params.fingerprint,
+        );
+      budget.tokens = Math.min(
+        this.getPrAutoDispatchBudgetLimits(params.config).capacity,
+        budget.tokens + 1,
+      );
+    }
+    this.writePrAutoDispatchBudget({ budget, now: params.now });
+    return budget;
+  }
+
+  private toPrAutoDispatchBudgetStatus(params: {
+    budget: PrAutoDispatchBudgetState;
+    config: PrAutoDispatchBudgetConfig;
+  }): PrAutoDispatchBudgetStatus {
+    const { capacity, refillPerMinute } = this.getPrAutoDispatchBudgetLimits(
+      params.config,
+    );
+    return {
+      availableTokens: Math.max(0, Math.floor(params.budget.tokens)),
+      capacity,
+      refillPerMinute,
+      paused: params.budget.pausedAt !== undefined,
+      ...(params.budget.pausedAt !== undefined
+        ? { pausedAt: params.budget.pausedAt }
+        : {}),
+    };
+  }
+
+  private getPrAutoDispatchBudgetLimits(
+    config: PrAutoDispatchBudgetConfig,
+  ): Pick<PrAutoDispatchBudgetConfig, "capacity" | "refillPerMinute"> {
+    return {
+      capacity:
+        Number.isFinite(config.capacity) && config.capacity > 0
+          ? Math.floor(config.capacity)
+          : 1,
+      refillPerMinute:
+        Number.isFinite(config.refillPerMinute) && config.refillPerMinute >= 0
+          ? config.refillPerMinute
+          : 0,
+    };
   }
 
   private readThreadPrAutoDispatchPending(params: {
@@ -5128,6 +5559,10 @@ export type OverlayStoreLike = Pick<
   | "resetThreadPrAutoDispatchForOperator"
   | "scheduleThreadPrAutoDispatch"
   | "beginThreadPrAutoDispatch"
+  | "getPrAutoDispatchBudgetStatus"
+  | "resumePrAutoDispatchBudget"
+  | "reserveThreadPrAutoDispatchBudget"
+  | "rejectThreadPrAutoDispatchForBudget"
   | "restoreThreadPrAutoDispatchAfterBusy"
   | "renewThreadPrAutoDispatchLease"
   | "finishThreadPrAutoDispatch"

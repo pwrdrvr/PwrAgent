@@ -675,6 +675,25 @@ function SettingsSectionBody(props: {
             git: { defaultPrAutoDispatchEnabled: enabled },
           });
         }}
+        onPrAutoDispatchBudgetCapacityChange={async (capacity: number) => {
+          await props.settings.writeConfig({
+            git: { prAutoDispatchBudgetCapacity: capacity },
+          });
+        }}
+        onPrAutoDispatchBudgetRefillPerMinuteChange={async (
+          refillPerMinute: number,
+        ) => {
+          await props.settings.writeConfig({
+            git: { prAutoDispatchBudgetRefillPerMinute: refillPerMinute },
+          });
+        }}
+        onPausePrAutoDispatchWhenBudgetEmptyChange={async (
+          enabled: boolean,
+        ) => {
+          await props.settings.writeConfig({
+            git: { pausePrAutoDispatchWhenBudgetEmpty: enabled },
+          });
+        }}
         onRefresh={props.settings.refresh}
         onSaveGhPath={async (path) => {
           await props.settings.writeConfig({

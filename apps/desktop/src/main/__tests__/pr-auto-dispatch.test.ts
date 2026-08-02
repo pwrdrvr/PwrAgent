@@ -6,6 +6,8 @@ import {
   buildPullRequestStatusKey,
   materializeNavigationThreads,
   type AppServerTurnInputItem,
+  type PrAutoDispatchBudgetConfig,
+  type PrAutoDispatchBudgetStatus,
   type PrSummary,
   type ThreadPrAutoDispatchPending,
 } from "@pwragent/shared";
@@ -67,16 +69,24 @@ function pr(overrides: Partial<PrSummary> = {}): PrSummary {
 }
 
 function createHarness(options: {
+  budget?: Partial<PrAutoDispatchBudgetConfig>;
   targetStore?: SqliteOverlayStore;
   busy?: boolean;
   gate?: boolean;
   currentPr?: PrSummary;
+  pauseGateWhenBudgetPaused?: boolean;
 } = {}) {
   let busy = options.busy ?? false;
   let gate = options.gate ?? true;
   let currentPr = options.currentPr ?? pr();
+  const budgetConfig: PrAutoDispatchBudgetConfig = {
+    capacity: options.budget?.capacity ?? 30,
+    refillPerMinute: options.budget?.refillPerMinute ?? 1,
+    pauseWhenEmpty: options.budget?.pauseWhenEmpty ?? true,
+  };
   let refreshedPr: PrSummary | undefined;
   const pendingUpdates: Array<ThreadPrAutoDispatchPending | null> = [];
+  const budgetStatuses: PrAutoDispatchBudgetStatus[] = [];
   const submitTurnIfIdle = vi.fn(async (_request: {
     input: AppServerTurnInputItem[];
   }) => busy
@@ -92,12 +102,21 @@ function createHarness(options: {
     },
     isPrAttached: () => true,
     isBackgroundPollingEnabled: () => gate,
+    getBudgetConfig: () => budgetConfig,
     now: () => clock,
     onPendingChanged: ({ pending }) => {
       pendingUpdates.push(pending);
     },
+    onBudgetStatusChanged: (status) => {
+      budgetStatuses.push(status);
+      if (status.paused && options.pauseGateWhenBudgetPaused) {
+        gate = false;
+      }
+    },
   });
   return {
+    budgetConfig,
+    budgetStatuses,
     coordinator,
     pendingUpdates,
     setBusy: (value: boolean) => {
@@ -132,6 +151,41 @@ async function observe(
 async function runCountdown(): Promise<void> {
   clock += PR_AUTO_DISPATCH_DELAY_MS;
   await vi.advanceTimersByTimeAsync(PR_AUTO_DISPATCH_DELAY_MS);
+}
+
+async function createReadyBudgetClaim(params: {
+  targetStore: SqliteOverlayStore;
+  threadId: string;
+  fingerprint: string;
+  prKey: string;
+  ownerId: string;
+}): Promise<void> {
+  const pending: ThreadPrAutoDispatchPending = {
+    createdAt: clock,
+    eventKinds: ["ci-failure"],
+    fingerprint: params.fingerprint,
+    headSha: "a".repeat(40),
+    prKey: params.prKey,
+    prNumber: 1,
+    prUrl: "https://github.com/pwrdrvr/PwrAgent/pull/1",
+    scheduledAt: clock,
+  };
+  await params.targetStore.scheduleThreadPrAutoDispatch({
+    backend: "codex",
+    threadId: params.threadId,
+    pending,
+    prompt: "Repair the pull request.",
+    maxAttempts: MAX_PR_AUTO_DISPATCH_ATTEMPTS_PER_INCIDENT,
+  });
+  await params.targetStore.beginThreadPrAutoDispatch({
+    backend: "codex",
+    fingerprint: params.fingerprint,
+    leaseExpiresAt: clock + PR_AUTO_DISPATCH_LEASE_MS,
+    maxAttempts: MAX_PR_AUTO_DISPATCH_ATTEMPTS_PER_INCIDENT,
+    now: clock,
+    ownerId: params.ownerId,
+    threadId: params.threadId,
+  });
 }
 
 describe("PrAutoDispatchCoordinator", () => {
@@ -571,6 +625,172 @@ describe("PrAutoDispatchCoordinator", () => {
       threadId: "thread-1",
       prKey: buildPullRequestStatusKey(pr()),
     })).toBe(1);
+  });
+
+  it("uses the profile budget capacity, refills it over time, and leaves an unchanged blocked fingerprint terminal", async () => {
+    const harness = createHarness({
+      budget: {
+        capacity: 1,
+        pauseWhenEmpty: false,
+        refillPerMinute: 1,
+      },
+    });
+    const first = pr({ headSha: "a".repeat(40) });
+    harness.setCurrentPr(first);
+    await observe(harness.coordinator, first);
+    await runCountdown();
+    expect(harness.submitTurnIfIdle).toHaveBeenCalledTimes(1);
+    expect(await store.getPrAutoDispatchBudgetStatus({
+      config: harness.budgetConfig,
+      now: clock,
+    })).toMatchObject({ availableTokens: 0, paused: false });
+
+    const blocked = pr({ headSha: "b".repeat(40) });
+    harness.setCurrentPr(blocked);
+    await observe(harness.coordinator, blocked);
+    await runCountdown();
+    expect(harness.submitTurnIfIdle).toHaveBeenCalledTimes(1);
+
+    // A later observation of the same condition must not become an implicit
+    // retry just because capacity has refilled.
+    clock += 60_000;
+    expect((await observe(harness.coordinator, blocked))[0]?.status).toBe(
+      "duplicate",
+    );
+    await vi.advanceTimersByTimeAsync(PR_AUTO_DISPATCH_DELAY_MS);
+    expect(harness.submitTurnIfIdle).toHaveBeenCalledTimes(1);
+
+    const refilled = pr({ headSha: "c".repeat(40) });
+    harness.setCurrentPr(refilled);
+    await observe(harness.coordinator, refilled);
+    await runCountdown();
+    expect(harness.submitTurnIfIdle).toHaveBeenCalledTimes(2);
+  });
+
+  it("serializes budget consumption across app instances", async () => {
+    const secondDb = StateDb.open(path.join(tempDir, "state.db"));
+    extraDbs.push(secondDb);
+    const secondStore = new SqliteOverlayStore(secondDb);
+    await store.setThreadPrAutoDispatchEnabled({
+      backend: "codex",
+      threadId: "thread-2",
+      enabled: true,
+    });
+    await createReadyBudgetClaim({
+      targetStore: store,
+      threadId: "thread-1",
+      fingerprint: "budget-claim-one",
+      prKey: "github.com/pwrdrvr/PwrAgent#1",
+      ownerId: "instance-one",
+    });
+    await createReadyBudgetClaim({
+      targetStore: secondStore,
+      threadId: "thread-2",
+      fingerprint: "budget-claim-two",
+      prKey: "github.com/pwrdrvr/PwrAgent#2",
+      ownerId: "instance-two",
+    });
+    const config: PrAutoDispatchBudgetConfig = {
+      capacity: 1,
+      pauseWhenEmpty: false,
+      refillPerMinute: 1,
+    };
+
+    const [first, second] = await Promise.all([
+      Promise.resolve().then(async () =>
+        await store.reserveThreadPrAutoDispatchBudget({
+          backend: "codex",
+          config,
+          fingerprint: "budget-claim-one",
+          now: clock,
+          ownerId: "instance-one",
+          threadId: "thread-1",
+        })),
+      Promise.resolve().then(async () =>
+        await secondStore.reserveThreadPrAutoDispatchBudget({
+          backend: "codex",
+          config,
+          fingerprint: "budget-claim-two",
+          now: clock,
+          ownerId: "instance-two",
+          threadId: "thread-2",
+        })),
+    ]);
+
+    expect([first.status, second.status].sort()).toEqual(["empty", "reserved"]);
+    expect(await store.getPrAutoDispatchBudgetStatus({ config, now: clock })).toMatchObject({
+      availableTokens: 0,
+      paused: false,
+    });
+  });
+
+  it("pauses automatic repair globally when an accepted dispatch exhausts the profile budget", async () => {
+    const harness = createHarness({
+      budget: { capacity: 1, pauseWhenEmpty: true, refillPerMinute: 1 },
+      pauseGateWhenBudgetPaused: true,
+    });
+    await observe(harness.coordinator);
+    await runCountdown();
+
+    expect(harness.submitTurnIfIdle).toHaveBeenCalledTimes(1);
+    expect(harness.budgetStatuses.at(-1)).toMatchObject({
+      availableTokens: 0,
+      paused: true,
+    });
+    expect(await store.getPrAutoDispatchBudgetStatus({
+      config: harness.budgetConfig,
+      now: clock,
+    })).toMatchObject({ paused: true });
+    expect((await store.getThreadOverlayState({
+      backend: "codex",
+      threadId: "thread-1",
+    }))?.prAutoDispatchEnabled).toBe(true);
+
+    const second = pr({ headSha: "b".repeat(40) });
+    harness.setCurrentPr(second);
+    expect(await observe(harness.coordinator, second, false)).toEqual([
+      { threadKey: "codex:thread-1", status: "gate-off" },
+    ]);
+
+    const dbPath = path.join(tempDir, "state.db");
+    harness.coordinator.close();
+    stateDb.close();
+    stateDb = StateDb.open(dbPath);
+    store = new SqliteOverlayStore(stateDb);
+    expect(await store.getPrAutoDispatchBudgetStatus({
+      config: harness.budgetConfig,
+      now: clock,
+    })).toMatchObject({ paused: true });
+  });
+
+  it("resumes the durable safety stop without replenishing the budget", async () => {
+    const config: PrAutoDispatchBudgetConfig = {
+      capacity: 1,
+      pauseWhenEmpty: true,
+      refillPerMinute: 1,
+    };
+    const harness = createHarness({ budget: config });
+    await observe(harness.coordinator);
+    await runCountdown();
+    expect(await store.getPrAutoDispatchBudgetStatus({ config, now: clock })).toMatchObject({
+      availableTokens: 0,
+      paused: true,
+    });
+
+    expect(await store.resumePrAutoDispatchBudget({ config, now: clock })).toMatchObject({
+      availableTokens: 0,
+      paused: false,
+    });
+
+    const next = pr({ headSha: "b".repeat(40) });
+    harness.setCurrentPr(next);
+    await observe(harness.coordinator, next);
+    await runCountdown();
+    expect(harness.submitTurnIfIdle).toHaveBeenCalledTimes(1);
+    expect(await store.getPrAutoDispatchBudgetStatus({ config, now: clock })).toMatchObject({
+      availableTokens: 0,
+      paused: true,
+    });
   });
 
   it("does not reset the finite incident budget while a repair head is pending", async () => {
