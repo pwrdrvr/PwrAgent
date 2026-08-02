@@ -153,6 +153,10 @@ describe("desktop settings contracts", () => {
           value: "show_some",
           source: "default",
         },
+        managerToolUpdateMode: {
+          value: "show_none",
+          source: "default",
+        },
         showStreamingOption: { value: false, source: "default" },
         attachments: {
           imageProfile: { value: "medium", source: "default" },

@@ -112,6 +112,10 @@ describe("DesktopSettingsService", () => {
       value: "show_more",
       source: "config",
     });
+    expect(snapshot.messaging.managerToolUpdateMode).toEqual({
+      value: "show_none",
+      source: "default",
+    });
     expect(snapshot.messaging.showStreamingOption).toEqual({
       value: true,
       source: "config",
@@ -767,6 +771,7 @@ describe("DesktopSettingsService", () => {
     await service.writeConfigPatch({
       messaging: {
         toolUpdateMode: "show_all",
+        managerToolUpdateMode: "show_more",
         showStreamingOption: true,
       },
     });
@@ -777,6 +782,7 @@ describe("DesktopSettingsService", () => {
     );
     expect(contents).toContain('chat_reply_composer = "custom-widget-chips"');
     expect(contents).toContain('tool_update_mode = "show_all"');
+    expect(contents).toContain('manager_tool_update_mode = "show_more"');
     expect(contents).toContain("show_streaming_option = true");
   });
 

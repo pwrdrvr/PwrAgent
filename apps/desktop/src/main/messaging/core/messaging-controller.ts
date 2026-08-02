@@ -38,6 +38,7 @@ import type {
   LinkedDirectorySummary,
   LaunchpadWorkMode,
   MaterializedDirectoryLaunchpadThread,
+  MessagingBindingTargetKind,
   MessagingToolUpdateMode,
   PwrAgentMessagingBoundThreadSummary,
   PwrAgentMessagingLocationSummary,
@@ -430,7 +431,9 @@ type MessagingControllerLogger = {
 
 type MessagingToolUpdateDefaultModeResolver =
   | MessagingToolUpdateMode
-  | (() => MessagingToolUpdateMode | Promise<MessagingToolUpdateMode>);
+  | ((
+    targetKind: MessagingBindingTargetKind,
+  ) => MessagingToolUpdateMode | Promise<MessagingToolUpdateMode>);
 
 type MessagingFullAccessControls = {
   allowEscalation: boolean;
@@ -6313,12 +6316,16 @@ export class MessagingController {
     session: MessagingBrowseSessionRecord,
     directory?: NavigationDirectorySummary,
   ): Promise<MessagingToolUpdateMode> {
-    return session.preferences?.toolUpdateMode
-      ?? (isNewAgentThreadLaunchAction(session.launchAction)
-        ? "show_none"
-        : undefined)
-      ?? directory?.launchpad?.messagingToolUpdateMode
-      ?? await this.resolveToolUpdateDefaultMode();
+    if (session.preferences?.toolUpdateMode) {
+      return session.preferences.toolUpdateMode;
+    }
+    if (isNewAgentThreadLaunchAction(session.launchAction)) {
+      return await this.resolveToolUpdateDefaultMode("agent_thread");
+    }
+    return (
+      directory?.launchpad?.messagingToolUpdateMode
+      ?? await this.resolveToolUpdateDefaultMode("thread")
+    );
   }
 
   private async loadNewThreadBackendChoices(
@@ -10068,7 +10075,7 @@ export class MessagingController {
   ): Promise<void> {
     const currentMode = resolveMessagingToolUpdateMode(
       binding,
-      await this.resolveToolUpdateDefaultMode(),
+      await this.resolveToolUpdateDefaultMode(binding.targetKind ?? "thread"),
     );
     await this.deliverAndStoreStatusSubmode(
       buildStatusToolUpdateModePickerIntent({
@@ -11743,19 +11750,23 @@ export class MessagingController {
     return await this.renderBindingStatus(retiredBinding, event, snapshot);
   }
 
-  private async resolveToolUpdateDefaultMode(): Promise<MessagingToolUpdateMode> {
+  private async resolveToolUpdateDefaultMode(
+    targetKind: MessagingBindingTargetKind = "thread",
+  ): Promise<MessagingToolUpdateMode> {
     const configured = this.options.toolUpdateDefaultMode;
     if (!configured) {
-      return "show_some";
+      return targetKind === "agent_thread" ? "show_none" : "show_some";
     }
 
     try {
-      return typeof configured === "function" ? await configured() : configured;
+      return typeof configured === "function"
+        ? await configured(targetKind)
+        : configured;
     } catch (error) {
       this.logger.debug?.("messaging tool update default resolution failed", {
         error: error instanceof Error ? error.message : String(error),
       });
-      return "show_some";
+      return targetKind === "agent_thread" ? "show_none" : "show_some";
     }
   }
 
@@ -11804,7 +11815,9 @@ export class MessagingController {
               binding,
               navigation,
             }),
-            toolUpdateMode: await this.resolveToolUpdateDefaultMode(),
+            toolUpdateMode: await this.resolveToolUpdateDefaultMode(
+              binding.targetKind ?? "thread",
+            ),
           }),
           actions: [],
           delivery: {
@@ -11907,7 +11920,9 @@ export class MessagingController {
         binding,
         navigation: snapshot,
       }),
-      toolUpdateMode: await this.resolveToolUpdateDefaultMode(),
+      toolUpdateMode: await this.resolveToolUpdateDefaultMode(
+        binding.targetKind ?? "thread",
+      ),
     });
     const result = await this.deliver(intent, binding, event);
     const latestBinding = await this.options.store.getBinding(binding.id);
@@ -13489,7 +13504,7 @@ export class MessagingController {
 
     const mode = resolveMessagingToolUpdateMode(
       binding,
-      await this.resolveToolUpdateDefaultMode(),
+      await this.resolveToolUpdateDefaultMode(binding.targetKind ?? "thread"),
     );
     const deliveries = this.toolUpdatePolicy.processActivity({
       activity,
@@ -13536,7 +13551,7 @@ export class MessagingController {
 
     const mode = resolveMessagingToolUpdateMode(
       binding,
-      await this.resolveToolUpdateDefaultMode(),
+      await this.resolveToolUpdateDefaultMode(binding.targetKind ?? "thread"),
     );
     const deliveries = this.toolUpdatePolicy.processActivity({
       activity,

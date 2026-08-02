@@ -58,6 +58,7 @@ const slackProviderMock = vi.hoisted(() => ({
 const messagingRoutesServiceMock = vi.hoisted(() => ({
   clearDesktopMessagingDefaultAgent: vi.fn(),
   listDesktopMessagingRoutes: vi.fn(),
+  resetDesktopMessagingToolUpdateBindings: vi.fn(),
   setDesktopMessagingDefaultAgent: vi.fn(),
 }));
 
@@ -157,6 +158,7 @@ describe("messaging status ipc", () => {
     slackProviderMock.resolveContact.mockReset();
     messagingRoutesServiceMock.clearDesktopMessagingDefaultAgent.mockReset();
     messagingRoutesServiceMock.listDesktopMessagingRoutes.mockReset();
+    messagingRoutesServiceMock.resetDesktopMessagingToolUpdateBindings.mockReset();
     messagingRoutesServiceMock.setDesktopMessagingDefaultAgent.mockReset();
   });
 
@@ -212,6 +214,38 @@ describe("messaging status ipc", () => {
       messagingRoutesServiceMock.setDesktopMessagingDefaultAgent,
     ).toHaveBeenCalledWith(setRequest);
     expect(runtimeMock.notifyBindingsChanged).toHaveBeenCalledTimes(2);
+  });
+
+  it("resets selected bound Working Updates through IPC", async () => {
+    const { registerMessagingStatusIpcHandlers } = await import(
+      "../ipc/messaging-status"
+    );
+    const { MESSAGING_RESET_TOOL_UPDATE_BINDINGS_CHANNEL } = await import(
+      "../../shared/ipc"
+    );
+    messagingRoutesServiceMock.resetDesktopMessagingToolUpdateBindings
+      .mockResolvedValueOnce({ bindingCount: 2 })
+      .mockResolvedValueOnce({ bindingCount: 0 });
+
+    registerMessagingStatusIpcHandlers();
+
+    await expect(
+      handlers.get(MESSAGING_RESET_TOOL_UPDATE_BINDINGS_CHANNEL)?.(
+        {},
+        { targetKind: "thread" },
+      ),
+    ).resolves.toEqual({ bindingCount: 2 });
+    await expect(
+      handlers.get(MESSAGING_RESET_TOOL_UPDATE_BINDINGS_CHANNEL)?.(
+        {},
+        { targetKind: "agent_thread" },
+      ),
+    ).resolves.toEqual({ bindingCount: 0 });
+
+    expect(
+      messagingRoutesServiceMock.resetDesktopMessagingToolUpdateBindings,
+    ).toHaveBeenNthCalledWith(1, { targetKind: "thread" });
+    expect(runtimeMock.notifyBindingsChanged).toHaveBeenCalledTimes(1);
   });
 
   it("loads startup eligibility diagnostics when enabling messaging at runtime", async () => {

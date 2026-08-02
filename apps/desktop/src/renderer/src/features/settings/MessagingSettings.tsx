@@ -87,6 +87,9 @@ export function MessagingSettings(props: {
     value: string,
   ) => Promise<boolean>;
   onToolUpdateModeChange: (mode: MessagingToolUpdateMode) => Promise<void>;
+  onManagerToolUpdateModeChange: (
+    mode: MessagingToolUpdateMode,
+  ) => Promise<void>;
   onShowStreamingOptionChange: (enabled: boolean) => Promise<void>;
   onImageProfileChange: (profile: DesktopMessagingImageProfile) => Promise<void>;
   onInputDebounceMsChange: (value: number) => Promise<void>;
@@ -129,8 +132,18 @@ export function MessagingSettings(props: {
     props.snapshot.messaging.allowFullAccessThreadResume;
   const fullAccessWarning = props.snapshot.messaging.fullAccessWarning;
   const toolUpdateMode = props.snapshot.messaging.toolUpdateMode;
+  const managerToolUpdateMode = props.snapshot.messaging.managerToolUpdateMode;
   const showStreamingOption = props.snapshot.messaging.showStreamingOption;
   const inputDebounceMs = props.snapshot.messaging.inputDebounceMs;
+  const [pendingToolUpdateBindingReset, setPendingToolUpdateBindingReset] =
+    useState<{
+      bindingCount: number;
+      targetKind: "thread" | "agent_thread";
+    }>();
+  const [resettingToolUpdateBindings, setResettingToolUpdateBindings] =
+    useState(false);
+  const [toolUpdateBindingResetStatus, setToolUpdateBindingResetStatus] =
+    useState<string>();
   const [streamingNudgeProvider, setStreamingNudgeProvider] = useState<
     string | null
   >(null);
@@ -192,6 +205,68 @@ export function MessagingSettings(props: {
     props.snapshot,
   );
 
+  const previewToolUpdateBindingReset = async (
+    targetKind: "thread" | "agent_thread",
+  ): Promise<void> => {
+    if (
+      !props.desktopApi?.listMessagingRoutes
+      || !props.desktopApi.resetMessagingToolUpdateBindings
+    ) {
+      setToolUpdateBindingResetStatus(
+        "Working Updates cleanup is unavailable in this build.",
+      );
+      return;
+    }
+    setToolUpdateBindingResetStatus(undefined);
+    try {
+      const routes = await props.desktopApi.listMessagingRoutes();
+      const bindingCount = routes.bindings.filter(
+        (binding) => binding.target.kind === targetKind,
+      ).length;
+      if (bindingCount === 0) {
+        setToolUpdateBindingResetStatus(
+          `No bound ${toolUpdateTargetLabel(targetKind)} need cleanup.`,
+        );
+        return;
+      }
+      setPendingToolUpdateBindingReset({ bindingCount, targetKind });
+    } catch (error) {
+      setToolUpdateBindingResetStatus(
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  };
+
+  const resetToolUpdateBindings = async (): Promise<void> => {
+    if (
+      !pendingToolUpdateBindingReset
+      || !props.desktopApi?.resetMessagingToolUpdateBindings
+    ) {
+      return;
+    }
+    setResettingToolUpdateBindings(true);
+    try {
+      const result = await props.desktopApi.resetMessagingToolUpdateBindings({
+        targetKind: pendingToolUpdateBindingReset.targetKind,
+      });
+      const targetLabel = toolUpdateTargetLabel(
+        pendingToolUpdateBindingReset.targetKind,
+      );
+      setToolUpdateBindingResetStatus(
+        result.bindingCount === 0
+          ? `All bound ${targetLabel} already use the profile default.`
+          : `Reset Working Updates for ${result.bindingCount} bound ${targetLabel}.`,
+      );
+      setPendingToolUpdateBindingReset(undefined);
+    } catch (error) {
+      setToolUpdateBindingResetStatus(
+        error instanceof Error ? error.message : String(error),
+      );
+    } finally {
+      setResettingToolUpdateBindings(false);
+    }
+  };
+
   return (
     <MessagingRoutesProvider desktopApi={props.desktopApi}>
       <SettingsSectionStack paneId="messaging" aria-label="Messaging settings">
@@ -242,9 +317,25 @@ export function MessagingSettings(props: {
             }}
           />
           <SegmentedField
-            disabled={props.saving}
-            label="Working Updates"
-            sub="How much of the agent's in-progress work — tool activity and in-turn messages — is bridged. None sends only final answers and questions; higher settings send coalesced batches that respect platform rate limits."
+            actions={
+              <ToolUpdateBindingResetActions
+                applying={resettingToolUpdateBindings}
+                disabled={props.saving}
+                mode={toolUpdateMode.value}
+                pending={
+                  pendingToolUpdateBindingReset?.targetKind === "thread"
+                    ? pendingToolUpdateBindingReset
+                    : undefined
+                }
+                targetKind="thread"
+                onCancel={() => setPendingToolUpdateBindingReset(undefined)}
+                onConfirm={() => void resetToolUpdateBindings()}
+                onReset={() => void previewToolUpdateBindingReset("thread")}
+              />
+            }
+            disabled={props.saving || resettingToolUpdateBindings}
+            label="Development thread Working Updates"
+            sub="Default for new Development-thread bindings. Bound threads keep their own selection until you reset them to this default. None sends only final answers and questions; higher settings send coalesced batches that respect platform rate limits."
             options={TOOL_UPDATE_MODE_OPTIONS}
             source={sourceBadge(toolUpdateMode)}
             value={toolUpdateMode.value}
@@ -252,6 +343,36 @@ export function MessagingSettings(props: {
               void props.onToolUpdateModeChange(mode);
             }}
           />
+          <SegmentedField
+            actions={
+              <ToolUpdateBindingResetActions
+                applying={resettingToolUpdateBindings}
+                disabled={props.saving}
+                mode={managerToolUpdateMode.value}
+                pending={
+                  pendingToolUpdateBindingReset?.targetKind === "agent_thread"
+                    ? pendingToolUpdateBindingReset
+                    : undefined
+                }
+                targetKind="agent_thread"
+                onCancel={() => setPendingToolUpdateBindingReset(undefined)}
+                onConfirm={() => void resetToolUpdateBindings()}
+                onReset={() => void previewToolUpdateBindingReset("agent_thread")}
+              />
+            }
+            disabled={props.saving || resettingToolUpdateBindings}
+            label="Manager agent Working Updates"
+            sub="Default for new manager-agent bindings. Manager agents can stay quieter than Development threads; reset existing bound agents to make them follow this default."
+            options={TOOL_UPDATE_MODE_OPTIONS}
+            source={sourceBadge(managerToolUpdateMode)}
+            value={managerToolUpdateMode.value}
+            onChange={(mode) => {
+              void props.onManagerToolUpdateModeChange(mode);
+            }}
+          />
+          {toolUpdateBindingResetStatus ? (
+            <p className="settings-empty">{toolUpdateBindingResetStatus}</p>
+          ) : null}
           <NumberField
             disabled={props.saving}
             label="Input debounce"
@@ -1862,6 +1983,7 @@ function isLikelyWorkspaceUrl(value: string): boolean {
 }
 
 function SegmentedField<TValue extends string>(props: {
+  actions?: ReactNode;
   disabled?: boolean;
   label: string;
   sub?: ReactNode;
@@ -1876,30 +1998,110 @@ function SegmentedField<TValue extends string>(props: {
       sub={props.sub}
       source={props.source}
       control={
-        <div
-          className="settings-segmented"
-          role="radiogroup"
-          aria-label={props.label}
-        >
-          {props.options.map((option) => (
-            <button
-              key={option.value}
-              aria-checked={props.value === option.value}
-              className={`settings-segmented__button${
-                props.value === option.value ? " is-active" : ""
-              }`}
-              disabled={props.disabled}
-              role="radio"
-              type="button"
-              onClick={() => props.onChange(option.value)}
-            >
-              {option.label}
-            </button>
-          ))}
-        </div>
+        <>
+          <div
+            className="settings-segmented"
+            role="radiogroup"
+            aria-label={props.label}
+          >
+            {props.options.map((option) => (
+              <button
+                key={option.value}
+                aria-checked={props.value === option.value}
+                className={`settings-segmented__button${
+                  props.value === option.value ? " is-active" : ""
+                }`}
+                disabled={props.disabled}
+                role="radio"
+                type="button"
+                onClick={() => props.onChange(option.value)}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+          {props.actions}
+        </>
       }
     />
   );
+}
+
+function ToolUpdateBindingResetActions(props: {
+  applying: boolean;
+  disabled: boolean;
+  mode: MessagingToolUpdateMode;
+  pending?: {
+    bindingCount: number;
+    targetKind: "thread" | "agent_thread";
+  };
+  targetKind: "thread" | "agent_thread";
+  onCancel: () => void;
+  onConfirm: () => void;
+  onReset: () => void;
+}) {
+  const target = toolUpdateTargetLabel(props.targetKind);
+  if (props.pending) {
+    const bindingCount = props.pending.bindingCount;
+    return (
+      <div aria-live="polite" className="settings-action-confirmation">
+        <div className="settings-action-confirmation__copy">
+          <strong>
+            Reset {bindingCount} bound {target}{" "}
+            {bindingCount === 1 ? "binding" : "bindings"}?
+          </strong>
+          <span>
+            This clears each binding&apos;s explicit selection. They will use{" "}
+            {toolUpdateModeLabel(props.mode)} now and follow future default changes.
+          </span>
+        </div>
+        <div className="settings-inline-actions">
+          <button
+            className="button button--primary"
+            disabled={props.applying}
+            type="button"
+            onClick={props.onConfirm}
+          >
+            {props.applying ? "Resetting…" : "Reset bindings"}
+          </button>
+          <button
+            className="button button--ghost"
+            disabled={props.applying}
+            type="button"
+            onClick={props.onCancel}
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="settings-inline-actions">
+      <button
+        className="button button--secondary"
+        disabled={props.disabled}
+        type="button"
+        onClick={props.onReset}
+      >
+        Reset bound {target} bindings
+      </button>
+    </div>
+  );
+}
+
+function toolUpdateTargetLabel(
+  targetKind: "thread" | "agent_thread",
+): string {
+  return targetKind === "agent_thread"
+    ? "manager agent"
+    : "Development thread";
+}
+
+function toolUpdateModeLabel(mode: MessagingToolUpdateMode): string {
+  return TOOL_UPDATE_MODE_OPTIONS.find((option) => option.value === mode)?.label
+    ?? "the selected default";
 }
 
 function ToggleField(props: {

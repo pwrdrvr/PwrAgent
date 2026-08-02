@@ -12,6 +12,7 @@ import type {
 import {
   clearDesktopMessagingDefaultAgent,
   listDesktopMessagingRoutes,
+  resetDesktopMessagingToolUpdateBindings,
   setDesktopMessagingDefaultAgent,
 } from "../messaging/messaging-routes-service";
 
@@ -132,6 +133,7 @@ function buildDependencies(options: {
     findObservedSurfaces: vi.fn(async () => options.observedSurfaces ?? []),
     getDefaultAgentAssignment: vi.fn(async (id: string) =>
       assignments.find((assignment) => assignment.id === id)),
+    upsertBinding: vi.fn(async (binding) => binding),
     upsertDefaultAgentAssignment: vi.fn(async (assignment) => assignment),
     revokeDefaultAgentAssignment: vi.fn(async ({ assignmentId, revokedAt }) => {
       const assignment = assignments.find((candidate) => candidate.id === assignmentId);
@@ -334,5 +336,57 @@ describe("messaging routes service", () => {
       assignmentId: "assignment-1",
       revokedAt: 4000,
     });
+  });
+
+  it("resets only the selected binding kind to inherit its profile default", async () => {
+    const developmentBinding = buildBinding({
+      preferences: {
+        model: "gpt-5.6",
+        toolUpdateMode: "show_all",
+        updatedAt: 1200,
+      },
+    });
+    const managerBinding = buildBinding({
+      id: "binding-manager",
+      targetKind: "agent_thread",
+      preferences: {
+        toolUpdateMode: "show_more",
+        updatedAt: 1300,
+      },
+    });
+    const dependencies = buildDependencies({
+      bindings: [developmentBinding, managerBinding],
+    });
+
+    await expect(
+      resetDesktopMessagingToolUpdateBindings(
+        { targetKind: "thread" },
+        { ...dependencies, now: () => 4000 },
+      ),
+    ).resolves.toEqual({ bindingCount: 1 });
+    expect(dependencies.store.upsertBinding).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "binding-1",
+        preferences: { model: "gpt-5.6", updatedAt: 4000 },
+        updatedAt: 4000,
+      }),
+    );
+    expect(dependencies.store.upsertBinding).not.toHaveBeenCalledWith(
+      expect.objectContaining({ id: "binding-manager" }),
+    );
+
+    await expect(
+      resetDesktopMessagingToolUpdateBindings(
+        { targetKind: "agent_thread" },
+        { ...dependencies, now: () => 5000 },
+      ),
+    ).resolves.toEqual({ bindingCount: 1 });
+    expect(dependencies.store.upsertBinding).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "binding-manager",
+        preferences: undefined,
+        updatedAt: 5000,
+      }),
+    );
   });
 });

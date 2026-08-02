@@ -176,6 +176,7 @@ export type DesktopMessagingConfig = {
   slack?: SlackMessagingConfig;
   telegram?: TelegramMessagingConfig;
   toolUpdateDefaultMode?: MessagingToolUpdateMode;
+  managerToolUpdateDefaultMode?: MessagingToolUpdateMode;
   showStreamingOption?: boolean;
 };
 
@@ -212,6 +213,7 @@ export const DESKTOP_MESSAGING_ROOT_CONFIG_FIELD_IMPACTS = {
   slack: "connection",
   telegram: "connection",
   toolUpdateDefaultMode: "irrelevant",
+  managerToolUpdateDefaultMode: "irrelevant",
   showStreamingOption: "irrelevant",
 } as const satisfies Record<
   keyof DesktopMessagingConfig,
@@ -551,6 +553,7 @@ export function loadDesktopMessagingConfig(
     },
     inputDebounceMs: readInputDebounceMsFromEnv(env) ?? 500,
     toolUpdateDefaultMode: "show_some",
+    managerToolUpdateDefaultMode: "show_none",
     ...(attachmentPolicy ? { attachmentPolicy } : {}),
     ...(telegramBotToken
       ? {
@@ -1132,6 +1135,8 @@ export async function loadDesktopMessagingConfigFromSettings(
     },
     inputDebounceMs: snapshot.messaging.inputDebounceMs.value,
     toolUpdateDefaultMode: snapshot.messaging.toolUpdateMode.value,
+    managerToolUpdateDefaultMode:
+      snapshot.messaging.managerToolUpdateMode.value,
     showStreamingOption: snapshot.messaging.showStreamingOption.value,
     attachmentPolicy,
     ...telegramConfig,
@@ -1221,6 +1226,8 @@ export function redactDesktopMessagingConfig(
         }
       : undefined,
     toolUpdateDefaultMode: config.toolUpdateDefaultMode ?? "show_some",
+    managerToolUpdateDefaultMode:
+      config.managerToolUpdateDefaultMode ?? "show_none",
     inputDebounceMs: config.inputDebounceMs ?? 500,
     discord: config.discord
       ? {

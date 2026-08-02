@@ -1306,10 +1306,10 @@ describe("MessagingController", () => {
         parts: [expect.objectContaining({ text: "I found it." })],
       }),
     );
-    expect(JSON.stringify(harness.delivered)).not.toContain(
+    expect(JSON.stringify(harness.delivered)).toContain(
       "I am searching for the thread now.",
     );
-    expect(JSON.stringify(harness.delivered)).not.toContain("find the thread");
+    expect(JSON.stringify(harness.delivered)).toContain("find the thread");
   });
 
   it("routes an accepted every-message topic to its default Agent without binding it", async () => {
@@ -7303,7 +7303,10 @@ describe("MessagingController", () => {
   });
 
   it("lets /new create an Agent thread and return to regular projects", async () => {
-    const harness = await createHarness();
+    const harness = await createHarness({
+      toolUpdateDefaultMode: (targetKind) =>
+        targetKind === "agent_thread" ? "show_more" : "show_less",
+    });
 
     await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
     await harness.controller.handleInboundEvent(
@@ -7381,6 +7384,7 @@ describe("MessagingController", () => {
       backend: "codex",
       threadId: "new-thread-1",
       targetKind: "agent_thread",
+      preferences: expect.objectContaining({ toolUpdateMode: "show_more" }),
     });
   });
 
@@ -18314,7 +18318,9 @@ async function createHarness(options?: {
   startThread?: NonNullable<MessagingBackendBridge["startThread"]>;
   startTurn?: NonNullable<MessagingBackendBridge["startTurn"]>;
   submitReview?: NonNullable<MessagingBackendBridge["submitReview"]>;
-  toolUpdateDefaultMode?: MessagingToolUpdateMode;
+  toolUpdateDefaultMode?:
+    | MessagingToolUpdateMode
+    | ((targetKind: "thread" | "agent_thread") => MessagingToolUpdateMode);
   showStreamingOption?: boolean;
 }): Promise<{
   controller: MessagingController;

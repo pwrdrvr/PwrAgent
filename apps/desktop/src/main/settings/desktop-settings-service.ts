@@ -695,6 +695,10 @@ export class DesktopSettingsService {
         toolUpdateMode: this.resolveToolUpdateMode(
           config.messaging?.toolUpdateMode,
         ),
+        managerToolUpdateMode: this.resolveToolUpdateMode(
+          config.messaging?.managerToolUpdateMode,
+          "show_none",
+        ),
         showStreamingOption: this.resolveConfigBoolean(
           config.messaging?.showStreamingOption,
           false,
@@ -1953,9 +1957,10 @@ export class DesktopSettingsService {
 
   private resolveToolUpdateMode(
     configValue: MessagingToolUpdateMode | undefined,
+    defaultValue: MessagingToolUpdateMode = "show_some",
   ): DesktopSettingsValue<MessagingToolUpdateMode> {
     return {
-      value: configValue ?? "show_some",
+      value: configValue ?? defaultValue,
       source: configValue === undefined ? "default" : "config",
     };
   }

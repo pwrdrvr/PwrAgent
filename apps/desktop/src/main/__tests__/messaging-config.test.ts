@@ -65,6 +65,7 @@ describe("desktop messaging config", () => {
       "fullAccessControls",
       "inputDebounceMs",
       "line",
+      "managerToolUpdateDefaultMode",
       "mattermost",
       "showStreamingOption",
       "slack",
@@ -245,6 +246,7 @@ describe("desktop messaging config", () => {
       },
       inputDebounceMs: 500,
       toolUpdateDefaultMode: "show_some",
+      managerToolUpdateDefaultMode: "show_none",
       telegram: {
         channel: "telegram",
         enabled: true,
@@ -500,6 +502,7 @@ describe("desktop messaging config", () => {
       enabled: true,
       inputDebounceMs: 500,
       toolUpdateDefaultMode: "show_some",
+      managerToolUpdateDefaultMode: "show_none",
       showStreamingOption: false,
       attachmentPolicy: {
         imageProfile: "medium",
@@ -915,6 +918,7 @@ describe("desktop messaging config", () => {
         authorizedActorCount: 2,
       },
       toolUpdateDefaultMode: "show_some",
+      managerToolUpdateDefaultMode: "show_none",
       inputDebounceMs: 500,
       discord: {
         channel: "discord",
