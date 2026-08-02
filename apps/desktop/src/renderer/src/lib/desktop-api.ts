@@ -103,6 +103,8 @@ import type {
   SetThreadPinResponse,
   SetThreadPrAutoDispatchRequest,
   SetThreadPrAutoDispatchResponse,
+  SetEligibleThreadsPrAutoDispatchRequest,
+  SetEligibleThreadsPrAutoDispatchResponse,
   CancelThreadPrAutoDispatchRequest,
   CancelThreadPrAutoDispatchResponse,
   SendThreadPrAutoDispatchNowRequest,
@@ -712,6 +714,9 @@ export type DesktopApi = {
   updateDirectoryLaunchpad?: (
     request: UpdateDirectoryLaunchpadRequest
   ) => Promise<UpdateDirectoryLaunchpadResponse>;
+  setEligibleThreadsPrAutoDispatch?: (
+    request: SetEligibleThreadsPrAutoDispatchRequest,
+  ) => Promise<SetEligibleThreadsPrAutoDispatchResponse>;
   resetDirectoryLaunchpad?: (
     request: ResetDirectoryLaunchpadRequest
   ) => Promise<ResetDirectoryLaunchpadResponse>;

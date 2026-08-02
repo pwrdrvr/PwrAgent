@@ -1477,6 +1477,9 @@ type ThreadPullRequestWatchToolHandler = (
 
 type ThreadPrAutoDispatchHandler = {
   preferenceChanged: (request: SetThreadPrAutoDispatchRequest) => Promise<void>;
+  preferencesChanged?: (
+    requests: SetThreadPrAutoDispatchRequest[],
+  ) => Promise<void>;
   cancelPending: (request: CancelThreadPrAutoDispatchRequest) => Promise<boolean>;
   sendPendingNow: (
     request: SendThreadPrAutoDispatchNowRequest,
@@ -4496,11 +4499,17 @@ function resolveCodexEnvironmentSelection(
 }
 
 async function resetLaunchpadAfterMaterialize(params: {
+  defaultPrAutoDispatchEnabled: boolean;
   defaults: NavigationLaunchpadDefaults;
   launchpad: NavigationLaunchpadDraft;
   overlayStore: OverlayStoreLike;
 }): Promise<void> {
-  const { defaults, launchpad, overlayStore } = params;
+  const {
+    defaultPrAutoDispatchEnabled,
+    defaults,
+    launchpad,
+    overlayStore,
+  } = params;
   await overlayStore.resetDirectoryLaunchpad({
     directoryKey: launchpad.directoryKey,
   });
@@ -4521,6 +4530,7 @@ async function resetLaunchpadAfterMaterialize(params: {
     reasoningEffort: defaults.reasoningEffort,
     serviceTier: defaults.serviceTier,
     fastMode: defaults.fastMode,
+    prAutoDispatchEnabled: defaultPrAutoDispatchEnabled,
     prompt: "",
     workMode: defaultLaunchpadWorkMode(launchpad, defaults),
     branchName: launchpad.branchName,
@@ -9090,6 +9100,7 @@ export class DesktopBackendRegistry {
     branchName?: string;
     requiredWorkMode?: NavigationLaunchpadDraft["workMode"];
     parentThreadId?: string;
+    prAutoDispatchEnabled?: boolean;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
     linkedDirectories?: LinkedDirectorySummary[];
   }): Promise<StartThreadResponse> {
@@ -9103,6 +9114,7 @@ export class DesktopBackendRegistry {
       branchName,
       requiredWorkMode,
       parentThreadId,
+      prAutoDispatchEnabled,
       ...request
     } = params;
     const modelSettings = await this.resolveModelSettings(backend, request);
@@ -9345,7 +9357,8 @@ export class DesktopBackendRegistry {
     await this.overlayStore.setThreadPrAutoDispatchEnabled({
       backend,
       threadId: result.threadId,
-      enabled: this.resolveDefaultPrAutoDispatchEnabledFn(),
+      enabled:
+        prAutoDispatchEnabled ?? this.resolveDefaultPrAutoDispatchEnabledFn(),
     });
     if (request.agent) {
       await this.overlayStore.setThreadAgent({
@@ -12215,23 +12228,51 @@ export class DesktopBackendRegistry {
   async setThreadPrAutoDispatch(
     params: SetThreadPrAutoDispatchRequest,
   ): Promise<SetThreadPrAutoDispatchResponse> {
-    await this.overlayStore.setThreadPrAutoDispatchEnabled({
-      backend: params.backend,
-      threadId: params.threadId,
-      enabled: params.enabled,
-    });
-    await this.emit({
-      backend: params.backend,
-      notification: {
-        method: "thread/prAutoDispatch/updated",
-        params: {
-          threadId: params.threadId,
-          enabled: params.enabled,
-        },
-      },
-    });
-    await this.threadPrAutoDispatchHandler?.preferenceChanged(params);
+    await this.setThreadPrAutoDispatchBatch([params]);
     return params;
+  }
+
+  /**
+   * Apply several operator-initiated Auto-fix preferences before asking the
+   * PR coordinator to evaluate them. This prevents a bulk settings action
+   * from refreshing or scheduling the same attached PR once per thread.
+   */
+  async setThreadPrAutoDispatchBatch(
+    requests: SetThreadPrAutoDispatchRequest[],
+  ): Promise<void> {
+    if (requests.length === 0) {
+      return;
+    }
+
+    for (const request of requests) {
+      await this.overlayStore.setThreadPrAutoDispatchEnabled({
+        backend: request.backend,
+        threadId: request.threadId,
+        enabled: request.enabled,
+      });
+      await this.emit({
+        backend: request.backend,
+        notification: {
+          method: "thread/prAutoDispatch/updated",
+          params: {
+            threadId: request.threadId,
+            enabled: request.enabled,
+          },
+        },
+      });
+    }
+
+    if (requests.length === 1) {
+      await this.threadPrAutoDispatchHandler?.preferenceChanged(requests[0]!);
+      return;
+    }
+    if (this.threadPrAutoDispatchHandler?.preferencesChanged) {
+      await this.threadPrAutoDispatchHandler.preferencesChanged(requests);
+      return;
+    }
+    for (const request of requests) {
+      await this.threadPrAutoDispatchHandler?.preferenceChanged(request);
+    }
   }
 
   async cancelThreadPrAutoDispatch(
@@ -13062,6 +13103,7 @@ export class DesktopBackendRegistry {
           fastMode: defaults.fastMode,
           acpRuntime: defaults.acpRuntime,
           providerSettings: defaults.providerSettings,
+          prAutoDispatchEnabled: this.resolveDefaultPrAutoDispatchEnabledFn(),
           workMode: defaultLaunchpadWorkMode(request, defaults),
           branchName: existing.branchName ?? request.currentBranch,
           parentThreadId: requestParentThreadId,
@@ -13126,6 +13168,7 @@ export class DesktopBackendRegistry {
       fastMode: defaults.fastMode,
       acpRuntime: defaults.acpRuntime,
       providerSettings: defaults.providerSettings,
+      prAutoDispatchEnabled: this.resolveDefaultPrAutoDispatchEnabledFn(),
       prompt: "",
       registeredAt: request.registeredAt,
       workMode: defaultLaunchpadWorkMode(request, defaults),
@@ -13903,6 +13946,8 @@ export class DesktopBackendRegistry {
       reasoningEffort: launchpad.reasoningEffort,
       serviceTier: launchpad.serviceTier,
       fastMode: launchpad.backend === "codex" ? launchpad.fastMode : undefined,
+      prAutoDispatchEnabled:
+        launchpad.prAutoDispatchEnabled ?? this.resolveDefaultPrAutoDispatchEnabledFn(),
       acpRuntime: launchpad.acpRuntime,
       codexEnvironmentRuntime,
       directoryKey: launchpad.directoryKey,
@@ -14010,6 +14055,7 @@ export class DesktopBackendRegistry {
     }
 
     await resetLaunchpadAfterMaterialize({
+      defaultPrAutoDispatchEnabled: this.resolveDefaultPrAutoDispatchEnabledFn(),
       defaults: await this.resolveLaunchpadDefaults(
         await this.overlayStore.getLaunchpadDefaults(),
         launchpad.backend,

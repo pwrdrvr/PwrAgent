@@ -222,6 +222,8 @@ export const NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL =
   "navigation:ensure-directory-launchpad";
 export const NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL =
   "navigation:update-directory-launchpad";
+export const NAVIGATION_SET_ELIGIBLE_THREADS_PR_AUTO_DISPATCH_CHANNEL =
+  "navigation:set-eligible-threads-pr-auto-dispatch";
 export const NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL =
   "navigation:reset-directory-launchpad";
 /**

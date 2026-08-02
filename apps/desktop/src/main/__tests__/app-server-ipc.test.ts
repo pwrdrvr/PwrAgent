@@ -291,6 +291,7 @@ const publishLocalEvent = vi.fn(async () => undefined);
 const setThreadPullRequestStatusToolHandler = vi.fn();
 const setThreadPullRequestWatchToolHandler = vi.fn();
 const setThreadPrAutoDispatchHandler = vi.fn();
+const setThreadPrAutoDispatchBatch = vi.fn(async () => undefined);
 const ensureDirectoryLaunchpad = vi.fn(async (request: {
   directoryKey: string;
   directoryKind: string;
@@ -606,6 +607,7 @@ vi.mock("../app-server/backend-registry", () => ({
     setThreadPullRequestStatusToolHandler,
     setThreadPullRequestWatchToolHandler,
     setThreadPrAutoDispatchHandler,
+    setThreadPrAutoDispatchBatch,
     ensureDirectoryLaunchpad,
     getQueuedExecutionModesSnapshot: () => ({}),
     rememberCompleteNavigationSnapshot,
@@ -672,6 +674,7 @@ describe("app server ipc", () => {
     setThreadPullRequestStatusToolHandler.mockClear();
     setThreadPullRequestWatchToolHandler.mockClear();
     setThreadPrAutoDispatchHandler.mockClear();
+    setThreadPrAutoDispatchBatch.mockClear();
     ensureDirectoryLaunchpad.mockClear();
     markThreadSeen.mockClear();
     registerDirectoryFromDiskService.mockClear();
@@ -736,6 +739,7 @@ describe("app server ipc", () => {
 
     expect(setThreadPrAutoDispatchHandler).toHaveBeenCalledWith({
       preferenceChanged: expect.any(Function),
+      preferencesChanged: expect.any(Function),
       cancelPending: expect.any(Function),
       sendPendingNow: expect.any(Function),
       inspect: expect.any(Function),
@@ -743,6 +747,117 @@ describe("app server ipc", () => {
     expect(setThreadPullRequestWatchToolHandler).toHaveBeenCalledWith(
       expect.any(Function),
     );
+  });
+
+  it("targets only existing threads with an open primary attached PR", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const {
+      NAVIGATION_SET_ELIGIBLE_THREADS_PR_AUTO_DISPATCH_CHANNEL,
+    } = await import("../../shared/ipc");
+    const primaryPr = githubPr({
+      number: 42,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      state: "passing",
+      title: "Primary PR",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/42",
+    });
+    const informationalPr = githubPr({
+      number: 43,
+      org: "other",
+      repo: "repo",
+      state: "failing",
+      title: "Informational PR",
+      url: "https://github.com/other/repo/pull/43",
+    });
+    const closedPr = githubPr({
+      number: 44,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      state: "closed",
+      title: "Closed PR",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/44",
+    });
+    const threads = [
+      {
+        id: "thread-primary-disabled",
+        title: "Primary disabled",
+        titleSource: "explicit" as const,
+        source: "codex" as const,
+        gitOriginUrl: "git@github.com:pwrdrvr/PwrAgent.git",
+        linkedDirectories: [],
+        prs: [primaryPr],
+        prAutoDispatchEnabled: false,
+        updatedAt: 2_000,
+      },
+      {
+        id: "thread-primary-enabled",
+        title: "Primary enabled",
+        titleSource: "explicit" as const,
+        source: "codex" as const,
+        gitOriginUrl: "git@github.com:pwrdrvr/PwrAgent.git",
+        linkedDirectories: [],
+        prs: [primaryPr],
+        prAutoDispatchEnabled: true,
+        updatedAt: 1_900,
+      },
+      {
+        id: "thread-informational",
+        title: "Informational",
+        titleSource: "explicit" as const,
+        source: "codex" as const,
+        gitOriginUrl: "git@github.com:pwrdrvr/PwrAgent.git",
+        linkedDirectories: [],
+        prs: [informationalPr],
+        prAutoDispatchEnabled: false,
+        updatedAt: 1_800,
+      },
+      {
+        id: "thread-closed",
+        title: "Closed",
+        titleSource: "explicit" as const,
+        source: "codex" as const,
+        gitOriginUrl: "git@github.com:pwrdrvr/PwrAgent.git",
+        linkedDirectories: [],
+        prs: [closedPr],
+        prAutoDispatchEnabled: false,
+        updatedAt: 1_700,
+      },
+    ];
+    listThreads.mockResolvedValueOnce(threads as never);
+    listThreads.mockResolvedValueOnce(threads as never);
+
+    registerAppServerIpcHandlers();
+
+    await expect(
+      handlers.get(NAVIGATION_SET_ELIGIBLE_THREADS_PR_AUTO_DISPATCH_CHANNEL)?.(
+        {},
+        { enabled: true, dryRun: true },
+      ),
+    ).resolves.toEqual({
+      enabled: true,
+      eligibleThreadCount: 2,
+      updatedThreadCount: 1,
+    });
+    expect(setThreadPrAutoDispatchBatch).not.toHaveBeenCalled();
+
+    await expect(
+      handlers.get(NAVIGATION_SET_ELIGIBLE_THREADS_PR_AUTO_DISPATCH_CHANNEL)?.(
+        {},
+        { enabled: true },
+      ),
+    ).resolves.toEqual({
+      enabled: true,
+      eligibleThreadCount: 2,
+      updatedThreadCount: 1,
+    });
+    expect(setThreadPrAutoDispatchBatch).toHaveBeenCalledWith([
+      {
+        backend: "codex",
+        threadId: "thread-primary-disabled",
+        enabled: true,
+      },
+    ]);
   });
 
   it("does not advertise Auto-fix as active without a primary Git repository", async () => {

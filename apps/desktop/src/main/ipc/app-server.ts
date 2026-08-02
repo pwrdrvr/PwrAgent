@@ -37,6 +37,8 @@ import {
   type CancelThreadPrAutoDispatchRequest,
   type SendThreadPrAutoDispatchNowRequest,
   type SetThreadPrAutoDispatchRequest,
+  type SetEligibleThreadsPrAutoDispatchRequest,
+  type SetEligibleThreadsPrAutoDispatchResponse,
   type ThreadSearchRequest,
   type ThreadSearchResponse,
   type PersistThreadUsageActivityRequest,
@@ -187,6 +189,7 @@ import {
   NAVIGATION_SET_THREAD_AGENT_CHANNEL,
   NAVIGATION_SET_THREAD_PIN_CHANNEL,
   NAVIGATION_SET_THREAD_REACTION_CHANNEL,
+  NAVIGATION_SET_ELIGIBLE_THREADS_PR_AUTO_DISPATCH_CHANNEL,
   NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL,
   NAVIGATION_LIST_RECENT_FILE_REFERENCES_CHANNEL,
   NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL,
@@ -3622,11 +3625,14 @@ class DesktopAppServerService {
     }
   }
 
-  /** Resolve only visible attachments; detached lookup history never qualifies. */
+  /** Resolve only primary visible attachments; detached and informational links never qualify. */
   private findThreadKeysForPrKey(prKey: string): string[] {
     const threadKeys: string[] = [];
     for (const [threadKey, attachment] of this.attachedPrsByThreadKey) {
-      if (attachment.prs.some((pr) => getPrStatusKey(pr) === prKey)) {
+      if (attachment.prs.some((pr) =>
+        getPrStatusKey(pr) === prKey
+        && pullRequestMatchesRepositoryKey(pr, attachment.primaryRepoKey)
+      )) {
         threadKeys.push(threadKey);
       }
     }
@@ -4133,7 +4139,9 @@ class DesktopAppServerService {
     this.prPollBackendByKey.clear();
 
     for (const [threadKey, attachment] of this.attachedPrsByThreadKey) {
-      for (const pr of attachment.prs) {
+      for (const pr of attachment.prs.filter((candidate) =>
+        pullRequestMatchesRepositoryKey(candidate, attachment.primaryRepoKey)
+      )) {
         const prKey = getPrStatusKey(pr);
         const latest = this.prStatusRegistry.get(prKey)?.pr ?? pr;
         if (isTerminalPullRequest(latest)) continue;
@@ -4200,49 +4208,85 @@ class DesktopAppServerService {
   async handleThreadPrAutoDispatchPreference(
     request: SetThreadPrAutoDispatchRequest,
   ): Promise<void> {
-    const coordinator = this.getPrAutoDispatchCoordinator();
-    if (!request.enabled) {
-      const attachment = this.attachedPrsByThreadKey.get(
-        buildThreadIdentityKey(request.backend, request.threadId),
-      );
-      const previouslyEligiblePrs = (attachment?.prs ?? []).filter((pr) =>
-        pullRequestMatchesRepositoryKey(pr, attachment?.primaryRepoKey),
-      );
-      await coordinator.cancelAllPendingForThread(request);
-      await this.syncThreadPrAutoDispatchCandidates(request);
-      if (this.isPrAutoDispatchAvailable() && previouslyEligiblePrs.length > 0) {
-        await this.handlePrAutoDispatchSnapshots(
-          previouslyEligiblePrs,
-          this.nextPrObservationTimestamp(),
-          true,
-        );
-      }
+    await this.handleThreadPrAutoDispatchPreferences([request]);
+  }
+
+  /**
+   * Coalesce an operator's bulk preference change before reading provider
+   * state. Several threads can attach the same PR; evaluating the final
+   * candidate set once keeps the first eligible thread authoritative and
+   * avoids a GraphQL request per thread.
+   */
+  async handleThreadPrAutoDispatchPreferences(
+    requests: SetThreadPrAutoDispatchRequest[],
+  ): Promise<void> {
+    if (requests.length === 0) {
       return;
     }
 
-    const overlay = await this.getOverlayStore().getThreadOverlayState(request);
-    const prs = this.canonicalizePrs(overlay?.prs ?? []);
-    await this.rememberThreadPrAttachmentUpdate({ ...request, prs });
-    await coordinator.resetForOperator(request);
-    if (!this.isPrAutoDispatchAvailable()) return;
-    const primaryPrs = this.primaryAttachedPrsForThread({ ...request, prs });
+    const coordinator = this.getPrAutoDispatchCoordinator();
+    const disabledRequests = requests.filter((request) => !request.enabled);
+    const enabledRequests = requests.filter((request) => request.enabled);
+
+    const previouslyEligiblePrs: PrSummary[] = [];
+    for (const request of disabledRequests) {
+      const attachment = this.attachedPrsByThreadKey.get(
+        buildThreadIdentityKey(request.backend, request.threadId),
+      );
+      previouslyEligiblePrs.push(
+        ...(attachment?.prs ?? []).filter((pr) =>
+          pullRequestMatchesRepositoryKey(pr, attachment?.primaryRepoKey),
+        ),
+      );
+      await coordinator.cancelAllPendingForThread(request);
+      await this.syncThreadPrAutoDispatchCandidates(request);
+    }
+    if (this.isPrAutoDispatchAvailable() && previouslyEligiblePrs.length > 0) {
+      await this.handlePrAutoDispatchSnapshots(
+        dedupePrsByStatusKey(previouslyEligiblePrs),
+        this.nextPrObservationTimestamp(),
+        true,
+      );
+    }
+
+    if (enabledRequests.length === 0) {
+      return;
+    }
+
+    const primaryPrs: PrSummary[] = [];
+    for (const request of enabledRequests) {
+      const overlay = await this.getOverlayStore().getThreadOverlayState(request);
+      const prs = this.canonicalizePrs(overlay?.prs ?? []);
+      await this.rememberThreadPrAttachmentUpdate({ ...request, prs });
+      await coordinator.resetForOperator(request);
+      primaryPrs.push(...this.primaryAttachedPrsForThread({ ...request, prs }));
+    }
+    if (!this.isPrAutoDispatchAvailable()) {
+      return;
+    }
+
+    const uniquePrimaryPrs = dedupePrsByStatusKey(primaryPrs);
     await this.handlePrAutoDispatchSnapshots(
-      primaryPrs,
+      uniquePrimaryPrs,
       this.nextPrObservationTimestamp(),
       true,
     );
 
     const refs = [
       ...new Map(
-        primaryPrs.flatMap((pr) => {
+        uniquePrimaryPrs.flatMap((pr) => {
           const ref = parsePrRefFromUrl(pr.url);
           return ref ? [[`${ref.owner}/${ref.repo}#${ref.number}`, ref] as const] : [];
         }),
       ).values(),
     ];
-    if (refs.length === 0) return;
+    if (refs.length === 0) {
+      return;
+    }
     const refreshed = await this.getPrGraphqlClient().fetchPullRequests(refs);
-    if (refreshed.length === 0) return;
+    if (refreshed.length === 0) {
+      return;
+    }
     const fetchedAt = this.nextPrObservationTimestamp();
     const changed = this.rememberPrStatuses(
       refreshed,
@@ -4251,7 +4295,7 @@ class DesktopAppServerService {
     );
     await this.writePrStatusesToCache(refreshed, fetchedAt);
     await this.publishPullRequestStatusUpdates({
-      backend: request.backend,
+      backend: enabledRequests[0]!.backend,
       prs: changed,
     });
     await this.handlePrAutoDispatchSnapshots(
@@ -4259,6 +4303,50 @@ class DesktopAppServerService {
       fetchedAt,
       true,
     );
+  }
+
+  /**
+   * The Settings bulk action refreshes the complete attachment view before it
+   * decides which saved preferences to change. Detached and informational PR
+   * links are never eligible because primary-workspace matching happens here
+   * in the main process.
+   */
+  async setEligibleThreadsPrAutoDispatch(
+    request: SetEligibleThreadsPrAutoDispatchRequest,
+  ): Promise<SetEligibleThreadsPrAutoDispatchResponse> {
+    const snapshot = await this.getNavigationSnapshot({
+      backend: "all",
+      refreshMode: "full",
+    });
+    const eligibleThreads = snapshot.threads.filter((thread) => {
+      const attachment = this.attachedPrsByThreadKey.get(
+        buildThreadIdentityKey(thread.source, thread.id),
+      );
+      return Boolean(
+        attachment?.primaryRepoKey
+        && attachment.prs.some((pr) =>
+          pullRequestMatchesRepositoryKey(pr, attachment.primaryRepoKey)
+          && !isTerminalPullRequest(pr)
+        ),
+      );
+    });
+    const updates = eligibleThreads
+      .filter((thread) => thread.prAutoDispatchEnabled !== request.enabled)
+      .map((thread) => ({
+        backend: thread.source,
+        threadId: thread.id,
+        enabled: request.enabled,
+      }));
+
+    if (!request.dryRun && updates.length > 0) {
+      await getDesktopBackendRegistry().setThreadPrAutoDispatchBatch(updates);
+    }
+
+    return {
+      enabled: request.enabled,
+      eligibleThreadCount: eligibleThreads.length,
+      updatedThreadCount: updates.length,
+    };
   }
 
   async cancelThreadPrAutoDispatch(
@@ -5358,6 +5446,8 @@ export function registerAppServerIpcHandlers(): void {
   getDesktopBackendRegistry().setThreadPrAutoDispatchHandler({
     preferenceChanged: async (request) =>
       await appServerService.handleThreadPrAutoDispatchPreference(request),
+    preferencesChanged: async (requests) =>
+      await appServerService.handleThreadPrAutoDispatchPreferences(requests),
     cancelPending: async (request) =>
       await appServerService.cancelThreadPrAutoDispatch(request),
     sendPendingNow: async (request) =>
@@ -5803,6 +5893,16 @@ export function registerAppServerIpcHandlers(): void {
       return await appServerService.updateDirectoryLaunchpad(request);
     },
   );
+  ipcMain.removeHandler(NAVIGATION_SET_ELIGIBLE_THREADS_PR_AUTO_DISPATCH_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_SET_ELIGIBLE_THREADS_PR_AUTO_DISPATCH_CHANNEL,
+    async (
+      _event,
+      request: SetEligibleThreadsPrAutoDispatchRequest,
+    ): Promise<SetEligibleThreadsPrAutoDispatchResponse> => {
+      return await appServerService.setEligibleThreadsPrAutoDispatch(request);
+    },
+  );
   ipcMain.removeHandler(NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL);
   ipcMain.handle(
     NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
@@ -5927,6 +6027,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(NAVIGATION_GET_GH_STATUS_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_SET_ELIGIBLE_THREADS_PR_AUTO_DISPATCH_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL);

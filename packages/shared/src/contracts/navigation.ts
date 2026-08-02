@@ -565,6 +565,12 @@ export type NavigationLaunchpadDraft = NavigationLaunchpadDefaults & {
   settingsTouchedAt?: number;
   /** Explicit messaging `/new` override for this project. */
   messagingToolUpdateMode?: MessagingToolUpdateMode;
+  /**
+   * Saved Auto-fix PR choice for this launchpad. New launchpads seed this from
+   * the profile default so a later profile-default change does not silently
+   * rewrite a launchpad the operator has already configured.
+   */
+  prAutoDispatchEnabled?: boolean;
   workMode: LaunchpadWorkMode;
   branchName?: string;
   parentThreadId?: string;

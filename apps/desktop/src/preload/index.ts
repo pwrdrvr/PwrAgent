@@ -44,6 +44,8 @@ import type {
   SetThreadModelSettingsResponse,
   SetThreadPrAutoDispatchRequest,
   SetThreadPrAutoDispatchResponse,
+  SetEligibleThreadsPrAutoDispatchRequest,
+  SetEligibleThreadsPrAutoDispatchResponse,
   CancelThreadPrAutoDispatchRequest,
   CancelThreadPrAutoDispatchResponse,
   SendThreadPrAutoDispatchNowRequest,
@@ -433,6 +435,7 @@ import {
   NAVIGATION_SET_THREAD_AGENT_CHANNEL,
   NAVIGATION_SET_THREAD_PIN_CHANNEL,
   NAVIGATION_SET_THREAD_REACTION_CHANNEL,
+  NAVIGATION_SET_ELIGIBLE_THREADS_PR_AUTO_DISPATCH_CHANNEL,
   NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
   NAVIGATION_SNAPSHOT_CHANNEL,
   NAVIGATION_UPDATE_SUBTHREAD_ORDER_CHANNEL,
@@ -1304,6 +1307,13 @@ const desktopApi = Object.freeze({
     request: UpdateDirectoryLaunchpadRequest,
   ): Promise<UpdateDirectoryLaunchpadResponse> =>
     await ipcRenderer.invoke(NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL, request),
+  setEligibleThreadsPrAutoDispatch: async (
+    request: SetEligibleThreadsPrAutoDispatchRequest,
+  ): Promise<SetEligibleThreadsPrAutoDispatchResponse> =>
+    await ipcRenderer.invoke(
+      NAVIGATION_SET_ELIGIBLE_THREADS_PR_AUTO_DISPATCH_CHANNEL,
+      request,
+    ),
   resetDirectoryLaunchpad: async (
     request: ResetDirectoryLaunchpadRequest,
   ): Promise<ResetDirectoryLaunchpadResponse> =>
