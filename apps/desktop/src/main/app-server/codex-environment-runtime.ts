@@ -21,6 +21,7 @@ import {
   readCodexEnvironmentActionRuns,
 } from "@pwragent/shared";
 import { getMainLogger } from "../log";
+import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { windowsBashCandidates } from "../windows-shell";
 import type { CodexEnvironmentHydrationStoreLike } from "./codex-environment-hydration-store";
 
@@ -394,10 +395,11 @@ export async function applyLocalCodexEnvironmentSelection(params: {
         phase: "started",
         at: Date.now(),
       });
+      const commandEnv = buildPwrAgentChildProcessEnv(params.env ?? process.env);
       const result = await (params.commandRunner ?? runShellCommand)({
         cwd,
         command: selection.environment.setupScript,
-        env: params.env,
+        env: commandEnv,
         mode: "wait",
         captureShellEnvironment: true,
         timeoutMs:
@@ -470,9 +472,10 @@ export async function applyLocalCodexEnvironmentSelection(params: {
     runtime.shellEnvironment = cachedShellEnvironment;
   }
 
-  const actionEnv = runtime.shellEnvironment
-    ? { ...(params.env ?? process.env), ...runtime.shellEnvironment }
-    : params.env;
+  const actionEnv = buildPwrAgentChildProcessEnv(
+    params.env ?? process.env,
+    runtime.shellEnvironment,
+  );
 
   if (selection.action) {
     const runId = params.actionRunId ?? randomUUID();
@@ -577,9 +580,10 @@ export async function startLocalCodexEnvironmentAction(params: {
   const existingRuns = readCodexEnvironmentActionRuns(params.runtime);
 
   try {
-    const actionEnv = params.runtime.shellEnvironment
-      ? { ...(params.env ?? process.env), ...params.runtime.shellEnvironment }
-      : params.env;
+    const actionEnv = buildPwrAgentChildProcessEnv(
+      params.env ?? process.env,
+      params.runtime.shellEnvironment,
+    );
     const result = await (params.commandRunner ?? runShellCommand)({
       cwd: params.runtime.cwd,
       command: action.command,
@@ -703,7 +707,10 @@ function runShellCommand(
           if (signal === "SIGKILL") {
             taskkillArgs.push("/f");
           }
-          spawnSync("taskkill", taskkillArgs, { stdio: "ignore" });
+          spawnSync("taskkill", taskkillArgs, {
+            env: buildPwrAgentChildProcessEnv(process.env),
+            stdio: "ignore",
+          });
         }
       } catch (error) {
         environmentRuntimeLog.warn("codex-environment-command-kill-failed", {
@@ -1039,7 +1046,7 @@ function runShellCommand(
 function sanitizeLocalEnvironmentCommandEnv(
   env: NodeJS.ProcessEnv,
 ): NodeJS.ProcessEnv {
-  const sanitized = { ...env };
+  const sanitized = buildPwrAgentChildProcessEnv(env);
   for (const key of Object.keys(sanitized)) {
     if (isParentElectronRuntimeEnvKey(key)) {
       delete sanitized[key];

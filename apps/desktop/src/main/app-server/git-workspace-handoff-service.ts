@@ -13,6 +13,7 @@ import type {
   ThreadWorkspaceHandoffStashSummary,
 } from "@pwragent/shared";
 import { DESKTOP_WORKTREE_STORAGE_DEFAULT } from "@pwragent/shared";
+import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { computeWorktreePath } from "./git-directory-service";
 import { WorktreeArchiveService } from "./worktree-archive-service";
 
@@ -116,7 +117,7 @@ async function runGit(
 ): Promise<GitResult> {
   return await execFileAsync("git", args, {
     cwd,
-    env: env ?? process.env,
+    env: buildPwrAgentChildProcessEnv(env ?? process.env),
     maxBuffer: 1024 * 1024 * 10,
   });
 }

@@ -72,6 +72,41 @@ describe("stdio transport Codex CLI resolution", () => {
 });
 
 describe("StdioJsonRpcTransport", () => {
+  it("does not pass PwrAgent's renderer URL to the Codex app server", async () => {
+    const child = new MockCodexChildProcess();
+    spawnMock.mockReturnValue(child);
+    const transport = new StdioJsonRpcTransport({
+      command: "codex",
+      env: {
+        ELECTRON_RENDERER_URL: "http://localhost:5173",
+        PATH: "/usr/bin",
+      },
+      resolveEnv: async () => ({
+        ELECTRON_RENDERER_URL: "http://localhost:5175",
+        PATH: "/opt/homebrew/bin:/usr/bin",
+      }),
+      resolveArgs: async (env) => {
+        env.ELECTRON_RENDERER_URL = "http://localhost:5176";
+        return [];
+      },
+    });
+
+    await transport.connect();
+
+    expect(spawnMock).toHaveBeenCalledWith(
+      "codex",
+      ["app-server"],
+      expect.objectContaining({
+        env: expect.objectContaining({ PATH: "/opt/homebrew/bin:/usr/bin" }),
+      }),
+    );
+    expect(spawnMock.mock.calls[0]?.[2]?.env).not.toHaveProperty(
+      "ELECTRON_RENDERER_URL",
+    );
+
+    await transport.close();
+  });
+
   it("drops late sends after an intentional close", async () => {
     const child = new MockCodexChildProcess();
     spawnMock.mockReturnValue(child);

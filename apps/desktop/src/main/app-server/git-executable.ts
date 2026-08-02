@@ -1,5 +1,6 @@
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
+import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { gitCandidateInputs } from "../settings/git-discovery";
 
 const execFile = promisify(execFileCallback);
@@ -58,7 +59,8 @@ async function canRunGit(
 export async function resolveGitExecutable(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<string> {
-  const cacheKey = gitResolutionCacheKey(env);
+  const childEnv = buildPwrAgentChildProcessEnv(env);
+  const cacheKey = gitResolutionCacheKey(childEnv);
   const resolved = resolvedGitExecutableByEnv.get(cacheKey);
   if (resolved) {
     return resolved;
@@ -68,8 +70,8 @@ export async function resolveGitExecutable(
   if (!resolving) {
     resolving = (async () => {
       const failures: string[] = [];
-      for (const candidate of gitExecutableCandidates(env)) {
-        const result = await canRunGit(candidate, env);
+      for (const candidate of gitExecutableCandidates(childEnv)) {
+        const result = await canRunGit(candidate, childEnv);
         if (result.ok) {
           resolvedGitExecutableByEnv.set(cacheKey, candidate);
           return candidate;
@@ -95,7 +97,7 @@ export async function runGitCommand(
   stdout: string;
   stderr: string;
 }> {
-  const env = options.env ?? process.env;
+  const env = buildPwrAgentChildProcessEnv(options.env ?? process.env);
   const git = await resolveGitExecutable(env);
   const { stdout, stderr } = await execFile(git, ["-C", cwd, ...args], {
     encoding: "utf8",

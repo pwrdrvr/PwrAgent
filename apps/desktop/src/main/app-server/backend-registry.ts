@@ -13,6 +13,7 @@ import type {
   MessagingApprovalDecision,
   MessagingBindingRecord,
 } from "@pwragent/messaging-interface";
+import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { getAppStateDb, getAppStateMode } from "../state/app-state";
 import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
 import { requestShowThread } from "../window-show-thread";
@@ -1156,7 +1157,7 @@ async function readCurrentGitBranch(sourcePath: string): Promise<string | undefi
   const result = await execFile(
     "git",
     ["-C", sourcePath, "rev-parse", "--abbrev-ref", "HEAD"],
-    { env: process.env },
+    { env: buildPwrAgentChildProcessEnv(process.env) },
   );
   const branch = result.stdout.trim();
   return branch || undefined;
@@ -22892,7 +22893,7 @@ export class DesktopBackendRegistry {
       const result = await execFile(
         "git",
         ["-C", cwd, "config", "--get", "remote.origin.url"],
-        { env: process.env, timeout: 2_000 },
+        { env: buildPwrAgentChildProcessEnv(process.env), timeout: 2_000 },
       );
       return parseGitRemoteRepositoryUrl(result.stdout);
     } catch {

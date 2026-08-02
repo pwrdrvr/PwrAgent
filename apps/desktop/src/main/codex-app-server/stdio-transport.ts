@@ -5,6 +5,7 @@ import {
 import readline from "node:readline";
 import type { JsonRpcTransport } from "@pwrdrvr/agent-transport";
 import { getMainLogger } from "../log";
+import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import {
   compareCodexCliVersions,
   resolveCodexCommand,
@@ -75,16 +76,19 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
     this.closeRequested = false;
     this.droppedSendAfterCloseLogged = false;
 
-    const env = this.options.resolveEnv
+    const resolvedEnv = this.options.resolveEnv
       ? await this.options.resolveEnv()
       : this.options.env ?? process.env;
+    const env = buildPwrAgentChildProcessEnv(resolvedEnv);
     const args = this.options.resolveArgs
       ? await this.options.resolveArgs(env)
       : this.options.args ?? [];
+    const commandEnv = buildPwrAgentChildProcessEnv(env);
     const command = await resolveCodexCommand({
       command: this.options.command,
-      env,
+      env: commandEnv,
     });
+    const childEnv = buildPwrAgentChildProcessEnv(commandEnv);
     codexTransportLog.info("launch app-server", {
       command: command.command,
       source: command.source,
@@ -93,7 +97,7 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
 
     const child = spawn(command.command, ["app-server", ...args], {
       stdio: ["pipe", "pipe", "pipe"],
-      env,
+      env: childEnv,
     });
 
     if (!child.stdin || !child.stdout || !child.stderr) {

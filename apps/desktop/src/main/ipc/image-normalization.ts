@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { ipcMain, nativeImage } from "electron";
+import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { getMainLogger } from "../log";
 import type {
   ImageUploadFallbackRequest,
@@ -32,7 +33,10 @@ type ExecFileLike = (
 
 const defaultDependencies: ImageFallbackDependencies = {
   createImageFromBuffer: (buffer) => nativeImage.createFromBuffer(buffer),
-  execFile,
+  execFile: async (file, args) =>
+    await execFile(file, args, {
+      env: buildPwrAgentChildProcessEnv(process.env),
+    }),
   platform: process.platform,
 };
 

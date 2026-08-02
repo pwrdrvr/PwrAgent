@@ -90,6 +90,30 @@ describe("AcpStdioJsonRpcTransport", () => {
     await expect(request).resolves.toEqual({ ok: true });
   });
 
+  it("does not pass PwrAgent's renderer URL to ACP agent sessions", async () => {
+    const child = new MockAcpChildProcess();
+    const spawnCalls: Array<Parameters<AcpStdioSpawn>> = [];
+    const spawn: AcpStdioSpawn = (command, args, options) => {
+      spawnCalls.push([command, args, options]);
+      return child;
+    };
+    const transport = new AcpStdioJsonRpcTransport({
+      launchDescriptor: createDescriptor({
+        env: {
+          ACP_TEST: "1",
+          ELECTRON_RENDERER_URL: "http://localhost:5175",
+        },
+      }),
+      spawn,
+    });
+
+    await transport.connect();
+
+    expect(spawnCalls[0]?.[2].env).toMatchObject({ ACP_TEST: "1" });
+    expect(spawnCalls[0]?.[2].env).not.toHaveProperty("ELECTRON_RENDERER_URL");
+    await transport.close();
+  });
+
   it("adds Gemini session trust when launching persisted local descriptors", async () => {
     const child = new MockAcpChildProcess();
     const spawnCalls: Array<Parameters<AcpStdioSpawn>> = [];

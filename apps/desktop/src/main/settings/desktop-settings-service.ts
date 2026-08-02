@@ -145,6 +145,10 @@ import { discoverDesktopApplications } from "./application-discovery";
 import { discoverGitCommands } from "./git-discovery";
 import { discoverGhCommands } from "./gh-discovery";
 import { getMainLogger } from "../log";
+import {
+  buildPwrAgentChildProcessEnv,
+  mergePwrAgentChildProcessEnv,
+} from "../child-process-env";
 // Login-shell PATH hydration is now shared via @pwrdrvr/agent-transport (it was
 // extracted FROM this file). Behavior-identical: same `mergeLoginShellEnvIntoEnv`
 // shape + the `resolveShellEnv` test seam; the kit takes an injected logger
@@ -305,7 +309,7 @@ async function resolveInteractiveLoginShellEnvAsync(
           ["-ilc", command],
           {
             encoding: "utf8",
-            env,
+            env: buildPwrAgentChildProcessEnv(env),
             maxBuffer: LOGIN_SHELL_ENV_MAX_BUFFER,
             timeout: LOGIN_SHELL_ENV_TIMEOUT_MS,
           },
@@ -320,7 +324,7 @@ async function resolveInteractiveLoginShellEnvAsync(
       });
       const shellEnv = extractMarkedEnv(output);
       if (shellEnv) {
-        return shellEnv;
+        return buildPwrAgentChildProcessEnv(shellEnv);
       }
       failures.push({ shell, error: "missing env markers" });
     } catch (error) {
@@ -1366,12 +1370,14 @@ export class DesktopSettingsService {
   resolveCodexSpawnEnv(): NodeJS.ProcessEnv {
     if (this.options.resolveCodexShellEnv) {
       return this.withStartupCodexHome(
-        mergeLoginShellEnvIntoEnv(this.env, {
-          resolveShellEnv: this.options.resolveCodexShellEnv,
-          // Preserve the in-tree copy's diagnostic logging (the kit defaults to
-          // no-op when no logger is injected).
-          logger: getMainLogger("pwragent:shell-environment"),
-        }),
+        buildPwrAgentChildProcessEnv(
+          mergeLoginShellEnvIntoEnv(buildPwrAgentChildProcessEnv(this.env), {
+            resolveShellEnv: this.options.resolveCodexShellEnv,
+            // Preserve the in-tree copy's diagnostic logging (the kit defaults to
+            // no-op when no logger is injected).
+            logger: getMainLogger("pwragent:shell-environment"),
+          }),
+        ),
       );
     }
 
@@ -1409,7 +1415,7 @@ export class DesktopSettingsService {
           hadNvmDir: Boolean(shellEnv.NVM_DIR),
           hadHomebrewPrefix: Boolean(shellEnv.HOMEBREW_PREFIX),
         });
-        Object.assign(targetEnv, shellEnv);
+        mergePwrAgentChildProcessEnv(targetEnv, shellEnv);
         if (this.startupCodexHome) {
           targetEnv.CODEX_HOME = this.startupCodexHome;
         }
@@ -1421,10 +1427,12 @@ export class DesktopSettingsService {
 
   async resolveTerminalSpawnEnvAsync(): Promise<NodeJS.ProcessEnv> {
     if (this.options.resolveCodexShellEnv) {
-      return mergeLoginShellEnvIntoEnv(this.env, {
-        resolveShellEnv: this.options.resolveCodexShellEnv,
-        logger: getMainLogger("pwragent:shell-environment"),
-      });
+      return buildPwrAgentChildProcessEnv(
+        mergeLoginShellEnvIntoEnv(buildPwrAgentChildProcessEnv(this.env), {
+          resolveShellEnv: this.options.resolveCodexShellEnv,
+          logger: getMainLogger("pwragent:shell-environment"),
+        }),
+      );
     }
 
     if (this.terminalSpawnEnvHydrationPromise) {
@@ -1452,7 +1460,7 @@ export class DesktopSettingsService {
         hadNvmDir: Boolean(shellEnv.NVM_DIR),
         hadHomebrewPrefix: Boolean(shellEnv.HOMEBREW_PREFIX),
       });
-      Object.assign(targetEnv, shellEnv);
+      mergePwrAgentChildProcessEnv(targetEnv, shellEnv);
       return targetEnv;
     });
 
@@ -1460,12 +1468,14 @@ export class DesktopSettingsService {
   }
 
   private ensureBaseCodexSpawnEnv(): NodeJS.ProcessEnv {
-    this.codexSpawnEnv ??= this.withStartupCodexHome({ ...this.env });
+    this.codexSpawnEnv ??= this.withStartupCodexHome(
+      buildPwrAgentChildProcessEnv(this.env),
+    );
     return this.codexSpawnEnv;
   }
 
   private ensureBaseTerminalSpawnEnv(): NodeJS.ProcessEnv {
-    this.terminalSpawnEnv ??= { ...this.env };
+    this.terminalSpawnEnv ??= buildPwrAgentChildProcessEnv(this.env);
     return this.terminalSpawnEnv;
   }
 

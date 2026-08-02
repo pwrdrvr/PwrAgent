@@ -11,7 +11,9 @@ import {
 
 const settingsServiceMock = vi.hoisted(() => ({
   resolveIntegratedTerminalWindowsShell: vi.fn(() => "auto"),
-  resolveTerminalSpawnEnvAsync: vi.fn(async () => ({ SHELL: "/bin/sh" })),
+  resolveTerminalSpawnEnvAsync: vi.fn(
+    async (): Promise<NodeJS.ProcessEnv> => ({ SHELL: "/bin/sh" }),
+  ),
 }));
 
 vi.mock("../settings/desktop-settings-singleton", () => ({
@@ -197,6 +199,43 @@ describe("resolveTerminalShell", () => {
     expect(second.sessionId).toBe(first.sessionId);
     expect(spawn).toHaveBeenCalledTimes(1);
     expect(webContents.once).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not pass PwrAgent's renderer URL to an integrated terminal", async () => {
+    const pty = fakePty();
+    let spawnOptions: { env?: NodeJS.ProcessEnv } | undefined;
+    const spawn = vi.fn((...args: unknown[]) => {
+      spawnOptions = args[2] as { env?: NodeJS.ProcessEnv } | undefined;
+      return pty;
+    });
+    settingsServiceMock.resolveTerminalSpawnEnvAsync.mockResolvedValue({
+      ELECTRON_RENDERER_URL: "http://localhost:5175",
+      KEEP_TERMINAL_ENV: "yes",
+      SHELL: "/bin/sh",
+    });
+    const service = new IntegratedTerminalService({
+      loadNodePty: async () => ({
+        spawn: spawn as unknown as typeof import("node-pty").spawn,
+      }),
+      platform: "darwin",
+    });
+
+    await service.createOrAttach(
+      {
+        threadKey: "codex:thread-renderer-env",
+        cwd: os.tmpdir(),
+        cols: 80,
+        rows: 24,
+      },
+      fakeWebContents(),
+    );
+
+    expect(spawnOptions?.env).not.toHaveProperty("ELECTRON_RENDERER_URL");
+    expect(spawnOptions?.env).toMatchObject({
+      KEEP_TERMINAL_ENV: "yes",
+      TERM: "xterm-256color",
+      COLORTERM: "truecolor",
+    });
   });
 
   it("reports terminal sessions with a foreground command for quit confirmation", async () => {

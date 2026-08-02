@@ -35,10 +35,13 @@ describe("runtime identity ipc", () => {
     expect(execFileSyncMock).toHaveBeenCalledWith(
       "git",
       ["-C", "/repo/PwrAgent", "branch", "--show-current"],
-      {
+      expect.objectContaining({
         encoding: "utf8",
+        env: expect.not.objectContaining({
+          ELECTRON_RENDERER_URL: expect.anything(),
+        }),
         stdio: ["ignore", "pipe", "ignore"],
-      }
+      }),
     );
   });
 

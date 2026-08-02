@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 
 const execFileAsync = promisify(execFile);
 const GIT_REMOTE_TIMEOUT_MS = 2_000;
@@ -132,7 +133,12 @@ async function defaultReadRemoteUrl(cwd: string): Promise<string | undefined> {
     const { stdout } = await execFileAsync(
       "git",
       ["remote", "get-url", "origin"],
-      { cwd, maxBuffer: 64 * 1024, timeout: GIT_REMOTE_TIMEOUT_MS },
+      {
+        cwd,
+        env: buildPwrAgentChildProcessEnv(process.env),
+        maxBuffer: 64 * 1024,
+        timeout: GIT_REMOTE_TIMEOUT_MS,
+      },
     );
     return stdout.trim() || undefined;
   } catch {

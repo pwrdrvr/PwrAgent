@@ -14,6 +14,7 @@ import {
   resolvePwragentRoot,
 } from "../profile";
 import { getMainLogger } from "../log";
+import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 
 const grokTransportLog = getMainLogger("pwragent:grok-transport");
 const STDERR_LOG_MAX_LINES_PER_WINDOW = 100;
@@ -206,12 +207,11 @@ function buildGrokAppServerEnv(params: {
       ? legacyStateRoot
       : path.join(activeProfileDir, "state", "grok-app-server");
 
-  const childEnv: NodeJS.ProcessEnv = {
-    ...params.baseEnv,
+  const childEnv = buildPwrAgentChildProcessEnv(params.baseEnv, {
     ELECTRON_RUN_AS_NODE: "1",
     [PROFILE_STATE_ROOT_ENV]: profileStateRoot,
     ...(params.apiKey ? { XAI_API_KEY: params.apiKey } : {}),
-  };
+  });
   delete childEnv[LOCAL_ENV_PATH_ENV];
   if (params.localEnvPath) {
     childEnv[LOCAL_ENV_PATH_ENV] = params.localEnvPath;
