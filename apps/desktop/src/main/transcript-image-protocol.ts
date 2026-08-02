@@ -14,6 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolveActiveProfilePath, resolvePwragentRoot } from "./profile";
+import { isPwrSnapSignedMediaUrl } from "./pwrsnap-media-url";
 import { resolveDefaultCodexHome } from "@pwrdrvr/codex-discovery";
 
 export const TRANSCRIPT_IMAGE_PROTOCOL_SCHEME = "pwragent-image";
@@ -44,8 +45,17 @@ const MAX_FETCHED_TRANSCRIPT_IMAGE_BYTES = 64 * 1024 * 1024;
 const FETCHED_TRANSCRIPT_IMAGE_TIMEOUT_MS = 10_000;
 
 export type TranscriptImageProtocolOptions = {
+  /** Extra local roots approved for the current thread's Markdown image links. */
+  additionalAllowedRoots?: readonly string[];
   env?: NodeJS.ProcessEnv;
   homeDir?: string;
+};
+
+export type TranscriptImageMaterializationOptions = {
+  /** Linked project/worktree roots approved for this thread's Markdown image links. */
+  approvedLocalImageRoots?: readonly string[];
+  /** Lazily resolves approved roots only when the transcript contains a Markdown image link. */
+  resolveApprovedLocalImageRoots?: () => Promise<readonly string[]>;
 };
 
 type TranscriptImageFetchResponse = {
@@ -58,14 +68,17 @@ type TranscriptImageFetchResponse = {
 export type TranscriptImageMaterializerDependencies = {
   fetch: (
     url: string,
-    init: { signal: AbortSignal },
+    init: { redirect: "error"; signal: AbortSignal },
   ) => Promise<TranscriptImageFetchResponse>;
   resolveRoot: (request: {
     backend: AppServerBackendKind;
     threadId: string;
   }) => string;
   mkdir: (dirPath: string, options: { recursive: true }) => Promise<unknown>;
-  resolveLocalImageLink: (sourcePath: string) => Promise<TranscriptImageFileResolution>;
+  resolveLocalImageLink: (
+    sourcePath: string,
+    options?: TranscriptImageProtocolOptions,
+  ) => Promise<TranscriptImageFileResolution>;
   writeFile: (filePath: string, data: Buffer) => Promise<unknown>;
 };
 
@@ -78,6 +91,13 @@ type MaterializedTranscriptImage = {
   extension: string;
   sha256: string;
 };
+
+type MaterializedMarkdownLinkedImage = {
+  sourceUrl: string;
+  url: string;
+};
+
+type ApprovedLocalImageRootResolver = () => Promise<readonly string[]>;
 
 const defaultMaterializerDependencies: TranscriptImageMaterializerDependencies = {
   fetch: async (url, init) => await globalThis.fetch(url, init),
@@ -94,6 +114,24 @@ const defaultMaterializerDependencies: TranscriptImageMaterializerDependencies =
   resolveLocalImageLink: resolveTranscriptImageFile,
   writeFile,
 };
+
+function createApprovedLocalImageRootResolver(
+  options: TranscriptImageMaterializationOptions,
+): ApprovedLocalImageRootResolver {
+  if (options.approvedLocalImageRoots) {
+    return async () => options.approvedLocalImageRoots ?? [];
+  }
+
+  let roots: Promise<readonly string[]> | undefined;
+  return async () => {
+    if (!roots) {
+      roots =
+        options.resolveApprovedLocalImageRoots?.().catch(() => []) ??
+        Promise.resolve([]);
+    }
+    return await roots;
+  };
+}
 
 export function toTranscriptImageProtocolUrl(src: string): string {
   return `pwragent-image://file/${encodeURIComponent(src)}`;
@@ -115,8 +153,10 @@ export function rewriteTranscriptImageUrlsForRenderer(
 export async function materializeTranscriptImageUrlsForRenderer(
   response: AppServerReadThreadResponse,
   dependencies: Partial<TranscriptImageMaterializerDependencies> = {},
+  options: TranscriptImageMaterializationOptions = {},
 ): Promise<AppServerReadThreadResponse> {
   const deps = { ...defaultMaterializerDependencies, ...dependencies };
+  const resolveApprovedLocalImageRoots = createApprovedLocalImageRootResolver(options);
   const materializedFileWrites = new Map<string, Promise<void>>();
   const fetchedLoopbackImages = new Map<
     string,
@@ -125,6 +165,10 @@ export async function materializeTranscriptImageUrlsForRenderer(
   const markdownLinkImageResolutions = new Map<
     string,
     Promise<TranscriptImageFileResolution>
+  >();
+  const materializedMarkdownLinkedImages = new Map<
+    string,
+    Promise<MaterializedMarkdownLinkedImage | undefined>
   >();
 
   return {
@@ -140,6 +184,8 @@ export async function materializeTranscriptImageUrlsForRenderer(
             materializedFileWrites,
             fetchedLoopbackImages,
             markdownLinkImageResolutions,
+            materializedMarkdownLinkedImages,
+            resolveApprovedLocalImageRoots,
           ),
         ),
       ),
@@ -152,6 +198,8 @@ export async function materializeTranscriptImageUrlsForRenderer(
             materializedFileWrites,
             fetchedLoopbackImages,
             markdownLinkImageResolutions,
+            materializedMarkdownLinkedImages,
+            resolveApprovedLocalImageRoots,
           ),
         ),
       ),
@@ -179,6 +227,11 @@ async function materializeTranscriptEntryImageUrls(
   materializedFileWrites: Map<string, Promise<void>>,
   fetchedLoopbackImages: Map<string, Promise<MaterializedTranscriptImage | undefined>>,
   markdownLinkImageResolutions: Map<string, Promise<TranscriptImageFileResolution>>,
+  materializedMarkdownLinkedImages: Map<
+    string,
+    Promise<MaterializedMarkdownLinkedImage | undefined>
+  >,
+  resolveApprovedLocalImageRoots: ApprovedLocalImageRootResolver,
 ): Promise<AppServerThreadEntry> {
   if (entry.type !== "message") {
     return entry;
@@ -191,6 +244,8 @@ async function materializeTranscriptEntryImageUrls(
     materializedFileWrites,
     fetchedLoopbackImages,
     markdownLinkImageResolutions,
+    materializedMarkdownLinkedImages,
+    resolveApprovedLocalImageRoots,
   )) as AppServerThreadMessageEntry;
 }
 
@@ -201,11 +256,20 @@ async function materializeTranscriptMessageImageUrls<T extends AppServerThreadMe
   materializedFileWrites: Map<string, Promise<void>>,
   fetchedLoopbackImages: Map<string, Promise<MaterializedTranscriptImage | undefined>>,
   markdownLinkImageResolutions: Map<string, Promise<TranscriptImageFileResolution>>,
+  materializedMarkdownLinkedImages: Map<
+    string,
+    Promise<MaterializedMarkdownLinkedImage | undefined>
+  >,
+  resolveApprovedLocalImageRoots: ApprovedLocalImageRootResolver,
 ): Promise<T> {
   const messageWithMarkdownLinkImages = await appendMarkdownLinkImageParts(
     message,
+    response,
     deps,
+    materializedFileWrites,
     markdownLinkImageResolutions,
+    materializedMarkdownLinkedImages,
+    resolveApprovedLocalImageRoots,
   );
   if (
     !messageWithMarkdownLinkImages.parts?.some(
@@ -332,7 +396,10 @@ async function fetchLoopbackSignedImageOnce(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), FETCHED_TRANSCRIPT_IMAGE_TIMEOUT_MS);
   try {
-    const response = await deps.fetch(url, { signal: controller.signal });
+    const response = await deps.fetch(url, {
+      redirect: "error",
+      signal: controller.signal,
+    });
     if (!response.ok) {
       return undefined;
     }
@@ -411,39 +478,17 @@ async function readFetchedTranscriptImageBuffer(
   return byteLength > 0 ? Buffer.concat(chunks, byteLength) : undefined;
 }
 
-function isPwrSnapSignedMediaUrl(value: string): boolean {
-  let parsed: URL;
-  try {
-    parsed = new URL(value);
-  } catch {
-    return false;
-  }
-
-  if (
-    (parsed.protocol !== "http:" && parsed.protocol !== "https:")
-    || !isLoopbackHostname(parsed.hostname)
-    || parsed.pathname !== "/media"
-  ) {
-    return false;
-  }
-
-  return Boolean(parsed.searchParams.get("grant"));
-}
-
-function isLoopbackHostname(hostname: string): boolean {
-  const normalized = hostname.toLowerCase();
-  return (
-    normalized === "localhost"
-    || normalized === "127.0.0.1"
-    || normalized === "::1"
-    || normalized.endsWith(".localhost")
-  );
-}
-
 async function appendMarkdownLinkImageParts<T extends AppServerThreadMessage>(
   message: T,
+  response: AppServerReadThreadResponse,
   deps: TranscriptImageMaterializerDependencies,
+  materializedFileWrites: Map<string, Promise<void>>,
   markdownLinkImageResolutions: Map<string, Promise<TranscriptImageFileResolution>>,
+  materializedMarkdownLinkedImages: Map<
+    string,
+    Promise<MaterializedMarkdownLinkedImage | undefined>
+  >,
+  resolveApprovedLocalImageRoots: ApprovedLocalImageRootResolver,
 ): Promise<T> {
   const textParts = message.parts?.filter(
     (part): part is Extract<AppServerThreadMessagePart, { type: "text" }> =>
@@ -465,25 +510,28 @@ async function appendMarkdownLinkImageParts<T extends AppServerThreadMessage>(
   const imageParts: AppServerThreadImagePart[] = [];
 
   for (const imageLink of imageLinks) {
-    const resolution = await resolveMarkdownLinkedImage(
+    const image = await materializeMarkdownLinkedImage(
       imageLink.sourcePath,
+      response,
       deps,
+      materializedFileWrites,
       markdownLinkImageResolutions,
+      materializedMarkdownLinkedImages,
+      resolveApprovedLocalImageRoots,
     );
-    if (!resolution.ok) {
+    if (!image) {
       continue;
     }
 
-    const sourceUrl = pathToFileURL(imageLink.sourcePath).toString();
-    if (existingSourceUrls.has(sourceUrl)) {
+    if (existingSourceUrls.has(image.sourceUrl)) {
       continue;
     }
-    existingSourceUrls.add(sourceUrl);
+    existingSourceUrls.add(image.sourceUrl);
     imageParts.push({
       type: "image",
-      url: toTranscriptImageProtocolUrl(pathToFileURL(resolution.path).toString()),
-      sourceUrl,
-      alt: imageLink.alt || path.basename(resolution.path),
+      url: image.url,
+      sourceUrl: image.sourceUrl,
+      alt: imageLink.alt || path.basename(imageLink.sourcePath),
     });
   }
 
@@ -497,17 +545,113 @@ async function appendMarkdownLinkImageParts<T extends AppServerThreadMessage>(
   };
 }
 
+async function materializeMarkdownLinkedImage(
+  sourcePath: string,
+  response: AppServerReadThreadResponse,
+  deps: TranscriptImageMaterializerDependencies,
+  materializedFileWrites: Map<string, Promise<void>>,
+  resolutions: Map<string, Promise<TranscriptImageFileResolution>>,
+  materializedImages: Map<string, Promise<MaterializedMarkdownLinkedImage | undefined>>,
+  resolveApprovedLocalImageRoots: ApprovedLocalImageRootResolver,
+): Promise<MaterializedMarkdownLinkedImage | undefined> {
+  const existing = materializedImages.get(sourcePath);
+  if (existing) {
+    return await existing;
+  }
+
+  const materialization = materializeMarkdownLinkedImageOnce(
+    sourcePath,
+    response,
+    deps,
+    materializedFileWrites,
+    resolutions,
+    resolveApprovedLocalImageRoots,
+  );
+  materializedImages.set(sourcePath, materialization);
+  return await materialization;
+}
+
+async function materializeMarkdownLinkedImageOnce(
+  sourcePath: string,
+  response: AppServerReadThreadResponse,
+  deps: TranscriptImageMaterializerDependencies,
+  materializedFileWrites: Map<string, Promise<void>>,
+  resolutions: Map<string, Promise<TranscriptImageFileResolution>>,
+  resolveApprovedLocalImageRoots: ApprovedLocalImageRootResolver,
+): Promise<MaterializedMarkdownLinkedImage | undefined> {
+  const approvedLocalImageRoots = await resolveApprovedLocalImageRoots();
+  const resolution = await resolveMarkdownLinkedImage(
+    sourcePath,
+    deps,
+    resolutions,
+    approvedLocalImageRoots,
+  );
+  if (!resolution.ok) {
+    return undefined;
+  }
+
+  const image = await readMarkdownLinkedTranscriptImage(resolution);
+  if (!image) {
+    return undefined;
+  }
+
+  const sourceUrl = pathToFileURL(sourcePath).toString();
+  const imagePart = await materializeTranscriptImagePart(
+    { type: "image", url: sourceUrl, sourceUrl },
+    image,
+    response,
+    deps,
+    materializedFileWrites,
+  );
+  if (!isTranscriptImageProtocolUrl(imagePart.url)) {
+    return undefined;
+  }
+
+  return { sourceUrl, url: imagePart.url };
+}
+
+async function readMarkdownLinkedTranscriptImage(
+  resolution: Extract<TranscriptImageFileResolution, { ok: true }>,
+): Promise<MaterializedTranscriptImage | undefined> {
+  const extension = DATA_IMAGE_EXTENSIONS.get(resolution.mimeType);
+  if (!extension) {
+    return undefined;
+  }
+
+  let buffer: Buffer;
+  try {
+    buffer = await readFile(resolution.path);
+  } catch {
+    return undefined;
+  }
+  if (
+    buffer.byteLength === 0
+    || buffer.byteLength > MAX_FETCHED_TRANSCRIPT_IMAGE_BYTES
+  ) {
+    return undefined;
+  }
+
+  return {
+    buffer,
+    extension,
+    sha256: createHash("sha256").update(buffer).digest("hex"),
+  };
+}
+
 function resolveMarkdownLinkedImage(
   sourcePath: string,
   deps: TranscriptImageMaterializerDependencies,
   resolutions: Map<string, Promise<TranscriptImageFileResolution>>,
+  approvedLocalImageRoots: readonly string[] | undefined,
 ): Promise<TranscriptImageFileResolution> {
   const existing = resolutions.get(sourcePath);
   if (existing) {
     return existing;
   }
 
-  const resolution = deps.resolveLocalImageLink(sourcePath).catch(() => ({
+  const resolution = deps.resolveLocalImageLink(sourcePath, {
+    additionalAllowedRoots: approvedLocalImageRoots,
+  }).catch(() => ({
     ok: false as const,
     status: 500,
     message: "could not resolve Markdown-linked image",
@@ -644,6 +788,10 @@ function rewriteTranscriptMessagePartImageUrl(
 
 function isFileImageUrl(url: string): boolean {
   return url.startsWith("file://");
+}
+
+function isTranscriptImageProtocolUrl(url: string): boolean {
+  return url.startsWith(`${TRANSCRIPT_IMAGE_PROTOCOL_SCHEME}://file/`);
 }
 
 function isMaterializableImageUrl(url: string): boolean {
@@ -788,6 +936,12 @@ function collectTranscriptImageRoots(options?: TranscriptImageProtocolOptions): 
   roots.add(path.join(resolvePwragentRoot({ env: {}, homeDir }), "profiles"));
   roots.add(resolveDefaultCodexHome({ env, homeDir }));
   roots.add(resolveDefaultCodexHome({ env: {}, homeDir }));
+  for (const root of options?.additionalAllowedRoots ?? []) {
+    const trimmed = root.trim();
+    if (trimmed) {
+      roots.add(trimmed);
+    }
+  }
 
   return [...roots];
 }

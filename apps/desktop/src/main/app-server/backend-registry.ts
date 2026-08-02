@@ -8879,6 +8879,38 @@ export class DesktopBackendRegistry {
     };
   }
 
+  async getThreadTranscriptImageRoots(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<string[]> {
+    this.assertNotBootstrap("getThreadTranscriptImageRoots");
+    const [thread, overlay] = await Promise.all([
+      this.findThreadForWorkspaceHandoff({
+        backend: params.backend,
+        callerReason: "transcript-image-roots",
+        threadId: params.threadId,
+      }),
+      this.overlayStore.getThreadOverlayState({
+        backend: params.backend,
+        threadId: params.threadId,
+      }),
+    ]);
+    const roots = new Set<string>();
+    for (const directory of dedupeLinkedDirectoriesByNormalizedIdentity([
+      ...(thread?.linkedDirectories ?? []),
+      ...(overlay?.extraLinkedDirectories ?? []),
+    ])) {
+      for (const candidate of [directory.path, directory.worktreePath]) {
+        const trimmed = candidate?.trim();
+        if (trimmed) {
+          roots.add(path.resolve(trimmed));
+        }
+      }
+    }
+
+    return [...roots];
+  }
+
   private async persistReplayUsageLines(
     replay: AppServerThreadReplay,
   ): Promise<void> {

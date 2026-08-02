@@ -217,7 +217,8 @@ describe("transcript image protocol", () => {
     const { materializeTranscriptImageUrlsForRenderer } = await import(
       "../transcript-image-protocol"
     );
-    const signedUrl = "http://127.0.0.1:51729/media?grant=read-once-grant";
+    const signedUrl =
+      "http://127.0.0.1:51729/media?grant=read-once-grant&signature=valid-signature";
     const bytes = new Uint8Array([4, 5, 6]);
     const fetch = vi.fn(async () => ({
       ok: true,
@@ -285,7 +286,10 @@ describe("transcript image protocol", () => {
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(fetch).toHaveBeenCalledWith(
       signedUrl,
-      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      expect.objectContaining({
+        redirect: "error",
+        signal: expect.any(AbortSignal),
+      }),
     );
     const materializedPath =
       entryPart?.type === "image" ? filePathFromProtocolUrl(entryPart.url) : "";
@@ -330,22 +334,63 @@ describe("transcript image protocol", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it("adds approved local Markdown image links to transcript galleries", async () => {
+  it("does not fetch unsigned or untrusted loopback image URLs", async () => {
+    const { materializeTranscriptImageUrlsForRenderer } = await import(
+      "../transcript-image-protocol"
+    );
+    const imageUrls = [
+      "http://127.0.0.1:51729/media?grant=missing-signature",
+      "http://127.0.0.1:51730/media?grant=other-service&signature=signature",
+      "http://localhost:51729/media?grant=wrong-origin&signature=signature",
+    ];
+    const fetch = vi.fn();
+
+    const response = await materializeTranscriptImageUrlsForRenderer(
+      {
+        backend: "codex",
+        fetchedAt: 1,
+        threadId: "thread-untrusted-loopback-image",
+        replay: {
+          entries: [],
+          messages: [
+            {
+              id: "message-1",
+              role: "assistant",
+              text: "Images.",
+              parts: imageUrls.map((url) => ({ type: "image" as const, url })),
+            },
+          ],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      },
+      { fetch },
+    );
+
+    expect(response.replay.messages[0]?.parts).toEqual(
+      imageUrls.map((url) => ({ type: "image", url })),
+    );
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("snapshots approved worktree Markdown image links into transcript galleries", async () => {
     const { materializeTranscriptImageUrlsForRenderer } = await import(
       "../transcript-image-protocol"
     );
     const imagePath = path.join(tempDir, "worktree", "dmg-background.png");
-    const linkedImagePath = "/tmp/worktree/dmg-background.png";
+    const linkedImagePath = imagePath;
     const sourceUrl = pathToFileURL(linkedImagePath).toString();
-    const resolveLocalImageLink = vi.fn(async () => ({
-      ok: true as const,
-      path: imagePath,
-      mimeType: "image/png",
-    }));
+    await mkdir(path.dirname(imagePath), { recursive: true });
+    await writeFile(imagePath, Buffer.from([7, 8, 9]));
+    const resolveApprovedLocalImageRoots = vi.fn(async () => [
+      path.join(tempDir, "worktree"),
+    ]);
     const message = {
       id: "message-image-link",
       role: "assistant" as const,
-      text: "The background is [dmg-background.png](/tmp/worktree/dmg-background.png).",
+      text: `The background is [dmg-background.png](${linkedImagePath}).`,
     };
 
     const response = await materializeTranscriptImageUrlsForRenderer(
@@ -363,18 +408,20 @@ describe("transcript image protocol", () => {
         },
       },
       {
-        resolveLocalImageLink,
-      }
+        resolveRoot: () => path.join(tempDir, "thread-images"),
+      },
+      {
+        resolveApprovedLocalImageRoots,
+      },
     );
 
-    expect(resolveLocalImageLink).toHaveBeenCalledTimes(1);
-    expect(resolveLocalImageLink).toHaveBeenCalledWith(linkedImagePath);
-    const expectedImagePart = {
+    expect(resolveApprovedLocalImageRoots).toHaveBeenCalledTimes(1);
+    const expectedImagePart = expect.objectContaining({
       type: "image",
-      url: `pwragent-image://file/${encodeURIComponent(pathToFileURL(imagePath).toString())}`,
+      url: expect.stringMatching(/^pwragent-image:\/\/file\//),
       sourceUrl,
       alt: "dmg-background.png",
-    };
+    });
     expect(response.replay.entries[0]).toMatchObject({
       type: "message",
       parts: [
@@ -388,6 +435,13 @@ describe("transcript image protocol", () => {
         expectedImagePart,
       ],
     });
+    const entryPart = response.replay.entries[0]?.type === "message"
+      ? response.replay.entries[0].parts?.[1]
+      : undefined;
+    const materializedPath =
+      entryPart?.type === "image" ? filePathFromProtocolUrl(entryPart.url) : "";
+    expect(materializedPath).toContain(path.join("thread-images"));
+    await expect(readFile(materializedPath)).resolves.toEqual(Buffer.from([7, 8, 9]));
   });
 
   it("keeps data image URLs when materialization writes fail", async () => {

@@ -1107,7 +1107,8 @@ class DesktopAppServerService {
     request: AppServerReadThreadRequest
   ): Promise<AppServerReadThreadResponse> {
     const backend = request.backend ?? "codex";
-    const response = await getDesktopBackendRegistry().readThread({
+    const registry = getDesktopBackendRegistry();
+    const response = await registry.readThread({
       backend,
       threadId: request.threadId,
       includeTurns: request.includeTurns,
@@ -1126,7 +1127,17 @@ class DesktopAppServerService {
       threadStatus: response.threadStatus ?? response.replay.threadStatus,
     });
 
-    const materialized = await materializeTranscriptImageUrlsForRenderer(response);
+    const materialized = await materializeTranscriptImageUrlsForRenderer(
+      response,
+      {},
+      {
+        resolveApprovedLocalImageRoots: async () =>
+          await registry.getThreadTranscriptImageRoots({
+            backend,
+            threadId: request.threadId,
+          }),
+      },
+    );
     return sanitizeRendererPayload(
       shapeReadThreadFileDiffsForRenderer(materialized),
     );

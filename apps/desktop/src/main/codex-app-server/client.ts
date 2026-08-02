@@ -49,6 +49,7 @@ import type {
   LinkedDirectorySummary,
 } from "@pwragent/shared";
 import { getMainLogger } from "../log";
+import { isPwrSnapSignedMediaUrl } from "../pwrsnap-media-url";
 import {
   buildPwrAgentChildProcessEnv,
   ELECTRON_RENDERER_URL_ENV,
@@ -3603,31 +3604,6 @@ function buildMcpResourceImagePart(
     type: "image",
     url: `data:${mimeType};base64,${blob}`,
   };
-}
-
-function isPwrSnapSignedMediaUrl(value: string): boolean {
-  let parsed: URL;
-  try {
-    parsed = new URL(value);
-  } catch {
-    return false;
-  }
-
-  if (
-    (parsed.protocol !== "http:" && parsed.protocol !== "https:")
-    || parsed.pathname !== "/media"
-  ) {
-    return false;
-  }
-
-  const hostname = parsed.hostname.toLowerCase();
-  const isLoopback = (
-    hostname === "localhost"
-    || hostname === "127.0.0.1"
-    || hostname === "::1"
-    || hostname.endsWith(".localhost")
-  );
-  return isLoopback && Boolean(parsed.searchParams.get("grant"));
 }
 
 function dedupeImageParts(

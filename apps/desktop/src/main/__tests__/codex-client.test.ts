@@ -3766,7 +3766,8 @@ describe("CodexAppServerClient", () => {
 
   it("attaches loopback image exports from MCP results to the final assistant message", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
-    const imageUrl = "http://127.0.0.1:51729/media?grant=signed-image";
+    const imageUrl =
+      "http://127.0.0.1:51729/media?grant=signed-image&signature=signed-media";
     MockTransport.readThreadResultByThreadId.set("thread-mcp-image", {
       thread: {
         turns: [
