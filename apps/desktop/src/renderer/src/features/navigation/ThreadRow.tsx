@@ -54,6 +54,12 @@ type ThreadRowProps = {
   nested?: boolean;
   revealSelectedThreadRequest?: number;
   selectedThreadKey?: string;
+  /**
+   * The rows currently selected for a sidebar batch action. This is separate
+   * from `selectedThreadKey`, which still identifies the thread open in the
+   * detail pane while the user builds a multi-selection.
+   */
+  selectedThreadKeys?: ReadonlySet<string>;
   subthreadCount?: number;
   subthreadsCollapsed?: boolean;
   thinkingThreadKeys?: Record<string, boolean>;
@@ -86,7 +92,10 @@ type ThreadRowProps = {
     thread: NavigationThreadSummary,
     binding: MessagingThreadBindingSummary,
   ) => Promise<void>;
-  onSelectThread: (thread: NavigationThreadSummary) => void;
+  onSelectThread: (
+    thread: NavigationThreadSummary,
+    event: MouseEvent<HTMLButtonElement>,
+  ) => void;
   onRevealSelectedThreadComplete?: (request: number) => void;
   onToggleSubthreads?: () => void;
   onDragStartThread?: (event: DragEvent<HTMLDivElement>) => void;
@@ -112,8 +121,10 @@ type ThreadRowProps = {
 
 export function ThreadRow(props: ThreadRowProps) {
   const threadKey = buildThreadIdentityKey(props.thread.source, props.thread.id);
-  const selected =
-    threadKey === props.selectedThreadKey;
+  const selected = props.selectedThreadKeys
+    ? props.selectedThreadKeys.has(threadKey)
+    : threadKey === props.selectedThreadKey;
+  const active = threadKey === props.selectedThreadKey;
   const isComposerSource = threadKey === props.composerSourceThreadKey;
   const status = getThreadRowStatus(props.thread, props.thinkingThreadKeys);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -145,7 +156,7 @@ export function ThreadRow(props: ThreadRowProps) {
     }
   }, []);
   useEffect(() => {
-    if (!selected) {
+    if (!active) {
       return;
     }
 
@@ -156,9 +167,9 @@ export function ThreadRow(props: ThreadRowProps) {
     rowButtonRef.current.scrollIntoView({
       block: "nearest",
     });
-  }, [selected, threadKey]);
+  }, [active, threadKey]);
   useEffect(() => {
-    if (!selected) {
+    if (!active) {
       return;
     }
 
@@ -172,7 +183,7 @@ export function ThreadRow(props: ThreadRowProps) {
   }, [
     onRevealSelectedThreadComplete,
     revealSelectedThreadRequest,
-    selected,
+    active,
   ]);
   const armHoverPrefetch = (): void => {
     if (!props.onPrefetchPullRequests) return;
@@ -269,7 +280,7 @@ export function ThreadRow(props: ThreadRowProps) {
             );
           }
         }}
-        onClick={() => props.onSelectThread(props.thread)}
+        onClick={(event) => props.onSelectThread(props.thread, event)}
       >
         <span className="thread-row__header">
           <span className="thread-row__heading">

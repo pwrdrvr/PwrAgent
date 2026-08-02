@@ -2016,6 +2016,302 @@ describe("Sidebar", () => {
     expect(onArchiveThread).toHaveBeenCalledWith(sharedThread);
   });
 
+  it("supports Cmd, Shift, and Cmd+Shift thread selections for batch actions", () => {
+    const copyText = vi.fn(async () => undefined);
+    const onArchiveThread = vi.fn(async () => undefined);
+    const onReorderThreadPins = vi.fn(async () => undefined);
+    const onSelectThread = vi.fn();
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: { copyText },
+    });
+
+    const firstThread = {
+      ...sharedThread,
+      id: "thread-first",
+      title: "First batch thread",
+      linkedDirectories: [
+        {
+          ...sharedThread.linkedDirectories[0]!,
+          path: "/tmp/project-first",
+          worktreePath: "/tmp/worktree-first",
+        },
+      ],
+    };
+    const secondThread = {
+      ...sharedThread,
+      id: "thread-second",
+      title: "Second batch thread",
+      linkedDirectories: [
+        {
+          ...sharedThread.linkedDirectories[0]!,
+          path: "/tmp/project-second",
+          worktreePath: "/tmp/worktree-second",
+        },
+      ],
+    };
+    const thirdThread = {
+      ...sharedThread,
+      id: "thread-third",
+      title: "Third batch thread",
+      linkedDirectories: [],
+    };
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        directories={directories}
+        inboxThreads={[firstThread, secondThread, thirdThread]}
+        loading={false}
+        threads={[firstThread, secondThread, thirdThread]}
+        onArchiveThread={onArchiveThread}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onReorderThreadPins={onReorderThreadPins}
+        onSelectThread={onSelectThread}
+      />,
+    );
+
+    const firstButton = screen.getByRole("button", {
+      name: "First batch thread",
+    });
+    const secondButton = screen.getByRole("button", {
+      name: "Second batch thread",
+    });
+    const thirdButton = screen.getByRole("button", {
+      name: "Third batch thread",
+    });
+
+    fireEvent.click(firstButton);
+    fireEvent.click(thirdButton, { metaKey: true });
+    expect(firstButton).toHaveAttribute("aria-pressed", "true");
+    expect(secondButton).toHaveAttribute("aria-pressed", "false");
+    expect(thirdButton).toHaveAttribute("aria-pressed", "true");
+
+    // Shift replaces the set with the range from the Cmd-click anchor; adding
+    // Cmd keeps that range alongside the existing selection.
+    fireEvent.click(secondButton, { shiftKey: true });
+    expect(firstButton).toHaveAttribute("aria-pressed", "false");
+    expect(secondButton).toHaveAttribute("aria-pressed", "true");
+    expect(thirdButton).toHaveAttribute("aria-pressed", "true");
+
+    fireEvent.click(firstButton, { metaKey: true, shiftKey: true });
+    expect(firstButton).toHaveAttribute("aria-pressed", "true");
+    expect(secondButton).toHaveAttribute("aria-pressed", "true");
+    expect(thirdButton).toHaveAttribute("aria-pressed", "true");
+    expect(onSelectThread).toHaveBeenCalledTimes(1);
+    expect(onSelectThread).toHaveBeenCalledWith(firstThread);
+
+    fireEvent.contextMenu(secondButton, { clientX: 48, clientY: 64 });
+    const menu = screen.getByRole("menu", {
+      name: "Actions for 3 threads selected",
+    });
+    expect(within(menu).getByRole("menuitem", { name: "Pin 3 Threads" })).toBeInTheDocument();
+    expect(
+      within(menu).getByRole("menuitem", { name: "Archive 3 Threads" }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(
+      within(menu).getByRole("menuitem", { name: "Copy Thread Paths" }),
+    );
+    expect(copyText).toHaveBeenCalledWith(
+      ["/tmp/worktree-first", "/tmp/worktree-second"].join("\n"),
+    );
+
+    fireEvent.contextMenu(secondButton, { clientX: 48, clientY: 64 });
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Archive 3 Threads" }),
+    );
+    expect(onArchiveThread).toHaveBeenCalledWith(firstThread);
+    expect(onArchiveThread).toHaveBeenCalledWith(secondThread);
+    expect(onArchiveThread).toHaveBeenCalledWith(thirdThread);
+  });
+
+  it("limits each batch action to its compatible thread subset", () => {
+    const onSetThreadParent = vi.fn(async () => undefined);
+    const onSetThreadPin = vi.fn(async () => undefined);
+    const onReorderThreadPins = vi.fn(async () => undefined);
+    const pinnedThread = {
+      ...sharedThread,
+      id: "thread-pinned",
+      title: "Pinned batch thread",
+      pinnedRank: "1024",
+    };
+    const parentThread = {
+      ...sharedThread,
+      id: "thread-parent",
+      title: "Batch parent thread",
+      subthreadsCollapsed: false,
+    };
+    const childThread = {
+      ...sharedThread,
+      id: "thread-child",
+      title: "Child batch thread",
+      parentThreadId: parentThread.id,
+    };
+    const unpinnedThread = {
+      ...sharedThread,
+      id: "thread-unpinned",
+      title: "Unpinned batch thread",
+    };
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        directories={directories}
+        inboxThreads={[pinnedThread, parentThread, childThread, unpinnedThread]}
+        loading={false}
+        threads={[pinnedThread, parentThread, childThread, unpinnedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onReorderThreadPins={onReorderThreadPins}
+        onSelectThread={() => undefined}
+        onSetThreadParent={onSetThreadParent}
+        onSetThreadPin={onSetThreadPin}
+      />,
+    );
+
+    const pinnedButton = screen.getByRole("button", {
+      name: "Pinned batch thread",
+    });
+    const childButton = screen.getByRole("button", {
+      name: "Child batch thread",
+    });
+    const unpinnedButton = screen.getByRole("button", {
+      name: "Unpinned batch thread",
+    });
+    fireEvent.click(childButton);
+    fireEvent.click(pinnedButton, { metaKey: true });
+    fireEvent.click(unpinnedButton, { metaKey: true });
+
+    fireEvent.contextMenu(pinnedButton, { clientX: 48, clientY: 64 });
+    expect(
+      screen.getByRole("menuitem", { name: "Unpin 1 Thread" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("menuitem", { name: "Pin 1 Thread" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("menuitem", { name: "Unlink 1 Thread from Parent" }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Unlink 1 Thread from Parent" }),
+    );
+    expect(onSetThreadParent).toHaveBeenCalledWith(childThread, undefined);
+
+    fireEvent.contextMenu(pinnedButton, { clientX: 48, clientY: 64 });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Unpin 1 Thread" }));
+    expect(onSetThreadPin).toHaveBeenCalledWith(pinnedThread, false);
+  });
+
+  it("uses the expanded directory order for Shift ranges", () => {
+    const secondThread = {
+      ...sharedThread,
+      id: "thread-directory-second",
+      title: "Directory second thread",
+    };
+    const directory = {
+      ...directories[0]!,
+      threadKeys: ["codex:thread-1", "codex:thread-directory-second"],
+    };
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        directories={[directory]}
+        inboxThreads={[sharedThread, secondThread]}
+        loading={false}
+        threads={[sharedThread, secondThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    const directorySummary = screen
+      .getAllByRole("button", { name: /PwrAgent/i })
+      .find((button) => button.getAttribute("aria-expanded") === "false");
+    expect(directorySummary).toBeDefined();
+    fireEvent.click(directorySummary!);
+
+    const firstButton = screen.getByRole("button", {
+      name: "Cross-project cleanup",
+    });
+    const secondButton = screen.getByRole("button", {
+      name: "Directory second thread",
+    });
+    fireEvent.click(firstButton);
+    fireEvent.click(secondButton, { shiftKey: true });
+
+    expect(firstButton).toHaveAttribute("aria-pressed", "true");
+    expect(secondButton).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("separates pinning, creation, management, and copy thread actions", () => {
+    const forkBackends = backends.map((backend) =>
+      backend.kind === "codex"
+        ? {
+            ...backend,
+            capabilities: {
+              ...backend.capabilities,
+              forkThread: true,
+            },
+          }
+        : backend,
+    );
+    const pinnedThread = {
+      ...sharedThread,
+      pinnedRank: "1024",
+    };
+
+    render(
+      <Sidebar
+        backends={forkBackends}
+        browseMode="recents"
+        directories={directories}
+        inboxThreads={[pinnedThread]}
+        loading={false}
+        threads={[pinnedThread]}
+        onArchiveThread={async () => undefined}
+        onBrowseModeChange={() => undefined}
+        onCreateSubthread={async () => undefined}
+        onCreateThread={async () => undefined}
+        onForkThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onReorderThreadPins={async () => undefined}
+        onSelectThread={() => undefined}
+        onSetThreadPin={async () => undefined}
+      />,
+    );
+
+    fireEvent.contextMenu(
+      screen.getByRole("button", { name: "Cross-project cleanup" }),
+      { clientX: 48, clientY: 64 },
+    );
+
+    const menu = screen.getByRole("menu");
+    const sections = [...menu.children].filter((child) =>
+      child.classList.contains("thread-context-menu__section"),
+    );
+    expect(sections).toHaveLength(4);
+    expect(sections[0]).toHaveTextContent("Unpin Thread");
+    expect(sections[1]).toHaveTextContent("Sub-thread in Same Worktree");
+    expect(sections[1]).toHaveTextContent("Fork into New Worktree");
+    expect(sections[2]).toHaveTextContent("Move Up");
+    expect(sections[2]).toHaveTextContent("Archive Thread");
+    expect(sections[3]).toHaveTextContent("Copy Thread Link");
+    expect(
+      menu.querySelectorAll(".thread-context-menu__separator"),
+    ).toHaveLength(3);
+  });
+
   it("splits parent archive actions between ungrouping children and archiving the group", () => {
     const onArchiveThread = vi.fn(async () => undefined);
     const childThread = {

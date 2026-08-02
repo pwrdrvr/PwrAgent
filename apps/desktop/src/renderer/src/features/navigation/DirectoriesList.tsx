@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   type ReactElement,
+  type MouseEvent,
 } from "react";
 import type {
   AppServerBackendKind,
@@ -61,6 +62,7 @@ type DirectoriesListProps = {
   directories: NavigationDirectorySummary[];
   revealSelectedThreadRequest?: number;
   selectedItemKey?: string;
+  selectedThreadKeys?: ReadonlySet<string>;
   thinkingThreadKeys?: Record<string, boolean>;
   threads: NavigationThreadSummary[];
   onOpenThreadContextMenu: (
@@ -77,7 +79,11 @@ type DirectoriesListProps = {
     preferredBackend?: AppServerBackendKind
   ) => Promise<void>;
   onRevealSelectedThreadComplete?: (request: number) => void;
-  onSelectThread: (thread: NavigationThreadSummary) => void;
+  onSelectThread: (
+    thread: NavigationThreadSummary,
+    event: MouseEvent<HTMLButtonElement>,
+    selectionOrder: string[],
+  ) => void;
   onPrefetchPullRequests?: (thread: NavigationThreadSummary) => void;
   onDetachPullRequest?: (
     thread: NavigationThreadSummary,
@@ -631,21 +637,23 @@ export function DirectoriesList(props: DirectoriesListProps) {
     ]
       .filter((label): label is string => Boolean(label))
       .join(", ");
-    const visibleThreadKeys = new Set(
+    const directoryThreadKeys = new Set(
       visibleThreads.map((thread) => buildThreadIdentityKey(thread.source, thread.id)),
     );
     const childThreadsByParentKey = new Map<string, NavigationThreadSummary[]>();
     for (const thread of visibleThreads) {
       if (!thread.parentThreadId) continue;
       const parentKey = buildThreadIdentityKey(thread.source, thread.parentThreadId);
-      if (!visibleThreadKeys.has(parentKey)) continue;
+      if (!directoryThreadKeys.has(parentKey)) continue;
       const children = childThreadsByParentKey.get(parentKey) ?? [];
       children.push(thread);
       childThreadsByParentKey.set(parentKey, children);
     }
     const topLevelVisibleThreads = visibleThreads.filter((thread) => {
       if (!thread.parentThreadId) return true;
-      return !visibleThreadKeys.has(buildThreadIdentityKey(thread.source, thread.parentThreadId));
+      return !directoryThreadKeys.has(
+        buildThreadIdentityKey(thread.source, thread.parentThreadId),
+      );
     });
     const renderStaticSubthreads = (parent: NavigationThreadSummary): ReactElement | null => {
       const parentKey = buildThreadIdentityKey(parent.source, parent.id);
@@ -692,6 +700,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
               nested
               revealSelectedThreadRequest={props.revealSelectedThreadRequest}
               selectedThreadKey={props.selectedItemKey}
+              selectedThreadKeys={props.selectedThreadKeys}
               thinkingThreadKeys={props.thinkingThreadKeys}
               thread={child}
               onDragStartThread={(event) => {
@@ -762,7 +771,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
               onRevealSelectedThreadComplete={
                 props.onRevealSelectedThreadComplete
               }
-              onSelectThread={props.onSelectThread}
+              onSelectThread={(thread, event) =>
+                props.onSelectThread(thread, event, selectionOrder)
+              }
               onSetReaction={props.onSetReaction}
               onSetThreadPin={props.onSetThreadPin}
               onUnbindMessagingBinding={props.onUnbindMessagingBinding}
@@ -805,6 +816,34 @@ export function DirectoriesList(props: DirectoriesListProps) {
     const directoryThreadsCollapsed =
       directoryPinnedThreads.length > 0 &&
       directory.directoryThreadsCollapsed === true;
+    const visibleUnpinnedThreads = directoryThreadsCollapsed
+      ? []
+      : [
+          ...cappedUnpinnedThreads,
+          ...(unpinnedExpanded ? overflowUnpinnedThreads : []),
+        ];
+    // A directory can repeat a thread that is linked to more than one project,
+    // so a Shift range is intentionally scoped to the expanded directory the
+    // user clicked. That makes its extent obvious and excludes hidden rows
+    // behind the directory, pinned/unpinned, and "Show more" disclosures.
+    const selectionOrder = [
+      ...directoryPinnedThreads,
+      ...visibleUnpinnedThreads,
+    ].flatMap((thread) => {
+      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+      const children = sortSubthreadSummaries(
+        thread,
+        childThreadsByParentKey.get(threadKey) ?? [],
+      );
+      return [
+        threadKey,
+        ...(thread.subthreadsCollapsed
+          ? []
+          : children.map((child) =>
+              buildThreadIdentityKey(child.source, child.id),
+            )),
+      ];
+    });
     // Render one unpinned thread row. Shared by the always-shown capped
     // slice and the overflow slice so the "Show more / Show less" toggle
     // sits at a fixed pivot between them — collapsing never makes the
@@ -835,6 +874,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
             linkedDirectoryMode={getDirectoryRowLinkedDirectoryMode(thread)}
             revealSelectedThreadRequest={props.revealSelectedThreadRequest}
             selectedThreadKey={props.selectedItemKey}
+            selectedThreadKeys={props.selectedThreadKeys}
             subthreadCount={subthreadCount}
             subthreadsCollapsed={subthreadsCollapsed}
             thinkingThreadKeys={props.thinkingThreadKeys}
@@ -863,7 +903,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
             onDetachPullRequest={props.onDetachPullRequest}
             onPrefetchPullRequests={props.onPrefetchPullRequests}
             onRevealSelectedThreadComplete={props.onRevealSelectedThreadComplete}
-            onSelectThread={props.onSelectThread}
+            onSelectThread={(target, event) =>
+              props.onSelectThread(target, event, selectionOrder)
+            }
             onSetReaction={props.onSetReaction}
             onSetThreadPin={props.onSetThreadPin}
             onUnbindMessagingBinding={props.onUnbindMessagingBinding}
@@ -1173,6 +1215,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                             props.revealSelectedThreadRequest
                           }
 	                          selectedThreadKey={props.selectedItemKey}
+	                          selectedThreadKeys={props.selectedThreadKeys}
                               subthreadCount={subthreadCount}
                               subthreadsCollapsed={subthreadsCollapsed}
 	                          thinkingThreadKeys={props.thinkingThreadKeys}
@@ -1252,7 +1295,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
                           onRevealSelectedThreadComplete={
                             props.onRevealSelectedThreadComplete
                           }
-                          onSelectThread={props.onSelectThread}
+                          onSelectThread={(target, event) =>
+                            props.onSelectThread(target, event, selectionOrder)
+                          }
                           onSetReaction={props.onSetReaction}
                           onSetThreadPin={props.onSetThreadPin}
 	                          onUnbindMessagingBinding={props.onUnbindMessagingBinding}

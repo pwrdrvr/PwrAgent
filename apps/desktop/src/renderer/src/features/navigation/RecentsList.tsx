@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type MouseEvent } from "react";
 import type {
   MessagingThreadBindingSummary,
   NavigationThreadSummary,
@@ -34,6 +34,7 @@ type RecentsListProps = {
   composerSourceThreadKey?: string;
   revealSelectedThreadRequest?: number;
   selectedThreadKey?: string;
+  selectedThreadKeys?: ReadonlySet<string>;
   thinkingThreadKeys?: Record<string, boolean>;
   threads: NavigationThreadSummary[];
   onOpenThreadContextMenu: (
@@ -59,7 +60,11 @@ type RecentsListProps = {
     parent: NavigationThreadSummary,
     collapsed: boolean,
   ) => Promise<void>;
-  onSelectThread: (thread: NavigationThreadSummary) => void;
+  onSelectThread: (
+    thread: NavigationThreadSummary,
+    event: MouseEvent<HTMLButtonElement>,
+    selectionOrder: string[],
+  ) => void;
   onRevealSelectedThreadComplete?: (request: number) => void;
   onSetReaction?: (
     thread: NavigationThreadSummary,
@@ -175,6 +180,7 @@ export function RecentsList(props: RecentsListProps) {
               nested
               revealSelectedThreadRequest={props.revealSelectedThreadRequest}
               selectedThreadKey={props.selectedThreadKey}
+              selectedThreadKeys={props.selectedThreadKeys}
               thinkingThreadKeys={props.thinkingThreadKeys}
               thread={child}
               onDragOverThread={(event) => {
@@ -240,7 +246,9 @@ export function RecentsList(props: RecentsListProps) {
               onRevealSelectedThreadComplete={
                 props.onRevealSelectedThreadComplete
               }
-              onSelectThread={props.onSelectThread}
+              onSelectThread={(thread, event) =>
+                props.onSelectThread(thread, event, selectionOrder)
+              }
               onSetReaction={props.onSetReaction}
               onSetThreadPin={props.onSetThreadPin}
               onUnbindMessagingBinding={props.onUnbindMessagingBinding}
@@ -253,6 +261,28 @@ export function RecentsList(props: RecentsListProps) {
       </div>
     );
   };
+
+  // Shift selection follows the rows a person can actually see: parents and
+  // any expanded children, first in the pinned section and then in the recent
+  // section. Collapsed children are deliberately absent, just like Finder
+  // ranges do not reach into a closed disclosure.
+  const selectionOrder = [...pinnedThreads, ...unpinnedThreads].flatMap(
+    (thread) => {
+      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+      const children = sortSubthreadSummaries(
+        thread,
+        childrenByParentKey.get(threadKey) ?? [],
+      );
+      return [
+        threadKey,
+        ...(isSubthreadSectionCollapsed(thread)
+          ? []
+          : children.map((child) =>
+              buildThreadIdentityKey(child.source, child.id),
+            )),
+      ];
+    },
+  );
 
   const renderThreadGroup = (thread: NavigationThreadSummary) => {
     const key = buildThreadIdentityKey(thread.source, thread.id);
@@ -277,6 +307,7 @@ export function RecentsList(props: RecentsListProps) {
           includeLinkedDirectories
           revealSelectedThreadRequest={props.revealSelectedThreadRequest}
           selectedThreadKey={props.selectedThreadKey}
+          selectedThreadKeys={props.selectedThreadKeys}
           subthreadCount={subthreadCount}
           subthreadsCollapsed={subthreadsCollapsed}
           thinkingThreadKeys={props.thinkingThreadKeys}
@@ -361,7 +392,9 @@ export function RecentsList(props: RecentsListProps) {
           onDetachPullRequest={props.onDetachPullRequest}
           onPrefetchPullRequests={props.onPrefetchPullRequests}
           onRevealSelectedThreadComplete={props.onRevealSelectedThreadComplete}
-          onSelectThread={props.onSelectThread}
+          onSelectThread={(target, event) =>
+            props.onSelectThread(target, event, selectionOrder)
+          }
           onSetReaction={props.onSetReaction}
           onSetThreadPin={props.onSetThreadPin}
           onUnbindMessagingBinding={props.onUnbindMessagingBinding}
