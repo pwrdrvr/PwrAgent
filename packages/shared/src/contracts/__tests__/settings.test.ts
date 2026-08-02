@@ -324,6 +324,9 @@ describe("desktop settings contracts", () => {
           enabled: true,
         },
       },
+      git: {
+        backgroundPrPolling: { value: true, source: "default" },
+      },
       applications: {
         editors: [],
         terminals: [],

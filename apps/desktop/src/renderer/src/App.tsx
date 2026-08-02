@@ -89,6 +89,7 @@ import {
 const SETTINGS_SECTIONS = new Set<SettingsSection>([
   "general",
   "applications",
+  "git",
   "profiles",
   "worktrees",
   "messaging",
@@ -1077,7 +1078,7 @@ function DesktopAppShell(props: {
       settings.snapshot?.experimental.fullAccessRiskWarningDismissed.value ?? false,
     backgroundPrPollingEnabled:
       settings.snapshot
-        ? settings.snapshot.experimental.backgroundPrPolling?.value
+        ? settings.snapshot.git?.backgroundPrPolling?.value
           ?? DEFAULT_BACKGROUND_PR_POLLING
         : false,
     pickDirectoryError: navigation.pickDirectoryError,

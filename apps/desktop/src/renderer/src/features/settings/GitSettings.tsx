@@ -1,0 +1,536 @@
+import { useCallback, useEffect, useState } from "react";
+import {
+  DEFAULT_BACKGROUND_PR_POLLING,
+  type DesktopGitDiscoveryCandidate,
+  type DesktopGhDiscoveryCandidate,
+  type DesktopSettingsSnapshot,
+  type GhStatus,
+} from "@pwragent/shared";
+import type { DesktopApi } from "../../lib/desktop-api";
+import { copyText } from "../../lib/copy-text";
+import {
+  SettingsField,
+  SettingsPanelHead,
+  SettingsSection,
+  SettingsSectionStack,
+} from "./SettingsLayout";
+import {
+  SettingsPathRow,
+  type SettingsPathRowChip,
+} from "./SettingsPathRow";
+import { SettingsSwitch } from "./SettingsSwitch";
+import { sourceBadge } from "./settings-fields";
+
+const DEFAULT_BACKGROUND_PR_POLLING_VALUE = {
+  value: DEFAULT_BACKGROUND_PR_POLLING,
+  source: "default" as const,
+};
+
+export function GitSettings(props: {
+  desktopApi?: DesktopApi;
+  saving: boolean;
+  snapshot: DesktopSettingsSnapshot;
+  onBackgroundPrPollingChange: (enabled: boolean) => Promise<void>;
+  onRefresh: () => Promise<void>;
+  onSaveGhPath: (path: string) => Promise<void>;
+}) {
+  const backgroundPrPolling =
+    props.snapshot.git?.backgroundPrPolling ??
+    DEFAULT_BACKGROUND_PR_POLLING_VALUE;
+
+  return (
+    <SettingsSectionStack paneId="git" aria-label="Git settings">
+      <SettingsPanelHead
+        eyebrow="Git"
+        title="Repository & pull requests"
+        help="Configure the Git and GitHub tools PwrAgent uses for repository, worktree, and pull request status."
+      />
+
+      <GitStatusPanel
+        desktopApi={props.desktopApi}
+        saving={props.saving}
+        snapshot={props.snapshot}
+        onRefresh={props.onRefresh}
+      />
+      <GhStatusPanel
+        desktopApi={props.desktopApi}
+        saving={props.saving}
+        snapshot={props.snapshot}
+        onSaveGhPath={props.onSaveGhPath}
+      />
+      <SettingsSection
+        eyebrow="Git"
+        title="Background pull request status"
+        description="Keep pull request status fresh across every open project instead of only the thread you have selected. Checks run in the background on a priority cadence and skip merged and closed pull requests."
+        chip={backgroundPrPolling.value ? "On" : "Off"}
+        chipKind={backgroundPrPolling.value ? "ok" : "default"}
+      >
+        <div className="settings-fields">
+          <SettingsField
+            label="Enable background pull request status"
+            sub="When on, the project you are viewing refreshes about every minute and other open projects refresh less often. Pull requests with no activity for a day stop being checked until you open their thread again. Requires the GitHub CLI to be signed in."
+            source={sourceBadge(backgroundPrPolling)}
+            control={
+              <SettingsSwitch
+                checked={backgroundPrPolling.value}
+                disabled={props.saving}
+                label="Enable background pull request status"
+                onChange={(enabled) => {
+                  void props.onBackgroundPrPollingChange(enabled);
+                }}
+              />
+            }
+          />
+        </div>
+      </SettingsSection>
+    </SettingsSectionStack>
+  );
+}
+
+const XCODE_LICENSE_REMEDIATION_COMMAND = "sudo xcodebuild -license";
+
+function GitStatusPanel(props: {
+  desktopApi?: DesktopApi;
+  saving: boolean;
+  snapshot: DesktopSettingsSnapshot;
+  onRefresh: () => Promise<void>;
+}) {
+  const [loading, setLoading] = useState(false);
+  const discovery = props.snapshot.applications.git.discovery;
+  const selected = discovery.candidates.find((candidate) => candidate.selected);
+  const hasWorkingGit = discovery.candidates.some((candidate) => candidate.executable);
+  const visibleCandidates = discovery.candidates.filter(
+    (candidate) =>
+      candidate.executable || isXcodeLicenseCandidate(candidate) || !hasWorkingGit,
+  );
+  const xcodeLicenseCandidate = discovery.candidates.find((candidate) =>
+    isXcodeLicenseCandidate(candidate)
+  );
+  const pill = describeGitStatusPill(discovery, xcodeLicenseCandidate);
+
+  const refresh = async (): Promise<void> => {
+    setLoading(true);
+    try {
+      await props.onRefresh();
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <SettingsSection
+      eyebrow="Git"
+      title="Git"
+      description={
+        <>
+          PwrAgent uses <code>git</code> to inspect repositories and create
+          worktrees for new threads.
+        </>
+      }
+    >
+      <div className="settings-fields">
+        <SettingsField
+          label="Command status"
+          sub="Checks the git command PwrAgent will use for repository and worktree operations."
+          source={selected?.source ?? "auto"}
+          control={
+            <div className="settings-gh-status">
+              <span className={`settings-pill settings-pill--${pill.tone}`}>
+                {pill.label}
+              </span>
+              {selected?.command ? (
+                <span className="settings-pathrow__path">
+                  Path: <code>{selected.command}</code>
+                </span>
+              ) : null}
+              {selected?.version ? (
+                <span className="settings-pathrow__path">
+                  Version: <code>{selected.version}</code>
+                </span>
+              ) : null}
+              {xcodeLicenseCandidate ? (
+                <div className="settings-gh-status">
+                  <span className="settings-pathrow__path settings-error">
+                    Apple&apos;s Git at <code>{xcodeLicenseCandidate.command}</code>{" "}
+                    is blocked by the Xcode license check.
+                  </span>
+                  <span className="settings-pathrow__path">
+                    Run this in Terminal, then follow the prompts:
+                  </span>
+                  <span className="settings-pathrow__path">
+                    <code>{XCODE_LICENSE_REMEDIATION_COMMAND}</code>
+                  </span>
+                  <div className="settings-inline-actions">
+                    <button
+                      className="button button--secondary"
+                      type="button"
+                      onClick={() =>
+                        void copyText(
+                          XCODE_LICENSE_REMEDIATION_COMMAND,
+                          props.desktopApi,
+                        )
+                      }
+                    >
+                      Copy command
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+              <div className="settings-inline-actions">
+                <button
+                  className="button button--secondary"
+                  disabled={loading || props.saving}
+                  type="button"
+                  onClick={() => void refresh()}
+                >
+                  {loading ? "Checking…" : "Re-check"}
+                </button>
+              </div>
+            </div>
+          }
+        />
+        <SettingsField
+          label="Available paths"
+          sub={
+            hasWorkingGit
+              ? "Detected on this machine. The selected path is used."
+              : "No working git executable was found. These are the paths PwrAgent checked."
+          }
+          control={
+            <div className="settings-paths" aria-label="Git discovery">
+              {visibleCandidates.length === 0 ? (
+                <p className="settings-empty">No git candidates found.</p>
+              ) : (
+                visibleCandidates.map((candidate) => (
+                  <GitCandidateRow
+                    key={`${candidate.source}:${candidate.command}`}
+                    candidate={candidate}
+                  />
+                ))
+              )}
+            </div>
+          }
+        />
+      </div>
+    </SettingsSection>
+  );
+}
+
+function GhStatusPanel(props: {
+  desktopApi?: DesktopApi;
+  saving: boolean;
+  snapshot: DesktopSettingsSnapshot;
+  onSaveGhPath: (path: string) => Promise<void>;
+}) {
+  const desktopApi = props.desktopApi;
+  const [status, setStatus] = useState<GhStatus | undefined>(undefined);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | undefined>(undefined);
+  const gh = props.snapshot.applications.gh;
+  const envForced = gh.path.source === "env";
+  const discovery = status?.discovery ?? gh.discovery;
+  const candidates = discovery.candidates;
+
+  const load = useCallback(
+    async (recheck: boolean) => {
+      if (!desktopApi?.getGhStatus) return;
+      setLoading(true);
+      setError(undefined);
+      try {
+        const next = await desktopApi.getGhStatus({ recheck });
+        setStatus(next);
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : String(caught));
+      } finally {
+        setLoading(false);
+      }
+    },
+    [desktopApi],
+  );
+
+  useEffect(() => {
+    void load(false);
+  }, [load]);
+
+  const pill = describeGhStatusPill(status);
+  const selected = discovery.candidates.find((candidate) => candidate.selected);
+  const resolvedCommand = selected?.command ?? discovery.selectedCommand;
+  const resolvedVersion = selected?.version;
+  const sourceLabel = gh.path.source === "default" ? "auto" : gh.path.source;
+  const saveGhPath = async (path: string): Promise<void> => {
+    await props.onSaveGhPath(path);
+    await load(true);
+  };
+
+  return (
+    <SettingsSection
+      eyebrow="Git"
+      title="GitHub CLI (gh)"
+      description={
+        <>
+          PwrAgent uses <code>gh</code> to read pull request status for thread chips.
+          It never opens, comments on, or merges PRs.
+        </>
+      }
+    >
+      <div className="settings-fields">
+        <SettingsField
+          label="Connection status"
+          sub="Checks the selected gh path and GitHub auth scopes."
+          source={sourceLabel}
+          control={
+            <div className="settings-gh-status">
+              <span
+                className={`settings-pill settings-pill--${pill.tone}`}
+                aria-live="polite"
+              >
+                {pill.label}
+              </span>
+              {resolvedCommand ? (
+                <span className="settings-pathrow__path">
+                  Path: <code>{resolvedCommand}</code>
+                </span>
+              ) : null}
+              {resolvedVersion ? (
+                <span className="settings-pathrow__path">
+                  Version: <code>{resolvedVersion}</code>
+                </span>
+              ) : null}
+              {status?.account ? (
+                <span className="settings-pathrow__path">
+                  Signed in as <strong>{status.account}</strong>
+                </span>
+              ) : null}
+              {status && status.installed && status.scopes.length > 0 ? (
+                <span className="settings-pathrow__path">
+                  Scopes: {status.scopes.join(", ")}
+                </span>
+              ) : null}
+              {status?.reason ? (
+                <span className="settings-pathrow__path">{status.reason}</span>
+              ) : null}
+              {error ? (
+                <span className="settings-pathrow__path settings-error">{error}</span>
+              ) : null}
+              <div className="settings-inline-actions">
+                <button
+                  className="button button--secondary"
+                  disabled={loading || !desktopApi?.getGhStatus}
+                  type="button"
+                  onClick={() => void load(true)}
+                >
+                  {loading ? "Checking…" : "Re-check"}
+                </button>
+              </div>
+            </div>
+          }
+        />
+        {gh.path.value.trim() || envForced ? (
+          <SettingsField
+            label="Discovery mode"
+            sub="Clear the override and use the first discovered gh candidate."
+            source={envForced ? "env override active" : "config"}
+            control={
+              <SettingsPathRow
+                title="Auto discovery"
+                chips={[{ label: "default", tone: "muted" }]}
+                selected={false}
+                disabled={props.saving || envForced}
+                useLabel="Auto"
+                onUse={() => void saveGhPath("")}
+              />
+            }
+          />
+        ) : null}
+        <SettingsField
+          label="Available paths"
+          sub={
+            candidates.some((candidate) => candidate.executable)
+              ? "Detected on this machine. The selected path is used."
+              : "No executable gh was found. These are the paths PwrAgent checked."
+          }
+          control={
+            <div className="settings-paths" aria-label="GitHub CLI discovery">
+              {candidates.length === 0 ? (
+                <p className="settings-empty">No gh candidates found.</p>
+              ) : (
+                candidates.map((candidate) => (
+                  <GhCandidateRow
+                    key={`${candidate.source}:${candidate.command}`}
+                    candidate={candidate}
+                    disabled={props.saving || envForced}
+                    onUse={(command) => void saveGhPath(command)}
+                  />
+                ))
+              )}
+            </div>
+          }
+        />
+        <SettingsField
+          label="Manual path"
+          sub="Pick a gh executable outside the discovered locations."
+          control={
+            <div className="settings-inline-actions">
+              <button
+                className="button button--secondary"
+                disabled={props.saving || envForced || !desktopApi?.pickGhCommand}
+                type="button"
+                onClick={() => {
+                  void (async () => {
+                    if (!desktopApi?.pickGhCommand) return;
+                    setError(undefined);
+                    const result = await desktopApi.pickGhCommand();
+                    if (result.canceled) return;
+                    if (result.error || !result.path) {
+                      setError(result.error ?? "No gh path was selected.");
+                      return;
+                    }
+                    await saveGhPath(result.path);
+                  })();
+                }}
+              >
+                Choose…
+              </button>
+            </div>
+          }
+        />
+      </div>
+    </SettingsSection>
+  );
+}
+
+function GitCandidateRow(props: {
+  candidate: DesktopGitDiscoveryCandidate;
+}) {
+  const candidate = props.candidate;
+  const failureLabel = describeCommandDiscoveryFailure(candidate.failureReason);
+  const chips: SettingsPathRowChip[] = [
+    { label: describeGitCandidateSource(candidate.source), tone: "muted" },
+  ];
+  if (candidate.executable) {
+    chips.push({
+      label: candidate.version ?? "version unknown",
+      tone: candidate.version ? "muted" : "err",
+    });
+  } else {
+    chips.push({
+      label: failureLabel ?? "Unavailable",
+      tone: isXcodeLicenseCandidate(candidate) ? "warn" : "err",
+    });
+  }
+
+  return (
+    <SettingsPathRow
+      title={candidate.command}
+      chips={chips}
+      selected={candidate.selected}
+      disabled
+    />
+  );
+}
+
+function GhCandidateRow(props: {
+  candidate: DesktopGhDiscoveryCandidate;
+  disabled?: boolean;
+  onUse: (command: string) => void;
+}) {
+  const candidate = props.candidate;
+  const unavailableLabel = describeCommandDiscoveryFailure(candidate.failureReason);
+  const chips: SettingsPathRowChip[] = [
+    { label: candidate.source, tone: "muted" },
+  ];
+  if (candidate.executable) {
+    chips.push({
+      label:
+        candidate.version
+        ?? describeCommandDiscoveryFailure(candidate.versionFailureReason)
+        ?? "version unknown",
+      tone: candidate.version ? "muted" : "err",
+    });
+  } else {
+    chips.push({
+      label: unavailableLabel ?? "Unavailable",
+      tone: "err",
+    });
+  }
+  if (candidate.executable && !candidate.selected) {
+    chips.push({
+      label: "Available",
+      tone: "muted",
+    });
+  }
+
+  return (
+    <SettingsPathRow
+      title={candidate.command}
+      chips={chips}
+      selected={candidate.selected}
+      disabled={props.disabled || !candidate.executable}
+      onUse={candidate.executable ? () => props.onUse(candidate.command) : undefined}
+    />
+  );
+}
+
+function describeGitStatusPill(
+  discovery: DesktopSettingsSnapshot["applications"]["git"]["discovery"],
+  xcodeLicenseCandidate?: DesktopGitDiscoveryCandidate,
+): {
+  tone: "ok" | "warn" | "bad" | "neutral";
+  label: string;
+} {
+  if (discovery.selectedCommand) {
+    return xcodeLicenseCandidate
+      ? { tone: "warn", label: "Available" }
+      : { tone: "ok", label: "Available" };
+  }
+  if (xcodeLicenseCandidate) {
+    return { tone: "bad", label: "Xcode license required" };
+  }
+  return { tone: "bad", label: "Not available" };
+}
+
+function describeGitCandidateSource(
+  source: DesktopGitDiscoveryCandidate["source"],
+): string {
+  if (source === "xcode") return "Apple Git";
+  if (source === "homebrew") return "Homebrew";
+  if (source === "env") return "env";
+  if (source === "path") return "PATH";
+  return source;
+}
+
+function describeCommandDiscoveryFailure(reason?: string): string | undefined {
+  if (!reason) return undefined;
+  if (reason === "not_found") return "Missing";
+  if (reason === "not_executable") return "Not executable";
+  if (reason === "version_not_reported") return "Version unknown";
+  if (isXcodeLicenseFailure(reason)) return "Xcode license";
+  return reason;
+}
+
+function isXcodeLicenseCandidate(
+  candidate: DesktopGitDiscoveryCandidate,
+): boolean {
+  return candidate.command === "/usr/bin/git"
+    && isXcodeLicenseFailure(candidate.failureReason ?? candidate.versionFailureReason);
+}
+
+function isXcodeLicenseFailure(reason?: string): boolean {
+  return Boolean(
+    reason?.includes("Xcode license")
+      || reason?.includes("license agreements")
+      || reason?.includes("xcodebuild -license"),
+  );
+}
+
+function describeGhStatusPill(status: GhStatus | undefined): {
+  tone: "ok" | "warn" | "bad" | "neutral";
+  label: string;
+} {
+  if (!status) return { tone: "neutral", label: "Checking…" };
+  if (!status.installed) return { tone: "bad", label: "Not installed" };
+  if (!status.loggedIn) return { tone: "bad", label: "Not signed in" };
+  if (!status.hasRepoScope)
+    return { tone: "warn", label: "Missing `repo` scope" };
+  return { tone: "ok", label: "Connected" };
+}

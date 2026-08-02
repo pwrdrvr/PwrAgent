@@ -512,14 +512,6 @@ export type DesktopSettingsSnapshot = {
      */
     lightweightNavigationRefresh: DesktopSettingsValue<boolean>;
     /**
-     * Gates background pull-request status polling. When disabled, PR chips
-     * refresh only on the pre-existing triggers (selecting a thread, hovering
-     * a row, a turn finishing). When enabled, a main-process poller keeps
-     * every open project's non-terminal PRs fresh on a priority-tiered
-     * cadence, and a slow rotation looks for newly opened PRs.
-     */
-    backgroundPrPolling?: DesktopSettingsValue<boolean>;
-    /**
      * Gates the thread context-rail Pricing tab. The pricing ledger may still
      * collect data for validation, but the user-visible summary stays hidden
      * while this experimental setting is disabled.
@@ -758,6 +750,17 @@ export type DesktopSettingsSnapshot = {
       enabled: boolean;
     };
   };
+  git: {
+    /**
+     * Controls background pull-request status polling. When disabled, PR
+     * chips refresh only on the pre-existing triggers (selecting a thread,
+     * hovering a row, or a turn finishing). When enabled, a main-process
+     * poller keeps every open project's non-terminal PRs fresh on a
+     * priority-tiered cadence, and a slow rotation looks for newly opened
+     * pull requests.
+     */
+    backgroundPrPolling: DesktopSettingsValue<boolean>;
+  };
   applications: DesktopApplicationsSnapshot;
   worktrees: {
     storage: DesktopSettingsValue<DesktopWorktreeStorageLocation>;
@@ -792,7 +795,6 @@ export type DesktopSettingsConfigPatch = {
     fullAccessRiskWarningDismissed?: boolean;
     liveTranscriptEventFiltering?: boolean;
     lightweightNavigationRefresh?: boolean;
-    backgroundPrPolling?: boolean;
     threadPricingSummary?: boolean;
     threadPricingDisplayUsd?: boolean;
     threadPricingDisplayCodexCredits?: boolean;
@@ -930,6 +932,9 @@ export type DesktopSettingsConfigPatch = {
       cliPath?: string;
       enabled?: boolean;
     };
+  };
+  git?: {
+    backgroundPrPolling?: boolean;
   };
   applications?: {
     editor?: {
