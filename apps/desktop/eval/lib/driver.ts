@@ -14,11 +14,16 @@ import type { Page } from "@playwright/test";
 import {
   buildPendingRequestResponse,
   type AppServerPendingRequestNotification,
+  type AppServerTurnInputItem,
 } from "@pwragent/shared";
 
 /** A backend kind as the app reports it: "codex" | "grok" | `acp:${id}`. */
 export type BackendKind = string;
 export type ExecutionMode = "default" | "full-access";
+export type ModelOptions = {
+  model?: string;
+  reasoningEffort?: string;
+};
 
 export type AgentNotification = {
   method: string;
@@ -128,11 +133,13 @@ export class LiveDriver {
     backend: BackendKind,
     cwd: string,
     executionMode: ExecutionMode,
+    modelOptions?: ModelOptions,
   ): Promise<string> {
     const res = await this.call<{ threadId: string }>("startThread", {
       backend,
       cwd,
       executionMode,
+      ...modelOptions,
     });
     return res.threadId;
   }
@@ -154,12 +161,31 @@ export class LiveDriver {
     threadId: string,
     text: string,
     executionMode: ExecutionMode,
+    modelOptions?: ModelOptions,
+  ): Promise<string> {
+    return await this.startTurnWithInput(
+      backend,
+      threadId,
+      [{ type: "text", text }],
+      executionMode,
+      modelOptions,
+    );
+  }
+
+  /** Start a turn with the exact input union the app-server receives. */
+  async startTurnWithInput(
+    backend: BackendKind,
+    threadId: string,
+    input: AppServerTurnInputItem[],
+    executionMode: ExecutionMode,
+    modelOptions?: ModelOptions,
   ): Promise<string> {
     const res = await this.call<{ turnId: string }>("startTurn", {
       backend,
       threadId,
-      input: [{ type: "text", text }],
+      input,
       executionMode,
+      ...modelOptions,
     });
     return res.turnId;
   }
