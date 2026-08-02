@@ -6967,6 +6967,95 @@ describe("MessagingController", () => {
       kind: "project_picker",
       fallbackText: expect.stringContaining("new PwrAgent thread"),
       prompt: expect.stringContaining("Choose a project"),
+      page: {
+        actions: expect.arrayContaining([
+          expect.objectContaining({ id: "browse:mode:resume", label: "Resume" }),
+          expect.objectContaining({ id: "browse:mode:new-agent", label: "New Agent" }),
+          expect.objectContaining({ id: "browse:cancel" }),
+        ]),
+      },
+    });
+  });
+
+  it("lets /new create an Agent thread and return to regular projects", async () => {
+    const harness = await createHarness();
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:mode:new-agent",
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "project_picker",
+      prompt: expect.stringContaining("new PwrAgent Agent thread"),
+      page: {
+        actions: expect.arrayContaining([
+          expect.objectContaining({ id: "browse:mode:new-thread", label: "Projects" }),
+          expect.objectContaining({ id: "browse:cancel" }),
+        ]),
+      },
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:mode:new-thread",
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "project_picker",
+      prompt: expect.stringContaining("new PwrAgent thread"),
+      page: {
+        actions: expect.arrayContaining([
+          expect.objectContaining({ id: "browse:mode:resume", label: "Resume" }),
+          expect.objectContaining({ id: "browse:mode:new-agent", label: "New Agent" }),
+        ]),
+      },
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:mode:new-agent",
+      }),
+    );
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Ready to start",
+      body: expect.stringContaining("Agent: Messaging Agent"),
+    });
+
+    await harness.controller.handleInboundEvent(buildTextEvent("Check the queue"));
+
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: {
+          name: "Messaging Agent",
+          instructions: expect.stringContaining("created from messaging"),
+        },
+      }),
+      expect.objectContaining({
+        onThreadMaterialized: expect.any(Function),
+      }),
+    );
+    await expect(
+      harness.store.findActiveBindingForChannel(buildCommandEvent("/new").channel),
+    ).resolves.toMatchObject({
+      backend: "codex",
+      threadId: "new-thread-1",
+      targetKind: "agent_thread",
     });
   });
 
