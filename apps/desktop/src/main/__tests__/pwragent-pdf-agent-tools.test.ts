@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   PWRAGENT_TOOL_NAMESPACE,
   type AppServerTurnInputItem,
@@ -138,7 +138,7 @@ describe("PwrAgent PDF agent tools", () => {
         },
         {
           type: "inputImage",
-          imageUrl: expect.stringMatching(/^file:\/\/\/tmp\/pwragent-pdf-page-1\.png$/u),
+          imageUrl: pathToFileURL("/tmp/pwragent-pdf-page-1.png").toString(),
         },
       ],
     });
@@ -153,7 +153,7 @@ describe("PwrAgent PDF agent tools", () => {
         },
         {
           type: "inputImage",
-          imageUrl: expect.stringMatching(/^file:\/\/\/tmp\/pwragent-pdf-page-2\.png$/u),
+          imageUrl: pathToFileURL("/tmp/pwragent-pdf-page-2.png").toString(),
         },
       ],
     });

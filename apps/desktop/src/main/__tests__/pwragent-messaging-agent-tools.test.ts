@@ -1,3 +1,4 @@
+import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import type { AppServerTurnInputItem } from "@pwragent/shared";
 
@@ -198,7 +199,7 @@ describe("PwrAgent messaging agent tools", () => {
         },
         {
           type: "inputImage",
-          imageUrl: "file:///tmp/pwragent-pdf-page-3.png",
+          imageUrl: pathToFileURL("/tmp/pwragent-pdf-page-3.png").toString(),
         },
       ],
     });
