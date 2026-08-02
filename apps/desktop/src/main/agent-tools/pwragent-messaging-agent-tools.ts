@@ -85,7 +85,7 @@ function descriptionForOperation(operation: PwrAgentMessagingOperationName): str
     case "search_messaging_pdf_text":
       return "Search embedded text in a bounded page range of a PDF attached to the current active PwrAgent turn. Use returned page-number snippets only to navigate, then render pages for visual analysis.";
     case "render_messaging_pdf_pages":
-      return "Render explicitly selected PDF pages from the current active PwrAgent turn into image input. This is capped by page count, total pixels, encoded image bytes, and model-input bytes; request fewer pages when a cap is exceeded.";
+      return "Render explicitly selected PDF pages from the current active PwrAgent turn into image input. Successful calls automatically add the returned page images to model context: analyze those images directly, and do not serialize the result, call image(), or request the same pages again. Partially repeated requests return only unseen pages. Rendering is capped by page count, total pixels, encoded image bytes, and model-input bytes.";
   }
 }
 
@@ -178,7 +178,8 @@ function inputSchemaForOperation(
               type: "integer",
               minimum: 1,
             },
-            description: "Specific page numbers to render. Start with the smallest useful batch.",
+            description:
+              "Specific page numbers to render. Start with the smallest useful batch; pages already supplied in this turn are not emitted again.",
           },
         },
       };
@@ -190,7 +191,12 @@ function messagingResponseToAgentToolResult(
 ): AgentToolDispatchResult {
   if (response.ok) {
     if (response.imageContent) {
-      const metadata = JSON.stringify(response.data, null, 2);
+      const metadata = [
+        response.imageContent.length > 0
+          ? "PwrAgent has already added the rendered PDF page image(s) to this turn's model context. Analyze those images directly. Do not serialize this result, call image(), or render the same page again."
+          : "PwrAgent already supplied the requested PDF page image(s) earlier in this turn, so no duplicate image was added. Analyze the existing image input directly.",
+        JSON.stringify(response.data, null, 2),
+      ].join("\n\n");
       return agentToolSuccess(response.data, {
         contentItems: [
           {

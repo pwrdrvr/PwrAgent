@@ -195,6 +195,7 @@ export type PwrAgentMessagingPdfTextSearchResult = {
 
 export type PwrAgentMessagingRenderedPdfPagesResult = {
   attachmentId: string;
+  alreadySuppliedPageNumbers: number[];
   name: string;
   pages: Array<{
     height: number;

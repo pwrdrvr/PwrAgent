@@ -176,7 +176,7 @@ export async function preparePdfTurnInput(params: {
 
   if (pdfAttachments.length > 0) {
     notes.unshift(
-      `PDF attachment${pdfAttachments.length === 1 ? "" : "s"} ${pdfAttachments.map((attachment) => `\`${attachment.name}\``).join(", ")} ${pdfAttachments.length === 1 ? "is" : "are"} available through PwrAgent's local PDF tools. Call inspect_messaging_pdfs first, use search_messaging_pdf_text for bounded navigation, then use render_messaging_pdf_pages to request only the pages needed for visual analysis.`,
+      `PDF attachment${pdfAttachments.length === 1 ? "" : "s"} ${pdfAttachments.map((attachment) => `\`${attachment.name}\``).join(", ")} ${pdfAttachments.length === 1 ? "is" : "are"} available through PwrAgent's local PDF tools. Call inspect_messaging_pdfs first, use search_messaging_pdf_text for bounded navigation, then use render_messaging_pdf_pages to request only the pages needed for visual analysis. A successful render already adds those images to model context: analyze them directly instead of serializing the result or calling image().`,
     );
   }
 

@@ -134,6 +134,7 @@ describe("PwrAgent messaging agent tools", () => {
       ok: true as const,
       data: {
         attachmentId: "pdf-1",
+        alreadySuppliedPageNumbers: [],
         name: "window-sticker.pdf",
         pages: [{ height: 1988, pageNumber: 3, width: 3072 }],
       },
@@ -167,11 +168,15 @@ describe("PwrAgent messaging agent tools", () => {
       contentItems: [
         {
           type: "inputText",
-          text: JSON.stringify({
-            attachmentId: "pdf-1",
-            name: "window-sticker.pdf",
-            pages: [{ height: 1988, pageNumber: 3, width: 3072 }],
-          }, null, 2),
+          text: [
+            "PwrAgent has already added the rendered PDF page image(s) to this turn's model context. Analyze those images directly. Do not serialize this result, call image(), or render the same page again.",
+            JSON.stringify({
+              attachmentId: "pdf-1",
+              alreadySuppliedPageNumbers: [],
+              name: "window-sticker.pdf",
+              pages: [{ height: 1988, pageNumber: 3, width: 3072 }],
+            }, null, 2),
+          ].join("\n\n"),
         },
         {
           type: "inputImage",

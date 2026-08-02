@@ -61,6 +61,10 @@ describe("preparePdfTurnInput", () => {
         sizeBytes: expect.any(Number),
       }),
     ]);
+    expect(prepared.input[1]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining("already adds those images to model context"),
+    });
   });
 
   it("keeps an explicit local PDF reference intact when analysis is disabled", async () => {

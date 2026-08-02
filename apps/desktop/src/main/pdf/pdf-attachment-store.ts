@@ -36,6 +36,7 @@ export class PdfAttachmentStore {
       attachments: PendingPdfAttachment[];
       renderedBytes: number;
       renderedPages: number;
+      claimedPageNumbersByAttachmentId: Map<string, Set<number>>;
       renderedPixels: number;
       renderedWireBytes: number;
     }
@@ -52,6 +53,7 @@ export class PdfAttachmentStore {
       attachments,
       renderedBytes: 0,
       renderedPages: 0,
+      claimedPageNumbersByAttachmentId: new Map(),
       renderedPixels: 0,
       renderedWireBytes: 0,
     });
@@ -116,6 +118,30 @@ export class PdfAttachmentStore {
   }> {
     const attachment = this.requireAttachment(params, params.attachmentId);
     const turn = this.requireTurn(params);
+    const requestedPageNumbers = [...new Set(params.pageNumbers)];
+    if (requestedPageNumbers.length === 0) {
+      throw new Error("Select at least one PDF page to render.");
+    }
+    const claimedPageNumbers =
+      turn.claimedPageNumbersByAttachmentId.get(attachment.attachmentId)
+      ?? new Set<number>();
+    const alreadySuppliedPageNumbers = requestedPageNumbers.filter((pageNumber) =>
+      claimedPageNumbers.has(pageNumber)
+    );
+    const pageNumbersToRender = requestedPageNumbers.filter(
+      (pageNumber) => !claimedPageNumbers.has(pageNumber),
+    );
+    if (pageNumbersToRender.length === 0) {
+      return {
+        imageContent: [],
+        result: {
+          attachmentId: attachment.attachmentId,
+          alreadySuppliedPageNumbers,
+          name: attachment.name,
+          pages: [],
+        },
+      };
+    }
     const remainingLimits = {
       maxEncodedBytes:
         DEFAULT_PDF_RENDER_LIMITS.maxEncodedBytes - turn.renderedBytes,
@@ -133,12 +159,32 @@ export class PdfAttachmentStore {
     ) {
       throw new Error("PDF rendering budget is exhausted for this turn.");
     }
-    const pages = await renderPdfPages({
-      data: attachment.data,
-      limits: remainingLimits,
-      pageNumbers: params.pageNumbers,
-      profile: attachment.profile,
-    });
+    // Claim pages before awaiting the renderer so concurrent dynamic-tool
+    // calls cannot emit the same model image twice.
+    for (const pageNumber of pageNumbersToRender) {
+      claimedPageNumbers.add(pageNumber);
+    }
+    turn.claimedPageNumbersByAttachmentId.set(
+      attachment.attachmentId,
+      claimedPageNumbers,
+    );
+    let pages: Awaited<ReturnType<typeof renderPdfPages>>;
+    try {
+      pages = await renderPdfPages({
+        data: attachment.data,
+        limits: remainingLimits,
+        pageNumbers: pageNumbersToRender,
+        profile: attachment.profile,
+      });
+    } catch (error) {
+      for (const pageNumber of pageNumbersToRender) {
+        claimedPageNumbers.delete(pageNumber);
+      }
+      if (claimedPageNumbers.size === 0) {
+        turn.claimedPageNumbersByAttachmentId.delete(attachment.attachmentId);
+      }
+      throw error;
+    }
     turn.renderedBytes += pages.reduce(
       (total, page) => total + page.encodedBytes,
       0,
@@ -160,6 +206,7 @@ export class PdfAttachmentStore {
       })),
       result: {
         attachmentId: attachment.attachmentId,
+        alreadySuppliedPageNumbers,
         name: attachment.name,
         pages: pages.map(({ height, pageNumber, width }) => ({
           height,
@@ -182,6 +229,7 @@ export class PdfAttachmentStore {
     attachments: PendingPdfAttachment[];
     renderedBytes: number;
     renderedPages: number;
+    claimedPageNumbersByAttachmentId: Map<string, Set<number>>;
     renderedPixels: number;
     renderedWireBytes: number;
   } {
