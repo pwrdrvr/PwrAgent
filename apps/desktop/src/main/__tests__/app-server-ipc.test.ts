@@ -24,6 +24,14 @@ const mockAppServerLog = vi.hoisted(() => ({
   warn: vi.fn(),
 }));
 
+const resolveGitHubRepoForDirectory = vi.hoisted(() =>
+  vi.fn(
+    async (): Promise<
+      { host: string; owner: string; repo: string } | undefined
+    > => undefined,
+  ),
+);
+
 const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
 const listThreads = vi.fn(async (request?: {
   archived?: boolean;
@@ -580,6 +588,16 @@ vi.mock("../pr-status/pr-detection", () => ({
   detectPullRequestsForThread,
 }));
 
+vi.mock("../pr-status/git-remote", async () => {
+  const actual = await vi.importActual<typeof import("../pr-status/git-remote")>(
+    "../pr-status/git-remote",
+  );
+  return {
+    ...actual,
+    resolveGitHubRepoForDirectory,
+  };
+});
+
 describe("app server ipc", () => {
   beforeEach(() => {
     handlers.clear();
@@ -655,6 +673,8 @@ describe("app server ipc", () => {
     fetchPullRequestByUrl.mockResolvedValue(undefined);
     detectPullRequestsForThread.mockReset();
     detectPullRequestsForThread.mockResolvedValue([]);
+    resolveGitHubRepoForDirectory.mockReset();
+    resolveGitHubRepoForDirectory.mockResolvedValue(undefined);
     mockAppServerLog.debug.mockClear();
     mockAppServerLog.error.mockClear();
     mockAppServerLog.info.mockClear();
@@ -867,6 +887,48 @@ describe("app server ipc", () => {
         backend: "codex",
         executionMode: "default",
       },
+    });
+  });
+
+  it("publishes the primary repository resolved from a worktree to the composer", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+    const thread = {
+      id: "thread-1",
+      title: "Clipboard fallback",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      linkedDirectories: [
+        {
+          id: "directory:/repo/PwrAgent",
+          kind: "worktree" as const,
+          label: "PwrAgent",
+          path: "/repo/PwrAgent",
+          worktreePath: "/repo/.worktrees/clipboard-fallback",
+        },
+      ],
+      updatedAt: 2000,
+    };
+    listThreads.mockResolvedValueOnce([thread] as never);
+    resolveGitHubRepoForDirectory.mockResolvedValueOnce({
+      host: "github.com",
+      owner: "pwrdrvr",
+      repo: "PwrAgent",
+    });
+
+    registerAppServerIpcHandlers();
+    const response = await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+
+    expect(resolveGitHubRepoForDirectory).toHaveBeenCalledWith(
+      "/repo/.worktrees/clipboard-fallback",
+    );
+    expect(response).toMatchObject({
+      threads: [
+        {
+          id: "thread-1",
+          primaryGitRepository: "github.com/pwrdrvr/pwragent",
+        },
+      ],
     });
   });
 

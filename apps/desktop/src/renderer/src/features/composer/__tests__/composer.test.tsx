@@ -624,6 +624,48 @@ describe("Composer", () => {
     );
   });
 
+  it("shows Auto-fix PR when main resolved the primary repository for a worktree", () => {
+    render(
+      <Composer
+        backgroundPrPollingEnabled
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Fix CI",
+          titleSource: "explicit",
+          source: "codex",
+          primaryGitRepository: "github.com/pwrdrvr/pwragent",
+          linkedDirectories: [
+            {
+              id: "directory-1",
+              kind: "worktree",
+              label: "PwrAgent",
+              path: "/repo/PwrAgent",
+              worktreePath: "/repo/.worktrees/fix-ci",
+            },
+          ],
+          inbox: { inInbox: false },
+          prs: [
+            {
+              provider: "github.com",
+              number: 1128,
+              org: "pwrdrvr",
+              repo: "PwrAgent",
+              state: "passing",
+              url: "https://github.com/pwrdrvr/PwrAgent/pull/1128",
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Auto-fix PR" })).toHaveAttribute(
+      "data-tooltip",
+      "Auto-fix PR — handle new CI failures or merge conflicts",
+    );
+  });
+
   it("treats PRs from secondary linked repositories as informational", () => {
     render(
       <Composer

@@ -1353,6 +1353,8 @@ class DesktopAppServerService {
     await this.rememberThreadPrAttachments(canonicalSnapshot.threads, {
       replace: backend === "all" && !request.filter?.trim() && !activeRecentRefresh,
     });
+    const threadsWithPrimaryGitRepositories =
+      this.applyPrimaryGitRepositories(canonicalSnapshot.threads);
     void this.getPrAutoDispatchCoordinator().resume();
     await this.loadDirectoryGitStatusCache();
     for (const directory of snapshot.directories) {
@@ -1389,9 +1391,10 @@ class DesktopAppServerService {
       canonicalSnapshot.threads,
       detachedPrsByThreadKey,
     );
-    const threadsWithWorkingState = canonicalSnapshot.threads.map((thread) =>
-      this.applyCachedWorktreeWorkingState(thread),
-    );
+    const threadsWithWorkingState =
+      threadsWithPrimaryGitRepositories.map((thread) =>
+        this.applyCachedWorktreeWorkingState(thread),
+      );
     this.startWorktreeWorkingStateRefresh({
       automatic: true,
       worktreePaths: this.collectThreadWorktreePaths(canonicalSnapshot.threads),
@@ -1563,6 +1566,19 @@ class DesktopAppServerService {
       },
     );
     await this.syncThreadPrAutoDispatchCandidates(params);
+  }
+
+  private applyPrimaryGitRepositories(
+    threads: NavigationSnapshot["threads"],
+  ): NavigationSnapshot["threads"] {
+    return threads.map((thread) => {
+      const primaryGitRepository = this.attachedPrsByThreadKey.get(
+        buildThreadIdentityKey(thread.source, thread.id),
+      )?.primaryRepoKey;
+      return primaryGitRepository
+        ? { ...thread, primaryGitRepository }
+        : thread;
+    });
   }
 
   private async syncThreadPrAutoDispatchCandidates(params: {
