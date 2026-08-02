@@ -1,6 +1,4 @@
-import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
-import type { AppServerTurnInputItem } from "@pwragent/shared";
 
 import { buildPwrAgentMessagingToolRouter } from "../agent-tools/pwragent-messaging-agent-tools";
 import {
@@ -148,17 +146,7 @@ describe("PwrAgent messaging agent tools", () => {
         },
       ],
     }));
-    const materializeImageInputs = vi.fn(
-      async (): Promise<AppServerTurnInputItem[]> => [
-        {
-          type: "localImage",
-          path: "/tmp/pwragent-pdf-page-3.png",
-        },
-      ],
-    );
-    const router = buildPwrAgentMessagingToolRouter(handler, {
-      materializeImageInputs,
-    });
+    const router = buildPwrAgentMessagingToolRouter(handler);
 
     const response = await router.handleDynamicToolCall({
       backend: "codex",
@@ -175,13 +163,6 @@ describe("PwrAgent messaging agent tools", () => {
       },
     });
 
-    expect(materializeImageInputs).toHaveBeenCalledWith([
-      {
-        type: "image",
-        name: "pwragent-pdf-page-3.png",
-        url: "data:image/png;base64,AQID",
-      },
-    ]);
     expect(response).toEqual({
       success: true,
       contentItems: [
@@ -199,11 +180,10 @@ describe("PwrAgent messaging agent tools", () => {
         },
         {
           type: "inputImage",
-          imageUrl: pathToFileURL("/tmp/pwragent-pdf-page-3.png").toString(),
+          imageUrl: "data:image/png;base64,AQID",
         },
       ],
     });
-    expect(JSON.stringify(response)).not.toContain("AQID");
 
     await expect(router.handleMcpToolCall({
       backend: "codex",
