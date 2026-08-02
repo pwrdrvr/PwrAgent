@@ -10549,7 +10549,7 @@ describe("MessagingController", () => {
         input: [
           {
             type: "text",
-            text: expect.stringContaining("inspect_messaging_pdfs"),
+            text: expect.stringContaining("first render page 1"),
           },
         ],
       }),

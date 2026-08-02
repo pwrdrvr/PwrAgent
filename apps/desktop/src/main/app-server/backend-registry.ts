@@ -7,6 +7,8 @@ import path from "node:path";
 import { promisify } from "node:util";
 import type {
   DynamicToolSpec as CodexDynamicToolSpec,
+  ThreadForkParams as CodexThreadForkParams,
+  ThreadStartParams as CodexThreadStartParams,
   ThreadSource as CodexThreadSource,
 } from "@pwrdrvr/codex-app-server-protocol/v2";
 import type {
@@ -221,6 +223,7 @@ import {
   DEFAULT_TASK_MONITOR_STARTUP_TIMEOUT_SECONDS,
   DEFAULT_PR_AUTO_DISPATCH_ENABLED_FOR_NEW_THREADS,
   PWRAGENT_MESSAGING_PDF_TOOL_CATALOG_VERSION,
+  PWRAGENT_TOOL_NAMESPACE,
   type CompleteMonitoringToolArgs,
   type CreateMonitorDelegationToolArgs,
   type InjectMonitorProgressToolArgs,
@@ -306,7 +309,11 @@ import {
   isPwrAgentMessagingDynamicToolCall,
   readPwrAgentMessagingDynamicToolCall,
 } from "../agent-tools/pwragent-messaging-codex-tools";
-import type { PwrAgentMessagingHandler } from "../agent-tools/pwragent-messaging-agent-tools";
+import {
+  buildPwrAgentMessagingPdfToolRouter,
+  PWRAGENT_MODEL_DIRECTED_PDF_OPERATION_NAMES,
+  type PwrAgentMessagingHandler,
+} from "../agent-tools/pwragent-messaging-agent-tools";
 import {
   buildPwrAgentThreadOrchestrationDynamicToolErrorResponse,
   handlePwrAgentThreadOrchestrationDynamicToolCall,
@@ -320,6 +327,7 @@ import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-regi
 import {
   AgentToolMcpServer,
   type AgentToolMcpClientContext,
+  type AgentToolMcpRegistration,
   type AgentToolMcpServerLike,
   type ResolvedAgentToolMcpCallContext,
 } from "../agent-tools/agent-tool-mcp-server";
@@ -587,6 +595,7 @@ type BackendClient = {
     reasoningEffort?: string;
     fastMode?: boolean;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+    config?: CodexThreadStartParams["config"];
     defaultModeRequestUserInput?: boolean;
     dynamicTools?: CodexDynamicToolSpec[];
     threadSource?: CodexThreadSource;
@@ -601,6 +610,7 @@ type BackendClient = {
     serviceTier?: string;
     fastMode?: boolean;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+    config?: CodexThreadForkParams["config"];
   }): Promise<{ threadId: string }>;
   startTurn(params: {
     threadId: string;
@@ -614,6 +624,7 @@ type BackendClient = {
     reasoningEffort?: string;
     fastMode?: boolean;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+    config?: CodexThreadStartParams["config"];
     defaultModeRequestUserInput?: boolean;
     dynamicTools?: CodexDynamicToolSpec[];
   }): Promise<{
@@ -5505,6 +5516,51 @@ function buildCodexParentDynamicToolSpecs(
   );
 }
 
+const PWRAGENT_PDF_MCP_SERVER_NAME = "pwragent_pdf";
+
+function buildCodexPdfMcpConfig(
+  registration: AgentToolMcpRegistration,
+): CodexThreadStartParams["config"] {
+  return {
+    mcp_servers: {
+      [PWRAGENT_PDF_MCP_SERVER_NAME]: {
+        enabled: true,
+        http_headers: Object.fromEntries(
+          registration.server.headers.map(({ name, value }) => [name, value]),
+        ),
+        url: registration.server.url,
+      },
+    },
+  } as CodexThreadStartParams["config"];
+}
+
+function buildCodexPdfMcpDisabledConfig(): CodexThreadStartParams["config"] {
+  return {
+    mcp_servers: {
+      [PWRAGENT_PDF_MCP_SERVER_NAME]: {
+        enabled: false,
+      },
+    },
+  } as CodexThreadStartParams["config"];
+}
+
+function omitModelDirectedPdfDynamicTools(
+  specs: CodexDynamicToolSpec[],
+): CodexDynamicToolSpec[] {
+  const modelDirectedPdfToolNames = new Set<string>(
+    PWRAGENT_MODEL_DIRECTED_PDF_OPERATION_NAMES,
+  );
+  return specs.flatMap((spec) => {
+    if (spec.type !== "namespace" || spec.name !== PWRAGENT_TOOL_NAMESPACE) {
+      return [spec];
+    }
+    const tools = spec.tools.filter(
+      (tool) => !modelDirectedPdfToolNames.has(tool.name),
+    );
+    return tools.length > 0 ? [{ ...spec, tools }] : [];
+  });
+}
+
 function mergeCodexDynamicToolSpecs(
   specs: CodexDynamicToolSpec[],
 ): CodexDynamicToolSpec[] {
@@ -6121,6 +6177,7 @@ export class DesktopBackendRegistry {
   private readonly resolveCodexFastAllowedFn: () => boolean;
   private readonly resolvePdfAnalysisEnabledFn: () => boolean;
   private readonly pdfAttachmentStore = new PdfAttachmentStore();
+  private readonly pdfToolMcpServer?: AgentToolMcpServerLike;
   /**
    * Reports whether the registry is running inside the throwaway
    * bootstrap profile (`.bootstrap/`). When `true`, `listThreads`
@@ -6148,6 +6205,7 @@ export class DesktopBackendRegistry {
     isAcpAgentEnabled?: (registryId: string) => boolean;
     createAcpClient?: AcpClientFactory;
     agentToolMcpServer?: AgentToolMcpServerLike | null;
+    pdfToolMcpServer?: AgentToolMcpServerLike | null;
     messagingStore?: MessagingArchiveCleanupStore | null;
     messagingArchiveCleaner?: MessagingArchiveCleaner | null;
     automationInspectionMcpCommand?: string;
@@ -6382,6 +6440,23 @@ export class DesktopBackendRegistry {
                 threadOrchestrationHandler: this.threadOrchestrationHandler,
               }),
           });
+    this.pdfToolMcpServer =
+      options?.pdfToolMcpServer === null
+        ? undefined
+        : options?.pdfToolMcpServer ??
+          (createsLiveCodexClient
+            ? new AgentToolMcpServer({
+                resolveCallContext: (context) =>
+                  this.resolveAgentToolMcpCallContext(context),
+                resolveCatalogs: () => [
+                  {
+                    router: buildPwrAgentMessagingPdfToolRouter(
+                      this.messagingHandler,
+                    ),
+                  },
+                ],
+              })
+            : undefined);
     this.acpBackend = new AcpBackendAdapter({
       acpAgentStore: options?.acpAgentStore,
       acpRolloutStore: options?.acpRolloutStore,
@@ -9323,12 +9398,22 @@ export class DesktopBackendRegistry {
       threadInspectionHandler: this.threadInspectionHandler,
       threadOrchestrationHandler: this.threadOrchestrationHandler,
     });
+    const pdfMcpRegistration =
+      backend === "codex" && this.resolvePdfAnalysisEnabledFn()
+        ? await this.registerPdfMcpClient({})
+        : undefined;
     const resolvedDynamicTools =
       backend === "codex"
         ? buildCodexParentDynamicToolSpecs(agentToolCatalogs)
         : undefined;
-    const dynamicTools = resolvedDynamicTools?.length
-      ? resolvedDynamicTools
+    const dynamicToolCandidates = pdfMcpRegistration
+      ? omitModelDirectedPdfDynamicTools(resolvedDynamicTools ?? [])
+      : resolvedDynamicTools;
+    const dynamicTools = dynamicToolCandidates?.length
+      ? dynamicToolCandidates
+      : undefined;
+    const pdfMcpConfig = pdfMcpRegistration
+      ? buildCodexPdfMcpConfig(pdfMcpRegistration)
       : undefined;
     if (dynamicTools?.length) {
       backendRegistryLog.info("attaching agent tool catalogs", {
@@ -9374,6 +9459,7 @@ export class DesktopBackendRegistry {
                   defaultModeRequestUserInput:
                     this.resolveCodexDefaultModeRequestUserInputFn(),
                   threadSource: "user" as CodexThreadSource,
+                  ...(pdfMcpConfig ? { config: pdfMcpConfig } : {}),
                 }
               : {}),
             dynamicTools,
@@ -9390,6 +9476,7 @@ export class DesktopBackendRegistry {
       });
       throw error;
     }
+    pdfMcpRegistration?.bindThread(result.threadId);
     const startedAt = Date.now();
     const pendingThreadKey = buildThreadIdentityKey(backend, result.threadId);
     const agentName = request.agent?.name?.trim();
@@ -9433,7 +9520,10 @@ export class DesktopBackendRegistry {
         threadId: result.threadId,
         executionMode: effectiveExecutionMode,
       });
-      if (typeof this.overlayStore.setThreadMessagingPdfToolCatalogVersion === "function") {
+      if (
+        pdfMcpRegistration &&
+        typeof this.overlayStore.setThreadMessagingPdfToolCatalogVersion === "function"
+      ) {
         await this.overlayStore.setThreadMessagingPdfToolCatalogVersion({
           backend,
           threadId: result.threadId,
@@ -9645,6 +9735,16 @@ export class DesktopBackendRegistry {
       request.onPreparedWorkspaceRollback?.(undefined);
       throw new Error("Selected backend does not support thread/fork.");
     }
+    const sourceHasPdfMcpToolCatalog = this.hasPdfMcpToolCatalog(sourceOverlay);
+    const pdfMcpRegistration =
+      sourceHasPdfMcpToolCatalog && this.resolvePdfAnalysisEnabledFn()
+        ? await this.registerPdfMcpClient({})
+        : undefined;
+    const pdfMcpConfig = sourceHasPdfMcpToolCatalog
+      ? pdfMcpRegistration
+        ? buildCodexPdfMcpConfig(pdfMcpRegistration)
+        : buildCodexPdfMcpDisabledConfig()
+      : undefined;
 
     let result: { threadId: string };
     let forkedCodexEnvironmentRuntime: CodexThreadEnvironmentRuntime | undefined;
@@ -9690,7 +9790,9 @@ export class DesktopBackendRegistry {
         approvalPolicy: request.approvalPolicy ?? modeSettings.approvalPolicy,
         sandbox: request.sandbox ?? modeSettings.sandbox,
         codexEnvironmentRuntime: forkedCodexEnvironmentRuntime,
+        ...(pdfMcpConfig ? { config: pdfMcpConfig } : {}),
       });
+      pdfMcpRegistration?.bindThread(result.threadId);
     } catch (error) {
       await preparedWorkspace.rollback?.();
       request.onPreparedWorkspaceRollback?.(undefined);
@@ -9737,6 +9839,16 @@ export class DesktopBackendRegistry {
         threadId: result.threadId,
         enabled: this.resolveDefaultPrAutoDispatchEnabledFn(),
       });
+      if (
+        pdfMcpRegistration
+        && typeof this.overlayStore.setThreadMessagingPdfToolCatalogVersion === "function"
+      ) {
+        await this.overlayStore.setThreadMessagingPdfToolCatalogVersion({
+          backend,
+          threadId: result.threadId,
+          version: PWRAGENT_MESSAGING_PDF_TOOL_CATALOG_VERSION,
+        });
+      }
       const currentMigration =
         this.resolveProviderThreadModelMigrationsFn()[backend];
       if (
@@ -10009,6 +10121,10 @@ export class DesktopBackendRegistry {
       return false;
     }
     const overlay = await this.overlayStore.getThreadOverlayState(params);
+    return this.resolvePdfAnalysisEnabledFn() && this.hasPdfMcpToolCatalog(overlay);
+  }
+
+  private hasPdfMcpToolCatalog(overlay: ThreadOverlayState | undefined): boolean {
     return (
       overlay?.messagingPdfToolCatalogVersion !== undefined &&
       overlay.messagingPdfToolCatalogVersion >=
@@ -10019,18 +10135,38 @@ export class DesktopBackendRegistry {
   private resolvePdfTurnInputHandling(params: {
     backend: AppServerBackendKind;
     overlay?: ThreadOverlayState;
+    pdfMcpAvailable?: boolean;
   }): PdfTurnInputHandling {
     if (!this.resolvePdfAnalysisEnabledFn()) {
       return "pass_through";
     }
     return (
       params.backend === "codex"
-      && params.overlay?.messagingPdfToolCatalogVersion !== undefined
-      && params.overlay.messagingPdfToolCatalogVersion >=
-        PWRAGENT_MESSAGING_PDF_TOOL_CATALOG_VERSION
+      && params.pdfMcpAvailable === true
+      && this.hasPdfMcpToolCatalog(params.overlay)
     )
       ? "model_directed"
       : "render_initial_pages";
+  }
+
+  private async registerPdfMcpClient(params: {
+    threadId?: string;
+  }): Promise<AgentToolMcpRegistration | undefined> {
+    if (!this.pdfToolMcpServer) {
+      return undefined;
+    }
+    try {
+      return await this.pdfToolMcpServer.registerClient({
+        backend: "codex",
+        ...(params.threadId ? { threadId: params.threadId } : {}),
+      });
+    } catch (error) {
+      backendRegistryLog.warn("pdf_mcp_start_failed", {
+        error: error instanceof Error ? error.message : String(error),
+        threadId: params.threadId ?? null,
+      });
+      return undefined;
+    }
   }
 
   async startTurn(params: {
@@ -10193,6 +10329,8 @@ export class DesktopBackendRegistry {
     let turnParams!: ModelSettings;
     let cwd: string | undefined;
     let activeTurnMode: ThreadExecutionMode | undefined;
+    let pdfMcpConfig: CodexThreadStartParams["config"] | undefined;
+    let pdfMcpAvailable = false;
     try {
       if (params.backend === "codex") {
         await this.flushQueuedExecutionModeIfPresent(params.threadId);
@@ -10201,10 +10339,22 @@ export class DesktopBackendRegistry {
         backend: params.backend,
         threadId: params.threadId,
       });
+      const hasPdfMcpToolCatalog =
+        params.backend === "codex" && this.hasPdfMcpToolCatalog(overlay);
+      if (hasPdfMcpToolCatalog) {
+        const registration = this.resolvePdfAnalysisEnabledFn()
+          ? await this.registerPdfMcpClient({ threadId: params.threadId })
+          : undefined;
+        pdfMcpAvailable = registration !== undefined;
+        pdfMcpConfig = registration
+          ? buildCodexPdfMcpConfig(registration)
+          : buildCodexPdfMcpDisabledConfig();
+      }
       const preparedPdfInput = await preparePdfTurnInput({
         handling: this.resolvePdfTurnInputHandling({
           backend: params.backend,
           overlay,
+          pdfMcpAvailable,
         }),
         input: params.input,
       });
@@ -10322,6 +10472,7 @@ export class DesktopBackendRegistry {
                 ...(overlay?.codexEnvironmentRuntime
                   ? { codexEnvironmentRuntime: overlay.codexEnvironmentRuntime }
                   : {}),
+                ...(pdfMcpConfig ? { config: pdfMcpConfig } : {}),
                 defaultModeRequestUserInput:
                   this.resolveCodexDefaultModeRequestUserInputFn(),
               });
@@ -14272,6 +14423,7 @@ export class DesktopBackendRegistry {
     }
 
     await this.acpBackend.close();
+    await this.pdfToolMcpServer?.close();
     await this.codexClient.close();
     await this.grokClient.close();
     await Promise.all(this.captureStores.splice(0).map(async (store) => await store.close()));

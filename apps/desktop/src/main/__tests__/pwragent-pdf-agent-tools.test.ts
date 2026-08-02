@@ -26,7 +26,7 @@ const context = {
 };
 
 describe("PwrAgent PDF agent tools", () => {
-  it("serves desktop-origin PDFs through the existing bounded dynamic-tool contract", async () => {
+  it("serves desktop-origin PDFs through the existing bounded PDF-tool contract", async () => {
     const data = await readFile(jeepStickerPageFixture);
     const store = new PdfAttachmentStore();
     store.bindTurn(context, [
@@ -178,7 +178,7 @@ describe("PwrAgent PDF agent tools", () => {
     ]);
   });
 
-  it("adds each rendered PDF page to model input only once per turn", async () => {
+  it("returns each rendered PDF page only once per turn", async () => {
     const data = await readFile(roadsterEquipmentFixture);
     const store = new PdfAttachmentStore();
     store.bindTurn(context, [
@@ -216,7 +216,7 @@ describe("PwrAgent PDF agent tools", () => {
       contentItems: [
         {
           type: "inputText",
-          text: expect.stringContaining("already added the rendered PDF page image"),
+          text: expect.stringContaining("returned rendered PDF page image"),
         },
         {
           type: "inputImage",

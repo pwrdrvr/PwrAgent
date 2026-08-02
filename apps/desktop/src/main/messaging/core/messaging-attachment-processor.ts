@@ -202,7 +202,7 @@ export async function processMessagingAttachments(params: {
               profile: policy.pdfProfile,
             });
           } catch {
-            // The dynamic inspection tool remains available as a fallback for
+            // The managed PDF tool remains available as a fallback for
             // PDFs whose metadata cannot be probed at attachment time.
           }
           if (inspection?.pageCount === 1) {

@@ -1309,9 +1309,10 @@ export type ThreadOverlayState = {
   observedGitBranch?: string;
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   /**
-   * Version of the PwrAgent messaging PDF dynamic-tool catalog supplied when
-   * this Codex thread was created. Unknown older threads use a bounded image
-   * fallback because Codex cannot add dynamic tools on thread resume.
+   * Version of the PwrAgent-managed PDF tool surface supplied when this Codex
+   * thread was created. Version 2 uses a loopback MCP server that can return
+   * page images; older threads use a bounded initial-image fallback because
+   * their initial dynamic-tool catalog cannot be replaced on resume.
    */
   messagingPdfToolCatalogVersion?: number;
   lastSeenAt?: number;

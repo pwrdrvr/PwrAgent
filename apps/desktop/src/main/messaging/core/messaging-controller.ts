@@ -14070,7 +14070,7 @@ export class MessagingController {
         error: {
           code: "unsupported_operation",
           message:
-            "Rendered messaging PDF pages are currently available only to Codex dynamic-tool turns.",
+            "Rendered messaging PDF pages are currently available only to Codex PDF analysis turns.",
         },
       };
     }

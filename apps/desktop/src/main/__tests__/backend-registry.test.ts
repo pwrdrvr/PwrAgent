@@ -8,6 +8,7 @@ import {
   applyNavigationLaunchpadProviderSettingsPatch,
   buildNavigationSnapshot,
   buildThreadIdentityKey,
+  PWRAGENT_MESSAGING_PDF_TOOL_CATALOG_VERSION,
 } from "@pwragent/shared";
 import type {
   AcpBackendId,
@@ -44,7 +45,11 @@ import type {
   WorktreeSnapshotSummary,
 } from "@pwragent/shared";
 import type { MessagingBindingRecord } from "@pwragent/messaging-interface";
-import type { ThreadSource as CodexThreadSource } from "@pwrdrvr/codex-app-server-protocol/v2";
+import type {
+  ThreadForkParams as CodexThreadForkParams,
+  ThreadSource as CodexThreadSource,
+  ThreadStartParams as CodexThreadStartParams,
+} from "@pwrdrvr/codex-app-server-protocol/v2";
 import {
   buildCodexFastModeMismatchNotificationParams,
   DesktopBackendRegistry,
@@ -62,6 +67,10 @@ import { AcpRolloutStore } from "../acp/acp-rollout-store";
 import type { AcpSessionMetadata } from "../acp/acp-session-store";
 import type { ThreadSearchService } from "../thread-search/thread-search-service";
 import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-registry";
+import type {
+  AgentToolMcpRegistration,
+  AgentToolMcpServerLike,
+} from "../agent-tools/agent-tool-mcp-server";
 
 const mainLoggerMock = vi.hoisted(() => ({
   debug: vi.fn(),
@@ -155,6 +164,37 @@ function expectPwragentDynamicTools(dynamicTools: unknown, names: string[]): voi
       ),
     ),
   );
+}
+
+function createPdfMcpServerMock() {
+  const bindThread = vi.fn<(threadId: string) => void>();
+  const registration = {
+    server: {
+      name: "pwragent",
+      type: "http" as const,
+      url: "http://127.0.0.1:42137/mcp",
+      headers: [
+        {
+          name: "Authorization",
+          value: "Bearer pwragent-pdf-test-token",
+        },
+      ],
+    },
+    bindThread,
+  } satisfies AgentToolMcpRegistration;
+  const registerClient = vi.fn<AgentToolMcpServerLike["registerClient"]>(
+    async () => registration,
+  );
+  const close = vi.fn<AgentToolMcpServerLike["close"]>(async () => undefined);
+  return {
+    bindThread,
+    close,
+    registerClient,
+    server: {
+      close,
+      registerClient,
+    },
+  };
 }
 
 // These tests pre-date the agent-core Grok experimental flag and exercise
@@ -1240,6 +1280,7 @@ class MockBackendClient {
     reasoningEffort?: string;
     fastMode?: boolean;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+    config?: CodexThreadStartParams["config"];
     defaultModeRequestUserInput?: boolean;
     threadSource?: CodexThreadSource;
   };
@@ -1253,6 +1294,7 @@ class MockBackendClient {
     serviceTier?: string;
     fastMode?: boolean;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+    config?: CodexThreadForkParams["config"];
   };
   lastStartTurnParams?: {
     backend?: "codex" | "grok";
@@ -1267,6 +1309,7 @@ class MockBackendClient {
     reasoningEffort?: string;
     fastMode?: boolean;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+    config?: CodexThreadStartParams["config"];
     defaultModeRequestUserInput?: boolean;
     dynamicTools?: unknown;
   };
@@ -1580,6 +1623,7 @@ class MockBackendClient {
     reasoningEffort?: string;
     fastMode?: boolean;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+    config?: CodexThreadStartParams["config"];
     defaultModeRequestUserInput?: boolean;
     threadSource?: CodexThreadSource;
   }): Promise<{ threadId: string }> {
@@ -1597,6 +1641,7 @@ class MockBackendClient {
     serviceTier?: string;
     fastMode?: boolean;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+    config?: CodexThreadForkParams["config"];
   }): Promise<{ threadId: string }> {
     this.lastForkThreadParams = params;
     return { threadId: "thread-fork" };
@@ -1616,6 +1661,7 @@ class MockBackendClient {
     reasoningEffort?: string;
     fastMode?: boolean;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+    config?: CodexThreadStartParams["config"];
     defaultModeRequestUserInput?: boolean;
     dynamicTools?: unknown;
   }): Promise<{ threadId: string; turnId: string }> {
@@ -7153,23 +7199,49 @@ script = "echo setup"
     await registry.close();
   });
 
-  it("records PDF dynamic-tool support for newly created Codex threads", async () => {
+  it("registers bounded PDF MCP tools for new Codex threads and refreshes them on turns", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: {
+        serverInfo: { name: "Codex App Server", version: "1.0.0" },
+        methods: ["thread/start", "turn/start"],
+      },
+    });
+    const overlayStore = createOverlayStoreMock();
+    const pdfMcp = createPdfMcpServerMock();
     const registry = new DesktopBackendRegistry({
-      codexClient: new MockBackendClient({
-        initializeResult: {
-          serverInfo: { name: "Codex App Server", version: "1.0.0" },
-          methods: ["thread/start", "turn/start"],
-        },
-      }),
+      codexClient,
       grokClient: new MockBackendClient({
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
-      overlayStore: createOverlayStoreMock(),
+      overlayStore,
       createScratchProjectDirectory: async () => "/tmp/pwragent-scratch",
+      pdfToolMcpServer: pdfMcp.server,
+      resolvePdfAnalysisEnabled: () => true,
     });
 
     await registry.startThread({ backend: "codex" });
 
+    expect(pdfMcp.registerClient).toHaveBeenCalledWith({ backend: "codex" });
+    expect(pdfMcp.bindThread).toHaveBeenCalledWith("thread-1");
+    expect(codexClient.lastStartThreadParams?.config).toEqual({
+      mcp_servers: {
+        pwragent_pdf: {
+          enabled: true,
+          http_headers: {
+            Authorization: "Bearer pwragent-pdf-test-token",
+          },
+          url: "http://127.0.0.1:42137/mcp",
+        },
+      },
+    });
+    expect(
+      pwragentDynamicTools(codexClient.lastStartThreadParams?.dynamicTools)
+        .map((tool) => tool.name),
+    ).not.toEqual(expect.arrayContaining([
+      "inspect_messaging_pdfs",
+      "search_messaging_pdf_text",
+      "render_messaging_pdf_pages",
+    ]));
     await expect(
       registry.supportsMessagingPdfTools({
         backend: "codex",
@@ -7182,8 +7254,40 @@ script = "echo setup"
         threadId: "thread-1",
       }),
     ).resolves.toBe(false);
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-1",
+      }),
+    ).resolves.toMatchObject({
+      messagingPdfToolCatalogVersion:
+        PWRAGENT_MESSAGING_PDF_TOOL_CATALOG_VERSION,
+    });
+
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "thread-1",
+      input: [{ type: "text", text: "Continue." }],
+    });
+
+    expect(pdfMcp.registerClient).toHaveBeenNthCalledWith(2, {
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(codexClient.lastStartTurnParams?.config).toEqual({
+      mcp_servers: {
+        pwragent_pdf: {
+          enabled: true,
+          http_headers: {
+            Authorization: "Bearer pwragent-pdf-test-token",
+          },
+          url: "http://127.0.0.1:42137/mcp",
+        },
+      },
+    });
 
     await registry.close();
+    expect(pdfMcp.close).toHaveBeenCalledTimes(1);
   });
 
   it("passes Agent dynamic tools when starting Agent Codex threads", async () => {
@@ -12518,6 +12622,77 @@ script = "printf setup-output"
     await registry.close();
   });
 
+  it("refreshes the PDF MCP registration when forking a PDF-enabled Codex thread", async () => {
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-parent": {
+          backend: "codex",
+          threadId: "thread-parent",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          messagingPdfToolCatalogVersion:
+            PWRAGENT_MESSAGING_PDF_TOOL_CATALOG_VERSION,
+        },
+      },
+    });
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/fork"] },
+    });
+    const pdfMcp = createPdfMcpServerMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+      pdfToolMcpServer: pdfMcp.server,
+      resolvePdfAnalysisEnabled: () => true,
+      gitDirectoryService: {
+        prepareLaunchpadWorkspace: vi.fn(async () => ({
+          cwd: "/repo/app",
+          workMode: "local" as const,
+        })),
+        recordCodexWorktreeOwnerThread: vi.fn(async () => {}),
+      } as never,
+    });
+
+    await registry.forkThread({
+      backend: "codex",
+      sourceThreadId: "thread-parent",
+      executionMode: "default",
+      directoryKind: "directory",
+      directoryLabel: "app",
+      directoryPath: "/repo/app",
+      workMode: "local",
+    });
+
+    expect(pdfMcp.registerClient).toHaveBeenCalledWith({ backend: "codex" });
+    expect(pdfMcp.bindThread).toHaveBeenCalledWith("thread-fork");
+    expect(codexClient.lastForkThreadParams?.config).toEqual({
+      mcp_servers: {
+        pwragent_pdf: {
+          enabled: true,
+          http_headers: {
+            Authorization: "Bearer pwragent-pdf-test-token",
+          },
+          url: "http://127.0.0.1:42137/mcp",
+        },
+      },
+    });
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-fork",
+      }),
+    ).resolves.toMatchObject({
+      messagingPdfToolCatalogVersion:
+        PWRAGENT_MESSAGING_PDF_TOOL_CATALOG_VERSION,
+    });
+
+    await registry.close();
+    expect(pdfMcp.close).toHaveBeenCalledTimes(1);
+  });
+
   it("passes a CAS-provided source rollout path when forking for migration", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/fork"] },
@@ -14326,6 +14501,7 @@ command = "pnpm dev"
       startTurnDelay: startTurnDelay.promise,
       threads: [],
     });
+    const pdfMcp = createPdfMcpServerMock();
     const registry = new DesktopBackendRegistry({
       codexClient,
       grokClient: new MockBackendClient({
@@ -14337,11 +14513,13 @@ command = "pnpm dev"
             backend: "codex",
             executionMode: "default",
             extraLinkedDirectories: [],
-            messagingPdfToolCatalogVersion: 1,
+            messagingPdfToolCatalogVersion:
+              PWRAGENT_MESSAGING_PDF_TOOL_CATALOG_VERSION,
             threadId: "thread-title-pdf",
           },
         },
       }),
+      pdfToolMcpServer: pdfMcp.server,
       resolvePdfAnalysisEnabled: () => true,
       threadTitleGenerationService: titleService,
     });

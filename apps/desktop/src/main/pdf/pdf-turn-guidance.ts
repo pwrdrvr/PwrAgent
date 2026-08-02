@@ -38,12 +38,12 @@ export function formatPdfAttachmentModelGuidance(
       ? "For every one-page PDF above, call render_messaging_pdf_pages exactly once with that attachmentId and pageNumbers [1], then analyze the supplied image directly. Do not call inspect_messaging_pdfs or search_messaging_pdf_text for a one-page PDF."
       : undefined,
     hasMultiPageAttachment
-      ? `For a multi-page PDF, render a known relevant page directly. Use search_messaging_pdf_text only when the relevant page is unknown; it is page navigation only, never a feature-extraction or comparison workflow. Text search is capped at ${MAX_PDF_TEXT_SEARCH_REQUESTS_PER_TURN} calls per turn.`
+      ? `For a multi-page PDF, first render page 1 (or a page the user explicitly named) from each relevant attachment. For a comparison or document-wide question, do not use search_messaging_pdf_text to build a feature inventory; render the small relevant page batch instead. Use text search only to locate an otherwise unknown page. Text search is capped at ${MAX_PDF_TEXT_SEARCH_REQUESTS_PER_TURN} calls per turn.`
       : undefined,
     hasUnknownPageCount
       ? "For only a PDF with unavailable page metadata, call inspect_messaging_pdfs once, then follow the one-page or multi-page rule above."
       : undefined,
-    "Render only a small useful batch; rendered pages are capped at five total per turn. Successful rendering already adds the page images to model context. Analyze those images directly. For a requested printed value, transcribe its labeled field instead of inferring it from line-item arithmetic. Do not use web search or other external sources for questions about these PDFs unless the user explicitly requests outside research. Do not serialize the render result, call image(), or use exec, shell, filesystem, OCR, or conversion tools on the source PDFs or rendered pages.",
+    "Render only a small useful batch; rendered pages are capped at five total per turn. Successful rendering returns page images in the tool result. Analyze those images directly. For a requested printed value, transcribe its labeled field instead of inferring it from line-item arithmetic. Do not use web search or other external sources for questions about these PDFs unless the user explicitly requests outside research. Do not serialize the render result, call image(), or use exec, shell, filesystem, OCR, or conversion tools on the source PDFs or rendered pages.",
     PDF_TURN_CONTEXT_CLOSE,
   ]
     .filter((line): line is string => Boolean(line))

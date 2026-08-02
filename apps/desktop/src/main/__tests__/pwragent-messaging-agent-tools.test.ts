@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { buildPwrAgentMessagingToolRouter } from "../agent-tools/pwragent-messaging-agent-tools";
+import {
+  buildPwrAgentMessagingPdfToolRouter,
+  buildPwrAgentMessagingToolRouter,
+} from "../agent-tools/pwragent-messaging-agent-tools";
 import {
   handlePwrAgentMessagingDynamicToolCall,
   isPwrAgentMessagingDynamicToolCall,
@@ -129,7 +132,7 @@ describe("PwrAgent messaging agent tools", () => {
     });
   });
 
-  it("returns rendered PDF pages as image input for Codex dynamic tools", async () => {
+  it("keeps rendered PDF pages on the legacy Codex dynamic-tool surface", async () => {
     const handler = vi.fn(async () => ({
       ok: true as const,
       data: {
@@ -169,7 +172,7 @@ describe("PwrAgent messaging agent tools", () => {
         {
           type: "inputText",
           text: [
-            "PwrAgent has already added the rendered PDF page image(s) to this turn's model context. Analyze those images directly. Read requested values from their printed labels, not inferred arithmetic. Do not use web search or other external sources for this PDF unless the user explicitly requests outside research. Do not serialize this result, call image(), use exec or other local tools to reprocess the page, or render the same page again.",
+            "PwrAgent returned rendered PDF page image(s) with this tool result. Analyze those images directly. Read requested values from their printed labels, not inferred arithmetic. Do not use web search or other external sources for this PDF unless the user explicitly requests outside research. Do not serialize this result, call image(), use exec or other local tools to reprocess the page, or render the same page again.",
             JSON.stringify({
               attachmentId: "pdf-1",
               alreadySuppliedPageNumbers: [],
@@ -198,6 +201,75 @@ describe("PwrAgent messaging agent tools", () => {
       isError: true,
       structuredContent: {
         code: "unsupported_operation",
+      },
+    });
+  });
+
+  it("exposes only bounded PDF tools through the dedicated MCP surface", async () => {
+    const handler = vi.fn(async () => ({
+      ok: true as const,
+      data: {
+        attachmentId: "pdf-1",
+        alreadySuppliedPageNumbers: [],
+        name: "window-sticker.pdf",
+        pages: [{ height: 1988, pageNumber: 3, width: 3072 }],
+      },
+      imageContent: [
+        {
+          base64: "AQID",
+          mimeType: "image/png",
+          pageNumber: 3,
+        },
+      ],
+    }));
+    const router = buildPwrAgentMessagingPdfToolRouter(handler);
+
+    expect(router.buildMcpTools().map((tool) => tool.name)).toEqual([
+      "inspect_messaging_pdfs",
+      "search_messaging_pdf_text",
+      "render_messaging_pdf_pages",
+    ]);
+
+    const response = await router.handleMcpToolCall({
+      backend: "codex",
+      threadId: "agent-thread",
+      turnId: "turn-1",
+      tool: "render_messaging_pdf_pages",
+      args: {
+        attachmentId: "pdf-1",
+        pageNumbers: [3],
+      },
+    });
+
+    expect(response).toMatchObject({
+      structuredContent: {
+        attachmentId: "pdf-1",
+        pages: [{ height: 1988, pageNumber: 3, width: 3072 }],
+      },
+      content: [
+        {
+          type: "text",
+          text: expect.stringContaining(
+            "PwrAgent returned rendered PDF page image(s) with this tool result.",
+          ),
+        },
+        {
+          type: "image",
+          data: "AQID",
+          mimeType: "image/png",
+        },
+      ],
+    });
+    expect(handler).toHaveBeenCalledWith({
+      operation: "render_messaging_pdf_pages",
+      context: {
+        backend: "codex",
+        threadId: "agent-thread",
+        turnId: "turn-1",
+      },
+      args: {
+        attachmentId: "pdf-1",
+        pageNumbers: [3],
       },
     });
   });

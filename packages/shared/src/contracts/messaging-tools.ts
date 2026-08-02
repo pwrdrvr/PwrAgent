@@ -21,10 +21,12 @@ export const PWRAGENT_MESSAGING_OPERATION_NAMES = [
 ] as const;
 
 /**
- * Codex persists dynamic tools when a thread is created. This version records
- * the first catalog that includes the model-directed messaging PDF tools.
+ * Codex persists its initial tool configuration when a thread is created.
+ * Version 2 records the dedicated PwrAgent loopback MCP surface that returns
+ * rendered PDF pages as real MCP image content. Older threads use bounded
+ * initial-image fallback because their dynamic tool catalog cannot be changed.
  */
-export const PWRAGENT_MESSAGING_PDF_TOOL_CATALOG_VERSION = 1;
+export const PWRAGENT_MESSAGING_PDF_TOOL_CATALOG_VERSION = 2;
 
 export const PWRAGENT_MESSAGING_LEGACY_OPERATION_NAMES = [
   "get_current_location",

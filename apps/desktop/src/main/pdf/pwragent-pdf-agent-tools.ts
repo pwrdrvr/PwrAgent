@@ -20,7 +20,7 @@ export function isPwrAgentPdfOperation(
 /**
  * Return undefined when this store does not own the turn. The registry can
  * then defer legacy messaging-origin requests to MessagingController while
- * desktop-origin turns use the same dynamic-tool contract.
+ * desktop-origin turns use the same bounded PDF-tool contract.
  */
 export async function handlePwrAgentPdfToolRequest(params: {
   request: PwrAgentMessagingRequest;
@@ -96,7 +96,7 @@ export async function handlePwrAgentPdfToolRequest(params: {
           ok: false,
           error: {
             code: "unsupported_operation",
-            message: "Rendered PDF pages are available only to Codex dynamic-tool turns.",
+            message: "Rendered PDF pages are available only to Codex PDF analysis turns.",
           },
         };
       }

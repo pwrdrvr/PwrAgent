@@ -6435,6 +6435,67 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("passes thread-local MCP config and redacts MCP bearer headers from observers", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const observedMessages: string[] = [];
+    const config = {
+      mcp_servers: {
+        pwragent_pdf: {
+          enabled: true,
+          http_headers: {
+            Authorization: "Bearer pwragent-pdf-secret",
+          },
+          url: "http://127.0.0.1:42137/mcp",
+        },
+      },
+    };
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+      connectionObserver: {
+        onMessage: (event) => {
+          observedMessages.push(event.raw);
+        },
+      },
+    });
+
+    await client.startThread({ config });
+    await client.startTurn({
+      threadId: "thread-existing",
+      input: [{ type: "text", text: "Continue." }],
+      config,
+      fastMode: true,
+    });
+    await client.forkThread({
+      threadId: "thread-source",
+      config,
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    const requests = transport!.sentMessages.map(
+      (message) => JSON.parse(message) as {
+        method?: string;
+        params?: Record<string, unknown>;
+      },
+    );
+    const threadStart = requests.find((request) => request.method === "thread/start")?.params;
+    const threadResume = requests.find((request) => request.method === "thread/resume")?.params;
+    const threadFork = requests.find((request) => request.method === "thread/fork")?.params;
+
+    expect(threadStart).toMatchObject({ config });
+    expect(threadResume).toMatchObject({
+      config: {
+        ...config,
+        fast_mode: true,
+      },
+    });
+    expect(threadFork).toMatchObject({ config });
+    expect(observedMessages.join("\n")).not.toContain("pwragent-pdf-secret");
+    expect(observedMessages.join("\n")).toContain("[redacted]");
+
+    await client.close();
+  });
+
   it("uses the 0.144 App Server wire contracts and advertises tools only at thread start", async () => {
     MockTransport.serverVersion = "0.144.0";
     const { CodexAppServerClient } = await import("../codex-app-server/client");

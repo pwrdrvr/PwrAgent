@@ -140,7 +140,7 @@ export async function preparePdfTurnInput(params: {
           profile,
         });
       } catch {
-        // Keep the attachment available for the dynamic inspection tool when
+        // Keep the attachment available for the managed PDF tool when
         // metadata probing cannot read an otherwise recognized PDF.
       }
       if (inspection?.pageCount === 1) {
