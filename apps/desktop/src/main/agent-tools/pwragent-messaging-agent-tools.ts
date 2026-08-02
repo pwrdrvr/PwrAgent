@@ -216,7 +216,7 @@ async function messagingResponseToAgentToolResult(
       );
       const metadata = [
         response.imageContent.length > 0
-          ? "PwrAgent has already added the rendered PDF page image(s) to this turn's model context. Analyze those images directly. Do not serialize this result, call image(), use exec or other local tools to reprocess the page, or render the same page again."
+          ? "PwrAgent has already added the rendered PDF page image(s) to this turn's model context. Analyze those images directly. Read requested values from their printed labels, not inferred arithmetic. Do not use web search or other external sources for this PDF unless the user explicitly requests outside research. Do not serialize this result, call image(), use exec or other local tools to reprocess the page, or render the same page again."
           : "PwrAgent already supplied the requested PDF page image(s) earlier in this turn, so no duplicate image was added. Analyze the existing image input directly.",
         JSON.stringify(response.data, null, 2),
       ].join("\n\n");
