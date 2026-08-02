@@ -60,6 +60,9 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
     () => buildMessageCopyText(props.message, contentParts),
     [contentParts, props.message]
   );
+  const imageParts = contentParts.filter(
+    (part): part is AppServerThreadImagePart => part.type === "image",
+  );
   const messageSegments = groupMessageParts(contentParts).flatMap(splitMarkdownTableSegment);
   const [monitorExpanded, setMonitorExpanded] = useState(false);
   const [monitorDetailsOpen, setMonitorDetailsOpen] = useState(false);
@@ -192,6 +195,7 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
                   applications: props.applications,
                   desktopApi: props.desktopApi,
                   fileViewerContext: props.fileViewerContext,
+                  imageParts,
                   onOpenImage: props.onOpenImage,
                   skills: props.skills,
                 }),
@@ -264,6 +268,7 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
               applications: props.applications,
               desktopApi: props.desktopApi,
               fileViewerContext: props.fileViewerContext,
+              imageParts,
               onOpenImage: props.onOpenImage,
               skills: props.skills,
             })}
@@ -496,6 +501,7 @@ function renderMessageSegment(params: {
     "copyText" | "openApplication" | "openMarkdownFileViewer" | "readMarkdownFile"
   >;
   fileViewerContext?: MarkdownFileViewerContext;
+  imageParts?: AppServerThreadImagePart[];
   segment: MessagePartSegment;
   index: number;
   onOpenImage?: (image: AppServerThreadImagePart) => void;
@@ -526,6 +532,8 @@ function renderMessageSegment(params: {
       className="transcript-message__text-block"
       desktopApi={params.desktopApi}
       fileViewerContext={params.fileViewerContext}
+      imageParts={params.imageParts}
+      onOpenImage={params.onOpenImage}
       skills={params.skills}
       text={params.segment.type === "table" ? params.segment.text : params.segment.part.text}
     />

@@ -2,6 +2,7 @@ import {
   isThreadUrl,
   PWRAGENT_URL_SCHEME,
   type AppServerSkillSummary,
+  type AppServerThreadImagePart,
   type DesktopApplicationsSnapshot,
   type MarkdownFileViewerContext,
 } from "@pwragent/shared";
@@ -57,6 +58,8 @@ type ThreadMarkdownProps = {
     "copyText" | "openApplication" | "openMarkdownFileViewer" | "readMarkdownFile"
   >;
   fileViewerContext?: MarkdownFileViewerContext;
+  imageParts?: AppServerThreadImagePart[];
+  onOpenImage?: (image: AppServerThreadImagePart) => void;
   skills?: AppServerSkillSummary[];
   text: string;
   variant?: "message" | "summary";
@@ -229,6 +232,7 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
         );
         const skillPath = localTarget?.path;
         const label = extractTextContent(anchorProps.children).trim();
+        const linkedImage = findMarkdownLinkedImagePart(props.imageParts, localTarget);
         const source = sourceForNode(markdownText, anchorProps.node);
 
         if (isImplicitBareAutolink({ href, label, source })) {
@@ -266,6 +270,22 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
         const pullRequest = resolvePullRequestHref(href, pullRequestLinks);
         if (pullRequest) {
           return <PullRequestLinkChip pr={pullRequest} />;
+        }
+
+        if (linkedImage && props.onOpenImage) {
+          return (
+            <a
+              className="transcript-message__link"
+              href={linkedImage.url}
+              onClick={(event) => {
+                event.preventDefault();
+                props.onOpenImage?.(linkedImage);
+              }}
+              title="Open image in PwrAgent"
+            >
+              {anchorProps.children}
+            </a>
+          );
         }
 
         if (label.startsWith("@") && localTarget) {
@@ -515,6 +535,8 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
       openLocalFileLink,
       openSkillMarkdownInEditor,
       props.desktopApi,
+      props.imageParts,
+      props.onOpenImage,
       pullRequestLinks,
       skillsByPath,
       threadLinks,
@@ -945,6 +967,23 @@ function localFileTargetFromHref(
   }
 
   return undefined;
+}
+
+function findMarkdownLinkedImagePart(
+  imageParts: AppServerThreadImagePart[] | undefined,
+  target: LocalFileTarget | undefined,
+): AppServerThreadImagePart | undefined {
+  if (!target) {
+    return undefined;
+  }
+
+  return imageParts?.find((imagePart) => {
+    if (!imagePart.sourceUrl) {
+      return false;
+    }
+
+    return localFileTargetFromHref(imagePart.sourceUrl)?.path === target.path;
+  });
 }
 
 function isMarkdownFilePath(filePath: string): boolean {

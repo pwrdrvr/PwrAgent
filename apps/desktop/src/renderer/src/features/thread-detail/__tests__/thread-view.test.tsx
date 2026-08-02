@@ -2050,12 +2050,17 @@ describe("ThreadView", () => {
             type: "message",
             id: "message-image-1",
             role: "user",
-            text: "",
+            text: "Open [Transcript screenshot](/Users/huntharo/.codex/worktrees/pwrsnap/latest.png).",
             parts: [
+              {
+                type: "text",
+                text: "Open [Transcript screenshot](/Users/huntharo/.codex/worktrees/pwrsnap/latest.png).",
+              },
               {
                 type: "image",
                 url: dataUrl,
-                alt: "Transcript screenshot"
+                alt: "Transcript screenshot",
+                sourceUrl: "file:///Users/huntharo/.codex/worktrees/pwrsnap/latest.png",
               }
             ]
           }
@@ -2066,7 +2071,7 @@ describe("ThreadView", () => {
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Expand transcript image 1" }));
+    fireEvent.click(screen.getByRole("button", { name: "Expand transcript image 2" }));
 
     const dialog = screen.getByRole("dialog", { name: "Expanded image" });
     expect(dialog).toBeInTheDocument();
@@ -2080,6 +2085,10 @@ describe("ThreadView", () => {
     expect(
       screen.queryByRole("dialog", { name: "Expanded image" })
     ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("link", { name: "Transcript screenshot" }));
+
+    expect(screen.getByRole("dialog", { name: "Expanded image" })).toBeInTheDocument();
   });
 
   it("clears an expanded transcript image when the selected thread changes", () => {

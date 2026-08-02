@@ -49,6 +49,7 @@ import type {
   LinkedDirectorySummary,
 } from "@pwragent/shared";
 import { getMainLogger } from "../log";
+import { isPwrSnapSignedMediaUrl } from "../pwrsnap-media-url";
 import {
   buildPwrAgentChildProcessEnv,
   ELECTRON_RENDERER_URL_ENV,
@@ -209,6 +210,17 @@ const SUPPORTED_CODEX_MODEL_ORDER = [
 ] as const;
 const SUPPORTED_CODEX_MODELS = new Set<string>(SUPPORTED_CODEX_MODEL_ORDER);
 const MAX_INLINE_FILE_DIFF_CHARS = 512 * 1024;
+const MAX_MCP_RESOURCE_IMAGE_BASE64_CHARS = Math.ceil((16 * 1024 * 1024) / 3) * 4;
+const MCP_RESOURCE_IMAGE_MIME_TYPES = new Set([
+  "image/avif",
+  "image/bmp",
+  "image/gif",
+  "image/jpeg",
+  "image/jpg",
+  "image/png",
+  "image/webp",
+]);
+const BASE64_IMAGE_BLOB_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/;
 
 type CodexReviewStartPayload = CodexReviewStartParams & {
   cwd?: string;
@@ -3392,6 +3404,321 @@ function extractFunctionCallOutputFromReplayItem(
   return undefined;
 }
 
+function extractCustomToolOutputImagePartsFromReplayItem(
+  item: Record<string, unknown>
+): AppServerThreadImagePart[] {
+  const candidates = [item];
+  for (const key of ["payload", "item", "responseItem", "response_item"]) {
+    const nestedItem = asRecord(item[key]);
+    if (nestedItem) {
+      candidates.push(nestedItem);
+    }
+  }
+
+  return dedupeImageParts(
+    candidates.flatMap((candidate) => {
+      if (normalizeItemType(pickString(candidate, ["type"])) !== "customtoolcalloutput") {
+        return [];
+      }
+
+      return extractCustomToolOutputImageParts(candidate.output);
+    }),
+  );
+}
+
+function extractCustomToolOutputImageParts(value: unknown): AppServerThreadImagePart[] {
+  const parsed = parseStructuredValue(value);
+  const parts = [
+    ...extractStructuredMessageParts(value),
+    ...extractImagePartsFromValue(value),
+    ...(parsed === value
+      ? []
+      : [
+          ...extractStructuredMessageParts(parsed),
+          ...extractImagePartsFromValue(parsed),
+        ]),
+  ];
+
+  return parts.filter(
+    (part): part is AppServerThreadImagePart => part.type === "image",
+  );
+}
+
+function extractMcpToolResultImagePartsFromReplayItem(
+  item: Record<string, unknown>
+): AppServerThreadImagePart[] {
+  const candidates = [item];
+  for (const key of ["payload", "item", "responseItem", "response_item"]) {
+    const nestedItem = asRecord(item[key]);
+    if (nestedItem) {
+      candidates.push(nestedItem);
+    }
+  }
+
+  return dedupeImageParts(
+    candidates.flatMap((candidate) => {
+      if (normalizeItemType(pickString(candidate, ["type"])) !== "mcptoolcall") {
+        return [];
+      }
+
+      const result = asRecord(candidate.result);
+      const structuredContent =
+        asRecord(result?.structuredContent) ??
+        asRecord(result?.structured_content);
+      const structuredImageParts = structuredContent
+        ? extractStructuredMessageParts(structuredContent).filter(
+            (part): part is AppServerThreadImagePart => part.type === "image",
+          )
+        : [];
+      const signedImagePart = structuredContent
+        ? buildMcpSignedImagePart(structuredContent)
+        : undefined;
+      const resourceLinkImageParts = extractMcpResourceLinkImageParts(result?.content);
+      const resourceImageParts = extractMcpResourceImageParts(result?.content);
+      return [
+        ...structuredImageParts,
+        ...resourceLinkImageParts,
+        ...(signedImagePart ? [signedImagePart] : []),
+        ...resourceImageParts,
+      ];
+    }),
+  );
+}
+
+function buildMcpSignedImagePart(
+  structuredContent: Record<string, unknown>,
+): AppServerThreadImagePart | undefined {
+  const signedUrl = pickString(structuredContent, ["signedUrl", "signed_url"]);
+  const mimeType = pickString(structuredContent, ["mimeType", "mime_type"]);
+  if (
+    !signedUrl
+    || !mimeType?.toLowerCase().startsWith("image/")
+    || !isPwrSnapSignedMediaUrl(signedUrl)
+  ) {
+    return undefined;
+  }
+
+  const imagePart = buildImagePartFromUrl(signedUrl);
+  if (!imagePart) {
+    return undefined;
+  }
+
+  const alt = pickString(structuredContent, ["alt", "altText", "alt_text", "title", "name"]);
+  if (alt) {
+    imagePart.alt = alt;
+  }
+  return imagePart;
+}
+
+function extractMcpResourceLinkImageParts(content: unknown): AppServerThreadImagePart[] {
+  const contentBlocks = Array.isArray(content) ? content : [content];
+  return dedupeImageParts(
+    contentBlocks.flatMap((contentBlock) => {
+      const resourceLink = asRecord(contentBlock);
+      if (!resourceLink) {
+        return [];
+      }
+      const type = normalizeItemType(
+        pickString(resourceLink, ["type", "contentType", "content_type"]),
+      );
+      const uri = pickString(resourceLink, ["uri", "url"]);
+      const mimeType = pickString(resourceLink, ["mimeType", "mime_type"]);
+      if (
+        type !== "resourcelink"
+        || !uri
+        || !mimeType?.toLowerCase().startsWith("image/")
+        || !isPwrSnapSignedMediaUrl(uri)
+      ) {
+        return [];
+      }
+
+      const imagePart = buildImagePartFromUrl(uri);
+      if (!imagePart) {
+        return [];
+      }
+
+      const alt = pickString(resourceLink, [
+        "name",
+        "title",
+        "alt",
+        "altText",
+        "alt_text",
+      ]);
+      return [{ ...imagePart, ...(alt ? { alt } : {}) }];
+    }),
+  );
+}
+
+function extractMcpResourceImageParts(content: unknown): AppServerThreadImagePart[] {
+  const contentBlocks = Array.isArray(content) ? content : [content];
+  return dedupeImageParts(
+    contentBlocks.flatMap((contentBlock) => {
+      const contentRecord = asRecord(contentBlock);
+      const parsedText = parseStructuredValue(
+        typeof contentBlock === "string"
+          ? contentBlock
+          : pickString(contentRecord ?? {}, ["text"]),
+      );
+      const resourceCandidates = [
+        contentRecord,
+        asRecord(contentRecord?.resource),
+        asRecord(parsedText),
+      ];
+
+      return resourceCandidates.flatMap((candidate) => {
+        if (!candidate) {
+          return [];
+        }
+
+        const resources = Array.isArray(candidate.contents)
+          ? candidate.contents
+          : [candidate];
+        return resources.flatMap((resource) => {
+          const imagePart = buildMcpResourceImagePart(asRecord(resource) ?? undefined);
+          return imagePart ? [imagePart] : [];
+        });
+      });
+    }),
+  );
+}
+
+function buildMcpResourceImagePart(
+  resource: Record<string, unknown> | undefined,
+): AppServerThreadImagePart | undefined {
+  const mimeType = pickString(resource ?? {}, ["mimeType", "mime_type"])
+    ?.trim()
+    .toLowerCase();
+  const blob = pickString(resource ?? {}, ["blob"]);
+  if (
+    !mimeType
+    || !MCP_RESOURCE_IMAGE_MIME_TYPES.has(mimeType)
+    || !blob
+    || blob.length > MAX_MCP_RESOURCE_IMAGE_BASE64_CHARS
+    || blob.length % 4 === 1
+    || !BASE64_IMAGE_BLOB_PATTERN.test(blob)
+  ) {
+    return undefined;
+  }
+
+  return {
+    type: "image",
+    url: `data:${mimeType};base64,${blob}`,
+  };
+}
+
+function dedupeImageParts(
+  imageParts: AppServerThreadImagePart[]
+): AppServerThreadImagePart[] {
+  const seenUrls = new Set<string>();
+  return imageParts.filter((imagePart) => {
+    if (seenUrls.has(imagePart.url)) {
+      return false;
+    }
+    seenUrls.add(imagePart.url);
+    return true;
+  });
+}
+
+function appendImagePartsToMessage<T extends {
+  parts?: AppServerThreadMessagePart[];
+  text: string;
+}>(
+  message: T,
+  imageParts: AppServerThreadImagePart[],
+): T {
+  const existingImageUrls = new Set(
+    (message.parts ?? [])
+      .filter((part): part is AppServerThreadImagePart => part.type === "image")
+      .map((part) => part.url),
+  );
+  const missingImageParts = imageParts.filter((imagePart) => {
+    if (existingImageUrls.has(imagePart.url)) {
+      return false;
+    }
+    existingImageUrls.add(imagePart.url);
+    return true;
+  });
+  if (missingImageParts.length === 0) {
+    return message;
+  }
+
+  return {
+    ...message,
+    parts: [
+      ...(message.parts ?? (message.text ? [{ type: "text", text: message.text }] : [])),
+      ...missingImageParts,
+    ],
+  };
+}
+
+function attachCustomToolOutputImagesToTurn(params: {
+  createdAt?: number;
+  entries: AppServerThreadEntry[];
+  imageParts: AppServerThreadImagePart[];
+  startIndex: number;
+  turn?: AppServerThreadTurnMetadata;
+}): void {
+  if (params.imageParts.length === 0) {
+    return;
+  }
+
+  let fallbackAssistantIndex: number | undefined;
+  for (let index = params.entries.length - 1; index >= params.startIndex; index -= 1) {
+    const entry = params.entries[index];
+    if (entry?.type !== "message" || entry.role !== "assistant") {
+      continue;
+    }
+    if (entry.phase === "final") {
+      params.entries[index] = appendImagePartsToMessage(entry, params.imageParts);
+      return;
+    }
+    fallbackAssistantIndex ??= index;
+  }
+
+  if (fallbackAssistantIndex !== undefined) {
+    const entry = params.entries[fallbackAssistantIndex];
+    if (entry?.type === "message") {
+      params.entries[fallbackAssistantIndex] = appendImagePartsToMessage(entry, params.imageParts);
+    }
+    return;
+  }
+
+  params.entries.push({
+    type: "message",
+    id: `tool-output-images-${params.turn?.id ?? params.entries.length + 1}`,
+    role: "assistant",
+    text: "",
+    parts: params.imageParts,
+    createdAt: params.createdAt,
+    ...(params.turn ? { turn: params.turn } : {}),
+  });
+}
+
+function mergeEntryImagePartsIntoReplayMessages(
+  messages: AppServerThreadReplay["messages"],
+  entries: AppServerThreadEntry[],
+): AppServerThreadReplay["messages"] {
+  const entriesById = new Map(
+    entries.flatMap((entry) =>
+      entry.type === "message" && entry.parts?.some((part) => part.type === "image")
+        ? [[entry.id, entry] as const]
+        : [],
+    ),
+  );
+
+  return messages.map((message) => {
+    const entry = entriesById.get(message.id);
+    if (!entry || entry.role !== message.role) {
+      return message;
+    }
+
+    const imageParts = entry.parts?.filter(
+      (part): part is AppServerThreadImagePart => part.type === "image",
+    ) ?? [];
+    return appendImagePartsToMessage(message, imageParts);
+  });
+}
+
 function attachFunctionCallOutput(
   items: Record<string, unknown>[],
   output: { callId: string; output: string }
@@ -4115,6 +4442,7 @@ function extractThreadEntries(
   const entries: AppServerThreadEntry[] = [];
 
   for (const turn of turns) {
+    const turnStartIndex = entries.length;
     const turnMetadata = extractTurnMetadata(turn);
     const turnPricingContext = extractTokenUsagePricingContext(turn);
     const createdAt = normalizeEpochTimestamp(
@@ -4125,6 +4453,12 @@ function extractThreadEntries(
           .map((entry) => asRecord(entry))
           .filter((entry): entry is Record<string, unknown> => entry !== null)
       : [];
+    const assistantImageParts = dedupeImageParts(
+      rawItems.flatMap((item) => [
+        ...extractCustomToolOutputImagePartsFromReplayItem(item),
+        ...extractMcpToolResultImagePartsFromReplayItem(item),
+      ]),
+    );
     const assistantReviewTexts = collectAssistantReviewTexts(rawItems);
     const suppressedAssistantTexts = collectReviewSuppressionTexts(rawItems);
     for (const text of assistantReviewTexts) {
@@ -4242,6 +4576,13 @@ function extractThreadEntries(
     }
 
     flushActivityItems();
+    attachCustomToolOutputImagesToTurn({
+      createdAt: turnMetadata?.completedAt ?? createdAt,
+      entries,
+      imageParts: assistantImageParts,
+      startIndex: turnStartIndex,
+      turn: turnMetadata,
+    });
   }
 
   return entries;
@@ -4275,7 +4616,10 @@ export function extractThreadReplayFromReadResult(
   options: { threadId?: string } = {}
 ): AppServerThreadReplay {
   const entries = extractThreadEntries(value, options);
-  const messages = extractConversationMessages(value);
+  const messages = mergeEntryImagePartsIntoReplayMessages(
+    extractConversationMessages(value),
+    entries,
+  );
   const agentName = extractCodexNativeAgentName(value);
   let lastUserMessage: string | undefined;
   let lastAssistantMessage: string | undefined;

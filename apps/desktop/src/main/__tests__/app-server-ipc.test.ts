@@ -79,6 +79,7 @@ const readThread = vi.fn(async ({ threadId }: { threadId: string }) => ({
     hasPreviousPage: false,
   },
 }));
+const getThreadTranscriptImageRoots = vi.fn(async () => [] as string[]);
 const archiveThread = vi.fn(async (request: ArchiveThreadRequest) => ({
   backend: request.backend ?? "codex",
   threadId: request.threadId,
@@ -558,6 +559,7 @@ vi.mock("../app-server/backend-registry", () => ({
     renameThread,
     listThreads,
     readThread,
+    getThreadTranscriptImageRoots,
     readDirectoryStatuses,
     readDirectoryStatusEntries,
     readWorktreeWorkingStateEntries,
@@ -609,6 +611,7 @@ describe("app server ipc", () => {
     renameThread.mockClear();
     listThreads.mockClear();
     readThread.mockClear();
+    getThreadTranscriptImageRoots.mockClear();
     reconcileNavigationSnapshot.mockClear();
     rememberCompleteNavigationSnapshot.mockClear();
     readDirectoryStatuses.mockClear();
@@ -1219,6 +1222,7 @@ describe("app server ipc", () => {
       limit: undefined,
       viewOnly: true,
     });
+    expect(getThreadTranscriptImageRoots).not.toHaveBeenCalled();
   });
 
   it("strips readThread file diffs behind fetchable refs before crossing IPC", async () => {
