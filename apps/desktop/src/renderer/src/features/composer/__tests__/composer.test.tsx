@@ -16,6 +16,11 @@ import {
 import type { JSONContent } from "@tiptap/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { DesktopApi } from "../../../lib/desktop-api";
+import {
+  AGENT_THREAD_CAPABILITIES,
+  CODEX_AGENT_THREAD_CREATION_NOTE,
+  DEFAULT_DESKTOP_AGENT_THREAD,
+} from "../../../lib/agent-thread";
 import { normalizeImageFile } from "../../../lib/image-normalization";
 import { ThreadLinkProvider } from "../../../lib/thread-links";
 import { Composer } from "../Composer";
@@ -669,6 +674,128 @@ describe("Composer", () => {
       "data-tooltip",
       "Auto-fix PR — starts when a PR for this workspace is linked",
     );
+  });
+
+  it("places the Agent thread menu after the reference picker and persists its choice", async () => {
+    const onUpdateLaunchpad = vi.fn(async () => undefined);
+
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        desktopApi={{ pickFileFromDisk: vi.fn() }}
+        disabled={false}
+        launchpad={{
+          directoryKey: "directory:/repo",
+          directoryKind: "directory",
+          directoryLabel: "Repo",
+          directoryPath: "/repo",
+          backend: "codex",
+          executionMode: "default",
+          prompt: "",
+          workMode: "local",
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+        onUpdateLaunchpad={onUpdateLaunchpad}
+        skills={[]}
+      />,
+    );
+
+    const addReference = screen.getByRole("button", { name: "Add reference" });
+    const threadOptions = screen.getByRole("button", { name: "Thread options" });
+    expect(
+      addReference.compareDocumentPosition(threadOptions) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(threadOptions).toHaveAttribute(
+      "data-tooltip",
+      AGENT_THREAD_CAPABILITIES,
+    );
+
+    fireEvent.click(threadOptions);
+    const agentThread = screen.getByRole("menuitemcheckbox", {
+      name: /Agent thread/,
+    });
+    expect(agentThread).toHaveAttribute("aria-checked", "false");
+    expect(agentThread).toHaveTextContent(AGENT_THREAD_CAPABILITIES);
+
+    await act(async () => {
+      fireEvent.click(agentThread);
+      await Promise.resolve();
+    });
+
+    expect(onUpdateLaunchpad).toHaveBeenCalledWith("directory:/repo", {
+      agent: DEFAULT_DESKTOP_AGENT_THREAD,
+    });
+  });
+
+  it("explains that an existing Codex thread cannot be converted into an Agent", () => {
+    const setThreadAgent = vi.fn();
+
+    render(
+      <Composer
+        desktopApi={{ setThreadAgent }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Existing Codex thread",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Thread options" }));
+    const agentThread = screen.getByRole("menuitemcheckbox", {
+      name: /Agent thread/,
+    });
+    expect(agentThread).toBeDisabled();
+    expect(agentThread).toHaveTextContent(CODEX_AGENT_THREAD_CREATION_NOTE);
+
+    fireEvent.click(agentThread);
+    expect(setThreadAgent).not.toHaveBeenCalled();
+  });
+
+  it("marks an existing non-Codex thread as an Agent from the composer menu", async () => {
+    const setThreadAgent = vi.fn(async () => ({
+      backend: "acp:gemini" as const,
+      threadId: "thread-1",
+    }));
+    const onRefreshNavigation = vi.fn(async () => undefined);
+
+    render(
+      <Composer
+        desktopApi={{ setThreadAgent }}
+        disabled={false}
+        onRefreshNavigation={onRefreshNavigation}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Existing Gemini thread",
+          titleSource: "explicit",
+          source: "acp:gemini",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Thread options" }));
+    fireEvent.click(
+      screen.getByRole("menuitemcheckbox", { name: /Agent thread/ }),
+    );
+
+    await waitFor(() => {
+      expect(setThreadAgent).toHaveBeenCalledWith({
+        backend: "acp:gemini",
+        threadId: "thread-1",
+        agent: DEFAULT_DESKTOP_AGENT_THREAD,
+      });
+    });
+    expect(onRefreshNavigation).toHaveBeenCalledOnce();
   });
 
   it("shows a cancellable on-deck countdown for a scheduled PR repair", async () => {

@@ -13280,6 +13280,10 @@ a.transcript-message__messaging-origin:focus-visible {
   margin: 3px 0 0;
 }
 
+.context-list__agent-note {
+  line-height: 1.4;
+}
+
 .context-list__label {
   display: inline-flex;
   align-items: center;
@@ -16033,6 +16037,50 @@ a.transcript-message__messaging-origin:focus-visible {
   height: 1px;
   margin: 6px 2px;
   background: var(--border-subtle);
+}
+
+.composer-thread-options {
+  position: relative;
+  display: inline-flex;
+}
+
+.composer-thread-options__menu {
+  min-width: min(360px, calc(100vw - 32px));
+}
+
+.composer-thread-options__option {
+  align-items: flex-start;
+}
+
+.composer-thread-options__copy {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.composer-thread-options__label {
+  font-weight: 650;
+}
+
+.composer-thread-options__description,
+.composer-thread-options__note {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.composer-thread-options__note {
+  margin-top: 3px;
+  color: var(--text-muted);
+}
+
+.composer-thread-options__option:hover:not(:disabled)
+  .composer-thread-options__description,
+.composer-thread-options__option:focus-visible:not(:disabled)
+  .composer-thread-options__description {
+  color: inherit;
 }
 
 /* ============================================================

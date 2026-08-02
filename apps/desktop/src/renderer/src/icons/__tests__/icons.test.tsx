@@ -11,6 +11,7 @@ import {
   FileCodeIcon,
   FolderIcon,
   MattermostIcon,
+  MoreVerticalIcon,
   NewThreadIcon,
   PinIcon,
   PopoutIcon,
@@ -42,6 +43,7 @@ const ALL_ICONS = [
   ["ChevronRightIcon", ChevronRightIcon],
   ["PinIcon", PinIcon],
   ["PopoutIcon", PopoutIcon],
+  ["MoreVerticalIcon", MoreVerticalIcon],
 ] as const;
 
 describe("icon library", () => {

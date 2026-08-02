@@ -8,6 +8,7 @@ import type {
   NavigationThreadSummary,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
+import { CODEX_AGENT_THREAD_CREATION_NOTE } from "../../../lib/agent-thread";
 import { AutomationsScreen } from "../AutomationsScreen";
 
 const thread: NavigationThreadSummary = {
@@ -155,14 +156,19 @@ describe("AutomationsScreen", () => {
   });
 
   it("promotes a regular thread to an Agent before creating an automation", async () => {
+    const promotableThread: NavigationThreadSummary = {
+      ...ordinaryThread,
+      source: "acp:gemini",
+    };
     const promotedAutomation: AutomationDetail = {
       ...automation,
+      backend: "acp:gemini",
       id: "automation-promoted",
       threadId: "ordinary-thread",
     };
     const createAutomation = vi.fn(async () => ({ automation: promotedAutomation }));
     const setThreadAgent = vi.fn(async () => ({
-      backend: "codex" as const,
+      backend: "acp:gemini" as const,
       threadId: "ordinary-thread",
       agent: {
         name: "Slack Agent",
@@ -185,7 +191,7 @@ describe("AutomationsScreen", () => {
     render(
       <AutomationsScreen
         desktopApi={desktopApi}
-        threads={[thread, ordinaryThread]}
+        threads={[thread, promotableThread]}
         onClose={() => undefined}
         onRefreshNavigation={onRefreshNavigation}
       />,
@@ -204,7 +210,7 @@ describe("AutomationsScreen", () => {
     await waitFor(() => expect(setThreadAgent).toHaveBeenCalledTimes(1));
     expect(setThreadAgent).toHaveBeenCalledWith({
       agent: { name: "Slack helper" },
-      backend: "codex",
+      backend: "acp:gemini",
       threadId: "ordinary-thread",
     });
     expect(within(editor).getByLabelText("Agent")).toHaveTextContent("Slack Agent");
@@ -217,11 +223,39 @@ describe("AutomationsScreen", () => {
     await waitFor(() => expect(createAutomation).toHaveBeenCalledTimes(1));
     expect(createAutomation).toHaveBeenCalledWith(
       expect.objectContaining({
-        backend: "codex",
+        backend: "acp:gemini",
         threadId: "ordinary-thread",
       }),
     );
     expect(onRefreshNavigation).toHaveBeenCalled();
+  });
+
+  it("does not offer existing Codex threads for Agent promotion", async () => {
+    const setThreadAgent = vi.fn();
+    const desktopApi: DesktopApi = {
+      listAutomations: vi.fn(async () => ({ automations: [] })),
+      onAgentEvent: () => () => undefined,
+      setThreadAgent,
+    };
+
+    render(
+      <AutomationsScreen
+        desktopApi={desktopApi}
+        threads={[thread, ordinaryThread]}
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "New Automation" }));
+    const editor = screen.getByLabelText("Name").closest("form") as HTMLElement;
+    fireEvent.click(within(editor).getByLabelText("Agent"));
+    fireEvent.click(within(editor).getByRole("tab", { name: "Threads" }));
+
+    expect(screen.getByText(CODEX_AGENT_THREAD_CREATION_NOTE)).toBeInTheDocument();
+    expect(
+      within(editor).queryByRole("option", { name: /Slack helper/ }),
+    ).not.toBeInTheDocument();
+    expect(setThreadAgent).not.toHaveBeenCalled();
   });
 
   it("shows rollout replay details for an automation run", async () => {

@@ -10018,6 +10018,48 @@ command = "pnpm grok"
     await registry.close();
   });
 
+  it("keeps a selected Agent designation when reopening a blank launchpad", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/start"] },
+      }),
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    await registry.ensureDirectoryLaunchpad({
+      directoryKey: "directory:/repo-a",
+      directoryKind: "directory",
+      directoryLabel: "Repo A",
+      directoryPath: "/repo-a",
+    });
+    await registry.updateDirectoryLaunchpad({
+      directoryKey: "directory:/repo-a",
+      patch: {
+        agent: {
+          name: "PwrAgent Agent",
+          instructions: "Manage PwrAgent threads.",
+        },
+      },
+    });
+
+    const reopened = await registry.ensureDirectoryLaunchpad({
+      directoryKey: "directory:/repo-a",
+      directoryKind: "directory",
+      directoryLabel: "Repo A",
+      directoryPath: "/repo-a",
+    });
+
+    expect(reopened.launchpad.agent).toEqual({
+      name: "PwrAgent Agent",
+      instructions: "Manage PwrAgent threads.",
+    });
+
+    await registry.close();
+  });
+
   it("keeps workspace launchpads in workspace mode even when directory drafts prefer worktrees", async () => {
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({
@@ -12171,7 +12213,7 @@ script = "printf setup-output"
     await registry.close();
   });
 
-  it("passes Agent metadata through materialized launchpad starts", async () => {
+  it("passes launchpad-selected Agent metadata through materialized starts", async () => {
     const overlayStore = createOverlayStoreMock();
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start"] },
@@ -12193,10 +12235,6 @@ script = "printf setup-output"
 
     const response = await registry.materializeDirectoryLaunchpad({
       directoryKey: "directory:/repo/app",
-      agent: {
-        name: "Messaging Agent",
-        instructions: "Keep shared messaging context.",
-      },
       launchpad: {
         directoryKey: "directory:/repo/app",
         directoryKind: "directory",
@@ -12204,6 +12242,10 @@ script = "printf setup-output"
         directoryPath: "/repo/app",
         backend: "codex",
         executionMode: "default",
+        agent: {
+          name: "PwrAgent Agent",
+          instructions: "Manage PwrAgent threads.",
+        },
         prompt: "",
         workMode: "local",
         createdAt: 1_000,
@@ -12218,8 +12260,8 @@ script = "printf setup-output"
       }),
     ).resolves.toMatchObject({
       agent: {
-        name: "Messaging Agent",
-        instructions: "Keep shared messaging context.",
+        name: "PwrAgent Agent",
+        instructions: "Manage PwrAgent threads.",
       },
     });
 

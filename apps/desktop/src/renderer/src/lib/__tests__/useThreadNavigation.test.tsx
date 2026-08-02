@@ -2363,6 +2363,10 @@ describe("useThreadNavigation", () => {
             directoryPath: "/Users/huntharo/github/PwrAgent",
             backend: "codex" as const,
             executionMode: "default" as const,
+            agent: {
+              name: "PwrAgent Agent",
+              instructions: "Manage PwrAgent threads.",
+            },
             prompt: "",
             workMode: "worktree" as const,
             branchName: "main",
@@ -2415,12 +2419,22 @@ describe("useThreadNavigation", () => {
       directoryKey: "directory:/Users/huntharo/github/PwrAgent",
       launchpad: expect.objectContaining({
         directoryKey: "directory:/Users/huntharo/github/PwrAgent",
+        agent: {
+          name: "PwrAgent Agent",
+          instructions: "Manage PwrAgent threads.",
+        },
       }),
       input: undefined,
       collaborationMode: undefined,
       reviewTarget: undefined,
     });
     expect(result.current.selectedThread?.id).toBe("thread-new");
+    expect(result.current.selectedThread?.title).toBe("PwrAgent Agent");
+    expect(result.current.selectedThread?.agent).toMatchObject({
+      name: "PwrAgent Agent",
+      instructionLineCount: 1,
+      instructionsTooLong: false,
+    });
     expect(result.current.selectedThread?.gitBranch).toBe("HEAD");
     expect(result.current.selectedThread?.observedGitBranch).toBe("HEAD");
     expect(result.current.directories[0]?.threadKeys).toEqual(["codex:thread-new"]);

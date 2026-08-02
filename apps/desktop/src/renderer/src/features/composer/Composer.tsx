@@ -56,6 +56,7 @@ import {
   FileCodeIcon,
   FolderIcon,
   LightningIcon,
+  MoreVerticalIcon,
   PlanIcon,
   PlayIcon,
   PlusIcon,
@@ -87,6 +88,12 @@ import {
 } from "../../lib/directory-references";
 import { expandTildePath } from "../../lib/tildify-path";
 import { normalizeImageFile } from "../../lib/image-normalization";
+import {
+  AGENT_THREAD_CAPABILITIES,
+  CODEX_AGENT_THREAD_CREATION_NOTE,
+  canChangeExistingThreadAgentDesignation,
+  createDesktopAgentThread,
+} from "../../lib/agent-thread";
 import {
   resolveThreadHref,
   resolveThreadIdText,
@@ -219,6 +226,7 @@ type ComposerProps = {
         | "directoryPath"
         | "imageAttachments"
         | "fileAttachments"
+        | "agent"
       >
     >,
     options?: { stickySettingsChanged?: boolean }
@@ -1672,6 +1680,78 @@ function ComposerDropdown(props: {
   );
 }
 
+function ComposerThreadOptionsMenu(props: {
+  agentThread: boolean;
+  disabled?: boolean;
+  existingCodexThread?: boolean;
+  onAgentThreadChange?: (agentThread: boolean) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const menuId = useId();
+  const ref = useDismissableMenu<HTMLDivElement>(open, () => setOpen(false));
+  const agentThreadChangeDisabled =
+    props.disabled ||
+    props.existingCodexThread ||
+    !props.onAgentThreadChange;
+
+  return (
+    <div className="composer-thread-options" ref={ref}>
+      <button
+        aria-controls={open ? menuId : undefined}
+        aria-expanded={open}
+        aria-haspopup="menu"
+        aria-label="Thread options"
+        className={`composer__toggle tooltip-target${
+          props.agentThread ? " is-active" : ""
+        }`}
+        // Omit the CSS tooltip while the menu is open so it does not cover
+        // the Agent explanation.
+        data-tooltip={open ? undefined : AGENT_THREAD_CAPABILITIES}
+        disabled={props.disabled}
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+      >
+        <MoreVerticalIcon size={15} aria-hidden="true" />
+      </button>
+      {open ? (
+        <div
+          aria-label="Thread options"
+          className="composer-dropdown__menu composer-thread-options__menu"
+          id={menuId}
+          role="menu"
+        >
+          <button
+            aria-checked={props.agentThread}
+            className="composer-dropdown__option composer-thread-options__option"
+            disabled={agentThreadChangeDisabled}
+            role="menuitemcheckbox"
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              props.onAgentThreadChange?.(!props.agentThread);
+            }}
+          >
+            <span aria-hidden="true" className="composer-dropdown__check">
+              {props.agentThread ? <CheckIcon size={13} /> : null}
+            </span>
+            <span className="composer-thread-options__copy">
+              <span className="composer-thread-options__label">Agent thread</span>
+              <span className="composer-thread-options__description">
+                {AGENT_THREAD_CAPABILITIES}
+              </span>
+              {props.existingCodexThread ? (
+                <span className="composer-thread-options__note">
+                  {CODEX_AGENT_THREAD_CREATION_NOTE}
+                </span>
+              ) : null}
+            </span>
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 type LaunchpadBranchOption = {
   name: string;
   /** Last commit time on the branch tip, in unix seconds. */
@@ -2631,6 +2711,8 @@ export function Composer(props: ComposerProps) {
     props.activeTurnId
   );
   const [sendError, setSendError] = useState<string>();
+  const [agentThreadError, setAgentThreadError] = useState<string>();
+  const [agentThreadSaving, setAgentThreadSaving] = useState(false);
   const [applicationOpenError, setApplicationOpenError] = useState<string>();
   const [threadEnvActionStarting, setThreadEnvActionStartingState] =
     useState<ThreadEnvActionStartingKey>();
@@ -2674,6 +2756,11 @@ export function Composer(props: ComposerProps) {
   const [activeSlashIndex, setActiveSlashIndex] = useState(0);
   const [activeDirectoryRefIndex, setActiveDirectoryRefIndex] = useState(0);
   const [dismissedAutocompleteKey, setDismissedAutocompleteKey] = useState<string>();
+
+  useEffect(() => {
+    setAgentThreadError(undefined);
+    setAgentThreadSaving(false);
+  }, [composerScopeKey]);
 
   const setThreadEnvActionStarting = (
     next: ThreadEnvActionStartingKey | undefined,
@@ -6399,6 +6486,50 @@ export function Composer(props: ComposerProps) {
     }, 0);
   };
 
+  const changeAgentThread = async (agentThread: boolean): Promise<void> => {
+    if (props.launchpad) {
+      if (!props.onUpdateLaunchpad) {
+        return;
+      }
+      setAgentThreadSaving(true);
+      setAgentThreadError(undefined);
+      try {
+        await props.onUpdateLaunchpad(props.launchpad.directoryKey, {
+          agent: agentThread ? createDesktopAgentThread() : undefined,
+        });
+      } catch (error) {
+        setAgentThreadError(error instanceof Error ? error.message : String(error));
+      } finally {
+        setAgentThreadSaving(false);
+      }
+      return;
+    }
+
+    const thread = props.thread;
+    if (
+      !thread ||
+      !canChangeExistingThreadAgentDesignation(thread) ||
+      !props.desktopApi?.setThreadAgent
+    ) {
+      return;
+    }
+
+    setAgentThreadSaving(true);
+    setAgentThreadError(undefined);
+    try {
+      await props.desktopApi.setThreadAgent({
+        backend: thread.source,
+        threadId: thread.id,
+        agent: agentThread ? createDesktopAgentThread() : null,
+      });
+      await props.onRefreshNavigation?.();
+    } catch (error) {
+      setAgentThreadError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setAgentThreadSaving(false);
+    }
+  };
+
   useEffect(() => {
     const launchpad = props.launchpad;
     const backend = launchpad?.backend;
@@ -8897,6 +9028,29 @@ export function Composer(props: ComposerProps) {
               </button>
             </ReferencePicker>
           ) : null}
+          <ComposerThreadOptionsMenu
+            agentThread={Boolean(props.launchpad?.agent ?? props.thread?.agent)}
+            disabled={launchpadSubmitting || agentThreadSaving}
+            existingCodexThread={
+              props.thread !== undefined &&
+              !canChangeExistingThreadAgentDesignation(props.thread)
+            }
+            onAgentThreadChange={
+              props.launchpad
+                ? props.onUpdateLaunchpad
+                  ? (agentThread) => {
+                      void changeAgentThread(agentThread);
+                    }
+                  : undefined
+                : props.thread &&
+                    canChangeExistingThreadAgentDesignation(props.thread) &&
+                    props.desktopApi?.setThreadAgent
+                  ? (agentThread) => {
+                      void changeAgentThread(agentThread);
+                    }
+                  : undefined
+            }
+          />
         </div>
       ) : null}
 
@@ -8916,6 +9070,11 @@ export function Composer(props: ComposerProps) {
         />
       ) : null}
       {sendError ? <p className="composer__meta composer__meta--error">{sendError}</p> : null}
+      {agentThreadError ? (
+        <p className="composer__meta composer__meta--error" role="alert">
+          {agentThreadError}
+        </p>
+      ) : null}
       {applicationOpenError ? (
         <p className="composer__meta composer__meta--error">{applicationOpenError}</p>
       ) : null}

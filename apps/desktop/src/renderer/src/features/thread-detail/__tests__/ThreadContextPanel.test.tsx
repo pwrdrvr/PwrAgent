@@ -20,6 +20,10 @@ import type {
 import { ThreadContextPanel } from "../ThreadContextPanel";
 import type { ContextTabId } from "../context-panels/context-tab";
 import { collectEditedFileGroups } from "../edited-file-groups";
+import {
+  CODEX_AGENT_THREAD_CREATION_NOTE,
+  DEFAULT_DESKTOP_AGENT_THREAD,
+} from "../../../lib/agent-thread";
 
 const HOVER_RAIL_REVEAL_DELAY_MS = 350;
 
@@ -2742,12 +2746,45 @@ describe("ThreadContextPanel", () => {
     expect(screen.getByText(/Spark Weekly limit: 100% left/)).toBeInTheDocument();
   });
 
-  it("marks an ordinary thread as an Agent from the context panel", async () => {
+  it("explains that existing Codex threads cannot be converted into Agents", () => {
+    const setThreadAgent = vi.fn();
+
+    renderPanel({
+      desktopApi: { setThreadAgent },
+      pinned: true,
+    });
+
+    expect(screen.getByText(CODEX_AGENT_THREAD_CREATION_NOTE)).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Mark as Agent" }),
+    ).not.toBeInTheDocument();
+    expect(setThreadAgent).not.toHaveBeenCalled();
+  });
+
+  it("keeps existing Codex Agent metadata read-only", () => {
+    renderPanel({
+      pinned: true,
+      thread: {
+        ...baseThread,
+        agent: {
+          name: "Existing Agent",
+          instructionLineCount: 0,
+          instructionsTooLong: false,
+          updatedAt: 1,
+        },
+      },
+    });
+
+    expect(screen.getByText(CODEX_AGENT_THREAD_CREATION_NOTE)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Clear" })).not.toBeInTheDocument();
+  });
+
+  it("marks an ordinary non-Codex thread as an Agent from the context panel", async () => {
     const setThreadAgent = vi.fn(async () => ({
-      backend: "codex" as const,
+      backend: "acp:gemini" as const,
       threadId: "thread-1",
       agent: {
-        name: "Thread",
+        name: DEFAULT_DESKTOP_AGENT_THREAD.name,
         instructionLineCount: 0,
         instructionsTooLong: false,
         updatedAt: 1,
@@ -2759,24 +2796,26 @@ describe("ThreadContextPanel", () => {
       desktopApi: { setThreadAgent },
       pinned: true,
       onRefreshNavigation,
+      thread: {
+        ...baseThread,
+        source: "acp:gemini",
+      },
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Mark as Agent" }));
 
     await waitFor(() => expect(setThreadAgent).toHaveBeenCalledTimes(1));
     expect(setThreadAgent).toHaveBeenCalledWith({
-      backend: "codex",
+      backend: "acp:gemini",
       threadId: "thread-1",
-      agent: {
-        name: "Thread",
-      },
+      agent: DEFAULT_DESKTOP_AGENT_THREAD,
     });
     expect(onRefreshNavigation).toHaveBeenCalledOnce();
   });
 
   it("clears Agent metadata from the context panel", async () => {
     const setThreadAgent = vi.fn(async () => ({
-      backend: "codex" as const,
+      backend: "acp:gemini" as const,
       threadId: "thread-1",
     }));
 
@@ -2785,6 +2824,7 @@ describe("ThreadContextPanel", () => {
       pinned: true,
       thread: {
         ...baseThread,
+        source: "acp:gemini",
         agent: {
           name: "Inbox Agent",
           instructionLineCount: 0,
@@ -2798,7 +2838,7 @@ describe("ThreadContextPanel", () => {
 
     await waitFor(() => expect(setThreadAgent).toHaveBeenCalledTimes(1));
     expect(setThreadAgent).toHaveBeenCalledWith({
-      backend: "codex",
+      backend: "acp:gemini",
       threadId: "thread-1",
       agent: null,
     });

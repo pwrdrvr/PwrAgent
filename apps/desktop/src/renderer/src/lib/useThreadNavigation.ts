@@ -24,6 +24,7 @@ import type {
   ThreadExecutionMode,
 } from "@pwragent/shared";
 import {
+  AGENT_PERSONA_INSTRUCTIONS_LINE_GUIDANCE,
   applyNavigationLaunchpadProviderSettingsPatch,
   buildAppendPinRank,
   buildPinnedRanks,
@@ -2092,11 +2093,16 @@ function buildOptimisticThreadFromLaunchpad(params: {
   const titlePrompt =
     params.optimisticUserMessage?.text?.trim() || params.launchpad.prompt.trim();
   const derivedTitle = shortenDerivedThreadTitle(titlePrompt);
+  const agentName = params.launchpad.agent?.name.trim();
+  const agentInstructions = params.launchpad.agent?.instructions?.trim();
+  const agentInstructionLineCount = agentInstructions
+    ? agentInstructions.split(/\r?\n/).length
+    : 0;
 
   return {
     id: params.threadId,
-    title: derivedTitle ?? "Untitled thread",
-    titleSource: derivedTitle ? "derived" : "fallback",
+    title: agentName || derivedTitle || "Untitled thread",
+    titleSource: agentName ? "explicit" : derivedTitle ? "derived" : "fallback",
     summary: titlePrompt || undefined,
     projectKey: params.launchpad.directoryPath,
     source: params.backend,
@@ -2105,6 +2111,18 @@ function buildOptimisticThreadFromLaunchpad(params: {
     reasoningEffort: params.launchpad.reasoningEffort,
     serviceTier: params.launchpad.serviceTier,
     fastMode: params.launchpad.fastMode,
+    ...(params.launchpad.agent
+      ? {
+          agent: {
+            name: params.launchpad.agent.name,
+            ...(agentInstructions ? { instructions: agentInstructions } : {}),
+            instructionLineCount: agentInstructionLineCount,
+            instructionsTooLong:
+              agentInstructionLineCount > AGENT_PERSONA_INSTRUCTIONS_LINE_GUIDANCE,
+            updatedAt: Date.now(),
+          },
+        }
+      : {}),
     parentThreadId: params.parentThreadId,
     pinnedRank: params.pinnedRank,
     acpRuntime: params.launchpad.acpRuntime,
