@@ -509,6 +509,52 @@ function navigationActions(
     });
     return actions;
   }
+  if (session.mode === "new_project") {
+    if (session.launchAction === "start_new_thread") {
+      if (session.returnTo) {
+        actions.push({
+          id: "browse:mode:resume",
+          label: "Resume",
+          style: "navigation",
+          fallbackText: "resume",
+          layout: { row: FOOTER_ROW },
+        });
+      }
+      actions.push({
+        id: "browse:mode:new-agent",
+        label: "New Agent",
+        style: "secondary",
+        fallbackText: "new agent",
+        layout: { row: FOOTER_ROW },
+      });
+    } else if (session.launchAction === "start_new_agent_thread") {
+      if (session.returnTo?.mode === "recents") {
+        actions.push({
+          id: "browse:mode:new-thread",
+          label: "Projects",
+          style: "navigation",
+          fallbackText: "projects",
+          layout: { row: FOOTER_ROW },
+        });
+      } else if (session.returnTo) {
+        actions.push({
+          id: "browse:mode:resume",
+          label: "Resume",
+          style: "navigation",
+          fallbackText: "resume",
+          layout: { row: FOOTER_ROW },
+        });
+      }
+    }
+    actions.push({
+      id: "browse:cancel",
+      label: "Cancel",
+      style: "secondary",
+      fallbackText: "cancel",
+      layout: { row: FOOTER_ROW },
+    });
+    return actions;
+  }
   if (session.mode === "agents") {
     actions.push({
       id: "browse:mode:recents",
@@ -524,7 +570,7 @@ function navigationActions(
       fallbackText: "new",
       layout: { row: FOOTER_ROW },
     });
-  } else if (session.mode !== "projects" && session.mode !== "new_project") {
+  } else if (session.mode !== "projects") {
     actions.push({
       id: "browse:mode:projects",
       label: "Projects",
@@ -685,7 +731,20 @@ function projectPickerFallbackText(
     page.pageIndex > 0 ? "previous" : undefined,
     page.pageIndex < page.totalPages - 1 ? "next" : undefined,
     session.launchAction === "resume_thread" ? "recent" : undefined,
-    session.returnTo ? "resume" : undefined,
+    session.mode === "new_project" && session.launchAction === "start_new_thread"
+      ? session.returnTo
+        ? "resume"
+        : undefined
+      : session.mode === "new_project" &&
+          session.launchAction === "start_new_agent_thread" &&
+          session.returnTo?.mode === "recents"
+        ? "projects"
+        : session.returnTo
+          ? "resume"
+          : undefined,
+    session.mode === "new_project" && session.launchAction === "start_new_thread"
+      ? "new agent"
+      : undefined,
     "cancel",
   ].filter(Boolean);
   return [

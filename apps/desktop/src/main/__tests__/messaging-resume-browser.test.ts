@@ -349,6 +349,11 @@ describe("messaging resume browser", () => {
       session: buildBrowseSession({
         launchAction: "start_new_thread",
         mode: "new_project",
+        returnTo: {
+          launchAction: "resume_thread",
+          mode: "recents",
+          pageIndex: 0,
+        },
       }),
     });
 
@@ -362,10 +367,16 @@ describe("messaging resume browser", () => {
             label: "PwrAgent",
           }),
         ],
+        actions: expect.arrayContaining([
+          expect.objectContaining({ id: "browse:mode:resume", label: "Resume" }),
+          expect.objectContaining({ id: "browse:mode:new-agent", label: "New Agent" }),
+          expect.objectContaining({ id: "browse:cancel" }),
+        ]),
       },
     });
     expect(intent.prompt).not.toContain("1. PwrAgent");
     expect(intent.fallbackText).toContain("1. PwrAgent");
+    expect(intent.fallbackText).toContain("resume, new agent, or cancel");
   });
 
   it("renders a Resume return action for new-thread pickers opened from resume", () => {
@@ -386,7 +397,7 @@ describe("messaging resume browser", () => {
 
     expect(intent).toMatchObject({
       kind: "project_picker",
-      fallbackText: expect.stringContaining("resume or cancel"),
+      fallbackText: expect.stringContaining("resume, new agent, or cancel"),
       page: {
         actions: expect.arrayContaining([
           expect.objectContaining({
@@ -398,6 +409,38 @@ describe("messaging resume browser", () => {
         ]),
       },
     });
+  });
+
+  it("renders Projects to return from Agent creation opened by /new", () => {
+    const intent = buildResumeIntent({
+      id: "intent-1",
+      createdAt: 1000,
+      navigation: buildNavigationSnapshot(),
+      session: buildBrowseSession({
+        launchAction: "start_new_agent_thread",
+        mode: "new_project",
+        returnTo: {
+          launchAction: "resume_thread",
+          mode: "recents",
+          pageIndex: 0,
+        },
+      }),
+    });
+
+    expect(intent).toMatchObject({
+      kind: "project_picker",
+      prompt: expect.stringContaining("new PwrAgent Agent thread"),
+      fallbackText: expect.stringContaining("projects or cancel"),
+      page: {
+        actions: expect.arrayContaining([
+          expect.objectContaining({ id: "browse:mode:new-thread", label: "Projects" }),
+          expect.objectContaining({ id: "browse:cancel" }),
+        ]),
+      },
+    });
+    expect(intent.page.actions).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "browse:mode:resume" })]),
+    );
   });
 });
 

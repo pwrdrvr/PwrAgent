@@ -1737,6 +1737,10 @@ describe("TelegramAdapter", () => {
           description: "Resume or start a PwrAgent thread",
         },
         {
+          command: "agent",
+          description: "Choose or create a PwrAgent Agent",
+        },
+        {
           command: "new",
           description: "Start a new PwrAgent thread",
         },

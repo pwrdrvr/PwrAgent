@@ -5146,6 +5146,12 @@ export class MessagingController {
           (directory) => directory.path === parsed.cwd || directory.key === parsed.cwd,
         )
       : undefined;
+    const preferences = parsed.preferences
+      ? {
+          ...parsed.preferences,
+          updatedAt: this.now(),
+        }
+      : undefined;
     const session: MessagingBrowseSessionRecord = {
       id: this.newIntentId("browse"),
       allowedActorIds: [event.actor.platformUserId],
@@ -5159,13 +5165,17 @@ export class MessagingController {
       mode: selectedDirectory && parsed.mode === "recents" ? "project_threads" : parsed.mode,
       pageIndex: 0,
       pageSize: resumeBrowserPageSize(this.capabilityProfile),
-      preferences: parsed.preferences
+      preferences,
+      query: parsed.query,
+      returnTo: parsed.launchAction === "start_new_thread"
         ? {
-            ...parsed.preferences,
-            updatedAt: this.now(),
+            launchAction: "resume_thread",
+            mode: "recents",
+            pageIndex: 0,
+            preferences,
+            query: parsed.query,
           }
         : undefined,
-      query: parsed.query,
       selectedProject: selectedDirectory
         ? {
             directoryKey: selectedDirectory.key,
@@ -5539,6 +5549,56 @@ export class MessagingController {
           mode: "new_project",
           pageIndex: 0,
           returnTo: session.returnTo ?? resumeReturnTargetForSession(nextSession),
+          selectedProject: undefined,
+        },
+        navigation,
+        event,
+      );
+      return;
+    }
+    if (actionId === "browse:mode:new-agent") {
+      const selectedBackend = await this.resolveNewThreadBackendForSession(
+        {
+          launchpadBackend: navigation.launchpadDefaults.backend,
+          session: nextSession,
+        },
+        event,
+      );
+      if (!selectedBackend) {
+        return;
+      }
+      await this.renderResumeBrowser(
+        {
+          ...nextSession,
+          backend: selectedBackend.kind,
+          launchAction: "start_new_agent_thread",
+          mode: "new_project",
+          pageIndex: 0,
+          selectedProject: undefined,
+        },
+        navigation,
+        event,
+      );
+      return;
+    }
+    if (actionId === "browse:mode:new-thread") {
+      const selectedBackend = await this.resolveNewThreadBackendForSession(
+        {
+          launchpadBackend: navigation.launchpadDefaults.backend,
+          session: nextSession,
+        },
+        event,
+      );
+      if (!selectedBackend) {
+        return;
+      }
+      await this.renderResumeBrowser(
+        {
+          ...nextSession,
+          backend: selectedBackend.kind,
+          launchAction: "start_new_thread",
+          mode: "new_project",
+          pageIndex: 0,
           selectedProject: undefined,
         },
         navigation,
