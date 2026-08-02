@@ -1190,6 +1190,14 @@ export type DesktopSettingsSnapshot = {
     /** Legacy round-trip field; per-review runMode now selects the engine. */
     managedReview?: DesktopSettingsValue<boolean>;
     /**
+     * Prevents a completed monitor from automatically waking or queueing
+     * follow-up work after newer work begins on its parent thread.
+     * Disabled by default while the workflow trade-off is evaluated.
+     */
+    taskMonitorFollowupSafety?: DesktopSettingsValue<boolean>;
+    /** The local dismissal preference for the monitor follow-up warning. */
+    taskMonitorFollowupWarningDismissed?: DesktopSettingsValue<boolean>;
+    /**
      * Diff condensation (a.k.a. "diff eliding") gates whether the configured
      * backend may classify less-relevant diff hunks. When disabled, every diff
      * renders in full and no structured-generation request fires.
@@ -1484,6 +1492,8 @@ export type DesktopSettingsConfigPatch = {
     codexSkillQuestionsWarningDismissed?: boolean;
     /** Legacy round-trip field; per-review runMode now selects the engine. */
     managedReview?: boolean;
+    taskMonitorFollowupSafety?: boolean;
+    taskMonitorFollowupWarningDismissed?: boolean;
     diffCondensation?: {
       enabled?: boolean;
     };

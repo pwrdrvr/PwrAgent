@@ -2932,6 +2932,38 @@ describe("DesktopSettingsService", () => {
     });
   });
 
+  it("defaults monitor follow-up safety off and persists its preferences", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    expect((await service.readSettingsProjection()).experimental).toMatchObject({
+      taskMonitorFollowupSafety: { value: false, source: "default" },
+      taskMonitorFollowupWarningDismissed: { value: false, source: "default" },
+    });
+    expect(service.resolveTaskMonitorFollowupSafetyEnabled()).toBe(false);
+
+    await service.writeConfigPatchTargeted({
+      experimental: {
+        taskMonitorFollowupSafety: true,
+        taskMonitorFollowupWarningDismissed: true,
+      },
+    });
+
+    expect(fs.readFileSync(configPath, "utf8")).toContain(
+      "task_monitor_followup_safety = true",
+    );
+    expect((await service.readSettingsProjection()).experimental).toMatchObject({
+      taskMonitorFollowupSafety: { value: true, source: "config" },
+      taskMonitorFollowupWarningDismissed: { value: true, source: "config" },
+    });
+    expect(service.resolveTaskMonitorFollowupSafetyEnabled()).toBe(true);
+  });
+
   it("defaults both interactive SVG preferences off and persists overrides", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");

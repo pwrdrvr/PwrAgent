@@ -315,8 +315,11 @@ type ComposerProps = {
   unavailableReason?: string;
   onActiveTurnIdChange?: (turnId?: string) => void;
   fullAccessRiskWarningDismissed?: boolean;
+  taskMonitorFollowupSafetyEnabled?: boolean;
+  taskMonitorOverlapWarningDismissed?: boolean;
   onEnsureSkillsLoaded?: () => void | Promise<void>;
   onDismissFullAccessRiskWarning?: () => Promise<void>;
+  onDismissTaskMonitorOverlapWarning?: () => Promise<void>;
   pendingRequestActive?: boolean;
   pendingUserInputActive?: boolean;
   onMaterializeLaunchpad?: (
@@ -493,6 +496,8 @@ async function refreshProviderCatalogOnFirstSelection(
 }
 
 type LocalHandoffStrategy = ThreadWorkspaceHandoffStrategy;
+
+type TaskMonitorOverlapAction = "review" | "turn";
 
 type ComposerImageAttachment = NavigationLaunchpadImageAttachment;
 
@@ -2822,6 +2827,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const terminalTurnKeysRef = useRef(new Set<string>());
   const activeReviewTurnIdRef = useRef<string | undefined>(undefined);
   const inFlightReviewSubmissionKeyRef = useRef<string | undefined>(undefined);
+  const taskMonitorOverlapResolverRef = useRef<
+    ((allowed: boolean) => void) | undefined
+  >(undefined);
   const autocompleteOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const reviewOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const reviewCommitInputRef = useRef<HTMLInputElement | null>(null);
@@ -3226,6 +3234,13 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       }
     };
   }, []);
+  const [taskMonitorOverlapAction, setTaskMonitorOverlapAction] = useState<
+    TaskMonitorOverlapAction | undefined
+  >();
+  const [taskMonitorOverlapDontWarnAgain, setTaskMonitorOverlapDontWarnAgain] =
+    useState(false);
+  const [taskMonitorOverlapSaving, setTaskMonitorOverlapSaving] = useState(false);
+  const [taskMonitorOverlapError, setTaskMonitorOverlapError] = useState<string>();
   const [autocompleteLayout, setAutocompleteLayout] = useState<{
     maxHeight: number;
     placement: "above" | "below";
@@ -3253,6 +3268,73 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     backend?.kind.startsWith("acp:") === true
       ? backend.capabilities.startReview !== false
       : true;
+  const activeTaskMonitorCount = (props.thread?.subAgents ?? []).filter(
+    (subAgent) =>
+      subAgent.monitorId.startsWith("monitor-")
+      && (
+        subAgent.status === "pending"
+        || subAgent.status === "running"
+        || subAgent.status === "blocked"
+        || subAgent.status === "failed"
+      ),
+  ).length;
+  const resolveTaskMonitorOverlap = (allowed: boolean): void => {
+    const resolve = taskMonitorOverlapResolverRef.current;
+    taskMonitorOverlapResolverRef.current = undefined;
+    setTaskMonitorOverlapAction(undefined);
+    setTaskMonitorOverlapError(undefined);
+    setTaskMonitorOverlapDontWarnAgain(false);
+    resolve?.(allowed);
+  };
+  const ensureTaskMonitorOverlapSafety = async (
+    action: TaskMonitorOverlapAction,
+  ): Promise<boolean> => {
+    if (
+      !props.taskMonitorFollowupSafetyEnabled
+      || activeTaskMonitorCount === 0
+      || !props.thread
+    ) {
+      return true;
+    }
+    if (props.taskMonitorOverlapWarningDismissed) {
+      return true;
+    }
+    if (taskMonitorOverlapResolverRef.current) {
+      return false;
+    }
+    return await new Promise<boolean>((resolve) => {
+      taskMonitorOverlapResolverRef.current = resolve;
+      setTaskMonitorOverlapDontWarnAgain(false);
+      setTaskMonitorOverlapError(undefined);
+      setTaskMonitorOverlapAction(action);
+    });
+  };
+  const confirmTaskMonitorOverlap = async (): Promise<void> => {
+    const action = taskMonitorOverlapAction;
+    if (!action) {
+      return;
+    }
+    setTaskMonitorOverlapSaving(true);
+    setTaskMonitorOverlapError(undefined);
+    try {
+      if (taskMonitorOverlapDontWarnAgain) {
+        await props.onDismissTaskMonitorOverlapWarning?.();
+      }
+      resolveTaskMonitorOverlap(true);
+    } catch (error) {
+      setTaskMonitorOverlapError(
+        error instanceof Error ? error.message : String(error),
+      );
+    } finally {
+      setTaskMonitorOverlapSaving(false);
+    }
+  };
+  useEffect(() => {
+    return () => {
+      taskMonitorOverlapResolverRef.current?.(false);
+      taskMonitorOverlapResolverRef.current = undefined;
+    };
+  }, []);
   const supportsCompactCommand = Boolean(
     props.providerCommands?.some((command) => {
       const commandName = command.name.startsWith("/")
@@ -5978,6 +6060,14 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       queueReviewCommand(reviewCommand);
       return;
     }
+    if (
+      activeTaskMonitorCount > 0
+      && !(await ensureTaskMonitorOverlapSafety("review"))
+    ) {
+      restoreQueuedTurnIfClaimed(options?.queued, options?.queueClaimed);
+      releaseQueuedTurnScopeLockIfClaimed(options?.queued, options?.queueClaimed);
+      return;
+    }
 
     setSendError(undefined);
     inFlightReviewSubmissionKeyRef.current = submissionKey;
@@ -6752,6 +6842,30 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           submittedScopeKey,
           submittedSnapshot,
         );
+      }
+      restoreQueuedTurnIfClaimed(queued, options?.queueClaimed);
+      if (queued && options?.queueClaimed) {
+        globalQueuedTurnReleaseScopeKeys.delete(composerScopeKey);
+      }
+      return false;
+    }
+
+    if (
+      activeTaskMonitorCount > 0
+      && !(await ensureTaskMonitorOverlapSafety("turn"))
+    ) {
+      if (backendQueueSubmission) {
+        removeQueuedTurnInScope(
+          backendQueueSubmission.scopeKey,
+          backendQueueSubmission.queued,
+        );
+        restoreSubmittedComposerDraftInScope(
+          submittedScopeKey,
+          submittedSnapshot,
+        );
+      }
+      if (!backendQueueSubmission || submittedScopeIsVisible()) {
+        updateSending(false);
       }
       restoreQueuedTurnIfClaimed(queued, options?.queueClaimed);
       if (queued && options?.queueClaimed) {
@@ -10753,6 +10867,81 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     handlePlainComposerKeyDown(event);
   };
 
+  const taskMonitorOverlapDialog = taskMonitorOverlapAction
+    ? createPortal(
+        <div className="full-access-warning-modal">
+          <div
+            aria-labelledby="task-monitor-warning-title"
+            aria-modal="true"
+            className="full-access-warning-dialog"
+            role="dialog"
+          >
+            <div className="full-access-warning-dialog__header">
+              <h2 id="task-monitor-warning-title">Keep the monitor report-only?</h2>
+              <button
+                aria-label="Cancel task monitor warning"
+                className="workspace-handoff-dialog__close"
+                disabled={taskMonitorOverlapSaving}
+                type="button"
+                onClick={() => {
+                  resolveTaskMonitorOverlap(false);
+                }}
+              >
+                ×
+              </button>
+            </div>
+            <p>
+              A task monitor is still running. Starting this{
+                taskMonitorOverlapAction === "review" ? " review" : " new turn"
+              } keeps it running, but its final result will be reported in this
+              thread without automatically starting or queuing follow-up work.
+            </p>
+            <p>
+              This prevents an older monitor result from acting on newer work.
+            </p>
+            <label className="composer__checkbox full-access-warning-dialog__checkbox">
+              <input
+                checked={taskMonitorOverlapDontWarnAgain}
+                disabled={taskMonitorOverlapSaving}
+                type="checkbox"
+                onChange={(event) =>
+                  setTaskMonitorOverlapDontWarnAgain(event.currentTarget.checked)
+                }
+              />
+              <span>Do not show this warning again on this desktop.</span>
+            </label>
+            {taskMonitorOverlapError ? (
+              <p className="full-access-warning-dialog__error" role="alert">
+                {taskMonitorOverlapError}
+              </p>
+            ) : null}
+            <div className="full-access-warning-dialog__actions">
+              <button
+                className="button button--secondary"
+                disabled={taskMonitorOverlapSaving}
+                type="button"
+                onClick={() => {
+                  resolveTaskMonitorOverlap(false);
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                className="button button--primary"
+                disabled={taskMonitorOverlapSaving}
+                type="button"
+                onClick={() => {
+                  void confirmTaskMonitorOverlap();
+                }}
+              >
+                {taskMonitorOverlapAction === "review" ? "Start review" : "Send turn"}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )
+    : null;
   const pdfPreviewPathSet = new Set(
     pdfPreviewReferences.map((reference) => reference.path),
   );
@@ -13633,6 +13822,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       </div>
       </form>
       {fullAccessRiskDialog}
+      {taskMonitorOverlapDialog}
       {imageLightbox}
     </>
   );

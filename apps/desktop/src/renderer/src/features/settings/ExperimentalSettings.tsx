@@ -34,6 +34,11 @@ const DEFAULT_CODEX_DEFAULT_MODE_REQUEST_USER_INPUT = {
   source: "default" as const,
 };
 
+const DEFAULT_TASK_MONITOR_FOLLOWUP_SAFETY = {
+  value: false,
+  source: "default" as const,
+};
+
 const DEFAULT_THREAD_TOOL_ACCOUNTING = {
   value: false,
   source: "default" as const,
@@ -120,6 +125,7 @@ export function ExperimentalSettings(props: {
   onCodexDefaultModeRequestUserInputChange: (
     enabled: boolean,
   ) => Promise<void>;
+  onTaskMonitorFollowupSafetyChange: (enabled: boolean) => Promise<void>;
 }) {
   const [tokenMiserWriteTarget, setTokenMiserWriteTarget] = useState<
     boolean | undefined
@@ -189,6 +195,9 @@ export function ExperimentalSettings(props: {
   const codexDefaultModeRequestUserInput =
     props.snapshot.experimental.codexDefaultModeRequestUserInput ??
     DEFAULT_CODEX_DEFAULT_MODE_REQUEST_USER_INPUT;
+  const taskMonitorFollowupSafety =
+    props.snapshot.experimental.taskMonitorFollowupSafety ??
+    DEFAULT_TASK_MONITOR_FOLLOWUP_SAFETY;
   const discontinuedEnabledCount =
     (condensation.enabled.value ? 1 : 0) +
     (liveTranscriptEventFiltering.value ? 1 : 0);
@@ -392,6 +401,28 @@ export function ExperimentalSettings(props: {
             source={sourceBadge(markdownMathRendering)}
             onChange={(enabled) => {
               return props.onMarkdownMathRenderingChange(enabled);
+            }}
+          />
+        </div>
+      </SettingsSection>
+
+      <SettingsSection
+        eyebrow="Experimental"
+        title="Monitor Follow-up Safety"
+        description="Keep a monitor from automatically resuming older work after you start a newer turn or review. Disabled by default while the workflow trade-off is evaluated."
+        chip={taskMonitorFollowupSafety.value ? "On" : "Off"}
+        chipKind={taskMonitorFollowupSafety.value ? "ok" : "default"}
+      >
+        <div className="settings-fields">
+          <ToggleField
+            checked={taskMonitorFollowupSafety.value}
+            disabled={props.saving}
+            label="Protect monitor follow-up"
+            sub="Warn before starting a new turn or review while a task monitor is active."
+            help="When on, newer work leaves the monitor's final result report-only instead of waking or queueing a parent follow-up."
+            source={sourceBadge(taskMonitorFollowupSafety)}
+            onChange={(enabled) => {
+              return props.onTaskMonitorFollowupSafetyChange(enabled);
             }}
           />
         </div>
