@@ -141,22 +141,6 @@ describe("desktopSettingsPatchToEdits — experimental", () => {
     ]);
   });
 
-  it("writes the background PR polling flag", () => {
-    const edits = desktopSettingsPatchToEdits({
-      experimental: {
-        backgroundPrPolling: true,
-      },
-    });
-
-    expect(edits).toEqual([
-      {
-        op: "set",
-        path: ["experimental", "background_pr_polling"],
-        value: true,
-      },
-    ]);
-  });
-
   it("writes the thread pricing summary flag", () => {
     const edits = desktopSettingsPatchToEdits({
       experimental: {
@@ -217,6 +201,57 @@ describe("desktopSettingsPatchToEdits — experimental", () => {
       path: ["experimental", "managed_review"],
       value: true,
     }]);
+  });
+});
+
+describe("desktopSettingsPatchToEdits — Git", () => {
+  it("writes the canonical background PR polling key for a new config", () => {
+    expect(
+      desktopSettingsPatchToEdits({
+        git: { backgroundPrPolling: false },
+      }),
+    ).toEqual([
+      {
+        op: "set",
+        path: ["git", "background_pr_polling"],
+        value: false,
+      },
+    ]);
+  });
+
+  it("preserves and mirrors a recognized experimental polling key", () => {
+    const edits = desktopSettingsPatchToEdits(
+      {
+        git: { backgroundPrPolling: true },
+      },
+      parseTomlTables(
+        [
+          "[experimental]",
+          "background_pr_polling = false",
+        ].join("\n"),
+        "config.toml",
+      ),
+    );
+
+    expect(edits).toEqual([
+      {
+        op: "ensureCommentBefore",
+        path: ["experimental", "background_pr_polling"],
+        marker: "pwragent-legacy-settings",
+        comment:
+          "# pwragent-legacy-settings key=background_pr_polling shape=boolean used_through=1.0.0-beta.50 kept_for_older_clients",
+      },
+      {
+        op: "set",
+        path: ["experimental", "background_pr_polling"],
+        value: true,
+      },
+      {
+        op: "set",
+        path: ["git", "background_pr_polling"],
+        value: true,
+      },
+    ]);
   });
 });
 

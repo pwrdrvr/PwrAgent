@@ -654,11 +654,8 @@ function SettingsSectionBody(props: {
         saving={props.settings.saving}
         snapshot={props.snapshot}
         onBackgroundPrPollingChange={async (enabled: boolean) => {
-          // The Git pane replaces the experimental UI surface, not the stable
-          // TOML key. Keeping the existing key avoids a config migration and
-          // preserves explicit opt-outs from earlier releases.
           await props.settings.writeConfig({
-            experimental: { backgroundPrPolling: enabled },
+            git: { backgroundPrPolling: enabled },
           });
         }}
         onRefresh={props.settings.refresh}

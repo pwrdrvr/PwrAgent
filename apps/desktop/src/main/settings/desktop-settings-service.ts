@@ -597,10 +597,6 @@ export class DesktopSettingsService {
           config.experimental?.lightweightNavigationRefresh,
           false,
         ),
-        backgroundPrPolling: this.resolveConfigBoolean(
-          config.experimental?.backgroundPrPolling,
-          DEFAULT_BACKGROUND_PR_POLLING,
-        ),
         threadPricingSummary: this.resolveConfigBoolean(
           config.experimental?.threadPricingSummary,
           true,
@@ -1008,6 +1004,12 @@ export class DesktopSettingsService {
         git: {
           discovery: gitDiscovery,
         },
+      },
+      git: {
+        backgroundPrPolling: this.resolveConfigBoolean(
+          config.git?.backgroundPrPolling,
+          DEFAULT_BACKGROUND_PR_POLLING,
+        ),
       },
       worktrees: this.resolveWorktrees(config.worktrees?.storage),
     };

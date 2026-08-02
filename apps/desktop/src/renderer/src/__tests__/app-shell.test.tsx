@@ -588,6 +588,9 @@ describe("App", () => {
         kimi: { cliPath: { value: "", source: "default" }, enabled: true },
         qwen: { cliPath: { value: "", source: "default" }, enabled: true },
       },
+      git: {
+        backgroundPrPolling: { value: true, source: "default" },
+      },
       applications: {
         editors: [],
         terminals: [],

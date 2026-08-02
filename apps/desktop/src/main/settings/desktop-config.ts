@@ -105,7 +105,6 @@ export type DesktopSettingsConfig = {
     fullAccessRiskWarningDismissed?: boolean;
     liveTranscriptEventFiltering?: boolean;
     lightweightNavigationRefresh?: boolean;
-    backgroundPrPolling?: boolean;
     threadPricingSummary?: boolean;
     threadPricingDisplayUsd?: boolean;
     threadPricingDisplayCodexCredits?: boolean;
@@ -243,6 +242,9 @@ export type DesktopSettingsConfig = {
       enabled?: boolean;
     };
   };
+  git?: {
+    backgroundPrPolling?: boolean;
+  };
   applications?: {
     editor?: {
       preferredId?: string;
@@ -262,8 +264,9 @@ export type DesktopSettingsConfig = {
 type TomlScalar = TomlValue;
 
 const LEGACY_AUTHORIZED_CONTACT_LAST_VERSION = "1.0.0-alpha.9";
-const LEGACY_AUTHORIZED_CONTACT_MARKER = "pwragent-legacy-settings";
+const LEGACY_SETTINGS_MARKER = "pwragent-legacy-settings";
 const LEGACY_CHAT_REPLY_COMPOSER_LAST_VERSION = "1.0.0-alpha.8";
+const LEGACY_BACKGROUND_PR_POLLING_LAST_VERSION = "1.0.0-beta.50";
 
 export function defaultDesktopConfigDir(
   options?: DesktopConfigPathOptions,
@@ -523,7 +526,7 @@ export function desktopSettingsPatchToEdits(
     edits.push({
       op: "ensureCommentBefore",
       path: ["experimental", "chat_reply_composer"],
-      marker: LEGACY_AUTHORIZED_CONTACT_MARKER,
+      marker: LEGACY_SETTINGS_MARKER,
       comment: legacyChatReplyComposerComment(),
     });
   }
@@ -558,7 +561,7 @@ export function desktopSettingsPatchToEdits(
       edits.push({
         op: "ensureCommentBefore",
         path: [...tablePath, legacyKey],
-        marker: LEGACY_AUTHORIZED_CONTACT_MARKER,
+        marker: LEGACY_SETTINGS_MARKER,
         comment: legacyAuthorizedContactComment(legacyKey),
       });
       edits.push({
@@ -664,12 +667,6 @@ export function desktopSettingsPatchToEdits(
     set(
       ["experimental", "lightweight_navigation_refresh"],
       patch.experimental.lightweightNavigationRefresh,
-    );
-  }
-  if (patch.experimental?.backgroundPrPolling !== undefined) {
-    set(
-      ["experimental", "background_pr_polling"],
-      patch.experimental.backgroundPrPolling,
     );
   }
   if (patch.experimental?.threadPricingSummary !== undefined) {
@@ -1302,6 +1299,29 @@ export function desktopSettingsPatchToEdits(
     set(["acp_agents", "qwen", "enabled"], patch.acpAgents.qwen.enabled);
   }
 
+  if (patch.git?.backgroundPrPolling !== undefined) {
+    // `[experimental].background_pr_polling` was the pre-Git-settings shape.
+    // Preserve a recognized old value for older clients, but write the stable
+    // key for every current client. The reader prefers `[git]` when both are
+    // present, so an older client can never override this canonical value.
+    if (
+      readBoolean(currentTables.experimental?.background_pr_polling)
+      !== undefined
+    ) {
+      edits.push({
+        op: "ensureCommentBefore",
+        path: ["experimental", "background_pr_polling"],
+        marker: LEGACY_SETTINGS_MARKER,
+        comment: legacyBackgroundPrPollingComment(),
+      });
+      set(
+        ["experimental", "background_pr_polling"],
+        patch.git.backgroundPrPolling,
+      );
+    }
+    set(["git", "background_pr_polling"], patch.git.backgroundPrPolling);
+  }
+
   if (patch.applications?.editor?.preferredId !== undefined) {
     set(["applications", "editor", "preferred_id"], patch.applications.editor.preferredId);
   }
@@ -1353,6 +1373,7 @@ function normalizeDesktopConfig(
   const acpAgentsGrok = tables["acp_agents.grok"];
   const acpAgentsKimi = tables["acp_agents.kimi"];
   const acpAgentsQwen = tables["acp_agents.qwen"];
+  const git = tables["git"];
   const editor = tables["applications.editor"];
   const terminal = tables["applications.terminal"];
   const gh = tables["applications.gh"];
@@ -1407,7 +1428,6 @@ function normalizeDesktopConfig(
       lightweightNavigationRefresh: readBoolean(
         experimental?.lightweight_navigation_refresh,
       ),
-      backgroundPrPolling: readBoolean(experimental?.background_pr_polling),
       threadPricingSummary: readBoolean(experimental?.thread_pricing_summary),
       threadPricingDisplayUsd: readBoolean(
         experimental?.thread_pricing_display_usd,
@@ -1624,6 +1644,11 @@ function normalizeDesktopConfig(
         enabled: readBoolean(acpAgentsQwen?.enabled),
       },
     },
+    git: {
+      backgroundPrPolling:
+        readBoolean(git?.background_pr_polling)
+        ?? readBoolean(experimental?.background_pr_polling),
+    },
     applications: {
       editor: {
         preferredId: readString(editor?.preferred_id),
@@ -1737,6 +1762,10 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
 
   if (config.experimental && hasDefinedValue(config.experimental)) {
     pruned.experimental = config.experimental;
+  }
+
+  if (config.git && hasDefinedValue(config.git)) {
+    pruned.git = config.git;
   }
 
   if (config.imageUploads && hasDefinedValue(config.imageUploads)) {
@@ -2363,7 +2392,7 @@ function normalizeAuthorizedContacts(
 function legacyAuthorizedContactComment(key: string): string {
   return [
     "#",
-    LEGACY_AUTHORIZED_CONTACT_MARKER,
+    LEGACY_SETTINGS_MARKER,
     `key=${key}`,
     "shape=string-array",
     `used_through=${LEGACY_AUTHORIZED_CONTACT_LAST_VERSION}`,
@@ -2374,7 +2403,7 @@ function legacyAuthorizedContactComment(key: string): string {
 function legacyChatReplyComposerComment(): string {
   return [
     "#",
-    LEGACY_AUTHORIZED_CONTACT_MARKER,
+    LEGACY_SETTINGS_MARKER,
     "key=chat_reply_composer",
     "shape=string-enum",
     `used_through=${LEGACY_CHAT_REPLY_COMPOSER_LAST_VERSION}`,
@@ -2382,6 +2411,17 @@ function legacyChatReplyComposerComment(): string {
     "obsolete_no_replacement",
     "ignored_by_current_clients",
     "remove_when_convenient",
+  ].join(" ");
+}
+
+function legacyBackgroundPrPollingComment(): string {
+  return [
+    "#",
+    LEGACY_SETTINGS_MARKER,
+    "key=background_pr_polling",
+    "shape=boolean",
+    `used_through=${LEGACY_BACKGROUND_PR_POLLING_LAST_VERSION}`,
+    "kept_for_older_clients",
   ].join(" ");
 }
 

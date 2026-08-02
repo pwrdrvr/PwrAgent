@@ -613,15 +613,15 @@ describe("DesktopSettingsService", () => {
     const listener = vi.fn();
     const unsubscribe = service.onConfigWritten(listener);
 
-    // Fires for the experimental flag the background poller cares about — this
-    // is what makes the toggle take effect without a restart.
+    // Fires for the Git setting the background poller cares about — this is
+    // what makes the toggle take effect without a restart.
     await service.writeConfigPatch({
-      experimental: { backgroundPrPolling: true },
+      git: { backgroundPrPolling: true },
     });
     expect(listener).toHaveBeenCalledTimes(1);
     // The listener runs AFTER the write lands, so a re-read sees the new value.
     expect(
-      (await service.readSettings()).experimental.backgroundPrPolling?.value,
+      (await service.readSettings()).git.backgroundPrPolling.value,
     ).toBe(true);
 
     // Generic: fires for unrelated writes too (cheap; the poller just re-reads).
@@ -631,7 +631,7 @@ describe("DesktopSettingsService", () => {
     // Unsubscribe stops delivery.
     unsubscribe();
     await service.writeConfigPatch({
-      experimental: { backgroundPrPolling: false },
+      git: { backgroundPrPolling: false },
     });
     expect(listener).toHaveBeenCalledTimes(2);
   });
@@ -651,10 +651,10 @@ describe("DesktopSettingsService", () => {
 
     // A throwing side-effect listener must not fail the settings write.
     await expect(
-      service.writeConfigPatch({ experimental: { backgroundPrPolling: true } }),
+      service.writeConfigPatch({ git: { backgroundPrPolling: true } }),
     ).resolves.toBeDefined();
     expect(
-      (await service.readSettings()).experimental.backgroundPrPolling?.value,
+      (await service.readSettings()).git.backgroundPrPolling.value,
     ).toBe(true);
   });
 
@@ -1848,7 +1848,7 @@ describe("DesktopSettingsService", () => {
     );
   });
 
-  it("defaults background PR polling to on and persists an explicit opt-out", async () => {
+  it("defaults Git background PR polling to on and persists an explicit opt-out", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
     const service = new DesktopSettingsService({
@@ -1859,25 +1859,149 @@ describe("DesktopSettingsService", () => {
 
     // With the flag absent, background polling is enabled by default.
     const initial = await service.readSettings();
-    expect(initial.experimental.backgroundPrPolling).toEqual({
+    expect(initial.git.backgroundPrPolling).toEqual({
       value: true,
       source: "default",
     });
 
     await service.writeConfigPatch({
-      experimental: {
+      git: {
         backgroundPrPolling: false,
       },
     });
 
     const updated = await service.readSettings();
-    expect(updated.experimental.backgroundPrPolling).toEqual({
+    expect(updated.git.backgroundPrPolling).toEqual({
       value: false,
       source: "config",
     });
-    expect(fs.readFileSync(configPath, "utf8")).toContain(
-      "background_pr_polling = false",
+    const contents = fs.readFileSync(configPath, "utf8");
+    expect(contents).toContain("[git]\nbackground_pr_polling = false");
+    expect(contents).not.toContain("[experimental]");
+  });
+
+  it("reads the canonical Git background PR polling key", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(
+      configPath,
+      [
+        "[git]",
+        "background_pr_polling = false",
+      ].join("\n"),
+      "utf8",
     );
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    expect((await service.readSettings()).git.backgroundPrPolling).toEqual({
+      value: false,
+      source: "config",
+    });
+  });
+
+  it("reads the legacy experimental background PR polling key when Git is absent", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(
+      configPath,
+      [
+        "[experimental]",
+        "background_pr_polling = false",
+      ].join("\n"),
+      "utf8",
+    );
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    expect((await service.readSettings()).git.backgroundPrPolling).toEqual({
+      value: false,
+      source: "config",
+    });
+  });
+
+  it("falls back to the legacy polling key when the canonical Git value is malformed", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(
+      configPath,
+      [
+        "[git]",
+        'background_pr_polling = "not-a-boolean"',
+        "",
+        "[experimental]",
+        "background_pr_polling = false",
+      ].join("\n"),
+      "utf8",
+    );
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    expect((await service.readSettings()).git.backgroundPrPolling).toEqual({
+      value: false,
+      source: "config",
+    });
+  });
+
+  it("migrates legacy background PR polling lazily without losing config context", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(
+      configPath,
+      [
+        "[experimental]",
+        "# Keep the older opt-out for downgrade clients.",
+        "background_pr_polling = false",
+        "",
+        "[general]",
+        "# Keep this unrelated comment too.",
+        "developer_mode = true",
+      ].join("\n"),
+      "utf8",
+    );
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    await service.writeConfigPatch({
+      git: { backgroundPrPolling: true },
+    });
+
+    let contents = fs.readFileSync(configPath, "utf8");
+    expect(contents).toContain(
+      [
+        "# Keep the older opt-out for downgrade clients.",
+        "# pwragent-legacy-settings key=background_pr_polling shape=boolean used_through=1.0.0-beta.50 kept_for_older_clients",
+        "background_pr_polling = true",
+      ].join("\n"),
+    );
+    expect(contents).toContain("[git]\nbackground_pr_polling = true");
+    expect(contents).toContain("# Keep this unrelated comment too.");
+    expect(contents).toContain("developer_mode = true");
+    expect(
+      contents.match(/pwragent-legacy-settings key=background_pr_polling/g),
+    ).toHaveLength(1);
+
+    await service.writeConfigPatch({
+      git: { backgroundPrPolling: false },
+    });
+
+    contents = fs.readFileSync(configPath, "utf8");
+    expect(contents).toContain("[git]\nbackground_pr_polling = false");
+    expect(
+      contents.match(/pwragent-legacy-settings key=background_pr_polling/g),
+    ).toHaveLength(1);
   });
 
   it("defaults thread pricing summary to true and persists it", async () => {

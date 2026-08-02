@@ -35,7 +35,7 @@ export function GitSettings(props: {
   onSaveGhPath: (path: string) => Promise<void>;
 }) {
   const backgroundPrPolling =
-    props.snapshot.experimental.backgroundPrPolling ??
+    props.snapshot.git?.backgroundPrPolling ??
     DEFAULT_BACKGROUND_PR_POLLING_VALUE;
 
   return (

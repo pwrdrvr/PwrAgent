@@ -3781,9 +3781,7 @@ class DesktopAppServerService {
           );
         }
         const settings = await settingsService.readSettings();
-        enabled =
-          settings.experimental.backgroundPrPolling?.value
-          ?? DEFAULT_BACKGROUND_PR_POLLING;
+        enabled = settings.git.backgroundPrPolling.value;
       } catch (error) {
         appServerLog.warn("failed to read background PR polling setting", {
           error: error instanceof Error ? error.message : String(error),

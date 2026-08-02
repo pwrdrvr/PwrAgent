@@ -343,6 +343,9 @@ function createSnapshot(
       kimi: { cliPath: { value: "", source: "default" }, enabled: true },
       qwen: { cliPath: { value: "", source: "default" }, enabled: true },
     },
+    git: {
+      backgroundPrPolling: { value: true, source: "default" },
+    },
     applications: {
       editors: [
         {
@@ -728,9 +731,7 @@ describe("SettingsScreen", () => {
       screen.getByRole("heading", { name: "Repository & pull requests" }),
     ).toBeInTheDocument();
 
-    // The snapshot fixture omits `backgroundPrPolling` entirely, which is the
-    // real shape an older/stale snapshot has — the toggle must still render
-    // (checked, from the shared default) rather than crash.
+    // The Git setting defaults on when the config does not opt out.
     const backgroundPrPollingSwitch = screen.getByRole("switch", {
       name: "Enable background pull request status",
     });
@@ -738,7 +739,7 @@ describe("SettingsScreen", () => {
     fireEvent.click(backgroundPrPollingSwitch);
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
-        experimental: { backgroundPrPolling: false },
+        git: { backgroundPrPolling: false },
       });
     });
 
