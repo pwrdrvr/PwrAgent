@@ -572,6 +572,55 @@ describe("Composer", () => {
     });
   });
 
+  it("renders a newly received PR repair countdown from the current clock", () => {
+    const mountedAt = new Date("2026-08-01T12:00:00.000Z").getTime();
+    vi.useFakeTimers();
+    vi.setSystemTime(mountedAt);
+    const thread: NavigationThreadSummary = {
+      id: "thread-1",
+      title: "Fix CI",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+      prAutoDispatchEnabled: true,
+    };
+    const { rerender } = render(
+      <Composer
+        backgroundPrPollingEnabled
+        disabled={false}
+        skills={[]}
+        thread={thread}
+      />,
+    );
+
+    vi.setSystemTime(mountedAt + 90_000);
+    rerender(
+      <Composer
+        backgroundPrPollingEnabled
+        disabled={false}
+        skills={[]}
+        thread={{
+          ...thread,
+          prAutoDispatchPending: {
+            fingerprint: "fingerprint-1",
+            prKey: "github.com/pwrdrvr/PwrAgent#1105",
+            prNumber: 1105,
+            prUrl: "https://github.com/pwrdrvr/PwrAgent/pull/1105",
+            headSha: "a".repeat(40),
+            eventKinds: ["ci-failure"],
+            createdAt: mountedAt + 90_000,
+            scheduledAt: mountedAt + 120_000,
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByLabelText("Scheduled PR auto-fix")).toHaveTextContent(
+      "Auto-fix PR in 30s",
+    );
+  });
+
   it("lets launchpad errors be copied with the transcript copy control", async () => {
     const copyText = vi.fn(async () => undefined);
     const launchpadError =
@@ -5995,6 +6044,113 @@ describe("Composer", () => {
         target: { type: "baseBranch", branch: "main" },
         delivery: "inline",
         cwd: "/Users/huntharo/.codex/profiles/sstk/worktrees/mr9motar/gif-recommendations",
+      });
+    });
+  });
+
+  it("defaults a multi-project review to the changed primary workspace", async () => {
+    const startReview = vi.fn(async (request: StartReviewRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      reviewThreadId: request.threadId,
+      turnId: "turn-review-1",
+    }));
+    const appDirectory: NavigationDirectorySummary = {
+      key: "directory:app",
+      kind: "directory",
+      label: "App",
+      path: "/repo/app",
+      threadKeys: ["codex:thread-1"],
+      needsAttentionCount: 0,
+      gitStatus: {
+        currentBranch: "feature/app",
+        defaultBranch: "main",
+        branches: ["feature/app", "main", "release"],
+        baseBranches: ["release", "main"],
+      },
+    };
+    const infraDirectory: NavigationDirectorySummary = {
+      key: "directory:infra",
+      kind: "directory",
+      label: "Infra",
+      path: "/repo/infra",
+      threadKeys: ["codex:thread-1"],
+      needsAttentionCount: 0,
+      gitStatus: {
+        currentBranch: "feature/infra",
+        defaultBranch: "develop",
+        branches: ["feature/infra", "develop"],
+        baseBranches: ["develop"],
+      },
+    };
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview,
+        }}
+        directory={infraDirectory}
+        directories={[infraDirectory, appDirectory]}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Review thread",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          projectKey: "/worktrees/app/packages/service",
+          gitWorkingState: {
+            dirtyFiles: 0,
+            dirtyAdditions: 0,
+            dirtyDeletions: 0,
+            untrackedFiles: 0,
+            unpushedCommits: 0,
+            baseBranch: "release",
+            baseAheadCommitCount: 1,
+          },
+          linkedDirectories: [
+            {
+              id: "directory:infra",
+              kind: "worktree",
+              label: "Infra",
+              path: "/repo/infra",
+              worktreePath: "/worktrees/infra",
+            },
+            {
+              id: "directory:app",
+              kind: "worktree",
+              label: "App",
+              path: "/repo/app",
+              worktreePath: "/worktrees/app",
+            },
+          ],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review" },
+    });
+    await clickButton("Send");
+
+    expect(screen.getByLabelText("Review project")).toHaveValue("/worktrees/app");
+    await waitFor(() => {
+      expect(screen.getByLabelText("Base branch")).toHaveValue("release");
+    });
+    expect(screen.getByRole("button", { name: "Start review" })).toBeEnabled();
+
+    await clickButton("Start review");
+
+    await waitFor(() => {
+      expect(startReview).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        target: { type: "baseBranch", branch: "release" },
+        delivery: "inline",
+        cwd: "/worktrees/app",
       });
     });
   });

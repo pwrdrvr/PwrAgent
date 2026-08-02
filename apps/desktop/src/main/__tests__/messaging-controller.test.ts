@@ -570,6 +570,48 @@ describe("MessagingController", () => {
     });
   });
 
+  it("defaults a multi-project review to the changed primary workspace", async () => {
+    const navigation = buildMultiProjectReviewNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      gitWorkingState: {
+        ...navigation.threads[0]!.gitWorkingState!,
+        baseAheadCommitCount: 1,
+      },
+      linkedDirectories: [...navigation.threads[0]!.linkedDirectories].reverse(),
+    };
+    const harness = await createHarness({ navigation });
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/review"));
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "review",
+      body: [
+        "Project: App",
+        "Review: Base Branch",
+        "Base Branch: release",
+      ].join("\n"),
+      review: {
+        cwd: "/worktrees/app",
+        repositoryPath: "/repo/app",
+      },
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "review:summary:start" }),
+    );
+
+    expect(harness.submitReview).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      target: { type: "baseBranch", branch: "release" },
+      delivery: "inline",
+      cwd: "/worktrees/app",
+    });
+  });
+
   it("resets a selected commit when changing review projects", async () => {
     const harness = await createHarness({
       navigation: buildMultiProjectReviewNavigationSnapshot(),

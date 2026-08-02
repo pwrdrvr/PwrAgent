@@ -666,6 +666,14 @@ describe("Sidebar", () => {
       />
     );
 
+    const searchButton = screen.getByRole("button", { name: "Search threads" });
+    fireEvent.mouseEnter(searchButton);
+    expect((await screen.findByRole("tooltip")).textContent).toBe(
+      "Open Search All  (Ctrl+Shift+F)\nQuick Thread List Search  (Ctrl+K)\nContext Search  (Ctrl+F) — Thread List in sidebar, Thread Chat elsewhere",
+    );
+    fireEvent.mouseLeave(searchButton);
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+
     const automationsButton = screen.getByRole("button", { name: "Open automations" });
     fireEvent.mouseEnter(automationsButton);
     expect((await screen.findByRole("tooltip")).textContent).toBe("Open automations");
@@ -1287,9 +1295,11 @@ describe("Sidebar", () => {
     );
 
     const browseSection = screen.getByRole("region", { name: "Thread browser" });
-    fireEvent.click(
-      within(browseSection as HTMLElement).getByRole("button", { name: "PwrAgent1" })
-    );
+    const directorySummary = within(browseSection as HTMLElement)
+      .getAllByRole("button", { name: /PwrAgent/i })
+      .find((button) => button.hasAttribute("aria-expanded"));
+    expect(directorySummary).toBeDefined();
+    fireEvent.click(directorySummary!);
     const worktreeThreadButton = within(browseSection as HTMLElement).getByRole("button", {
       name: /Cross-project cleanup/i,
     });
@@ -1484,6 +1494,77 @@ describe("Sidebar", () => {
     expect(
       threadButton.querySelector('[data-thread-status="thinking"]')
     ).not.toBeNull();
+  });
+
+  it("separates active and reviewable threads in directory counts", () => {
+    const backendActiveThread = {
+      ...sharedThread,
+      id: "thread-backend-active",
+      title: "Backend-reported active thread",
+      threadStatus: "active" as const,
+    };
+    const locallyThinkingThread = {
+      ...sharedThread,
+      id: "thread-locally-thinking",
+      title: "Locally initiated active thread",
+    };
+    const idleThread = {
+      ...sharedThread,
+      id: "thread-idle",
+      title: "Idle thread",
+      threadStatus: "idle" as const,
+      inbox: {
+        inInbox: true,
+        reason: "updated-since-seen" as const,
+        lastSeenUpdatedAt: sharedThread.updatedAt - 1,
+      },
+    };
+    const directory: NavigationDirectorySummary = {
+      ...directories[0]!,
+      // The summary's persisted Inbox aggregate includes all three threads,
+      // but the renderer must not count the two active ones again as review.
+      needsAttentionCount: 3,
+      threadKeys: [
+        "codex:thread-backend-active",
+        "codex:thread-locally-thinking",
+        "codex:thread-idle",
+      ],
+    };
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        createThreadError={undefined}
+        directories={[directory]}
+        inboxThreads={[backendActiveThread, locallyThinkingThread, idleThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey={undefined}
+        thinkingThreadKeys={{ "codex:thread-locally-thinking": true }}
+        threads={[backendActiveThread, locallyThinkingThread, idleThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    expect(
+      screen.getByRole("tab", { name: "Directories, 2 active threads" }),
+    ).toBeInTheDocument();
+
+    const summary = screen
+      .getAllByRole("button", { name: /PwrAgent/i })
+      .find((button) => button.hasAttribute("aria-expanded"));
+    expect(summary).toBeDefined();
+    const activeCount = within(summary!).getByTitle("2 active threads");
+    expect(activeCount).toHaveAttribute("data-active-thread-count", "2");
+    expect(activeCount).toHaveTextContent("2 active");
+    const reviewCount = within(summary!).getByTitle("1 thread to review");
+    expect(reviewCount).toHaveAttribute("data-review-thread-count", "1");
+    expect(reviewCount).toHaveTextContent("1 to review");
   });
 
   it("shows an approval chip for threads waiting on an approval request", () => {

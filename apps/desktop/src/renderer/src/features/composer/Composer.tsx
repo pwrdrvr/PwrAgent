@@ -43,6 +43,7 @@ import {
   buildThreadMarkdownLink,
   buildThreadUrl,
   buildReviewBranchOptions,
+  findPreferredReviewWorkspaceCwd,
   parseThreadUrl,
   readCodexEnvironmentActionRuns,
 } from "@pwragent/shared";
@@ -727,6 +728,7 @@ function createReviewConfig(params: {
   };
 }): ReviewConfigState {
   const workspaceOptions = buildReviewWorkspaceOptions(params.thread);
+  const preferredWorkspaceCwd = findPreferredReviewWorkspaceCwd(params.thread);
   const config: ReviewConfigState = {
     branch: buildReviewBranchOptions(params)[0] ?? "main",
     branchSource: "auto",
@@ -734,7 +736,8 @@ function createReviewConfig(params: {
     customInstructions: "",
     target: "baseBranch",
     workspaceCwd: params.reviewCommand?.cwd ?? (
-      workspaceOptions.length === 1 ? workspaceOptions[0]?.cwd : undefined
+      preferredWorkspaceCwd ??
+      (workspaceOptions.length === 1 ? workspaceOptions[0]?.cwd : undefined)
     ),
   };
   const target = params.reviewCommand?.target;
@@ -2562,7 +2565,11 @@ export function Composer(props: ComposerProps) {
   const [recentFileReferences, setRecentFileReferences] = useState<
     ReferencePickerFile[]
   >([]);
-  const [scheduleTick, setScheduleTick] = useState(() => Date.now());
+  // The state only schedules the next countdown render. It must not be used as
+  // the clock itself: a newly received schedule can arrive long after the
+  // previous tick, briefly making its first countdown look much too long.
+  const [scheduleTick, setScheduleTick] = useState(0);
+  const scheduleNow = Date.now();
   const [scheduledDraftSendAt, setScheduledDraftSendAt] = useState<
     number | undefined
   >();
@@ -2785,7 +2792,7 @@ export function Composer(props: ComposerProps) {
   const nextReleasableQueuedTurn = getNextReleasableQueuedTurn(queuedTurns);
   const futureScheduledDraftSendAt = getFutureScheduledSendAt(
     scheduledDraftSendAt,
-    scheduleTick,
+    scheduleNow,
   );
   launchpadUpdateRef.current = props.onUpdateLaunchpad;
   latestDraftSnapshotRef.current = {
@@ -3381,7 +3388,7 @@ export function Composer(props: ComposerProps) {
     }
 
     const timer = window.setInterval(() => {
-      setScheduleTick(Date.now());
+      setScheduleTick((current) => current + 1);
     }, 1_000);
 
     return () => {
@@ -6712,7 +6719,7 @@ export function Composer(props: ComposerProps) {
   const launchpadSubmitting = isLaunchpad && sending;
   const fiveHourResetAt = getFiveHourRateLimitResetAt({
     backend,
-    now: scheduleTick,
+    now: scheduleNow,
     selectedModelOption,
   });
   const scheduledSendOptions: ScheduledSendMenuOption[] = [
@@ -6725,7 +6732,7 @@ export function Composer(props: ComposerProps) {
           {
             label: `Send in ${formatScheduledSendCountdown(
               fiveHourResetAt,
-              scheduleTick,
+              scheduleNow,
             )} (5h context reset)`,
             scheduledSendAt: fiveHourResetAt,
           },
@@ -7747,7 +7754,7 @@ export function Composer(props: ComposerProps) {
                 ? "Auto-fix PR paused"
                 : `Auto-fix PR in ${formatScheduledSendCountdown(
                     prAutoDispatchPending.scheduledAt,
-                    scheduleTick,
+                    scheduleNow,
                   )}`}
             </span>
             <span className="composer__queued-text">
@@ -7796,10 +7803,10 @@ export function Composer(props: ComposerProps) {
       {queuedTurns.map((queued, index) => {
         const scheduledSendAt = getFutureScheduledSendAt(
           queued.scheduledSendAt,
-          scheduleTick,
+          scheduleNow,
         );
         const queuedLabel = scheduledSendAt
-          ? `Sends in ${formatScheduledSendCountdown(scheduledSendAt, scheduleTick)}`
+          ? `Sends in ${formatScheduledSendCountdown(scheduledSendAt, scheduleNow)}`
           : index === 0
             ? "Queued next"
             : `Queued #${index + 1}`;
@@ -8128,7 +8135,7 @@ export function Composer(props: ComposerProps) {
                 {futureScheduledDraftSendAt
                   ? `Send in ${formatScheduledSendCountdown(
                       futureScheduledDraftSendAt,
-                      scheduleTick,
+                      scheduleNow,
                     )}`
                   : "Start review"}
               </button>
@@ -9143,7 +9150,7 @@ export function Composer(props: ComposerProps) {
                   disabled={scheduleButtonDisabled}
                   type="button"
                   onClick={() => {
-                    setScheduleTick(Date.now());
+                    setScheduleTick((current) => current + 1);
                     setScheduleMenuOpen((current) => !current);
                   }}
                 >
@@ -9157,11 +9164,11 @@ export function Composer(props: ComposerProps) {
                     scheduleArmed
                       ? `Send later, in ${formatScheduledSendCountdown(
                           futureScheduledDraftSendAt!,
-                          scheduleTick,
+                          scheduleNow,
                         )}. Uncheck to send now.`
                       : `Send now. Check to send later, in ${formatScheduledSendCountdown(
                           futureScheduledDraftSendAt!,
-                          scheduleTick,
+                          scheduleNow,
                         )}.`
                   }
                   className={[
@@ -9174,7 +9181,7 @@ export function Composer(props: ComposerProps) {
                   role="switch"
                   type="button"
                   onClick={() => {
-                    setScheduleTick(Date.now());
+                    setScheduleTick((current) => current + 1);
                     setScheduleArmed((current) => !current);
                   }}
                 >
@@ -9188,7 +9195,7 @@ export function Composer(props: ComposerProps) {
                     in{" "}
                     {formatScheduledSendCountdown(
                       futureScheduledDraftSendAt!,
-                      scheduleTick,
+                      scheduleNow,
                     )}
                   </span>
                 </button>
