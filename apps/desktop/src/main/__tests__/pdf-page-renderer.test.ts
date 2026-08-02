@@ -1,5 +1,14 @@
+import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { calculatePdfRenderDimensions } from "../messaging/pdf-page-renderer";
+import {
+  calculatePdfRenderDimensions,
+  renderPdfPages,
+} from "../messaging/pdf-page-renderer";
+
+const jeepStickerPageFixture = fileURLToPath(
+  new URL("./fixtures/pdf/jeep-sticker-page-size.pdf", import.meta.url),
+);
 
 describe("PDF page renderer", () => {
   it("uses the full high-profile bounds to rasterize a landscape vector page", () => {
@@ -27,5 +36,21 @@ describe("PDF page renderer", () => {
         width: 792,
       }),
     ).toEqual({ height: 3072, width: 1988 });
+  });
+
+  it("renders a Jeep-sticker-sized PDF page at the selected high-profile resolution", async () => {
+    const pages = await renderPdfPages({
+      data: await readFile(jeepStickerPageFixture),
+      profile: "high",
+    });
+
+    expect(pages).toEqual([
+      expect.objectContaining({
+        height: 1988,
+        pageNumber: 1,
+        width: 3072,
+      }),
+    ]);
+    expect(pages[0]?.dataUrl).toMatch(/^data:image\/png;base64,/);
   });
 });
