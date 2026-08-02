@@ -545,8 +545,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_pr_auto_dispatch_active_thread
   WHERE status IN ('pending', 'dispatching');
 CREATE INDEX IF NOT EXISTS idx_pr_auto_dispatch_pending_schedule
   ON pr_auto_dispatch_claims(status, scheduled_at);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_pr_auto_dispatch_pr_fingerprint
-  ON pr_auto_dispatch_claims(pr_key, fingerprint);
 
 CREATE TABLE IF NOT EXISTS pr_auto_dispatch_incidents (
   backend       TEXT NOT NULL,
@@ -568,6 +566,11 @@ CREATE TABLE IF NOT EXISTS pr_auto_dispatch_candidates (
 );
 CREATE INDEX IF NOT EXISTS idx_pr_auto_dispatch_candidate_winner
   ON pr_auto_dispatch_candidates(pr_key, eligible_since, backend, thread_id);
+`;
+
+const PR_AUTO_DISPATCH_GLOBAL_FINGERPRINT_INDEX = `
+CREATE UNIQUE INDEX IF NOT EXISTS idx_pr_auto_dispatch_pr_fingerprint
+  ON pr_auto_dispatch_claims(pr_key, fingerprint);
 `;
 
 const PR_STATUS_WATCH_SCHEMA = `
@@ -1116,9 +1119,13 @@ export class StateDb {
           );
         `);
         db.exec(PR_AUTO_DISPATCH_SCHEMA);
+        db.exec(PR_AUTO_DISPATCH_GLOBAL_FINGERPRINT_INDEX);
         db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
       })();
     }
+    // Keep current-version databases converged without asking pre-v36 profiles
+    // to install the unique index before the migration above removes duplicates.
+    db.exec(PR_AUTO_DISPATCH_GLOBAL_FINGERPRINT_INDEX);
     return new StateDb(db);
   }
 

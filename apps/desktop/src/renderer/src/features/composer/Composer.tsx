@@ -6887,7 +6887,9 @@ export function Composer(props: ComposerProps) {
     currentThreadEnvActionStartingKey,
   );
   const threadWorkspace = props.thread ? getThreadWorkspace(props.thread) : undefined;
-  const showPrAutoDispatchToggle = threadWorkspace?.gitBacked === true;
+  const showPrAutoDispatchToggle = Boolean(
+    normalizeGitOriginUrl(props.thread?.gitOriginUrl),
+  );
   const hasAttachedPullRequest = props.thread
     ? hasPrimaryWorkspacePullRequest(props.thread)
     : false;

@@ -2632,7 +2632,9 @@ class DesktopAppServerService {
         now: createdAt,
       });
       watch = registration.watch;
-      await this.getPrStatusWatchCoordinator().handleStatusSnapshot(pr, createdAt);
+      if (currentOutcomeIsFresh) {
+        await this.getPrStatusWatchCoordinator().handleStatusSnapshot(pr, createdAt);
+      }
     }
 
     return {
@@ -2656,6 +2658,10 @@ class DesktopAppServerService {
   }): Promise<ThreadPullRequestAutomationStatus> {
     const overlay = await this.getOverlayStore().getThreadOverlayState(params);
     const autoFixEnabled = overlay?.prAutoDispatchEnabled === true;
+    const attachment = this.attachedPrsByThreadKey.get(
+      buildThreadIdentityKey(params.backend, params.threadId),
+    );
+    const hasPrimaryRepo = Boolean(attachment?.primaryRepoKey);
     const primaryPrs = this.primaryAttachedPrsForThread({
       ...params,
       prs: this.canonicalizePrs(overlay?.prs ?? []),
@@ -2670,7 +2676,7 @@ class DesktopAppServerService {
     const ownsAttachedPr = winners.some((winner) =>
       winner?.backend === params.backend && winner.threadId === params.threadId,
     );
-    const waitingForPr = primaryPrs.length === 0;
+    const waitingForPr = hasPrimaryRepo && primaryPrs.length === 0;
     const autoFixActive =
       autoFixEnabled
       && this.backgroundPrPollingEnabled
@@ -2684,7 +2690,9 @@ class DesktopAppServerService {
       ? "Auto-fix PR is active. Do not poll CI and do not create a monitor thread for this PR. End the turn; PwrAgent will start a repair turn on a CI failure or merge conflict. Use watch_thread_pull_request before ending when the thread should also wake on successful completion."
       : autoFixEnabled
         ? this.backgroundPrPollingEnabled
-          ? "Auto-fix PR is enabled, but an older eligible thread owns monitoring for this PR. Do not poll CI or create another monitor; the elected thread receives the PR event."
+          ? hasPrimaryRepo
+            ? "Auto-fix PR is enabled, but an older eligible thread owns monitoring for this PR. Do not poll CI or create another monitor; the elected thread receives the PR event."
+            : "Auto-fix PR is enabled, but this thread has no GitHub primary workspace. PwrAgent cannot monitor PR automation for it; check the PR directly until the thread is attached to a Git workspace."
           : "Auto-fix PR is saved but paused because background PR polling is off. Do not assume PwrAgent will wake this thread until polling is enabled."
         : this.backgroundPrPollingEnabled
           ? "Background PR polling is active, but Auto-fix PR is off for this thread. Use watch_thread_pull_request for a bounded one-shot success/failure notification instead of polling or creating a monitor thread."

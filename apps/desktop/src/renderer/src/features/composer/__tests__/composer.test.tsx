@@ -478,6 +478,7 @@ describe("Composer", () => {
       title: "Fix CI",
       titleSource: "explicit",
       source: "codex",
+      gitOriginUrl: "git@github.com:pwrdrvr/PwrAgent.git",
       linkedDirectories: [
         {
           id: "directory-1",
@@ -543,6 +544,35 @@ describe("Composer", () => {
           source: "codex",
           linkedDirectories: [],
           projectKey: "/projects/scratch",
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: "Auto-fix PR" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("hides Auto-fix PR for a fallback local directory without Git evidence", () => {
+    render(
+      <Composer
+        backgroundPrPollingEnabled
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Local scratch directory",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [
+            {
+              id: "directory-1",
+              kind: "local",
+              label: "Scratch",
+              path: "/projects/scratch",
+            },
+          ],
           inbox: { inInbox: false },
         }}
       />,

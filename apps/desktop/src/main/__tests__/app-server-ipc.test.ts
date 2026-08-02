@@ -682,6 +682,131 @@ describe("app server ipc", () => {
     );
   });
 
+  it("does not advertise Auto-fix as active without a primary Git repository", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+    listThreads.mockResolvedValueOnce([
+      {
+        id: "thread-1",
+        title: "Local scratch directory",
+        titleSource: "explicit",
+        source: "codex",
+        linkedDirectories: [
+          {
+            id: "directory:/projects/scratch",
+            kind: "local",
+            label: "Scratch",
+            path: "/projects/scratch",
+          },
+        ],
+        updatedAt: 2000,
+      },
+    ] as never);
+    getThreadOverlayState.mockResolvedValue({
+      backend: "codex",
+      threadId: "thread-1",
+      executionMode: "default",
+      extraLinkedDirectories: [],
+      prAutoDispatchEnabled: true,
+    });
+
+    registerAppServerIpcHandlers();
+    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    const autoDispatchHandlers = setThreadPrAutoDispatchHandler.mock.calls.at(-1)?.[0];
+    expect(autoDispatchHandlers).toBeDefined();
+    await vi.waitFor(async () => {
+      const status = await autoDispatchHandlers?.inspect({
+        backend: "codex",
+        threadId: "thread-1",
+      });
+      expect(status).toMatchObject({
+        backgroundPollingEnabled: true,
+        autoFixEnabled: true,
+        autoFixActive: false,
+        guidance: expect.stringContaining("no GitHub primary workspace"),
+      });
+    });
+  });
+
+  it("keeps a new PR watch pending when the cached outcome is stale", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+    const stalePr = githubPr({
+      number: 1128,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      title: "PR automation",
+      state: "failing",
+      headSha: "a".repeat(40),
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/1128",
+    });
+    readPrStatusCache.mockResolvedValueOnce({
+      "github.com/pwrdrvr/pwragent#1128": {
+        provider: "github.com",
+        prKey: "github.com/pwrdrvr/pwragent#1128",
+        fetchedAt: Date.now() - 60_000,
+        pr: stalePr,
+      },
+    });
+    listThreads.mockResolvedValueOnce([
+      {
+        id: "thread-1",
+        title: "PR automation",
+        titleSource: "explicit",
+        source: "codex",
+        gitOriginUrl: "git@github.com:pwrdrvr/PwrAgent.git",
+        linkedDirectories: [
+          {
+            id: "directory:/repo/PwrAgent",
+            kind: "local",
+            label: "PwrAgent",
+            path: "/repo/PwrAgent",
+          },
+        ],
+        prs: [stalePr],
+        updatedAt: 2000,
+      },
+    ] as never);
+    getThreadOverlayState.mockResolvedValue({
+      backend: "codex",
+      threadId: "thread-1",
+      executionMode: "default",
+      extraLinkedDirectories: [],
+      prs: [stalePr],
+    });
+
+    registerAppServerIpcHandlers();
+    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    const autoDispatchHandlers = setThreadPrAutoDispatchHandler.mock.calls.at(-1)?.[0];
+    await vi.waitFor(async () => {
+      const status = await autoDispatchHandlers?.inspect({
+        backend: "codex",
+        threadId: "thread-1",
+      });
+      expect(status?.backgroundPollingEnabled).toBe(true);
+    });
+    const watchHandler = setThreadPullRequestWatchToolHandler.mock.calls.at(-1)?.[0];
+    const response = await watchHandler?.({
+      backend: "codex",
+      threadId: "thread-1",
+      notifyOn: ["failure"],
+    });
+
+    expect(response).toMatchObject({
+      ok: true,
+      data: {
+        pullRequestWatch: {
+          watch: {
+            prKey: "github.com/pwrdrvr/pwragent#1128",
+            notifyOn: ["failure"],
+          },
+        },
+      },
+    });
+    expect(registerThreadPrStatusWatch).toHaveBeenCalledOnce();
+    expect(claimThreadPrStatusWatches).not.toHaveBeenCalled();
+  });
+
   it("aggregates navigation snapshots across backends by default", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
