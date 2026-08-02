@@ -1,6 +1,7 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ArchiveWorktreeRequest,
@@ -707,6 +708,60 @@ describe("app server ipc", () => {
         filePaths: [pdfPath, nonPdfPath],
         pdfPaths: [pdfPath],
       });
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  it("renders and revalidates an explicit Composer PDF preview without caching it main-side", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-pdf-preview-ipc-"));
+    const pdfPath = path.join(root, "Jeep");
+    const nonPdfPath = path.join(root, "notes.pdf");
+    const fixture = await readFile(
+      fileURLToPath(
+        new URL("./fixtures/pdf/jeep-sticker-page-size.pdf", import.meta.url),
+      ),
+    );
+    await writeFile(pdfPath, fixture);
+    await writeFile(nonPdfPath, "not a PDF");
+    try {
+      const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+      const { NAVIGATION_RENDER_COMPOSER_PDF_PREVIEW_CHANNEL } = await import(
+        "../../shared/ipc"
+      );
+      registerAppServerIpcHandlers();
+
+      const handler = handlers.get(NAVIGATION_RENDER_COMPOSER_PDF_PREVIEW_CHANNEL);
+      expect(handler).toBeDefined();
+      const initial = await handler!({}, { path: pdfPath });
+      expect(initial).toMatchObject({
+        dataUrl: expect.stringMatching(/^data:image\/png;base64,/),
+        fileIdentity: expect.any(String),
+        pageCount: 1,
+        unchanged: false,
+      });
+      const initialIdentity = (initial as { fileIdentity: string }).fileIdentity;
+
+      await expect(
+        handler!({}, { knownFileIdentity: initialIdentity, path: pdfPath }),
+      ).resolves.toEqual({
+        fileIdentity: initialIdentity,
+        unchanged: true,
+      });
+
+      await writeFile(pdfPath, Buffer.concat([fixture, Buffer.from("\n% preview mutation\n")]));
+      const changed = await handler!({}, {
+        knownFileIdentity: initialIdentity,
+        path: pdfPath,
+      });
+      expect(changed).toMatchObject({
+        dataUrl: expect.stringMatching(/^data:image\/png;base64,/),
+        unchanged: false,
+      });
+      expect((changed as { fileIdentity: string }).fileIdentity).not.toBe(initialIdentity);
+      await expect(handler!({}, { path: nonPdfPath })).rejects.toThrow(
+        "no longer a PDF",
+      );
     } finally {
       await rm(root, { force: true, recursive: true });
     }

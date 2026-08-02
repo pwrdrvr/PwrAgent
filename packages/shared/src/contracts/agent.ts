@@ -725,6 +725,35 @@ export type InspectPdfReferencePathsResponse = {
 };
 
 /**
+ * Request a local, low-resolution Composer preview after a reference has
+ * already been explicitly selected. `knownFileIdentity` is an opaque,
+ * in-memory cache key: main revalidates it before deciding whether a new
+ * raster is needed.
+ */
+export type RenderComposerPdfPreviewRequest = {
+  knownFileIdentity?: string;
+  path: string;
+};
+
+/**
+ * UI-only local PDF preview. The image data must not be persisted in a
+ * Composer draft or forwarded as a turn input.
+ */
+export type RenderComposerPdfPreviewResponse =
+  | {
+      fileIdentity: string;
+      unchanged: true;
+    }
+  | {
+      dataUrl: string;
+      fileIdentity: string;
+      height: number;
+      pageCount: number;
+      unchanged: false;
+      width: number;
+    };
+
+/**
  * Recently referenced files for the composer's reference picker. The main
  * process persists a small most-recent-first list of paths (capped,
  * deduped by path) and computes each label from the path's basename.
