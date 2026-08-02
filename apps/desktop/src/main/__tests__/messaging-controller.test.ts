@@ -1237,6 +1237,61 @@ describe("MessagingController", () => {
     );
   });
 
+  it("binds an accepted every-message topic to its default Agent without a mention", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      title: "Topic Agent",
+      agent: {
+        name: "Topic Agent",
+        instructionLineCount: 1,
+        instructionsTooLong: false,
+        updatedAt: 1500,
+      },
+    };
+    const harness = await createHarness({
+      navigation,
+      responseModeForConversation: () => "every_message",
+    });
+    const channel = buildTopicChannel("13056");
+    const event = buildTextEvent("who are you?", { channel });
+    await harness.store.upsertDefaultAgentAssignment({
+      id: "default-agent:telegram-provider",
+      scope: {
+        kind: "provider",
+        channel: "telegram",
+      },
+      target: {
+        kind: "agent",
+        backend: "codex",
+        threadId: "thread-1",
+      },
+      createdAt: 1000,
+      updatedAt: 1000,
+    });
+
+    await harness.controller.handleInboundEvent(event);
+
+    await expect(
+      harness.store.findActiveBindingForChannel(channel),
+    ).resolves.toMatchObject({
+      backend: "codex",
+      channel,
+      targetKind: "agent_thread",
+      threadId: "thread-1",
+    });
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        input: [{ type: "text", text: "who are you?" }],
+        threadId: "thread-1",
+      }),
+    );
+    expect(harness.delivered).not.toContainEqual(
+      expect.objectContaining({ title: "PwrAgent commands" }),
+    );
+  });
+
   it("creates a child for an addressed unbound root and admits the default Agent turn there", async () => {
     const navigation = buildNavigationSnapshot();
     navigation.threads[0] = {
@@ -1410,6 +1465,7 @@ describe("MessagingController", () => {
       channel: "slack",
       createManagedConversation,
       navigation,
+      responseModeForConversation: () => "mention_only",
     });
     const channel = {
       channel: "slack" as const,
@@ -1427,10 +1483,7 @@ describe("MessagingController", () => {
 
     expect(createManagedConversation).not.toHaveBeenCalled();
     expect(harness.startTurn).not.toHaveBeenCalled();
-    expect(harness.delivered.at(-1)).toMatchObject({
-      kind: "confirmation",
-      title: "PwrAgent commands",
-    });
+    expect(harness.delivered).toHaveLength(0);
   });
 
   it("revokes a stale specific default and continues to a valid broader default", async () => {

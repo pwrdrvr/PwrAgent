@@ -246,7 +246,9 @@ export function MessagingRoutesSettings(props: {
         <div className="messaging-routes__toolbar">
           <div>
             <strong>Default Agents</strong>
-            <span>Choose which Agent receives addressed messages on unbound surfaces.</span>
+            <span>
+              Choose which Agent receives messages PwrAgent handles on unbound surfaces.
+            </span>
           </div>
           <button
             className="button button--secondary messaging-routes__add"

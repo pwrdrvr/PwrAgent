@@ -2396,13 +2396,10 @@ export class MessagingController {
 
     const binding = await this.options.store.findActiveBindingForChannel(event.channel);
     if (!binding) {
-      if (
-        event.botMention &&
-        await this.bootstrapDefaultAgentForAddressedMessage(event)
-      ) {
+      if (!await this.shouldHandleAmbientSharedMessage(event)) {
         return;
       }
-      if (!await this.shouldHandleAmbientSharedMessage(event)) {
+      if (await this.bootstrapDefaultAgentForAcceptedMessage(event)) {
         return;
       }
       await this.presentHelp(event);
@@ -2425,7 +2422,7 @@ export class MessagingController {
     await this.turnAdmission.append({ binding, event });
   }
 
-  private async bootstrapDefaultAgentForAddressedMessage(
+  private async bootstrapDefaultAgentForAcceptedMessage(
     event: MessagingInboundTextEvent,
   ): Promise<boolean> {
     const assignments =

@@ -929,7 +929,7 @@ textarea,
   flex: none;
   height: 18px;
   padding: 0 6px;
-  font-family: var(--font-sans);
+  font-family: var(--font-sans, sans-serif);
   font-size: 10px;
 }
 
