@@ -423,6 +423,12 @@ export type AppServerThreadImagePart = {
   type: "image";
   url: string;
   alt?: string;
+  /**
+   * Canonical local source URL when this image was discovered from a Markdown
+   * link. The renderer uses it to make the original link open the same image
+   * in PwrAgent rather than delegating it to an external editor.
+   */
+  sourceUrl?: string;
 };
 
 export type AppServerThreadMessagePart =

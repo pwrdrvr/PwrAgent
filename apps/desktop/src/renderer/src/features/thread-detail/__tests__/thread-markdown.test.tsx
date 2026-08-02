@@ -122,6 +122,58 @@ describe("ThreadMarkdown", () => {
     });
   });
 
+  it("opens Markdown-linked images in PwrAgent instead of the configured editor", () => {
+    const onOpenImage = vi.fn();
+    const openApplication = vi.fn(async () => ({ opened: true as const }));
+    const sourceUrl = "file:///Users/huntharo/.codex/worktrees/pwrgit/build/dmg-background.png";
+    const imagePart = {
+      type: "image" as const,
+      url: `pwragent-image://file/${encodeURIComponent(sourceUrl)}`,
+      sourceUrl,
+      alt: "dmg-background.png",
+    };
+
+    render(
+      <ThreadMarkdown
+        applications={{
+          editors: [
+            {
+              id: "vscode",
+              kind: "editor",
+              name: "VS Code",
+              source: "application",
+              appPath: "/Applications/Visual Studio Code.app",
+              canOpenWorkspace: true,
+            },
+          ],
+          terminals: [],
+          preferredEditorId: { value: "vscode", source: "config" },
+          preferredTerminalId: { value: "", source: "default" },
+          gh: {
+            path: { value: "", source: "default" },
+            discovery: { candidates: [] },
+          },
+          git: {
+            discovery: { candidates: [] },
+          },
+        }}
+        desktopApi={{ openApplication }}
+        imageParts={[imagePart]}
+        onOpenImage={onOpenImage}
+        text={"The branded DMG background is at [dmg-background.png](/Users/huntharo/.codex/worktrees/pwrgit/build/dmg-background.png)."}
+      />
+    );
+
+    const link = screen.getByRole("link", { name: "dmg-background.png" });
+    expect(link).toHaveAttribute("href", imagePart.url);
+    expect(link).toHaveAttribute("title", "Open image in PwrAgent");
+
+    fireEvent.click(link);
+
+    expect(onOpenImage).toHaveBeenCalledWith(imagePart);
+    expect(openApplication).not.toHaveBeenCalled();
+  });
+
   it("opens markdown file links in a document modal and keeps the editor icon separate", async () => {
     const openApplication = vi.fn(async () => ({ opened: true as const }));
     const openMarkdownFileViewer = vi.fn(async () => ({ opened: true as const }));

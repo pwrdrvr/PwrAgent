@@ -3392,6 +3392,237 @@ function extractFunctionCallOutputFromReplayItem(
   return undefined;
 }
 
+function extractCustomToolOutputImagePartsFromReplayItem(
+  item: Record<string, unknown>
+): AppServerThreadImagePart[] {
+  const candidates = [item];
+  for (const key of ["payload", "item", "responseItem", "response_item"]) {
+    const nestedItem = asRecord(item[key]);
+    if (nestedItem) {
+      candidates.push(nestedItem);
+    }
+  }
+
+  return dedupeImageParts(
+    candidates.flatMap((candidate) => {
+      if (normalizeItemType(pickString(candidate, ["type"])) !== "customtoolcalloutput") {
+        return [];
+      }
+
+      return extractCustomToolOutputImageParts(candidate.output);
+    }),
+  );
+}
+
+function extractCustomToolOutputImageParts(value: unknown): AppServerThreadImagePart[] {
+  const parsed = parseStructuredValue(value);
+  const parts = [
+    ...extractStructuredMessageParts(value),
+    ...extractImagePartsFromValue(value),
+    ...(parsed === value
+      ? []
+      : [
+          ...extractStructuredMessageParts(parsed),
+          ...extractImagePartsFromValue(parsed),
+        ]),
+  ];
+
+  return parts.filter(
+    (part): part is AppServerThreadImagePart => part.type === "image",
+  );
+}
+
+function extractMcpToolResultImagePartsFromReplayItem(
+  item: Record<string, unknown>
+): AppServerThreadImagePart[] {
+  const candidates = [item];
+  for (const key of ["payload", "item", "responseItem", "response_item"]) {
+    const nestedItem = asRecord(item[key]);
+    if (nestedItem) {
+      candidates.push(nestedItem);
+    }
+  }
+
+  return dedupeImageParts(
+    candidates.flatMap((candidate) => {
+      if (normalizeItemType(pickString(candidate, ["type"])) !== "mcptoolcall") {
+        return [];
+      }
+
+      const result = asRecord(candidate.result);
+      const structuredContent =
+        asRecord(result?.structuredContent) ??
+        asRecord(result?.structured_content);
+      if (!structuredContent) {
+        return [];
+      }
+
+      const structuredImageParts = extractStructuredMessageParts(structuredContent).filter(
+        (part): part is AppServerThreadImagePart => part.type === "image",
+      );
+      const signedImagePart = buildMcpSignedImagePart(structuredContent);
+      return signedImagePart
+        ? [...structuredImageParts, signedImagePart]
+        : structuredImageParts;
+    }),
+  );
+}
+
+function buildMcpSignedImagePart(
+  structuredContent: Record<string, unknown>,
+): AppServerThreadImagePart | undefined {
+  const signedUrl = pickString(structuredContent, ["signedUrl", "signed_url"]);
+  const mimeType = pickString(structuredContent, ["mimeType", "mime_type"]);
+  if (!signedUrl || !mimeType?.toLowerCase().startsWith("image/") || !isLoopbackUrl(signedUrl)) {
+    return undefined;
+  }
+
+  const imagePart = buildImagePartFromUrl(signedUrl);
+  if (!imagePart) {
+    return undefined;
+  }
+
+  const alt = pickString(structuredContent, ["alt", "altText", "alt_text", "title", "name"]);
+  if (alt) {
+    imagePart.alt = alt;
+  }
+  return imagePart;
+}
+
+function isLoopbackUrl(value: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return false;
+  }
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return false;
+  }
+
+  const hostname = parsed.hostname.toLowerCase();
+  return (
+    hostname === "localhost"
+    || hostname === "127.0.0.1"
+    || hostname === "::1"
+    || hostname.endsWith(".localhost")
+  );
+}
+
+function dedupeImageParts(
+  imageParts: AppServerThreadImagePart[]
+): AppServerThreadImagePart[] {
+  const seenUrls = new Set<string>();
+  return imageParts.filter((imagePart) => {
+    if (seenUrls.has(imagePart.url)) {
+      return false;
+    }
+    seenUrls.add(imagePart.url);
+    return true;
+  });
+}
+
+function appendImagePartsToMessage<T extends {
+  parts?: AppServerThreadMessagePart[];
+  text: string;
+}>(
+  message: T,
+  imageParts: AppServerThreadImagePart[],
+): T {
+  const existingImageUrls = new Set(
+    (message.parts ?? [])
+      .filter((part): part is AppServerThreadImagePart => part.type === "image")
+      .map((part) => part.url),
+  );
+  const missingImageParts = imageParts.filter((imagePart) => {
+    if (existingImageUrls.has(imagePart.url)) {
+      return false;
+    }
+    existingImageUrls.add(imagePart.url);
+    return true;
+  });
+  if (missingImageParts.length === 0) {
+    return message;
+  }
+
+  return {
+    ...message,
+    parts: [
+      ...(message.parts ?? (message.text ? [{ type: "text", text: message.text }] : [])),
+      ...missingImageParts,
+    ],
+  };
+}
+
+function attachCustomToolOutputImagesToTurn(params: {
+  createdAt?: number;
+  entries: AppServerThreadEntry[];
+  imageParts: AppServerThreadImagePart[];
+  startIndex: number;
+  turn?: AppServerThreadTurnMetadata;
+}): void {
+  if (params.imageParts.length === 0) {
+    return;
+  }
+
+  let fallbackAssistantIndex: number | undefined;
+  for (let index = params.entries.length - 1; index >= params.startIndex; index -= 1) {
+    const entry = params.entries[index];
+    if (entry?.type !== "message" || entry.role !== "assistant") {
+      continue;
+    }
+    if (entry.phase === "final") {
+      params.entries[index] = appendImagePartsToMessage(entry, params.imageParts);
+      return;
+    }
+    fallbackAssistantIndex ??= index;
+  }
+
+  if (fallbackAssistantIndex !== undefined) {
+    const entry = params.entries[fallbackAssistantIndex];
+    if (entry?.type === "message") {
+      params.entries[fallbackAssistantIndex] = appendImagePartsToMessage(entry, params.imageParts);
+    }
+    return;
+  }
+
+  params.entries.push({
+    type: "message",
+    id: `tool-output-images-${params.turn?.id ?? params.entries.length + 1}`,
+    role: "assistant",
+    text: "",
+    parts: params.imageParts,
+    createdAt: params.createdAt,
+    ...(params.turn ? { turn: params.turn } : {}),
+  });
+}
+
+function mergeEntryImagePartsIntoReplayMessages(
+  messages: AppServerThreadReplay["messages"],
+  entries: AppServerThreadEntry[],
+): AppServerThreadReplay["messages"] {
+  const entriesById = new Map(
+    entries.flatMap((entry) =>
+      entry.type === "message" && entry.parts?.some((part) => part.type === "image")
+        ? [[entry.id, entry] as const]
+        : [],
+    ),
+  );
+
+  return messages.map((message) => {
+    const entry = entriesById.get(message.id);
+    if (!entry || entry.role !== message.role) {
+      return message;
+    }
+
+    const imageParts = entry.parts?.filter(
+      (part): part is AppServerThreadImagePart => part.type === "image",
+    ) ?? [];
+    return appendImagePartsToMessage(message, imageParts);
+  });
+}
+
 function attachFunctionCallOutput(
   items: Record<string, unknown>[],
   output: { callId: string; output: string }
@@ -4115,6 +4346,7 @@ function extractThreadEntries(
   const entries: AppServerThreadEntry[] = [];
 
   for (const turn of turns) {
+    const turnStartIndex = entries.length;
     const turnMetadata = extractTurnMetadata(turn);
     const turnPricingContext = extractTokenUsagePricingContext(turn);
     const createdAt = normalizeEpochTimestamp(
@@ -4125,6 +4357,12 @@ function extractThreadEntries(
           .map((entry) => asRecord(entry))
           .filter((entry): entry is Record<string, unknown> => entry !== null)
       : [];
+    const assistantImageParts = dedupeImageParts(
+      rawItems.flatMap((item) => [
+        ...extractCustomToolOutputImagePartsFromReplayItem(item),
+        ...extractMcpToolResultImagePartsFromReplayItem(item),
+      ]),
+    );
     const assistantReviewTexts = collectAssistantReviewTexts(rawItems);
     const suppressedAssistantTexts = collectReviewSuppressionTexts(rawItems);
     for (const text of assistantReviewTexts) {
@@ -4242,6 +4480,13 @@ function extractThreadEntries(
     }
 
     flushActivityItems();
+    attachCustomToolOutputImagesToTurn({
+      createdAt: turnMetadata?.completedAt ?? createdAt,
+      entries,
+      imageParts: assistantImageParts,
+      startIndex: turnStartIndex,
+      turn: turnMetadata,
+    });
   }
 
   return entries;
@@ -4275,7 +4520,10 @@ export function extractThreadReplayFromReadResult(
   options: { threadId?: string } = {}
 ): AppServerThreadReplay {
   const entries = extractThreadEntries(value, options);
-  const messages = extractConversationMessages(value);
+  const messages = mergeEntryImagePartsIntoReplayMessages(
+    extractConversationMessages(value),
+    entries,
+  );
   const agentName = extractCodexNativeAgentName(value);
   let lastUserMessage: string | undefined;
   let lastAssistantMessage: string | undefined;

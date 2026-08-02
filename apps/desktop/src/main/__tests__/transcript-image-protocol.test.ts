@@ -213,6 +213,66 @@ describe("transcript image protocol", () => {
     await expect(readFile(materializedPath)).resolves.toEqual(Buffer.from([1, 2, 3]));
   });
 
+  it("adds approved local Markdown image links to transcript galleries", async () => {
+    const { materializeTranscriptImageUrlsForRenderer } = await import(
+      "../transcript-image-protocol"
+    );
+    const imagePath = path.join(tempDir, "worktree", "dmg-background.png");
+    const linkedImagePath = "/tmp/worktree/dmg-background.png";
+    const sourceUrl = pathToFileURL(linkedImagePath).toString();
+    const resolveLocalImageLink = vi.fn(async () => ({
+      ok: true as const,
+      path: imagePath,
+      mimeType: "image/png",
+    }));
+    const message = {
+      id: "message-image-link",
+      role: "assistant" as const,
+      text: "The background is [dmg-background.png](/tmp/worktree/dmg-background.png).",
+    };
+
+    const response = await materializeTranscriptImageUrlsForRenderer(
+      {
+        backend: "codex",
+        fetchedAt: 1,
+        threadId: "thread-image-link",
+        replay: {
+          entries: [{ type: "message", ...message }],
+          messages: [message],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      },
+      {
+        resolveLocalImageLink,
+      }
+    );
+
+    expect(resolveLocalImageLink).toHaveBeenCalledTimes(1);
+    expect(resolveLocalImageLink).toHaveBeenCalledWith(linkedImagePath);
+    const expectedImagePart = {
+      type: "image",
+      url: `pwragent-image://file/${encodeURIComponent(pathToFileURL(imagePath).toString())}`,
+      sourceUrl,
+      alt: "dmg-background.png",
+    };
+    expect(response.replay.entries[0]).toMatchObject({
+      type: "message",
+      parts: [
+        { type: "text", text: message.text },
+        expectedImagePart,
+      ],
+    });
+    expect(response.replay.messages[0]).toMatchObject({
+      parts: [
+        { type: "text", text: message.text },
+        expectedImagePart,
+      ],
+    });
+  });
+
   it("keeps data image URLs when materialization writes fail", async () => {
     const { materializeTranscriptImageUrlsForRenderer } = await import(
       "../transcript-image-protocol"

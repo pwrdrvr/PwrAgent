@@ -3,6 +3,7 @@ import type {
   AppServerBackendKind,
   AppServerReadThreadResponse,
   AppServerThreadEntry,
+  AppServerThreadImagePart,
   AppServerThreadMessage,
   AppServerThreadMessageEntry,
   AppServerThreadMessagePart,
@@ -37,6 +38,8 @@ const DATA_IMAGE_EXTENSIONS = new Map<string, string>([
   ["image/webp", "webp"],
 ]);
 
+const MARKDOWN_LINKED_IMAGE_PATTERN = /!?\[([^\]\r\n]*)\]\(\s*(?:<([^>\r\n]+)>|([^\s)]+))[^)]*\)/g;
+
 export type TranscriptImageProtocolOptions = {
   env?: NodeJS.ProcessEnv;
   homeDir?: string;
@@ -48,6 +51,7 @@ export type TranscriptImageMaterializerDependencies = {
     threadId: string;
   }) => string;
   mkdir: (dirPath: string, options: { recursive: true }) => Promise<unknown>;
+  resolveLocalImageLink: (sourcePath: string) => Promise<TranscriptImageFileResolution>;
   writeFile: (filePath: string, data: Buffer) => Promise<unknown>;
 };
 
@@ -66,6 +70,7 @@ const defaultMaterializerDependencies: TranscriptImageMaterializerDependencies =
       ),
     ),
   mkdir,
+  resolveLocalImageLink: resolveTranscriptImageFile,
   writeFile,
 };
 
@@ -92,6 +97,10 @@ export async function materializeTranscriptImageUrlsForRenderer(
 ): Promise<AppServerReadThreadResponse> {
   const deps = { ...defaultMaterializerDependencies, ...dependencies };
   const materializedFileWrites = new Map<string, Promise<void>>();
+  const markdownLinkImageResolutions = new Map<
+    string,
+    Promise<TranscriptImageFileResolution>
+  >();
 
   return {
     ...response,
@@ -104,6 +113,7 @@ export async function materializeTranscriptImageUrlsForRenderer(
             response,
             deps,
             materializedFileWrites,
+            markdownLinkImageResolutions,
           ),
         ),
       ),
@@ -114,6 +124,7 @@ export async function materializeTranscriptImageUrlsForRenderer(
             response,
             deps,
             materializedFileWrites,
+            markdownLinkImageResolutions,
           ),
         ),
       ),
@@ -139,6 +150,7 @@ async function materializeTranscriptEntryImageUrls(
   response: AppServerReadThreadResponse,
   deps: TranscriptImageMaterializerDependencies,
   materializedFileWrites: Map<string, Promise<void>>,
+  markdownLinkImageResolutions: Map<string, Promise<TranscriptImageFileResolution>>,
 ): Promise<AppServerThreadEntry> {
   if (entry.type !== "message") {
     return entry;
@@ -149,6 +161,7 @@ async function materializeTranscriptEntryImageUrls(
     response,
     deps,
     materializedFileWrites,
+    markdownLinkImageResolutions,
   )) as AppServerThreadMessageEntry;
 }
 
@@ -157,19 +170,25 @@ async function materializeTranscriptMessageImageUrls<T extends AppServerThreadMe
   response: AppServerReadThreadResponse,
   deps: TranscriptImageMaterializerDependencies,
   materializedFileWrites: Map<string, Promise<void>>,
+  markdownLinkImageResolutions: Map<string, Promise<TranscriptImageFileResolution>>,
 ): Promise<T> {
+  const messageWithMarkdownLinkImages = await appendMarkdownLinkImageParts(
+    message,
+    deps,
+    markdownLinkImageResolutions,
+  );
   if (
-    !message.parts?.some(
+    !messageWithMarkdownLinkImages.parts?.some(
       (part) => part.type === "image" && isMaterializableImageUrl(part.url),
     )
   ) {
-    return message;
+    return messageWithMarkdownLinkImages;
   }
 
   return {
-    ...message,
+    ...messageWithMarkdownLinkImages,
     parts: await Promise.all(
-      message.parts.map((part) =>
+      messageWithMarkdownLinkImages.parts.map((part) =>
         materializeTranscriptMessagePartImageUrl(
           part,
           response,
@@ -224,6 +243,174 @@ async function materializeTranscriptMessagePartImageUrl(
   } catch {
     return part;
   }
+}
+
+async function appendMarkdownLinkImageParts<T extends AppServerThreadMessage>(
+  message: T,
+  deps: TranscriptImageMaterializerDependencies,
+  markdownLinkImageResolutions: Map<string, Promise<TranscriptImageFileResolution>>,
+): Promise<T> {
+  const textParts = message.parts?.filter(
+    (part): part is Extract<AppServerThreadMessagePart, { type: "text" }> =>
+      part.type === "text",
+  ) ?? (message.text ? [{ type: "text", text: message.text }] : []);
+  const imageLinks = textParts.flatMap((part) => extractMarkdownLinkedImageParts(part.text));
+  if (imageLinks.length === 0) {
+    return message;
+  }
+
+  const existingParts = message.parts ?? textParts;
+  const existingSourceUrls = new Set(
+    existingParts.flatMap((part) =>
+      part.type === "image"
+        ? [part.sourceUrl, isFileImageUrl(part.url) ? part.url : undefined]
+        : [],
+    ).filter((url): url is string => Boolean(url)),
+  );
+  const imageParts: AppServerThreadImagePart[] = [];
+
+  for (const imageLink of imageLinks) {
+    const resolution = await resolveMarkdownLinkedImage(
+      imageLink.sourcePath,
+      deps,
+      markdownLinkImageResolutions,
+    );
+    if (!resolution.ok) {
+      continue;
+    }
+
+    const sourceUrl = pathToFileURL(imageLink.sourcePath).toString();
+    if (existingSourceUrls.has(sourceUrl)) {
+      continue;
+    }
+    existingSourceUrls.add(sourceUrl);
+    imageParts.push({
+      type: "image",
+      url: toTranscriptImageProtocolUrl(pathToFileURL(resolution.path).toString()),
+      sourceUrl,
+      alt: imageLink.alt || path.basename(resolution.path),
+    });
+  }
+
+  if (imageParts.length === 0) {
+    return message;
+  }
+
+  return {
+    ...message,
+    parts: [...existingParts, ...imageParts],
+  };
+}
+
+function resolveMarkdownLinkedImage(
+  sourcePath: string,
+  deps: TranscriptImageMaterializerDependencies,
+  resolutions: Map<string, Promise<TranscriptImageFileResolution>>,
+): Promise<TranscriptImageFileResolution> {
+  const existing = resolutions.get(sourcePath);
+  if (existing) {
+    return existing;
+  }
+
+  const resolution = deps.resolveLocalImageLink(sourcePath).catch(() => ({
+    ok: false as const,
+    status: 500,
+    message: "could not resolve Markdown-linked image",
+  }));
+  resolutions.set(sourcePath, resolution);
+  return resolution;
+}
+
+function extractMarkdownLinkedImageParts(text: string): Array<{
+  alt?: string;
+  sourcePath: string;
+}> {
+  const output: Array<{ alt?: string; sourcePath: string }> = [];
+  let fenceMarker: "`" | "~" | undefined;
+
+  for (const line of text.split(/\r?\n/u)) {
+    const fence = /^\s{0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+    if (fence) {
+      const marker = fence[0] as "`" | "~";
+      if (!fenceMarker) {
+        fenceMarker = marker;
+      } else if (fenceMarker === marker) {
+        fenceMarker = undefined;
+      }
+      continue;
+    }
+    if (fenceMarker) {
+      continue;
+    }
+
+    MARKDOWN_LINKED_IMAGE_PATTERN.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = MARKDOWN_LINKED_IMAGE_PATTERN.exec(line))) {
+      if (isInsideInlineCode(line, match.index)) {
+        continue;
+      }
+
+      const sourcePath = localImageLinkPath(match[2] ?? match[3] ?? "");
+      if (!sourcePath || !mimeTypeForImagePath(sourcePath)) {
+        continue;
+      }
+      output.push({
+        alt: match[1]?.trim() || undefined,
+        sourcePath,
+      });
+    }
+  }
+
+  return output;
+}
+
+function localImageLinkPath(destination: string): string | undefined {
+  const trimmed = destination.trim();
+  if (trimmed.startsWith("file://")) {
+    try {
+      return fileURLToPath(trimmed);
+    } catch {
+      return undefined;
+    }
+  }
+
+  if (trimmed.startsWith("/")) {
+    return safelyDecodeUriComponent(trimmed);
+  }
+
+  if (trimmed.startsWith("~/")) {
+    return path.join(os.homedir(), safelyDecodeUriComponent(trimmed.slice(2)));
+  }
+
+  return undefined;
+}
+
+function safelyDecodeUriComponent(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function isInsideInlineCode(line: string, offset: number): boolean {
+  let markerLength = 0;
+  for (let index = 0; index < offset; index += 1) {
+    if (line[index] !== "`" || line[index - 1] === "\\") {
+      continue;
+    }
+    let length = 1;
+    while (line[index + length] === "`") {
+      length += 1;
+    }
+    if (markerLength === 0) {
+      markerLength = length;
+    } else if (markerLength === length) {
+      markerLength = 0;
+    }
+    index += length - 1;
+  }
+  return markerLength > 0;
 }
 
 function rewriteTranscriptEntryImageUrls(entry: AppServerThreadEntry): AppServerThreadEntry {

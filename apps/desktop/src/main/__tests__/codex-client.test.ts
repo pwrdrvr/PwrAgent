@@ -3684,6 +3684,145 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("attaches custom tool output images to the final assistant message", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const imageUrl = "data:image/jpeg;base64,AQID";
+    MockTransport.readThreadResultByThreadId.set("thread-custom-tool-image", {
+      thread: {
+        turns: [
+          {
+            id: "turn-custom-tool-image",
+            startedAt: 1_763_500_150,
+            items: [
+              {
+                type: "userMessage",
+                id: "user-message",
+                text: "Show the most recent screenshot.",
+              },
+              {
+                type: "agentMessage",
+                id: "assistant-commentary",
+                phase: "commentary",
+                text: "I found the screenshot.",
+              },
+              {
+                type: "response_item",
+                payload: {
+                  type: "custom_tool_call_output",
+                  call_id: "call-screenshot",
+                  output: [
+                    { type: "input_text", text: "PwrSnap screenshot" },
+                    { type: "input_image", image_url: imageUrl },
+                  ],
+                },
+              },
+              {
+                type: "agentMessage",
+                id: "assistant-final",
+                phase: "final_answer",
+                text: "There it is.",
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const replay = await client.readThread({ threadId: "thread-custom-tool-image" });
+    const finalEntry = replay.entries.find(
+      (entry) => entry.type === "message" && entry.id === "assistant-final",
+    );
+    const finalMessage = replay.messages.find((message) => message.id === "assistant-final");
+
+    expect(finalEntry).toMatchObject({
+      type: "message",
+      role: "assistant",
+      text: "There it is.",
+      parts: [
+        { type: "text", text: "There it is." },
+        { type: "image", url: imageUrl },
+      ],
+    });
+    expect(finalMessage).toMatchObject({
+      role: "assistant",
+      text: "There it is.",
+      parts: [
+        { type: "text", text: "There it is." },
+        { type: "image", url: imageUrl },
+      ],
+    });
+    expect(replay.entries).not.toContainEqual(expect.objectContaining({
+      id: "assistant-commentary",
+      parts: expect.arrayContaining([{ type: "image", url: imageUrl }]),
+    }));
+
+    await client.close();
+  });
+
+  it("attaches loopback image exports from MCP results to the final assistant message", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const imageUrl = "http://127.0.0.1:51729/media?grant=signed-image";
+    MockTransport.readThreadResultByThreadId.set("thread-mcp-image", {
+      thread: {
+        turns: [
+          {
+            id: "turn-mcp-image",
+            startedAt: 1_763_500_150,
+            items: [
+              {
+                type: "mcpToolCall",
+                id: "mcp-export",
+                server: "pwrsnap",
+                tool: "pwrsnap_capture_export",
+                status: "completed",
+                result: {
+                  structuredContent: {
+                    signedUrl: imageUrl,
+                    mimeType: "image/jpeg",
+                    variant: "composite",
+                  },
+                },
+              },
+              {
+                type: "agentMessage",
+                id: "assistant-final",
+                phase: "final_answer",
+                text: "There it is.",
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const replay = await client.readThread({ threadId: "thread-mcp-image" });
+    const finalEntry = replay.entries.find(
+      (entry) => entry.type === "message" && entry.id === "assistant-final",
+    );
+
+    expect(finalEntry).toMatchObject({
+      type: "message",
+      role: "assistant",
+      text: "There it is.",
+      parts: [
+        { type: "text", text: "There it is." },
+        { type: "image", url: imageUrl },
+      ],
+    });
+
+    await client.close();
+  });
+
   it("deduplicates Codex raw event user messages when a response item carries the image", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.readThreadResultByThreadId.set("thread-raw-image-events", {
