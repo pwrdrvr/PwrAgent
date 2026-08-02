@@ -880,7 +880,11 @@ export function Sidebar(props: SidebarProps) {
         <div className="sidebar__masthead-actions">
           <MastheadActionButton
             ariaLabel="Search threads"
-            tooltipText={`Search threads  (${formatPrimaryAccel("F", { shift: true })})`}
+            tooltipText={[
+              `Open Search All  (${formatPrimaryAccel("F", { shift: true })})`,
+              `Quick Thread List Search  (${formatPrimaryAccel("K")})`,
+              `Context Search  (${formatPrimaryAccel("F")}) — Thread List in sidebar, Thread Chat elsewhere`,
+            ].join("\n")}
             ariaPressed={props.threadSearchActive}
             className={`sidebar__icon-button${props.threadSearchActive ? " is-active" : ""}`}
             onClick={props.onOpenThreadSearch}
