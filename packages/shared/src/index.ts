@@ -18,6 +18,7 @@ export * from "./contracts/messaging";
 export * from "./contracts/messaging-tools";
 export * from "./contracts/navigation";
 export * from "./contracts/settings";
+export * from "./contracts/github-commit-author-identity";
 export * from "./contracts/subagent-transcript";
 export * from "./contracts/thread-link";
 export * from "./contracts/thread-tools";

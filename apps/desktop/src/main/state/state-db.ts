@@ -9,7 +9,7 @@ import {
 } from "@pwragent/shared";
 import { getNativeBinding } from "./native-binding.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 34;
+export const CURRENT_STATE_DB_USER_VERSION = 35;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -511,6 +511,25 @@ CREATE INDEX IF NOT EXISTS idx_pr_lookup_cache_fetched
   ON pr_lookup_cache(fetched_at DESC);
 `;
 
+const GITHUB_COMMIT_AUTHOR_IDENTITY_CACHE_SCHEMA = `
+CREATE TABLE IF NOT EXISTS github_commit_author_identity_cache (
+  identity_key  TEXT PRIMARY KEY,
+  status        TEXT NOT NULL CHECK (status IN ('resolved', 'negative', 'unavailable')),
+  github_login  TEXT,
+  avatar_url    TEXT,
+  fetched_at    INTEGER NOT NULL,
+  expires_at    INTEGER NOT NULL,
+  failure_count INTEGER NOT NULL DEFAULT 0,
+  next_retry_at INTEGER,
+  updated_at    INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_github_commit_author_identity_cache_expiry
+  ON github_commit_author_identity_cache(status, expires_at);
+CREATE INDEX IF NOT EXISTS idx_github_commit_author_identity_cache_retry
+  ON github_commit_author_identity_cache(next_retry_at)
+  WHERE next_retry_at IS NOT NULL;
+`;
+
 const PR_AUTO_DISPATCH_SCHEMA = `
 CREATE TABLE IF NOT EXISTS pr_auto_dispatch_claims (
   backend       TEXT NOT NULL,
@@ -774,6 +793,10 @@ const REVOKED_BINDINGS_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 const APP_RUNTIME_INSTANCE_RETENTION_MS = 60 * 60 * 1000;
 const COMPOSER_DRAFT_JOURNAL_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const COMPOSER_DRAFT_JOURNAL_CAP = 300;
+const GITHUB_COMMIT_AUTHOR_IDENTITY_RESOLVED_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
+const GITHUB_COMMIT_AUTHOR_IDENTITY_NEGATIVE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+const GITHUB_COMMIT_AUTHOR_IDENTITY_UNAVAILABLE_RETENTION_MS = 24 * 60 * 60 * 1000;
+
 /**
  * Per-platform cap for the messaging activity log. Older rows are
  * evicted FIFO so the table stays small even on busy platforms. Tuned
@@ -1035,6 +1058,12 @@ export class StateDb {
     if ((db.pragma("user_version", { simple: true }) as number) < 34) {
       db.transaction(() => {
         db.exec(PR_AUTO_DISPATCH_SCHEMA);
+        db.pragma("user_version = 34");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 35) {
+      db.transaction(() => {
+        db.exec(GITHUB_COMMIT_AUTHOR_IDENTITY_CACHE_SCHEMA);
         db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
       })();
     }
@@ -1089,6 +1118,19 @@ export class StateDb {
           "DELETE FROM app_runtime_instances WHERE heartbeat_at < ? AND exited_at IS NOT NULL",
         )
         .run(now - APP_RUNTIME_INSTANCE_RETENTION_MS);
+      this.db
+        .prepare(
+          `DELETE FROM github_commit_author_identity_cache
+           WHERE (status = 'resolved' AND expires_at < ?)
+              OR (status = 'negative' AND expires_at < ?)
+              OR (status = 'unavailable' AND updated_at < ?)`,
+        )
+        .run(
+          now - GITHUB_COMMIT_AUTHOR_IDENTITY_RESOLVED_RETENTION_MS,
+          now - GITHUB_COMMIT_AUTHOR_IDENTITY_NEGATIVE_RETENTION_MS,
+          now - GITHUB_COMMIT_AUTHOR_IDENTITY_UNAVAILABLE_RETENTION_MS,
+        );
+
       this.db
         .prepare("DELETE FROM deliveries WHERE created_at < ?")
         .run(now - DELIVERIES_RETENTION_MS);
@@ -1187,6 +1229,7 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     db.exec(THREAD_SEARCH_SCHEMA);
     db.exec(PR_STATUS_CACHE_SCHEMA);
     db.exec(PR_LOOKUP_CACHE_SCHEMA);
+    db.exec(GITHUB_COMMIT_AUTHOR_IDENTITY_CACHE_SCHEMA);
     db.exec(PR_AUTO_DISPATCH_SCHEMA);
     ensureThreadSearchFtsThreadIdColumn(db);
     ensurePullRequestProviderColumns(db);

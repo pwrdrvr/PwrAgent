@@ -64,6 +64,55 @@ describe("StateDb", () => {
     expect(prLookupColumns.map((column) => column.name)).toContain("provider");
   });
 
+  it("creates a privacy-preserving GitHub commit-author identity cache", () => {
+    const columns = stateDb.raw
+      .prepare("PRAGMA table_info(github_commit_author_identity_cache)")
+      .all() as Array<{ name: string }>;
+    const indexes = stateDb.raw
+      .prepare("PRAGMA index_list(github_commit_author_identity_cache)")
+      .all() as Array<{ name: string }>;
+
+    expect(columns.map((column) => column.name)).toEqual([
+      "identity_key",
+      "status",
+      "github_login",
+      "avatar_url",
+      "fetched_at",
+      "expires_at",
+      "failure_count",
+      "next_retry_at",
+      "updated_at",
+    ]);
+    expect(columns.map((column) => column.name)).not.toEqual(
+      expect.arrayContaining(["author_name", "author_email", "token"]),
+    );
+    expect(indexes.map((index) => index.name)).toEqual(
+      expect.arrayContaining([
+        "idx_github_commit_author_identity_cache_expiry",
+        "idx_github_commit_author_identity_cache_retry",
+      ]),
+    );
+  });
+
+  it("migrates version 34 databases to the commit-author identity cache", () => {
+    const dbPath = path.join(tempDir, "state.db");
+    stateDb.raw.exec("DROP TABLE github_commit_author_identity_cache");
+    stateDb.raw.pragma("user_version = 34");
+    stateDb.close();
+
+    stateDb = StateDb.open(dbPath);
+
+    const table = stateDb.raw
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+      )
+      .get("github_commit_author_identity_cache") as { name: string } | undefined;
+    expect(table?.name).toBe("github_commit_author_identity_cache");
+    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(
+      CURRENT_STATE_DB_USER_VERSION,
+    );
+  });
+
   it("creates thread usage pricing ledger tables", () => {
     const tables = stateDb.raw
       .prepare(
