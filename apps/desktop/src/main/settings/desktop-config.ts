@@ -144,6 +144,7 @@ export type DesktopSettingsConfig = {
     showStreamingOption?: boolean;
     attachments?: {
       imageProfile?: DesktopMessagingImageProfile;
+      pdfProfile?: DesktopMessagingImageProfile;
       maxAttachmentBytes?: number;
       maxAttachmentCount?: number;
     };
@@ -923,6 +924,16 @@ export function desktopSettingsPatchToEdits(
       set(["messaging", "attachments", "image_profile"], attachments.imageProfile);
     }
   }
+  if (attachments?.pdfProfile !== undefined) {
+    if (attachments.pdfProfile === "high") {
+      edits.push({
+        op: "delete",
+        path: ["messaging", "attachments", "pdf_profile"],
+      });
+    } else {
+      set(["messaging", "attachments", "pdf_profile"], attachments.pdfProfile);
+    }
+  }
   if (attachments?.maxAttachmentBytes !== undefined) {
     set(["messaging", "attachments", "max_attachment_bytes"], attachments.maxAttachmentBytes);
   }
@@ -1506,6 +1517,7 @@ function normalizeDesktopConfig(
       showStreamingOption: readBoolean(messaging?.show_streaming_option),
       attachments: {
         imageProfile: readImageProfile(attachments?.image_profile),
+        pdfProfile: readImageProfile(attachments?.pdf_profile),
         maxAttachmentBytes: readNumber(attachments?.max_attachment_bytes),
         maxAttachmentCount: readNumber(attachments?.max_attachment_count),
       },

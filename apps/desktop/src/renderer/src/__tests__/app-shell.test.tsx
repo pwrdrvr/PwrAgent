@@ -561,6 +561,7 @@ describe("App", () => {
         },
         attachments: {
           imageProfile: { value: "medium", source: "default" },
+          pdfProfile: { value: "high", source: "default" },
           maxAttachmentBytes: { value: 10485760, source: "default" },
           maxAttachmentCount: { value: 4, source: "default" },
         },

@@ -291,6 +291,7 @@ export type DesktopMessagingImageProfile = "low" | "medium" | "high" | "actual";
 
 export type DesktopMessagingAttachmentSettingsSnapshot = {
   imageProfile: DesktopSettingsValue<DesktopMessagingImageProfile>;
+  pdfProfile: DesktopSettingsValue<DesktopMessagingImageProfile>;
   maxAttachmentBytes: DesktopSettingsValue<number>;
   maxAttachmentCount: DesktopSettingsValue<number>;
 };
@@ -856,6 +857,7 @@ export type DesktopSettingsConfigPatch = {
     showStreamingOption?: boolean;
     attachments?: {
       imageProfile?: DesktopMessagingImageProfile;
+      pdfProfile?: DesktopMessagingImageProfile;
       maxAttachmentBytes?: number;
       maxAttachmentCount?: number;
     };

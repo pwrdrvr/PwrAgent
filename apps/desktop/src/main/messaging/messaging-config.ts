@@ -71,6 +71,7 @@ import {
   MATTERMOST_SLASH_COMMAND_PREFIX_ENV,
   MATTERMOST_STREAMING_RESPONSES_ENV,
   MESSAGING_ATTACHMENT_IMAGE_PROFILE_ENV,
+  MESSAGING_ATTACHMENT_PDF_PROFILE_ENV,
   MESSAGING_ATTACHMENT_MAX_BYTES_ENV,
   MESSAGING_ATTACHMENT_MAX_COUNT_ENV,
   MESSAGING_INPUT_DEBOUNCE_MS_ENV,
@@ -93,6 +94,7 @@ import {
   readEnvBoolean,
   readEnvInteger,
   readEnvMessagingImageProfile,
+  readEnvMessagingPdfProfile,
 } from "../settings/desktop-settings-env";
 
 export {
@@ -138,6 +140,7 @@ export {
   MATTERMOST_SLASH_COMMAND_PREFIX_ENV,
   MATTERMOST_STREAMING_RESPONSES_ENV,
   MESSAGING_ATTACHMENT_IMAGE_PROFILE_ENV,
+  MESSAGING_ATTACHMENT_PDF_PROFILE_ENV,
   MESSAGING_ATTACHMENT_MAX_BYTES_ENV,
   MESSAGING_ATTACHMENT_MAX_COUNT_ENV,
   MESSAGING_INPUT_DEBOUNCE_MS_ENV,
@@ -884,6 +887,7 @@ export async function loadDesktopMessagingConfigFromSettings(
     || undefined;
   const attachmentPolicy: Partial<MessagingAttachmentPolicy> = {
     imageProfile: snapshot.messaging.attachments.imageProfile.value,
+    pdfProfile: snapshot.messaging.attachments.pdfProfile.value,
     maxAttachmentBytes: snapshot.messaging.attachments.maxAttachmentBytes.value,
     maxAttachmentCount: snapshot.messaging.attachments.maxAttachmentCount.value,
   };
@@ -1605,6 +1609,7 @@ function readAttachmentPolicyFromEnv(
   env: NodeJS.ProcessEnv,
 ): Partial<MessagingAttachmentPolicy> | undefined {
   const imageProfile = readEnvMessagingImageProfile(env).value;
+  const pdfProfile = readEnvMessagingPdfProfile(env).value;
   const maxAttachmentBytes = readEnvInteger(
     env,
     MESSAGING_ATTACHMENT_MAX_BYTES_ENV,
@@ -1615,6 +1620,7 @@ function readAttachmentPolicyFromEnv(
   ).value;
   const policy: Partial<MessagingAttachmentPolicy> = {
     ...(imageProfile ? { imageProfile } : {}),
+    ...(pdfProfile ? { pdfProfile } : {}),
     ...(maxAttachmentBytes !== undefined ? { maxAttachmentBytes } : {}),
     ...(maxAttachmentCount !== undefined ? { maxAttachmentCount } : {}),
   };

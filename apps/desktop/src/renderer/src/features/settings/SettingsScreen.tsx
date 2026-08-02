@@ -532,6 +532,15 @@ function SettingsSectionBody(props: {
             },
           });
         }}
+        onPdfProfileChange={async (
+          pdfProfile: DesktopMessagingImageProfile,
+        ) => {
+          await props.settings.writeConfig({
+            messaging: {
+              attachments: { pdfProfile },
+            },
+          });
+        }}
         onMessagingEnabledChange={async (enabled) => {
           if (props.snapshot.runtime.messaging.overrideActive) {
             await props.desktopApi?.setMessagingEnabled?.({ enabled });

@@ -135,6 +135,7 @@ import {
   readEnvInteger,
   readEnvList,
   readEnvMessagingImageProfile,
+  readEnvMessagingPdfProfile,
   readEnvString,
   readEnvWorktreeStorage,
 } from "./desktop-settings-env";
@@ -708,6 +709,9 @@ export class DesktopSettingsService {
         attachments: {
           imageProfile: this.resolveMessagingImageProfile(
             config.messaging?.attachments?.imageProfile,
+          ),
+          pdfProfile: this.resolveMessagingPdfProfile(
+            config.messaging?.attachments?.pdfProfile,
           ),
           maxAttachmentBytes: this.resolveNumber(
             config.messaging?.attachments?.maxAttachmentBytes,
@@ -1624,6 +1628,25 @@ export class DesktopSettingsService {
 
     return {
       value: configValue ?? "medium",
+      source: configValue === undefined ? "default" : "config",
+      error: envValue.error,
+    };
+  }
+
+  private resolveMessagingPdfProfile(
+    configValue: DesktopMessagingImageProfile | undefined,
+  ): DesktopSettingsValue<DesktopMessagingImageProfile> {
+    const envValue = readEnvMessagingPdfProfile(this.env);
+    if (envValue.value) {
+      return {
+        value: envValue.value,
+        source: "env",
+        overriddenByEnv: configValue !== undefined,
+      };
+    }
+
+    return {
+      value: configValue ?? "high",
       source: configValue === undefined ? "default" : "config",
       error: envValue.error,
     };

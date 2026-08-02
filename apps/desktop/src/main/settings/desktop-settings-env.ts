@@ -121,6 +121,8 @@ export const LINE_AUTHORIZED_ROOMS_ENV =
   "PWRAGENT_MESSAGING_LINE_AUTHORIZED_ROOMS";
 export const MESSAGING_ATTACHMENT_IMAGE_PROFILE_ENV =
   "PWRAGENT_MESSAGING_ATTACHMENT_IMAGE_PROFILE";
+export const MESSAGING_ATTACHMENT_PDF_PROFILE_ENV =
+  "PWRAGENT_MESSAGING_ATTACHMENT_PDF_PROFILE";
 export const MESSAGING_ATTACHMENT_MAX_BYTES_ENV =
   "PWRAGENT_MESSAGING_ATTACHMENT_MAX_BYTES";
 export const MESSAGING_ATTACHMENT_MAX_COUNT_ENV =
@@ -206,6 +208,21 @@ export function readEnvMessagingImageProfile(
   if (!isDesktopMessagingImageProfile(value)) {
     return {
       error: `Invalid image profile for ${MESSAGING_ATTACHMENT_IMAGE_PROFILE_ENV}`,
+    };
+  }
+  return { value };
+}
+
+export function readEnvMessagingPdfProfile(
+  env: NodeJS.ProcessEnv,
+): ParsedEnvValue<DesktopMessagingImageProfile> {
+  const value = readEnvString(env, MESSAGING_ATTACHMENT_PDF_PROFILE_ENV);
+  if (!value) {
+    return {};
+  }
+  if (!isDesktopMessagingImageProfile(value)) {
+    return {
+      error: `Invalid PDF profile for ${MESSAGING_ATTACHMENT_PDF_PROFILE_ENV}`,
     };
   }
   return { value };
