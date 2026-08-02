@@ -208,6 +208,18 @@ function normalizePrSummary(pr: PrSummary): PrSummary {
   } else {
     delete normalized.headSha;
   }
+  const baseRefName = pr.baseRefName?.trim();
+  if (baseRefName) {
+    normalized.baseRefName = baseRefName;
+  } else {
+    delete normalized.baseRefName;
+  }
+  const headRefName = pr.headRefName?.trim();
+  if (headRefName) {
+    normalized.headRefName = headRefName;
+  } else {
+    delete normalized.headRefName;
+  }
   return normalized;
 }
 

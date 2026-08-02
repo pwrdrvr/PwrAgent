@@ -37,6 +37,7 @@ export type GhPrPayload = {
   mergeStateStatus?: string | null;
   mergedAt: string | null;
   commits?: { oid?: string | null }[] | null;
+  baseRefName?: string | null;
   headRefName: string;
   headRepository: { name?: string } | null;
   headRepositoryOwner: { login?: string } | null;
@@ -67,6 +68,8 @@ export function parseGhPrPayload(row: GhPrPayload): PrSummary {
     org: row.headRepositoryOwner?.login ?? "",
     repo: row.headRepository?.name ?? "",
     ...(row.title?.trim() ? { title: row.title.trim() } : {}),
+    ...(row.baseRefName?.trim() ? { baseRefName: row.baseRefName.trim() } : {}),
+    ...(row.headRefName?.trim() ? { headRefName: row.headRefName.trim() } : {}),
     state: checkState,
     checkState,
     ...(checksStillRunning ? { checksStillRunning: true } : {}),

@@ -1,6 +1,55 @@
 import { describe, expect, it } from "vitest";
-import type { NavigationThreadSummary } from "../contracts/navigation";
-import { findPreferredReviewWorkspaceCwd } from "../review-branches";
+import type { NavigationThreadSummary, PrSummary } from "../contracts/navigation";
+import {
+  buildReviewBranchOptions,
+  findPreferredReviewWorkspaceCwd,
+} from "../review-branches";
+
+describe("buildReviewBranchOptions", () => {
+  it("prefers an open PR's target branch over the conventional Git base", () => {
+    expect(
+      buildReviewBranchOptions({
+        thread: {
+          gitBranch: "agent/pr-auto-dispatch-budget",
+          observedGitBranch: "agent/pr-auto-dispatch-budget",
+          prs: [
+            pullRequest({
+              baseRefName: "agent/github-pr-auto-fix-settings",
+              headRefName: "agent/pr-auto-dispatch-budget",
+            }),
+          ],
+        } as NavigationThreadSummary,
+      }),
+    ).toEqual([
+      "agent/github-pr-auto-fix-settings",
+      "main",
+    ]);
+  });
+
+  it("does not select an unrelated open PR when several are attached", () => {
+    expect(
+      buildReviewBranchOptions({
+        thread: {
+          gitBranch: "agent/pr-auto-dispatch-budget",
+          prs: [
+            pullRequest({
+              baseRefName: "agent/github-pr-auto-fix-settings",
+              headRefName: "agent/pr-auto-dispatch-budget",
+            }),
+            pullRequest({
+              number: 1144,
+              baseRefName: "main",
+              headRefName: "agent/other-work",
+            }),
+          ],
+        } as NavigationThreadSummary,
+      }),
+    ).toEqual([
+      "agent/github-pr-auto-fix-settings",
+      "main",
+    ]);
+  });
+});
 
 describe("findPreferredReviewWorkspaceCwd", () => {
   it("selects the changed primary project from multiple linked workspaces", () => {
@@ -82,6 +131,19 @@ function reviewThread(
         worktreePath: "/worktrees/app",
       },
     ],
+    ...overrides,
+  };
+}
+
+function pullRequest(overrides: Partial<PrSummary> = {}): PrSummary {
+  return {
+    provider: "github.com",
+    number: 1143,
+    org: "pwrdrvr",
+    repo: "PwrAgent",
+    state: "passing",
+    lifecycleState: "open",
+    url: "https://github.com/pwrdrvr/PwrAgent/pull/1143",
     ...overrides,
   };
 }

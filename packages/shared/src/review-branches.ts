@@ -123,6 +123,21 @@ export function buildReviewBranchOptions(params: {
     }
   };
 
+  const openPrs = (params.thread?.prs ?? []).filter(
+    (pr) => pr.lifecycleState === "open" && Boolean(pr.baseRefName?.trim()),
+  );
+  const pullRequestForCurrentBranch = openPrs.find(
+    (pr) => pr.headRefName && isCurrentBranch(pr.headRefName),
+  );
+  const soleOpenPullRequest = openPrs.length === 1 ? openPrs[0] : undefined;
+
+  // A PR target is more specific than Git's conventional-base heuristic. In
+  // particular, it prevents stacked PR reviews from re-reviewing their parent
+  // branch's commits as though they were changes against main.
+  pushInferredBaseBranch(
+    pullRequestForCurrentBranch?.baseRefName
+    ?? soleOpenPullRequest?.baseRefName,
+  );
   pushInferredBaseBranch(params.thread?.gitWorkingState?.baseBranch);
   pushDirectoryDefault();
   for (const branch of REVIEW_PREFERRED_BASE_BRANCHES) {

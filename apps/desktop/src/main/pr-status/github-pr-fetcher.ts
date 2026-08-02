@@ -40,6 +40,7 @@ const GH_FIELDS = [
   "mergeStateStatus",
   "mergedAt",
   "commits",
+  "baseRefName",
   "headRefName",
   "headRepository",
   "headRepositoryOwner",

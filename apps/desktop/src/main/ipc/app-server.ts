@@ -628,6 +628,18 @@ function normalizePrSummary(pr: PrSummary): PrSummary {
   } else {
     delete normalized.headSha;
   }
+  const baseRefName = pr.baseRefName?.trim();
+  if (baseRefName) {
+    normalized.baseRefName = baseRefName;
+  } else {
+    delete normalized.baseRefName;
+  }
+  const headRefName = pr.headRefName?.trim();
+  if (headRefName) {
+    normalized.headRefName = headRefName;
+  } else {
+    delete normalized.headRefName;
+  }
   return normalized;
 }
 
@@ -739,6 +751,8 @@ function prSummariesEqual(left: PrSummary[], right: PrSummary[]): boolean {
       candidate.lifecycleState === pr.lifecycleState &&
       candidate.reviewState === pr.reviewState &&
       candidate.mergeState === pr.mergeState &&
+      candidate.baseRefName === pr.baseRefName &&
+      candidate.headRefName === pr.headRefName &&
       candidate.headSha === pr.headSha &&
       JSON.stringify(candidate.commitShas ?? []) === JSON.stringify(pr.commitShas ?? []) &&
       candidate.url === pr.url
