@@ -883,7 +883,7 @@ export function Sidebar(props: SidebarProps) {
             tooltipText={[
               `Open Search All  (${formatPrimaryAccel("F", { shift: true })})`,
               `Quick Thread List Search  (${formatPrimaryAccel("K")})`,
-              `Thread Chat Search  (${formatPrimaryAccel("F")})`,
+              `Context Search  (${formatPrimaryAccel("F")}) — Thread List in sidebar, Thread Chat elsewhere`,
             ].join("\n")}
             ariaPressed={props.threadSearchActive}
             className={`sidebar__icon-button${props.threadSearchActive ? " is-active" : ""}`}
