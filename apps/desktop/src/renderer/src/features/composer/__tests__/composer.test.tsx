@@ -6048,6 +6048,113 @@ describe("Composer", () => {
     });
   });
 
+  it("defaults a multi-project review to the changed primary workspace", async () => {
+    const startReview = vi.fn(async (request: StartReviewRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      reviewThreadId: request.threadId,
+      turnId: "turn-review-1",
+    }));
+    const appDirectory: NavigationDirectorySummary = {
+      key: "directory:app",
+      kind: "directory",
+      label: "App",
+      path: "/repo/app",
+      threadKeys: ["codex:thread-1"],
+      needsAttentionCount: 0,
+      gitStatus: {
+        currentBranch: "feature/app",
+        defaultBranch: "main",
+        branches: ["feature/app", "main", "release"],
+        baseBranches: ["release", "main"],
+      },
+    };
+    const infraDirectory: NavigationDirectorySummary = {
+      key: "directory:infra",
+      kind: "directory",
+      label: "Infra",
+      path: "/repo/infra",
+      threadKeys: ["codex:thread-1"],
+      needsAttentionCount: 0,
+      gitStatus: {
+        currentBranch: "feature/infra",
+        defaultBranch: "develop",
+        branches: ["feature/infra", "develop"],
+        baseBranches: ["develop"],
+      },
+    };
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview,
+        }}
+        directory={infraDirectory}
+        directories={[infraDirectory, appDirectory]}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Review thread",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          projectKey: "/worktrees/app/packages/service",
+          gitWorkingState: {
+            dirtyFiles: 0,
+            dirtyAdditions: 0,
+            dirtyDeletions: 0,
+            untrackedFiles: 0,
+            unpushedCommits: 0,
+            baseBranch: "release",
+            baseAheadCommitCount: 1,
+          },
+          linkedDirectories: [
+            {
+              id: "directory:infra",
+              kind: "worktree",
+              label: "Infra",
+              path: "/repo/infra",
+              worktreePath: "/worktrees/infra",
+            },
+            {
+              id: "directory:app",
+              kind: "worktree",
+              label: "App",
+              path: "/repo/app",
+              worktreePath: "/worktrees/app",
+            },
+          ],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review" },
+    });
+    await clickButton("Send");
+
+    expect(screen.getByLabelText("Review project")).toHaveValue("/worktrees/app");
+    await waitFor(() => {
+      expect(screen.getByLabelText("Base branch")).toHaveValue("release");
+    });
+    expect(screen.getByRole("button", { name: "Start review" })).toBeEnabled();
+
+    await clickButton("Start review");
+
+    await waitFor(() => {
+      expect(startReview).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        target: { type: "baseBranch", branch: "release" },
+        delivery: "inline",
+        cwd: "/worktrees/app",
+      });
+    });
+  });
+
   it("reloads review base branches when the review project changes", async () => {
     const startReview = vi.fn(async (request: StartReviewRequest) => ({
       backend: request.backend,

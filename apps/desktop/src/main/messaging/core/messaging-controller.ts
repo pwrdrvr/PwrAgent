@@ -4,6 +4,7 @@ import {
   applyNavigationLaunchpadProviderSettingsPatch,
   buildReviewBranchOptions,
   buildThreadIdentityKey,
+  findPreferredReviewWorkspaceCwd,
   isAcpBackendId,
   isAppServerBackendKind,
   isMessagingBindingTargetKind,
@@ -1868,9 +1869,10 @@ export class MessagingController {
         } =>
           Boolean(workspace.cwd),
       );
-    const selectedWorkspace = workspaces.length === 1
-      ? workspaces[0]
-      : undefined;
+    const preferredWorkspaceCwd = findPreferredReviewWorkspaceCwd(thread);
+    const selectedWorkspace = workspaces.find(
+      (workspace) => workspace.cwd.trim() === preferredWorkspaceCwd,
+    ) ?? (workspaces.length === 1 ? workspaces[0] : undefined);
     const defaultRepositoryPath =
       selectedWorkspace?.repositoryPath
       ?? workspaces[0]?.repositoryPath;
