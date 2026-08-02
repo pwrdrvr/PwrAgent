@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import {
-  isAcpBackendId,
   type AcpBackendId,
   type AppServerThreadReplay,
 } from "@pwragent/shared";
@@ -35,10 +34,9 @@ type ChunkBuffer = {
 };
 
 const CHUNK_FLUSH_TEXT_LENGTH = 2_048;
-const LEGACY_BACKEND_PATH_PREFIX = "acp_3A";
-const CURRENT_BACKEND_PATH_PREFIX = "acp_";
-const PATH_LAYOUT_MIGRATION_MARKER = ".backend-path-layout-v2";
 const PWRAGENT_SYNTHETIC_UPDATE_META_KEY = "pwragentSynthetic";
+const LEGACY_BACKEND_PATH_PREFIX = "acp_3A";
+const COLLISION_SAFE_CURRENT_BACKEND_PATH_SUFFIX = "__current";
 
 export function isPwrAgentSyntheticAcpUpdate(
   update: Record<string, unknown>,
@@ -56,9 +54,7 @@ export class AcpRolloutStore {
   private readonly chunkBuffers = new Map<string, ChunkBuffer>();
   private readonly lastFingerprints = new Map<string, string>();
 
-  constructor(private readonly rootDir: string) {
-    migrateLegacyBackendDirectories(rootDir);
-  }
+  constructor(private readonly rootDir: string) {}
 
   appendUpdate(params: AcpRolloutStoreAppendParams): void {
     if (!shouldPersistUpdate(params.update)) {
@@ -186,12 +182,73 @@ export class AcpRolloutStore {
   }
 
   private rolloutPath(backendId: AcpBackendId, sessionId: string): string {
-    return path.join(
+    const rolloutPath = path.join(
       this.rootDir,
       encodeBackendPathSegment(backendId),
       encodePathSegment(sessionId),
       "rollout.jsonl",
     );
+    this.recoverLegacySession(backendId, sessionId, rolloutPath);
+    return rolloutPath;
+  }
+
+  /**
+   * Older desktop builds encoded `acp:grok` as `acp_3Agrok`; current builds
+   * use `acp_grok`. An older process can still recreate the old directory
+   * after a newer build has migrated it, so a one-time root marker cannot make
+   * the layout durable. Recover only the exact requested session instead.
+   *
+   * The canonical session directory always wins. This deliberately leaves a
+   * duplicate old-path session alone rather than merging or overwriting it.
+   */
+  private recoverLegacySession(
+    backendId: AcpBackendId,
+    sessionId: string,
+    currentRolloutPath: string,
+  ): void {
+    const currentSessionPath = path.dirname(currentRolloutPath);
+    if (fs.existsSync(currentSessionPath)) {
+      return;
+    }
+
+    const legacySessionPath = path.join(
+      this.rootDir,
+      encodePathSegment(backendId),
+      encodePathSegment(sessionId),
+    );
+    if (!fs.existsSync(legacySessionPath)) {
+      return;
+    }
+
+    fs.mkdirSync(path.dirname(currentSessionPath), { recursive: true });
+    try {
+      fs.renameSync(legacySessionPath, currentSessionPath);
+    } catch (error) {
+      // Another current build may have recovered this same session first.
+      if (
+        isErrnoException(error) &&
+        error.code === "ENOENT" &&
+        !fs.existsSync(legacySessionPath) &&
+        fs.existsSync(currentSessionPath)
+      ) {
+        return;
+      }
+      throw error;
+    }
+
+    try {
+      fs.rmdirSync(path.dirname(legacySessionPath));
+    } catch (error) {
+      // Keep a non-empty legacy backend directory for any other sessions an
+      // older app instance may still own. Its next current-build access will
+      // recover that session independently.
+      if (
+        !isErrnoException(error) ||
+        (error.code !== "ENOENT" && error.code !== "ENOTEMPTY")
+      ) {
+        throw error;
+      }
+    }
   }
 }
 
@@ -328,69 +385,13 @@ function encodePathSegment(value: string): string {
 }
 
 function encodeBackendPathSegment(value: AcpBackendId): string {
-  return value.replace(":", "_");
-}
-
-function migrateLegacyBackendDirectories(rootDir: string): void {
-  const markerPath = path.join(rootDir, PATH_LAYOUT_MIGRATION_MARKER);
-  if (fs.existsSync(markerPath)) {
-    return;
-  }
-
-  fs.mkdirSync(rootDir, { recursive: true });
-  const legacyDirectoryNames = fs
-    .readdirSync(rootDir, { withFileTypes: true })
-    .filter(
-      (entry) =>
-        entry.isDirectory() &&
-        entry.name.startsWith(LEGACY_BACKEND_PATH_PREFIX) &&
-        isAcpBackendId(
-          `acp:${entry.name.slice(LEGACY_BACKEND_PATH_PREFIX.length)}`,
-        ),
-    )
-    .map((entry) => entry.name)
-    .sort(
-      (left, right) =>
-        left.length - right.length || left.localeCompare(right),
-    );
-
-  for (const legacyDirectoryName of legacyDirectoryNames) {
-    const registryId = legacyDirectoryName.slice(
-      LEGACY_BACKEND_PATH_PREFIX.length,
-    );
-    const currentDirectoryName = `${CURRENT_BACKEND_PATH_PREFIX}${registryId}`;
-    const legacyPath = path.join(rootDir, legacyDirectoryName);
-    const currentPath = path.join(rootDir, currentDirectoryName);
-    if (!fs.existsSync(legacyPath)) {
-      continue;
-    }
-    if (fs.existsSync(currentPath)) {
-      throw new Error(
-        `Cannot migrate ACP rollout directory because both paths exist: ${legacyPath} and ${currentPath}`,
-      );
-    }
-    try {
-      fs.renameSync(legacyPath, currentPath);
-    } catch (error) {
-      if (
-        isErrnoException(error) &&
-        error.code === "ENOENT" &&
-        !fs.existsSync(legacyPath) &&
-        fs.existsSync(currentPath)
-      ) {
-        continue;
-      }
-      throw error;
-    }
-  }
-
-  try {
-    fs.writeFileSync(markerPath, "2\n", { encoding: "utf8", flag: "wx" });
-  } catch (error) {
-    if (!isErrnoException(error) || error.code !== "EEXIST") {
-      throw error;
-    }
-  }
+  const currentPathSegment = value.replace(":", "_");
+  // The old URL-style encoding makes `acp:grok` `acp_3Agrok`, which is also
+  // the readable encoding of a valid current backend ID, `acp:3Agrok`.
+  // Never let a current backend claim a directory that an old build can own.
+  return currentPathSegment.startsWith(LEGACY_BACKEND_PATH_PREFIX)
+    ? `${currentPathSegment}${COLLISION_SAFE_CURRENT_BACKEND_PATH_SUFFIX}`
+    : currentPathSegment;
 }
 
 function isErrnoException(error: unknown): error is NodeJS.ErrnoException {

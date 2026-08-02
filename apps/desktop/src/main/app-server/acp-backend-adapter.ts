@@ -120,7 +120,10 @@ export type AcpRuntimeClient = Pick<
   Partial<
     Pick<
       AcpAgentClient,
-      "readProviderStatus" | "sendControlPrompt" | "setRuntimeOption"
+      | "didSessionLoadReplayHistory"
+      | "readProviderStatus"
+      | "sendControlPrompt"
+      | "setRuntimeOption"
     >
   >;
 
@@ -195,6 +198,13 @@ export function readAcpUpdateText(
     return update.output_text;
   }
   return readAcpContentText(update.content);
+}
+
+function observedAcpSessionHistoryReplay(
+  client: AcpRuntimeClient,
+  sessionId: string,
+): boolean | undefined {
+  return client.didSessionLoadReplayHistory?.(sessionId);
 }
 
 export function readKimiYoloExecutionModeFromText(
@@ -1115,6 +1125,8 @@ export class AcpBackendAdapter {
           const replay = await cachedClient.loadSession(session);
           return this.providerReplayOrRolloutFallback({
             backend,
+            observedSessionHistoryReplay:
+              observedAcpSessionHistoryReplay(cachedClient, session.sessionId),
             replay,
             session,
           });
@@ -1184,6 +1196,8 @@ export class AcpBackendAdapter {
       });
       return this.providerReplayOrRolloutFallback({
         backend,
+        observedSessionHistoryReplay:
+          observedAcpSessionHistoryReplay(client, session.sessionId),
         replay,
         session,
       });
@@ -1292,23 +1306,22 @@ export class AcpBackendAdapter {
 
   private providerReplayOrRolloutFallback(params: {
     backend: AcpBackendId;
+    observedSessionHistoryReplay?: boolean;
     replay: AppServerThreadReplay;
     session: AcpSessionMetadata;
   }): AppServerThreadReplay {
     const { backend, replay, session } = params;
 
-    // For agents that do NOT replay their transcript on session/load (Gemini,
-    // Grok, Qwen — anything without sessionHistoryReplay), the provider
-    // "replay" is not the real history. Gemini in particular re-emits its
-    // <session_context> as a single user message on session/load, so the
-    // provider replay is non-empty but bogus — trusting it (entries > 0) used
-    // to drop the real conversation on reload. Our durable rollout captured
-    // every turn while the creating instance ran, so prefer it whenever it has
-    // entries. (We still call session/load above to resume the agent session
-    // for continuation; we just don't trust its replay as history here.)
-    const supportsHistoryReplay = acpRuntimeSupportsSessionHistoryReplay(
-      this.getInstalledAgent(backend)?.runtimeCapabilities,
-    );
+    // ACP agents commonly replay the transcript as session/update
+    // notifications during session/load rather than advertising
+    // sessionHistoryReplay. Prefer a replay that the client observed, but
+    // retain the advertised flag and rollout fallback for older providers and
+    // Gemini's non-transcript session_context bootstrap.
+    const supportsHistoryReplay =
+      params.observedSessionHistoryReplay === true ||
+      acpRuntimeSupportsSessionHistoryReplay(
+        this.getInstalledAgent(backend)?.runtimeCapabilities,
+      );
     if (!supportsHistoryReplay) {
       const rolloutReplay =
         this.acpRolloutStore?.readReplay({
@@ -1625,6 +1638,7 @@ export class AcpBackendAdapter {
         }),
       onSessionUpdate: async ({
         assistantMessageItemId,
+        fromSessionLoad,
         sessionId,
         replay,
         title,
@@ -1709,7 +1723,9 @@ export class AcpBackendAdapter {
             this.acpSessionStore?.upsertSession?.({
               ...metadata,
               executionMode: kimiYoloExecutionMode,
-              updatedAt: Math.max(metadata.updatedAt, Date.now()),
+              updatedAt: fromSessionLoad
+                ? metadata.updatedAt
+                : Math.max(metadata.updatedAt, Date.now()),
             });
             await this.emit({
               backend: agent.backendId,
@@ -1832,6 +1848,7 @@ export class AcpBackendAdapter {
         });
       },
       onRuntimeCapabilities: async ({
+        fromSessionLoad,
         runtimeCapabilities,
         runtimeState,
         sessionId,
@@ -1867,15 +1884,21 @@ export class AcpBackendAdapter {
                   ...(runtimeState.configValues ?? {}),
                 },
               },
-              updatedAt: Math.max(
-                metadata.updatedAt,
-                runtimeState.updatedAt ?? now,
-              ),
+              updatedAt: fromSessionLoad
+                ? metadata.updatedAt
+                : Math.max(
+                    metadata.updatedAt,
+                    runtimeState.updatedAt ?? now,
+                  ),
             });
           }
         }
       },
-      onSessionRuntimeStateChange: async ({ sessionId, runtimeState }) => {
+      onSessionRuntimeStateChange: async ({
+        fromSessionLoad,
+        sessionId,
+        runtimeState,
+      }) => {
         if (!this.acpSessionStore?.upsertSession) {
           return;
         }
@@ -1894,10 +1917,12 @@ export class AcpBackendAdapter {
         this.acpSessionStore.upsertSession({
           ...metadata,
           acpRuntime,
-          updatedAt: Math.max(
-            metadata.updatedAt,
-            runtimeState.updatedAt ?? Date.now(),
-          ),
+          updatedAt: fromSessionLoad
+            ? metadata.updatedAt
+            : Math.max(
+                metadata.updatedAt,
+                runtimeState.updatedAt ?? Date.now(),
+              ),
         });
         await this.emit({
           backend: agent.backendId,

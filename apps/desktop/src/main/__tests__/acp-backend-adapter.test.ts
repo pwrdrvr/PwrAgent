@@ -1157,6 +1157,104 @@ describe("AcpBackendAdapter", () => {
     await adapter.close();
   });
 
+  it("does not make a thread newly active when session/load refreshes ACP runtime", async () => {
+    const backendId = "acp:grok" as AcpBackendId;
+    const transport = new FakeAcpAgentTransport({
+      initialize: {
+        protocolVersion: 1,
+        agentCapabilities: {
+          loadSession: true,
+        },
+      },
+      "session/load": {
+        models: {
+          currentModelId: "grok-4.5",
+          availableModels: [{ modelId: "grok-4.5" }],
+        },
+      },
+    });
+    const sessions: AcpSessionMetadata[] = [
+      {
+        backendId,
+        sessionId: "session-1",
+        title: "Grok session",
+        cwd: "/repo",
+        createdAt: 900,
+        updatedAt: 950,
+        executionMode: "default",
+        status: "idle",
+      },
+    ];
+    const agent: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "grok",
+      name: "Grok",
+      launchDescriptor: {
+        backendId,
+        registryId: "grok",
+        distributionKind: "local",
+        command: "grok",
+        args: [],
+        env: {},
+      },
+    };
+    const adapter = new AcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => agent,
+        listInstalledAgents: () => [agent],
+        upsertInstalledAgent: vi.fn(),
+      },
+      acpSessionStore: {
+        listSessions: () => sessions,
+        getSession: (_backend, sessionId) =>
+          sessions.find((session) => session.sessionId === sessionId),
+        upsertSession: (metadata) => {
+          const index = sessions.findIndex(
+            (session) => session.sessionId === metadata.sessionId,
+          );
+          sessions[index] = metadata;
+        },
+      },
+      captureStores: [],
+      createAcpTransport: () => ({
+        request: async (method, params, timeoutMs) => {
+          if (method === "session/load") {
+            transport.emitSessionUpdate("session-1", {
+              kind: "current_mode_update",
+              currentModeId: "yolo",
+            });
+          }
+          return await transport.request(method, params, timeoutMs);
+        },
+        notify: async (method, params) => await transport.notify(method, params),
+        close: async () => await transport.close(),
+        onNotification: (listener) => transport.onNotification(listener),
+        onRequest: (listener) => transport.onRequest(listener),
+      }),
+      emit: vi.fn(async () => undefined),
+      handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
+    });
+
+    const client = await adapter.getClient(backendId);
+    await client.loadSession(sessions[0]!);
+    expect(transport.requests.map((request) => request.method)).toEqual([
+      "initialize",
+      "session/load",
+    ]);
+
+    await vi.waitFor(() => {
+      expect(sessions[0]).toMatchObject({
+        acpRuntime: {
+          currentModelId: "grok-4.5",
+          currentModeId: "yolo",
+        },
+        updatedAt: 950,
+      });
+    });
+    await adapter.close();
+  });
+
   it("adds Grok billing metadata from an active ACP connection", async () => {
     const backendId = "acp:grok" as AcpBackendId;
     const transport = new FakeAcpAgentTransport({
@@ -1645,6 +1743,128 @@ describe("AcpBackendAdapter", () => {
     // session/load is still invoked to resume the agent session, but its
     // bogus <session_context> replay is discarded in favor of the rollout.
     expect(loadSession).toHaveBeenCalled();
+
+    await adapter.close();
+  });
+
+  it("prefers session/load history observed through ACP notifications", async () => {
+    const backendId = "acp:grok" as AcpBackendId;
+    const agent: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "grok",
+      name: "Grok",
+      runtimeCapabilities: {
+        schemaVersion: 1,
+        status: "discovered",
+        agentCapabilities: {
+          loadSession: true,
+        },
+      },
+    };
+    const session: AcpSessionMetadata = {
+      backendId,
+      sessionId: "session-1",
+      title: "Grok thread",
+      createdAt: 1000,
+      updatedAt: 1000,
+      executionMode: "default",
+      status: "idle",
+      hasConversationHistory: true,
+    };
+    const rolloutReplay = {
+      entries: [
+        {
+          type: "message" as const,
+          id: "assistant:rollout",
+          role: "assistant" as const,
+          text: "Stale rollout reply",
+          createdAt: 1001,
+        },
+      ],
+      messages: [
+        {
+          id: "assistant:rollout",
+          role: "assistant" as const,
+          text: "Stale rollout reply",
+          createdAt: 1001,
+        },
+      ],
+      lastAssistantMessage: "Stale rollout reply",
+      pagination: {
+        supportsPagination: false,
+        hasPreviousPage: false,
+      },
+      threadStatus: "idle" as const,
+    };
+    const providerReplay = {
+      entries: [
+        {
+          type: "message" as const,
+          id: "assistant:provider",
+          role: "assistant" as const,
+          text: "Timestamped provider reply",
+          createdAt: 1002,
+        },
+      ],
+      messages: [
+        {
+          id: "assistant:provider",
+          role: "assistant" as const,
+          text: "Timestamped provider reply",
+          createdAt: 1002,
+        },
+      ],
+      lastAssistantMessage: "Timestamped provider reply",
+      pagination: {
+        supportsPagination: false,
+        hasPreviousPage: false,
+      },
+      threadStatus: "idle" as const,
+    };
+    const loadSession = vi.fn(async () => providerReplay);
+    const adapter = new AcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => agent,
+        listInstalledAgents: () => [agent],
+        upsertInstalledAgent: vi.fn(),
+      },
+      acpRolloutStore: {
+        appendUpdate: vi.fn(),
+        readUpdates: vi.fn(() => []),
+        readReplay: vi.fn(() => rolloutReplay),
+      },
+      acpSessionStore: {
+        listSessions: () => [session],
+        getSession: () => session,
+        upsertSession: vi.fn(),
+      },
+      captureStores: [],
+      createAcpClient: () =>
+        ({
+          didSessionLoadReplayHistory: () => true,
+          dispose: vi.fn(async () => undefined),
+          initialize: vi.fn(async () => undefined),
+          loadSession,
+          readReplay: vi.fn(() => ({
+            entries: [],
+            messages: [],
+            pagination: {
+              supportsPagination: false,
+              hasPreviousPage: false,
+            },
+            threadStatus: "idle",
+          })),
+          refreshSession: vi.fn(async () => undefined),
+        }) as never,
+      emit: vi.fn(async () => undefined),
+      handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
+    });
+
+    await expect(adapter.readReplay(backendId, "session-1")).resolves.toMatchObject({
+      lastAssistantMessage: "Timestamped provider reply",
+    });
+    expect(loadSession).toHaveBeenCalledOnce();
 
     await adapter.close();
   });
