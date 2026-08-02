@@ -1,4 +1,5 @@
 import { BrowserWindow, dialog, ipcMain } from "electron";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -29,6 +30,10 @@ import {
   type DetachDirectoryFromThreadRequest,
   type DetachDirectoryFromThreadResponse,
   type CheckThreadPullRequestStatusToolArgs,
+  type WatchThreadPullRequestToolArgs,
+  type ThreadPullRequestAutomationStatus,
+  type ThreadPullRequestWatchEvent,
+  type ThreadPullRequestWatchSummary,
   type CancelThreadPrAutoDispatchRequest,
   type SendThreadPrAutoDispatchNowRequest,
   type SetThreadPrAutoDispatchRequest,
@@ -209,6 +214,10 @@ import { resolveGitHubRepoForDirectory } from "../pr-status/git-remote";
 import { PrPollingScheduler } from "../pr-status/pr-polling-scheduler";
 import type { PrPollTarget } from "../pr-status/pr-polling-scheduler";
 import { PrAutoDispatchCoordinator } from "../pr-status/pr-auto-dispatch";
+import {
+  PrStatusWatchCoordinator,
+  getPrStatusWatchOutcome,
+} from "../pr-status/pr-status-watch";
 import { isTerminalPullRequest, mergeCommitShas } from "../pr-status/pr-derivations";
 import {
   computePrStatusTransition,
@@ -233,6 +242,7 @@ import {
 } from "../app-server/thread-file-diff-cache";
 
 const isDevelopment = process.env.NODE_ENV !== "production";
+const PR_STATUS_WATCH_CURRENT_OUTCOME_MAX_AGE_MS = 30_000;
 const THREAD_PR_REFRESH_MIN_INTERVAL_MS = 60_000;
 const USER_THREAD_PR_REFRESH_MIN_INTERVAL_MS = 10_000;
 const TERMINAL_USER_THREAD_PR_REFRESH_MIN_INTERVAL_MS = 60_000;
@@ -669,6 +679,25 @@ function getPrStatusKey(
   return buildPullRequestStatusKey(pr);
 }
 
+function normalizePrStatusWatchEvents(
+  events: ThreadPullRequestWatchEvent[] | undefined,
+): ThreadPullRequestWatchEvent[] | undefined {
+  if (events === undefined) return ["success", "failure"];
+  const normalized = [...new Set(events)];
+  if (
+    normalized.length === 0
+    || normalized.some((event) => event !== "success" && event !== "failure")
+  ) {
+    return undefined;
+  }
+  return normalized;
+}
+
+function normalizePrWatchUrl(url: string | undefined): string | undefined {
+  const normalized = url?.trim().replace(/\/+$/, "").toLowerCase();
+  return normalized || undefined;
+}
+
 function filterDetachedPullRequests(
   prs: PrSummary[],
   detachedPrKeys: string[] | undefined,
@@ -889,6 +918,7 @@ class DesktopAppServerService {
   private prPollingScheduler: PrPollingScheduler | undefined;
   private backgroundPrPollingEnabled = false;
   private prAutoDispatchCoordinator: PrAutoDispatchCoordinator | undefined;
+  private prStatusWatchCoordinator: PrStatusWatchCoordinator | undefined;
   /** Visible thread→PR attachments, including explicit directoryless refs. */
   private readonly attachedPrsByThreadKey = new Map<
     string,
@@ -2344,6 +2374,10 @@ class DesktopAppServerService {
       directoryPaths: lookupDirectoryPaths,
       includeStatusFreshness: true,
     });
+    const prAutomation = await this.getThreadPullRequestAutomationStatus({
+      backend: args.backend,
+      threadId,
+    });
 
     return {
       ok: true,
@@ -2353,8 +2387,194 @@ class DesktopAppServerService {
           requestedAt,
           branch,
           directoryPaths: lookupDirectoryPaths,
+          prAutomation,
         },
       },
+    };
+  }
+
+  async watchThreadPullRequestForTool(
+    args: WatchThreadPullRequestToolArgs,
+  ): Promise<PwrAgentThreadInspectionResponse> {
+    if (!args.backend || !isAppServerBackendKind(args.backend)) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message: "backend must be a known PwrAgent backend.",
+        },
+      };
+    }
+    const threadId = args.threadId?.trim();
+    if (!threadId) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message: "threadId is required.",
+        },
+      };
+    }
+    if (!this.backgroundPrPollingEnabled) {
+      return {
+        ok: false,
+        error: {
+          code: "forbidden",
+          message:
+            "Background pull request polling is off. Enable it before asking PwrAgent to watch a PR.",
+        },
+      };
+    }
+    const requestedEvents = normalizePrStatusWatchEvents(args.notifyOn);
+    if (!requestedEvents) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message: "notifyOn must contain success, failure, or both.",
+        },
+      };
+    }
+
+    const overlay = await this.getOverlayStore().getThreadOverlayState({
+      backend: args.backend,
+      threadId,
+    });
+    const attachedPrs = this.canonicalizePrs(overlay?.prs ?? []);
+    const requestedUrl = normalizePrWatchUrl(args.url);
+    const matches = requestedUrl
+      ? attachedPrs.filter((pr) => normalizePrWatchUrl(pr.url) === requestedUrl)
+      : attachedPrs;
+    if (matches.length !== 1) {
+      const message = requestedUrl
+        ? "The requested pull request is not attached to this thread."
+        : attachedPrs.length === 0
+          ? "This thread does not have an attached pull request to watch."
+          : "url is required when a thread has more than one attached pull request.";
+      return {
+        ok: false,
+        error: {
+          code: matches.length === 0 ? "not_found" : "invalid_arguments",
+          message,
+        },
+      };
+    }
+
+    const attachedPr = matches[0]!;
+    const prKey = getPrStatusKey(attachedPr);
+    const currentPrEntry = this.prStatusRegistry.get(prKey);
+    const pr = currentPrEntry?.pr ?? attachedPr;
+    const headSha = pr.headSha?.trim();
+    if (!headSha) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message:
+            "The attached pull request does not have a known head SHA yet. Check its status once, then create the watch.",
+        },
+      };
+    }
+
+    const prAutomation = await this.getThreadPullRequestAutomationStatus({
+      backend: args.backend,
+      threadId,
+    });
+    const failureCoveredByAutoFix = prAutomation.autoFixActive
+      && requestedEvents.includes("failure");
+    const coveredByAutoFix: ThreadPullRequestWatchEvent[] = failureCoveredByAutoFix
+      ? ["failure" as const]
+      : [];
+    const notifyOn = requestedEvents;
+    const currentOutcome = getPrStatusWatchOutcome(pr);
+    const currentOutcomeIsFresh = Boolean(
+      currentPrEntry
+      && Date.now() - currentPrEntry.fetchedAt
+        <= PR_STATUS_WATCH_CURRENT_OUTCOME_MAX_AGE_MS,
+    );
+    if (
+      currentOutcome
+      && (
+        isTerminalPullRequest(pr)
+        || (requestedEvents.includes(currentOutcome) && currentOutcomeIsFresh)
+      )
+    ) {
+      return {
+        ok: true,
+        data: {
+          pullRequestWatch: {
+            currentOutcome,
+            coveredByAutoFix,
+            prAutomation,
+          },
+        },
+      };
+    }
+    let watch: ThreadPullRequestWatchSummary | undefined;
+    if (notifyOn.length > 0) {
+      const createdAt = Date.now();
+      const candidate: ThreadPullRequestWatchSummary = {
+        watchId: randomUUID(),
+        backend: args.backend,
+        threadId,
+        prKey,
+        prUrl: pr.url,
+        prNumber: pr.number,
+        ...(pr.title ? { prTitle: pr.title } : {}),
+        headSha,
+        notifyOn,
+        createdAt,
+        failureHandledByAutoFix: coveredByAutoFix.length > 0,
+      };
+      const registration = await this.getOverlayStore().registerThreadPrStatusWatch({
+        watch: candidate,
+        now: createdAt,
+      });
+      watch = registration.watch;
+      await this.getPrStatusWatchCoordinator().handleStatusSnapshot(pr, createdAt);
+    }
+
+    return {
+      ok: true,
+      data: {
+        pullRequestWatch: {
+          ...(watch ? { watch } : {}),
+          coveredByAutoFix,
+          prAutomation: await this.getThreadPullRequestAutomationStatus({
+            backend: args.backend,
+            threadId,
+          }),
+        },
+      },
+    };
+  }
+
+  async getThreadPullRequestAutomationStatus(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<ThreadPullRequestAutomationStatus> {
+    const overlay = await this.getOverlayStore().getThreadOverlayState(params);
+    const autoFixEnabled = overlay?.prAutoDispatchEnabled === true;
+    const autoFixActive = autoFixEnabled && this.backgroundPrPollingEnabled;
+    const watches = await this.getOverlayStore().listActiveThreadPrStatusWatches(
+      params,
+    );
+    const guidance = autoFixActive
+      ? "Auto-fix PR is active. Do not poll CI and do not create a monitor thread for this PR. End the turn; PwrAgent will start a repair turn on a CI failure or merge conflict. Use watch_thread_pull_request before ending when the thread should also wake on successful completion."
+      : autoFixEnabled
+        ? "Auto-fix PR is saved but paused because background PR polling is off. Do not assume PwrAgent will wake this thread until polling is enabled."
+        : this.backgroundPrPollingEnabled
+          ? "Background PR polling is active, but Auto-fix PR is off for this thread. Use watch_thread_pull_request for a bounded one-shot success/failure notification instead of polling or creating a monitor thread."
+          : "Background PR polling and Auto-fix PR are off. PwrAgent will not wake this thread for PR status changes.";
+    return {
+      backgroundPollingEnabled: this.backgroundPrPollingEnabled,
+      autoFixEnabled,
+      autoFixActive,
+      ...(overlay?.prAutoDispatchPending
+        ? { autoFixPending: overlay.prAutoDispatchPending }
+        : {}),
+      ...(watches.length > 0 ? { watches } : {}),
+      guidance,
     };
   }
 
@@ -2366,6 +2586,12 @@ class DesktopAppServerService {
       backend,
       threadId: request.threadId,
       pr: request.pr,
+    });
+    await this.getOverlayStore().cancelThreadPrStatusWatchesForPr({
+      backend,
+      threadId: request.threadId,
+      prKey: getPrStatusKey(request.pr),
+      now: Date.now(),
     });
     const prs = overlay.prs ?? [];
     await this.publishThreadPullRequestsUpdated({
@@ -3707,16 +3933,35 @@ class DesktopAppServerService {
       const threadKeys = onlyThreadKey
         ? [onlyThreadKey]
         : this.findThreadKeysForPrKey(prKey);
-      if (threadKeys.length === 0) continue;
-      const outcomes = await coordinator.handleStatusSnapshot({
-        pr,
-        threadKeys,
-        observedAt,
-        backgroundPollingEnabled: this.backgroundPrPollingEnabled,
-        operatorInitiated,
-      });
+      const outcomes = threadKeys.length > 0
+        ? await coordinator.handleStatusSnapshot({
+            pr,
+            threadKeys,
+            observedAt,
+            backgroundPollingEnabled: this.backgroundPrPollingEnabled,
+            operatorInitiated,
+          })
+        : [];
       for (const outcome of outcomes) {
         appServerLog.info("pr auto dispatch", { prKey, ...outcome });
+      }
+      if (this.backgroundPrPollingEnabled) {
+        const failureCoveredThreadKeys = new Set(
+          outcomes.flatMap((outcome) =>
+            outcome.status === "scheduled"
+            || outcome.status === "pending"
+              ? [outcome.threadKey]
+              : [],
+          ),
+        );
+        const dispatched = await this.getPrStatusWatchCoordinator()
+          .handleStatusSnapshot(pr, observedAt, failureCoveredThreadKeys);
+        if (dispatched > 0) {
+          appServerLog.info("pr status watch completed", {
+            prKey,
+            watchCount: dispatched,
+          });
+        }
       }
     }
   }
@@ -4594,6 +4839,7 @@ class DesktopAppServerService {
     this.prStatusTransitionListeners.clear();
     this.prAutoDispatchCoordinator?.close();
     this.prAutoDispatchCoordinator = undefined;
+    this.prStatusWatchCoordinator = undefined;
     this.attachedPrsByThreadKey.clear();
     this.pendingNavigationSnapshots.clear();
     this.pendingThreadPullRequestRefreshes.clear();
@@ -4663,6 +4909,17 @@ class DesktopAppServerService {
       });
     }
     return this.prAutoDispatchCoordinator;
+  }
+
+  private getPrStatusWatchCoordinator(): PrStatusWatchCoordinator {
+    if (!this.prStatusWatchCoordinator) {
+      this.prStatusWatchCoordinator = new PrStatusWatchCoordinator({
+        store: this.getOverlayStore(),
+        registry: getDesktopBackendRegistry(),
+        isBackgroundPollingEnabled: () => this.backgroundPrPollingEnabled,
+      });
+    }
+    return this.prStatusWatchCoordinator;
   }
 
   private getFocusedDiffService(modelOverride?: string): FocusedDiffService {
@@ -4824,6 +5081,9 @@ export function registerAppServerIpcHandlers(): void {
   getDesktopBackendRegistry().setThreadPullRequestStatusToolHandler(
     async (args) => await appServerService.checkThreadPullRequestStatusForTool(args),
   );
+  getDesktopBackendRegistry().setThreadPullRequestWatchToolHandler(
+    async (args) => await appServerService.watchThreadPullRequestForTool(args),
+  );
   getDesktopBackendRegistry().setThreadPrAutoDispatchHandler({
     preferenceChanged: async (request) =>
       await appServerService.handleThreadPrAutoDispatchPreference(request),
@@ -4831,6 +5091,8 @@ export function registerAppServerIpcHandlers(): void {
       await appServerService.cancelThreadPrAutoDispatch(request),
     sendPendingNow: async (request) =>
       await appServerService.sendThreadPrAutoDispatchNow(request),
+    inspect: async (request) =>
+      await appServerService.getThreadPullRequestAutomationStatus(request),
   });
 
   ipcMain.removeHandler(APP_SERVER_LIST_SKILLS_CHANNEL);
@@ -5402,6 +5664,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   unsubscribeWorkingStateEvents?.();
   unsubscribeWorkingStateEvents = undefined;
   getDesktopBackendRegistry().setThreadPullRequestStatusToolHandler(undefined);
+  getDesktopBackendRegistry().setThreadPullRequestWatchToolHandler(undefined);
   getDesktopBackendRegistry().setThreadPrAutoDispatchHandler(undefined);
   await appServerService.close();
 }

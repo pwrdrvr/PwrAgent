@@ -154,6 +154,8 @@ import {
   type AttachThreadDirectoryWorkspaceMode,
   type AttachThreadPullRequestToolArgs,
   type CheckThreadPullRequestStatusToolArgs,
+  type WatchThreadPullRequestToolArgs,
+  type ThreadPullRequestAutomationStatus,
   type DetachThreadDirectoryToolArgs,
   type ReadThreadToolArgs,
   type PwrAgentThreadInspectionRequest,
@@ -1468,12 +1470,20 @@ type ThreadPullRequestStatusToolHandler = (
   args: CheckThreadPullRequestStatusToolArgs,
 ) => PwrAgentThreadInspectionResponse | Promise<PwrAgentThreadInspectionResponse>;
 
+type ThreadPullRequestWatchToolHandler = (
+  args: WatchThreadPullRequestToolArgs,
+) => PwrAgentThreadInspectionResponse | Promise<PwrAgentThreadInspectionResponse>;
+
 type ThreadPrAutoDispatchHandler = {
   preferenceChanged: (request: SetThreadPrAutoDispatchRequest) => Promise<void>;
   cancelPending: (request: CancelThreadPrAutoDispatchRequest) => Promise<boolean>;
   sendPendingNow: (
     request: SendThreadPrAutoDispatchNowRequest,
   ) => Promise<boolean>;
+  inspect?: (request: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }) => Promise<ThreadPullRequestAutomationStatus>;
 };
 
 type ThreadTitleGenerationLogStatus =
@@ -5975,6 +5985,9 @@ export class DesktopBackendRegistry {
   private threadPullRequestStatusToolHandler:
     | ThreadPullRequestStatusToolHandler
     | undefined;
+  private threadPullRequestWatchToolHandler:
+    | ThreadPullRequestWatchToolHandler
+    | undefined;
   private threadPrAutoDispatchHandler: ThreadPrAutoDispatchHandler | undefined;
   private threadInspectionSearchService: ThreadSearchService | null | undefined;
   private readonly headlessAutomationTurns = new Map<
@@ -6587,6 +6600,12 @@ export class DesktopBackendRegistry {
     handler: ThreadPullRequestStatusToolHandler | null | undefined,
   ): void {
     this.threadPullRequestStatusToolHandler = handler ?? undefined;
+  }
+
+  setThreadPullRequestWatchToolHandler(
+    handler: ThreadPullRequestWatchToolHandler | null | undefined,
+  ): void {
+    this.threadPullRequestWatchToolHandler = handler ?? undefined;
   }
 
   setThreadPrAutoDispatchHandler(
@@ -22588,6 +22607,8 @@ export class DesktopBackendRegistry {
           backend,
           sourceThreadId: threadId,
         });
+      const prAutomation =
+        await this.threadPrAutoDispatchHandler?.inspect?.({ backend, threadId });
       return {
         ok: true,
         data: {
@@ -22596,6 +22617,7 @@ export class DesktopBackendRegistry {
             status,
             queuedExecutionMode: queued?.mode,
             queuedExecutionModeAt: queued?.queuedAt,
+            ...(prAutomation ? { prAutomation } : {}),
             ...(pendingHandoffs.length ? { pendingHandoffs } : {}),
             ...(pendingWorkspaceMoves.length ? { pendingWorkspaceMoves } : {}),
           },
@@ -22626,6 +22648,23 @@ export class DesktopBackendRegistry {
         };
       }
       return await this.threadPullRequestStatusToolHandler({
+        ...request.args,
+        backend: request.args.backend ?? request.context.backend,
+        threadId: request.args.threadId ?? request.context.threadId,
+      });
+    }
+
+    if (request.operation === "watch_thread_pull_request") {
+      if (!this.threadPullRequestWatchToolHandler) {
+        return {
+          ok: false,
+          error: {
+            code: "unsupported_operation",
+            message: "Pull request completion watches are not available.",
+          },
+        };
+      }
+      return await this.threadPullRequestWatchToolHandler({
         ...request.args,
         backend: request.args.backend ?? request.context.backend,
         threadId: request.args.threadId ?? request.context.threadId,

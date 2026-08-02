@@ -250,6 +250,7 @@ function emitRegistryEvent(event: unknown): void {
 }
 const publishLocalEvent = vi.fn(async () => undefined);
 const setThreadPullRequestStatusToolHandler = vi.fn();
+const setThreadPullRequestWatchToolHandler = vi.fn();
 const setThreadPrAutoDispatchHandler = vi.fn();
 const ensureDirectoryLaunchpad = vi.fn(async (request: {
   directoryKey: string;
@@ -378,6 +379,17 @@ const listPendingThreadPrAutoDispatches = vi.fn(async () => []);
 const recoverOrphanedThreadPrAutoDispatches = vi.fn(async () => ({
   recoveredCount: 0,
 }));
+const registerThreadPrStatusWatch = vi.fn(async ({ watch }) => ({
+  status: "watching" as const,
+  watch,
+}));
+const claimThreadPrStatusWatches = vi.fn(async () => []);
+const releaseThreadPrStatusWatch = vi.fn(async () => undefined);
+const renewThreadPrStatusWatchLease = vi.fn(async () => false);
+const finishThreadPrStatusWatch = vi.fn(async () => undefined);
+const supersedeThreadPrStatusWatches = vi.fn(async () => 0);
+const listActiveThreadPrStatusWatches = vi.fn(async () => []);
+const cancelThreadPrStatusWatchesForPr = vi.fn(async () => 0);
 const isGhAvailable = vi.fn(async () => true);
 const getAuthStatus = vi.fn(async () => ({
   installed: true,
@@ -504,6 +516,14 @@ vi.mock("../app-server/desktop-overlay-store", () => ({
     getThreadPrAutoDispatchPending,
     listPendingThreadPrAutoDispatches,
     recoverOrphanedThreadPrAutoDispatches,
+    registerThreadPrStatusWatch,
+    claimThreadPrStatusWatches,
+    releaseThreadPrStatusWatch,
+    renewThreadPrStatusWatchLease,
+    finishThreadPrStatusWatch,
+    supersedeThreadPrStatusWatches,
+    listActiveThreadPrStatusWatches,
+    cancelThreadPrStatusWatchesForPr,
     readDirectoryGitStatusCache,
     writeDirectoryGitStatusCacheEntry,
     readThreadGitWorkingStateCache,
@@ -534,6 +554,7 @@ vi.mock("../app-server/backend-registry", () => ({
     onEvent,
     publishLocalEvent,
     setThreadPullRequestStatusToolHandler,
+    setThreadPullRequestWatchToolHandler,
     setThreadPrAutoDispatchHandler,
     ensureDirectoryLaunchpad,
     getQueuedExecutionModesSnapshot: () => ({}),
@@ -584,6 +605,7 @@ describe("app server ipc", () => {
     registryEventListeners.length = 0;
     publishLocalEvent.mockClear();
     setThreadPullRequestStatusToolHandler.mockClear();
+    setThreadPullRequestWatchToolHandler.mockClear();
     setThreadPrAutoDispatchHandler.mockClear();
     ensureDirectoryLaunchpad.mockClear();
     markThreadSeen.mockClear();
@@ -614,6 +636,14 @@ describe("app server ipc", () => {
     getThreadPrAutoDispatchPending.mockClear();
     listPendingThreadPrAutoDispatches.mockClear();
     recoverOrphanedThreadPrAutoDispatches.mockClear();
+    registerThreadPrStatusWatch.mockClear();
+    claimThreadPrStatusWatches.mockClear();
+    releaseThreadPrStatusWatch.mockClear();
+    renewThreadPrStatusWatchLease.mockClear();
+    finishThreadPrStatusWatch.mockClear();
+    supersedeThreadPrStatusWatches.mockClear();
+    listActiveThreadPrStatusWatches.mockClear();
+    cancelThreadPrStatusWatchesForPr.mockClear();
     isGhAvailable.mockClear();
     isGhAvailable.mockResolvedValue(true);
     getAuthStatus.mockClear();
@@ -641,7 +671,11 @@ describe("app server ipc", () => {
       preferenceChanged: expect.any(Function),
       cancelPending: expect.any(Function),
       sendPendingNow: expect.any(Function),
+      inspect: expect.any(Function),
     });
+    expect(setThreadPullRequestWatchToolHandler).toHaveBeenCalledWith(
+      expect.any(Function),
+    );
   });
 
   it("aggregates navigation snapshots across backends by default", async () => {
@@ -4053,6 +4087,11 @@ describe("app server ipc", () => {
           lastStatusCheckAt: fetchedAt,
           branch: "feat/status-tool",
           directoryPaths: ["/repo/wt"],
+          prAutomation: {
+            backgroundPollingEnabled: false,
+            autoFixEnabled: false,
+            autoFixActive: false,
+          },
         },
       },
     });

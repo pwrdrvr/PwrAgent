@@ -25,7 +25,7 @@ describe("PwrAgent task monitor agent tools", () => {
       .flatMap((catalog) => catalog.router.buildMcpTools())
       .sort((left, right) => left.name.localeCompare(right.name));
 
-    expect(dynamicTools).toHaveLength(21);
+    expect(dynamicTools).toHaveLength(22);
     expect(mcpTools).toEqual(dynamicTools);
     expect(mcpTools.map((tool) => tool.name))
       .toContain("create_monitor_delegation");
@@ -36,6 +36,9 @@ describe("PwrAgent task monitor agent tools", () => {
     );
     expect(createMonitorTool?.description).toContain(
       "Normally omit preferredModel and preferredReasoningEffort",
+    );
+    expect(createMonitorTool?.description).toContain(
+      "Do not use this to poll an attached pull request",
     );
     expect(createMonitorTool?.inputSchema).toMatchObject({
       properties: {

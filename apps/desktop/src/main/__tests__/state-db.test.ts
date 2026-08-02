@@ -64,6 +64,31 @@ describe("StateDb", () => {
     expect(prLookupColumns.map((column) => column.name)).toContain("provider");
   });
 
+  it("creates durable pull request status watch storage", () => {
+    const table = stateDb.raw
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+      )
+      .get("pr_status_watches") as { name: string } | undefined;
+    expect(table?.name).toBe("pr_status_watches");
+
+    const columns = stateDb.raw
+      .prepare("PRAGMA table_info(pr_status_watches)")
+      .all() as Array<{ name: string }>;
+    expect(columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining([
+        "watch_id",
+        "backend",
+        "thread_id",
+        "pr_key",
+        "head_sha",
+        "status",
+        "lease_owner",
+        "lease_expires_at",
+      ]),
+    );
+  });
+
   it("creates thread usage pricing ledger tables", () => {
     const tables = stateDb.raw
       .prepare(

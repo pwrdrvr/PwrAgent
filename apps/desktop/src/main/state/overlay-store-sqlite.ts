@@ -27,6 +27,7 @@ import type {
   ThreadPricingSummary,
   ThreadPrAutoDispatchEventKind,
   ThreadPrAutoDispatchPending,
+  ThreadPullRequestWatchSummary,
   ThreadSubAgentSummary,
   ThreadTurnFailure,
   ThreadUsageLineRecord,
@@ -93,6 +94,16 @@ export type PrAutoDispatchScheduleResult = {
   pending?: ThreadPrAutoDispatchPending;
 };
 
+export type PrStatusWatchClaim = {
+  attemptCount: number;
+  watch: ThreadPullRequestWatchSummary;
+};
+
+export type PrStatusWatchRegistrationResult = {
+  status: "watching" | "duplicate";
+  watch: ThreadPullRequestWatchSummary;
+};
+
 type PrAutoDispatchClaimRow = {
   payload: string;
   pr_key: string;
@@ -103,6 +114,24 @@ type PrAutoDispatchIncidentRow = {
   active_kinds: string;
   attempt_count: number;
 };
+
+type PrStatusWatchRow = {
+  attempt_count: number;
+  payload: string;
+};
+
+function parsePrStatusWatchSummary(
+  payload: string,
+): ThreadPullRequestWatchSummary | undefined {
+  try {
+    const parsed = JSON.parse(payload) as ThreadPullRequestWatchSummary;
+    return parsed?.watchId && parsed.prKey && parsed.headSha
+      ? parsed
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 function parsePrAutoDispatchPendingRecord(
   payload: string,
@@ -3029,6 +3058,307 @@ export class SqliteOverlayStore {
     return this.readPrAutoDispatchIncident(params)?.attempt_count ?? 0;
   }
 
+  async registerThreadPrStatusWatch(params: {
+    watch: ThreadPullRequestWatchSummary;
+    now: number;
+  }): Promise<PrStatusWatchRegistrationResult> {
+    const register = this.stateDb.raw.transaction(() => {
+      const inserted = this.stateDb.raw
+        .prepare(
+          `INSERT OR IGNORE INTO pr_status_watches(
+             watch_id, backend, thread_id, pr_key, head_sha,
+             notify_on_success, notify_on_failure, status, attempt_count,
+             lease_owner, lease_expires_at, created_at, updated_at, payload
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, 'watching', 0, NULL, NULL, ?, ?, ?)`,
+        )
+        .run(
+          params.watch.watchId,
+          params.watch.backend,
+          params.watch.threadId,
+          params.watch.prKey,
+          params.watch.headSha,
+          params.watch.notifyOn.includes("success") ? 1 : 0,
+          params.watch.notifyOn.includes("failure") ? 1 : 0,
+          params.watch.createdAt,
+          params.now,
+          JSON.stringify(params.watch),
+        );
+      if (inserted.changes > 0) {
+        return { status: "watching", watch: params.watch } as const;
+      }
+      const duplicate = this.stateDb.raw
+        .prepare(
+          `SELECT payload
+           FROM pr_status_watches
+           WHERE backend = ? AND thread_id = ? AND pr_key = ? AND head_sha = ?
+             AND status IN ('watching', 'dispatching')
+           LIMIT 1`,
+        )
+        .get(
+          params.watch.backend,
+          params.watch.threadId,
+          params.watch.prKey,
+          params.watch.headSha,
+        ) as { payload: string } | undefined;
+      const existing = duplicate
+        ? parsePrStatusWatchSummary(duplicate.payload)
+        : undefined;
+      if (existing) {
+        const notifyOn = [
+          ...new Set([...existing.notifyOn, ...params.watch.notifyOn]),
+        ];
+        const merged: ThreadPullRequestWatchSummary = {
+          ...existing,
+          notifyOn,
+          failureHandledByAutoFix:
+            existing.failureHandledByAutoFix
+            && params.watch.failureHandledByAutoFix,
+        };
+        this.stateDb.raw
+          .prepare(
+            `UPDATE pr_status_watches
+             SET notify_on_success = ?, notify_on_failure = ?,
+                 updated_at = ?, payload = ?
+             WHERE watch_id = ? AND status IN ('watching', 'dispatching')`,
+          )
+          .run(
+            notifyOn.includes("success") ? 1 : 0,
+            notifyOn.includes("failure") ? 1 : 0,
+            params.now,
+            JSON.stringify(merged),
+            existing.watchId,
+          );
+        return { status: "duplicate", watch: merged } as const;
+      }
+      return {
+        status: "duplicate",
+        watch: params.watch,
+      } as const;
+    });
+    return register();
+  }
+
+  async claimThreadPrStatusWatches(params: {
+    prKey: string;
+    headSha: string;
+    outcome: "success" | "failure";
+    now: number;
+    ownerId: string;
+    leaseExpiresAt: number;
+    maxAttempts: number;
+  }): Promise<PrStatusWatchClaim[]> {
+    const claim = this.stateDb.raw.transaction(() => {
+      const rows = this.stateDb.raw
+        .prepare(
+          `SELECT watch_id, attempt_count, payload
+           FROM pr_status_watches
+           WHERE pr_key = ? AND head_sha = ?
+             AND (
+               (? = 'success' AND notify_on_success = 1)
+               OR (? = 'failure' AND notify_on_failure = 1)
+             )
+             AND attempt_count < ?
+             AND (
+               status = 'watching'
+               OR (
+                 status = 'dispatching'
+                 AND COALESCE(lease_expires_at, 0) <= ?
+               )
+             )`,
+        )
+        .all(
+          params.prKey,
+          params.headSha,
+          params.outcome,
+          params.outcome,
+          params.maxAttempts,
+          params.now,
+        ) as Array<PrStatusWatchRow & { watch_id: string }>;
+      const claimed: PrStatusWatchClaim[] = [];
+      for (const row of rows) {
+        const updated = this.stateDb.raw
+          .prepare(
+            `UPDATE pr_status_watches
+             SET status = 'dispatching',
+                 attempt_count = attempt_count + 1,
+                 lease_owner = ?, lease_expires_at = ?, updated_at = ?
+             WHERE watch_id = ?
+               AND (
+                 status = 'watching'
+                 OR (
+                   status = 'dispatching'
+                   AND COALESCE(lease_expires_at, 0) <= ?
+                 )
+               )`,
+          )
+          .run(
+            params.ownerId,
+            params.leaseExpiresAt,
+            params.now,
+            row.watch_id,
+            params.now,
+          );
+        const watch = parsePrStatusWatchSummary(row.payload);
+        if (updated.changes > 0 && watch) {
+          claimed.push({
+            attemptCount: row.attempt_count + 1,
+            watch,
+          });
+        }
+      }
+      return claimed;
+    });
+    return claim();
+  }
+
+  async releaseThreadPrStatusWatch(params: {
+    watchId: string;
+    ownerId: string;
+    now: number;
+    spendAttempt: boolean;
+    maxAttempts: number;
+  }): Promise<void> {
+    const release = this.stateDb.raw.transaction(() => {
+      const row = this.stateDb.raw
+        .prepare(
+          `SELECT attempt_count
+           FROM pr_status_watches
+           WHERE watch_id = ? AND status = 'dispatching' AND lease_owner = ?`,
+        )
+        .get(params.watchId, params.ownerId) as
+        | { attempt_count: number }
+        | undefined;
+      if (!row) return;
+      const attemptCount = params.spendAttempt
+        ? row.attempt_count
+        : Math.max(0, row.attempt_count - 1);
+      const status = attemptCount >= params.maxAttempts ? "failed" : "watching";
+      this.stateDb.raw
+        .prepare(
+          `UPDATE pr_status_watches
+           SET status = ?, attempt_count = ?, lease_owner = NULL,
+               lease_expires_at = NULL, updated_at = ?
+           WHERE watch_id = ? AND status = 'dispatching' AND lease_owner = ?`,
+        )
+        .run(
+          status,
+          attemptCount,
+          params.now,
+          params.watchId,
+          params.ownerId,
+        );
+    });
+    release();
+  }
+
+  async renewThreadPrStatusWatchLease(params: {
+    watchId: string;
+    ownerId: string;
+    now: number;
+    leaseExpiresAt: number;
+  }): Promise<boolean> {
+    const result = this.stateDb.raw
+      .prepare(
+        `UPDATE pr_status_watches
+         SET lease_expires_at = ?, updated_at = ?
+         WHERE watch_id = ? AND status = 'dispatching' AND lease_owner = ?`,
+      )
+      .run(
+        params.leaseExpiresAt,
+        params.now,
+        params.watchId,
+        params.ownerId,
+      );
+    return result.changes > 0;
+  }
+
+  async finishThreadPrStatusWatch(params: {
+    watchId: string;
+    ownerId: string;
+    now: number;
+  }): Promise<void> {
+    this.stateDb.raw
+      .prepare(
+        `UPDATE pr_status_watches
+         SET status = 'dispatched', lease_owner = NULL,
+             lease_expires_at = NULL, updated_at = ?
+         WHERE watch_id = ? AND status = 'dispatching' AND lease_owner = ?`,
+      )
+      .run(params.now, params.watchId, params.ownerId);
+  }
+
+  async supersedeThreadPrStatusWatches(params: {
+    prKey: string;
+    headSha: string;
+    now: number;
+  }): Promise<number> {
+    const result = this.stateDb.raw
+      .prepare(
+        `UPDATE pr_status_watches
+         SET status = 'superseded', lease_owner = NULL,
+             lease_expires_at = NULL, updated_at = ?
+         WHERE pr_key = ? AND head_sha <> ?
+           AND (
+             status = 'watching'
+             OR (
+               status = 'dispatching'
+               AND COALESCE(lease_expires_at, 0) <= ?
+             )
+           )`,
+      )
+      .run(params.now, params.prKey, params.headSha, params.now);
+    return result.changes;
+  }
+
+  async listActiveThreadPrStatusWatches(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+  }): Promise<ThreadPullRequestWatchSummary[]> {
+    const rows = this.stateDb.raw
+      .prepare(
+        `SELECT payload
+         FROM pr_status_watches
+         WHERE backend = ? AND thread_id = ?
+           AND status IN ('watching', 'dispatching')
+         ORDER BY created_at ASC`,
+      )
+      .all(params.backend, params.threadId) as Array<{ payload: string }>;
+    return rows.flatMap((row) => {
+      const watch = parsePrStatusWatchSummary(row.payload);
+      return watch ? [watch] : [];
+    });
+  }
+
+  async cancelThreadPrStatusWatchesForPr(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    prKey: string;
+    now: number;
+  }): Promise<number> {
+    const result = this.stateDb.raw
+      .prepare(
+        `UPDATE pr_status_watches
+         SET status = 'cancelled', lease_owner = NULL,
+             lease_expires_at = NULL, updated_at = ?
+         WHERE backend = ? AND thread_id = ? AND pr_key = ?
+           AND (
+             status = 'watching'
+             OR (
+               status = 'dispatching'
+               AND COALESCE(lease_expires_at, 0) <= ?
+             )
+           )`,
+      )
+      .run(
+        params.now,
+        params.backend,
+        params.threadId,
+        params.prKey,
+        params.now,
+      );
+    return result.changes;
+  }
+
   async setThreadCodexEnvironmentRuntime(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;
@@ -4661,6 +4991,14 @@ export type OverlayStoreLike = Pick<
   | "listPendingThreadPrAutoDispatches"
   | "recoverOrphanedThreadPrAutoDispatches"
   | "getThreadPrAutoDispatchAttemptCount"
+  | "registerThreadPrStatusWatch"
+  | "claimThreadPrStatusWatches"
+  | "releaseThreadPrStatusWatch"
+  | "renewThreadPrStatusWatchLease"
+  | "finishThreadPrStatusWatch"
+  | "supersedeThreadPrStatusWatches"
+  | "listActiveThreadPrStatusWatches"
+  | "cancelThreadPrStatusWatchesForPr"
   | "turnOffCodexFastEverywhere"
   | "setThreadExpectedBranch"
   | "setThreadObservedBranch"
