@@ -52,6 +52,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
+    "@napi-rs/canvas": "0.1.100",
     "@octokit/graphql": "^9.0.3",
     "@pwragent/messaging-interface": "workspace:*",
     "@pwragent/messaging-provider-discord": "workspace:*",
@@ -80,6 +81,7 @@
     "electron-updater": "6.8.9",
     "node-fetch": "2.7.0",
     "node-pty": "1.2.0-beta.14",
+    "pdfjs-dist": "5.7.284",
     "prosemirror-history": "^1.5.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",

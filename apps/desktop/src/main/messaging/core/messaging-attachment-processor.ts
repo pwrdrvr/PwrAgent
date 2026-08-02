@@ -1,10 +1,13 @@
-import { Buffer } from "node:buffer";
 import type { AppServerTurnInputItem } from "@pwragent/shared";
 import type {
   MessagingAttachmentDescriptor,
 } from "@pwragent/messaging-interface";
 import type { ImageUploadQualityProfile } from "../../../shared/image-normalization";
 import { normalizeMessagingImageAttachment } from "../attachment-image-normalization";
+import {
+  renderPdfPages,
+  type RenderedPdfPage,
+} from "../pdf-page-renderer";
 import type { MessagingAdapter } from "./messaging-adapter";
 import {
   classifyMessagingAttachment,
@@ -13,6 +16,7 @@ import {
 
 export type MessagingAttachmentPolicy = {
   imageProfile: ImageUploadQualityProfile;
+  pdfProfile: ImageUploadQualityProfile;
   maxAttachmentBytes: number;
   maxAttachmentCount: number;
   maxExtractedTextCharacters: number;
@@ -30,9 +34,21 @@ export type MessagingAttachmentProcessingResult = {
 
 export const DEFAULT_MESSAGING_ATTACHMENT_POLICY: MessagingAttachmentPolicy = {
   imageProfile: "medium",
+  pdfProfile: "high",
   maxAttachmentBytes: 10 * 1024 * 1024,
   maxAttachmentCount: 4,
   maxExtractedTextCharacters: 80_000,
+};
+
+export type MessagingAttachmentProcessingDependencies = {
+  renderPdfPages: (params: {
+    data: Uint8Array;
+    profile: ImageUploadQualityProfile;
+  }) => Promise<RenderedPdfPage[]>;
+};
+
+const DEFAULT_DEPENDENCIES: MessagingAttachmentProcessingDependencies = {
+  renderPdfPages,
 };
 
 export async function processMessagingAttachments(params: {
@@ -40,10 +56,15 @@ export async function processMessagingAttachments(params: {
   attachments: MessagingAttachmentDescriptor[];
   policy?: Partial<MessagingAttachmentPolicy>;
   text?: string;
+  dependencies?: Partial<MessagingAttachmentProcessingDependencies>;
 }): Promise<MessagingAttachmentProcessingResult> {
   const policy = {
     ...DEFAULT_MESSAGING_ATTACHMENT_POLICY,
     ...params.policy,
+  };
+  const dependencies = {
+    ...DEFAULT_DEPENDENCIES,
+    ...params.dependencies,
   };
   const textInput: string[] = [];
   const mediaInput: AppServerTurnInputItem[] = [];
@@ -126,13 +147,23 @@ export async function processMessagingAttachments(params: {
       }
 
       if (classification.kind === "pdf") {
-        mediaInput.push({
-          type: "file",
-          name: downloaded.fileName,
-          mimeType: classification.mimeType,
-          data: Buffer.from(downloaded.data).toString("base64"),
-          sizeBytes: downloaded.sizeBytes,
+        const pages = await dependencies.renderPdfPages({
+          data: downloaded.data,
+          profile: policy.pdfProfile,
         });
+        if (pages.length === 0) {
+          throw new Error("PDF has no renderable pages.");
+        }
+        textInput.push(
+          `Attachment \`${downloaded.fileName}\` was rendered into ${pages.length} page image${pages.length === 1 ? "" : "s"} for model input.`,
+        );
+        mediaInput.push(
+          ...pages.map((page) => ({
+            type: "image" as const,
+            name: pdfPageImageName(downloaded.fileName, page.pageNumber),
+            url: page.dataUrl,
+          })),
+        );
         continue;
       }
 
@@ -180,6 +211,11 @@ export async function processMessagingAttachments(params: {
   ];
 
   return { input, rejections };
+}
+
+function pdfPageImageName(fileName: string, pageNumber: number): string {
+  const baseName = fileName.replace(/\.pdf$/i, "") || fileName;
+  return `${baseName}-page-${pageNumber}.png`;
 }
 
 function formatAttachmentText(params: {

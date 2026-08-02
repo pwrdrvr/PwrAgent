@@ -111,13 +111,26 @@ describe("processMessagingAttachments", () => {
     });
   });
 
-  it("passes PDFs through as file input without text extraction", async () => {
+  it("renders PDFs into page images without normalizing the rendered output", async () => {
     const adapter = createAdapter({
       "readable.pdf": bytes("%PDF-1.7\n(hello pdf) Tj\n"),
-      "scan.pdf": bytes("%PDF-1.7\n/image data\n"),
     });
+    const renderPdfPages = vi.fn(async () => [
+      {
+        dataUrl: "data:image/png;base64,first-page",
+        height: 1988,
+        pageNumber: 1,
+        width: 3072,
+      },
+      {
+        dataUrl: "data:image/png;base64,second-page",
+        height: 1988,
+        pageNumber: 2,
+        width: 3072,
+      },
+    ]);
 
-    const readable = await processMessagingAttachments({
+    const result = await processMessagingAttachments({
       adapter,
       attachments: [
         {
@@ -128,37 +141,29 @@ describe("processMessagingAttachments", () => {
           mimeType: "application/pdf",
         },
       ],
-    });
-    const scanned = await processMessagingAttachments({
-      adapter,
-      attachments: [
-        {
-          id: "pdf-2",
-          kind: "file",
-          name: "scan.pdf",
-          disposition: "available",
-          mimeType: "application/pdf",
-        },
-      ],
+      dependencies: { renderPdfPages },
     });
 
-    expect(readable.rejections).toEqual([]);
-    expect(readable.input).toEqual([
+    expect(renderPdfPages).toHaveBeenCalledWith({
+      data: bytes("%PDF-1.7\n(hello pdf) Tj\n"),
+      profile: "high",
+    });
+    expect(result.rejections).toEqual([]);
+    expect(result.input).toEqual([
       {
-        type: "file",
-        name: "readable.pdf",
-        mimeType: "application/pdf",
-        data: Buffer.from("%PDF-1.7\n(hello pdf) Tj\n").toString("base64"),
-        sizeBytes: 24,
+        type: "text",
+        text: "Attachment `readable.pdf` was rendered into 2 page images for model input.",
       },
-    ]);
-    expect(scanned.rejections).toEqual([]);
-    expect(scanned.input).toEqual([
-      expect.objectContaining({
-        type: "file",
-        name: "scan.pdf",
-        mimeType: "application/pdf",
-      }),
+      {
+        type: "image",
+        name: "readable-page-1.png",
+        url: "data:image/png;base64,first-page",
+      },
+      {
+        type: "image",
+        name: "readable-page-2.png",
+        url: "data:image/png;base64,second-page",
+      },
     ]);
   });
 });
