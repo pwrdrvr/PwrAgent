@@ -15,10 +15,22 @@ export type AgentToolCallContentItems = NonNullable<
   DynamicToolCallResponse["contentItems"]
 >;
 
+export type AgentToolMcpContentItem =
+  | {
+      type: "text";
+      text: string;
+    }
+  | {
+      type: "image";
+      data: string;
+      mimeType: string;
+    };
+
 export type AgentToolDispatchSuccess = {
   ok: true;
   data: unknown;
   contentItems?: AgentToolCallContentItems;
+  mcpContentItems?: AgentToolMcpContentItem[];
 };
 
 export type AgentToolDispatchFailure = {
@@ -27,6 +39,7 @@ export type AgentToolDispatchFailure = {
   message: string;
   data?: unknown;
   contentItems?: AgentToolCallContentItems;
+  mcpContentItems?: AgentToolMcpContentItem[];
 };
 
 export type AgentToolDispatchResult =
@@ -43,6 +56,11 @@ export type AgentToolDefinition<TName extends string = string> = {
    * advertised to new Agent turns or MCP clients.
    */
   advertise?: boolean;
+  /**
+   * Omit a dynamic-only tool from the generic MCP server while leaving it
+   * advertised to Codex threads created with PwrAgent dynamic tools.
+   */
+  advertiseMcp?: boolean;
   deferLoading?: boolean;
   dispatch: (
     args: Record<string, unknown>,
@@ -52,12 +70,16 @@ export type AgentToolDefinition<TName extends string = string> = {
 
 export function agentToolSuccess(
   data: unknown,
-  options: { contentItems?: AgentToolCallContentItems } = {},
+  options: {
+    contentItems?: AgentToolCallContentItems;
+    mcpContentItems?: AgentToolMcpContentItem[];
+  } = {},
 ): AgentToolDispatchSuccess {
   return {
     ok: true,
     data,
     contentItems: options.contentItems,
+    mcpContentItems: options.mcpContentItems,
   };
 }
 
@@ -66,6 +88,7 @@ export function agentToolFailure(params: {
   message: string;
   data?: unknown;
   contentItems?: AgentToolCallContentItems;
+  mcpContentItems?: AgentToolMcpContentItem[];
 }): AgentToolDispatchFailure {
   return {
     ok: false,
@@ -73,5 +96,6 @@ export function agentToolFailure(params: {
     message: params.message,
     data: params.data,
     contentItems: params.contentItems,
+    mcpContentItems: params.mcpContentItems,
   };
 }

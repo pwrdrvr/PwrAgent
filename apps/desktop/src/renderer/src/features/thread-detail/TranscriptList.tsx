@@ -1288,6 +1288,7 @@ export function TranscriptList(props: TranscriptListProps) {
                   desktopApi={props.desktopApi}
                   entry={item.entry}
                   fileViewerContext={props.fileViewerContext}
+                  onOpenImage={props.onOpenImage}
                   skills={skills}
                 />
               ) : item.entry.type === "plan" ? (

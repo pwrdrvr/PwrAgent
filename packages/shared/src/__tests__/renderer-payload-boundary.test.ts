@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { sanitizeRendererPayload } from "../renderer-payload-boundary";
+import {
+  RENDERER_PAYLOAD_STRING_LIMIT_CHARS,
+  sanitizeRendererPayload,
+} from "../renderer-payload-boundary";
 
 describe("renderer payload boundary", () => {
   it("truncates oversized arbitrary strings", () => {
@@ -43,6 +46,28 @@ describe("renderer payload boundary", () => {
     const sanitized = sanitizeRendererPayload(payload);
 
     expect(sanitized.replay.entries[0]?.parts[0]?.url).toBe(imageUrl);
+  });
+
+  it("preserves dynamic and MCP tool result image payloads", () => {
+    const imageData = "a".repeat(RENDERER_PAYLOAD_STRING_LIMIT_CHARS + 1);
+    const dynamicImageUrl = `data:image/png;base64,${imageData}`;
+    const sanitized = sanitizeRendererPayload({
+      dynamicToolCall: {
+        contentItems: [
+          { type: "inputImage", imageUrl: dynamicImageUrl },
+        ],
+      },
+      mcpToolCall: {
+        result: {
+          content: [
+            { type: "image", data: imageData, mimeType: "image/png" },
+          ],
+        },
+      },
+    });
+
+    expect(sanitized.dynamicToolCall.contentItems[0]?.imageUrl).toBe(dynamicImageUrl);
+    expect(sanitized.mcpToolCall.result.content[0]?.data).toBe(imageData);
   });
 
   it("still truncates image-looking strings outside explicit image fields", () => {

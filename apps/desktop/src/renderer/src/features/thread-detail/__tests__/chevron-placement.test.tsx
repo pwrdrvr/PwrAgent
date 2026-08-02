@@ -82,4 +82,35 @@ describe("transcript disclosure chevron placement", () => {
     expect(screen.getByText('grep(pattern="needle")')).toBeInTheDocument();
     expect(screen.getByText("found 20 matches")).toBeInTheDocument();
   });
+
+  it("opens a rendered tool image through the shared lightbox callback", () => {
+    const onOpenImage = vi.fn();
+    const image = {
+      type: "image" as const,
+      url: "data:image/png;base64,AQID",
+      alt: "render_messaging_pdf_pages result",
+    };
+    render(
+      <TranscriptActivity
+        entry={{
+          type: "activity",
+          id: "pdf-render-1",
+          summary: "Used 1 tool",
+          details: [
+            {
+              id: "pdf-render-1",
+              kind: "command",
+              label: "render_messaging_pdf_pages",
+              images: [image],
+            },
+          ],
+        }}
+        onOpenImage={onOpenImage}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand tool result image 1" }));
+
+    expect(onOpenImage).toHaveBeenCalledWith(image);
+  });
 });

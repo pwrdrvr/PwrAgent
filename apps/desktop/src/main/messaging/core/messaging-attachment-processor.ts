@@ -8,6 +8,8 @@ import { normalizeMessagingImageAttachment } from "../attachment-image-normaliza
 import {
   DEFAULT_PDF_RENDER_LIMITS,
   renderPdfPages,
+  renderedPdfPageDataUrl,
+  renderedPdfPageWireBytes,
   type RenderedPdfPage,
 } from "../pdf-page-renderer";
 import type { PendingMessagingPdfAttachment } from "../messaging-pdf-attachment-store";
@@ -50,9 +52,11 @@ export type MessagingAttachmentProcessingDependencies = {
     data: Uint8Array;
     limits?: {
       maxEncodedBytes?: number;
+      maxPageEncodedBytes?: number;
       maxPages?: number;
       maxPagePixels?: number;
       maxPixels?: number;
+      maxWireBytes?: number;
     };
     pageNumbers?: number[];
     profile: ImageUploadQualityProfile;
@@ -88,6 +92,7 @@ export async function processMessagingAttachments(params: {
     bytes: 0,
     pages: 0,
     pixels: 0,
+    wireBytes: 0,
   };
 
   const text = params.text?.trim();
@@ -183,14 +188,18 @@ export async function processMessagingAttachments(params: {
         const remainingPdfRenderLimits = {
           maxEncodedBytes:
             DEFAULT_PDF_RENDER_LIMITS.maxEncodedBytes - renderedPdfBudget.bytes,
+          maxPageEncodedBytes: DEFAULT_PDF_RENDER_LIMITS.maxPageEncodedBytes,
           maxPages: DEFAULT_PDF_RENDER_LIMITS.maxPages - renderedPdfBudget.pages,
           maxPagePixels: DEFAULT_PDF_RENDER_LIMITS.maxPagePixels,
           maxPixels: DEFAULT_PDF_RENDER_LIMITS.maxPixels - renderedPdfBudget.pixels,
+          maxWireBytes:
+            DEFAULT_PDF_RENDER_LIMITS.maxWireBytes - renderedPdfBudget.wireBytes,
         };
         if (
           remainingPdfRenderLimits.maxEncodedBytes < 1 ||
           remainingPdfRenderLimits.maxPages < 1 ||
-          remainingPdfRenderLimits.maxPixels < 1
+          remainingPdfRenderLimits.maxPixels < 1 ||
+          remainingPdfRenderLimits.maxWireBytes < 1
         ) {
           rejections.push({
             name: attachment.name,
@@ -215,6 +224,10 @@ export async function processMessagingAttachments(params: {
           (total, page) => total + page.width * page.height,
           0,
         );
+        renderedPdfBudget.wireBytes += pages.reduce(
+          (total, page) => total + renderedPdfPageWireBytes(page),
+          0,
+        );
         textInput.push(
           `Attachment \`${downloaded.fileName}\` was rendered into ${pages.length} page image${pages.length === 1 ? "" : "s"} for model input.`,
         );
@@ -222,7 +235,7 @@ export async function processMessagingAttachments(params: {
           ...pages.map((page) => ({
             type: "image" as const,
             name: pdfPageImageName(downloaded.fileName, page.pageNumber),
-            url: page.dataUrl,
+            url: renderedPdfPageDataUrl(page),
           })),
         );
         continue;

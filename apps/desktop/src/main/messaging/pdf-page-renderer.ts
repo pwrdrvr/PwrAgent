@@ -9,18 +9,21 @@ import {
 } from "../../shared/image-normalization";
 
 export type RenderedPdfPage = {
-  dataUrl: string;
+  base64: string;
   encodedBytes: number;
   height: number;
+  mimeType: "image/png";
   pageNumber: number;
   width: number;
 };
 
 export type PdfRenderLimits = {
   maxEncodedBytes: number;
+  maxPageEncodedBytes: number;
   maxPages: number;
   maxPagePixels: number;
   maxPixels: number;
+  maxWireBytes: number;
 };
 
 export type PdfDocumentInspection = {
@@ -40,15 +43,20 @@ export type PdfTextSearchMatch = {
 
 export const DEFAULT_PDF_RENDER_LIMITS: PdfRenderLimits = {
   // Five high-profile Jeep-sticker pages are about 30.5 MP in aggregate.
-  maxEncodedBytes: 24 * 1024 * 1024,
+  // Keep the data-URL payload below 24 MiB after base64 expansion.
+  maxEncodedBytes: 18 * 1024 * 1024,
+  maxPageEncodedBytes: 6 * 1024 * 1024,
   maxPages: 5,
   maxPagePixels: 8 * 1024 * 1024,
   maxPixels: 32 * 1024 * 1024,
+  maxWireBytes: 24 * 1024 * 1024,
 };
 
 export const MAX_PDF_TEXT_SEARCH_PAGES = 25;
 export const MAX_PDF_TEXT_SEARCH_RESULTS = 10;
 export const MAX_PDF_TEXT_SEARCH_QUERY_CHARACTERS = 200;
+
+const PDF_PAGE_DATA_URL_PREFIX = "data:image/png;base64,";
 
 const require = createRequire(import.meta.url);
 const wasmUrl = pathToFileURL(
@@ -86,6 +94,18 @@ export function calculatePdfRenderDimensions(params: {
     height: Math.max(1, Math.round(sourceHeight * scale)),
     width: Math.max(1, Math.round(sourceWidth * scale)),
   };
+}
+
+export function renderedPdfPageDataUrl(
+  page: Pick<RenderedPdfPage, "base64" | "mimeType">,
+): string {
+  return `${dataUrlPrefix(page.mimeType)}${page.base64}`;
+}
+
+export function renderedPdfPageWireBytes(
+  page: Pick<RenderedPdfPage, "base64" | "mimeType">,
+): number {
+  return dataUrlPrefix(page.mimeType).length + page.base64.length;
 }
 
 export async function inspectPdfDocument(params: {
@@ -250,6 +270,7 @@ export async function renderPdfPages(params: {
 
     const pages: RenderedPdfPage[] = [];
     let encodedBytes = 0;
+    let wireBytes = 0;
     for (const pageNumber of pageNumbers) {
       const page = await document.getPage(pageNumber);
       try {
@@ -267,16 +288,31 @@ export async function renderPdfPages(params: {
           viewport,
         }).promise;
         const encoded = await canvas.encode("png");
-        encodedBytes += encoded.byteLength;
+        const pageEncodedBytes = encoded.byteLength;
+        const pageWireBytes =
+          PDF_PAGE_DATA_URL_PREFIX.length + base64EncodedByteLength(pageEncodedBytes);
+        if (pageEncodedBytes > limits.maxPageEncodedBytes) {
+          throw new Error(
+            `Rendered PDF page ${pageNumber} exceeds the ${formatByteLimit(limits.maxPageEncodedBytes)} per-image limit.`,
+          );
+        }
+        encodedBytes += pageEncodedBytes;
         if (encodedBytes > limits.maxEncodedBytes) {
           throw new Error(
             `Rendered PDF pages exceed the ${formatByteLimit(limits.maxEncodedBytes)} image-data limit.`,
           );
         }
+        wireBytes += pageWireBytes;
+        if (wireBytes > limits.maxWireBytes) {
+          throw new Error(
+            `Rendered PDF pages exceed the ${formatByteLimit(limits.maxWireBytes)} model-input limit.`,
+          );
+        }
         pages.push({
-          dataUrl: `data:image/png;base64,${encoded.toString("base64")}`,
-          encodedBytes: encoded.byteLength,
+          base64: encoded.toString("base64"),
+          encodedBytes: pageEncodedBytes,
           height: dimensions.height,
+          mimeType: "image/png",
           pageNumber,
           width: dimensions.width,
         });
@@ -365,4 +401,14 @@ function formatLimit(value: number): string {
 
 function formatByteLimit(value: number): string {
   return `${Math.round(value / (1024 * 1024))} MB`;
+}
+
+function base64EncodedByteLength(byteLength: number): number {
+  return Math.ceil(byteLength / 3) * 4;
+}
+
+function dataUrlPrefix(mimeType: RenderedPdfPage["mimeType"]): string {
+  return mimeType === "image/png"
+    ? PDF_PAGE_DATA_URL_PREFIX
+    : `data:${mimeType};base64,`;
 }

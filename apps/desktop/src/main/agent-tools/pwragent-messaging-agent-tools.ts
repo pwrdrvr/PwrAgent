@@ -49,6 +49,7 @@ export function buildPwrAgentMessagingToolDefinitions(
     advertise: PWRAGENT_MESSAGING_OPERATION_NAMES.includes(
       operation as (typeof PWRAGENT_MESSAGING_OPERATION_NAMES)[number],
     ),
+    advertiseMcp: !isModelDirectedPdfOperation(operation),
     deferLoading: false,
     dispatch: async (args, context): Promise<AgentToolDispatchResult> => {
       if (!handler) {
@@ -84,7 +85,7 @@ function descriptionForOperation(operation: PwrAgentMessagingOperationName): str
     case "search_messaging_pdf_text":
       return "Search embedded text in a bounded page range of a PDF attached to the current active messaging turn. Use returned page-number snippets only to navigate, then render pages for visual analysis.";
     case "render_messaging_pdf_pages":
-      return "Render explicitly selected PDF pages from the current active messaging turn into image input. This is capped by page count, total pixels, and encoded image bytes; request fewer pages when a cap is exceeded.";
+      return "Render explicitly selected PDF pages from the current active messaging turn into image input. This is capped by page count, total pixels, encoded image bytes, and model-input bytes; request fewer pages when a cap is exceeded.";
   }
 }
 
@@ -189,15 +190,27 @@ function messagingResponseToAgentToolResult(
 ): AgentToolDispatchResult {
   if (response.ok) {
     if (response.imageContent) {
+      const metadata = JSON.stringify(response.data, null, 2);
       return agentToolSuccess(response.data, {
         contentItems: [
           {
             type: "inputText",
-            text: JSON.stringify(response.data, null, 2),
+            text: metadata,
           },
           ...response.imageContent.map((image) => ({
             type: "inputImage" as const,
-            imageUrl: image.dataUrl,
+            imageUrl: messagingToolImageDataUrl(image),
+          })),
+        ],
+        mcpContentItems: [
+          {
+            type: "text",
+            text: metadata,
+          },
+          ...response.imageContent.map((image) => ({
+            type: "image" as const,
+            data: image.base64,
+            mimeType: image.mimeType,
           })),
         ],
       });
@@ -208,4 +221,19 @@ function messagingResponseToAgentToolResult(
     code: response.error.code,
     message: response.error.message,
   });
+}
+
+function isModelDirectedPdfOperation(operation: PwrAgentMessagingOperationName): boolean {
+  return (
+    operation === "inspect_messaging_pdfs" ||
+    operation === "search_messaging_pdf_text" ||
+    operation === "render_messaging_pdf_pages"
+  );
+}
+
+function messagingToolImageDataUrl(image: {
+  base64: string;
+  mimeType: string;
+}): string {
+  return `data:${image.mimeType};base64,${image.base64}`;
 }

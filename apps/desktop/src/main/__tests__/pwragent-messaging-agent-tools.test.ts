@@ -59,6 +59,10 @@ describe("PwrAgent messaging agent tools", () => {
       "search_messaging_pdf_text",
       "render_messaging_pdf_pages",
     ]);
+    expect(router.buildMcpTools().map((tool) => tool.name)).toEqual([
+      "get_current_messaging_surface",
+      "attach_thread_here",
+    ]);
     expect(
       isPwrAgentMessagingDynamicToolCall({
         namespace: "pwragent_messaging",
@@ -135,7 +139,8 @@ describe("PwrAgent messaging agent tools", () => {
       },
       imageContent: [
         {
-          dataUrl: "data:image/png;base64,AQID",
+          base64: "AQID",
+          mimeType: "image/png",
           pageNumber: 3,
         },
       ],
@@ -175,28 +180,20 @@ describe("PwrAgent messaging agent tools", () => {
       ],
     });
 
-    await expect(
-      router.handleMcpToolCall({
-        backend: "codex",
-        threadId: "agent-thread",
-        turnId: "turn-1",
-        tool: "render_messaging_pdf_pages",
-        args: {
-          attachmentId: "pdf-1",
-          pageNumbers: [3],
-        },
-      }),
-    ).resolves.toMatchObject({
-      content: [
-        {
-          type: "text",
-        },
-        {
-          type: "image",
-          data: "AQID",
-          mimeType: "image/png",
-        },
-      ],
+    await expect(router.handleMcpToolCall({
+      backend: "codex",
+      threadId: "agent-thread",
+      turnId: "turn-1",
+      tool: "render_messaging_pdf_pages",
+      args: {
+        attachmentId: "pdf-1",
+        pageNumbers: [3],
+      },
+    })).resolves.toMatchObject({
+      isError: true,
+      structuredContent: {
+        code: "unsupported_operation",
+      },
     });
   });
 });

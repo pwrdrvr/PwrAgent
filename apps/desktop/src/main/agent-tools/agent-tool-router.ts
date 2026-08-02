@@ -14,6 +14,7 @@ import type {
   AgentToolDefinition,
   AgentToolDispatchFailure,
   AgentToolDispatchResult,
+  AgentToolMcpContentItem,
 } from "./agent-tool-definition.js";
 import { agentToolFailure } from "./agent-tool-definition.js";
 
@@ -33,17 +34,7 @@ export type AgentMcpTool = {
 };
 
 export type AgentMcpToolCallResponse = {
-  content: Array<
-    | {
-        type: "text";
-        text: string;
-      }
-    | {
-        type: "image";
-        data: string;
-        mimeType: string;
-      }
-  >;
+  content: AgentToolMcpContentItem[];
   structuredContent?: Record<string, unknown>;
   isError?: boolean;
 };
@@ -91,7 +82,10 @@ export class AgentToolRouter {
 
   buildMcpTools(): AgentMcpTool[] {
     return this.definitions
-      .filter((definition) => definition.advertise !== false)
+      .filter(
+        (definition) =>
+          definition.advertise !== false && definition.advertiseMcp !== false,
+      )
       .map((definition) => ({
         name: definition.name,
         description: definition.description,
@@ -183,10 +177,15 @@ export class AgentToolRouter {
     namespace: string | undefined,
     tool: string,
   ): AgentToolDefinition | undefined {
+    const definitions = this.definitions.filter(
+      (definition) => definition.advertiseMcp !== false,
+    );
     if (namespace) {
-      return this.findDefinition(namespace, tool);
+      return definitions.find(
+        (definition) => definition.namespace === namespace && definition.name === tool,
+      );
     }
-    const matching = this.definitions.filter((definition) => definition.name === tool);
+    const matching = definitions.filter((definition) => definition.name === tool);
     return matching.length === 1 ? matching[0] : undefined;
   }
 }
@@ -247,14 +246,14 @@ export function toMcpToolResponse(
   return {
     isError: result.ok ? undefined : true,
     structuredContent: toStructuredContent(payload),
-    content: result.contentItems
+    content: result.mcpContentItems ?? (result.contentItems
       ? toMcpContentItems(result.contentItems)
       : [
           {
             type: "text",
             text: JSON.stringify(payload, null, 2),
           },
-        ],
+        ]),
   };
 }
 

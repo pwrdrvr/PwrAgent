@@ -138,6 +138,7 @@ function renderEntry(params: {
       desktopApi={params.desktopApi}
       entry={entry}
       fileViewerContext={params.fileViewerContext}
+      onOpenImage={params.onOpenImage}
       skills={params.skills}
     />
   ) : entry.type === "plan" ? (

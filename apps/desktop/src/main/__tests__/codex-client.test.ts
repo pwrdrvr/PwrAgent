@@ -5160,6 +5160,72 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("hydrates dynamic tool result images from persisted thread activity", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.readThreadResultByThreadId.set("thread-pdf-tool-image", {
+      thread: {
+        turns: [
+          {
+            id: "turn-pdf-tool",
+            status: "completed",
+            startedAt: 1_763_500_220,
+            completedAt: 1_763_500_250,
+            items: [
+              {
+                type: "dynamicToolCall",
+                id: "pdf-render-1",
+                tool: "render_messaging_pdf_pages",
+                arguments: { pageNumbers: [3] },
+                status: "completed",
+                contentItems: [
+                  {
+                    type: "inputText",
+                    text: JSON.stringify({ pages: [{ pageNumber: 3 }] }),
+                  },
+                  {
+                    type: "inputImage",
+                    imageUrl: "data:image/png;base64,AQID",
+                  },
+                ],
+                success: true,
+                durationMs: 30,
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const replay = await client.readThread({
+      threadId: "thread-pdf-tool-image",
+    });
+
+    expect(replay.entries).toEqual([
+      expect.objectContaining({
+        type: "activity",
+        details: [
+          expect.objectContaining({
+            id: "pdf-render-1",
+            images: [
+              {
+                type: "image",
+                url: "data:image/png;base64,AQID",
+                alt: "render_messaging_pdf_pages result",
+              },
+            ],
+          }),
+        ],
+      }),
+    ]);
+
+    await client.close();
+  });
+
   it("hydrates persisted OpenAI function calls as transcript activity", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.readThreadResultByThreadId.set("thread-openai-function-calls", {

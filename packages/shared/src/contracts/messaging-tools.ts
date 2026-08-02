@@ -173,9 +173,11 @@ export type PwrAgentMessagingPdfAttachmentSummary = {
   };
   renderLimits: {
     maxEncodedBytes: number;
+    maxPageEncodedBytes: number;
     maxPages: number;
     maxPagePixels: number;
     maxPixels: number;
+    maxWireBytes: number;
   };
 };
 
@@ -202,7 +204,8 @@ export type PwrAgentMessagingRenderedPdfPagesResult = {
 };
 
 export type PwrAgentMessagingToolImage = {
-  dataUrl: string;
+  base64: string;
+  mimeType: string;
   pageNumber: number;
 };
 

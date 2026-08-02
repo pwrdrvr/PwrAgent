@@ -133,6 +133,91 @@ describe("AgentToolRouter", () => {
     );
   });
 
+  it("keeps dynamic-only tools out of MCP", async () => {
+    const router = new AgentToolRouter([
+      {
+        namespace: "pwragent_test",
+        name: "render_page",
+        description: "Render a local PDF page.",
+        inputSchema: { type: "object" },
+        advertiseMcp: false,
+        dispatch: () => agentToolSuccess(
+          { pageNumber: 3 },
+          {
+            contentItems: [
+              { type: "inputText", text: "page 3" },
+              { type: "inputImage", imageUrl: "data:image/png;base64,AQID" },
+            ],
+            mcpContentItems: [
+              { type: "text", text: "page 3" },
+              { type: "image", data: "AQID", mimeType: "image/png" },
+            ],
+          },
+        ),
+      },
+    ]);
+
+    const specs = router.buildDynamicToolSpecs();
+    const [namespace] = specs;
+    expect(namespace?.type).toBe("namespace");
+    if (!namespace || namespace.type !== "namespace") {
+      throw new Error("Expected a dynamic-tool namespace.");
+    }
+    expect(namespace.tools.map((tool) => tool.name)).toEqual(["render_page"]);
+    expect(router.buildMcpTools()).toEqual([]);
+
+    await expect(
+      router.handleMcpToolCall({
+        backend: "codex",
+        threadId: "thread-1",
+        namespace: "pwragent_test",
+        tool: "render_page",
+      }),
+    ).resolves.toMatchObject({
+      isError: true,
+      structuredContent: { code: "unsupported_operation" },
+    });
+  });
+
+  it("uses supplied MCP image blocks without parsing dynamic data URLs", async () => {
+    const router = new AgentToolRouter([
+      {
+        namespace: "pwragent_test",
+        name: "render_page",
+        description: "Render a local PDF page.",
+        inputSchema: { type: "object" },
+        dispatch: () => agentToolSuccess(
+          { pageNumber: 3 },
+          {
+            contentItems: [
+              { type: "inputText", text: "page 3" },
+              { type: "inputImage", imageUrl: "unsupported://image" },
+            ],
+            mcpContentItems: [
+              { type: "text", text: "page 3" },
+              { type: "image", data: "AQID", mimeType: "image/png" },
+            ],
+          },
+        ),
+      },
+    ]);
+
+    await expect(
+      router.handleMcpToolCall({
+        backend: "codex",
+        threadId: "thread-1",
+        namespace: "pwragent_test",
+        tool: "render_page",
+      }),
+    ).resolves.toEqual({
+      structuredContent: { pageNumber: 3 },
+      content: [
+        { type: "text", text: "page 3" },
+        { type: "image", data: "AQID", mimeType: "image/png" },
+      ],
+    });
+  });
+
   it("returns MCP errors for unsupported MCP tools", async () => {
     const router = new AgentToolRouter([], {
       unsupportedMessage: "Unsupported test MCP tool.",
