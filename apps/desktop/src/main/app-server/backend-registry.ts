@@ -53,6 +53,7 @@ import {
   type AppServerThreadStatus,
   type AppServerThreadSummary,
   type AppServerThreadTitleSource,
+  type CodexNativeSubAgentSummary,
   type AppServerTurnInputItem,
   type AppServerAvailableCommandSummary,
   type AppServerBackendKind,
@@ -489,6 +490,14 @@ type BackendClient = {
       limit?: number;
       maxPages?: number;
       skipArchivedMetadataRefresh?: boolean;
+    },
+    diagnostics?: { callerReason?: string; ownerId?: string },
+  ): Promise<AppServerThreadSummary[]>;
+  listNativeSubAgentThreads?(
+    params?: {
+      filter?: string;
+      limit?: number;
+      maxPages?: number;
     },
     diagnostics?: { callerReason?: string; ownerId?: string },
   ): Promise<AppServerThreadSummary[]>;
@@ -2382,6 +2391,76 @@ function isCodexNativeSubAgentTool(tool: string): tool is CodexNativeSubAgentToo
 
 function codexNativeSubAgentId(threadId: string): string {
   return `codex-native:${threadId}`;
+}
+
+/**
+ * Projects native Codex worker threads into a one-level disclosure owned by
+ * their nearest ordinary thread. Nested workers are deliberately flattened:
+ * the UI only supports one nesting level, but a worker still immediately
+ * follows the worker that spawned it.
+ */
+function groupCodexNativeSubAgents(params: {
+  nativeThreads: AppServerThreadSummary[];
+  parentThreads: AppServerThreadSummary[];
+}): AppServerThreadSummary[] {
+  const childrenByParentThreadId = new Map<string, AppServerThreadSummary[]>();
+
+  for (const thread of params.nativeThreads) {
+    const provenance = thread.codexNativeSubAgent;
+    const parentThreadId = provenance?.parentThreadId.trim();
+    if (
+      thread.source !== "codex"
+      || !parentThreadId
+      || parentThreadId === thread.id
+    ) {
+      continue;
+    }
+    const children = childrenByParentThreadId.get(parentThreadId) ?? [];
+    children.push(thread);
+    childrenByParentThreadId.set(parentThreadId, children);
+  }
+
+  const sortNativeThreads = (
+    left: AppServerThreadSummary,
+    right: AppServerThreadSummary,
+  ): number =>
+    (left.createdAt ?? 0) - (right.createdAt ?? 0)
+    || (left.updatedAt ?? 0) - (right.updatedAt ?? 0)
+    || left.id.localeCompare(right.id);
+  for (const children of childrenByParentThreadId.values()) {
+    children.sort(sortNativeThreads);
+  }
+
+  return params.parentThreads.map((parent) => {
+    const nativeSubAgents: CodexNativeSubAgentSummary[] = [];
+    const emittedThreadIds = new Set<string>();
+
+    const appendChildren = (parentThreadId: string, inferredDepth: number): void => {
+      for (const child of childrenByParentThreadId.get(parentThreadId) ?? []) {
+        if (emittedThreadIds.has(child.id)) {
+          continue;
+        }
+        emittedThreadIds.add(child.id);
+        const provenance = child.codexNativeSubAgent;
+        nativeSubAgents.push({
+          threadId: child.id,
+          title: child.title,
+          createdAt: child.createdAt,
+          updatedAt: child.updatedAt,
+          threadStatus: child.threadStatus,
+          depth: provenance?.depth ?? inferredDepth,
+          agentNickname: provenance?.agentNickname,
+          agentRole: provenance?.agentRole,
+        });
+        appendChildren(child.id, inferredDepth + 1);
+      }
+    };
+
+    appendChildren(parent.id, 1);
+    return nativeSubAgents.length > 0
+      ? { ...parent, codexNativeSubAgents: nativeSubAgents }
+      : parent;
+  });
 }
 
 function shortCodexNativeAgentId(threadId: string): string {
@@ -15549,7 +15628,25 @@ export class DesktopBackendRegistry {
 
         return [];
       });
-    const allThreads = defaultThreads.map((thread) => ({
+    const nativeSubAgentThreads =
+      !params.archived &&
+      !params.filter?.trim() &&
+      defaultThreads.length > 0 &&
+      this.codexClient.listNativeSubAgentThreads
+        ? await this.codexClient.listNativeSubAgentThreads({
+            ...(params.limit !== undefined ? { limit: params.limit } : {}),
+            ...(params.maxPages !== undefined ? { maxPages: params.maxPages } : {}),
+          }, diagnostics).catch((error) => {
+            backendRegistryLog.debug("native Codex sub-agent discovery failed", {
+              error: error instanceof Error ? error.message : String(error),
+            });
+            return [];
+          })
+        : [];
+    const allThreads = groupCodexNativeSubAgents({
+      nativeThreads: nativeSubAgentThreads,
+      parentThreads: defaultThreads,
+    }).map((thread) => ({
       ...thread,
       executionMode: "default" as const,
     }));

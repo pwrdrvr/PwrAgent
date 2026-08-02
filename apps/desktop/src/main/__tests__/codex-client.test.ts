@@ -1344,7 +1344,7 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
-  it("keeps spawned agents out of navigation when a fallback ignores source filtering", async () => {
+  it("keeps spawned agents out of navigation and exposes them for parent disclosure", async () => {
     MockTransport.threadListResultBySearchTerm.set("native-subagent-source", [
       {
         id: "thread-parent",
@@ -1390,8 +1390,39 @@ describe("CodexAppServerClient", () => {
     });
 
     const threads = await client.listThreads({ filter: "native-subagent-source" });
+    const nativeSubAgentThreads = await client.listNativeSubAgentThreads({
+      filter: "native-subagent-source",
+    });
 
     expect(threads.map((thread) => thread.id)).toEqual(["thread-parent"]);
+    expect(nativeSubAgentThreads).toEqual([
+      expect.objectContaining({
+        id: "thread-child",
+        codexNativeSubAgent: {
+          parentThreadId: "thread-parent",
+          depth: 1,
+          agentNickname: "route-scout",
+          agentRole: "explorer",
+        },
+      }),
+    ]);
+
+    const transport = MockTransport.instances.at(-1);
+    const threadListRequests = transport!.sentMessages
+      .map((message) => JSON.parse(message) as {
+        method?: string;
+        params?: { sourceKinds?: string[] };
+      })
+      .filter((message) => message.method === "thread/list");
+    expect(threadListRequests).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          params: expect.objectContaining({
+            sourceKinds: ["subAgentThreadSpawn"],
+          }),
+        }),
+      ]),
+    );
 
     await client.close();
   });

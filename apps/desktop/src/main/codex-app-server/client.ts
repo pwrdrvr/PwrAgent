@@ -4953,6 +4953,50 @@ function readCodexThreadSourceKind(
   return "subAgentOther";
 }
 
+function readCodexNativeSubAgent(
+  record: Record<string, unknown>,
+  sessionRecord: Record<string, unknown> | null,
+  sourceKind: string | undefined,
+): AppServerThreadSummary["codexNativeSubAgent"] {
+  const source =
+    asRecord(record.source) ??
+    asRecord(sessionRecord?.source);
+  const subAgent =
+    asRecord(source?.subAgent) ??
+    asRecord(source?.sub_agent);
+  const spawn =
+    asRecord(subAgent?.thread_spawn) ??
+    asRecord(subAgent?.threadSpawn);
+  if (sourceKind !== "subAgentThreadSpawn" && !spawn) {
+    return undefined;
+  }
+
+  const parentThreadId =
+    pickString(spawn ?? {}, ["parentThreadId", "parent_thread_id"]) ??
+    pickString(record, ["parentThreadId", "parent_thread_id"]) ??
+    pickString(sessionRecord ?? {}, ["parentThreadId", "parent_thread_id"]);
+  if (!parentThreadId) {
+    return undefined;
+  }
+
+  const depth = pickNumber(spawn ?? {}, ["depth"]);
+  const agentNickname =
+    pickString(record, ["agentNickname", "agent_nickname"]) ??
+    pickString(sessionRecord ?? {}, ["agentNickname", "agent_nickname"]) ??
+    pickString(spawn ?? {}, ["agentNickname", "agent_nickname"]);
+  const agentRole =
+    pickString(record, ["agentRole", "agent_role"]) ??
+    pickString(sessionRecord ?? {}, ["agentRole", "agent_role"]) ??
+    pickString(spawn ?? {}, ["agentRole", "agent_role"]);
+
+  return {
+    parentThreadId,
+    ...(depth !== undefined ? { depth } : {}),
+    ...(agentNickname ? { agentNickname } : {}),
+    ...(agentRole ? { agentRole } : {}),
+  };
+}
+
 function isRequestTimeoutError(error: unknown, method: string): boolean {
   const text = error instanceof Error ? error.message : String(error);
   return text.toLowerCase().includes(`json-rpc timeout: ${method.toLowerCase()}`);
@@ -4973,6 +5017,11 @@ function extractThreadsFromValue(value: unknown): RawCodexThreadSummary[] {
 
     const sessionRecord = asRecord(record.session);
     const codexThreadSourceKind = readCodexThreadSourceKind(record, sessionRecord);
+    const codexNativeSubAgent = readCodexNativeSubAgent(
+      record,
+      sessionRecord,
+      codexThreadSourceKind,
+    );
     const gitInfoRecord =
       asRecord(record.gitInfo) ??
       asRecord(record.git_info) ??
@@ -5063,6 +5112,7 @@ function extractThreadsFromValue(value: unknown): RawCodexThreadSummary[] {
         "remote_url",
       ]),
       codexThreadSourceKind,
+      codexNativeSubAgent,
     });
   }
 
@@ -5085,7 +5135,8 @@ function buildThreadDiscoveryPayloads(
   filter?: string,
   archived?: boolean,
   cursor?: string,
-  limit = 50
+  limit = 50,
+  sourceKinds?: CodexThreadListParams["sourceKinds"],
 ): CodexThreadListParams[] {
   const searchTerm = filter?.trim() || undefined;
   const baseParams: CodexThreadListParams = {
@@ -5093,7 +5144,7 @@ function buildThreadDiscoveryPayloads(
     cursor,
     limit,
     sortKey: "updated_at",
-    sourceKinds: ["cli", "vscode"],
+    sourceKinds: sourceKinds ?? ["cli", "vscode"],
     useStateDbOnly: true,
   };
 
@@ -5863,6 +5914,7 @@ async function requestThreadListPages(params: {
   limit?: number;
   maxPages?: number;
   requestTimeoutMs: number;
+  sourceKinds?: CodexThreadListParams["sourceKinds"];
 }): Promise<RawCodexThreadSummary[]> {
   const pages: RawCodexThreadSummary[] = [];
   const seenCursors = new Set<string>();
@@ -5890,6 +5942,7 @@ async function requestThreadListPages(params: {
         params.archived,
         cursor,
         requestedLimit,
+        params.sourceKinds,
       ),
       timeoutMs: params.requestTimeoutMs,
     });
@@ -6518,6 +6571,34 @@ export class CodexAppServerClient {
     return await this.enrichThreads(threads, {
       enrichDirectories: params?.enrichDirectories ?? true,
     });
+  }
+
+  /**
+   * Lists native Codex `spawn_agent` workers for parent-scoped disclosure.
+   * Callers must not add these summaries to ordinary navigation.
+   */
+  async listNativeSubAgentThreads(params?: {
+    filter?: string;
+    limit?: number;
+    maxPages?: number;
+  }, diagnostics?: JsonRpcObserverDiagnostics): Promise<AppServerThreadSummary[]> {
+    await this.ensureInitialized();
+
+    const nativeThreads = await requestThreadListPages({
+      archived: false,
+      client: this.connection,
+      diagnostics,
+      filter: params?.filter,
+      limit: params?.limit,
+      maxPages: params?.maxPages,
+      requestTimeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      sourceKinds: ["subAgentThreadSpawn"],
+    });
+
+    return await this.enrichThreads(
+      nativeThreads.filter((thread) => Boolean(thread.codexNativeSubAgent)),
+      { enrichDirectories: false },
+    );
   }
 
   async listThreadsForMigration(params?: {
