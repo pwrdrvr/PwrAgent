@@ -1704,9 +1704,7 @@ function ComposerThreadOptionsMenu(props: {
         className={`composer__toggle tooltip-target${
           props.agentThread ? " is-active" : ""
         }`}
-        // Omit the CSS tooltip while the menu is open so it does not cover
-        // the Agent explanation.
-        data-tooltip={open ? undefined : AGENT_THREAD_CAPABILITIES}
+        data-tooltip={open ? undefined : "Thread options"}
         disabled={props.disabled}
         type="button"
         onClick={() => setOpen((current) => !current)}
@@ -1720,32 +1718,36 @@ function ComposerThreadOptionsMenu(props: {
           id={menuId}
           role="menu"
         >
-          <button
-            aria-checked={props.agentThread}
-            className="composer-dropdown__option composer-thread-options__option"
-            disabled={agentThreadChangeDisabled}
-            role="menuitemcheckbox"
-            type="button"
-            onClick={() => {
-              setOpen(false);
-              props.onAgentThreadChange?.(!props.agentThread);
-            }}
+          <div
+            className="composer-thread-options__item tooltip-target"
+            data-tooltip={
+              props.existingCodexThread
+                ? CODEX_AGENT_THREAD_CREATION_NOTE
+                : AGENT_THREAD_CAPABILITIES
+            }
           >
-            <span aria-hidden="true" className="composer-dropdown__check">
-              {props.agentThread ? <CheckIcon size={13} /> : null}
-            </span>
-            <span className="composer-thread-options__copy">
+            <button
+              aria-checked={props.agentThread}
+              className="composer-dropdown__option composer-thread-options__option"
+              disabled={agentThreadChangeDisabled}
+              role="menuitemcheckbox"
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                props.onAgentThreadChange?.(!props.agentThread);
+              }}
+            >
               <span className="composer-thread-options__label">Agent thread</span>
-              <span className="composer-thread-options__description">
-                {AGENT_THREAD_CAPABILITIES}
+              <span
+                aria-hidden="true"
+                className={`composer-thread-options__toggle${
+                  props.agentThread ? " is-checked" : ""
+                }`}
+              >
+                <span className="composer-thread-options__toggle-thumb" />
               </span>
-              {props.existingCodexThread ? (
-                <span className="composer-thread-options__note">
-                  {CODEX_AGENT_THREAD_CREATION_NOTE}
-                </span>
-              ) : null}
-            </span>
-          </button>
+            </button>
+          </div>
         </div>
       ) : null}
     </div>

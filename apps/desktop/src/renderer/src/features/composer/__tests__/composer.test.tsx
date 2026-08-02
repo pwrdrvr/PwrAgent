@@ -709,7 +709,7 @@ describe("Composer", () => {
     ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     expect(threadOptions).toHaveAttribute(
       "data-tooltip",
-      AGENT_THREAD_CAPABILITIES,
+      "Thread options",
     );
 
     fireEvent.click(threadOptions);
@@ -717,7 +717,11 @@ describe("Composer", () => {
       name: /Agent thread/,
     });
     expect(agentThread).toHaveAttribute("aria-checked", "false");
-    expect(agentThread).toHaveTextContent(AGENT_THREAD_CAPABILITIES);
+    expect(agentThread).not.toHaveTextContent(AGENT_THREAD_CAPABILITIES);
+    expect(agentThread.parentElement).toHaveAttribute(
+      "data-tooltip",
+      AGENT_THREAD_CAPABILITIES,
+    );
 
     await act(async () => {
       fireEvent.click(agentThread);
@@ -753,7 +757,11 @@ describe("Composer", () => {
       name: /Agent thread/,
     });
     expect(agentThread).toBeDisabled();
-    expect(agentThread).toHaveTextContent(CODEX_AGENT_THREAD_CREATION_NOTE);
+    expect(agentThread).not.toHaveTextContent(CODEX_AGENT_THREAD_CREATION_NOTE);
+    expect(agentThread.parentElement).toHaveAttribute(
+      "data-tooltip",
+      CODEX_AGENT_THREAD_CREATION_NOTE,
+    );
 
     fireEvent.click(agentThread);
     expect(setThreadAgent).not.toHaveBeenCalled();
