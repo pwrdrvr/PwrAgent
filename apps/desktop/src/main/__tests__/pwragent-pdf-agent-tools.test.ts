@@ -1,6 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared";
+import {
+  PWRAGENT_TOOL_NAMESPACE,
+  type AppServerTurnInputItem,
+} from "@pwragent/shared";
 import { describe, expect, it } from "vitest";
 import {
   buildPwrAgentMessagingToolRouter,
@@ -90,13 +93,28 @@ describe("PwrAgent PDF agent tools", () => {
         sizeBytes: data.byteLength,
       },
     ]);
-    const router = buildPwrAgentMessagingToolRouter(async (request) => {
-      const response = await handlePwrAgentPdfToolRequest({ request, store });
-      if (!response) {
-        throw new Error("Expected the PDF store to own this turn.");
-      }
-      return response;
-    });
+    const router = buildPwrAgentMessagingToolRouter(
+      async (request) => {
+        const response = await handlePwrAgentPdfToolRequest({ request, store });
+        if (!response) {
+          throw new Error("Expected the PDF store to own this turn.");
+        }
+        return response;
+      },
+      {
+        materializeImageInputs: async (input): Promise<AppServerTurnInputItem[]> =>
+          input.map((item) => {
+            if (item.type !== "image") {
+              return item;
+            }
+            return {
+              type: "localImage",
+              name: item.name,
+              path: `/tmp/${item.name ?? "pwragent-pdf-page.png"}`,
+            };
+          }),
+      },
+    );
     let callNumber = 0;
     const render = async (pageNumbers: number[]) => await router.handleDynamicToolCall({
       backend: "codex",
@@ -120,7 +138,7 @@ describe("PwrAgent PDF agent tools", () => {
         },
         {
           type: "inputImage",
-          imageUrl: expect.stringMatching(/^data:image\/png;base64,/u),
+          imageUrl: expect.stringMatching(/^file:\/\/\/tmp\/pwragent-pdf-page-1\.png$/u),
         },
       ],
     });
@@ -135,7 +153,7 @@ describe("PwrAgent PDF agent tools", () => {
         },
         {
           type: "inputImage",
-          imageUrl: expect.stringMatching(/^data:image\/png;base64,/u),
+          imageUrl: expect.stringMatching(/^file:\/\/\/tmp\/pwragent-pdf-page-2\.png$/u),
         },
       ],
     });

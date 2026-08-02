@@ -1,8 +1,12 @@
+import { pathToFileURL } from "node:url";
 import type {
+  AppServerTurnInputItem,
   PwrAgentMessagingOperationName,
   PwrAgentMessagingRequest,
   PwrAgentMessagingResponse,
+  PwrAgentMessagingToolImage,
 } from "@pwragent/shared";
+import { materializeLocalImageInputs } from "../app-server/image-input-files.js";
 import {
   PWRAGENT_MESSAGING_CALLABLE_OPERATION_NAMES,
   PWRAGENT_MESSAGING_OPERATION_NAMES,
@@ -25,11 +29,22 @@ export type PwrAgentMessagingHandler = (
   request: PwrAgentMessagingRequest,
 ) => PwrAgentMessagingResponse | Promise<PwrAgentMessagingResponse>;
 
+type MaterializeImageInputs = (
+  input: AppServerTurnInputItem[],
+) => Promise<AppServerTurnInputItem[]>;
+
+export type PwrAgentMessagingToolRouterOptions = {
+  materializeImageInputs?: MaterializeImageInputs;
+  namespace?: string;
+  unsupportedMessage?: string;
+};
+
 export function buildPwrAgentMessagingToolRouter(
   handler: PwrAgentMessagingHandler | undefined,
-  options: { namespace?: string; unsupportedMessage?: string } = {},
+  options: PwrAgentMessagingToolRouterOptions = {},
 ): AgentToolRouter {
   return new AgentToolRouter(buildPwrAgentMessagingToolDefinitions(handler, {
+    materializeImageInputs: options.materializeImageInputs,
     namespace: options.namespace,
   }), {
     unsupportedMessage:
@@ -39,7 +54,7 @@ export function buildPwrAgentMessagingToolRouter(
 
 export function buildPwrAgentMessagingToolDefinitions(
   handler: PwrAgentMessagingHandler | undefined,
-  options: { namespace?: string } = {},
+  options: Pick<PwrAgentMessagingToolRouterOptions, "materializeImageInputs" | "namespace"> = {},
 ): AgentToolDefinition<PwrAgentMessagingOperationName>[] {
   return PWRAGENT_MESSAGING_CALLABLE_OPERATION_NAMES.map((operation) => ({
     namespace: options.namespace ?? PWRAGENT_TOOL_NAMESPACE,
@@ -67,7 +82,10 @@ export function buildPwrAgentMessagingToolDefinitions(
         },
         args,
       } as PwrAgentMessagingRequest);
-      return messagingResponseToAgentToolResult(response);
+      return await messagingResponseToAgentToolResult(
+        response,
+        options.materializeImageInputs ?? materializeLocalImageInputs,
+      );
     },
   }));
 }
@@ -85,7 +103,7 @@ function descriptionForOperation(operation: PwrAgentMessagingOperationName): str
     case "search_messaging_pdf_text":
       return "Search embedded text in a bounded page range of a PDF attached to the current active PwrAgent turn. Use returned page-number snippets only to navigate, then render pages for visual analysis.";
     case "render_messaging_pdf_pages":
-      return "Render explicitly selected PDF pages from the current active PwrAgent turn into image input. Successful calls automatically add the returned page images to model context: analyze those images directly, and do not serialize the result, call image(), or request the same pages again. Partially repeated requests return only unseen pages. Rendering is capped by page count, total pixels, encoded image bytes, and model-input bytes.";
+      return "Render explicitly selected PDF pages from the current active PwrAgent turn into image input. This is the only permitted way to access PwrAgent-managed PDF pages: do not use exec, shell, filesystem, OCR, or conversion tools on the source PDF or rendered page. Successful calls automatically add the returned page images to model context: analyze those images directly, and do not serialize the result, call image(), or request the same pages again. Partially repeated requests return only unseen pages. Rendering is capped by page count, total pixels, encoded image bytes, and model-input bytes.";
   }
 }
 
@@ -186,14 +204,19 @@ function inputSchemaForOperation(
   }
 }
 
-function messagingResponseToAgentToolResult(
+async function messagingResponseToAgentToolResult(
   response: PwrAgentMessagingResponse,
-): AgentToolDispatchResult {
+  materializeImageInputs: MaterializeImageInputs,
+): Promise<AgentToolDispatchResult> {
   if (response.ok) {
     if (response.imageContent) {
+      const imageUrls = await materializePdfImageUrls(
+        response.imageContent,
+        materializeImageInputs,
+      );
       const metadata = [
         response.imageContent.length > 0
-          ? "PwrAgent has already added the rendered PDF page image(s) to this turn's model context. Analyze those images directly. Do not serialize this result, call image(), or render the same page again."
+          ? "PwrAgent has already added the rendered PDF page image(s) to this turn's model context. Analyze those images directly. Do not serialize this result, call image(), use exec or other local tools to reprocess the page, or render the same page again."
           : "PwrAgent already supplied the requested PDF page image(s) earlier in this turn, so no duplicate image was added. Analyze the existing image input directly.",
         JSON.stringify(response.data, null, 2),
       ].join("\n\n");
@@ -203,20 +226,9 @@ function messagingResponseToAgentToolResult(
             type: "inputText",
             text: metadata,
           },
-          ...response.imageContent.map((image) => ({
+          ...imageUrls.map((imageUrl) => ({
             type: "inputImage" as const,
-            imageUrl: messagingToolImageDataUrl(image),
-          })),
-        ],
-        mcpContentItems: [
-          {
-            type: "text",
-            text: metadata,
-          },
-          ...response.imageContent.map((image) => ({
-            type: "image" as const,
-            data: image.base64,
-            mimeType: image.mimeType,
+            imageUrl,
           })),
         ],
       });
@@ -237,9 +249,35 @@ function isModelDirectedPdfOperation(operation: PwrAgentMessagingOperationName):
   );
 }
 
-function messagingToolImageDataUrl(image: {
-  base64: string;
-  mimeType: string;
-}): string {
+async function materializePdfImageUrls(
+  images: PwrAgentMessagingToolImage[],
+  materializeImageInputs: MaterializeImageInputs,
+): Promise<string[]> {
+  const fallbackUrls = images.map((image) => messagingToolImageDataUrl(image));
+  try {
+    const materialized = await materializeImageInputs(
+      images.map((image) => ({
+        type: "image" as const,
+        name: `pwragent-pdf-page-${image.pageNumber}.${pdfImageExtension(image.mimeType)}`,
+        url: messagingToolImageDataUrl(image),
+      })),
+    );
+    const localImages = materialized.filter(
+      (item): item is Extract<AppServerTurnInputItem, { type: "localImage" }> =>
+        item.type === "localImage",
+    );
+    return localImages.length === images.length
+      ? localImages.map((image) => pathToFileURL(image.path).toString())
+      : fallbackUrls;
+  } catch {
+    return fallbackUrls;
+  }
+}
+
+function messagingToolImageDataUrl(image: PwrAgentMessagingToolImage): string {
   return `data:${image.mimeType};base64,${image.base64}`;
+}
+
+function pdfImageExtension(mimeType: string): "jpg" | "png" {
+  return mimeType === "image/jpeg" || mimeType === "image/jpg" ? "jpg" : "png";
 }
