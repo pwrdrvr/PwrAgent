@@ -99,9 +99,9 @@ function descriptionForOperation(operation: PwrAgentMessagingOperationName): str
     case "attach_thread_here":
       return "Attach a known PwrAgent thread to the current messaging surface, creating a native child thread/topic when the provider supports it. This does not rename the PwrAgent thread.";
     case "inspect_messaging_pdfs":
-      return "List PDF attachments available only for the current active PwrAgent turn. Returns local metadata and render limits, not PDF bytes or extracted document text.";
+      return "List PDF attachments available only for the current active PwrAgent turn. The initial turn input already includes page metadata when probing succeeded; call this only for an attachment whose metadata was unavailable. Returns local metadata and render limits, not PDF bytes or extracted document text.";
     case "search_messaging_pdf_text":
-      return "Search embedded text in a bounded page range of a PDF attached to the current active PwrAgent turn. Use returned page-number snippets only to navigate, then render pages for visual analysis.";
+      return "For a multi-page PDF only, locate an unknown relevant page using its embedded text layer. Use returned page-number snippets only for bounded navigation, then render pages for visual analysis. Do not use this on one-page PDFs or as a content-extraction/comparison workflow; per-turn search calls are capped.";
     case "render_messaging_pdf_pages":
       return "Render explicitly selected PDF pages from the current active PwrAgent turn into image input. This is the only permitted way to access PwrAgent-managed PDF pages: do not use exec, shell, filesystem, OCR, or conversion tools on the source PDF or rendered page. Successful calls automatically add the returned page images to model context: analyze those images directly, and do not serialize the result, call image(), or request the same pages again. Partially repeated requests return only unseen pages. Rendering is capped by page count, total pixels, encoded image bytes, and model-input bytes.";
   }
@@ -161,7 +161,7 @@ function inputSchemaForOperation(
         properties: {
           attachmentId: {
             type: "string",
-            description: "Opaque attachmentId returned by inspect_messaging_pdfs.",
+            description: "Opaque attachmentId supplied in the initial PDF page manifest or returned by inspect_messaging_pdfs.",
           },
           query: {
             type: "string",
@@ -187,7 +187,7 @@ function inputSchemaForOperation(
         properties: {
           attachmentId: {
             type: "string",
-            description: "Opaque attachmentId returned by inspect_messaging_pdfs.",
+            description: "Opaque attachmentId supplied in the initial PDF page manifest or returned by inspect_messaging_pdfs.",
           },
           pageNumbers: {
             type: "array",

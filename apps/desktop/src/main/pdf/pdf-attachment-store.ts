@@ -13,15 +13,28 @@ import {
   renderPdfPages,
   renderedPdfPageWireBytes,
   searchPdfText,
+  type PdfDocumentInspection,
 } from "./pdf-page-renderer";
+import { MAX_PDF_TEXT_SEARCH_REQUESTS_PER_TURN } from "./pdf-turn-guidance";
 
 export type PendingPdfAttachment = {
   attachmentId: string;
   data: Uint8Array;
+  inspection?: PdfDocumentInspection;
   name: string;
   profile: ImageUploadQualityProfile;
   sizeBytes: number;
 };
+
+export class PdfAttachmentToolError extends Error {
+  constructor(
+    readonly code: "unsupported_operation",
+    message: string,
+  ) {
+    super(message);
+    this.name = "PdfAttachmentToolError";
+  }
+}
 
 export type PdfAttachmentToolContext = {
   backend: AppServerBackendKind;
@@ -37,8 +50,10 @@ export class PdfAttachmentStore {
       renderedBytes: number;
       renderedPages: number;
       claimedPageNumbersByAttachmentId: Map<string, Set<number>>;
+      inspectionPromisesByAttachmentId: Map<string, Promise<PdfDocumentInspection>>;
       renderedPixels: number;
       renderedWireBytes: number;
+      textSearchRequests: number;
     }
   >();
 
@@ -54,8 +69,10 @@ export class PdfAttachmentStore {
       renderedBytes: 0,
       renderedPages: 0,
       claimedPageNumbersByAttachmentId: new Map(),
+      inspectionPromisesByAttachmentId: new Map(),
       renderedPixels: 0,
       renderedWireBytes: 0,
+      textSearchRequests: 0,
     });
   }
 
@@ -70,13 +87,10 @@ export class PdfAttachmentStore {
   async inspect(
     context: PdfAttachmentToolContext,
   ): Promise<PwrAgentMessagingPdfAttachmentSummary[]> {
-    const attachments = this.requireAttachments(context);
+    const turn = this.requireTurn(context);
     const summaries: PwrAgentMessagingPdfAttachmentSummary[] = [];
-    for (const attachment of attachments) {
-      const inspection = await inspectPdfDocument({
-        data: attachment.data,
-        profile: attachment.profile,
-      });
+    for (const attachment of turn.attachments) {
+      const inspection = await this.inspectAttachment(turn, attachment);
       summaries.push({
         attachmentId: attachment.attachmentId,
         firstPage: inspection.firstPage,
@@ -95,7 +109,24 @@ export class PdfAttachmentStore {
     pageStart?: number;
     query: string;
   }): Promise<PwrAgentMessagingPdfTextSearchResult> {
+    const turn = this.requireTurn(params);
     const attachment = this.requireAttachment(params, params.attachmentId);
+    const inspection = await this.inspectAttachment(turn, attachment);
+    if (inspection.pageCount === 1) {
+      throw new PdfAttachmentToolError(
+        "unsupported_operation",
+        `Text search is unavailable for \`${attachment.name}\` because it has one page. Render page 1 directly and analyze the image.`,
+      );
+    }
+    if (turn.textSearchRequests >= MAX_PDF_TEXT_SEARCH_REQUESTS_PER_TURN) {
+      throw new PdfAttachmentToolError(
+        "unsupported_operation",
+        `PDF text search is limited to ${MAX_PDF_TEXT_SEARCH_REQUESTS_PER_TURN} calls per turn. Render the identified pages and analyze the images.`,
+      );
+    }
+    // Reserve the request before awaiting searchPdfText so concurrent dynamic
+    // calls cannot overrun the per-turn navigation budget.
+    turn.textSearchRequests += 1;
     const result = await searchPdfText({
       data: attachment.data,
       pageEnd: params.pageEnd,
@@ -230,8 +261,10 @@ export class PdfAttachmentStore {
     renderedBytes: number;
     renderedPages: number;
     claimedPageNumbersByAttachmentId: Map<string, Set<number>>;
+    inspectionPromisesByAttachmentId: Map<string, Promise<PdfDocumentInspection>>;
     renderedPixels: number;
     renderedWireBytes: number;
+    textSearchRequests: number;
   } {
     const turn = this.attachmentsByTurnKey.get(turnKey(context));
     if (!turn?.attachments.length) {
@@ -250,6 +283,40 @@ export class PdfAttachmentStore {
       throw new Error("That PDF attachment is not available for this turn.");
     }
     return attachment;
+  }
+
+  private async inspectAttachment(
+    turn: {
+      inspectionPromisesByAttachmentId: Map<string, Promise<PdfDocumentInspection>>;
+    },
+    attachment: PendingPdfAttachment,
+  ): Promise<PdfDocumentInspection> {
+    if (attachment.inspection) {
+      return attachment.inspection;
+    }
+    const existing = turn.inspectionPromisesByAttachmentId.get(
+      attachment.attachmentId,
+    );
+    if (existing) {
+      return await existing;
+    }
+
+    const inspection = inspectPdfDocument({
+      data: attachment.data,
+      profile: attachment.profile,
+    }).then((result) => {
+      attachment.inspection = result;
+      return result;
+    });
+    turn.inspectionPromisesByAttachmentId.set(
+      attachment.attachmentId,
+      inspection,
+    );
+    try {
+      return await inspection;
+    } finally {
+      turn.inspectionPromisesByAttachmentId.delete(attachment.attachmentId);
+    }
   }
 }
 

@@ -2,7 +2,10 @@ import type {
   PwrAgentMessagingRequest,
   PwrAgentMessagingResponse,
 } from "@pwragent/shared";
-import type { PdfAttachmentStore } from "./pdf-attachment-store";
+import {
+  PdfAttachmentToolError,
+  type PdfAttachmentStore,
+} from "./pdf-attachment-store";
 
 export function isPwrAgentPdfOperation(
   operation: PwrAgentMessagingRequest["operation"],
@@ -153,6 +156,15 @@ function readPdfToolPageNumbers(value: unknown): number[] | undefined {
 }
 
 function pdfToolFailure(error: unknown): Extract<PwrAgentMessagingResponse, { ok: false }> {
+  if (error instanceof PdfAttachmentToolError) {
+    return {
+      ok: false,
+      error: {
+        code: error.code,
+        message: error.message,
+      },
+    };
+  }
   return {
     ok: false,
     error: {

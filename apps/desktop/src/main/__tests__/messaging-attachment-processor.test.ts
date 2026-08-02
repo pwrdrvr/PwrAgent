@@ -182,6 +182,15 @@ describe("processMessagingAttachments", () => {
 
   it("retains PDFs locally for model-directed page tools", async () => {
     const pdfData = bytes("%PDF-1.7\n(local only) Tj\n");
+    const inspectPdfDocument = vi.fn(async () => ({
+      firstPage: {
+        height: 792,
+        renderHeight: 1988,
+        renderWidth: 3072,
+        width: 1224,
+      },
+      pageCount: 1,
+    }));
     const renderPdfPages = vi.fn();
 
     const result = await processMessagingAttachments({
@@ -197,22 +206,36 @@ describe("processMessagingAttachments", () => {
       ],
       dependencies: {
         createPdfAttachmentId: () => "local-pdf-1",
+        inspectPdfDocument,
         renderPdfPages,
       },
       pdfHandling: "model_directed",
     });
 
+    expect(inspectPdfDocument).toHaveBeenCalledTimes(1);
     expect(renderPdfPages).not.toHaveBeenCalled();
     expect(result.input).toEqual([
       {
         type: "text",
-        text: expect.stringContaining("inspect_messaging_pdfs"),
+        text: expect.stringContaining("render_messaging_pdf_pages exactly once"),
       },
     ]);
+    expect((result.input[0] as { text: string }).text).toContain(
+      "Do not call inspect_messaging_pdfs or search_messaging_pdf_text for a one-page PDF.",
+    );
     expect(result.pdfAttachments).toEqual([
       {
         attachmentId: "local-pdf-1",
         data: pdfData,
+        inspection: {
+          firstPage: {
+            height: 792,
+            renderHeight: 1988,
+            renderWidth: 3072,
+            width: 1224,
+          },
+          pageCount: 1,
+        },
         name: "window-sticker.pdf",
         profile: "high",
         sizeBytes: pdfData.byteLength,

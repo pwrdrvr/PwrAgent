@@ -613,6 +613,35 @@ function stripCodexImageBoundaryText(value: string): string {
     .trim();
 }
 
+function stripPwrAgentPdfContext(value: string): string {
+  return value
+    .replace(
+      /\s*<pwragent-pdf-context>[\s\S]*?<\/pwragent-pdf-context>\s*/giu,
+      "\n",
+    )
+    .replace(/\n{3,}/gu, "\n\n")
+    .trim();
+}
+
+function normalizeComposerFileReferenceText(value: string): string {
+  return stripPwrAgentPdfContext(stripCodexImageBoundaryText(value)).replace(
+    /\[@([^\]]+)\]\([^)]*\)/gu,
+    (_reference, name: string) => `@${name}`,
+  );
+}
+
+function shouldPreserveOptimisticMessagePresentation(
+  message: AppServerThreadMessage,
+  entry: AppServerThreadMessageEntry,
+): boolean {
+  return (
+    stripCodexImageBoundaryText(message.text) !==
+      stripCodexImageBoundaryText(entry.text)
+    && normalizeComposerFileReferenceText(message.text) ===
+      normalizeComposerFileReferenceText(entry.text)
+  );
+}
+
 function stripCodexImageBoundaryParts(
   parts: AppServerThreadMessagePart[] | undefined
 ): AppServerThreadMessagePart[] | undefined {
@@ -2632,8 +2661,8 @@ function messageTextMatchesOptimisticEntry(
 ): boolean {
   if (
     message.role !== entry.role ||
-    stripCodexImageBoundaryText(message.text) !==
-      stripCodexImageBoundaryText(entry.text)
+    normalizeComposerFileReferenceText(message.text) !==
+      normalizeComposerFileReferenceText(entry.text)
   ) {
     return false;
   }
@@ -2651,13 +2680,25 @@ function mergeCompletedUserMessageWithOptimisticEntry(
       message.role === "user" &&
       messageTextMatchesOptimisticEntry(message, entry)
   );
-  if (!optimisticEntry?.parts?.some((part) => part.type === "image")) {
+  if (!optimisticEntry) {
+    return message;
+  }
+
+  const preservePresentation = shouldPreserveOptimisticMessagePresentation(
+    message,
+    optimisticEntry,
+  );
+  const optimisticImageParts = optimisticEntry.parts?.some(
+    (part) => part.type === "image",
+  );
+  if (!preservePresentation && !optimisticImageParts) {
     return message;
   }
 
   return {
     ...message,
-    parts: optimisticEntry.parts,
+    ...(preservePresentation ? { text: optimisticEntry.text } : {}),
+    ...(optimisticEntry.parts ? { parts: optimisticEntry.parts } : {}),
     createdAt: optimisticEntry.createdAt ?? message.createdAt,
   };
 }
@@ -2692,6 +2733,10 @@ function mergeCompletedUserMessageWithPromotedOptimisticEntry(
     return message;
   }
 
+  const preservePresentation = shouldPreserveOptimisticMessagePresentation(
+    message,
+    optimisticEntry,
+  );
   const optimisticImageParts = optimisticEntry.parts?.some(
     (part) => part.type === "image"
   )
@@ -2700,6 +2745,7 @@ function mergeCompletedUserMessageWithPromotedOptimisticEntry(
 
   return {
     ...message,
+    ...(preservePresentation ? { text: optimisticEntry.text } : {}),
     ...(optimisticImageParts ? { parts: optimisticImageParts } : {}),
     createdAt: optimisticEntry.createdAt ?? message.createdAt,
   };
