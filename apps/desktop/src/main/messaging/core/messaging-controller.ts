@@ -238,9 +238,9 @@ import {
   type MessagingAttachmentRejection,
 } from "./messaging-attachment-processor.js";
 import {
-  MessagingPdfAttachmentStore,
-  type PendingMessagingPdfAttachment,
-} from "../messaging-pdf-attachment-store.js";
+  PdfAttachmentStore,
+  type PendingPdfAttachment,
+} from "../../pdf/pdf-attachment-store.js";
 import {
   MessagingTurnAdmission,
   threadKeyForBinding,
@@ -649,6 +649,7 @@ export type MessagingControllerOptions = {
   inputDebounceMs?: number;
   pendingIntentTtlMs?: number;
   attachmentPolicy?: Partial<MessagingAttachmentPolicy>;
+  pdfAnalysisEnabled?: boolean | (() => boolean | Promise<boolean>);
   store: MessagingStoreLike;
   streamingResponsesDefault?: boolean;
   showStreamingOption?: boolean | (() => boolean | Promise<boolean>);
@@ -700,7 +701,7 @@ export class MessagingController {
     string,
     ActiveAgentMessagingOrigin
   >();
-  private readonly pdfAttachmentStore = new MessagingPdfAttachmentStore();
+  private readonly pdfAttachmentStore = new PdfAttachmentStore();
   private readonly deliveredAutomationStartKeys = new Set<string>();
   private readonly deliveredAutomationFinalKeys = new Set<string>();
   private readonly now: () => number;
@@ -2736,13 +2737,13 @@ export class MessagingController {
   private prependPendingSkillSelection(
     prepared: {
       input: AppServerTurnInputItem[];
-      pdfAttachments: PendingMessagingPdfAttachment[];
+      pdfAttachments: PendingPdfAttachment[];
       preview: string;
     },
     binding: MessagingBindingRecord,
   ): {
     input: AppServerTurnInputItem[];
-    pdfAttachments: PendingMessagingPdfAttachment[];
+    pdfAttachments: PendingPdfAttachment[];
     preview: string;
   } {
     const selection = binding.pendingSkillSelection;
@@ -2904,13 +2905,13 @@ export class MessagingController {
   ): Promise<
     | {
         input: AppServerTurnInputItem[];
-        pdfAttachments: PendingMessagingPdfAttachment[];
+        pdfAttachments: PendingPdfAttachment[];
         preview: string;
       }
     | undefined
   > {
     const input: AppServerTurnInputItem[] = [];
-    const pdfAttachments: PendingMessagingPdfAttachment[] = [];
+    const pdfAttachments: PendingPdfAttachment[] = [];
     const previewParts: string[] = [];
     const rejections: MessagingAttachmentRejection[] = [];
     const pdfHandling = await this.resolveMessagingPdfHandling(binding);
@@ -2988,7 +2989,10 @@ export class MessagingController {
 
   private async resolveMessagingPdfHandling(
     binding: MessagingBindingRecord | undefined,
-  ): Promise<"model_directed" | "render_initial_pages"> {
+  ): Promise<"model_directed" | "render_initial_pages" | "pass_through"> {
+    if (!(await this.resolvePdfAnalysisEnabled())) {
+      return "pass_through";
+    }
     if (
       binding?.backend !== "codex" ||
       !this.options.backend.supportsMessagingPdfTools
@@ -3012,12 +3016,20 @@ export class MessagingController {
     }
   }
 
+  private async resolvePdfAnalysisEnabled(): Promise<boolean> {
+    const configured = this.options.pdfAnalysisEnabled;
+    if (typeof configured === "function") {
+      return (await configured()) !== false;
+    }
+    return configured !== false;
+  }
+
   private async startPreparedInput(params: {
     binding: MessagingBindingRecord;
     event?: MessagingInboundEvent;
     input: AppServerTurnInputItem[];
     navigation?: NavigationSnapshot;
-    pdfAttachments?: PendingMessagingPdfAttachment[];
+    pdfAttachments?: PendingPdfAttachment[];
     preview: string;
     queueOnConcurrentStart?: boolean;
     threadKey: string;
@@ -3217,7 +3229,7 @@ export class MessagingController {
     binding: MessagingBindingRecord;
     event?: MessagingInboundEvent;
     input: AppServerTurnInputItem[];
-    pdfAttachments?: PendingMessagingPdfAttachment[];
+    pdfAttachments?: PendingPdfAttachment[];
     preview: string;
     threadKey: string;
   }): Promise<void> {

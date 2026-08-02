@@ -10,7 +10,7 @@ import type {
   MessagingSurfaceRef,
 } from "@pwragent/messaging-interface";
 import { buildThreadIdentityKey } from "@pwragent/shared";
-import type { PendingMessagingPdfAttachment } from "../messaging-pdf-attachment-store";
+import type { PendingPdfAttachment } from "../../pdf/pdf-attachment-store";
 
 export type MessagingTurnInputEvent =
   | MessagingInboundTextEvent
@@ -29,7 +29,7 @@ export type MessagingQueuedTurnEntry = {
   event?: MessagingInboundEvent;
   id: string;
   input: AppServerTurnInputItem[];
-  pdfAttachments?: PendingMessagingPdfAttachment[];
+  pdfAttachments?: PendingPdfAttachment[];
   preview: string;
   status: "queued" | "steered" | "cancelled" | "submitted" | "failed";
   surface?: MessagingSurfaceRef;

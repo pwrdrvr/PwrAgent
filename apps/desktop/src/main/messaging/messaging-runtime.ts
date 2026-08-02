@@ -1011,6 +1011,8 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       channel: adapter.channel,
       deliveryBudget,
       inputDebounceMs: config.inputDebounceMs,
+      pdfAnalysisEnabled: async () =>
+        (await this.loadConfig()).pdfAnalysisEnabled !== false,
       store,
       activityLog: getDesktopMessagingActivityLog,
       streamingResponsesDefault: streamingResponsesDefaultForChannel(

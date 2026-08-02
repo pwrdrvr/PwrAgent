@@ -536,6 +536,10 @@ export class DesktopSettingsService {
           config.general?.confirmQuitWithInProgressThreads,
           true,
         ),
+        pdfAnalysisEnabled: this.resolveConfigBoolean(
+          config.general?.pdfAnalysisEnabled,
+          true,
+        ),
         developerMode: this.resolveConfigBoolean(
           config.general?.developerMode,
           this.defaultDeveloperMode(),
@@ -1142,6 +1146,13 @@ export class DesktopSettingsService {
   resolveConfirmQuitWithInProgressThreads(): boolean {
     return this.resolveConfigBoolean(
       this.readConfig().config.general?.confirmQuitWithInProgressThreads,
+      true,
+    ).value;
+  }
+
+  resolvePdfAnalysisEnabled(): boolean {
+    return this.resolveConfigBoolean(
+      this.readConfig().config.general?.pdfAnalysisEnabled,
       true,
     ).value;
   }

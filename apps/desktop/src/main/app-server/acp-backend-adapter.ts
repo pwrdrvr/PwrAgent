@@ -777,6 +777,14 @@ export function inputToAcpPrompt(
       continue;
     }
 
+    if (item.type === "localFile") {
+      const fileName = item.name?.trim() || path.basename(item.path);
+      const text = `[Local file: ${fileName} (${item.path})]`;
+      promptContent.push({ type: "text", text });
+      parts.push({ type: "text", text });
+      continue;
+    }
+
     const fileName = item.name?.trim() || path.basename(item.path);
     const text = `[Local image: ${fileName}]`;
     promptContent.push({ type: "text", text });

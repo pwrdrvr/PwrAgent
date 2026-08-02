@@ -81,6 +81,7 @@ type StoredChatReplyComposer =
 export type DesktopSettingsConfig = {
   general?: {
     confirmQuitWithInProgressThreads?: boolean;
+    pdfAnalysisEnabled?: boolean;
     developerMode?: boolean;
     hotCpuProfilingEnabled?: boolean;
     hotCpuProfilingStartDelayMs?: DesktopHotCpuProfileStartDelayMs;
@@ -644,6 +645,13 @@ export function desktopSettingsPatchToEdits(
       ["general", "confirm_quit_with_in_progress_threads"],
       patch.general.confirmQuitWithInProgressThreads,
     );
+  }
+  if (patch.general?.pdfAnalysisEnabled !== undefined) {
+    if (patch.general.pdfAnalysisEnabled) {
+      edits.push({ op: "delete", path: ["general", "pdf_analysis_enabled"] });
+    } else {
+      set(["general", "pdf_analysis_enabled"], false);
+    }
   }
   if (patch.general?.notificationsEnabled !== undefined) {
     set(["general", "notifications_enabled"], patch.general.notificationsEnabled);
@@ -1416,6 +1424,7 @@ function normalizeDesktopConfig(
       confirmQuitWithInProgressThreads: readBoolean(
         general?.confirm_quit_with_in_progress_threads,
       ),
+      pdfAnalysisEnabled: readBoolean(general?.pdf_analysis_enabled),
       developerMode: readBoolean(general?.developer_mode),
       hotCpuProfilingEnabled: readBoolean(general?.hot_cpu_profiling_enabled),
       hotCpuProfilingStartDelayMs: readHotCpuProfileStartDelayMs(
@@ -1723,6 +1732,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     config.general?.hotCpuProfilingHeapSnapshotLimit;
   const confirmQuitWithInProgressThreads =
     config.general?.confirmQuitWithInProgressThreads;
+  const pdfAnalysisEnabled = config.general?.pdfAnalysisEnabled;
   const notificationsEnabled = config.general?.notificationsEnabled;
   const appearance = config.general?.appearance;
   const appearanceDefined = appearance && hasDefinedValue(appearance);
@@ -1737,6 +1747,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     hotCpuProfilingCaptureHeapSnapshot !== undefined ||
     hotCpuProfilingHeapSnapshotLimit !== undefined ||
     confirmQuitWithInProgressThreads !== undefined ||
+    pdfAnalysisEnabled !== undefined ||
     notificationsEnabled !== undefined ||
     appearanceDefined ||
     codexProfileModel !== undefined ||
@@ -1770,6 +1781,9 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     if (confirmQuitWithInProgressThreads !== undefined) {
       pruned.general.confirmQuitWithInProgressThreads =
         confirmQuitWithInProgressThreads;
+    }
+    if (pdfAnalysisEnabled !== undefined) {
+      pruned.general.pdfAnalysisEnabled = pdfAnalysisEnabled;
     }
     if (notificationsEnabled !== undefined) {
       pruned.general.notificationsEnabled = notificationsEnabled;

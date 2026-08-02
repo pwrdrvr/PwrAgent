@@ -17,6 +17,19 @@ describe("Codex turn lifecycle", () => {
       input: [
         { type: "text", text: "Describe this image" },
         { type: "localImage", path: "/tmp/screenshot.png" },
+        {
+          type: "localFile",
+          name: "Jeep",
+          path: "/tmp/Jeep",
+          pdfRenderProfile: "high",
+        },
+        {
+          type: "file",
+          name: "window-sticker.pdf",
+          mimeType: "application/pdf",
+          data: "JVBERi0=",
+          pdfRenderProfile: "high",
+        },
       ],
     });
     provider.runs[0]?.deferred.resolve({
@@ -30,6 +43,19 @@ describe("Codex turn lifecycle", () => {
     expect(provider.runs[0]?.input).toEqual([
       { type: "text", text: "Describe this image" },
       { type: "localImage", path: "/tmp/screenshot.png" },
+      {
+        type: "localFile",
+        name: "Jeep",
+        path: "/tmp/Jeep",
+        pdfRenderProfile: "high",
+      },
+      {
+        type: "file",
+        name: "window-sticker.pdf",
+        mimeType: "application/pdf",
+        data: "JVBERi0=",
+        pdfRenderProfile: "high",
+      },
     ]);
     expect(notifications).toEqual([
       {

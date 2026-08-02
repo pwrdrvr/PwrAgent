@@ -176,6 +176,7 @@ export type DesktopMessagingConfig = {
   inputDebounceMs?: number;
   line?: LineMessagingConfig;
   mattermost?: MattermostMessagingConfig;
+  pdfAnalysisEnabled?: boolean;
   slack?: SlackMessagingConfig;
   telegram?: TelegramMessagingConfig;
   toolUpdateDefaultMode?: MessagingToolUpdateMode;
@@ -213,6 +214,7 @@ export const DESKTOP_MESSAGING_ROOT_CONFIG_FIELD_IMPACTS = {
   inputDebounceMs: "connection",
   line: "connection",
   mattermost: "connection",
+  pdfAnalysisEnabled: "irrelevant",
   slack: "connection",
   telegram: "connection",
   toolUpdateDefaultMode: "irrelevant",
@@ -1138,6 +1140,7 @@ export async function loadDesktopMessagingConfigFromSettings(
         await canPersistMessagingFullAccessWarningDismissal(settings, channel, actorId),
     },
     inputDebounceMs: snapshot.messaging.inputDebounceMs.value,
+    pdfAnalysisEnabled: snapshot.general.pdfAnalysisEnabled.value,
     toolUpdateDefaultMode: snapshot.messaging.toolUpdateMode.value,
     managerToolUpdateDefaultMode:
       snapshot.messaging.managerToolUpdateMode.value,

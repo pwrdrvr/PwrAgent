@@ -15,7 +15,7 @@ import {
   searchPdfText,
 } from "./pdf-page-renderer";
 
-export type PendingMessagingPdfAttachment = {
+export type PendingPdfAttachment = {
   attachmentId: string;
   data: Uint8Array;
   name: string;
@@ -23,17 +23,17 @@ export type PendingMessagingPdfAttachment = {
   sizeBytes: number;
 };
 
-export type MessagingPdfAttachmentToolContext = {
+export type PdfAttachmentToolContext = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   turnId: string;
 };
 
-export class MessagingPdfAttachmentStore {
+export class PdfAttachmentStore {
   private readonly attachmentsByTurnKey = new Map<
     string,
     {
-      attachments: PendingMessagingPdfAttachment[];
+      attachments: PendingPdfAttachment[];
       renderedBytes: number;
       renderedPages: number;
       renderedPixels: number;
@@ -42,8 +42,8 @@ export class MessagingPdfAttachmentStore {
   >();
 
   bindTurn(
-    context: MessagingPdfAttachmentToolContext,
-    attachments: PendingMessagingPdfAttachment[],
+    context: PdfAttachmentToolContext,
+    attachments: PendingPdfAttachment[],
   ): void {
     if (attachments.length === 0) {
       return;
@@ -57,12 +57,16 @@ export class MessagingPdfAttachmentStore {
     });
   }
 
-  releaseTurn(context: MessagingPdfAttachmentToolContext): void {
+  releaseTurn(context: PdfAttachmentToolContext): void {
     this.attachmentsByTurnKey.delete(turnKey(context));
   }
 
+  hasTurn(context: PdfAttachmentToolContext): boolean {
+    return this.attachmentsByTurnKey.has(turnKey(context));
+  }
+
   async inspect(
-    context: MessagingPdfAttachmentToolContext,
+    context: PdfAttachmentToolContext,
   ): Promise<PwrAgentMessagingPdfAttachmentSummary[]> {
     const attachments = this.requireAttachments(context);
     const summaries: PwrAgentMessagingPdfAttachmentSummary[] = [];
@@ -83,7 +87,7 @@ export class MessagingPdfAttachmentStore {
     return summaries;
   }
 
-  async search(params: MessagingPdfAttachmentToolContext & {
+  async search(params: PdfAttachmentToolContext & {
     attachmentId: string;
     pageEnd?: number;
     pageStart?: number;
@@ -103,7 +107,7 @@ export class MessagingPdfAttachmentStore {
     };
   }
 
-  async render(params: MessagingPdfAttachmentToolContext & {
+  async render(params: PdfAttachmentToolContext & {
     attachmentId: string;
     pageNumbers: number[];
   }): Promise<{
@@ -127,7 +131,7 @@ export class MessagingPdfAttachmentStore {
       remainingLimits.maxPixels < 1 ||
       remainingLimits.maxWireBytes < 1
     ) {
-      throw new Error("PDF rendering budget is exhausted for this messaging turn.");
+      throw new Error("PDF rendering budget is exhausted for this turn.");
     }
     const pages = await renderPdfPages({
       data: attachment.data,
@@ -167,15 +171,15 @@ export class MessagingPdfAttachmentStore {
   }
 
   private requireAttachments(
-    context: MessagingPdfAttachmentToolContext,
-  ): PendingMessagingPdfAttachment[] {
+    context: PdfAttachmentToolContext,
+  ): PendingPdfAttachment[] {
     return this.requireTurn(context).attachments;
   }
 
   private requireTurn(
-    context: MessagingPdfAttachmentToolContext,
+    context: PdfAttachmentToolContext,
   ): {
-    attachments: PendingMessagingPdfAttachment[];
+    attachments: PendingPdfAttachment[];
     renderedBytes: number;
     renderedPages: number;
     renderedPixels: number;
@@ -183,24 +187,24 @@ export class MessagingPdfAttachmentStore {
   } {
     const turn = this.attachmentsByTurnKey.get(turnKey(context));
     if (!turn?.attachments.length) {
-      throw new Error("No PDF attachments are available for this messaging turn.");
+      throw new Error("No PDF attachments are available for this turn.");
     }
     return turn;
   }
 
   private requireAttachment(
-    context: MessagingPdfAttachmentToolContext,
+    context: PdfAttachmentToolContext,
     attachmentId: string,
-  ): PendingMessagingPdfAttachment {
+  ): PendingPdfAttachment {
     const attachment = this.requireAttachments(context)
       .find((candidate) => candidate.attachmentId === attachmentId);
     if (!attachment) {
-      throw new Error("That PDF attachment is not available for this messaging turn.");
+      throw new Error("That PDF attachment is not available for this turn.");
     }
     return attachment;
   }
 }
 
-function turnKey(context: MessagingPdfAttachmentToolContext): string {
+function turnKey(context: PdfAttachmentToolContext): string {
   return JSON.stringify([context.backend, context.threadId, context.turnId]);
 }

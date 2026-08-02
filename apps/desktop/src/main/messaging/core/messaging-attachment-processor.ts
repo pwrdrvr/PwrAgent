@@ -11,8 +11,8 @@ import {
   renderedPdfPageDataUrl,
   renderedPdfPageWireBytes,
   type RenderedPdfPage,
-} from "../pdf-page-renderer";
-import type { PendingMessagingPdfAttachment } from "../messaging-pdf-attachment-store";
+} from "../../pdf/pdf-page-renderer";
+import type { PendingPdfAttachment } from "../../pdf/pdf-attachment-store";
 import type { MessagingAdapter } from "./messaging-adapter";
 import {
   classifyMessagingAttachment,
@@ -34,7 +34,7 @@ export type MessagingAttachmentRejection = {
 
 export type MessagingAttachmentProcessingResult = {
   input: AppServerTurnInputItem[];
-  pdfAttachments: PendingMessagingPdfAttachment[];
+  pdfAttachments: PendingPdfAttachment[];
   rejections: MessagingAttachmentRejection[];
 };
 
@@ -72,7 +72,7 @@ export async function processMessagingAttachments(params: {
   adapter: MessagingAdapter;
   attachments: MessagingAttachmentDescriptor[];
   policy?: Partial<MessagingAttachmentPolicy>;
-  pdfHandling?: "model_directed" | "render_initial_pages";
+  pdfHandling?: "model_directed" | "render_initial_pages" | "pass_through";
   text?: string;
   dependencies?: Partial<MessagingAttachmentProcessingDependencies>;
 }): Promise<MessagingAttachmentProcessingResult> {
@@ -86,7 +86,7 @@ export async function processMessagingAttachments(params: {
   };
   const textInput: string[] = [];
   const mediaInput: AppServerTurnInputItem[] = [];
-  const pdfAttachments: PendingMessagingPdfAttachment[] = [];
+  const pdfAttachments: PendingPdfAttachment[] = [];
   const rejections: MessagingAttachmentRejection[] = [];
   const renderedPdfBudget = {
     bytes: 0,
@@ -172,6 +172,20 @@ export async function processMessagingAttachments(params: {
       }
 
       if (classification.kind === "pdf") {
+        if (params.pdfHandling === "pass_through") {
+          mediaInput.push({
+            type: "file",
+            name: downloaded.fileName,
+            mimeType: classification.mimeType,
+            data: Buffer.from(downloaded.data).toString("base64"),
+            sizeBytes: downloaded.sizeBytes,
+            pdfRenderProfile: policy.pdfProfile,
+          });
+          textInput.push(
+            `PDF attachment \`${downloaded.fileName}\` was left as a normal file attachment.`,
+          );
+          continue;
+        }
         if (params.pdfHandling === "model_directed") {
           pdfAttachments.push({
             attachmentId: dependencies.createPdfAttachmentId(),

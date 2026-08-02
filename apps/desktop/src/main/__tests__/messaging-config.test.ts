@@ -68,6 +68,7 @@ describe("desktop messaging config", () => {
       "line",
       "managerToolUpdateDefaultMode",
       "mattermost",
+      "pdfAnalysisEnabled",
       "showStreamingOption",
       "slack",
       "telegram",
@@ -502,6 +503,7 @@ describe("desktop messaging config", () => {
     expect(config).toEqual({
       enabled: true,
       inputDebounceMs: 500,
+      pdfAnalysisEnabled: true,
       toolUpdateDefaultMode: "show_some",
       managerToolUpdateDefaultMode: "show_none",
       showStreamingOption: false,

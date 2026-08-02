@@ -281,6 +281,45 @@ describe("DesktopSettingsService", () => {
     expect(service.resolveDeveloperMode()).toBe(true);
   });
 
+  it("defaults PDF analysis on and persists its opt-out", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    expect((await service.readSettings()).general.pdfAnalysisEnabled).toEqual({
+      value: true,
+      source: "default",
+    });
+    expect(service.resolvePdfAnalysisEnabled()).toBe(true);
+
+    await service.writeConfigPatch({
+      general: { pdfAnalysisEnabled: false },
+    });
+
+    expect(fs.readFileSync(configPath, "utf8")).toContain(
+      "pdf_analysis_enabled = false",
+    );
+    expect((await service.readSettings()).general.pdfAnalysisEnabled).toEqual({
+      value: false,
+      source: "config",
+    });
+    expect(service.resolvePdfAnalysisEnabled()).toBe(false);
+
+    await service.writeConfigPatch({
+      general: { pdfAnalysisEnabled: true },
+    });
+
+    expect(fs.readFileSync(configPath, "utf8")).not.toContain("pdf_analysis_enabled");
+    expect((await service.readSettings()).general.pdfAnalysisEnabled).toEqual({
+      value: true,
+      source: "default",
+    });
+  });
+
   it("defaults hot CPU profiling to disabled and persists overrides", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
