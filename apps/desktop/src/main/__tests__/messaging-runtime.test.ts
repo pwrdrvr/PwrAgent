@@ -752,6 +752,117 @@ describe("DesktopMessagingRuntime", () => {
     expect(discordAdapter.delivered).toEqual([]);
   });
 
+  it("resolves an ephemeral Agent origin after multiple unrelated providers", async () => {
+    await prepareRuntimeStore();
+    const lineAdapter = createAdapter("line");
+    const mattermostAdapter = createAdapter("mattermost");
+    const telegramAdapter = createAdapter("telegram");
+    const bridge = createBackendBridge();
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      agent: {
+        name: "Jeeves",
+        instructionLineCount: 1,
+        instructionsTooLong: false,
+        updatedAt: 1000,
+      },
+    };
+    navigation.threads.push({
+      id: "thread-2",
+      title: "Whimsical breakfast questionnaire",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: {
+        inInbox: false,
+      },
+    });
+    bridge.getNavigationSnapshot = vi.fn(async () => navigation);
+    const { getDesktopMessagingStore } = await import(
+      "../messaging/desktop-messaging-store"
+    );
+    const store = getDesktopMessagingStore();
+    await store.upsertDefaultAgentAssignment({
+      id: "default-agent:telegram-provider",
+      scope: {
+        kind: "provider",
+        channel: "telegram",
+      },
+      target: {
+        kind: "agent",
+        backend: "codex",
+        threadId: "thread-1",
+      },
+      createdAt: 1000,
+      updatedAt: 1000,
+    });
+    const { DesktopMessagingRuntime: Runtime } = await import(
+      "../messaging/messaging-runtime"
+    );
+    const runtime = trackRuntime(new Runtime({
+      adapterFactory: () => [lineAdapter, mattermostAdapter, telegramAdapter],
+      backendBridge: bridge,
+      config: {
+        inputDebounceMs: 0,
+        line: {
+          channel: "line",
+          channelSecret: "line-secret",
+          callbackBaseUrl: "http://127.0.0.1:47822/",
+          authorizedActorIds: [{ id: "user-1", displayName: "" }],
+        },
+        mattermost: {
+          channel: "mattermost",
+          botToken: "mattermost-token",
+          callbackBaseUrl: "http://127.0.0.1:47821/",
+          serverUrl: "https://mattermost.example.com",
+          authorizedActorIds: [{ id: "user-1", displayName: "" }],
+        },
+        telegram: {
+          channel: "telegram",
+          botToken: "telegram-token",
+          authorizedActorIds: [{ id: "user-1", displayName: "" }],
+        },
+      },
+    }));
+
+    await runtime.start();
+    await telegramAdapter.listener?.(buildTextEvent("Attach a fun thread here."));
+
+    const response = await runtime.handlePwrAgentMessagingRequest({
+      operation: "attach_thread_here",
+      context: {
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-1",
+      },
+      args: {
+        backend: "codex",
+        threadId: "thread-2",
+        placement: "auto",
+        targetKind: "thread",
+      },
+    });
+
+    expect(response).toMatchObject({
+      ok: true,
+      data: {
+        outcome: "attached",
+        placement: "current_conversation",
+      },
+    });
+    await expect(store.findActiveBindingForChannel({
+      channel: "telegram",
+      conversation: {
+        id: "chat-1",
+        kind: "dm",
+      },
+    })).resolves.toMatchObject({
+      backend: "codex",
+      threadId: "thread-2",
+    });
+  });
+
   it("clears resolved approval buttons through the owning channel adapter only", async () => {
     await prepareRuntimeStore();
     const telegramAdapter = createAdapter("telegram");

@@ -356,8 +356,8 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       if (response.ok) {
         return response;
       }
-      if (!firstNotFound && response.error.code === "not_found") {
-        firstNotFound = response;
+      if (response.error.code === "not_found") {
+        firstNotFound ??= response;
         continue;
       }
       return response;
