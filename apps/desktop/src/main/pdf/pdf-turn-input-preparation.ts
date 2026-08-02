@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { open } from "node:fs/promises";
+import { homedir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type {
   AppServerFileInputItem,
   AppServerLocalFileInputItem,
@@ -77,6 +79,7 @@ export async function preparePdfTurnInput(params: {
   const defaultProfile = params.defaultProfile ?? "high";
   const input: AppServerTurnInputItem[] = [];
   const pdfAttachments: PendingPdfAttachment[] = [];
+  const consumedLocalPdfPaths = new Set<string>();
   const notes: string[] = [];
   const renderedBudget = {
     bytes: 0,
@@ -127,6 +130,9 @@ export async function preparePdfTurnInput(params: {
         profile,
         sizeBytes: candidate.data.byteLength,
       });
+      if (item.type === "localFile") {
+        consumedLocalPdfPaths.add(normalizeLocalPdfPath(item.path));
+      }
       continue;
     }
 
@@ -176,12 +182,15 @@ export async function preparePdfTurnInput(params: {
 
   if (pdfAttachments.length > 0) {
     notes.unshift(
-      `PDF attachment${pdfAttachments.length === 1 ? "" : "s"} ${pdfAttachments.map((attachment) => `\`${attachment.name}\``).join(", ")} ${pdfAttachments.length === 1 ? "is" : "are"} available through PwrAgent's local PDF tools. Call inspect_messaging_pdfs first, use search_messaging_pdf_text for bounded navigation, then use render_messaging_pdf_pages to request only the pages needed for visual analysis. A successful render already adds those images to model context: analyze them directly instead of serializing the result or calling image().`,
+      `PDF attachment${pdfAttachments.length === 1 ? "" : "s"} ${pdfAttachments.map((attachment) => `\`${attachment.name}\``).join(", ")} ${pdfAttachments.length === 1 ? "is" : "are"} available only through PwrAgent's local PDF tools. Call inspect_messaging_pdfs first, use search_messaging_pdf_text for bounded navigation, then use render_messaging_pdf_pages to request only the pages needed for visual analysis. Do not use exec, shell, filesystem, OCR, or conversion tools to access the source PDFs or rendered pages. A successful render already adds those images to model context: analyze them directly instead of serializing the result or calling image().`,
     );
   }
 
   return {
-    input: insertPdfNotes(input, notes),
+    input: insertPdfNotes(
+      redactConsumedLocalPdfReferences(input, consumedLocalPdfPaths),
+      notes,
+    ),
     pdfAttachments,
   };
 }
@@ -316,6 +325,65 @@ function recordRenderedBudget(
     (total, page) => total + renderedPdfPageWireBytes(page),
     0,
   );
+}
+
+function redactConsumedLocalPdfReferences(
+  input: AppServerTurnInputItem[],
+  consumedLocalPdfPaths: Set<string>,
+): AppServerTurnInputItem[] {
+  if (consumedLocalPdfPaths.size === 0) {
+    return input;
+  }
+  return input.map((item) => {
+    if (item.type !== "text" || !item.text.includes("[@")) {
+      return item;
+    }
+    return {
+      ...item,
+      text: item.text.replace(
+        /\[@([^\]]+)\]\(([^)]*)\)/gu,
+        (reference, name: string, value: string) => {
+          const referencePath = normalizeExplicitLocalReferencePath(value);
+          return referencePath && consumedLocalPdfPaths.has(referencePath)
+            ? `@${name}`
+            : reference;
+        },
+      ),
+    };
+  });
+}
+
+function normalizeExplicitLocalReferencePath(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (trimmed.startsWith("file://")) {
+    try {
+      return normalizeLocalPdfPath(fileURLToPath(trimmed));
+    } catch {
+      return undefined;
+    }
+  }
+  const decoded = decodeUriComponentOrOriginal(trimmed);
+  const expanded = decoded === "~"
+    ? homedir()
+    : decoded.startsWith("~/")
+      ? path.join(homedir(), decoded.slice(2))
+      : decoded;
+  return path.isAbsolute(expanded) ? normalizeLocalPdfPath(expanded) : undefined;
+}
+
+function normalizeLocalPdfPath(value: string): string {
+  return path.resolve(value);
+}
+
+function decodeUriComponentOrOriginal(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
 }
 
 function insertPdfNotes(

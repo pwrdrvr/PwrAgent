@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { AppServerTurnInputItem } from "@pwragent/shared";
 
 import { buildPwrAgentMessagingToolRouter } from "../agent-tools/pwragent-messaging-agent-tools";
 import {
@@ -146,30 +147,47 @@ describe("PwrAgent messaging agent tools", () => {
         },
       ],
     }));
-    const router = buildPwrAgentMessagingToolRouter(handler);
-
-    await expect(
-      router.handleDynamicToolCall({
-        backend: "codex",
-        call: {
-          threadId: "agent-thread",
-          turnId: "turn-1",
-          callId: "call-1",
-          namespace: "pwragent",
-          tool: "render_messaging_pdf_pages",
-          arguments: {
-            attachmentId: "pdf-1",
-            pageNumbers: [3],
-          },
+    const materializeImageInputs = vi.fn(
+      async (): Promise<AppServerTurnInputItem[]> => [
+        {
+          type: "localImage",
+          path: "/tmp/pwragent-pdf-page-3.png",
         },
-      }),
-    ).resolves.toEqual({
+      ],
+    );
+    const router = buildPwrAgentMessagingToolRouter(handler, {
+      materializeImageInputs,
+    });
+
+    const response = await router.handleDynamicToolCall({
+      backend: "codex",
+      call: {
+        threadId: "agent-thread",
+        turnId: "turn-1",
+        callId: "call-1",
+        namespace: "pwragent",
+        tool: "render_messaging_pdf_pages",
+        arguments: {
+          attachmentId: "pdf-1",
+          pageNumbers: [3],
+        },
+      },
+    });
+
+    expect(materializeImageInputs).toHaveBeenCalledWith([
+      {
+        type: "image",
+        name: "pwragent-pdf-page-3.png",
+        url: "data:image/png;base64,AQID",
+      },
+    ]);
+    expect(response).toEqual({
       success: true,
       contentItems: [
         {
           type: "inputText",
           text: [
-            "PwrAgent has already added the rendered PDF page image(s) to this turn's model context. Analyze those images directly. Do not serialize this result, call image(), or render the same page again.",
+            "PwrAgent has already added the rendered PDF page image(s) to this turn's model context. Analyze those images directly. Do not serialize this result, call image(), use exec or other local tools to reprocess the page, or render the same page again.",
             JSON.stringify({
               attachmentId: "pdf-1",
               alreadySuppliedPageNumbers: [],
@@ -180,10 +198,11 @@ describe("PwrAgent messaging agent tools", () => {
         },
         {
           type: "inputImage",
-          imageUrl: "data:image/png;base64,AQID",
+          imageUrl: "file:///tmp/pwragent-pdf-page-3.png",
         },
       ],
     });
+    expect(JSON.stringify(response)).not.toContain("AQID");
 
     await expect(router.handleMcpToolCall({
       backend: "codex",

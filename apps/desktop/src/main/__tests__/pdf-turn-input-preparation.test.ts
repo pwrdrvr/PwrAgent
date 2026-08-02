@@ -36,7 +36,10 @@ describe("preparePdfTurnInput", () => {
     const prepared = await preparePdfTurnInput({
       handling: "model_directed",
       input: [
-        { type: "text", text: "Compare this window sticker." },
+        {
+          type: "text",
+          text: `Compare [@Jeep](${pdfPath}) and keep [@notes](/tmp/notes.txt).`,
+        },
         { type: "localFile", name: "Jeep", path: pdfPath },
       ],
       dependencies: {
@@ -47,7 +50,7 @@ describe("preparePdfTurnInput", () => {
 
     expect(renderPdfPages).not.toHaveBeenCalled();
     expect(prepared.input).toEqual([
-      { type: "text", text: "Compare this window sticker." },
+      { type: "text", text: "Compare @Jeep and keep [@notes](/tmp/notes.txt)." },
       {
         type: "text",
         text: expect.stringContaining("inspect_messaging_pdfs"),
@@ -73,14 +76,20 @@ describe("preparePdfTurnInput", () => {
     const prepared = await preparePdfTurnInput({
       handling: "pass_through",
       input: [
-        { type: "text", text: "Let the model inspect this itself." },
+        {
+          type: "text",
+          text: `Let the model inspect [@Jeep](${pdfPath}) itself.`,
+        },
         { type: "localFile", name: "Jeep", path: pdfPath },
       ],
     });
 
     expect(prepared).toEqual({
       input: [
-        { type: "text", text: "Let the model inspect this itself." },
+        {
+          type: "text",
+          text: `Let the model inspect [@Jeep](${pdfPath}) itself.`,
+        },
         { type: "localFile", name: "Jeep", path: pdfPath },
       ],
       pdfAttachments: [],
