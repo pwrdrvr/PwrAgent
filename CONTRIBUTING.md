@@ -115,6 +115,27 @@ repo root. The package-level
 `pnpm --filter @pwragent/desktop test:e2e` path is also safe — it builds
 `apps/desktop/out/` before launching Playwright.
 
+### macOS VM E2E and visual goldens
+
+Do not run a full headed Electron suite on an active desktop. On a Mac with the
+Tart lab installed, use `~/pwragent-mac-vm/run-e2e.sh --local <repo-path>` so
+the windows render on the guest display. The complete setup, shared-runner
+security model, and troubleshooting guide live in
+[`.agents/skills/macos-vm-e2e-lab/SKILL.md`](.agents/skills/macos-vm-e2e-lab/SKILL.md).
+
+The small macOS/ARM64 visual-regression suite has PNG baselines under
+`apps/desktop/e2e/*.spec.ts-snapshots/`. They are Git LFS objects, not ordinary
+Git blobs. Update them only inside the Tart VM with:
+
+```bash
+~/pwragent-mac-vm/run-e2e.sh --local /absolute/path/to/PwrAgent \
+  e2e/visual-regression.spec.ts --update-snapshots
+```
+
+Review each changed image and check `git lfs status` before committing. The CI
+lane runs on the selected-repository PwrDrvr organization runner shared with
+PwrSnap; fork PRs are deliberately excluded from that machine.
+
 For manual screenshots of the branch-drift dialog, run
 `pnpm --filter @pwragent/desktop inspect:e2e:branch-drift`; it opens a
 replay-backed Electron fixture and waits until you close the app.

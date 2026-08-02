@@ -214,6 +214,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
         timeout-minutes: 10
+        # macOS visual baselines are LFS objects. The Linux suite currently
+        # skips that platform-specific visual spec, but fetching them here
+        # keeps checkout behavior ready for future Linux coverage too.
+        with:
+          lfs: true
 
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@v1
@@ -231,6 +236,54 @@ jobs:
         timeout-minutes: 10
         with:
           name: desktop-e2e-artifacts
+          path: |
+            apps/desktop/playwright-report/
+            apps/desktop/test-results/
+          retention-days: 30
+
+  desktop-e2e-macos:
+    name: macOS Desktop E2E (shared VM)
+    # The restricted PwrDrvr organization runner group exposes this label only
+    # to PwrAgent and PwrSnap. The host Tart VM runs Electron on its virtual
+    # display, so neither CI nor manual test work takes over an operator's Mac.
+    #
+    # Never relax this fork guard: a public fork must not execute arbitrary
+    # code on a self-hosted machine, even when the VM is softnet-isolated.
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: [self-hosted, macOS, ARM64, pwrdrvr-macos]
+    needs: install-deps
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        timeout-minutes: 10
+        with:
+          lfs: true
+
+      - name: Install Node.js and dependencies
+        uses: pwrdrvr/configure-nodejs@v1
+        timeout-minutes: 10
+        with:
+          node-version: 24.x
+
+      - name: Run desktop replay-backed Electron tests
+        # Tart's AppleParavirtGPU can reset under Electron load. The early
+        # PWRAGENT_E2E_DISABLE_GPU gate selects software rendering before
+        # Electron initializes, while ordinary host E2E keeps GPU coverage.
+        timeout-minutes: 20
+        env:
+          PWRAGENT_E2E_DISABLE_GPU: "1"
+        run: pnpm run test:desktop-e2e
+
+      - name: Upload macOS Playwright artifacts
+        uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        with:
+          name: desktop-e2e-macos-artifacts
           path: |
             apps/desktop/playwright-report/
             apps/desktop/test-results/
