@@ -1359,9 +1359,11 @@ describe("Sidebar", () => {
     );
 
     const browseSection = screen.getByRole("region", { name: "Thread browser" });
-    fireEvent.click(
-      within(browseSection as HTMLElement).getByRole("button", { name: "PwrGit" }),
-    );
+    const pwrGitDirectorySummary = within(browseSection as HTMLElement)
+      .getAllByRole("button", { name: /^PwrGit(?:,|$)/ })
+      .find((button) => button.hasAttribute("aria-expanded"));
+    expect(pwrGitDirectorySummary).toBeDefined();
+    fireEvent.click(pwrGitDirectorySummary!);
     const threadButton = within(browseSection as HTMLElement).getByRole("button", {
       name: "Prepare PwrGit branding assets",
     });
