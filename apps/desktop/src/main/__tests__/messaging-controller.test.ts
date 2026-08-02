@@ -1202,6 +1202,7 @@ describe("MessagingController", () => {
     const harness = await createHarness({
       createManagedConversation,
       navigation,
+      toolUpdateDefaultMode: "show_all",
     });
     const channel = buildTopicChannel("13056");
     const event = buildTextEvent("find the thread for 13056", {
@@ -1261,6 +1262,27 @@ describe("MessagingController", () => {
     }
     expect(location.data.location.binding).toBeUndefined();
 
+    harness.delivered.length = 0;
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "assistant-commentary",
+            type: "agentMessage",
+            phase: "commentary",
+            text: "I am searching for the thread now.",
+          },
+        },
+      },
+    });
+    await harness.controller.handleBackendEvent(
+      buildToolCompletedEvent("tool-1", "find the thread"),
+    );
+
     await harness.controller.handleBackendEvent({
       backend: "codex",
       notification: {
@@ -1284,6 +1306,10 @@ describe("MessagingController", () => {
         parts: [expect.objectContaining({ text: "I found it." })],
       }),
     );
+    expect(JSON.stringify(harness.delivered)).not.toContain(
+      "I am searching for the thread now.",
+    );
+    expect(JSON.stringify(harness.delivered)).not.toContain("find the thread");
   });
 
   it("routes an accepted every-message topic to its default Agent without binding it", async () => {
@@ -1798,6 +1824,9 @@ describe("MessagingController", () => {
       kind: "confirmation",
       title: "Ready to start",
       body: expect.stringContaining("Agent: Messaging Agent"),
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      body: expect.stringContaining("Working Updates: None"),
     });
 
     await harness.controller.handleInboundEvent(buildTextEvent("Check the queue"));

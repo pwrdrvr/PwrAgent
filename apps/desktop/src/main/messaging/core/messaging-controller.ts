@@ -6254,6 +6254,9 @@ export class MessagingController {
     directory?: NavigationDirectorySummary,
   ): Promise<MessagingToolUpdateMode> {
     return session.preferences?.toolUpdateMode
+      ?? (isNewAgentThreadLaunchAction(session.launchAction)
+        ? "show_none"
+        : undefined)
       ?? directory?.launchpad?.messagingToolUpdateMode
       ?? await this.resolveToolUpdateDefaultMode();
   }

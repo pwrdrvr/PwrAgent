@@ -734,7 +734,9 @@ export function resolveMessagingToolUpdateMode(
   binding: MessagingBindingRecord,
   defaultMode: MessagingToolUpdateMode | undefined,
 ): MessagingToolUpdateMode {
-  return binding.preferences?.toolUpdateMode ?? defaultMode ?? "show_some";
+  return binding.preferences?.toolUpdateMode
+    ?? (binding.targetKind === "agent_thread" ? "show_none" : defaultMode)
+    ?? "show_some";
 }
 
 export function resolveMessagingResponseMode(
