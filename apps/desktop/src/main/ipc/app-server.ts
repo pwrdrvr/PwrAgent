@@ -128,6 +128,7 @@ import {
 } from "@pwragent/shared";
 import {
   DEFAULT_BACKGROUND_PR_POLLING,
+  DEFAULT_PR_AUTO_DISPATCH_ALLOWED,
   DEFAULT_PULL_REQUEST_PROVIDER,
   buildPullRequestStatusKey,
   buildThreadIdentityKey,
@@ -925,6 +926,7 @@ class DesktopAppServerService {
   private prGraphqlClient: GithubGraphqlPrClient | undefined;
   private prPollingScheduler: PrPollingScheduler | undefined;
   private backgroundPrPollingEnabled = false;
+  private prAutoDispatchAllowed = false;
   private prAutoDispatchCoordinator: PrAutoDispatchCoordinator | undefined;
   private prStatusWatchCoordinator: PrStatusWatchCoordinator | undefined;
   /** Visible thread→PR attachments plus the primary workspace's repository. */
@@ -2746,7 +2748,7 @@ class DesktopAppServerService {
     const waitingForPr = hasPrimaryRepo && primaryPrs.length === 0;
     const autoFixActive =
       autoFixEnabled
-      && this.backgroundPrPollingEnabled
+      && this.isPrAutoDispatchAvailable()
       && (waitingForPr || ownsAttachedPr);
     const watches = await this.getOverlayStore().listActiveThreadPrStatusWatches(
       params,
@@ -2757,15 +2759,20 @@ class DesktopAppServerService {
       ? "Auto-fix PR is active. Do not poll CI and do not create a monitor thread for this PR. End the turn; PwrAgent will start a repair turn on a CI failure or merge conflict. Use watch_thread_pull_request before ending when the thread should also wake on successful completion."
       : autoFixEnabled
         ? this.backgroundPrPollingEnabled
-          ? hasPrimaryRepo
-            ? "Auto-fix PR is enabled, but an older eligible thread owns monitoring for this PR. Do not poll CI or create another monitor; the elected thread receives the PR event."
-            : "Auto-fix PR is enabled, but this thread has no GitHub primary workspace. PwrAgent cannot monitor PR automation for it; check the PR directly until the thread is attached to a Git workspace."
+          ? this.prAutoDispatchAllowed
+            ? hasPrimaryRepo
+              ? "Auto-fix PR is enabled, but an older eligible thread owns monitoring for this PR. Do not poll CI or create another monitor; the elected thread receives the PR event."
+              : "Auto-fix PR is enabled, but this thread has no GitHub primary workspace. PwrAgent cannot monitor PR automation for it; check the PR directly until the thread is attached to a Git workspace."
+            : "Auto-fix PR is saved but disabled globally in Git settings. Do not assume PwrAgent will wake this thread until automatic PR repair is allowed again."
           : "Auto-fix PR is saved but paused because background PR polling is off. Do not assume PwrAgent will wake this thread until polling is enabled."
         : this.backgroundPrPollingEnabled
-          ? "Background PR polling is active, but Auto-fix PR is off for this thread. Use watch_thread_pull_request for a bounded one-shot success/failure notification instead of polling or creating a monitor thread."
+          ? this.prAutoDispatchAllowed
+            ? "Background PR polling is active, but Auto-fix PR is off for this thread. Use watch_thread_pull_request for a bounded one-shot success/failure notification instead of polling or creating a monitor thread."
+            : "Background PR polling is active, but automatic PR repair is disabled globally in Git settings. Use watch_thread_pull_request for a bounded one-shot success/failure notification instead of polling or creating a monitor thread."
           : "Background PR polling and Auto-fix PR are off. PwrAgent will not wake this thread for PR status changes.";
     return {
       backgroundPollingEnabled: this.backgroundPrPollingEnabled,
+      autoFixAllowed: this.prAutoDispatchAllowed,
       autoFixEnabled,
       autoFixActive,
       ...(overlay?.prAutoDispatchPending
@@ -3817,20 +3824,14 @@ class DesktopAppServerService {
   }
 
   /**
-   * Start or stop the background poller to match the experimental setting.
-   *
-   * Called on every navigation snapshot, so toggling the setting takes effect
-   * without an app restart. With the flag off nothing is scheduled and PR chips
-   * behave exactly as they did before the poller existed.
-   */
-  /**
-   * Start or stop the background PR poller to match the experimental flag.
-   * Public + idempotent: called on every navigation snapshot AND the moment the
-   * setting is written, so toggling takes effect without a restart.
+   * Start or stop background PR polling and automatic repair dispatch to match
+   * the Git settings. Public + idempotent: called on every navigation snapshot
+   * and after every settings write, so both gates take effect without a restart.
    */
   syncPrPollingSchedulerState(): void {
     void (async () => {
-      let enabled = DEFAULT_BACKGROUND_PR_POLLING;
+      let backgroundPollingEnabled = DEFAULT_BACKGROUND_PR_POLLING;
+      let prAutoDispatchAllowed = DEFAULT_PR_AUTO_DISPATCH_ALLOWED;
       try {
         const settingsService = getDesktopSettingsService();
         // Subscribe lazily on the first sync (which the first navigation
@@ -3841,30 +3842,42 @@ class DesktopAppServerService {
           this.prPollingSettingsUnsubscribe = settingsService.onConfigWritten(
             () => {
               // Pause dispatch pessimistically while the new snapshot is read.
-              // This closes the settings-write race for the global kill switch.
+              // This closes settings-write races for both global kill switches.
               this.backgroundPrPollingEnabled = false;
+              this.prAutoDispatchAllowed = false;
+              this.prAutoDispatchCoordinator?.pause();
               this.syncPrPollingSchedulerState();
             },
           );
         }
         const settings = await settingsService.readSettings();
-        enabled = settings.git.backgroundPrPolling.value;
+        backgroundPollingEnabled = settings.git.backgroundPrPolling.value;
+        prAutoDispatchAllowed = settings.git.prAutoDispatchAllowed.value;
       } catch (error) {
-        appServerLog.warn("failed to read background PR polling setting", {
+        appServerLog.warn("failed to read GitHub PR automation settings", {
           error: error instanceof Error ? error.message : String(error),
         });
       }
 
-      this.backgroundPrPollingEnabled = enabled;
+      this.backgroundPrPollingEnabled = backgroundPollingEnabled;
+      this.prAutoDispatchAllowed = prAutoDispatchAllowed;
 
-      if (!enabled) {
+      if (!backgroundPollingEnabled) {
         this.prAutoDispatchCoordinator?.pause();
         this.stopPrPollingScheduler();
         return;
       }
       this.ensurePrPollingSchedulerStarted();
+      if (!this.isPrAutoDispatchAvailable()) {
+        this.prAutoDispatchCoordinator?.pause();
+        return;
+      }
       void this.getPrAutoDispatchCoordinator().resume();
     })();
+  }
+
+  private isPrAutoDispatchAvailable(): boolean {
+    return this.backgroundPrPollingEnabled && this.prAutoDispatchAllowed;
   }
 
   private stopPrPollingScheduler(): void {
@@ -4149,7 +4162,7 @@ class DesktopAppServerService {
             pr,
             threadKeys,
             observedAt,
-            backgroundPollingEnabled: this.backgroundPrPollingEnabled,
+            backgroundPollingEnabled: this.isPrAutoDispatchAvailable(),
             operatorInitiated,
           })
         : [];
@@ -4190,7 +4203,7 @@ class DesktopAppServerService {
       );
       await coordinator.cancelAllPendingForThread(request);
       await this.syncThreadPrAutoDispatchCandidates(request);
-      if (this.backgroundPrPollingEnabled && previouslyEligiblePrs.length > 0) {
+      if (this.isPrAutoDispatchAvailable() && previouslyEligiblePrs.length > 0) {
         await this.handlePrAutoDispatchSnapshots(
           previouslyEligiblePrs,
           this.nextPrObservationTimestamp(),
@@ -4204,7 +4217,7 @@ class DesktopAppServerService {
     const prs = this.canonicalizePrs(overlay?.prs ?? []);
     await this.rememberThreadPrAttachmentUpdate({ ...request, prs });
     await coordinator.resetForOperator(request);
-    if (!this.backgroundPrPollingEnabled) return;
+    if (!this.isPrAutoDispatchAvailable()) return;
     const primaryPrs = this.primaryAttachedPrsForThread({ ...request, prs });
     await this.handlePrAutoDispatchSnapshots(
       primaryPrs,
@@ -5049,6 +5062,7 @@ class DesktopAppServerService {
     this.prPollingScheduler?.stop();
     this.prPollingScheduler = undefined;
     this.backgroundPrPollingEnabled = false;
+    this.prAutoDispatchAllowed = false;
     if (this.prDiscoveryTimer) {
       clearInterval(this.prDiscoveryTimer);
       this.prDiscoveryTimer = undefined;
@@ -5113,7 +5127,7 @@ class DesktopAppServerService {
       this.prAutoDispatchCoordinator = new PrAutoDispatchCoordinator({
         store: this.getOverlayStore(),
         registry: getDesktopBackendRegistry(),
-        isBackgroundPollingEnabled: () => this.backgroundPrPollingEnabled,
+        isBackgroundPollingEnabled: () => this.isPrAutoDispatchAvailable(),
         getCurrentPr: (prKey) => this.prStatusRegistry.get(prKey)?.pr,
         refreshPendingPrs: async (pending) =>
           await this.refreshPendingPrAutoDispatches(pending),

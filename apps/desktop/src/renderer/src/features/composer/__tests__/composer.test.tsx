@@ -529,6 +529,22 @@ describe("Composer", () => {
       "data-tooltip",
       expect.stringContaining("paused"),
     );
+
+    rerender(
+      <Composer
+        backgroundPrPollingEnabled
+        prAutoDispatchAllowed={false}
+        disabled={false}
+        onSetThreadPrAutoDispatch={onSetThreadPrAutoDispatch}
+        skills={[]}
+        thread={thread}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Auto-fix PR" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Auto-fix PR" })).toHaveAttribute(
+      "data-tooltip",
+      expect.stringContaining("globally"),
+    );
   });
 
   it("hides Auto-fix PR when the thread is not backed by a Git repository", () => {

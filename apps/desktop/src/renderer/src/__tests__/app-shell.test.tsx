@@ -590,6 +590,8 @@ describe("App", () => {
       },
       git: {
         backgroundPrPolling: { value: true, source: "default" },
+        prAutoDispatchAllowed: { value: true, source: "default" },
+        defaultPrAutoDispatchEnabled: { value: true, source: "default" },
       },
       applications: {
         editors: [],

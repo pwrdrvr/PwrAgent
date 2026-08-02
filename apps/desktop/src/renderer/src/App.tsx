@@ -13,6 +13,7 @@ import {
 import {
   buildThreadIdentityKey,
   DEFAULT_BACKGROUND_PR_POLLING,
+  DEFAULT_PR_AUTO_DISPATCH_ALLOWED,
   parseThreadIdentityKey,
   type AppServerBackendKind,
   type DesktopBootInfo,
@@ -1080,6 +1081,11 @@ function DesktopAppShell(props: {
       settings.snapshot
         ? settings.snapshot.git?.backgroundPrPolling?.value
           ?? DEFAULT_BACKGROUND_PR_POLLING
+        : false,
+    prAutoDispatchAllowed:
+      settings.snapshot
+        ? settings.snapshot.git?.prAutoDispatchAllowed?.value
+          ?? DEFAULT_PR_AUTO_DISPATCH_ALLOWED
         : false,
     pickDirectoryError: navigation.pickDirectoryError,
     pickingDirectory: navigation.pickingDirectory,

@@ -345,6 +345,8 @@ function createSnapshot(
     },
     git: {
       backgroundPrPolling: { value: true, source: "default" },
+      prAutoDispatchAllowed: { value: true, source: "default" },
+      defaultPrAutoDispatchEnabled: { value: true, source: "default" },
     },
     applications: {
       editors: [
@@ -4076,6 +4078,66 @@ describe("SettingsScreen", () => {
       await screen.findByText(/Update available: v1.0.0-beta.8/),
     ).toBeInTheDocument();
     expect(desktopApi.readAppUpdateStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it("configures GitHub Auto-fix PR and gates it on background PR status", async () => {
+    const settings = createSettingsState();
+    render(
+      <SettingsScreen
+        initialSection="git"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    const allowAutoFix = screen.getByRole("switch", {
+      name: "Allow Auto-fix PR",
+    });
+    const defaultAutoFix = screen.getByRole("switch", {
+      name: "Enable Auto-fix PR for new threads",
+    });
+    expect(allowAutoFix).toHaveAttribute("aria-checked", "true");
+    expect(defaultAutoFix).toHaveAttribute("aria-checked", "true");
+
+    fireEvent.click(allowAutoFix);
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        git: { prAutoDispatchAllowed: false },
+      });
+    });
+    fireEvent.click(defaultAutoFix);
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        git: { defaultPrAutoDispatchEnabled: false },
+      });
+    });
+
+    const baseSnapshot = createSnapshot();
+    const backgroundOffSettings = createSettingsState(
+      createSnapshot({
+        git: {
+          ...baseSnapshot.git,
+          backgroundPrPolling: { value: false, source: "config" },
+        },
+      }),
+    );
+    cleanup();
+    render(
+      <SettingsScreen
+        initialSection="git"
+        settings={backgroundOffSettings}
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(
+      screen.getByRole("switch", { name: "Allow Auto-fix PR" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("switch", {
+        name: "Enable Auto-fix PR for new threads",
+      }),
+    ).toBeDisabled();
   });
 
   it("blocks settings edits when the config file cannot be parsed", () => {

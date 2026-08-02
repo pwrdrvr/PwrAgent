@@ -244,6 +244,8 @@ export type DesktopSettingsConfig = {
   };
   git?: {
     backgroundPrPolling?: boolean;
+    prAutoDispatchAllowed?: boolean;
+    defaultPrAutoDispatchEnabled?: boolean;
   };
   applications?: {
     editor?: {
@@ -1321,6 +1323,18 @@ export function desktopSettingsPatchToEdits(
     }
     set(["git", "background_pr_polling"], patch.git.backgroundPrPolling);
   }
+  if (patch.git?.prAutoDispatchAllowed !== undefined) {
+    set(
+      ["git", "pr_auto_dispatch_allowed"],
+      patch.git.prAutoDispatchAllowed,
+    );
+  }
+  if (patch.git?.defaultPrAutoDispatchEnabled !== undefined) {
+    set(
+      ["git", "default_pr_auto_dispatch_enabled"],
+      patch.git.defaultPrAutoDispatchEnabled,
+    );
+  }
 
   if (patch.applications?.editor?.preferredId !== undefined) {
     set(["applications", "editor", "preferred_id"], patch.applications.editor.preferredId);
@@ -1648,6 +1662,10 @@ function normalizeDesktopConfig(
       backgroundPrPolling:
         readBoolean(git?.background_pr_polling)
         ?? readBoolean(experimental?.background_pr_polling),
+      prAutoDispatchAllowed: readBoolean(git?.pr_auto_dispatch_allowed),
+      defaultPrAutoDispatchEnabled: readBoolean(
+        git?.default_pr_auto_dispatch_enabled,
+      ),
     },
     applications: {
       editor: {

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   DEFAULT_BACKGROUND_PR_POLLING,
+  DEFAULT_PR_AUTO_DISPATCH_ALLOWED,
+  DEFAULT_PR_AUTO_DISPATCH_ENABLED_FOR_NEW_THREADS,
   type DesktopGitDiscoveryCandidate,
   type DesktopGhDiscoveryCandidate,
   type DesktopSettingsSnapshot,
@@ -26,17 +28,35 @@ const DEFAULT_BACKGROUND_PR_POLLING_VALUE = {
   source: "default" as const,
 };
 
+const DEFAULT_PR_AUTO_DISPATCH_ALLOWED_VALUE = {
+  value: DEFAULT_PR_AUTO_DISPATCH_ALLOWED,
+  source: "default" as const,
+};
+
+const DEFAULT_PR_AUTO_DISPATCH_ENABLED_VALUE = {
+  value: DEFAULT_PR_AUTO_DISPATCH_ENABLED_FOR_NEW_THREADS,
+  source: "default" as const,
+};
+
 export function GitSettings(props: {
   desktopApi?: DesktopApi;
   saving: boolean;
   snapshot: DesktopSettingsSnapshot;
   onBackgroundPrPollingChange: (enabled: boolean) => Promise<void>;
+  onPrAutoDispatchAllowedChange: (enabled: boolean) => Promise<void>;
+  onDefaultPrAutoDispatchEnabledChange: (enabled: boolean) => Promise<void>;
   onRefresh: () => Promise<void>;
   onSaveGhPath: (path: string) => Promise<void>;
 }) {
   const backgroundPrPolling =
     props.snapshot.git?.backgroundPrPolling ??
     DEFAULT_BACKGROUND_PR_POLLING_VALUE;
+  const prAutoDispatchAllowed =
+    props.snapshot.git?.prAutoDispatchAllowed ??
+    DEFAULT_PR_AUTO_DISPATCH_ALLOWED_VALUE;
+  const defaultPrAutoDispatchEnabled =
+    props.snapshot.git?.defaultPrAutoDispatchEnabled ??
+    DEFAULT_PR_AUTO_DISPATCH_ENABLED_VALUE;
 
   return (
     <SettingsSectionStack paneId="git" aria-label="Git settings">
@@ -77,6 +97,58 @@ export function GitSettings(props: {
                 label="Enable background pull request status"
                 onChange={(enabled) => {
                   void props.onBackgroundPrPollingChange(enabled);
+                }}
+              />
+            }
+          />
+        </div>
+      </SettingsSection>
+      <SettingsSection
+        eyebrow="GitHub"
+        title="Pull request automation"
+        description="Control whether PwrAgent can schedule a bounded repair turn for a linked pull request that fails CI or becomes conflicted."
+        chip={prAutoDispatchAllowed.value ? "Allowed" : "Off"}
+        chipKind={prAutoDispatchAllowed.value ? "ok" : "default"}
+      >
+        <div className="settings-fields">
+          <SettingsField
+            label="Allow Auto-fix PR"
+            sub={
+              backgroundPrPolling.value
+                ? "When enabled, a thread with Auto-fix PR on can receive one bounded repair turn for a newly failing or conflicting pull request."
+                : "Turn on background pull request status above before allowing automatic PR repairs."
+            }
+            source={sourceBadge(prAutoDispatchAllowed)}
+            control={
+              <SettingsSwitch
+                checked={prAutoDispatchAllowed.value}
+                disabled={props.saving || !backgroundPrPolling.value}
+                label="Allow Auto-fix PR"
+                onChange={(enabled) => {
+                  void props.onPrAutoDispatchAllowedChange(enabled);
+                }}
+              />
+            }
+          />
+          <SettingsField
+            label="Enable Auto-fix PR for new threads"
+            sub={
+              backgroundPrPolling.value && prAutoDispatchAllowed.value
+                ? "New threads and launchpads start with Auto-fix PR on. Existing threads keep their saved choice."
+                : "This default is available when background pull request status and Auto-fix PR are allowed."
+            }
+            source={sourceBadge(defaultPrAutoDispatchEnabled)}
+            control={
+              <SettingsSwitch
+                checked={defaultPrAutoDispatchEnabled.value}
+                disabled={
+                  props.saving
+                  || !backgroundPrPolling.value
+                  || !prAutoDispatchAllowed.value
+                }
+                label="Enable Auto-fix PR for new threads"
+                onChange={(enabled) => {
+                  void props.onDefaultPrAutoDispatchEnabledChange(enabled);
                 }}
               />
             }

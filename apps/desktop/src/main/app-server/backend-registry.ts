@@ -219,6 +219,7 @@ import {
   DEFAULT_TASK_MONITOR_POLL_INTERVAL_SECONDS,
   DEFAULT_TASK_MONITOR_REASONING_EFFORT,
   DEFAULT_TASK_MONITOR_STARTUP_TIMEOUT_SECONDS,
+  DEFAULT_PR_AUTO_DISPATCH_ENABLED_FOR_NEW_THREADS,
   type CompleteMonitoringToolArgs,
   type CreateMonitorDelegationToolArgs,
   type InjectMonitorProgressToolArgs,
@@ -6062,6 +6063,7 @@ export class DesktopBackendRegistry {
   private readonly isCodexBootstrapDeferredFn: () => boolean;
   private readonly resolveCodexDefaultModeRequestUserInputFn: () => boolean;
   private readonly resolveManagedReviewEnabledFn: () => boolean;
+  private readonly resolveDefaultPrAutoDispatchEnabledFn: () => boolean;
   private readonly resolveProviderModelDefaultsFn: () => Record<
     string,
     DesktopProviderModelDefaults
@@ -6111,6 +6113,7 @@ export class DesktopBackendRegistry {
     isBootstrapMode?: () => boolean;
     resolveCodexDefaultModeRequestUserInput?: () => boolean;
     resolveManagedReviewEnabled?: () => boolean;
+    resolveDefaultPrAutoDispatchEnabled?: () => boolean;
     resolveProviderModelDefaults?: () => Record<
       string,
       DesktopProviderModelDefaults
@@ -6195,6 +6198,24 @@ export class DesktopBackendRegistry {
             },
           );
           return false;
+        }
+      });
+    this.resolveDefaultPrAutoDispatchEnabledFn =
+      options?.resolveDefaultPrAutoDispatchEnabled ??
+      (() => {
+        try {
+          return (
+            settingsService?.resolveDefaultPrAutoDispatchEnabled()
+            ?? DEFAULT_PR_AUTO_DISPATCH_ENABLED_FOR_NEW_THREADS
+          );
+        } catch (error) {
+          backendRegistryLog.warn(
+            "failed to resolve default Auto-fix PR setting",
+            {
+              error: error instanceof Error ? error.message : String(error),
+            },
+          );
+          return DEFAULT_PR_AUTO_DISPATCH_ENABLED_FOR_NEW_THREADS;
         }
       });
     this.resolveProviderModelDefaultsFn =
@@ -9321,6 +9342,11 @@ export class DesktopBackendRegistry {
         branch: gitBranch,
       });
     }
+    await this.overlayStore.setThreadPrAutoDispatchEnabled({
+      backend,
+      threadId: result.threadId,
+      enabled: this.resolveDefaultPrAutoDispatchEnabledFn(),
+    });
     if (request.agent) {
       await this.overlayStore.setThreadAgent({
         backend,
@@ -9600,6 +9626,11 @@ export class DesktopBackendRegistry {
         backend,
         threadId: result.threadId,
         executionMode,
+      });
+      await this.overlayStore.setThreadPrAutoDispatchEnabled({
+        backend,
+        threadId: result.threadId,
+        enabled: this.resolveDefaultPrAutoDispatchEnabledFn(),
       });
       const currentMigration =
         this.resolveProviderThreadModelMigrationsFn()[backend];

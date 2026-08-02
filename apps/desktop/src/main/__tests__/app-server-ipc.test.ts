@@ -24,6 +24,27 @@ const mockAppServerLog = vi.hoisted(() => ({
   warn: vi.fn(),
 }));
 
+const prAutomationSettings = vi.hoisted(() => {
+  const state = {
+    backgroundPrPollingEnabled: true,
+    prAutoDispatchAllowed: true,
+  };
+  return {
+    state,
+    onConfigWritten: vi.fn(() => () => undefined),
+    readSettings: vi.fn(async () => ({
+      git: {
+        backgroundPrPolling: {
+          value: state.backgroundPrPollingEnabled,
+        },
+        prAutoDispatchAllowed: {
+          value: state.prAutoDispatchAllowed,
+        },
+      },
+    })),
+  };
+});
+
 const resolveGitHubRepoForDirectory = vi.hoisted(() =>
   vi.fn(
     async (): Promise<
@@ -500,6 +521,13 @@ vi.mock("../log", () => ({
   getMainLogger: vi.fn(() => mockAppServerLog),
 }));
 
+vi.mock("../settings/desktop-settings-singleton", () => ({
+  getDesktopSettingsService: () => ({
+    onConfigWritten: prAutomationSettings.onConfigWritten,
+    readSettings: prAutomationSettings.readSettings,
+  }),
+}));
+
 vi.mock("../app-server/desktop-overlay-store", () => ({
   getDesktopOverlayStore: () => ({
     reconcileNavigationSnapshot,
@@ -600,6 +628,10 @@ vi.mock("../pr-status/git-remote", async () => {
 
 describe("app server ipc", () => {
   beforeEach(() => {
+    prAutomationSettings.state.backgroundPrPollingEnabled = true;
+    prAutomationSettings.state.prAutoDispatchAllowed = true;
+    prAutomationSettings.onConfigWritten.mockClear();
+    prAutomationSettings.readSettings.mockClear();
     handlers.clear();
     archiveThread.mockClear();
     restoreThread.mockClear();
@@ -741,11 +773,50 @@ describe("app server ipc", () => {
       });
       expect(status).toMatchObject({
         backgroundPollingEnabled: true,
+        autoFixAllowed: true,
         autoFixEnabled: true,
         autoFixActive: false,
         guidance: expect.stringContaining("no GitHub primary workspace"),
       });
     });
+  });
+
+  it("keeps Auto-fix PR disabled globally without overwriting its thread setting", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+    prAutomationSettings.state.prAutoDispatchAllowed = false;
+    getThreadOverlayState.mockResolvedValue({
+      backend: "codex",
+      threadId: "thread-1",
+      executionMode: "default",
+      extraLinkedDirectories: [],
+      prAutoDispatchEnabled: true,
+    });
+
+    registerAppServerIpcHandlers();
+    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    const autoDispatchHandlers = setThreadPrAutoDispatchHandler.mock.calls.at(-1)?.[0];
+    expect(autoDispatchHandlers).toBeDefined();
+    await vi.waitFor(async () => {
+      const status = await autoDispatchHandlers?.inspect({
+        backend: "codex",
+        threadId: "thread-1",
+      });
+      expect(status).toMatchObject({
+        backgroundPollingEnabled: true,
+        autoFixAllowed: false,
+        autoFixEnabled: true,
+        autoFixActive: false,
+        guidance: expect.stringContaining("disabled globally"),
+      });
+    });
+
+    await autoDispatchHandlers?.preferenceChanged({
+      backend: "codex",
+      threadId: "thread-1",
+      enabled: true,
+    });
+    expect(scheduleThreadPrAutoDispatch).not.toHaveBeenCalled();
   });
 
   it("keeps a new PR watch pending when the cached outcome is stale", async () => {
@@ -4357,6 +4428,7 @@ describe("app server ipc", () => {
           directoryPaths: ["/repo/wt"],
           prAutomation: {
             backgroundPollingEnabled: false,
+            autoFixAllowed: false,
             autoFixEnabled: false,
             autoFixActive: false,
           },

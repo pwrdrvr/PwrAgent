@@ -1280,7 +1280,7 @@ export type ThreadOverlayState = {
   modelSettingsManuallyUpdatedAt?: number;
   serviceTier?: string;
   fastMode?: boolean;
-  /** Saved operator preference; the global background-polling flag gates its effect. */
+  /** Saved operator preference; global PR polling and Auto-fix gates control its effect. */
   prAutoDispatchEnabled?: boolean;
   /** Joined from the durable dispatch table for navigation; never stored in overlay JSON. */
   prAutoDispatchPending?: ThreadPrAutoDispatchPending;

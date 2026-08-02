@@ -768,6 +768,7 @@ export type ThreadViewProps = {
   suppressBranchDriftDialog?: boolean;
   fullAccessRiskWarningDismissed?: boolean;
   backgroundPrPollingEnabled?: boolean;
+  prAutoDispatchAllowed?: boolean;
   /**
    * Project-directory picker (issue #223) — surfaced in the launchpad
    * composer when no thread is selected yet. Rendering happens inside
@@ -3034,6 +3035,7 @@ export function ThreadView(props: ThreadViewProps) {
             onCancelThreadPrAutoDispatch={props.onCancelThreadPrAutoDispatch}
             onSendThreadPrAutoDispatchNow={props.onSendThreadPrAutoDispatchNow}
             backgroundPrPollingEnabled={props.backgroundPrPollingEnabled}
+            prAutoDispatchAllowed={props.prAutoDispatchAllowed}
             onAttachDirectoryReferences={props.onAttachDirectoryReferences}
             onPickDirectoryForReference={props.onPickDirectoryForReference}
             pendingRequestActive={Boolean(props.pendingRequest)}

@@ -2266,6 +2266,48 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
+  it("seeds Auto-fix PR for new threads from the configured default", async () => {
+    const defaultOverlayStore = createOverlayStoreMock();
+    const defaultRegistry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: defaultOverlayStore,
+    });
+    const disabledOverlayStore = createOverlayStoreMock();
+    const disabledRegistry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: disabledOverlayStore,
+      resolveDefaultPrAutoDispatchEnabled: () => false,
+    });
+
+    try {
+      await defaultRegistry.startThread({
+        backend: "codex",
+        cwd: process.cwd(),
+      });
+      expect(
+        (await defaultOverlayStore.getThreadOverlayState({
+          backend: "codex",
+          threadId: "thread-1",
+        }))?.prAutoDispatchEnabled,
+      ).toBe(true);
+
+      await disabledRegistry.startThread({
+        backend: "codex",
+        cwd: process.cwd(),
+      });
+      expect(
+        (await disabledOverlayStore.getThreadOverlayState({
+          backend: "codex",
+          threadId: "thread-1",
+        }))?.prAutoDispatchEnabled,
+      ).toBe(false);
+    } finally {
+      await Promise.all([defaultRegistry.close(), disabledRegistry.close()]);
+    }
+  });
+
   it("does not resolve the Grok API key while AgentCore-Grok is disabled", async () => {
     const previous = process.env.PWRAGENT_EXPERIMENTAL_AGENT_CORE_GROK;
     process.env.PWRAGENT_EXPERIMENTAL_AGENT_CORE_GROK = "0";
@@ -10477,6 +10519,7 @@ command = "pnpm grok"
       reasoningEffort: "high",
       serviceTier: "priority",
       fastMode: true,
+      prAutoDispatchEnabled: true,
     });
 
     await registry.close();
@@ -24702,6 +24745,7 @@ script = "printf setup"
       sendPendingNow: vi.fn(async () => false),
       inspect: vi.fn(async () => ({
         backgroundPollingEnabled: true,
+        autoFixAllowed: true,
         autoFixEnabled: true,
         autoFixActive: true,
         guidance: "End the turn and let PwrAgent watch CI.",
@@ -24742,6 +24786,7 @@ script = "printf setup"
       status: "idle",
       prAutomation: {
         backgroundPollingEnabled: true,
+        autoFixAllowed: true,
         autoFixEnabled: true,
         autoFixActive: true,
       },
@@ -26022,6 +26067,7 @@ script = "printf setup"
           directoryPaths: args.directoryPaths ?? ["/repo"],
           prAutomation: {
             backgroundPollingEnabled: true,
+            autoFixAllowed: true,
             autoFixEnabled: true,
             autoFixActive: true,
             guidance: "End the turn and let PwrAgent watch the PR.",
@@ -26110,6 +26156,7 @@ script = "printf setup"
           directoryPaths: args.directoryPaths ?? [],
           prAutomation: {
             backgroundPollingEnabled: true,
+            autoFixAllowed: true,
             autoFixEnabled: false,
             autoFixActive: false,
             guidance: "Use a one-shot PR watch.",
@@ -26185,6 +26232,7 @@ script = "printf setup"
           coveredByAutoFix: ["failure" as const],
           prAutomation: {
             backgroundPollingEnabled: true,
+            autoFixAllowed: true,
             autoFixEnabled: true,
             autoFixActive: true,
             guidance: "End the turn.",
