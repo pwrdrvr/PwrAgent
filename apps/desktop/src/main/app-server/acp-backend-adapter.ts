@@ -375,14 +375,6 @@ function acpRuntimeCapabilitiesForAgent(
   return agent.runtimeCapabilities;
 }
 
-function shouldPersistAcpRollout(agent: AcpInstalledAgentRecord): boolean {
-  // Grok and Qwen replay complete, timestamped transcripts from their own
-  // session stores. Keep reading legacy PwrAgent rollouts as a compatibility
-  // fallback, but do not duplicate new provider-owned history locally. Kimi
-  // still needs the local timestamps its session/load replay does not provide.
-  return agent.registryId !== "grok" && agent.registryId !== "qwen";
-}
-
 function normalizeInstalledAcpAgent(
   agent: AcpInstalledAgentRecord,
 ): AcpInstalledAgentRecord {
@@ -1631,9 +1623,7 @@ export class AcpBackendAdapter {
       backendId: agent.backendId,
       agentDisplayName: agent.name,
       initialRuntimeCapabilities: acpRuntimeCapabilitiesForAgent(agent),
-      rolloutStore: shouldPersistAcpRollout(agent)
-        ? this.acpRolloutStore
-        : undefined,
+      rolloutStore: this.acpRolloutStore,
       store: this.acpSessionStore as AcpSessionStoreContract,
       transport:
         this.createAcpTransport?.(agent) ??

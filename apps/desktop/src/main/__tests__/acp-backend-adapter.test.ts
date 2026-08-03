@@ -1360,7 +1360,7 @@ describe("AcpBackendAdapter", () => {
     await adapter.close();
   });
 
-  it("persists local rollout history only when provider replay lacks timestamps", async () => {
+  it("retains fallback rollout history until provider replay is verified", async () => {
     for (const registryId of ["grok", "qwen", "kimi"] as const) {
       const backendId = `acp:${registryId}` as AcpBackendId;
       const appendUpdate = vi.fn();
@@ -1435,11 +1435,7 @@ describe("AcpBackendAdapter", () => {
         ).toBe(true);
       });
 
-      if (registryId === "kimi") {
-        expect(appendUpdate).toHaveBeenCalled();
-      } else {
-        expect(appendUpdate).not.toHaveBeenCalled();
-      }
+      expect(appendUpdate).toHaveBeenCalled();
       await adapter.close();
     }
   });

@@ -1919,7 +1919,7 @@ describe("AcpAgentClient", () => {
     ).toHaveLength(5);
   });
 
-  it("repairs a session activity timestamp from complete local rollout history", async () => {
+  it("preserves newer metadata activity over complete local rollout history", async () => {
     const rolloutStore = new AcpRolloutStore(path.join(tempDir, "rollouts"));
     rolloutStore.appendUpdate({
       backendId: "acp:grok",
@@ -1979,10 +1979,15 @@ describe("AcpAgentClient", () => {
       title: "Grok session",
       cwd: "/repo",
       createdAt: 1000,
-      // Simulates the old session/load behavior marking the thread as freshly
-      // active even though the durable replay ended at 1201.
+      // A rename and runtime-option change legitimately happened after the
+      // last conversation event in the rollout.
       updatedAt: 2000,
       executionMode: "default",
+      titleSource: "explicit",
+      acpRuntime: {
+        currentModelId: "grok-4.5",
+        updatedAt: 2000,
+      },
       status: "idle",
       hasConversationHistory: true,
     });
@@ -1996,7 +2001,7 @@ describe("AcpAgentClient", () => {
       1100,
       1200,
     ]);
-    expect(store.getSession("acp:grok", "session-1")?.updatedAt).toBe(1201);
+    expect(store.getSession("acp:grok", "session-1")?.updatedAt).toBe(2000);
     expect(transport.requests.map((request) => request.method)).toEqual([
       "initialize",
       "session/load",
@@ -2120,9 +2125,24 @@ describe("AcpAgentClient", () => {
       { createdAt: 1_785_000_001_300, text: "Provider prompt" },
       { createdAt: 1_785_000_001_400, text: "Provider reply" },
     ]);
+    client.startPrompt({
+      sessionId: "session-1",
+      prompt: "Provider-owned follow-up",
+      turnId: "turn-2",
+    });
+    await vi.waitFor(() => {
+      expect(
+        transport.requests.filter(
+          (request) => request.method === "session/prompt",
+        ),
+      ).toHaveLength(1);
+    });
+    await vi.waitFor(() => {
+      expect(client.readReplay("session-1").threadStatus).toBe("idle");
+    });
     expect(client.didSessionLoadReplayHistory("session-1")).toBe(true);
     expect(store.getSession("acp:grok", "session-1")?.updatedAt).toBe(
-      1_785_000_001_401,
+      1_800_000_000_000,
     );
     expect(store.getSession("acp:grok", "session-1")?.status).toBe("idle");
     expect(
@@ -2389,7 +2409,7 @@ describe("AcpAgentClient", () => {
     ).toBeUndefined();
   });
 
-  it("does not write local rollout history when the ACP agent advertises session replay", async () => {
+  it("retains fallback history when advertised session replay returns no transcript", async () => {
     const rolloutStore = {
       appendUpdate: vi.fn(),
       readUpdates: vi.fn(() => []),
@@ -2417,32 +2437,41 @@ describe("AcpAgentClient", () => {
       transport,
       now: () => 1000,
     });
+    store.upsertSession({
+      backendId: "acp:kimi",
+      sessionId: "session-1",
+      title: "Kimi session",
+      cwd: "/repo",
+      createdAt: 900,
+      updatedAt: 900,
+      executionMode: "default",
+      status: "idle",
+      hasConversationHistory: true,
+    });
 
     await client.initialize();
-    const session = await client.startSession({
-      cwd: "/repo",
-      executionMode: "default",
-    });
+    await client.loadSession(store.getSession("acp:kimi", "session-1")!);
     client.startPrompt({
-      sessionId: session.sessionId,
+      sessionId: "session-1",
       prompt: "hello",
       turnId: "turn-1",
     });
-    transport.emitSessionUpdate(session.sessionId, {
+    transport.emitSessionUpdate("session-1", {
       session_update: "agent_message_chunk",
       content: { type: "text", text: "Kimi says hi." },
     });
 
     await vi.waitFor(() => {
-      expect(client.readReplay(session.sessionId).lastAssistantMessage).toBe(
+      expect(client.readReplay("session-1").lastAssistantMessage).toBe(
         "Kimi says hi.",
       );
     });
     await vi.waitFor(() => {
-      expect(client.readReplay(session.sessionId).threadStatus).toBe("idle");
+      expect(client.readReplay("session-1").threadStatus).toBe("idle");
     });
 
-    expect(rolloutStore.appendUpdate).not.toHaveBeenCalled();
+    expect(client.didSessionLoadReplayHistory("session-1")).toBe(false);
+    expect(rolloutStore.appendUpdate).toHaveBeenCalled();
   });
 
   it("does not call session/load when the ACP agent says loading is unsupported", async () => {

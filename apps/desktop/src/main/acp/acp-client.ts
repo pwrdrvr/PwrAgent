@@ -22,7 +22,6 @@ import {
   type AcpSessionUpdate,
 } from "./acp-session-normalizer.js";
 import {
-  acpRuntimeSupportsSessionHistoryReplay,
   acpRuntimeSupportsSessionLoad,
   acpSessionRuntimeStateFromResponse,
   acpSessionRuntimeStateFromUpdate,
@@ -152,7 +151,6 @@ type AcpSuppressedControlPrompt = {
 
 type AcpHydratedSessionHistory = {
   isComplete: boolean;
-  lastActivityAt?: number;
 };
 
 export type AcpAgentClientOptions = {
@@ -463,10 +461,6 @@ export class AcpAgentClient {
     this.options.store.upsertSession(metadata);
     const localHistory = this.hydrateSessionFromHistory(metadata);
     const fallbackNormalizer = this.normalizers.get(metadata.sessionId);
-    this.reconcileSessionActivityTimestamp(
-      metadata.sessionId,
-      localHistory,
-    );
     const hydratedMetadata =
       this.options.store.getSession(this.options.backendId, metadata.sessionId) ??
       metadata;
@@ -488,12 +482,6 @@ export class AcpAgentClient {
         sessionLoadReplay?.lastTimestampedTranscriptAt !== undefined ||
         (!localHistory.isComplete && sessionLoadReplay)
       ) {
-        if (sessionLoadReplay.lastTimestampedTranscriptAt !== undefined) {
-          this.reconcileSessionActivityTimestamp(metadata.sessionId, {
-            isComplete: true,
-            lastActivityAt: sessionLoadReplay.lastTimestampedTranscriptAt,
-          });
-        }
         return this.replayForSessionMetadata(
           this.options.store.getSession(
             this.options.backendId,
@@ -1063,7 +1051,6 @@ export class AcpAgentClient {
       surfaceThoughtsAsMessages: this.surfaceThoughtsAsMessages,
     });
     let hasTranscriptHistory = false;
-    let lastActivityAt: number | undefined;
     const records = this.options.rolloutStore.readUpdates({
       backendId: this.options.backendId,
       sessionId: metadata.sessionId,
@@ -1074,10 +1061,6 @@ export class AcpAgentClient {
       }
       if (isTranscriptReplayUpdate(record.update)) {
         hasTranscriptHistory = true;
-        lastActivityAt = Math.max(
-          lastActivityAt ?? 0,
-          readAcpUpdateTimestamp(record.update) ?? record.receivedAt,
-        );
       }
       normalizer.apply({
         sessionId: metadata.sessionId,
@@ -1090,28 +1073,7 @@ export class AcpAgentClient {
     const hasReplay = replay.messages.length > 0 || replay.entries.length > 0;
     return {
       isComplete: (hasTranscriptHistory || hasReplay) && replay.threadStatus === "idle",
-      lastActivityAt,
     };
-  }
-
-  private reconcileSessionActivityTimestamp(
-    sessionId: string,
-    localHistory: AcpHydratedSessionHistory,
-  ): void {
-    if (!localHistory.isComplete || localHistory.lastActivityAt === undefined) {
-      return;
-    }
-    const metadata = this.options.store.getSession(this.options.backendId, sessionId);
-    if (!metadata || metadata.updatedAt === localHistory.lastActivityAt) {
-      return;
-    }
-    // A complete local rollout is the durable record of actual conversation
-    // activity. It repairs timestamps previously inflated by session/load
-    // hydration without turning metadata/config refreshes into unread events.
-    this.options.store.upsertSession({
-      ...metadata,
-      updatedAt: localHistory.lastActivityAt,
-    });
   }
 
   private markSessionHasConversationHistory(
@@ -1383,7 +1345,14 @@ export class AcpAgentClient {
     receivedAt: number,
     update: Record<string, unknown>,
   ): void {
-    if (acpRuntimeSupportsSessionHistoryReplay(this.runtimeCapabilities)) {
+    const verifiedReplay = this.sessionLoadReplays.get(
+      this.protocolSessionIdFor(sessionId),
+    );
+    // Keep a durable fallback until this exact session has successfully
+    // replayed timestamped provider history. An advertised capability alone
+    // cannot prove that session/load returned usable transcript history, and
+    // providers such as Kimi still need the local timestamps they omit.
+    if (verifiedReplay?.lastTimestampedTranscriptAt !== undefined) {
       return;
     }
     this.options.rolloutStore?.appendUpdate({
