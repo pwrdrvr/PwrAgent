@@ -11469,25 +11469,24 @@ export class DesktopBackendRegistry {
     if (subAgent.status !== "running") {
       throw new Error("Sub-agent is no longer running.");
     }
-    if (!subAgent.monitorThreadId || !subAgent.monitorTurnId) {
-      throw new Error("Sub-agent does not expose an active turn to stop.");
-    }
-
     const taskMonitor = this.taskMonitorDelegations.get(params.monitorId);
     if (
       taskMonitor
       && taskMonitor.parentBackend === params.backend
       && taskMonitor.parentThreadId === params.threadId
     ) {
+      if (!taskMonitor.monitorThreadId || !taskMonitor.monitorTurnId) {
+        throw new Error("Sub-agent does not expose an active turn to stop.");
+      }
       // A terminal notification from an interrupted monitor normally starts a
       // recovery turn. Remove an intentionally stopped monitor first so the
       // terminal handler cannot mistake this user action for a crash.
       this.taskMonitorDelegations.delete(params.monitorId);
       try {
-        await this.interruptTurn({
-          backend: taskMonitor.backend,
-          threadId: subAgent.monitorThreadId,
-          turnId: subAgent.monitorTurnId,
+        const executionMode = taskMonitor.executionMode ?? "default";
+        await this.getClient("codex", executionMode).interruptTurn({
+          threadId: taskMonitor.monitorThreadId,
+          turnId: taskMonitor.monitorTurnId,
         });
       } catch (error) {
         this.taskMonitorDelegations.set(params.monitorId, taskMonitor);
@@ -11508,6 +11507,10 @@ export class DesktopBackendRegistry {
         monitorId: params.monitorId,
         stoppedAt,
       };
+    }
+
+    if (!subAgent.monitorThreadId || !subAgent.monitorTurnId) {
+      throw new Error("Sub-agent does not expose an active turn to stop.");
     }
 
     let turnId = subAgent.monitorTurnId;
