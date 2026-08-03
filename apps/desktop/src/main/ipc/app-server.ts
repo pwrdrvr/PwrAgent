@@ -946,6 +946,7 @@ class DesktopAppServerService {
     pauseWhenEmpty: DEFAULT_PAUSE_PR_AUTO_DISPATCH_WHEN_BUDGET_EMPTY,
   };
   private prAutoDispatchBudgetPaused = false;
+  private prAutoDispatchBudgetPausedAt: number | undefined;
   private prAutoDispatchCoordinator: PrAutoDispatchCoordinator | undefined;
   private prStatusWatchCoordinator: PrStatusWatchCoordinator | undefined;
   /** Visible thread→PR attachments plus the primary workspace's repository. */
@@ -4015,13 +4016,19 @@ class DesktopAppServerService {
     options?: { allowResume?: boolean },
   ): void {
     const previousPaused = this.prAutoDispatchBudgetPaused;
+    const previousPausedAt = this.prAutoDispatchBudgetPausedAt;
     if (status.paused) {
       this.prAutoDispatchBudgetPaused = true;
+      this.prAutoDispatchBudgetPausedAt = status.pausedAt;
       this.prAutoDispatchCoordinator?.pause();
     } else if (options?.allowResume) {
       this.prAutoDispatchBudgetPaused = false;
+      this.prAutoDispatchBudgetPausedAt = undefined;
     }
-    if (previousPaused !== this.prAutoDispatchBudgetPaused || status.paused) {
+    const pauseStateChanged = previousPaused !== this.prAutoDispatchBudgetPaused;
+    const pauseEventChanged =
+      status.paused && status.pausedAt !== previousPausedAt;
+    if (pauseStateChanged || pauseEventChanged) {
       this.broadcastPrAutoDispatchBudgetStatus(status);
     }
   }
@@ -5306,6 +5313,7 @@ class DesktopAppServerService {
     this.backgroundPrPollingEnabled = false;
     this.prAutoDispatchAllowed = false;
     this.prAutoDispatchBudgetPaused = false;
+    this.prAutoDispatchBudgetPausedAt = undefined;
     if (this.prDiscoveryTimer) {
       clearInterval(this.prDiscoveryTimer);
       this.prDiscoveryTimer = undefined;

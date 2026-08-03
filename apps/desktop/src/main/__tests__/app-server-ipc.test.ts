@@ -24,10 +24,13 @@ const mockAppServerLog = vi.hoisted(() => ({
   warn: vi.fn(),
 }));
 
+const prAutoDispatchBudgetStatusSend = vi.hoisted(() => vi.fn());
+
 const prAutomationSettings = vi.hoisted(() => {
   const state = {
     backgroundPrPollingEnabled: true,
     budgetPaused: false,
+    budgetPausedAt: 1_000,
     pauseWhenBudgetEmpty: true,
     prAutoDispatchAllowed: true,
     budgetCapacity: 30,
@@ -429,7 +432,9 @@ const getPrAutoDispatchBudgetStatus = vi.fn(async (params: {
   capacity: params.config.capacity,
   refillPerMinute: params.config.refillPerMinute,
   paused: prAutomationSettings.state.budgetPaused,
-  ...(prAutomationSettings.state.budgetPaused ? { pausedAt: 1_000 } : {}),
+  ...(prAutomationSettings.state.budgetPaused
+    ? { pausedAt: prAutomationSettings.state.budgetPausedAt }
+    : {}),
 }));
 const resumePrAutoDispatchBudget = vi.fn(async (params: {
   config: {
@@ -570,6 +575,15 @@ vi.mock("electron", () => ({
   },
 }));
 
+vi.mock("../window-channels", () => ({
+  subscribersForChannel: vi.fn(() => [
+    {
+      isDestroyed: () => false,
+      send: prAutoDispatchBudgetStatusSend,
+    },
+  ]),
+}));
+
 vi.mock("../log", () => ({
   getMainLogger: vi.fn(() => mockAppServerLog),
 }));
@@ -687,6 +701,7 @@ describe("app server ipc", () => {
   beforeEach(() => {
     prAutomationSettings.state.backgroundPrPollingEnabled = true;
     prAutomationSettings.state.budgetPaused = false;
+    prAutomationSettings.state.budgetPausedAt = 1_000;
     prAutomationSettings.state.pauseWhenBudgetEmpty = true;
     prAutomationSettings.state.prAutoDispatchAllowed = true;
     prAutomationSettings.state.budgetCapacity = 30;
@@ -777,6 +792,7 @@ describe("app server ipc", () => {
     mockAppServerLog.error.mockClear();
     mockAppServerLog.info.mockClear();
     mockAppServerLog.warn.mockClear();
+    prAutoDispatchBudgetStatusSend.mockClear();
   });
 
   afterEach(async () => {
@@ -1022,6 +1038,38 @@ describe("app server ipc", () => {
       },
       now: expect.any(Number),
     });
+  });
+
+  it("broadcasts each durable budget pause only once", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const {
+      APP_SERVER_GET_PR_AUTO_DISPATCH_BUDGET_STATUS_CHANNEL,
+      PR_AUTO_DISPATCH_BUDGET_CHANGED_EVENT_CHANNEL,
+    } = await import("../../shared/ipc");
+    prAutomationSettings.state.budgetPaused = true;
+
+    registerAppServerIpcHandlers();
+    const readStatus = handlers.get(
+      APP_SERVER_GET_PR_AUTO_DISPATCH_BUDGET_STATUS_CHANNEL,
+    );
+
+    await readStatus?.();
+    await readStatus?.();
+
+    expect(prAutoDispatchBudgetStatusSend).toHaveBeenCalledTimes(1);
+    expect(prAutoDispatchBudgetStatusSend).toHaveBeenLastCalledWith(
+      PR_AUTO_DISPATCH_BUDGET_CHANGED_EVENT_CHANNEL,
+      expect.objectContaining({ paused: true, pausedAt: 1_000 }),
+    );
+
+    prAutomationSettings.state.budgetPausedAt = 2_000;
+    await readStatus?.();
+
+    expect(prAutoDispatchBudgetStatusSend).toHaveBeenCalledTimes(2);
+    expect(prAutoDispatchBudgetStatusSend).toHaveBeenLastCalledWith(
+      PR_AUTO_DISPATCH_BUDGET_CHANGED_EVENT_CHANNEL,
+      expect.objectContaining({ paused: true, pausedAt: 2_000 }),
+    );
   });
 
   it("keeps thread preferences intact while a durable budget safety stop pauses Auto-fix PR", async () => {
