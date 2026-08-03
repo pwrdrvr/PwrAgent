@@ -372,6 +372,19 @@ describe("Tangerine Terminal theme contract", () => {
     );
   });
 
+  it("keeps the entire Messaging control interactive in Settings title bars", () => {
+    const titlebarDragRuleIndex = css.indexOf(".settings-titlebar * {");
+    const messagingNoDragRuleIndex = css.indexOf(
+      ".settings-titlebar .messaging-status-bar,",
+    );
+
+    expect(titlebarDragRuleIndex).toBeGreaterThan(-1);
+    expect(messagingNoDragRuleIndex).toBeGreaterThan(titlebarDragRuleIndex);
+    expect(css).toMatch(
+      /\.settings-titlebar \.messaging-status-bar,\s*\.settings-titlebar \.messaging-status-bar \*\s*\{[\s\S]*?-webkit-app-region:\s*no-drag;[\s\S]*?\}/,
+    );
+  });
+
   it("keeps the thread title reveal hit target to the rendered title text", () => {
     const compactTitleRule = extractRuleBody(css, ".thread-header__compact-title");
     const titleButtonRule = extractRuleBody(css, ".thread-header__title-button");

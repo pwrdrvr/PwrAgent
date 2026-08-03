@@ -5719,8 +5719,19 @@ textarea,
 .settings-titlebar [role="button"] {
   -webkit-app-region: no-drag;
 }
-/* MessagingStatusBar already enforces no-drag on its whole subtree
-   via its own CSS (~line 211). No duplication needed here. */
+
+/* `.settings-titlebar *` is declared after the shared MessagingStatusBar
+   rules and has equal specificity, so it otherwise wins the cascade and
+   turns the controller's text/icon pixels plus the popover's transparent
+   hover bridge back into window-drag regions. The button's bare padding
+   stays clickable, which makes the failure look like a broken hover hitbox.
+   Keep this context-specific carve-out after the broad drag rule and use the
+   extra class specificity so every pixel in the shared control remains
+   interactive in Settings and Automations title bars. */
+.settings-titlebar .messaging-status-bar,
+.settings-titlebar .messaging-status-bar * {
+  -webkit-app-region: no-drag;
+}
 
 .settings-titlebar__breadcrumb {
   display: flex;
