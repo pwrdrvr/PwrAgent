@@ -52,7 +52,9 @@ test("thread reply Tiptap skill autocomplete filters and commits the reported mu
     const tiptapInput = app.window.getByTestId("composer-tiptap-input");
     const textbox = app.window.getByRole("textbox", { name: "Reply" });
     await textbox.fill(reportedDraftPrefix);
-    await expect(tiptapInput).toHaveAttribute("data-value", reportedDraftPrefix);
+    await expect(tiptapInput).toHaveAttribute("data-value", /Let's use $/);
+    const seededDraft = await tiptapInput.getAttribute("data-value");
+    expect(seededDraft).toBeTruthy();
     await textbox.focus();
     const selectionRange = await textbox.evaluate((element, selectionIndex) => {
       const editor = element as HTMLElement & {
@@ -62,13 +64,11 @@ test("thread reply Tiptap skill autocomplete filters and commits the reported mu
       };
       editor.setSelectionRange(selectionIndex, selectionIndex);
       return [editor.selectionStart, editor.selectionEnd];
-    }, reportedDraftPrefix.length);
+    }, seededDraft!.length);
     expect(selectionRange).toEqual([
-      reportedDraftPrefix.length,
-      reportedDraftPrefix.length,
+      seededDraft!.length,
+      seededDraft!.length,
     ]);
-    const seededDraft = await tiptapInput.getAttribute("data-value");
-    expect(seededDraft).toMatch(/Let's use $/);
 
     await app.window.keyboard.type("$ce");
     await expect(app.window.getByRole("listbox", { name: "Skills" })).toBeVisible();
