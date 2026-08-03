@@ -63,7 +63,9 @@ cd ~/pwragent-mac-vm
 `--local` pushes the local repository's committed `HEAD` to the VM over SSH as
 the private `e2e-local` branch. Use it for unpushed work; do not push a WIP
 branch to a public remote only to run tests. Uncommitted changes do not travel,
-so commit a disposable WIP checkpoint first when necessary.
+so commit a disposable WIP checkpoint first when necessary. The local transport
+also copies only the Git LFS objects referenced by `HEAD` into the guest repo;
+the guest SSH remote does not need to act as an LFS server.
 
 The test command runs inside tmux session `e2e` in the VM. Ctrl-C on the host
 log tail detaches from it without terminating the test. Failed-run artifacts
