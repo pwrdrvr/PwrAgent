@@ -6893,7 +6893,7 @@ describe("CodexAppServerClient", () => {
     expect(mention).toBeDefined();
     expect(await fs.readFile(mention!.path)).toEqual(pdfBytes);
 
-    await fs.rm(path.dirname(path.dirname(mention!.path)), {
+    await fs.rm(path.dirname(mention!.path), {
       force: true,
       recursive: true,
     });

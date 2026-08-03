@@ -1,5 +1,4 @@
-import { randomUUID } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -119,6 +118,7 @@ import {
   type CompatibleApprovalPolicy,
   type CompatibleDynamicToolSpec,
 } from "./protocol-compatibility";
+import { persistCodexFileInput } from "./codex-file-input-files";
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
 const ARCHIVED_THREAD_METADATA_REFRESH_INTERVAL_MS = 60_000;
@@ -6227,7 +6227,6 @@ function toCodexUserInput(
 }
 
 async function prepareCodexUserInput(params: {
-  threadId: string;
   input: AppServerTurnInputItem[];
 }): Promise<CodexUserInput[]> {
   const prepared: CodexUserInput[] = [];
@@ -6250,10 +6249,7 @@ async function prepareCodexUserInput(params: {
       continue;
     }
 
-    const filePath = await persistCodexFileInput({
-      file: input,
-      threadId: params.threadId,
-    });
+    const filePath = await persistCodexFileInput(input);
     fileReferences.push(formatCodexFileReference(input, filePath));
     prepared.push({
       type: "mention",
@@ -6280,22 +6276,6 @@ async function prepareCodexUserInput(params: {
   ];
 }
 
-async function persistCodexFileInput(params: {
-  file: AppServerFileInputItem;
-  threadId: string;
-}): Promise<string> {
-  const attachmentDir = path.join(
-    tmpdir(),
-    "pwragent-codex-attachments",
-    sanitizePathSegment(params.threadId),
-    randomUUID(),
-  );
-  await mkdir(attachmentDir, { recursive: true });
-  const filePath = path.join(attachmentDir, sanitizeAttachmentFileName(params.file.name));
-  await writeFile(filePath, Buffer.from(params.file.data, "base64"));
-  return filePath;
-}
-
 function formatCodexFileReference(
   file: Pick<AppServerFileInputItem, "name" | "mimeType" | "sizeBytes">
     | Pick<AppServerLocalFileInputItem, "name">,
@@ -6309,17 +6289,6 @@ function formatCodexFileReference(
   return type
     ? `- ${file.name}: ${filePath} (Type: ${type}${size})`
     : `- ${file.name}: ${filePath}`;
-}
-
-function sanitizePathSegment(value: string): string {
-  const sanitized = value.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 120);
-  return sanitized || "thread";
-}
-
-function sanitizeAttachmentFileName(value: string): string {
-  const baseName = path.basename(value).replace(/[\0]/g, "");
-  const sanitized = baseName.replace(/[^a-zA-Z0-9._@()+,= -]/g, "_").slice(0, 160);
-  return sanitized && sanitized !== "." && sanitized !== ".." ? sanitized : "attachment";
 }
 
 function buildTurnStartPayload(params: {
@@ -7633,7 +7602,6 @@ export class CodexAppServerClient {
       }));
 
     const codexInput = await prepareCodexUserInput({
-      threadId: params.threadId,
       input: params.input,
     });
     const result = await requestWithFallbacks({
@@ -8224,7 +8192,6 @@ export class CodexAppServerClient {
     }).catch(() => undefined);
 
     const codexInput = await prepareCodexUserInput({
-      threadId: params.threadId,
       input: params.input,
     });
     const payload: CodexTurnSteerParams = {
