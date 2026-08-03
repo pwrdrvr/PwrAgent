@@ -24,6 +24,10 @@ const mockAppServerLog = vi.hoisted(() => ({
   info: vi.fn(),
   warn: vi.fn(),
 }));
+const backendRegistryLifecycle = vi.hoisted(() => ({
+  existing: true,
+  get: vi.fn(),
+}));
 
 const prAutoDispatchBudgetStatusSend = vi.hoisted(() => vi.fn());
 
@@ -646,9 +650,8 @@ vi.mock("../app-server/directory-registration-service", () => ({
   registerDirectoryFromDisk: registerDirectoryFromDiskService,
 }));
 
-vi.mock("../app-server/backend-registry", () => ({
-  disposeDesktopBackendRegistry: vi.fn(async () => undefined),
-  getDesktopBackendRegistry: () => ({
+vi.mock("../app-server/backend-registry", () => {
+  const registry = {
     archiveThread,
     restoreThread,
     archiveWorktree,
@@ -673,8 +676,15 @@ vi.mock("../app-server/backend-registry", () => ({
     ensureDirectoryLaunchpad,
     getQueuedExecutionModesSnapshot: () => ({}),
     rememberCompleteNavigationSnapshot,
-  }),
-}));
+  };
+  backendRegistryLifecycle.get.mockImplementation(() => registry);
+  return {
+    disposeDesktopBackendRegistry: vi.fn(async () => undefined),
+    getDesktopBackendRegistry: backendRegistryLifecycle.get,
+    getExistingDesktopBackendRegistry: () =>
+      backendRegistryLifecycle.existing ? registry : null,
+  };
+});
 
 vi.mock("../pr-status/github-pr-fetcher", () => ({
   GithubPrFetcher: vi.fn(function GithubPrFetcher() {
@@ -702,6 +712,8 @@ vi.mock("../pr-status/git-remote", async () => {
 
 describe("app server ipc", () => {
   beforeEach(() => {
+    backendRegistryLifecycle.existing = true;
+    backendRegistryLifecycle.get.mockClear();
     prAutomationSettings.state.backgroundPrPollingEnabled = true;
     prAutomationSettings.state.budgetPaused = false;
     prAutomationSettings.state.budgetPausedAt = 1_000;
@@ -802,6 +814,15 @@ describe("app server ipc", () => {
   afterEach(async () => {
     const { disposeAppServerIpcHandlers } = await import("../ipc/app-server");
     await disposeAppServerIpcHandlers();
+  });
+
+  it("does not construct a backend registry during disposal", async () => {
+    backendRegistryLifecycle.existing = false;
+    const { disposeAppServerIpcHandlers } = await import("../ipc/app-server");
+
+    await disposeAppServerIpcHandlers();
+
+    expect(backendRegistryLifecycle.get).not.toHaveBeenCalled();
   });
 
   it("identifies explicitly selected extensionless PDFs by their magic bytes", async () => {

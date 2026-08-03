@@ -103,6 +103,7 @@ export const ACP_LIVE_HANDOFF_UNSUPPORTED_ERROR =
 
 const acpBackendAdapterLog = getMainLogger("pwragent:acp-backend-adapter");
 const ACP_PROVIDER_STATUS_CACHE_TTL_MS = 60_000;
+const ACP_CLOSE_TIMEOUT_MS = 5_000;
 
 export type AcpRuntimeClient = Pick<
   AcpAgentClient,
@@ -133,6 +134,12 @@ export type AcpSessionStoreLike =
   Pick<AcpSessionStoreContract, "getSession" | "listSessions"> &
   Partial<Pick<AcpSessionStoreContract, "upsertSession">>;
 
+type AcpClientEntry = {
+  client: AcpRuntimeClient;
+  promise: Promise<AcpRuntimeClient>;
+  disposePromise?: Promise<void>;
+};
+
 type AcpLiveTurnUsage = {
   model?: string;
   tokenUsage: AcpTokenUsage;
@@ -159,6 +166,7 @@ export type AcpBackendAdapterOptions = {
   discoverLocalAcpAgents?: LocalAcpDiscovery;
   resolveLocalAcpDiscoveryEnv?: () => Promise<NodeJS.ProcessEnv>;
   isAcpAgentEnabled?: (registryId: string) => boolean;
+  closeTimeoutMs?: number;
   emit: (event: AgentEvent) => Promise<void>;
   handleServerRequest: (
     backend: AcpBackendId,
@@ -844,12 +852,14 @@ export class AcpBackendAdapter {
     backend: AcpBackendId,
     request: AppServerPendingRequestNotification,
   ) => Promise<unknown>;
-  private readonly acpClients = new Map<AcpBackendId, Promise<AcpRuntimeClient>>();
+  private readonly acpClients = new Map<AcpBackendId, AcpClientEntry>();
   private readonly liveNotificationFingerprints = new Map<string, string>();
   private readonly providerStatuses = new Map<AcpBackendId, AcpProviderStatus>();
   private readonly providerStatusRefreshAttempts = new Map<AcpBackendId, number>();
   private readonly providerStatusRefreshes = new Map<AcpBackendId, Promise<void>>();
   private closed = false;
+  private closePromise?: Promise<void>;
+  private readonly closeTimeoutMs: number;
   private readonly liveTurnUsage = new Map<string, AcpLiveTurnUsage>();
   private localAcpAgentsPromise?: Promise<AcpInstalledAgentRecord[]>;
 
@@ -859,6 +869,7 @@ export class AcpBackendAdapter {
     this.automationInspectionMcpCommand = options.automationInspectionMcpCommand;
     this.emit = options.emit;
     this.handleServerRequest = options.handleServerRequest;
+    this.closeTimeoutMs = options.closeTimeoutMs ?? ACP_CLOSE_TIMEOUT_MS;
     this.acpAgentStore =
       options.acpAgentStore === null
         ? undefined
@@ -943,7 +954,7 @@ export class AcpBackendAdapter {
   }
 
   private refreshProviderStatusInBackground(backend: AcpBackendId): void {
-    const clientPromise = this.acpClients.get(backend);
+    const clientPromise = this.acpClients.get(backend)?.promise;
     if (
       this.closed
       || !clientPromise
@@ -1087,7 +1098,9 @@ export class AcpBackendAdapter {
     sessionId: string,
   ): Promise<AppServerThreadReplay> {
     const session = this.getSession(backend, sessionId);
-    const cachedClient = await this.acpClients.get(backend)?.catch(() => undefined);
+    const cachedClient = await this.acpClients
+      .get(backend)
+      ?.promise.catch(() => undefined);
     if (cachedClient) {
       const replay = cachedClient.readReplay(sessionId);
       if (
@@ -1189,24 +1202,38 @@ export class AcpBackendAdapter {
   }
 
   async getClient(backend: AcpBackendId): Promise<AcpRuntimeClient> {
+    if (this.closed) {
+      throw new Error("ACP backend adapter is closed");
+    }
     const cached = this.acpClients.get(backend);
     if (cached) {
-      return await cached;
+      return await cached.promise;
     }
 
     const agent = await this.resolveInstalledAgent(backend);
-    const clientPromise = (async () => {
-      const client = this.createAcpClient(agent);
+    if (this.closed) {
+      throw new Error("ACP backend adapter is closed");
+    }
+    const client = this.createAcpClient(agent);
+    const entry: AcpClientEntry = {
+      client,
+      promise: Promise.resolve(client),
+    };
+    entry.promise = (async () => {
       await client.initialize();
+      if (this.closed) {
+        await this.disposeAcpClient(entry);
+        throw new Error("ACP backend adapter is closed");
+      }
       return client;
     })();
-    this.acpClients.set(backend, clientPromise);
-    clientPromise.catch(() => {
-      if (this.acpClients.get(backend) === clientPromise) {
+    this.acpClients.set(backend, entry);
+    entry.promise.catch(() => {
+      if (this.acpClients.get(backend) === entry) {
         this.acpClients.delete(backend);
       }
     });
-    return await clientPromise;
+    return await entry.promise;
   }
 
   private readRolloutReplay(
@@ -1454,21 +1481,75 @@ export class AcpBackendAdapter {
   }
 
   async close(): Promise<void> {
+    if (this.closePromise) {
+      return await this.closePromise;
+    }
     this.closed = true;
-    const acpClients = [...this.acpClients.values()];
+    const acpClients = [...this.acpClients.entries()];
     this.acpClients.clear();
     this.liveNotificationFingerprints.clear();
     this.providerStatuses.clear();
     this.providerStatusRefreshAttempts.clear();
     this.providerStatusRefreshes.clear();
     this.liveTurnUsage.clear();
-    await Promise.all(
-      acpClients.map(async (clientPromise) => {
-        const client = await clientPromise.catch(() => undefined);
-        await client?.dispose();
+    this.closePromise = this.closeResources(acpClients);
+    return await this.closePromise;
+  }
+
+  private async closeResources(
+    acpClients: Array<[AcpBackendId, AcpClientEntry]>,
+  ): Promise<void> {
+    const resources = [
+      ...acpClients.map(async ([backend, entry]) => {
+        const dispose = this.disposeAcpClient(entry);
+        const [, disposeResult] = await Promise.allSettled([
+          entry.promise,
+          dispose,
+        ]);
+        if (disposeResult.status === "rejected") {
+          throw disposeResult.reason;
+        }
+        acpBackendAdapterLog.info("acp_client_closed", { backend });
       }),
-    );
-    await this.agentToolMcpServer?.close();
+      Promise.resolve().then(() => this.agentToolMcpServer?.close()),
+    ];
+    const cleanup = Promise.allSettled(resources).then((results) => {
+      for (const [index, result] of results.entries()) {
+        if (result.status === "rejected") {
+          acpBackendAdapterLog.warn("acp_resource_close_failed", {
+            resource:
+              index < acpClients.length
+                ? acpClients[index]?.[0]
+                : "agent-tool-mcp",
+            error:
+              result.reason instanceof Error
+                ? result.reason.message
+                : String(result.reason),
+          });
+        }
+      }
+    });
+    let timer: NodeJS.Timeout | undefined;
+    const timedOut = await Promise.race([
+      cleanup.then(() => false),
+      new Promise<true>((resolve) => {
+        timer = setTimeout(() => resolve(true), this.closeTimeoutMs);
+      }),
+    ]);
+    if (timer) {
+      clearTimeout(timer);
+    }
+    if (timedOut) {
+      acpBackendAdapterLog.warn("acp_close_timed_out", {
+        clientCount: acpClients.length,
+        timeoutMs: this.closeTimeoutMs,
+      });
+    }
+  }
+
+  private disposeAcpClient(entry: AcpClientEntry): Promise<void> {
+    entry.disposePromise ??= Promise.resolve().then(() => entry.client.dispose());
+    return entry.disposePromise;
   }
 
   private shouldEmitLiveToolNotification(

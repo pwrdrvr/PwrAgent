@@ -6,6 +6,7 @@ import readline from "node:readline";
 import type { JsonRpcTransport } from "@pwrdrvr/agent-transport";
 import { getMainLogger } from "../log";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
+import { terminateOwnedProcessTree } from "../process-tree";
 import {
   compareCodexCliVersions,
   resolveCodexCommand,
@@ -57,6 +58,8 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
   private closeHandler: (error?: Error) => void = () => undefined;
   private closeRequested = false;
   private closePromise?: Promise<void>;
+  private connectPromise?: Promise<void>;
+  private lifecycleGeneration = 0;
   private droppedSendAfterCloseLogged = false;
 
   constructor(private readonly options: StdioJsonRpcTransportOptions) {}
@@ -73,21 +76,46 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
     if (this.childProcess) {
       return;
     }
+    if (this.connectPromise && !this.closeRequested) {
+      return await this.connectPromise;
+    }
+    const generation = ++this.lifecycleGeneration;
     this.closeRequested = false;
     this.droppedSendAfterCloseLogged = false;
 
+    const connectPromise = this.connectForGeneration(generation);
+    this.connectPromise = connectPromise;
+    try {
+      await connectPromise;
+    } finally {
+      if (this.connectPromise === connectPromise) {
+        this.connectPromise = undefined;
+      }
+    }
+  }
+
+  private assertCurrentGeneration(generation: number): void {
+    if (this.closeRequested || generation !== this.lifecycleGeneration) {
+      throw new Error("codex app server connection cancelled");
+    }
+  }
+
+  private async connectForGeneration(generation: number): Promise<void> {
     const resolvedEnv = this.options.resolveEnv
       ? await this.options.resolveEnv()
       : this.options.env ?? process.env;
+    this.assertCurrentGeneration(generation);
     const env = buildPwrAgentChildProcessEnv(resolvedEnv);
     const args = this.options.resolveArgs
       ? await this.options.resolveArgs(env)
       : this.options.args ?? [];
+    this.assertCurrentGeneration(generation);
     const commandEnv = buildPwrAgentChildProcessEnv(env);
     const command = await resolveCodexCommand({
       command: this.options.command,
       env: commandEnv,
     });
+    this.assertCurrentGeneration(generation);
     const childEnv = buildPwrAgentChildProcessEnv(commandEnv);
     codexTransportLog.info("launch app-server", {
       command: command.command,
@@ -98,13 +126,21 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
     const child = spawn(command.command, ["app-server", ...args], {
       stdio: ["pipe", "pipe", "pipe"],
       env: childEnv,
+      detached: process.platform !== "win32",
     });
 
+    this.childProcess = child;
+
     if (!child.stdin || !child.stdout || !child.stderr) {
+      await terminateOwnedProcessTree(child, {
+        gracefulTimeoutMs: PROCESS_CLOSE_TIMEOUT_MS,
+        forceTimeoutMs: PROCESS_FORCE_CLOSE_TIMEOUT_MS,
+      });
+      if (this.childProcess === child) {
+        this.childProcess = null;
+      }
       throw new Error("codex app server stdio pipes unavailable");
     }
-
-    this.childProcess = child;
 
     const stdoutReader = readline.createInterface({ input: child.stdout });
     stdoutReader.on("line", (line: string) => {
@@ -154,6 +190,9 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
       });
     });
     child.on("error", (error: Error) => {
+      if (this.childProcess === child && child.pid === undefined) {
+        this.childProcess = null;
+      }
       this.closeHandler(error);
     });
     child.on("close", () => {
@@ -166,6 +205,7 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
 
   async close(): Promise<void> {
     this.closeRequested = true;
+    this.lifecycleGeneration += 1;
     if (this.closePromise) {
       return await this.closePromise;
     }
@@ -173,74 +213,16 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
     if (!child) {
       return;
     }
-    this.closePromise = new Promise<void>((resolve, reject) => {
-      let settled = false;
-      let lastError: Error | undefined;
-      let forceExitTimer: NodeJS.Timeout | undefined;
-      const cleanup = (): void => {
-        clearTimeout(forceKillTimer);
-        if (forceExitTimer) {
-          clearTimeout(forceExitTimer);
-        }
-        child.removeListener("close", onClose);
-        child.removeListener("error", onError);
-      };
-      const onClose = (): void => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        cleanup();
+    this.closePromise = terminateOwnedProcessTree(child, {
+      gracefulTimeoutMs: PROCESS_CLOSE_TIMEOUT_MS,
+      forceTimeoutMs: PROCESS_FORCE_CLOSE_TIMEOUT_MS,
+    })
+      .finally(() => {
         if (this.childProcess === child) {
           this.childProcess = null;
         }
-        resolve();
-      };
-      const onError = (error: Error): void => {
-        // An error can mean the termination signal itself failed. It is not
-        // proof that the process exited, so keep waiting for `close` and let
-        // the force-kill deadline decide whether shutdown failed.
-        lastError = error;
-      };
-      const tryKill = (signal: NodeJS.Signals): void => {
-        try {
-          if (!child.kill(signal)) {
-            lastError = new Error(
-              `Codex app-server did not accept ${signal}`,
-            );
-          }
-        } catch (error) {
-          onError(error instanceof Error ? error : new Error(String(error)));
-        }
-      };
-      const forceKillTimer = setTimeout(() => {
-        tryKill("SIGKILL");
-        forceExitTimer = setTimeout(() => {
-          if (settled) {
-            return;
-          }
-          settled = true;
-          cleanup();
-          reject(
-            lastError
-            ?? new Error(
-              "Codex app-server did not exit after SIGKILL",
-            ),
-          );
-        }, PROCESS_FORCE_CLOSE_TIMEOUT_MS);
-        forceExitTimer.unref?.();
-      }, PROCESS_CLOSE_TIMEOUT_MS);
-      forceKillTimer.unref?.();
-      child.once("close", onClose);
-      child.on("error", onError);
-      if (child.exitCode !== null || child.signalCode !== null) {
-        onClose();
-        return;
-      }
-      tryKill("SIGTERM");
-    }).finally(() => {
-      this.closePromise = undefined;
-    });
+        this.closePromise = undefined;
+      });
     return await this.closePromise;
   }
 

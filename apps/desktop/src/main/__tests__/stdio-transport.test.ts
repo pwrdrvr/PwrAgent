@@ -184,7 +184,7 @@ describe("StdioJsonRpcTransport", () => {
 
       await transport.connect();
       const closeResult = expect(transport.close()).rejects.toThrow(
-        "Codex app-server did not accept SIGKILL",
+        "child process tree did not accept SIGKILL",
       );
       await vi.advanceTimersByTimeAsync(10_000);
       await closeResult;
@@ -207,5 +207,59 @@ describe("StdioJsonRpcTransport", () => {
     expect(() =>
       transport.send(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { ok: true } })),
     ).toThrow("codex app server stdio not connected");
+  });
+
+  it("does not spawn after close cancels environment hydration", async () => {
+    let resolveEnv: ((env: NodeJS.ProcessEnv) => void) | undefined;
+    const transport = new StdioJsonRpcTransport({
+      command: "codex",
+      resolveEnv: () =>
+        new Promise((resolve) => {
+          resolveEnv = resolve;
+        }),
+    });
+
+    const connect = transport.connect();
+    await Promise.resolve();
+    await transport.close();
+    resolveEnv?.({ PATH: process.env.PATH ?? "" });
+
+    await expect(connect).rejects.toThrow("connection cancelled");
+    expect(resolveCodexCommandMock).not.toHaveBeenCalled();
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("cleans up a spawned child whose stdio pipes are unavailable", async () => {
+    const child = new MockCodexChildProcess();
+    Object.defineProperty(child, "stdout", { value: null });
+    spawnMock.mockReturnValue(child);
+    const transport = new StdioJsonRpcTransport({
+      command: "codex",
+      env: { PATH: process.env.PATH ?? "" },
+    });
+
+    await expect(transport.connect()).rejects.toThrow(
+      "codex app server stdio pipes unavailable",
+    );
+    expect(child.killCalled).toBe(true);
+  });
+
+  it("supports an intentional reconnect after close completes", async () => {
+    const firstChild = new MockCodexChildProcess();
+    const secondChild = new MockCodexChildProcess();
+    spawnMock
+      .mockReturnValueOnce(firstChild)
+      .mockReturnValueOnce(secondChild);
+    const transport = new StdioJsonRpcTransport({
+      command: "codex",
+      env: { PATH: process.env.PATH ?? "" },
+    });
+
+    await transport.connect();
+    await transport.close();
+    await transport.connect();
+
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+    await transport.close();
   });
 });

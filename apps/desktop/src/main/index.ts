@@ -138,6 +138,7 @@ import {
 } from "./profile";
 import { SECRET_STORAGE_DISABLED_ENV } from "./settings/desktop-secret-store";
 import { isUpdateInstallInProgress } from "./update-install-state";
+import { createShutdownBarrier } from "./shutdown-barrier";
 
 const APP_NAME = "PwrAgent";
 const APP_COPYRIGHT = "Copyright © 2026 PwrDrvr LLC.";
@@ -147,7 +148,12 @@ const isMac = process.platform === "darwin";
 const isDevelopment = process.env.NODE_ENV !== "production";
 const mainLog = getMainLogger("pwragent:main");
 const mainProcessStartedAt = Date.now();
+const MAIN_PROCESS_SHUTDOWN_TIMEOUT_MS = 12_000;
+const MESSAGING_SHUTDOWN_TIMEOUT_MS = 4_000;
+const APP_SERVER_SHUTDOWN_TIMEOUT_MS = 7_500;
 let mainProcessResourcesDisposed = false;
+let mainProcessShutdownComplete = false;
+let finalQuitPromise: Promise<void> | undefined;
 let quitInProgress = false;
 let profileFocusRequestWatcher: ProfileFocusRequestWatcher | null = null;
 let startupCpuProfilerForNewWindows:
@@ -404,18 +410,52 @@ function disposeMainProcessResourcesSync(): void {
   if (isDevelopment) {
     disposeRuntimeIdentityIpcHandlers();
   }
-  void disposeMessagingStatusIpcHandlers();
   const runtimeMessagingLeaseCoordinator =
     getExistingRuntimeMessagingLeaseCoordinator() ??
     (isAppStateInitialized() ? getRuntimeMessagingLeaseCoordinator() : null);
   runtimeMessagingLeaseCoordinator?.shutdownSync();
-  void disposeDesktopMessagingRuntime().catch((error) => {
-    mainLog.warn("messaging runtime disposal failed during shutdown", {
-      error: error instanceof Error ? error.message : String(error),
-    });
-  });
-  void disposeAppServerIpcHandlers();
+}
+
+const runMainProcessShutdownBarrier = createShutdownBarrier({
+  globalTimeoutMs: MAIN_PROCESS_SHUTDOWN_TIMEOUT_MS,
+  logger: mainLog,
+  phases: [
+    {
+      name: "messaging",
+      timeoutMs: MESSAGING_SHUTDOWN_TIMEOUT_MS,
+      run: async () => {
+        await disposeMessagingStatusIpcHandlers();
+        await disposeDesktopMessagingRuntime();
+      },
+    },
+    {
+      name: "app-server",
+      timeoutMs: APP_SERVER_SHUTDOWN_TIMEOUT_MS,
+      run: disposeAppServerIpcHandlers,
+    },
+  ],
+});
+
+async function disposeMainProcessResources(source: string): Promise<void> {
+  disposeMainProcessResourcesSync();
+  await runMainProcessShutdownBarrier(source);
   disposeAppState();
+  mainProcessShutdownComplete = true;
+}
+
+function quitAfterResourceShutdown(source: string): void {
+  finalQuitPromise ??= disposeMainProcessResources(source)
+    .catch((error: unknown) => {
+      mainLog.warn("main process shutdown barrier failed", {
+        source,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    })
+    .finally(() => {
+      mainProcessShutdownComplete = true;
+      appQuitManager.allowImmediateQuit();
+      app.quit();
+    });
 }
 
 function beginQuitInProgress(source: string): void {
@@ -497,14 +537,14 @@ function installProcessShutdownHandlers(): void {
   const handleSignal = (signal: NodeJS.Signals): void => {
     mainLog.info("main process shutdown signal received", { signal });
     beginQuitInProgress(signal);
-    disposeMainProcessResourcesSync();
     appQuitManager.allowImmediateQuit();
-    app.quit();
+    quitAfterResourceShutdown(signal);
   };
   process.once("SIGTERM", handleSignal);
   process.once("SIGINT", handleSignal);
   process.once("exit", () => {
     disposeMainProcessResourcesSync();
+    disposeAppState();
   });
 }
 
@@ -917,6 +957,11 @@ export function bootstrapApp(): void {
     }
     if (quitInProgress) {
       if (appQuitManager.isQuitAllowed()) {
+        if (!mainProcessShutdownComplete) {
+          mainLog.info("starting resource shutdown after windows closed");
+          quitAfterResourceShutdown("window-all-closed");
+          return;
+        }
         mainLog.info("quitting after windows closed during shutdown");
         app.quit();
         return;
@@ -934,10 +979,15 @@ export function bootstrapApp(): void {
       return;
     }
     beginQuitInProgress("before-quit");
+    if (!mainProcessShutdownComplete) {
+      event?.preventDefault();
+      quitAfterResourceShutdown("before-quit");
+    }
   });
 
   app.on("will-quit", () => {
     disposeMainProcessResourcesSync();
+    disposeAppState();
   });
 }
 
