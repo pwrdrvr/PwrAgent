@@ -24429,6 +24429,168 @@ script = "printf setup"
     await registry.close();
   });
 
+  it("projects canonical PR statuses into both Agent inspection endpoints", async () => {
+    const stalePr = {
+      provider: "github.com",
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      number: 1132,
+      title: "Fix agent inspection",
+      state: "passing" as const,
+      checkState: "passing" as const,
+      lifecycleState: "open" as const,
+      reviewState: "ready_for_review" as const,
+      mergeState: "mergeable" as const,
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/1132",
+    };
+    const mergedPr = {
+      ...stalePr,
+      lifecycleState: "merged" as const,
+      mergeState: "unknown" as const,
+    };
+    const manualPr = {
+      ...stalePr,
+      repo: "PwrGit",
+      number: 77,
+      title: "Manual attachment",
+      url: "https://github.com/pwrdrvr/PwrGit/pull/77",
+    };
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "thread/read"] },
+      threads: [
+        {
+          id: "thread-1",
+          title: "Fix Agent PR status projection",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          updatedAt: 2_000,
+        },
+      ],
+      replay: {
+        entries: [],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+        threadStatus: "idle",
+      },
+    });
+    const search = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: 2_000,
+      filters: { backend: "all" as const, includeArchived: false },
+      contentMode: "metadata" as const,
+      semanticMode: "disabled" as const,
+      searchedScopes: ["metadata"] as const,
+      unavailableScopes: [],
+      results: [
+        {
+          backend: "codex" as const,
+          threadId: "thread-1",
+          identityKey: "codex:thread-1",
+          title: "Fix Agent PR status projection",
+          updatedAt: 2_000,
+          linkedDirectories: [],
+          source: "codex" as const,
+          score: 1,
+          confidence: "high" as const,
+          matchReasons: [{ kind: "metadata_match" as const }],
+          snippets: [],
+        },
+      ],
+      truncated: false,
+    }));
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:agent-thread": createAgentOverlay(),
+          "codex:thread-1": {
+            backend: "codex",
+            threadId: "thread-1",
+            executionMode: "default",
+            extraLinkedDirectories: [],
+            prs: [stalePr, manualPr],
+          },
+        },
+      }),
+      threadSearchService: { search } as unknown as ThreadSearchService,
+    });
+    registry.setThreadPullRequestCanonicalizer(async (prs) =>
+      prs.map((pr) => pr.number === mergedPr.number ? mergedPr : pr),
+    );
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "agent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+    const searchResponse = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "agent-thread",
+        turnId: "turn-1",
+        callId: "call-search",
+        requestId: "call-search",
+        namespace: "pwragent",
+        tool: "search_threads",
+        arguments: {},
+      },
+    } as AppServerPendingRequestNotification);
+    const statusResponse = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "agent-thread",
+        turnId: "turn-1",
+        callId: "call-status",
+        requestId: "call-status",
+        namespace: "pwragent",
+        tool: "get_thread_status",
+        arguments: {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    const searchPayload = JSON.parse(
+      (searchResponse as { contentItems: Array<{ text: string }> })
+        .contentItems[0]!.text,
+    );
+    const statusPayload = JSON.parse(
+      (statusResponse as { contentItems: Array<{ text: string }> })
+        .contentItems[0]!.text,
+    );
+    expect(searchPayload.threads[0].pullRequests[0]).toMatchObject({
+      number: 1132,
+      lifecycleState: "merged",
+    });
+    expect(searchPayload.threads[0].pullRequests[1]).toMatchObject({
+      number: 77,
+      lifecycleState: "open",
+    });
+    expect(statusPayload.thread.pullRequests[0]).toMatchObject({
+      number: 1132,
+      lifecycleState: "merged",
+    });
+    expect(statusPayload.thread.pullRequests[1]).toMatchObject({
+      number: 77,
+      lifecycleState: "open",
+    });
+
+    await registry.close();
+  });
+
   it("lists recent lightweight thread candidates for Agent thread search", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/list"] },

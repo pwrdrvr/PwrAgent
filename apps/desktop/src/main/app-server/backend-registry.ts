@@ -1471,6 +1471,10 @@ type ThreadPullRequestStatusToolHandler = (
   args: CheckThreadPullRequestStatusToolArgs,
 ) => PwrAgentThreadInspectionResponse | Promise<PwrAgentThreadInspectionResponse>;
 
+type ThreadPullRequestCanonicalizer = (
+  prs: PrSummary[],
+) => PrSummary[] | Promise<PrSummary[]>;
+
 type ThreadPullRequestWatchToolHandler = (
   args: WatchThreadPullRequestToolArgs,
 ) => PwrAgentThreadInspectionResponse | Promise<PwrAgentThreadInspectionResponse>;
@@ -6000,6 +6004,9 @@ export class DesktopBackendRegistry {
     | ThreadPullRequestWatchToolHandler
     | undefined;
   private threadPrAutoDispatchHandler: ThreadPrAutoDispatchHandler | undefined;
+  private threadPullRequestCanonicalizer:
+    | ThreadPullRequestCanonicalizer
+    | undefined;
   private threadInspectionSearchService: ThreadSearchService | null | undefined;
   private readonly headlessAutomationTurns = new Map<
     string,
@@ -6631,6 +6638,12 @@ export class DesktopBackendRegistry {
     handler: ThreadPullRequestStatusToolHandler | null | undefined,
   ): void {
     this.threadPullRequestStatusToolHandler = handler ?? undefined;
+  }
+
+  setThreadPullRequestCanonicalizer(
+    canonicalizer: ThreadPullRequestCanonicalizer | null | undefined,
+  ): void {
+    this.threadPullRequestCanonicalizer = canonicalizer ?? undefined;
   }
 
   setThreadPullRequestWatchToolHandler(
@@ -23332,7 +23345,7 @@ export class DesktopBackendRegistry {
         });
         return toThreadInspectionSummaryFromSearchResult(
           result,
-          overlay,
+          await this.projectCanonicalPullRequests(overlay),
           messagingBindings,
         );
       }),
@@ -23362,11 +23375,21 @@ export class DesktopBackendRegistry {
             : undefined);
         return toThreadInspectionSummary(
           gitWorkingState ? { ...thread, gitWorkingState } : thread,
-          overlay,
+          await this.projectCanonicalPullRequests(overlay),
           messagingBindings,
         );
       }),
     );
+  }
+
+  private async projectCanonicalPullRequests(
+    overlay: ThreadOverlayState | undefined,
+  ): Promise<ThreadOverlayState | undefined> {
+    if (!overlay?.prs?.length || !this.threadPullRequestCanonicalizer) {
+      return overlay;
+    }
+    const prs = await this.threadPullRequestCanonicalizer(overlay.prs);
+    return { ...overlay, prs };
   }
 
   private async getThreadInspectionMessagingBindings(params: {

@@ -290,6 +290,7 @@ function emitRegistryEvent(event: unknown): void {
 }
 const publishLocalEvent = vi.fn(async () => undefined);
 const setThreadPullRequestStatusToolHandler = vi.fn();
+const setThreadPullRequestCanonicalizer = vi.fn();
 const setThreadPullRequestWatchToolHandler = vi.fn();
 const setThreadPrAutoDispatchHandler = vi.fn();
 const setThreadPrAutoDispatchBatch = vi.fn(async () => undefined);
@@ -607,6 +608,7 @@ vi.mock("../app-server/backend-registry", () => ({
     onEvent,
     publishLocalEvent,
     setThreadPullRequestStatusToolHandler,
+    setThreadPullRequestCanonicalizer,
     setThreadPullRequestWatchToolHandler,
     setThreadPrAutoDispatchHandler,
     setThreadPrAutoDispatchBatch,
@@ -675,6 +677,7 @@ describe("app server ipc", () => {
     registryEventListeners.length = 0;
     publishLocalEvent.mockClear();
     setThreadPullRequestStatusToolHandler.mockClear();
+    setThreadPullRequestCanonicalizer.mockClear();
     setThreadPullRequestWatchToolHandler.mockClear();
     setThreadPrAutoDispatchHandler.mockClear();
     setThreadPrAutoDispatchBatch.mockClear();
@@ -750,6 +753,46 @@ describe("app server ipc", () => {
     expect(setThreadPullRequestWatchToolHandler).toHaveBeenCalledWith(
       expect.any(Function),
     );
+    expect(setThreadPullRequestCanonicalizer).toHaveBeenCalledWith(
+      expect.any(Function),
+    );
+  });
+
+  it("hydrates the thread inspection PR canonicalizer from durable cache", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const stalePr = githubPr({
+      number: 1132,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      state: "passing",
+      lifecycleState: "open",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/1132",
+    });
+    const mergedPr = githubPr({
+      ...stalePr,
+      lifecycleState: "merged",
+    });
+    readPrStatusCache.mockResolvedValueOnce({
+      "github.com/pwrdrvr/pwragent#1132": {
+        provider: "github.com",
+        prKey: "github.com/pwrdrvr/pwragent#1132",
+        fetchedAt: Date.now(),
+        pr: mergedPr,
+      },
+    });
+
+    registerAppServerIpcHandlers();
+
+    const canonicalize =
+      setThreadPullRequestCanonicalizer.mock.calls.at(-1)?.[0];
+    const [first, second] = await Promise.all([
+      canonicalize?.([stalePr]),
+      canonicalize?.([stalePr]),
+    ]);
+    expect(first).toEqual([mergedPr]);
+    expect(second).toEqual([mergedPr]);
+    expect(readPrStatusCache).toHaveBeenCalledTimes(1);
+    expect(publishLocalEvent).not.toHaveBeenCalled();
   });
 
   it("targets only existing threads with an open primary attached PR", async () => {
