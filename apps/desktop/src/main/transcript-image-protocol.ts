@@ -522,6 +522,7 @@ async function appendMarkdownLinkImageParts<T extends AppServerThreadMessage>(
 
   for (const imageLink of imageLinks) {
     const image = await materializeMarkdownLinkedImage(
+      message.id,
       imageLink.sourcePath,
       response,
       deps,
@@ -557,6 +558,7 @@ async function appendMarkdownLinkImageParts<T extends AppServerThreadMessage>(
 }
 
 async function materializeMarkdownLinkedImage(
+  messageId: string,
   sourcePath: string,
   response: AppServerReadThreadResponse,
   deps: TranscriptImageMaterializerDependencies,
@@ -565,12 +567,14 @@ async function materializeMarkdownLinkedImage(
   materializedImages: Map<string, Promise<MaterializedMarkdownLinkedImage | undefined>>,
   resolveApprovedLocalImageRoots: ApprovedLocalImageRootResolver,
 ): Promise<MaterializedMarkdownLinkedImage | undefined> {
-  const existing = materializedImages.get(sourcePath);
+  const associationKey = markdownLinkedImageAssociationKey(messageId, sourcePath);
+  const existing = materializedImages.get(associationKey);
   if (existing) {
     return await existing;
   }
 
   const materialization = materializeMarkdownLinkedImageOnce(
+    messageId,
     sourcePath,
     response,
     deps,
@@ -578,11 +582,12 @@ async function materializeMarkdownLinkedImage(
     resolutions,
     resolveApprovedLocalImageRoots,
   );
-  materializedImages.set(sourcePath, materialization);
+  materializedImages.set(associationKey, materialization);
   return await materialization;
 }
 
 async function materializeMarkdownLinkedImageOnce(
+  messageId: string,
   sourcePath: string,
   response: AppServerReadThreadResponse,
   deps: TranscriptImageMaterializerDependencies,
@@ -590,6 +595,18 @@ async function materializeMarkdownLinkedImageOnce(
   resolutions: Map<string, Promise<TranscriptImageFileResolution>>,
   resolveApprovedLocalImageRoots: ApprovedLocalImageRootResolver,
 ): Promise<MaterializedMarkdownLinkedImage | undefined> {
+  const sourceUrl = pathToFileURL(sourcePath).toString();
+  const cachedImage = await readCachedMarkdownLinkedImage(
+    messageId,
+    sourceUrl,
+    sourcePath,
+    response,
+    deps,
+  );
+  if (cachedImage) {
+    return cachedImage;
+  }
+
   const approvedLocalImageRoots = await resolveApprovedLocalImageRoots();
   const resolution = await resolveMarkdownLinkedImage(
     sourcePath,
@@ -606,19 +623,114 @@ async function materializeMarkdownLinkedImageOnce(
     return undefined;
   }
 
-  const sourceUrl = pathToFileURL(sourcePath).toString();
-  const imagePart = await materializeTranscriptImagePart(
-    { type: "image", url: sourceUrl, sourceUrl },
+  return await writeCachedMarkdownLinkedImage(
+    messageId,
+    sourceUrl,
     image,
     response,
     deps,
     materializedFileWrites,
   );
-  if (!isTranscriptImageProtocolUrl(imagePart.url)) {
+}
+
+async function readCachedMarkdownLinkedImage(
+  messageId: string,
+  sourceUrl: string,
+  sourcePath: string,
+  response: AppServerReadThreadResponse,
+  deps: TranscriptImageMaterializerDependencies,
+): Promise<MaterializedMarkdownLinkedImage | undefined> {
+  const mimeType = mimeTypeForImagePath(sourcePath);
+  const extension = mimeType ? DATA_IMAGE_EXTENSIONS.get(mimeType) : undefined;
+  if (!extension) {
     return undefined;
   }
 
-  return { sourceUrl, url: imagePart.url };
+  const filePath = markdownLinkedImageCachePath(
+    messageId,
+    sourceUrl,
+    extension,
+    response,
+    deps,
+  );
+  try {
+    const fileStat = await stat(filePath);
+    if (
+      !fileStat.isFile()
+      || fileStat.size === 0
+      || fileStat.size > MAX_FETCHED_TRANSCRIPT_IMAGE_BYTES
+    ) {
+      return undefined;
+    }
+  } catch {
+    return undefined;
+  }
+
+  return {
+    sourceUrl,
+    url: toTranscriptImageProtocolUrl(pathToFileURL(filePath).toString()),
+  };
+}
+
+async function writeCachedMarkdownLinkedImage(
+  messageId: string,
+  sourceUrl: string,
+  image: MaterializedTranscriptImage,
+  response: AppServerReadThreadResponse,
+  deps: TranscriptImageMaterializerDependencies,
+  materializedFileWrites: Map<string, Promise<void>>,
+): Promise<MaterializedMarkdownLinkedImage | undefined> {
+  const root = deps.resolveRoot({
+    backend: response.backend,
+    threadId: response.threadId,
+  });
+  const filePath = markdownLinkedImageCachePath(
+    messageId,
+    sourceUrl,
+    image.extension,
+    response,
+    deps,
+  );
+  try {
+    await deps.mkdir(root, { recursive: true });
+    let writePromise = materializedFileWrites.get(filePath);
+    if (!writePromise) {
+      writePromise = deps.writeFile(filePath, image.buffer).then(() => undefined);
+      materializedFileWrites.set(filePath, writePromise);
+    }
+    await writePromise;
+  } catch {
+    return undefined;
+  }
+
+  return {
+    sourceUrl,
+    url: toTranscriptImageProtocolUrl(pathToFileURL(filePath).toString()),
+  };
+}
+
+function markdownLinkedImageCachePath(
+  messageId: string,
+  sourceUrl: string,
+  extension: string,
+  response: AppServerReadThreadResponse,
+  deps: TranscriptImageMaterializerDependencies,
+): string {
+  const root = deps.resolveRoot({
+    backend: response.backend,
+    threadId: response.threadId,
+  });
+  const associationHash = createHash("sha256")
+    .update(markdownLinkedImageAssociationKey(messageId, sourceUrl))
+    .digest("hex");
+  return path.join(root, `markdown-${associationHash}.${extension}`);
+}
+
+function markdownLinkedImageAssociationKey(
+  messageId: string,
+  source: string,
+): string {
+  return `${messageId}\0${source}`;
 }
 
 async function readMarkdownLinkedTranscriptImage(
@@ -799,10 +911,6 @@ function rewriteTranscriptMessagePartImageUrl(
 
 function isFileImageUrl(url: string): boolean {
   return url.startsWith("file://");
-}
-
-function isTranscriptImageProtocolUrl(url: string): boolean {
-  return url.startsWith(`${TRANSCRIPT_IMAGE_PROTOCOL_SCHEME}://file/`);
 }
 
 function isMaterializableImageUrl(url: string): boolean {
