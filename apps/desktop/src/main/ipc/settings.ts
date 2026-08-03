@@ -860,8 +860,11 @@ function getCredentialTester(
         resolveService().resolveLineChannelAccessTokenSync(),
       resolveGrokApiKey: () => resolveService().resolveGrokApiKey(),
       resolveCodexCommand: async () => {
-        const snapshot = await resolveService().readSettings();
-        return snapshot.models.codex.discovery.selectedCommand ?? undefined;
+        try {
+          return (await resolveService().resolveCodexCommand()).command;
+        } catch {
+          return undefined;
+        }
       },
       validateMessagingCredentials: (request) =>
         getDesktopMessagingRuntime().requestCredentialValidation(request),
@@ -1033,7 +1036,7 @@ export function registerSettingsIpcHandlers(
       _request?: RefreshDesktopCodexDiscoveryRequest,
     ): Promise<ReadDesktopSettingsResponse> => ({
       snapshot: applyRuntimeMessagingSnapshot(
-        await getService(service).readSettings(),
+        await getService(service).refreshCodexDiscovery(),
       ),
     }),
   );

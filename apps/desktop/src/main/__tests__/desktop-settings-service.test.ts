@@ -24,6 +24,55 @@ function createTempRoot(): string {
 }
 
 describe("DesktopSettingsService", () => {
+  it("forces discovery refresh and invalidates command-setting writes", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const discover = vi.fn(async () => ({
+      candidates: [
+        {
+          command: "/opt/codex",
+          executable: true,
+          selected: true,
+          source: "config" as const,
+          version: "0.126.0",
+        },
+      ],
+      selectedCommand: "/opt/codex",
+      selectedSource: "config" as const,
+    }));
+    const invalidate = vi.fn();
+    const service = new DesktopSettingsService({
+      codexDiscoveryCoordinator: {
+        discover,
+        invalidate,
+        resolve: vi.fn(async () => ({
+          command: "/opt/codex",
+          source: "config" as const,
+          version: "0.126.0",
+        })),
+      },
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    await service.readSettings();
+    await service.refreshCodexDiscovery();
+    expect(discover).toHaveBeenNthCalledWith(2, undefined, {
+      allowStaleSuccess: true,
+      force: true,
+    });
+
+    await service.writeConfigPatch({
+      models: { codex: { path: "/opt/codex" } },
+    });
+    expect(invalidate).toHaveBeenCalledOnce();
+    expect(discover).toHaveBeenLastCalledWith("/opt/codex", {
+      allowStaleSuccess: true,
+      force: false,
+    });
+  });
+
   it("loads TOML values from the desktop config path", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");

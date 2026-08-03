@@ -94,7 +94,10 @@ import {
   type ThreadDirectoryEnrichment,
 } from "../app-server/thread-directory-enricher";
 import { normalizeReviewDisplayText } from "../../shared/review-command";
-import { StdioJsonRpcTransport } from "./stdio-transport";
+import {
+  StdioJsonRpcTransport,
+  type StdioJsonRpcTransportOptions,
+} from "./stdio-transport";
 import type {
   ThreadTitleAdapterParams,
   ThreadTitleAdapterResult,
@@ -164,6 +167,7 @@ type CodexClientOptions = {
   args?: string[];
   env?: NodeJS.ProcessEnv;
   resolveArgs?: (env: NodeJS.ProcessEnv) => Promise<string[]> | string[];
+  resolveCommand?: StdioJsonRpcTransportOptions["resolveCommand"];
   resolveEnv?: () => Promise<NodeJS.ProcessEnv>;
   directoryResolver?: (
     projectKey?: string
@@ -5784,6 +5788,7 @@ export class CodexAppServerClient {
         args: options.args ?? [],
         env: options.env,
         resolveArgs: options.resolveArgs,
+        resolveCommand: options.resolveCommand,
         resolveEnv: options.resolveEnv,
       }),
       options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,

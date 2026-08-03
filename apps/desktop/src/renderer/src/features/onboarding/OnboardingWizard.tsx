@@ -1722,6 +1722,7 @@ function BackendRequirementsStep(props: {
     setRefreshing(true);
     try {
       await props.desktopApi.refreshCodexDiscovery({});
+      await props.settings.refresh();
     } catch (caught) {
        
       console.warn("Onboarding: refreshCodexDiscovery failed", caught);

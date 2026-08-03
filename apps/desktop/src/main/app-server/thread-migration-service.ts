@@ -31,6 +31,7 @@ import {
   discoverCodexAuthProfiles,
   resolveDefaultCodexHome,
   resolveCodexHomeForProfile,
+  type ResolvedCodexCommandCandidate,
 } from "@pwrdrvr/codex-discovery";
 import {
   CodexAppServerClient,
@@ -68,12 +69,19 @@ type ThreadMigrationServiceOptions = {
   settingsService?: Pick<
     DesktopSettingsService,
     "readSettings" | "resolveCodexCommandPreference" | "resolveCodexSpawnEnv"
-  >;
+  > & Partial<Pick<
+    DesktopSettingsService,
+    "resolveCodexCommand" | "resolveCodexSpawnEnvAsync"
+  >>;
   sourceClientFactory?: (params: {
     codexHome: string;
     command?: string;
     env: NodeJS.ProcessEnv;
     profile: string;
+    resolveCommand?: (params: {
+      command: string;
+      env: NodeJS.ProcessEnv;
+    }) => Promise<ResolvedCodexCommandCandidate>;
   }) => SourceMigrationClient;
   idFactory?: () => string;
   now?: () => number;
@@ -684,23 +692,31 @@ export class ThreadMigrationService {
     const codexHome =
       source?.codexHome ?? resolveCodexHome(sourceProfile, this.options);
     const settingsService = this.getSettingsService();
-    const baseEnv = settingsService.resolveCodexSpawnEnv();
+    const baseEnv = settingsService.resolveCodexSpawnEnvAsync
+      ? await settingsService.resolveCodexSpawnEnvAsync()
+      : settingsService.resolveCodexSpawnEnv();
     const env = {
       ...baseEnv,
       CODEX_HOME: codexHome,
     };
     const command = settingsService.resolveCodexCommandPreference();
+    const resolveCodexCommand = settingsService.resolveCodexCommand;
+    const resolveCommand = resolveCodexCommand
+      ? async () => await resolveCodexCommand.call(settingsService)
+      : undefined;
     const client =
       this.options.sourceClientFactory?.({
         codexHome,
         command,
         env,
         profile: sourceProfile,
+        resolveCommand,
       }) ??
       new CodexAppServerClient({
         args: buildCodexClientArgs(env),
         command,
         env,
+        resolveCommand,
       });
     this.sourceClients.set(sourceProfile, client);
     return client;
@@ -709,7 +725,10 @@ export class ThreadMigrationService {
   private getSettingsService(): Pick<
     DesktopSettingsService,
     "readSettings" | "resolveCodexCommandPreference" | "resolveCodexSpawnEnv"
-  > {
+  > & Partial<Pick<
+    DesktopSettingsService,
+    "resolveCodexCommand" | "resolveCodexSpawnEnvAsync"
+  >> {
     return this.options.settingsService ?? getDesktopSettingsService();
   }
 
