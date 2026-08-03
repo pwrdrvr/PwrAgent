@@ -236,8 +236,13 @@ vi.mock("../auto-updater", () => ({
 }));
 
 const isUpdateInstallInProgressMock = vi.fn(() => false);
+const isUpdateInstallUpdaterQuitReadyMock = vi.fn(() => false);
+const setUpdateInstallPreparationHandlerMock = vi.fn();
 vi.mock("../update-install-state", () => ({
   isUpdateInstallInProgress: () => isUpdateInstallInProgressMock(),
+  isUpdateInstallUpdaterQuitReady: () =>
+    isUpdateInstallUpdaterQuitReadyMock(),
+  setUpdateInstallPreparationHandler: setUpdateInstallPreparationHandlerMock,
 }));
 
 vi.mock("../app-log-window", () => ({
@@ -496,6 +501,9 @@ describe("bootstrapApp", () => {
     isQuitAllowedMock.mockReturnValue(true);
     isUpdateInstallInProgressMock.mockReset();
     isUpdateInstallInProgressMock.mockReturnValue(false);
+    isUpdateInstallUpdaterQuitReadyMock.mockReset();
+    isUpdateInstallUpdaterQuitReadyMock.mockReturnValue(false);
+    setUpdateInstallPreparationHandlerMock.mockReset();
     mainLogInfoMock.mockReset();
     mainLogWarnMock.mockReset();
     mainLogErrorMock.mockReset();
@@ -764,12 +772,59 @@ describe("bootstrapApp", () => {
     // relaunch. If we answered that window-all-closed with our own app.quit()
     // we would race the native teardown and strand the app on the old version.
     isUpdateInstallInProgressMock.mockReturnValue(true);
+    isUpdateInstallUpdaterQuitReadyMock.mockReturnValue(true);
     requestQuitMock.mockClear();
 
     appEventHandlers.get("window-all-closed")?.();
     await flushMicrotasks();
 
     expect(requestQuitMock).not.toHaveBeenCalled();
+  });
+
+  it("does not intercept the updater-owned before-quit event", async () => {
+    startupProfilerInstance.start.mockResolvedValue();
+
+    await import("../index");
+    await flushMicrotasks();
+
+    isUpdateInstallInProgressMock.mockReturnValue(true);
+    isUpdateInstallUpdaterQuitReadyMock.mockReturnValue(true);
+    const event = { preventDefault: vi.fn() };
+    appEventHandlers.get("before-quit")?.(event);
+    await vi.waitFor(() =>
+      expect(disposeAppServerIpcHandlersMock).toHaveBeenCalledOnce(),
+    );
+
+    expect(event.preventDefault).not.toHaveBeenCalled();
+    expect(quitMock).not.toHaveBeenCalled();
+  });
+
+  it("holds before-quit while update shutdown preparation is pending", async () => {
+    let finishMessaging!: () => void;
+    startupProfilerInstance.start.mockResolvedValue();
+    disposeDesktopMessagingRuntimeMock.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        finishMessaging = resolve;
+      }),
+    );
+
+    await import("../index");
+    await flushMicrotasks();
+
+    isUpdateInstallInProgressMock.mockReturnValue(true);
+    isUpdateInstallUpdaterQuitReadyMock.mockReturnValue(false);
+    const event = { preventDefault: vi.fn() };
+    appEventHandlers.get("before-quit")?.(event);
+    await flushMicrotasks();
+
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+    expect(quitMock).not.toHaveBeenCalled();
+
+    finishMessaging();
+    await vi.waitFor(() =>
+      expect(disposeAppServerIpcHandlersMock).toHaveBeenCalledOnce(),
+    );
+    expect(quitMock).not.toHaveBeenCalled();
   });
 
   it("creates a main window when a profile focus request arrives without one", async () => {

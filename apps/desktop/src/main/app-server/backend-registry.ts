@@ -14557,12 +14557,21 @@ export class DesktopBackendRegistry {
     }
     const recoveryDrain = this.codexInvalidIdRecoveryDrain;
     const resources = [
-      ...(recoveryDrain
-        ? [{ name: "codex-recovery", close: () => recoveryDrain }]
-        : []),
       { name: "acp", close: () => this.acpBackend.close() },
       { name: "pdf-mcp", close: () => this.pdfToolMcpServer?.close() },
-      { name: "codex", close: () => this.codexClient.close() },
+      {
+        name: "codex",
+        close: async () => {
+          try {
+            await recoveryDrain;
+          } finally {
+            // Recovery may restart the transport before it observes that the
+            // registry closed. Always make the final Codex close happen after
+            // that drain so no retry-path child can escape shutdown.
+            await this.codexClient.close();
+          }
+        },
+      },
       { name: "grok", close: () => this.grokClient.close() },
       ...this.captureStores.splice(0).map((store, index) => ({
         name: `capture-${index}`,

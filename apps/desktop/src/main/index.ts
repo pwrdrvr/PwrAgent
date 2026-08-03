@@ -137,7 +137,11 @@ import {
   type ProfileFocusRequestWatcher,
 } from "./profile";
 import { SECRET_STORAGE_DISABLED_ENV } from "./settings/desktop-secret-store";
-import { isUpdateInstallInProgress } from "./update-install-state";
+import {
+  isUpdateInstallInProgress,
+  isUpdateInstallUpdaterQuitReady,
+  setUpdateInstallPreparationHandler,
+} from "./update-install-state";
 import { createShutdownBarrier } from "./shutdown-barrier";
 
 const APP_NAME = "PwrAgent";
@@ -153,6 +157,7 @@ const MESSAGING_SHUTDOWN_TIMEOUT_MS = 4_000;
 const APP_SERVER_SHUTDOWN_TIMEOUT_MS = 7_500;
 let mainProcessResourcesDisposed = false;
 let mainProcessShutdownComplete = false;
+let mainProcessShutdownPromise: Promise<void> | undefined;
 let finalQuitPromise: Promise<void> | undefined;
 let quitInProgress = false;
 let profileFocusRequestWatcher: ProfileFocusRequestWatcher | null = null;
@@ -437,10 +442,18 @@ const runMainProcessShutdownBarrier = createShutdownBarrier({
 });
 
 async function disposeMainProcessResources(source: string): Promise<void> {
-  disposeMainProcessResourcesSync();
-  await runMainProcessShutdownBarrier(source);
-  disposeAppState();
-  mainProcessShutdownComplete = true;
+  mainProcessShutdownPromise ??= (async () => {
+    disposeMainProcessResourcesSync();
+    await runMainProcessShutdownBarrier(source);
+    disposeAppState();
+    mainProcessShutdownComplete = true;
+  })();
+  await mainProcessShutdownPromise;
+}
+
+async function prepareForUpdateInstallShutdown(): Promise<void> {
+  beginQuitInProgress("update-install");
+  await disposeMainProcessResources("update-install");
 }
 
 function quitAfterResourceShutdown(source: string): void {
@@ -724,6 +737,7 @@ function rejectDevOnlyEnvVarsInProduction(): void {
 }
 
 export function bootstrapApp(): void {
+  setUpdateInstallPreparationHandler(prepareForUpdateInstallShutdown);
   rejectDevOnlyEnvVarsInProduction();
   app.setName(APP_NAME);
   app.setAboutPanelOptions({
@@ -973,6 +987,23 @@ export function bootstrapApp(): void {
   });
 
   app.on("before-quit", (event) => {
+    if (isUpdateInstallInProgress()) {
+      beginQuitInProgress("update-install");
+      if (!isUpdateInstallUpdaterQuitReady()) {
+        event?.preventDefault();
+      }
+      if (!mainProcessShutdownComplete) {
+        // Defensive fallback for a native/direct updater invocation that did
+        // not pass through installDownloadedAppUpdate. Never issue app.quit()
+        // here; preparation or Squirrel owns the next transition.
+        void prepareForUpdateInstallShutdown().catch((error: unknown) => {
+          mainLog.warn("update-install shutdown preparation failed", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      }
+      return;
+    }
     if (!appQuitManager.isQuitAllowed()) {
       event?.preventDefault();
       beginQuitWithRelease("before-quit");

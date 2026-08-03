@@ -7769,7 +7769,7 @@ script = "echo setup"
     await registry.close();
   });
 
-  it("closes Codex while an in-flight repair drains and does not retry", async () => {
+  it("drains an in-flight repair before the final Codex close", async () => {
     const threadId = "thread-close-during-invalid-id-repair";
     const recoveryDelay = createDeferred<void>();
     const codexClient = new MockBackendClient({
@@ -7816,7 +7816,7 @@ script = "echo setup"
     });
     await Promise.resolve();
     expect(closeSettled).toBe(false);
-    expect(codexClient.closeCallCount).toBe(1);
+    expect(codexClient.closeCallCount).toBe(0);
 
     recoveryDelay.resolve();
     await closePromise;

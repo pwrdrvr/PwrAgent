@@ -23,6 +23,18 @@ function isExited(child: OwnedChildProcess): boolean {
   return child.exitCode !== null || child.signalCode !== null;
 }
 
+function isOwnedProcessTreeAlive(child: OwnedChildProcess): boolean {
+  if (process.platform !== "win32" && child.pid) {
+    try {
+      process.kill(-child.pid, 0);
+      return true;
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code !== "ESRCH";
+    }
+  }
+  return !isExited(child);
+}
+
 function waitForExit(
   child: OwnedChildProcess,
   timeoutMs: number,
@@ -47,6 +59,39 @@ function waitForExit(
     if (isExited(child)) {
       finish(true);
     }
+  });
+}
+
+function waitForOwnedProcessTreeExit(
+  child: OwnedChildProcess,
+  timeoutMs: number,
+): Promise<boolean> {
+  if (process.platform === "win32" || !child.pid) {
+    return waitForExit(child, timeoutMs);
+  }
+  if (!isOwnedProcessTreeAlive(child)) {
+    return Promise.resolve(true);
+  }
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (exited: boolean): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearInterval(pollTimer);
+      clearTimeout(deadlineTimer);
+      resolve(exited);
+    };
+    const pollTimer = setInterval(() => {
+      if (!isOwnedProcessTreeAlive(child)) {
+        finish(true);
+      }
+    }, Math.max(1, Math.min(25, timeoutMs)));
+    const deadlineTimer = setTimeout(
+      () => finish(!isOwnedProcessTreeAlive(child)),
+      timeoutMs,
+    );
   });
 }
 
@@ -102,7 +147,7 @@ export async function terminateOwnedProcessTree(
   child: OwnedChildProcess,
   options: ProcessTreeTerminationOptions,
 ): Promise<void> {
-  if (isExited(child)) {
+  if (!isOwnedProcessTreeAlive(child)) {
     return;
   }
   let lastError: Error | undefined;
@@ -118,7 +163,7 @@ export async function terminateOwnedProcessTree(
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
     }
-    if (await waitForExit(child, options.gracefulTimeoutMs)) {
+    if (await waitForOwnedProcessTreeExit(child, options.gracefulTimeoutMs)) {
       return;
     }
     try {
@@ -128,7 +173,7 @@ export async function terminateOwnedProcessTree(
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
     }
-    if (await waitForExit(child, options.forceTimeoutMs)) {
+    if (await waitForOwnedProcessTreeExit(child, options.forceTimeoutMs)) {
       return;
     }
     throw lastError ?? new Error("child process tree did not exit after SIGKILL");

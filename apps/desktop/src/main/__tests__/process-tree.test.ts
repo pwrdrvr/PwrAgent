@@ -6,10 +6,9 @@ import { terminateOwnedProcessTree } from "../process-tree";
 const posixOnly = process.platform === "win32" ? it.skip : it;
 
 describe("terminateOwnedProcessTree", () => {
-  posixOnly("escalates and kills resistant descendants", async () => {
+  posixOnly("kills a resistant descendant after its group leader exits", async () => {
     const script = [
       'const { spawn } = require("node:child_process");',
-      'process.on("SIGTERM", () => undefined);',
       "const descendant = spawn(process.execPath, [\"-e\", \"process.on('SIGTERM', () => undefined); setInterval(() => undefined, 1000)\"], { stdio: \"ignore\" });",
       'process.stdout.write(String(descendant.pid) + "\\n");',
       "setInterval(() => undefined, 1000);",
