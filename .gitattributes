@@ -26,6 +26,11 @@ apps/desktop/src/main/pr-status/github-pr-fetcher.ts text eol=lf diff
 **/*.pdf binary
 **/*.webp binary
 
+# Playwright's macOS visual-regression baselines are generated on the matching
+# ARM64 VM runner. Keep this deliberately narrow so product imagery stays
+# ordinary Git content while infrequently changed golden assets use LFS.
+apps/desktop/e2e/*.spec.ts-snapshots/*.png filter=lfs diff=lfs merge=lfs -text
+
 # Vendor brand-kit SVGs — verbatim files from each vendor's brand
 # kit, refreshed via the procedure documented in each vendor's
 # `README.md` and never hand-edited (see

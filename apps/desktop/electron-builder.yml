@@ -4,8 +4,9 @@ copyright: "Copyright © 2026 PwrDrvr LLC."
 
 # Pinned so `pnpm deploy --prod` works — electron lives in devDependencies
 # and is therefore not present in the deploy stage's node_modules.
-# Keep this in sync with apps/desktop/package.json devDependencies.electron.
-electronVersion: 41.2.1
+# Keep this in sync with the apps/desktop Electron version resolved in
+# pnpm-lock.yaml. CI enforces the exact packaged/runtime match.
+electronVersion: 41.10.3
 
 # Bundle layout
 asar: true

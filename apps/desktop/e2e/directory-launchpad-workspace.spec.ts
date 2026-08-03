@@ -779,6 +779,8 @@ test("new-thread picker starts a newly added directory in local checkout by defa
     await app.window.getByRole("button", { name: /^(Project:|Choose a project)/ }).click();
     await app.window.getByRole("button", { name: /Add directory/ }).click();
 
+    await expectDirectoryLaunchpadHeader(app, "PickedRepo");
+
     const settings = app.window.getByLabel("New thread settings");
     const workspaceMode = settings.getByLabel("Workspace mode");
     await expect(workspaceMode).toBeEnabled();

@@ -32,6 +32,17 @@
   to removing invalid `id` fields from response items whose type is `message`.
 - Use the project-local [desktop E2E fixture seeding skill](.agents/skills/desktop-e2e-fixture-seeding/SKILL.md) when seeding or refreshing desktop replay fixtures from live captured sessions.
 - For reliable desktop E2E runs, prefer `pnpm test:desktop-e2e` from the repo root. The package-level `pnpm --filter @pwragent/desktop test:e2e` path is also safe now because it builds `apps/desktop/out/` before launching Playwright.
+- **Run disruptive macOS desktop E2E in the Tart VM lab, not on the user's
+  desktop.** Headed Electron tests flash and steal focus. If
+  `~/pwragent-mac-vm/run-e2e.sh` is present, run the suite there; windows render
+  on the guest display and the host desktop is untouched. Use
+  `~/pwragent-mac-vm/run-e2e.sh --local <repo-path> [playwright args]` for a
+  committed, unpushed HEAD. The local lab details live in the
+  `macos-vm-e2e-lab` skill at
+  [`.agents/skills/macos-vm-e2e-lab/SKILL.md`](.agents/skills/macos-vm-e2e-lab/SKILL.md).
+- The macOS CI lane uses the selected-repository **PwrDrvr macOS**
+  organization runner group, shared only with PwrSnap. Do not add a
+  repository-scoped runner or widen access to the rest of the organization.
 - For manual screenshots of the branch-drift dialog, run `pnpm --filter @pwragent/desktop inspect:e2e:branch-drift`; it opens a replay-backed Electron fixture and waits until you close the app.
 - To regenerate the README screenshots under `docs/assets/screenshots/`, run `pnpm --filter @pwragent/desktop screenshot:readme`. The full walkthrough (spec, fixtures, state-seeding helpers, native capture utilities) lives in [apps/desktop/AGENTS.md](apps/desktop/AGENTS.md) under "Capturing README Screenshots". macOS Screen Recording permission is required for whichever terminal/IDE runs the spec.
 - When focusing root Vitest runs through `pnpm test`, pass file paths or filters directly, for example `pnpm test packages/agent-core/src/__tests__/overlay-store.test.ts`. Do not insert a standalone `--` before the focus args; `pnpm test -- packages/...` makes Vitest run the full workspace suite.

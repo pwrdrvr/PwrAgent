@@ -4,7 +4,10 @@ import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promi
 import os from "node:os";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
-import { launchElectronApp } from "./fixtures/electron-app";
+import {
+  closeElectronApplication,
+  launchElectronApp,
+} from "./fixtures/electron-app";
 
 async function createCodexEnvironmentSetupFixture(params?: {
   includeExistingRunningSteps?: boolean;
@@ -524,12 +527,14 @@ test("thread environment Run command uses the current cwd after workspace handof
             const runs = thread?.codexEnvironmentRuntime?.actionRuns ?? [];
             // Take the most recently started run's status, which is the
             // one the Run-button click just kicked off. (Multi-instance
-            // refactor: see PR #505.)
+            // refactor: see PR #505.) This action is intentionally short,
+            // so assert its stable terminal state instead of racing to
+            // observe the transient "started" state.
             return runs.at(-1)?.status ?? "missing";
           }),
         { timeout: 5_000 },
       )
-      .toBe("started");
+      .toBe("exited");
     await expect
       .poll(
         async () =>
@@ -608,7 +613,7 @@ test("directory launchpad keeps selected environment controls after snapshot rel
       { directoryKey, repoDir: fixture.repoDir },
     );
 
-    await firstApp.electronApp.close();
+    await closeElectronApplication(firstApp.electronApp);
     firstApp = undefined;
 
     secondApp = await launchElectronApp({

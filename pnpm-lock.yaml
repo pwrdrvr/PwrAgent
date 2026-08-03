@@ -218,7 +218,7 @@ importers:
         specifier: ^4.11.4
         version: 4.12.1
       electron:
-        specifier: ^41.2.1
+        specifier: ^41.10.3
         version: 41.10.3
       electron-builder:
         specifier: 26.15.7
