@@ -70,6 +70,8 @@ import type {
   HandoffThreadWorkspaceResponse,
   InterruptTurnRequest,
   InterruptTurnResponse,
+  StopSubAgentRequest,
+  StopSubAgentResponse,
   LatestCodexConfigWarningResponse,
   ListAutomationCardsRequest,
   ListAutomationCardsResponse,
@@ -472,6 +474,9 @@ export type DesktopApi = {
   interruptTurn?: (
     request: InterruptTurnRequest
   ) => Promise<InterruptTurnResponse>;
+  stopSubAgent?: (
+    request: StopSubAgentRequest,
+  ) => Promise<StopSubAgentResponse>;
   steerTurn?: (request: SteerTurnRequest) => Promise<SteerTurnResponse>;
   setThreadExecutionMode?: (
     request: SetThreadExecutionModeRequest

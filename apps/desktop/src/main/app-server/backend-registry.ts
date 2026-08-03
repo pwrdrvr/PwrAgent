@@ -185,6 +185,8 @@ import {
   type StartReviewToolResult,
   type StartThreadRequest,
   type StartThreadResponse,
+  type StopSubAgentRequest,
+  type StopSubAgentResponse,
   type SubmitServerRequestRequest,
   type SubmitServerRequestResponse,
   type TrustCodexProjectRequest,
@@ -11465,6 +11467,128 @@ export class DesktopBackendRegistry {
       backend: params.backend,
       threadId: result.threadId,
       turnId: result.turnId,
+    };
+  }
+
+  async stopSubAgent(
+    params: StopSubAgentRequest,
+  ): Promise<StopSubAgentResponse> {
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: params.backend,
+      threadId: params.threadId,
+    });
+    const subAgent = overlay?.subAgents?.find(
+      (candidate) => candidate.monitorId === params.monitorId,
+    );
+    if (!subAgent) {
+      throw new Error("Sub-agent was not found on this thread.");
+    }
+    if (subAgent.status !== "running") {
+      throw new Error("Sub-agent is no longer running.");
+    }
+    const taskMonitor = this.taskMonitorDelegations.get(params.monitorId);
+    if (
+      taskMonitor
+      && taskMonitor.parentBackend === params.backend
+      && taskMonitor.parentThreadId === params.threadId
+    ) {
+      if (!taskMonitor.monitorThreadId || !taskMonitor.monitorTurnId) {
+        throw new Error("Sub-agent does not expose an active turn to stop.");
+      }
+      // A terminal notification from an interrupted monitor normally starts a
+      // recovery turn. Remove an intentionally stopped monitor first so the
+      // terminal handler cannot mistake this user action for a crash.
+      this.taskMonitorDelegations.delete(params.monitorId);
+      try {
+        const executionMode = taskMonitor.executionMode ?? "default";
+        await this.getClient("codex", executionMode).interruptTurn({
+          threadId: taskMonitor.monitorThreadId,
+          turnId: taskMonitor.monitorTurnId,
+        });
+      } catch (error) {
+        this.taskMonitorDelegations.set(params.monitorId, taskMonitor);
+        throw error;
+      }
+
+      const stoppedAt = Date.now();
+      await this.persistTaskMonitorSubAgent(taskMonitor, {
+        completedAt: stoppedAt,
+        lastMessage: "Stopped by user.",
+        outcome: "cancelled",
+        status: "cancelled",
+        updatedAt: stoppedAt,
+      });
+      return {
+        backend: params.backend,
+        threadId: params.threadId,
+        monitorId: params.monitorId,
+        stoppedAt,
+      };
+    }
+
+    if (!subAgent.monitorThreadId || !subAgent.monitorTurnId) {
+      throw new Error("Sub-agent does not expose an active turn to stop.");
+    }
+
+    let turnId = subAgent.monitorTurnId;
+    if (subAgent.monitorId.startsWith("codex-native:")) {
+      try {
+        const child = await this.readThread({
+          backend: "codex",
+          threadId: subAgent.monitorThreadId,
+          includeTurns: true,
+          viewOnly: true,
+        });
+        const activeEntry = [...child.replay.entries]
+          .reverse()
+          .find((entry) => entry.turn?.status === "in_progress");
+        turnId = activeEntry?.turn?.id ?? turnId;
+      } catch (error) {
+        backendRegistryLog.debug("native sub-agent active turn read failed", {
+          error: error instanceof Error ? error.message : String(error),
+          monitorId: subAgent.monitorId,
+          monitorThreadId: subAgent.monitorThreadId,
+        });
+      }
+    }
+
+    await this.interruptTurn({
+      backend: subAgent.backend ?? params.backend,
+      threadId: subAgent.monitorThreadId,
+      turnId,
+    });
+
+    const stoppedAt = Date.now();
+    await this.overlayStore.upsertThreadSubAgent({
+      backend: params.backend,
+      threadId: params.threadId,
+      subAgent: {
+        ...subAgent,
+        status: "cancelled",
+        outcome: "cancelled",
+        completedAt: stoppedAt,
+        updatedAt: stoppedAt,
+        lastMessage: "Stopped by user.",
+      },
+    });
+    if (subAgent.monitorId.startsWith("codex-native:")) {
+      this.clearCodexNativeSubAgentReconciliation(subAgent.monitorThreadId);
+    }
+    this.invalidateThreadListCache(params.backend);
+    await this.emit({
+      backend: params.backend,
+      notification: {
+        method: "thread/subAgents/updated",
+        params: {
+          threadId: params.threadId,
+        },
+      },
+    });
+    return {
+      backend: params.backend,
+      threadId: params.threadId,
+      monitorId: params.monitorId,
+      stoppedAt,
     };
   }
 

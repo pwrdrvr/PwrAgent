@@ -17,6 +17,8 @@ import {
   type MaterializeDirectoryLaunchpadResponse,
   type InterruptTurnRequest,
   type InterruptTurnResponse,
+  type StopSubAgentRequest,
+  type StopSubAgentResponse,
   type LatestCodexConfigWarningResponse,
   type ListBackendsRequest,
   type ListBackendsResponse,
@@ -70,6 +72,7 @@ import {
   AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL,
   AGENT_COMPACT_THREAD_CHANNEL,
   AGENT_INTERRUPT_TURN_CHANNEL,
+  AGENT_STOP_SUB_AGENT_CHANNEL,
   AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
   AGENT_QUEUE_THREAD_EXECUTION_MODE_CHANNEL,
   AGENT_RETAIN_THREAD_BRANCH_DRIFT_CHANNEL,
@@ -526,6 +529,33 @@ export function registerAgentIpcHandlers(): void {
     },
   );
 
+  ipcMain.removeHandler(AGENT_STOP_SUB_AGENT_CHANNEL);
+  ipcMain.handle(
+    AGENT_STOP_SUB_AGENT_CHANNEL,
+    async (
+      _event,
+      request: StopSubAgentRequest,
+    ): Promise<StopSubAgentResponse> => {
+      logDebug("stopSubAgent", {
+        backend: request.backend,
+        threadId: request.threadId,
+        monitorId: request.monitorId,
+      });
+
+      try {
+        return await registry.stopSubAgent(request);
+      } catch (error) {
+        appServerLog.error("stopSubAgent failed", {
+          backend: request.backend,
+          threadId: request.threadId,
+          monitorId: request.monitorId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
+    },
+  );
+
   ipcMain.removeHandler(AGENT_STEER_TURN_CHANNEL);
   ipcMain.handle(
     AGENT_STEER_TURN_CHANNEL,
@@ -763,6 +793,7 @@ export function disposeAgentIpcHandlers(): void {
   ipcMain.removeHandler(AGENT_COMPACT_THREAD_CHANNEL);
   ipcMain.removeHandler(AGENT_START_TURN_CHANNEL);
   ipcMain.removeHandler(AGENT_INTERRUPT_TURN_CHANNEL);
+  ipcMain.removeHandler(AGENT_STOP_SUB_AGENT_CHANNEL);
   ipcMain.removeHandler(AGENT_STEER_TURN_CHANNEL);
   ipcMain.removeHandler(AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL);
   ipcMain.removeHandler(AGENT_QUEUE_THREAD_EXECUTION_MODE_CHANNEL);

@@ -34,6 +34,7 @@ export const AGENT_START_TURN_CHANNEL = "agent:start-turn";
 export const AGENT_START_REVIEW_CHANNEL = "agent:start-review";
 export const AGENT_COMPACT_THREAD_CHANNEL = "agent:compact-thread";
 export const AGENT_INTERRUPT_TURN_CHANNEL = "agent:interrupt-turn";
+export const AGENT_STOP_SUB_AGENT_CHANNEL = "agent:stop-sub-agent";
 export const AGENT_STEER_TURN_CHANNEL = "agent:steer-turn";
 export const AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL = "agent:set-thread-execution-mode";
 export const AGENT_QUEUE_THREAD_EXECUTION_MODE_CHANNEL =
