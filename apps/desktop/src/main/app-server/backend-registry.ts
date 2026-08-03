@@ -202,6 +202,7 @@ import {
   type EnsureDirectoryLaunchpadResponse,
   applyCodexEnvironmentActionRunUpdate,
   buildPendingRequestResponse,
+  buildPullRequestStatusKey,
   buildThreadIdentityKey,
   insertSubthreadIdAfter,
   isAcpBackendId,
@@ -5989,6 +5990,7 @@ export class DesktopBackendRegistry {
     | ThreadPullRequestWatchToolHandler
     | undefined;
   private threadPrAutoDispatchHandler: ThreadPrAutoDispatchHandler | undefined;
+  private readonly canonicalPullRequestsByStatusKey = new Map<string, PrSummary>();
   private threadInspectionSearchService: ThreadSearchService | null | undefined;
   private readonly headlessAutomationTurns = new Map<
     string,
@@ -23223,7 +23225,7 @@ export class DesktopBackendRegistry {
         });
         return toThreadInspectionSummaryFromSearchResult(
           result,
-          overlay,
+          this.projectCanonicalPullRequests(overlay),
           messagingBindings,
         );
       }),
@@ -23253,11 +23255,31 @@ export class DesktopBackendRegistry {
             : undefined);
         return toThreadInspectionSummary(
           gitWorkingState ? { ...thread, gitWorkingState } : thread,
-          overlay,
+          this.projectCanonicalPullRequests(overlay),
           messagingBindings,
         );
       }),
     );
+  }
+
+  private projectCanonicalPullRequests(
+    overlay: ThreadOverlayState | undefined,
+  ): ThreadOverlayState | undefined {
+    if (!overlay?.prs?.length || this.canonicalPullRequestsByStatusKey.size === 0) {
+      return overlay;
+    }
+    let changed = false;
+    const prs = overlay.prs.map((pr) => {
+      const canonical = this.canonicalPullRequestsByStatusKey.get(
+        buildPullRequestStatusKey(pr),
+      );
+      if (!canonical) {
+        return pr;
+      }
+      changed = changed || canonical !== pr;
+      return canonical;
+    });
+    return changed ? { ...overlay, prs } : overlay;
   }
 
   private async getThreadInspectionMessagingBindings(params: {
@@ -23742,6 +23764,17 @@ export class DesktopBackendRegistry {
     event = await this.withThreadMessageOrigin(event);
     this.rememberFileChangeApprovalContext(event);
     event = this.withEmbeddedFileChangeApprovalContext(event);
+
+    if (event.notification.method === "pullRequest/status/updated") {
+      const { prKey, pr } = event.notification.params as {
+        prKey: string;
+        pr: PrSummary;
+      };
+      this.canonicalPullRequestsByStatusKey.set(
+        prKey,
+        pr,
+      );
+    }
 
     if (event.backend === "codex") {
       this.recordTaskMonitorActivity(event.notification);
