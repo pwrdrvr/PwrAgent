@@ -1646,6 +1646,99 @@ describe("MessagingController", () => {
     );
   });
 
+  it.each([
+    "telegram",
+    "discord",
+    "slack",
+    "mattermost",
+    "feishu",
+    "line",
+  ] as const)(
+    "routes natural language beginning with a command verb to the %s provider default Agent",
+    async (provider) => {
+      const navigation = buildNavigationSnapshot();
+      navigation.threads[0] = {
+        ...navigation.threads[0]!,
+        title: "Provider Default Agent",
+        agent: {
+          name: "Provider Default Agent",
+          instructionLineCount: 1,
+          instructionsTooLong: false,
+          updatedAt: 1500,
+        },
+      };
+      const harness = await createHarness({
+        channel: provider,
+        navigation,
+      });
+      const channel = {
+        channel: provider,
+        conversation: {
+          id: `${provider}-channel-1`,
+          kind: "channel" as const,
+          workspaceId: `${provider}-workspace-1`,
+        },
+      };
+      await harness.store.upsertDefaultAgentAssignment({
+        id: `default-agent:${provider}:provider`,
+        scope: {
+          kind: "provider",
+          channel: provider,
+        },
+        target: {
+          kind: "agent",
+          backend: "codex",
+          threadId: "thread-1",
+        },
+        createdAt: 1000,
+        updatedAt: 1000,
+      });
+
+      await harness.controller.handleInboundEvent(
+        buildTextEvent("new phone who dis?", {
+          botMention: provider !== "feishu" && provider !== "line",
+          channel,
+        }),
+      );
+
+      expect(harness.startTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          backend: "codex",
+          input: [{ type: "text", text: "new phone who dis?" }],
+          threadId: "thread-1",
+        }),
+      );
+      expect(harness.delivered).not.toContainEqual(
+        expect.objectContaining({ kind: "project_picker" }),
+      );
+    },
+  );
+
+  it("preserves exact at-mention command shortcuts", async () => {
+    const harness = await createHarness({ channel: "slack" });
+    const channel = {
+      channel: "slack" as const,
+      conversation: {
+        id: "slack-channel-1",
+        kind: "channel" as const,
+        workspaceId: "slack-workspace-1",
+      },
+    };
+
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("new", {
+        botMention: true,
+        channel,
+      }),
+    );
+
+    expect(harness.startTurn).not.toHaveBeenCalled();
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "project_picker",
+      prompt: expect.stringContaining("Choose a project for the new PwrAgent thread"),
+    });
+  });
+
   it("routes an addressed root when its adapter cannot create a child", async () => {
     const navigation = buildNavigationSnapshot();
     navigation.threads[0] = {

@@ -918,26 +918,31 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       return;
     }
 
-    // `@<botUsername> <verb>` text mention → command. Works on every
-    // Mattermost server version (the WS `posted` event always carries
-    // full thread context via `post.root_id`), unlike v10.x slash
-    // commands which need the response_url workaround. Users get a
-    // path that "just works" in threads without depending on server
-    // version. The mention prefix is case-insensitive because
-    // Mattermost's autocomplete inserts the canonical username but
-    // users may type-correct or use shell-style tab completion.
+    // Normalize leading bot mentions to the same addressed-text shape used by
+    // Slack, Telegram, and Discord. The controller owns the channel-neutral
+    // decision between an exact mention command (`@bot new`) and natural
+    // language (`@bot new phone who dis?`). Bare mentions remain the canonical
+    // Help shortcut. The mention prefix is case-insensitive because
+    // Mattermost's autocomplete inserts the canonical username but users may
+    // type-correct or use shell-style tab completion.
     const stripped = stripBotMention(messageText, this.botUsername);
     if (stripped !== undefined) {
-      await this.dispatchCommandEvent({
-        actor,
-        channel: channelRef,
-        eventId: post.id,
-        // Synthesize the slash form so `dispatchCommandEvent`'s
-        // existing parser strips the leading `/` and produces a
-        // standard `MessagingInboundCommandEvent` — the controller
-        // sees the same shape regardless of slash-vs-mention origin.
-        rawText: stripped.length === 0 ? "/help" : `/${stripped}`,
-      });
+      if (stripped.length === 0) {
+        await this.dispatchCommandEvent({
+          actor,
+          channel: channelRef,
+          eventId: post.id,
+          rawText: "/help",
+        });
+      } else {
+        await this.dispatchTextEvent({
+          actor,
+          botMention: true,
+          channel: channelRef,
+          eventId: post.id,
+          text: stripped,
+        });
+      }
       return;
     }
 
@@ -1266,6 +1271,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
 
   private async dispatchTextEvent(params: {
     actor: MessagingActorIdentity;
+    botMention?: boolean;
     channel: MessagingChannelRef;
     eventId: string;
     text: string;
@@ -1279,6 +1285,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       receivedAt: this.now(),
       actor: params.actor,
       channel: params.channel,
+      ...(params.botMention ? { botMention: true } : {}),
       text: params.text,
     });
   }

@@ -362,6 +362,62 @@ describe("MattermostAdapter — capability profile", () => {
     ]);
   });
 
+  it("dispatches natural language after a leading bot mention as addressed text", async () => {
+    const wsHooks: WebSocketHooks = {
+      fireMessage: () => {},
+      fireClose: () => {},
+    };
+    const events: MessagingInboundEvent[] = [];
+    const adapter = new MattermostAdapter({
+      callbackHandleStore: fakeStore,
+      client: fakeClient4({
+        createdPosts: [],
+        patchedPosts: [],
+      }),
+      config: {
+        ...baseConfig,
+        authorizedActorIds: [
+          { id: "haroldabcdefghijklmnopqr12", displayName: "" },
+        ],
+      },
+      logger: silentLogger,
+      websocketClient: fakeWebSocketClient(undefined, wsHooks),
+      callbackServer: {
+        start: async () => {},
+        stop: async () => {},
+        signContext: () => ({ hmac: "x", issuedAt: 0 }),
+      } as never,
+      now: () => 1_700_000_000_000,
+    });
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    wsHooks.fireMessage({
+      event: "posted",
+      data: {
+        channel_type: "D",
+        channel_display_name: "PwrAgent",
+        sender_name: "harold",
+        post: JSON.stringify({
+          id: "postpostabcdefghijklmn1234",
+          channel_id: "channelabcdefghijklmn12345",
+          user_id: "haroldabcdefghijklmnopqr12",
+          message: "@pwragent new phone who dis?",
+        }),
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        botMention: true,
+        kind: "text",
+        text: "new phone who dis?",
+      }),
+    ]);
+  });
+
   it("rejects group DM posts from authorized actors when no workspace or conversation is authorized", async () => {
     const wsHooks: WebSocketHooks = {
       fireMessage: () => {},

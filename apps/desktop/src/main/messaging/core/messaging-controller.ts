@@ -17808,8 +17808,15 @@ function parseMentionCommand(
   text: string,
 ): { command: string; args: string[] } | undefined {
   const tokens = text.trim().split(/\s+/).filter(Boolean);
+  // Keep mention commands deliberately unambiguous. A bare known verb such
+  // as `@bot new` is a convenient control shortcut, but addressed prose such
+  // as `@bot new phone who dis?` belongs to the bound/default Agent. Commands
+  // with arguments remain available through their explicit slash form.
+  if (tokens.length !== 1) {
+    return undefined;
+  }
   const command = matchMessagingCommandVerb(tokens[0] ?? "");
-  return command ? { command, args: tokens.slice(1) } : undefined;
+  return command ? { command, args: [] } : undefined;
 }
 
 function skillSearchCwdsForThreadState(
