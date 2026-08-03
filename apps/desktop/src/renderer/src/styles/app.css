@@ -13400,6 +13400,11 @@ a.transcript-message__messaging-origin:focus-visible {
   outline: none;
 }
 
+.context-list__action:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
 .context-list__action--danger {
   border-color: var(--danger-border);
   color: var(--danger-text);
@@ -14677,6 +14682,23 @@ a.transcript-message__messaging-origin:focus-visible {
 
 .rail-card__usage {
   color: var(--text-secondary);
+}
+
+.rail-card__actions {
+  width: 100%;
+  margin-top: 2px;
+}
+
+.rail-card__details-action {
+  flex: 1 1 auto;
+}
+
+.rail-card__error {
+  margin: 0;
+  color: var(--danger-text);
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 .pricing-usage-row {

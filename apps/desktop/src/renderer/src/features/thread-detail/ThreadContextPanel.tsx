@@ -738,6 +738,8 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
       case "subagents":
         return (
           <SubAgentsPanel
+            desktopApi={props.desktopApi}
+            onRefreshNavigation={props.onRefreshNavigation}
             pricingDisplayOptions={props.pricingDisplayOptions}
             thread={props.thread}
             onDetailsModalOpenChange={handlePortaledInteractionChange}

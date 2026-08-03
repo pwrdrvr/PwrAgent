@@ -28684,6 +28684,176 @@ script = "printf setup"
     await registry.close();
   });
 
+  it("stops active task monitors without starting recovery", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "turn/interrupt"] },
+      models: TEST_TASK_MONITOR_MODELS,
+      startThreadResult: { threadId: "monitor-thread" },
+    });
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+    const delegationResponse = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent_task_monitors",
+        tool: "create_monitor_delegation",
+        arguments: {
+          task: "Watch an asynchronous task until it finishes.",
+          pollIntervalSeconds: 20,
+        },
+      },
+    } as AppServerPendingRequestNotification);
+    const monitorId = JSON.parse(
+      (delegationResponse as { contentItems: Array<{ text: string }> })
+        .contentItems[0]?.text ?? "{}",
+    ).monitorId as string;
+
+    await expect(registry.stopSubAgent({
+      backend: "codex",
+      threadId: "thread-1",
+      monitorId,
+    })).resolves.toMatchObject({
+      backend: "codex",
+      threadId: "thread-1",
+      monitorId,
+    });
+
+    expect(codexClient.lastInterruptTurnParams).toMatchObject({
+      threadId: "monitor-thread",
+      turnId: "turn-1",
+    });
+    await expect(overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: "thread-1",
+    })).resolves.toMatchObject({
+      subAgents: [
+        expect.objectContaining({
+          monitorId,
+          status: "cancelled",
+          outcome: "cancelled",
+          lastMessage: "Stopped by user.",
+        }),
+      ],
+    });
+
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/cancelled",
+        params: {
+          threadId: "monitor-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1", status: "cancelled", output: [] },
+        },
+      },
+    });
+
+    expect(codexClient.startTurnCallCount).toBe(1);
+    expect(codexClient.injectedThreadItems).toHaveLength(0);
+    await registry.close();
+  });
+
+  it("stops native Codex sub-agents using the child's active turn", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/read", "turn/interrupt"] },
+      replay: {
+        entries: [
+          {
+            type: "activity",
+            id: "activity-1",
+            summary: "Working",
+            details: [],
+            turn: {
+              id: "child-turn",
+              status: "in_progress",
+            },
+          },
+        ],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+      },
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          subAgents: [
+            {
+              monitorId: "codex-native:child-thread",
+              task: "Investigate the issue",
+              status: "running",
+              createdAt: 1,
+              updatedAt: 1,
+              backend: "codex",
+              monitorThreadId: "child-thread",
+              monitorTurnId: "parent-turn",
+            },
+          ],
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({}),
+      overlayStore,
+    });
+
+    await registry.stopSubAgent({
+      backend: "codex",
+      threadId: "thread-1",
+      monitorId: "codex-native:child-thread",
+    });
+
+    expect(codexClient.lastReadThreadParams).toMatchObject({
+      threadId: "child-thread",
+      includeTurns: true,
+    });
+    expect(codexClient.lastInterruptTurnParams).toMatchObject({
+      threadId: "child-thread",
+      turnId: "child-turn",
+    });
+    await expect(overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: "thread-1",
+    })).resolves.toMatchObject({
+      subAgents: [
+        expect.objectContaining({
+          monitorId: "codex-native:child-thread",
+          status: "cancelled",
+          outcome: "cancelled",
+        }),
+      ],
+    });
+    await registry.close();
+  });
+
   it("interrupts stale active monitors before fallback completion", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },

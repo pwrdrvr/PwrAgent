@@ -4,6 +4,7 @@ import type {
   InterruptTurnRequest,
   ListBackendsRequest,
   MaterializeDirectoryLaunchpadRequest,
+  StopSubAgentRequest,
   StartReviewRequest,
   StartThreadRequest,
   StartTurnRequest,
@@ -56,6 +57,12 @@ const registry = {
     backend: request.backend,
     threadId: request.threadId,
     turnId: request.turnId,
+  })),
+  stopSubAgent: vi.fn(async (request: StopSubAgentRequest) => ({
+    backend: request.backend,
+    threadId: request.threadId,
+    monitorId: request.monitorId,
+    stoppedAt: 1,
   })),
   steerTurn: vi.fn(async (request: SteerTurnRequest) => ({
     backend: request.backend,
@@ -121,6 +128,7 @@ describe("agent ipc", () => {
     registry.submitTurn.mockClear();
     registry.startReview.mockClear();
     registry.interruptTurn.mockClear();
+    registry.stopSubAgent.mockClear();
     registry.steerTurn.mockClear();
     registry.materializeDirectoryLaunchpad.mockClear();
     registryListener = undefined;
@@ -138,6 +146,7 @@ describe("agent ipc", () => {
       AGENT_START_THREAD_CHANNEL,
       AGENT_START_REVIEW_CHANNEL,
       AGENT_START_TURN_CHANNEL,
+      AGENT_STOP_SUB_AGENT_CHANNEL,
       AGENT_STEER_TURN_CHANNEL,
       BACKEND_LIST_CHANNEL,
     } = await import("../../shared/ipc");
@@ -189,6 +198,18 @@ describe("agent ipc", () => {
       backend: "grok",
       threadId: "thread-1",
       turnId: "turn-1",
+    });
+    expect(
+      await handlers.get(AGENT_STOP_SUB_AGENT_CHANNEL)?.({}, {
+        backend: "codex",
+        threadId: "thread-1",
+        monitorId: "monitor-1",
+      }),
+    ).toEqual({
+      backend: "codex",
+      threadId: "thread-1",
+      monitorId: "monitor-1",
+      stoppedAt: 1,
     });
     expect(
       await handlers.get(AGENT_STEER_TURN_CHANNEL)?.({}, {
