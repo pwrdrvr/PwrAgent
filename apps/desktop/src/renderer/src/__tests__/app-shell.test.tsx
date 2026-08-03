@@ -1232,7 +1232,7 @@ describe("App", () => {
       "heading",
       {
         level: 2,
-        name: "PwrAgent",
+        name: "New thread",
       },
       { timeout: 5_000 },
     );
@@ -3488,7 +3488,7 @@ describe("App", () => {
       screen.getByRole("tab", { name: /^Directories/ }),
     );
     await clickButton("Open new thread launchpad for PwrAgent");
-    await screen.findByRole("heading", { level: 2, name: "PwrAgent" });
+    await screen.findByRole("heading", { level: 2, name: "New thread" });
     expect(
       screen.getByRole("button", { name: "First project thread" }),
     ).toHaveAttribute("aria-pressed", "false");
@@ -3512,7 +3512,7 @@ describe("App", () => {
     });
     await clickButton("Back");
 
-    await screen.findByRole("heading", { level: 2, name: "PwrAgent" });
+    await screen.findByRole("heading", { level: 2, name: "New thread" });
     expect(
       getComposerValueHost(screen.getByRole("textbox", { name: "New thread" })),
     ).toHaveAttribute("data-value", "Keep this configured project draft.");

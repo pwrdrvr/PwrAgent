@@ -110,7 +110,8 @@ type ThreadContextPanelProps = {
     usd: boolean;
   };
   threadPricingSummaryEnabled?: boolean;
-  thread: NavigationThreadSummary;
+  /** Absent on the new-thread launchpad, where only provider context applies. */
+  thread?: NavigationThreadSummary;
   worktreeArchiveError?: string;
   onRestoreWorktree?: (
     thread: NavigationThreadSummary,
@@ -180,12 +181,15 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   const outsideRailSinceRef = useRef<number | undefined>(undefined);
   const threadPricingSummaryEnabled = props.threadPricingSummaryEnabled ?? true;
 
-  const activeTab =
-    props.activeTab === "pricing" && !threadPricingSummaryEnabled
+  const activeTab = !props.thread
+    ? "providers"
+    : props.activeTab === "pricing" && !threadPricingSummaryEnabled
       ? "info"
       : props.activeTab;
-  const visibleTabs = CONTEXT_TABS.filter(
-    (tab) => tab.id !== "pricing" || threadPricingSummaryEnabled,
+  const visibleTabs = CONTEXT_TABS.filter((tab) =>
+    props.thread
+      ? tab.id !== "pricing" || threadPricingSummaryEnabled
+      : tab.id === "providers",
   );
   const topTabs = visibleTabs.filter((tab) => !tab.bottom);
   const bottomTabs = visibleTabs.filter((tab) => tab.bottom);
@@ -502,7 +506,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   return (
     <aside
       ref={railRef}
-      aria-label="Thread context"
+      aria-label={props.thread ? "Thread context" : "New thread context"}
       className={`context-rail${open ? " is-open" : " is-collapsed"}${
         pinned ? " is-pinned" : ""
       }${resizing ? " is-resizing" : ""}`}
@@ -681,6 +685,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   function renderActivePanel() {
     switch (activeTab) {
       case "info":
+        if (!props.thread) return null;
         return (
           <ThreadInfoPanel
             thread={props.thread}
@@ -693,6 +698,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
           />
         );
       case "edits":
+        if (!props.thread) return null;
         return (
           <EditsPanel
             groups={props.editedFileGroups ?? []}
@@ -708,6 +714,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
           />
         );
       case "pricing":
+        if (!props.thread) return null;
         return (
           <PricingPanel
             activeTurnId={props.activeTurnId}
@@ -719,6 +726,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
           />
         );
       case "actions":
+        if (!props.thread) return null;
         return (
           <ActionRunsPanel
             dock={props.actionRunsDock ?? "above"}
@@ -735,6 +743,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
           />
         );
       case "subagents":
+        if (!props.thread) return null;
         return (
           <SubAgentsPanel
             pricingDisplayOptions={props.pricingDisplayOptions}
@@ -743,6 +752,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
           />
         );
       case "automations":
+        if (!props.thread) return null;
         return (
           <ThreadAutomationsPanel
             desktopApi={props.desktopApi}
@@ -751,6 +761,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
           />
         );
       case "prs":
+        if (!props.thread) return null;
         return (
           <PullRequestsPanel
             desktopApi={props.desktopApi}
@@ -759,6 +770,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
           />
         );
       case "projects":
+        if (!props.thread) return null;
         return (
           <LinkedProjectsPanel
             desktopApi={props.desktopApi}
