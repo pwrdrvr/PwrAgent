@@ -552,6 +552,12 @@ export type DesktopSettingsSnapshot = {
      */
     lightweightNavigationRefresh: DesktopSettingsValue<boolean>;
     /**
+     * Renders LaTeX delimiters in thread Markdown with KaTeX. Disabled by
+     * default so the renderer does not load the math runtime until an operator
+     * explicitly opts into the experiment.
+     */
+    markdownMathRendering?: DesktopSettingsValue<boolean>;
+    /**
      * Gates the thread context-rail Pricing tab. The pricing ledger may still
      * collect data for validation, but the user-visible summary stays hidden
      * while this experimental setting is disabled.
@@ -847,6 +853,7 @@ export type DesktopSettingsConfigPatch = {
     fullAccessRiskWarningDismissed?: boolean;
     liveTranscriptEventFiltering?: boolean;
     lightweightNavigationRefresh?: boolean;
+    markdownMathRendering?: boolean;
     threadPricingSummary?: boolean;
     threadPricingDisplayUsd?: boolean;
     threadPricingDisplayCodexCredits?: boolean;

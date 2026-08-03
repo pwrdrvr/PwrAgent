@@ -151,6 +151,10 @@ function createSnapshot(
         value: false,
         source: "default",
       },
+      markdownMathRendering: {
+        value: false,
+        source: "default",
+      },
       threadPricingSummary: {
         value: true,
         source: "default",
@@ -1346,6 +1350,31 @@ describe("SettingsScreen", () => {
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         experimental: { lightweightNavigationRefresh: true },
+      });
+    });
+  });
+
+  it("defaults Markdown math rendering off for stale snapshots", async () => {
+    const snapshot = createSnapshot() as any;
+    delete snapshot.experimental.markdownMathRendering;
+    const settings = createSettingsState(snapshot);
+
+    render(
+      <SettingsScreen
+        initialSection="experimental"
+        settings={settings}
+      />,
+    );
+
+    const mathSwitch = screen.getByRole("switch", {
+      name: "Enable Markdown math rendering",
+    });
+    expect(mathSwitch).toHaveAttribute("aria-checked", "false");
+
+    fireEvent.click(mathSwitch);
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        experimental: { markdownMathRendering: true },
       });
     });
   });

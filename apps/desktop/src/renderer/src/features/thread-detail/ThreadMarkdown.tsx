@@ -26,6 +26,7 @@ import { AppIcon } from "../../components/AppIcon";
 import { CloseIcon, FolderIcon, PopoutIcon } from "../../icons";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { repairNestedLanguageFences } from "../../lib/markdown-fences";
+import { useMarkdownMathRuntime } from "../../lib/markdown-rendering-options";
 import {
   resolveThreadHref,
   resolveThreadIdText,
@@ -121,9 +122,14 @@ type MarkdownViewerTarget = LocalFileTarget & {
 type SkillActionTarget = AppServerSkillSummary & LocalFileTarget;
 
 export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdownProps) {
-  const markdownText = useMemo(
+  const mathRuntime = useMarkdownMathRuntime();
+  const sourceMarkdownText = useMemo(
     () => protectComposerHyphenListItems(repairNestedLanguageFences(props.text)),
     [props.text]
+  );
+  const markdownText = useMemo(
+    () => mathRuntime?.normalize(sourceMarkdownText) ?? sourceMarkdownText,
+    [mathRuntime, sourceMarkdownText]
   );
   const [markdownViewerTarget, setMarkdownViewerTarget] =
     useState<MarkdownViewerTarget>();
@@ -386,7 +392,7 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
       },
       blockquote(blockquoteProps) {
         const copyText = normalizeBlockquoteCopyText(
-          sourceForNode(markdownText, blockquoteProps.node) ??
+          sourceForNode(sourceMarkdownText, blockquoteProps.node) ??
             extractTextContent(blockquoteProps.children)
         );
 
@@ -538,6 +544,7 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
       props.imageParts,
       props.onOpenImage,
       pullRequestLinks,
+      sourceMarkdownText,
       skillsByPath,
       threadLinks,
       viewSkillMarkdown,
@@ -556,7 +563,9 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
     >
       <ReactMarkdown
         components={components}
+        rehypePlugins={mathRuntime?.rehypePlugins}
         remarkPlugins={[
+          ...(mathRuntime?.remarkPlugins ?? []),
           remarkBreaks,
           remarkGfm,
           remarkPullRequestReferences,

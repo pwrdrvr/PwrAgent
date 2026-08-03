@@ -1,6 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { MarkdownRenderingOptionsProvider } from "../../../lib/markdown-rendering-options";
 import { ThreadMarkdown } from "../ThreadMarkdown";
 
 const copyText = vi.hoisted(() => vi.fn(async (
@@ -50,6 +51,43 @@ const malformedHandoffBody = [
 
 const malformedHandoff = `\`\`\`text\n${malformedHandoffBody}\n\`\`\``;
 
+// Regression fixture based on Codex's response to Problem 1.20 in:
+// IAP Proofs Workshop 2021 Lecture Notes
+// https://uma.mit.edu/static/media/allLectures.c2be766b.pdf
+//
+// The source PDF and Codex rollout are intentionally not vendored.
+const problem120MathMarkdown = String.raw`Problem 1.20 is a good early logic exercise: it makes you translate carefully between symbols and ordinary language, especially noticing the scope of “every,” “there exists,” and “unique.”
+
+1. \(\forall a\in\mathbb R,\;2a\in\mathbb R\)
+
+   “Twice every real number is a real number.” True: the reals are closed under multiplication.
+
+2. \(\exists a\in A:=\{1,2,7,5,2\}\) such that \(2a\in A\)
+
+   “There is an element of \(A\) whose double is also in \(A\).” True: take \(a=1\), so \(2a=2\). The repeated \(2\) does nothing; sets ignore duplicates.
+
+3. “Every natural number has a unique integer which is its negative.”
+
+   \[
+   \forall a\in\mathbb N,\;\exists!b\in\mathbb Z\text{ such that }b=-a.
+   \]
+
+   True. For each natural number \(a\), the one integer that works is \(-a\).
+
+   One small teaching observation: the preceding example writes \(\exists b\), not \(\exists!b\), despite saying “unique.” It’s still effectively fine here because the equation \(b=-a\) determines only one \(b\), but I’d use \(\exists!\) to make the translation exact.
+
+4. “There is a number which when multiplied with any other number, results in the original number.”
+
+   Read in the usual intended way:
+
+   \[
+   \exists a\in\mathbb R\;\forall b\in\mathbb R,\;a b=b.
+   \]
+
+   This is true: \(a=1\), the multiplicative identity.
+
+The fourth is the most valuable one, because the English is slightly ambiguous. “Original number” could conceivably mean \(a\), which would instead describe \(0\): \(0\cdot b=0\). In context, though, it almost surely means the “other number” \(b\), so the intended answer is \(1\).`;
+
 describe("ThreadMarkdown", () => {
   it("renders markdown formatting and local file links", () => {
     render(
@@ -67,6 +105,121 @@ describe("ThreadMarkdown", () => {
       "title",
       "Open in PwrAgent"
     );
+  });
+
+  it("leaves LaTeX untypeset when experimental math rendering is disabled", () => {
+    const { container } = render(
+      <ThreadMarkdown text={String.raw`Literal \(a=1\).`} />
+    );
+
+    expect(container.querySelector(".katex")).toBeNull();
+    expect(container).toHaveTextContent("Literal (a=1).");
+  });
+
+  it("stops typesetting immediately when experimental math rendering is disabled", async () => {
+    const text = String.raw`Toggle \(a=1\).`;
+    const { container, rerender } = render(
+      <MarkdownRenderingOptionsProvider mathEnabled>
+        <ThreadMarkdown text={text} />
+      </MarkdownRenderingOptionsProvider>
+    );
+
+    await waitFor(() => {
+      expect(container.querySelectorAll(".katex")).toHaveLength(1);
+    });
+
+    rerender(
+      <MarkdownRenderingOptionsProvider mathEnabled={false}>
+        <ThreadMarkdown text={text} />
+      </MarkdownRenderingOptionsProvider>
+    );
+
+    expect(container.querySelector(".katex")).toBeNull();
+    expect(container).toHaveTextContent("Toggle (a=1).");
+  });
+
+  it("renders Codex inline and display LaTeX from the Problem 1.20 fixture", async () => {
+    const { container } = render(
+      <MarkdownRenderingOptionsProvider mathEnabled>
+        <ThreadMarkdown text={problem120MathMarkdown} />
+      </MarkdownRenderingOptionsProvider>
+    );
+
+    await waitFor(() => {
+      expect(container.querySelectorAll(".katex")).toHaveLength(23);
+    });
+
+    const texSources = Array.from(
+      container.querySelectorAll("annotation[encoding='application/x-tex']")
+    ).map((annotation) => annotation.textContent);
+
+    expect(problem120MathMarkdown).toHaveLength(1_599);
+    expect(container.querySelectorAll(".katex")).toHaveLength(23);
+    expect(container.querySelectorAll(".katex-display")).toHaveLength(2);
+    expect(container.querySelectorAll("ol > li")).toHaveLength(4);
+    expect(texSources).toContain(String.raw`\forall a\in\mathbb R,\;2a\in\mathbb R`);
+    expect(texSources).toContain(
+      String.raw`\forall a\in\mathbb N,\;\exists!b\in\mathbb Z\text{ such that }b=-a.`
+    );
+    expect(texSources).toContain(
+      String.raw`\exists a\in\mathbb R\;\forall b\in\mathbb R,\;a b=b.`
+    );
+    expect(container.querySelector(".katex-error")).toBeNull();
+  });
+
+  it("keeps currency and LaTeX-looking code literal around rendered math", async () => {
+    const { container } = render(
+      <MarkdownRenderingOptionsProvider mathEnabled>
+        <ThreadMarkdown
+          text={[
+            String.raw`A $5 part and a $10 part remain currency beside \(a=1\).`,
+            "",
+            "Inline code: `\\(notMath\\)`",
+            "",
+            "```tex",
+            String.raw`\[notMath\]`,
+            "```",
+          ].join("\n")}
+        />
+      </MarkdownRenderingOptionsProvider>
+    );
+
+    await waitFor(() => {
+      expect(container.querySelectorAll(".katex")).toHaveLength(1);
+    });
+    expect(container).toHaveTextContent("A $5 part and a $10 part remain currency");
+    expect(container.querySelector("code.transcript-message__code")).toHaveTextContent(
+      String.raw`\(notMath\)`
+    );
+    expect(container.querySelector("pre code")).toHaveTextContent(
+      String.raw`\[notMath\]`
+    );
+  });
+
+  it("renders later and list-continuation math without consuming broken text", async () => {
+    const { container } = render(
+      <MarkdownRenderingOptionsProvider mathEnabled>
+        <ThreadMarkdown
+          text={[
+            String.raw`Broken \( text; valid \(x\).`,
+            "",
+            "- item",
+            String.raw`    \(y\)`,
+          ].join("\n")}
+        />
+      </MarkdownRenderingOptionsProvider>
+    );
+
+    await waitFor(() => {
+      expect(container.querySelectorAll(".katex")).toHaveLength(2);
+    });
+    expect(container).toHaveTextContent("Broken ( text; valid");
+    expect(
+      Array.from(
+        container.querySelectorAll("annotation[encoding='application/x-tex']"),
+      ).map((annotation) => annotation.textContent),
+    ).toEqual(["x", "y"]);
+    expect(container.querySelector("li .katex")).not.toBeNull();
   });
 
   it("opens local file links in the configured editor", async () => {

@@ -37,6 +37,11 @@ const DEFAULT_LIGHTWEIGHT_NAVIGATION_REFRESH = {
   source: "default" as const,
 };
 
+const DEFAULT_MARKDOWN_MATH_RENDERING = {
+  value: false,
+  source: "default" as const,
+};
+
 const DEFAULT_CODEX_DEFAULT_MODE_REQUEST_USER_INPUT = {
   value: false,
   source: "default" as const,
@@ -79,6 +84,7 @@ export function ExperimentalSettings(props: {
   onDiffCondensationModelChange: (model: string) => Promise<void>;
   onLiveTranscriptEventFilteringChange: (enabled: boolean) => Promise<void>;
   onLightweightNavigationRefreshChange: (enabled: boolean) => Promise<void>;
+  onMarkdownMathRenderingChange: (enabled: boolean) => Promise<void>;
   onThreadPricingSummaryChange: (enabled: boolean) => Promise<void>;
   onThreadPricingDisplayUsdChange: (enabled: boolean) => Promise<void>;
   onThreadPricingDisplayCodexCreditsChange: (enabled: boolean) => Promise<void>;
@@ -96,6 +102,9 @@ export function ExperimentalSettings(props: {
   const lightweightNavigationRefresh =
     props.snapshot.experimental.lightweightNavigationRefresh ??
     DEFAULT_LIGHTWEIGHT_NAVIGATION_REFRESH;
+  const markdownMathRendering =
+    props.snapshot.experimental.markdownMathRendering ??
+    DEFAULT_MARKDOWN_MATH_RENDERING;
   const threadPricingSummary =
     props.snapshot.experimental.threadPricingSummary ??
     DEFAULT_THREAD_PRICING_SUMMARY;
@@ -199,6 +208,33 @@ export function ExperimentalSettings(props: {
                 label="Display tool output accounting"
                 onChange={(enabled) => {
                   void props.onThreadToolAccountingChange(enabled);
+                }}
+              />
+            }
+          />
+        </div>
+      </SettingsSection>
+
+      <SettingsSection
+        eyebrow="Experimental"
+        title="Markdown Math Rendering"
+        description="Render LaTeX math delimiters in thread transcripts with KaTeX. Disabled by default while rendering quality and performance are evaluated."
+        chip={markdownMathRendering.value ? "On" : "Off"}
+        chipKind={markdownMathRendering.value ? "ok" : "default"}
+      >
+        <div className="settings-fields">
+          <SettingsField
+            label="Enable Markdown math rendering"
+            sub="Render \\(…\\) and \\[…\\] expressions as typeset math."
+            help="The KaTeX runtime is loaded on demand after this setting is enabled. Turning it off restores literal Markdown rendering."
+            source={sourceBadge(markdownMathRendering)}
+            control={
+              <SettingsSwitch
+                checked={markdownMathRendering.value}
+                disabled={props.saving}
+                label="Enable Markdown math rendering"
+                onChange={(enabled) => {
+                  void props.onMarkdownMathRenderingChange(enabled);
                 }}
               />
             }

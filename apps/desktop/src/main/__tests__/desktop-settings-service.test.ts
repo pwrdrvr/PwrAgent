@@ -1923,6 +1923,37 @@ describe("DesktopSettingsService", () => {
     );
   });
 
+  it("defaults Markdown math rendering to false and persists it", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    const initial = await service.readSettings();
+    expect(initial.experimental.markdownMathRendering).toEqual({
+      value: false,
+      source: "default",
+    });
+
+    await service.writeConfigPatch({
+      experimental: {
+        markdownMathRendering: true,
+      },
+    });
+
+    const updated = await service.readSettings();
+    expect(updated.experimental.markdownMathRendering).toEqual({
+      value: true,
+      source: "config",
+    });
+    expect(fs.readFileSync(configPath, "utf8")).toContain(
+      "markdown_math_rendering = true",
+    );
+  });
+
   it("defaults Git background PR polling to on and persists an explicit opt-out", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");

@@ -166,6 +166,22 @@ describe("desktopSettingsPatchToEdits — experimental", () => {
     ]);
   });
 
+  it("writes the Markdown math rendering flag", () => {
+    const edits = desktopSettingsPatchToEdits({
+      experimental: {
+        markdownMathRendering: true,
+      },
+    });
+
+    expect(edits).toEqual([
+      {
+        op: "set",
+        path: ["experimental", "markdown_math_rendering"],
+        value: true,
+      },
+    ]);
+  });
+
   it("writes the thread pricing summary flag", () => {
     const edits = desktopSettingsPatchToEdits({
       experimental: {

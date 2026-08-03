@@ -79,6 +79,8 @@
     "better-sqlite3": "^12.8.0",
     "electron-log": "^5.4.3",
     "electron-updater": "6.8.9",
+    "katex": "^0.16.47",
+    "mdast-util-from-markdown": "^2.0.3",
     "node-fetch": "2.7.0",
     "node-pty": "1.2.0-beta.14",
     "pdfjs-dist": "5.7.284",
@@ -86,8 +88,10 @@
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-markdown": "^10.1.0",
+    "rehype-katex": "^7.0.1",
     "remark-breaks": "^4.0.0",
-    "remark-gfm": "^4.0.1"
+    "remark-gfm": "^4.0.1",
+    "remark-math": "^6.0.0"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.11.3",

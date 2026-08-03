@@ -106,6 +106,7 @@ export type DesktopSettingsConfig = {
     fullAccessRiskWarningDismissed?: boolean;
     liveTranscriptEventFiltering?: boolean;
     lightweightNavigationRefresh?: boolean;
+    markdownMathRendering?: boolean;
     threadPricingSummary?: boolean;
     threadPricingDisplayUsd?: boolean;
     threadPricingDisplayCodexCredits?: boolean;
@@ -682,6 +683,12 @@ export function desktopSettingsPatchToEdits(
     set(
       ["experimental", "lightweight_navigation_refresh"],
       patch.experimental.lightweightNavigationRefresh,
+    );
+  }
+  if (patch.experimental?.markdownMathRendering !== undefined) {
+    set(
+      ["experimental", "markdown_math_rendering"],
+      patch.experimental.markdownMathRendering,
     );
   }
   if (patch.experimental?.threadPricingSummary !== undefined) {
@@ -1489,6 +1496,9 @@ function normalizeDesktopConfig(
       ),
       lightweightNavigationRefresh: readBoolean(
         experimental?.lightweight_navigation_refresh,
+      ),
+      markdownMathRendering: readBoolean(
+        experimental?.markdown_math_rendering,
       ),
       threadPricingSummary: readBoolean(experimental?.thread_pricing_summary),
       threadPricingDisplayUsd: readBoolean(

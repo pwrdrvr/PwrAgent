@@ -611,6 +611,10 @@ export class DesktopSettingsService {
           config.experimental?.lightweightNavigationRefresh,
           false,
         ),
+        markdownMathRendering: this.resolveConfigBoolean(
+          config.experimental?.markdownMathRendering,
+          false,
+        ),
         threadPricingSummary: this.resolveConfigBoolean(
           config.experimental?.threadPricingSummary,
           true,

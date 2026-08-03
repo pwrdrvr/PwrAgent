@@ -451,6 +451,11 @@ function SettingsSectionBody(props: {
             experimental: { lightweightNavigationRefresh: enabled },
           });
         }}
+        onMarkdownMathRenderingChange={async (enabled: boolean) => {
+          await props.settings.writeConfig({
+            experimental: { markdownMathRendering: enabled },
+          });
+        }}
         onThreadPricingSummaryChange={async (enabled: boolean) => {
           await props.settings.writeConfig({
             experimental: { threadPricingSummary: enabled },
