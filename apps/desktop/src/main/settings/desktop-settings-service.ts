@@ -32,7 +32,10 @@ import { execFile } from "node:child_process";
 import {
   DEFAULT_BACKGROUND_PR_POLLING,
   DEFAULT_PR_AUTO_DISPATCH_ALLOWED,
+  DEFAULT_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
+  DEFAULT_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
   DEFAULT_PR_AUTO_DISPATCH_ENABLED_FOR_NEW_THREADS,
+  DEFAULT_PAUSE_PR_AUTO_DISPATCH_WHEN_BUDGET_EMPTY,
   DESKTOP_APPEARANCE_DENSITY_DEFAULT,
   DESKTOP_APPEARANCE_THEME_DEFAULT,
   DESKTOP_CHAT_REPLY_COMPOSER_DEFAULT,
@@ -43,6 +46,10 @@ import {
   DESKTOP_INTEGRATED_TERMINAL_WINDOWS_SHELL_DEFAULT,
   DESKTOP_UPDATE_CHANNEL_DEFAULT,
   DESKTOP_WORKTREE_STORAGE_DEFAULT,
+  MAX_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
+  MAX_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
+  MIN_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
+  MIN_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
 } from "@pwragent/shared";
 import {
   SLACK_CHANNEL_AUTHORIZATION_MODE_DEFAULT,
@@ -1032,6 +1039,23 @@ export class DesktopSettingsService {
           config.git?.defaultPrAutoDispatchEnabled,
           DEFAULT_PR_AUTO_DISPATCH_ENABLED_FOR_NEW_THREADS,
         ),
+        prAutoDispatchBudgetCapacity: this.resolvePrAutoDispatchBudgetNumber(
+          config.git?.prAutoDispatchBudgetCapacity,
+          DEFAULT_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
+          MIN_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
+          MAX_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
+        ),
+        prAutoDispatchBudgetRefillPerMinute:
+          this.resolvePrAutoDispatchBudgetNumber(
+            config.git?.prAutoDispatchBudgetRefillPerMinute,
+            DEFAULT_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
+            MIN_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
+            MAX_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
+          ),
+        pausePrAutoDispatchWhenBudgetEmpty: this.resolveConfigBoolean(
+          config.git?.pausePrAutoDispatchWhenBudgetEmpty,
+          DEFAULT_PAUSE_PR_AUTO_DISPATCH_WHEN_BUDGET_EMPTY,
+        ),
       },
       worktrees: this.resolveWorktrees(config.worktrees?.storage),
     };
@@ -1672,6 +1696,22 @@ export class DesktopSettingsService {
         : undefined;
     return {
       value: normalized ?? DEFAULT_PASTED_IMAGE_MAX_PATCHES,
+      source: normalized === undefined ? "default" : "config",
+    };
+  }
+
+  private resolvePrAutoDispatchBudgetNumber(
+    configValue: number | undefined,
+    defaultValue: number,
+    minValue: number,
+    maxValue: number,
+  ): DesktopSettingsValue<number> {
+    const normalized =
+      configValue !== undefined && Number.isFinite(configValue)
+        ? Math.min(maxValue, Math.max(minValue, Math.floor(configValue)))
+        : undefined;
+    return {
+      value: normalized ?? defaultValue,
       source: normalized === undefined ? "default" : "config",
     };
   }

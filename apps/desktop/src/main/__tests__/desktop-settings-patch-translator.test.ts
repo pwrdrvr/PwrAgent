@@ -266,6 +266,34 @@ describe("desktopSettingsPatchToEdits — Git", () => {
     ]);
   });
 
+  it("writes the automatic repair budget controls", () => {
+    expect(
+      desktopSettingsPatchToEdits({
+        git: {
+          prAutoDispatchBudgetCapacity: 42,
+          prAutoDispatchBudgetRefillPerMinute: 3,
+          pausePrAutoDispatchWhenBudgetEmpty: false,
+        },
+      }),
+    ).toEqual([
+      {
+        op: "set",
+        path: ["git", "pr_auto_dispatch_budget_capacity"],
+        value: 42,
+      },
+      {
+        op: "set",
+        path: ["git", "pr_auto_dispatch_budget_refill_per_minute"],
+        value: 3,
+      },
+      {
+        op: "set",
+        path: ["git", "pause_pr_auto_dispatch_when_budget_empty"],
+        value: false,
+      },
+    ]);
+  });
+
   it("preserves and mirrors a recognized experimental polling key", () => {
     const edits = desktopSettingsPatchToEdits(
       {

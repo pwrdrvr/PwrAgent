@@ -39,6 +39,13 @@ export const DEFAULT_PR_AUTO_DISPATCH_ALLOWED = true;
  * default. Existing threads retain their saved per-thread preference.
  */
 export const DEFAULT_PR_AUTO_DISPATCH_ENABLED_FOR_NEW_THREADS = true;
+export const DEFAULT_PR_AUTO_DISPATCH_BUDGET_CAPACITY = 30;
+export const DEFAULT_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE = 1;
+export const DEFAULT_PAUSE_PR_AUTO_DISPATCH_WHEN_BUDGET_EMPTY = true;
+export const MIN_PR_AUTO_DISPATCH_BUDGET_CAPACITY = 1;
+export const MAX_PR_AUTO_DISPATCH_BUDGET_CAPACITY = 1_000;
+export const MIN_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE = 1;
+export const MAX_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE = 60;
 
 export const DESKTOP_UPDATE_CHANNELS = ["latest", "prerelease"] as const;
 
@@ -119,6 +126,20 @@ export type DesktopSettingsValue<T> = {
   source: DesktopSettingsNonSecretSource;
   overriddenByEnv?: boolean;
   error?: string;
+};
+
+export type PrAutoDispatchBudgetConfig = {
+  capacity: number;
+  refillPerMinute: number;
+  pauseWhenEmpty: boolean;
+};
+
+export type PrAutoDispatchBudgetStatus = {
+  availableTokens: number;
+  capacity: number;
+  refillPerMinute: number;
+  paused: boolean;
+  pausedAt?: number;
 };
 
 /**
@@ -787,6 +808,9 @@ export type DesktopSettingsSnapshot = {
     prAutoDispatchAllowed: DesktopSettingsValue<boolean>;
     /** Default Auto-fix PR preference seeded only onto newly created threads. */
     defaultPrAutoDispatchEnabled: DesktopSettingsValue<boolean>;
+    prAutoDispatchBudgetCapacity: DesktopSettingsValue<number>;
+    prAutoDispatchBudgetRefillPerMinute: DesktopSettingsValue<number>;
+    pausePrAutoDispatchWhenBudgetEmpty: DesktopSettingsValue<boolean>;
   };
   applications: DesktopApplicationsSnapshot;
   worktrees: {
@@ -967,6 +991,9 @@ export type DesktopSettingsConfigPatch = {
     backgroundPrPolling?: boolean;
     prAutoDispatchAllowed?: boolean;
     defaultPrAutoDispatchEnabled?: boolean;
+    prAutoDispatchBudgetCapacity?: number;
+    prAutoDispatchBudgetRefillPerMinute?: number;
+    pausePrAutoDispatchWhenBudgetEmpty?: boolean;
   };
   applications?: {
     editor?: {

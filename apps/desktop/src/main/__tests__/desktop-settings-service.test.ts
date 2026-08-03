@@ -1973,12 +1973,27 @@ describe("DesktopSettingsService", () => {
       value: true,
       source: "default",
     });
+    expect(initial.git.prAutoDispatchBudgetCapacity).toEqual({
+      value: 30,
+      source: "default",
+    });
+    expect(initial.git.prAutoDispatchBudgetRefillPerMinute).toEqual({
+      value: 1,
+      source: "default",
+    });
+    expect(initial.git.pausePrAutoDispatchWhenBudgetEmpty).toEqual({
+      value: true,
+      source: "default",
+    });
     expect(service.resolveDefaultPrAutoDispatchEnabled()).toBe(true);
 
     await service.writeConfigPatch({
       git: {
         prAutoDispatchAllowed: false,
         defaultPrAutoDispatchEnabled: false,
+        prAutoDispatchBudgetCapacity: 42,
+        prAutoDispatchBudgetRefillPerMinute: 3,
+        pausePrAutoDispatchWhenBudgetEmpty: false,
       },
     });
 
@@ -1991,10 +2006,25 @@ describe("DesktopSettingsService", () => {
       value: false,
       source: "config",
     });
+    expect(updated.git.prAutoDispatchBudgetCapacity).toEqual({
+      value: 42,
+      source: "config",
+    });
+    expect(updated.git.prAutoDispatchBudgetRefillPerMinute).toEqual({
+      value: 3,
+      source: "config",
+    });
+    expect(updated.git.pausePrAutoDispatchWhenBudgetEmpty).toEqual({
+      value: false,
+      source: "config",
+    });
     expect(service.resolveDefaultPrAutoDispatchEnabled()).toBe(false);
     const contents = fs.readFileSync(configPath, "utf8");
     expect(contents).toContain("pr_auto_dispatch_allowed = false");
     expect(contents).toContain("default_pr_auto_dispatch_enabled = false");
+    expect(contents).toContain("pr_auto_dispatch_budget_capacity = 42");
+    expect(contents).toContain("pr_auto_dispatch_budget_refill_per_minute = 3");
+    expect(contents).toContain("pause_pr_auto_dispatch_when_budget_empty = false");
   });
 
   it("reads the canonical Git background PR polling key", async () => {

@@ -58,6 +58,7 @@ import type {
   GetThreadFileDiffResponse,
   PersistThreadUsageActivityRequest,
   PersistThreadUsageActivityResponse,
+  PrAutoDispatchBudgetStatus,
   DraftAutomationPromptRequest,
   DraftAutomationPromptResponse,
   GetAutomationRunArtifactRequest,
@@ -419,6 +420,8 @@ export type DesktopApi = {
   listSkills?: (
     request?: AppServerListSkillsRequest
   ) => Promise<AppServerListSkillsResponse>;
+  getPrAutoDispatchBudgetStatus?: () => Promise<PrAutoDispatchBudgetStatus>;
+  resumePrAutoDispatchBudget?: () => Promise<PrAutoDispatchBudgetStatus>;
   analyzeFocusedDiff?: (
     request: FocusedDiffAnalysisRequest
   ) => Promise<FocusedDiffAnalysisResponse>;
@@ -798,6 +801,9 @@ export type DesktopApi = {
   ) => void;
   reportRendererError?: (report: RendererErrorReport) => Promise<void>;
   onAgentEvent?: (callback: (event: AgentEvent) => void) => () => void;
+  onPrAutoDispatchBudgetChanged?: (
+    callback: (status: PrAutoDispatchBudgetStatus) => void,
+  ) => () => void;
   /**
    * Subscription for main → renderer appearance broadcasts. Fired
    * whenever the user changes theme or density in Settings → the

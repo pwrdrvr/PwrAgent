@@ -598,6 +598,15 @@ describe("App", () => {
         backgroundPrPolling: { value: true, source: "default" },
         prAutoDispatchAllowed: { value: true, source: "default" },
         defaultPrAutoDispatchEnabled: { value: true, source: "default" },
+        prAutoDispatchBudgetCapacity: { value: 30, source: "default" },
+        prAutoDispatchBudgetRefillPerMinute: {
+          value: 1,
+          source: "default",
+        },
+        pausePrAutoDispatchWhenBudgetEmpty: {
+          value: true,
+          source: "default",
+        },
       },
       applications: {
         editors: [],

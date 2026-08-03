@@ -20,6 +20,7 @@ import {
   type DesktopCodexProfileModel,
   type DesktopPwrAgentProfileSummary,
   type NavigationThreadSummary,
+  type PrAutoDispatchBudgetStatus,
 } from "@pwragent/shared";
 import { Sidebar } from "./features/navigation/Sidebar";
 import { useThreadJump } from "./features/navigation/useThreadJump";
@@ -71,6 +72,7 @@ import { CodexConfigWarningBanner } from "./features/codex-config/CodexConfigWar
 import { AppNoticeToast } from "./features/notifications/AppNoticeToast";
 import type { AppNoticeToastNotice } from "./features/notifications/AppNoticeToast";
 import { resolveBackendErrorNotice } from "./features/notifications/backend-error-notice";
+import { buildPrAutoDispatchBudgetNotice } from "./features/notifications/pr-auto-dispatch-budget-notice";
 import {
   buildHeapSnapshotHandoffMessage,
   describeHeapSnapshotResult,
@@ -280,6 +282,8 @@ function DesktopAppShell(props: {
   // stays until dismissed.
   const [automationLoadNotice, setAutomationLoadNotice] =
     useState<AppNoticeToastNotice>();
+  const [prAutoDispatchBudgetNotice, setPrAutoDispatchBudgetNotice] =
+    useState<AppNoticeToastNotice>();
   // Latest thread list, mirrored into a ref so the backend-error toast
   // subscription can resolve a thread's title without re-subscribing on
   // every navigation change. Kept fresh by an effect below, once
@@ -288,6 +292,30 @@ function DesktopAppShell(props: {
   const [ThreadViewComponent, setThreadViewComponent] =
     useState<ComponentType<ThreadViewProps>>();
   const desktopApi = props.desktopApi;
+  const resumePrAutoDispatchBudget = useCallback(() => {
+    void desktopApi?.resumePrAutoDispatchBudget?.()
+      .then((status) => {
+        if (!status.paused) {
+          setPrAutoDispatchBudgetNotice(undefined);
+        }
+      })
+      .catch(() => {
+        // Keep the safety notice visible when acknowledgement cannot reach the
+        // main process; the operator can try again without losing the stop.
+      });
+  }, [desktopApi]);
+  const showPrAutoDispatchBudgetNotice = useCallback(
+    (status: PrAutoDispatchBudgetStatus) => {
+      setPrAutoDispatchBudgetNotice(
+        buildPrAutoDispatchBudgetNotice({
+          onLeaveDisabled: () => setPrAutoDispatchBudgetNotice(undefined),
+          onResume: resumePrAutoDispatchBudget,
+          status,
+        }),
+      );
+    },
+    [resumePrAutoDispatchBudget],
+  );
   // Spawning / focusing the Messaging Activity window is fire-and-forget
   // — see `apps/desktop/src/main/messaging-activity-window.ts`. The
   // main window stays where it was; the activity surface gets its own
@@ -295,6 +323,24 @@ function DesktopAppShell(props: {
   const openMessagingActivityWindow = useCallback(() => {
     void desktopApi?.openMessagingActivityWindow?.();
   }, [desktopApi]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const unsubscribe = desktopApi?.onPrAutoDispatchBudgetChanged?.((status) => {
+      if (!cancelled) showPrAutoDispatchBudgetNotice(status);
+    });
+    void desktopApi?.getPrAutoDispatchBudgetStatus?.()
+      .then((status) => {
+        if (!cancelled) showPrAutoDispatchBudgetNotice(status);
+      })
+      .catch(() => {
+        // Best effort only. A later budget event will still surface the stop.
+      });
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
+  }, [desktopApi, showPrAutoDispatchBudgetNotice]);
 
   useEffect(() => {
     return desktopApi?.onHotCpuProfileCaptured?.((event) => {
@@ -1702,6 +1748,11 @@ function DesktopAppShell(props: {
             desktopApi={desktopApi}
             notice={automationLoadNotice}
             onDismiss={() => setAutomationLoadNotice(undefined)}
+          />
+          <AppNoticeToast
+            desktopApi={desktopApi}
+            notice={prAutoDispatchBudgetNotice}
+            onDismiss={() => setPrAutoDispatchBudgetNotice(undefined)}
           />
           <AppUpdateBanner desktopApi={desktopApi} />
         </div>

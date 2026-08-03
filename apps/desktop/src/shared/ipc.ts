@@ -6,6 +6,12 @@ export const APP_SERVER_GET_THREAD_FILE_DIFF_CHANNEL =
 export const APP_SERVER_PERSIST_THREAD_USAGE_ACTIVITY_CHANNEL =
   "app-server:persist-thread-usage-activity";
 export const APP_SERVER_LIST_SKILLS_CHANNEL = "app-server:list-skills";
+export const APP_SERVER_GET_PR_AUTO_DISPATCH_BUDGET_STATUS_CHANNEL =
+  "app-server:get-pr-auto-dispatch-budget-status";
+export const APP_SERVER_RESUME_PR_AUTO_DISPATCH_BUDGET_CHANNEL =
+  "app-server:resume-pr-auto-dispatch-budget";
+export const PR_AUTO_DISPATCH_BUDGET_CHANGED_EVENT_CHANNEL =
+  "app-server:pr-auto-dispatch-budget-changed";
 export const APP_SERVER_ARCHIVE_THREAD_CHANNEL = "app-server:archive-thread";
 export const APP_SERVER_RESTORE_THREAD_CHANNEL = "app-server:restore-thread";
 export const APP_SERVER_ARCHIVE_WORKTREE_CHANNEL = "app-server:archive-worktree";

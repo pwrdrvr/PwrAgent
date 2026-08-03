@@ -121,6 +121,42 @@ describe("AppNoticeToast", () => {
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 
+  it("uses exactly the supplied operator actions for a persistent safety notice", () => {
+    vi.useFakeTimers();
+    const leaveDisabled = vi.fn();
+    const resume = vi.fn();
+    const onDismiss = vi.fn();
+
+    const { container } = render(
+      <AppNoticeToast
+        notice={{
+          ...notice,
+          actions: [
+            {
+              label: "Leave disabled",
+              onClick: leaveDisabled,
+              tone: "secondary",
+            },
+            { label: "Resume", onClick: resume, tone: "primary" },
+          ],
+          autoDismiss: false,
+        }}
+        onDismiss={onDismiss}
+      />,
+    );
+
+    expect(screen.getAllByRole("button")).toHaveLength(2);
+    expect(screen.queryByRole("button", { name: "Copy notice" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Dismiss notice" })).toBeNull();
+    expect(container.querySelector(".app-notice-toast__timer")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Leave disabled" }));
+    fireEvent.click(screen.getByRole("button", { name: "Resume" }));
+    expect(leaveDisabled).toHaveBeenCalledTimes(1);
+    expect(resume).toHaveBeenCalledTimes(1);
+    expect(onDismiss).not.toHaveBeenCalled();
+  });
+
   it("starts a hover-paused countdown when repair progress flips to success", () => {
     vi.useFakeTimers();
     const onDismiss = vi.fn();

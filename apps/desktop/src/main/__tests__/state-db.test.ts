@@ -107,6 +107,23 @@ describe("StateDb", () => {
     expect(fingerprintIndex?.name).toBe(
       "idx_pr_auto_dispatch_pr_fingerprint",
     );
+
+    const budgetTable = stateDb.raw
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+      )
+      .get("pr_auto_dispatch_budget") as { name: string } | undefined;
+    const reservationTable = stateDb.raw
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+      )
+      .get("pr_auto_dispatch_budget_reservations") as
+        | { name: string }
+        | undefined;
+    expect(budgetTable?.name).toBe("pr_auto_dispatch_budget");
+    expect(reservationTable?.name).toBe(
+      "pr_auto_dispatch_budget_reservations",
+    );
   });
 
   it("deduplicates legacy PR claims before creating the global fingerprint index", () => {

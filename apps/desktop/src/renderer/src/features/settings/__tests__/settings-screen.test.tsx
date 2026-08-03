@@ -353,6 +353,15 @@ function createSnapshot(
       backgroundPrPolling: { value: true, source: "default" },
       prAutoDispatchAllowed: { value: true, source: "default" },
       defaultPrAutoDispatchEnabled: { value: true, source: "default" },
+      prAutoDispatchBudgetCapacity: { value: 30, source: "default" },
+      prAutoDispatchBudgetRefillPerMinute: {
+        value: 1,
+        source: "default",
+      },
+      pausePrAutoDispatchWhenBudgetEmpty: {
+        value: true,
+        source: "default",
+      },
     },
     applications: {
       editors: [
@@ -4242,6 +4251,14 @@ describe("SettingsScreen", () => {
     });
     expect(allowAutoFix).toHaveAttribute("aria-checked", "true");
     expect(defaultAutoFix).toHaveAttribute("aria-checked", "true");
+    const budgetCapacity = screen.getByLabelText("Automatic repair capacity");
+    const budgetRefill = screen.getByLabelText("Automatic repair refill rate");
+    const pauseWhenEmpty = screen.getByRole("switch", {
+      name: "Pause Auto-fix PR when the budget is empty",
+    });
+    expect(budgetCapacity).toHaveValue(30);
+    expect(budgetRefill).toHaveValue(1);
+    expect(pauseWhenEmpty).toHaveAttribute("aria-checked", "true");
 
     fireEvent.click(allowAutoFix);
     await waitFor(() => {
@@ -4253,6 +4270,26 @@ describe("SettingsScreen", () => {
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         git: { defaultPrAutoDispatchEnabled: false },
+      });
+    });
+    fireEvent.change(budgetCapacity, { target: { value: "42" } });
+    fireEvent.blur(budgetCapacity);
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        git: { prAutoDispatchBudgetCapacity: 42 },
+      });
+    });
+    fireEvent.change(budgetRefill, { target: { value: "3" } });
+    fireEvent.blur(budgetRefill);
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        git: { prAutoDispatchBudgetRefillPerMinute: 3 },
+      });
+    });
+    fireEvent.click(pauseWhenEmpty);
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        git: { pausePrAutoDispatchWhenBudgetEmpty: false },
       });
     });
 
