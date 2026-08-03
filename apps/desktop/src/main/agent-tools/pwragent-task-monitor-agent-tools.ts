@@ -1,4 +1,5 @@
 import type {
+  CancelMonitorDelegationToolArgs,
   CreateMonitorDelegationToolArgs,
   TaskMonitorRequest,
   TaskMonitorResponse,
@@ -40,15 +41,32 @@ export const TASK_MONITOR_CREATE_TOOL_INPUT_SCHEMA = {
   additionalProperties: false,
 } satisfies Record<string, unknown>;
 
+export const TASK_MONITOR_CANCEL_TOOL_DESCRIPTION =
+  "Cancel an active PwrAgent-managed monitor delegation immediately. Use the monitorId returned by create_monitor_delegation. This interrupts the monitor's active turn, records a cancelled result in the parent thread, and does not start or queue another parent turn. Use this instead of send_message_to_thread when a running monitor must stop.";
+
+export const TASK_MONITOR_CANCEL_TOOL_INPUT_SCHEMA = {
+  type: "object",
+  properties: {
+    monitorId: { type: "string" },
+    reason: { type: "string" },
+  },
+  required: ["monitorId"],
+  additionalProperties: false,
+} satisfies Record<string, unknown>;
+
+type ParentTaskMonitorOperation =
+  | "create_monitor_delegation"
+  | "cancel_monitor_delegation";
+
 export type PwrAgentTaskMonitorHandler = (
-  request: TaskMonitorRequest<"create_monitor_delegation">,
+  request: TaskMonitorRequest,
 ) =>
-  | TaskMonitorResponse<"create_monitor_delegation">
-  | Promise<TaskMonitorResponse<"create_monitor_delegation">>;
+  | TaskMonitorResponse
+  | Promise<TaskMonitorResponse>;
 
 export function buildPwrAgentTaskMonitorToolDefinitions(
   handler: PwrAgentTaskMonitorHandler | undefined,
-): AgentToolDefinition<"create_monitor_delegation">[] {
+): AgentToolDefinition<ParentTaskMonitorOperation>[] {
   return [
     {
       namespace: PWRAGENT_TOOL_NAMESPACE,
@@ -72,6 +90,38 @@ export function buildPwrAgentTaskMonitorToolDefinitions(
         }
         const response = await handler({
           operation: "create_monitor_delegation",
+          context: {
+            backend: context.backend,
+            threadId: context.threadId,
+            turnId: context.turnId ?? "",
+          },
+          args: normalizedArgs,
+        });
+        return taskMonitorResponseToAgentToolResult(response);
+      },
+    },
+    {
+      namespace: PWRAGENT_TOOL_NAMESPACE,
+      name: "cancel_monitor_delegation",
+      description: TASK_MONITOR_CANCEL_TOOL_DESCRIPTION,
+      inputSchema: TASK_MONITOR_CANCEL_TOOL_INPUT_SCHEMA,
+      deferLoading: false,
+      dispatch: async (args, context): Promise<AgentToolDispatchResult> => {
+        if (!handler) {
+          return agentToolFailure({
+            code: "internal_error",
+            message: "PwrAgent task monitor tools are not available.",
+          });
+        }
+        const normalizedArgs = normalizeCancelMonitorArgs(args);
+        if (!normalizedArgs) {
+          return agentToolFailure({
+            code: "invalid_arguments",
+            message: "cancel_monitor_delegation requires a non-empty monitorId string.",
+          });
+        }
+        const response = await handler({
+          operation: "cancel_monitor_delegation",
           context: {
             backend: context.backend,
             threadId: context.threadId,
@@ -114,8 +164,21 @@ function normalizeCreateMonitorArgs(
   };
 }
 
+function normalizeCancelMonitorArgs(
+  args: Record<string, unknown>,
+): CancelMonitorDelegationToolArgs | undefined {
+  const monitorId = readString(args.monitorId);
+  if (!monitorId) {
+    return undefined;
+  }
+  return {
+    monitorId,
+    reason: readString(args.reason),
+  };
+}
+
 function taskMonitorResponseToAgentToolResult(
-  response: TaskMonitorResponse<"create_monitor_delegation">,
+  response: TaskMonitorResponse,
 ): AgentToolDispatchResult {
   if (response.ok) {
     return agentToolSuccess(response.data);

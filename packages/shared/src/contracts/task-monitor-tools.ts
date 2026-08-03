@@ -12,6 +12,7 @@ export const DEFAULT_TASK_MONITOR_HEARTBEAT_INTERVAL_SECONDS =
 
 export const TASK_MONITOR_OPERATION_NAMES = [
   "create_monitor_delegation",
+  "cancel_monitor_delegation",
   "inject_progress",
   "complete_monitoring",
 ] as const;
@@ -33,6 +34,11 @@ export type CreateMonitorDelegationToolArgs = {
   preferredModel?: string;
   preferredReasoningEffort?: string;
   finalHandoffPrompt?: string;
+};
+
+export type CancelMonitorDelegationToolArgs = {
+  monitorId: string;
+  reason?: string;
 };
 
 export type InjectMonitorProgressToolArgs = {
@@ -73,6 +79,9 @@ export type TaskMonitorCompletionSource =
       type: "monitor_tool";
     }
   | {
+      type: "parent_cancel";
+    }
+  | {
       type: "pwragent_fallback";
       reason: string;
       recoveryAttempted: boolean;
@@ -81,6 +90,7 @@ export type TaskMonitorCompletionSource =
 
 export type TaskMonitorToolArgsByOperation = {
   create_monitor_delegation: CreateMonitorDelegationToolArgs;
+  cancel_monitor_delegation: CancelMonitorDelegationToolArgs;
   inject_progress: InjectMonitorProgressToolArgs;
   complete_monitoring: CompleteMonitoringToolArgs;
 };
@@ -134,6 +144,7 @@ export type TaskMonitorCompletionData = TaskMonitorProgressData & {
 
 export type TaskMonitorToolDataByOperation = {
   create_monitor_delegation: TaskMonitorDelegationData;
+  cancel_monitor_delegation: TaskMonitorCompletionData;
   inject_progress: TaskMonitorProgressData;
   complete_monitoring: TaskMonitorCompletionData;
 };

@@ -223,6 +223,7 @@ import {
   DEFAULT_TASK_MONITOR_STARTUP_TIMEOUT_SECONDS,
   DEFAULT_PR_AUTO_DISPATCH_ENABLED_FOR_NEW_THREADS,
   PWRAGENT_MESSAGING_PDF_TOOL_CATALOG_VERSION,
+  type CancelMonitorDelegationToolArgs,
   type CompleteMonitoringToolArgs,
   type CreateMonitorDelegationToolArgs,
   type InjectMonitorProgressToolArgs,
@@ -2362,6 +2363,7 @@ type TaskMonitorDelegationRecord = {
   pollIntervalSeconds: number;
   preferredModel: string;
   preferredReasoningEffort: string;
+  cancellationRequested?: boolean;
   recoveryAttempted?: boolean;
   staleInterruptAttempted?: boolean;
   startupTimeoutSeconds: number;
@@ -3018,7 +3020,9 @@ function formatTaskMonitorCompletionMessage(params: {
     `Outcome: ${params.outcome}`,
     params.completionSource?.type === "pwragent_fallback"
       ? "Completion source: PwrAgent fallback"
-      : undefined,
+      : params.completionSource?.type === "parent_cancel"
+        ? "Completion source: Parent cancellation"
+        : undefined,
     params.summary,
     params.details?.trim() ? `Details:\n${params.details.trim()}` : undefined,
   ]
@@ -3041,7 +3045,9 @@ function buildTaskMonitorFinalHandoffInput(params: {
     `Outcome: ${params.outcome}`,
     params.completionSource?.type === "pwragent_fallback"
       ? "Completion source: pwragent_fallback"
-      : undefined,
+      : params.completionSource?.type === "parent_cancel"
+        ? "Completion source: parent_cancel"
+        : undefined,
     `Summary: ${params.summary}`,
     params.details?.trim() ? `Details:\n${params.details.trim()}` : undefined,
     params.finalHandoffPrompt?.trim()
@@ -6423,7 +6429,7 @@ export class DesktopBackendRegistry {
                 automationInspectionHandler: this.automationInspectionHandler,
                 messagingHandler: this.messagingHandler,
                 taskMonitorHandler: async (request) =>
-                  await this.handleCreateMonitorAgentRequest(request),
+                  await this.handleAgentTaskMonitorRequest(request),
                 threadInspectionHandler: this.threadInspectionHandler,
                 threadOrchestrationHandler: this.threadOrchestrationHandler,
               }),
@@ -9388,7 +9394,7 @@ export class DesktopBackendRegistry {
       automationInspectionHandler: this.automationInspectionHandler,
       messagingHandler: this.messagingHandler,
       taskMonitorHandler: async (request) =>
-        await this.handleCreateMonitorAgentRequest(request),
+        await this.handleAgentTaskMonitorRequest(request),
       threadInspectionHandler: this.threadInspectionHandler,
       threadOrchestrationHandler: this.threadOrchestrationHandler,
     });
@@ -21789,6 +21795,12 @@ export class DesktopBackendRegistry {
         request.args as CreateMonitorDelegationToolArgs,
       );
     }
+    if (request.operation === "cancel_monitor_delegation") {
+      return await this.cancelTaskMonitorDelegation(
+        request.context,
+        request.args as CancelMonitorDelegationToolArgs,
+      );
+    }
     if (request.operation === "inject_progress") {
       return await this.injectTaskMonitorProgress(
         request.context.threadId,
@@ -21806,6 +21818,9 @@ export class DesktopBackendRegistry {
   ): Promise<TaskMonitorResponse> {
     if (request.operation === "create_monitor_delegation") {
       return await this.handleCreateMonitorAgentRequest(request);
+    }
+    if (request.operation === "cancel_monitor_delegation") {
+      return await this.handleCancelMonitorAgentRequest(request);
     }
     return await this.handleTaskMonitorRequest(request);
   }
@@ -21832,6 +21847,33 @@ export class DesktopBackendRegistry {
       );
     }
     return await this.createTaskMonitorDelegation(
+      request.context,
+      request.args,
+    );
+  }
+
+  private async handleCancelMonitorAgentRequest(
+    request: TaskMonitorRequest<"cancel_monitor_delegation">,
+  ): Promise<TaskMonitorResponse<"cancel_monitor_delegation">> {
+    if (
+      !this.isLiveDynamicToolCall(request.context.backend, {
+        threadId: request.context.threadId,
+        turnId: request.context.turnId,
+      })
+    ) {
+      backendRegistryLog.warn("rejecting task monitor cancellation tool call", {
+        backend: request.context.backend,
+        threadId: request.context.threadId,
+        tool: request.operation,
+        turnId: request.context.turnId,
+      });
+      return taskMonitorFailure(
+        "cancel_monitor_delegation",
+        "forbidden",
+        "Task monitor cancellation must originate from an active parent turn.",
+      );
+    }
+    return await this.cancelTaskMonitorDelegation(
       request.context,
       request.args,
     );
@@ -21992,6 +22034,123 @@ export class DesktopBackendRegistry {
         monitorTurnId: startedMonitor.turnId,
         parentAgentGuidance,
         prompt,
+      },
+    };
+  }
+
+  private async cancelTaskMonitorDelegation(
+    context: TaskMonitorRequest<"cancel_monitor_delegation">["context"],
+    args: CancelMonitorDelegationToolArgs,
+  ): Promise<TaskMonitorResponse<"cancel_monitor_delegation">> {
+    const monitorId = args.monitorId?.trim();
+    if (!monitorId) {
+      return taskMonitorFailure(
+        "cancel_monitor_delegation",
+        "invalid_arguments",
+        "monitorId is required.",
+      );
+    }
+
+    const record = this.taskMonitorDelegations.get(monitorId);
+    if (!record) {
+      const overlay = await this.overlayStore.getThreadOverlayState({
+        backend: context.backend,
+        threadId: context.threadId,
+      });
+      const completedCancellation = overlay?.subAgents?.find(
+        (subAgent) =>
+          subAgent.monitorId === monitorId
+          && subAgent.outcome === "cancelled"
+          && subAgent.completionSource?.type === "parent_cancel",
+      );
+      if (completedCancellation) {
+        return {
+          ok: true,
+          operation: "cancel_monitor_delegation",
+          data: {
+            monitorId,
+            parentThreadId: context.threadId,
+            injected: true,
+            outcome: "cancelled",
+            completionSource: { type: "parent_cancel" },
+            ...(completedCancellation.monitorUsage
+              ? { monitorUsage: completedCancellation.monitorUsage }
+              : {}),
+          },
+        };
+      }
+      return taskMonitorFailure(
+        "cancel_monitor_delegation",
+        "not_found",
+        "Unknown, completed, or non-cancellable monitorId.",
+      );
+    }
+    if (
+      record.parentBackend !== context.backend
+      || record.parentThreadId !== context.threadId
+    ) {
+      return taskMonitorFailure(
+        "cancel_monitor_delegation",
+        "forbidden",
+        "Only the parent thread that created a monitor may cancel it.",
+      );
+    }
+    if (!record.monitorThreadId || !record.monitorTurnId) {
+      return taskMonitorFailure(
+        "cancel_monitor_delegation",
+        "internal_error",
+        "The monitor turn has not started and cannot be interrupted yet.",
+      );
+    }
+
+    record.cancellationRequested = true;
+    record.lastActivityAt = Date.now();
+    const executionMode = record.executionMode ?? "default";
+    try {
+      await this.getClient("codex", executionMode).interruptTurn({
+        threadId: record.monitorThreadId,
+        turnId: record.monitorTurnId,
+      });
+    } catch (error) {
+      record.cancellationRequested = false;
+      backendRegistryLog.error("failed to cancel task monitor", {
+        error: error instanceof Error ? error.message : String(error),
+        monitorId,
+        monitorThreadId: record.monitorThreadId,
+        monitorTurnId: record.monitorTurnId,
+        parentThreadId: record.parentThreadId,
+      });
+      return taskMonitorFailure(
+        "cancel_monitor_delegation",
+        "internal_error",
+        `Failed to interrupt task monitor: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+
+    const summary =
+      args.reason?.trim()
+      || "Monitoring cancelled by the parent agent.";
+    const completionSource: TaskMonitorCompletionSource = {
+      type: "parent_cancel",
+    };
+    await this.finishTaskMonitorDelegation({
+      completionSource,
+      outcome: "cancelled",
+      record,
+      summary,
+      triggerParentTurn: false,
+    });
+
+    return {
+      ok: true,
+      operation: "cancel_monitor_delegation",
+      data: {
+        monitorId,
+        parentThreadId: record.parentThreadId,
+        injected: true,
+        outcome: "cancelled",
+        completionSource,
+        ...(record.latestUsage ? { monitorUsage: record.latestUsage } : {}),
       },
     };
   }
@@ -22373,6 +22532,10 @@ export class DesktopBackendRegistry {
         (!candidate.monitorTurnId || !turnId || candidate.monitorTurnId === turnId),
     );
     if (!record) {
+      return;
+    }
+
+    if (record.cancellationRequested) {
       return;
     }
 

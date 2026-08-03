@@ -3,7 +3,7 @@ import { resolveAgentToolCatalogs } from "../agent-tool-catalog-registry";
 import { buildPwrAgentTaskMonitorToolRouter } from "../pwragent-task-monitor-agent-tools";
 
 describe("PwrAgent task monitor agent tools", () => {
-  it("includes create_monitor_delegation in both parent transports", () => {
+  it("includes monitor creation and cancellation in both parent transports", () => {
     const catalogs = resolveAgentToolCatalogs({});
     const dynamicTools = catalogs
       .flatMap((catalog) => catalog.dynamicTools)
@@ -30,12 +30,14 @@ describe("PwrAgent task monitor agent tools", () => {
       "render_messaging_pdf_pages",
       "search_messaging_pdf_text",
     ]);
-    expect(dynamicTools).toHaveLength(25);
+    expect(dynamicTools).toHaveLength(26);
     expect(mcpTools).toEqual(
       dynamicTools.filter((tool) => !dynamicOnlyToolNames.has(tool.name)),
     );
     expect(mcpTools.map((tool) => tool.name))
       .toContain("create_monitor_delegation");
+    expect(mcpTools.map((tool) => tool.name))
+      .toContain("cancel_monitor_delegation");
     expect(mcpTools.map((tool) => tool.name))
       .toContain("start_review");
     expect(mcpTools.map((tool) => tool.name))
@@ -62,6 +64,15 @@ describe("PwrAgent task monitor agent tools", () => {
           ),
         },
       },
+    });
+    const cancelMonitorTool = mcpTools.find(
+      (tool) => tool.name === "cancel_monitor_delegation",
+    );
+    expect(cancelMonitorTool?.description).toContain(
+      "Use this instead of send_message_to_thread",
+    );
+    expect(cancelMonitorTool?.inputSchema).toMatchObject({
+      required: ["monitorId"],
     });
   });
 
@@ -155,6 +166,80 @@ describe("PwrAgent task monitor agent tools", () => {
         preferredModel: undefined,
         preferredReasoningEffort: undefined,
         finalHandoffPrompt: undefined,
+      },
+    });
+  });
+
+  it("dispatches dynamic and MCP monitor cancellation with matching context", async () => {
+    const handler = vi.fn(async () => ({
+      ok: true as const,
+      operation: "cancel_monitor_delegation" as const,
+      data: {
+        monitorId: "monitor-1",
+        parentThreadId: "thread-1",
+        injected: true as const,
+        outcome: "cancelled" as const,
+        completionSource: { type: "parent_cancel" as const },
+      },
+    }));
+    const router = buildPwrAgentTaskMonitorToolRouter(handler);
+
+    const dynamicResponse = await router.handleDynamicToolCall({
+      backend: "codex",
+      call: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "dynamic-call-1",
+        namespace: "pwragent",
+        tool: "cancel_monitor_delegation",
+        arguments: {
+          monitorId: "monitor-1",
+          reason: "Wrong runner was selected.",
+        },
+      },
+    });
+    const mcpResponse = await router.handleMcpToolCall({
+      backend: "codex",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      tool: "cancel_monitor_delegation",
+      args: {
+        monitorId: "monitor-1",
+        reason: "Wrong runner was selected.",
+      },
+    });
+
+    expect(dynamicResponse).toMatchObject({ success: true });
+    expect(mcpResponse).toMatchObject({
+      structuredContent: {
+        monitorId: "monitor-1",
+        outcome: "cancelled",
+      },
+    });
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(handler).toHaveBeenNthCalledWith(1, {
+      operation: "cancel_monitor_delegation",
+      context: {
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-1",
+      },
+      args: {
+        monitorId: "monitor-1",
+        reason: "Wrong runner was selected.",
+      },
+    });
+    expect(handler).toHaveBeenNthCalledWith(2, {
+      operation: "cancel_monitor_delegation",
+      context: {
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-1",
+      },
+      args: {
+        monitorId: "monitor-1",
+        reason: "Wrong runner was selected.",
       },
     });
   });

@@ -1,5 +1,6 @@
 import type {
   AppServerBackendKind,
+  CancelMonitorDelegationToolArgs,
   CompleteMonitoringToolArgs,
   CreateMonitorDelegationToolArgs,
   InjectMonitorProgressToolArgs,
@@ -24,6 +25,8 @@ import type {
   DynamicToolSpec,
 } from "@pwrdrvr/codex-app-server-protocol/v2";
 import {
+  TASK_MONITOR_CANCEL_TOOL_DESCRIPTION,
+  TASK_MONITOR_CANCEL_TOOL_INPUT_SCHEMA,
   TASK_MONITOR_CREATE_TOOL_DESCRIPTION,
   TASK_MONITOR_CREATE_TOOL_INPUT_SCHEMA,
 } from "../agent-tools/pwragent-task-monitor-agent-tools.js";
@@ -40,6 +43,13 @@ export function buildTaskMonitorDynamicToolSpecs(
     name: "create_monitor_delegation",
     description: TASK_MONITOR_CREATE_TOOL_DESCRIPTION,
     inputSchema: TASK_MONITOR_CREATE_TOOL_INPUT_SCHEMA,
+    deferLoading: false,
+  };
+  const cancelTool: DynamicToolNamespaceTool = {
+    type: "function",
+    name: "cancel_monitor_delegation",
+    description: TASK_MONITOR_CANCEL_TOOL_DESCRIPTION,
+    inputSchema: TASK_MONITOR_CANCEL_TOOL_INPUT_SCHEMA,
     deferLoading: false,
   };
   const monitorTools: DynamicToolNamespaceTool[] = [
@@ -88,10 +98,10 @@ export function buildTaskMonitorDynamicToolSpecs(
   ];
   const tools =
     role === "parent"
-      ? [createTool]
+      ? [createTool, cancelTool]
       : role === "monitor"
         ? monitorTools
-        : [createTool, ...monitorTools];
+        : [createTool, cancelTool, ...monitorTools];
   return [
     {
       type: "namespace",
@@ -366,6 +376,12 @@ function normalizeTaskMonitorToolArguments(
       preferredReasoningEffort: readString(args.preferredReasoningEffort),
       finalHandoffPrompt: readString(args.finalHandoffPrompt),
     } satisfies CreateMonitorDelegationToolArgs;
+  }
+  if (operation === "cancel_monitor_delegation") {
+    return {
+      monitorId: readString(args.monitorId) ?? "",
+      reason: readString(args.reason),
+    } satisfies CancelMonitorDelegationToolArgs;
   }
   if (operation === "inject_progress") {
     return {
