@@ -219,6 +219,51 @@ describe("buildLiveToolDetails", () => {
     ]);
     expect(details[0]?.label).not.toContain("AQID");
   });
+
+  it("uses MCP titles and builds expandable invocation details", () => {
+    const details = buildLiveToolDetails({
+      type: "mcpToolCall",
+      id: "tool-node-repl",
+      server: "node_repl",
+      tool: "js",
+      arguments: {
+        title: "Inspect PwrGit profile",
+        code: "await sky.get_app_state();",
+      },
+      status: "completed",
+      durationMs: 1_170,
+      result: {
+        content: [
+          { type: "text", text: "Visible application state" },
+          { type: "image", mimeType: "image/png", data: "AQID" },
+        ],
+        structuredContent: {},
+      },
+    });
+
+    expect(details).toEqual([
+      expect.objectContaining({
+        id: "tool-node-repl",
+        label: "Inspect PwrGit profile (1.2s)",
+        images: [
+          {
+            type: "image",
+            url: "data:image/png;base64,AQID",
+            alt: "node_repl/js result",
+          },
+        ],
+        command: expect.objectContaining({
+          source: "tool",
+          rawCommand: "node_repl/js",
+          durationMs: 1_170,
+          displayCommand: expect.stringContaining("await sky.get_app_state();"),
+          output: expect.stringContaining("Visible application state"),
+        }),
+      }),
+    ]);
+    expect(details[0]?.label).not.toContain("Visible application state");
+    expect(details[0]?.label).not.toContain("AQID");
+  });
 });
 
 describe("appendCommandOutputDelta", () => {

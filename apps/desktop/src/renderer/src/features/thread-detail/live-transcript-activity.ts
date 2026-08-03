@@ -15,6 +15,12 @@ import {
   type AppServerThreadSubAgentCallDetail,
   type AppServerThreadTurnMetadata,
 } from "@pwragent/shared";
+import {
+  formatMcpToolActivityTitle,
+  formatMcpToolIdentifier,
+  formatMcpToolInvocation,
+  formatMcpToolOutput,
+} from "../../../../shared/mcp-tool-activity";
 
 export const RENDERER_SEQUENCE_KEY = "__rendererSequence" as const;
 
@@ -186,27 +192,28 @@ function summarizeDynamicToolResult(item: Record<string, unknown>): string | und
   return summarizeToolOutput(text);
 }
 
-function summarizeMcpToolResult(item: Record<string, unknown>): string | undefined {
-  const error = summarizeJsonValue(item.error);
-  if (error) {
-    return error;
-  }
-  const result = readRecord(item.result);
-  if (!result) {
-    return undefined;
-  }
-  const structuredContent = summarizeJsonValue(
-    result.structuredContent ?? result.structured_content,
-  );
-  if (structuredContent) {
-    return structuredContent;
-  }
-  const text = (Array.isArray(result.content) ? result.content : [])
-    .map(readRecord)
-    .map((contentItem) => readString(contentItem, "text"))
-    .filter((value): value is string => Boolean(value))
-    .join(" ");
-  return summarizeToolOutput(text);
+function buildLiveMcpToolCommandDetail(
+  item: Record<string, unknown>,
+  toolName: string,
+  elapsedMs: number | undefined,
+): AppServerThreadCommandDetail {
+  const serverName =
+    readString(item, "server") ??
+    readString(item, "serverName") ??
+    readString(item, "server_name");
+  const identifier = formatMcpToolIdentifier(serverName, toolName);
+  const args = readRecord(item.arguments) ?? readRecord(item.input);
+  const output = formatMcpToolOutput({
+    error: item.error,
+    result: item.result,
+  });
+  return {
+    displayCommand: formatMcpToolInvocation(identifier, args),
+    rawCommand: identifier,
+    source: "tool",
+    ...(output ? { output } : {}),
+    ...(typeof elapsedMs === "number" ? { durationMs: elapsedMs } : {}),
+  };
 }
 
 function readCommandOutputText(item: Record<string, unknown>): string | undefined {
@@ -690,23 +697,6 @@ function summarizeToolOutput(text: string | undefined): string | undefined {
   return normalized.length > 180 ? `${normalized.slice(0, 177)}...` : normalized;
 }
 
-function summarizeJsonValue(value: unknown): string | undefined {
-  if (value == null) {
-    return undefined;
-  }
-  if (typeof value === "string") {
-    return summarizeToolOutput(value);
-  }
-  if (typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-  try {
-    return summarizeToolOutput(JSON.stringify(value));
-  } catch {
-    return undefined;
-  }
-}
-
 function formatLiveToolName(
   toolName: string,
   status: AppServerThreadActivityDetail["status"]
@@ -764,7 +754,14 @@ function buildLiveToolLabel(
   }
 
   if (itemType === "mcptoolcall") {
-    const serverName = readString(item, "server") ?? readString(item, "serverName");
+    const title = readToolArgument(item, "title");
+    if (title) {
+      return formatMcpToolActivityTitle(title);
+    }
+    const serverName =
+      readString(item, "server") ??
+      readString(item, "serverName") ??
+      readString(item, "server_name");
     return formatMcpToolName(serverName, toolName, status);
   }
 
@@ -1006,7 +1003,7 @@ export function buildLiveToolDetails(
   const query = readToolArgument(item, "query") ?? readToolArgument(item, "q");
   const preview =
     itemType === "mcptoolcall"
-      ? summarizeMcpToolResult(item)
+      ? undefined
       : itemType === "dynamictoolcall"
         ? summarizeDynamicToolResult(item)
       : summarizeToolOutput(readToolOutputText(item));
@@ -1026,6 +1023,8 @@ export function buildLiveToolDetails(
       ? buildLiveCommandDetail(item, command, elapsedMs)
       : itemType === "collabagenttoolcall"
         ? buildCollabAgentCommandDetail(item, toolName, readStringArray(item.receiverThreadIds))
+        : itemType === "mcptoolcall"
+          ? buildLiveMcpToolCommandDetail(item, toolName, elapsedMs)
         : undefined;
   const details: AppServerThreadActivityDetail[] = [
     {
