@@ -230,7 +230,12 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
       limit: 20,
       threadId: request.threadId,
     });
-    const message = findAssistantMessageForText(response.replay, request.text) ?? {
+    const message = findAssistantMessageForText(
+      response.replay,
+      request.text,
+      request.itemId,
+      request.turnId,
+    ) ?? {
       id: request.itemId ?? `turn:${request.turnId ?? "unknown"}:assistant`,
       role: "assistant" as const,
       text: request.text,
@@ -394,8 +399,47 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
 function findAssistantMessageForText(
   replay: AppServerThreadReplay,
   text: string,
+  itemId?: string,
+  turnId?: string,
 ): AppServerThreadMessage | undefined {
+  if (itemId) {
+    for (let index = replay.messages.length - 1; index >= 0; index -= 1) {
+      const message = replay.messages[index];
+      if (message?.role === "assistant" && message.id === itemId) {
+        return message;
+      }
+    }
+    for (let index = replay.entries.length - 1; index >= 0; index -= 1) {
+      const entry = replay.entries[index];
+      if (
+        entry?.type === "message"
+        && entry.role === "assistant"
+        && entry.id === itemId
+      ) {
+        return entry;
+      }
+    }
+  }
   const expected = text.trim();
+  if (turnId) {
+    for (let index = replay.entries.length - 1; index >= 0; index -= 1) {
+      const entry = replay.entries[index];
+      if (
+        entry?.type === "message"
+        && entry.role === "assistant"
+        && entry.turn?.id === turnId
+        && entry.text.trim() === expected
+      ) {
+        return entry;
+      }
+    }
+  }
+  // Empty assistant messages need an item or turn identity. Falling back to a
+  // text-only match here could pick an unrelated image-only result from an
+  // earlier turn when the current terminal event produced no assistant output.
+  if (!expected && (itemId || turnId)) {
+    return undefined;
+  }
   for (let index = replay.messages.length - 1; index >= 0; index -= 1) {
     const message = replay.messages[index];
     if (message?.role === "assistant" && message.text.trim() === expected) {

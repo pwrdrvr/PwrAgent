@@ -220,7 +220,7 @@ export function buildSlackBlocksForIntent(params: {
       blocks.push({
         type: "image",
         image_url: part.url,
-        alt_text: alt,
+        alt_text: truncateSlackPlainText(alt, 2_000),
         title: {
           type: "plain_text",
           text: truncateSlackPlainText(alt, 2_000),

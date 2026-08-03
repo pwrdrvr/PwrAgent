@@ -11830,6 +11830,55 @@ describe("MessagingController", () => {
     ]);
   });
 
+  it("delivers resolved images for an image-only assistant completion", async () => {
+    const resolveAssistantMessageImages = vi.fn(async () => [{
+      type: "image" as const,
+      url: "data:image/png;base64,AQID",
+      alt: "Image-only result",
+      source: "assistant" as const,
+    }]);
+    const harness = await createHarness({ resolveAssistantMessageImages });
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "assistant-image-only",
+            type: "agentMessage",
+            phase: "final",
+            text: "",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(resolveAssistantMessageImages).toHaveBeenCalledWith({
+      backend: "codex",
+      itemId: "assistant-image-only",
+      text: "",
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+    expect(harness.delivered.filter((intent) => intent.kind === "message")).toEqual([
+      expect.objectContaining({
+        kind: "message",
+        role: "assistant",
+        parts: [
+          expect.objectContaining({
+            type: "image",
+            alt: "Image-only result",
+          }),
+        ],
+      }),
+    ]);
+  });
+
   it("posts resolved images after finalizing a streamed assistant response", async () => {
     const harness = await createHarness({
       streamingResponsesDefault: true,

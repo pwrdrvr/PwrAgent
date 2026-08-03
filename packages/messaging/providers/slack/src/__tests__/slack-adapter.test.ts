@@ -2980,6 +2980,66 @@ describe("SlackAdapter", () => {
     }
   });
 
+  it("splits long Markdown with images and attaches them to the final post", async () => {
+    const posted: Array<{
+      blocks?: Array<{ image_url?: string; text?: string; type: string }>;
+      channel: string;
+      text?: string;
+    }> = [];
+    const uploads: Array<{ threadTs?: string }> = [];
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: {
+        ...fakeApi({ posted }),
+        uploadFile: async (params) => {
+          uploads.push(params);
+        },
+      },
+      socketClient: fakeSocket(),
+      now: () => 1_700_000_000_000,
+    });
+    const longText = `${"This is a full sentence that keeps going. ".repeat(320)}END`;
+
+    await expect(adapter.deliver({
+      id: "assistant-message-with-images",
+      kind: "message",
+      createdAt: 1,
+      role: "assistant",
+      parts: [
+        { type: "text", text: longText, markdown: "markdown" },
+        { type: "image", url: "https://example.com/remote.png", alt: "Remote" },
+        { type: "image", url: "data:image/png;base64,AQID", alt: "Local" },
+      ],
+      audit: {
+        actor: { platformUserId: "U012ABCDEF0" },
+        bindingId: "slack-binding-1",
+        channel: {
+          channel: "slack",
+          conversation: { id: "D012ABCDEF0", kind: "dm" },
+        },
+        occurredAt: 1,
+      },
+    } satisfies MessagingSurfaceIntent)).resolves.toMatchObject({
+      channel: "slack",
+      outcome: "presented",
+    });
+
+    expect(posted.length).toBeGreaterThan(1);
+    expect(posted.at(-1)?.blocks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: "image",
+        image_url: "https://example.com/remote.png",
+      }),
+    ]));
+    expect(
+      posted.slice(0, -1).flatMap((post) => post.blocks ?? [])
+        .some((block) => block.type === "image"),
+    ).toBe(false);
+    expect(posted.at(-1)?.blocks?.[0]?.text).toContain("END");
+    expect(uploads).toHaveLength(1);
+  });
+
   it("keeps oversized Markdown tables renderable across native Markdown posts", async () => {
     const posted: Array<{
       blocks?: Array<{ text?: string; type: string }>;

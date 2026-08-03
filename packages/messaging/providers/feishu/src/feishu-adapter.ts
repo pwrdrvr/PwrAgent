@@ -41,6 +41,8 @@ import {
 import type { FeishuMessagingConfig } from "./feishu-config.ts";
 import {
   FEISHU_BUTTON_VALUE_LIMIT,
+  FEISHU_CARD_TEXT_LIMIT,
+  FEISHU_MESSAGE_TEXT_LIMIT,
   actionsForFeishuIntent,
   buildFeishuActionElements,
   buildFeishuCardForIntent,
@@ -61,9 +63,6 @@ const DEFAULT_CALLBACK_PORT = 47823;
 const DEFAULT_CALLBACK_HOST = "127.0.0.1";
 const FEISHU_SIGNED_VALUE_VERSION = 1;
 const FEISHU_WEBHOOK_BODY_LIMIT_BYTES = 2 * 1024 * 1024;
-// Feishu's per-message text limit (matches the capability profile). Longer
-// responses split onto multiple card messages instead of truncating.
-const FEISHU_MESSAGE_TEXT_LIMIT = 30_000;
 const FEISHU_INBOUND_DEDUP_TTL_MS = 10 * 60 * 1000;
 const FEISHU_INBOUND_DEDUP_MAX = 1_000;
 
@@ -509,26 +508,32 @@ export class FeishuAdapter implements FeishuProviderAdapter {
       layout: intent.actionLayout,
     });
 
-    // Long text-only messages: split into several card messages at clean
-    // boundaries so the per-message limit doesn't truncate the tail. Restricted
-    // to the simple assistant-response case — no buttons, not an in-place edit.
+    // Long assistant messages: split into several messages at clean boundaries
+    // so neither the card nor plain-text limit truncates the tail. Uploaded
+    // images are attached to the final chunk. Restricted to the simple
+    // assistant-response case — no buttons, not an in-place edit.
     if (
       intent.kind === "message" &&
       actionElements.length === 0 &&
-      uploadedImages.length === 0 &&
       intent.delivery?.mode !== "update"
     ) {
       const chunks = splitTextForDelivery(rawText, {
-        limit: FEISHU_MESSAGE_TEXT_LIMIT,
+        limit: uploadedImages.length > 0
+          ? FEISHU_CARD_TEXT_LIMIT
+          : FEISHU_MESSAGE_TEXT_LIMIT,
         measure: "chars",
       });
       if (chunks.length > 1) {
         let firstMessageId: string | undefined;
         try {
-          for (const chunk of chunks) {
-            const useCard = shouldSendFeishuCard(intent, chunk, 0);
+          for (const [index, chunk] of chunks.entries()) {
+            const images = index === chunks.length - 1 ? uploadedImages : [];
+            const useCard = images.length > 0
+              || shouldSendFeishuCard(intent, chunk, 0);
             const result = await this.api.sendMessage({
-              card: useCard ? buildFeishuCardForIntent({ intent, text: chunk }) : undefined,
+              card: useCard
+                ? buildFeishuCardForIntent({ images, intent, text: chunk })
+                : undefined,
               receiveId: target.receiveId,
               receiveIdType: target.receiveIdType,
               text: useCard ? undefined : clampFeishuMessage(chunk),

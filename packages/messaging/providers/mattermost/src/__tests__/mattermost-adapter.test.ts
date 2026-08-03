@@ -519,8 +519,13 @@ describe("MattermostAdapter — outbound deliver", () => {
         },
         {
           type: "image",
-          url: "https://example.com/remote.png",
-          alt: "Remote screenshot",
+          url: "https://example.com/remote-1.png",
+          alt: "Remote screenshot 1",
+        },
+        {
+          type: "image",
+          url: "https://example.com/remote-2.png",
+          alt: "Remote screenshot 2",
         },
       ],
       audit: {
@@ -541,7 +546,10 @@ describe("MattermostAdapter — outbound deliver", () => {
         props: {
           attachments: [
             expect.objectContaining({
-              image_url: "https://example.com/remote.png",
+              image_url: "https://example.com/remote-1.png",
+            }),
+            expect.objectContaining({
+              image_url: "https://example.com/remote-2.png",
             }),
           ],
         },
@@ -650,6 +658,51 @@ describe("MattermostAdapter — outbound deliver", () => {
     for (const post of spies.createdPosts) {
       expect(post.message.length).toBeLessThanOrEqual(16_383);
     }
+  });
+
+  it("splits long text with images and attaches them to the final post", async () => {
+    const spies = {
+      createdPosts: [] as CreatedPost[],
+      patchedPosts: [] as PatchedPost[],
+      uploadedFiles: [] as FormData[],
+    };
+    const adapter = makeAdapter(spies);
+    const longText = `${"This is a full sentence that keeps going. ".repeat(500)}END`;
+
+    const result = await adapter.deliver({
+      id: "intent-long-images",
+      kind: "message",
+      createdAt: 1_700_000_000_000,
+      parts: [
+        { type: "text", text: longText },
+        { type: "image", url: "data:image/png;base64,AQID", alt: "Local" },
+        { type: "image", url: "https://example.com/remote.png", alt: "Remote" },
+      ],
+      audit: {
+        channel: dmChannel("dm-1"),
+        actor: { platformUserId: "user-1" },
+      },
+    } as unknown as MessagingSurfaceIntent);
+
+    expect(result.outcome).toBe("presented");
+    expect(spies.createdPosts.length).toBeGreaterThan(1);
+    expect(spies.uploadedFiles).toHaveLength(1);
+    for (const post of spies.createdPosts.slice(0, -1)) {
+      expect(post.file_ids).toBeUndefined();
+      expect(post.props).toBeUndefined();
+      expect(post.message.length).toBeLessThanOrEqual(16_383);
+    }
+    expect(spies.createdPosts.at(-1)).toMatchObject({
+      file_ids: ["file-1"],
+      message: expect.stringContaining("END"),
+      props: {
+        attachments: [
+          expect.objectContaining({
+            image_url: "https://example.com/remote.png",
+          }),
+        ],
+      },
+    });
   });
 
   it("returns failed outcome when neither audit.channel nor opaque postId is present", async () => {

@@ -1463,20 +1463,34 @@ export class MessagingController {
             activeTurn?.turnId,
           );
         }
-      } else if (
-        isTerminalTurnLifecycle(activeTurn)
-        && !assistantDelta
-        && !reviewTurnEvent
-      ) {
-        // Only flush buffered stream text on a genuine terminal event (e.g.
-        // turn/completed, idle) — never on an assistant delta. Deltas are
-        // mid-stream content owned by deliverAssistantStreamUpdate's buffer;
-        // when the turn lifecycle is already terminal but the backend keeps
-        // emitting deltas, letting each delta run the terminal flush re-posts
-        // the (growing) buffer as a brand-new message every time — the
-        // multi-message channel flood (and the budget starvation it caused).
-        await this.waitForAssistantStreamDeliveriesForEvent(event, binding);
-        await this.flushBufferedAssistantStreamsForTerminalEvent(event, binding);
+      } else {
+        if (
+          isFinalAssistantImageResolutionEvent(event)
+          && !reviewTurnEvent
+          && !isTaskMonitorProgressEvent(event)
+        ) {
+          const assistantImages = await this.resolveAssistantMessageImages(
+            "",
+            event,
+            binding,
+          );
+          await this.deliverAssistantImages(assistantImages, event, binding);
+        }
+        if (
+          isTerminalTurnLifecycle(activeTurn)
+          && !assistantDelta
+          && !reviewTurnEvent
+        ) {
+          // Only flush buffered stream text on a genuine terminal event (e.g.
+          // turn/completed, idle) — never on an assistant delta. Deltas are
+          // mid-stream content owned by deliverAssistantStreamUpdate's buffer;
+          // when the turn lifecycle is already terminal but the backend keeps
+          // emitting deltas, letting each delta run the terminal flush re-posts
+          // the (growing) buffer as a brand-new message every time — the
+          // multi-message channel flood (and the budget starvation it caused).
+          await this.waitForAssistantStreamDeliveriesForEvent(event, binding);
+          await this.flushBufferedAssistantStreamsForTerminalEvent(event, binding);
+        }
       }
 
       // Automation turns surface their own terminal output (incl. errors) via
@@ -16841,6 +16855,20 @@ function isNonFinalAssistantTextForBackendEvent(event: AgentEvent): boolean {
   }
   const phase = typeof params.item.phase === "string" ? params.item.phase : undefined;
   return Boolean(phase && phase !== "final" && phase !== "final_answer");
+}
+
+function isFinalAssistantImageResolutionEvent(event: AgentEvent): boolean {
+  if (event.notification.method === "turn/completed") {
+    return true;
+  }
+  if (event.notification.method !== "item/completed") {
+    return false;
+  }
+  const item = (event.notification.params as {
+    item?: { type?: unknown };
+  }).item;
+  return item?.type === "agentMessage"
+    && !isNonFinalAssistantTextForBackendEvent(event);
 }
 
 function isTaskMonitorProgressEvent(event: AgentEvent): boolean {

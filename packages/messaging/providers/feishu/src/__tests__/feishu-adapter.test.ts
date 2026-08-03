@@ -295,6 +295,68 @@ describe("FeishuAdapter", () => {
     expect(spies.sent.length).toBeGreaterThan(1);
   });
 
+  it("splits long text with an uploaded image and attaches it to the final card", async () => {
+    const sent: Array<{
+      card?: {
+        elements: Array<{
+          alt?: { content?: string };
+          img_key?: string;
+          tag: string;
+          text?: { content?: string };
+        }>;
+      };
+      text?: string;
+    }> = [];
+    const uploaded: unknown[] = [];
+    const adapter = new FeishuAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({ sent, uploaded }),
+      now: () => 1_700_000_000_000,
+    });
+    const longText = `${"This is a full sentence that keeps going. ".repeat(240)}END`;
+
+    await expect(adapter.deliver({
+      id: "assistant-message-with-image",
+      kind: "message",
+      createdAt: 1,
+      role: "assistant",
+      parts: [
+        { type: "text", text: longText, markdown: "markdown" },
+        { type: "image", url: "data:image/png;base64,AQID", alt: "Screenshot" },
+      ],
+      audit: {
+        actor: { platformUserId: "ou_user" },
+        bindingId: "binding-1",
+        channel: {
+          channel: "feishu",
+          conversation: { id: "ou_user", kind: "dm" },
+        },
+        occurredAt: 1,
+      },
+    } satisfies MessagingSurfaceIntent)).resolves.toMatchObject({
+      channel: "feishu",
+      outcome: "presented",
+    });
+
+    expect(sent.length).toBeGreaterThan(1);
+    expect(uploaded).toHaveLength(1);
+    expect(
+      sent.slice(0, -1).flatMap((message) => message.card?.elements ?? [])
+        .some((element) => element.tag === "img"),
+    ).toBe(false);
+    expect(sent.at(-1)?.card?.elements).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        tag: "img",
+        img_key: "img_1",
+      }),
+    ]));
+    expect(
+      sent.at(-1)?.card?.elements.find((element) => element.tag === "div")
+        ?.text?.content,
+    ).toContain("END");
+  });
+
   it("sends interactive cards with persisted callback handles", async () => {
     const store = fakeStore();
     const spies: { sent: unknown[] } = { sent: [] };
