@@ -4742,6 +4742,86 @@ describe("Composer", () => {
     });
   });
 
+  it("removes concurrently cancelled queue entries by stable id", async () => {
+    const cancellationOne = createDeferred<{
+      queueEntryId: string;
+      cancelled: boolean;
+    }>();
+    const cancellationTwo = createDeferred<{
+      queueEntryId: string;
+      cancelled: boolean;
+    }>();
+    const startTurn = vi.fn(async (request: StartTurnRequest) => {
+      const queueEntryId = `queue-entry-${startTurn.mock.calls.length}`;
+      return {
+        backend: request.backend,
+        threadId: request.threadId,
+        turnId: queueEntryId,
+        queueStatus: "queued" as const,
+        queueEntryId,
+      };
+    });
+    const cancelQueuedTurn = vi.fn(({ queueEntryId }: {
+      queueEntryId: string;
+    }) => queueEntryId === "queue-entry-1"
+      ? cancellationOne.promise
+      : cancellationTwo.promise);
+
+    render(
+      <Composer
+        activeTurnId="turn-1"
+        backends={[backendSummary("codex")]}
+        desktopApi={{
+          cancelQueuedTurn,
+          onAgentEvent: () => () => undefined,
+          startTurn,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Active turn",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "First queued reply" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+    fireEvent.change(textarea, { target: { value: "Second queued reply" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(screen.getAllByRole("button", { name: "Delete" })).toHaveLength(2);
+    });
+    const deleteButtons = screen.getAllByRole("button", { name: "Delete" });
+    fireEvent.click(deleteButtons[0]!);
+    fireEvent.click(deleteButtons[1]!);
+
+    await act(async () => {
+      cancellationOne.resolve({
+        queueEntryId: "queue-entry-1",
+        cancelled: true,
+      });
+      await cancellationOne.promise;
+    });
+    await act(async () => {
+      cancellationTwo.resolve({
+        queueEntryId: "queue-entry-2",
+        cancelled: true,
+      });
+      await cancellationTwo.promise;
+    });
+
+    expect(screen.queryByLabelText("Queued message")).not.toBeInTheDocument();
+    expect(cancelQueuedTurn).toHaveBeenCalledTimes(2);
+  });
+
   it("restores a queued active-turn message after navigating away and back", async () => {
     const draftStore = createComposerDraftStore();
     const startTurn = vi.fn(async (request: StartTurnRequest) => ({
@@ -5029,6 +5109,228 @@ describe("Composer", () => {
       />,
     );
     expect(screen.getByText("Stay with thread A")).toBeInTheDocument();
+  });
+
+  it("does not apply a delayed started response to another thread", async () => {
+    const draftStore = createComposerDraftStore();
+    const startTurnDeferred = createDeferred<StartTurnResponse>();
+    const startTurn = vi.fn(() => startTurnDeferred.promise);
+    const addOptimisticUserMessage = vi.fn(() => "optimistic-a");
+    const onActiveTurnIdChange = vi.fn();
+    const threadA: NavigationThreadSummary = {
+      id: "thread-1",
+      title: "Active turn",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const threadB: NavigationThreadSummary = {
+      ...threadA,
+      id: "thread-2",
+      title: "Other thread",
+    };
+    const baseProps = {
+      addOptimisticUserMessage,
+      desktopApi: {
+        onAgentEvent: () => () => undefined,
+        startTurn,
+      },
+      disabled: false,
+      draftStore,
+      onActiveTurnIdChange,
+      skills: [],
+    };
+    const { rerender } = render(
+      <Composer
+        {...baseProps}
+        activeTurnId="turn-1"
+        thread={threadA}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "Start for thread A" },
+    });
+    fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter" });
+    await waitFor(() => expect(startTurn).toHaveBeenCalledTimes(1));
+
+    rerender(
+      <Composer
+        {...baseProps}
+        activeTurnId={undefined}
+        thread={threadB}
+      />,
+    );
+
+    await act(async () => {
+      startTurnDeferred.resolve({
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-a",
+      });
+      await startTurnDeferred.promise;
+    });
+
+    expect(onActiveTurnIdChange).not.toHaveBeenCalledWith("turn-a");
+    expect(addOptimisticUserMessage).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument();
+  });
+
+  it("restores a rejected delayed submission to its original thread", async () => {
+    const draftStore = createComposerDraftStore();
+    const startTurnDeferred = createDeferred<StartTurnResponse>();
+    const startTurn = vi.fn(() => startTurnDeferred.promise);
+    const threadA: NavigationThreadSummary = {
+      id: "thread-1",
+      title: "Active turn",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const threadB: NavigationThreadSummary = {
+      ...threadA,
+      id: "thread-2",
+      title: "Other thread",
+    };
+    const baseProps = {
+      desktopApi: {
+        onAgentEvent: () => () => undefined,
+        startTurn,
+      },
+      disabled: false,
+      draftStore,
+      skills: [],
+    };
+    const { rerender } = render(
+      <Composer
+        {...baseProps}
+        activeTurnId="turn-1"
+        thread={threadA}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "Recover for thread A" },
+    });
+    fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter" });
+    await waitFor(() => expect(startTurn).toHaveBeenCalledTimes(1));
+
+    rerender(
+      <Composer
+        {...baseProps}
+        activeTurnId={undefined}
+        thread={threadB}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "Keep thread B draft" },
+    });
+
+    await act(async () => {
+      startTurnDeferred.reject(new Error("thread A start failed"));
+      await startTurnDeferred.promise.catch(() => undefined);
+    });
+
+    expect(screen.getByLabelText("Reply")).toHaveValue("Keep thread B draft");
+    expect(screen.queryByText("thread A start failed")).not.toBeInTheDocument();
+    expect(draftStore.get("thread:codex:thread-1")).toMatchObject({
+      draft: "Recover for thread A",
+    });
+  });
+
+  it("preserves a cancelled queued item when its steer target changes", async () => {
+    const draftStore = createComposerDraftStore();
+    draftStore.setQueuedTurn("thread:codex:thread-1", {
+      id: "queued-steer-1",
+      queueEntryId: "queue-entry-1",
+      text: "Steer the original turn",
+      imageAttachments: [],
+      fileAttachments: [],
+      input: [{ type: "text", text: "Steer the original turn" }],
+    });
+    const cancellation = createDeferred<{
+      queueEntryId: string;
+      cancelled: boolean;
+    }>();
+    const cancelQueuedTurn = vi.fn(() => cancellation.promise);
+    const steerTurn = vi.fn();
+    const baseProps = {
+      backends: [
+        {
+          ...backendSummary("codex", {
+            models: [
+              {
+                id: "gpt-5.5",
+                label: "GPT-5.5",
+                current: true,
+                supportsReasoning: true,
+                supportsSteering: true,
+              },
+            ],
+          }),
+          capabilities: {
+            ...backendSummary("codex").capabilities,
+            steerTurn: true,
+          },
+        },
+      ],
+      desktopApi: {
+        cancelQueuedTurn,
+        onAgentEvent: () => () => undefined,
+        steerTurn,
+      },
+      disabled: false,
+      draftStore,
+      skills: [],
+      thread: {
+        id: "thread-1",
+        title: "Active turn",
+        titleSource: "explicit" as const,
+        source: "codex" as const,
+        executionMode: "default" as const,
+        linkedDirectories: [],
+        inbox: { inInbox: false },
+      },
+    };
+    const { rerender } = render(
+      <Composer
+        {...baseProps}
+        activeTurnId="turn-1"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Steer" }));
+    expect(cancelQueuedTurn).toHaveBeenCalledWith({
+      queueEntryId: "queue-entry-1",
+    });
+
+    rerender(
+      <Composer
+        {...baseProps}
+        activeTurnId="turn-2"
+      />,
+    );
+    await act(async () => {
+      cancellation.resolve({
+        queueEntryId: "queue-entry-1",
+        cancelled: true,
+      });
+      await cancellation.promise;
+    });
+
+    expect(steerTurn).not.toHaveBeenCalled();
+    expect(screen.getByText("Steer the original turn")).toBeInTheDocument();
+    expect(
+      draftStore.getQueuedTurn("thread:codex:thread-1"),
+    ).toMatchObject({
+      id: "queued-steer-1",
+      text: "Steer the original turn",
+    });
+    expect(
+      draftStore.getQueuedTurn("thread:codex:thread-1")?.queueEntryId,
+    ).toBeUndefined();
   });
 
   it("steers Command Enter during an active turn when supported", async () => {

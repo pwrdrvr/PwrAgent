@@ -3706,6 +3706,22 @@ export function Composer(props: ComposerProps) {
     applyRecoveredComposerDraft(snapshot);
     return true;
   };
+  const restoreSubmittedComposerDraftInScope = (
+    scopeKey: string,
+    snapshot: ComposerDraftSnapshot,
+  ): boolean => {
+    if (activeComposerScopeKeyRef.current === scopeKey) {
+      return recoverSubmittedComposerDraft(snapshot);
+    }
+
+    const current = draftStore.get(scopeKey);
+    if (current && hasComposerDraftSnapshotContent(current)) {
+      draftStore.pushDraft(scopeKey, snapshot);
+      return false;
+    }
+    saveComposerDraftSnapshot(scopeKey, snapshot);
+    return true;
+  };
   const clearRecoveredComposerDraft = (): void => {
     recoveryCycleRef.current = undefined;
     recoveringDraftRef.current = true;
@@ -3915,6 +3931,17 @@ export function Composer(props: ComposerProps) {
       return nextQueuedTurns;
     });
   };
+  const enqueueQueuedTurnInScope = (
+    scopeKey: string,
+    nextQueuedTurn: QueuedTurnDraft,
+  ): void => {
+    const current = draftStore.getQueuedTurns(scopeKey);
+    const nextQueuedTurns = [...current, nextQueuedTurn];
+    saveQueuedTurnSnapshots(scopeKey, nextQueuedTurns);
+    if (activeComposerScopeKeyRef.current === scopeKey) {
+      setQueuedTurnsState(nextQueuedTurns);
+    }
+  };
   const removeQueuedTurnAt = (index: number): void => {
     setQueuedTurnsState((current) => {
       const nextQueuedTurns = current.filter((_, candidateIndex) => {
@@ -3963,14 +3990,40 @@ export function Composer(props: ComposerProps) {
       setQueuedTurnsState(nextQueuedTurns);
     }
   };
+  const preserveCancelledQueuedTurnInScope = (
+    scopeKey: string,
+    queued: QueuedTurnDraft,
+  ): void => {
+    const current = draftStore.getQueuedTurns(scopeKey);
+    const preserved = {
+      ...queued,
+      backendQueuePending: false,
+      queueEntryId: undefined,
+    };
+    const nextQueuedTurns = current.some((candidate) => candidate.id === queued.id)
+      ? current.map((candidate) =>
+          candidate.id === queued.id ? preserved : candidate
+        )
+      : [...current, preserved];
+    saveQueuedTurnSnapshots(scopeKey, nextQueuedTurns);
+    if (activeComposerScopeKeyRef.current === scopeKey) {
+      setQueuedTurnsState(nextQueuedTurns);
+    }
+  };
   const cancelServerManagedQueuedTurn = async (
     queued: QueuedTurnDraft,
+    scopeKey = composerScopeKey,
   ): Promise<boolean> => {
+    const reportError = (message: string): void => {
+      if (activeComposerScopeKeyRef.current === scopeKey) {
+        setSendError(message);
+      }
+    };
     if (!queued.queueEntryId) {
       return true;
     }
     if (!props.desktopApi?.cancelQueuedTurn) {
-      setSendError("Queued turn cancellation is unavailable.");
+      reportError("Queued turn cancellation is unavailable.");
       return false;
     }
     try {
@@ -3978,12 +4031,12 @@ export function Composer(props: ComposerProps) {
         queueEntryId: queued.queueEntryId,
       });
       if (!response.cancelled) {
-        setSendError("The queued turn is no longer waiting.");
+        reportError("The queued turn is no longer waiting.");
         return false;
       }
       return true;
     } catch (error) {
-      setSendError(error instanceof Error ? error.message : String(error));
+      reportError(error instanceof Error ? error.message : String(error));
       return false;
     }
   };
@@ -5543,19 +5596,35 @@ export function Composer(props: ComposerProps) {
       backendQueueProjection?: {
         queued: QueuedTurnDraft;
         scopeKey: string;
+        submittedSnapshot: ComposerDraftSnapshot;
       };
       payload?: ComposerTurnPayload;
       queueClaimed?: boolean;
     },
   ): Promise<void> => {
+    const backendQueueSubmission = options?.backendQueueProjection;
+    const submittedScopeKey =
+      backendQueueSubmission?.scopeKey ?? composerScopeKey;
+    const submittedSnapshot =
+      backendQueueSubmission?.submittedSnapshot
+      ?? latestDraftSnapshotRef.current.snapshot;
+    const submittedScopeIsVisible = (): boolean =>
+      activeComposerScopeKeyRef.current === submittedScopeKey;
+
     if (!props.thread || !props.desktopApi?.startTurn) {
-      if (options?.backendQueueProjection) {
+      if (backendQueueSubmission) {
         removeQueuedTurnInScope(
-          options.backendQueueProjection.scopeKey,
-          options.backendQueueProjection.queued,
+          backendQueueSubmission.scopeKey,
+          backendQueueSubmission.queued,
+        );
+        restoreSubmittedComposerDraftInScope(
+          submittedScopeKey,
+          submittedSnapshot,
         );
       }
-      updateSending(false);
+      if (!backendQueueSubmission || submittedScopeIsVisible()) {
+        updateSending(false);
+      }
       restoreQueuedTurnIfClaimed(queued, options?.queueClaimed);
       if (queued && options?.queueClaimed) {
         globalQueuedTurnReleaseScopeKeys.delete(composerScopeKey);
@@ -5577,6 +5646,16 @@ export function Composer(props: ComposerProps) {
       ? await payloadOrPromise
       : payloadOrPromise;
     if (payload.input.length === 0 || props.disabled) {
+      if (backendQueueSubmission) {
+        removeQueuedTurnInScope(
+          backendQueueSubmission.scopeKey,
+          backendQueueSubmission.queued,
+        );
+        restoreSubmittedComposerDraftInScope(
+          submittedScopeKey,
+          submittedSnapshot,
+        );
+      }
       restoreQueuedTurnIfClaimed(queued, options?.queueClaimed);
       if (queued && options?.queueClaimed) {
         globalQueuedTurnReleaseScopeKeys.delete(composerScopeKey);
@@ -5608,7 +5687,6 @@ export function Composer(props: ComposerProps) {
       return;
     }
 
-    const backendQueueSubmission = Boolean(options?.backendQueueProjection);
     let optimisticMessageId: string | undefined;
     if (!backendQueueSubmission) {
       props.onBeforeSendTurn?.();
@@ -5621,8 +5699,7 @@ export function Composer(props: ComposerProps) {
       );
       setActiveOptimisticMessageId(optimisticMessageId);
     }
-    const submittedSnapshot = latestDraftSnapshotRef.current.snapshot;
-    if (!queued) {
+    if (!queued && !backendQueueSubmission) {
       resetComposerDraftAndState(composerScopeKey);
       if (collaborationMode) {
         setPlanModeEnabled(false);
@@ -5645,10 +5722,10 @@ export function Composer(props: ComposerProps) {
       });
       if (response.queueStatus === "queued") {
         const queueEntryId = response.queueEntryId ?? response.turnId;
-        if (options?.backendQueueProjection) {
+        if (backendQueueSubmission) {
           updateQueuedTurnInScope(
-            options.backendQueueProjection.scopeKey,
-            options.backendQueueProjection.queued,
+            backendQueueSubmission.scopeKey,
+            backendQueueSubmission.queued,
             (current) => ({
               ...current,
               backendQueuePending: false,
@@ -5656,6 +5733,9 @@ export function Composer(props: ComposerProps) {
               queueEntryId,
             }),
           );
+          if (submittedScopeIsVisible()) {
+            updateSending(false);
+          }
         } else {
           enqueueQueuedTurn({
             ...(queued ?? {
@@ -5669,23 +5749,27 @@ export function Composer(props: ComposerProps) {
           });
         }
       } else {
-        if (options?.backendQueueProjection) {
+        if (backendQueueSubmission) {
           removeQueuedTurnInScope(
-            options.backendQueueProjection.scopeKey,
-            options.backendQueueProjection.queued,
+            backendQueueSubmission.scopeKey,
+            backendQueueSubmission.queued,
           );
-          props.onBeforeSendTurn?.();
-          props.onPendingStatusChange?.(
-            collaborationMode ? "Planning" : "Thinking",
-          );
-          optimisticMessageId = props.addOptimisticUserMessage?.(
-            payload.displayText,
-            payload.imageParts,
-          );
-          setActiveOptimisticMessageId(optimisticMessageId);
+          if (submittedScopeIsVisible()) {
+            props.onBeforeSendTurn?.();
+            props.onPendingStatusChange?.(
+              collaborationMode ? "Planning" : "Thinking",
+            );
+            optimisticMessageId = props.addOptimisticUserMessage?.(
+              payload.displayText,
+              payload.imageParts,
+            );
+            setActiveOptimisticMessageId(optimisticMessageId);
+          }
         }
-        updateActiveTurnId(response.turnId);
-        props.onActiveTurnIdChange?.(response.turnId);
+        if (!backendQueueSubmission || submittedScopeIsVisible()) {
+          updateActiveTurnId(response.turnId);
+          props.onActiveTurnIdChange?.(response.turnId);
+        }
       }
       // Queued turns only carry their serialized text, but that text is
       // self-describing (`[@label](~/path)` markdown), so the scan alone
@@ -5716,34 +5800,44 @@ export function Composer(props: ComposerProps) {
         );
       }
     } catch (error) {
-      if (options?.backendQueueProjection) {
+      if (backendQueueSubmission) {
         removeQueuedTurnInScope(
-          options.backendQueueProjection.scopeKey,
-          options.backendQueueProjection.queued,
+          backendQueueSubmission.scopeKey,
+          backendQueueSubmission.queued,
         );
       }
       if (optimisticMessageId) {
         props.removeOptimisticMessage?.(optimisticMessageId);
       }
       if (!queued) {
-        const recoveredSubmittedDraft =
-          recoverSubmittedComposerDraft(submittedSnapshot);
-        if (collaborationMode && recoveredSubmittedDraft) {
+        const recoveredSubmittedDraft = backendQueueSubmission
+          ? restoreSubmittedComposerDraftInScope(
+              submittedScopeKey,
+              submittedSnapshot,
+            )
+          : recoverSubmittedComposerDraft(submittedSnapshot);
+        if (
+          collaborationMode
+          && recoveredSubmittedDraft
+          && (!backendQueueSubmission || submittedScopeIsVisible())
+        ) {
           setPlanModeEnabled(true);
         }
       }
-      props.onPendingStatusChange?.(undefined);
-      updateSending(false);
-      setInterrupting(false);
-      setSteering(false);
-      updateActiveTurnId(undefined);
-      props.onActiveTurnIdChange?.(undefined);
-      setActiveOptimisticMessageId(undefined);
+      if (!backendQueueSubmission || submittedScopeIsVisible()) {
+        props.onPendingStatusChange?.(undefined);
+        updateSending(false);
+        setInterrupting(false);
+        setSteering(false);
+        updateActiveTurnId(undefined);
+        props.onActiveTurnIdChange?.(undefined);
+        setActiveOptimisticMessageId(undefined);
+        setSendError(error instanceof Error ? error.message : String(error));
+      }
       restoreQueuedTurnIfClaimed(queued, options?.queueClaimed);
       if (queued && options?.queueClaimed) {
         globalQueuedTurnReleaseScopeKeys.delete(composerScopeKey);
       }
-      setSendError(error instanceof Error ? error.message : String(error));
     }
   };
 
@@ -5996,8 +6090,12 @@ export function Composer(props: ComposerProps) {
     void queueCurrentDraft({ scheduledSendAt });
   };
 
-  const submitPendingSteer = async (pending: QueuedTurnDraft): Promise<void> => {
-    const turnId = activeTurnIdRef.current;
+  const submitPendingSteer = async (
+    pending: QueuedTurnDraft,
+    expectedTurnId = activeTurnIdRef.current,
+    expectedScopeKey = composerScopeKey,
+  ): Promise<void> => {
+    const turnId = expectedTurnId;
     if (!props.thread || !turnId || !props.desktopApi?.steerTurn) {
       setSendError("Steering is not available for this backend.");
       return;
@@ -6011,6 +6109,15 @@ export function Composer(props: ComposerProps) {
     const payload = isPromiseLike(payloadOrPromise)
       ? await payloadOrPromise
       : payloadOrPromise;
+    if (
+      activeTurnIdRef.current !== turnId
+      || activeComposerScopeKeyRef.current !== expectedScopeKey
+    ) {
+      if (activeComposerScopeKeyRef.current === expectedScopeKey) {
+        setSendError("The target turn changed before steering could start.");
+      }
+      return;
+    }
     if (
       payload.input.length === 0 ||
       props.disabled ||
@@ -6079,14 +6186,18 @@ export function Composer(props: ComposerProps) {
 
   const createPendingSteer = (
     pending: QueuedTurnDraft,
+    expectedTurnId = activeTurnIdRef.current,
+    expectedScopeKey = composerScopeKey,
   ): boolean | Promise<boolean> => {
-    const turnId = activeTurnIdRef.current;
+    const turnId = expectedTurnId;
     if (pendingSteerCreationInFlightRef.current) {
       return false;
     }
     if (
       !props.thread
       || !turnId
+      || activeTurnIdRef.current !== turnId
+      || activeComposerScopeKeyRef.current !== expectedScopeKey
       || !props.desktopApi?.steerTurn
       || !supportsSteering
     ) {
@@ -6098,7 +6209,13 @@ export function Composer(props: ComposerProps) {
     const inputOrPayload = buildQueuedTurnPayload(pending);
     const complete = (input: AppServerTurnInputItem[]): boolean => {
       try {
-        if (input.length === 0 || props.disabled || pendingSteer) {
+        if (
+          input.length === 0
+          || props.disabled
+          || pendingSteer
+          || activeTurnIdRef.current !== turnId
+          || activeComposerScopeKeyRef.current !== expectedScopeKey
+        ) {
           return false;
         }
 
@@ -6156,10 +6273,20 @@ export function Composer(props: ComposerProps) {
       imageAttachments,
       fileAttachments,
     };
-    const created = createPendingSteer(pending);
+    const expectedTurnId = activeTurnIdRef.current;
+    const expectedScopeKey = composerScopeKey;
+    const created = createPendingSteer(
+      pending,
+      expectedTurnId,
+      expectedScopeKey,
+    );
     const continueSteering = (accepted: boolean): void => {
-      if (accepted && activeTurnIdRef.current) {
-        void submitPendingSteer(pending);
+      if (accepted) {
+        void submitPendingSteer(
+          pending,
+          expectedTurnId,
+          expectedScopeKey,
+        );
       }
     };
     if (isPromiseLike(created)) {
@@ -6169,19 +6296,38 @@ export function Composer(props: ComposerProps) {
   };
 
   const steerQueuedTurn = async (queued: QueuedTurnDraft): Promise<void> => {
-    if (!(await cancelServerManagedQueuedTurn(queued))) {
+    const expectedTurnId = activeTurnIdRef.current;
+    const expectedScopeKey = composerScopeKey;
+    if (!expectedTurnId) {
+      return;
+    }
+    if (!(await cancelServerManagedQueuedTurn(queued, expectedScopeKey))) {
+      return;
+    }
+    if (
+      activeTurnIdRef.current !== expectedTurnId
+      || activeComposerScopeKeyRef.current !== expectedScopeKey
+    ) {
+      preserveCancelledQueuedTurnInScope(expectedScopeKey, queued);
       return;
     }
     const continueSteering = (created: boolean): void => {
       if (!created) {
+        preserveCancelledQueuedTurnInScope(expectedScopeKey, queued);
         return;
       }
-      removeQueuedTurn(queued);
-      if (activeTurnIdRef.current) {
-        void submitPendingSteer(queued);
-      }
+      removeQueuedTurnInScope(expectedScopeKey, queued);
+      void submitPendingSteer(
+        queued,
+        expectedTurnId,
+        expectedScopeKey,
+      );
     };
-    const created = createPendingSteer(queued);
+    const created = createPendingSteer(
+      queued,
+      expectedTurnId,
+      expectedScopeKey,
+    );
     if (isPromiseLike(created)) {
       await created.then(continueSteering);
     } else {
@@ -6254,8 +6400,11 @@ export function Composer(props: ComposerProps) {
         // Ordinary replies enter the main-process FIFO immediately. The
         // renderer reserves a presentation slot while startTurn hands the
         // request to that queue, then records the registry entry id.
+        const submittedScopeKey = composerScopeKey;
+        const submittedSnapshot = latestDraftSnapshotRef.current.snapshot;
         setScheduledDraftSendAt(undefined);
         setScheduleArmed(true);
+        resetComposerDraftAndState(submittedScopeKey);
         const payloadOrPromise = buildTurnPayload(
           canonicalDraft,
           imageAttachments,
@@ -6269,8 +6418,14 @@ export function Composer(props: ComposerProps) {
           try {
             payload = await payloadOrPromise;
           } catch (error) {
-            updateSending(false);
-            setSendError(error instanceof Error ? error.message : String(error));
+            restoreSubmittedComposerDraftInScope(
+              submittedScopeKey,
+              submittedSnapshot,
+            );
+            if (activeComposerScopeKeyRef.current === submittedScopeKey) {
+              updateSending(false);
+              setSendError(error instanceof Error ? error.message : String(error));
+            }
             return;
           } finally {
             turnPayloadPreparationInFlightRef.current = false;
@@ -6279,8 +6434,10 @@ export function Composer(props: ComposerProps) {
           payload = payloadOrPromise;
         }
         if (payload.input.length > 0 && !props.disabled) {
-          setSendError(undefined);
-          updateSending(true);
+          if (activeComposerScopeKeyRef.current === submittedScopeKey) {
+            setSendError(undefined);
+            updateSending(true);
+          }
           const backendQueueProjection: QueuedTurnDraft = {
             id: createQueuedTurnId(),
             backendQueuePending: true,
@@ -6289,14 +6446,23 @@ export function Composer(props: ComposerProps) {
             fileAttachments,
             input: payload.input,
           };
-          enqueueQueuedTurn(backendQueueProjection);
+          enqueueQueuedTurnInScope(
+            submittedScopeKey,
+            backendQueueProjection,
+          );
           await sendThreadTurn(undefined, {
             backendQueueProjection: {
               queued: backendQueueProjection,
-              scopeKey: composerScopeKey,
+              scopeKey: submittedScopeKey,
+              submittedSnapshot,
             },
             payload,
           });
+        } else {
+          restoreSubmittedComposerDraftInScope(
+            submittedScopeKey,
+            submittedSnapshot,
+          );
         }
       }
       return;
@@ -8850,6 +9016,7 @@ export function Composer(props: ComposerProps) {
       ) : null}
 
       {queuedTurns.map((queued, index) => {
+        const queuedScopeKey = composerScopeKey;
         const backendOwned = Boolean(
           queued.backendQueuePending || queued.queueEntryId,
         );
@@ -8917,12 +9084,29 @@ export function Composer(props: ComposerProps) {
                 type="button"
                 onClick={() => {
                   const editQueuedTurn = (): void => {
+                    removeQueuedTurnInScope(queuedScopeKey, queued);
+                    if (activeComposerScopeKeyRef.current !== queuedScopeKey) {
+                      const currentDraft = draftStore.get(queuedScopeKey);
+                      if (
+                        currentDraft
+                        && hasComposerDraftSnapshotContent(currentDraft)
+                      ) {
+                        draftStore.pushDraft(queuedScopeKey, currentDraft);
+                      }
+                      saveComposerDraftSnapshot(queuedScopeKey, {
+                        draft: queued.text,
+                        editorDocument: undefined,
+                        imageAttachments: queued.imageAttachments,
+                        fileAttachments: queued.fileAttachments,
+                        skillTokens: [],
+                      });
+                      return;
+                    }
                     setComposerDraftFromCanonical(queued.text);
                     setImageAttachments(queued.imageAttachments);
                     setFileAttachments(queued.fileAttachments);
                     setScheduledDraftSendAt(scheduledSendAt);
                     setScheduleArmed(true);
-                    removeQueuedTurnAt(index);
                     requestAnimationFrame(() => inputRef.current?.focus());
                   };
                   if (!backendOwned) {
@@ -8930,7 +9114,12 @@ export function Composer(props: ComposerProps) {
                     return;
                   }
                   void (async () => {
-                    if (!(await cancelServerManagedQueuedTurn(queued))) {
+                    if (
+                      !(await cancelServerManagedQueuedTurn(
+                        queued,
+                        queuedScopeKey,
+                      ))
+                    ) {
                       return;
                     }
                     editQueuedTurn();
@@ -8949,8 +9138,13 @@ export function Composer(props: ComposerProps) {
                     return;
                   }
                   void (async () => {
-                    if (await cancelServerManagedQueuedTurn(queued)) {
-                      removeQueuedTurnAt(index);
+                    if (
+                      await cancelServerManagedQueuedTurn(
+                        queued,
+                        queuedScopeKey,
+                      )
+                    ) {
+                      removeQueuedTurnInScope(queuedScopeKey, queued);
                     }
                   })();
                 }}
