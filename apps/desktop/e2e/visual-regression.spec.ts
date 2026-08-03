@@ -55,6 +55,11 @@ test.describe("visual regression", () => {
           name: "Add AGENTS docs for media VCL",
         }),
       ).toBeVisible();
+      await expect(
+        app.window.getByText(
+          /Existing Codex threads cannot be converted/,
+        ),
+      ).toBeVisible();
 
       const shell = app.window.locator(".app-shell");
       await expect(shell).toBeVisible();
