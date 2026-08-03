@@ -264,6 +264,37 @@ describe("buildLiveToolDetails", () => {
     expect(details[0]?.label).not.toContain("Visible application state");
     expect(details[0]?.label).not.toContain("AQID");
   });
+
+  it("uses dynamic tool titles while preserving expandable tool identity", () => {
+    const details = buildLiveToolDetails({
+      type: "dynamicToolCall",
+      id: "tool-handoff",
+      tool: "handoff_task",
+      arguments: {
+        title: "Design Git remotes and branches UI",
+        task: "Inspect the existing implementation",
+      },
+      status: "completed",
+      success: true,
+      durationMs: 50,
+      contentItems: [
+        { type: "inputText", text: "Created delegated thread" },
+      ],
+    });
+
+    expect(details).toEqual([
+      expect.objectContaining({
+        id: "tool-handoff",
+        label: "Design Git remotes and branches UI (50ms)",
+        command: expect.objectContaining({
+          source: "tool",
+          rawCommand: "handoff_task",
+          displayCommand: expect.stringContaining("Inspect the existing implementation"),
+          output: "Created delegated thread",
+        }),
+      }),
+    ]);
+  });
 });
 
 describe("appendCommandOutputDelta", () => {

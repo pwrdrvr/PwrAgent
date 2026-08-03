@@ -2,21 +2,21 @@ import { truncateRendererPayloadString } from "@pwragent/shared";
 
 const TOOL_ACTIVITY_TITLE_MAX_CHARS = 160;
 
-export function formatMcpToolActivityTitle(value: string): string {
+export function formatToolActivityTitle(value: string): string {
   const normalized = value.replace(/\s+/g, " ").trim();
   return normalized.length > TOOL_ACTIVITY_TITLE_MAX_CHARS
     ? `${normalized.slice(0, TOOL_ACTIVITY_TITLE_MAX_CHARS - 3)}...`
     : normalized;
 }
 
-export function formatMcpToolIdentifier(
+export function formatToolIdentifier(
   serverName: string | undefined,
   toolName: string,
 ): string {
   return serverName ? `${serverName}/${toolName}` : toolName;
 }
 
-export function formatMcpToolInvocation(
+export function formatToolInvocation(
   identifier: string,
   args: Record<string, unknown> | undefined,
 ): string {
@@ -77,6 +77,30 @@ export function formatMcpToolOutput(params: {
   const output = parts.join("\n\n");
   return output
     ? truncateRendererPayloadString(output, "MCP tool output")
+    : undefined;
+}
+
+export function formatDynamicToolOutput(contentItems: unknown): string | undefined {
+  if (!Array.isArray(contentItems)) {
+    return undefined;
+  }
+  const parts: string[] = [];
+  for (const value of contentItems) {
+    const item = asRecord(value);
+    const itemType = readString(item, "type")?.replace(/[-_\s]/g, "").toLowerCase();
+    if (itemType === "inputimage") {
+      parts.push("[image result]");
+      continue;
+    }
+    const text = readString(item, "text");
+    const formatted = text ?? formatResultValue(value);
+    if (formatted) {
+      parts.push(formatted);
+    }
+  }
+  const output = parts.join("\n\n");
+  return output
+    ? truncateRendererPayloadString(output, "dynamic tool output")
     : undefined;
 }
 

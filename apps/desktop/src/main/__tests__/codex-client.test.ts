@@ -5242,7 +5242,7 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
-  it("does not use title arguments as labels for non-MCP dynamic tools", async () => {
+  it("uses dynamic tool titles while preserving expandable tool identity", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.readThreadResultByThreadId.set("thread-dynamic-tool-title", {
       thread: {
@@ -5262,6 +5262,9 @@ describe("CodexAppServerClient", () => {
                 status: "completed",
                 success: true,
                 durationMs: 50,
+                contentItems: [
+                  { type: "inputText", text: "Created delegated thread" },
+                ],
               },
             ],
           },
@@ -5284,7 +5287,13 @@ describe("CodexAppServerClient", () => {
         details: [
           expect.objectContaining({
             id: "tool-handoff",
-            label: "handoff_task (50ms)",
+            label: "Design Git remotes and branches UI (50ms)",
+            command: expect.objectContaining({
+              source: "tool",
+              rawCommand: "handoff_task",
+              displayCommand: expect.stringContaining("Inspect the existing implementation"),
+              output: "Created delegated thread",
+            }),
           }),
         ],
       }),

@@ -100,11 +100,12 @@ import {
 } from "../app-server/thread-directory-enricher";
 import { normalizeReviewDisplayText } from "../../shared/review-command";
 import {
-  formatMcpToolActivityTitle,
-  formatMcpToolIdentifier,
-  formatMcpToolInvocation,
+  formatDynamicToolOutput,
   formatMcpToolOutput,
-} from "../../shared/mcp-tool-activity";
+  formatToolActivityTitle,
+  formatToolIdentifier,
+  formatToolInvocation,
+} from "../../shared/tool-activity";
 import {
   StdioJsonRpcTransport,
   type StdioJsonRpcTransportOptions,
@@ -3630,7 +3631,7 @@ function extractDirectMcpToolResultImageParts(
 ): AppServerThreadImagePart[] {
   const result = asRecord(item.result);
   const content = Array.isArray(result?.content) ? result.content : [];
-  const identifier = formatMcpToolIdentifier(
+  const identifier = formatToolIdentifier(
     pickString(item, ["server", "serverName", "server_name"]),
     toolName,
   );
@@ -3934,7 +3935,7 @@ function buildMcpToolCommandDetail(params: {
   toolName: string;
   elapsedMs: number | undefined;
 }): AppServerThreadCommandDetail {
-  const identifier = formatMcpToolIdentifier(
+  const identifier = formatToolIdentifier(
     pickString(params.item, ["server", "serverName", "server_name"]),
     params.toolName,
   );
@@ -3944,8 +3945,26 @@ function buildMcpToolCommandDetail(params: {
     result: params.item.result,
   });
   return {
-    displayCommand: formatMcpToolInvocation(identifier, args),
+    displayCommand: formatToolInvocation(identifier, args),
     rawCommand: identifier,
+    source: "tool",
+    ...(output ? { output } : {}),
+    ...(typeof params.elapsedMs === "number" ? { durationMs: params.elapsedMs } : {}),
+  };
+}
+
+function buildDynamicToolCommandDetail(params: {
+  item: Record<string, unknown>;
+  toolName: string;
+  elapsedMs: number | undefined;
+}): AppServerThreadCommandDetail {
+  const args = parseToolArguments(params.item);
+  const output = formatDynamicToolOutput(
+    params.item.contentItems ?? params.item.content_items,
+  );
+  return {
+    displayCommand: formatToolInvocation(params.toolName, args),
+    rawCommand: params.toolName,
     source: "tool",
     ...(output ? { output } : {}),
     ...(typeof params.elapsedMs === "number" ? { durationMs: params.elapsedMs } : {}),
@@ -4249,16 +4268,22 @@ function summarizeActivityItems(
         normalizedItemType === "mcptoolcall" && toolName
           ? buildMcpToolCommandDetail({ item, toolName, elapsedMs })
           : undefined;
+      const dynamicCommandDetail =
+        normalizedItemType === "dynamictoolcall" && explicitTitle && toolName
+          ? buildDynamicToolCommandDetail({ item, toolName, elapsedMs })
+          : undefined;
       const images =
         normalizedItemType === "dynamictoolcall"
           ? extractDynamicToolCallImageParts(item, toolName ?? "Tool")
           : normalizedItemType === "mcptoolcall"
             ? extractDirectMcpToolResultImageParts(item, toolName ?? "Tool")
           : [];
-      const label = normalizedItemType === "mcptoolcall" && explicitTitle
-        ? formatMcpToolActivityTitle(explicitTitle)
+      const label =
+        (normalizedItemType === "mcptoolcall" || normalizedItemType === "dynamictoolcall")
+        && explicitTitle
+        ? formatToolActivityTitle(explicitTitle)
         : normalizedItemType === "mcptoolcall" && toolName
-          ? `Used MCP ${formatMcpToolIdentifier(
+          ? `Used MCP ${formatToolIdentifier(
               pickString(item, ["server", "serverName", "server_name"]),
               toolName,
             )}`
@@ -4271,7 +4296,9 @@ function summarizeActivityItems(
           query ? `: ${query}` : "",
         ].join(""),
         ...(images.length > 0 ? { images } : {}),
-        ...(mcpCommandDetail ? { command: mcpCommandDetail } : {}),
+        ...(mcpCommandDetail || dynamicCommandDetail
+          ? { command: mcpCommandDetail ?? dynamicCommandDetail }
+          : {}),
         status: itemStatus
       });
     }
