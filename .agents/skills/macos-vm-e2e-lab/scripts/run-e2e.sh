@@ -40,7 +40,31 @@ LOG="e2e-$STAMP.log"
 
 if [[ $LOCAL_RUN == 1 ]]; then
   echo ">> pushing committed local HEAD from $LOCAL_REPO into VM branch e2e-local"
-  GIT_SSH_COMMAND="ssh -i $SSH_KEY -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR" \
+  # The guest Git repo is an SSH remote, not an LFS server. Skip the LFS
+  # pre-push negotiation and copy the exact objects referenced by HEAD into
+  # the guest media store before checkout. This keeps --local useful for
+  # unpushed visual-golden commits without copying the host's entire LFS cache.
+  LFS_MEDIA_DIR=$(git -C "$LOCAL_REPO" lfs env | sed -n 's/^LocalMediaDir=//p')
+  LFS_OBJECT_PATHS=()
+  while IFS= read -r oid; do
+    [[ -n $oid ]] || continue
+    object_path="${oid:0:2}/${oid:2:2}/$oid"
+    if [[ ! -f "$LFS_MEDIA_DIR/$object_path" ]]; then
+      echo "missing local Git LFS object for HEAD: $oid" >&2
+      exit 1
+    fi
+    LFS_OBJECT_PATHS+=("$object_path")
+  done < <(git -C "$LOCAL_REPO" lfs ls-files --long HEAD | awk '{print $1}')
+
+  if [[ ${#LFS_OBJECT_PATHS[@]} -gt 0 ]]; then
+    echo ">> copying ${#LFS_OBJECT_PATHS[@]} HEAD Git LFS object(s) into the VM"
+    tar -C "$LFS_MEDIA_DIR" -cf - "${LFS_OBJECT_PATHS[@]}" \
+      | ssh "${SSH_OPTS[@]}" "$SSH_USER@$IP" \
+        'mkdir -p "$HOME/PwrAgent/.git/lfs/objects" && tar -C "$HOME/PwrAgent/.git/lfs/objects" -xf -'
+  fi
+
+  GIT_LFS_SKIP_PUSH=1 \
+    GIT_SSH_COMMAND="ssh -i $SSH_KEY -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR" \
     git -C "$LOCAL_REPO" push -q -f "$SSH_USER@$IP:PwrAgent" HEAD:refs/heads/e2e-local
 fi
 
