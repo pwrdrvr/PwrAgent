@@ -921,6 +921,7 @@ class DesktopAppServerService {
   private readonly prStatusTokenBucket = new PrStatusTokenBucket();
   private lastPrObservationTimestamp = 0;
   private prStatusRegistryLoaded = false;
+  private prStatusRegistryLoadPromise: Promise<void> | undefined;
   private prLookupRegistryLoaded = false;
   private prGraphqlClient: GithubGraphqlPrClient | undefined;
   private prPollingScheduler: PrPollingScheduler | undefined;
@@ -3650,10 +3651,22 @@ class DesktopAppServerService {
     if (this.prStatusRegistryLoaded) {
       return;
     }
-    this.prStatusRegistryLoaded = true;
-    const entries = await this.getOverlayStore().readPrStatusCache();
-    for (const entry of Object.values(entries)) {
-      this.rememberPrStatuses([entry.pr], entry.fetchedAt, "pr-status-cache");
+    if (!this.prStatusRegistryLoadPromise) {
+      this.prStatusRegistryLoadPromise = (async () => {
+        const entries = await this.getOverlayStore().readPrStatusCache();
+        for (const entry of Object.values(entries)) {
+          this.rememberPrStatuses([entry.pr], entry.fetchedAt, "pr-status-cache");
+        }
+        this.prStatusRegistryLoaded = true;
+      })();
+    }
+    const loadPromise = this.prStatusRegistryLoadPromise;
+    try {
+      await loadPromise;
+    } finally {
+      if (this.prStatusRegistryLoadPromise === loadPromise) {
+        this.prStatusRegistryLoadPromise = undefined;
+      }
     }
   }
 
@@ -3691,6 +3704,13 @@ class DesktopAppServerService {
       const normalized = normalizePrSummary(pr);
       return this.prStatusRegistry.get(getPrStatusKey(normalized))?.pr ?? normalized;
     });
+  }
+
+  async canonicalizeThreadInspectionPullRequests(
+    prs: PrSummary[],
+  ): Promise<PrSummary[]> {
+    await this.loadPrStatusRegistry();
+    return this.canonicalizePrs(prs);
   }
 
   private mergePrHistory(
@@ -5076,6 +5096,7 @@ class DesktopAppServerService {
     this.prLookupSubscribers.clear();
     this.pendingPrOverlayWrites.clear();
     this.prStatusRegistryLoaded = false;
+    this.prStatusRegistryLoadPromise = undefined;
     this.prLookupRegistryLoaded = false;
     this.pendingDirectoryGitStatusRefreshes.clear();
     this.pendingDirectoryGitStatusKeys.clear();
@@ -5329,6 +5350,10 @@ export function registerAppServerIpcHandlers(): void {
   });
   getDesktopBackendRegistry().setThreadPullRequestStatusToolHandler(
     async (args) => await appServerService.checkThreadPullRequestStatusForTool(args),
+  );
+  getDesktopBackendRegistry().setThreadPullRequestCanonicalizer(
+    async (prs) =>
+      await appServerService.canonicalizeThreadInspectionPullRequests(prs),
   );
   getDesktopBackendRegistry().setThreadPullRequestWatchToolHandler(
     async (args) => await appServerService.watchThreadPullRequestForTool(args),
@@ -5913,6 +5938,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   unsubscribeWorkingStateEvents?.();
   unsubscribeWorkingStateEvents = undefined;
   getDesktopBackendRegistry().setThreadPullRequestStatusToolHandler(undefined);
+  getDesktopBackendRegistry().setThreadPullRequestCanonicalizer(undefined);
   getDesktopBackendRegistry().setThreadPullRequestWatchToolHandler(undefined);
   getDesktopBackendRegistry().setThreadPrAutoDispatchHandler(undefined);
   await appServerService.close();

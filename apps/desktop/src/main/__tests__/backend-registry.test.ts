@@ -24259,7 +24259,7 @@ script = "printf setup"
     await registry.close();
   });
 
-  it("projects canonical PR status updates into both Agent inspection endpoints", async () => {
+  it("projects canonical PR statuses into both Agent inspection endpoints", async () => {
     const stalePr = {
       provider: "github.com",
       org: "pwrdrvr",
@@ -24351,6 +24351,9 @@ script = "printf setup"
       }),
       threadSearchService: { search } as unknown as ThreadSearchService,
     });
+    registry.setThreadPullRequestCanonicalizer(async (prs) =>
+      prs.map((pr) => pr.number === mergedPr.number ? mergedPr : pr),
+    );
     await registry.publishLocalEvent({
       backend: "codex",
       notification: {
@@ -24362,17 +24365,6 @@ script = "printf setup"
         },
       },
     });
-    await registry.publishLocalEvent({
-      backend: "codex",
-      notification: {
-        method: "pullRequest/status/updated",
-        params: {
-          prKey: "github.com/pwrdrvr/pwragent#1132",
-          pr: mergedPr,
-        },
-      },
-    });
-
     const searchResponse = await codexClient.emitRequest({
       method: "item/tool/call",
       params: {

@@ -202,7 +202,6 @@ import {
   type EnsureDirectoryLaunchpadResponse,
   applyCodexEnvironmentActionRunUpdate,
   buildPendingRequestResponse,
-  buildPullRequestStatusKey,
   buildThreadIdentityKey,
   insertSubthreadIdAfter,
   isAcpBackendId,
@@ -1470,6 +1469,10 @@ type ThreadTitleService = Pick<ThreadTitleGenerationService, "generateTitle"> & 
 type ThreadPullRequestStatusToolHandler = (
   args: CheckThreadPullRequestStatusToolArgs,
 ) => PwrAgentThreadInspectionResponse | Promise<PwrAgentThreadInspectionResponse>;
+
+type ThreadPullRequestCanonicalizer = (
+  prs: PrSummary[],
+) => PrSummary[] | Promise<PrSummary[]>;
 
 type ThreadPullRequestWatchToolHandler = (
   args: WatchThreadPullRequestToolArgs,
@@ -5990,7 +5993,9 @@ export class DesktopBackendRegistry {
     | ThreadPullRequestWatchToolHandler
     | undefined;
   private threadPrAutoDispatchHandler: ThreadPrAutoDispatchHandler | undefined;
-  private readonly canonicalPullRequestsByStatusKey = new Map<string, PrSummary>();
+  private threadPullRequestCanonicalizer:
+    | ThreadPullRequestCanonicalizer
+    | undefined;
   private threadInspectionSearchService: ThreadSearchService | null | undefined;
   private readonly headlessAutomationTurns = new Map<
     string,
@@ -6602,6 +6607,12 @@ export class DesktopBackendRegistry {
     handler: ThreadPullRequestStatusToolHandler | null | undefined,
   ): void {
     this.threadPullRequestStatusToolHandler = handler ?? undefined;
+  }
+
+  setThreadPullRequestCanonicalizer(
+    canonicalizer: ThreadPullRequestCanonicalizer | null | undefined,
+  ): void {
+    this.threadPullRequestCanonicalizer = canonicalizer ?? undefined;
   }
 
   setThreadPullRequestWatchToolHandler(
@@ -23225,7 +23236,7 @@ export class DesktopBackendRegistry {
         });
         return toThreadInspectionSummaryFromSearchResult(
           result,
-          this.projectCanonicalPullRequests(overlay),
+          await this.projectCanonicalPullRequests(overlay),
           messagingBindings,
         );
       }),
@@ -23255,31 +23266,21 @@ export class DesktopBackendRegistry {
             : undefined);
         return toThreadInspectionSummary(
           gitWorkingState ? { ...thread, gitWorkingState } : thread,
-          this.projectCanonicalPullRequests(overlay),
+          await this.projectCanonicalPullRequests(overlay),
           messagingBindings,
         );
       }),
     );
   }
 
-  private projectCanonicalPullRequests(
+  private async projectCanonicalPullRequests(
     overlay: ThreadOverlayState | undefined,
-  ): ThreadOverlayState | undefined {
-    if (!overlay?.prs?.length || this.canonicalPullRequestsByStatusKey.size === 0) {
+  ): Promise<ThreadOverlayState | undefined> {
+    if (!overlay?.prs?.length || !this.threadPullRequestCanonicalizer) {
       return overlay;
     }
-    let changed = false;
-    const prs = overlay.prs.map((pr) => {
-      const canonical = this.canonicalPullRequestsByStatusKey.get(
-        buildPullRequestStatusKey(pr),
-      );
-      if (!canonical) {
-        return pr;
-      }
-      changed = changed || canonical !== pr;
-      return canonical;
-    });
-    return changed ? { ...overlay, prs } : overlay;
+    const prs = await this.threadPullRequestCanonicalizer(overlay.prs);
+    return { ...overlay, prs };
   }
 
   private async getThreadInspectionMessagingBindings(params: {
@@ -23764,17 +23765,6 @@ export class DesktopBackendRegistry {
     event = await this.withThreadMessageOrigin(event);
     this.rememberFileChangeApprovalContext(event);
     event = this.withEmbeddedFileChangeApprovalContext(event);
-
-    if (event.notification.method === "pullRequest/status/updated") {
-      const { prKey, pr } = event.notification.params as {
-        prKey: string;
-        pr: PrSummary;
-      };
-      this.canonicalPullRequestsByStatusKey.set(
-        prKey,
-        pr,
-      );
-    }
 
     if (event.backend === "codex") {
       this.recordTaskMonitorActivity(event.notification);
