@@ -110,6 +110,64 @@ type LaunchpadEnvironmentSetupProgress = {
   status: "starting" | "running" | "completed" | "failed";
 };
 
+function collectThreadImageGallery(
+  entries: Array<AppServerThreadEntry | undefined>,
+): AppServerThreadImagePart[] {
+  const images: AppServerThreadImagePart[] = [];
+  const seenSourceUrls = new Set<string>();
+  const seenUrls = new Set<string>();
+
+  const appendImage = (image: AppServerThreadImagePart): void => {
+    if (
+      seenUrls.has(image.url)
+      || (image.sourceUrl ? seenSourceUrls.has(image.sourceUrl) : false)
+    ) {
+      return;
+    }
+    seenUrls.add(image.url);
+    if (image.sourceUrl) {
+      seenSourceUrls.add(image.sourceUrl);
+    }
+    images.push(image);
+  };
+
+  for (const entry of entries) {
+    if (entry?.type === "message") {
+      for (const part of entry.parts ?? []) {
+        if (part.type === "image") {
+          appendImage(part);
+        }
+      }
+      continue;
+    }
+
+    if (entry?.type === "activity") {
+      for (const detail of entry.details) {
+        for (const image of detail.images ?? []) {
+          appendImage(image);
+        }
+      }
+    }
+  }
+
+  return images;
+}
+
+function threadGalleryImageMatches(
+  candidate: AppServerThreadImagePart,
+  selected: AppServerThreadImagePart,
+): boolean {
+  return (
+    candidate === selected
+    || candidate.url === selected.url
+    || Boolean(
+      candidate.sourceUrl
+      && selected.sourceUrl
+      && candidate.sourceUrl === selected.sourceUrl,
+    )
+  );
+}
+
 const LazyIntegratedTerminal = lazy(async () => {
   const module = await import("./IntegratedTerminal");
   return { default: module.IntegratedTerminal };
@@ -1882,6 +1940,28 @@ export function ThreadView(props: ThreadViewProps) {
     pendingActivityEntry && activityHasFileDiff(pendingActivityEntry)
       ? pendingActivityEntry
       : undefined;
+  const threadImageGallery = useMemo(
+    () =>
+      collectThreadImageGallery([
+        ...props.transcriptEntries,
+        pendingTranscriptActivityEntry,
+        pendingProtocolActivityEntry,
+        pendingUsageActivityEntry,
+        props.pendingAssistantMessage,
+      ]),
+    [
+      pendingProtocolActivityEntry,
+      pendingTranscriptActivityEntry,
+      pendingUsageActivityEntry,
+      props.pendingAssistantMessage,
+      props.transcriptEntries,
+    ],
+  );
+  const expandedImageIndex = expandedImage
+    ? threadImageGallery.findIndex((image) =>
+        threadGalleryImageMatches(image, expandedImage)
+      )
+    : -1;
 
   // Accumulated edited files: persisted replay entries + deferred live
   // entries grouped per turn, cleared past a committed turn once the
@@ -3130,9 +3210,25 @@ export function ThreadView(props: ThreadViewProps) {
         <ImageLightbox
           src={expandedImage.url}
           alt={expandedImage.alt ?? "Expanded image"}
+          position={expandedImageIndex >= 0 ? expandedImageIndex + 1 : undefined}
+          total={expandedImageIndex >= 0 ? threadImageGallery.length : undefined}
           onClose={() => {
             setExpandedImage(undefined);
           }}
+          onNext={
+            expandedImageIndex >= 0 && expandedImageIndex < threadImageGallery.length - 1
+              ? () => {
+                  setExpandedImage(threadImageGallery[expandedImageIndex + 1]);
+                }
+              : undefined
+          }
+          onPrevious={
+            expandedImageIndex > 0
+              ? () => {
+                  setExpandedImage(threadImageGallery[expandedImageIndex - 1]);
+                }
+              : undefined
+          }
         />
       ) : null}
 

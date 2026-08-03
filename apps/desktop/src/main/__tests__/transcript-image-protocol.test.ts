@@ -444,6 +444,95 @@ describe("transcript image protocol", () => {
     await expect(readFile(materializedPath)).resolves.toEqual(Buffer.from([7, 8, 9]));
   });
 
+  it("snapshots Markdown image links from agent temporary directories", async () => {
+    const { materializeTranscriptImageUrlsForRenderer } = await import(
+      "../transcript-image-protocol"
+    );
+    const temporaryRoot = path.sep === "/" ? "/tmp" : os.tmpdir();
+    const agentTempDir = await mkdtemp(
+      path.join(temporaryRoot, "pwragent-markdown-image-")
+    );
+    const imagePath = path.join(agentTempDir, "pwrgit-ui-qa-overview.png");
+    const sourceUrl = pathToFileURL(imagePath).toString();
+    await writeFile(imagePath, Buffer.from([10, 11, 12]));
+
+    try {
+      const message = {
+        id: "message-temporary-image-link",
+        role: "assistant" as const,
+        text: `Open [Worktrees overview](${imagePath}).`,
+      };
+      const rawResponse = {
+        backend: "codex" as const,
+        fetchedAt: 1,
+        threadId: "thread-temporary-image-link",
+        replay: {
+          entries: [{ type: "message" as const, ...message }],
+          messages: [message],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      };
+      const snapshotRoot = path.join(tempDir, "thread-images");
+      const dependencies = {
+        resolveRoot: () => snapshotRoot,
+      };
+      const options = {
+        includeTemporaryImageRoots: true,
+      };
+      const response = await materializeTranscriptImageUrlsForRenderer(
+        rawResponse,
+        dependencies,
+        options,
+      );
+
+      const expectedImagePart = expect.objectContaining({
+        type: "image",
+        url: expect.stringMatching(/^pwragent-image:\/\/file\//),
+        sourceUrl,
+        alt: "Worktrees overview",
+      });
+      expect(response.replay.messages[0]).toMatchObject({
+        parts: [
+          { type: "text", text: message.text },
+          expectedImagePart,
+        ],
+      });
+      const firstImagePart = response.replay.messages[0]?.parts?.[1];
+      const firstSnapshotUrl = firstImagePart?.type === "image"
+        ? firstImagePart.url
+        : "";
+      const firstSnapshotPath = filePathFromProtocolUrl(firstSnapshotUrl);
+      expect(path.basename(firstSnapshotPath)).toMatch(/^markdown-[a-f0-9]{64}\.png$/);
+      await expect(readFile(firstSnapshotPath)).resolves.toEqual(Buffer.from([10, 11, 12]));
+
+      await rm(agentTempDir, { recursive: true, force: true });
+
+      const rehydrated = await materializeTranscriptImageUrlsForRenderer(
+        rawResponse,
+        dependencies,
+        options,
+      );
+
+      expect(rehydrated.replay.messages[0]).toMatchObject({
+        parts: [
+          { type: "text", text: message.text },
+          expectedImagePart,
+        ],
+      });
+      const rehydratedImagePart = rehydrated.replay.messages[0]?.parts?.[1];
+      expect(rehydratedImagePart).toMatchObject({
+        type: "image",
+        url: firstSnapshotUrl,
+        sourceUrl,
+      });
+    } finally {
+      await rm(agentTempDir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps data image URLs when materialization writes fail", async () => {
     const { materializeTranscriptImageUrlsForRenderer } = await import(
       "../transcript-image-protocol"

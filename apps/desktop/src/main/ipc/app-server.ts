@@ -1303,6 +1303,7 @@ class DesktopAppServerService {
       response,
       {},
       {
+        includeTemporaryImageRoots: true,
         resolveApprovedLocalImageRoots: async () =>
           await registry.getThreadTranscriptImageRoots({
             backend,

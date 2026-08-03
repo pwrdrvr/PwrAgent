@@ -15930,7 +15930,8 @@ a.transcript-message__messaging-origin:focus-visible {
 
 /* The single full-size local-raster viewer (`ImageLightbox`) — used for pasted
    Composer attachments, Composer PDF page previews, and sent transcript
-   images. Click the scrim, the close cookie, or Escape to dismiss. */
+   images. Click the scrim, the close cookie, or Escape to dismiss. Transcript
+   galleries add edge controls and a compact position indicator. */
 .image-lightbox {
   position: fixed;
   inset: 0;
@@ -15988,6 +15989,50 @@ a.transcript-message__messaging-origin:focus-visible {
   outline-offset: 2px;
 }
 
+.image-lightbox__nav {
+  position: absolute;
+  top: 50%;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--bg-panel-elevated) 92%, transparent);
+  color: var(--text-primary);
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--shadow-base) 34%, transparent);
+  cursor: pointer;
+  transform: translateY(-50%);
+  -webkit-app-region: no-drag;
+}
+
+.image-lightbox__nav--previous {
+  left: 24px;
+}
+
+.image-lightbox__nav--next {
+  right: 24px;
+}
+
+.image-lightbox__nav:hover:not(:disabled) {
+  border-color: var(--accent-border);
+  background: var(--bg-panel-hover);
+  color: var(--accent);
+}
+
+.image-lightbox__nav:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.image-lightbox__nav:disabled {
+  opacity: 0.32;
+  cursor: default;
+}
+
 .image-lightbox__image {
   display: block;
   max-width: min(100vw - 48px, 1100px);
@@ -16003,6 +16048,27 @@ a.transcript-message__messaging-origin:focus-visible {
   color: var(--text-secondary);
   font-size: 13px;
   text-align: center;
+}
+
+.image-lightbox__position {
+  align-self: center;
+  margin: 8px 0 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.image-lightbox__position b {
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+@media (max-width: 760px) {
+  .image-lightbox__nav {
+    top: auto;
+    bottom: 24px;
+    transform: none;
+  }
 }
 
 .composer__setup {

@@ -2091,6 +2091,129 @@ describe("ThreadView", () => {
     expect(screen.getByRole("dialog", { name: "Expanded image" })).toBeInTheDocument();
   });
 
+  it("navigates images across activity and message entries as one thread gallery", () => {
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[
+          {
+            kind: "codex",
+            label: "Codex app server",
+            available: true,
+            methods: ["thread/list", "thread/read", "turn/start", "skills/list"],
+            capabilities: {
+              listThreads: true,
+              createThread: false,
+              resumeThread: true,
+              renameThread: false,
+              readThread: true,
+              startTurn: true,
+              interruptTurn: false,
+              steerTurn: false,
+              transcriptPagination: true,
+              toolUse: false,
+              approvalRequests: false,
+              multiDirectoryThreads: true,
+            },
+            executionModes: [
+              {
+                mode: "default",
+                label: "Default Access",
+                available: true,
+                isDefault: true,
+              },
+            ],
+          },
+        ]}
+        composerDisabled={false}
+        desktopApi={{
+          startTurn: async () => ({
+            backend: "codex",
+            threadId: "thread-gallery",
+            turnId: "turn-1",
+          }),
+        }}
+        loading={false}
+        loadingMore={false}
+        messageCount={1}
+        selectedThread={{
+          id: "thread-gallery",
+          title: "Inspect image gallery",
+          titleSource: "explicit",
+          source: "codex",
+          updatedAt: Date.now(),
+          linkedDirectories: [],
+          inbox: {
+            inInbox: false,
+          },
+        }}
+        skills={[]}
+        transcriptEntries={[
+          {
+            type: "activity",
+            id: "activity-images",
+            summary: "Explored 1 item",
+            details: [
+              {
+                id: "tool-images",
+                kind: "read",
+                label: "Screenshots",
+                images: [
+                  {
+                    type: "image",
+                    url: "https://example.test/overview.png",
+                    alt: "Overview",
+                  },
+                ],
+              },
+            ],
+          },
+          {
+            type: "message",
+            id: "message-images",
+            role: "assistant",
+            text: "Two more screenshots.",
+            parts: [
+              { type: "text", text: "Two more screenshots." },
+              {
+                type: "image",
+                url: "https://example.test/branches.png",
+                alt: "Branches",
+              },
+              {
+                type: "image",
+                url: "https://example.test/remotes.png",
+                alt: "Remotes",
+              },
+            ],
+          },
+        ]}
+        clearPendingRequest={() => undefined}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand tool result image 1" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Expanded image" });
+    expect(within(dialog).getByRole("img", { name: "Overview" })).toBeInTheDocument();
+    expect(dialog).toHaveTextContent("1 / 3");
+    expect(screen.getByRole("button", { name: "Previous image" })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Next image" }));
+    expect(within(dialog).getByRole("img", { name: "Branches" })).toBeInTheDocument();
+    expect(dialog).toHaveTextContent("2 / 3");
+
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    expect(within(dialog).getByRole("img", { name: "Remotes" })).toBeInTheDocument();
+    expect(dialog).toHaveTextContent("3 / 3");
+    expect(screen.getByRole("button", { name: "Next image" })).toBeDisabled();
+
+    fireEvent.keyDown(window, { key: "ArrowLeft" });
+    expect(within(dialog).getByRole("img", { name: "Branches" })).toBeInTheDocument();
+  });
+
   it("clears an expanded transcript image when the selected thread changes", () => {
     const viewProps = {
       addOptimisticUserMessage: (_text: string) => "optimistic-1",
