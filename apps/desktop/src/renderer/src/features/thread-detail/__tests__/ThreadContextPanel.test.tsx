@@ -1839,6 +1839,10 @@ describe("ThreadContextPanel", () => {
       activeTab: "pricing",
       activeTurnId: "turn-live",
       pinned: true,
+      thread: {
+        ...baseThread,
+        reasoningEffort: "high",
+      },
       pricing: {
         lines: [
           {
@@ -1848,6 +1852,7 @@ describe("ThreadContextPanel", () => {
             createdAt: startedAt,
             currency: "USD",
             inputTokens: 100,
+            model: "gpt-5.6-sol",
             outputCostMicros: 0,
             outputTokens: 10,
             priceStatus: "priced",
@@ -1874,6 +1879,9 @@ describe("ThreadContextPanel", () => {
     const activeRow = container.querySelector(".pricing-usage-row--active");
     expect(activeRow).not.toBeNull();
     expect(within(activeRow as HTMLElement).getByText("Running")).toBeInTheDocument();
+    expect(
+      within(activeRow as HTMLElement).getByText("gpt-5.6-sol · high"),
+    ).toBeInTheDocument();
     const times = activeRow?.querySelector(".rail-card__times");
     expect(times?.textContent).toContain("· 1m 5s");
     expect(times?.textContent).toMatch(/Started .*:\d{2}:\d{2} [AP]M/);
@@ -1998,6 +2006,7 @@ describe("ThreadContextPanel", () => {
             task: "Review the diff",
             status: "running",
             agentName: "Reviewer",
+            preferredReasoningEffort: "medium",
             createdAt: startedAt,
             updatedAt: startedAt,
           },
@@ -2014,6 +2023,9 @@ describe("ThreadContextPanel", () => {
     expect(activeRow).not.toBeNull();
     expect(within(activeRow as HTMLElement).getByText("Running")).toBeInTheDocument();
     expect(within(activeRow as HTMLElement).getByText("Reviewer")).toBeInTheDocument();
+    expect(
+      within(activeRow as HTMLElement).getByText("gpt-5.5 · medium"),
+    ).toBeInTheDocument();
     const times = activeRow?.querySelector(".rail-card__times");
     expect(times?.textContent).toContain("· 1m 5s");
   });

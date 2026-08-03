@@ -46,6 +46,7 @@ type PricingPanelProps = {
    * Supplies each sub-agent row's name and its live/terminal status.
    */
   subAgents?: ThreadSubAgentSummary[];
+  threadReasoningEffort?: string;
 };
 
 type PricingDisplayOptions = {
@@ -308,6 +309,12 @@ export function PricingPanel(props: PricingPanelProps) {
             const isActive = isActiveUsageLine({ activeTurnId, line, subAgentsById });
             const usageTitle = formatUsageLineTitle(line, subAgent);
             const showUsageTitle = usageTitle !== "Turn usage";
+            const reasoningEffort =
+              line.reasoningEffort
+              ?? subAgent?.preferredReasoningEffort
+              ?? (isActive && line.scope !== "monitor"
+                ? props.threadReasoningEffort
+                : undefined);
 
             return (
               <li
@@ -327,7 +334,7 @@ export function PricingPanel(props: PricingPanelProps) {
                       </span>
                       <span className="rail-card__model">
                         {line.model ?? "Unknown model"}
-                        {line.reasoningEffort ? ` · ${line.reasoningEffort}` : ""}
+                        {reasoningEffort ? ` · ${reasoningEffort}` : ""}
                         {formatServiceTierLabel(line)}
                       </span>
                     </p>

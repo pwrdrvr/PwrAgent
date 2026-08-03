@@ -4302,6 +4302,7 @@ describe("CodexAppServerClient", () => {
       threadId: "thread-token-count-priced",
       model: "gpt-5.5",
       priceStatus: "priced",
+      reasoningEffort: "high",
     });
 
     await client.close();

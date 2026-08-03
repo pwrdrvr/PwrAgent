@@ -3036,6 +3036,7 @@ type NormalizedTokenUsage = {
 type TokenUsagePricingContext = {
   fastMode?: boolean;
   model?: string;
+  reasoningEffort?: string;
   serviceTier?: string;
 };
 
@@ -3127,6 +3128,18 @@ function readTokenUsagePricingContext(
       pickString(record, ["model", "modelId", "model_id"]) ??
       pickString(payload ?? {}, ["model", "modelId", "model_id"]) ??
       pickString(settings ?? {}, ["model", "modelId", "model_id"]),
+    reasoningEffort:
+      pickString(record, ["reasoningEffort", "reasoning_effort", "effort"]) ??
+      pickString(payload ?? {}, [
+        "reasoningEffort",
+        "reasoning_effort",
+        "effort",
+      ]) ??
+      pickString(settings ?? {}, [
+        "reasoningEffort",
+        "reasoning_effort",
+        "effort",
+      ]),
     serviceTier:
       pickString(record, ["serviceTier", "service_tier"]) ??
       pickString(payload ?? {}, ["serviceTier", "service_tier"]) ??
@@ -3141,12 +3154,18 @@ function mergeTokenUsagePricingContext(
   return {
     fastMode: primary.fastMode ?? fallback?.fastMode,
     model: primary.model ?? fallback?.model,
+    reasoningEffort: primary.reasoningEffort ?? fallback?.reasoningEffort,
     serviceTier: primary.serviceTier ?? fallback?.serviceTier,
   };
 }
 
 function hasTokenUsagePricingContext(context: TokenUsagePricingContext): boolean {
-  return Boolean(context.model || context.serviceTier || context.fastMode !== undefined);
+  return Boolean(
+    context.model
+    || context.reasoningEffort
+    || context.serviceTier
+    || context.fastMode !== undefined
+  );
 }
 
 function extractTokenUsagePricingContext(value: unknown): TokenUsagePricingContext | undefined {
@@ -3280,6 +3299,9 @@ function summarizeTokenUsageActivity(
         ...(cost?.catalogId ? { pricingCatalogId: cost.catalogId } : {}),
         ...(cost?.catalogVersion ? { pricingCatalogVersion: cost.catalogVersion } : {}),
         ...(cost?.rateId ? { pricingRateId: cost.rateId } : {}),
+        ...(resolvedPricingContext.reasoningEffort
+          ? { reasoningEffort: resolvedPricingContext.reasoningEffort }
+          : {}),
         reasoningOutputTokens,
         scope: scope === "latest-request" ? "latest-request" : "total",
         ...(resolvedPricingContext.serviceTier
