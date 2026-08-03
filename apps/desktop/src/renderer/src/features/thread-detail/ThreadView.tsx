@@ -863,6 +863,10 @@ export type ThreadViewProps = {
   skills: AppServerSkillSummary[];
   transcriptEntries: AppServerThreadEntry[];
   transcriptError?: string;
+  /** Session-owned reading state; ThreadView may unmount while navigation resolves. */
+  expandedTranscriptActivityIds?: string[];
+  expandedTranscriptWorkPhaseGroupIds?: string[];
+  renderedTranscriptEntryLimit?: number;
   transcriptPagination?: AppServerThreadReplayPagination;
   updatingExecutionMode?: ThreadExecutionMode;
   onActiveTurnIdChange?: (turnId?: string) => void;
@@ -971,6 +975,9 @@ export type ThreadViewProps = {
     isGluedToBottom?: boolean;
     scrollTop: number;
   }) => void;
+  onExpandedTranscriptActivityIdsChange?: (activityIds: string[]) => void;
+  onExpandedTranscriptWorkPhaseGroupIdsChange?: (groupIds: string[]) => void;
+  onRenderedTranscriptEntryLimitChange?: (limit: number) => void;
   onUpdateLaunchpad?: (
     directoryKey: string,
     patch: Partial<
@@ -1136,9 +1143,12 @@ export function ThreadView(props: ThreadViewProps) {
   const [expandedImage, setExpandedImage] = useState<AppServerThreadImagePart>();
   const [contextRailResizing, setContextRailResizing] = useState(false);
   const [transcriptReglueRequestKey, setTranscriptReglueRequestKey] = useState(0);
-  const [transcriptEntryLimits, setTranscriptEntryLimits] = useState(
-    () => new Map<string, number>(),
-  );
+  // App supplies a session-owned limit in production. Keep a local fallback
+  // for isolated renderers/tests that intentionally omit the owner callbacks.
+  const [
+    uncontrolledTranscriptEntryLimits,
+    setUncontrolledTranscriptEntryLimits,
+  ] = useState(() => new Map<string, number>());
   const [pendingTranscriptTurnTarget, setPendingTranscriptTurnTarget] =
     useState<PendingTranscriptTurnTarget>();
   const transcriptTurnPageLoadsRef = useRef(0);
@@ -1290,7 +1300,8 @@ export function ThreadView(props: ThreadViewProps) {
     ? buildThreadIdentityKey(selectedThread.source, selectedThread.id)
     : undefined;
   const transcriptEntryLimit = selectedThreadKey
-    ? transcriptEntryLimits.get(selectedThreadKey)
+    ? props.renderedTranscriptEntryLimit
+      ?? uncontrolledTranscriptEntryLimits.get(selectedThreadKey)
       ?? DEFAULT_RENDERED_TRANSCRIPT_ENTRY_LIMIT
     : DEFAULT_RENDERED_TRANSCRIPT_ENTRY_LIMIT;
   const visibleTranscriptEntries = useMemo(
@@ -1299,6 +1310,8 @@ export function ThreadView(props: ThreadViewProps) {
   );
   const transcriptEntryCount = props.transcriptEntries.length;
   const onLoadOlder = props.onLoadOlder;
+  const onRenderedTranscriptEntryLimitChange =
+    props.onRenderedTranscriptEntryLimitChange;
   const hiddenTranscriptEntryCount =
     transcriptEntryCount - visibleTranscriptEntries.length;
   const canLoadServerTranscriptHistory = Boolean(
@@ -1325,7 +1338,15 @@ export function ThreadView(props: ThreadViewProps) {
       if (!selectedThreadKey) {
         return;
       }
-      setTranscriptEntryLimits((current) => {
+      const nextLimit = Math.max(transcriptEntryLimit, minimumLimit);
+      if (nextLimit === transcriptEntryLimit) {
+        return;
+      }
+      if (onRenderedTranscriptEntryLimitChange) {
+        onRenderedTranscriptEntryLimitChange(nextLimit);
+        return;
+      }
+      setUncontrolledTranscriptEntryLimits((current) => {
         const currentLimit =
           current.get(selectedThreadKey)
           ?? DEFAULT_RENDERED_TRANSCRIPT_ENTRY_LIMIT;
@@ -1337,7 +1358,11 @@ export function ThreadView(props: ThreadViewProps) {
         return next;
       });
     },
-    [selectedThreadKey],
+    [
+      onRenderedTranscriptEntryLimitChange,
+      selectedThreadKey,
+      transcriptEntryLimit,
+    ],
   );
   const loadOlderTranscript = useCallback(async () => {
     if (hiddenTranscriptEntryCount > 0) {
@@ -2969,6 +2994,10 @@ export function ThreadView(props: ThreadViewProps) {
               pendingUserInput={props.pendingUserInput}
               pendingStatusText={props.pendingStatusText}
               runningTurnUsageText={props.runningTurnUsageText}
+              expandedActivityIds={props.expandedTranscriptActivityIds}
+              expandedWorkPhaseGroupIds={
+                props.expandedTranscriptWorkPhaseGroupIds
+              }
               restoredViewport={props.transcriptViewport}
               reglueRequestKey={transcriptReglueRequestKey}
               skills={props.skills}
@@ -2978,6 +3007,12 @@ export function ThreadView(props: ThreadViewProps) {
               threadId={`${selectedThread!.source}:${selectedThread!.id}`}
               onLoadOlder={loadOlderTranscript}
               onOpenImage={setExpandedImage}
+              onExpandedActivityIdsChange={
+                props.onExpandedTranscriptActivityIdsChange
+              }
+              onExpandedWorkPhaseGroupIdsChange={
+                props.onExpandedTranscriptWorkPhaseGroupIdsChange
+              }
               onRespondToPendingRequest={respondToPendingRequest}
               onPendingMcpInteractionChange={(state) => {
                 props.onUpdatePendingMcpInteraction?.(state.requestId, () => state);

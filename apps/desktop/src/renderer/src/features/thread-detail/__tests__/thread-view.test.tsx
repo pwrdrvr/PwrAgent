@@ -650,28 +650,36 @@ describe("ThreadView", () => {
       },
     };
 
-    const { container } = render(
-      <ThreadView
-        addOptimisticUserMessage={(_text) => "optimistic-1"}
-        backends={[]}
-        clearPendingRequest={() => undefined}
-        composerDisabled={false}
-        desktopApi={{}}
-        loading={false}
-        loadingMore={false}
-        messageCount={entries.length}
-        onLoadOlder={loadOlder}
-        removeOptimisticMessage={(_id) => undefined}
-        selectedThread={selectedThread}
-        skills={[]}
-        transcriptEntries={entries}
-        transcriptPagination={{
-          supportsPagination: true,
-          hasPreviousPage: true,
-          previousCursor: "cursor-1",
-        }}
-      />,
-    );
+    function Harness() {
+      const [renderedTranscriptEntryLimit, setRenderedTranscriptEntryLimit] =
+        useState<number>();
+      return (
+        <ThreadView
+          addOptimisticUserMessage={(_text) => "optimistic-1"}
+          backends={[]}
+          clearPendingRequest={() => undefined}
+          composerDisabled={false}
+          desktopApi={{}}
+          loading={false}
+          loadingMore={false}
+          messageCount={entries.length}
+          onLoadOlder={loadOlder}
+          onRenderedTranscriptEntryLimitChange={setRenderedTranscriptEntryLimit}
+          removeOptimisticMessage={(_id) => undefined}
+          renderedTranscriptEntryLimit={renderedTranscriptEntryLimit}
+          selectedThread={selectedThread}
+          skills={[]}
+          transcriptEntries={entries}
+          transcriptPagination={{
+            supportsPagination: true,
+            hasPreviousPage: true,
+            previousCursor: "cursor-1",
+          }}
+        />
+      );
+    }
+
+    const { container } = render(<Harness />);
 
     expect(container.querySelectorAll(".transcript-message")).toHaveLength(40);
 

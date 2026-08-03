@@ -25,11 +25,13 @@ type TranscriptWorkPhaseGroupProps = {
   >;
   entries: AppServerThreadEntry[];
   expanded: boolean;
+  expandedActivityIds?: ReadonlySet<string>;
   fileViewerContext?: MarkdownFileViewerContext;
   label: string;
   parentThreadId?: string;
   skills: AppServerSkillSummary[];
   subAgents?: ThreadSubAgentSummary[];
+  onActivityExpandedChange?: (activityId: string, expanded: boolean) => void;
   onOpenImage?: (image: AppServerThreadImagePart) => void;
   onToggle: () => void;
 };
@@ -74,7 +76,9 @@ export const TranscriptWorkPhaseGroup = memo(function TranscriptWorkPhaseGroup(
               directoryPaths: props.directoryPaths,
               desktopApi: props.desktopApi,
               entry,
+              expandedActivityIds: props.expandedActivityIds,
               fileViewerContext: props.fileViewerContext,
+              onActivityExpandedChange: props.onActivityExpandedChange,
               onOpenImage: props.onOpenImage,
               parentThreadId: props.parentThreadId ?? "",
               skills: props.skills,
@@ -124,7 +128,9 @@ function renderEntry(params: {
     "copyText" | "openApplication" | "openMarkdownFileViewer" | "readMarkdownFile"
   >;
   entry: AppServerThreadEntry;
+  expandedActivityIds?: ReadonlySet<string>;
   fileViewerContext?: MarkdownFileViewerContext;
+  onActivityExpandedChange?: (activityId: string, expanded: boolean) => void;
   parentThreadId: string;
   skills: AppServerSkillSummary[];
   subAgents?: ThreadSubAgentSummary[];
@@ -137,7 +143,11 @@ function renderEntry(params: {
       applications={params.applications}
       desktopApi={params.desktopApi}
       entry={entry}
+      expanded={params.expandedActivityIds?.has(entry.id)}
       fileViewerContext={params.fileViewerContext}
+      onExpandedChange={(expanded) => {
+        params.onActivityExpandedChange?.(entry.id, expanded);
+      }}
       onOpenImage={params.onOpenImage}
       skills={params.skills}
     />

@@ -81,6 +81,8 @@ type TranscriptListProps = {
   directoryPaths?: string[];
   entries: AppServerThreadEntry[];
   error?: string;
+  expandedActivityIds?: string[];
+  expandedWorkPhaseGroupIds?: string[];
   loading: boolean;
   loadingMore: boolean;
   pendingActivityEntry?: AppServerThreadActivityEntry;
@@ -105,7 +107,9 @@ type TranscriptListProps = {
   fileViewerContext?: MarkdownFileViewerContext;
   skills?: AppServerSkillSummary[];
   subAgents?: ThreadSubAgentSummary[];
+  onExpandedActivityIdsChange?: (activityIds: string[]) => void;
   onOpenImage?: (image: AppServerThreadImagePart) => void;
+  onExpandedWorkPhaseGroupIdsChange?: (groupIds: string[]) => void;
   onViewportChange?: (viewport?: TranscriptViewport) => void;
   onRespondToPendingRequest?: (action: PendingRequestAction) => Promise<void>;
   onPendingMcpInteractionChange?: (state: PendingMcpInteractionState) => void;
@@ -625,9 +629,30 @@ export function TranscriptList(props: TranscriptListProps) {
   // the post-mount `syncScrollState` corrects it for threads that
   // hydrate at a saved-scroll position other than the top.
   const [isAtTop, setIsAtTop] = useState(true);
-  const [expandedCommentaryGroupIds, setExpandedCommentaryGroupIds] = useState(
-    () => new Set<string>()
+  const [
+    uncontrolledExpandedCommentaryGroupIds,
+    setUncontrolledExpandedCommentaryGroupIds,
+  ] = useState(() => new Set<string>());
+  const controlledExpandedCommentaryGroupIds = useMemo(
+    () =>
+      props.expandedWorkPhaseGroupIds === undefined
+        ? undefined
+        : new Set(props.expandedWorkPhaseGroupIds),
+    [props.expandedWorkPhaseGroupIds]
   );
+  const expandedCommentaryGroupIds =
+    controlledExpandedCommentaryGroupIds
+    ?? uncontrolledExpandedCommentaryGroupIds;
+  const controlledExpandedActivityIds = useMemo(
+    () =>
+      props.expandedActivityIds === undefined
+        ? undefined
+        : new Set(props.expandedActivityIds),
+    [props.expandedActivityIds]
+  );
+  const onExpandedWorkPhaseGroupIdsChange =
+    props.onExpandedWorkPhaseGroupIdsChange;
+  const onExpandedActivityIdsChange = props.onExpandedActivityIdsChange;
   const [renderNow, setRenderNow] = useState(() => Date.now());
   const canLoadOlder = Boolean(
     props.pagination?.supportsPagination && props.pagination.hasPreviousPage
@@ -826,8 +851,10 @@ export function TranscriptList(props: TranscriptListProps) {
     (props.pendingUserInput ? 1 : 0);
   const hasTranscriptContent = transcriptEntries.length > 0;
   useEffect(() => {
-    setExpandedCommentaryGroupIds(new Set());
-  }, [props.threadId]);
+    if (props.expandedWorkPhaseGroupIds === undefined) {
+      setUncontrolledExpandedCommentaryGroupIds(new Set());
+    }
+  }, [props.expandedWorkPhaseGroupIds, props.threadId]);
 
   useEffect(() => {
     if (!props.activeTurnId) {
@@ -865,7 +892,7 @@ export function TranscriptList(props: TranscriptListProps) {
   }, [props.activeTurnId, props.activeTurnStartedAt, transcriptEntries]);
 
   const toggleCommentaryGroup = useCallback((groupId: string) => {
-    setExpandedCommentaryGroupIds((current) => {
+    const toggle = (current: Set<string>): Set<string> => {
       const next = new Set(current);
       if (next.has(groupId)) {
         next.delete(groupId);
@@ -873,8 +900,34 @@ export function TranscriptList(props: TranscriptListProps) {
         next.add(groupId);
       }
       return next;
-    });
-  }, []);
+    };
+
+    if (controlledExpandedCommentaryGroupIds) {
+      onExpandedWorkPhaseGroupIdsChange?.([
+        ...toggle(controlledExpandedCommentaryGroupIds),
+      ]);
+      return;
+    }
+
+    setUncontrolledExpandedCommentaryGroupIds(toggle);
+  }, [
+    controlledExpandedCommentaryGroupIds,
+    onExpandedWorkPhaseGroupIdsChange,
+  ]);
+
+  const setActivityExpanded = useCallback((activityId: string, expanded: boolean) => {
+    if (!controlledExpandedActivityIds) {
+      return;
+    }
+
+    const next = new Set(controlledExpandedActivityIds);
+    if (expanded) {
+      next.add(activityId);
+    } else {
+      next.delete(activityId);
+    }
+    onExpandedActivityIdsChange?.([...next]);
+  }, [controlledExpandedActivityIds, onExpandedActivityIdsChange]);
 
   const captureSnapshot = useCallback((): ScrollSnapshot | undefined => {
     const container = scrollContainerRef.current;
@@ -1275,11 +1328,13 @@ export function TranscriptList(props: TranscriptListProps) {
                   desktopApi={props.desktopApi}
                   entries={item.entries}
                   expanded={expandedCommentaryGroupIds.has(item.id)}
+                  expandedActivityIds={controlledExpandedActivityIds}
                   fileViewerContext={props.fileViewerContext}
                   label={item.label}
                   parentThreadId={props.parentThreadId ?? ""}
                   skills={skills}
                   subAgents={props.subAgents}
+                  onActivityExpandedChange={setActivityExpanded}
                   onOpenImage={props.onOpenImage}
                   onToggle={() => {
                     toggleCommentaryGroup(item.id);
@@ -1290,7 +1345,11 @@ export function TranscriptList(props: TranscriptListProps) {
                   applications={props.applications}
                   desktopApi={props.desktopApi}
                   entry={item.entry}
+                  expanded={controlledExpandedActivityIds?.has(item.entry.id)}
                   fileViewerContext={props.fileViewerContext}
+                  onExpandedChange={(expanded) => {
+                    setActivityExpanded(item.entry.id, expanded);
+                  }}
                   onOpenImage={props.onOpenImage}
                   skills={skills}
                 />

@@ -1165,6 +1165,10 @@ function DesktopAppShell(props: {
     skills: skills.skills,
     transcriptEntries: session.entries,
     transcriptError: session.error,
+    expandedTranscriptActivityIds: session.expandedTranscriptActivityIds,
+    expandedTranscriptWorkPhaseGroupIds:
+      session.expandedTranscriptWorkPhaseGroupIds,
+    renderedTranscriptEntryLimit: session.renderedTranscriptEntryLimit,
     transcriptPagination: session.response?.replay.pagination,
     updatingExecutionMode: navigation.updatingThreadExecutionMode,
     worktreeArchiveError: navigation.worktreeArchiveError,
@@ -1288,6 +1292,12 @@ function DesktopAppShell(props: {
       : undefined,
     onRestoreWorktree: navigation.restoreWorktree,
     onTranscriptViewportChange: session.setViewport,
+    onExpandedTranscriptActivityIdsChange:
+      session.setExpandedTranscriptActivityIds,
+    onExpandedTranscriptWorkPhaseGroupIdsChange:
+      session.setExpandedTranscriptWorkPhaseGroupIds,
+    onRenderedTranscriptEntryLimitChange:
+      session.setRenderedTranscriptEntryLimit,
     onUpdateLaunchpad: navigation.updateDirectoryLaunchpad,
     onUpdatePendingMcpInteraction: session.updatePendingMcpInteraction,
     onUpdatePendingUserInput: session.updatePendingUserInput,

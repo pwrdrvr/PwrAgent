@@ -20,14 +20,17 @@ type TranscriptActivityProps = {
     "copyText" | "openApplication" | "openMarkdownFileViewer" | "readMarkdownFile"
   >;
   entry: AppServerThreadActivityEntry;
+  expanded?: boolean;
   fileViewerContext?: MarkdownFileViewerContext;
   onOpenImage?: (image: AppServerThreadImagePart) => void;
+  onExpandedChange?: (expanded: boolean) => void;
   skills?: AppServerSkillSummary[];
 };
 
 export function TranscriptActivity(props: TranscriptActivityProps) {
   const detailsId = useId();
-  const [isExpanded, setIsExpanded] = useState(false);
+  const [uncontrolledExpanded, setUncontrolledExpanded] = useState(false);
+  const isExpanded = props.expanded ?? uncontrolledExpanded;
   const [expandedDetailIds, setExpandedDetailIds] = useState(() => new Set<string>());
   const hasDetails = props.entry.details.length > 0;
   const directDetail = singleDirectDetail(props.entry);
@@ -49,7 +52,12 @@ export function TranscriptActivity(props: TranscriptActivityProps) {
               aria-controls={detailsId}
               aria-expanded={isExpanded}
               onClick={() => {
-                setIsExpanded((current) => !current);
+                const nextExpanded = !isExpanded;
+                if (props.expanded !== undefined) {
+                  props.onExpandedChange?.(nextExpanded);
+                  return;
+                }
+                setUncontrolledExpanded(nextExpanded);
               }}
             >
               <span className="transcript-activity__chevron" aria-hidden="true" />
