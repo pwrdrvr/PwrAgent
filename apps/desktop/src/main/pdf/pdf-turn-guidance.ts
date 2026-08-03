@@ -43,7 +43,7 @@ export function formatPdfAttachmentModelGuidance(
     hasUnknownPageCount
       ? "For only a PDF with unavailable page metadata, call inspect_messaging_pdfs once, then follow the one-page or multi-page rule above."
       : undefined,
-    "Render only a small useful batch; rendered pages are capped at five total per turn. Successful rendering returns page images in the tool result. Analyze those images directly. For a requested printed value, transcribe its labeled field instead of inferring it from line-item arithmetic. Do not use web search or other external sources for questions about these PDFs unless the user explicitly requests outside research. Do not serialize the render result, call image(), or use exec, shell, filesystem, OCR, or conversion tools on the source PDFs or rendered pages.",
+    "Render only a small useful batch; rendered pages are capped at five total per turn. Follow the render tool's transport-specific image instructions exactly and never print its encoded result. Analyze each returned image once. For a requested printed value, transcribe its labeled field instead of inferring it from line-item arithmetic. Do not use web search or other external sources for questions about these PDFs unless the user explicitly requests outside research. Do not use shell, filesystem, OCR, or conversion tools on the source PDFs or rendered pages.",
     PDF_TURN_CONTEXT_CLOSE,
   ]
     .filter((line): line is string => Boolean(line))

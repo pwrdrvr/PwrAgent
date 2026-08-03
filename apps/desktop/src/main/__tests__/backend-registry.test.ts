@@ -7199,7 +7199,7 @@ script = "echo setup"
     await registry.close();
   });
 
-  it("registers bounded PDF MCP tools for new Codex threads and refreshes them on turns", async () => {
+  it("registers bounded PDF MCP tools while retaining the dynamic fallback", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: {
         serverInfo: { name: "Codex App Server", version: "1.0.0" },
@@ -7237,7 +7237,7 @@ script = "echo setup"
     expect(
       pwragentDynamicTools(codexClient.lastStartThreadParams?.dynamicTools)
         .map((tool) => tool.name),
-    ).not.toEqual(expect.arrayContaining([
+    ).toEqual(expect.arrayContaining([
       "inspect_messaging_pdfs",
       "search_messaging_pdf_text",
       "render_messaging_pdf_pages",

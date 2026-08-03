@@ -218,10 +218,16 @@ describe("PwrAgent PDF agent tools", () => {
           type: "inputText",
           text: expect.stringContaining("returned rendered PDF page image"),
         },
-        {
-          type: "inputImage",
-          imageUrl: expect.stringMatching(/^data:image\/png;base64,/),
-        },
+      ],
+    });
+    expect(JSON.parse(
+      first.contentItems?.[0]?.type === "inputText"
+        ? first.contentItems[0].text
+        : "{}",
+    )).toMatchObject({
+      content: [
+        { type: "text" },
+        { type: "image", mimeType: "image/png" },
       ],
     });
 
@@ -231,15 +237,21 @@ describe("PwrAgent PDF agent tools", () => {
       contentItems: [
         {
           type: "inputText",
-          text: expect.stringContaining('"alreadySuppliedPageNumbers": [\n    1\n  ]'),
-        },
-        {
-          type: "inputImage",
-          imageUrl: expect.stringMatching(/^data:image\/png;base64,/),
+          text: expect.any(String),
         },
       ],
     });
-    expect(partialRepeat.contentItems).toHaveLength(2);
+    expect(JSON.parse(
+      partialRepeat.contentItems?.[0]?.type === "inputText"
+        ? partialRepeat.contentItems[0].text
+        : "{}",
+    )).toMatchObject({
+      result: {
+        alreadySuppliedPageNumbers: [1],
+        pages: [{ pageNumber: 2 }],
+      },
+    });
+    expect(partialRepeat.contentItems).toHaveLength(1);
 
     const repeat = await render([1, 2]);
     expect(repeat).toEqual({
@@ -263,9 +275,14 @@ describe("PwrAgent PDF agent tools", () => {
       },
     ]);
     const concurrent = await Promise.all([render([1]), render([1])]);
-    expect(
-      concurrent.flatMap((response) => response.contentItems)
-        .filter((item) => item.type === "inputImage"),
-    ).toHaveLength(1);
+    const concurrentImages = concurrent.flatMap((response) => {
+      const item = response.contentItems?.[0];
+      if (item?.type !== "inputText") return [];
+      const envelope = JSON.parse(item.text) as {
+        content?: Array<{ type: string }>;
+      };
+      return envelope.content?.filter((content) => content.type === "image") ?? [];
+    });
+    expect(concurrentImages).toHaveLength(1);
   });
 });

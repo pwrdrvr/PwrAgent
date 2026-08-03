@@ -223,7 +223,6 @@ import {
   DEFAULT_TASK_MONITOR_STARTUP_TIMEOUT_SECONDS,
   DEFAULT_PR_AUTO_DISPATCH_ENABLED_FOR_NEW_THREADS,
   PWRAGENT_MESSAGING_PDF_TOOL_CATALOG_VERSION,
-  PWRAGENT_TOOL_NAMESPACE,
   type CompleteMonitoringToolArgs,
   type CreateMonitorDelegationToolArgs,
   type InjectMonitorProgressToolArgs,
@@ -311,7 +310,6 @@ import {
 } from "../agent-tools/pwragent-messaging-codex-tools";
 import {
   buildPwrAgentMessagingPdfToolRouter,
-  PWRAGENT_MODEL_DIRECTED_PDF_OPERATION_NAMES,
   type PwrAgentMessagingHandler,
 } from "../agent-tools/pwragent-messaging-agent-tools";
 import {
@@ -5544,23 +5542,6 @@ function buildCodexPdfMcpDisabledConfig(): CodexThreadStartParams["config"] {
   } as CodexThreadStartParams["config"];
 }
 
-function omitModelDirectedPdfDynamicTools(
-  specs: CodexDynamicToolSpec[],
-): CodexDynamicToolSpec[] {
-  const modelDirectedPdfToolNames = new Set<string>(
-    PWRAGENT_MODEL_DIRECTED_PDF_OPERATION_NAMES,
-  );
-  return specs.flatMap((spec) => {
-    if (spec.type !== "namespace" || spec.name !== PWRAGENT_TOOL_NAMESPACE) {
-      return [spec];
-    }
-    const tools = spec.tools.filter(
-      (tool) => !modelDirectedPdfToolNames.has(tool.name),
-    );
-    return tools.length > 0 ? [{ ...spec, tools }] : [];
-  });
-}
-
 function mergeCodexDynamicToolSpecs(
   specs: CodexDynamicToolSpec[],
 ): CodexDynamicToolSpec[] {
@@ -9406,11 +9387,10 @@ export class DesktopBackendRegistry {
       backend === "codex"
         ? buildCodexParentDynamicToolSpecs(agentToolCatalogs)
         : undefined;
-    const dynamicToolCandidates = pdfMcpRegistration
-      ? omitModelDirectedPdfDynamicTools(resolvedDynamicTools ?? [])
-      : resolvedDynamicTools;
-    const dynamicTools = dynamicToolCandidates?.length
-      ? dynamicToolCandidates
+    // Custom MCP servers can report READY without Codex exposing their tools
+    // to the model. Keep the dynamic PDF surface as the compatible fallback.
+    const dynamicTools = resolvedDynamicTools?.length
+      ? resolvedDynamicTools
       : undefined;
     const pdfMcpConfig = pdfMcpRegistration
       ? buildCodexPdfMcpConfig(pdfMcpRegistration)

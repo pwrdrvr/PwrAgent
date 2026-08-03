@@ -166,26 +166,40 @@ describe("PwrAgent messaging agent tools", () => {
       },
     });
 
-    expect(response).toEqual({
+    expect(response).toMatchObject({
       success: true,
       contentItems: [
         {
           type: "inputText",
-          text: [
-            "PwrAgent returned rendered PDF page image(s) with this tool result. Analyze those images directly. Read requested values from their printed labels, not inferred arithmetic. Do not use web search or other external sources for this PDF unless the user explicitly requests outside research. Do not serialize this result, call image(), use exec or other local tools to reprocess the page, or render the same page again.",
-            JSON.stringify({
-              attachmentId: "pdf-1",
-              alreadySuppliedPageNumbers: [],
-              name: "window-sticker.pdf",
-              pages: [{ height: 1988, pageNumber: 3, width: 3072 }],
-            }, null, 2),
-          ].join("\n\n"),
-        },
-        {
-          type: "inputImage",
-          imageUrl: "data:image/png;base64,AQID",
+          text: expect.any(String),
         },
       ],
+    });
+    const dynamicPayload = JSON.parse(
+      response.contentItems?.[0]?.type === "inputText"
+        ? response.contentItems[0].text
+        : "{}",
+    );
+    expect(dynamicPayload).toMatchObject({
+      content: [
+        {
+          type: "text",
+          text: expect.stringContaining(
+            "PwrAgent returned rendered PDF page image(s) with this tool result.",
+          ),
+        },
+        {
+          type: "image",
+          data: "AQID",
+          mimeType: "image/png",
+        },
+      ],
+      result: {
+        attachmentId: "pdf-1",
+        alreadySuppliedPageNumbers: [],
+        name: "window-sticker.pdf",
+        pages: [{ height: 1988, pageNumber: 3, width: 3072 }],
+      },
     });
 
     await expect(router.handleMcpToolCall({
