@@ -1618,12 +1618,13 @@ describe("AcpAgentClient", () => {
   });
 
   it("stores available command updates as session metadata", async () => {
+    let now = 1000;
     const transport = new FakeAcpAgentTransport();
     const client = new AcpAgentClient({
       backendId: "acp:kimi",
       store,
       transport,
-      now: () => 1000,
+      now: () => now,
     });
 
     await client.initialize();
@@ -1633,6 +1634,7 @@ describe("AcpAgentClient", () => {
       title: "Kimi ACP",
     });
 
+    now = 2000;
     transport.emitSessionUpdate(session.sessionId, {
       sessionUpdate: "available_commands_update",
       availableCommands: [
@@ -1666,6 +1668,7 @@ describe("AcpAgentClient", () => {
     expect(readRawAcpSessionPayload("acp:kimi", "session-1")?.availableCommands).toEqual(
       store.getSession("acp:kimi", "session-1")?.availableCommands,
     );
+    expect(store.getSession("acp:kimi", "session-1")?.updatedAt).toBe(1000);
   });
 
   it("loads ACP transcript replay from provider session/load without storing it in the DB", async () => {
@@ -1985,9 +1988,9 @@ describe("AcpAgentClient", () => {
     });
 
     await client.initialize();
-    const replay = await client.loadSession(
-      store.getSession("acp:grok", "session-1")!,
-    );
+    const staleMetadata = store.getSession("acp:grok", "session-1")!;
+    const replay = await client.loadSession(staleMetadata);
+    await client.refreshSession(staleMetadata);
 
     expect(replay.messages.map((message) => message.createdAt)).toEqual([
       1100,

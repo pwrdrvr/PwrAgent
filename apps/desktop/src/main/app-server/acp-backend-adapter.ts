@@ -1765,13 +1765,15 @@ export class AcpBackendAdapter {
             });
           }
         }
-        const toolNotifications = acpToolUpdateNotifications({
-          threadId: sessionId,
-          turnId,
-          update,
-        }).filter((notification) =>
-          this.shouldEmitLiveToolNotification(agent.backendId, notification),
-        );
+        const toolNotifications = fromSessionLoad
+          ? []
+          : acpToolUpdateNotifications({
+              threadId: sessionId,
+              turnId,
+              update,
+            }).filter((notification) =>
+              this.shouldEmitLiveToolNotification(agent.backendId, notification),
+            );
         for (const notification of toolNotifications) {
           await this.emit({
             backend: agent.backendId,

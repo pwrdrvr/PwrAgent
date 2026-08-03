@@ -1255,6 +1255,111 @@ describe("AcpBackendAdapter", () => {
     await adapter.close();
   });
 
+  it("does not emit live tool notifications while replaying session/load history", async () => {
+    const backendId = "acp:grok" as AcpBackendId;
+    const transport = new FakeAcpAgentTransport({
+      initialize: {
+        protocolVersion: 1,
+        agentCapabilities: {
+          loadSession: true,
+        },
+      },
+    });
+    const events: AgentEvent[] = [];
+    const sessions: AcpSessionMetadata[] = [
+      {
+        backendId,
+        sessionId: "session-1",
+        title: "Grok session",
+        cwd: "/repo",
+        createdAt: 900,
+        updatedAt: 950,
+        executionMode: "default",
+        status: "idle",
+        hasConversationHistory: true,
+      },
+    ];
+    const agent: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "grok",
+      name: "Grok",
+      launchDescriptor: {
+        backendId,
+        registryId: "grok",
+        distributionKind: "local",
+        command: "grok",
+        args: [],
+        env: {},
+      },
+    };
+    const adapter = new AcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => agent,
+        listInstalledAgents: () => [agent],
+        upsertInstalledAgent: vi.fn(),
+      },
+      acpSessionStore: {
+        listSessions: () => sessions,
+        getSession: (_backend, sessionId) =>
+          sessions.find((session) => session.sessionId === sessionId),
+        upsertSession: (metadata) => {
+          sessions[0] = metadata;
+        },
+      },
+      captureStores: [],
+      createAcpTransport: () => ({
+        request: async (method, params, timeoutMs) => {
+          if (method === "session/load") {
+            transport.emitSessionUpdate("session-1", {
+              session_update: "tool_call",
+              tool_call_id: "tool-1",
+              title: "Read README.md",
+              kind: "read",
+              status: "in_progress",
+            });
+            transport.emitSessionUpdate("session-1", {
+              session_update: "tool_call_update",
+              tool_call_id: "tool-1",
+              title: "Read README.md",
+              kind: "read",
+              status: "completed",
+            });
+          }
+          return await transport.request(method, params, timeoutMs);
+        },
+        notify: async (method, params) => await transport.notify(method, params),
+        close: async () => await transport.close(),
+        onNotification: (listener) => transport.onNotification(listener),
+        onRequest: (listener) => transport.onRequest(listener),
+      }),
+      emit: async (event) => {
+        events.push(event);
+      },
+      handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
+    });
+
+    const client = await adapter.getClient(backendId);
+    const replay = await client.loadSession(sessions[0]!);
+
+    expect(replay.entries).toEqual([
+      expect.objectContaining({
+        type: "activity",
+        id: "tool-1",
+        createdAt: expect.any(Number),
+        status: "completed",
+      }),
+    ]);
+    expect(
+      events.filter((event) =>
+        event.notification.method === "item/started"
+        || event.notification.method === "item/completed",
+      ),
+    ).toEqual([]);
+
+    await adapter.close();
+  });
+
   it("adds Grok billing metadata from an active ACP connection", async () => {
     const backendId = "acp:grok" as AcpBackendId;
     const transport = new FakeAcpAgentTransport({

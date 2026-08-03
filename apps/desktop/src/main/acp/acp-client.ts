@@ -519,12 +519,12 @@ export class AcpAgentClient {
     metadata: AcpSessionMetadata,
     options: { suppressTranscriptReplay?: boolean } = {},
   ): Promise<void> {
-    this.options.store.upsertSession(metadata);
     this.rememberSessionIds(metadata);
-    if (!this.supportsSessionLoad()) {
+    if (this.supportsSessionLoad() && this.isSessionLoaded(metadata)) {
       return;
     }
-    if (this.isSessionLoaded(metadata)) {
+    this.options.store.upsertSession(metadata);
+    if (!this.supportsSessionLoad()) {
       return;
     }
     await this.loadSessionFromAgent(metadata, options);
@@ -890,7 +890,10 @@ export class AcpAgentClient {
     }
     if (updateKind === "available_commands_update") {
       this.updateSessionAvailableCommands(sessionId, update, activityAt, {
-        touchActivity: !fromSessionLoad,
+        // Providers refresh command capabilities during and immediately after
+        // session/load. Capability metadata is not conversation activity,
+        // even when a late notification no longer carries replay provenance.
+        touchActivity: false,
       });
     }
     if (updateKind === "turn_started") {
