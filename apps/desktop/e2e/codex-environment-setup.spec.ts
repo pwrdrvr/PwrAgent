@@ -391,6 +391,16 @@ test("selected environments run setup and show transcript output", async () => {
         .getByRole("region", { name: "Preparing transcript" })
         .getByRole("heading", { name: "Running environment setup" }),
     ).toBeVisible();
+    const pendingSetup = app.window.getByRole("region", {
+      name: "Preparing transcript",
+    });
+    await expect(pendingSetup.getByText("Running", { exact: true })).toBeVisible();
+    await expect(
+      pendingSetup.getByRole("button", { name: "Copy setup path" }),
+    ).toBeVisible();
+    await expect(
+      pendingSetup.getByRole("button", { name: "Copy setup command" }),
+    ).toBeVisible();
     await expect(
       app.window
         .locator('[aria-label="Setup command"]')
@@ -399,7 +409,9 @@ test("selected environments run setup and show transcript output", async () => {
     await expect(app.window.locator('[aria-label="Setup output"]')).toContainText(
       "setup-output",
     );
-
+    await expect(
+      pendingSetup.getByRole("button", { name: "Copy setup output" }),
+    ).toBeVisible();
     await expect(
       app.window.getByRole("heading", { level: 2, name: "hello env" }),
     ).toBeVisible();

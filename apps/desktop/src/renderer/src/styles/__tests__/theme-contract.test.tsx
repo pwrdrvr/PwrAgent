@@ -398,6 +398,27 @@ describe("Tangerine Terminal theme contract", () => {
     expect(setupComposerRule).toContain("min-height: 0;");
   });
 
+  it("keeps environment setup status, copying, and path wrapping on theme tokens", () => {
+    const setupRule = extractRuleBody(css, ".launchpad-pending--setup");
+    const successRule = extractRuleBody(
+      css,
+      ".launchpad-pending__status--success"
+    );
+    const copyButtonRule = extractRuleBody(
+      css,
+      ".transcript-copy-button.transcript-copy-button--setup"
+    );
+
+    expect(setupRule).toContain("container-type: inline-size;");
+    expect(successRule).toContain("border-color: var(--success-border);");
+    expect(successRule).toContain("background: var(--success-soft);");
+    expect(successRule).toContain("color: var(--success-text);");
+    expect(copyButtonRule).toContain("opacity: 1;");
+    expect(css).toMatch(
+      /@container \(max-width: 1000px\)\s*\{[\s\S]*?\.launchpad-pending__meta-path\s*\{[\s\S]*?grid-column:\s*1 \/ -1;/
+    );
+  });
+
   it("keeps launchpad composer errors selectable and directly copyable", () => {
     const errorRule = extractRuleBody(css, ".composer__meta--copyable");
     const errorTextRule = extractRuleBody(css, ".composer__meta-text");

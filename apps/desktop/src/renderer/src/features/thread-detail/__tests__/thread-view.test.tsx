@@ -1540,13 +1540,19 @@ describe("ThreadView", () => {
     ).toBeInTheDocument();
     expect(screen.getByLabelText("Setup command")).toHaveTextContent("pnpm install");
     expect(screen.getAllByText("PwrSnap").length).toBeGreaterThan(0);
+    expect(screen.getByText("/repo")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Copy setup path" }),
+    ).not.toBeInTheDocument();
   });
 
   it("shows pending environment setup while a forked worktree is preparing", async () => {
     let setupProgress: Parameters<
       NonNullable<DesktopApi["onCodexEnvironmentSetupProgress"]>
     >[0] = () => undefined;
+    const copyText = vi.fn(async () => undefined);
     const desktopApi = {
+      copyText,
       onCodexEnvironmentSetupProgress: (callback: typeof setupProgress) => {
         setupProgress = callback;
         return () => undefined;
@@ -1566,6 +1572,7 @@ describe("ThreadView", () => {
         pendingForkEnvironmentSetup={{
           backend: "codex",
           command: "pnpm install",
+          cwd: "/repo/app",
           directoryKey: "fork:codex:thread-parent:new-worktree",
           directoryLabel: "PwrAgent",
           environmentId: "pwragent",
@@ -1582,6 +1589,10 @@ describe("ThreadView", () => {
       screen.getByRole("heading", { name: "Running environment setup" }),
     ).toBeInTheDocument();
     expect(screen.getByLabelText("Setup command")).toHaveTextContent("pnpm install");
+    expect(screen.getByText("/repo/app")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Copy setup path" }),
+    ).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Forking thread" })).toBeInTheDocument();
     expect(screen.getByLabelText("New thread context")).toBeInTheDocument();
 
@@ -1601,6 +1612,70 @@ describe("ThreadView", () => {
     expect(screen.getByText("/repo/app/.worktrees/thread-fork/app")).toBeInTheDocument();
     expect(screen.getByLabelText("Setup output")).toHaveTextContent(
       "installing dependencies",
+    );
+    expect(screen.getByRole("button", { name: "Copy setup path" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Copy setup command" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Copy setup output" })).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy setup path" }));
+    fireEvent.click(screen.getByRole("button", { name: "Copy setup command" }));
+    fireEvent.click(screen.getByRole("button", { name: "Copy setup output" }));
+
+    await waitFor(() => {
+      expect(copyText).toHaveBeenNthCalledWith(
+        1,
+        "/repo/app/.worktrees/thread-fork/app",
+      );
+      expect(copyText).toHaveBeenNthCalledWith(2, "pnpm install");
+      expect(copyText).toHaveBeenNthCalledWith(3, "installing dependencies\n");
+    });
+
+    act(() => {
+      setupProgress({
+        at: Date.now(),
+        command: "pnpm install",
+        cwd: "/repo/app/.worktrees/thread-fork/app",
+        directoryKey: "fork:codex:thread-parent:new-worktree",
+        durationMs: 1200,
+        environmentId: "pwragent",
+        environmentName: "PwrAgent",
+        exitCode: 0,
+        output: "installing dependencies\n",
+        phase: "completed",
+      });
+    });
+
+    expect(screen.getByText("Success (exit code 0)")).toHaveClass(
+      "launchpad-pending__status--success",
+    );
+    expect(
+      screen.getByRole("heading", { name: "Environment setup complete" }),
+    ).toBeInTheDocument();
+
+    act(() => {
+      setupProgress({
+        at: Date.now(),
+        command: "pnpm install",
+        cwd: "/repo/app/.worktrees/thread-fork/app",
+        directoryKey: "fork:codex:thread-parent:new-worktree",
+        durationMs: 1400,
+        environmentId: "pwragent",
+        environmentName: "PwrAgent",
+        error: "Setup failed with exit code 17",
+        exitCode: 17,
+        output: "dependency install failed\n",
+        phase: "failed",
+      });
+    });
+
+    expect(screen.getByText("Failed (exit code 17)")).toHaveClass(
+      "launchpad-pending__status--failed",
+    );
+    expect(
+      screen.getByRole("heading", { name: "Environment setup failed" }),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Setup output")).toHaveTextContent(
+      "dependency install failed",
     );
   });
 
