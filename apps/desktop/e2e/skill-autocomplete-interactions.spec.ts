@@ -38,15 +38,13 @@ async function getActiveOptionIndex(
 }
 
 async function seedComposerDraft(input: Locator, value: string): Promise<void> {
-  await input.evaluate((element, nextValue) => {
+  await input.fill(value);
+  await input.evaluate((element, selectionIndex) => {
     const editor = element as HTMLElement & {
       setSelectionRange: (start: number, end: number) => void;
-      value: string;
     };
-    editor.value = nextValue;
-    editor.dispatchEvent(new Event("change", { bubbles: true }));
-    editor.setSelectionRange(nextValue.length, nextValue.length);
-  }, value);
+    editor.setSelectionRange(selectionIndex, selectionIndex);
+  }, value.length);
   await input.focus();
 }
 
