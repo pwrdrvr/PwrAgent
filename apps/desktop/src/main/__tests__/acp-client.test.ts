@@ -133,6 +133,38 @@ describe("AcpAgentClient", () => {
     expect(sessionUpdates).toEqual(["session-1"]);
   });
 
+  it("uses a provider update timestamp for persisted ACP activity", async () => {
+    const transport = new FakeAcpAgentTransport();
+    const client = new AcpAgentClient({
+      backendId: "acp:grok",
+      store,
+      transport,
+      now: () => 1_800_000_000_000,
+    });
+    store.upsertSession({
+      backendId: "acp:grok",
+      sessionId: "session-1",
+      title: "Grok session",
+      cwd: "/repo",
+      createdAt: 1_600_000_000_000,
+      updatedAt: 1_600_000_000_000,
+      executionMode: "default",
+      status: "idle",
+    });
+
+    await client.initialize();
+    transport.emitSessionUpdate("session-1", {
+      kind: "agent_message_chunk",
+      content: "This update has a provider timestamp.",
+      timestamp: 1_700_000_000,
+    });
+
+    expect(store.getSession("acp:grok", "session-1")).toMatchObject({
+      hasConversationHistory: true,
+      updatedAt: 1_700_000_000_000,
+    });
+  });
+
   it("records Kimi snake_case assistant chunks as active turn text", async () => {
     const promptResponse = createDeferred<unknown>();
     const transport = new FakeAcpAgentTransport({
@@ -1586,12 +1618,13 @@ describe("AcpAgentClient", () => {
   });
 
   it("stores available command updates as session metadata", async () => {
+    let now = 1000;
     const transport = new FakeAcpAgentTransport();
     const client = new AcpAgentClient({
       backendId: "acp:kimi",
       store,
       transport,
-      now: () => 1000,
+      now: () => now,
     });
 
     await client.initialize();
@@ -1601,6 +1634,7 @@ describe("AcpAgentClient", () => {
       title: "Kimi ACP",
     });
 
+    now = 2000;
     transport.emitSessionUpdate(session.sessionId, {
       sessionUpdate: "available_commands_update",
       availableCommands: [
@@ -1634,6 +1668,7 @@ describe("AcpAgentClient", () => {
     expect(readRawAcpSessionPayload("acp:kimi", "session-1")?.availableCommands).toEqual(
       store.getSession("acp:kimi", "session-1")?.availableCommands,
     );
+    expect(store.getSession("acp:kimi", "session-1")?.updatedAt).toBe(1000);
   });
 
   it("loads ACP transcript replay from provider session/load without storing it in the DB", async () => {
@@ -1882,6 +1917,243 @@ describe("AcpAgentClient", () => {
         sessionId: "session-1",
       }),
     ).toHaveLength(5);
+  });
+
+  it("preserves newer metadata activity over complete local rollout history", async () => {
+    const rolloutStore = new AcpRolloutStore(path.join(tempDir, "rollouts"));
+    rolloutStore.appendUpdate({
+      backendId: "acp:grok",
+      sessionId: "session-1",
+      receivedAt: 1100,
+      update: {
+        kind: "pwragent_user_prompt",
+        prompt: "Was this really sent now?",
+        turnId: "turn-1",
+      },
+    });
+    rolloutStore.appendUpdate({
+      backendId: "acp:grok",
+      sessionId: "session-1",
+      receivedAt: 1200,
+      update: {
+        session_update: "agent_message_chunk",
+        content: { type: "text", text: "No, it was sent earlier." },
+      },
+    });
+    rolloutStore.appendUpdate({
+      backendId: "acp:grok",
+      sessionId: "session-1",
+      receivedAt: 1201,
+      update: {
+        session_update: "turn_finished",
+        turnId: "turn-1",
+      },
+    });
+    rolloutStore.appendUpdate({
+      backendId: "acp:grok",
+      sessionId: "session-1",
+      receivedAt: 1900,
+      update: {
+        kind: "provider_runtime_snapshot",
+        state: "ready",
+      },
+    });
+    const transport = new FakeAcpAgentTransport({
+      initialize: {
+        protocolVersion: 1,
+        agentCapabilities: {
+          loadSession: true,
+        },
+      },
+    });
+    const client = new AcpAgentClient({
+      backendId: "acp:grok",
+      rolloutStore,
+      store,
+      transport,
+      now: () => 2000,
+    });
+    store.upsertSession({
+      backendId: "acp:grok",
+      sessionId: "session-1",
+      title: "Grok session",
+      cwd: "/repo",
+      createdAt: 1000,
+      // A rename and runtime-option change legitimately happened after the
+      // last conversation event in the rollout.
+      updatedAt: 2000,
+      executionMode: "default",
+      titleSource: "explicit",
+      acpRuntime: {
+        currentModelId: "grok-4.5",
+        updatedAt: 2000,
+      },
+      status: "idle",
+      hasConversationHistory: true,
+    });
+
+    await client.initialize();
+    const staleMetadata = store.getSession("acp:grok", "session-1")!;
+    const replay = await client.loadSession(staleMetadata);
+    await client.refreshSession(staleMetadata);
+
+    expect(replay.messages.map((message) => message.createdAt)).toEqual([
+      1100,
+      1200,
+    ]);
+    expect(store.getSession("acp:grok", "session-1")?.updatedAt).toBe(2000);
+    expect(transport.requests.map((request) => request.method)).toEqual([
+      "initialize",
+      "session/load",
+    ]);
+  });
+
+  it("uses timestamped Grok session/load notifications over a complete rollout", async () => {
+    const rolloutStore = new AcpRolloutStore(path.join(tempDir, "rollouts"));
+    rolloutStore.appendUpdate({
+      backendId: "acp:grok",
+      sessionId: "session-1",
+      receivedAt: 1100,
+      update: {
+        kind: "pwragent_user_prompt",
+        prompt: "Old local prompt",
+        turnId: "turn-1",
+      },
+    });
+    rolloutStore.appendUpdate({
+      backendId: "acp:grok",
+      sessionId: "session-1",
+      receivedAt: 1200,
+      update: {
+        session_update: "agent_message_chunk",
+        content: { type: "text", text: "Old local reply" },
+      },
+    });
+    rolloutStore.appendUpdate({
+      backendId: "acp:grok",
+      sessionId: "session-1",
+      receivedAt: 1201,
+      update: {
+        session_update: "turn_finished",
+        turnId: "turn-1",
+      },
+    });
+    const transport = new FakeAcpAgentTransport({
+      initialize: {
+        protocolVersion: 1,
+        agentCapabilities: {
+          loadSession: true,
+        },
+      },
+    });
+    const client = new AcpAgentClient({
+      backendId: "acp:grok",
+      rolloutStore,
+      store,
+      transport: {
+        request: async (method, params) => {
+          const result = await transport.request(method, params);
+          if (method === "session/load") {
+            transport.emitSessionUpdate(
+              "session-1",
+              {
+                session_update: "user_message_chunk",
+                content: { type: "text", text: "Provider prompt" },
+              },
+              { agentTimestampMs: 1_785_000_001_300, isReplay: true },
+            );
+            transport.emitSessionUpdate(
+              "session-1",
+              {
+                session_update: "agent_message_chunk",
+                content: { type: "text", text: "Provider reply" },
+              },
+              { agentTimestampMs: 1_785_000_001_400, isReplay: true },
+            );
+            transport.emitSessionUpdate(
+              "session-1",
+              {
+                session_update: "turn_completed",
+                turnId: "turn-1",
+              },
+              { agentTimestampMs: 1_785_000_001_401, isReplay: true },
+            );
+          }
+          return result;
+        },
+        notify: (method, params) => transport.notify(method, params),
+        close: () => transport.close(),
+        onNotification: (listener) => transport.onNotification(listener),
+      },
+      now: () => 1_800_000_000_000,
+    });
+    store.upsertSession({
+      backendId: "acp:grok",
+      sessionId: "session-1",
+      title: "Grok session",
+      cwd: "/repo",
+      createdAt: 1_785_000_000_000,
+      updatedAt: 1_800_000_000_000,
+      executionMode: "default",
+      status: "active",
+      hasConversationHistory: true,
+    });
+
+    await client.initialize();
+    const replay = await client.loadSession(
+      store.getSession("acp:grok", "session-1")!,
+    );
+    const cachedReplay = await client.loadSession(
+      store.getSession("acp:grok", "session-1")!,
+    );
+
+    expect(
+      replay.messages.map((message) => ({
+        createdAt: message.createdAt,
+        text: message.text,
+      })),
+    ).toEqual([
+      { createdAt: 1_785_000_001_300, text: "Provider prompt" },
+      { createdAt: 1_785_000_001_400, text: "Provider reply" },
+    ]);
+    expect(
+      cachedReplay.messages.map((message) => ({
+        createdAt: message.createdAt,
+        text: message.text,
+      })),
+    ).toEqual([
+      { createdAt: 1_785_000_001_300, text: "Provider prompt" },
+      { createdAt: 1_785_000_001_400, text: "Provider reply" },
+    ]);
+    client.startPrompt({
+      sessionId: "session-1",
+      prompt: "Provider-owned follow-up",
+      turnId: "turn-2",
+    });
+    await vi.waitFor(() => {
+      expect(
+        transport.requests.filter(
+          (request) => request.method === "session/prompt",
+        ),
+      ).toHaveLength(1);
+    });
+    await vi.waitFor(() => {
+      expect(client.readReplay("session-1").threadStatus).toBe("idle");
+    });
+    expect(client.didSessionLoadReplayHistory("session-1")).toBe(true);
+    expect(store.getSession("acp:grok", "session-1")?.updatedAt).toBe(
+      1_800_000_000_000,
+    );
+    expect(store.getSession("acp:grok", "session-1")?.status).toBe("idle");
+    expect(
+      rolloutStore.readUpdates({
+        backendId: "acp:grok",
+        sessionId: "session-1",
+      }),
+    ).toHaveLength(3);
+    expect(
+      transport.requests.filter((request) => request.method === "session/load"),
+    ).toHaveLength(1);
   });
 
   it("merges provider session/load replay when local rollout history is incomplete", async () => {
@@ -2137,7 +2409,7 @@ describe("AcpAgentClient", () => {
     ).toBeUndefined();
   });
 
-  it("does not write local rollout history when the ACP agent advertises session replay", async () => {
+  it("retains fallback history when advertised session replay returns no transcript", async () => {
     const rolloutStore = {
       appendUpdate: vi.fn(),
       readUpdates: vi.fn(() => []),
@@ -2165,32 +2437,41 @@ describe("AcpAgentClient", () => {
       transport,
       now: () => 1000,
     });
+    store.upsertSession({
+      backendId: "acp:kimi",
+      sessionId: "session-1",
+      title: "Kimi session",
+      cwd: "/repo",
+      createdAt: 900,
+      updatedAt: 900,
+      executionMode: "default",
+      status: "idle",
+      hasConversationHistory: true,
+    });
 
     await client.initialize();
-    const session = await client.startSession({
-      cwd: "/repo",
-      executionMode: "default",
-    });
+    await client.loadSession(store.getSession("acp:kimi", "session-1")!);
     client.startPrompt({
-      sessionId: session.sessionId,
+      sessionId: "session-1",
       prompt: "hello",
       turnId: "turn-1",
     });
-    transport.emitSessionUpdate(session.sessionId, {
+    transport.emitSessionUpdate("session-1", {
       session_update: "agent_message_chunk",
       content: { type: "text", text: "Kimi says hi." },
     });
 
     await vi.waitFor(() => {
-      expect(client.readReplay(session.sessionId).lastAssistantMessage).toBe(
+      expect(client.readReplay("session-1").lastAssistantMessage).toBe(
         "Kimi says hi.",
       );
     });
     await vi.waitFor(() => {
-      expect(client.readReplay(session.sessionId).threadStatus).toBe("idle");
+      expect(client.readReplay("session-1").threadStatus).toBe("idle");
     });
 
-    expect(rolloutStore.appendUpdate).not.toHaveBeenCalled();
+    expect(client.didSessionLoadReplayHistory("session-1")).toBe(false);
+    expect(rolloutStore.appendUpdate).toHaveBeenCalled();
   });
 
   it("does not call session/load when the ACP agent says loading is unsupported", async () => {
@@ -2896,6 +3177,13 @@ describe("AcpAgentClient", () => {
             notificationListener?.("session/update", {
               sessionId: "session-1",
               update: {
+                kind: "current_mode_update",
+                currentModeId: "yolo",
+              },
+            });
+            notificationListener?.("session/update", {
+              sessionId: "session-1",
+              update: {
                 sessionUpdate: "tool_call_update",
                 toolCallId: "update_topic_1",
                 kind: "think",
@@ -2951,7 +3239,11 @@ describe("AcpAgentClient", () => {
       "Loaded Project Research",
     );
     expect(store.getSession("acp:gemini", "session-1")).toMatchObject({
+      acpRuntime: {
+        currentModeId: "yolo",
+      },
       hasConversationHistory: true,
+      updatedAt: 950,
     });
     expect(
       readRawAcpSessionPayload("acp:gemini", "session-1")?.transcriptUpdates,

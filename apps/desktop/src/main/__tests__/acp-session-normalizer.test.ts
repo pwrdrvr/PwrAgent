@@ -25,6 +25,59 @@ describe("AcpSessionReplayNormalizer", () => {
     expect(replay.lastAssistantMessage).toBe("Hello world");
   });
 
+  it("prefers a provider timestamp extension over local receipt time", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1_800_000_000_000,
+      update: {
+        kind: "agent_message_chunk",
+        content: "Recorded earlier by the provider.",
+        created_at: "2026-07-27T05:38:07.874Z",
+      },
+    });
+
+    expect(replay.messages).toEqual([
+      expect.objectContaining({
+        createdAt: Date.parse("2026-07-27T05:38:07.874Z"),
+        role: "assistant",
+        text: "Recorded earlier by the provider.",
+      }),
+    ]);
+  });
+
+  it("reads Grok and Qwen timestamps from ACP update metadata", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1_800_000_000_000,
+      update: {
+        kind: "agent_message_chunk",
+        content: "Grok timestamp.",
+        _meta: { agentTimestampMs: 1_785_000_000_100 },
+      },
+    });
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1_800_000_000_000,
+      update: {
+        kind: "agent_message_chunk",
+        content: " Qwen timestamp.",
+        _meta: { timestamp: 1_785_000_000_200 },
+      },
+    });
+
+    expect(replay.messages).toEqual([
+      expect.objectContaining({
+        createdAt: 1_785_000_000_100,
+        role: "assistant",
+        text: "Grok timestamp. Qwen timestamp.",
+      }),
+    ]);
+  });
+
   it("drops Gemini's <session_context> boilerplate user_message_chunk", () => {
     // Gemini re-emits its <session_context> environment block (date/OS/workspace
     // /directory tree) as a user_message_chunk on session/load. It is agent
