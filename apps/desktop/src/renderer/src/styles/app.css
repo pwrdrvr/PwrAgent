@@ -9057,6 +9057,7 @@ textarea,
      while the run is still in progress. */
   user-select: text;
   -webkit-user-select: text;
+  container-type: inline-size;
 }
 
 .launchpad-pending__header {
@@ -9082,6 +9083,18 @@ textarea,
   text-transform: uppercase;
 }
 
+.launchpad-pending__status--success {
+  border-color: var(--success-border);
+  background: var(--success-soft);
+  color: var(--success-text);
+}
+
+.launchpad-pending__status--failed {
+  border-color: var(--danger-border);
+  background: var(--danger-soft);
+  color: var(--danger-text);
+}
+
 .launchpad-pending h3 {
   margin: 4px 0 0;
   color: var(--text-primary);
@@ -9098,7 +9111,10 @@ textarea,
 
 .launchpad-pending__meta {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns:
+    minmax(0, 0.8fr)
+    minmax(0, 0.8fr)
+    minmax(0, 1.6fr);
   gap: 12px;
   margin: 0;
   padding: 0;
@@ -9117,6 +9133,22 @@ textarea,
   letter-spacing: 0;
   line-height: 1.2;
   text-transform: uppercase;
+}
+
+.launchpad-pending__meta-label,
+.launchpad-pending__section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.launchpad-pending__meta-label {
+  margin-bottom: 5px;
+}
+
+.launchpad-pending__meta-label .transcript-copy-button--setup {
+  margin-top: -5px;
 }
 
 .launchpad-pending__meta dd {
@@ -9142,6 +9174,10 @@ textarea,
   max-height: min(230px, 36vh);
 }
 
+.launchpad-pending__command .launchpad-pending__section-header {
+  margin-bottom: 5px;
+}
+
 .launchpad-pending__command pre,
 .launchpad-pending__output pre {
   margin: 0;
@@ -9161,11 +9197,21 @@ textarea,
   overflow: hidden;
 }
 
-.launchpad-pending__output .launchpad-pending__command-label {
+.launchpad-pending__output .launchpad-pending__section-header {
   flex: 0 0 auto;
-  margin: 0;
-  padding: 12px 12px 8px;
+  padding: 8px 10px 8px 12px;
   border-bottom: 1px solid var(--border-subtle);
+}
+
+.launchpad-pending__section-header .launchpad-pending__command-label {
+  margin: 0;
+}
+
+.transcript-copy-button.transcript-copy-button--setup {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  opacity: 1;
 }
 
 .launchpad-pending__output pre {
@@ -9173,6 +9219,16 @@ textarea,
   min-height: 0;
   padding: 12px;
   overflow: auto;
+}
+
+@container (max-width: 1000px) {
+  .launchpad-pending__meta {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .launchpad-pending__meta-path {
+    grid-column: 1 / -1;
+  }
 }
 
 @media (max-width: 760px) {

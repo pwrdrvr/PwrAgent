@@ -1538,7 +1538,9 @@ describe("ThreadView", () => {
     let setupProgress: Parameters<
       NonNullable<DesktopApi["onCodexEnvironmentSetupProgress"]>
     >[0] = () => undefined;
+    const copyText = vi.fn(async () => undefined);
     const desktopApi = {
+      copyText,
       onCodexEnvironmentSetupProgress: (callback: typeof setupProgress) => {
         setupProgress = callback;
         return () => undefined;
@@ -1594,6 +1596,44 @@ describe("ThreadView", () => {
     expect(screen.getByLabelText("Setup output")).toHaveTextContent(
       "installing dependencies",
     );
+    expect(screen.getByRole("button", { name: "Copy setup path" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Copy setup command" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Copy setup output" })).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy setup path" }));
+    fireEvent.click(screen.getByRole("button", { name: "Copy setup command" }));
+    fireEvent.click(screen.getByRole("button", { name: "Copy setup output" }));
+
+    await waitFor(() => {
+      expect(copyText).toHaveBeenNthCalledWith(
+        1,
+        "/repo/app/.worktrees/thread-fork/app",
+      );
+      expect(copyText).toHaveBeenNthCalledWith(2, "pnpm install");
+      expect(copyText).toHaveBeenNthCalledWith(3, "installing dependencies\n");
+    });
+
+    act(() => {
+      setupProgress({
+        at: Date.now(),
+        command: "pnpm install",
+        cwd: "/repo/app/.worktrees/thread-fork/app",
+        directoryKey: "fork:codex:thread-parent:new-worktree",
+        durationMs: 1200,
+        environmentId: "pwragent",
+        environmentName: "PwrAgent",
+        exitCode: 0,
+        output: "installing dependencies\n",
+        phase: "completed",
+      });
+    });
+
+    expect(screen.getByText("Success (exit code 0)")).toHaveClass(
+      "launchpad-pending__status--success",
+    );
+    expect(
+      screen.getByRole("heading", { name: "Environment setup complete" }),
+    ).toBeInTheDocument();
   });
 
   it("keeps launch failures closable from the pending setup screen", async () => {

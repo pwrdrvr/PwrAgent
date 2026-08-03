@@ -79,6 +79,7 @@ import { ThreadFindBar } from "./ThreadFindBar";
 import { ThreadHeader } from "./ThreadHeader";
 import { ThreadPlaceholderHeader } from "./ThreadPlaceholderHeader";
 import { ImageLightbox } from "./ImageLightbox";
+import { TranscriptCopyButton } from "./TranscriptCopyButton";
 import { TranscriptList } from "./TranscriptList";
 import { LiveWorkRail } from "./LiveWorkRail";
 import {
@@ -223,25 +224,58 @@ function applyLaunchpadEnvironmentSetupProgress(
   };
 }
 
-function formatSetupStatus(progress?: LaunchpadEnvironmentSetupProgress): string {
+function formatSetupStatus(progress?: LaunchpadEnvironmentSetupProgress): {
+  heading: string;
+  label: string;
+  tone: "failed" | "running" | "success";
+} {
   if (!progress || progress.status === "starting" || progress.status === "running") {
-    return "running";
+    return {
+      heading: "Running environment setup",
+      label: "Running",
+      tone: "running",
+    };
   }
   if (progress.status === "completed") {
-    return progress.exitCode === undefined ? "completed" : `exit ${progress.exitCode}`;
+    if (progress.exitCode === undefined) {
+      return {
+        heading: "Environment setup complete",
+        label: "Success",
+        tone: "success",
+      };
+    }
+    if (progress.exitCode === 0) {
+      return {
+        heading: "Environment setup complete",
+        label: "Success (exit code 0)",
+        tone: "success",
+      };
+    }
+    return {
+      heading: "Environment setup failed",
+      label: `Failed (exit code ${progress.exitCode})`,
+      tone: "failed",
+    };
   }
-  return "failed";
+  return {
+    heading: "Environment setup failed",
+    label: "Failed",
+    tone: "failed",
+  };
 }
 
 function LaunchpadEnvironmentSetupPending(props: {
   command?: string;
   cwd?: string;
+  desktopApi?: Pick<DesktopApi, "copyText">;
   directoryLabel: string;
   environmentName?: string;
   progress?: LaunchpadEnvironmentSetupProgress;
 }) {
   const output = props.progress?.output ?? "";
   const error = props.progress?.error;
+  const renderedOutput = `${output}${error ? `\n${error}` : ""}`;
+  const status = formatSetupStatus(props.progress);
   const outputRef = useRef<HTMLPreElement>(null);
 
   useEffect(() => {
@@ -261,10 +295,12 @@ function LaunchpadEnvironmentSetupPending(props: {
         <div className="launchpad-pending__header">
           <div>
             <p className="eyebrow">Preparing transcript</p>
-            <h3>Running environment setup</h3>
+            <h3>{status.heading}</h3>
           </div>
-          <span className="launchpad-pending__status">
-            {formatSetupStatus(props.progress)}
+          <span
+            className={`launchpad-pending__status launchpad-pending__status--${status.tone}`}
+          >
+            {status.label}
           </span>
         </div>
         <dl className="launchpad-pending__meta">
@@ -277,24 +313,52 @@ function LaunchpadEnvironmentSetupPending(props: {
             <dd>{props.directoryLabel}</dd>
           </div>
           {props.cwd ? (
-            <div>
-              <dt>Path</dt>
+            <div className="launchpad-pending__meta-path">
+              <dt className="launchpad-pending__meta-label">
+                <span>Path</span>
+                <TranscriptCopyButton
+                  className="transcript-copy-button--setup"
+                  desktopApi={props.desktopApi}
+                  label="Copy setup path"
+                  text={props.cwd}
+                />
+              </dt>
               <dd>{props.cwd}</dd>
             </div>
           ) : null}
         </dl>
         <div className="launchpad-pending__command" aria-label="Setup command">
-          <div className="launchpad-pending__command-label">Command</div>
+          <div className="launchpad-pending__section-header">
+            <div className="launchpad-pending__command-label">Command</div>
+            {props.command ? (
+              <TranscriptCopyButton
+                className="transcript-copy-button--setup"
+                desktopApi={props.desktopApi}
+                label="Copy setup command"
+                text={props.command}
+              />
+            ) : null}
+          </div>
           <pre>
             <code>{props.command ? `$ ${props.command}` : "$"}</code>
           </pre>
         </div>
         <div className="launchpad-pending__output" aria-label="Setup output">
-          <div className="launchpad-pending__command-label">
-            {error ? "Output and errors" : "Output"}
+          <div className="launchpad-pending__section-header">
+            <div className="launchpad-pending__command-label">
+              {error ? "Output and errors" : "Output"}
+            </div>
+            {renderedOutput ? (
+              <TranscriptCopyButton
+                className="transcript-copy-button--setup"
+                desktopApi={props.desktopApi}
+                label={error ? "Copy setup output and errors" : "Copy setup output"}
+                text={renderedOutput}
+              />
+            ) : null}
           </div>
           <pre ref={outputRef}>
-            <code>{`${output}${error ? `\n${error}` : ""}` || "Waiting for output..."}</code>
+            <code>{renderedOutput || "Waiting for output..."}</code>
           </pre>
         </div>
       </div>
@@ -2595,6 +2659,7 @@ export function ThreadView(props: ThreadViewProps) {
                   pendingForkEnvironmentSetup.command
                 }
                 cwd={launchpadSetupProgress?.cwd ?? pendingForkEnvironmentSetup.cwd}
+                desktopApi={props.desktopApi}
                 directoryLabel={pendingForkEnvironmentSetup.directoryLabel}
                 environmentName={
                   launchpadSetupProgress?.environmentName ??
@@ -2753,6 +2818,7 @@ export function ThreadView(props: ThreadViewProps) {
                   cwd={
                     launchpadSetupProgress?.cwd ?? selectedLaunchpad.directoryPath
                   }
+                  desktopApi={props.desktopApi}
                   directoryLabel={selectedLaunchpad.directoryLabel}
                   environmentName={
                     launchpadSetupProgress?.environmentName ??
