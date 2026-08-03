@@ -1298,15 +1298,25 @@ function sameResolvedPath(
 
 function shouldInheritHandoffCodexEnvironmentRuntime(params: {
   callerCwd?: string;
+  callerProjectBoundary?: string;
   requestedCwd?: string;
+  requestedProjectBoundary?: string;
   workspaceMode: HandoffTaskWorkspaceMode;
 }): boolean {
   if (params.workspaceMode === "none") {
     return false;
   }
   return (
-    !params.requestedCwd ||
-    sameResolvedPath(params.requestedCwd, params.callerCwd)
+    !params.requestedCwd
+    || sameResolvedPath(params.requestedCwd, params.callerCwd)
+    || (
+      Boolean(params.callerProjectBoundary)
+      && Boolean(params.requestedProjectBoundary)
+      && sameResolvedPath(
+        params.callerProjectBoundary,
+        params.requestedProjectBoundary,
+      )
+    )
   );
 }
 
@@ -21434,6 +21444,16 @@ export class DesktopBackendRegistry {
       );
     }
 
+    const callerProjectBoundary = await this.resolveHandoffProjectBoundaryPath({
+      cwd: callerCwd,
+      linkedDirectory: callerLinkedDirectory,
+    });
+    const requestedProjectBoundary = requestedCwd
+      ? await this.resolveHandoffProjectBoundaryPath({
+          cwd: sourceCwd,
+          linkedDirectory: sourceLinkedDirectory,
+        })
+      : undefined;
     const inheritedSettings: HandoffTaskInheritedSettings = {
       backend,
       executionMode,
@@ -21454,14 +21474,16 @@ export class DesktopBackendRegistry {
       approvalPolicy: request.args.approvalPolicy ?? modeSettings.approvalPolicy,
       sandbox: request.args.sandbox ?? modeSettings.sandbox,
       codexEnvironmentRuntime:
-        backend === "codex" &&
-        shouldInheritHandoffCodexEnvironmentRuntime({
+        backend === "codex"
+        && shouldInheritHandoffCodexEnvironmentRuntime({
           callerCwd,
+          callerProjectBoundary,
           requestedCwd,
+          requestedProjectBoundary,
           workspaceMode,
         })
-        ? sourceOverlay.codexEnvironmentRuntime
-        : undefined,
+          ? sourceOverlay.codexEnvironmentRuntime
+          : undefined,
     };
     const projectLocalCwd =
       workspaceMode === "project_local"
@@ -21489,19 +21511,19 @@ export class DesktopBackendRegistry {
         : workspaceMode === "project_local"
           ? projectLocalCwd
           : sourceCwd;
-    const callerProjectBoundary = await this.resolveHandoffProjectBoundaryPath({
-      cwd: callerCwd,
-      linkedDirectory: callerLinkedDirectory,
-    });
-    const childProjectBoundary = await this.resolveHandoffProjectBoundaryPath({
-      cwd: cwdForChild,
-      linkedDirectory:
-        workspaceMode === "project_local"
-          ? sourceLinkedDirectory?.kind === "local"
-            ? sourceLinkedDirectory
-            : undefined
-          : sourceLinkedDirectory,
-    });
+    const childProjectBoundary =
+      workspaceMode === "none"
+        ? undefined
+        : requestedProjectBoundary
+          ?? await this.resolveHandoffProjectBoundaryPath({
+            cwd: cwdForChild,
+            linkedDirectory:
+              workspaceMode === "project_local"
+                ? sourceLinkedDirectory?.kind === "local"
+                  ? sourceLinkedDirectory
+                  : undefined
+                : sourceLinkedDirectory,
+          });
     const groupingMode: HandoffTaskGroupingMode =
       requestedGroupingMode === "subthread" &&
       backend === sourceBackend &&
