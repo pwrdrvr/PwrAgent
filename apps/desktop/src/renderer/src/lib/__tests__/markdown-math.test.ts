@@ -30,6 +30,23 @@ describe("normalizeLatexMathDelimiters", () => {
     expect(normalizeLatexMathDelimiters(input)).toBe(input);
   });
 
+  it("skips repeated unmatched openers without hiding later valid math", () => {
+    const unmatched = String.raw`\[`.repeat(10_000);
+    const input = [
+      unmatched,
+      "```txt",
+      String.raw`\[protected\]`,
+      "```",
+      String.raw`\[valid\]`,
+    ].join("\n");
+
+    const output = normalizeLatexMathDelimiters(input);
+
+    expect(output.startsWith(unmatched)).toBe(true);
+    expect(output).toContain(String.raw`\[protected\]`);
+    expect(output.endsWith("$$valid$$")).toBe(true);
+  });
+
   it("does not normalize delimiters inside inline or fenced code", () => {
     const input = [
       "Render \\(outside\\), not `\\(inside\\)`.",

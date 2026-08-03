@@ -8,6 +8,11 @@ type Fence = {
   marker: "`" | "~";
 };
 
+type ClosingDelimiterSearch = {
+  closingIndex: number;
+  unmatchedUntil: number;
+};
+
 /**
  * Convert the LaTeX delimiters emitted by Codex into the dollar-delimited
  * syntax understood by remark-math. Each delimiter stays two characters long,
@@ -26,6 +31,8 @@ export function normalizeLatexMathDelimiters(markdown: string): string {
   const characters = markdown.split("");
   let changed = false;
   let index = 0;
+  let unmatchedDisplayUntil = 0;
+  let unmatchedInlineUntil = 0;
 
   while (index < markdown.length - 1) {
     const protectedRange = protectedRangeAt(protectedRanges, index);
@@ -44,8 +51,15 @@ export function normalizeLatexMathDelimiters(markdown: string): string {
     }
 
     const inline = markdown[index + 1] === "(";
+    const unmatchedUntil = inline
+      ? unmatchedInlineUntil
+      : unmatchedDisplayUntil;
+    if (index < unmatchedUntil) {
+      index += 2;
+      continue;
+    }
     const closingCharacter = inline ? ")" : "]";
-    const closingIndex = findClosingDelimiter(
+    const search = findClosingDelimiter(
       markdown,
       index + 2,
       closingCharacter,
@@ -53,17 +67,22 @@ export function normalizeLatexMathDelimiters(markdown: string): string {
       protectedRanges,
     );
 
-    if (closingIndex === -1) {
+    if (search.closingIndex === -1) {
+      if (inline) {
+        unmatchedInlineUntil = search.unmatchedUntil;
+      } else {
+        unmatchedDisplayUntil = search.unmatchedUntil;
+      }
       index += 2;
       continue;
     }
 
     characters[index] = "$";
     characters[index + 1] = "$";
-    characters[closingIndex] = "$";
-    characters[closingIndex + 1] = "$";
+    characters[search.closingIndex] = "$";
+    characters[search.closingIndex + 1] = "$";
     changed = true;
-    index = closingIndex + 2;
+    index = search.closingIndex + 2;
   }
 
   return changed ? characters.join("") : markdown;
@@ -75,14 +94,15 @@ function findClosingDelimiter(
   closingCharacter: ")" | "]",
   inline: boolean,
   protectedRanges: ProtectedRange[],
-): number {
+): ClosingDelimiterSearch {
   for (let index = start; index < markdown.length - 1; index += 1) {
     if (inline && markdown[index] === "\n") {
-      return -1;
+      return { closingIndex: -1, unmatchedUntil: index + 1 };
     }
 
-    if (protectedRangeAt(protectedRanges, index)) {
-      return -1;
+    const protectedRange = protectedRangeAt(protectedRanges, index);
+    if (protectedRange) {
+      return { closingIndex: -1, unmatchedUntil: protectedRange.end };
     }
 
     if (
@@ -90,11 +110,11 @@ function findClosingDelimiter(
       && markdown[index + 1] === closingCharacter
       && !isEscapedBackslash(markdown, index)
     ) {
-      return index;
+      return { closingIndex: index, unmatchedUntil: 0 };
     }
   }
 
-  return -1;
+  return { closingIndex: -1, unmatchedUntil: markdown.length };
 }
 
 function isEscapedBackslash(value: string, index: number): boolean {
