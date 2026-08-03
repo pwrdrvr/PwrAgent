@@ -49,6 +49,39 @@ describe("buildReviewBranchOptions", () => {
       "main",
     ]);
   });
+
+  it("uses a remote-only stacked PR target branch", () => {
+    const options = buildReviewBranchOptions({
+      directory: {
+        key: "directory:app",
+        kind: "directory",
+        label: "App",
+        path: "/repo/app",
+        threadKeys: [],
+        needsAttentionCount: 0,
+        gitStatus: {
+          currentBranch: "agent/pr-auto-dispatch-budget",
+          branches: ["agent/pr-auto-dispatch-budget"],
+          baseBranches: [
+            "origin/agent/github-pr-auto-fix-settings",
+            "origin/main",
+          ],
+        },
+      },
+      thread: {
+        gitBranch: "agent/pr-auto-dispatch-budget",
+        prs: [
+          pullRequest({
+            baseRefName: "agent/github-pr-auto-fix-settings",
+            headRefName: "agent/pr-auto-dispatch-budget",
+          }),
+        ],
+      } as NavigationThreadSummary,
+    });
+
+    expect(options[0]).toBe("origin/agent/github-pr-auto-fix-settings");
+    expect(options).not.toContain("agent/github-pr-auto-fix-settings");
+  });
 });
 
 describe("findPreferredReviewWorkspaceCwd", () => {

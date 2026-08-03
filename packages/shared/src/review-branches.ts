@@ -115,6 +115,7 @@ export function buildReviewBranchOptions(params: {
       pushIfKnown(`origin/${value}`);
       pushIfKnown(value);
     } else {
+      pushIfKnown(`origin/${value}`);
       pushIfKnown(value);
     }
 
