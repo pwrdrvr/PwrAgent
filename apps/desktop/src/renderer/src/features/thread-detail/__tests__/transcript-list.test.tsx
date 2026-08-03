@@ -2759,6 +2759,67 @@ describe("TranscriptList", () => {
     expect(list.scrollTop).toBe(1120);
   });
 
+  it("preserves selected assistant text across equivalent live transcript refreshes", () => {
+    const stableSkills: [] = [];
+    const assistantMessage = {
+      type: "message" as const,
+      id: "assistant-selection-1",
+      role: "assistant" as const,
+      phase: "final" as const,
+      parts: [
+        {
+          type: "text" as const,
+          text: "Selected assistant text must remain selected while the turn keeps running."
+        }
+      ],
+      text: "Selected assistant text must remain selected while the turn keeps running."
+    };
+    const { rerender } = render(
+      <TranscriptList
+        entries={[assistantMessage]}
+        loading={false}
+        loadingMore={false}
+        pendingStatusText="Thinking"
+        runningTurnUsageText="Usage so far: 100 uncached in"
+        skills={stableSkills}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    const paragraph = screen.getByText(assistantMessage.text);
+    const selectedTextNode = paragraph.firstChild;
+    expect(selectedTextNode).toBeInstanceOf(Text);
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(paragraph);
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    expect(selection?.toString()).toBe(assistantMessage.text);
+
+    rerender(
+      <TranscriptList
+        entries={[
+          {
+            ...assistantMessage,
+            parts: assistantMessage.parts.map((part) => ({ ...part }))
+          }
+        ]}
+        loading={false}
+        loadingMore={false}
+        pendingStatusText="Thinking"
+        runningTurnUsageText="Usage so far: 100 uncached in · 200 cached"
+        skills={stableSkills}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(screen.getByText("Usage so far: 100 uncached in · 200 cached")).toBeVisible();
+    expect(screen.getByText(assistantMessage.text).firstChild).toBe(selectedTextNode);
+    expect(selection?.toString()).toBe(assistantMessage.text);
+  });
+
   it("keeps following after a new prompt is appended to a long bottom-pinned chat", () => {
     const entries = Array.from({ length: 32 }, (_, index) => ({
       type: "message" as const,
