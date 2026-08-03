@@ -1608,6 +1608,9 @@ describe("App", () => {
     expect(
       await screen.findByRole("heading", { level: 2, name: "Investigate Grok thread" })
     ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Investigate Grok thread" }),
+    ).toHaveAttribute("aria-pressed", "true");
     expect(screen.getAllByText(/Grok/).length).toBeGreaterThan(0);
     await waitFor(() => {
       expect(screen.getByRole("region", { name: "Transcript" })).toHaveTextContent(
@@ -3486,6 +3489,12 @@ describe("App", () => {
     );
     await clickButton("Open new thread launchpad for PwrAgent");
     await screen.findByRole("heading", { level: 2, name: "PwrAgent" });
+    expect(
+      screen.getByRole("button", { name: "First project thread" }),
+    ).toHaveAttribute("aria-pressed", "false");
+    expect(
+      screen.getByRole("button", { name: "Second project thread" }),
+    ).toHaveAttribute("aria-pressed", "false");
 
     const composer = screen.getByRole("textbox", { name: "New thread" });
     pasteComposerText(composer, "Keep this configured project draft.");
@@ -3511,14 +3520,13 @@ describe("App", () => {
     expect(ensureDirectoryLaunchpad).toHaveBeenCalledTimes(1);
 
     await clickButton("Cancel");
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Back" })).toBeEnabled();
-    });
-    await clickButton("Back");
     await screen.findByRole("heading", {
       level: 2,
       name: "First project thread",
     });
+    expect(
+      screen.getByRole("button", { name: "First project thread" }),
+    ).toHaveAttribute("aria-pressed", "true");
   });
 
   it("renames the selected thread from the sidebar actions menu", async () => {

@@ -1217,7 +1217,10 @@ function DesktopAppShell(props: {
       : undefined,
     onLoadOlder: session.loadOlder,
     onLiveTranscriptEntry: session.upsertLiveTranscriptEntry,
-    onCancelLaunchpad: navigation.discardLaunchpad,
+    onCancelLaunchpad: (directoryKey) => {
+      navigation.discardLaunchpad(directoryKey);
+      history.goBack();
+    },
     // The composer's 5th argument is `extraDirectoryPaths` (draft
     // `@`-references); the hook's 5th is `parentThreadId` (resolved from
     // the launchpad draft internally), so map positions explicitly.
