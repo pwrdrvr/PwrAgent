@@ -1830,6 +1830,40 @@ describe("ThreadContextPanel", () => {
     });
   });
 
+  it("pairs a monitor turn with its monitor thread in usage actions", async () => {
+    const copyText = vi.fn(async () => undefined);
+    (window as Window & { pwragent?: unknown }).pwragent = { copyText };
+
+    renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      pricing: {
+        lines: [
+          buildMonitorLine({
+            parentThreadId: "thread-1",
+            threadId: "monitor-thread-1",
+            turnId: "monitor-turn-1",
+          }),
+        ],
+        summaries: [],
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Usage actions" }));
+    fireEvent.click(
+      within(screen.getByRole("menu")).getByRole("menuitem", {
+        name: "Copy Thread + Turn IDs",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(copyText).toHaveBeenCalledWith(
+        "Thread ID: monitor-thread-1\nTurn ID: monitor-turn-1",
+      );
+    });
+  });
+
   it("marks the active live turn with a Running chip and duration", () => {
     const startedAt = 1_800_000_000_000;
     vi.useFakeTimers();

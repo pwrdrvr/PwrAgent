@@ -1334,7 +1334,7 @@ function PricingUsageActions(props: {
   const [position, setPosition] = useState<ChipContextMenuPosition>();
   const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
   const turnId = props.line.turnId ?? props.subAgent?.monitorTurnId;
-  const threadId = props.line.parentThreadId ?? props.line.threadId;
+  const threadId = props.line.threadId;
   const canScrollToTurn = Boolean(turnId && props.onScrollToTurn);
   const items: ChipContextMenuItem[] = [];
 
