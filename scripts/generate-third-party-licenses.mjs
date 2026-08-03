@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url";
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const outputPath = join(repoRoot, "THIRD_PARTY_LICENSES");
 const desktopFilter = "@pwragent/desktop";
+const PLATFORM_VARIANT_SUFFIX = /-(?:android|darwin|freebsd|linux|openbsd|sunos|win32)(?:-|$)/;
 
 function runPnpmLicenses(args) {
   const result = spawnSync(
@@ -191,6 +192,38 @@ function stableRecordKey(record) {
   return `${record.name}@${record.version}`;
 }
 
+export function expandOptionalPlatformVariants(records) {
+  const variants = new Map();
+
+  for (const record of records) {
+    const packageJson = readPackageJson(record);
+    for (const [name, version] of Object.entries(packageJson.optionalDependencies ?? {})) {
+      if (
+        !name.startsWith(`${record.name}-`)
+        || !PLATFORM_VARIANT_SUFFIX.test(name)
+        || version !== record.version
+      ) {
+        continue;
+      }
+
+      variants.set(`${name}@${version}`, {
+        ...record,
+        name,
+        version,
+      });
+    }
+  }
+
+  if (variants.size === 0) {
+    return records;
+  }
+
+  return [
+    ...records.filter((record) => !variants.has(stableRecordKey(record))),
+    ...variants.values(),
+  ];
+}
+
 export function enrichRecord(record) {
   const packageJson = readPackageJson(record);
   const licensePath = findLicenseFile(record.packagePath);
@@ -236,7 +269,9 @@ function main() {
     }
   }
 
-  const records = Array.from(recordsByKey.values()).sort(compareRecords).map(enrichRecord);
+  const records = expandOptionalPlatformVariants(Array.from(recordsByKey.values()))
+    .sort(compareRecords)
+    .map(enrichRecord);
 
   const recordsByLicense = new Map();
   for (const record of records) {

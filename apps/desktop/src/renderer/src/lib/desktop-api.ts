@@ -147,6 +147,8 @@ import type {
   PickDirectoryFromDiskResponse,
   PickFileFromDiskResponse,
   PickReferenceFromDiskResponse,
+  InspectPdfReferencePathsRequest,
+  InspectPdfReferencePathsResponse,
   ListRecentFileReferencesResponse,
   RecordRecentFileReferencesRequest,
   DetachThreadPullRequestRequest,
@@ -753,6 +755,10 @@ export type DesktopApi = {
    * tray and directories to reference chips.
    */
   pickReferenceFromDisk?: () => Promise<PickReferenceFromDiskResponse>;
+  /** Check explicit local-file references by PDF magic bytes, not extension. */
+  inspectPdfReferencePaths?: (
+    request: InspectPdfReferencePathsRequest,
+  ) => Promise<InspectPdfReferencePathsResponse>;
   /** Recently referenced files for the reference picker's Files tab. */
   listRecentFileReferences?: () => Promise<ListRecentFileReferencesResponse>;
   /** Fire-and-forget record of freshly committed file references. */

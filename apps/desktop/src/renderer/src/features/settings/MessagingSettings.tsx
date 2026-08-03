@@ -92,6 +92,7 @@ export function MessagingSettings(props: {
   ) => Promise<void>;
   onShowStreamingOptionChange: (enabled: boolean) => Promise<void>;
   onImageProfileChange: (profile: DesktopMessagingImageProfile) => Promise<void>;
+  onPdfProfileChange: (profile: DesktopMessagingImageProfile) => Promise<void>;
   onInputDebounceMsChange: (value: number) => Promise<void>;
   onMessagingEnabledChange: (enabled: boolean) => Promise<void>;
   onFullAccessEscalationChange: (enabled: boolean) => Promise<void>;
@@ -172,6 +173,7 @@ export function MessagingSettings(props: {
     }
   };
   const imageProfile = props.snapshot.messaging.attachments.imageProfile;
+  const pdfProfile = props.snapshot.messaging.attachments.pdfProfile;
   const runtimeMessaging = props.snapshot.runtime.messaging;
   const masterEnabled = runtimeMessaging.overrideActive
     ? !runtimeMessaging.disabled
@@ -425,6 +427,17 @@ export function MessagingSettings(props: {
             value={imageProfile.value}
             onChange={(profile) => {
               void props.onImageProfileChange(profile);
+            }}
+          />
+          <SegmentedField
+            disabled={props.saving || pdfProfile.source === "env"}
+            label="Inbound PDF render profile"
+            sub="Rasterize PDF pages at this profile before forwarding them to the model."
+            options={PDF_PROFILE_OPTIONS}
+            source={sourceBadge(pdfProfile)}
+            value={pdfProfile.value}
+            onChange={(profile) => {
+              void props.onPdfProfileChange(profile);
             }}
           />
 
@@ -1838,6 +1851,16 @@ const IMAGE_PROFILE_OPTIONS: Array<{
   { label: "Medium", value: "medium" },
   { label: "High", value: "high" },
   { label: "Actual", value: "actual" },
+];
+
+const PDF_PROFILE_OPTIONS: Array<{
+  label: string;
+  value: DesktopMessagingImageProfile;
+}> = [
+  { label: "Low", value: "low" },
+  { label: "Medium", value: "medium" },
+  { label: "High", value: "high" },
+  { label: "Maximum", value: "actual" },
 ];
 
 const RESPONSE_MODE_OPTIONS: Array<{

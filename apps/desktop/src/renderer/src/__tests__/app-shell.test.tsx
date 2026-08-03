@@ -390,6 +390,10 @@ describe("App", () => {
           value: false,
           source: "default",
         },
+        pdfAnalysisEnabled: {
+          value: true,
+          source: "default",
+        },
         hotCpuProfilingEnabled: {
           value: false,
           source: "default",
@@ -561,6 +565,7 @@ describe("App", () => {
         },
         attachments: {
           imageProfile: { value: "medium", source: "default" },
+          pdfProfile: { value: "high", source: "default" },
           maxAttachmentBytes: { value: 10485760, source: "default" },
           maxAttachmentCount: { value: 4, source: "default" },
         },

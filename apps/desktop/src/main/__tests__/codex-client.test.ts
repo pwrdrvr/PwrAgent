@@ -5160,6 +5160,72 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("hydrates dynamic tool result images from persisted thread activity", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.readThreadResultByThreadId.set("thread-pdf-tool-image", {
+      thread: {
+        turns: [
+          {
+            id: "turn-pdf-tool",
+            status: "completed",
+            startedAt: 1_763_500_220,
+            completedAt: 1_763_500_250,
+            items: [
+              {
+                type: "dynamicToolCall",
+                id: "pdf-render-1",
+                tool: "render_messaging_pdf_pages",
+                arguments: { pageNumbers: [3] },
+                status: "completed",
+                contentItems: [
+                  {
+                    type: "inputText",
+                    text: JSON.stringify({ pages: [{ pageNumber: 3 }] }),
+                  },
+                  {
+                    type: "inputImage",
+                    imageUrl: "data:image/png;base64,AQID",
+                  },
+                ],
+                success: true,
+                durationMs: 30,
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const replay = await client.readThread({
+      threadId: "thread-pdf-tool-image",
+    });
+
+    expect(replay.entries).toEqual([
+      expect.objectContaining({
+        type: "activity",
+        details: [
+          expect.objectContaining({
+            id: "pdf-render-1",
+            images: [
+              {
+                type: "image",
+                url: "data:image/png;base64,AQID",
+                alt: "render_messaging_pdf_pages result",
+              },
+            ],
+          }),
+        ],
+      }),
+    ]);
+
+    await client.close();
+  });
+
   it("hydrates persisted OpenAI function calls as transcript activity", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.readThreadResultByThreadId.set("thread-openai-function-calls", {
@@ -6369,6 +6435,67 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("passes thread-local MCP config and redacts MCP bearer headers from observers", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const observedMessages: string[] = [];
+    const config = {
+      mcp_servers: {
+        pwragent_pdf: {
+          enabled: true,
+          http_headers: {
+            Authorization: "Bearer pwragent-pdf-secret",
+          },
+          url: "http://127.0.0.1:42137/mcp",
+        },
+      },
+    };
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+      connectionObserver: {
+        onMessage: (event) => {
+          observedMessages.push(event.raw);
+        },
+      },
+    });
+
+    await client.startThread({ config });
+    await client.startTurn({
+      threadId: "thread-existing",
+      input: [{ type: "text", text: "Continue." }],
+      config,
+      fastMode: true,
+    });
+    await client.forkThread({
+      threadId: "thread-source",
+      config,
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    const requests = transport!.sentMessages.map(
+      (message) => JSON.parse(message) as {
+        method?: string;
+        params?: Record<string, unknown>;
+      },
+    );
+    const threadStart = requests.find((request) => request.method === "thread/start")?.params;
+    const threadResume = requests.find((request) => request.method === "thread/resume")?.params;
+    const threadFork = requests.find((request) => request.method === "thread/fork")?.params;
+
+    expect(threadStart).toMatchObject({ config });
+    expect(threadResume).toMatchObject({
+      config: {
+        ...config,
+        fast_mode: true,
+      },
+    });
+    expect(threadFork).toMatchObject({ config });
+    expect(observedMessages.join("\n")).not.toContain("pwragent-pdf-secret");
+    expect(observedMessages.join("\n")).toContain("[redacted]");
+
+    await client.close();
+  });
+
   it("uses the 0.144 App Server wire contracts and advertises tools only at thread start", async () => {
     MockTransport.serverVersion = "0.144.0";
     const { CodexAppServerClient } = await import("../codex-app-server/client");
@@ -6695,6 +6822,133 @@ describe("CodexAppServerClient", () => {
           serviceTier: "priority",
         }),
       }),
+    );
+
+    await client.close();
+  });
+
+  it("stores file inputs as local file references before sending Codex turns", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const pdfBytes = Buffer.from("%PDF-1.7\n/image data\n");
+    MockTransport.turnStartResult = {
+      thread: {
+        id: "thread-3",
+      },
+      turn: {
+        id: "turn-1",
+      },
+    };
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    await client.startTurn({
+      threadId: "thread-3",
+      input: [
+        { type: "text", text: "What's in this?" },
+        {
+          type: "file",
+          name: "Bullstrap-2024-10-05.pdf",
+          mimeType: "application/pdf",
+          data: pdfBytes.toString("base64"),
+          sizeBytes: pdfBytes.byteLength,
+        },
+      ],
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    expect(transport).toBeDefined();
+    const turnStart = transport!.sentMessages
+      .map((message) => JSON.parse(message) as { method?: string; params?: { input?: unknown[] } })
+      .find((payload) => payload.method === "turn/start");
+    expect(turnStart?.params?.input).toEqual([
+      expect.objectContaining({
+        type: "text",
+        text: expect.stringContaining("Files attached or referenced from PwrAgent"),
+      }),
+      {
+        type: "text",
+        text: "What's in this?",
+        text_elements: [],
+      },
+      expect.objectContaining({
+        type: "mention",
+        name: "Bullstrap-2024-10-05.pdf",
+        path: expect.any(String),
+      }),
+    ]);
+    expect(turnStart?.params?.input).not.toContainEqual(
+      expect.objectContaining({ type: "file" }),
+    );
+
+    const mention = turnStart?.params?.input?.find(
+      (item): item is { type: "mention"; path: string } =>
+        typeof item === "object" &&
+        item !== null &&
+        (item as { type?: unknown }).type === "mention" &&
+        typeof (item as { path?: unknown }).path === "string",
+    );
+    expect(mention).toBeDefined();
+    expect(await fs.readFile(mention!.path)).toEqual(pdfBytes);
+
+    await fs.rm(path.dirname(mention!.path), {
+      force: true,
+      recursive: true,
+    });
+    await client.close();
+  });
+
+  it("sends explicit local file references as Codex mentions", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.turnStartResult = {
+      thread: {
+        id: "thread-3",
+      },
+      turn: {
+        id: "turn-1",
+      },
+    };
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    await client.startTurn({
+      threadId: "thread-3",
+      input: [
+        { type: "text", text: "What is in this local file?" },
+        {
+          type: "localFile",
+          name: "Jeep",
+          path: "/Users/huntharo/Downloads/Jeep",
+        },
+      ],
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    const turnStart = transport!.sentMessages
+      .map((message) => JSON.parse(message) as { method?: string; params?: { input?: unknown[] } })
+      .find((payload) => payload.method === "turn/start");
+    expect(turnStart?.params?.input).toEqual([
+      expect.objectContaining({
+        type: "text",
+        text: expect.stringContaining("Files attached or referenced from PwrAgent"),
+      }),
+      {
+        type: "text",
+        text: "What is in this local file?",
+        text_elements: [],
+      },
+      {
+        type: "mention",
+        name: "Jeep",
+        path: "/Users/huntharo/Downloads/Jeep",
+      },
+    ]);
+    expect(turnStart?.params?.input).not.toContainEqual(
+      expect.objectContaining({ type: "file" }),
     );
 
     await client.close();

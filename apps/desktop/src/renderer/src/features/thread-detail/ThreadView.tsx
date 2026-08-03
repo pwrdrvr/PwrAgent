@@ -760,6 +760,7 @@ export type ThreadViewProps = {
   runningTurnUsageText?: string;
   threadBusy?: boolean;
   pastedImageMaxPatches?: number;
+  pdfAnalysisEnabled?: boolean;
   platform?: string;
   selectedDirectory?: NavigationDirectorySummary;
   selectedLaunchpad?: NavigationLaunchpadDraft;
@@ -2774,6 +2775,7 @@ export function ThreadView(props: ThreadViewProps) {
               launchpad={selectedLaunchpad}
               launchpadError={props.launchpadError}
               pastedImageMaxPatches={props.pastedImageMaxPatches}
+              pdfAnalysisEnabled={props.pdfAnalysisEnabled}
               fullAccessRiskWarningDismissed={
                 props.fullAccessRiskWarningDismissed
               }
@@ -3044,6 +3046,7 @@ export function ThreadView(props: ThreadViewProps) {
               props.pendingUserInput || props.pendingMcpInteraction
             )}
             pastedImageMaxPatches={props.pastedImageMaxPatches}
+            pdfAnalysisEnabled={props.pdfAnalysisEnabled}
             removeOptimisticMessage={props.removeOptimisticMessage}
             setExecutionModeError={props.setExecutionModeError}
             threadModelSettingsError={props.setThreadModelSettingsError}

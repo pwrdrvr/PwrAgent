@@ -51,6 +51,10 @@ import {
 import type { MessagingAdapter, MessagingBackendBridge } from "../messaging/core/messaging-adapter";
 import { MessagingDeliveryBudget } from "../messaging/core/messaging-delivery-budget";
 import { MessagingStore } from "../messaging/core/messaging-store";
+import {
+  inspectPdfDocument,
+  renderPdfPages,
+} from "../pdf/pdf-page-renderer";
 
 const tempDirs: string[] = [];
 
@@ -61,6 +65,23 @@ vi.mock("../messaging/attachment-image-normalization", () => ({
     mimeType: "image/png",
     width: 1,
   })),
+}));
+
+vi.mock("../pdf/pdf-page-renderer", () => ({
+  DEFAULT_PDF_RENDER_LIMITS: {
+    maxEncodedBytes: 18 * 1024 * 1024,
+    maxPageEncodedBytes: 6 * 1024 * 1024,
+    maxPages: 5,
+    maxPagePixels: 8 * 1024 * 1024,
+    maxPixels: 32 * 1024 * 1024,
+    maxWireBytes: 24 * 1024 * 1024,
+  },
+  inspectPdfDocument: vi.fn(),
+  renderPdfPages: vi.fn(),
+  renderedPdfPageDataUrl: (page: { base64: string; mimeType: string }) =>
+    `data:${page.mimeType};base64,${page.base64}`,
+  renderedPdfPageWireBytes: (page: { base64: string; mimeType: string }) =>
+    `data:${page.mimeType};base64,`.length + page.base64.length,
 }));
 
 async function createStore(): Promise<MessagingStore> {
@@ -1257,7 +1278,7 @@ describe("MessagingController", () => {
         },
       },
     });
-    if (!location.ok) {
+    if (!location.ok || !("location" in location.data)) {
       throw new Error("Expected the transparent Agent route location");
     }
     expect(location.data.location.binding).toBeUndefined();
@@ -10391,6 +10412,271 @@ describe("MessagingController", () => {
     );
   });
 
+  it("routes inbound PDFs into bound thread turns as rendered page images", async () => {
+    const pdfData = new TextEncoder().encode("%PDF-1.7\n/image data\n");
+    vi.mocked(renderPdfPages).mockResolvedValueOnce([
+      {
+        base64: "rendered-pdf-page",
+        encodedBytes: 1,
+        height: 1988,
+        mimeType: "image/png",
+        pageNumber: 1,
+        width: 3072,
+      },
+    ]);
+    const harness = await createHarness({
+      downloadAttachment: vi.fn(async ({ attachment }) => ({
+        data: pdfData,
+        fileName: attachment.name,
+        mimeType: attachment.mimeType,
+        sizeBytes: pdfData.byteLength,
+      })),
+    });
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "bind:codex:thread-1",
+        value: {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+      }),
+    );
+
+    await harness.controller.handleInboundEvent({
+      ...buildTextEvent("What's in this?"),
+      id: "event-pdf",
+      kind: "media",
+      text: "What's in this?",
+      attachments: [
+        {
+          id: "pdf-1",
+          kind: "file",
+          name: "Bullstrap-2024-10-05.pdf",
+          disposition: "available",
+          mimeType: "application/pdf",
+          sizeBytes: pdfData.byteLength,
+        },
+      ],
+      disposition: "available",
+    });
+
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: [
+          {
+            type: "text",
+            text: [
+              "What's in this?",
+              "Attachment `Bullstrap-2024-10-05.pdf` was rendered into 1 page image for model input.",
+            ].join("\n\n"),
+          },
+          {
+            type: "image",
+            name: "Bullstrap-2024-10-05-page-1.png",
+            url: "data:image/png;base64,rendered-pdf-page",
+          },
+        ],
+      }),
+    );
+    expect(renderPdfPages).toHaveBeenCalledWith({
+      data: pdfData,
+      limits: {
+        maxEncodedBytes: 18 * 1024 * 1024,
+        maxPageEncodedBytes: 6 * 1024 * 1024,
+        maxPages: 5,
+        maxPagePixels: 8 * 1024 * 1024,
+        maxPixels: 32 * 1024 * 1024,
+        maxWireBytes: 24 * 1024 * 1024,
+      },
+      profile: "high",
+    });
+  });
+
+  it("keeps PDFs local and exposes bounded page tools to model-directed Codex turns", async () => {
+    const pdfData = new TextEncoder().encode("%PDF-1.7\n/local PDF\n");
+    vi.mocked(renderPdfPages).mockClear();
+    vi.mocked(inspectPdfDocument).mockClear();
+    vi.mocked(inspectPdfDocument).mockResolvedValueOnce({
+      firstPage: {
+        height: 792,
+        renderHeight: 1988,
+        renderWidth: 3072,
+        width: 1224,
+      },
+      pageCount: 12,
+    });
+    vi.mocked(renderPdfPages).mockResolvedValueOnce([
+      {
+        base64: "rendered-pdf-page",
+        encodedBytes: 1,
+        height: 1988,
+        mimeType: "image/png",
+        pageNumber: 3,
+        width: 3072,
+      },
+    ]);
+    const harness = await createHarness({
+      downloadAttachment: vi.fn(async ({ attachment }) => ({
+        data: pdfData,
+        fileName: attachment.name,
+        mimeType: attachment.mimeType,
+        sizeBytes: pdfData.byteLength,
+      })),
+      supportsMessagingPdfTools: async () => true,
+    });
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent({
+      ...buildTextEvent("Does this have a soft top?"),
+      id: "event-model-directed-pdf",
+      kind: "media",
+      text: "Does this have a soft top?",
+      attachments: [
+        {
+          id: "pdf-1",
+          kind: "file",
+          name: "window-sticker.pdf",
+          disposition: "available",
+          mimeType: "application/pdf",
+          sizeBytes: pdfData.byteLength,
+        },
+      ],
+      disposition: "available",
+    });
+
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: [
+          {
+            type: "text",
+            text: expect.stringContaining("first render page 1"),
+          },
+        ],
+      }),
+    );
+    expect(renderPdfPages).not.toHaveBeenCalled();
+
+    const inspection = await harness.controller.handlePwrAgentMessagingRequest({
+      operation: "inspect_messaging_pdfs",
+      context: {
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-1",
+      },
+      args: {},
+    });
+    expect(inspection).toMatchObject({
+      ok: true,
+      data: {
+        attachments: [
+          expect.objectContaining({
+            name: "window-sticker.pdf",
+            pageCount: 12,
+            renderLimits: {
+              maxEncodedBytes: 18 * 1024 * 1024,
+              maxPageEncodedBytes: 6 * 1024 * 1024,
+              maxPages: 5,
+              maxPagePixels: 8 * 1024 * 1024,
+              maxPixels: 32 * 1024 * 1024,
+              maxWireBytes: 24 * 1024 * 1024,
+            },
+          }),
+        ],
+      },
+    });
+    if (!inspection.ok || !("attachments" in inspection.data)) {
+      throw new Error("Expected PDF inspection metadata.");
+    }
+    const attachmentId = inspection.data.attachments[0]?.attachmentId;
+    expect(attachmentId).toBeTruthy();
+
+    await expect(
+      harness.controller.handlePwrAgentMessagingRequest({
+        operation: "render_messaging_pdf_pages",
+        context: {
+          backend: "codex",
+          threadId: "thread-1",
+          turnId: "turn-1",
+        },
+        args: {
+          attachmentId: attachmentId!,
+          pageNumbers: [3],
+        },
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      data: {
+        pages: [{ pageNumber: 3 }],
+      },
+      imageContent: [
+        {
+          base64: "rendered-pdf-page",
+          mimeType: "image/png",
+          pageNumber: 3,
+        },
+      ],
+    });
+  });
+
+  it("leaves messaging PDFs as normal file input when PDF analysis is disabled", async () => {
+    const pdfData = new TextEncoder().encode("%PDF-1.7\n/pass through\n");
+    const supportsMessagingPdfTools = vi.fn(async () => true);
+    vi.mocked(renderPdfPages).mockClear();
+    const harness = await createHarness({
+      downloadAttachment: vi.fn(async ({ attachment }) => ({
+        data: pdfData,
+        fileName: attachment.name,
+        mimeType: attachment.mimeType,
+        sizeBytes: pdfData.byteLength,
+      })),
+      pdfAnalysisEnabled: false,
+      supportsMessagingPdfTools,
+    });
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent({
+      ...buildTextEvent("Inspect this PDF without PwrAgent analysis."),
+      id: "event-pdf-pass-through",
+      kind: "media",
+      text: "Inspect this PDF without PwrAgent analysis.",
+      attachments: [
+        {
+          id: "pdf-1",
+          kind: "file",
+          name: "window-sticker.pdf",
+          disposition: "available",
+          mimeType: "application/pdf",
+          sizeBytes: pdfData.byteLength,
+        },
+      ],
+      disposition: "available",
+    });
+
+    expect(supportsMessagingPdfTools).not.toHaveBeenCalled();
+    expect(renderPdfPages).not.toHaveBeenCalled();
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: [
+          {
+            type: "text",
+            text: [
+              "Inspect this PDF without PwrAgent analysis.",
+              "PDF attachment `window-sticker.pdf` was left as a normal file attachment.",
+            ].join("\n\n"),
+          },
+          {
+            type: "file",
+            name: "window-sticker.pdf",
+            mimeType: "application/pdf",
+            data: Buffer.from(pdfData).toString("base64"),
+            sizeBytes: pdfData.byteLength,
+            pdfRenderProfile: "high",
+          },
+        ],
+      }),
+    );
+  });
+
   it("debounces split text messages into one agent turn", async () => {
     vi.useFakeTimers();
     const harness = await createHarness({ inputDebounceMs: 500 });
@@ -18275,6 +18561,7 @@ async function createHarness(options?: {
   navigation?: NavigationSnapshot;
   now?: () => number;
   pendingIntentTtlMs?: number;
+  pdfAnalysisEnabled?: MessagingControllerOptions["pdfAnalysisEnabled"];
   channel?: MessagingChannelKind;
   capabilityProfile?: MessagingCapabilityProfile;
   sleepUntil?: MessagingControllerOptions["sleepUntil"];
@@ -18315,6 +18602,9 @@ async function createHarness(options?: {
     MessagingBackendBridge["setAcpSessionRuntimeOption"]
   >;
   setConversationTitle?: MessagingAdapter["setConversationTitle"];
+  supportsMessagingPdfTools?: NonNullable<
+    MessagingBackendBridge["supportsMessagingPdfTools"]
+  >;
   startThread?: NonNullable<MessagingBackendBridge["startThread"]>;
   startTurn?: NonNullable<MessagingBackendBridge["startTurn"]>;
   submitReview?: NonNullable<MessagingBackendBridge["submitReview"]>;
@@ -18712,6 +19002,9 @@ async function createHarness(options?: {
     setThreadExecutionMode,
     setThreadModelSettings,
     startThread,
+    ...(options?.supportsMessagingPdfTools
+      ? { supportsMessagingPdfTools: options.supportsMessagingPdfTools }
+      : {}),
     submitReview,
     startTurn,
     steerTurn,
@@ -18731,6 +19024,7 @@ async function createHarness(options?: {
     logger: options?.logger,
     now: options?.now ?? (() => 1000),
     pendingIntentTtlMs: options?.pendingIntentTtlMs,
+    pdfAnalysisEnabled: options?.pdfAnalysisEnabled,
     sleepUntil: options?.sleepUntil,
     fullAccessControls: options?.fullAccessControls ?? {
       allowEscalation: true,

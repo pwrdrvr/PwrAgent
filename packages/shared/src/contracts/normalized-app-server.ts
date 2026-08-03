@@ -37,6 +37,32 @@ export type AppServerLocalImageInputItem = {
   path: string;
 };
 
+export type AppServerPdfRenderProfile = "low" | "medium" | "high" | "actual";
+
+/**
+ * Explicit local-file reference supplied by the desktop composer. The main
+ * process may classify and consume supported document types before forwarding
+ * the turn to a backend.
+ */
+export type AppServerLocalFileInputItem = {
+  type: "localFile";
+  /** User-visible filename / attachment label when available. */
+  name?: string;
+  path: string;
+  /** Rendering preference when this local file is classified as a PDF. */
+  pdfRenderProfile?: AppServerPdfRenderProfile;
+};
+
+export type AppServerFileInputItem = {
+  type: "file";
+  name: string;
+  mimeType: string;
+  data: string;
+  sizeBytes?: number;
+  /** Rendering preference when this file is classified as a PDF. */
+  pdfRenderProfile?: AppServerPdfRenderProfile;
+};
+
 export type AppServerSkillSummary = {
   name: string;
   description?: string;
@@ -58,7 +84,9 @@ export type AppServerAvailableCommandSummary = {
 export type AppServerTurnInputItem =
   | AppServerTextInputItem
   | AppServerImageInputItem
-  | AppServerLocalImageInputItem;
+  | AppServerLocalImageInputItem
+  | AppServerLocalFileInputItem
+  | AppServerFileInputItem;
 
 export type AppServerReviewTarget =
   | {
@@ -431,9 +459,17 @@ export type AppServerThreadImagePart = {
   sourceUrl?: string;
 };
 
+export type AppServerThreadFilePart = {
+  type: "file";
+  name: string;
+  mimeType?: string;
+  sizeBytes?: number;
+};
+
 export type AppServerThreadMessagePart =
   | AppServerThreadTextPart
-  | AppServerThreadImagePart;
+  | AppServerThreadImagePart
+  | AppServerThreadFilePart;
 
 export type AppServerTranscriptPhase = "commentary" | "final";
 
@@ -531,6 +567,7 @@ export type AppServerThreadActivityDetail = {
   id: string;
   kind: "read" | "write" | "command";
   label: string;
+  images?: AppServerThreadImagePart[];
   markdown?: string;
   path?: string;
   url?: string;

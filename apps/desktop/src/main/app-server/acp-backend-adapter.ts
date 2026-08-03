@@ -765,6 +765,26 @@ export function inputToAcpPrompt(
       continue;
     }
 
+    if (item.type === "file") {
+      const text = `[File attachment: ${item.name}]`;
+      promptContent.push({ type: "text", text });
+      parts.push({
+        type: "file",
+        name: item.name,
+        mimeType: item.mimeType,
+        sizeBytes: item.sizeBytes,
+      });
+      continue;
+    }
+
+    if (item.type === "localFile") {
+      const fileName = item.name?.trim() || path.basename(item.path);
+      const text = `[Local file: ${fileName} (${item.path})]`;
+      promptContent.push({ type: "text", text });
+      parts.push({ type: "text", text });
+      continue;
+    }
+
     const fileName = item.name?.trim() || path.basename(item.path);
     const text = `[Local image: ${fileName}]`;
     promptContent.push({ type: "text", text });

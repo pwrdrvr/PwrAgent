@@ -1,0 +1,206 @@
+import { copyFile, mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  preparePdfTurnInput,
+} from "../pdf/pdf-turn-input-preparation";
+
+const jeepStickerPageFixture = fileURLToPath(
+  new URL("./fixtures/pdf/jeep-sticker-page-size.pdf", import.meta.url),
+);
+const tempRoots: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(
+    tempRoots.splice(0).map(async (root) => {
+      await rm(root, { force: true, recursive: true });
+    }),
+  );
+});
+
+async function makeExtensionlessFixture(): Promise<string> {
+  const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-pdf-turn-"));
+  tempRoots.push(root);
+  const fixturePath = path.join(root, "Jeep");
+  await copyFile(jeepStickerPageFixture, fixturePath);
+  return fixturePath;
+}
+
+describe("preparePdfTurnInput", () => {
+  it("renders an extensionless explicit one-page local PDF as a normal image input", async () => {
+    const pdfPath = await makeExtensionlessFixture();
+    const inspectPdfDocument = vi.fn(async () => ({
+      firstPage: {
+        height: 792,
+        renderHeight: 1988,
+        renderWidth: 3072,
+        width: 1224,
+      },
+      pageCount: 1,
+    }));
+    const renderPdfPages = vi.fn(async () => [
+      {
+        base64: "rendered-page",
+        encodedBytes: 1,
+        height: 1988,
+        mimeType: "image/png" as const,
+        pageNumber: 1,
+        width: 3072,
+      },
+    ]);
+    const createAttachmentId = vi.fn(() => "jeep-pdf");
+
+    const prepared = await preparePdfTurnInput({
+      handling: "model_directed",
+      input: [
+        {
+          type: "text",
+          text: `Compare [@Jeep](${pdfPath}) and keep [@notes](/tmp/notes.txt).`,
+        },
+        { type: "localFile", name: "Jeep", path: pdfPath },
+      ],
+      dependencies: {
+        createAttachmentId,
+        inspectPdfDocument,
+        renderPdfPages,
+      },
+    });
+
+    expect(inspectPdfDocument).toHaveBeenCalledTimes(1);
+    expect(createAttachmentId).not.toHaveBeenCalled();
+    expect(renderPdfPages).toHaveBeenCalledWith({
+      data: expect.any(Uint8Array),
+      limits: {
+        maxEncodedBytes: 18 * 1024 * 1024,
+        maxPageEncodedBytes: 6 * 1024 * 1024,
+        maxPages: 5,
+        maxPagePixels: 8 * 1024 * 1024,
+        maxPixels: 32 * 1024 * 1024,
+        maxWireBytes: 24 * 1024 * 1024,
+      },
+      pageNumbers: [1],
+      profile: "high",
+    });
+    expect(prepared.input).toEqual([
+      {
+        type: "text",
+        text: expect.stringContaining(
+          "Compare @Jeep and keep [@notes](/tmp/notes.txt).",
+        ),
+      },
+      {
+        type: "image",
+        name: "Jeep-page-1.png",
+        url: "data:image/png;base64,rendered-page",
+      },
+    ]);
+    expect(prepared.pdfAttachments).toEqual([]);
+    expect((prepared.input[0] as { text: string }).text).toContain(
+      "PwrAgent rendered PDF attachment `Jeep` into its only page image for visual analysis.",
+    );
+    expect((prepared.input[0] as { text: string }).text).not.toContain(
+      "<pwragent-pdf-context>",
+    );
+  });
+
+  it("retains an explicit multi-page local PDF for bounded page selection", async () => {
+    const pdfPath = await makeExtensionlessFixture();
+    const inspectPdfDocument = vi.fn(async () => ({
+      firstPage: {
+        height: 792,
+        renderHeight: 1988,
+        renderWidth: 3072,
+        width: 1224,
+      },
+      pageCount: 3,
+    }));
+    const renderPdfPages = vi.fn();
+    const createAttachmentId = vi.fn(() => "jeep-pdf");
+
+    const prepared = await preparePdfTurnInput({
+      handling: "model_directed",
+      input: [
+        { type: "text", text: `Compare [@Jeep](${pdfPath}).` },
+        { type: "localFile", name: "Jeep", path: pdfPath },
+      ],
+      dependencies: {
+        createAttachmentId,
+        inspectPdfDocument,
+        renderPdfPages,
+      },
+    });
+
+    expect(renderPdfPages).not.toHaveBeenCalled();
+    expect(createAttachmentId).toHaveBeenCalledTimes(1);
+    expect(prepared.input).toEqual([
+      {
+        type: "text",
+        text: expect.stringContaining("Compare @Jeep."),
+      },
+    ]);
+    expect((prepared.input[0] as { text: string }).text).toContain(
+      "<pwragent-pdf-context>",
+    );
+    expect((prepared.input[0] as { text: string }).text).toContain(
+      "3 pages; page 1 renders at 3072x1988.",
+    );
+    expect(prepared.pdfAttachments).toEqual([
+      expect.objectContaining({
+        attachmentId: "jeep-pdf",
+        inspection: expect.objectContaining({ pageCount: 3 }),
+        name: "Jeep",
+      }),
+    ]);
+  });
+
+  it("keeps an explicit local PDF reference intact when analysis is disabled", async () => {
+    const pdfPath = "/private/var/tmp/PwrAgent/Jeep";
+
+    const prepared = await preparePdfTurnInput({
+      handling: "pass_through",
+      input: [
+        {
+          type: "text",
+          text: `Let the model inspect [@Jeep](${pdfPath}) itself.`,
+        },
+        { type: "localFile", name: "Jeep", path: pdfPath },
+      ],
+    });
+
+    expect(prepared).toEqual({
+      input: [
+        {
+          type: "text",
+          text: `Let the model inspect [@Jeep](${pdfPath}) itself.`,
+        },
+        { type: "localFile", name: "Jeep", path: pdfPath },
+      ],
+      pdfAttachments: [],
+    });
+  });
+
+  it("keeps an explicit non-PDF local file as a backend reference", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-file-turn-"));
+    tempRoots.push(root);
+    const textPath = path.join(root, "notes.txt");
+    await writeFile(textPath, "not a PDF");
+
+    await expect(
+      preparePdfTurnInput({
+        handling: "model_directed",
+        input: [
+          { type: "text", text: "Read these notes." },
+          { type: "localFile", name: "notes.txt", path: textPath },
+        ],
+      }),
+    ).resolves.toEqual({
+      input: [
+        { type: "text", text: "Read these notes." },
+        { type: "localFile", name: "notes.txt", path: textPath },
+      ],
+      pdfAttachments: [],
+    });
+  });
+});

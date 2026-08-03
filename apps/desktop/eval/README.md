@@ -18,6 +18,71 @@ this project?") fails for any available backend.
 This is **not** in CI — it needs your authenticated agents + Codex login and
 hits real (paid, non-deterministic) models.
 
+## PDF attachment eval
+
+`pnpm eval:pdf` is a focused local comparison for the messaging PDF path. It
+runs every question twice against **Codex GPT-5.6-Terra / high reasoning**:
+
+| Condition | Input sent through PwrAgent | What it measures |
+| --- | --- | --- |
+| PDF file reference | A real `AppServerFileInputItem`, the same union variant emitted by messaging attachment processing | Codex receives PwrAgent's persisted local PDF reference and must choose how to inspect it. |
+| Page images | The same document's three page rasters as `image` input items | The model receives pages directly, without first needing to render the PDF locally. |
+
+The checked-in, compact fixtures are deliberately scan-like PDFs and use the
+same page PNGs as the image condition. This makes the page pixels identical
+between conditions without requiring Poppler or another system PDF renderer.
+They cover:
+
+- text immediately under a named heading while a neighboring column contains a decoy;
+- left-column extraction in visual reading order, with three code decoys on the right;
+- OCR of a code embedded only in a visual notice; and
+- a three-page, two-column roadster equipment record where `Soft Top` is
+  standard, then replaced by `Hard Top`, then explicitly deleted. The correct
+  final state is **no Soft Top, Hard Top installed**; keyword matching alone is
+  insufficient.
+
+```bash
+# Build the desktop app, then run all four cases under both conditions (8 turns):
+pnpm eval:pdf:build
+
+# Skip the rebuild when apps/desktop/out/main/index.js already exists:
+pnpm eval:pdf
+
+# Run only the roof-state pair and retain protocol captures + scored results:
+EVAL_PDF_CASES=roof-state EVAL_KEEP_TEMP=1 pnpm eval:pdf
+```
+
+The eval prints a marker score, elapsed time, and command-output count for each
+condition, then writes detailed answers, event methods, and totals to
+`captures/pdf-eval-results.json` under the temporary eval directory. Use
+`EVAL_KEEP_TEMP=1` to retain that JSON and the raw protocol captures. It
+reports model misses without a non-zero exit by default because these are paid,
+non-deterministic calls; use
+`EVAL_PDF_STRICT=1` to gate every expected marker or
+`EVAL_PDF_REQUIRE_IMAGE_WIN=1` to fail unless the page-image total is greater
+than the PDF-reference total.
+
+| Var | Default | Meaning |
+| --- | --- | --- |
+| `EVAL_PDF_MODEL` | `gpt-5.6-terra` | Codex model for both conditions |
+| `EVAL_PDF_REASONING_EFFORT` | `high` | Reasoning effort for both conditions |
+| `EVAL_PDF_CASES` | all | comma list: `heading,column,ocr,roof-state` |
+| `EVAL_PDF_TURN_TIMEOUT_MS` | `300000` | per-turn timeout |
+| `EVAL_PDF_STRICT` | off | non-zero exit if any condition misses a marker |
+| `EVAL_PDF_REQUIRE_IMAGE_WIN` | off | non-zero exit unless page images outscore the PDF reference |
+| `EVAL_KEEP_TEMP` | off | retain the temporary profile, captures, and result JSON |
+
+To regenerate the fixtures after deliberately changing their content or layout:
+
+```bash
+python3 apps/desktop/eval/pdf-fixtures/generate.py
+```
+
+The generator uses Pillow only; the generated PDFs and PNG page rasters are
+checked in, so no Python or PDF-rendering tool is needed to run the eval. Keep
+this command out of CI: it needs an active Codex subscription and intentionally
+uses real model calls.
+
 ## Run it
 
 ```bash

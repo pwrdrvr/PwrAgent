@@ -1,11 +1,21 @@
-import type {
-  AppServerTurnInputItem,
-} from "@pwragent/shared";
+import type { AppServerTurnInputItem } from "@pwragent/shared";
+import { randomUUID } from "node:crypto";
 import type {
   MessagingAttachmentDescriptor,
 } from "@pwragent/messaging-interface";
 import type { ImageUploadQualityProfile } from "../../../shared/image-normalization";
 import { normalizeMessagingImageAttachment } from "../attachment-image-normalization";
+import {
+  DEFAULT_PDF_RENDER_LIMITS,
+  inspectPdfDocument,
+  renderPdfPages,
+  renderedPdfPageDataUrl,
+  renderedPdfPageWireBytes,
+  type PdfDocumentInspection,
+  type RenderedPdfPage,
+} from "../../pdf/pdf-page-renderer";
+import type { PendingPdfAttachment } from "../../pdf/pdf-attachment-store";
+import { formatPdfAttachmentModelGuidance } from "../../pdf/pdf-turn-guidance";
 import type { MessagingAdapter } from "./messaging-adapter";
 import {
   classifyMessagingAttachment,
@@ -14,6 +24,7 @@ import {
 
 export type MessagingAttachmentPolicy = {
   imageProfile: ImageUploadQualityProfile;
+  pdfProfile: ImageUploadQualityProfile;
   maxAttachmentBytes: number;
   maxAttachmentCount: number;
   maxExtractedTextCharacters: number;
@@ -26,29 +37,71 @@ export type MessagingAttachmentRejection = {
 
 export type MessagingAttachmentProcessingResult = {
   input: AppServerTurnInputItem[];
+  pdfAttachments: PendingPdfAttachment[];
   rejections: MessagingAttachmentRejection[];
 };
 
 export const DEFAULT_MESSAGING_ATTACHMENT_POLICY: MessagingAttachmentPolicy = {
   imageProfile: "medium",
+  pdfProfile: "high",
   maxAttachmentBytes: 10 * 1024 * 1024,
   maxAttachmentCount: 4,
   maxExtractedTextCharacters: 80_000,
+};
+
+export type MessagingAttachmentProcessingDependencies = {
+  createPdfAttachmentId: () => string;
+  inspectPdfDocument: (params: {
+    data: Uint8Array;
+    profile: ImageUploadQualityProfile;
+  }) => Promise<PdfDocumentInspection>;
+  renderPdfPages: (params: {
+    data: Uint8Array;
+    limits?: {
+      maxEncodedBytes?: number;
+      maxPageEncodedBytes?: number;
+      maxPages?: number;
+      maxPagePixels?: number;
+      maxPixels?: number;
+      maxWireBytes?: number;
+    };
+    pageNumbers?: number[];
+    profile: ImageUploadQualityProfile;
+  }) => Promise<RenderedPdfPage[]>;
+};
+
+const DEFAULT_DEPENDENCIES: MessagingAttachmentProcessingDependencies = {
+  createPdfAttachmentId: randomUUID,
+  inspectPdfDocument,
+  renderPdfPages,
 };
 
 export async function processMessagingAttachments(params: {
   adapter: MessagingAdapter;
   attachments: MessagingAttachmentDescriptor[];
   policy?: Partial<MessagingAttachmentPolicy>;
+  pdfHandling?: "model_directed" | "render_initial_pages" | "pass_through";
   text?: string;
+  dependencies?: Partial<MessagingAttachmentProcessingDependencies>;
 }): Promise<MessagingAttachmentProcessingResult> {
   const policy = {
     ...DEFAULT_MESSAGING_ATTACHMENT_POLICY,
     ...params.policy,
   };
+  const dependencies = {
+    ...DEFAULT_DEPENDENCIES,
+    ...params.dependencies,
+  };
   const textInput: string[] = [];
   const mediaInput: AppServerTurnInputItem[] = [];
+  const pdfAttachments: PendingPdfAttachment[] = [];
   const rejections: MessagingAttachmentRejection[] = [];
+  const renderedPdfBudget = {
+    bytes: 0,
+    pages: 0,
+    pixels: 0,
+    wireBytes: 0,
+  };
 
   const text = params.text?.trim();
   if (text) {
@@ -127,22 +180,100 @@ export async function processMessagingAttachments(params: {
       }
 
       if (classification.kind === "pdf") {
-        const extracted = extractBasicPdfText(downloaded.data);
-        if (!extracted) {
-          rejections.push({
-            name: attachment.name,
-            reason: "PDF text could not be extracted.",
+        if (params.pdfHandling === "pass_through") {
+          mediaInput.push({
+            type: "file",
+            name: downloaded.fileName,
+            mimeType: classification.mimeType,
+            data: Buffer.from(downloaded.data).toString("base64"),
+            sizeBytes: downloaded.sizeBytes,
+            pdfRenderProfile: policy.pdfProfile,
+          });
+          textInput.push(
+            `PDF attachment \`${downloaded.fileName}\` was left as a normal file attachment.`,
+          );
+          continue;
+        }
+        if (params.pdfHandling === "model_directed") {
+          let inspection: PdfDocumentInspection | undefined;
+          try {
+            inspection = await dependencies.inspectPdfDocument({
+              data: downloaded.data,
+              profile: policy.pdfProfile,
+            });
+          } catch {
+            // The managed PDF tool remains available as a fallback for
+            // PDFs whose metadata cannot be probed at attachment time.
+          }
+          if (inspection?.pageCount === 1) {
+            const remainingPdfRenderLimits = remainingPdfRenderLimitsForBudget(
+              renderedPdfBudget,
+            );
+            if (hasRemainingPdfRenderBudget(remainingPdfRenderLimits)) {
+              try {
+                const pages = await dependencies.renderPdfPages({
+                  data: downloaded.data,
+                  limits: remainingPdfRenderLimits,
+                  pageNumbers: [1],
+                  profile: policy.pdfProfile,
+                });
+                if (pages.length !== 1) {
+                  throw new Error("PDF did not render exactly one page.");
+                }
+                recordRenderedPdfBudget(renderedPdfBudget, pages);
+                textInput.push(
+                  `Attachment \`${downloaded.fileName}\` was rendered into its only page image for model input.`,
+                );
+                mediaInput.push({
+                  type: "image",
+                  name: pdfPageImageName(downloaded.fileName, pages[0]!.pageNumber),
+                  url: renderedPdfPageDataUrl(pages[0]!),
+                });
+                continue;
+              } catch {
+                // Keep the managed attachment available as a bounded fallback
+                // when initial one-page rendering cannot be completed.
+              }
+            }
+          }
+          pdfAttachments.push({
+            attachmentId: dependencies.createPdfAttachmentId(),
+            data: downloaded.data,
+            inspection,
+            name: downloaded.fileName,
+            profile: policy.pdfProfile,
+            sizeBytes: downloaded.sizeBytes,
           });
           continue;
         }
+        const remainingPdfRenderLimits = remainingPdfRenderLimitsForBudget(
+          renderedPdfBudget,
+        );
+        if (!hasRemainingPdfRenderBudget(remainingPdfRenderLimits)) {
+          rejections.push({
+            name: attachment.name,
+            reason: "PDF rendering budget was exhausted by earlier attachments.",
+          });
+          continue;
+        }
+        const pages = await dependencies.renderPdfPages({
+          data: downloaded.data,
+          limits: remainingPdfRenderLimits,
+          profile: policy.pdfProfile,
+        });
+        if (pages.length === 0) {
+          throw new Error("PDF has no renderable pages.");
+        }
+        recordRenderedPdfBudget(renderedPdfBudget, pages);
         textInput.push(
-          formatAttachmentText({
-            content: truncateText(extracted, policy.maxExtractedTextCharacters),
-            fileName: downloaded.fileName,
-            mimeType: classification.mimeType,
-            sizeBytes: downloaded.sizeBytes,
-            truncated: extracted.length > policy.maxExtractedTextCharacters,
-          }),
+          `Attachment \`${downloaded.fileName}\` was rendered into ${pages.length} page image${pages.length === 1 ? "" : "s"} for model input.`,
+        );
+        mediaInput.push(
+          ...pages.map((page) => ({
+            type: "image" as const,
+            name: pdfPageImageName(downloaded.fileName, page.pageNumber),
+            url: renderedPdfPageDataUrl(page),
+          })),
         );
         continue;
       }
@@ -178,6 +309,10 @@ export async function processMessagingAttachments(params: {
     }
   }
 
+  if (pdfAttachments.length > 0) {
+    textInput.push(formatPdfAttachmentModelGuidance(pdfAttachments));
+  }
+
   const input: AppServerTurnInputItem[] = [
     ...(textInput.length > 0
       ? [
@@ -190,7 +325,65 @@ export async function processMessagingAttachments(params: {
     ...mediaInput,
   ];
 
-  return { input, rejections };
+  return { input, pdfAttachments, rejections };
+}
+
+function pdfPageImageName(fileName: string, pageNumber: number): string {
+  const baseName = fileName.replace(/\.pdf$/i, "") || fileName;
+  return `${baseName}-page-${pageNumber}.png`;
+}
+
+function remainingPdfRenderLimitsForBudget(budget: {
+  bytes: number;
+  pages: number;
+  pixels: number;
+  wireBytes: number;
+}): {
+  maxEncodedBytes: number;
+  maxPageEncodedBytes: number;
+  maxPages: number;
+  maxPagePixels: number;
+  maxPixels: number;
+  maxWireBytes: number;
+} {
+  return {
+    maxEncodedBytes: DEFAULT_PDF_RENDER_LIMITS.maxEncodedBytes - budget.bytes,
+    maxPageEncodedBytes: DEFAULT_PDF_RENDER_LIMITS.maxPageEncodedBytes,
+    maxPages: DEFAULT_PDF_RENDER_LIMITS.maxPages - budget.pages,
+    maxPagePixels: DEFAULT_PDF_RENDER_LIMITS.maxPagePixels,
+    maxPixels: DEFAULT_PDF_RENDER_LIMITS.maxPixels - budget.pixels,
+    maxWireBytes: DEFAULT_PDF_RENDER_LIMITS.maxWireBytes - budget.wireBytes,
+  };
+}
+
+function hasRemainingPdfRenderBudget(limits: {
+  maxEncodedBytes: number;
+  maxPages: number;
+  maxPixels: number;
+  maxWireBytes: number;
+}): boolean {
+  return (
+    limits.maxEncodedBytes > 0
+    && limits.maxPages > 0
+    && limits.maxPixels > 0
+    && limits.maxWireBytes > 0
+  );
+}
+
+function recordRenderedPdfBudget(
+  budget: { bytes: number; pages: number; pixels: number; wireBytes: number },
+  pages: RenderedPdfPage[],
+): void {
+  budget.bytes += pages.reduce((total, page) => total + page.encodedBytes, 0);
+  budget.pages += pages.length;
+  budget.pixels += pages.reduce(
+    (total, page) => total + page.width * page.height,
+    0,
+  );
+  budget.wireBytes += pages.reduce(
+    (total, page) => total + renderedPdfPageWireBytes(page),
+    0,
+  );
 }
 
 function formatAttachmentText(params: {
@@ -267,12 +460,4 @@ function truncateText(text: string, maxCharacters: number): string {
     return text;
   }
   return `${text.slice(0, maxCharacters)}\n[attachment truncated]`;
-}
-
-function extractBasicPdfText(data: Uint8Array): string | undefined {
-  const decoded = new TextDecoder("latin1", { fatal: false }).decode(data);
-  const matches = [...decoded.matchAll(/\(([^()]*)\)\s*Tj/g)]
-    .map((match) => match[1]?.replace(/\\([()\\])/g, "$1").trim())
-    .filter((value): value is string => Boolean(value));
-  return matches.length > 0 ? matches.join("\n") : undefined;
 }

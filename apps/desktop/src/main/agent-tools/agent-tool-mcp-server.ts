@@ -65,8 +65,10 @@ export type AgentToolMcpServerLike = {
   close(): Promise<void>;
 };
 
+export type AgentToolMcpCatalog = Pick<ResolvedAgentToolCatalog, "router">;
+
 export type AgentToolMcpServerOptions = {
-  resolveCatalogs: () => ResolvedAgentToolCatalog[];
+  resolveCatalogs: () => AgentToolMcpCatalog[];
   resolveCallContext: (
     context: AgentToolMcpClientContext,
   ) =>

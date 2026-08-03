@@ -21,6 +21,7 @@ import {
   MATTERMOST_SERVER_URL_ENV,
   MESSAGING_ATTACHMENT_MAX_BYTES_ENV,
   MESSAGING_ATTACHMENT_MAX_COUNT_ENV,
+  MESSAGING_ATTACHMENT_PDF_PROFILE_ENV,
   MESSAGING_INPUT_DEBOUNCE_MS_ENV,
   SLACK_APP_TOKEN_ENV,
   SLACK_AUTHORIZED_WORKSPACES_ENV,
@@ -67,6 +68,7 @@ describe("desktop messaging config", () => {
       "line",
       "managerToolUpdateDefaultMode",
       "mattermost",
+      "pdfAnalysisEnabled",
       "showStreamingOption",
       "slack",
       "telegram",
@@ -501,11 +503,13 @@ describe("desktop messaging config", () => {
     expect(config).toEqual({
       enabled: true,
       inputDebounceMs: 500,
+      pdfAnalysisEnabled: true,
       toolUpdateDefaultMode: "show_some",
       managerToolUpdateDefaultMode: "show_none",
       showStreamingOption: false,
       attachmentPolicy: {
         imageProfile: "medium",
+        pdfProfile: "high",
         maxAttachmentBytes: 10485760,
         maxAttachmentCount: 4,
       },
@@ -866,6 +870,14 @@ describe("desktop messaging config", () => {
 
     expect(config.attachmentPolicy).toBeUndefined();
     expect(config.inputDebounceMs).toBe(500);
+  });
+
+  it("reads the PDF render profile independently from the image profile", () => {
+    const config = loadDesktopMessagingConfig({
+      [MESSAGING_ATTACHMENT_PDF_PROFILE_ENV]: "actual",
+    });
+
+    expect(config.attachmentPolicy).toEqual({ pdfProfile: "actual" });
   });
 
   it("loads and caps the input debounce env override", () => {

@@ -90,6 +90,31 @@ describe("desktopSettingsPatchToEdits — general", () => {
       },
     ]);
   });
+
+  it("persists only the PDF analysis opt-out", () => {
+    expect(
+      desktopSettingsPatchToEdits({
+        general: { pdfAnalysisEnabled: false },
+      }),
+    ).toEqual([
+      {
+        op: "set",
+        path: ["general", "pdf_analysis_enabled"],
+        value: false,
+      },
+    ]);
+
+    expect(
+      desktopSettingsPatchToEdits({
+        general: { pdfAnalysisEnabled: true },
+      }),
+    ).toEqual([
+      {
+        op: "delete",
+        path: ["general", "pdf_analysis_enabled"],
+      },
+    ]);
+  });
 });
 
 describe("desktopSettingsPatchToEdits — experimental", () => {

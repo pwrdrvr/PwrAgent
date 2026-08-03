@@ -16,6 +16,8 @@ import {
 } from "@pwragent/shared";
 import type {
   AppServerAvailableCommandSummary,
+  AppServerFileInputItem,
+  AppServerLocalFileInputItem,
   AppServerNotification,
   AppServerPendingRequestNotification,
   AppServerThreadCommandDetail,
@@ -23,6 +25,7 @@ import type {
   AppServerThreadActivityEntry,
   AppServerThreadActivityStatus,
   AppServerThreadEntry,
+  AppServerThreadFilePart,
   AppServerThreadImagePart,
   AppServerThreadMessagePart,
   AppServerThreadMessageEntry,
@@ -115,6 +118,7 @@ import {
   type CompatibleApprovalPolicy,
   type CompatibleDynamicToolSpec,
 } from "./protocol-compatibility";
+import { persistCodexFileInput } from "./codex-file-input-files";
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
 const ARCHIVED_THREAD_METADATA_REFRESH_INTERVAL_MS = 60_000;
@@ -549,33 +553,34 @@ function createCodexObserverWithConfigReadRedaction(
 
   return {
     onMessage: async (event) => {
-      const requestId = event.envelope.id;
+      const redactedEvent = redactCodexThreadMcpHeaders(event);
+      const requestId = redactedEvent.envelope.id;
       const requestKey = requestId === null || requestId === undefined
         ? undefined
         : String(requestId);
       if (
-        event.direction === "outbound"
-        && event.envelope.method === "config/read"
-        && event.diagnostics?.callerReason === CODEX_THREAD_TITLE_CONFIG_READ_REASON
+        redactedEvent.direction === "outbound"
+        && redactedEvent.envelope.method === "config/read"
+        && redactedEvent.diagnostics?.callerReason === CODEX_THREAD_TITLE_CONFIG_READ_REASON
         && requestKey
       ) {
         sensitiveRequestIds.add(requestKey);
-        await observer.onMessage(event);
+        await observer.onMessage(redactedEvent);
         return;
       }
       if (
-        event.direction !== "inbound"
+        redactedEvent.direction !== "inbound"
         || !requestKey
         || !sensitiveRequestIds.delete(requestKey)
-        || !Object.hasOwn(event.envelope, "result")
+        || !Object.hasOwn(redactedEvent.envelope, "result")
       ) {
-        await observer.onMessage(event);
+        await observer.onMessage(redactedEvent);
         return;
       }
 
-      const names = readConfiguredMcpServerNames(event.envelope.result);
+      const names = readConfiguredMcpServerNames(redactedEvent.envelope.result);
       const envelope: JsonRpcObserverEvent["envelope"] = {
-        ...event.envelope,
+        ...redactedEvent.envelope,
         result: {
           config: {
             mcp_servers: Object.fromEntries(names.map((name) => [name, {}])),
@@ -583,11 +588,72 @@ function createCodexObserverWithConfigReadRedaction(
         },
       };
       await observer.onMessage({
-        ...event,
+        ...redactedEvent,
         envelope,
         raw: JSON.stringify(envelope),
       });
     },
+  };
+}
+
+function redactCodexThreadMcpHeaders(
+  event: JsonRpcObserverEvent,
+): JsonRpcObserverEvent {
+  if (
+    event.direction !== "outbound"
+    || (
+      event.envelope.method !== "thread/start"
+      && event.envelope.method !== "thread/resume"
+      && event.envelope.method !== "thread/fork"
+    )
+  ) {
+    return event;
+  }
+  const params = asRecord(event.envelope.params);
+  const config = asRecord(params?.config);
+  const servers = asRecord(config?.mcp_servers);
+  if (!params || !config || !servers) {
+    return event;
+  }
+
+  let redacted = false;
+  const redactedServers = Object.fromEntries(
+    Object.entries(servers).map(([name, value]) => {
+      const server = asRecord(value);
+      const headers = asRecord(server?.http_headers);
+      if (!server || !headers) {
+        return [name, value];
+      }
+      redacted = true;
+      return [
+        name,
+        {
+          ...server,
+          http_headers: Object.fromEntries(
+            Object.keys(headers).map((headerName) => [headerName, "[redacted]"]),
+          ),
+        },
+      ];
+    }),
+  );
+  if (!redacted) {
+    return event;
+  }
+
+  const envelope: JsonRpcObserverEvent["envelope"] = {
+    ...event.envelope,
+    params: {
+      ...params,
+      config: {
+        ...config,
+        mcp_servers: redactedServers,
+      },
+    },
+  };
+  return {
+    ...event,
+    envelope,
+    raw: JSON.stringify(envelope),
   };
 }
 
@@ -1814,6 +1880,27 @@ function buildImagePartFromUrl(value: string | undefined): AppServerThreadImageP
   return url ? { type: "image", url } : undefined;
 }
 
+function extractDynamicToolCallImageParts(
+  item: Record<string, unknown>,
+  toolName: string,
+): AppServerThreadImagePart[] {
+  const contentItems = Array.isArray(item.contentItems)
+    ? item.contentItems
+    : Array.isArray(item.content_items)
+      ? item.content_items
+      : [];
+  return contentItems.flatMap((value): AppServerThreadImagePart[] => {
+    const contentItem = asRecord(value);
+    if (normalizeItemType(pickString(contentItem ?? {}, ["type"])) !== "inputimage") {
+      return [];
+    }
+    const image = buildImagePartFromUrl(
+      pickString(contentItem ?? {}, ["imageUrl", "image_url"]),
+    );
+    return image ? [{ ...image, alt: `${toolName} result` }] : [];
+  });
+}
+
 function extractImagePartsFromValue(value: unknown): AppServerThreadImagePart[] {
   if (typeof value === "string") {
     const part = buildImagePartFromUrl(value);
@@ -1916,6 +2003,26 @@ function extractStructuredMessageParts(value: unknown): AppServerThreadMessagePa
       imagePart.alt = alt;
     }
     return [imagePart];
+  }
+
+  if (normalizedType === "file" || normalizedType === "input_file") {
+    const name = pickString(record, ["name", "filename", "fileName", "file_name"]);
+    if (!name) {
+      return [];
+    }
+    const part: AppServerThreadFilePart = {
+      type: "file",
+      name,
+    };
+    const mimeType = pickString(record, ["mimeType", "mime_type", "mediaType", "media_type"]);
+    if (mimeType) {
+      part.mimeType = mimeType;
+    }
+    const sizeBytes = pickNumber(record, ["sizeBytes", "size_bytes", "bytes"]);
+    if (sizeBytes !== undefined) {
+      part.sizeBytes = sizeBytes;
+    }
+    return [part];
   }
 
   for (const nestedKey of ["content", "parts", "input", "output", "data"]) {
@@ -4043,6 +4150,10 @@ function summarizeActivityItems(
         pickString(item, ["tool", "toolName", "tool_name", "name"]) ??
         (normalizedItemType === "websearch" ? "web search" : undefined);
       const query = pickString(item, ["query"]);
+      const images =
+        normalizedItemType === "dynamictoolcall"
+          ? extractDynamicToolCallImageParts(item, toolName ?? "Tool")
+          : [];
       pushActivityDetail(details, {
         id: itemId,
         kind: normalizedItemType === "websearch" ? "read" : "command",
@@ -4050,6 +4161,7 @@ function summarizeActivityItems(
           appendElapsedLabel(toolName ?? "Used tool", elapsedMs),
           query ? `: ${query}` : "",
         ].join(""),
+        ...(images.length > 0 ? { images } : {}),
         status: itemStatus
       });
     }
@@ -5906,6 +6018,20 @@ function mergeCodexDefaultModeRequestUserInputConfig(
   } as CodexThreadStartParams["config"];
 }
 
+function mergeCodexFastModeConfig(
+  config: CodexThreadStartParams["config"] | undefined,
+  fastMode: boolean | undefined,
+): CodexThreadStartParams["config"] | undefined {
+  if (typeof fastMode !== "boolean") {
+    return config;
+  }
+  const baseConfig = isPlainRecord(config) ? config : {};
+  return {
+    ...baseConfig,
+    fast_mode: fastMode,
+  } as CodexThreadStartParams["config"];
+}
+
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -5924,6 +6050,7 @@ function buildThreadForkPayload(params: {
   serviceTier?: string;
   fastMode?: boolean;
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+  config?: CodexThreadForkParams["config"];
 }, compatibility: CodexProtocolCompatibility): CodexThreadForkPayload {
   const base: CodexThreadForkPayload = {
     threadId: params.threadId,
@@ -5962,13 +6089,8 @@ function buildThreadForkPayload(params: {
     base.serviceTier = serviceTier;
   }
 
-  if (typeof params.fastMode === "boolean") {
-    base.config = {
-      fast_mode: params.fastMode,
-    };
-  }
   const config = mergeCodexShellEnvironmentPolicyConfig(
-    base.config,
+    mergeCodexFastModeConfig(params.config, params.fastMode),
     params.codexEnvironmentRuntime,
   );
   if (config) {
@@ -5988,6 +6110,7 @@ function buildThreadResumePayloads(params: {
   reasoningEffort?: string;
   fastMode?: boolean;
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+  config?: CodexThreadResumeParams["config"];
   defaultModeRequestUserInput?: boolean;
 }, compatibility: CodexProtocolCompatibility): CodexThreadResumePayload[] {
   const base: CodexThreadResumePayload = {
@@ -6022,14 +6145,9 @@ function buildThreadResumePayloads(params: {
     base.serviceTier = serviceTier;
   }
 
-  if (typeof params.fastMode === "boolean") {
-    base.config = {
-      fast_mode: params.fastMode,
-    };
-  }
   const config = mergeCodexShellEnvironmentPolicyConfig(
     mergeCodexDefaultModeRequestUserInputConfig(
-      base.config,
+      mergeCodexFastModeConfig(params.config, params.fastMode),
       params.defaultModeRequestUserInput,
     ),
     params.codexEnvironmentRuntime,
@@ -6081,7 +6199,12 @@ function buildCollaborationModeOverrides(params: {
   };
 }
 
-function toCodexUserInput(input: AppServerTurnInputItem): CodexUserInput {
+function toCodexUserInput(
+  input: Exclude<
+    AppServerTurnInputItem,
+    AppServerFileInputItem | AppServerLocalFileInputItem
+  >,
+): CodexUserInput {
   if (input.type === "text") {
     return {
       type: "text",
@@ -6103,9 +6226,74 @@ function toCodexUserInput(input: AppServerTurnInputItem): CodexUserInput {
   };
 }
 
+async function prepareCodexUserInput(params: {
+  input: AppServerTurnInputItem[];
+}): Promise<CodexUserInput[]> {
+  const prepared: CodexUserInput[] = [];
+  const fileReferences: string[] = [];
+
+  for (const input of params.input) {
+    if (input.type === "localFile") {
+      const name = input.name?.trim() || path.basename(input.path);
+      fileReferences.push(formatCodexFileReference({ name }, input.path));
+      prepared.push({
+        type: "mention",
+        name,
+        path: input.path,
+      });
+      continue;
+    }
+
+    if (input.type !== "file") {
+      prepared.push(toCodexUserInput(input));
+      continue;
+    }
+
+    const filePath = await persistCodexFileInput(input);
+    fileReferences.push(formatCodexFileReference(input, filePath));
+    prepared.push({
+      type: "mention",
+      name: input.name,
+      path: filePath,
+    });
+  }
+
+  if (fileReferences.length === 0) {
+    return prepared;
+  }
+
+  return [
+    {
+      type: "text",
+      text: [
+        "Files attached or referenced from PwrAgent are available locally for this turn:",
+        ...fileReferences,
+        "Use local tools to inspect these files as needed.",
+      ].join("\n"),
+      text_elements: [],
+    },
+    ...prepared,
+  ];
+}
+
+function formatCodexFileReference(
+  file: Pick<AppServerFileInputItem, "name" | "mimeType" | "sizeBytes">
+    | Pick<AppServerLocalFileInputItem, "name">,
+  filePath: string,
+): string {
+  const type = "mimeType" in file ? file.mimeType : undefined;
+  const size =
+    "sizeBytes" in file && typeof file.sizeBytes === "number"
+      ? ` | Size: ${formatByteSize(file.sizeBytes)}`
+      : "";
+  return type
+    ? `- ${file.name}: ${filePath} (Type: ${type}${size})`
+    : `- ${file.name}: ${filePath}`;
+}
+
 function buildTurnStartPayload(params: {
   threadId: string;
-  input: AppServerTurnInputItem[];
+  input: CodexUserInput[];
   cwd?: string;
   model?: string;
   reasoningEffort?: string;
@@ -6120,7 +6308,7 @@ function buildTurnStartPayload(params: {
 }, compatibility: CodexProtocolCompatibility): CodexTurnStartPayload {
   const base: CodexTurnStartPayload = {
     threadId: params.threadId,
-    input: params.input.map(toCodexUserInput),
+    input: params.input,
   };
 
   if (params.cwd?.trim()) {
@@ -7289,6 +7477,7 @@ export class CodexAppServerClient {
     reasoningEffort?: string;
     fastMode?: boolean;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+    config?: CodexThreadStartParams["config"];
     defaultModeRequestUserInput?: boolean;
     dynamicTools?: CodexDynamicToolSpec[];
     threadSource?: CodexThreadStartParams["threadSource"];
@@ -7327,6 +7516,7 @@ export class CodexAppServerClient {
     serviceTier?: string;
     fastMode?: boolean;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+    config?: CodexThreadForkParams["config"];
   }): Promise<{ threadId: string }> {
     await this.ensureInitialized();
 
@@ -7364,6 +7554,7 @@ export class CodexAppServerClient {
     reasoningEffort?: string;
     fastMode?: boolean;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+    config?: CodexThreadResumeParams["config"];
     defaultModeRequestUserInput?: boolean;
   }): Promise<{
     threadId: string;
@@ -7394,6 +7585,7 @@ export class CodexAppServerClient {
             reasoningEffort: params.reasoningEffort,
             fastMode: params.fastMode,
             codexEnvironmentRuntime: params.codexEnvironmentRuntime,
+            config: params.config,
             defaultModeRequestUserInput: params.defaultModeRequestUserInput,
           },
           this.getProtocolCompatibility(),
@@ -7409,6 +7601,9 @@ export class CodexAppServerClient {
         return undefined;
       }));
 
+    const codexInput = await prepareCodexUserInput({
+      input: params.input,
+    });
     const result = await requestWithFallbacks({
       client: this.connection,
       methods: ["turn/start"],
@@ -7416,7 +7611,7 @@ export class CodexAppServerClient {
         buildTurnStartPayload(
           {
             threadId: params.threadId,
-            input: params.input,
+            input: codexInput,
             cwd: params.cwd,
             model: params.model,
             reasoningEffort: params.reasoningEffort,
@@ -7629,7 +7824,7 @@ export class CodexAppServerClient {
           buildTurnStartPayload(
             {
               threadId: helperThreadId,
-              input: [{ type: "text", text: params.prompt }],
+              input: [{ type: "text", text: params.prompt, text_elements: [] }],
               model: DEFAULT_CODEX_THREAD_TITLE_MODEL,
               serviceTier: null,
               reasoningEffort: "low",
@@ -7996,9 +8191,12 @@ export class CodexAppServerClient {
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     }).catch(() => undefined);
 
+    const codexInput = await prepareCodexUserInput({
+      input: params.input,
+    });
     const payload: CodexTurnSteerParams = {
       threadId: params.threadId,
-      input: params.input.map(toCodexUserInput),
+      input: codexInput,
       expectedTurnId: params.expectedTurnId,
     };
     const result = await requestWithFallbacks({

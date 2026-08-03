@@ -1063,6 +1063,7 @@ function DesktopAppShell(props: {
     threadBusy: session.threadBusy,
     pastedImageMaxPatches:
       settings.snapshot?.imageUploads.pastedImageMaxPatches.value,
+    pdfAnalysisEnabled: settings.snapshot?.general.pdfAnalysisEnabled?.value,
     platform: desktopApi?.platform,
     ...(navigation.creatingThread?.pendingForkEnvironmentSetup
       ? {

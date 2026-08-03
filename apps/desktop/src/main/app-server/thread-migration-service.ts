@@ -1067,7 +1067,14 @@ function fingerprintReplay(replay: AppServerThreadReplay): string[] {
       parts: message.parts?.map((part) =>
         part.type === "text"
           ? { type: "text", text: part.text }
-          : { type: "image", alt: part.alt ?? "", url: part.url },
+          : part.type === "image"
+            ? { type: "image", alt: part.alt ?? "", url: part.url }
+            : {
+                type: "file",
+                mimeType: part.mimeType ?? "",
+                name: part.name,
+                sizeBytes: part.sizeBytes ?? 0,
+              },
       ),
     }),
   );

@@ -11,6 +11,7 @@ import {
 import type {
   AgentToolDefinition,
   AgentToolDispatchResult,
+  AgentToolTransport,
 } from "./agent-tool-definition.js";
 import {
   agentToolFailure,
@@ -21,15 +22,28 @@ import { AgentToolRouter } from "./agent-tool-router.js";
 export const PWRAGENT_MESSAGING_UNAVAILABLE_MESSAGE =
   "PwrAgent messaging context tools are not available.";
 
+export const PWRAGENT_MODEL_DIRECTED_PDF_OPERATION_NAMES = [
+  "inspect_messaging_pdfs",
+  "search_messaging_pdf_text",
+  "render_messaging_pdf_pages",
+] as const satisfies readonly PwrAgentMessagingOperationName[];
+
 export type PwrAgentMessagingHandler = (
   request: PwrAgentMessagingRequest,
 ) => PwrAgentMessagingResponse | Promise<PwrAgentMessagingResponse>;
 
+export type PwrAgentMessagingToolRouterOptions = {
+  includeModelDirectedPdfMcp?: boolean;
+  namespace?: string;
+  unsupportedMessage?: string;
+};
+
 export function buildPwrAgentMessagingToolRouter(
   handler: PwrAgentMessagingHandler | undefined,
-  options: { namespace?: string; unsupportedMessage?: string } = {},
+  options: PwrAgentMessagingToolRouterOptions = {},
 ): AgentToolRouter {
   return new AgentToolRouter(buildPwrAgentMessagingToolDefinitions(handler, {
+    includeModelDirectedPdfMcp: options.includeModelDirectedPdfMcp,
     namespace: options.namespace,
   }), {
     unsupportedMessage:
@@ -37,9 +51,33 @@ export function buildPwrAgentMessagingToolRouter(
   });
 }
 
+/**
+ * The dedicated loopback MCP surface for managed PDF attachments. Keeping it
+ * separate from the broader messaging router prevents Codex from receiving
+ * every PwrAgent dynamic tool twice.
+ */
+export function buildPwrAgentMessagingPdfToolRouter(
+  handler: PwrAgentMessagingHandler | undefined,
+  options: PwrAgentMessagingToolRouterOptions = {},
+): AgentToolRouter {
+  return new AgentToolRouter(
+    buildPwrAgentMessagingToolDefinitions(handler, {
+      includeModelDirectedPdfMcp: true,
+      namespace: options.namespace,
+    }).filter((definition) => isModelDirectedPdfOperation(definition.name)),
+    {
+      unsupportedMessage:
+        options.unsupportedMessage ?? "Unsupported PwrAgent PDF tool.",
+    },
+  );
+}
+
 export function buildPwrAgentMessagingToolDefinitions(
   handler: PwrAgentMessagingHandler | undefined,
-  options: { namespace?: string } = {},
+  options: Pick<
+    PwrAgentMessagingToolRouterOptions,
+    "includeModelDirectedPdfMcp" | "namespace"
+  > = {},
 ): AgentToolDefinition<PwrAgentMessagingOperationName>[] {
   return PWRAGENT_MESSAGING_CALLABLE_OPERATION_NAMES.map((operation) => ({
     namespace: options.namespace ?? PWRAGENT_TOOL_NAMESPACE,
@@ -49,6 +87,9 @@ export function buildPwrAgentMessagingToolDefinitions(
     advertise: PWRAGENT_MESSAGING_OPERATION_NAMES.includes(
       operation as (typeof PWRAGENT_MESSAGING_OPERATION_NAMES)[number],
     ),
+    advertiseMcp:
+      options.includeModelDirectedPdfMcp === true ||
+      !isModelDirectedPdfOperation(operation),
     deferLoading: false,
     dispatch: async (args, context): Promise<AgentToolDispatchResult> => {
       if (!handler) {
@@ -66,7 +107,7 @@ export function buildPwrAgentMessagingToolDefinitions(
         },
         args,
       } as PwrAgentMessagingRequest);
-      return messagingResponseToAgentToolResult(response);
+      return messagingResponseToAgentToolResult(response, context.transport);
     },
   }));
 }
@@ -79,6 +120,12 @@ function descriptionForOperation(operation: PwrAgentMessagingOperationName): str
       return "Inspect the messaging platform, actor, conversation, binding, compact bound-thread identity, and native thread/topic creation capability for the surface that started this Agent turn.";
     case "attach_thread_here":
       return "Attach a known PwrAgent thread to the current messaging surface, creating a native child thread/topic when the provider supports it. This does not rename the PwrAgent thread.";
+    case "inspect_messaging_pdfs":
+      return "List PDF attachments available only for the current active PwrAgent turn. The initial turn input already includes page metadata when probing succeeded; call this only for an attachment whose metadata was unavailable. Returns local metadata and render limits, not PDF bytes or extracted document text. In Codex Code Mode, JSON.parse the returned string; native MCP callers receive the response directly.";
+    case "search_messaging_pdf_text":
+      return "For a multi-page PDF only, locate an unknown relevant page using its embedded text layer. Use returned page-number snippets only for bounded navigation, then render pages for visual analysis. Do not use this on one-page PDFs or as a content-extraction/comparison workflow; per-turn search calls are capped. In Codex Code Mode, JSON.parse the returned string; native MCP callers receive the response directly.";
+    case "render_messaging_pdf_pages":
+      return "Render explicitly selected PDF pages from the current active PwrAgent turn. The result contains page images for direct visual analysis. In Codex Code Mode, JSON.parse the returned string and pass each image block in its content array to image(item) exactly once; do not print or text() the JSON. Native MCP callers receive image content directly and must not call image(). This is the only permitted way to access PwrAgent-managed PDF pages: do not use shell, filesystem, OCR, or conversion tools on the source PDF or rendered page. Partially repeated requests return only unseen pages. Rendering is capped by page count, total pixels, encoded image bytes, and model-input bytes.";
   }
 }
 
@@ -122,17 +169,119 @@ function inputSchemaForOperation(
           },
         },
       };
+    case "inspect_messaging_pdfs":
+      return {
+        type: "object",
+        additionalProperties: false,
+        properties: {},
+      };
+    case "search_messaging_pdf_text":
+      return {
+        type: "object",
+        additionalProperties: false,
+        required: ["attachmentId", "query"],
+        properties: {
+          attachmentId: {
+            type: "string",
+            description: "Opaque attachmentId supplied in the initial PDF page manifest or returned by inspect_messaging_pdfs.",
+          },
+          query: {
+            type: "string",
+            description: "Text to locate in the PDF's embedded text layer.",
+          },
+          pageStart: {
+            type: "integer",
+            minimum: 1,
+            description: "First page to search, inclusive. Defaults to page 1.",
+          },
+          pageEnd: {
+            type: "integer",
+            minimum: 1,
+            description: "Last page to search, inclusive. The range is capped at 25 pages.",
+          },
+        },
+      };
+    case "render_messaging_pdf_pages":
+      return {
+        type: "object",
+        additionalProperties: false,
+        required: ["attachmentId", "pageNumbers"],
+        properties: {
+          attachmentId: {
+            type: "string",
+            description: "Opaque attachmentId supplied in the initial PDF page manifest or returned by inspect_messaging_pdfs.",
+          },
+          pageNumbers: {
+            type: "array",
+            minItems: 1,
+            items: {
+              type: "integer",
+              minimum: 1,
+            },
+            description:
+              "Specific page numbers to render. Start with the smallest useful batch; pages already supplied in this turn are not emitted again.",
+          },
+        },
+      };
   }
 }
 
 function messagingResponseToAgentToolResult(
   response: PwrAgentMessagingResponse,
+  transport: AgentToolTransport,
 ): AgentToolDispatchResult {
   if (response.ok) {
+    if (response.imageContent) {
+      const metadata = [
+        response.imageContent.length > 0
+          ? "PwrAgent returned rendered PDF page image(s) with this tool result. Analyze those images directly. Read requested values from their printed labels, not inferred arithmetic. Do not use web search or other external sources for this PDF unless the user explicitly requests outside research. Do not use local tools to reprocess the page or render the same page again."
+          : "PwrAgent already supplied the requested PDF page image(s) earlier in this turn, so no duplicate image was added. Analyze the existing image input directly.",
+        JSON.stringify(response.data, null, 2),
+      ].join("\n\n");
+      const mcpContentItems = [
+        {
+          type: "text" as const,
+          text: metadata,
+        },
+        ...response.imageContent.map((image) => ({
+          type: "image" as const,
+          data: image.base64,
+          mimeType: image.mimeType,
+        })),
+      ];
+      if (transport === "codex_dynamic_tool") {
+        return agentToolSuccess(response.data, {
+          contentItems: [
+            {
+              type: "inputText",
+              text: JSON.stringify({
+                content: mcpContentItems,
+                result: response.data,
+              }),
+            },
+          ],
+          mcpContentItems,
+        });
+      }
+      return agentToolSuccess(response.data, {
+        contentItems: [
+          {
+            type: "inputText",
+            text: metadata,
+          },
+        ],
+        mcpContentItems,
+      });
+    }
     return agentToolSuccess(response.data);
   }
   return agentToolFailure({
     code: response.error.code,
     message: response.error.message,
   });
+}
+
+function isModelDirectedPdfOperation(operation: PwrAgentMessagingOperationName): boolean {
+  return (PWRAGENT_MODEL_DIRECTED_PDF_OPERATION_NAMES as readonly string[])
+    .includes(operation);
 }

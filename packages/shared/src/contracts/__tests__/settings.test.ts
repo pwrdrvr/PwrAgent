@@ -27,6 +27,10 @@ describe("desktop settings contracts", () => {
           value: false,
           source: "default",
         },
+        pdfAnalysisEnabled: {
+          value: true,
+          source: "default",
+        },
         hotCpuProfilingEnabled: {
           value: false,
           source: "default",
@@ -160,6 +164,7 @@ describe("desktop settings contracts", () => {
         showStreamingOption: { value: false, source: "default" },
         attachments: {
           imageProfile: { value: "medium", source: "default" },
+          pdfProfile: { value: "high", source: "default" },
           maxAttachmentBytes: { value: 10485760, source: "default" },
           maxAttachmentCount: { value: 4, source: "default" },
         },

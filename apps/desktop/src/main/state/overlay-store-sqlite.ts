@@ -3536,6 +3536,26 @@ export class SqliteOverlayStore {
     return nextState;
   }
 
+  async setThreadMessagingPdfToolCatalogVersion(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    version: number;
+  }): Promise<ThreadOverlayState> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.getThread(threadKey) ?? {
+      backend: params.backend,
+      threadId: params.threadId,
+      executionMode: "default" as const,
+      extraLinkedDirectories: [],
+    };
+    const nextState: ThreadOverlayState = {
+      ...current,
+      messagingPdfToolCatalogVersion: params.version,
+    };
+    this.putThread(threadKey, nextState);
+    return nextState;
+  }
+
   async turnOffCodexFastEverywhere(): Promise<{
     launchpadCount: number;
     threadCount: number;
@@ -5134,6 +5154,7 @@ export type OverlayStoreLike = Pick<
   | "upsertWorktreeSnapshot"
   | "setThreadExecutionMode"
   | "setThreadModelSettings"
+  | "setThreadMessagingPdfToolCatalogVersion"
   | "setThreadPrAutoDispatchEnabled"
   | "syncThreadPrAutoDispatchCandidates"
   | "getPrAutoDispatchCandidateWinner"

@@ -291,6 +291,7 @@ export type DesktopMessagingImageProfile = "low" | "medium" | "high" | "actual";
 
 export type DesktopMessagingAttachmentSettingsSnapshot = {
   imageProfile: DesktopSettingsValue<DesktopMessagingImageProfile>;
+  pdfProfile: DesktopSettingsValue<DesktopMessagingImageProfile>;
   maxAttachmentBytes: DesktopSettingsValue<number>;
   maxAttachmentCount: DesktopSettingsValue<number>;
 };
@@ -314,6 +315,11 @@ export type DesktopAppearanceSnapshot = {
 
 export type DesktopGeneralSettingsSnapshot = {
   confirmQuitWithInProgressThreads: DesktopSettingsValue<boolean>;
+  /**
+   * Prefer PwrAgent's bounded, visual PDF analysis flow over handing a raw
+   * local PDF reference to the model.
+   */
+  pdfAnalysisEnabled: DesktopSettingsValue<boolean>;
   developerMode: DesktopSettingsValue<boolean>;
   hotCpuProfilingEnabled: DesktopSettingsValue<boolean>;
   hotCpuProfilingStartDelayMs: DesktopSettingsValue<DesktopHotCpuProfileStartDelayMs>;
@@ -792,6 +798,7 @@ export type DesktopSettingsSnapshot = {
 export type DesktopSettingsConfigPatch = {
   general?: {
     confirmQuitWithInProgressThreads?: boolean;
+    pdfAnalysisEnabled?: boolean;
     developerMode?: boolean;
     hotCpuProfilingEnabled?: boolean;
     hotCpuProfilingStartDelayMs?: DesktopHotCpuProfileStartDelayMs;
@@ -856,6 +863,7 @@ export type DesktopSettingsConfigPatch = {
     showStreamingOption?: boolean;
     attachments?: {
       imageProfile?: DesktopMessagingImageProfile;
+      pdfProfile?: DesktopMessagingImageProfile;
       maxAttachmentBytes?: number;
       maxAttachmentCount?: number;
     };

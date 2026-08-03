@@ -1315,6 +1315,13 @@ export type ThreadOverlayState = {
   gitBranch?: string;
   observedGitBranch?: string;
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+  /**
+   * Version of the PwrAgent-managed PDF tool surface supplied when this Codex
+   * thread was created. Version 2 uses a loopback MCP server that can return
+   * page images; older threads use a bounded initial-image fallback because
+   * their initial dynamic-tool catalog cannot be replaced on resume.
+   */
+  messagingPdfToolCatalogVersion?: number;
   lastSeenAt?: number;
   lastSeenUpdatedAt?: number;
   dismissedAt?: number;

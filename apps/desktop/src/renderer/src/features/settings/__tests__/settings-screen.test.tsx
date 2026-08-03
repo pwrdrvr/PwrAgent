@@ -91,6 +91,10 @@ function createSnapshot(
         value: false,
         source: "default",
       },
+      pdfAnalysisEnabled: {
+        value: true,
+        source: "default",
+      },
       hotCpuProfilingEnabled: {
         value: false,
         source: "default",
@@ -278,6 +282,7 @@ function createSnapshot(
       },
       attachments: {
         imageProfile: { value: "medium", source: "default" },
+        pdfProfile: { value: "high", source: "default" },
         maxAttachmentBytes: { value: 10485760, source: "default" },
         maxAttachmentCount: { value: 4, source: "default" },
       },
@@ -599,6 +604,19 @@ describe("SettingsScreen", () => {
       });
     });
     expect(
+      screen.getByRole("switch", { name: "Use PwrAgent PDF analysis" }),
+    ).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Use PwrAgent PDF analysis" }),
+    );
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: {
+          pdfAnalysisEnabled: false,
+        },
+      });
+    });
+    expect(
       screen.queryByRole("switch", { name: "Developer Mode" }),
     ).not.toBeInTheDocument();
     fireEvent.click(
@@ -827,16 +845,36 @@ describe("SettingsScreen", () => {
 
     fireEvent.click(within(sections).getByRole("button", { name: "Messaging" }));
     expect(screen.getByRole("heading", { name: "General" })).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: "Medium" })).toHaveAttribute(
+    const imageProfile = screen.getByRole("radiogroup", {
+      name: "Inbound image profile",
+    });
+    expect(within(imageProfile).getByRole("radio", { name: "Medium" })).toHaveAttribute(
       "aria-checked",
       "true",
     );
-    fireEvent.click(screen.getByRole("radio", { name: "High" }));
+    fireEvent.click(within(imageProfile).getByRole("radio", { name: "High" }));
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         messaging: {
           attachments: {
             imageProfile: "high",
+          },
+        },
+      });
+    });
+    const pdfProfile = screen.getByRole("radiogroup", {
+      name: "Inbound PDF render profile",
+    });
+    expect(within(pdfProfile).getByRole("radio", { name: "High" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    fireEvent.click(within(pdfProfile).getByRole("radio", { name: "Maximum" }));
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        messaging: {
+          attachments: {
+            pdfProfile: "actual",
           },
         },
       });

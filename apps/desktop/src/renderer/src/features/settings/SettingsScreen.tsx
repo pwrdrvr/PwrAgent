@@ -343,6 +343,11 @@ function SettingsSectionBody(props: {
             general: { confirmQuitWithInProgressThreads },
           });
         }}
+        onPdfAnalysisEnabledChange={async (pdfAnalysisEnabled) => {
+          await props.settings.writeConfig({
+            general: { pdfAnalysisEnabled },
+          });
+        }}
         onUpdateChannelChange={async (channel: DesktopUpdateChannel) => {
           await props.settings.writeConfig({
             updates: { channel },
@@ -529,6 +534,15 @@ function SettingsSectionBody(props: {
           await props.settings.writeConfig({
             messaging: {
               attachments: { imageProfile },
+            },
+          });
+        }}
+        onPdfProfileChange={async (
+          pdfProfile: DesktopMessagingImageProfile,
+        ) => {
+          await props.settings.writeConfig({
+            messaging: {
+              attachments: { pdfProfile },
             },
           });
         }}

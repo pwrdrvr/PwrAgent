@@ -238,6 +238,10 @@ import {
   type MessagingAttachmentRejection,
 } from "./messaging-attachment-processor.js";
 import {
+  PdfAttachmentStore,
+  type PendingPdfAttachment,
+} from "../../pdf/pdf-attachment-store.js";
+import {
   MessagingTurnAdmission,
   threadKeyForBinding,
   type MessagingQueuedTurnEntry,
@@ -421,6 +425,41 @@ function formatAttachmentRejections(
   return rejections
     .map((rejection) => `${rejection.name}: ${rejection.reason}`)
     .join("\n");
+}
+
+function readPdfToolString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readOptionalPositiveInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0
+    ? value
+    : undefined;
+}
+
+function readPdfToolPageNumbers(value: unknown): number[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) {
+    return undefined;
+  }
+  const pageNumbers = value.map(readOptionalPositiveInteger);
+  return pageNumbers.every((pageNumber) => pageNumber !== undefined)
+    ? pageNumbers as number[]
+    : undefined;
+}
+
+function pdfToolFailure(error: unknown): Extract<PwrAgentMessagingResponse, { ok: false }> {
+  const message = error instanceof Error ? error.message : "PDF attachment could not be read.";
+  return {
+    ok: false,
+    error: {
+      code:
+        message.startsWith("No PDF attachments") ||
+        message.startsWith("That PDF attachment")
+          ? "not_found"
+          : "invalid_arguments",
+      message,
+    },
+  };
 }
 
 type MessagingControllerLogger = {
@@ -610,6 +649,7 @@ export type MessagingControllerOptions = {
   inputDebounceMs?: number;
   pendingIntentTtlMs?: number;
   attachmentPolicy?: Partial<MessagingAttachmentPolicy>;
+  pdfAnalysisEnabled?: boolean | (() => boolean | Promise<boolean>);
   store: MessagingStoreLike;
   streamingResponsesDefault?: boolean;
   showStreamingOption?: boolean | (() => boolean | Promise<boolean>);
@@ -661,6 +701,7 @@ export class MessagingController {
     string,
     ActiveAgentMessagingOrigin
   >();
+  private readonly pdfAttachmentStore = new PdfAttachmentStore();
   private readonly deliveredAutomationStartKeys = new Set<string>();
   private readonly deliveredAutomationFinalKeys = new Set<string>();
   private readonly now: () => number;
@@ -789,6 +830,12 @@ export class MessagingController {
       }
       case "attach_thread_here":
         return await this.attachThreadHereFromAgentMessagingOrigin(request);
+      case "inspect_messaging_pdfs":
+        return await this.inspectMessagingPdfsFromAgentMessagingOrigin(request);
+      case "search_messaging_pdf_text":
+        return await this.searchMessagingPdfTextFromAgentMessagingOrigin(request);
+      case "render_messaging_pdf_pages":
+        return await this.renderMessagingPdfPagesFromAgentMessagingOrigin(request);
     }
   }
 
@@ -2663,6 +2710,7 @@ export class MessagingController {
         binding: consumedSkillBinding,
         event: bundle.events[0],
         input: preparedWithSkill.input,
+        pdfAttachments: preparedWithSkill.pdfAttachments,
         preview: preparedWithSkill.preview,
         threadKey: bundle.threadKey,
       });
@@ -2675,6 +2723,7 @@ export class MessagingController {
     const startResult = await this.startPreparedInput({
       binding: consumedSkillBinding,
       input: preparedWithSkill.input,
+      pdfAttachments: preparedWithSkill.pdfAttachments,
       preview: preparedWithSkill.preview,
       threadKey: bundle.threadKey,
       event: bundle.events[0],
@@ -2686,9 +2735,17 @@ export class MessagingController {
   }
 
   private prependPendingSkillSelection(
-    prepared: { input: AppServerTurnInputItem[]; preview: string },
+    prepared: {
+      input: AppServerTurnInputItem[];
+      pdfAttachments: PendingPdfAttachment[];
+      preview: string;
+    },
     binding: MessagingBindingRecord,
-  ): { input: AppServerTurnInputItem[]; preview: string } {
+  ): {
+    input: AppServerTurnInputItem[];
+    pdfAttachments: PendingPdfAttachment[];
+    preview: string;
+  } {
     const selection = binding.pendingSkillSelection;
     if (!selection) return prepared;
     const prefix = formatSkillInputPrefix(selection);
@@ -2700,6 +2757,7 @@ export class MessagingController {
         },
         ...prepared.input,
       ],
+      pdfAttachments: prepared.pdfAttachments,
       preview: `${prefix}\n${prepared.preview}`,
     };
   }
@@ -2847,13 +2905,16 @@ export class MessagingController {
   ): Promise<
     | {
         input: AppServerTurnInputItem[];
+        pdfAttachments: PendingPdfAttachment[];
         preview: string;
       }
     | undefined
   > {
     const input: AppServerTurnInputItem[] = [];
+    const pdfAttachments: PendingPdfAttachment[] = [];
     const previewParts: string[] = [];
     const rejections: MessagingAttachmentRejection[] = [];
+    const pdfHandling = await this.resolveMessagingPdfHandling(binding);
 
     for (const turnEvent of events) {
       if (turnEvent.kind === "text") {
@@ -2872,10 +2933,12 @@ export class MessagingController {
           ...DEFAULT_MESSAGING_ATTACHMENT_POLICY,
           ...this.options.attachmentPolicy,
         },
+        pdfHandling,
         text: turnEvent.text,
       });
 
       input.push(...processed.input);
+      pdfAttachments.push(...processed.pdfAttachments);
       rejections.push(...processed.rejections);
       if (turnEvent.text?.trim()) {
         previewParts.push(turnEvent.text.trim());
@@ -2919,8 +2982,46 @@ export class MessagingController {
 
     return {
       input,
+      pdfAttachments,
       preview: buildQueuedInputPreview(previewParts),
     };
+  }
+
+  private async resolveMessagingPdfHandling(
+    binding: MessagingBindingRecord | undefined,
+  ): Promise<"model_directed" | "render_initial_pages" | "pass_through"> {
+    if (!(await this.resolvePdfAnalysisEnabled())) {
+      return "pass_through";
+    }
+    if (
+      binding?.backend !== "codex" ||
+      !this.options.backend.supportsMessagingPdfTools
+    ) {
+      return "render_initial_pages";
+    }
+    try {
+      return await this.options.backend.supportsMessagingPdfTools({
+        backend: binding.backend,
+        threadId: binding.threadId,
+      })
+        ? "model_directed"
+        : "render_initial_pages";
+    } catch (error) {
+      this.logger.warn?.("could not resolve messaging PDF tool support", {
+        bindingId: binding.id,
+        error: error instanceof Error ? error.message : String(error),
+        threadId: binding.threadId,
+      });
+      return "render_initial_pages";
+    }
+  }
+
+  private async resolvePdfAnalysisEnabled(): Promise<boolean> {
+    const configured = this.options.pdfAnalysisEnabled;
+    if (typeof configured === "function") {
+      return (await configured()) !== false;
+    }
+    return configured !== false;
   }
 
   private async startPreparedInput(params: {
@@ -2928,6 +3029,7 @@ export class MessagingController {
     event?: MessagingInboundEvent;
     input: AppServerTurnInputItem[];
     navigation?: NavigationSnapshot;
+    pdfAttachments?: PendingPdfAttachment[];
     preview: string;
     queueOnConcurrentStart?: boolean;
     threadKey: string;
@@ -3012,6 +3114,14 @@ export class MessagingController {
         updatedAt: this.now(),
       };
       this.setActiveTurn(params.binding, activeTurn);
+      this.pdfAttachmentStore.bindTurn(
+        {
+          backend: params.binding.backend,
+          threadId: params.binding.threadId,
+          turnId: started.turnId,
+        },
+        params.pdfAttachments ?? [],
+      );
       this.rememberAgentMessagingOrigin({
         binding: params.binding,
         event: params.event,
@@ -3037,6 +3147,7 @@ export class MessagingController {
             binding: params.binding,
             event: params.event,
             input: params.input,
+            pdfAttachments: params.pdfAttachments,
             preview: params.preview,
             threadKey: params.threadKey,
           });
@@ -3118,6 +3229,7 @@ export class MessagingController {
     binding: MessagingBindingRecord;
     event?: MessagingInboundEvent;
     input: AppServerTurnInputItem[];
+    pdfAttachments?: PendingPdfAttachment[];
     preview: string;
     threadKey: string;
   }): Promise<void> {
@@ -3130,7 +3242,7 @@ export class MessagingController {
       entry.binding,
       "queued_turn_notice",
     );
-    const canSteer = this.canSteerQueuedTurn(activeTurn);
+    const canSteer = this.canSteerQueuedTurn(entry, activeTurn);
     const intent = buildConfirmationIntent({
       id: this.newIntentId("queued-turn"),
       capabilityProfile: this.capabilityProfile,
@@ -3160,10 +3272,12 @@ export class MessagingController {
   }
 
   private canSteerQueuedTurn(
+    entry: MessagingQueuedTurnEntry,
     activeTurn: MessagingActiveTurnSummary | undefined,
   ): boolean {
     return Boolean(
-      this.options.backend.steerTurn &&
+      !entry.pdfAttachments?.length &&
+        this.options.backend.steerTurn &&
         activeTurn &&
         ["working", "waiting"].includes(activeTurn.status),
     );
@@ -3242,6 +3356,7 @@ export class MessagingController {
       "queued_turn_steer",
     );
     if (
+      entry.pdfAttachments?.length ||
       !this.options.backend.steerTurn ||
       !activeTurn ||
       !["working", "waiting"].includes(activeTurn.status)
@@ -3310,6 +3425,7 @@ export class MessagingController {
       binding: entry.binding,
       event: entry.event,
       input: entry.input,
+      pdfAttachments: entry.pdfAttachments,
       preview: entry.preview,
       queueOnConcurrentStart: false,
       threadKey,
@@ -12655,6 +12771,7 @@ export class MessagingController {
     this.activeAgentMessagingOriginsByTurnKey.delete(
       agentMessagingTurnKey(backend, threadId, turnId),
     );
+    this.pdfAttachmentStore.releaseTurn({ backend, threadId, turnId });
   }
 
   private rememberQueuedAgentMessagingOrigin(params: {
@@ -13879,6 +13996,151 @@ export class MessagingController {
           ? "created_and_attached"
           : "attached",
         placement: resolvedPlacement.placement,
+      },
+    };
+  }
+
+  private async inspectMessagingPdfsFromAgentMessagingOrigin(
+    request: Extract<PwrAgentMessagingRequest, { operation: "inspect_messaging_pdfs" }>,
+  ): Promise<PwrAgentMessagingResponse> {
+    const context = await this.resolvePdfToolContext(request);
+    if (!context.ok) {
+      return context.error;
+    }
+    try {
+      return {
+        ok: true,
+        data: {
+          attachments: await this.pdfAttachmentStore.inspect(context.context),
+        },
+      };
+    } catch (error) {
+      return pdfToolFailure(error);
+    }
+  }
+
+  private async searchMessagingPdfTextFromAgentMessagingOrigin(
+    request: Extract<PwrAgentMessagingRequest, { operation: "search_messaging_pdf_text" }>,
+  ): Promise<PwrAgentMessagingResponse> {
+    const attachmentId = readPdfToolString(request.args.attachmentId);
+    const query = readPdfToolString(request.args.query);
+    const pageStart = readOptionalPositiveInteger(request.args.pageStart);
+    const pageEnd = readOptionalPositiveInteger(request.args.pageEnd);
+    if (
+      !attachmentId ||
+      !query ||
+      (request.args.pageStart !== undefined && pageStart === undefined) ||
+      (request.args.pageEnd !== undefined && pageEnd === undefined)
+    ) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message:
+            "search_messaging_pdf_text requires attachmentId and query; pageStart and pageEnd must be positive integers when supplied.",
+        },
+      };
+    }
+    const context = await this.resolvePdfToolContext(request);
+    if (!context.ok) {
+      return context.error;
+    }
+    try {
+      return {
+        ok: true,
+        data: await this.pdfAttachmentStore.search({
+          ...context.context,
+          attachmentId,
+          pageEnd,
+          pageStart,
+          query,
+        }),
+      };
+    } catch (error) {
+      return pdfToolFailure(error);
+    }
+  }
+
+  private async renderMessagingPdfPagesFromAgentMessagingOrigin(
+    request: Extract<PwrAgentMessagingRequest, { operation: "render_messaging_pdf_pages" }>,
+  ): Promise<PwrAgentMessagingResponse> {
+    if (request.context.backend !== "codex") {
+      return {
+        ok: false,
+        error: {
+          code: "unsupported_operation",
+          message:
+            "Rendered messaging PDF pages are currently available only to Codex PDF analysis turns.",
+        },
+      };
+    }
+    const attachmentId = readPdfToolString(request.args.attachmentId);
+    const pageNumbers = readPdfToolPageNumbers(request.args.pageNumbers);
+    if (!attachmentId || !pageNumbers) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message:
+            "render_messaging_pdf_pages requires attachmentId and one or more positive integer pageNumbers.",
+        },
+      };
+    }
+    const context = await this.resolvePdfToolContext(request);
+    if (!context.ok) {
+      return context.error;
+    }
+    try {
+      const rendered = await this.pdfAttachmentStore.render({
+        ...context.context,
+        attachmentId,
+        pageNumbers,
+      });
+      return {
+        ok: true,
+        data: rendered.result,
+        imageContent: rendered.imageContent,
+      };
+    } catch (error) {
+      return pdfToolFailure(error);
+    }
+  }
+
+  private async resolvePdfToolContext(
+    request: PwrAgentMessagingRequest,
+  ): Promise<
+    | {
+        ok: true;
+        context: {
+          backend: AppServerBackendKind;
+          threadId: ThreadIdentifier;
+          turnId: string;
+        };
+      }
+    | { ok: false; error: Extract<PwrAgentMessagingResponse, { ok: false }> }
+  > {
+    if (!request.context.turnId) {
+      return {
+        ok: false,
+        error: {
+          ok: false,
+          error: {
+            code: "not_found",
+            message: "Messaging PDF tools require an active messaging turn.",
+          },
+        },
+      };
+    }
+    const origin = await this.resolveAgentMessagingOrigin(request.context);
+    if (!origin.ok) {
+      return { ok: false, error: origin };
+    }
+    return {
+      ok: true,
+      context: {
+        backend: request.context.backend,
+        threadId: request.context.threadId,
+        turnId: request.context.turnId,
       },
     };
   }

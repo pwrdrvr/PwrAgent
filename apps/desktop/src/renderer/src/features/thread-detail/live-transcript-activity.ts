@@ -11,6 +11,7 @@ import {
   type AppServerThreadActivityDetail,
   type AppServerThreadActivityEntry,
   type AppServerThreadCommandDetail,
+  type AppServerThreadImagePart,
   type AppServerThreadSubAgentCallDetail,
   type AppServerThreadTurnMetadata,
 } from "@pwragent/shared";
@@ -124,6 +125,88 @@ function readToolOutputText(item: Record<string, unknown>): string | undefined {
     readString(data, "result") ??
     readString(item, "text");
   return output && output !== toolName ? output : undefined;
+}
+
+function readToolResultImages(
+  item: Record<string, unknown>,
+  itemType: string,
+  toolName: string,
+): AppServerThreadImagePart[] {
+  if (itemType === "dynamictoolcall") {
+    const contentItems = Array.isArray(item.contentItems)
+      ? item.contentItems
+      : Array.isArray(item.content_items)
+        ? item.content_items
+        : [];
+    return contentItems.flatMap((value): AppServerThreadImagePart[] => {
+      const contentItem = readRecord(value);
+      const imageUrl =
+        readString(contentItem, "imageUrl") ?? readString(contentItem, "image_url");
+      if (
+        readString(contentItem, "type")?.toLowerCase() !== "inputimage" ||
+        !imageUrl?.startsWith("data:image/")
+      ) {
+        return [];
+      }
+      return [{ type: "image", url: imageUrl, alt: `${toolName} result` }];
+    });
+  }
+
+  if (itemType !== "mcptoolcall") {
+    return [];
+  }
+  const result = readRecord(item.result);
+  const content = Array.isArray(result?.content) ? result.content : [];
+  const serverName = readString(item, "server") ?? readString(item, "serverName");
+  const alt = `${serverName ? `${serverName}/` : "MCP "}${toolName} result`;
+  return content.flatMap((value): AppServerThreadImagePart[] => {
+    const block = readRecord(value);
+    const type = readString(block, "type")?.toLowerCase();
+    const mimeType = readString(block, "mimeType") ?? readString(block, "mime_type");
+    const data = typeof block?.data === "string" ? block.data : undefined;
+    if (type !== "image" || !mimeType?.startsWith("image/") || !data) {
+      return [];
+    }
+    return [{ type: "image", url: `data:${mimeType};base64,${data}`, alt }];
+  });
+}
+
+function summarizeDynamicToolResult(item: Record<string, unknown>): string | undefined {
+  const contentItems = Array.isArray(item.contentItems)
+    ? item.contentItems
+    : Array.isArray(item.content_items)
+      ? item.content_items
+      : [];
+  const text = contentItems
+    .map(readRecord)
+    .filter((contentItem) => readString(contentItem, "type") === "inputText")
+    .map((contentItem) => readString(contentItem, "text"))
+    .filter((value): value is string => Boolean(value))
+    .join(" ");
+  return summarizeToolOutput(text);
+}
+
+function summarizeMcpToolResult(item: Record<string, unknown>): string | undefined {
+  const error = summarizeJsonValue(item.error);
+  if (error) {
+    return error;
+  }
+  const result = readRecord(item.result);
+  if (!result) {
+    return undefined;
+  }
+  const structuredContent = summarizeJsonValue(
+    result.structuredContent ?? result.structured_content,
+  );
+  if (structuredContent) {
+    return structuredContent;
+  }
+  const text = (Array.isArray(result.content) ? result.content : [])
+    .map(readRecord)
+    .map((contentItem) => readString(contentItem, "text"))
+    .filter((value): value is string => Boolean(value))
+    .join(" ");
+  return summarizeToolOutput(text);
 }
 
 function readCommandOutputText(item: Record<string, unknown>): string | undefined {
@@ -923,8 +1006,11 @@ export function buildLiveToolDetails(
   const query = readToolArgument(item, "query") ?? readToolArgument(item, "q");
   const preview =
     itemType === "mcptoolcall"
-      ? summarizeJsonValue(item.error) ?? summarizeJsonValue(item.result)
+      ? summarizeMcpToolResult(item)
+      : itemType === "dynamictoolcall"
+        ? summarizeDynamicToolResult(item)
       : summarizeToolOutput(readToolOutputText(item));
+  const images = readToolResultImages(item, itemType, toolName);
   const elapsedMs = readElapsedMs(item);
   const command =
     itemType === "commandexecution"
@@ -958,6 +1044,7 @@ export function buildLiveToolDetails(
         query ? `: ${query}` : "",
         preview ? ` - ${preview}` : "",
       ].join(""),
+      ...(images.length > 0 ? { images } : {}),
       ...(commandDetail ? { command: commandDetail } : {}),
       status,
     },

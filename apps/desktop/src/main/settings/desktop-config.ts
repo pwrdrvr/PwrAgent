@@ -81,6 +81,7 @@ type StoredChatReplyComposer =
 export type DesktopSettingsConfig = {
   general?: {
     confirmQuitWithInProgressThreads?: boolean;
+    pdfAnalysisEnabled?: boolean;
     developerMode?: boolean;
     hotCpuProfilingEnabled?: boolean;
     hotCpuProfilingStartDelayMs?: DesktopHotCpuProfileStartDelayMs;
@@ -144,6 +145,7 @@ export type DesktopSettingsConfig = {
     showStreamingOption?: boolean;
     attachments?: {
       imageProfile?: DesktopMessagingImageProfile;
+      pdfProfile?: DesktopMessagingImageProfile;
       maxAttachmentBytes?: number;
       maxAttachmentCount?: number;
     };
@@ -644,6 +646,13 @@ export function desktopSettingsPatchToEdits(
       patch.general.confirmQuitWithInProgressThreads,
     );
   }
+  if (patch.general?.pdfAnalysisEnabled !== undefined) {
+    if (patch.general.pdfAnalysisEnabled) {
+      edits.push({ op: "delete", path: ["general", "pdf_analysis_enabled"] });
+    } else {
+      set(["general", "pdf_analysis_enabled"], false);
+    }
+  }
   if (patch.general?.notificationsEnabled !== undefined) {
     set(["general", "notifications_enabled"], patch.general.notificationsEnabled);
   }
@@ -921,6 +930,16 @@ export function desktopSettingsPatchToEdits(
       });
     } else {
       set(["messaging", "attachments", "image_profile"], attachments.imageProfile);
+    }
+  }
+  if (attachments?.pdfProfile !== undefined) {
+    if (attachments.pdfProfile === "high") {
+      edits.push({
+        op: "delete",
+        path: ["messaging", "attachments", "pdf_profile"],
+      });
+    } else {
+      set(["messaging", "attachments", "pdf_profile"], attachments.pdfProfile);
     }
   }
   if (attachments?.maxAttachmentBytes !== undefined) {
@@ -1405,6 +1424,7 @@ function normalizeDesktopConfig(
       confirmQuitWithInProgressThreads: readBoolean(
         general?.confirm_quit_with_in_progress_threads,
       ),
+      pdfAnalysisEnabled: readBoolean(general?.pdf_analysis_enabled),
       developerMode: readBoolean(general?.developer_mode),
       hotCpuProfilingEnabled: readBoolean(general?.hot_cpu_profiling_enabled),
       hotCpuProfilingStartDelayMs: readHotCpuProfileStartDelayMs(
@@ -1506,6 +1526,7 @@ function normalizeDesktopConfig(
       showStreamingOption: readBoolean(messaging?.show_streaming_option),
       attachments: {
         imageProfile: readImageProfile(attachments?.image_profile),
+        pdfProfile: readImageProfile(attachments?.pdf_profile),
         maxAttachmentBytes: readNumber(attachments?.max_attachment_bytes),
         maxAttachmentCount: readNumber(attachments?.max_attachment_count),
       },
@@ -1711,6 +1732,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     config.general?.hotCpuProfilingHeapSnapshotLimit;
   const confirmQuitWithInProgressThreads =
     config.general?.confirmQuitWithInProgressThreads;
+  const pdfAnalysisEnabled = config.general?.pdfAnalysisEnabled;
   const notificationsEnabled = config.general?.notificationsEnabled;
   const appearance = config.general?.appearance;
   const appearanceDefined = appearance && hasDefinedValue(appearance);
@@ -1725,6 +1747,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     hotCpuProfilingCaptureHeapSnapshot !== undefined ||
     hotCpuProfilingHeapSnapshotLimit !== undefined ||
     confirmQuitWithInProgressThreads !== undefined ||
+    pdfAnalysisEnabled !== undefined ||
     notificationsEnabled !== undefined ||
     appearanceDefined ||
     codexProfileModel !== undefined ||
@@ -1758,6 +1781,9 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     if (confirmQuitWithInProgressThreads !== undefined) {
       pruned.general.confirmQuitWithInProgressThreads =
         confirmQuitWithInProgressThreads;
+    }
+    if (pdfAnalysisEnabled !== undefined) {
+      pruned.general.pdfAnalysisEnabled = pdfAnalysisEnabled;
     }
     if (notificationsEnabled !== undefined) {
       pruned.general.notificationsEnabled = notificationsEnabled;

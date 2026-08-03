@@ -98,6 +98,62 @@ describe("buildAiSdkMessages", () => {
     }
   });
 
+  it("builds PDF file parts from base64 input", async () => {
+    const pdfData = Buffer.from("%PDF-1.7\n");
+
+    await expect(
+      buildAiSdkMessages({
+        input: [
+          { type: "text", text: "What's in this?" },
+          {
+            type: "file",
+            name: "sample.pdf",
+            mimeType: "application/pdf",
+            data: pdfData.toString("base64"),
+            sizeBytes: pdfData.byteLength,
+          },
+        ],
+      }),
+    ).resolves.toEqual([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "What's in this?" },
+          {
+            type: "file",
+            data: pdfData,
+            mediaType: "application/pdf",
+            filename: "sample.pdf",
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("keeps local file references as text instead of reading their bytes", async () => {
+    await expect(
+      buildAiSdkMessages({
+        input: [
+          { type: "text", text: "Compare this document." },
+          {
+            type: "localFile",
+            name: "Jeep",
+            path: "/tmp/Jeep",
+            pdfRenderProfile: "high",
+          },
+        ],
+      }),
+    ).resolves.toEqual([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "Compare this document." },
+          { type: "text", text: "[Local file reference: Jeep (/tmp/Jeep)]" },
+        ],
+      },
+    ]);
+  });
+
   it("rejects file URLs because remote xAI cannot access them", async () => {
     await expect(
       buildAiSdkMessages({

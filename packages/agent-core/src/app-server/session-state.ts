@@ -1,5 +1,6 @@
 import type {
   AppServerItemStatus,
+  AppServerThreadMessagePart,
   AppServerTurnInputItem,
   ThreadReplay,
   ThreadReplayItem,
@@ -7,6 +8,7 @@ import type {
   ThreadSummary,
   ThreadTitleSource,
 } from "./internal-contract.js";
+import { pathToFileURL } from "node:url";
 import type {
   AppServerSessionStore,
   HydratedSessionState,
@@ -224,18 +226,12 @@ export class AppServerSessionState {
   }
 
   appendInput(threadId: string, input: AppServerTurnInputItem[]): void {
-    const parts = input.flatMap((item): AppServerTurnInputItem[] => {
-      if (item.type === "text") {
-        const trimmed = item.text.trim();
-        return trimmed ? [{ type: "text", text: trimmed }] : [];
-      }
-      return [item];
-    });
-    const text = input
-      .filter(
-        (item): item is Extract<AppServerTurnInputItem, { type: "text" }> => item.type === "text",
+    const parts = input.flatMap(toReplayMessagePart);
+    const text = parts
+      .filter((item): item is Extract<AppServerThreadMessagePart, { type: "text" }> =>
+        item.type === "text"
       )
-      .map((item) => item.text.trim())
+      .map((item) => item.text)
       .filter(Boolean)
       .join("\n");
     if (!text && parts.length === 0) {
@@ -616,6 +612,31 @@ export class AppServerSessionState {
     existing.lastMessageCount = currentMessageCount;
     return existing.resolvedId;
   }
+}
+
+function toReplayMessagePart(item: AppServerTurnInputItem): AppServerThreadMessagePart[] {
+  if (item.type === "text") {
+    const trimmed = item.text.trim();
+    return trimmed ? [{ type: "text", text: trimmed }] : [];
+  }
+  if (item.type === "image") {
+    return [{ type: "image", url: item.url }];
+  }
+  if (item.type === "localImage") {
+    return [{ type: "image", url: pathToFileURL(item.path).toString() }];
+  }
+  if (item.type === "localFile") {
+    const name = item.name?.trim() || item.path;
+    return [{ type: "text", text: `[Local file reference: ${name} (${item.path})]` }];
+  }
+  return [
+    {
+      type: "file",
+      name: item.name,
+      mimeType: item.mimeType,
+      sizeBytes: item.sizeBytes,
+    },
+  ];
 }
 
 function normalizeReplayItem(item: ThreadReplayItem): ThreadReplayItem {

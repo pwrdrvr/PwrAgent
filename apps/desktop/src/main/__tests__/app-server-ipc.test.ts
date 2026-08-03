@@ -738,6 +738,29 @@ describe("app server ipc", () => {
     await disposeAppServerIpcHandlers();
   });
 
+  it("identifies explicitly selected extensionless PDFs by their magic bytes", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-pdf-ipc-"));
+    const pdfPath = path.join(root, "Jeep");
+    const textPath = path.join(root, "notes.txt");
+    await writeFile(pdfPath, "%PDF-1.7\n");
+    await writeFile(textPath, "not a PDF");
+    try {
+      const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+      const { NAVIGATION_INSPECT_PDF_REFERENCE_PATHS_CHANNEL } = await import(
+        "../../shared/ipc"
+      );
+      registerAppServerIpcHandlers();
+
+      await expect(
+        handlers.get(NAVIGATION_INSPECT_PDF_REFERENCE_PATHS_CHANNEL)?.({}, {
+          paths: [pdfPath, textPath],
+        }),
+      ).resolves.toEqual({ pdfPaths: [pdfPath] });
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
   it("registers main-process PR auto-dispatch handlers", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
 

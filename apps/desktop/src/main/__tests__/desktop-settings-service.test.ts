@@ -281,6 +281,45 @@ describe("DesktopSettingsService", () => {
     expect(service.resolveDeveloperMode()).toBe(true);
   });
 
+  it("defaults PDF analysis on and persists its opt-out", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    expect((await service.readSettings()).general.pdfAnalysisEnabled).toEqual({
+      value: true,
+      source: "default",
+    });
+    expect(service.resolvePdfAnalysisEnabled()).toBe(true);
+
+    await service.writeConfigPatch({
+      general: { pdfAnalysisEnabled: false },
+    });
+
+    expect(fs.readFileSync(configPath, "utf8")).toContain(
+      "pdf_analysis_enabled = false",
+    );
+    expect((await service.readSettings()).general.pdfAnalysisEnabled).toEqual({
+      value: false,
+      source: "config",
+    });
+    expect(service.resolvePdfAnalysisEnabled()).toBe(false);
+
+    await service.writeConfigPatch({
+      general: { pdfAnalysisEnabled: true },
+    });
+
+    expect(fs.readFileSync(configPath, "utf8")).not.toContain("pdf_analysis_enabled");
+    expect((await service.readSettings()).general.pdfAnalysisEnabled).toEqual({
+      value: true,
+      source: "default",
+    });
+  });
+
   it("defaults hot CPU profiling to disabled and persists overrides", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
@@ -662,7 +701,7 @@ describe("DesktopSettingsService", () => {
     ).toBe(true);
   });
 
-  it("defaults the image upload profile and only persists non-default values", async () => {
+  it("defaults attachment profiles and only persists non-default values", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
     const service = new DesktopSettingsService({
@@ -674,6 +713,10 @@ describe("DesktopSettingsService", () => {
     const initial = await service.readSettings();
     expect(initial.messaging.attachments.imageProfile).toEqual({
       value: "medium",
+      source: "default",
+    });
+    expect(initial.messaging.attachments.pdfProfile).toEqual({
+      value: "high",
       source: "default",
     });
 
@@ -701,6 +744,32 @@ describe("DesktopSettingsService", () => {
     expect(afterDefault).not.toContain("image_profile");
     expect((await service.readSettings()).messaging.attachments.imageProfile).toEqual({
       value: "medium",
+      source: "default",
+    });
+
+    await service.writeConfigPatch({
+      messaging: {
+        attachments: { pdfProfile: "actual" },
+      },
+    });
+
+    const afterPdfActual = fs.readFileSync(configPath, "utf8");
+    expect(afterPdfActual).toContain('pdf_profile = "actual"');
+    expect((await service.readSettings()).messaging.attachments.pdfProfile).toEqual({
+      value: "actual",
+      source: "config",
+    });
+
+    await service.writeConfigPatch({
+      messaging: {
+        attachments: { pdfProfile: "high" },
+      },
+    });
+
+    const afterPdfDefault = fs.readFileSync(configPath, "utf8");
+    expect(afterPdfDefault).not.toContain("pdf_profile");
+    expect((await service.readSettings()).messaging.attachments.pdfProfile).toEqual({
+      value: "high",
       source: "default",
     });
   });

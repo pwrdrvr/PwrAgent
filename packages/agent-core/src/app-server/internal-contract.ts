@@ -1,18 +1,24 @@
 import type {
   AppServerCommandAction,
+  AppServerFileInputItem,
   AppServerImageInputItem,
+  AppServerLocalFileInputItem,
   AppServerLocalImageInputItem,
   AppServerSource,
   AppServerTextInputItem,
+  AppServerThreadMessagePart,
   AppServerTurnInputItem,
 } from "@pwragent/shared";
 
 export type {
   AppServerCommandAction,
+  AppServerFileInputItem,
   AppServerImageInputItem,
+  AppServerLocalFileInputItem,
   AppServerLocalImageInputItem,
   AppServerSource,
   AppServerTextInputItem,
+  AppServerThreadMessagePart,
   AppServerTurnInputItem,
 };
 
@@ -68,7 +74,7 @@ export type ThreadReplay = {
   messages: Array<{
     role: AppServerRole;
     text: string;
-    parts?: AppServerTurnInputItem[];
+    parts?: AppServerThreadMessagePart[];
   }>;
   items: ThreadReplayItem[];
   lastUserMessage?: string;
@@ -92,7 +98,7 @@ export type ThreadReplayItem = {
   status?: AppServerItemStatus;
   role?: AppServerRole;
   text?: string;
-  parts?: AppServerTurnInputItem[];
+  parts?: AppServerThreadMessagePart[];
   review?: string;
   command?: string;
   commandAction?: AppServerCommandAction;

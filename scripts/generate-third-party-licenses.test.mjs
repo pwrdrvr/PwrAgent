@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  expandOptionalPlatformVariants,
   enrichRecord,
   StaleInstallError,
 } from "./generate-third-party-licenses.mjs";
@@ -108,5 +109,40 @@ describe("third-party license package enrichment", () => {
       "The installed package does not include a separate license file. Its package metadata declares MIT.",
     );
     expect(enriched.licenseText).toContain("Copyright (c) Example Author");
+  });
+
+  it("includes all platform-specific optional package variants", () => {
+    const packagePath = join(createTemporaryDirectory(), "canvas");
+    mkdirSync(packagePath);
+    writeFileSync(
+      join(packagePath, "package.json"),
+      JSON.stringify({
+        name: "example-canvas",
+        version: "1.2.3",
+        optionalDependencies: {
+          "example-canvas-darwin-arm64": "1.2.3",
+          "example-canvas-linux-x64": "1.2.3",
+          "example-canvas-wasm": "1.2.3",
+          "unrelated-optional-package": "1.2.3",
+        },
+      }),
+    );
+
+    const records = expandOptionalPlatformVariants([
+      {
+        ...createRecord(packagePath),
+        name: "example-canvas",
+      },
+      {
+        ...createRecord(packagePath),
+        name: "example-canvas-darwin-arm64",
+      },
+    ]);
+
+    expect(records.map((record) => `${record.name}@${record.version}`).sort()).toEqual([
+      "example-canvas-darwin-arm64@1.2.3",
+      "example-canvas-linux-x64@1.2.3",
+      "example-canvas@1.2.3",
+    ]);
   });
 });
