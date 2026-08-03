@@ -48,6 +48,7 @@ import {
   buildPendingRequestResponse,
   buildThreadIdentityKey,
   isBranchDrifted,
+  PWRSNAP_MCP_CONNECTION_ID,
   readCodexEnvironmentActionRuns,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -85,6 +86,10 @@ import { ImageLightbox } from "./ImageLightbox";
 import { TranscriptCopyButton } from "./TranscriptCopyButton";
 import { TranscriptList } from "./TranscriptList";
 import { LiveWorkRail } from "./LiveWorkRail";
+import {
+  PwrSnapConnectionPrompt,
+  pwrSnapConnectionIds,
+} from "./PwrSnapConnectionPrompt";
 import {
   buildQuestionnaireResponse,
   type PendingQuestionnaireState,
@@ -1079,6 +1084,7 @@ export type ThreadViewProps = {
         | "directoryLabel"
         | "directoryPath"
         | "imageAttachments"
+        | "mcpConnectionIds"
         | "agent"
       >
     >,
@@ -2863,6 +2869,23 @@ export function ThreadView(props: ThreadViewProps) {
           }${contextRailResizing ? " is-resizing-context-rail" : ""}`}
         >
           <div className="thread-view__primary">
+            {!launchpadMaterializing ? (
+              <PwrSnapConnectionPrompt
+                backend={selectedLaunchpad.backend}
+                desktopApi={props.desktopApi}
+                enabled={
+                  selectedLaunchpad.mcpConnectionIds?.includes(
+                    PWRSNAP_MCP_CONNECTION_ID,
+                  ) === true
+                }
+                onEnabledChange={async (enabled) => {
+                  await props.onUpdateLaunchpad?.(
+                    selectedLaunchpad.directoryKey,
+                    { mcpConnectionIds: pwrSnapConnectionIds(enabled) },
+                  );
+                }}
+              />
+            ) : null}
             <div className="thread-view__launchpad-composer">
               {launchpadMaterializing && launchpadMaterializeError ? (
                 <LaunchpadMaterializeFailure

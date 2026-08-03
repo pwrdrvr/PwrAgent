@@ -1501,6 +1501,18 @@ export class DesktopSettingsService {
     return keyPair;
   }
 
+  async resolvePwrSnapMcpCredential(): Promise<string | undefined> {
+    return await this.options.secretStore.getSecret("pwrsnapMcpCredential");
+  }
+
+  async savePwrSnapMcpCredential(value: string): Promise<void> {
+    await this.options.secretStore.setSecret("pwrsnapMcpCredential", value);
+  }
+
+  async clearPwrSnapMcpCredential(): Promise<void> {
+    await this.options.secretStore.deleteSecret("pwrsnapMcpCredential");
+  }
+
   resolveTelegramBotTokenSync(): string | undefined {
     return this.resolveSecretSync("telegramBotToken", TELEGRAM_BOT_TOKEN_ENV);
   }

@@ -93,6 +93,14 @@ export const AGENT_TRUST_CODEX_PROJECT_CHANNEL = "agent:trust-codex-project";
 export const AGENT_LATEST_CODEX_CONFIG_WARNING_CHANNEL =
   "agent:latest-codex-config-warning";
 export const AGENT_EVENT_CHANNEL = "agent:event";
+export const MCP_CONNECTION_PWRSNAP_STATUS_CHANNEL =
+  "mcp-connection:pwrsnap-status";
+export const MCP_CONNECTION_PWRSNAP_CONNECT_CHANNEL =
+  "mcp-connection:pwrsnap-connect";
+export const MCP_CONNECTION_PWRSNAP_OPEN_CHANNEL =
+  "mcp-connection:pwrsnap-open";
+export const MCP_CONNECTION_PWRSNAP_DOWNLOAD_CHANNEL =
+  "mcp-connection:pwrsnap-download";
 export const NAVIGATION_SNAPSHOT_CHANNEL = "navigation:get-snapshot";
 export const NAVIGATION_SET_BROWSE_MODE_CHANNEL =
   "navigation:set-browse-mode";

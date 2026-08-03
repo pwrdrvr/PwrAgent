@@ -169,6 +169,9 @@ import type {
   PickDirectoryFromDiskResponse,
   PickFileFromDiskResponse,
   PickReferenceFromDiskResponse,
+  ConnectPwrSnapResponse,
+  OpenPwrSnapResponse,
+  PwrSnapConnectionStatus,
   InspectPdfReferencePathsRequest,
   InspectPdfReferencePathsResponse,
   RenderComposerPdfPreviewRequest,
@@ -342,6 +345,10 @@ import type {
 export type DesktopApi = {
   copyText?: (text: string) => Promise<void>;
   copyRichText?: (payload: { text: string; html: string }) => Promise<void>;
+  readPwrSnapConnectionStatus?: () => Promise<PwrSnapConnectionStatus>;
+  connectPwrSnap?: () => Promise<ConnectPwrSnapResponse>;
+  openPwrSnap?: () => Promise<OpenPwrSnapResponse>;
+  openPwrSnapDownload?: () => Promise<OpenPwrSnapResponse>;
   getRuntimeIdentity?: () => Promise<RuntimeIdentity>;
   readAppMetadata?: () => Promise<AppMetadata>;
   readLicenseDocument?: (

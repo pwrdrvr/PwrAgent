@@ -348,6 +348,33 @@ export class OverlayStore {
     });
   }
 
+  async setThreadMcpConnectionIds(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    connectionIds: string[];
+  }): Promise<ThreadOverlayState> {
+    return await this.withData(async (data) => {
+      const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+      const current = data.threads[threadKey] ?? {
+        backend: params.backend,
+        threadId: params.threadId,
+        executionMode: "default" as const,
+        extraLinkedDirectories: [],
+      };
+      const connectionIds = [
+        ...new Set(params.connectionIds.map((id) => id.trim()).filter(Boolean)),
+      ];
+      const nextState: ThreadOverlayState = {
+        ...current,
+        ...(connectionIds.length > 0
+          ? { mcpConnectionIds: connectionIds }
+          : { mcpConnectionIds: undefined }),
+      };
+      data.threads[threadKey] = nextState;
+      return nextState;
+    });
+  }
+
   async appendPermissionTransition(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;

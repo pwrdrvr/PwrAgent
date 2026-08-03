@@ -151,6 +151,9 @@ import type {
   PickFileFromDiskResponse,
   PickGhCommandResponse,
   PickReferenceFromDiskResponse,
+  ConnectPwrSnapResponse,
+  OpenPwrSnapResponse,
+  PwrSnapConnectionStatus,
   InspectPdfReferencePathsRequest,
   InspectPdfReferencePathsResponse,
   RenderComposerPdfPreviewRequest,
@@ -454,6 +457,10 @@ import {
   IMAGE_UPLOAD_FALLBACK_CHANNEL,
   IMAGE_UPLOAD_NORMALIZATION_LOG_CHANNEL,
   MESSAGING_BINDINGS_CHANGED_EVENT_CHANNEL,
+  MCP_CONNECTION_PWRSNAP_CONNECT_CHANNEL,
+  MCP_CONNECTION_PWRSNAP_DOWNLOAD_CHANNEL,
+  MCP_CONNECTION_PWRSNAP_OPEN_CHANNEL,
+  MCP_CONNECTION_PWRSNAP_STATUS_CHANNEL,
   MESSAGING_APPROVE_PAIRING_CHANNEL,
   MESSAGING_CLEAR_DEFAULT_AGENT_CHANNEL,
   MESSAGING_GENERATE_PAIRING_TOKEN_CHANNEL,
@@ -665,6 +672,14 @@ const desktopApi = Object.freeze({
   copyRichText: async (payload: { text: string; html: string }): Promise<void> => {
     await ipcRenderer.invoke(CLIPBOARD_WRITE_RICH_TEXT_CHANNEL, payload);
   },
+  readPwrSnapConnectionStatus: async (): Promise<PwrSnapConnectionStatus> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_PWRSNAP_STATUS_CHANNEL),
+  connectPwrSnap: async (): Promise<ConnectPwrSnapResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_PWRSNAP_CONNECT_CHANNEL),
+  openPwrSnap: async (): Promise<OpenPwrSnapResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_PWRSNAP_OPEN_CHANNEL),
+  openPwrSnapDownload: async (): Promise<OpenPwrSnapResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_PWRSNAP_DOWNLOAD_CHANNEL),
   readAppMetadata: async (): Promise<AppMetadata> =>
     await ipcRenderer.invoke(APP_METADATA_READ_CHANNEL),
   readLicenseDocument: async (

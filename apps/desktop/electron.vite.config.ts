@@ -47,6 +47,16 @@ export default defineConfig(({ command }) => {
         minify: "esbuild",
         sourcemap: false,
         rollupOptions: {
+          input: {
+            index: resolve(__dirname, "src/main/index.ts"),
+            "mcp-connection-bridge": resolve(
+              __dirname,
+              "src/main/mcp-connections/mcp-connection-bridge-entry.ts"
+            )
+          },
+          output: {
+            entryFileNames: "[name].js"
+          },
           external: [
             "abort-controller",
             "bufferutil",

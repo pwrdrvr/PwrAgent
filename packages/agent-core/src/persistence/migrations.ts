@@ -376,6 +376,12 @@ export function migrateOverlayStoreData(raw: unknown): OverlayStoreData {
             imageAttachments: migrateLaunchpadImageAttachments(
               launchpadRecord.imageAttachments,
             ),
+            mcpConnectionIds: Array.isArray(launchpadRecord.mcpConnectionIds)
+              ? launchpadRecord.mcpConnectionIds.filter(
+                  (entry): entry is string =>
+                    typeof entry === "string" && entry.trim().length > 0,
+                )
+              : undefined,
             workMode:
               launchpadRecord.workMode === "worktree" ? "worktree" : "local",
             branchName:
@@ -454,6 +460,12 @@ export function migrateOverlayStoreData(raw: unknown): OverlayStoreData {
               typeof threadRecord.fastMode === "boolean"
                 ? threadRecord.fastMode
                 : undefined,
+            mcpConnectionIds: Array.isArray(threadRecord.mcpConnectionIds)
+              ? threadRecord.mcpConnectionIds.filter(
+                  (value): value is string =>
+                    typeof value === "string" && value.trim().length > 0,
+                )
+              : undefined,
             gitBranch:
               typeof threadRecord.gitBranch === "string"
                 ? threadRecord.gitBranch
