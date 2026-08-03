@@ -53,6 +53,7 @@ const registry = {
     reviewThreadId: request.threadId,
     turnId: "turn-review-1",
   })),
+  cancelQueuedTurn: vi.fn(() => true),
   interruptTurn: vi.fn(async (request: InterruptTurnRequest) => ({
     backend: request.backend,
     threadId: request.threadId,
@@ -127,6 +128,7 @@ describe("agent ipc", () => {
     registry.startTurn.mockClear();
     registry.submitTurn.mockClear();
     registry.startReview.mockClear();
+    registry.cancelQueuedTurn.mockClear();
     registry.interruptTurn.mockClear();
     registry.stopSubAgent.mockClear();
     registry.steerTurn.mockClear();
@@ -141,6 +143,7 @@ describe("agent ipc", () => {
     } = await import("../ipc/agent-ipc");
     const {
       AGENT_EVENT_CHANNEL,
+      AGENT_CANCEL_QUEUED_TURN_CHANNEL,
       AGENT_INTERRUPT_TURN_CHANNEL,
       AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
       AGENT_START_THREAD_CHANNEL,
@@ -176,6 +179,18 @@ describe("agent ipc", () => {
       threadId: "thread-1",
       turnId: "turn-1",
     });
+    expect(
+      await handlers.get(AGENT_CANCEL_QUEUED_TURN_CHANNEL)?.({}, {
+        queueEntryId: "queue-2",
+      }),
+    ).toEqual({
+      queueEntryId: "queue-2",
+      cancelled: true,
+    });
+    expect(registry.cancelQueuedTurn).toHaveBeenCalledWith(
+      "queue-2",
+      "Cancelled from the desktop composer.",
+    );
     expect(
       await handlers.get(AGENT_START_REVIEW_CHANNEL)?.({}, {
         backend: "grok",

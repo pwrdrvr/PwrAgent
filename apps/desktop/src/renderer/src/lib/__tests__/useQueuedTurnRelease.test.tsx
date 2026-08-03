@@ -133,6 +133,59 @@ describe("useQueuedTurnRelease", () => {
     vi.restoreAllMocks();
   });
 
+  it("clears a backend-owned queued message without dispatching it from React", async () => {
+    const listeners = new Set<(event: AgentEvent) => void>();
+    const startTurn = vi.fn();
+    const composerDraftStore = createComposerDraftStore();
+    composerDraftStore.setQueuedTurn("thread:codex:thread-a", {
+      id: "queued-ui-1",
+      queueEntryId: "backend-queue-1",
+      text: "Backend-owned reply",
+      imageAttachments: [],
+      fileAttachments: [],
+      input: [{ type: "text", text: "Backend-owned reply" }],
+    });
+
+    renderHook(() =>
+      useQueuedTurnRelease({
+        backends: [backendSummary()],
+        composerDraftStore,
+        desktopApi: {
+          onAgentEvent: (listener) => {
+            listeners.add(listener);
+            return () => listeners.delete(listener);
+          },
+          startTurn,
+        },
+        selectedThread: thread("thread-b"),
+        threads: [thread("thread-a"), thread("thread-b")],
+      }),
+    );
+
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "thread/turnQueue/updated",
+            params: {
+              threadId: "thread-a",
+              queueEntryId: "backend-queue-1",
+              origin: "manual",
+              status: "started",
+              turnId: "turn-next",
+            },
+          },
+        });
+      }
+    });
+
+    expect(startTurn).not.toHaveBeenCalled();
+    expect(
+      composerDraftStore.getQueuedTurn("thread:codex:thread-a"),
+    ).toBeUndefined();
+  });
+
   it("releases the oldest queued message for a non-focused thread when its turn completes", async () => {
     const listeners = new Set<(event: AgentEvent) => void>();
     const startTurn = vi.fn(async () => ({

@@ -5,6 +5,8 @@ import {
   type AgentEvent,
   type ApplyThreadModelMigrationRequest,
   type ApplyThreadModelMigrationResponse,
+  type CancelQueuedTurnRequest,
+  type CancelQueuedTurnResponse,
   type CancelThreadExecutionModeQueueRequest,
   type CancelThreadExecutionModeQueueResponse,
   type CheckThreadBranchDriftRequest,
@@ -64,6 +66,7 @@ import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { buildLiveDiffActivityEntry } from "../app-server/live-diff-activity";
 import { timeStartupProfileOperation } from "../diagnostics/startup-profile-events";
 import {
+  AGENT_CANCEL_QUEUED_TURN_CHANNEL,
   AGENT_CANCEL_THREAD_EXECUTION_MODE_QUEUE_CHANNEL,
   AGENT_APPLY_THREAD_MODEL_MIGRATION_CHANNEL,
   AGENT_EVENT_CHANNEL,
@@ -434,6 +437,21 @@ export function registerAgentIpcHandlers(): void {
         throw error;
       }
     },
+  );
+
+  ipcMain.removeHandler(AGENT_CANCEL_QUEUED_TURN_CHANNEL);
+  ipcMain.handle(
+    AGENT_CANCEL_QUEUED_TURN_CHANNEL,
+    async (
+      _event,
+      request: CancelQueuedTurnRequest,
+    ): Promise<CancelQueuedTurnResponse> => ({
+      queueEntryId: request.queueEntryId,
+      cancelled: registry.cancelQueuedTurn(
+        request.queueEntryId,
+        "Cancelled from the desktop composer.",
+      ),
+    }),
   );
 
   ipcMain.removeHandler(AGENT_START_REVIEW_CHANNEL);

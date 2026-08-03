@@ -249,6 +249,15 @@ export type StartTurnResponse = {
   queueEntryId?: string;
 };
 
+export type CancelQueuedTurnRequest = {
+  queueEntryId: string;
+};
+
+export type CancelQueuedTurnResponse = {
+  queueEntryId: string;
+  cancelled: boolean;
+};
+
 export type StartReviewRequest = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;

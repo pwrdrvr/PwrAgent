@@ -33,6 +33,8 @@ import type {
   ArchiveWorktreeResponse,
   ArchiveThreadRequest,
   ArchiveThreadResponse,
+  CancelQueuedTurnRequest,
+  CancelQueuedTurnResponse,
   AppServerListSkillsRequest,
   AppServerListSkillsResponse,
   CheckThreadBranchDriftRequest,
@@ -471,6 +473,9 @@ export type DesktopApi = {
     request: CompactThreadRequest
   ) => Promise<CompactThreadResponse>;
   startTurn?: (request: StartTurnRequest) => Promise<StartTurnResponse>;
+  cancelQueuedTurn?: (
+    request: CancelQueuedTurnRequest,
+  ) => Promise<CancelQueuedTurnResponse>;
   interruptTurn?: (
     request: InterruptTurnRequest
   ) => Promise<InterruptTurnResponse>;

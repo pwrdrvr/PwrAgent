@@ -22,6 +22,10 @@ export type ComposerDraftSnapshot = {
 
 export type ComposerQueuedTurnSnapshot = {
   id: string;
+  /** Submission is in flight to the main-process FIFO. */
+  backendQueuePending?: boolean;
+  /** Main-process FIFO entry once the renderer has handed off dispatch ownership. */
+  queueEntryId?: string;
   input?: AppServerTurnInputItem[];
   text: string;
   imageAttachments: NavigationLaunchpadImageAttachment[];
@@ -92,11 +96,22 @@ export function getQueuedTurnReleaseDelayMs(
 }
 
 export function getNextReleasableQueuedTurn<
-  T extends Pick<ComposerQueuedTurnSnapshot, "scheduledSendAt">,
+  T extends Pick<
+    ComposerQueuedTurnSnapshot,
+    "backendQueuePending" | "queueEntryId" | "scheduledSendAt"
+  >,
 >(queuedTurns: readonly T[], now = Date.now()): T | undefined {
-  return queuedTurns.find((queuedTurn) =>
-    getQueuedTurnReleaseDelayMs(queuedTurn, now) === 0
-  );
+  for (const queuedTurn of queuedTurns) {
+    // A backend-owned entry is already in the authoritative FIFO. Local
+    // scheduled turns and reviews behind it must not leapfrog that entry.
+    if (queuedTurn.backendQueuePending || queuedTurn.queueEntryId) {
+      return undefined;
+    }
+    if (getQueuedTurnReleaseDelayMs(queuedTurn, now) === 0) {
+      return queuedTurn;
+    }
+  }
+  return undefined;
 }
 
 export function useComposerDraftStore(): ComposerDraftStore {
