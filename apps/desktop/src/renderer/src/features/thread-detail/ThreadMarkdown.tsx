@@ -20,12 +20,15 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import ReactMarkdown, { type Components, type UrlTransform } from "react-markdown";
+import rehypeKatex from "rehype-katex";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
 import { AppIcon } from "../../components/AppIcon";
 import { CloseIcon, FolderIcon, PopoutIcon } from "../../icons";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { repairNestedLanguageFences } from "../../lib/markdown-fences";
+import { normalizeLatexMathDelimiters } from "../../lib/markdown-math";
 import {
   resolveThreadHref,
   resolveThreadIdText,
@@ -121,9 +124,13 @@ type MarkdownViewerTarget = LocalFileTarget & {
 type SkillActionTarget = AppServerSkillSummary & LocalFileTarget;
 
 export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdownProps) {
-  const markdownText = useMemo(
+  const sourceMarkdownText = useMemo(
     () => protectComposerHyphenListItems(repairNestedLanguageFences(props.text)),
     [props.text]
+  );
+  const markdownText = useMemo(
+    () => normalizeLatexMathDelimiters(sourceMarkdownText),
+    [sourceMarkdownText]
   );
   const [markdownViewerTarget, setMarkdownViewerTarget] =
     useState<MarkdownViewerTarget>();
@@ -386,7 +393,7 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
       },
       blockquote(blockquoteProps) {
         const copyText = normalizeBlockquoteCopyText(
-          sourceForNode(markdownText, blockquoteProps.node) ??
+          sourceForNode(sourceMarkdownText, blockquoteProps.node) ??
             extractTextContent(blockquoteProps.children)
         );
 
@@ -538,6 +545,7 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
       props.imageParts,
       props.onOpenImage,
       pullRequestLinks,
+      sourceMarkdownText,
       skillsByPath,
       threadLinks,
       viewSkillMarkdown,
@@ -556,7 +564,15 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
     >
       <ReactMarkdown
         components={components}
+        rehypePlugins={[
+          [rehypeKatex, {
+            maxExpand: 1_000,
+            maxSize: 20,
+            trust: false,
+          }],
+        ]}
         remarkPlugins={[
+          [remarkMath, { singleDollarTextMath: false }],
           remarkBreaks,
           remarkGfm,
           remarkPullRequestReferences,
