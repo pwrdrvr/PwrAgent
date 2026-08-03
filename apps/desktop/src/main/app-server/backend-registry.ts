@@ -11495,6 +11495,9 @@ export class DesktopBackendRegistry {
       && taskMonitor.parentBackend === params.backend
       && taskMonitor.parentThreadId === params.threadId
     ) {
+      if (taskMonitor.finalizationStarted || taskMonitor.cancellation) {
+        throw new Error("Sub-agent is already completing.");
+      }
       if (!taskMonitor.monitorThreadId || !taskMonitor.monitorTurnId) {
         throw new Error("Sub-agent does not expose an active turn to stop.");
       }
@@ -22725,12 +22728,21 @@ export class DesktopBackendRegistry {
       outcome: params.outcome,
       status: params.outcome,
     });
-    await this.injectTaskMonitorCompletionMessage({
-      backend: params.record.parentBackend,
-      monitorId: params.record.monitorId,
-      parentThreadId: params.record.parentThreadId,
-      text: finalText,
-    });
+    const canInjectCodexCompletion =
+      params.record.parentBackend === "codex"
+      && !params.triggerParentTurn
+      && this.canStartThreadTurnImmediately({
+        backend: "codex",
+        threadId: params.record.parentThreadId,
+      });
+    if (params.record.parentBackend !== "codex" || canInjectCodexCompletion) {
+      await this.injectTaskMonitorCompletionMessage({
+        backend: params.record.parentBackend,
+        monitorId: params.record.monitorId,
+        parentThreadId: params.record.parentThreadId,
+        text: finalText,
+      });
+    }
     if (params.record.latestUsage) {
       await this.emitTaskMonitorUsageActivity({
         monitorId: params.record.monitorId,
@@ -23012,6 +23024,10 @@ export class DesktopBackendRegistry {
     reason: string;
     terminalStatus?: "completed" | "failed" | "cancelled";
   }): Promise<void> {
+    if (params.record.cancellation || params.record.finalizationStarted) {
+      return;
+    }
+    params.record.finalizationStarted = true;
     const completionSource: TaskMonitorCompletionSource = {
       type: "pwragent_fallback",
       reason: params.reason,
@@ -23020,21 +23036,26 @@ export class DesktopBackendRegistry {
     };
     const outcome =
       params.terminalStatus === "cancelled" ? "cancelled" : "failure";
-    await this.finishTaskMonitorDelegation({
-      completionSource,
-      details: [
-        "PwrAgent generated this fallback because the monitor subagent stopped without invoking pwragent.complete_monitoring.",
-        `Fallback reason: ${params.reason}.`,
-        params.terminalStatus
-          ? `Last monitor turn status: ${params.terminalStatus}.`
-          : "No terminal monitor turn status was observed.",
-      ].join("\n"),
-      outcome,
-      record: params.record,
-      summary:
-        "Monitor subagent stopped without reporting a final result through the required completion tool.",
-      triggerParentTurn: true,
-    });
+    try {
+      await this.finishTaskMonitorDelegation({
+        completionSource,
+        details: [
+          "PwrAgent generated this fallback because the monitor subagent stopped without invoking pwragent.complete_monitoring.",
+          `Fallback reason: ${params.reason}.`,
+          params.terminalStatus
+            ? `Last monitor turn status: ${params.terminalStatus}.`
+            : "No terminal monitor turn status was observed.",
+        ].join("\n"),
+        outcome,
+        record: params.record,
+        summary:
+          "Monitor subagent stopped without reporting a final result through the required completion tool.",
+        triggerParentTurn: true,
+      });
+    } catch (error) {
+      params.record.finalizationStarted = false;
+      throw error;
+    }
   }
 
   private bindTaskMonitorCaller(
