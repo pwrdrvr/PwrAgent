@@ -24,6 +24,8 @@ export function subAgentTone(status: ThreadSubAgentStatus): RailChipTone {
   switch (status) {
     case "running":
       return "active";
+    case "cancelling":
+      return "warning";
     case "success":
       return "ok";
     case "blocked":
@@ -44,6 +46,8 @@ export function subAgentStatusLabel(status: ThreadSubAgentStatus): string {
       return "Pending";
     case "running":
       return "Running";
+    case "cancelling":
+      return "Cancelling";
     case "blocked":
       return "Blocked";
     case "failed":

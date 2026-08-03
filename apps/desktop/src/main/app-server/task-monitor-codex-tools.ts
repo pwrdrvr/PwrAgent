@@ -1,5 +1,6 @@
 import type {
   AppServerBackendKind,
+  CancelMonitorDelegationToolArgs,
   CompleteMonitoringToolArgs,
   CreateMonitorDelegationToolArgs,
   InjectMonitorProgressToolArgs,
@@ -31,6 +32,15 @@ import {
 export type TaskMonitorHandler = (
   request: TaskMonitorRequest,
 ) => TaskMonitorResponse | Promise<TaskMonitorResponse>;
+
+const LEGACY_TASK_MONITOR_OPERATION_NAMES = [
+  "create_monitor_delegation",
+  "inject_progress",
+  "complete_monitoring",
+] as const satisfies readonly TaskMonitorOperationName[];
+
+type LegacyTaskMonitorOperationName =
+  (typeof LEGACY_TASK_MONITOR_OPERATION_NAMES)[number];
 
 export function buildTaskMonitorDynamicToolSpecs(
   role: "parent" | "monitor" | "all" = "all",
@@ -163,6 +173,15 @@ export async function handleTaskMonitorDynamicToolCall(params: {
       message: "Unsupported PwrAgent task monitor tool.",
     });
   }
+  if (
+    params.call.namespace === TASK_MONITOR_TOOL_NAMESPACE
+    && !isLegacyTaskMonitorOperationName(params.call.tool)
+  ) {
+    return buildTaskMonitorDynamicToolErrorResponse({
+      code: "unsupported_operation",
+      message: "Unsupported legacy PwrAgent task monitor tool.",
+    });
+  }
 
   const context: TaskMonitorContext = {
     backend: params.backend,
@@ -178,6 +197,14 @@ export async function handleTaskMonitorDynamicToolCall(params: {
     ),
   } as TaskMonitorRequest);
   return toDynamicToolResponse(response);
+}
+
+function isLegacyTaskMonitorOperationName(
+  value: string,
+): value is LegacyTaskMonitorOperationName {
+  return (
+    LEGACY_TASK_MONITOR_OPERATION_NAMES as readonly string[]
+  ).includes(value);
 }
 
 export function buildTaskMonitorDynamicToolErrorResponse(params: {
@@ -366,6 +393,12 @@ function normalizeTaskMonitorToolArguments(
       preferredReasoningEffort: readString(args.preferredReasoningEffort),
       finalHandoffPrompt: readString(args.finalHandoffPrompt),
     } satisfies CreateMonitorDelegationToolArgs;
+  }
+  if (operation === "cancel_monitor_delegation") {
+    return {
+      monitorId: readString(args.monitorId) ?? "",
+      reason: readString(args.reason),
+    } satisfies CancelMonitorDelegationToolArgs;
   }
   if (operation === "inject_progress") {
     return {

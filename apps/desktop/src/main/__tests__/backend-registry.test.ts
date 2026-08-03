@@ -2125,16 +2125,16 @@ async function callRegistryMcpTool(params: {
   args: Record<string, unknown>;
 }) {
   const internal = params.registry as unknown as {
-    handleCreateMonitorAgentRequest(
-      request: TaskMonitorRequest<"create_monitor_delegation">,
-    ): Promise<TaskMonitorResponse<"create_monitor_delegation">>;
+    handleAgentTaskMonitorRequest(
+      request: TaskMonitorRequest,
+    ): Promise<TaskMonitorResponse>;
     threadOrchestrationHandler: (
       request: PwrAgentThreadOrchestrationRequest,
     ) => Promise<PwrAgentThreadOrchestrationResponse>;
   };
   const catalogs = resolveAgentToolCatalogs({
     taskMonitorHandler: async (request) =>
-      await internal.handleCreateMonitorAgentRequest(request),
+      await internal.handleAgentTaskMonitorRequest(request),
     threadOrchestrationHandler: internal.threadOrchestrationHandler,
   });
   const router = catalogs
@@ -7199,6 +7199,7 @@ script = "echo setup"
       "send_message_to_thread",
       "start_review",
       "create_monitor_delegation",
+      "cancel_monitor_delegation",
     ]);
 
     await registry.close();
@@ -7382,6 +7383,7 @@ script = "echo setup"
       "list_automations",
       "get_automation_run_artifact",
       "create_monitor_delegation",
+      "cancel_monitor_delegation",
       "manage_pwragent",
       "search_threads",
       "read_thread",
@@ -10904,6 +10906,7 @@ command = "pnpm grok"
     });
     expectPwragentDynamicTools(codexClient.lastStartThreadParams?.dynamicTools, [
       "create_monitor_delegation",
+      "cancel_monitor_delegation",
     ]);
 
     await registry.close();
@@ -28506,6 +28509,267 @@ script = "printf setup"
     });
 
     unsubscribeEvents();
+    await registry.close();
+  });
+
+  it("lets only the active parent cancel a managed monitor without waking another turn", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      models: TEST_TASK_MONITOR_MODELS,
+      startThreadResult: { threadId: "monitor-thread" },
+    });
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore,
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+    const delegationResponse = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-1",
+        requestId: "call-1",
+        namespace: "pwragent",
+        tool: "create_monitor_delegation",
+        arguments: {
+          task: "Recover the runner after its current job finishes.",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+    const monitorId = JSON.parse(
+      (delegationResponse as { contentItems: Array<{ text: string }> })
+        .contentItems[0]?.text ?? "{}",
+    ).monitorId as string;
+    const legacyCancellationResponse = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-cancel-legacy",
+        requestId: "call-cancel-legacy",
+        namespace: "pwragent_task_monitors",
+        tool: "cancel_monitor_delegation",
+        arguments: { monitorId },
+      },
+    } as AppServerPendingRequestNotification);
+    expect(legacyCancellationResponse).toMatchObject({ success: false });
+    expect(codexClient.interruptTurnCallCount).toBe(0);
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-2",
+          turnId: "turn-2",
+          turn: { id: "turn-2" },
+        },
+      },
+    });
+
+    const forbiddenResponse = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-2",
+        turnId: "turn-2",
+        callId: "call-forbidden",
+        requestId: "call-forbidden",
+        namespace: "pwragent",
+        tool: "cancel_monitor_delegation",
+        arguments: { monitorId },
+      },
+    } as AppServerPendingRequestNotification);
+    expect(forbiddenResponse).toMatchObject({ success: false });
+    expect(codexClient.interruptTurnCallCount).toBe(0);
+
+    const cancellationResponsePromise = codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-cancel",
+        requestId: "call-cancel",
+        namespace: "pwragent",
+        tool: "cancel_monitor_delegation",
+        arguments: {
+          monitorId,
+          reason: "The monitor was targeting the wrong runner.",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+    await expectEventually(
+      async () => codexClient.interruptTurnCallCount,
+      1,
+    );
+    const overlappingResponsePromise = codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-cancel-overlap",
+        requestId: "call-cancel-overlap",
+        namespace: "pwragent",
+        tool: "cancel_monitor_delegation",
+        arguments: { monitorId },
+      },
+    } as AppServerPendingRequestNotification);
+    let cancellationSettled = false;
+    void cancellationResponsePromise.then(() => {
+      cancellationSettled = true;
+    });
+    await Promise.resolve();
+
+    expect(codexClient.interruptTurnCallCount).toBe(1);
+    expect(cancellationSettled).toBe(false);
+    expect(codexClient.injectedThreadItems).toHaveLength(0);
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-1",
+      }),
+    ).resolves.toMatchObject({
+      subAgents: [
+        {
+          lastMessage:
+            "Cancellation requested; waiting for the monitor turn to stop.",
+          monitorId,
+          status: "cancelling",
+        },
+      ],
+    });
+    const lateCompletionResponse = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "monitor-thread",
+        turnId: "turn-1",
+        callId: "call-complete-late",
+        requestId: "call-complete-late",
+        namespace: "pwragent_task_monitors",
+        tool: "complete_monitoring",
+        arguments: {
+          monitorId,
+          outcome: "success",
+          summary: "The monitor finished while cancellation was pending.",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+    expect(lateCompletionResponse).toMatchObject({ success: false });
+    expect(codexClient.injectedThreadItems).toHaveLength(0);
+
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/cancelled",
+        params: {
+          threadId: "monitor-thread",
+          turnId: "some-other-turn",
+          turn: { id: "some-other-turn", status: "cancelled", output: [] },
+        },
+      },
+    });
+    expect(codexClient.injectedThreadItems).toHaveLength(0);
+
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/cancelled",
+        params: {
+          threadId: "monitor-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1", status: "cancelled", output: [] },
+        },
+      },
+    });
+    const [cancellationResponse, overlappingResponse] = await Promise.all([
+      cancellationResponsePromise,
+      overlappingResponsePromise,
+    ]);
+    const cancellationPayload = JSON.parse(
+      (cancellationResponse as { contentItems: Array<{ text: string }> })
+        .contentItems[0]?.text ?? "{}",
+    ) as Record<string, unknown>;
+
+    expect(cancellationResponse).toMatchObject({ success: true });
+    expect(overlappingResponse).toEqual(cancellationResponse);
+    expect(cancellationPayload).toMatchObject({
+      monitorId,
+      parentThreadId: "thread-1",
+      outcome: "cancelled",
+      completionSource: { type: "parent_cancel" },
+    });
+    expect(codexClient.interruptTurnCallCount).toBe(1);
+    expect(codexClient.lastInterruptTurnParams).toEqual({
+      threadId: "monitor-thread",
+      turnId: "turn-1",
+    });
+    expect(codexClient.startTurnCallCount).toBe(1);
+    expect(codexClient.injectedThreadItems).toHaveLength(1);
+    expect(codexClient.injectedThreadItems[0]).toMatchObject({
+      threadId: "thread-1",
+      items: [
+        {
+          type: "message",
+          role: "assistant",
+          content: [
+            {
+              type: "output_text",
+              text: expect.stringContaining(
+                "The monitor was targeting the wrong runner.",
+              ),
+            },
+          ],
+        },
+      ],
+    });
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-1",
+      }),
+    ).resolves.toMatchObject({
+      subAgents: [
+        {
+          completedAt: expect.any(Number),
+          completionSource: { type: "parent_cancel" },
+          lastMessage: "The monitor was targeting the wrong runner.",
+          monitorId,
+          outcome: "cancelled",
+          status: "cancelled",
+        },
+      ],
+    });
+
+    const repeatedResponse = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-cancel-again",
+        requestId: "call-cancel-again",
+        namespace: "pwragent",
+        tool: "cancel_monitor_delegation",
+        arguments: { monitorId },
+      },
+    } as AppServerPendingRequestNotification);
+    expect(repeatedResponse).toMatchObject({ success: true });
+    expect(codexClient.interruptTurnCallCount).toBe(1);
+    expect(codexClient.injectedThreadItems).toHaveLength(1);
+    expect(codexClient.startTurnCallCount).toBe(1);
+
     await registry.close();
   });
 
