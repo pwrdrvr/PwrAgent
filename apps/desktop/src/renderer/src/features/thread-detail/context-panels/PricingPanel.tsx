@@ -27,6 +27,7 @@ import {
   subAgentCompletedAt,
 } from "./subagent-format";
 import { formatTimestamp } from "./context-rail-shared";
+import { RailStatusChip } from "./RailStatusChip";
 import { subAgentPricingUsageTitle } from "./subagent-kind";
 import { RailCardTiming, useNowWhileActive } from "./RailCardTiming";
 
@@ -333,13 +334,7 @@ export function PricingPanel(props: PricingPanelProps) {
                   </div>
                   <div className="pricing-usage-row__controls">
                     {isActive ? (
-                      <span className="rail-chip pricing-usage-row__live">
-                        <span
-                          className="rail-chip__dot rail-chip__dot--active"
-                          aria-hidden="true"
-                        />
-                        Live
-                      </span>
+                      <RailStatusChip tone="active">Running</RailStatusChip>
                     ) : null}
                     <PricingUsageActions
                       line={line}
@@ -1246,7 +1241,7 @@ function isHistoricalUsageSummary(line: ThreadUsageLineRecord): boolean {
 }
 
 // The in-progress turn: the live, still-pending turn row whose id matches the
-// session's active turn. Drives the Live chip + running duration.
+// session's active turn. Drives the Running chip + live duration.
 function isActiveLiveTurnUsageLine(params: {
   activeTurnId?: string;
   line: PricingUsageLine;

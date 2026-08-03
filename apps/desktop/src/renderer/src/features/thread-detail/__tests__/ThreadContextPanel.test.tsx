@@ -1830,7 +1830,7 @@ describe("ThreadContextPanel", () => {
     });
   });
 
-  it("marks the active live turn with a Live chip and a running duration", () => {
+  it("marks the active live turn with a Running chip and duration", () => {
     const startedAt = 1_800_000_000_000;
     vi.useFakeTimers();
     vi.setSystemTime(startedAt + 65_000);
@@ -1873,7 +1873,7 @@ describe("ThreadContextPanel", () => {
 
     const activeRow = container.querySelector(".pricing-usage-row--active");
     expect(activeRow).not.toBeNull();
-    expect(within(activeRow as HTMLElement).getByText("Live")).toBeInTheDocument();
+    expect(within(activeRow as HTMLElement).getByText("Running")).toBeInTheDocument();
     const times = activeRow?.querySelector(".rail-card__times");
     expect(times?.textContent).toContain("· 1m 5s");
     expect(times?.textContent).toMatch(/Started .*:\d{2}:\d{2} [AP]M/);
@@ -1882,7 +1882,7 @@ describe("ThreadContextPanel", () => {
   it("keeps the running duration on an active turn that trips the historical-summary heuristic", () => {
     // An active live turn the builder couldn't attribute (turnUsageAttributed
     // false) classifies as a historical summary. It is still the active turn,
-    // so it must keep its Live chip AND running clock (guard-order in
+    // so it must keep its Running chip AND running clock (guard-order in
     // formatUsageLineDuration puts the active branch before the summary guard).
     const startedAt = 1_800_000_000_000;
     vi.useFakeTimers();
@@ -1927,12 +1927,12 @@ describe("ThreadContextPanel", () => {
 
     const activeRow = container.querySelector(".pricing-usage-row--active");
     expect(activeRow).not.toBeNull();
-    expect(within(activeRow as HTMLElement).getByText("Live")).toBeInTheDocument();
+    expect(within(activeRow as HTMLElement).getByText("Running")).toBeInTheDocument();
     const times = activeRow?.querySelector(".rail-card__times");
     expect(times?.textContent).toContain("· 1m 5s");
   });
 
-  it("shows a finished duration and no Live chip on a completed turn", () => {
+  it("shows a finished duration and no Running chip on a completed turn", () => {
     const startedAt = 1_800_000_000_000;
 
     const { container } = renderPanel({
@@ -1973,7 +1973,7 @@ describe("ThreadContextPanel", () => {
     });
 
     expect(container.querySelector(".pricing-usage-row--active")).toBeNull();
-    expect(screen.queryByText("Live")).not.toBeInTheDocument();
+    expect(screen.queryByText("Running")).not.toBeInTheDocument();
     const times = container.querySelector(".rail-card__times");
     expect(times?.textContent).toContain("· 2m 5s");
     expect(times?.querySelector(".rail-card__duration")).toHaveAttribute(
@@ -2012,7 +2012,7 @@ describe("ThreadContextPanel", () => {
 
     const activeRow = container.querySelector(".pricing-usage-row--active");
     expect(activeRow).not.toBeNull();
-    expect(within(activeRow as HTMLElement).getByText("Live")).toBeInTheDocument();
+    expect(within(activeRow as HTMLElement).getByText("Running")).toBeInTheDocument();
     expect(within(activeRow as HTMLElement).getByText("Reviewer")).toBeInTheDocument();
     const times = activeRow?.querySelector(".rail-card__times");
     expect(times?.textContent).toContain("· 1m 5s");
@@ -2054,7 +2054,7 @@ describe("ThreadContextPanel", () => {
   });
 
   for (const status of ["success", "failure", "cancelled"] as const) {
-    it(`shows a ${status} sub-agent's name but no Live chip`, () => {
+    it(`shows a ${status} sub-agent's name but no Running chip`, () => {
       const { container } = renderPanel({
         activeTab: "pricing",
         pinned: true,
@@ -2079,7 +2079,7 @@ describe("ThreadContextPanel", () => {
       });
 
       expect(container.querySelector(".pricing-usage-row--active")).toBeNull();
-      expect(screen.queryByText("Live")).not.toBeInTheDocument();
+      expect(screen.queryByText("Running")).not.toBeInTheDocument();
       expect(screen.getByText("Reviewer")).toBeInTheDocument();
     });
   }
@@ -2111,7 +2111,7 @@ describe("ThreadContextPanel", () => {
       });
 
       expect(container.querySelector(".pricing-usage-row--active")).toBeNull();
-      expect(screen.queryByText("Live")).not.toBeInTheDocument();
+      expect(screen.queryByText("Running")).not.toBeInTheDocument();
     });
 
     it(`keeps a progress-only ${status} monitor live`, () => {
@@ -2144,7 +2144,7 @@ describe("ThreadContextPanel", () => {
 
       const activeRow = container.querySelector(".pricing-usage-row--active");
       expect(activeRow).not.toBeNull();
-      expect(within(activeRow as HTMLElement).getByText("Live")).toBeInTheDocument();
+      expect(within(activeRow as HTMLElement).getByText("Running")).toBeInTheDocument();
       expect(activeRow?.querySelector(".rail-card__times")?.textContent).toContain(
         "· 1m 5s",
       );
@@ -2250,7 +2250,7 @@ describe("ThreadContextPanel", () => {
     });
 
     expect(container.querySelectorAll(".pricing-usage-row--active")).toHaveLength(2);
-    expect(screen.getAllByText("Live")).toHaveLength(2);
+    expect(screen.getAllByText("Running")).toHaveLength(2);
   });
 
   it("summarizes pricing rows when provider summaries are absent", () => {

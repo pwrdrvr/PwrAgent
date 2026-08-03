@@ -14727,7 +14727,7 @@ a.transcript-message__messaging-origin:focus-visible {
 
 /* The in-progress turn: a calm accent left-stripe + slightly firmer border,
    reading as "live" without the background wash that would look like a
-   hover/selection state. Pairs with the Live chip in the card header. */
+   hover/selection state. Pairs with the Running chip in the card header. */
 .pricing-usage-row--active {
   border-color: color-mix(in srgb, var(--accent) 45%, var(--border-subtle));
   box-shadow: inset 2px 0 0 0 var(--accent);
@@ -14761,10 +14761,6 @@ a.transcript-message__messaging-origin:focus-visible {
   flex: 0 0 auto;
   align-items: center;
   gap: 4px;
-}
-
-.pricing-usage-row__live {
-  flex: 0 0 auto;
 }
 
 .pricing-usage-row__menu-trigger {
