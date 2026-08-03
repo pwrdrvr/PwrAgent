@@ -212,9 +212,9 @@ describe("MessagingStatusBar", () => {
 
     expect(settingsButton.nextElementSibling).toBe(masterToggle);
     fireEvent.mouseEnter(settingsButton);
-    expect(await screen.findByRole("tooltip")).toHaveTextContent(
-      "Open Messaging Settings",
-    );
+    const tooltip = await screen.findByRole("tooltip");
+    expect(tooltip).toHaveClass("messaging-status-tooltip");
+    expect(tooltip).toHaveTextContent("Open Messaging Settings");
 
     fireEvent.click(settingsButton);
 

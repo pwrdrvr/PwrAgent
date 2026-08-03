@@ -92,7 +92,9 @@ export function MessagingStatusBar(props: {
     hide: hideSettingsTooltip,
     show: showSettingsTooltip,
     tooltipNode: settingsTooltipNode,
-  } = useViewportTooltip({ className: "viewport-tooltip" });
+  } = useViewportTooltip({
+    className: "viewport-tooltip messaging-status-tooltip",
+  });
 
   const runtimeMessagingEnabled =
     settingsSnapshot?.runtime?.messaging?.disabled !== undefined

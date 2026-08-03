@@ -566,9 +566,8 @@ textarea,
 
 .new-thread-menu {
   position: absolute;
-  /* Matches the title-bar z-index; the title bar forms its own stacking
-     context, so within the masthead this reliably layers above sibling
-     content without competing with it. */
+  /* Within the masthead, this reliably layers above sibling thread chrome
+     without competing with full-window overlays. */
   z-index: 40;
   top: 100%;
   right: 0;
@@ -644,7 +643,11 @@ textarea,
   top: 0;
   left: 0;
   right: 0;
-  z-index: 40;
+  /* Windows keeps the single global Messaging controller in this strip even
+     while Settings/Automations occupies the app-shell overlay layer (120).
+     The strip does not overlap that shell, but its popover extends into it, so
+     this parent stacking context must sit above the overlay. */
+  z-index: 130;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -13132,6 +13135,14 @@ a.transcript-message__messaging-origin:focus-visible {
   pointer-events: none;
   text-align: left;
   white-space: pre-wrap;
+}
+
+/* Messaging appears inside full-window Settings/Automations surfaces whose
+   overlay layer is 120. Its portal tooltip escapes that DOM subtree, so give
+   this one title-bar tooltip an explicit layer above the overlay and Windows
+   app title bar without raising every viewport tooltip globally. */
+.messaging-status-tooltip {
+  z-index: 140;
 }
 
 .context-rail__tooltip {
