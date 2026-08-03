@@ -9,7 +9,6 @@ import { RendererErrorBoundary } from "./features/diagnostics/RendererErrorBound
 import { applyAppearanceAttributes, resolveTheme } from "./lib/appearance";
 import { installDevPerformancePruning } from "./lib/dev-performance-pruning";
 import { installGlobalRendererErrorHandlers } from "./lib/renderer-error-reporting";
-import "katex/dist/katex.min.css";
 import "./styles/app.css";
 
 installGlobalRendererErrorHandlers();

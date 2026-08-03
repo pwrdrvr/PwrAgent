@@ -57,6 +57,7 @@ import {
   type NavigationHistoryLocation,
 } from "./lib/useNavigationHistory";
 import { TranscriptLinkProvider } from "./lib/transcript-links";
+import { MarkdownRenderingOptionsProvider } from "./lib/markdown-rendering-options";
 import { useThreadNavigation } from "./lib/useThreadNavigation";
 import { usePwrAgentProfiles } from "./lib/usePwrAgentProfiles";
 import { usePullRequestRefresh } from "./features/pr-status/usePullRequestRefresh";
@@ -1546,7 +1547,13 @@ function DesktopAppShell(props: {
               />
             </section>
           ) : ThreadViewComponent ? (
-            <ThreadViewComponent {...threadViewProps} />
+            <MarkdownRenderingOptionsProvider
+              mathEnabled={
+                settings.snapshot?.experimental.markdownMathRendering?.value ?? false
+              }
+            >
+              <ThreadViewComponent {...threadViewProps} />
+            </MarkdownRenderingOptionsProvider>
           ) : null}
         </main>
 

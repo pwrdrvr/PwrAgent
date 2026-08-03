@@ -9878,19 +9878,6 @@ a.transcript-message__messaging-origin:focus-visible {
   word-break: break-word;
 }
 
-.thread-markdown .katex {
-  color: inherit;
-  font-size: 1.05em;
-}
-
-.thread-markdown .katex-display {
-  max-width: 100%;
-  margin: 4px 0;
-  padding: 2px 0;
-  overflow-x: auto;
-  overflow-y: hidden;
-}
-
 .transcript-message__text > * {
   margin: 0;
 }

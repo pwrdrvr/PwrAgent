@@ -1,6 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { MarkdownRenderingOptionsProvider } from "../../../lib/markdown-rendering-options";
 import { ThreadMarkdown } from "../ThreadMarkdown";
 
 const copyText = vi.hoisted(() => vi.fn(async (
@@ -106,10 +107,47 @@ describe("ThreadMarkdown", () => {
     );
   });
 
-  it("renders Codex inline and display LaTeX from the Problem 1.20 fixture", () => {
+  it("leaves LaTeX untypeset when experimental math rendering is disabled", () => {
     const { container } = render(
-      <ThreadMarkdown text={problem120MathMarkdown} />
+      <ThreadMarkdown text={String.raw`Literal \(a=1\).`} />
     );
+
+    expect(container.querySelector(".katex")).toBeNull();
+    expect(container).toHaveTextContent("Literal (a=1).");
+  });
+
+  it("stops typesetting immediately when experimental math rendering is disabled", async () => {
+    const text = String.raw`Toggle \(a=1\).`;
+    const { container, rerender } = render(
+      <MarkdownRenderingOptionsProvider mathEnabled>
+        <ThreadMarkdown text={text} />
+      </MarkdownRenderingOptionsProvider>
+    );
+
+    await waitFor(() => {
+      expect(container.querySelectorAll(".katex")).toHaveLength(1);
+    });
+
+    rerender(
+      <MarkdownRenderingOptionsProvider mathEnabled={false}>
+        <ThreadMarkdown text={text} />
+      </MarkdownRenderingOptionsProvider>
+    );
+
+    expect(container.querySelector(".katex")).toBeNull();
+    expect(container).toHaveTextContent("Toggle (a=1).");
+  });
+
+  it("renders Codex inline and display LaTeX from the Problem 1.20 fixture", async () => {
+    const { container } = render(
+      <MarkdownRenderingOptionsProvider mathEnabled>
+        <ThreadMarkdown text={problem120MathMarkdown} />
+      </MarkdownRenderingOptionsProvider>
+    );
+
+    await waitFor(() => {
+      expect(container.querySelectorAll(".katex")).toHaveLength(23);
+    });
 
     const texSources = Array.from(
       container.querySelectorAll("annotation[encoding='application/x-tex']")
@@ -129,22 +167,26 @@ describe("ThreadMarkdown", () => {
     expect(container.querySelector(".katex-error")).toBeNull();
   });
 
-  it("keeps currency and LaTeX-looking code literal around rendered math", () => {
+  it("keeps currency and LaTeX-looking code literal around rendered math", async () => {
     const { container } = render(
-      <ThreadMarkdown
-        text={[
-          String.raw`A $5 part and a $10 part remain currency beside \(a=1\).`,
-          "",
-          "Inline code: `\\(notMath\\)`",
-          "",
-          "```tex",
-          String.raw`\[notMath\]`,
-          "```",
-        ].join("\n")}
-      />
+      <MarkdownRenderingOptionsProvider mathEnabled>
+        <ThreadMarkdown
+          text={[
+            String.raw`A $5 part and a $10 part remain currency beside \(a=1\).`,
+            "",
+            "Inline code: `\\(notMath\\)`",
+            "",
+            "```tex",
+            String.raw`\[notMath\]`,
+            "```",
+          ].join("\n")}
+        />
+      </MarkdownRenderingOptionsProvider>
     );
 
-    expect(container.querySelectorAll(".katex")).toHaveLength(1);
+    await waitFor(() => {
+      expect(container.querySelectorAll(".katex")).toHaveLength(1);
+    });
     expect(container).toHaveTextContent("A $5 part and a $10 part remain currency");
     expect(container.querySelector("code.transcript-message__code")).toHaveTextContent(
       String.raw`\(notMath\)`
