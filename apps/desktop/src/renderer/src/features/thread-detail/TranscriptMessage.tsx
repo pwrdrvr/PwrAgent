@@ -47,25 +47,39 @@ type TranscriptMessageProps = {
   onOpenImage?: (image: AppServerThreadImagePart) => void;
 };
 
+// Keep text-only markdown props referentially stable when protocol refreshes
+// replace an otherwise equivalent message object. ReactMarkdown treats a new
+// component map as new element types, which remounts selected text nodes.
+const EMPTY_IMAGE_PARTS: AppServerThreadImagePart[] = [];
+
 export const TranscriptMessage = memo(function TranscriptMessage(props: TranscriptMessageProps) {
   const threadLinks = useThreadLinks();
   const sourceThreadLink = props.message.origin?.sourceThread
     ? threadLinks?.resolve(props.message.origin.sourceThread)
     : undefined;
-  const contentParts =
-    props.message.parts && props.message.parts.length > 0
-      ? props.message.parts
-      : props.message.text
-        ? [{ type: "text", text: props.message.text } satisfies AppServerThreadMessagePart]
-        : [];
+  const contentParts = useMemo(
+    () =>
+      props.message.parts && props.message.parts.length > 0
+        ? props.message.parts
+        : props.message.text
+          ? [{ type: "text", text: props.message.text } satisfies AppServerThreadMessagePart]
+          : [],
+    [props.message.parts, props.message.text],
+  );
   const messageCopyText = useMemo(
     () => buildMessageCopyText(props.message, contentParts),
     [contentParts, props.message]
   );
-  const imageParts = contentParts.filter(
-    (part): part is AppServerThreadImagePart => part.type === "image",
+  const imageParts = useMemo(() => {
+    const parts = contentParts.filter(
+      (part): part is AppServerThreadImagePart => part.type === "image",
+    );
+    return parts.length > 0 ? parts : EMPTY_IMAGE_PARTS;
+  }, [contentParts]);
+  const messageSegments = useMemo(
+    () => groupMessageParts(contentParts).flatMap(splitMarkdownTableSegment),
+    [contentParts],
   );
-  const messageSegments = groupMessageParts(contentParts).flatMap(splitMarkdownTableSegment);
   const [monitorExpanded, setMonitorExpanded] = useState(false);
   const [monitorDetailsOpen, setMonitorDetailsOpen] = useState(false);
   const monitorOrigin = props.message.origin?.subAgent;

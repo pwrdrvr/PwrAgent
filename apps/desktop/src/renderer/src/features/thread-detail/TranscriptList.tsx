@@ -137,6 +137,9 @@ type SyncScrollStateOptions = {
 
 const BOTTOM_THRESHOLD_PX = 24;
 const LOAD_OLDER_THRESHOLD_PX = 160;
+// Callers that do not need skill links should not invalidate every memoized
+// transcript message on an unrelated live-turn render.
+const EMPTY_SKILLS: AppServerSkillSummary[] = [];
 
 type AutomationThreadTarget = {
   backend: "codex" | "grok";
@@ -601,7 +604,7 @@ function ApprovalDiffDisclosures(props: {
 }
 
 export function TranscriptList(props: TranscriptListProps) {
-  const skills = props.skills ?? [];
+  const skills = props.skills ?? EMPTY_SKILLS;
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const scrollContentRef = useRef<HTMLDivElement>(null);
   const snapshotRef = useRef<ScrollSnapshot | undefined>(undefined);
