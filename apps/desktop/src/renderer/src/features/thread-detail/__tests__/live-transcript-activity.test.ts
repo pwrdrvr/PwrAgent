@@ -269,6 +269,7 @@ describe("buildLiveToolDetails", () => {
     const details = buildLiveToolDetails({
       type: "dynamicToolCall",
       id: "tool-handoff",
+      namespace: "pwragent",
       tool: "handoff_task",
       arguments: {
         title: "Design Git remotes and branches UI",
@@ -288,8 +289,10 @@ describe("buildLiveToolDetails", () => {
         label: "Design Git remotes and branches UI (50ms)",
         command: expect.objectContaining({
           source: "tool",
-          rawCommand: "handoff_task",
-          displayCommand: expect.stringContaining("Inspect the existing implementation"),
+          rawCommand: "pwragent/handoff_task",
+          displayCommand: expect.stringMatching(
+            /pwragent\/handoff_task[\s\S]*Inspect the existing implementation/,
+          ),
           output: "Created delegated thread",
         }),
       }),

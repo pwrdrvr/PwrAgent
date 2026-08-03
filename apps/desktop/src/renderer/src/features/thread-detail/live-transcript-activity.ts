@@ -222,11 +222,16 @@ function buildLiveDynamicToolCommandDetail(
   toolName: string,
   elapsedMs: number | undefined,
 ): AppServerThreadCommandDetail {
+  const namespace =
+    readString(item, "namespace") ??
+    readString(item, "toolNamespace") ??
+    readString(item, "tool_namespace");
+  const identifier = formatToolIdentifier(namespace, toolName);
   const args = readRecord(item.arguments) ?? readRecord(item.input);
   const output = formatDynamicToolOutput(item.contentItems ?? item.content_items);
   return {
-    displayCommand: formatToolInvocation(toolName, args),
-    rawCommand: toolName,
+    displayCommand: formatToolInvocation(identifier, args),
+    rawCommand: identifier,
     source: "tool",
     ...(output ? { output } : {}),
     ...(typeof elapsedMs === "number" ? { durationMs: elapsedMs } : {}),

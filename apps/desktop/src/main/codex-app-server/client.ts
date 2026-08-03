@@ -3958,13 +3958,17 @@ function buildDynamicToolCommandDetail(params: {
   toolName: string;
   elapsedMs: number | undefined;
 }): AppServerThreadCommandDetail {
+  const identifier = formatToolIdentifier(
+    pickString(params.item, ["namespace", "toolNamespace", "tool_namespace"]),
+    params.toolName,
+  );
   const args = parseToolArguments(params.item);
   const output = formatDynamicToolOutput(
     params.item.contentItems ?? params.item.content_items,
   );
   return {
-    displayCommand: formatToolInvocation(params.toolName, args),
-    rawCommand: params.toolName,
+    displayCommand: formatToolInvocation(identifier, args),
+    rawCommand: identifier,
     source: "tool",
     ...(output ? { output } : {}),
     ...(typeof params.elapsedMs === "number" ? { durationMs: params.elapsedMs } : {}),

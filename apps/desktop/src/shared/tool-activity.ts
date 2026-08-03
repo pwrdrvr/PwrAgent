@@ -10,10 +10,10 @@ export function formatToolActivityTitle(value: string): string {
 }
 
 export function formatToolIdentifier(
-  serverName: string | undefined,
+  qualifier: string | undefined,
   toolName: string,
 ): string {
-  return serverName ? `${serverName}/${toolName}` : toolName;
+  return qualifier ? `${qualifier}/${toolName}` : toolName;
 }
 
 export function formatToolInvocation(
@@ -58,6 +58,19 @@ export function formatMcpToolOutput(params: {
     if (blockType === "image" || blockType === "audio") {
       const mimeType = readString(block, "mimeType") ?? readString(block, "mime_type");
       parts.push(`[${mimeType ?? blockType} ${blockType} result]`);
+      continue;
+    }
+    const resource = asRecord(block?.resource);
+    const resourceMimeType =
+      readString(resource, "mimeType") ?? readString(resource, "mime_type");
+    const resourceBlob = resource?.blob;
+    if (
+      blockType === "resource"
+      && resourceMimeType?.toLowerCase().startsWith("image/")
+      && typeof resourceBlob === "string"
+      && resourceBlob.length > 0
+    ) {
+      parts.push(`[${resourceMimeType} image resource]`);
       continue;
     }
     const text = readString(block, "text");
