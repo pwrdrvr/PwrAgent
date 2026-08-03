@@ -1446,6 +1446,78 @@ describe("TranscriptList", () => {
     expect(screen.getByText("Third commentary.")).toBeVisible();
   });
 
+  it("restores expanded work and the viewport after the transcript remounts", () => {
+    const entries = [
+      {
+        type: "message" as const,
+        id: "commentary-1",
+        role: "assistant" as const,
+        phase: "commentary" as const,
+        text: "First commentary.",
+      },
+      {
+        type: "message" as const,
+        id: "commentary-2",
+        role: "assistant" as const,
+        phase: "commentary" as const,
+        text: "Second commentary.",
+      },
+      {
+        type: "message" as const,
+        id: "commentary-3",
+        role: "assistant" as const,
+        phase: "commentary" as const,
+        text: "Third commentary.",
+      },
+      {
+        type: "message" as const,
+        id: "final-1",
+        role: "assistant" as const,
+        phase: "final" as const,
+        text: "Final answer.",
+      },
+    ];
+    const onExpandedWorkPhaseGroupIdsChange = vi.fn();
+    const firstRender = render(
+      <TranscriptList
+        entries={entries}
+        expandedWorkPhaseGroupIds={[]}
+        loading={false}
+        loadingMore={false}
+        threadId="thread-1"
+        onExpandedWorkPhaseGroupIdsChange={onExpandedWorkPhaseGroupIdsChange}
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "3 previous messages" }));
+    const restoredGroupIds = onExpandedWorkPhaseGroupIdsChange.mock.calls[0]?.[0];
+    expect(restoredGroupIds).toHaveLength(1);
+
+    firstRender.unmount();
+    render(
+      <TranscriptList
+        entries={entries}
+        expandedWorkPhaseGroupIds={restoredGroupIds}
+        loading={false}
+        loadingMore={false}
+        restoredViewport={{
+          distanceFromBottom: 168,
+          isGluedToBottom: false,
+          scrollTop: 72,
+        }}
+        threadId="thread-1"
+        onExpandedWorkPhaseGroupIdsChange={onExpandedWorkPhaseGroupIdsChange}
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: "3 previous messages" }))
+      .toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("First commentary.")).toBeVisible();
+    expect(screen.getByRole("list").scrollTop).toBe(72);
+  });
+
   it("keeps all active commentary messages visible", () => {
     render(
       <TranscriptList

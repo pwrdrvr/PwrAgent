@@ -348,6 +348,68 @@ describe("useThreadSessionState", () => {
     );
   });
 
+  it("retains transcript reading state across temporary view unmounts", async () => {
+    const desktopApi: DesktopApi = {
+      onAgentEvent: () => () => undefined,
+      readThread: vi.fn(async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        threadStatus: "idle" as const,
+        replay: {
+          entries: [
+            messageEntry({
+              createdAt: 100,
+              id: `${threadId}-message`,
+              text: `History for ${threadId}`,
+            }),
+          ],
+          messages: [],
+          pagination: {
+            supportsPagination: true,
+            hasPreviousPage: false,
+          },
+        },
+      })),
+    };
+    const { result, rerender } = renderHook(
+      ({ threadId }: { threadId: string }) =>
+        useThreadSessionState({
+          desktopApi,
+          thread: buildThread({ id: threadId, updatedAt: 1_000 }),
+        }),
+      { initialProps: { threadId: "thread-1" } }
+    );
+
+    await waitForThreadHydration(result);
+    act(() => {
+      result.current.setExpandedTranscriptWorkPhaseGroupIds(["work-group-1"]);
+      result.current.setRenderedTranscriptEntryLimit(90);
+      result.current.setViewport({
+        distanceFromBottom: 480,
+        isGluedToBottom: false,
+        scrollTop: 720,
+      });
+    });
+
+    rerender({ threadId: "thread-2" });
+    await waitForThreadHydration(result, "thread-2");
+    rerender({ threadId: "thread-1" });
+
+    await waitFor(() => {
+      expect(result.current.response?.threadId).toBe("thread-1");
+      expect(result.current.expandedTranscriptWorkPhaseGroupIds).toEqual([
+        "work-group-1",
+      ]);
+      expect(result.current.renderedTranscriptEntryLimit).toBe(90);
+      expect(result.current.viewport).toEqual({
+        distanceFromBottom: 480,
+        isGluedToBottom: false,
+        scrollTop: 720,
+      });
+    });
+  });
+
   it("rehydrates the selected thread when the initial history limit changes", async () => {
     const readThread = vi.fn(async ({ backend, threadId }) => ({
       backend: backend ?? "codex",
