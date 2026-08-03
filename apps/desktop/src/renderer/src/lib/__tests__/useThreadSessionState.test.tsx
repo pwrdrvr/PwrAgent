@@ -8529,6 +8529,172 @@ describe("useThreadSessionState", () => {
     });
   });
 
+  it("does not reconcile historical review starts with a newer turn sharing the same label", async () => {
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const reviewStartEntry = (reviewNumber: number): AppServerThreadEntry => ({
+      type: "review",
+      id: `review-start-${reviewNumber}`,
+      review: "changes against 'origin/main'",
+      displayText: "Review changes against origin/main",
+      turn: {
+        id: `review-turn-${reviewNumber}`,
+        status: "completed",
+        completedAt: reviewNumber * 1_000 + 200,
+      },
+    });
+    const reviewResultEntry = (reviewNumber: number): AppServerThreadEntry => ({
+      type: "review",
+      id: `review-result-${reviewNumber}`,
+      review: `${["First", "Second", "Third"][reviewNumber - 1]} review result`,
+      createdAt: reviewNumber * 1_000 + 200,
+      turn: {
+        id: `review-turn-${reviewNumber}`,
+        status: "completed",
+        completedAt: reviewNumber * 1_000 + 200,
+      },
+    });
+    const historicalEntries: AppServerThreadEntry[] = [
+      messageEntry({
+        createdAt: 1_000,
+        id: "before-review-1",
+        text: "Before review one",
+      }),
+      reviewStartEntry(1),
+      reviewResultEntry(1),
+      messageEntry({
+        createdAt: 2_000,
+        id: "before-review-2",
+        text: "Before review two",
+      }),
+      reviewStartEntry(2),
+      reviewResultEntry(2),
+      messageEntry({
+        createdAt: 3_000,
+        id: "before-review-3",
+        text: "Before review three",
+      }),
+    ];
+    const hydratedLatestEntries: AppServerThreadEntry[] = [
+      ...historicalEntries,
+      reviewStartEntry(3),
+      reviewResultEntry(3),
+    ];
+    let responseEntries = historicalEntries;
+    const readThread = vi.fn(async () =>
+      readThreadResponse({
+        entries: responseEntries,
+        hasPreviousPage: false,
+        supportsPagination: false,
+      })
+    );
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      readThread,
+    };
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+    await waitForThreadHydration(result);
+
+    act(() => {
+      result.current.addOptimisticReviewEntry(
+        "Review changes against origin/main",
+      );
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "review-turn-3",
+            item: {
+              id: "review-start-3",
+              type: "enteredReviewMode",
+              review: "changes against 'origin/main'",
+              createdAt: 3_100,
+            },
+          },
+        },
+      });
+    });
+
+    responseEntries = hydratedLatestEntries;
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "review-turn-3",
+            item: {
+              id: "review-result-3",
+              type: "exitedReviewMode",
+              review: "Third review result",
+              createdAt: 3_200,
+            },
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "review-turn-3",
+            turn: {
+              id: "review-turn-3",
+              status: "completed",
+              completedAt: 3_200,
+              output: [],
+            },
+          },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(readThread.mock.calls.length).toBeGreaterThanOrEqual(2);
+      expect(result.current.entries.map((entry) => entry.id)).toEqual(
+        hydratedLatestEntries.map((entry) => entry.id),
+      );
+    });
+    expect(
+      result.current.entries
+        .filter((entry) => entry.type === "review" && entry.displayText)
+        .map((entry) => ({
+          createdAt: entry.createdAt,
+          id: entry.id,
+          turnId: entry.turn?.id,
+        })),
+    ).toEqual([
+      {
+        createdAt: undefined,
+        id: "review-start-1",
+        turnId: "review-turn-1",
+      },
+      {
+        createdAt: undefined,
+        id: "review-start-2",
+        turnId: "review-turn-2",
+      },
+      {
+        createdAt: 3_100_000,
+        id: "review-start-3",
+        turnId: "review-turn-3",
+      },
+    ]);
+  });
+
   it("does not clear a just-started review from a racing idle hydration", async () => {
     let agentEventHandler:
       | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]

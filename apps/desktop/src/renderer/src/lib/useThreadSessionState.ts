@@ -1209,16 +1209,28 @@ function reviewEntriesMatch(
   candidate: AppServerThreadReviewEntry,
   optimisticEntry: AppServerThreadReviewEntry
 ): boolean {
-  if (isReviewStartEntry(candidate) !== isReviewStartEntry(optimisticEntry)) {
+  const candidateIsStart = isReviewStartEntry(candidate);
+  const optimisticIsStart = isReviewStartEntry(optimisticEntry);
+  if (candidateIsStart !== optimisticIsStart) {
     return false;
   }
 
-  if (
-    isReviewStartEntry(candidate)
-    && candidate.turn?.id
-    && candidate.turn.id === optimisticEntry.turn?.id
-  ) {
-    return true;
+  const candidateTurnId = candidate.turn?.id;
+  const optimisticTurnId = optimisticEntry.turn?.id;
+  if (candidateTurnId && optimisticTurnId) {
+    if (candidateTurnId !== optimisticTurnId) {
+      return false;
+    }
+    if (candidateIsStart) {
+      return true;
+    }
+  }
+
+  if (candidateIsStart && (candidateTurnId || optimisticTurnId)) {
+    const authoritativeEntry = candidateTurnId ? candidate : optimisticEntry;
+    if (authoritativeEntry.turn?.status !== "in_progress") {
+      return false;
+    }
   }
 
   const candidateLabels = reviewEntryLabels(candidate);
