@@ -94,6 +94,9 @@ const buildFromTemplateMock = vi.fn((template: unknown) => ({
   template,
 }));
 const shellOpenExternalMock = vi.fn(async () => undefined);
+const shellOpenPathMock = vi.fn(async () => "");
+const shellShowItemInFolderMock = vi.fn();
+const showMessageBoxSyncMock = vi.fn(() => 0);
 const setNameMock = vi.fn();
 const setAboutPanelOptionsMock = vi.fn();
 const showAboutPanelMock = vi.fn();
@@ -168,6 +171,11 @@ vi.mock("electron", () => ({
   },
   shell: {
     openExternal: shellOpenExternalMock,
+    openPath: shellOpenPathMock,
+    showItemInFolder: shellShowItemInFolderMock,
+  },
+  dialog: {
+    showMessageBoxSync: showMessageBoxSyncMock,
   },
   protocol: {
     handle: protocolHandleMock,
@@ -320,6 +328,7 @@ vi.mock("../ipc/window-pointer", () => ({
 }));
 
 vi.mock("../log", () => ({
+  getMainLogFilePath: vi.fn(() => "/tmp/profile-dev.main.log"),
   initializeMainLogger: initializeMainLoggerMock,
   resolveMainLogProfileName: resolveMainLogProfileNameMock,
   getMainLogger: vi.fn(() => ({
@@ -536,6 +545,11 @@ describe("bootstrapApp", () => {
     disposeMessagingStatusIpcHandlersMock.mockReset();
     setApplicationMenuMock.mockReset();
     shellOpenExternalMock.mockReset();
+    shellOpenPathMock.mockReset();
+    shellOpenPathMock.mockResolvedValue("");
+    shellShowItemInFolderMock.mockReset();
+    showMessageBoxSyncMock.mockReset();
+    showMessageBoxSyncMock.mockReturnValue(0);
     buildFromTemplateMock.mockClear();
     setNameMock.mockReset();
     setAboutPanelOptionsMock.mockReset();
@@ -582,6 +596,7 @@ describe("bootstrapApp", () => {
   afterEach(() => {
     vi.clearAllMocks();
     vi.restoreAllMocks();
+    vi.useRealTimers();
     vi.unstubAllEnvs();
   });
 
@@ -606,6 +621,7 @@ describe("bootstrapApp", () => {
 
     expect(messagingLeaseStartMock).toHaveBeenCalledTimes(1);
     expect(createMainWindowMock).toHaveBeenCalledWith({
+      onShown: expect.any(Function),
       startupCpuProfiler: startupProfilerInstance,
     });
     expect(registerAppServerIpcHandlersMock).toHaveBeenCalledTimes(1);
@@ -631,6 +647,54 @@ describe("bootstrapApp", () => {
       expect.objectContaining({ onFocus: expect.any(Function) }),
     );
     expect(setApplicationMenuMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels the watchdog when the window shows before createMainWindow returns", async () => {
+    vi.useFakeTimers();
+    startupProfilerInstance.start.mockResolvedValue();
+    createMainWindowMock.mockImplementation(
+      (options?: { onShown?: () => void }) => {
+        options?.onShown?.();
+        return {
+          isVisible: () => false,
+          on: (event: string, handler: (...args: unknown[]) => void) => {
+            mainWindowHandlers.set(event, handler);
+          },
+          once: (event: string, handler: (...args: unknown[]) => void) => {
+            mainWindowHandlers.set(event, handler);
+          },
+        };
+      },
+    );
+
+    await import("../index");
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(25_000);
+
+    expect(showMessageBoxSyncMock).not.toHaveBeenCalled();
+    expect(mainLogErrorMock).not.toHaveBeenCalledWith(
+      "startup failed before the main window appeared",
+      expect.anything(),
+    );
+  });
+
+  it("surfaces a boot failure when the main window never shows", async () => {
+    vi.useFakeTimers();
+    startupProfilerInstance.start.mockResolvedValue();
+
+    await import("../index");
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(25_000);
+
+    expect(showMessageBoxSyncMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "PwrAgent failed to start",
+      }),
+    );
+    expect(mainLogErrorMock).toHaveBeenCalledWith(
+      "startup failed before the main window appeared",
+      expect.objectContaining({ reason: "watchdog-timeout" }),
+    );
   });
 
   it("sets the About panel version without duplicating it as a build value", async () => {
@@ -671,6 +735,7 @@ describe("bootstrapApp", () => {
     expect(messagingLeaseStartMock).toHaveBeenCalledTimes(1);
     expect(registerMessagingStatusIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(createMainWindowMock).toHaveBeenCalledWith({
+      onShown: expect.any(Function),
       startupCpuProfiler: startupProfilerInstance,
     });
   });
@@ -861,6 +926,7 @@ describe("bootstrapApp", () => {
     await flushMicrotasks();
 
     expect(createMainWindowMock).toHaveBeenCalledWith({
+      onShown: expect.any(Function),
       startupCpuProfiler: startupProfilerInstance,
     });
     expect(listThreadsMock).toHaveBeenCalledWith({
@@ -877,6 +943,7 @@ describe("bootstrapApp", () => {
     await flushMicrotasks();
 
     expect(createMainWindowMock).toHaveBeenCalledWith({
+      onShown: expect.any(Function),
       startupCpuProfiler: startupProfilerInstance,
     });
     expect(listThreadsMock).not.toHaveBeenCalled();
@@ -1004,6 +1071,7 @@ describe("bootstrapApp", () => {
     await flushMicrotasks();
 
     expect(createMainWindowMock).toHaveBeenCalledWith({
+      onShown: expect.any(Function),
       startupCpuProfiler: startupProfilerInstance,
     });
     expect(mainLogWarnMock).toHaveBeenCalledWith(
@@ -1043,6 +1111,7 @@ describe("bootstrapApp", () => {
     await flushMicrotasks();
 
     expect(createMainWindowMock).toHaveBeenCalledWith({
+      onShown: expect.any(Function),
       startupCpuProfiler: startupProfilerInstance,
     });
     expect(mainLogErrorMock).toHaveBeenCalledWith(
@@ -1068,6 +1137,7 @@ describe("bootstrapApp", () => {
     activateHandler();
 
     expect(createMainWindowMock).toHaveBeenNthCalledWith(1, {
+      onShown: expect.any(Function),
       startupCpuProfiler: startupProfilerInstance,
     });
     expect(createMainWindowMock).toHaveBeenNthCalledWith(2, {
@@ -1410,6 +1480,7 @@ describe("bootstrapApp", () => {
       }),
     );
     expect(createMainWindowMock).toHaveBeenCalledWith({
+      onShown: expect.any(Function),
       startupCpuProfiler: startupProfilerInstance,
     });
   });
