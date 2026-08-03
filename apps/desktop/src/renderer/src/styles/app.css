@@ -14645,6 +14645,12 @@ a.transcript-message__messaging-origin:focus-visible {
   color: var(--text-secondary);
 }
 
+.rail-card__duration[title] {
+  cursor: help;
+  text-decoration: underline dotted var(--border-strong);
+  text-underline-offset: 2px;
+}
+
 /* Generic muted meta line (e.g. a PR's repo + number). */
 .rail-card__meta {
   margin: 0;

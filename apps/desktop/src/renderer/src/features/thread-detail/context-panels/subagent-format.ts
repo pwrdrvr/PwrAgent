@@ -1,6 +1,7 @@
 import type {
   TaskMonitorUsageSnapshot,
   ThreadSubAgentStatus,
+  ThreadSubAgentSummary,
 } from "@pwragent/shared";
 import {
   estimateOpenAiCodexCreditUsage,
@@ -53,6 +54,33 @@ export function subAgentStatusLabel(status: ThreadSubAgentStatus): string {
     case "cancelled":
       return "Cancelled";
   }
+}
+
+/** Terminal evidence is stronger than progress-oriented status text. */
+export function isTerminalSubAgent(subAgent: ThreadSubAgentSummary): boolean {
+  return (
+    subAgent.status === "success"
+    || subAgent.status === "failure"
+    || subAgent.status === "cancelled"
+    || subAgent.completedAt !== undefined
+    || subAgent.outcome !== undefined
+    || subAgent.completionSource !== undefined
+  );
+}
+
+/**
+ * New records carry completedAt. For older terminal records, updatedAt is the
+ * best durable completion boundary available and keeps their duration useful.
+ */
+export function subAgentCompletedAt(
+  subAgent: ThreadSubAgentSummary,
+): number | undefined {
+  if (subAgent.completedAt !== undefined) {
+    return subAgent.completedAt;
+  }
+  return isTerminalSubAgent(subAgent) && subAgent.updatedAt >= subAgent.createdAt
+    ? subAgent.updatedAt
+    : undefined;
 }
 
 /** Compact, locale-grouped token count (e.g. `303,488`). */

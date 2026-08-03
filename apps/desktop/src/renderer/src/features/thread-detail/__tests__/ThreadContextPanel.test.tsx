@@ -255,6 +255,8 @@ describe("ThreadContextPanel", () => {
   });
 
   it("renders persisted sub-agent cards with monitor usage", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(3_000);
     renderPanel({
       activeTab: "subagents",
       pinned: true,
@@ -317,10 +319,20 @@ describe("ThreadContextPanel", () => {
     expect(screen.getAllByRole("listitem")[0]).toHaveTextContent(
       "Watch CI until it completes.",
     );
-    // Every card shows a labeled start time; the completed one also shows
-    // the optional end time.
+    // Every card shows a second-resolution start plus a duration. The exact
+    // completed timestamp lives on the settled duration's tooltip instead of
+    // occupying the narrow rail with a second timestamp.
     expect(screen.getAllByText("Started")).toHaveLength(2);
-    expect(screen.getByText("Ended")).toBeInTheDocument();
+    expect(screen.queryByText("Ended")).not.toBeInTheDocument();
+    const timeRows = document.querySelectorAll(".rail-card__times");
+    expect(timeRows[0]?.textContent).toMatch(/\d+:\d{2}:\d{2} [AP]M · 1s/);
+    expect(timeRows[1]?.textContent).toMatch(/\d+:\d{2}:\d{2} [AP]M · 500ms/);
+    expect(
+      timeRows[1]?.querySelector(".rail-card__duration"),
+    ).toHaveAttribute(
+      "title",
+      expect.stringMatching(/^Ended .*:\d{2}:\d{2} [AP]M$/),
+    );
 
     // Details (renamed from the disabled History button) opens a modal with
     // the request, latest message, model, and token/pricing breakdown.
@@ -1805,6 +1817,7 @@ describe("ThreadContextPanel", () => {
     expect(within(activeRow as HTMLElement).getByText("Live")).toBeInTheDocument();
     const times = activeRow?.querySelector(".rail-card__times");
     expect(times?.textContent).toContain("· 1m 5s ·");
+    expect(times?.textContent).toMatch(/Started .*:\d{2}:\d{2} [AP]M/);
   });
 
   it("keeps the running duration on an active turn that trips the historical-summary heuristic", () => {
@@ -1904,6 +1917,10 @@ describe("ThreadContextPanel", () => {
     expect(screen.queryByText("Live")).not.toBeInTheDocument();
     const times = container.querySelector(".rail-card__times");
     expect(times?.textContent).toContain("· 2m 5s ·");
+    expect(times?.querySelector(".rail-card__duration")).toHaveAttribute(
+      "title",
+      expect.stringMatching(/^Ended .*:\d{2}:\d{2} [AP]M$/),
+    );
   });
 
   it("marks a running sub-agent row live with its name and a running clock", () => {
@@ -1940,6 +1957,41 @@ describe("ThreadContextPanel", () => {
     expect(within(activeRow as HTMLElement).getByText("Reviewer")).toBeInTheDocument();
     const times = activeRow?.querySelector(".rail-card__times");
     expect(times?.textContent).toContain("· 1m 5s");
+  });
+
+  it("keeps a completed sub-agent duration on its pricing card", () => {
+    const startedAt = 1_800_000_000_000;
+    const completedAt = startedAt + 125_000;
+
+    const { container } = renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      thread: {
+        ...baseThread,
+        subAgents: [
+          {
+            monitorId: "mon-1",
+            task: "Review the diff",
+            status: "success",
+            createdAt: startedAt,
+            completedAt,
+            updatedAt: completedAt,
+          },
+        ],
+      },
+      pricing: {
+        lines: [buildMonitorLine({ createdAt: startedAt + 10_000 })],
+        summaries: [],
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    const times = container.querySelector(".rail-card__times");
+    expect(times?.textContent).toMatch(/Started .*:\d{2}:\d{2} [AP]M · 2m 5s/);
+    expect(times?.querySelector(".rail-card__duration")).toHaveAttribute(
+      "title",
+      expect.stringMatching(/^Ended .*:\d{2}:\d{2} [AP]M$/),
+    );
   });
 
   for (const status of ["success", "failure", "cancelled"] as const) {

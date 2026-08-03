@@ -1,6 +1,5 @@
 import type {
   ThreadPricingSummary,
-  ThreadSubAgentStatus,
   ThreadSubAgentSummary,
   ThreadToolAccounting,
   ThreadToolInvocationRecord,
@@ -12,14 +11,15 @@ import {
   estimateTokenUsageCost,
   formatTokenUsageMicrosAsUsd,
 } from "@pwragent/shared";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
-  formatDurationMs,
-  formatRunningDurationMs,
-} from "../../../lib/format-duration";
+  formatTokenCount,
+  isTerminalSubAgent,
+  subAgentCompletedAt,
+} from "./subagent-format";
 import { formatTimestamp } from "./context-rail-shared";
-import { formatTokenCount } from "./subagent-format";
 import { subAgentPricingUsageTitle } from "./subagent-kind";
+import { RailCardTiming, useNowWhileActive } from "./RailCardTiming";
 
 type PricingPanelProps = {
   activeTurnId?: string;
@@ -37,24 +37,6 @@ type PricingPanelProps = {
    */
   subAgents?: ThreadSubAgentSummary[];
 };
-
-// Terminal sub-agent statuses — a sub-agent in any other status is still
-// running, so its usage row reads as live. Mirrors the main process
-// `codexNativeSubAgentIsTerminal`.
-const SUBAGENT_TERMINAL_STATUSES: ReadonlySet<ThreadSubAgentStatus> = new Set([
-  "success",
-  "failure",
-  "cancelled",
-]);
-
-function isTerminalSubAgent(subAgent: ThreadSubAgentSummary): boolean {
-  return (
-    SUBAGENT_TERMINAL_STATUSES.has(subAgent.status)
-    || subAgent.completedAt !== undefined
-    || subAgent.outcome !== undefined
-    || subAgent.completionSource !== undefined
-  );
-}
 
 type PricingDisplayOptions = {
   codexCredits: boolean;
@@ -314,7 +296,6 @@ export function PricingPanel(props: PricingPanelProps) {
                 ? subAgentsById.get(line.sourceItemId)
                 : undefined;
             const isActive = isActiveUsageLine({ activeTurnId, line, subAgentsById });
-            const duration = formatUsageLineDuration({ isActive, line, now });
 
             return (
               <li
@@ -356,9 +337,11 @@ export function PricingPanel(props: PricingPanelProps) {
                     : ""}
                 </p>
                 <PricingUsageTimestamp
-                  duration={duration}
+                  isActive={isActive}
                   line={line}
+                  now={now}
                   onScrollToTurn={props.onScrollToTurn}
+                  subAgent={subAgent}
                 />
                 {usageLineEstimate ? (
                   <p className="rail-card__usage">{usageLineEstimate}</p>
@@ -1272,96 +1255,41 @@ function isActiveUsageLine(params: {
 }
 
 function PricingUsageTimestamp(props: {
-  duration?: string;
+  isActive: boolean;
   line: ThreadUsageLineRecord;
+  now: number;
   onScrollToTurn?: (turnId: string, turnTimeMs?: number) => void;
+  subAgent?: ThreadSubAgentSummary;
 }) {
-  const timestamp = formatTimestamp(props.line.createdAt);
+  const startedAt =
+    props.subAgent?.createdAt ?? props.line.startedAt ?? props.line.createdAt;
+  const completedAt =
+    props.subAgent !== undefined
+      ? subAgentCompletedAt(props.subAgent)
+      : props.line.completedAt;
+  const timestamp = formatTimestamp(startedAt, { includeSeconds: true });
   const canScrollToTurn = Boolean(props.line.turnId && props.onScrollToTurn);
 
   return (
-    <p className="rail-card__times">
-      {canScrollToTurn ? (
-        <button
-          type="button"
-          className="rail-card__time-button"
-          title="Scroll the transcript to this turn"
-          aria-label={`Scroll the transcript to this turn (${timestamp})`}
-          onClick={() =>
-            props.line.turnId &&
-            props.onScrollToTurn?.(props.line.turnId, props.line.createdAt)
+    <RailCardTiming
+      completedAt={completedAt}
+      now={props.now}
+      running={props.isActive}
+      startedAt={startedAt}
+      trailing={props.line.turnId}
+      {...(canScrollToTurn
+        ? {
+            onStartClick: () => {
+              if (props.line.turnId) {
+                props.onScrollToTurn?.(props.line.turnId, startedAt);
+              }
+            },
+            startActionLabel: `Scroll the transcript to this turn (${timestamp})`,
+            startActionTitle: "Scroll the transcript to this turn",
           }
-        >
-          {timestamp}
-        </button>
-      ) : (
-        timestamp
-      )}
-      {props.duration ? ` · ${props.duration}` : ""}
-      {props.line.turnId ? ` · ${props.line.turnId}` : ""}
-    </p>
+        : {})}
+    />
   );
-}
-
-/**
- * The start-anchored timestamp on each card carries the "when", so the card
- * pairs it with a single duration rather than a second minute-resolution stop
- * stamp (two coarse stamps can't reconstruct a sub-minute turn anyway).
- *
- * - Live turn: elapsed since start, ticking once per second.
- * - Finished turn: completedAt − start, in the coarse `2h 3m 4s` style.
- * - Estimates / historical summaries / sub-agent rollups: no duration — the
- *   span isn't a single measurable turn.
- */
-function formatUsageLineDuration(params: {
-  isActive: boolean;
-  line: PricingUsageLine;
-  now: number;
-}): string {
-  const { isActive, line, now } = params;
-  const start = line.startedAt ?? line.createdAt;
-  // The active turn always shows its running clock: if it's wearing the Live
-  // chip, the duration must agree. Checked before the scope/estimate/historical
-  // guards because a live turn can trip isHistoricalUsageSummary (a >= 1M-token
-  // request with no cumulative snapshot yet), which would otherwise strand the
-  // Live chip with no ticking duration.
-  if (isActive) {
-    return formatRunningDurationMs(Math.max(0, now - start));
-  }
-  if (
-    line.scope === "monitor" ||
-    isEstimatedUsageGap(line) ||
-    isHistoricalUsageSummary(line)
-  ) {
-    return "";
-  }
-  const end = line.completedAt;
-  if (end === undefined || end <= start) {
-    return "";
-  }
-  return formatDurationMs(end - start);
-}
-
-/**
- * `Date.now()` that re-renders once per second, but only while a live turn is
- * present. When nothing is active the interval is torn down, so a settled
- * pricing panel never keeps a timer running.
- */
-function useNowWhileActive(enabled: boolean): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!enabled) {
-      return;
-    }
-    setNow(Date.now());
-    const intervalId = window.setInterval(() => {
-      setNow(Date.now());
-    }, 1_000);
-    return () => {
-      window.clearInterval(intervalId);
-    };
-  }, [enabled]);
-  return now;
 }
 
 function aggregateSummaries(
