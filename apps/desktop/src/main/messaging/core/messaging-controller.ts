@@ -336,6 +336,12 @@ type AssistantStreamBuffer = AssistantStreamDelta & {
   text: string;
 };
 
+type AssistantMessageDeliveryIdentity = {
+  itemId?: string;
+  threadId?: string;
+  turnId?: string;
+};
+
 type AutomationTurnMessagingContext = {
   automationName?: string;
   automationRunId?: string;
@@ -1427,26 +1433,46 @@ export class MessagingController {
           !isNonFinalAssistantTextForBackendEvent(event)
           && !isTaskMonitorProgressEvent(event)
         ) {
+          // Claim the stable backend item before image resolution yields. A
+          // nearly-simultaneous idle/terminal event may flush the same buffered
+          // deltas while this lookup is in flight; both paths must contend for
+          // one item identity before either can create a provider message.
+          const assistantMessageClaimed = this.markAssistantMessageDelivered(
+            event,
+            binding,
+            assistantText,
+          );
           const assistantImages = await this.resolveAssistantMessageImages(
             assistantText,
             event,
             binding,
           );
-          const deliveredFinalStream = await this.flushAssistantStreamForEvent(
-            event,
-            binding,
-            assistantText,
-          );
-          if (deliveredFinalStream) {
-            this.markAssistantMessageDelivered(event, binding, assistantText);
+          if (!assistantMessageClaimed) {
             await this.deliverAssistantImages(assistantImages, event, binding);
           } else {
-            await this.deliverAssistantMessage(
-              assistantText,
+            const deliveredFinalStream = await this.flushAssistantStreamForEvent(
               event,
               binding,
-              assistantImages,
+              assistantText,
             );
+            if (deliveredFinalStream) {
+              await this.deliverAssistantImages(
+                assistantImages,
+                event,
+                binding,
+                undefined,
+                true,
+              );
+            } else {
+              await this.deliverAssistantMessage(
+                assistantText,
+                event,
+                binding,
+                assistantImages,
+                undefined,
+                true,
+              );
+            }
           }
         } else if (!automationTurnEvent) {
           // NON-final agentMessage completions (e.g. Codex "commentary" phases
@@ -4863,7 +4889,10 @@ export class MessagingController {
     binding: MessagingBindingRecord,
   ): Promise<void> {
     const streamingEnabled = this.isStreamingResponsesEnabledForBinding(binding);
-    const fallbackTexts: string[] = [];
+    const fallbackMessages: Array<{
+      identity: AssistantMessageDeliveryIdentity;
+      text: string;
+    }> = [];
     for (const bufferKey of this.assistantStreamBufferKeysForEvent(event, binding)) {
       const buffer = this.assistantStreamBuffers.get(bufferKey);
       if (!buffer) {
@@ -4879,7 +4908,14 @@ export class MessagingController {
       // (immediately discarded) final `stream_update`. Same single-message
       // outcome, without churning the delivery budget on a doomed stream edit.
       if (!streamingEnabled) {
-        fallbackTexts.push(text);
+        fallbackMessages.push({
+          identity: {
+            itemId: buffer.itemId,
+            threadId: buffer.threadId,
+            turnId: buffer.turnId,
+          },
+          text,
+        });
         this.assistantStreamBuffers.delete(bufferKey);
         this.assistantStreamDeliveryQueues.delete(bufferKey);
         continue;
@@ -4892,15 +4928,27 @@ export class MessagingController {
       });
       const result = await this.enqueueAssistantStreamBufferDelivery(bufferKey, binding, true);
       if (!isVisibleAssistantStreamDelivery(result)) {
-        fallbackTexts.push(text);
+        fallbackMessages.push({
+          identity: {
+            itemId: buffer.itemId,
+            threadId: buffer.threadId,
+            turnId: buffer.turnId,
+          },
+          text,
+        });
       }
       this.assistantStreamBuffers.delete(bufferKey);
       this.assistantStreamDeliveryQueues.delete(bufferKey);
     }
 
-    const fallbackText = fallbackTexts.join("\n\n").trim();
-    if (fallbackText) {
-      await this.deliverAssistantMessage(fallbackText, event, binding);
+    for (const fallback of fallbackMessages) {
+      await this.deliverAssistantMessage(
+        fallback.text,
+        event,
+        binding,
+        [],
+        fallback.identity,
+      );
     }
   }
 
@@ -5033,16 +5081,22 @@ export class MessagingController {
     event: AgentEvent,
     binding: MessagingBindingRecord,
     images: MessagingImagePart[] = [],
+    identity?: AssistantMessageDeliveryIdentity,
+    deliveryClaimed = false,
   ): Promise<void> {
-    if (!this.markAssistantMessageDelivered(event, binding, text)) {
-      await this.deliverAssistantImages(images, event, binding);
+    if (
+      !deliveryClaimed
+      && !this.markAssistantMessageDelivered(event, binding, text, identity)
+    ) {
+      await this.deliverAssistantImages(images, event, binding, identity);
       return;
     }
     if (images.length > 0) {
-      this.markAssistantMessageDelivered(
+      this.rememberAssistantMessageContentDelivered(
         event,
         binding,
         assistantImageDeliverySignature(images),
+        identity,
       );
     }
     this.logger.debug?.(
@@ -5073,19 +5127,29 @@ export class MessagingController {
     images: MessagingImagePart[],
     event: AgentEvent,
     binding: MessagingBindingRecord,
+    identity?: AssistantMessageDeliveryIdentity,
+    deliveryClaimed = false,
   ): Promise<void> {
     if (images.length === 0) {
       return;
     }
     if (
-      !this.markAssistantMessageDelivered(
+      !deliveryClaimed
+      && !this.markAssistantMessageDelivered(
         event,
         binding,
         assistantImageDeliverySignature(images),
+        identity,
       )
     ) {
       return;
     }
+    this.rememberAssistantMessageContentDelivered(
+      event,
+      binding,
+      assistantImageDeliverySignature(images),
+      identity,
+    );
     await this.deliver(
       {
         id: this.newIntentId("assistant-images"),
@@ -5247,13 +5311,27 @@ export class MessagingController {
     event: AgentEvent,
     binding: MessagingBindingRecord,
     text: string,
+    identity?: AssistantMessageDeliveryIdentity,
   ): boolean {
-    const key = assistantMessageDeliveryKey(event, binding, text);
-    if (this.deliveredAssistantMessageKeys.has(key)) {
+    const keys = assistantMessageDeliveryKeys(event, binding, text, identity);
+    if (keys.some((key) => this.deliveredAssistantMessageKeys.has(key))) {
       return false;
     }
-    this.deliveredAssistantMessageKeys.add(key);
+    for (const key of keys) {
+      this.deliveredAssistantMessageKeys.add(key);
+    }
     return true;
+  }
+
+  private rememberAssistantMessageContentDelivered(
+    event: AgentEvent,
+    binding: MessagingBindingRecord,
+    text: string,
+    identity?: AssistantMessageDeliveryIdentity,
+  ): void {
+    this.deliveredAssistantMessageKeys.add(
+      assistantMessageContentDeliveryKey(event, binding, text, identity),
+    );
   }
 
   updateAuthorizedActorIds(actorIds: readonly string[]): void {
@@ -17398,30 +17476,70 @@ function shouldRecordOutboundActivity(
   return intent.kind !== "activity" && intent.kind !== "dismiss";
 }
 
-function assistantMessageDeliveryKey(
+function assistantMessageDeliveryKeys(
   event: AgentEvent,
   binding: MessagingBindingRecord,
   text: string,
+  identity?: AssistantMessageDeliveryIdentity,
+): string[] {
+  const contentKey = assistantMessageContentDeliveryKey(
+    event,
+    binding,
+    text,
+    identity,
+  );
+  const itemId = identity?.itemId ?? assistantItemIdForBackendEvent(event);
+  if (!itemId) {
+    return [contentKey];
+  }
+  // Backend item identity is authoritative and intentionally independent of
+  // turn/text: replaying one item with changed metadata must never post it
+  // again. Keep the content alias so a later turn/completed event, which may
+  // omit the item id, is deduped against the same already-delivered message.
+  return [
+    [
+      binding.id,
+      event.backend,
+      assistantMessageThreadId(event, identity),
+      `item:${itemId}`,
+    ].join("\0"),
+    contentKey,
+  ];
+}
+
+function assistantMessageContentDeliveryKey(
+  event: AgentEvent,
+  binding: MessagingBindingRecord,
+  text: string,
+  identity?: AssistantMessageDeliveryIdentity,
 ): string {
   const params = event.notification.params as {
-    threadId?: unknown;
     turn?: { id?: unknown };
     turnId?: unknown;
   };
-  const threadId = typeof params.threadId === "string" ? params.threadId : "";
   const turnId =
-    typeof params.turnId === "string"
+    identity?.turnId
+    ?? (typeof params.turnId === "string"
       ? params.turnId
       : typeof params.turn?.id === "string"
         ? params.turn.id
-        : "";
+        : "");
   return [
     binding.id,
     event.backend,
-    threadId,
+    assistantMessageThreadId(event, identity),
     turnId,
-    createHash("sha256").update(text).digest("base64url"),
+    `text:${createHash("sha256").update(text).digest("base64url")}`,
   ].join("\0");
+}
+
+function assistantMessageThreadId(
+  event: AgentEvent,
+  identity?: AssistantMessageDeliveryIdentity,
+): string {
+  const params = event.notification.params as { threadId?: unknown };
+  return identity?.threadId
+    ?? (typeof params.threadId === "string" ? params.threadId : "");
 }
 
 function isThreadStatusIdleEvent(event: AgentEvent): boolean {

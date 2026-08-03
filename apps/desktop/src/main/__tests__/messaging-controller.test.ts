@@ -13132,6 +13132,130 @@ describe("MessagingController", () => {
     ]);
   });
 
+  it("posts one assistant message when final image resolution overlaps terminal idle", async () => {
+    let releaseImageResolution: (() => void) | undefined;
+    let markImageResolutionStarted: (() => void) | undefined;
+    const imageResolutionStarted = new Promise<void>((resolve) => {
+      markImageResolutionStarted = resolve;
+    });
+    const imageResolutionReleased = new Promise<void>((resolve) => {
+      releaseImageResolution = resolve;
+    });
+    const harness = await createHarness({
+      resolveAssistantMessageImages: async () => {
+        markImageResolutionStarted?.();
+        await imageResolutionReleased;
+        return [];
+      },
+    });
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: { id: "turn-1", status: "inProgress" },
+        },
+      },
+    } satisfies AgentEvent);
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "assistant-message-1",
+          delta: "Final answer.",
+        },
+      },
+    } satisfies AgentEvent);
+
+    const finalMessage = harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "assistant-message-1",
+            type: "agentMessage",
+            phase: "final",
+            text: "Final answer.",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+    await imageResolutionStarted;
+
+    const terminalIdle = harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/status/changed",
+        params: {
+          threadId: "thread-1",
+          status: { type: "idle" },
+        },
+      },
+    } satisfies AgentEvent);
+    await terminalIdle;
+    releaseImageResolution?.();
+    await finalMessage;
+
+    expect(
+      harness.delivered.filter(
+        (intent) => intent.kind === "message" && intent.role === "assistant",
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        parts: [expect.objectContaining({ text: "Final answer." })],
+      }),
+    ]);
+  });
+
+  it("never posts the same backend assistant message id twice", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    for (const [turnId, text] of [
+      ["turn-1", "Final answer."],
+      ["turn-2", "Final answer replayed."],
+    ] as const) {
+      await harness.controller.handleBackendEvent({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId,
+            item: {
+              id: "assistant-message-1",
+              type: "agentMessage",
+              phase: "final",
+              text,
+            },
+          },
+        },
+      } satisfies AgentEvent);
+    }
+
+    expect(
+      harness.delivered.filter(
+        (intent) => intent.kind === "message" && intent.role === "assistant",
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        parts: [expect.objectContaining({ text: "Final answer." })],
+      }),
+    ]);
+  });
+
   it("posts buffered delta text as one message when streaming is disabled and terminal output is empty", async () => {
     const delivered: MessagingSurfaceIntent[] = [];
     const harness = await createHarness({
