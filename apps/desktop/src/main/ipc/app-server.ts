@@ -63,6 +63,8 @@ import {
   type PickReferenceFromDiskResponse,
   type InspectPdfReferencePathsRequest,
   type InspectPdfReferencePathsResponse,
+  type RenderComposerPdfPreviewRequest,
+  type RenderComposerPdfPreviewResponse,
   type RecordRecentFileReferencesRequest,
   type DetachThreadPullRequestRequest,
   type DetachThreadPullRequestResponse,
@@ -198,6 +200,7 @@ import {
   NAVIGATION_PICK_FILE_FROM_DISK_CHANNEL,
   NAVIGATION_PICK_REFERENCE_FROM_DISK_CHANNEL,
   NAVIGATION_INSPECT_PDF_REFERENCE_PATHS_CHANNEL,
+  NAVIGATION_RENDER_COMPOSER_PDF_PREVIEW_CHANNEL,
   NAVIGATION_RECORD_RECENT_FILE_REFERENCES_CHANNEL,
   NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL,
   NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
@@ -207,6 +210,7 @@ import {
   NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL,
 } from "../../shared/ipc";
 import { FocusedDiffService } from "../diff-focus/focused-diff-service";
+import { renderComposerPdfPreview } from "../pdf/composer-pdf-preview";
 import { getMainLogger } from "../log";
 import { buildMessagingBindingsByThreadKey } from "../messaging/messaging-bindings-snapshot";
 import { getDesktopAutomationService } from "../automations/desktop-automation-service";
@@ -350,6 +354,7 @@ function classifyReferencePaths(
 
 const PDF_MAGIC = Buffer.from("%PDF-");
 const MAX_PDF_REFERENCE_PATHS = 20;
+const MAX_COMPOSER_PDF_PREVIEW_FILE_BYTES = 64 * 1024 * 1024;
 
 function inspectPdfReferencePaths(paths: string[]): {
   filePaths: string[];
@@ -381,6 +386,87 @@ function inspectPdfReferencePaths(paths: string[]): {
     }
   }
   return { filePaths, pdfPaths };
+}
+
+/**
+ * Read one explicitly referenced PDF from a stable descriptor. The preview
+ * endpoint rechecks the magic bytes itself so a path swapped after Composer's
+ * earlier inspection cannot become an arbitrary local-file renderer.
+ */
+function readComposerPdfPreviewFile(filePath: string): {
+  data: Buffer;
+  fileIdentity: string;
+} {
+  const candidate = filePath.trim();
+  if (!candidate || !path.isAbsolute(candidate)) {
+    throw new Error("Select a local PDF before opening its preview.");
+  }
+
+  let descriptor: number | undefined;
+  try {
+    descriptor = fs.openSync(candidate, "r");
+    const before = fs.fstatSync(descriptor);
+    if (!before.isFile()) {
+      throw new Error("The selected PDF is no longer a regular file.");
+    }
+    if (before.size > MAX_COMPOSER_PDF_PREVIEW_FILE_BYTES) {
+      throw new Error("This PDF is too large to preview locally.");
+    }
+
+    const header = Buffer.alloc(PDF_MAGIC.byteLength);
+    const bytesRead = fs.readSync(descriptor, header, 0, header.byteLength, 0);
+    if (bytesRead !== PDF_MAGIC.byteLength || !header.equals(PDF_MAGIC)) {
+      throw new Error("The selected file is no longer a PDF.");
+    }
+
+    // The header read uses an explicit position, leaving the descriptor at
+    // offset zero. Reading through that descriptor avoids a path-level
+    // time-of-check/time-of-use gap while pdfjs consumes the document.
+    const data = fs.readFileSync(descriptor);
+    const after = fs.fstatSync(descriptor);
+    const fileIdentity = composerPdfPreviewFileIdentity(before);
+    if (
+      data.byteLength !== after.size
+      || fileIdentity !== composerPdfPreviewFileIdentity(after)
+    ) {
+      throw new Error("The selected PDF changed while its preview was loading.");
+    }
+    return { data, fileIdentity };
+  } catch (error) {
+    if (error instanceof Error) {
+      throw error;
+    }
+    throw new Error("The selected PDF could not be read.", { cause: error });
+  } finally {
+    if (descriptor !== undefined) {
+      fs.closeSync(descriptor);
+    }
+  }
+}
+
+function composerPdfPreviewFileIdentity(stats: {
+  ctimeMs: number;
+  dev: number;
+  ino: number;
+  mtimeMs: number;
+  size: number;
+}): string {
+  return [stats.dev, stats.ino, stats.size, stats.mtimeMs, stats.ctimeMs].join(":");
+}
+
+async function renderExplicitComposerPdfPreview(
+  request: RenderComposerPdfPreviewRequest,
+): Promise<RenderComposerPdfPreviewResponse> {
+  const file = readComposerPdfPreviewFile(request.path);
+  if (request.knownFileIdentity === file.fileIdentity) {
+    return { fileIdentity: file.fileIdentity, unchanged: true };
+  }
+
+  return {
+    ...(await renderComposerPdfPreview({ data: file.data })),
+    fileIdentity: file.fileIdentity,
+    unchanged: false,
+  };
 }
 
 function logDebug(event: string, payload: Record<string, unknown>): void {
@@ -6043,6 +6129,15 @@ export function registerAppServerIpcHandlers(): void {
     ): Promise<InspectPdfReferencePathsResponse> =>
       inspectPdfReferencePaths(request.paths ?? []),
   );
+  ipcMain.removeHandler(NAVIGATION_RENDER_COMPOSER_PDF_PREVIEW_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_RENDER_COMPOSER_PDF_PREVIEW_CHANNEL,
+    async (
+      _event,
+      request: RenderComposerPdfPreviewRequest,
+    ): Promise<RenderComposerPdfPreviewResponse> =>
+      await renderExplicitComposerPdfPreview(request),
+  );
   ipcMain.removeHandler(NAVIGATION_LIST_RECENT_FILE_REFERENCES_CHANNEL);
   ipcMain.handle(
     NAVIGATION_LIST_RECENT_FILE_REFERENCES_CHANNEL,
@@ -6128,6 +6223,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_RENDER_COMPOSER_PDF_PREVIEW_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_ATTACH_DIRECTORY_TO_THREAD_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_DETACH_DIRECTORY_FROM_THREAD_CHANNEL);
   unsubscribeWorkingStateEvents?.();

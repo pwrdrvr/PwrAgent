@@ -5616,7 +5616,7 @@ describe("Composer", () => {
     expect(steerTurn).not.toHaveBeenCalled();
   });
 
-  it("hydrates local PDF references when queued and steer drafts return to Composer", async () => {
+  it("rehydrates local PDF previews when queued and steer drafts return to Composer", async () => {
     (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
       "/Users/huntharo";
     try {
@@ -5639,6 +5639,20 @@ describe("Composer", () => {
         filePaths: ["/Users/huntharo/Downloads/Jeep"],
         pdfPaths: ["/Users/huntharo/Downloads/Jeep"],
       }));
+      const renderComposerPdfPreview = vi
+        .fn()
+        .mockResolvedValueOnce({
+          dataUrl: "data:image/png;base64,UEZERg==",
+          fileIdentity: "queued-pdf-v1",
+          height: 480,
+          pageCount: 1,
+          unchanged: false as const,
+          width: 360,
+        })
+        .mockResolvedValueOnce({
+          fileIdentity: "queued-pdf-v1",
+          unchanged: true as const,
+        });
 
       render(
         <Composer
@@ -5646,6 +5660,7 @@ describe("Composer", () => {
           desktopApi={{
             inspectPdfReferencePaths,
             onAgentEvent: () => () => undefined,
+            renderComposerPdfPreview,
           }}
           disabled={false}
           draftStore={draftStore}
@@ -5677,6 +5692,11 @@ describe("Composer", () => {
             .closest("[data-mention-kind]"),
         ).toHaveAttribute("data-mention-kind", "file");
       });
+      await waitFor(() => {
+        expect(renderComposerPdfPreview).toHaveBeenCalledWith({
+          path: "/Users/huntharo/Downloads/Jeep",
+        });
+      });
 
       fireEvent.click(
         within(screen.getByLabelText("Pending steer message")).getByRole("button", {
@@ -5690,6 +5710,12 @@ describe("Composer", () => {
             .getByText("@SteerJeep")
             .closest("[data-mention-kind]"),
         ).toHaveAttribute("data-mention-kind", "file");
+      });
+      await waitFor(() => {
+        expect(renderComposerPdfPreview).toHaveBeenLastCalledWith({
+          knownFileIdentity: "queued-pdf-v1",
+          path: "/Users/huntharo/Downloads/Jeep",
+        });
       });
       expect(inspectPdfReferencePaths).toHaveBeenCalledTimes(1);
     } finally {
@@ -14862,6 +14888,259 @@ describe("Composer", () => {
     }
   });
 
+  it("shows an explicit PDF's local first-page preview without adding it to the turn", async () => {
+    (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
+      "/Users/huntharo";
+    try {
+      const pdfPath = "/Users/huntharo/Downloads/Jeep";
+      const inspectPdfReferencePaths = vi.fn(async () => ({
+        filePaths: [pdfPath],
+        pdfPaths: [pdfPath],
+      }));
+      const renderComposerPdfPreview = vi
+        .fn()
+        .mockResolvedValueOnce({
+          dataUrl: "data:image/png;base64,UEZERg==",
+          fileIdentity: "pdf-v1",
+          height: 480,
+          pageCount: 7,
+          unchanged: false as const,
+          width: 360,
+        })
+        .mockResolvedValueOnce({
+          fileIdentity: "pdf-v1",
+          unchanged: true as const,
+        });
+      const startTurn = vi.fn(async (request: StartTurnRequest) => ({
+        backend: request.backend,
+        threadId: request.threadId,
+        turnId: "turn-1",
+      }));
+      const jeepFile = new File(["%PDF-1.7"], "Jeep", {
+        type: "application/octet-stream",
+      });
+
+      render(
+        <Composer
+          desktopApi={{
+            getPathForFile: () => pdfPath,
+            inspectPdfReferencePaths,
+            onAgentEvent: () => () => undefined,
+            renderComposerPdfPreview,
+            startTurn,
+          }}
+          disabled={false}
+          skills={[]}
+          thread={{
+            id: "thread-1",
+            title: "Compare window stickers",
+            titleSource: "explicit",
+            source: "codex",
+            linkedDirectories: [],
+            inbox: { inInbox: false },
+          }}
+        />,
+      );
+
+      fireEvent.change(screen.getByLabelText("Reply"), {
+        target: { value: "Compare the first page" },
+      });
+      fireEvent.drop(screen.getByLabelText("Reply"), {
+        dataTransfer: {
+          files: [],
+          items: [
+            {
+              kind: "file",
+              type: "application/octet-stream",
+              getAsFile: () => jeepFile,
+            },
+          ],
+        },
+      });
+
+      expect(
+        await screen.findByAltText("Page 1 preview of Jeep"),
+      ).toBeInTheDocument();
+      expect(screen.getByText("Page 1 of 7")).toBeInTheDocument();
+      expect(renderComposerPdfPreview).toHaveBeenCalledWith({ path: pdfPath });
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "Expand PDF preview for Jeep" }),
+      );
+      const dialog = screen.getByRole("dialog", { name: "PDF preview: Jeep" });
+      expect(within(dialog).getByText("Jeep · Page 1 of 7")).toBeInTheDocument();
+
+      fireEvent.focus(window);
+      await waitFor(() => {
+        expect(renderComposerPdfPreview).toHaveBeenLastCalledWith({
+          knownFileIdentity: "pdf-v1",
+          path: pdfPath,
+        });
+      });
+
+      await clickButton("Send");
+      await waitFor(() => {
+        expect(startTurn).toHaveBeenCalledWith({
+          backend: "codex",
+          threadId: "thread-1",
+          input: [
+            {
+              type: "text",
+              text: "Compare the first page\n\n[@Jeep](~/Downloads/Jeep)",
+            },
+            {
+              type: "localFile",
+              name: "Jeep",
+              path: pdfPath,
+            },
+          ],
+        });
+      });
+    } finally {
+      delete (window as unknown as { __pwragentHomeDir?: string })
+        .__pwragentHomeDir;
+    }
+  });
+
+  it("does not auto-render a PDF preview while PDF analysis is off", async () => {
+    (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
+      "/Users/huntharo";
+    try {
+      const pdfPath = "/Users/huntharo/Downloads/Jeep";
+      const inspectPdfReferencePaths = vi.fn(async () => ({
+        filePaths: [pdfPath],
+        pdfPaths: [pdfPath],
+      }));
+      const renderComposerPdfPreview = vi.fn(async () => ({
+        dataUrl: "data:image/png;base64,UEZERg==",
+        fileIdentity: "pdf-v1",
+        height: 480,
+        pageCount: 1,
+        unchanged: false as const,
+        width: 360,
+      }));
+      const jeepFile = new File(["%PDF-1.7"], "Jeep", {
+        type: "application/octet-stream",
+      });
+
+      render(
+        <Composer
+          desktopApi={{
+            getPathForFile: () => pdfPath,
+            inspectPdfReferencePaths,
+            onAgentEvent: () => () => undefined,
+            renderComposerPdfPreview,
+          }}
+          disabled={false}
+          pdfAnalysisEnabled={false}
+          skills={[]}
+          thread={{
+            id: "thread-1",
+            title: "Compare window stickers",
+            titleSource: "explicit",
+            source: "codex",
+            linkedDirectories: [],
+            inbox: { inInbox: false },
+          }}
+        />,
+      );
+
+      fireEvent.drop(screen.getByLabelText("Reply"), {
+        dataTransfer: {
+          files: [],
+          items: [
+            {
+              kind: "file",
+              type: "application/octet-stream",
+              getAsFile: () => jeepFile,
+            },
+          ],
+        },
+      });
+
+      expect(await screen.findByRole("button", { name: "Preview" })).toBeInTheDocument();
+      expect(renderComposerPdfPreview).not.toHaveBeenCalled();
+
+      await clickButton("Preview");
+      await waitFor(() => {
+        expect(renderComposerPdfPreview).toHaveBeenCalledWith({ path: pdfPath });
+      });
+    } finally {
+      delete (window as unknown as { __pwragentHomeDir?: string })
+        .__pwragentHomeDir;
+    }
+  });
+
+  it("shows PDF preview loading and retry states when local rendering fails", async () => {
+    (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
+      "/Users/huntharo";
+    try {
+      const pdfPath = "/Users/huntharo/Downloads/Jeep";
+      const preview = createDeferred<{
+        dataUrl: string;
+        fileIdentity: string;
+        height: number;
+        pageCount: number;
+        unchanged: false;
+        width: number;
+      }>();
+      const renderComposerPdfPreview = vi.fn(() => preview.promise);
+      const jeepFile = new File(["%PDF-1.7"], "Jeep", {
+        type: "application/octet-stream",
+      });
+
+      render(
+        <Composer
+          desktopApi={{
+            getPathForFile: () => pdfPath,
+            inspectPdfReferencePaths: async () => ({
+              filePaths: [pdfPath],
+              pdfPaths: [pdfPath],
+            }),
+            onAgentEvent: () => () => undefined,
+            renderComposerPdfPreview,
+          }}
+          disabled={false}
+          skills={[]}
+          thread={{
+            id: "thread-1",
+            title: "Compare window stickers",
+            titleSource: "explicit",
+            source: "codex",
+            linkedDirectories: [],
+            inbox: { inInbox: false },
+          }}
+        />,
+      );
+
+      fireEvent.drop(screen.getByLabelText("Reply"), {
+        dataTransfer: {
+          files: [],
+          items: [
+            {
+              kind: "file",
+              type: "application/octet-stream",
+              getAsFile: () => jeepFile,
+            },
+          ],
+        },
+      });
+
+      expect(await screen.findByText("Loading preview")).toBeInTheDocument();
+      await act(async () => {
+        preview.reject(new Error("PDF is damaged"));
+        await preview.promise.catch(() => undefined);
+      });
+      expect(
+        await screen.findByText("Preview unavailable"),
+      ).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Retry preview" })).toBeInTheDocument();
+    } finally {
+      delete (window as unknown as { __pwragentHomeDir?: string })
+        .__pwragentHomeDir;
+    }
+  });
+
   it("does not infer PDF analysis from a reference filename suffix", async () => {
     (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
       "/Users/huntharo";
@@ -15122,12 +15401,14 @@ describe("Composer", () => {
       filePaths: [],
       pdfPaths: [],
     }));
+    const renderComposerPdfPreview = vi.fn();
 
     render(
       <Composer
         desktopApi={{
           inspectPdfReferencePaths,
           onAgentEvent: () => () => undefined,
+          renderComposerPdfPreview,
         }}
         disabled={false}
         skills={[]}
@@ -15148,6 +15429,7 @@ describe("Composer", () => {
     await flushReactUpdates();
 
     expect(inspectPdfReferencePaths).not.toHaveBeenCalled();
+    expect(renderComposerPdfPreview).not.toHaveBeenCalled();
   });
 
   it("hydrates a restored extensionless PDF reference before sending", async () => {
@@ -15166,6 +15448,14 @@ describe("Composer", () => {
         filePaths: ["/Users/huntharo/Downloads/Jeep"],
         pdfPaths: ["/Users/huntharo/Downloads/Jeep"],
       }));
+      const renderComposerPdfPreview = vi.fn(async () => ({
+        dataUrl: "data:image/png;base64,UEZERg==",
+        fileIdentity: "restored-pdf-v1",
+        height: 480,
+        pageCount: 1,
+        unchanged: false as const,
+        width: 360,
+      }));
       const startTurn = vi.fn(async () => ({
         backend: "codex" as const,
         threadId: "thread-1",
@@ -15177,6 +15467,7 @@ describe("Composer", () => {
           desktopApi={{
             onAgentEvent: () => () => undefined,
             inspectPdfReferencePaths,
+            renderComposerPdfPreview,
             startTurn,
           }}
           disabled={false}
@@ -15207,6 +15498,11 @@ describe("Composer", () => {
       expect(
         await screen.findByText(/PDF analysis is on\./),
       ).toBeInTheDocument();
+      await waitFor(() => {
+        expect(renderComposerPdfPreview).toHaveBeenCalledWith({
+          path: "/Users/huntharo/Downloads/Jeep",
+        });
+      });
 
       await clickButton("Send");
 
