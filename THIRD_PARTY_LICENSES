@@ -246,6 +246,7 @@ MIT
 - json-with-bigint@3.5.8 | https://github.com/Ivan-Korolenko/json-with-bigint
 - jsonfile@6.2.1 | https://github.com/jprichardson/node-jsonfile
 - katex@0.16.47 | https://github.com/KaTeX/KaTeX
+- katex@0.18.1 | https://github.com/KaTeX/KaTeX
 - lazy-val@1.0.5 | develar/lazy-val
 - linkifyjs@4.3.3 | https://github.com/nfrasser/linkifyjs
 - lodash.escaperegexp@4.1.2 | lodash/lodash
@@ -342,8 +343,8 @@ MIT
 - pump@3.0.4 | https://github.com/mafintosh/pump
 - range-parser@1.3.0 | jshttp/range-parser
 - raw-body@3.0.2 | stream-utils/raw-body
-- react@19.2.7 | https://github.com/facebook/react
-- react-dom@19.2.7 | https://github.com/facebook/react
+- react@19.2.8 | https://github.com/react/react
+- react-dom@19.2.8 | https://github.com/react/react
 - react-markdown@10.1.0 | remarkjs/react-markdown
 - readable-stream@3.6.2 | https://github.com/nodejs/readable-stream
 - rehype-katex@7.0.1 | https://github.com/remarkjs/remark-math/tree/main/packages/rehype-katex
@@ -4212,6 +4213,7 @@ katex@0.16.47 (MIT)
 
 Applies to:
 - katex@0.16.47 (MIT)
+- katex@0.18.1 (MIT)
 
 Representative file: katex@0.16.47/LICENSE
 
@@ -5576,16 +5578,16 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 
-react@19.2.7 (MIT)
+react@19.2.8 (MIT)
 ------------------
 
 Applies to:
-- react@19.2.7 (MIT)
-- react-dom@19.2.7 (MIT)
+- react@19.2.8 (MIT)
+- react-dom@19.2.8 (MIT)
 - scheduler@0.27.0 (MIT)
 - use-sync-external-store@1.6.0 (MIT)
 
-Representative file: react@19.2.7/LICENSE
+Representative file: react@19.2.8/LICENSE
 
 MIT License
 
