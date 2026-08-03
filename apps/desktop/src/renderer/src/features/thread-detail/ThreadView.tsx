@@ -58,12 +58,10 @@ import {
   THREAD_HISTORY_PAGE_LIMIT,
 } from "../../lib/thread-history-limits";
 import { formatBackendLabel } from "../../lib/backend-label";
-import { isSameWorktreeSubthreadLaunchpad } from "../../lib/subthread-launchpads";
 import { resolvePreferredEditor } from "../../lib/preferred-application";
 import { Composer } from "../composer/Composer";
 import type { ComposerDraftStore } from "../composer/useComposerDraftStore";
 import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
-import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import { ThreadContextPanel } from "./ThreadContextPanel";
 import {
   DEFAULT_CONTEXT_TAB,
@@ -2557,48 +2555,65 @@ export function ThreadView(props: ThreadViewProps) {
 
   if (pendingForkEnvironmentSetup) {
     return (
-      <section className="thread-view thread-view--launchpad">
-        <header className="thread-header thread-header--launchpad">
-          <div className="thread-header__main thread-header__main--launchpad">
-            <div className="thread-header__eyebrow-row">
-              <p className="eyebrow">Forking thread</p>
-              <span className="chip chip--backend">
-                {formatBackendLabel(pendingForkEnvironmentSetup.backend, props.backends)}
-              </span>
-            </div>
-            <h2 className="thread-header__title">
-              {pendingForkEnvironmentSetup.directoryLabel}
-            </h2>
-          </div>
+      <section
+        className="thread-view thread-view--launchpad"
+        style={
+          {
+            "--context-rail-width": `${contextRailWidth}px`,
+          } as CSSProperties
+        }
+      >
+        <ThreadPlaceholderHeader
+          backendLabel={formatBackendLabel(
+            pendingForkEnvironmentSetup.backend,
+            props.backends,
+          )}
+          desktopApi={props.desktopApi}
+          projectLabel={pendingForkEnvironmentSetup.directoryLabel}
+          title="Forking thread"
+          onOpenMessagingActivity={props.onOpenMessagingActivity}
+          layout={{
+            sidebarOpen: !sidebarHidden,
+            railOpen: contextRailPinned,
+            onToggleSidebar,
+            onToggleRail: () => onContextRailPinnedChange(!contextRailPinned),
+          }}
+          masthead={props.mastheadActions}
+          history={props.historyNav}
+        />
 
-          <div className="thread-header__launchpad-aside">
-            <div className="thread-header__stats">
-              <div>
-                <span className="thread-header__stat-label">Workspace</span>
-                <strong>New worktree</strong>
-              </div>
-              <div>
-                <span className="thread-header__stat-label">Environment</span>
-                <strong>{pendingForkEnvironmentSetup.environmentName}</strong>
-              </div>
+        <div
+          className={`thread-view__layout${
+            contextRailPinned ? " has-pinned-context-rail" : ""
+          }${contextRailResizing ? " is-resizing-context-rail" : ""}`}
+        >
+          <div className="thread-view__primary">
+            <div className="thread-view__launchpad-composer">
+              <LaunchpadEnvironmentSetupPending
+                command={
+                  launchpadSetupProgress?.command ??
+                  pendingForkEnvironmentSetup.command
+                }
+                cwd={launchpadSetupProgress?.cwd ?? pendingForkEnvironmentSetup.cwd}
+                directoryLabel={pendingForkEnvironmentSetup.directoryLabel}
+                environmentName={
+                  launchpadSetupProgress?.environmentName ??
+                  pendingForkEnvironmentSetup.environmentName
+                }
+                progress={launchpadSetupProgress}
+              />
             </div>
-            <MessagingStatusBar
-              desktopApi={props.desktopApi}
-              onOpenActivity={props.onOpenMessagingActivity}
-            />
           </div>
-        </header>
-
-        <div className="thread-view__launchpad-composer">
-          <LaunchpadEnvironmentSetupPending
-            command={launchpadSetupProgress?.command ?? pendingForkEnvironmentSetup.command}
-            cwd={launchpadSetupProgress?.cwd ?? pendingForkEnvironmentSetup.cwd}
-            directoryLabel={pendingForkEnvironmentSetup.directoryLabel}
-            environmentName={
-              launchpadSetupProgress?.environmentName ??
-              pendingForkEnvironmentSetup.environmentName
-            }
-            progress={launchpadSetupProgress}
+          <ThreadContextPanel
+            activeTab={activeContextTab}
+            backendError={props.backendError}
+            backends={props.backends}
+            desktopApi={props.desktopApi}
+            onActiveTabChange={onActiveContextTabChange}
+            onResizingChange={setContextRailResizing}
+            onWidthChange={setContextRailWidth}
+            width={contextRailWidth}
+            pinned={contextRailPinned}
           />
         </div>
       </section>
@@ -2639,49 +2654,6 @@ export function ThreadView(props: ThreadViewProps) {
     const launchpadBackend = props.backends.find(
       (backend) => backend.kind === selectedLaunchpad.backend
     );
-    const syncLabel = formatDirectorySync(props.selectedDirectory);
-    const sameWorktreeSubthread = isSameWorktreeSubthreadLaunchpad(
-      selectedLaunchpad.directoryKey,
-    );
-    const launchpadIsSubthread = Boolean(selectedLaunchpad.parentThreadId);
-    const launchpadCurrentBranch =
-      props.selectedDirectory.gitStatus?.currentBranch ?? selectedLaunchpad.branchName;
-    const workspaceLabel =
-      props.selectedDirectory.kind === "workspace"
-        ? "Workspace"
-        : sameWorktreeSubthread
-          ? "Same worktree"
-          : selectedLaunchpad.workMode === "worktree"
-            ? "New worktree"
-            : "Local checkout";
-    const launchpadTitle =
-      props.selectedDirectory.kind === "workspace"
-        ? "New thread"
-        : selectedLaunchpad.directoryLabel;
-    const launchpadBranchLabel =
-      selectedLaunchpad.workMode === "worktree"
-        ? selectedLaunchpad.branchName ??
-          props.selectedDirectory.gitStatus?.currentBranch ??
-          "Pick one"
-        : launchpadCurrentBranch ?? "Not attached";
-    const launchpadBranchDetailLabel =
-      selectedLaunchpad.workMode === "worktree" ? "Base branch" : "Current branch";
-    const launchpadBranchDetailValue =
-      selectedLaunchpad.workMode === "worktree"
-        ? launchpadBranchLabel
-        : launchpadCurrentBranch ??
-          (props.selectedDirectory.gitStatus?.syncState === "status-unavailable"
-            ? "Unavailable"
-            : "Not a Git repo");
-    const launchpadStatusValue =
-      launchpadIsSubthread
-        ? "Starts empty"
-        : syncLabel ?? "Directory context only";
-    const launchpadDirectoryStatusValue =
-      syncLabel ??
-      (sameWorktreeSubthread && selectedLaunchpad.branchName
-        ? "Git worktree"
-        : "Directory context only");
     const selectedLaunchpadCodexEnvironment =
       selectedLaunchpad.codexEnvironmentOptions?.find(
         (environment) => environment.id === selectedLaunchpad.codexEnvironmentId,
@@ -2721,167 +2693,145 @@ export function ThreadView(props: ThreadViewProps) {
     };
 
     return (
-      <section className="thread-view thread-view--launchpad">
-        <header className="thread-header thread-header--launchpad">
-          <div className="thread-header__main thread-header__main--launchpad">
-            <div className="thread-header__eyebrow-row">
-              <p className="eyebrow">New thread</p>
-              <span className="chip chip--backend">
-                {formatBackendLabel(selectedLaunchpad.backend, props.backends)}
-              </span>
-            </div>
-            <h2 className="thread-header__title">{launchpadTitle}</h2>
-          </div>
-
-          <div className="thread-header__launchpad-aside">
-            <div className="thread-header__stats">
-              <div>
-                <span className="thread-header__stat-label">Workspace</span>
-                <strong>{workspaceLabel}</strong>
-              </div>
-              <div>
-                <span className="thread-header__stat-label">Branch</span>
-                <strong>{launchpadBranchLabel}</strong>
-              </div>
-            </div>
-            <MessagingStatusBar
-              desktopApi={props.desktopApi}
-              onOpenActivity={props.onOpenMessagingActivity}
-            />
-          </div>
-        </header>
-
-        <div className="launchpad-panel launchpad-panel--compact">
-          <div className="launchpad-panel__summary">
-            <div>
-              <span className="launchpad-panel__label">Project</span>
-              <strong>{selectedLaunchpad.directoryLabel}</strong>
-            </div>
-            <div>
-              <span className="launchpad-panel__label">Threads</span>
-              <strong>
-                {props.selectedDirectory.threadKeys.length} thread
-                {props.selectedDirectory.threadKeys.length === 1 ? "" : "s"}
-              </strong>
-            </div>
-            {launchpadIsSubthread ? (
-              <div>
-                <span className="launchpad-panel__label">Grouped under</span>
-                <strong
-                  title={selectedLaunchpad.parentThreadTitle ?? selectedLaunchpad.parentThreadId}
-                >
-                  {selectedLaunchpad.parentThreadTitle ?? selectedLaunchpad.parentThreadId}
-                </strong>
-              </div>
-            ) : null}
-            <div>
-              <span className="launchpad-panel__label">
-                {launchpadIsSubthread ? "History" : "Status"}
-              </span>
-              <strong>{launchpadStatusValue}</strong>
-            </div>
-          </div>
-
-          <dl className="launchpad-grid">
-            <div>
-              <dt>Path</dt>
-              <dd>{props.selectedDirectory.path ?? "Not recorded"}</dd>
-            </div>
-            <div>
-              <dt>{launchpadBranchDetailLabel}</dt>
-              <dd>{launchpadBranchDetailValue}</dd>
-            </div>
-            <div>
-              <dt>Upstream</dt>
-              <dd>{props.selectedDirectory.gitStatus?.upstreamBranch ?? "Not tracking"}</dd>
-            </div>
-            <div>
-              <dt>Status</dt>
-              <dd>{launchpadDirectoryStatusValue}</dd>
-            </div>
-          </dl>
-        </div>
-
-        <div className="thread-view__launchpad-composer">
-          {launchpadMaterializing && launchpadMaterializeError ? (
-            <LaunchpadMaterializeFailure
-              directoryLabel={selectedLaunchpad.directoryLabel}
-              error={launchpadMaterializeError}
-              onClose={() => {
-                setLaunchpadMaterializing(false);
-                setLaunchpadMaterializeError(undefined);
-              }}
-            />
-          ) : launchpadMaterializing && launchpadRunningCodexEnvironmentSetup ? (
-            <LaunchpadEnvironmentSetupPending
-              command={
-                launchpadSetupProgress?.command ??
-                selectedLaunchpadCodexEnvironment?.setupScript
-              }
-              cwd={launchpadSetupProgress?.cwd ?? selectedLaunchpad.directoryPath}
-              directoryLabel={selectedLaunchpad.directoryLabel}
-              environmentName={
-                launchpadSetupProgress?.environmentName ??
-                selectedLaunchpadCodexEnvironment?.name
-              }
-              progress={launchpadSetupProgress}
-            />
-          ) : launchpadMaterializing ? (
-            <section
-              className="transcript-panel transcript-panel--pending"
-              aria-label="Preparing transcript"
-            >
-              <div className="launchpad-pending">
-                <p className="eyebrow">Preparing transcript</p>
-                <h3>Starting {selectedLaunchpad.directoryLabel}</h3>
-                <p>Your prompt was sent. The transcript will appear here when the thread is ready.</p>
-              </div>
-            </section>
-          ) : (
-            <Composer
-              backends={props.backends}
-              applications={props.applications}
-              codexFastAllowed={props.codexFastAllowed}
-              providerModelDefaults={props.providerModelDefaults}
-              desktopApi={props.desktopApi}
-              onShowNotice={props.onShowNotice}
-              onProviderSelected={props.onProviderSelected}
-              composerImplementation={props.composerImplementation}
-              draftStore={props.composerDraftStore}
-              directory={props.selectedDirectory}
-              directories={props.directories}
-              disabled={launchpadBackend ? !launchpadBackend.available : false}
-              unavailableReason={launchpadBackend?.unavailableReason}
-              launchpad={selectedLaunchpad}
-              launchpadError={props.launchpadError}
-              pastedImageMaxPatches={props.pastedImageMaxPatches}
-              pdfAnalysisEnabled={props.pdfAnalysisEnabled}
-              fullAccessRiskWarningDismissed={
-                props.fullAccessRiskWarningDismissed
-              }
-              onEnsureSkillsLoaded={props.onEnsureSkillsLoaded}
-              onDismissFullAccessRiskWarning={
-                props.onDismissFullAccessRiskWarning
-              }
-              onMaterializeLaunchpad={handleMaterializeLaunchpad}
-              onCancelLaunchpad={props.onCancelLaunchpad}
-              onUpdateLaunchpad={props.onUpdateLaunchpad}
-              onSelectDirectoryFromPicker={props.onSelectDirectoryFromPicker}
-              onSelectNoDirectoryFromPicker={props.onSelectNoDirectoryFromPicker}
-              onPickAndRegisterDirectory={props.onPickAndRegisterDirectory}
-              onPickAndAttachDirectoryToThread={
-                props.onPickAndAttachDirectoryToThread
-              }
-              onPickDirectoryForReference={props.onPickDirectoryForReference}
-              onClearPickDirectoryError={props.onClearPickDirectoryError}
-              pickDirectoryError={props.pickDirectoryError}
-              pickingDirectory={props.pickingDirectory}
-              skillError={props.skillError}
-              skillLoading={props.skillLoading}
-              providerCommands={props.providerCommands ?? []}
-              skills={props.skills}
-            />
+      <section
+        className="thread-view thread-view--launchpad"
+        style={
+          {
+            "--context-rail-width": `${contextRailWidth}px`,
+          } as CSSProperties
+        }
+      >
+        <ThreadPlaceholderHeader
+          backendLabel={formatBackendLabel(
+            selectedLaunchpad.backend,
+            props.backends,
           )}
+          desktopApi={props.desktopApi}
+          contextLabel={
+            selectedLaunchpad.parentThreadTitle || selectedLaunchpad.parentThreadId
+              ? `Grouped under ${
+                  selectedLaunchpad.parentThreadTitle ??
+                  selectedLaunchpad.parentThreadId
+                }`
+              : undefined
+          }
+          projectLabel={selectedLaunchpad.directoryLabel}
+          title="New thread"
+          onOpenMessagingActivity={props.onOpenMessagingActivity}
+          layout={{
+            sidebarOpen: !sidebarHidden,
+            railOpen: contextRailPinned,
+            onToggleSidebar,
+            onToggleRail: () => onContextRailPinnedChange(!contextRailPinned),
+          }}
+          masthead={props.mastheadActions}
+          history={props.historyNav}
+        />
+
+        <div
+          className={`thread-view__layout${
+            contextRailPinned ? " has-pinned-context-rail" : ""
+          }${contextRailResizing ? " is-resizing-context-rail" : ""}`}
+        >
+          <div className="thread-view__primary">
+            <div className="thread-view__launchpad-composer">
+              {launchpadMaterializing && launchpadMaterializeError ? (
+                <LaunchpadMaterializeFailure
+                  directoryLabel={selectedLaunchpad.directoryLabel}
+                  error={launchpadMaterializeError}
+                  onClose={() => {
+                    setLaunchpadMaterializing(false);
+                    setLaunchpadMaterializeError(undefined);
+                  }}
+                />
+              ) : launchpadMaterializing && launchpadRunningCodexEnvironmentSetup ? (
+                <LaunchpadEnvironmentSetupPending
+                  command={
+                    launchpadSetupProgress?.command ??
+                    selectedLaunchpadCodexEnvironment?.setupScript
+                  }
+                  cwd={
+                    launchpadSetupProgress?.cwd ?? selectedLaunchpad.directoryPath
+                  }
+                  directoryLabel={selectedLaunchpad.directoryLabel}
+                  environmentName={
+                    launchpadSetupProgress?.environmentName ??
+                    selectedLaunchpadCodexEnvironment?.name
+                  }
+                  progress={launchpadSetupProgress}
+                />
+              ) : launchpadMaterializing ? (
+                <section
+                  className="transcript-panel transcript-panel--pending"
+                  aria-label="Preparing transcript"
+                >
+                  <div className="launchpad-pending">
+                    <p className="eyebrow">Preparing transcript</p>
+                    <h3>Starting {selectedLaunchpad.directoryLabel}</h3>
+                    <p>
+                      Your prompt was sent. The transcript will appear here when
+                      the thread is ready.
+                    </p>
+                  </div>
+                </section>
+              ) : (
+                <Composer
+                  backends={props.backends}
+                  applications={props.applications}
+                  codexFastAllowed={props.codexFastAllowed}
+                  providerModelDefaults={props.providerModelDefaults}
+                  desktopApi={props.desktopApi}
+                  onShowNotice={props.onShowNotice}
+                  onProviderSelected={props.onProviderSelected}
+                  composerImplementation={props.composerImplementation}
+                  draftStore={props.composerDraftStore}
+                  directory={props.selectedDirectory}
+                  directories={props.directories}
+                  disabled={launchpadBackend ? !launchpadBackend.available : false}
+                  unavailableReason={launchpadBackend?.unavailableReason}
+                  launchpad={selectedLaunchpad}
+                  launchpadError={props.launchpadError}
+                  pastedImageMaxPatches={props.pastedImageMaxPatches}
+                  pdfAnalysisEnabled={props.pdfAnalysisEnabled}
+                  fullAccessRiskWarningDismissed={
+                    props.fullAccessRiskWarningDismissed
+                  }
+                  onEnsureSkillsLoaded={props.onEnsureSkillsLoaded}
+                  onDismissFullAccessRiskWarning={
+                    props.onDismissFullAccessRiskWarning
+                  }
+                  onMaterializeLaunchpad={handleMaterializeLaunchpad}
+                  onCancelLaunchpad={props.onCancelLaunchpad}
+                  onUpdateLaunchpad={props.onUpdateLaunchpad}
+                  onSelectDirectoryFromPicker={props.onSelectDirectoryFromPicker}
+                  onSelectNoDirectoryFromPicker={props.onSelectNoDirectoryFromPicker}
+                  onPickAndRegisterDirectory={props.onPickAndRegisterDirectory}
+                  onPickAndAttachDirectoryToThread={
+                    props.onPickAndAttachDirectoryToThread
+                  }
+                  onPickDirectoryForReference={props.onPickDirectoryForReference}
+                  onClearPickDirectoryError={props.onClearPickDirectoryError}
+                  pickDirectoryError={props.pickDirectoryError}
+                  pickingDirectory={props.pickingDirectory}
+                  skillError={props.skillError}
+                  skillLoading={props.skillLoading}
+                  providerCommands={props.providerCommands ?? []}
+                  skills={props.skills}
+                />
+              )}
+            </div>
+          </div>
+          <ThreadContextPanel
+            activeTab={activeContextTab}
+            backendError={props.backendError}
+            backends={props.backends}
+            desktopApi={props.desktopApi}
+            onActiveTabChange={onActiveContextTabChange}
+            onResizingChange={setContextRailResizing}
+            onWidthChange={setContextRailWidth}
+            width={contextRailWidth}
+            pinned={contextRailPinned}
+          />
         </div>
       </section>
     );
@@ -3401,34 +3351,6 @@ export function ThreadView(props: ThreadViewProps) {
 
     </section>
   );
-}
-
-function formatDirectorySync(directory: NavigationDirectorySummary): string | undefined {
-  const status = directory.gitStatus;
-  if (!status) {
-    return undefined;
-  }
-
-  if (status.syncState === "in-sync") {
-    return "Up to date";
-  }
-  if (status.syncState === "ahead") {
-    return `${status.ahead ?? 0} ahead`;
-  }
-  if (status.syncState === "behind") {
-    return `${status.behind ?? 0} behind`;
-  }
-  if (status.syncState === "diverged") {
-    return `${status.ahead ?? 0} ahead · ${status.behind ?? 0} behind`;
-  }
-  if (status.syncState === "untracked") {
-    return "No upstream";
-  }
-  if (status.syncState === "status-unavailable") {
-    return "Status unavailable";
-  }
-
-  return undefined;
 }
 
 function threadDirectoryPaths(thread: NavigationThreadSummary): string[] {

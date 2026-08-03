@@ -1072,9 +1072,6 @@ textarea,
      compact title's top at y=18.5 — exactly where the brand sits in
      the sidebar masthead. Result: title, brand, and messaging pills
      all share the same vertical centerline.
-     The launchpad variant (`.thread-header--launchpad`) overrides
-     align-items back to flex-start since it has its own taller
-     stacked layout.
      The header is now a column: a single top row (breadcrumb + chips on
      the left, layout toggles + MessagingStatusBar on the right) with any
      directory/branch warnings stacked beneath it. Keeping MSG in the top
@@ -3653,7 +3650,6 @@ textarea,
 .thread-row__time,
 .directory-group__count,
 .context-list__meta,
-.thread-header__stat-label,
 .transcript-message__time {
   color: var(--text-muted);
   font-size: 12px;
@@ -8589,16 +8585,6 @@ textarea,
   color: var(--danger-text);
 }
 
-.thread-view--launchpad {
-  gap: 12px;
-  padding: 0 24px 16px 24px;
-}
-
-.thread-view--launchpad > .thread-header,
-.thread-view--launchpad > .launchpad-panel {
-  flex: 0 0 auto;
-}
-
 .thread-view__launchpad-composer {
   display: flex;
   flex: 0 0 auto;
@@ -8620,9 +8606,7 @@ textarea,
 
 /* The launchpad surface doesn't have a transcript above the composer,
    so the composer's `border-top` (issue #240) would render as a
-   floating divider line with empty space above it. The launchpad-panel
-   above the composer is its own visually-framed card; no divider line
-   needed between it and the composer. */
+   floating divider line with empty space above it. */
 .thread-view__launchpad-composer > .composer {
   border-top: 0;
 }
@@ -8630,32 +8614,6 @@ textarea,
 .thread-header__title {
   font-size: 40px;
   font-weight: 700;
-}
-
-.thread-header--launchpad {
-  /* The launchpad header keeps its own row layout (title column +
-     aside), so opt back out of the base header's column stacking. */
-  flex-direction: row;
-  align-items: flex-start;
-  padding-left: 0;
-  padding-right: 0;
-}
-
-.thread-header__main--launchpad {
-  flex: 1 1 auto;
-}
-
-.thread-header__launchpad-aside {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: flex-start;
-  gap: 16px;
-  min-width: max-content;
-}
-
-.thread-header--launchpad .messaging-status-bar {
-  padding-top: 0;
-  padding-bottom: 0;
 }
 
 .environment-setup-choice {
@@ -8795,10 +8753,6 @@ textarea,
   gap: 8px;
 }
 
-.thread-header--launchpad .thread-header__title {
-  font-size: 34px;
-}
-
 .thread-header__eyebrow-row {
   display: flex;
   align-items: center;
@@ -8893,14 +8847,6 @@ textarea,
   max-width: min(26ch, 28%);
 }
 
-.thread-header--launchpad .thread-header__eyebrow-row {
-  flex-wrap: wrap;
-}
-
-.thread-header--launchpad .thread-header__eyebrow-row > .thread-row__chip {
-  max-width: 100%;
-}
-
 .thread-header__warning {
   max-width: min(72vw, 760px);
   margin: 10px 0 0;
@@ -8917,18 +8863,6 @@ textarea,
   color: var(--accent-bright);
   font-family: var(--font-mono);
   overflow-wrap: anywhere;
-}
-
-.thread-header__stats {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(104px, 1fr));
-  gap: 12px;
-}
-
-.thread-header__stats strong {
-  display: block;
-  margin-top: 4px;
-  font-size: 14px;
 }
 
 .thread-view__layout {
@@ -9081,81 +9015,6 @@ textarea,
 .transcript-panel,
 .composer {
   background: transparent;
-}
-
-.launchpad-panel {
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  background: var(--bg-panel);
-}
-
-.launchpad-panel--compact {
-  display: grid;
-  grid-template-columns: minmax(220px, 0.9fr) minmax(0, 1.6fr);
-  align-items: stretch;
-}
-
-.launchpad-panel__header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 16px 16px 12px;
-  border-bottom: 1px solid var(--border-subtle);
-}
-
-.launchpad-panel__header p {
-  margin: 4px 0 0;
-  color: var(--text-secondary);
-  font-size: 14px;
-  line-height: 1.45;
-}
-
-.launchpad-panel__summary {
-  display: grid;
-  gap: 10px;
-  padding: 14px 16px;
-  border-right: 1px solid var(--border-subtle);
-}
-
-.launchpad-panel__summary strong {
-  display: block;
-  margin-top: 3px;
-  overflow: hidden;
-  color: var(--text-primary);
-  font-size: 14px;
-  line-height: 1.25;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.launchpad-panel__label {
-  display: block;
-  color: var(--text-muted);
-  font-size: 11px;
-  font-weight: 700;
-  text-transform: uppercase;
-}
-
-.launchpad-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px 14px;
-  padding: 14px 16px;
-}
-
-.launchpad-grid dt {
-  color: var(--text-muted);
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.launchpad-grid dd {
-  margin: 4px 0 0;
-  color: var(--text-primary);
-  font-size: 14px;
-  line-height: 1.45;
-  word-break: break-word;
 }
 
 .transcript-panel {
@@ -18647,20 +18506,6 @@ a.transcript-message__messaging-origin:focus-visible {
     bottom: 16px;
   }
 
-  .launchpad-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .launchpad-panel--compact {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .launchpad-panel__summary {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    border-right: 0;
-    border-bottom: 1px solid var(--border-subtle);
-  }
-
   /* No rail overrides at narrow widths. The rail is anchored to
      `.thread-view__layout` (position: absolute) and its width is the
      sidebar-aware `--context-rail-effective`, which already shrinks the
@@ -18704,18 +18549,6 @@ a.transcript-message__messaging-origin:focus-visible {
 
   .thread-header__title {
     font-size: 32px;
-  }
-
-  .thread-header--launchpad {
-    align-items: flex-start;
-  }
-
-  .thread-header--launchpad .thread-header__title {
-    font-size: 30px;
-  }
-
-  .launchpad-panel__summary {
-    grid-template-columns: minmax(0, 1fr);
   }
 
   .composer__review-options {

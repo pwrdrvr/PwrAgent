@@ -354,8 +354,10 @@ export function Sidebar(props: SidebarProps) {
 
   // A direct navigation change (history, search, a thread link, etc.) starts a
   // fresh selection. Modified clicks deliberately do not navigate, so they can
-  // build a batch without making the detail pane jump around.
-  useEffect(() => {
+  // build a batch without making the detail pane jump around. Keep this in a
+  // layout effect so a launchpad cannot paint once with the previous thread's
+  // local batch-selection highlight still visible.
+  useLayoutEffect(() => {
     if (selectedItemKey === previousSelectedItemKeyRef.current) {
       return;
     }

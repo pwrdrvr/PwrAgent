@@ -164,9 +164,11 @@ async function openDirectoryLaunchpad(app: Awaited<ReturnType<typeof launchElect
     .getByRole("button", { name: "Open new thread launchpad for FixtureRepo" })
     .click();
 
+  const header = app.window.locator(".thread-header");
   await expect(
-    app.window.getByRole("heading", { level: 2, name: "FixtureRepo" }),
+    header.getByRole("heading", { level: 2, name: "New thread" }),
   ).toBeVisible();
+  await expect(header.getByText("FixtureRepo", { exact: true })).toBeVisible();
 }
 
 async function openExistingThread(app: Awaited<ReturnType<typeof launchElectronApp>>) {

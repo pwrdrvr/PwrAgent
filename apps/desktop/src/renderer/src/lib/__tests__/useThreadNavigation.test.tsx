@@ -5498,8 +5498,11 @@ describe("useThreadNavigation", () => {
       "subthread:codex:thread-parent:local",
     );
 
+    let restoredSourceThread = false;
     await act(async () => {
-      result.current.discardLaunchpad("subthread:codex:thread-parent:local");
+      restoredSourceThread = result.current.discardLaunchpad(
+        "subthread:codex:thread-parent:local",
+      );
     });
 
     // A sub-thread launchpad has no registeredAt, so cancel drops the whole
@@ -5507,6 +5510,7 @@ describe("useThreadNavigation", () => {
     expect(resetDirectoryLaunchpad).toHaveBeenCalledWith({
       directoryKey: "subthread:codex:thread-parent:local",
     });
+    expect(restoredSourceThread).toBe(true);
     expect(result.current.selectedLaunchpad).toBeUndefined();
   });
 
@@ -5595,8 +5599,11 @@ describe("useThreadNavigation", () => {
       "subthread:codex:thread-parent:local",
     );
 
+    let restoredSourceThread = false;
     await act(async () => {
-      result.current.discardLaunchpad("subthread:codex:thread-parent:local");
+      restoredSourceThread = result.current.discardLaunchpad(
+        "subthread:codex:thread-parent:local",
+      );
     });
 
     // Cancel must still resolve the launchpad (from localLaunchpads via the
@@ -5605,6 +5612,7 @@ describe("useThreadNavigation", () => {
     expect(resetDirectoryLaunchpad).toHaveBeenCalledWith({
       directoryKey: "subthread:codex:thread-parent:local",
     });
+    expect(restoredSourceThread).toBe(true);
     expect(result.current.selectedItemKey).toBe("codex:thread-parent");
   });
 
@@ -5672,8 +5680,11 @@ describe("useThreadNavigation", () => {
       ).toBe(true);
     });
 
+    let restoredSourceThread = true;
     await act(async () => {
-      result.current.discardLaunchpad("directory:/repo/app");
+      restoredSourceThread = result.current.discardLaunchpad(
+        "directory:/repo/app",
+      );
     });
 
     // Registered directory: keep the row, wipe only the composed message.
@@ -5682,6 +5693,7 @@ describe("useThreadNavigation", () => {
       patch: { prompt: "", imageAttachments: [], editorDocument: undefined },
     });
     expect(resetDirectoryLaunchpad).not.toHaveBeenCalled();
+    expect(restoredSourceThread).toBe(false);
     expect(
       result.current.directories.some(
         (directory) => directory.key === "directory:/repo/app",

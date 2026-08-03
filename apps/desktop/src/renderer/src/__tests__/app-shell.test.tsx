@@ -1232,7 +1232,7 @@ describe("App", () => {
       "heading",
       {
         level: 2,
-        name: "PwrAgent",
+        name: "New thread",
       },
       { timeout: 5_000 },
     );
@@ -1608,6 +1608,9 @@ describe("App", () => {
     expect(
       await screen.findByRole("heading", { level: 2, name: "Investigate Grok thread" })
     ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Investigate Grok thread" }),
+    ).toHaveAttribute("aria-pressed", "true");
     expect(screen.getAllByText(/Grok/).length).toBeGreaterThan(0);
     await waitFor(() => {
       expect(screen.getByRole("region", { name: "Transcript" })).toHaveTextContent(
@@ -3298,15 +3301,24 @@ describe("App", () => {
       createdAt: 1,
       updatedAt: 1,
     };
-    const ensureDirectoryLaunchpad = vi.fn(async () => ({
-      launchpad,
-      defaults: {
-        backend: "codex" as const,
-        executionMode: "default" as const,
+    const ensureDirectoryLaunchpad = vi.fn(
+      async ({ directoryKey: ensuredDirectoryKey }: { directoryKey: string }) => {
+        launchpad = {
+          ...launchpad,
+          directoryKey: ensuredDirectoryKey,
+        };
+        return {
+          launchpad,
+          defaults: {
+            backend: "codex" as const,
+            executionMode: "default" as const,
+          },
+        };
       },
-    }));
+    );
     const updateDirectoryLaunchpad = vi.fn(
       async ({
+        directoryKey: updatedDirectoryKey,
         patch,
       }: {
         directoryKey: string;
@@ -3314,6 +3326,7 @@ describe("App", () => {
       }) => {
         launchpad = {
           ...launchpad,
+          directoryKey: updatedDirectoryKey,
           ...patch,
           updatedAt: launchpad.updatedAt + 1,
         };
@@ -3485,7 +3498,13 @@ describe("App", () => {
       screen.getByRole("tab", { name: /^Directories/ }),
     );
     await clickButton("Open new thread launchpad for PwrAgent");
-    await screen.findByRole("heading", { level: 2, name: "PwrAgent" });
+    await screen.findByRole("heading", { level: 2, name: "New thread" });
+    expect(
+      screen.getByRole("button", { name: "First project thread" }),
+    ).toHaveAttribute("aria-pressed", "false");
+    expect(
+      screen.getByRole("button", { name: "Second project thread" }),
+    ).toHaveAttribute("aria-pressed", "false");
 
     const composer = screen.getByRole("textbox", { name: "New thread" });
     pasteComposerText(composer, "Keep this configured project draft.");
@@ -3503,7 +3522,7 @@ describe("App", () => {
     });
     await clickButton("Back");
 
-    await screen.findByRole("heading", { level: 2, name: "PwrAgent" });
+    await screen.findByRole("heading", { level: 2, name: "New thread" });
     expect(
       getComposerValueHost(screen.getByRole("textbox", { name: "New thread" })),
     ).toHaveAttribute("data-value", "Keep this configured project draft.");
@@ -3511,14 +3530,39 @@ describe("App", () => {
     expect(ensureDirectoryLaunchpad).toHaveBeenCalledTimes(1);
 
     await clickButton("Cancel");
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Back" })).toBeEnabled();
-    });
-    await clickButton("Back");
     await screen.findByRole("heading", {
       level: 2,
       name: "First project thread",
     });
+    expect(
+      screen.getByRole("button", { name: "First project thread" }),
+    ).toHaveAttribute("aria-pressed", "true");
+
+    // Opening a sub-thread composer from an unselected row must remember that
+    // row as its source. Cancel returns there directly instead of consuming
+    // history and restoring the unrelated thread that was previously open.
+    fireEvent.contextMenu(
+      screen.getByRole("button", { name: "Second project thread" }),
+    );
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "Sub-thread in Local" }),
+    );
+    await screen.findByRole("heading", { level: 2, name: "New thread" });
+    expect(
+      screen.getByRole("button", { name: "First project thread" }),
+    ).toHaveAttribute("aria-pressed", "false");
+    expect(
+      screen.getByRole("button", { name: "Second project thread" }),
+    ).toHaveAttribute("aria-pressed", "false");
+
+    await clickButton("Cancel");
+    await screen.findByRole("heading", {
+      level: 2,
+      name: "Second project thread",
+    });
+    expect(
+      screen.getByRole("button", { name: "Second project thread" }),
+    ).toHaveAttribute("aria-pressed", "true");
   });
 
   it("renames the selected thread from the sidebar actions menu", async () => {

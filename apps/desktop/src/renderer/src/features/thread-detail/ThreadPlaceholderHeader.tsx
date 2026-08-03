@@ -18,7 +18,10 @@ type ThreadPlaceholderLayoutControls = {
 };
 
 type ThreadPlaceholderHeaderProps = {
+  backendLabel?: string;
+  contextLabel?: string;
   desktopApi?: DesktopApi;
+  projectLabel?: string;
   title: string;
   onOpenMessagingActivity?: (platform?: MessagingChannelKind) => void;
   /**
@@ -64,7 +67,30 @@ export function ThreadPlaceholderHeader(props: ThreadPlaceholderHeaderProps) {
         {props.history ? <HistoryNavButtons {...props.history} /> : null}
         <div className="thread-header__main">
           <div className="thread-header__eyebrow-row">
-            <h2 className="thread-header__compact-title">{props.title}</h2>
+            <div className="thread-header__breadcrumb">
+              {props.projectLabel ? (
+                <>
+                  <span
+                    className="thread-header__eyebrow"
+                    title={props.projectLabel}
+                  >
+                    {props.projectLabel}
+                  </span>
+                  <span aria-hidden="true" className="thread-header__separator">
+                    ›
+                  </span>
+                </>
+              ) : null}
+              <h2 className="thread-header__compact-title">{props.title}</h2>
+            </div>
+            {props.backendLabel ? (
+              <span className="chip chip--backend">{props.backendLabel}</span>
+            ) : null}
+            {props.contextLabel ? (
+              <span className="thread-row__chip" title={props.contextLabel}>
+                {props.contextLabel}
+              </span>
+            ) : null}
           </div>
         </div>
         <div className="thread-header__chrome">

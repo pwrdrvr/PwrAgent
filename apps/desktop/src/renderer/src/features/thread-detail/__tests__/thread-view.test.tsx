@@ -1317,7 +1317,7 @@ describe("ThreadView", () => {
     expect(closeIntegratedTerminal).not.toHaveBeenCalled();
   });
 
-  it("renders launchpad header chips and messaging status icons", async () => {
+  it("renders launchpads with standard navigation chrome and no summary card", async () => {
     const statuses = [
       {
         changedAt: 1000,
@@ -1404,6 +1404,12 @@ describe("ThreadView", () => {
         }}
         loading={false}
         loadingMore={false}
+        historyNav={{
+          canGoBack: true,
+          canGoForward: false,
+          onBack: vi.fn(),
+          onForward: vi.fn(),
+        }}
         messageCount={2}
         selectedDirectory={selectedDirectory}
         selectedLaunchpad={selectedLaunchpad}
@@ -1414,12 +1420,21 @@ describe("ThreadView", () => {
       />
     );
 
-    const header = document.querySelector(".thread-header--launchpad");
+    const header = document.querySelector(".thread-header--placeholder");
     expect(header).not.toBeNull();
+    expect(within(header as HTMLElement).getByText("PwrAgnt")).toBeInTheDocument();
     expect(within(header as HTMLElement).getByText("New thread")).toBeInTheDocument();
     expect(within(header as HTMLElement).getByText("Codex app server")).toBeInTheDocument();
+    expect(within(header as HTMLElement).getByRole("button", { name: "Back" }))
+      .toBeEnabled();
+    expect(within(header as HTMLElement).getByRole("button", { name: "Forward" }))
+      .toBeDisabled();
     // Access mode is shown only in the composer now, not the header.
     expect(within(header as HTMLElement).queryByText("Full Access")).toBeNull();
+    expect(document.querySelector(".launchpad-panel")).toBeNull();
+    expect(screen.getByLabelText("New thread context")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "AI provider info" })).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Edits" })).not.toBeInTheDocument();
     await waitFor(() => {
       expect(screen.getByLabelText(/Telegram: Enabled/)).toBeInTheDocument();
     });
@@ -1559,7 +1574,8 @@ describe("ThreadView", () => {
       screen.getByRole("heading", { name: "Running environment setup" }),
     ).toBeInTheDocument();
     expect(screen.getByLabelText("Setup command")).toHaveTextContent("pnpm install");
-    expect(screen.getByText("New worktree")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Forking thread" })).toBeInTheDocument();
+    expect(screen.getByLabelText("New thread context")).toBeInTheDocument();
 
     act(() => {
       setupProgress({
@@ -1705,11 +1721,10 @@ describe("ThreadView", () => {
       />
     );
 
-    expect(screen.getByText("Grouped under")).toBeInTheDocument();
-    expect(screen.getByText("Issue 193 Markdown attachments")).toBeInTheDocument();
-    expect(screen.getByText("History")).toBeInTheDocument();
-    expect(screen.getByText("Starts empty")).toBeInTheDocument();
-    expect(screen.getByText("Base branch")).toBeInTheDocument();
+    expect(
+      screen.getByText("Grouped under Issue 193 Markdown attachments"),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "New thread" })).toBeInTheDocument();
     expect(screen.getAllByText("main").length).toBeGreaterThan(0);
     expect(screen.queryByText("Not a Git repo")).not.toBeInTheDocument();
   });
@@ -1757,15 +1772,11 @@ describe("ThreadView", () => {
       />
     );
 
-    expect(screen.getByText("Workspace").nextElementSibling).toHaveTextContent(
-      "Same worktree",
-    );
-    expect(screen.getByText("Current branch").nextElementSibling).toHaveTextContent(
-      "feat/messaging-artifact-delivery",
-    );
-    expect(screen.getByText("Status").nextElementSibling).toHaveTextContent(
-      "Git worktree",
-    );
+    expect(screen.getByText("Same worktree")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "New thread" })).toBeInTheDocument();
+    expect(screen.getByText("Grouped under Issue 193 Markdown attachments"))
+      .toBeInTheDocument();
+    expect(document.querySelector(".launchpad-panel")).not.toBeInTheDocument();
     expect(screen.queryByText("Local checkout")).not.toBeInTheDocument();
     expect(screen.queryByText("Not a Git repo")).not.toBeInTheDocument();
   });
@@ -1880,10 +1891,15 @@ describe("ThreadView", () => {
       />
     );
 
+    const composerTextbox = screen.getByRole("textbox", { name: "New thread" });
+    const composer = composerTextbox.closest(".composer");
+    expect(composer).not.toBeNull();
     expect(
-      await screen.findByText("ACP agent authentication required")
+      await within(composer as HTMLElement).findByText(
+        "ACP agent authentication required",
+      ),
     ).toHaveClass("composer__meta--error");
-    expect(screen.getByRole("textbox", { name: "New thread" })).toHaveAttribute(
+    expect(composerTextbox).toHaveAttribute(
       "contenteditable",
       "false",
     );

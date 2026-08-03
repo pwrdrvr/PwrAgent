@@ -383,21 +383,9 @@ describe("Tangerine Terminal theme contract", () => {
     expect(titleButtonRule).not.toMatch(/(?:^|\n)\s*width:\s*100%;/);
   });
 
-  it("keeps launchpad header chips content-sized and aligned with the eyebrow", () => {
-    const launchpadHeaderRule = extractRuleBody(css, ".thread-header--launchpad");
-    const launchpadAsideRule = extractRuleBody(css, ".thread-header__launchpad-aside");
-    const eyebrowRule = extractRuleBody(css, ".thread-header__eyebrow-row > .eyebrow");
-
-    expect(launchpadHeaderRule).toContain("align-items: flex-start;");
-    expect(launchpadAsideRule).toContain("align-items: flex-start;");
-    expect(eyebrowRule).toContain("height: 24px;");
-    expect(eyebrowRule).toContain("margin: 0 2px 0 0;");
-    expect(css).toMatch(
-      /\.thread-header--launchpad \.thread-header__eyebrow-row > \.thread-row__chip\s*\{[\s\S]*?max-width:\s*100%;[\s\S]*?\}/
-    );
-    expect(css).toMatch(
-      /\.thread-header--launchpad \.messaging-status-bar\s*\{[\s\S]*?padding-top:\s*0;[\s\S]*?padding-bottom:\s*0;[\s\S]*?\}/
-    );
+  it("uses the standard thread chrome instead of legacy launchpad chrome", () => {
+    expect(css).not.toContain(".thread-header--launchpad");
+    expect(css).not.toContain(".launchpad-panel");
   });
 
   it("keeps launchpad setup output from shrinking the header summary", () => {
@@ -406,9 +394,6 @@ describe("Tangerine Terminal theme contract", () => {
       ".thread-view__launchpad-composer:has(.transcript-panel--setup)"
     );
 
-    expect(css).toMatch(
-      /\.thread-view--launchpad > \.thread-header,\s*\.thread-view--launchpad > \.launchpad-panel\s*\{[\s\S]*?flex:\s*0 0 auto;[\s\S]*?\}/
-    );
     expect(setupComposerRule).toContain("flex: 1 1 0;");
     expect(setupComposerRule).toContain("min-height: 0;");
   });
