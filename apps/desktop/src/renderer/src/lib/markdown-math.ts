@@ -1,3 +1,5 @@
+import { fromMarkdown } from "mdast-util-from-markdown";
+
 type ProtectedRange = {
   end: number;
   start: number;
@@ -11,6 +13,15 @@ type Fence = {
 type ClosingDelimiterSearch = {
   closingIndex: number;
   unmatchedUntil: number;
+};
+
+type PositionedMarkdownNode = {
+  children?: PositionedMarkdownNode[];
+  position?: {
+    end: { offset?: number };
+    start: { offset?: number };
+  };
+  type: string;
 };
 
 /**
@@ -51,6 +62,7 @@ export function normalizeLatexMathDelimiters(markdown: string): string {
     }
 
     const inline = markdown[index + 1] === "(";
+    const openingCharacter = inline ? "(" : "[";
     const unmatchedUntil = inline
       ? unmatchedInlineUntil
       : unmatchedDisplayUntil;
@@ -62,6 +74,7 @@ export function normalizeLatexMathDelimiters(markdown: string): string {
     const search = findClosingDelimiter(
       markdown,
       index + 2,
+      openingCharacter,
       closingCharacter,
       inline,
       protectedRanges,
@@ -91,6 +104,7 @@ export function normalizeLatexMathDelimiters(markdown: string): string {
 function findClosingDelimiter(
   markdown: string,
   start: number,
+  openingCharacter: "(" | "[",
   closingCharacter: ")" | "]",
   inline: boolean,
   protectedRanges: ProtectedRange[],
@@ -105,12 +119,13 @@ function findClosingDelimiter(
       return { closingIndex: -1, unmatchedUntil: protectedRange.end };
     }
 
-    if (
-      markdown[index] === "\\"
-      && markdown[index + 1] === closingCharacter
-      && !isEscapedBackslash(markdown, index)
-    ) {
-      return { closingIndex: index, unmatchedUntil: 0 };
+    if (markdown[index] === "\\" && !isEscapedBackslash(markdown, index)) {
+      if (markdown[index + 1] === closingCharacter) {
+        return { closingIndex: index, unmatchedUntil: 0 };
+      }
+      if (markdown[index + 1] === openingCharacter) {
+        return { closingIndex: -1, unmatchedUntil: index };
+      }
     }
   }
 
@@ -129,6 +144,10 @@ function isEscapedBackslash(value: string, index: number): boolean {
 }
 
 function collectProtectedCodeRanges(markdown: string): ProtectedRange[] {
+  if (hasPotentialIndentedCode(markdown)) {
+    return collectParsedCodeRanges(markdown);
+  }
+
   const blockRanges = collectProtectedBlockRanges(markdown);
   const codeSpanRanges: ProtectedRange[] = [];
   let index = 0;
@@ -165,6 +184,38 @@ function collectProtectedCodeRanges(markdown: string): ProtectedRange[] {
   return mergeRanges([...blockRanges, ...codeSpanRanges]);
 }
 
+/**
+ * Indentation is context-sensitive in CommonMark: four leading spaces can be
+ * an indented code block, ordinary paragraph continuation, or list-item
+ * content. When a message contains an ambiguous line, use the same mdast
+ * parser family as ReactMarkdown as the authority for code-node ranges rather
+ * than guessing from the raw prefix.
+ */
+function collectParsedCodeRanges(markdown: string): ProtectedRange[] {
+  const ranges: ProtectedRange[] = [];
+
+  function visit(node: PositionedMarkdownNode): void {
+    if (node.type === "code" || node.type === "inlineCode") {
+      const start = node.position?.start.offset;
+      const end = node.position?.end.offset;
+      if (start !== undefined && end !== undefined) {
+        ranges.push({ start, end });
+      }
+      return;
+    }
+    for (const child of node.children ?? []) {
+      visit(child);
+    }
+  }
+
+  visit(fromMarkdown(markdown) as PositionedMarkdownNode);
+  return mergeRanges(ranges);
+}
+
+function hasPotentialIndentedCode(markdown: string): boolean {
+  return /(?:^|\n)(?: {0,3}>[ \t]?)*(?: {4}| {0,3}\t)/.test(markdown);
+}
+
 function collectProtectedBlockRanges(markdown: string): ProtectedRange[] {
   const ranges: ProtectedRange[] = [];
   let activeFence: (Fence & { start: number }) | undefined;
@@ -191,8 +242,6 @@ function collectProtectedBlockRanges(markdown: string): ProtectedRange[] {
       }
     } else if (fence) {
       activeFence = { ...fence, start: lineStart };
-    } else if (/^(?: {4}|\t)/.test(line)) {
-      ranges.push({ start: lineStart, end: lineEnd });
     }
 
     lineStart = lineEnd;

@@ -196,6 +196,32 @@ describe("ThreadMarkdown", () => {
     );
   });
 
+  it("renders later and list-continuation math without consuming broken text", async () => {
+    const { container } = render(
+      <MarkdownRenderingOptionsProvider mathEnabled>
+        <ThreadMarkdown
+          text={[
+            String.raw`Broken \( text; valid \(x\).`,
+            "",
+            "- item",
+            String.raw`    \(y\)`,
+          ].join("\n")}
+        />
+      </MarkdownRenderingOptionsProvider>
+    );
+
+    await waitFor(() => {
+      expect(container.querySelectorAll(".katex")).toHaveLength(2);
+    });
+    expect(container).toHaveTextContent("Broken ( text; valid");
+    expect(
+      Array.from(
+        container.querySelectorAll("annotation[encoding='application/x-tex']"),
+      ).map((annotation) => annotation.textContent),
+    ).toEqual(["x", "y"]);
+    expect(container.querySelector("li .katex")).not.toBeNull();
+  });
+
   it("opens local file links in the configured editor", async () => {
     const openApplication = vi.fn(async () => ({ opened: true as const }));
 

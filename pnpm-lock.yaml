@@ -150,6 +150,9 @@ importers:
       katex:
         specifier: ^0.16.47
         version: 0.16.47
+      mdast-util-from-markdown:
+        specifier: ^2.0.3
+        version: 2.0.3
       node-fetch:
         specifier: 2.7.0
         version: 2.7.0(encoding@0.1.13)

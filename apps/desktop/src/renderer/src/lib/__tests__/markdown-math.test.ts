@@ -30,6 +30,13 @@ describe("normalizeLatexMathDelimiters", () => {
     expect(normalizeLatexMathDelimiters(input)).toBe(input);
   });
 
+  it("does not let an unmatched opener consume a later expression", () => {
+    const input = String.raw`broken \( text; valid \(x\)`;
+    expect(normalizeLatexMathDelimiters(input)).toBe(
+      String.raw`broken \( text; valid $$x$$`,
+    );
+  });
+
   it("skips repeated unmatched openers without hiding later valid math", () => {
     const unmatched = String.raw`\[`.repeat(10_000);
     const input = [
@@ -66,6 +73,40 @@ describe("normalizeLatexMathDelimiters", () => {
       "```",
       "",
       "    \\(indented\\)",
+    ].join("\n"));
+  });
+
+  it("distinguishes list and paragraph continuations from indented code", () => {
+    const input = [
+      "- item",
+      String.raw`    \(listMath\)`,
+      "",
+      "paragraph",
+      String.raw`    \(paragraphMath\)`,
+      "",
+      String.raw`    \(topLevelCode\)`,
+      "",
+      "- item",
+      "",
+      String.raw`      \(listCode\)`,
+      "",
+      String.raw`>     \(quotedCode\)`,
+    ].join("\n");
+
+    expect(normalizeLatexMathDelimiters(input)).toBe([
+      "- item",
+      "    $$listMath$$",
+      "",
+      "paragraph",
+      "    $$paragraphMath$$",
+      "",
+      String.raw`    \(topLevelCode\)`,
+      "",
+      "- item",
+      "",
+      String.raw`      \(listCode\)`,
+      "",
+      String.raw`>     \(quotedCode\)`,
     ].join("\n"));
   });
 
