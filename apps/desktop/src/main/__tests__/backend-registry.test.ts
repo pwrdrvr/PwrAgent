@@ -20417,7 +20417,7 @@ command = "pnpm dev"
       branchName: "origin/master",
       directoryKind: "directory",
       directoryLabel: "repo",
-      directoryPath: expectedDir(repoPath),
+      directoryPath: repoPath,
       workMode: "worktree",
     });
     expect(commandRunner).toHaveBeenCalledTimes(1);
@@ -23452,9 +23452,11 @@ script = "printf setup"
   it("does not inherit a project Codex environment runtime for no-workspace handoffs", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-handoff-none-env-"));
     const repoPath = path.join(root, "search-compare");
+    const ignoredCwd = path.join(root, "other-project");
     const scratchPath = path.join(root, "profiles", "sstk", "projects", "2026-06-30-c2acd2");
     try {
       await mkdir(repoPath, { recursive: true });
+      await mkdir(ignoredCwd, { recursive: true });
       try {
         await git(repoPath, ["init", "-b", "main"]);
       } catch {
@@ -23500,23 +23502,24 @@ script = "printf setup"
           },
         ],
       });
+      const overlayStore = createOverlayStoreMock({
+        overlays: {
+          "codex:ordinary-thread": {
+            backend: "codex",
+            threadId: "ordinary-thread",
+            executionMode: "full-access",
+            codexEnvironmentRuntime: sourceRuntime,
+            extraLinkedDirectories: [linkedDirectory],
+          },
+        },
+      });
       const registry = new DesktopBackendRegistry({
         codexClient,
         createScratchProjectDirectory: async () => scratchPath,
         grokClient: new MockBackendClient({
           initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
         }),
-        overlayStore: createOverlayStoreMock({
-          overlays: {
-            "codex:ordinary-thread": {
-              backend: "codex",
-              threadId: "ordinary-thread",
-              executionMode: "full-access",
-              codexEnvironmentRuntime: sourceRuntime,
-              extraLinkedDirectories: [linkedDirectory],
-            },
-          },
-        }),
+        overlayStore,
         threadTitleGenerationService: null,
       });
       await registry.publishLocalEvent({
@@ -23543,7 +23546,9 @@ script = "printf setup"
           arguments: {
             task: "Use /Users/huntharo/GIPHY/giphy-services from the prompt only.",
             title: "Prompt-only target",
+            groupingMode: "subthread",
             workspaceMode: "none",
+            cwd: ignoredCwd,
           },
         },
       } as AppServerPendingRequestNotification);
@@ -23563,6 +23568,18 @@ script = "printf setup"
           kind: "non_git",
           worktreeCreationAvailable: false,
         },
+      });
+      expect(payload).toMatchObject({
+        groupingMode: "subthread",
+        groupedUnderThreadId: "ordinary-thread",
+      });
+      await expect(
+        overlayStore.getThreadOverlayState({
+          backend: "codex",
+          threadId: "thread-1",
+        }),
+      ).resolves.toMatchObject({
+        parentThreadId: "ordinary-thread",
       });
       expect(payload.inheritedSettings).not.toHaveProperty(
         "codexEnvironmentRuntime",

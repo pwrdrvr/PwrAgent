@@ -21509,16 +21509,18 @@ export class DesktopBackendRegistry {
           ? projectLocalCwd
           : sourceCwd;
     const childProjectBoundary =
-      requestedProjectBoundary
-      ?? await this.resolveHandoffProjectBoundaryPath({
-        cwd: cwdForChild,
-        linkedDirectory:
-          workspaceMode === "project_local"
-            ? sourceLinkedDirectory?.kind === "local"
-              ? sourceLinkedDirectory
-              : undefined
-            : sourceLinkedDirectory,
-      });
+      workspaceMode === "none"
+        ? undefined
+        : requestedProjectBoundary
+          ?? await this.resolveHandoffProjectBoundaryPath({
+            cwd: cwdForChild,
+            linkedDirectory:
+              workspaceMode === "project_local"
+                ? sourceLinkedDirectory?.kind === "local"
+                  ? sourceLinkedDirectory
+                  : undefined
+                : sourceLinkedDirectory,
+          });
     const groupingMode: HandoffTaskGroupingMode =
       requestedGroupingMode === "subthread" &&
       backend === sourceBackend &&
