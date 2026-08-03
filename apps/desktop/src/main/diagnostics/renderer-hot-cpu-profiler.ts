@@ -82,12 +82,14 @@ export class RendererHotCpuProfiler {
   private heapSnapshotLimitReached = false;
   private heapSnapshotsCaptured = 0;
   private heapSnapshotMidTimer: ReturnType<typeof setTimeout> | null = null;
+  private captureSamplePromise: Promise<void> | null = null;
   private intervalTimer: ReturnType<typeof setTimeout> | null = null;
   private lastProfileAtMs: number | null = null;
   private previousCumulativeCpuSeconds: number | null = null;
   private previousSampleAtMs: number | null = null;
   private profileDurationTimer: ReturnType<typeof setTimeout> | null = null;
   private profileCount = 0;
+  private shutdownPromise: Promise<void> | null = null;
   private stopProfilePromise: Promise<void> | null = null;
   private profiling = false;
   private samplingPausedForProfile = false;
@@ -148,17 +150,33 @@ export class RendererHotCpuProfiler {
   }
 
   async stop(reason = "stopped"): Promise<void> {
-    if (this.stopped) {
+    if (this.shutdownPromise) {
+      await this.shutdownPromise;
       return;
     }
 
     this.stopped = true;
+    this.shutdownPromise = this.stopInner(reason);
+    await this.shutdownPromise;
+  }
+
+  private async stopInner(reason: string): Promise<void> {
     if (this.intervalTimer) {
       clearTimeout(this.intervalTimer);
       this.intervalTimer = null;
     }
     this.clearProfileDurationTimer();
     this.clearHeapSnapshotMidTimer();
+
+    // Stop an already-started profile in parallel with its owning sample so a
+    // blocked heap snapshot cannot deadlock shutdown. Recheck after the sample
+    // settles in case it crossed into profiling while shutdown was starting.
+    const captureSamplePromise = this.captureSamplePromise;
+    const activeProfileStop =
+      this.profiling || this.stopProfilePromise
+        ? this.stopProfile(reason)
+        : null;
+    await Promise.all([captureSamplePromise, activeProfileStop]);
 
     if (this.profiling || this.stopProfilePromise) {
       await this.stopProfile(reason);
@@ -177,7 +195,23 @@ export class RendererHotCpuProfiler {
       return;
     }
 
-    this.intervalTimer = setTimeout(() => this.captureSample(), delayMs);
+    this.intervalTimer = setTimeout(() => {
+      const captureSamplePromise = this.captureSample();
+      this.captureSamplePromise = captureSamplePromise;
+      void captureSamplePromise.then(
+        () => {
+          if (this.captureSamplePromise === captureSamplePromise) {
+            this.captureSamplePromise = null;
+          }
+        },
+        (error) => {
+          if (this.captureSamplePromise === captureSamplePromise) {
+            this.captureSamplePromise = null;
+          }
+          this.logger.error("[pwragent:hot-cpu] sample task failed", error);
+        },
+      );
+    }, delayMs);
   }
 
   private async captureSample(): Promise<void> {
@@ -304,7 +338,11 @@ export class RendererHotCpuProfiler {
   }
 
   private shouldStartProfile(cpuPercent: number, capturedAt: string): boolean {
-    if (this.profiling || cpuPercent < this.triggerThresholdPercent()) {
+    if (
+      this.stopped
+      || this.profiling
+      || cpuPercent < this.triggerThresholdPercent()
+    ) {
       return false;
     }
 
@@ -338,6 +376,10 @@ export class RendererHotCpuProfiler {
     cpuPercent: number;
     pid: number;
   }): Promise<void> {
+    if (this.stopped) {
+      return;
+    }
+
     if (this.target.debugger.isAttached()) {
       await this.session.appendEvent({
         capturedAt: options.capturedAt,
@@ -356,8 +398,15 @@ export class RendererHotCpuProfiler {
       this.debuggerAttached = true;
       this.target.debugger.on("detach", this.detachListener);
       await this.target.debugger.sendCommand("Profiler.enable");
+      if (this.stopped) {
+        this.detachDebugger();
+        return;
+      }
       await this.target.debugger.sendCommand("Profiler.start");
       this.profiling = true;
+      if (this.stopped) {
+        return;
+      }
       this.activeProfileHeapSnapshots = [];
       this.activeProfileTrigger = {
         triggerConsecutiveSamples: this.triggerConsecutiveSamples(),
