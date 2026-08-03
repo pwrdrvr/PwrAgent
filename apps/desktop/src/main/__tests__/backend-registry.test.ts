@@ -28580,7 +28580,7 @@ script = "printf setup"
     expect(forbiddenResponse).toMatchObject({ success: false });
     expect(codexClient.interruptTurnCallCount).toBe(0);
 
-    const cancellationResponse = await codexClient.emitRequest({
+    const cancellationResponsePromise = codexClient.emitRequest({
       method: "item/tool/call",
       params: {
         threadId: "thread-1",
@@ -28595,12 +28595,100 @@ script = "printf setup"
         },
       },
     } as AppServerPendingRequestNotification);
+    await expectEventually(
+      async () => codexClient.interruptTurnCallCount,
+      1,
+    );
+    const overlappingResponsePromise = codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-cancel-overlap",
+        requestId: "call-cancel-overlap",
+        namespace: "pwragent_task_monitors",
+        tool: "cancel_monitor_delegation",
+        arguments: { monitorId },
+      },
+    } as AppServerPendingRequestNotification);
+    let cancellationSettled = false;
+    void cancellationResponsePromise.then(() => {
+      cancellationSettled = true;
+    });
+    await Promise.resolve();
+
+    expect(codexClient.interruptTurnCallCount).toBe(1);
+    expect(cancellationSettled).toBe(false);
+    expect(codexClient.injectedThreadItems).toHaveLength(0);
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-1",
+      }),
+    ).resolves.toMatchObject({
+      subAgents: [
+        {
+          lastMessage:
+            "Cancellation requested; waiting for the monitor turn to stop.",
+          monitorId,
+          status: "cancelling",
+        },
+      ],
+    });
+    const lateCompletionResponse = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "monitor-thread",
+        turnId: "turn-1",
+        callId: "call-complete-late",
+        requestId: "call-complete-late",
+        namespace: "pwragent_task_monitors",
+        tool: "complete_monitoring",
+        arguments: {
+          monitorId,
+          outcome: "success",
+          summary: "The monitor finished while cancellation was pending.",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+    expect(lateCompletionResponse).toMatchObject({ success: false });
+    expect(codexClient.injectedThreadItems).toHaveLength(0);
+
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/cancelled",
+        params: {
+          threadId: "monitor-thread",
+          turnId: "some-other-turn",
+          turn: { id: "some-other-turn", status: "cancelled", output: [] },
+        },
+      },
+    });
+    expect(codexClient.injectedThreadItems).toHaveLength(0);
+
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/cancelled",
+        params: {
+          threadId: "monitor-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1", status: "cancelled", output: [] },
+        },
+      },
+    });
+    const [cancellationResponse, overlappingResponse] = await Promise.all([
+      cancellationResponsePromise,
+      overlappingResponsePromise,
+    ]);
     const cancellationPayload = JSON.parse(
       (cancellationResponse as { contentItems: Array<{ text: string }> })
         .contentItems[0]?.text ?? "{}",
     ) as Record<string, unknown>;
 
     expect(cancellationResponse).toMatchObject({ success: true });
+    expect(overlappingResponse).toEqual(cancellationResponse);
     expect(cancellationPayload).toMatchObject({
       monitorId,
       parentThreadId: "thread-1",
@@ -28664,18 +28752,6 @@ script = "printf setup"
     expect(repeatedResponse).toMatchObject({ success: true });
     expect(codexClient.interruptTurnCallCount).toBe(1);
     expect(codexClient.injectedThreadItems).toHaveLength(1);
-
-    await registry.publishLocalEvent({
-      backend: "codex",
-      notification: {
-        method: "turn/cancelled",
-        params: {
-          threadId: "monitor-thread",
-          turnId: "turn-1",
-          turn: { id: "turn-1", status: "cancelled", output: [] },
-        },
-      },
-    });
     expect(codexClient.startTurnCallCount).toBe(1);
 
     await registry.close();

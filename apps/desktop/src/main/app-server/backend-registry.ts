@@ -2345,6 +2345,16 @@ function readNotificationItemType(notification: AppServerNotification): string |
 const TASK_MONITOR_STALE_CHECK_INTERVAL_MS = 15_000;
 const TASK_MONITOR_STALE_GRACE_MS = 15_000;
 
+type TaskMonitorCancellationState = {
+  finalizing: boolean;
+  promise: Promise<TaskMonitorResponse<"cancel_monitor_delegation">>;
+  requestPersisted: Promise<void>;
+  resolve: (
+    response: TaskMonitorResponse<"cancel_monitor_delegation">,
+  ) => void;
+  summary: string;
+};
+
 type TaskMonitorDelegationRecord = {
   activeCommandCount: number;
   backend: "codex";
@@ -2363,7 +2373,8 @@ type TaskMonitorDelegationRecord = {
   pollIntervalSeconds: number;
   preferredModel: string;
   preferredReasoningEffort: string;
-  cancellationRequested?: boolean;
+  cancellation?: TaskMonitorCancellationState;
+  finalizationStarted?: boolean;
   recoveryAttempted?: boolean;
   staleInterruptAttempted?: boolean;
   startupTimeoutSeconds: number;
@@ -22095,6 +22106,16 @@ export class DesktopBackendRegistry {
         "Only the parent thread that created a monitor may cancel it.",
       );
     }
+    if (record.cancellation) {
+      return await record.cancellation.promise;
+    }
+    if (record.finalizationStarted) {
+      return taskMonitorFailure(
+        "cancel_monitor_delegation",
+        "not_found",
+        "The monitor is already completing and can no longer be cancelled.",
+      );
+    }
     if (!record.monitorThreadId || !record.monitorTurnId) {
       return taskMonitorFailure(
         "cancel_monitor_delegation",
@@ -22103,16 +22124,52 @@ export class DesktopBackendRegistry {
       );
     }
 
-    record.cancellationRequested = true;
+    const summary =
+      args.reason?.trim()
+      || "Monitoring cancelled by the parent agent.";
+    let resolveCancellation!: TaskMonitorCancellationState["resolve"];
+    const cancellationPromise = new Promise<
+      TaskMonitorResponse<"cancel_monitor_delegation">
+    >((resolve) => {
+      resolveCancellation = resolve;
+    });
+    const cancellation: TaskMonitorCancellationState = {
+      finalizing: false,
+      promise: cancellationPromise,
+      requestPersisted: Promise.resolve(),
+      resolve: resolveCancellation,
+      summary,
+    };
+    // Own cancellation before the first await so overlapping tool calls share
+    // one interrupt and one terminal completion.
+    record.cancellation = cancellation;
     record.lastActivityAt = Date.now();
     const executionMode = record.executionMode ?? "default";
+    cancellation.requestPersisted = this.persistTaskMonitorSubAgent(record, {
+      lastMessage: "Cancellation requested; waiting for the monitor turn to stop.",
+      status: "cancelling",
+    });
     try {
+      await cancellation.requestPersisted;
+      if (
+        cancellation.finalizing
+        || this.taskMonitorDelegations.get(monitorId) !== record
+      ) {
+        return await cancellation.promise;
+      }
       await this.getClient("codex", executionMode).interruptTurn({
         threadId: record.monitorThreadId,
         turnId: record.monitorTurnId,
       });
     } catch (error) {
-      record.cancellationRequested = false;
+      if (
+        record.cancellation !== cancellation
+        || cancellation.finalizing
+        || !this.taskMonitorDelegations.has(monitorId)
+      ) {
+        return await cancellation.promise;
+      }
+      record.cancellation = undefined;
       backendRegistryLog.error("failed to cancel task monitor", {
         error: error instanceof Error ? error.message : String(error),
         monitorId,
@@ -22120,39 +22177,75 @@ export class DesktopBackendRegistry {
         monitorTurnId: record.monitorTurnId,
         parentThreadId: record.parentThreadId,
       });
-      return taskMonitorFailure(
+      const failure = taskMonitorFailure(
         "cancel_monitor_delegation",
         "internal_error",
         `Failed to interrupt task monitor: ${error instanceof Error ? error.message : String(error)}`,
       );
+      cancellation.resolve(failure);
+      await this.persistTaskMonitorSubAgent(record, {
+        lastMessage: "Cancellation could not be requested; the monitor is still running.",
+        status: "running",
+      });
+      return failure;
     }
 
-    const summary =
-      args.reason?.trim()
-      || "Monitoring cancelled by the parent agent.";
+    return await cancellation.promise;
+  }
+
+  private async finalizeTaskMonitorCancellation(
+    record: TaskMonitorDelegationRecord,
+    terminalStatus: "completed" | "failed" | "cancelled",
+  ): Promise<void> {
+    const cancellation = record.cancellation;
+    if (!cancellation || cancellation.finalizing) {
+      return;
+    }
+    cancellation.finalizing = true;
     const completionSource: TaskMonitorCompletionSource = {
       type: "parent_cancel",
     };
-    await this.finishTaskMonitorDelegation({
-      completionSource,
-      outcome: "cancelled",
-      record,
-      summary,
-      triggerParentTurn: false,
-    });
-
-    return {
-      ok: true,
-      operation: "cancel_monitor_delegation",
-      data: {
-        monitorId,
-        parentThreadId: record.parentThreadId,
-        injected: true,
-        outcome: "cancelled",
+    try {
+      await cancellation.requestPersisted;
+      await this.finishTaskMonitorDelegation({
         completionSource,
-        ...(record.latestUsage ? { monitorUsage: record.latestUsage } : {}),
-      },
-    };
+        details: `Monitor turn reached terminal status: ${terminalStatus}.`,
+        outcome: "cancelled",
+        record,
+        summary: cancellation.summary,
+        triggerParentTurn: false,
+      });
+      cancellation.resolve({
+        ok: true,
+        operation: "cancel_monitor_delegation",
+        data: {
+          monitorId: record.monitorId,
+          parentThreadId: record.parentThreadId,
+          injected: true,
+          outcome: "cancelled",
+          completionSource,
+          ...(record.latestUsage ? { monitorUsage: record.latestUsage } : {}),
+        },
+      });
+    } catch (error) {
+      cancellation.finalizing = false;
+      if (this.taskMonitorDelegations.get(record.monitorId) === record) {
+        record.cancellation = undefined;
+      }
+      backendRegistryLog.error("failed to finalize task monitor cancellation", {
+        error: error instanceof Error ? error.message : String(error),
+        monitorId: record.monitorId,
+        monitorThreadId: record.monitorThreadId,
+        monitorTurnId: record.monitorTurnId,
+        parentThreadId: record.parentThreadId,
+        terminalStatus,
+      });
+      cancellation.resolve(taskMonitorFailure(
+        "cancel_monitor_delegation",
+        "internal_error",
+        `Monitor stopped, but cancellation could not be recorded: ${error instanceof Error ? error.message : String(error)}`,
+      ));
+    }
   }
 
   private async resolveTaskMonitorModelSettings(params: {
@@ -22373,20 +22466,48 @@ export class DesktopBackendRegistry {
     if (!bound.ok) {
       return taskMonitorFailure("complete_monitoring", bound.code, bound.message);
     }
+    if (bound.record.cancellation) {
+      return taskMonitorFailure(
+        "complete_monitoring",
+        "forbidden",
+        "The parent has requested cancellation; wait for the monitor turn to stop.",
+      );
+    }
+    if (bound.record.finalizationStarted) {
+      return taskMonitorFailure(
+        "complete_monitoring",
+        "forbidden",
+        "Monitor completion is already in progress.",
+      );
+    }
     const summary = args.summary?.trim();
     if (!summary) {
       return taskMonitorFailure("complete_monitoring", "invalid_arguments", "summary is required.");
     }
 
     bound.record.lastActivityAt = Date.now();
-    const parentTurn = await this.finishTaskMonitorDelegation({
-      completionSource: { type: "monitor_tool" },
-      details: args.details,
-      outcome: args.outcome,
-      record: bound.record,
-      summary,
-      triggerParentTurn: args.triggerParentTurn !== false,
-    });
+    bound.record.finalizationStarted = true;
+    let parentTurn:
+      | {
+          status: "started" | "queued";
+          turnId?: string;
+          queueEntryId?: string;
+          position?: number;
+        }
+      | undefined;
+    try {
+      parentTurn = await this.finishTaskMonitorDelegation({
+        completionSource: { type: "monitor_tool" },
+        details: args.details,
+        outcome: args.outcome,
+        record: bound.record,
+        summary,
+        triggerParentTurn: args.triggerParentTurn !== false,
+      });
+    } catch (error) {
+      bound.record.finalizationStarted = false;
+      throw error;
+    }
 
     return {
       ok: true,
@@ -22535,7 +22656,11 @@ export class DesktopBackendRegistry {
       return;
     }
 
-    if (record.cancellationRequested) {
+    if (record.cancellation) {
+      if (!turnId || !record.monitorTurnId || turnId !== record.monitorTurnId) {
+        return;
+      }
+      await this.finalizeTaskMonitorCancellation(record, terminalStatus);
       return;
     }
 
@@ -22557,6 +22682,9 @@ export class DesktopBackendRegistry {
   private async checkStaleTaskMonitors(now = Date.now()): Promise<void> {
     for (const record of Array.from(this.taskMonitorDelegations.values())) {
       if (!record.monitorThreadId || !record.monitorTurnId) {
+        continue;
+      }
+      if (record.cancellation) {
         continue;
       }
       if (record.activeCommandCount > 0) {

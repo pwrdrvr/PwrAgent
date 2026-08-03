@@ -168,6 +168,7 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
 export type ThreadSubAgentStatus =
   | "pending"
   | "running"
+  | "cancelling"
   | "blocked"
   | "failed"
   | "success"
