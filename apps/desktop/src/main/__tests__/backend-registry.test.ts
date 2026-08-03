@@ -20241,9 +20241,10 @@ command = "pnpm dev"
     }
   });
 
-  it("rehydrates inherited Codex environment runtime for clean new-worktree handoffs", async () => {
+  it("rehydrates inherited Codex environment runtime when an explicit cwd is the caller worktree's repository", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-handoff-env-"));
     const repoPath = path.join(root, "repo");
+    const callerWorktreePath = path.join(root, "caller-worktree");
     const worktreePath = path.join(root, "worktree");
     try {
       await mkdir(repoPath, { recursive: true });
@@ -20263,6 +20264,7 @@ command = "pnpm dev"
       "-m",
       "initial",
     ]);
+    await mkdir(callerWorktreePath, { recursive: true });
     await mkdir(path.join(worktreePath, ".codex", "environments"), { recursive: true });
     await writeFile(
       path.join(worktreePath, ".codex", "environments", "environment.toml"),
@@ -20284,12 +20286,12 @@ command = "pnpm dev"
       environmentId: "environment",
       environmentName: "GifGrabber",
       executionTarget: "local",
-      cwd: repoPath,
+      cwd: callerWorktreePath,
       setupStatus: "completed",
       setupCommand: "printf setup",
       shellEnvironment: {
-        PATH: `${repoPath}/.venv/bin:/usr/bin`,
-        VIRTUAL_ENV: `${repoPath}/.venv`,
+        PATH: `${callerWorktreePath}/.venv/bin:/usr/bin`,
+        VIRTUAL_ENV: `${callerWorktreePath}/.venv`,
       },
       selectedActionIdByEnvironmentId: {
         environment: "dev",
@@ -20335,10 +20337,11 @@ command = "pnpm dev"
           source: "codex",
           linkedDirectories: [
             {
-              id: expectedDir(repoPath),
-              kind: "local",
+              id: expectedDir(callerWorktreePath),
+              kind: "worktree",
               label: "repo",
               path: expectedDir(repoPath),
+              worktreePath: expectedDir(callerWorktreePath),
             },
           ],
           updatedAt: 1000,
@@ -20354,10 +20357,11 @@ command = "pnpm dev"
           codexEnvironmentRuntime: sourceRuntime,
           extraLinkedDirectories: [
             {
-              id: expectedDir(repoPath),
-              kind: "local",
+              id: expectedDir(callerWorktreePath),
+              kind: "worktree",
               label: "repo",
               path: expectedDir(repoPath),
+              worktreePath: expectedDir(callerWorktreePath),
             },
           ],
         },
@@ -20401,6 +20405,7 @@ command = "pnpm dev"
           task: "Implement the export failure alert on master.",
           title: "Swift export alert",
           workspaceMode: "new_worktree",
+          cwd: repoPath,
           branchName: "origin/master",
         },
       },
