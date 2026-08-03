@@ -151,6 +151,7 @@ import {
 import { registerDirectoryFromDisk } from "../app-server/directory-registration-service";
 import {
   disposeDesktopBackendRegistry,
+  getExistingDesktopBackendRegistry,
   getDesktopBackendRegistry,
 } from "../app-server/backend-registry";
 import { materializeTranscriptImageUrlsForRenderer } from "../transcript-image-protocol";
@@ -6404,10 +6405,11 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(NAVIGATION_DETACH_DIRECTORY_FROM_THREAD_CHANNEL);
   unsubscribeWorkingStateEvents?.();
   unsubscribeWorkingStateEvents = undefined;
-  getDesktopBackendRegistry().setThreadPullRequestStatusToolHandler(undefined);
-  getDesktopBackendRegistry().setThreadPullRequestCanonicalizer(undefined);
-  getDesktopBackendRegistry().setThreadPullRequestWatchToolHandler(undefined);
-  getDesktopBackendRegistry().setThreadPrAutoDispatchHandler(undefined);
+  const registry = getExistingDesktopBackendRegistry();
+  registry?.setThreadPullRequestStatusToolHandler(undefined);
+  registry?.setThreadPullRequestCanonicalizer(undefined);
+  registry?.setThreadPullRequestWatchToolHandler(undefined);
+  registry?.setThreadPrAutoDispatchHandler(undefined);
   await appServerService.close();
 }
 

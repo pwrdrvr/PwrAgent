@@ -137,7 +137,12 @@ import {
   type ProfileFocusRequestWatcher,
 } from "./profile";
 import { SECRET_STORAGE_DISABLED_ENV } from "./settings/desktop-secret-store";
-import { isUpdateInstallInProgress } from "./update-install-state";
+import {
+  isUpdateInstallInProgress,
+  isUpdateInstallUpdaterQuitReady,
+  setUpdateInstallPreparationHandler,
+} from "./update-install-state";
+import { createShutdownBarrier } from "./shutdown-barrier";
 
 const APP_NAME = "PwrAgent";
 const APP_COPYRIGHT = "Copyright © 2026 PwrDrvr LLC.";
@@ -147,7 +152,13 @@ const isMac = process.platform === "darwin";
 const isDevelopment = process.env.NODE_ENV !== "production";
 const mainLog = getMainLogger("pwragent:main");
 const mainProcessStartedAt = Date.now();
+const MAIN_PROCESS_SHUTDOWN_TIMEOUT_MS = 12_000;
+const MESSAGING_SHUTDOWN_TIMEOUT_MS = 4_000;
+const APP_SERVER_SHUTDOWN_TIMEOUT_MS = 7_500;
 let mainProcessResourcesDisposed = false;
+let mainProcessShutdownComplete = false;
+let mainProcessShutdownPromise: Promise<void> | undefined;
+let finalQuitPromise: Promise<void> | undefined;
 let quitInProgress = false;
 let profileFocusRequestWatcher: ProfileFocusRequestWatcher | null = null;
 let startupCpuProfilerForNewWindows:
@@ -404,18 +415,60 @@ function disposeMainProcessResourcesSync(): void {
   if (isDevelopment) {
     disposeRuntimeIdentityIpcHandlers();
   }
-  void disposeMessagingStatusIpcHandlers();
   const runtimeMessagingLeaseCoordinator =
     getExistingRuntimeMessagingLeaseCoordinator() ??
     (isAppStateInitialized() ? getRuntimeMessagingLeaseCoordinator() : null);
   runtimeMessagingLeaseCoordinator?.shutdownSync();
-  void disposeDesktopMessagingRuntime().catch((error) => {
-    mainLog.warn("messaging runtime disposal failed during shutdown", {
-      error: error instanceof Error ? error.message : String(error),
+}
+
+const runMainProcessShutdownBarrier = createShutdownBarrier({
+  globalTimeoutMs: MAIN_PROCESS_SHUTDOWN_TIMEOUT_MS,
+  logger: mainLog,
+  phases: [
+    {
+      name: "messaging",
+      timeoutMs: MESSAGING_SHUTDOWN_TIMEOUT_MS,
+      run: async () => {
+        await disposeMessagingStatusIpcHandlers();
+        await disposeDesktopMessagingRuntime();
+      },
+    },
+    {
+      name: "app-server",
+      timeoutMs: APP_SERVER_SHUTDOWN_TIMEOUT_MS,
+      run: disposeAppServerIpcHandlers,
+    },
+  ],
+});
+
+async function disposeMainProcessResources(source: string): Promise<void> {
+  mainProcessShutdownPromise ??= (async () => {
+    disposeMainProcessResourcesSync();
+    await runMainProcessShutdownBarrier(source);
+    disposeAppState();
+    mainProcessShutdownComplete = true;
+  })();
+  await mainProcessShutdownPromise;
+}
+
+async function prepareForUpdateInstallShutdown(): Promise<void> {
+  beginQuitInProgress("update-install");
+  await disposeMainProcessResources("update-install");
+}
+
+function quitAfterResourceShutdown(source: string): void {
+  finalQuitPromise ??= disposeMainProcessResources(source)
+    .catch((error: unknown) => {
+      mainLog.warn("main process shutdown barrier failed", {
+        source,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    })
+    .finally(() => {
+      mainProcessShutdownComplete = true;
+      appQuitManager.allowImmediateQuit();
+      app.quit();
     });
-  });
-  void disposeAppServerIpcHandlers();
-  disposeAppState();
 }
 
 function beginQuitInProgress(source: string): void {
@@ -497,14 +550,14 @@ function installProcessShutdownHandlers(): void {
   const handleSignal = (signal: NodeJS.Signals): void => {
     mainLog.info("main process shutdown signal received", { signal });
     beginQuitInProgress(signal);
-    disposeMainProcessResourcesSync();
     appQuitManager.allowImmediateQuit();
-    app.quit();
+    quitAfterResourceShutdown(signal);
   };
   process.once("SIGTERM", handleSignal);
   process.once("SIGINT", handleSignal);
   process.once("exit", () => {
     disposeMainProcessResourcesSync();
+    disposeAppState();
   });
 }
 
@@ -684,6 +737,7 @@ function rejectDevOnlyEnvVarsInProduction(): void {
 }
 
 export function bootstrapApp(): void {
+  setUpdateInstallPreparationHandler(prepareForUpdateInstallShutdown);
   rejectDevOnlyEnvVarsInProduction();
   app.setName(APP_NAME);
   app.setAboutPanelOptions({
@@ -917,6 +971,11 @@ export function bootstrapApp(): void {
     }
     if (quitInProgress) {
       if (appQuitManager.isQuitAllowed()) {
+        if (!mainProcessShutdownComplete) {
+          mainLog.info("starting resource shutdown after windows closed");
+          quitAfterResourceShutdown("window-all-closed");
+          return;
+        }
         mainLog.info("quitting after windows closed during shutdown");
         app.quit();
         return;
@@ -928,16 +987,38 @@ export function bootstrapApp(): void {
   });
 
   app.on("before-quit", (event) => {
+    if (isUpdateInstallInProgress()) {
+      beginQuitInProgress("update-install");
+      if (!isUpdateInstallUpdaterQuitReady()) {
+        event?.preventDefault();
+      }
+      if (!mainProcessShutdownComplete) {
+        // Defensive fallback for a native/direct updater invocation that did
+        // not pass through installDownloadedAppUpdate. Never issue app.quit()
+        // here; preparation or Squirrel owns the next transition.
+        void prepareForUpdateInstallShutdown().catch((error: unknown) => {
+          mainLog.warn("update-install shutdown preparation failed", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      }
+      return;
+    }
     if (!appQuitManager.isQuitAllowed()) {
       event?.preventDefault();
       beginQuitWithRelease("before-quit");
       return;
     }
     beginQuitInProgress("before-quit");
+    if (!mainProcessShutdownComplete) {
+      event?.preventDefault();
+      quitAfterResourceShutdown("before-quit");
+    }
   });
 
   app.on("will-quit", () => {
     disposeMainProcessResourcesSync();
+    disposeAppState();
   });
 }
 

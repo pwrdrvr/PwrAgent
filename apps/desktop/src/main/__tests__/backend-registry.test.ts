@@ -7769,7 +7769,7 @@ script = "echo setup"
     await registry.close();
   });
 
-  it("waits for an in-flight repair and does not retry after registry close", async () => {
+  it("drains an in-flight repair before the final Codex close", async () => {
     const threadId = "thread-close-during-invalid-id-repair";
     const recoveryDelay = createDeferred<void>();
     const codexClient = new MockBackendClient({

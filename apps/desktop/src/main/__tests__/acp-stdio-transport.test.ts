@@ -18,11 +18,15 @@ class MockAcpChildProcess extends EventEmitter {
   });
   readonly stdout = new PassThrough();
   readonly stderr = new PassThrough();
+  exitCode: number | null = null;
+  signalCode: NodeJS.Signals | null = null;
   killCalled = false;
 
-  kill(): void {
+  kill(signal: NodeJS.Signals = "SIGTERM"): boolean {
     this.killCalled = true;
+    this.signalCode = signal;
     this.emit("close");
+    return true;
   }
 }
 
@@ -256,5 +260,63 @@ describe("AcpStdioJsonRpcTransport", () => {
       result: { ok: true },
     });
     await transport.close();
+  });
+
+  it("prevents reconnect and late requests after close", async () => {
+    const child = new MockAcpChildProcess();
+    const spawn = vi.fn(() => child);
+    const transport = new AcpStdioJsonRpcTransport({
+      launchDescriptor: createDescriptor(),
+      spawn,
+    });
+
+    await transport.connect();
+    await transport.close();
+
+    await expect(transport.connect()).rejects.toThrow("transport is closed");
+    await expect(transport.request("session/new")).rejects.toThrow(
+      "transport is closed",
+    );
+    expect(spawn).toHaveBeenCalledOnce();
+  });
+
+  it("cleans up a child whose stdio pipes are unavailable", async () => {
+    const child = new MockAcpChildProcess();
+    Object.defineProperty(child, "stderr", { value: null });
+    const transport = new AcpStdioJsonRpcTransport({
+      launchDescriptor: createDescriptor(),
+      spawn: () => child,
+    });
+
+    await expect(transport.connect()).rejects.toThrow(
+      "ACP stdio pipes unavailable",
+    );
+    expect(child.killCalled).toBe(true);
+  });
+
+  it("waits for ACP exit and escalates when SIGTERM is resisted", async () => {
+    vi.useFakeTimers();
+    try {
+      const child = new MockAcpChildProcess();
+      child.kill = vi.fn(() => false);
+      const transport = new AcpStdioJsonRpcTransport({
+        launchDescriptor: createDescriptor(),
+        spawn: () => child,
+      });
+      await transport.connect();
+
+      const close = transport.close();
+      await Promise.resolve();
+      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(child.kill).toHaveBeenCalledWith("SIGKILL");
+      child.signalCode = "SIGKILL";
+      child.emit("close");
+
+      await expect(close).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -14556,15 +14556,44 @@ export class DesktopBackendRegistry {
       this.codexInvalidIdRecoveryBarrier = undefined;
     }
     const recoveryDrain = this.codexInvalidIdRecoveryDrain;
-    if (recoveryDrain) {
-      await recoveryDrain;
+    const resources = [
+      { name: "acp", close: () => this.acpBackend.close() },
+      { name: "pdf-mcp", close: () => this.pdfToolMcpServer?.close() },
+      {
+        name: "codex",
+        close: async () => {
+          try {
+            await recoveryDrain;
+          } finally {
+            // Recovery may restart the transport before it observes that the
+            // registry closed. Always make the final Codex close happen after
+            // that drain so no retry-path child can escape shutdown.
+            await this.codexClient.close();
+          }
+        },
+      },
+      { name: "grok", close: () => this.grokClient.close() },
+      ...this.captureStores.splice(0).map((store, index) => ({
+        name: `capture-${index}`,
+        close: () => store.close(),
+      })),
+    ];
+    const results = await Promise.allSettled(
+      resources.map((resource) => Promise.resolve().then(resource.close)),
+    );
+    const failures = results.flatMap((result, index) =>
+      result.status === "rejected"
+        ? [{ name: resources[index].name, reason: result.reason }]
+        : [],
+    );
+    if (failures.length > 0) {
+      throw new AggregateError(
+        failures.map((failure) => failure.reason),
+        `Desktop backend registry close failed: ${failures
+          .map((failure) => failure.name)
+          .join(", ")}`,
+      );
     }
-
-    await this.acpBackend.close();
-    await this.pdfToolMcpServer?.close();
-    await this.codexClient.close();
-    await this.grokClient.close();
-    await Promise.all(this.captureStores.splice(0).map(async (store) => await store.close()));
   }
 
   private async resolveModelSettings(
@@ -25690,6 +25719,10 @@ function truncateThreadInspectionTextWithFlag(
 }
 
 let registry: DesktopBackendRegistry | null = null;
+
+export function getExistingDesktopBackendRegistry(): DesktopBackendRegistry | null {
+  return registry;
+}
 
 export function getDesktopBackendRegistry(): DesktopBackendRegistry {
   if (!registry) {
