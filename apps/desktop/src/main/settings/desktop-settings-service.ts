@@ -146,10 +146,10 @@ import {
   readEnvString,
   readEnvWorktreeStorage,
 } from "./desktop-settings-env";
-import { discoverCodexCommands } from "@pwrdrvr/codex-discovery";
 import {
   discoverCodexAuthProfiles,
   resolveCodexHomeForProfile,
+  type ResolvedCodexCommandCandidate,
 } from "@pwrdrvr/codex-discovery";
 import { discoverDesktopApplications } from "./application-discovery";
 import { discoverGitCommands } from "./git-discovery";
@@ -164,6 +164,11 @@ import {
 // shape + the `resolveShellEnv` test seam; the kit takes an injected logger
 // (passed below) where the in-tree copy hardcoded `getMainLogger`.
 import { mergeLoginShellEnvIntoEnv } from "@pwrdrvr/agent-transport";
+import {
+  CODEX_DISCOVERY_NOT_INSTALLED_TTL_MS,
+  CODEX_DISCOVERY_SUCCESS_TTL_MS,
+  CodexDiscoveryCoordinator,
+} from "../codex-discovery-coordinator";
 
 const LOGIN_SHELL_ENV_MARKER_START = "__PWRAGENT_LOGIN_SHELL_ENV_START__";
 const LOGIN_SHELL_ENV_MARKER_END = "__PWRAGENT_LOGIN_SHELL_ENV_END__";
@@ -199,6 +204,10 @@ function normalizeCodexProfilesSnapshot(
 }
 
 type DesktopSettingsServiceOptions = {
+  codexDiscoveryCoordinator?: Pick<
+    CodexDiscoveryCoordinator,
+    "discover" | "invalidate" | "resolve"
+  >;
   configPath?: string;
   defaultDeveloperMode?: boolean;
   env?: NodeJS.ProcessEnv;
@@ -360,26 +369,22 @@ export class DesktopSettingsService {
   private readonly startupCodexHome?: string;
   private loggedObsoleteComposerConfig = false;
   private loggedObsoleteComposerEnv = false;
-  // Per-instance memoization for executable discovery. Each discovery is a
-  // pure function of `this.env` (fixed at construction), the filesystem, and a
-  // handful of config strings — so re-running them on every readSettings() just
-  // re-spawns the same probe child processes. That's wasteful everywhere and,
-  // on Windows where process spawn is far slower, multiple readSettings() calls
-  // in a single unit test could blow past the 5s test timeout. Caching is
-  // behavior-preserving: git/applications are config-independent (cached as a
-  // single promise), while codex/gh are keyed on the exact config input they
-  // consume, so a test that changes that input still triggers a fresh probe.
+  // Git/applications discovery remains process-lifetime memoized. Codex uses a
+  // bounded coordinator shared with app-server launch so Settings and launch
+  // cannot select different binaries.
   private gitDiscoveryPromise?: Promise<DesktopGitDiscoverySnapshot>;
   private applicationsDiscoveryPromise?: Promise<DesktopApplicationsSnapshot>;
-  private codexDiscoveryCache?: {
-    key: string;
-    promise: ReturnType<typeof discoverCodexCommands>;
-  };
+  private readonly codexDiscoveryCoordinator: Pick<
+    CodexDiscoveryCoordinator,
+    "discover" | "invalidate" | "resolve"
+  >;
   private ghDiscoveryCache?: {
     key: string;
     promise: ReturnType<typeof discoverGhCommands>;
   };
   private codexSpawnEnv?: NodeJS.ProcessEnv;
+  private codexSpawnEnvHydratedAt?: number;
+  private codexSpawnEnvHydrationSucceeded = false;
   private codexSpawnEnvHydrationPromise?: Promise<NodeJS.ProcessEnv>;
   private terminalSpawnEnv?: NodeJS.ProcessEnv;
   private terminalSpawnEnvHydrationPromise?: Promise<NodeJS.ProcessEnv>;
@@ -395,9 +400,17 @@ export class DesktopSettingsService {
       this.readConfig().config.models?.codex?.profile,
       { env: this.env },
     );
+    this.codexDiscoveryCoordinator =
+      options.codexDiscoveryCoordinator
+      ?? new CodexDiscoveryCoordinator({
+        now: this.now,
+        resolveEnv: async () => await this.resolveCodexSpawnEnvAsync(),
+      });
   }
 
-  async readSettings(): Promise<DesktopSettingsSnapshot> {
+  async readSettings(options: {
+    forceCodexDiscovery?: boolean;
+  } = {}): Promise<DesktopSettingsSnapshot> {
     const { config, error } = this.readConfig();
     const secretStorage = this.options.secretStore.describe();
 
@@ -471,8 +484,12 @@ export class DesktopSettingsService {
       undefined,
       secretStorage.available,
     );
-    const codexDiscovery = await this.discoverCodexCommandsCached(
-      config.models?.codex?.path,
+    const codexDiscovery = await this.codexDiscoveryCoordinator.discover(
+      this.resolveCodexCommandPreferenceFromConfig(config),
+      {
+        allowStaleSuccess: true,
+        force: options.forceCodexDiscovery === true,
+      },
     );
     const codexProfiles = normalizeCodexProfilesSnapshot(
       discoverCodexAuthProfiles({
@@ -1081,22 +1098,6 @@ export class DesktopSettingsService {
     return this.applicationsDiscoveryPromise;
   }
 
-  // codex/gh discovery depends on a single config string. Cache keyed on that
-  // string so repeated readSettings() with unchanged config skip the re-spawn,
-  // while a test that mutates the configured path re-probes (cache miss).
-  private discoverCodexCommandsCached(
-    configuredCommand: string | undefined,
-  ): ReturnType<typeof discoverCodexCommands> {
-    const key = configuredCommand ?? "";
-    if (this.codexDiscoveryCache?.key !== key) {
-      this.codexDiscoveryCache = {
-        key,
-        promise: discoverCodexCommands({ configuredCommand, env: this.env }),
-      };
-    }
-    return this.codexDiscoveryCache.promise;
-  }
-
   private discoverGhCommandsCached(
     configuredCommand: string | undefined,
   ): ReturnType<typeof discoverGhCommands> {
@@ -1256,6 +1257,9 @@ export class DesktopSettingsService {
       );
     }
     applyDesktopSettingsPatch(this.configPath, patch);
+    if (patch.models?.codex?.path !== undefined) {
+      this.codexDiscoveryCoordinator.invalidate();
+    }
     // Fan out appearance updates to every open window so aux surfaces
     // (changelog, app-log, license, messaging activity) re-apply their
     // <html data-*> attributes live instead of staying stuck on
@@ -1411,10 +1415,17 @@ export class DesktopSettingsService {
   }
 
   resolveCodexCommandPreference(): string | undefined {
-    return (
-      readEnvString(this.env, CODEX_COMMAND_ENV)
-      || this.readConfig().config.models?.codex?.path
-      || undefined
+    return this.resolveCodexCommandPreferenceFromConfig(this.readConfig().config);
+  }
+
+  async refreshCodexDiscovery(): Promise<DesktopSettingsSnapshot> {
+    this.codexSpawnEnvHydratedAt = undefined;
+    return await this.readSettings({ forceCodexDiscovery: true });
+  }
+
+  async resolveCodexCommand(): Promise<ResolvedCodexCommandCandidate> {
+    return await this.codexDiscoveryCoordinator.resolve(
+      this.resolveCodexCommandPreference(),
     );
   }
 
@@ -1462,10 +1473,22 @@ export class DesktopSettingsService {
     }
 
     const targetEnv = this.ensureBaseCodexSpawnEnv();
-    this.codexSpawnEnvHydrationPromise = resolveInteractiveLoginShellEnvAsync(this.env)
+    const hydrationTtlMs = this.codexSpawnEnvHydrationSucceeded
+      ? CODEX_DISCOVERY_SUCCESS_TTL_MS
+      : CODEX_DISCOVERY_NOT_INSTALLED_TTL_MS;
+    if (
+      this.codexSpawnEnvHydratedAt !== undefined
+      && this.now() - this.codexSpawnEnvHydratedAt < hydrationTtlMs
+    ) {
+      return targetEnv;
+    }
+
+    const hydrationPromise = resolveInteractiveLoginShellEnvAsync(this.env)
       .then((shellEnv) => {
         const logger = getMainLogger("pwragent:shell-environment");
         if (!shellEnv || Object.keys(shellEnv).length === 0) {
+          this.codexSpawnEnvHydratedAt = this.now();
+          this.codexSpawnEnvHydrationSucceeded = false;
           logger.warn("login-shell-env-merge-empty", {
             parentPathLength: this.env.PATH?.length ?? 0,
             parentShell: this.env.SHELL,
@@ -1485,10 +1508,18 @@ export class DesktopSettingsService {
         if (this.startupCodexHome) {
           targetEnv.CODEX_HOME = this.startupCodexHome;
         }
+        this.codexSpawnEnvHydratedAt = this.now();
+        this.codexSpawnEnvHydrationSucceeded = true;
         return targetEnv;
       });
-
-    return await this.codexSpawnEnvHydrationPromise;
+    this.codexSpawnEnvHydrationPromise = hydrationPromise;
+    try {
+      return await hydrationPromise;
+    } finally {
+      if (this.codexSpawnEnvHydrationPromise === hydrationPromise) {
+        this.codexSpawnEnvHydrationPromise = undefined;
+      }
+    }
   }
 
   async resolveTerminalSpawnEnvAsync(): Promise<NodeJS.ProcessEnv> {
@@ -1538,6 +1569,16 @@ export class DesktopSettingsService {
       buildPwrAgentChildProcessEnv(this.env),
     );
     return this.codexSpawnEnv;
+  }
+
+  private resolveCodexCommandPreferenceFromConfig(
+    config: DesktopSettingsConfig,
+  ): string | undefined {
+    return (
+      readEnvString(this.env, CODEX_COMMAND_ENV)
+      || config.models?.codex?.path
+      || undefined
+    );
   }
 
   private ensureBaseTerminalSpawnEnv(): NodeJS.ProcessEnv {
