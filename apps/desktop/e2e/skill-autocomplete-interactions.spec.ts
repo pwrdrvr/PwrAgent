@@ -63,10 +63,7 @@ test("thread reply Tiptap skill autocomplete filters and commits the reported mu
     await openSkillAutocompleteThread(app);
 
     const tiptapInput = app.window.getByTestId("composer-tiptap-input");
-    const textbox = app.window.getByRole("textbox", { name: "Reply" });
-    await textbox.fill(reportedDraftPrefix);
-    await textbox.focus();
-    await app.window.keyboard.press("End");
+    await seedComposerDraft(tiptapInput, reportedDraftPrefix);
     const seededDraft = await tiptapInput.getAttribute("data-value");
     expect(seededDraft).toMatch(/Let's use $/);
 
