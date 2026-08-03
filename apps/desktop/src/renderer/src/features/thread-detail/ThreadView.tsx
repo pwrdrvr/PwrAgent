@@ -213,7 +213,10 @@ function applyLaunchpadEnvironmentSetupProgress(
   if (event.phase === "failed") {
     return {
       ...base,
+      durationMs: event.durationMs,
       error: event.error,
+      exitCode: event.exitCode,
+      output: event.output ?? base.output,
       status: "failed",
     };
   }
@@ -257,6 +260,13 @@ function formatSetupStatus(progress?: LaunchpadEnvironmentSetupProgress): {
       tone: "failed",
     };
   }
+  if (progress.exitCode !== undefined) {
+    return {
+      heading: "Environment setup failed",
+      label: `Failed (exit code ${progress.exitCode})`,
+      tone: "failed",
+    };
+  }
   return {
     heading: "Environment setup failed",
     label: "Failed",
@@ -266,6 +276,7 @@ function formatSetupStatus(progress?: LaunchpadEnvironmentSetupProgress): {
 
 function LaunchpadEnvironmentSetupPending(props: {
   command?: string;
+  confirmedCwd?: string;
   cwd?: string;
   desktopApi?: Pick<DesktopApi, "copyText">;
   directoryLabel: string;
@@ -316,12 +327,14 @@ function LaunchpadEnvironmentSetupPending(props: {
             <div className="launchpad-pending__meta-path">
               <dt className="launchpad-pending__meta-label">
                 <span>Path</span>
-                <TranscriptCopyButton
-                  className="transcript-copy-button--setup"
-                  desktopApi={props.desktopApi}
-                  label="Copy setup path"
-                  text={props.cwd}
-                />
+                {props.confirmedCwd ? (
+                  <TranscriptCopyButton
+                    className="transcript-copy-button--setup"
+                    desktopApi={props.desktopApi}
+                    label="Copy setup path"
+                    text={props.confirmedCwd}
+                  />
+                ) : null}
               </dt>
               <dd>{props.cwd}</dd>
             </div>
@@ -2658,6 +2671,7 @@ export function ThreadView(props: ThreadViewProps) {
                   launchpadSetupProgress?.command ??
                   pendingForkEnvironmentSetup.command
                 }
+                confirmedCwd={launchpadSetupProgress?.cwd}
                 cwd={launchpadSetupProgress?.cwd ?? pendingForkEnvironmentSetup.cwd}
                 desktopApi={props.desktopApi}
                 directoryLabel={pendingForkEnvironmentSetup.directoryLabel}
@@ -2815,6 +2829,7 @@ export function ThreadView(props: ThreadViewProps) {
                     launchpadSetupProgress?.command ??
                     selectedLaunchpadCodexEnvironment?.setupScript
                   }
+                  confirmedCwd={launchpadSetupProgress?.cwd}
                   cwd={
                     launchpadSetupProgress?.cwd ?? selectedLaunchpad.directoryPath
                   }

@@ -1532,6 +1532,10 @@ describe("ThreadView", () => {
     ).toBeInTheDocument();
     expect(screen.getByLabelText("Setup command")).toHaveTextContent("pnpm install");
     expect(screen.getAllByText("PwrSnap").length).toBeGreaterThan(0);
+    expect(screen.getByText("/repo")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Copy setup path" }),
+    ).not.toBeInTheDocument();
   });
 
   it("shows pending environment setup while a forked worktree is preparing", async () => {
@@ -1560,6 +1564,7 @@ describe("ThreadView", () => {
         pendingForkEnvironmentSetup={{
           backend: "codex",
           command: "pnpm install",
+          cwd: "/repo/app",
           directoryKey: "fork:codex:thread-parent:new-worktree",
           directoryLabel: "PwrAgent",
           environmentId: "pwragent",
@@ -1576,6 +1581,10 @@ describe("ThreadView", () => {
       screen.getByRole("heading", { name: "Running environment setup" }),
     ).toBeInTheDocument();
     expect(screen.getByLabelText("Setup command")).toHaveTextContent("pnpm install");
+    expect(screen.getByText("/repo/app")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Copy setup path" }),
+    ).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Forking thread" })).toBeInTheDocument();
     expect(screen.getByLabelText("New thread context")).toBeInTheDocument();
 
@@ -1634,6 +1643,32 @@ describe("ThreadView", () => {
     expect(
       screen.getByRole("heading", { name: "Environment setup complete" }),
     ).toBeInTheDocument();
+
+    act(() => {
+      setupProgress({
+        at: Date.now(),
+        command: "pnpm install",
+        cwd: "/repo/app/.worktrees/thread-fork/app",
+        directoryKey: "fork:codex:thread-parent:new-worktree",
+        durationMs: 1400,
+        environmentId: "pwragent",
+        environmentName: "PwrAgent",
+        error: "Setup failed with exit code 17",
+        exitCode: 17,
+        output: "dependency install failed\n",
+        phase: "failed",
+      });
+    });
+
+    expect(screen.getByText("Failed (exit code 17)")).toHaveClass(
+      "launchpad-pending__status--failed",
+    );
+    expect(
+      screen.getByRole("heading", { name: "Environment setup failed" }),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Setup output")).toHaveTextContent(
+      "dependency install failed",
+    );
   });
 
   it("keeps launch failures closable from the pending setup screen", async () => {
