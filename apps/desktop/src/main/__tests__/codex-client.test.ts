@@ -5242,6 +5242,57 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("does not use title arguments as labels for non-MCP dynamic tools", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.readThreadResultByThreadId.set("thread-dynamic-tool-title", {
+      thread: {
+        turns: [
+          {
+            id: "turn-dynamic-tool-title",
+            status: "completed",
+            items: [
+              {
+                type: "dynamicToolCall",
+                id: "tool-handoff",
+                tool: "handoff_task",
+                arguments: {
+                  title: "Design Git remotes and branches UI",
+                  task: "Inspect the existing implementation",
+                },
+                status: "completed",
+                success: true,
+                durationMs: 50,
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const replay = await client.readThread({
+      threadId: "thread-dynamic-tool-title",
+    });
+
+    expect(replay.entries).toEqual([
+      expect.objectContaining({
+        type: "activity",
+        details: [
+          expect.objectContaining({
+            id: "tool-handoff",
+            label: "handoff_task (50ms)",
+          }),
+        ],
+      }),
+    ]);
+
+    await client.close();
+  });
+
   it("hydrates dynamic tool result images from persisted thread activity", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.readThreadResultByThreadId.set("thread-pdf-tool-image", {

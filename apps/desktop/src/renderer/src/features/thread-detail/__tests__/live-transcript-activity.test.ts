@@ -341,6 +341,31 @@ describe("mergeCommandDetail", () => {
       source: "shell",
     });
   });
+
+  it("keeps completed MCP invocations classified as tools", () => {
+    expect(
+      mergeCommandDetail(
+        {
+          displayCommand: "node_repl/js\n{\n  \"title\": \"Inspect profile\"\n}",
+          rawCommand: "node_repl/js",
+          source: "tool",
+        },
+        {
+          displayCommand: "node_repl/js\n{\n  \"title\": \"Inspect profile\"\n}",
+          rawCommand: "node_repl/js",
+          source: "tool",
+          output: "Visible application state",
+          durationMs: 1_170,
+        },
+      ),
+    ).toEqual({
+      displayCommand: "node_repl/js\n{\n  \"title\": \"Inspect profile\"\n}",
+      rawCommand: "node_repl/js",
+      source: "tool",
+      output: "Visible application state",
+      durationMs: 1_170,
+    });
+  });
 });
 
 describe("mergeActivityDetails", () => {

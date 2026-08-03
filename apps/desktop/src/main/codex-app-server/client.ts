@@ -4255,7 +4255,7 @@ function summarizeActivityItems(
           : normalizedItemType === "mcptoolcall"
             ? extractDirectMcpToolResultImageParts(item, toolName ?? "Tool")
           : [];
-      const label = explicitTitle
+      const label = normalizedItemType === "mcptoolcall" && explicitTitle
         ? formatMcpToolActivityTitle(explicitTitle)
         : normalizedItemType === "mcptoolcall" && toolName
           ? `Used MCP ${formatMcpToolIdentifier(

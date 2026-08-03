@@ -1149,9 +1149,11 @@ export function mergeCommandDetail(
     return undefined;
   }
   const source =
-    next?.rawCommand && existing?.source === "tool"
-      ? "shell"
-      : next?.source ?? existing?.source;
+    next?.source === "tool"
+      ? "tool"
+      : next?.rawCommand && existing?.source === "tool"
+        ? "shell"
+        : next?.source ?? existing?.source;
 
   return {
     displayCommand,
