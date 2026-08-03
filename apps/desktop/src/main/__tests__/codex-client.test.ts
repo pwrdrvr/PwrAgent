@@ -5151,11 +5151,155 @@ describe("CodexAppServerClient", () => {
           {
             id: "tool-2",
             kind: "command",
-            label: "search_issues",
+            label: "Used MCP github/search_issues",
+            command: {
+              displayCommand: "github/search_issues",
+              rawCommand: "github/search_issues",
+              source: "tool",
+            },
             status: "in_progress"
           }
         ]
       }
+    ]);
+
+    await client.close();
+  });
+
+  it("uses MCP titles and preserves expandable invocations, output, and images", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.readThreadResultByThreadId.set("thread-mcp-tool-details", {
+      thread: {
+        turns: [
+          {
+            id: "turn-mcp-tool-details",
+            status: "completed",
+            startedAt: 1_763_500_210,
+            items: [
+              {
+                type: "mcpToolCall",
+                id: "tool-node-repl",
+                server: "node_repl",
+                tool: "js",
+                arguments: {
+                  title: "Inspect PwrGit profile",
+                  code: "await sky.get_app_state();",
+                },
+                status: "completed",
+                result: {
+                  content: [
+                    { type: "text", text: "Visible application state" },
+                    { type: "image", mimeType: "image/png", data: "AQID" },
+                  ],
+                  structuredContent: {},
+                },
+                error: null,
+                durationMs: 1_170,
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const replay = await client.readThread({
+      threadId: "thread-mcp-tool-details",
+    });
+
+    expect(replay.entries).toEqual([
+      expect.objectContaining({
+        type: "activity",
+        summary: "Used 1 tool",
+        details: [
+          expect.objectContaining({
+            id: "tool-node-repl",
+            label: "Inspect PwrGit profile (1.2s)",
+            status: "completed",
+            command: expect.objectContaining({
+              source: "tool",
+              rawCommand: "node_repl/js",
+              durationMs: 1_170,
+              displayCommand: expect.stringContaining("await sky.get_app_state();"),
+              output: expect.stringContaining("Visible application state"),
+            }),
+            images: [
+              {
+                type: "image",
+                url: "data:image/png;base64,AQID",
+                alt: "node_repl/js result",
+              },
+            ],
+          }),
+        ],
+      }),
+    ]);
+
+    await client.close();
+  });
+
+  it("uses dynamic tool titles while preserving expandable tool identity", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.readThreadResultByThreadId.set("thread-dynamic-tool-title", {
+      thread: {
+        turns: [
+          {
+            id: "turn-dynamic-tool-title",
+            status: "completed",
+            items: [
+              {
+                type: "dynamicToolCall",
+                id: "tool-handoff",
+                namespace: "pwragent",
+                tool: "handoff_task",
+                arguments: {
+                  title: "Design Git remotes and branches UI",
+                  task: "Inspect the existing implementation",
+                },
+                status: "completed",
+                success: true,
+                durationMs: 50,
+                contentItems: [
+                  { type: "inputText", text: "Created delegated thread" },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const replay = await client.readThread({
+      threadId: "thread-dynamic-tool-title",
+    });
+
+    expect(replay.entries).toEqual([
+      expect.objectContaining({
+        type: "activity",
+        details: [
+          expect.objectContaining({
+            id: "tool-handoff",
+            label: "Design Git remotes and branches UI (50ms)",
+            command: expect.objectContaining({
+              source: "tool",
+              rawCommand: "pwragent/handoff_task",
+              displayCommand: expect.stringMatching(
+                /pwragent\/handoff_task[\s\S]*Inspect the existing implementation/,
+              ),
+              output: "Created delegated thread",
+            }),
+          }),
+        ],
+      }),
     ]);
 
     await client.close();

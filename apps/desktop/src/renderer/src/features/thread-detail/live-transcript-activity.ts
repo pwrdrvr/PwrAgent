@@ -15,6 +15,13 @@ import {
   type AppServerThreadSubAgentCallDetail,
   type AppServerThreadTurnMetadata,
 } from "@pwragent/shared";
+import {
+  formatDynamicToolOutput,
+  formatMcpToolOutput,
+  formatToolActivityTitle,
+  formatToolIdentifier,
+  formatToolInvocation,
+} from "../../../../shared/tool-activity";
 
 export const RENDERER_SEQUENCE_KEY = "__rendererSequence" as const;
 
@@ -186,27 +193,49 @@ function summarizeDynamicToolResult(item: Record<string, unknown>): string | und
   return summarizeToolOutput(text);
 }
 
-function summarizeMcpToolResult(item: Record<string, unknown>): string | undefined {
-  const error = summarizeJsonValue(item.error);
-  if (error) {
-    return error;
-  }
-  const result = readRecord(item.result);
-  if (!result) {
-    return undefined;
-  }
-  const structuredContent = summarizeJsonValue(
-    result.structuredContent ?? result.structured_content,
-  );
-  if (structuredContent) {
-    return structuredContent;
-  }
-  const text = (Array.isArray(result.content) ? result.content : [])
-    .map(readRecord)
-    .map((contentItem) => readString(contentItem, "text"))
-    .filter((value): value is string => Boolean(value))
-    .join(" ");
-  return summarizeToolOutput(text);
+function buildLiveMcpToolCommandDetail(
+  item: Record<string, unknown>,
+  toolName: string,
+  elapsedMs: number | undefined,
+): AppServerThreadCommandDetail {
+  const serverName =
+    readString(item, "server") ??
+    readString(item, "serverName") ??
+    readString(item, "server_name");
+  const identifier = formatToolIdentifier(serverName, toolName);
+  const args = readRecord(item.arguments) ?? readRecord(item.input);
+  const output = formatMcpToolOutput({
+    error: item.error,
+    result: item.result,
+  });
+  return {
+    displayCommand: formatToolInvocation(identifier, args),
+    rawCommand: identifier,
+    source: "tool",
+    ...(output ? { output } : {}),
+    ...(typeof elapsedMs === "number" ? { durationMs: elapsedMs } : {}),
+  };
+}
+
+function buildLiveDynamicToolCommandDetail(
+  item: Record<string, unknown>,
+  toolName: string,
+  elapsedMs: number | undefined,
+): AppServerThreadCommandDetail {
+  const namespace =
+    readString(item, "namespace") ??
+    readString(item, "toolNamespace") ??
+    readString(item, "tool_namespace");
+  const identifier = formatToolIdentifier(namespace, toolName);
+  const args = readRecord(item.arguments) ?? readRecord(item.input);
+  const output = formatDynamicToolOutput(item.contentItems ?? item.content_items);
+  return {
+    displayCommand: formatToolInvocation(identifier, args),
+    rawCommand: identifier,
+    source: "tool",
+    ...(output ? { output } : {}),
+    ...(typeof elapsedMs === "number" ? { durationMs: elapsedMs } : {}),
+  };
 }
 
 function readCommandOutputText(item: Record<string, unknown>): string | undefined {
@@ -690,23 +719,6 @@ function summarizeToolOutput(text: string | undefined): string | undefined {
   return normalized.length > 180 ? `${normalized.slice(0, 177)}...` : normalized;
 }
 
-function summarizeJsonValue(value: unknown): string | undefined {
-  if (value == null) {
-    return undefined;
-  }
-  if (typeof value === "string") {
-    return summarizeToolOutput(value);
-  }
-  if (typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-  try {
-    return summarizeToolOutput(JSON.stringify(value));
-  } catch {
-    return undefined;
-  }
-}
-
 function formatLiveToolName(
   toolName: string,
   status: AppServerThreadActivityDetail["status"]
@@ -738,6 +750,11 @@ function buildLiveToolLabel(
   status: AppServerThreadActivityDetail["status"],
   toolName: string
 ): string {
+  const title = readToolArgument(item, "title");
+  if ((itemType === "mcptoolcall" || itemType === "dynamictoolcall") && title) {
+    return formatToolActivityTitle(title);
+  }
+
   if (itemType === "collabagenttoolcall") {
     return formatCollabAgentToolLabel({
       receiverThreadIds: readStringArray(item.receiverThreadIds),
@@ -764,7 +781,10 @@ function buildLiveToolLabel(
   }
 
   if (itemType === "mcptoolcall") {
-    const serverName = readString(item, "server") ?? readString(item, "serverName");
+    const serverName =
+      readString(item, "server") ??
+      readString(item, "serverName") ??
+      readString(item, "server_name");
     return formatMcpToolName(serverName, toolName, status);
   }
 
@@ -1003,10 +1023,13 @@ export function buildLiveToolDetails(
     readString(item, "name") ??
     (itemType === "websearch" ? "web search" : "tool");
   const status = normalizeItemStatus(item.status);
+  const title = readToolArgument(item, "title");
   const query = readToolArgument(item, "query") ?? readToolArgument(item, "q");
   const preview =
     itemType === "mcptoolcall"
-      ? summarizeMcpToolResult(item)
+      ? undefined
+      : itemType === "dynamictoolcall" && title
+        ? undefined
       : itemType === "dynamictoolcall"
         ? summarizeDynamicToolResult(item)
       : summarizeToolOutput(readToolOutputText(item));
@@ -1026,6 +1049,10 @@ export function buildLiveToolDetails(
       ? buildLiveCommandDetail(item, command, elapsedMs)
       : itemType === "collabagenttoolcall"
         ? buildCollabAgentCommandDetail(item, toolName, readStringArray(item.receiverThreadIds))
+        : itemType === "mcptoolcall"
+          ? buildLiveMcpToolCommandDetail(item, toolName, elapsedMs)
+          : itemType === "dynamictoolcall" && title
+            ? buildLiveDynamicToolCommandDetail(item, toolName, elapsedMs)
         : undefined;
   const details: AppServerThreadActivityDetail[] = [
     {
@@ -1150,9 +1177,11 @@ export function mergeCommandDetail(
     return undefined;
   }
   const source =
-    next?.rawCommand && existing?.source === "tool"
-      ? "shell"
-      : next?.source ?? existing?.source;
+    next?.source === "tool"
+      ? "tool"
+      : next?.rawCommand && existing?.source === "tool"
+        ? "shell"
+        : next?.source ?? existing?.source;
 
   return {
     displayCommand,

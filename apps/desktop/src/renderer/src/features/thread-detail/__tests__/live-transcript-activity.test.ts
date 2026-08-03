@@ -219,6 +219,85 @@ describe("buildLiveToolDetails", () => {
     ]);
     expect(details[0]?.label).not.toContain("AQID");
   });
+
+  it("uses MCP titles and builds expandable invocation details", () => {
+    const details = buildLiveToolDetails({
+      type: "mcpToolCall",
+      id: "tool-node-repl",
+      server: "node_repl",
+      tool: "js",
+      arguments: {
+        title: "Inspect PwrGit profile",
+        code: "await sky.get_app_state();",
+      },
+      status: "completed",
+      durationMs: 1_170,
+      result: {
+        content: [
+          { type: "text", text: "Visible application state" },
+          { type: "image", mimeType: "image/png", data: "AQID" },
+        ],
+        structuredContent: {},
+      },
+    });
+
+    expect(details).toEqual([
+      expect.objectContaining({
+        id: "tool-node-repl",
+        label: "Inspect PwrGit profile (1.2s)",
+        images: [
+          {
+            type: "image",
+            url: "data:image/png;base64,AQID",
+            alt: "node_repl/js result",
+          },
+        ],
+        command: expect.objectContaining({
+          source: "tool",
+          rawCommand: "node_repl/js",
+          durationMs: 1_170,
+          displayCommand: expect.stringContaining("await sky.get_app_state();"),
+          output: expect.stringContaining("Visible application state"),
+        }),
+      }),
+    ]);
+    expect(details[0]?.label).not.toContain("Visible application state");
+    expect(details[0]?.label).not.toContain("AQID");
+  });
+
+  it("uses dynamic tool titles while preserving expandable tool identity", () => {
+    const details = buildLiveToolDetails({
+      type: "dynamicToolCall",
+      id: "tool-handoff",
+      namespace: "pwragent",
+      tool: "handoff_task",
+      arguments: {
+        title: "Design Git remotes and branches UI",
+        task: "Inspect the existing implementation",
+      },
+      status: "completed",
+      success: true,
+      durationMs: 50,
+      contentItems: [
+        { type: "inputText", text: "Created delegated thread" },
+      ],
+    });
+
+    expect(details).toEqual([
+      expect.objectContaining({
+        id: "tool-handoff",
+        label: "Design Git remotes and branches UI (50ms)",
+        command: expect.objectContaining({
+          source: "tool",
+          rawCommand: "pwragent/handoff_task",
+          displayCommand: expect.stringMatching(
+            /pwragent\/handoff_task[\s\S]*Inspect the existing implementation/,
+          ),
+          output: "Created delegated thread",
+        }),
+      }),
+    ]);
+  });
 });
 
 describe("appendCommandOutputDelta", () => {
@@ -294,6 +373,31 @@ describe("mergeCommandDetail", () => {
       displayCommand: "rg -n grok .",
       rawCommand: "rg -n grok .",
       source: "shell",
+    });
+  });
+
+  it("keeps completed MCP invocations classified as tools", () => {
+    expect(
+      mergeCommandDetail(
+        {
+          displayCommand: "node_repl/js\n{\n  \"title\": \"Inspect profile\"\n}",
+          rawCommand: "node_repl/js",
+          source: "tool",
+        },
+        {
+          displayCommand: "node_repl/js\n{\n  \"title\": \"Inspect profile\"\n}",
+          rawCommand: "node_repl/js",
+          source: "tool",
+          output: "Visible application state",
+          durationMs: 1_170,
+        },
+      ),
+    ).toEqual({
+      displayCommand: "node_repl/js\n{\n  \"title\": \"Inspect profile\"\n}",
+      rawCommand: "node_repl/js",
+      source: "tool",
+      output: "Visible application state",
+      durationMs: 1_170,
     });
   });
 });

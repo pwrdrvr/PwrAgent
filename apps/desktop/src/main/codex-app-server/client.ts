@@ -100,6 +100,13 @@ import {
 } from "../app-server/thread-directory-enricher";
 import { normalizeReviewDisplayText } from "../../shared/review-command";
 import {
+  formatDynamicToolOutput,
+  formatMcpToolOutput,
+  formatToolActivityTitle,
+  formatToolIdentifier,
+  formatToolInvocation,
+} from "../../shared/tool-activity";
+import {
   StdioJsonRpcTransport,
   type StdioJsonRpcTransportOptions,
 } from "./stdio-transport";
@@ -3618,6 +3625,42 @@ function extractMcpToolResultImagePartsFromReplayItem(
   );
 }
 
+function extractDirectMcpToolResultImageParts(
+  item: Record<string, unknown>,
+  toolName: string,
+): AppServerThreadImagePart[] {
+  const result = asRecord(item.result);
+  const content = Array.isArray(result?.content) ? result.content : [];
+  const identifier = formatToolIdentifier(
+    pickString(item, ["server", "serverName", "server_name"]),
+    toolName,
+  );
+  return dedupeImageParts(content.flatMap((value): AppServerThreadImagePart[] => {
+    const block = asRecord(value);
+    const type = normalizeItemType(pickString(block ?? {}, ["type"]));
+    const mimeType = pickString(block ?? {}, ["mimeType", "mime_type"])
+      ?.trim()
+      .toLowerCase();
+    const data = pickString(block ?? {}, ["data"]);
+    if (
+      type !== "image"
+      || !mimeType
+      || !MCP_RESOURCE_IMAGE_MIME_TYPES.has(mimeType)
+      || !data
+      || data.length > MAX_MCP_RESOURCE_IMAGE_BASE64_CHARS
+      || data.length % 4 === 1
+      || !BASE64_IMAGE_BLOB_PATTERN.test(data)
+    ) {
+      return [];
+    }
+    return [{
+      type: "image",
+      url: `data:${mimeType};base64,${data}`,
+      alt: `${identifier} result`,
+    }];
+  }));
+}
+
 function buildMcpSignedImagePart(
   structuredContent: Record<string, unknown>,
 ): AppServerThreadImagePart | undefined {
@@ -3885,6 +3928,51 @@ function parseToolArguments(item: Record<string, unknown>): Record<string, unkno
     asRecord(item.input) ??
     undefined
   );
+}
+
+function buildMcpToolCommandDetail(params: {
+  item: Record<string, unknown>;
+  toolName: string;
+  elapsedMs: number | undefined;
+}): AppServerThreadCommandDetail {
+  const identifier = formatToolIdentifier(
+    pickString(params.item, ["server", "serverName", "server_name"]),
+    params.toolName,
+  );
+  const args = parseToolArguments(params.item);
+  const output = formatMcpToolOutput({
+    error: params.item.error,
+    result: params.item.result,
+  });
+  return {
+    displayCommand: formatToolInvocation(identifier, args),
+    rawCommand: identifier,
+    source: "tool",
+    ...(output ? { output } : {}),
+    ...(typeof params.elapsedMs === "number" ? { durationMs: params.elapsedMs } : {}),
+  };
+}
+
+function buildDynamicToolCommandDetail(params: {
+  item: Record<string, unknown>;
+  toolName: string;
+  elapsedMs: number | undefined;
+}): AppServerThreadCommandDetail {
+  const identifier = formatToolIdentifier(
+    pickString(params.item, ["namespace", "toolNamespace", "tool_namespace"]),
+    params.toolName,
+  );
+  const args = parseToolArguments(params.item);
+  const output = formatDynamicToolOutput(
+    params.item.contentItems ?? params.item.content_items,
+  );
+  return {
+    displayCommand: formatToolInvocation(identifier, args),
+    rawCommand: identifier,
+    source: "tool",
+    ...(output ? { output } : {}),
+    ...(typeof params.elapsedMs === "number" ? { durationMs: params.elapsedMs } : {}),
+  };
 }
 
 function readActivityOutputText(item: Record<string, unknown>): string | undefined {
@@ -4175,19 +4263,46 @@ function summarizeActivityItems(
       const toolName =
         pickString(item, ["tool", "toolName", "tool_name", "name"]) ??
         (normalizedItemType === "websearch" ? "web search" : undefined);
-      const query = pickString(item, ["query"]);
+      const args = parseToolArguments(item);
+      const query =
+        pickString(item, ["query"]) ??
+        pickString(args ?? {}, ["query", "q"]);
+      const explicitTitle = pickString(args ?? {}, ["title"]);
+      const mcpCommandDetail =
+        normalizedItemType === "mcptoolcall" && toolName
+          ? buildMcpToolCommandDetail({ item, toolName, elapsedMs })
+          : undefined;
+      const dynamicCommandDetail =
+        normalizedItemType === "dynamictoolcall" && explicitTitle && toolName
+          ? buildDynamicToolCommandDetail({ item, toolName, elapsedMs })
+          : undefined;
       const images =
         normalizedItemType === "dynamictoolcall"
           ? extractDynamicToolCallImageParts(item, toolName ?? "Tool")
+          : normalizedItemType === "mcptoolcall"
+            ? extractDirectMcpToolResultImageParts(item, toolName ?? "Tool")
           : [];
+      const label =
+        (normalizedItemType === "mcptoolcall" || normalizedItemType === "dynamictoolcall")
+        && explicitTitle
+        ? formatToolActivityTitle(explicitTitle)
+        : normalizedItemType === "mcptoolcall" && toolName
+          ? `Used MCP ${formatToolIdentifier(
+              pickString(item, ["server", "serverName", "server_name"]),
+              toolName,
+            )}`
+          : toolName ?? "Used tool";
       pushActivityDetail(details, {
         id: itemId,
         kind: normalizedItemType === "websearch" ? "read" : "command",
         label: [
-          appendElapsedLabel(toolName ?? "Used tool", elapsedMs),
+          appendElapsedLabel(label, elapsedMs),
           query ? `: ${query}` : "",
         ].join(""),
         ...(images.length > 0 ? { images } : {}),
+        ...(mcpCommandDetail || dynamicCommandDetail
+          ? { command: mcpCommandDetail ?? dynamicCommandDetail }
+          : {}),
         status: itemStatus
       });
     }
