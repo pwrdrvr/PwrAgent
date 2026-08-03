@@ -4,7 +4,10 @@ import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promi
 import os from "node:os";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
-import { launchElectronApp } from "./fixtures/electron-app";
+import {
+  closeElectronApplication,
+  launchElectronApp,
+} from "./fixtures/electron-app";
 
 async function createCodexEnvironmentSetupFixture(params?: {
   includeExistingRunningSteps?: boolean;
@@ -610,7 +613,7 @@ test("directory launchpad keeps selected environment controls after snapshot rel
       { directoryKey, repoDir: fixture.repoDir },
     );
 
-    await firstApp.electronApp.close();
+    await closeElectronApplication(firstApp.electronApp);
     firstApp = undefined;
 
     secondApp = await launchElectronApp({

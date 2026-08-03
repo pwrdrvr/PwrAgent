@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -11,6 +12,12 @@ import { _electron as electron, expect, type ElectronApplication, type Page } fr
 import { applyDesktopSettingsPatch } from "../../src/main/settings/desktop-config";
 
 const fixtureDir = path.dirname(fileURLToPath(import.meta.url));
+const ELECTRON_EVALUATE_QUIT_TIMEOUT_MS = 1_000;
+const ELECTRON_CLOSE_TIMEOUT_MS = 1_000;
+const ELECTRON_FORCE_EXIT_TIMEOUT_MS = 1_000;
+
+type ElectronChildProcess = ReturnType<ElectronApplication["process"]>;
+type CloseResult = "closed" | "rejected" | "timeout";
 
 type LaunchResult = {
   electronApp: ElectronApplication;
@@ -283,7 +290,7 @@ export async function launchElectronApp(params: {
       }, requestParams);
     },
     close: async () => {
-      await electronApp.close();
+      await closeElectronApplication(electronApp);
       // The wizard's graduation path can spawn a detached child
       // Electron process for the operator's chosen profile (see
       // `openPwrAgentProfile` in `ipc/profiles.ts`). That child
@@ -301,6 +308,202 @@ export async function launchElectronApp(params: {
       await rm(homeRoot, { recursive: true, force: true });
     },
   };
+}
+
+/**
+ * Close a Playwright-owned Electron app without letting a degraded persistent
+ * runner turn one teardown into a 15-second tax. The normal path still asks
+ * Electron to exit first. If the main event loop or Playwright connection is
+ * wedged, the fallback snapshots and kills the complete process tree so helper
+ * processes cannot accumulate across jobs in the shared macOS VM.
+ */
+export async function closeElectronApplication(
+  electronApp: ElectronApplication,
+): Promise<void> {
+  const child = electronApp.process();
+  try {
+    await withTimeout(
+      electronApp.evaluate(({ app }) => {
+        app.quit();
+      }),
+      ELECTRON_EVALUATE_QUIT_TIMEOUT_MS,
+      "Electron quit evaluation timed out",
+    );
+  } catch {
+    // A healthy process commonly closes the Playwright connection before the
+    // evaluate round-trip resolves. A wedged process also lands here; the
+    // bounded close and process-tree fallback below distinguish the two.
+  }
+
+  const closePromise = electronApp.close();
+  closePromise.catch(() => undefined);
+  const result = await waitForClose(
+    closePromise,
+    ELECTRON_CLOSE_TIMEOUT_MS,
+  );
+  if (hasExited(child)) {
+    return;
+  }
+
+  console.warn(
+    `[pwragent-e2e-teardown] graceful close failed (close=${result}, exited=${hasExited(child)}) — force-killing pid=${child.pid ?? "?"}`,
+  );
+  await killProcessTree(child);
+  await waitForProcessExit(child, ELECTRON_FORCE_EXIT_TIMEOUT_MS);
+  await waitForClose(closePromise, ELECTRON_FORCE_EXIT_TIMEOUT_MS);
+}
+
+export async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string,
+): Promise<T> {
+  promise.catch(() => undefined);
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race<T>([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+async function waitForClose(
+  promise: Promise<void>,
+  timeoutMs: number,
+): Promise<CloseResult> {
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race<CloseResult>([
+      promise.then(
+        () => "closed",
+        () => "rejected",
+      ),
+      new Promise<"timeout">((resolve) => {
+        timeout = setTimeout(() => resolve("timeout"), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+function hasExited(child: ElectronChildProcess): boolean {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+async function waitForProcessExit(
+  child: ElectronChildProcess,
+  timeoutMs: number,
+): Promise<boolean> {
+  if (hasExited(child)) {
+    return true;
+  }
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race<boolean>([
+      new Promise<true>((resolve) => {
+        child.once("exit", () => resolve(true));
+      }),
+      new Promise<false>((resolve) => {
+        timeout = setTimeout(() => resolve(false), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+async function killProcessTree(child: ElectronChildProcess): Promise<void> {
+  if (hasExited(child)) {
+    return;
+  }
+  const pid = child.pid;
+  if (pid === undefined) {
+    if (!child.killed) {
+      child.kill("SIGKILL");
+    }
+    return;
+  }
+  if (process.platform === "win32") {
+    await new Promise<void>((resolve) => {
+      execFile(
+        "taskkill",
+        ["/pid", String(pid), "/T", "/F"],
+        { timeout: 5_000 },
+        (error) => {
+          if (error && !child.killed) {
+            child.kill("SIGKILL");
+          }
+          resolve();
+        },
+      );
+    });
+    return;
+  }
+
+  // Snapshot descendants before the root exits and they reparent to launchd.
+  const descendants = await listDescendantPids(pid);
+  if (!child.killed) {
+    child.kill("SIGKILL");
+  }
+  for (const descendant of descendants) {
+    try {
+      process.kill(descendant, "SIGKILL");
+    } catch {
+      // The descendant already exited between the ps snapshot and this kill.
+    }
+  }
+}
+
+async function listDescendantPids(rootPid: number): Promise<number[]> {
+  const stdout = await new Promise<string>((resolve) => {
+    execFile(
+      "ps",
+      ["-axo", "pid=,ppid="],
+      { timeout: 5_000 },
+      (_error, output) => resolve(output ?? ""),
+    );
+  });
+  const childrenByParent = new Map<number, number[]>();
+  for (const line of stdout.split("\n")) {
+    const match = line.trim().match(/^(\d+)\s+(\d+)$/);
+    if (!match) {
+      continue;
+    }
+    const childPid = Number(match[1]);
+    const parentPid = Number(match[2]);
+    const children = childrenByParent.get(parentPid);
+    if (children) {
+      children.push(childPid);
+    } else {
+      childrenByParent.set(parentPid, [childPid]);
+    }
+  }
+
+  const descendants: number[] = [];
+  const queue = [rootPid];
+  while (queue.length > 0) {
+    const parentPid = queue.shift();
+    if (parentPid === undefined) {
+      break;
+    }
+    for (const childPid of childrenByParent.get(parentPid) ?? []) {
+      descendants.push(childPid);
+      queue.push(childPid);
+    }
+  }
+  return descendants;
 }
 
 async function killSpawnedProfileProcessesUnder(homeRoot: string): Promise<void> {
