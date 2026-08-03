@@ -144,8 +144,12 @@ import type {
   PickFileFromDiskResponse,
   PickGhCommandResponse,
   PickReferenceFromDiskResponse,
+  InspectComposerPdfReferencesRequest,
+  InspectComposerPdfReferencesResponse,
   ListRecentFileReferencesResponse,
   RecordRecentFileReferencesRequest,
+  RenderComposerPdfPreviewRequest,
+  RenderComposerPdfPreviewResponse,
   DetachThreadPullRequestRequest,
   DetachThreadPullRequestResponse,
   RegisterDirectoryFromDiskRequest,
@@ -419,7 +423,9 @@ import {
   NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL,
   NAVIGATION_PICK_FILE_FROM_DISK_CHANNEL,
   NAVIGATION_PICK_REFERENCE_FROM_DISK_CHANNEL,
+  NAVIGATION_INSPECT_COMPOSER_PDF_REFERENCES_CHANNEL,
   NAVIGATION_RECORD_RECENT_FILE_REFERENCES_CHANNEL,
+  NAVIGATION_RENDER_COMPOSER_PDF_PREVIEW_CHANNEL,
   NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
   NAVIGATION_SET_PR_POLLING_FOCUS_CHANNEL,
   NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL,
@@ -1345,6 +1351,20 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(NAVIGATION_PICK_FILE_FROM_DISK_CHANNEL),
   pickReferenceFromDisk: async (): Promise<PickReferenceFromDiskResponse> =>
     await ipcRenderer.invoke(NAVIGATION_PICK_REFERENCE_FROM_DISK_CHANNEL),
+  inspectComposerPdfReferences: async (
+    request: InspectComposerPdfReferencesRequest,
+  ): Promise<InspectComposerPdfReferencesResponse> =>
+    await ipcRenderer.invoke(
+      NAVIGATION_INSPECT_COMPOSER_PDF_REFERENCES_CHANNEL,
+      request,
+    ),
+  renderComposerPdfPreview: async (
+    request: RenderComposerPdfPreviewRequest,
+  ): Promise<RenderComposerPdfPreviewResponse> =>
+    await ipcRenderer.invoke(
+      NAVIGATION_RENDER_COMPOSER_PDF_PREVIEW_CHANNEL,
+      request,
+    ),
   listRecentFileReferences: async (): Promise<ListRecentFileReferencesResponse> =>
     await ipcRenderer.invoke(NAVIGATION_LIST_RECENT_FILE_REFERENCES_CHANNEL),
   recordRecentFileReferences: async (

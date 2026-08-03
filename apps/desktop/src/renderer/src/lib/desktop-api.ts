@@ -147,8 +147,12 @@ import type {
   PickDirectoryFromDiskResponse,
   PickFileFromDiskResponse,
   PickReferenceFromDiskResponse,
+  InspectComposerPdfReferencesRequest,
+  InspectComposerPdfReferencesResponse,
   ListRecentFileReferencesResponse,
   RecordRecentFileReferencesRequest,
+  RenderComposerPdfPreviewRequest,
+  RenderComposerPdfPreviewResponse,
   DetachThreadPullRequestRequest,
   DetachThreadPullRequestResponse,
   RegisterDirectoryFromDiskRequest,
@@ -753,6 +757,14 @@ export type DesktopApi = {
    * tray and directories to reference chips.
    */
   pickReferenceFromDisk?: () => Promise<PickReferenceFromDiskResponse>;
+  /** Magic-byte inspection for explicit Composer attachments/reference tokens. */
+  inspectComposerPdfReferences?: (
+    request: InspectComposerPdfReferencesRequest,
+  ) => Promise<InspectComposerPdfReferencesResponse>;
+  /** Render a local PDF through an in-memory explicit-reference capability. */
+  renderComposerPdfPreview?: (
+    request: RenderComposerPdfPreviewRequest,
+  ) => Promise<RenderComposerPdfPreviewResponse>;
   /** Recently referenced files for the reference picker's Files tab. */
   listRecentFileReferences?: () => Promise<ListRecentFileReferencesResponse>;
   /** Fire-and-forget record of freshly committed file references. */

@@ -729,6 +729,61 @@ export type PickReferenceFromDiskResponse =
     };
 
 /**
+ * Ask main to identify PDF files from paths already carried by explicit
+ * Composer attachments or `@` reference tokens. The renderer must never pass
+ * a filesystem-looking value parsed from ordinary typed text.
+ */
+export type InspectComposerPdfReferencesRequest = {
+  /** Ephemeral identifier for one live Composer surface. */
+  scopeId: string;
+  /** Explicit attachment/reference paths currently visible in that Composer. */
+  paths: string[];
+};
+
+/**
+ * An in-memory capability for one explicit Composer PDF. It is invalidated
+ * when its path or observed file identity changes and is never persisted.
+ */
+export type ComposerPdfPreviewReference = {
+  fileIdentity: string;
+  path: string;
+  previewId: string;
+};
+
+export type InspectComposerPdfReferencesResponse = {
+  /** Only paths whose magic bytes identify a regular PDF. */
+  references: ComposerPdfPreviewReference[];
+};
+
+/**
+ * Render an explicitly authorized local PDF preview. There is deliberately no
+ * file path here: main resolves the path from the in-memory `previewId`.
+ */
+export type RenderComposerPdfPreviewRequest = {
+  knownFileIdentity?: string;
+  previewId: string;
+  scopeId: string;
+};
+
+/**
+ * A low-resolution, local-only first-page raster. Callers must keep this out
+ * of drafts, queued/steer snapshots, and model turn input.
+ */
+export type RenderComposerPdfPreviewResponse =
+  | {
+      fileIdentity: string;
+      unchanged: true;
+    }
+  | {
+      dataUrl: string;
+      fileIdentity: string;
+      height: number;
+      pageCount: number;
+      unchanged: false;
+      width: number;
+    };
+
+/**
  * Recently referenced files for the composer's reference picker. The main
  * process persists a small most-recent-first list of paths (capped,
  * deduped by path) and computes each label from the path's basename.

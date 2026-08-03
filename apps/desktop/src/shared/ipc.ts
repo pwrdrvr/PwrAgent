@@ -255,6 +255,11 @@ export const NAVIGATION_PICK_FILE_FROM_DISK_CHANNEL =
  */
 export const NAVIGATION_PICK_REFERENCE_FROM_DISK_CHANNEL =
   "navigation:pick-reference-from-disk";
+/** Local-only PDF preview bridge for explicit Composer references. */
+export const NAVIGATION_INSPECT_COMPOSER_PDF_REFERENCES_CHANNEL =
+  "navigation:inspect-composer-pdf-references";
+export const NAVIGATION_RENDER_COMPOSER_PDF_PREVIEW_CHANNEL =
+  "navigation:render-composer-pdf-preview";
 /**
  * Recently referenced files for the reference picker's Files tab —
  * `list` reads the persisted most-recent-first list; `record` is a

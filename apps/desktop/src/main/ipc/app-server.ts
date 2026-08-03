@@ -61,7 +61,11 @@ import {
   type PickDirectoryFromDiskResponse,
   type PickFileFromDiskResponse,
   type PickReferenceFromDiskResponse,
+  type InspectComposerPdfReferencesRequest,
+  type InspectComposerPdfReferencesResponse,
   type RecordRecentFileReferencesRequest,
+  type RenderComposerPdfPreviewRequest,
+  type RenderComposerPdfPreviewResponse,
   type DetachThreadPullRequestRequest,
   type DetachThreadPullRequestResponse,
   type RefreshDirectoryGitStatusesRequest,
@@ -195,7 +199,9 @@ import {
   NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL,
   NAVIGATION_PICK_FILE_FROM_DISK_CHANNEL,
   NAVIGATION_PICK_REFERENCE_FROM_DISK_CHANNEL,
+  NAVIGATION_INSPECT_COMPOSER_PDF_REFERENCES_CHANNEL,
   NAVIGATION_RECORD_RECENT_FILE_REFERENCES_CHANNEL,
+  NAVIGATION_RENDER_COMPOSER_PDF_PREVIEW_CHANNEL,
   NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL,
   NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
   NAVIGATION_SET_BROWSE_MODE_CHANNEL,
@@ -206,6 +212,7 @@ import {
 import { FocusedDiffService } from "../diff-focus/focused-diff-service";
 import { getMainLogger } from "../log";
 import { buildMessagingBindingsByThreadKey } from "../messaging/messaging-bindings-snapshot";
+import { ComposerPdfPreviewReferences } from "../pdf/composer-pdf-preview-references";
 import { getDesktopAutomationService } from "../automations/desktop-automation-service";
 import { GithubPrFetcher } from "../pr-status/github-pr-fetcher";
 import { detectPullRequestsForThread } from "../pr-status/pr-detection";
@@ -5471,6 +5478,7 @@ const GIT_MUTATION_COMMAND =
   /(?:^|[;&|]\s*)git\s+(?:-{1,2}[\w-]+(?:[= ]\S+)?\s+)*(?:commit|merge|rebase|reset|revert|stash|checkout|switch|restore|cherry-pick|pull|push|am|apply|clean)\b/;
 
 const appServerService = new DesktopAppServerService();
+const composerPdfPreviewReferences = new ComposerPdfPreviewReferences();
 
 let unsubscribeWorkingStateEvents: (() => void) | undefined;
 
@@ -5996,6 +6004,24 @@ export function registerAppServerIpcHandlers(): void {
       );
     },
   );
+  ipcMain.removeHandler(NAVIGATION_INSPECT_COMPOSER_PDF_REFERENCES_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_INSPECT_COMPOSER_PDF_REFERENCES_CHANNEL,
+    async (
+      _event,
+      request: InspectComposerPdfReferencesRequest,
+    ): Promise<InspectComposerPdfReferencesResponse> =>
+      composerPdfPreviewReferences.inspect(request),
+  );
+  ipcMain.removeHandler(NAVIGATION_RENDER_COMPOSER_PDF_PREVIEW_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_RENDER_COMPOSER_PDF_PREVIEW_CHANNEL,
+    async (
+      _event,
+      request: RenderComposerPdfPreviewRequest,
+    ): Promise<RenderComposerPdfPreviewResponse> =>
+      await composerPdfPreviewReferences.render(request),
+  );
   ipcMain.removeHandler(NAVIGATION_LIST_RECENT_FILE_REFERENCES_CHANNEL);
   ipcMain.handle(
     NAVIGATION_LIST_RECENT_FILE_REFERENCES_CHANNEL,
@@ -6080,6 +6106,8 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(NAVIGATION_SET_ELIGIBLE_THREADS_PR_AUTO_DISPATCH_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_INSPECT_COMPOSER_PDF_REFERENCES_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_RENDER_COMPOSER_PDF_PREVIEW_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_ATTACH_DIRECTORY_TO_THREAD_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_DETACH_DIRECTORY_FROM_THREAD_CHANNEL);
@@ -6089,6 +6117,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   getDesktopBackendRegistry().setThreadPullRequestCanonicalizer(undefined);
   getDesktopBackendRegistry().setThreadPullRequestWatchToolHandler(undefined);
   getDesktopBackendRegistry().setThreadPrAutoDispatchHandler(undefined);
+  composerPdfPreviewReferences.clear();
   await appServerService.close();
 }
 

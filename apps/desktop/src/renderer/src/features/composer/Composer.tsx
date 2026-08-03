@@ -4,6 +4,7 @@ import {
   type DragEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type Ref,
+  useCallback,
   useEffect,
   useId,
   useLayoutEffect,
@@ -36,6 +37,8 @@ import type {
   NavigationLaunchpadFileAttachment,
   NavigationLaunchpadImageAttachment,
   NavigationThreadSummary,
+  ComposerPdfPreviewReference,
+  RenderComposerPdfPreviewResponse,
   ThreadWorkspaceHandoffStrategy,
   ThreadExecutionMode,
 } from "@pwragent/shared";
@@ -336,6 +339,26 @@ type LocalHandoffStrategy = ThreadWorkspaceHandoffStrategy;
 type ComposerImageAttachment = NavigationLaunchpadImageAttachment;
 
 type ComposerFileAttachment = NavigationLaunchpadFileAttachment;
+
+type ComposerPdfPreview = Extract<
+  RenderComposerPdfPreviewResponse,
+  { unchanged: false }
+>;
+
+type ComposerPdfPreviewState =
+  | { previewId: string; status: "loading" }
+  | { message: string; previewId: string; status: "error" }
+  | { preview: ComposerPdfPreview; previewId: string; status: "ready" };
+
+type ComposerPdfReference = ComposerPdfPreviewReference & {
+  attachmentId?: string;
+  label: string;
+};
+
+type ComposerPdfReferenceSnapshot = {
+  references: ComposerPdfPreviewReference[];
+  scopeId: string;
+};
 
 /**
  * Maximum number of image attachments allowed on a single message. No
@@ -1339,6 +1362,69 @@ function appendFileReferenceMarkdown(
     )
     .join("\n");
   return text ? `${text}\n\n${referenceBlock}` : referenceBlock;
+}
+
+/**
+ * Local inspection is authorized only by a Composer attachment or an explicit
+ * `@` reference token. Do not scan ordinary typed text for path-shaped values.
+ */
+function listExplicitComposerReferencePaths(
+  fileRefs: ComposerFileAttachment[],
+  skillTokens: ComposerSkillToken[],
+): string[] {
+  const paths = new Set<string>();
+  const add = (rawPath: string | undefined): void => {
+    const filePath = rawPath?.trim();
+    if (
+      filePath
+      && (
+        filePath.startsWith("/")
+        || filePath.startsWith("\\\\")
+        || /^[A-Za-z]:[\\/]/u.test(filePath)
+      )
+    ) {
+      paths.add(filePath);
+    }
+  };
+
+  for (const fileRef of fileRefs) {
+    add(fileRef.path);
+  }
+  for (const token of skillTokens) {
+    if (token.kind === "file" || token.kind === "directory") {
+      add(token.path);
+    }
+  }
+  return [...paths].sort();
+}
+
+function listComposerPdfReferences(params: {
+  fileAttachments: ComposerFileAttachment[];
+  references: ComposerPdfPreviewReference[];
+  skillTokens: ComposerSkillToken[];
+}): ComposerPdfReference[] {
+  const attachmentByPath = new Map(
+    params.fileAttachments.map((attachment) => [attachment.path, attachment]),
+  );
+  const labelByPath = new Map<string, string>();
+  for (const token of params.skillTokens) {
+    if (
+      (token.kind === "file" || token.kind === "directory")
+      && token.path
+      && !labelByPath.has(token.path)
+    ) {
+      labelByPath.set(token.path, token.name);
+    }
+  }
+
+  return params.references.map((reference) => {
+    const attachment = attachmentByPath.get(reference.path);
+    return {
+      ...reference,
+      ...(attachment ? { attachmentId: attachment.id } : {}),
+      label: attachment?.label ?? labelByPath.get(reference.path) ?? fileLabelFromPath(reference.path),
+    };
+  });
 }
 
 function getComposerSkillTokensSignature(skillTokens: ComposerSkillToken[]): string {
@@ -2557,6 +2643,8 @@ export function Composer(props: ComposerProps) {
   const latestLaunchpadRef =
     useRef<NavigationLaunchpadDraft | undefined>(props.launchpad);
   latestLaunchpadRef.current = props.launchpad;
+  const desktopApiRef = useRef(props.desktopApi);
+  desktopApiRef.current = props.desktopApi;
   const pendingProgrammaticComposerChangeRef =
     useRef<PendingProgrammaticComposerChange | undefined>(undefined);
   const composerScopeKey = props.launchpad
@@ -2728,6 +2816,35 @@ export function Composer(props: ComposerProps) {
   const [fileAttachments, setFileAttachments] = useState<ComposerFileAttachment[]>(
     latestDraftSnapshotRef.current.snapshot.fileAttachments ?? []
   );
+  // Preview rasters live only in this component. Drafts, queued/steer snapshots,
+  // launchpads, and turn payloads retain their normal path-only references.
+  const [composerPdfReferenceSnapshot, setComposerPdfReferenceSnapshot] =
+    useState<ComposerPdfReferenceSnapshot>(() => ({
+      references: [],
+      scopeId: composerScopeKey,
+    }));
+  // Do not let a previous thread's in-memory capabilities or raster cards
+  // flash while this reusable Composer hydrates its next scope.
+  const composerPdfReferences = useMemo(
+    () =>
+      composerPdfReferenceSnapshot.scopeId === composerScopeKey
+        ? composerPdfReferenceSnapshot.references
+        : [],
+    [composerPdfReferenceSnapshot, composerScopeKey],
+  );
+  const [composerPdfPreviewStates, setComposerPdfPreviewStates] = useState(
+    () => new Map<string, ComposerPdfPreviewState>(),
+  );
+  const composerPdfPreviewStatesRef = useRef(composerPdfPreviewStates);
+  composerPdfPreviewStatesRef.current = composerPdfPreviewStates;
+  const composerPdfPreviewRequestIdsRef = useRef(new Map<string, number>());
+  const composerPdfReferenceInspectionIdRef = useRef(0);
+  const [pdfPreviewLightbox, setPdfPreviewLightbox] = useState<{
+    label: string;
+    path: string;
+    preview: ComposerPdfPreview;
+    scopeId: string;
+  }>();
   // Per-attachment content signature (`<size>:<hash>`) cache used to reject
   // exact-duplicate pastes. Computed lazily on first use and kept only in
   // memory — signatures are never part of the persisted draft snapshot.
@@ -2877,6 +2994,227 @@ export function Composer(props: ComposerProps) {
     () => serializeDraftWithSkillTokens(draft, skillTokens),
     [draft, skillTokens]
   );
+  // Restored markdown may not yet have a live Tiptap mention node. Parse only
+  // serialized `@` reference tokens here; ordinary typed path-like text never
+  // enters this set.
+  const canonicalReferenceTokens = useMemo(
+    () => hydrateComposerDraft(canonicalDraft, props.skills, threadLinks).skillTokens,
+    [canonicalDraft, props.skills, threadLinks],
+  );
+  const explicitComposerReferencePaths = useMemo(
+    () =>
+      listExplicitComposerReferencePaths(fileAttachments, [
+        ...skillTokens,
+        ...canonicalReferenceTokens,
+      ]),
+    [canonicalReferenceTokens, fileAttachments, skillTokens],
+  );
+  const explicitComposerReferencePathsKey = explicitComposerReferencePaths.join("\u0000");
+  const explicitComposerReferencePathsRef = useRef(explicitComposerReferencePaths);
+  explicitComposerReferencePathsRef.current = explicitComposerReferencePaths;
+  const refreshComposerPdfReferences = useCallback(async (): Promise<void> => {
+    if (activeComposerScopeKeyRef.current !== composerScopeKey) {
+      return;
+    }
+    const inspectionId = ++composerPdfReferenceInspectionIdRef.current;
+    const paths = explicitComposerReferencePathsRef.current;
+    const inspector = desktopApiRef.current?.inspectComposerPdfReferences;
+    if (!inspector || paths.length === 0) {
+      if (inspectionId === composerPdfReferenceInspectionIdRef.current) {
+        setComposerPdfReferenceSnapshot({
+          references: [],
+          scopeId: composerScopeKey,
+        });
+      }
+      return;
+    }
+
+    try {
+      const response = await inspector({
+        paths,
+        scopeId: composerScopeKey,
+      });
+      if (inspectionId !== composerPdfReferenceInspectionIdRef.current) {
+        return;
+      }
+      const allowedPaths = new Set(paths);
+      setComposerPdfReferenceSnapshot({
+        references: response.references.filter((reference) =>
+          allowedPaths.has(reference.path),
+        ),
+        scopeId: composerScopeKey,
+      });
+    } catch {
+      if (inspectionId === composerPdfReferenceInspectionIdRef.current) {
+        setComposerPdfReferenceSnapshot({
+          references: [],
+          scopeId: composerScopeKey,
+        });
+      }
+    }
+  }, [composerScopeKey]);
+  useEffect(() => {
+    void refreshComposerPdfReferences();
+  }, [explicitComposerReferencePathsKey, refreshComposerPdfReferences]);
+  useEffect(() => {
+    // A different app can replace a local file while PwrAgent is unfocused.
+    // Re-inspection invalidates any stale renderer-only raster without creating
+    // a new preview; rendering remains an explicit Preview action.
+    const revalidate = (): void => {
+      void refreshComposerPdfReferences();
+    };
+    window.addEventListener("focus", revalidate);
+    return () => {
+      window.removeEventListener("focus", revalidate);
+    };
+  }, [refreshComposerPdfReferences]);
+  const composerPdfReferenceKey = useMemo(
+    () =>
+      composerPdfReferences
+        .map((reference) =>
+          [reference.path, reference.fileIdentity, reference.previewId].join("\u0001"),
+        )
+        .sort()
+        .join("\u0000"),
+    [composerPdfReferences],
+  );
+  const composerPdfReferenceByPath = useMemo(
+    () => new Map(composerPdfReferences.map((reference) => [reference.path, reference])),
+    [composerPdfReferences],
+  );
+  const composerPdfReferenceByPathRef = useRef(composerPdfReferenceByPath);
+  composerPdfReferenceByPathRef.current = composerPdfReferenceByPath;
+  const pdfPreviewReferences = useMemo(
+    () =>
+      listComposerPdfReferences({
+        fileAttachments,
+        references: composerPdfReferences,
+        skillTokens: [...skillTokens, ...canonicalReferenceTokens],
+      }),
+    [canonicalReferenceTokens, composerPdfReferences, fileAttachments, skillTokens],
+  );
+  const updateComposerPdfPreviewState = useCallback(
+    (path: string, state: ComposerPdfPreviewState | undefined): void => {
+      const next = new Map(composerPdfPreviewStatesRef.current);
+      if (state) {
+        next.set(path, state);
+      } else {
+        next.delete(path);
+      }
+      composerPdfPreviewStatesRef.current = next;
+      setComposerPdfPreviewStates(next);
+    },
+    [],
+  );
+  const requestComposerPdfPreview = useCallback(
+    async (reference: ComposerPdfReference): Promise<void> => {
+      const current = composerPdfPreviewStatesRef.current.get(reference.path);
+      if (
+        current?.previewId === reference.previewId
+        && current.status === "loading"
+      ) {
+        return;
+      }
+
+      const requestId =
+        (composerPdfPreviewRequestIdsRef.current.get(reference.path) ?? 0) + 1;
+      composerPdfPreviewRequestIdsRef.current.set(reference.path, requestId);
+      updateComposerPdfPreviewState(reference.path, {
+        previewId: reference.previewId,
+        status: "loading",
+      });
+
+      const renderer = desktopApiRef.current?.renderComposerPdfPreview;
+      if (!renderer) {
+        updateComposerPdfPreviewState(reference.path, {
+          message: "Preview unavailable",
+          previewId: reference.previewId,
+          status: "error",
+        });
+        return;
+      }
+
+      try {
+        const response = await renderer({
+          ...(current?.status === "ready" && current.previewId === reference.previewId
+            ? { knownFileIdentity: current.preview.fileIdentity }
+            : {}),
+          previewId: reference.previewId,
+          scopeId: composerScopeKey,
+        });
+        const currentReference = composerPdfReferenceByPathRef.current.get(
+          reference.path,
+        );
+        if (
+          composerPdfPreviewRequestIdsRef.current.get(reference.path) !== requestId
+          || currentReference?.previewId !== reference.previewId
+        ) {
+          return;
+        }
+        if (response.unchanged) {
+          if (current?.status === "ready" && current.previewId === reference.previewId) {
+            updateComposerPdfPreviewState(reference.path, current);
+          } else {
+            updateComposerPdfPreviewState(reference.path, {
+              message: "Preview unavailable",
+              previewId: reference.previewId,
+              status: "error",
+            });
+          }
+          return;
+        }
+        updateComposerPdfPreviewState(reference.path, {
+          preview: response,
+          previewId: reference.previewId,
+          status: "ready",
+        });
+      } catch {
+        const currentReference = composerPdfReferenceByPathRef.current.get(
+          reference.path,
+        );
+        if (
+          composerPdfPreviewRequestIdsRef.current.get(reference.path) === requestId
+          && currentReference?.previewId === reference.previewId
+        ) {
+          updateComposerPdfPreviewState(reference.path, {
+            message: "Preview unavailable",
+            previewId: reference.previewId,
+            status: "error",
+          });
+        }
+      }
+    },
+    [composerScopeKey, updateComposerPdfPreviewState],
+  );
+  useEffect(() => {
+    const referencesByPath = new Map(
+      composerPdfReferences.map((reference) => [reference.path, reference]),
+    );
+    const current = composerPdfPreviewStatesRef.current;
+    const next = new Map(
+      [...current].filter(([path, state]) => {
+        const reference = referencesByPath.get(path);
+        return (
+          reference?.previewId === state.previewId
+          && (state.status !== "ready" || state.preview.fileIdentity === reference.fileIdentity)
+        );
+      }),
+    );
+    if (next.size !== current.size) {
+      composerPdfPreviewStatesRef.current = next;
+      setComposerPdfPreviewStates(next);
+    }
+    setPdfPreviewLightbox((lightbox) => {
+      const reference = lightbox && referencesByPath.get(lightbox.path);
+      return (
+        lightbox?.scopeId === composerScopeKey
+        && reference
+        && reference.fileIdentity === lightbox.preview.fileIdentity
+      )
+        ? lightbox
+        : undefined;
+    });
+  }, [composerPdfReferenceKey, composerPdfReferences, composerScopeKey]);
   const hasComposerContent =
     draft.trim().length > 0 || skillTokens.length > 0;
   const queuedTurn = queuedTurns[0];
@@ -3877,6 +4215,15 @@ export function Composer(props: ComposerProps) {
       return;
     }
 
+    composerPdfReferenceInspectionIdRef.current += 1;
+    composerPdfPreviewRequestIdsRef.current.clear();
+    composerPdfPreviewStatesRef.current = new Map();
+    setComposerPdfReferenceSnapshot({
+      references: [],
+      scopeId: composerScopeKey,
+    });
+    setComposerPdfPreviewStates(composerPdfPreviewStatesRef.current);
+    setPdfPreviewLightbox(undefined);
     recoveryEligibilityVersionRef.current += 1;
     recoveryLookupSequenceRef.current += 1;
     const pendingRetarget = pendingDraftRetargetRef.current;
@@ -7598,6 +7945,29 @@ export function Composer(props: ComposerProps) {
       onClose={() => setLightboxAttachment(undefined)}
     />
   ) : null;
+  const pdfPreviewPathSet = new Set(
+    pdfPreviewReferences.map((reference) => reference.path),
+  );
+  const visibleFileAttachments = fileAttachments.filter(
+    (attachment) => !pdfPreviewPathSet.has(attachment.path),
+  );
+  const hasVisibleAttachments =
+    imageAttachments.length > 0
+    || visibleFileAttachments.length > 0
+    || pdfPreviewReferences.length > 0;
+  const activePdfPreviewLightbox =
+    pdfPreviewLightbox?.scopeId === composerScopeKey
+      ? pdfPreviewLightbox
+      : undefined;
+  const pdfPreviewLightboxNode = activePdfPreviewLightbox ? (
+    <ImageLightbox
+      alt={`Page 1 preview of ${activePdfPreviewLightbox.label}`}
+      caption={`${activePdfPreviewLightbox.label} · Page 1 of ${activePdfPreviewLightbox.preview.pageCount}`}
+      dialogLabel={`PDF preview: ${activePdfPreviewLightbox.label}`}
+      src={activePdfPreviewLightbox.preview.dataUrl}
+      onClose={() => setPdfPreviewLightbox(undefined)}
+    />
+  ) : null;
   const workspaceHandoffDialog =
     handoffDialog && threadWorkspace
       ? createPortal(
@@ -8039,10 +8409,14 @@ export function Composer(props: ComposerProps) {
         );
       })}
 
-      {imageAttachments.length > 0 || fileAttachments.length > 0 ? (
+      {hasVisibleAttachments ? (
         <div
           className="composer__attachments"
-          aria-label={fileAttachments.length > 0 ? "Attachments" : "Pasted images"}
+          aria-label={
+            visibleFileAttachments.length > 0 || pdfPreviewReferences.length > 0
+              ? "Attachments"
+              : "Pasted images"
+          }
         >
           {imageAttachments.map((attachment, index) => {
             const dimensions = formatImageDimensions(
@@ -8088,7 +8462,114 @@ export function Composer(props: ComposerProps) {
               </div>
             );
           })}
-          {fileAttachments.map((attachment) => (
+          {pdfPreviewReferences.map((reference) => {
+            const previewState = composerPdfPreviewStates.get(reference.path);
+            const preview =
+              previewState?.status === "ready" ? previewState.preview : undefined;
+            const previewActionLabel =
+              previewState?.status === "error" ? "Retry preview" : "Preview";
+            return (
+              <div
+                className="composer__attachment composer__attachment--pdf"
+                key={reference.path}
+              >
+                <div className="composer__attachment-thumb">
+                  {preview ? (
+                    <button
+                      aria-label={`Expand PDF preview for ${reference.label}`}
+                      className="composer__attachment-open"
+                      type="button"
+                      onClick={() => {
+                        setPdfPreviewLightbox({
+                          label: reference.label,
+                          path: reference.path,
+                          preview,
+                          scopeId: composerScopeKey,
+                        });
+                      }}
+                    >
+                      <img
+                        className="composer__attachment-preview composer__attachment-preview--pdf"
+                        src={preview.dataUrl}
+                        alt={`Page 1 preview of ${reference.label}`}
+                      />
+                    </button>
+                  ) : (
+                    <div
+                      aria-live="polite"
+                      className={[
+                        "composer__pdf-preview-placeholder",
+                        previewState?.status !== "loading" ? "has-action" : "",
+                      ]
+                        .filter(Boolean)
+                        .join(" ")}
+                      role="status"
+                    >
+                      {previewState?.status === "loading" ? (
+                        <span
+                          aria-hidden="true"
+                          className="composer__pdf-preview-spinner"
+                        />
+                      ) : (
+                        <FileCodeIcon size={22} aria-hidden="true" />
+                      )}
+                      <span className="composer__pdf-preview-placeholder-label">
+                        {previewState?.status === "loading"
+                          ? "Loading preview"
+                          : previewState?.status === "error"
+                            ? previewState.message
+                            : "PDF"}
+                      </span>
+                      {previewState?.status !== "loading" ? (
+                        <button
+                          className="composer__pdf-preview-action"
+                          type="button"
+                          onClick={() => {
+                            void requestComposerPdfPreview(reference);
+                          }}
+                        >
+                          {previewActionLabel}
+                        </button>
+                      ) : null}
+                    </div>
+                  )}
+                  {reference.attachmentId ? (
+                    <button
+                      aria-label={`Remove ${reference.label}`}
+                      className="composer__attachment-remove"
+                      type="button"
+                      onClick={() => {
+                        removeFileAttachment(reference.attachmentId!);
+                      }}
+                    >
+                      <CloseIcon size={12} aria-hidden="true" />
+                    </button>
+                  ) : null}
+                </div>
+                <div className="composer__attachment-chips">
+                  {preview ? (
+                    <>
+                      <span className="composer__attachment-chip">
+                        Page 1 of {preview.pageCount}
+                      </span>
+                      <span className="composer__attachment-chip">
+                        {formatImageDimensions(preview.width, preview.height)}
+                      </span>
+                    </>
+                  ) : (
+                    <span className="composer__attachment-chip">PDF</span>
+                  )}
+                </div>
+                <span
+                  className="composer__pdf-preview-label tooltip-target"
+                  data-tooltip={buildFileReferenceTooltip(reference.path)}
+                >
+                  {reference.label}
+                </span>
+              </div>
+            );
+          })}
+          {visibleFileAttachments.map((attachment) => (
             <span
               className="composer__file-attachment tooltip-target"
               data-tooltip={buildFileReferenceTooltip(attachment.path)}
@@ -9411,6 +9892,7 @@ export function Composer(props: ComposerProps) {
       </form>
       {fullAccessRiskDialog}
       {imageLightbox}
+      {pdfPreviewLightboxNode}
     </>
   );
 }

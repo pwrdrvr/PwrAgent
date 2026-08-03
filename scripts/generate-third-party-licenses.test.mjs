@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   enrichRecord,
+  isPlatformSpecificNapiCanvasPackage,
   StaleInstallError,
 } from "./generate-third-party-licenses.mjs";
 
@@ -46,6 +47,20 @@ afterEach(() => {
 });
 
 describe("third-party license package enrichment", () => {
+  it("excludes only platform-selected @napi-rs/canvas helpers", () => {
+    expect(isPlatformSpecificNapiCanvasPackage("@napi-rs/canvas-darwin-arm64")).toBe(
+      true,
+    );
+    expect(isPlatformSpecificNapiCanvasPackage("@napi-rs/canvas-linux-x64-gnu")).toBe(
+      true,
+    );
+    expect(isPlatformSpecificNapiCanvasPackage("@napi-rs/canvas-win32-x64-msvc")).toBe(
+      true,
+    );
+    expect(isPlatformSpecificNapiCanvasPackage("@napi-rs/canvas")).toBe(false);
+    expect(isPlatformSpecificNapiCanvasPackage("pdfjs-dist")).toBe(false);
+  });
+
   it("rejects a license report without an installed package path", () => {
     const error = captureError(() => enrichRecord(createRecord(undefined)));
 

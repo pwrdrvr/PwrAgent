@@ -191,6 +191,10 @@ function stableRecordKey(record) {
   return `${record.name}@${record.version}`;
 }
 
+export function isPlatformSpecificNapiCanvasPackage(name) {
+  return /^@napi-rs\/canvas-(?:android|darwin|linux|win32)-/u.test(name);
+}
+
 export function enrichRecord(record) {
   const packageJson = readPackageJson(record);
   const licensePath = findLicenseFile(record.packagePath);
@@ -236,7 +240,15 @@ function main() {
     }
   }
 
-  const records = Array.from(recordsByKey.values()).sort(compareRecords).map(enrichRecord);
+  // @napi-rs/canvas installs exactly one OS/architecture helper package. Its
+  // name changes with the host running this script, while the canonical
+  // @napi-rs/canvas package (which remains in this notice) carries the shared
+  // package license. Keeping the selected helper out of the generated notice
+  // makes this source-controlled disclosure deterministic across CI hosts.
+  const records = Array.from(recordsByKey.values())
+    .filter((record) => !isPlatformSpecificNapiCanvasPackage(record.name))
+    .sort(compareRecords)
+    .map(enrichRecord);
 
   const recordsByLicense = new Map();
   for (const record of records) {

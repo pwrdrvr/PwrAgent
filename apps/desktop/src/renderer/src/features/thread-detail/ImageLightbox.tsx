@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { type ReactNode, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { CloseIcon } from "../../icons";
 import { TranscriptImage } from "./TranscriptImage";
@@ -7,6 +7,10 @@ type ImageLightboxProps = {
   /** Image source — a data URL or any resolvable URL. */
   src: string;
   alt: string;
+  /** Optional visible local-image metadata, such as a PDF page count. */
+  caption?: ReactNode;
+  /** More specific accessible name for callers that expand a non-photo image. */
+  dialogLabel?: string;
   onClose: () => void;
 };
 
@@ -17,7 +21,13 @@ type ImageLightboxProps = {
  * the accent close cookie, or Escape. `TranscriptImage` resolves embedded data
  * URLs to object URLs, so both image sources render the same way.
  */
-export function ImageLightbox({ src, alt, onClose }: ImageLightboxProps) {
+export function ImageLightbox({
+  src,
+  alt,
+  caption,
+  dialogLabel = "Expanded image",
+  onClose,
+}: ImageLightboxProps) {
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
@@ -40,7 +50,7 @@ export function ImageLightbox({ src, alt, onClose }: ImageLightboxProps) {
       className="image-lightbox"
       role="dialog"
       aria-modal="true"
-      aria-label="Expanded image"
+      aria-label={dialogLabel}
       onClick={onClose}
     >
       <div
@@ -58,6 +68,7 @@ export function ImageLightbox({ src, alt, onClose }: ImageLightboxProps) {
           <CloseIcon size={18} aria-hidden="true" />
         </button>
         <TranscriptImage className="image-lightbox__image" src={src} alt={alt} />
+        {caption ? <p className="image-lightbox__caption">{caption}</p> : null}
       </div>
     </div>,
     document.body,
