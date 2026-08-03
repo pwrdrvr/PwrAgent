@@ -263,6 +263,13 @@ export type PrSummary = {
   /** Last observed pull request title, when the provider returns one. */
   title?: string;
   /**
+   * Branch the PR is proposing to merge into. Used to default a review to the
+   * PR's actual target, including stacked pull requests.
+   */
+  baseRefName?: string;
+  /** Branch containing the PR changes, when the provider returns one. */
+  headRefName?: string;
+  /**
    * Deprecated compatibility alias for `checkState`. New writers keep this
    * check-only so review/lifecycle/mergeability never collide with checks.
    */

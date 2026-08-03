@@ -27,6 +27,7 @@ function rawMergedPr() {
       { oid: "a".repeat(40) },
       { oid: "b".repeat(40) },
     ],
+    baseRefName: "agent/github-pr-auto-fix-settings",
     headRefName: "feat/desktop-thread-reactions-and-pr-chips",
     headRepository: { name: "PwrAgent" },
     headRepositoryOwner: { login: "pwrdrvr" },
@@ -49,6 +50,8 @@ describe("parseGhPrPayload", () => {
       org: "pwrdrvr",
       repo: "PwrAgent",
       title: "Retain thread pull request history",
+      baseRefName: "agent/github-pr-auto-fix-settings",
+      headRefName: "feat/desktop-thread-reactions-and-pr-chips",
       state: "passing",
       checkState: "passing",
       lifecycleState: "merged",
@@ -609,6 +612,8 @@ describe("GithubPrFetcher", () => {
           org: "pwrdrvr",
           repo: "PwrAgent",
           title: "Retain thread pull request history",
+          baseRefName: "agent/github-pr-auto-fix-settings",
+          headRefName: "feat/desktop-thread-reactions-and-pr-chips",
           state: "passing",
           checkState: "passing",
           lifecycleState: "merged",
@@ -633,6 +638,8 @@ describe("GithubPrFetcher", () => {
         "5",
       ]);
       expect(args[args.indexOf("--json") + 1]).toContain("title");
+      expect(args[args.indexOf("--json") + 1]).toContain("baseRefName");
+      expect(args[args.indexOf("--json") + 1]).toContain("headRefName");
     });
 
     it("returns [] on subprocess failure", async () => {
@@ -660,6 +667,8 @@ describe("GithubPrFetcher", () => {
         org: "pwrdrvr",
         repo: "PwrAgent",
         title: "Retain thread pull request history",
+        baseRefName: "agent/github-pr-auto-fix-settings",
+        headRefName: "feat/desktop-thread-reactions-and-pr-chips",
         state: "passing",
         checkState: "passing",
         lifecycleState: "merged",

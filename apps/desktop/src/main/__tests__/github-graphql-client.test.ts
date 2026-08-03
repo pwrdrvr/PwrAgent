@@ -19,6 +19,8 @@ function node(overrides: Partial<GraphqlPrNode> = {}): GraphqlPrNode {
     state: "OPEN",
     isDraft: false,
     mergeable: "MERGEABLE",
+    baseRefName: "agent/github-pr-auto-fix-settings",
+    headRefName: "agent/pr-auto-dispatch-budget",
     headRepository: { name: "PwrAgent" },
     headRepositoryOwner: { login: "pwrdrvr" },
     commits: {
@@ -72,6 +74,8 @@ describe("buildBatchedPrQuery", () => {
     expect(query).toContain("pullRequest(number: $p0)");
     expect(query).toContain("pullRequest(number: $p1)");
     expect(query.match(/repository\(/g)).toHaveLength(2);
+    expect(query).toContain("baseRefName");
+    expect(query).toContain("headRefName");
     expect(query).toContain("contexts(first: 100)");
     expect(query).toContain("pageInfo { hasNextPage endCursor }");
   });
@@ -168,6 +172,8 @@ describe("mapGraphqlPrNode", () => {
       org: "pwrdrvr",
       repo: "PwrAgent",
       title: "Add polling",
+      baseRefName: "agent/github-pr-auto-fix-settings",
+      headRefName: "agent/pr-auto-dispatch-budget",
       state: "passing",
       checkState: "passing",
       lifecycleState: "open",

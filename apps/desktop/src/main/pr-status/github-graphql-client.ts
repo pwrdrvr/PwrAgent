@@ -98,6 +98,8 @@ fragment PrStatus on PullRequest {
   state
   isDraft
   mergeable
+  baseRefName
+  headRefName
   headRepository { name }
   headRepositoryOwner { login }
   commits(last: 1) {
@@ -152,6 +154,8 @@ export type GraphqlPrNode = {
   state: string;
   isDraft: boolean;
   mergeable?: string | null;
+  baseRefName?: string | null;
+  headRefName?: string | null;
   headRepository?: { name?: string | null } | null;
   headRepositoryOwner?: { login?: string | null } | null;
   commits?: {
@@ -364,6 +368,8 @@ export function mapGraphqlPrNode(
     org: node.headRepositoryOwner?.login ?? "",
     repo: node.headRepository?.name ?? "",
     ...(node.title?.trim() ? { title: node.title.trim() } : {}),
+    ...(node.baseRefName?.trim() ? { baseRefName: node.baseRefName.trim() } : {}),
+    ...(node.headRefName?.trim() ? { headRefName: node.headRefName.trim() } : {}),
     state: checkState,
     checkState,
     ...(checksStillRunning ? { checksStillRunning: true } : {}),
