@@ -81,6 +81,7 @@ type TranscriptListProps = {
   directoryPaths?: string[];
   entries: AppServerThreadEntry[];
   error?: string;
+  expandedActivityIds?: string[];
   expandedWorkPhaseGroupIds?: string[];
   loading: boolean;
   loadingMore: boolean;
@@ -106,6 +107,7 @@ type TranscriptListProps = {
   fileViewerContext?: MarkdownFileViewerContext;
   skills?: AppServerSkillSummary[];
   subAgents?: ThreadSubAgentSummary[];
+  onExpandedActivityIdsChange?: (activityIds: string[]) => void;
   onOpenImage?: (image: AppServerThreadImagePart) => void;
   onExpandedWorkPhaseGroupIdsChange?: (groupIds: string[]) => void;
   onViewportChange?: (viewport?: TranscriptViewport) => void;
@@ -641,8 +643,16 @@ export function TranscriptList(props: TranscriptListProps) {
   const expandedCommentaryGroupIds =
     controlledExpandedCommentaryGroupIds
     ?? uncontrolledExpandedCommentaryGroupIds;
+  const controlledExpandedActivityIds = useMemo(
+    () =>
+      props.expandedActivityIds === undefined
+        ? undefined
+        : new Set(props.expandedActivityIds),
+    [props.expandedActivityIds]
+  );
   const onExpandedWorkPhaseGroupIdsChange =
     props.onExpandedWorkPhaseGroupIdsChange;
+  const onExpandedActivityIdsChange = props.onExpandedActivityIdsChange;
   const [renderNow, setRenderNow] = useState(() => Date.now());
   const canLoadOlder = Boolean(
     props.pagination?.supportsPagination && props.pagination.hasPreviousPage
@@ -904,6 +914,20 @@ export function TranscriptList(props: TranscriptListProps) {
     controlledExpandedCommentaryGroupIds,
     onExpandedWorkPhaseGroupIdsChange,
   ]);
+
+  const setActivityExpanded = useCallback((activityId: string, expanded: boolean) => {
+    if (!controlledExpandedActivityIds) {
+      return;
+    }
+
+    const next = new Set(controlledExpandedActivityIds);
+    if (expanded) {
+      next.add(activityId);
+    } else {
+      next.delete(activityId);
+    }
+    onExpandedActivityIdsChange?.([...next]);
+  }, [controlledExpandedActivityIds, onExpandedActivityIdsChange]);
 
   const captureSnapshot = useCallback((): ScrollSnapshot | undefined => {
     const container = scrollContainerRef.current;
@@ -1304,11 +1328,13 @@ export function TranscriptList(props: TranscriptListProps) {
                   desktopApi={props.desktopApi}
                   entries={item.entries}
                   expanded={expandedCommentaryGroupIds.has(item.id)}
+                  expandedActivityIds={controlledExpandedActivityIds}
                   fileViewerContext={props.fileViewerContext}
                   label={item.label}
                   parentThreadId={props.parentThreadId ?? ""}
                   skills={skills}
                   subAgents={props.subAgents}
+                  onActivityExpandedChange={setActivityExpanded}
                   onOpenImage={props.onOpenImage}
                   onToggle={() => {
                     toggleCommentaryGroup(item.id);
@@ -1319,7 +1345,11 @@ export function TranscriptList(props: TranscriptListProps) {
                   applications={props.applications}
                   desktopApi={props.desktopApi}
                   entry={item.entry}
+                  expanded={controlledExpandedActivityIds?.has(item.entry.id)}
                   fileViewerContext={props.fileViewerContext}
+                  onExpandedChange={(expanded) => {
+                    setActivityExpanded(item.entry.id, expanded);
+                  }}
                   onOpenImage={props.onOpenImage}
                   skills={skills}
                 />

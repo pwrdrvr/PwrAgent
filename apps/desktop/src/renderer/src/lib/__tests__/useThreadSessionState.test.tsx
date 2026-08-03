@@ -383,6 +383,7 @@ describe("useThreadSessionState", () => {
 
     await waitForThreadHydration(result);
     act(() => {
+      result.current.setExpandedTranscriptActivityIds(["turn-usage-1"]);
       result.current.setExpandedTranscriptWorkPhaseGroupIds(["work-group-1"]);
       result.current.setRenderedTranscriptEntryLimit(90);
       result.current.setViewport({
@@ -398,6 +399,9 @@ describe("useThreadSessionState", () => {
 
     await waitFor(() => {
       expect(result.current.response?.threadId).toBe("thread-1");
+      expect(result.current.expandedTranscriptActivityIds).toEqual([
+        "turn-usage-1",
+      ]);
       expect(result.current.expandedTranscriptWorkPhaseGroupIds).toEqual([
         "work-group-1",
       ]);

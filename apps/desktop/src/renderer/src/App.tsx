@@ -1165,6 +1165,7 @@ function DesktopAppShell(props: {
     skills: skills.skills,
     transcriptEntries: session.entries,
     transcriptError: session.error,
+    expandedTranscriptActivityIds: session.expandedTranscriptActivityIds,
     expandedTranscriptWorkPhaseGroupIds:
       session.expandedTranscriptWorkPhaseGroupIds,
     renderedTranscriptEntryLimit: session.renderedTranscriptEntryLimit,
@@ -1291,6 +1292,8 @@ function DesktopAppShell(props: {
       : undefined,
     onRestoreWorktree: navigation.restoreWorktree,
     onTranscriptViewportChange: session.setViewport,
+    onExpandedTranscriptActivityIdsChange:
+      session.setExpandedTranscriptActivityIds,
     onExpandedTranscriptWorkPhaseGroupIdsChange:
       session.setExpandedTranscriptWorkPhaseGroupIds,
     onRenderedTranscriptEntryLimitChange:

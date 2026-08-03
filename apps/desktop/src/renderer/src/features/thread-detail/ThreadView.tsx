@@ -864,6 +864,7 @@ export type ThreadViewProps = {
   transcriptEntries: AppServerThreadEntry[];
   transcriptError?: string;
   /** Session-owned reading state; ThreadView may unmount while navigation resolves. */
+  expandedTranscriptActivityIds?: string[];
   expandedTranscriptWorkPhaseGroupIds?: string[];
   renderedTranscriptEntryLimit?: number;
   transcriptPagination?: AppServerThreadReplayPagination;
@@ -974,6 +975,7 @@ export type ThreadViewProps = {
     isGluedToBottom?: boolean;
     scrollTop: number;
   }) => void;
+  onExpandedTranscriptActivityIdsChange?: (activityIds: string[]) => void;
   onExpandedTranscriptWorkPhaseGroupIdsChange?: (groupIds: string[]) => void;
   onRenderedTranscriptEntryLimitChange?: (limit: number) => void;
   onUpdateLaunchpad?: (
@@ -2992,6 +2994,7 @@ export function ThreadView(props: ThreadViewProps) {
               pendingUserInput={props.pendingUserInput}
               pendingStatusText={props.pendingStatusText}
               runningTurnUsageText={props.runningTurnUsageText}
+              expandedActivityIds={props.expandedTranscriptActivityIds}
               expandedWorkPhaseGroupIds={
                 props.expandedTranscriptWorkPhaseGroupIds
               }
@@ -3004,6 +3007,9 @@ export function ThreadView(props: ThreadViewProps) {
               threadId={`${selectedThread!.source}:${selectedThread!.id}`}
               onLoadOlder={loadOlderTranscript}
               onOpenImage={setExpandedImage}
+              onExpandedActivityIdsChange={
+                props.onExpandedTranscriptActivityIdsChange
+              }
               onExpandedWorkPhaseGroupIdsChange={
                 props.onExpandedTranscriptWorkPhaseGroupIdsChange
               }

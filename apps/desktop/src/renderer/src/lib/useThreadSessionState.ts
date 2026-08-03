@@ -53,6 +53,7 @@ import {
 import { THREAD_HISTORY_PAGE_LIMIT } from "./thread-history-limits";
 
 const MAX_VIEW_ONLY_THREADS = 10;
+const EMPTY_EXPANDED_TRANSCRIPT_ACTIVITY_IDS: string[] = [];
 const EMPTY_EXPANDED_TRANSCRIPT_WORK_PHASE_GROUP_IDS: string[] = [];
 const OWN_UPDATE_IDLE_GRACE_MS = 1_500;
 const SUPPORTED_APPROVAL_REQUEST_METHODS = new Set([
@@ -156,6 +157,7 @@ type ThreadSessionEntry = {
   response?: AppServerReadThreadResponse;
   // Lightweight reading state belongs beside the bounded transcript cache.
   // ThreadView is allowed to unmount while thread navigation resolves.
+  expandedTranscriptActivityIds?: string[];
   expandedTranscriptWorkPhaseGroupIds?: string[];
   renderedTranscriptEntryLimit?: number;
   staleThinkingRecheckAt?: number;
@@ -3426,6 +3428,7 @@ export function useThreadSessionState(params: {
   clearPendingRequest: (requestId: string, nextStatus?: string) => void;
   entries: AppServerThreadEntry[];
   error?: string;
+  expandedTranscriptActivityIds: string[];
   expandedTranscriptWorkPhaseGroupIds: string[];
   loading: boolean;
   loadingMore: boolean;
@@ -3454,6 +3457,7 @@ export function useThreadSessionState(params: {
     updater: (state: PendingMcpInteractionState) => PendingMcpInteractionState
   ) => void;
   setPendingStatusText: (status?: string) => void;
+  setExpandedTranscriptActivityIds: (activityIds: string[]) => void;
   setExpandedTranscriptWorkPhaseGroupIds: (groupIds: string[]) => void;
   setRenderedTranscriptEntryLimit: (limit: number) => void;
   threadBusy: boolean;
@@ -5432,6 +5436,34 @@ export function useThreadSessionState(params: {
     [threadKey, updateSession]
   );
 
+  const setExpandedTranscriptActivityIds = useCallback(
+    (activityIds: string[]): void => {
+      if (!threadKey) {
+        return;
+      }
+
+      const nextActivityIds = [...new Set(activityIds.filter(Boolean))];
+      updateSession(threadKey, (current) => {
+        const currentActivityIds = current.expandedTranscriptActivityIds ?? [];
+        if (
+          currentActivityIds.length === nextActivityIds.length
+          && currentActivityIds.every(
+            (activityId, index) => activityId === nextActivityIds[index]
+          )
+        ) {
+          return current;
+        }
+
+        return {
+          ...current,
+          expandedTranscriptActivityIds: nextActivityIds,
+          lastTouchedAt: Date.now(),
+        };
+      });
+    },
+    [threadKey, updateSession]
+  );
+
   const setRenderedTranscriptEntryLimit = useCallback(
     (limit: number): void => {
       if (!threadKey || !Number.isFinite(limit)) {
@@ -5559,11 +5591,15 @@ export function useThreadSessionState(params: {
     updatePendingUserInput,
     updatePendingMcpInteraction,
     setPendingStatusText,
+    setExpandedTranscriptActivityIds,
     setRenderedTranscriptEntryLimit,
     threadBusy,
     thinkingThreadKeys,
     setViewport,
     viewport: selectedSession?.viewport,
+    expandedTranscriptActivityIds:
+      selectedSession?.expandedTranscriptActivityIds
+      ?? EMPTY_EXPANDED_TRANSCRIPT_ACTIVITY_IDS,
     expandedTranscriptWorkPhaseGroupIds:
       selectedSession?.expandedTranscriptWorkPhaseGroupIds
       ?? EMPTY_EXPANDED_TRANSCRIPT_WORK_PHASE_GROUP_IDS,

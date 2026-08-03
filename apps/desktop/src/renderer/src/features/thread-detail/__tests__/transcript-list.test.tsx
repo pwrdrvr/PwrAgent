@@ -1981,6 +1981,53 @@ describe("TranscriptList", () => {
     expect(screen.queryByText("Read TranscriptActivity.tsx")).not.toBeInTheDocument();
   });
 
+  it("restores a session-owned activity disclosure after remount", () => {
+    const entry = {
+      type: "activity" as const,
+      id: "turn-usage-1",
+      summary: "Turn usage: 1,000 uncached in · 2,000 cached",
+      details: [
+        {
+          id: "usage-detail-1",
+          kind: "read" as const,
+          label: "Input: 3,000 tokens",
+        },
+      ],
+    };
+    const onExpandedActivityIdsChange = vi.fn();
+    const firstRender = render(
+      <TranscriptList
+        entries={[entry]}
+        expandedActivityIds={[]}
+        loading={false}
+        loadingMore={false}
+        threadId="thread-1"
+        onExpandedActivityIdsChange={onExpandedActivityIdsChange}
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Turn usage/i }));
+    expect(onExpandedActivityIdsChange).toHaveBeenCalledWith(["turn-usage-1"]);
+
+    firstRender.unmount();
+    render(
+      <TranscriptList
+        entries={[entry]}
+        expandedActivityIds={["turn-usage-1"]}
+        loading={false}
+        loadingMore={false}
+        threadId="thread-1"
+        onExpandedActivityIdsChange={onExpandedActivityIdsChange}
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: /Turn usage/i }))
+      .toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("Input: 3,000 tokens")).toBeInTheDocument();
+  });
+
   it("renders pending same-turn work before a persisted final assistant reply", () => {
     render(
       <TranscriptList
