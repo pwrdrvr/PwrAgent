@@ -1360,6 +1360,90 @@ describe("AcpBackendAdapter", () => {
     await adapter.close();
   });
 
+  it("persists local rollout history only when provider replay lacks timestamps", async () => {
+    for (const registryId of ["grok", "qwen", "kimi"] as const) {
+      const backendId = `acp:${registryId}` as AcpBackendId;
+      const appendUpdate = vi.fn();
+      const transport = new FakeAcpAgentTransport();
+      const sessions: AcpSessionMetadata[] = [];
+      const agent: AcpInstalledAgentRecord = {
+        ...buildInstalledAgent(),
+        backendId,
+        registryId,
+        name: registryId,
+        launchDescriptor: {
+          backendId,
+          registryId,
+          distributionKind: "local",
+          command: registryId,
+          args: [],
+          env: {},
+        },
+      };
+      const adapter = new AcpBackendAdapter({
+        acpAgentStore: {
+          getInstalledAgent: () => agent,
+          listInstalledAgents: () => [agent],
+          upsertInstalledAgent: vi.fn(),
+        },
+        acpRolloutStore: {
+          appendUpdate,
+          readUpdates: vi.fn(() => []),
+          readReplay: vi.fn(() => ({
+            entries: [],
+            messages: [],
+            pagination: {
+              supportsPagination: false,
+              hasPreviousPage: false,
+            },
+          })),
+        },
+        acpSessionStore: {
+          listSessions: () => sessions,
+          getSession: (_backend, sessionId) =>
+            sessions.find((session) => session.sessionId === sessionId),
+          upsertSession: (metadata) => {
+            const index = sessions.findIndex(
+              (session) => session.sessionId === metadata.sessionId,
+            );
+            if (index >= 0) {
+              sessions[index] = metadata;
+            } else {
+              sessions.push(metadata);
+            }
+          },
+        },
+        captureStores: [],
+        createAcpTransport: () => transport,
+        emit: vi.fn(async () => undefined),
+        handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
+      });
+
+      const client = await adapter.getClient(backendId);
+      const session = await client.startSession({
+        cwd: "/repo",
+        executionMode: "default",
+      });
+      client.startPrompt({
+        sessionId: session.sessionId,
+        prompt: "Tell me about this project",
+        turnId: "turn-1",
+      });
+      await vi.waitFor(() => {
+        expect(
+          transport.requests.some((request) => request.method === "session/prompt"),
+        ).toBe(true);
+      });
+
+      if (registryId === "kimi") {
+        expect(appendUpdate).toHaveBeenCalled();
+      } else {
+        expect(appendUpdate).not.toHaveBeenCalled();
+      }
+      await adapter.close();
+    }
+  });
+
   it("adds Grok billing metadata from an active ACP connection", async () => {
     const backendId = "acp:grok" as AcpBackendId;
     const transport = new FakeAcpAgentTransport({
