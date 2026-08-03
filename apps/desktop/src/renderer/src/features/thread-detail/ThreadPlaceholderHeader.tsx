@@ -24,6 +24,7 @@ type ThreadPlaceholderHeaderProps = {
   projectLabel?: string;
   title: string;
   onOpenMessagingActivity?: (platform?: MessagingChannelKind) => void;
+  onOpenMessagingSettings?: () => void;
   /**
    * Window panel toggles — mirrors ThreadHeader so the loading / empty
    * states share the same chrome (no layout shift, no stoplight overlap).
@@ -106,6 +107,7 @@ export function ThreadPlaceholderHeader(props: ThreadPlaceholderHeaderProps) {
           <MessagingStatusBar
             desktopApi={props.desktopApi}
             onOpenActivity={props.onOpenMessagingActivity}
+            onOpenSettings={props.onOpenMessagingSettings}
           />
         </div>
       </div>

@@ -29,6 +29,7 @@ export type AppTitleBarLayoutControls = {
 export function AppTitleBar(props: {
   desktopApi?: DesktopApi;
   onOpenMessagingActivity?: () => void;
+  onOpenMessagingSettings?: () => void;
   layout?: AppTitleBarLayoutControls;
   actions?: {
     automationsActive: boolean;
@@ -99,6 +100,7 @@ export function AppTitleBar(props: {
             <MessagingStatusBar
               desktopApi={props.desktopApi}
               onOpenActivity={props.onOpenMessagingActivity}
+              onOpenSettings={props.onOpenMessagingSettings}
             />
           ) : null}
         </div>

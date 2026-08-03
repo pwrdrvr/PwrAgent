@@ -53,6 +53,7 @@ type ThreadSearchPanelProps = {
     turnId?: string;
   }) => Promise<void> | void;
   onOpenMessagingActivity?: (platform?: MessagingChannelKind) => void;
+  onOpenMessagingSettings?: () => void;
   /**
    * Close the search screen (Escape). App routes this to history back so it
    * pops the search entry off the stack and returns to wherever you came from,
@@ -305,6 +306,7 @@ export function ThreadSearchPanel(props: ThreadSearchPanelProps) {
         desktopApi={props.desktopApi}
         title="Search"
         onOpenMessagingActivity={props.onOpenMessagingActivity}
+        onOpenMessagingSettings={props.onOpenMessagingSettings}
         layout={
           props.layout ? { ...props.layout, railToggleDisabled: true } : undefined
         }

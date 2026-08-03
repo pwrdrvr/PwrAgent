@@ -951,6 +951,8 @@ export type ThreadViewProps = {
   onDismissFullAccessRiskWarning?: () => Promise<void>;
   /** Forwarded to ThreadHeader -> MessagingStatusBar - opens Messaging Activity. */
   onOpenMessagingActivity?: (platform?: MessagingChannelKind) => void;
+  /** Forwarded to ThreadHeader -> MessagingStatusBar - opens Messaging settings. */
+  onOpenMessagingSettings?: () => void;
   onRevealSelectedThreadInList?: () => void;
   /**
    * Window-level layout state (owned by App). The context rail pin +
@@ -2674,6 +2676,7 @@ export function ThreadView(props: ThreadViewProps) {
           projectLabel={pendingForkEnvironmentSetup.directoryLabel}
           title="Forking thread"
           onOpenMessagingActivity={props.onOpenMessagingActivity}
+          onOpenMessagingSettings={props.onOpenMessagingSettings}
           layout={{
             sidebarOpen: !sidebarHidden,
             railOpen: contextRailPinned,
@@ -2731,6 +2734,7 @@ export function ThreadView(props: ThreadViewProps) {
           desktopApi={props.desktopApi}
           title="Pick a Thread"
           onOpenMessagingActivity={props.onOpenMessagingActivity}
+          onOpenMessagingSettings={props.onOpenMessagingSettings}
           layout={{
             sidebarOpen: !sidebarHidden,
             railOpen: contextRailPinned,
@@ -2822,6 +2826,7 @@ export function ThreadView(props: ThreadViewProps) {
           projectLabel={selectedLaunchpad.directoryLabel}
           title="New thread"
           onOpenMessagingActivity={props.onOpenMessagingActivity}
+          onOpenMessagingSettings={props.onOpenMessagingSettings}
           layout={{
             sidebarOpen: !sidebarHidden,
             railOpen: contextRailPinned,
@@ -2958,6 +2963,7 @@ export function ThreadView(props: ThreadViewProps) {
         thread={selectedThread!}
         backends={props.backends}
         onOpenMessagingActivity={props.onOpenMessagingActivity}
+        onOpenMessagingSettings={props.onOpenMessagingSettings}
         onRevealSelectedThreadInList={props.onRevealSelectedThreadInList}
         layout={{
           sidebarOpen: !sidebarHidden,

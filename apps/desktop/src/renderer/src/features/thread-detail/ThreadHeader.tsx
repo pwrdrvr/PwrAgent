@@ -35,6 +35,8 @@ type ThreadHeaderProps = {
   backends?: BackendSummary[];
   /** Forwarded to MessagingStatusBar - opens Messaging Activity. */
   onOpenMessagingActivity?: (platform?: MessagingChannelKind) => void;
+  /** Forwarded to MessagingStatusBar - opens Settings at Messaging. */
+  onOpenMessagingSettings?: () => void;
   onRevealSelectedThreadInList?: () => void;
   /**
    * Window panel toggles. Rendered here (top-right, beside MSG) on
@@ -195,6 +197,7 @@ export function ThreadHeader(props: ThreadHeaderProps) {
           <MessagingStatusBar
             desktopApi={props.desktopApi}
             onOpenActivity={props.onOpenMessagingActivity}
+            onOpenSettings={props.onOpenMessagingSettings}
           />
         </div>
       </div>

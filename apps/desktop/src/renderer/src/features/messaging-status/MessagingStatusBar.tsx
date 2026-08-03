@@ -12,6 +12,8 @@ import {
   formatMessagingPlatformName,
   MESSAGING_PLATFORM_ICONS,
 } from "../../lib/messaging-platform-branding";
+import { useViewportTooltip } from "../../lib/useViewportTooltip";
+import { SettingsIcon } from "../../icons/SettingsIcon";
 import { useMessagingPlatformStatuses } from "./useMessagingPlatformStatuses";
 import type { DesktopApi } from "../../lib/desktop-api";
 
@@ -61,6 +63,8 @@ export function MessagingStatusBar(props: {
    * scope the screen to it in the future.
    */
   onOpenActivity?: (platform?: MessagingChannelKind) => void;
+  /** Opens Settings directly to the Messaging section. */
+  onOpenSettings?: () => void;
 }) {
   const { statuses, activeAtByPlatform } = useMessagingPlatformStatuses(
     props.desktopApi,
@@ -84,6 +88,13 @@ export function MessagingStatusBar(props: {
   >({});
   const rootRef = useRef<HTMLDivElement | null>(null);
   const popoverId = useId();
+  const {
+    hide: hideSettingsTooltip,
+    show: showSettingsTooltip,
+    tooltipNode: settingsTooltipNode,
+  } = useViewportTooltip({
+    className: "viewport-tooltip messaging-status-tooltip",
+  });
 
   const runtimeMessagingEnabled =
     settingsSnapshot?.runtime?.messaging?.disabled !== undefined
@@ -190,11 +201,13 @@ export function MessagingStatusBar(props: {
     if (!open) return;
     const onPointerDown = (event: PointerEvent) => {
       if (rootRef.current?.contains(event.target as Node)) return;
+      hideSettingsTooltip();
       setOpen(false);
       setPinned(false);
     };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
+      hideSettingsTooltip();
       setOpen(false);
       setPinned(false);
     };
@@ -204,7 +217,7 @@ export function MessagingStatusBar(props: {
       document.removeEventListener("pointerdown", onPointerDown);
       document.removeEventListener("keydown", onKeyDown);
     };
-  }, [open]);
+  }, [hideSettingsTooltip, open]);
 
   const handleToggleMessaging = async (): Promise<void> => {
     if (!props.desktopApi?.setMessagingEnabled) {
@@ -286,7 +299,10 @@ export function MessagingStatusBar(props: {
       aria-label="Messaging platform status"
       onPointerEnter={() => setOpen(true)}
       onPointerLeave={() => {
-        if (!pinned) setOpen(false);
+        if (!pinned) {
+          hideSettingsTooltip();
+          setOpen(false);
+        }
       }}
     >
       <button
@@ -301,6 +317,7 @@ export function MessagingStatusBar(props: {
         } messaging status.`}
         onClick={() => {
           if (pinned) {
+            hideSettingsTooltip();
             setOpen(false);
             setPinned(false);
             return;
@@ -340,22 +357,53 @@ export function MessagingStatusBar(props: {
                   {summary}
                 </div>
               </div>
-              <button
-                type="button"
-                className={`settings-switch messaging-status-popover__switch${
-                  messagingOn ? " is-on" : ""
-                }`}
-                aria-pressed={messagingOn}
-                disabled={togglePending}
-                onClick={() => {
-                  void handleToggleMessaging();
-                }}
-              >
-                <span aria-hidden="true" className="settings-switch__track">
-                  <span className="settings-switch__thumb" />
-                </span>
-                <span>{togglePending ? "..." : messagingOn ? "On" : "Off"}</span>
-              </button>
+              <div className="messaging-status-popover__head-actions">
+                {props.onOpenSettings ? (
+                  <button
+                    type="button"
+                    className="messaging-status-popover__settings"
+                    aria-label="Open Messaging Settings"
+                    onBlur={hideSettingsTooltip}
+                    onClick={() => {
+                      hideSettingsTooltip();
+                      setOpen(false);
+                      setPinned(false);
+                      props.onOpenSettings?.();
+                    }}
+                    onFocus={(event) =>
+                      showSettingsTooltip(
+                        event.currentTarget,
+                        "Open Messaging Settings",
+                      )
+                    }
+                    onMouseEnter={(event) =>
+                      showSettingsTooltip(
+                        event.currentTarget,
+                        "Open Messaging Settings",
+                      )
+                    }
+                    onMouseLeave={hideSettingsTooltip}
+                  >
+                    <SettingsIcon size={16} />
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  className={`settings-switch messaging-status-popover__switch${
+                    messagingOn ? " is-on" : ""
+                  }`}
+                  aria-pressed={messagingOn}
+                  disabled={togglePending}
+                  onClick={() => {
+                    void handleToggleMessaging();
+                  }}
+                >
+                  <span aria-hidden="true" className="settings-switch__track">
+                    <span className="settings-switch__thumb" />
+                  </span>
+                  <span>{togglePending ? "..." : messagingOn ? "On" : "Off"}</span>
+                </button>
+              </div>
             </div>
             <div className="messaging-status-popover__rows">
               {displayStatuses.map((status) => (
@@ -390,6 +438,7 @@ export function MessagingStatusBar(props: {
                 type="button"
                 className="messaging-status-popover__activity"
                 onClick={() => {
+                  hideSettingsTooltip();
                   setOpen(false);
                   setPinned(false);
                   props.onOpenActivity?.();
@@ -401,6 +450,7 @@ export function MessagingStatusBar(props: {
           </div>
         </div>
       ) : null}
+      {settingsTooltipNode}
     </div>
   );
 }

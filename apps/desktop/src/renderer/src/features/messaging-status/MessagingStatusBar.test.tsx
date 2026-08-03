@@ -183,6 +183,48 @@ describe("MessagingStatusBar", () => {
     expect(screen.getByRole("button", { name: "Off" })).toBeInTheDocument();
   });
 
+  it("opens Messaging settings from the gear immediately before the master toggle", async () => {
+    const statuses = [
+      {
+        changedAt: 1000,
+        health: "enabled",
+        platform: "telegram",
+      },
+    ] satisfies MessagingPlatformStatus[];
+    const desktopApi: DesktopApi = {
+      getMessagingPlatformStatuses: vi.fn(async () => statuses),
+      onMessagingPlatformStatusEvent: vi.fn(() => () => {}),
+    };
+    const onOpenSettings = vi.fn();
+
+    render(
+      <MessagingStatusBar
+        desktopApi={desktopApi}
+        onOpenSettings={onOpenSettings}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: /1 online/ }));
+    const settingsButton = await screen.findByRole("button", {
+      name: "Open Messaging Settings",
+    });
+    const masterToggle = screen.getByRole("button", { name: "On" });
+
+    expect(settingsButton.nextElementSibling).toBe(masterToggle);
+    fireEvent.mouseEnter(settingsButton);
+    const tooltip = await screen.findByRole("tooltip");
+    expect(tooltip).toHaveClass("messaging-status-tooltip");
+    expect(tooltip).toHaveTextContent("Open Messaging Settings");
+
+    fireEvent.click(settingsButton);
+
+    expect(onOpenSettings).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("dialog", { name: "Messaging platforms" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("uses runtime-disabled settings instead of stale errored platform health", async () => {
     const statuses = [
       {

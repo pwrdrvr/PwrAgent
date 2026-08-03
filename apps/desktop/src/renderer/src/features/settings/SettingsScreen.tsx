@@ -248,6 +248,7 @@ export function SettingsScreen(props: {
           <MessagingStatusBar
             desktopApi={props.desktopApi}
             onOpenActivity={onOpenActivity}
+            onOpenSettings={() => setSection("messaging")}
           />
         </header>
 
