@@ -1218,8 +1218,10 @@ function DesktopAppShell(props: {
     onLoadOlder: session.loadOlder,
     onLiveTranscriptEntry: session.upsertLiveTranscriptEntry,
     onCancelLaunchpad: (directoryKey) => {
-      navigation.discardLaunchpad(directoryKey);
-      history.goBack();
+      const restoredSourceThread = navigation.discardLaunchpad(directoryKey);
+      if (!restoredSourceThread) {
+        history.goBack();
+      }
     },
     // The composer's 5th argument is `extraDirectoryPaths` (draft
     // `@`-references); the hook's 5th is `parentThreadId` (resolved from

@@ -3301,15 +3301,24 @@ describe("App", () => {
       createdAt: 1,
       updatedAt: 1,
     };
-    const ensureDirectoryLaunchpad = vi.fn(async () => ({
-      launchpad,
-      defaults: {
-        backend: "codex" as const,
-        executionMode: "default" as const,
+    const ensureDirectoryLaunchpad = vi.fn(
+      async ({ directoryKey: ensuredDirectoryKey }: { directoryKey: string }) => {
+        launchpad = {
+          ...launchpad,
+          directoryKey: ensuredDirectoryKey,
+        };
+        return {
+          launchpad,
+          defaults: {
+            backend: "codex" as const,
+            executionMode: "default" as const,
+          },
+        };
       },
-    }));
+    );
     const updateDirectoryLaunchpad = vi.fn(
       async ({
+        directoryKey: updatedDirectoryKey,
         patch,
       }: {
         directoryKey: string;
@@ -3317,6 +3326,7 @@ describe("App", () => {
       }) => {
         launchpad = {
           ...launchpad,
+          directoryKey: updatedDirectoryKey,
           ...patch,
           updatedAt: launchpad.updatedAt + 1,
         };
@@ -3526,6 +3536,32 @@ describe("App", () => {
     });
     expect(
       screen.getByRole("button", { name: "First project thread" }),
+    ).toHaveAttribute("aria-pressed", "true");
+
+    // Opening a sub-thread composer from an unselected row must remember that
+    // row as its source. Cancel returns there directly instead of consuming
+    // history and restoring the unrelated thread that was previously open.
+    fireEvent.contextMenu(
+      screen.getByRole("button", { name: "Second project thread" }),
+    );
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "Sub-thread in Local" }),
+    );
+    await screen.findByRole("heading", { level: 2, name: "New thread" });
+    expect(
+      screen.getByRole("button", { name: "First project thread" }),
+    ).toHaveAttribute("aria-pressed", "false");
+    expect(
+      screen.getByRole("button", { name: "Second project thread" }),
+    ).toHaveAttribute("aria-pressed", "false");
+
+    await clickButton("Cancel");
+    await screen.findByRole("heading", {
+      level: 2,
+      name: "Second project thread",
+    });
+    expect(
+      screen.getByRole("button", { name: "Second project thread" }),
     ).toHaveAttribute("aria-pressed", "true");
   });
 

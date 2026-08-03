@@ -2298,7 +2298,8 @@ export function useThreadNavigation(
     parent: NavigationThreadSummary,
     mode?: ThreadWorkspaceMode,
   ) => Promise<void>;
-  discardLaunchpad: (directoryKey: string) => void;
+  /** Returns true when cancellation restores a sub-thread source selection. */
+  discardLaunchpad: (directoryKey: string) => boolean;
   forkThread: (
     parent: NavigationThreadSummary,
     mode: ThreadWorkspaceMode,
@@ -5271,7 +5272,7 @@ export function useThreadNavigation(
    * thread"). Drops the draft and, for a sub-thread composer, returns the
    * selection to the source card the user invoked it from.
    */
-  const discardLaunchpad = useCallback((directoryKey: string): void => {
+  const discardLaunchpad = useCallback((directoryKey: string): boolean => {
     // Read from the merged `directories` memo, not the raw snapshot: the
     // main-process snapshot deliberately omits sub-thread launchpads, so after
     // an authoritative refresh they exist only in `localLaunchpads`. Sourcing
@@ -5283,6 +5284,7 @@ export function useThreadNavigation(
     )?.launchpad;
     const sourceThreadId = launchpad?.sourceThreadId;
     const sourceBackend = launchpad?.backend;
+    const restoresSourceThread = Boolean(sourceThreadId && sourceBackend);
     // An explicitly-registered directory (user added it, or it already holds
     // threads) must stay in the Directories list — Cancel only discards its
     // un-submitted message. Everything else (sub-thread launchpads, transient
@@ -5335,6 +5337,7 @@ export function useThreadNavigation(
         ?.resetDirectoryLaunchpad?.({ directoryKey })
         .catch(handleDiscardError);
     }
+    return restoresSourceThread;
   }, [desktopApi, directories]);
 
   const archiveThread = useCallback(
