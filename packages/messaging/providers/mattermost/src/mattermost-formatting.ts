@@ -285,7 +285,7 @@ function renderContentPart(part: MessagingContentPart): string | undefined {
     return renderMarkdownPolicy(part.text, part.markdown ?? "plain");
   }
   if (part.type === "image") {
-    return part.alt ? part.alt : undefined;
+    return undefined;
   }
   return [part.name, part.description, part.url]
     .filter((value): value is string => Boolean(value))

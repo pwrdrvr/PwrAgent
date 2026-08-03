@@ -165,6 +165,53 @@ describe("adaptGrammyBot", () => {
 });
 
 describe("TelegramAdapter callback persistence", () => {
+  it("sends every assistant image", async () => {
+    const api = fakeTelegramApi();
+    const sendPhoto = vi.spyOn(api, "sendPhoto");
+    const adapter = new TelegramAdapter({
+      api,
+      config: {
+        authorizedActorIds: [{ id: "user-1", displayName: "" }],
+        botToken: "token",
+        channel: "telegram",
+      },
+      now: () => 1_700_000_000_000,
+      store: fakeCallbackStore(),
+    });
+
+    await adapter.deliver({
+      id: "assistant-images",
+      kind: "message",
+      createdAt: 1,
+      role: "assistant",
+      parts: [
+        { type: "text", text: "Two screenshots" },
+        { type: "image", url: "data:image/png;base64,AQID", alt: "One" },
+        { type: "image", url: "https://example.com/two.png", alt: "Two" },
+      ],
+      audit: {
+        actor: { platformUserId: "user-1" },
+        channel: {
+          channel: "telegram",
+          conversation: { id: "42", kind: "dm" },
+        },
+        occurredAt: 1,
+      },
+    });
+
+    expect(sendPhoto).toHaveBeenCalledTimes(2);
+    expect(sendPhoto.mock.calls[0]?.[0]).toMatchObject({
+      caption: expect.stringContaining("Two screenshots"),
+      chat_id: 42,
+      photo: new Uint8Array([1, 2, 3]),
+    });
+    expect(sendPhoto.mock.calls[1]?.[0]).toMatchObject({
+      caption: undefined,
+      chat_id: 42,
+      photo: "https://example.com/two.png",
+    });
+  });
+
   it("registers Agent and Monitor with Telegram bot commands", async () => {
     const grammyBot = createGrammyBot();
     const adapter = new TelegramAdapter({

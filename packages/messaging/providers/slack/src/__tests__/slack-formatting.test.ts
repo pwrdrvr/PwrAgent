@@ -90,6 +90,24 @@ describe("Slack formatting", () => {
     ]);
   });
 
+  it("clamps remote image alt text to Slack's plain-text limit", () => {
+    const alt = "a".repeat(2_500);
+    const intent: MessagingSurfaceIntent = {
+      id: "remote-image",
+      kind: "message",
+      createdAt: 1,
+      role: "assistant",
+      parts: [{ type: "image", url: "https://example.com/image.png", alt }],
+    };
+
+    const [block] = buildSlackBlocksForIntent({ intent, text: "" });
+    expect(block).toMatchObject({
+      type: "image",
+      alt_text: `${"a".repeat(1_999)}…`,
+      title: expect.objectContaining({ text: `${"a".repeat(1_999)}…` }),
+    });
+  });
+
   it("splits legacy text by its escaped mrkdwn length", () => {
     const text = "<".repeat(3_000);
     const intent: MessagingSurfaceIntent = {

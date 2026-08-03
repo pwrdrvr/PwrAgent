@@ -30,6 +30,8 @@ import type {
   MessagingInboundEvent,
   MessagingInboundRejectedListener,
   MessagingJsonValue,
+  MessagingFilePart,
+  MessagingImagePart,
   MessagingRejectedInboundEvent,
   MessagingReconnectInfo,
   MessagingSurfaceAction,
@@ -1730,23 +1732,31 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       layout: intent.actionLayout,
     });
 
-    const attachment: MattermostMessageAttachment | undefined = buttons
-      ? { actions: buttons }
-      : undefined;
+    const remoteImageAttachments: MattermostMessageAttachment[] = intent.kind === "message"
+      ? intent.parts
+          .filter(
+            (part): part is MessagingImagePart =>
+              part.type === "image" && /^https:\/\//iu.test(part.url),
+          )
+          .map((part) => ({ image_url: part.url }))
+      : [];
+    const attachments: MattermostMessageAttachment[] = [
+      ...(buttons ? [{ actions: buttons }] : []),
+      ...remoteImageAttachments,
+    ];
 
     const fileIds = await this.uploadOutboundFiles({
       channelId: target.channelId,
       intent,
     });
 
-    // Long text-only messages: split into several posts at clean boundaries so
-    // the per-post limit doesn't truncate the tail. Restricted to the simple
-    // case — a plain message, no buttons/attachments, not an edit or a
-    // response_url delivery — which is the assistant-response path.
+    // Long assistant messages: split into several posts at clean boundaries so
+    // the per-post limit doesn't truncate the tail. Images and uploaded files
+    // are attached to the final chunk. Restricted to the simple case — no
+    // buttons, not an edit or a response_url delivery.
     if (
       intent.kind === "message" &&
       !buttons &&
-      fileIds.length === 0 &&
       !(target.existingPostId && target.canUpdate) &&
       !target.responseUrl
     ) {
@@ -1756,11 +1766,16 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       });
       if (chunks.length > 1) {
         let firstSurface: MessagingSurfaceRef | undefined;
-        for (const chunk of chunks) {
+        for (const [index, chunk] of chunks.entries()) {
+          const isLastChunk = index === chunks.length - 1;
           const created = await this.client.createPost({
             channel_id: target.channelId,
             message: chunk,
             ...(target.rootId ? { root_id: target.rootId } : {}),
+            ...(isLastChunk && fileIds.length > 0 ? { file_ids: fileIds } : {}),
+            ...(isLastChunk && attachments.length > 0
+              ? { props: { attachments } }
+              : {}),
           });
           firstSurface ??= surfaceRefForPost(created.id, target.channelId, target.rootId);
         }
@@ -1777,7 +1792,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       message: text || " ",
       ...(target.rootId ? { root_id: target.rootId } : {}),
       ...(fileIds.length > 0 ? { file_ids: fileIds } : {}),
-      ...(attachment ? { props: { attachments: [attachment] } } : {}),
+      ...(attachments.length > 0 ? { props: { attachments } } : {}),
     };
 
     if (target.existingPostId && target.canUpdate) {
@@ -1833,7 +1848,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       const recovered = await this.deliverViaResponseUrl({
         channelId: target.channelId,
         message: post.message,
-        attachment,
+        attachments,
         responseUrl: target.responseUrl,
         invokerUserId: target.responseUrlInvokerUserId,
       });
@@ -1934,7 +1949,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
   private async deliverViaResponseUrl(params: {
     channelId: string;
     message: string;
-    attachment: MattermostMessageAttachment | undefined;
+    attachments: MattermostMessageAttachment[];
     responseUrl: string;
     /**
      * Mattermost's response_url handler stamps the resulting post
@@ -1958,7 +1973,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       // from_webhook prop gives us a defensive filter in
       // `handlePostedEvent` even if the post-id dedup misses.
       ...(this.botUsername ? { username: this.botUsername } : {}),
-      ...(params.attachment ? { attachments: [params.attachment] } : {}),
+      ...(params.attachments.length > 0 ? { attachments: params.attachments } : {}),
     };
     const before = this.now();
     try {
@@ -2405,10 +2420,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     if (params.intent.kind !== "message") {
       return [];
     }
-    const fileParts = params.intent.parts.filter(
-      (part): part is import("@pwragent/messaging-interface").MessagingFilePart =>
-        part.type === "file",
-    );
+    const fileParts = mattermostUploadParts(params.intent);
     if (fileParts.length === 0) {
       return [];
     }
@@ -2576,6 +2588,54 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       void listener(event);
     }
   }
+}
+
+function mattermostUploadParts(intent: MessagingSurfaceIntent): MessagingFilePart[] {
+  if (intent.kind !== "message") {
+    return [];
+  }
+  return intent.parts.flatMap((part, index): MessagingFilePart[] => {
+    if (part.type === "file") {
+      return [part];
+    }
+    if (part.type !== "image") {
+      return [];
+    }
+    const image = parseMattermostDataImageUrl(part.url);
+    if (!image) {
+      return [];
+    }
+    return [{
+      data: image.data,
+      description: part.alt,
+      mimeType: image.mimeType,
+      name: `image-${index + 1}.${image.extension}`,
+      sizeBytes: image.data.byteLength,
+      type: "file",
+    }];
+  });
+}
+
+function parseMattermostDataImageUrl(
+  url: string,
+): { data: Uint8Array; extension: string; mimeType: string } | undefined {
+  const match = /^data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/]+={0,2})$/iu.exec(url);
+  if (!match) {
+    return undefined;
+  }
+  const mimeType = match[1]?.toLowerCase();
+  const payload = match[2];
+  if (!mimeType || !payload) {
+    return undefined;
+  }
+  const extension = mimeType === "image/jpeg"
+    ? "jpg"
+    : mimeType.split("/")[1]?.replace(/[^a-z0-9]/giu, "") || "png";
+  return {
+    data: Buffer.from(payload, "base64"),
+    extension,
+    mimeType,
+  };
 }
 
 /**

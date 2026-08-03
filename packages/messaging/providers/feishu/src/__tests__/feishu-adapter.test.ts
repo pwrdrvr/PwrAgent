@@ -72,6 +72,7 @@ function encryptFeishuPayload(payload: unknown, encryptKey: string): string {
 function fakeApi(spies: {
   deleted?: string[];
   downloaded?: unknown[];
+  uploaded?: unknown[];
   sent?: unknown[];
   updated?: unknown[];
 }): FeishuApi {
@@ -88,6 +89,10 @@ function fakeApi(spies: {
       openId: "ou_bot",
       tenantKey: "tenant_1",
     }),
+    uploadImage: async (params) => {
+      spies.uploaded?.push(params);
+      return { imageKey: `img_${spies.uploaded?.length ?? 1}` };
+    },
     sendMessage: async (params) => {
       spies.sent?.push(params);
       return { messageId: "om_sent", chatId: params.receiveId };
@@ -116,6 +121,68 @@ describe("FeishuAdapter", () => {
     expect(adapter.clientRateLimitStrategy).toBe("direct");
     expect(adapter.capabilityProfile.actions?.maxActions).toBe(20);
     expect(adapter.capabilityProfile.text.markdownDialect).toBe("feishu-md");
+    expect(adapter.capabilityProfile.outboundAttachments?.supportsImageUpload).toBe(true);
+  });
+
+  it("uploads assistant images and renders them in an interactive card", async () => {
+    const spies: { sent: unknown[]; uploaded: unknown[] } = {
+      sent: [],
+      uploaded: [],
+    };
+    const adapter = new FeishuAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi(spies),
+      now: () => 1_700_000_000_000,
+    });
+
+    await adapter.deliver({
+      id: "assistant-images",
+      kind: "message",
+      createdAt: 1,
+      role: "assistant",
+      parts: [
+        { type: "text", text: "Final screenshot" },
+        {
+          type: "image",
+          url: "data:image/png;base64,AQID",
+          alt: "Worktrees overview",
+        },
+      ],
+      audit: {
+        actor: { platformUserId: "ou_user" },
+        channel: {
+          channel: "feishu",
+          conversation: { id: "ou_user", kind: "dm" },
+        },
+        occurredAt: 1,
+      },
+    });
+
+    expect(spies.uploaded).toHaveLength(1);
+    expect(spies.uploaded[0]).toMatchObject({
+      mimeType: "image/png",
+      name: "assistant-image-2.png",
+    });
+    expect(Array.from((spies.uploaded[0] as { data: Uint8Array }).data)).toEqual([
+      1,
+      2,
+      3,
+    ]);
+    expect(spies.sent).toEqual([
+      expect.objectContaining({
+        card: expect.objectContaining({
+          elements: expect.arrayContaining([
+            {
+              tag: "img",
+              img_key: "img_1",
+              alt: { tag: "plain_text", content: "Worktrees overview" },
+            },
+          ]),
+        }),
+        text: undefined,
+      }),
+    ]);
   });
 
   function streamIntent(params: {
@@ -226,6 +293,68 @@ describe("FeishuAdapter", () => {
     ).resolves.toMatchObject({ channel: "feishu", outcome: "presented" });
 
     expect(spies.sent.length).toBeGreaterThan(1);
+  });
+
+  it("splits long text with an uploaded image and attaches it to the final card", async () => {
+    const sent: Array<{
+      card?: {
+        elements: Array<{
+          alt?: { content?: string };
+          img_key?: string;
+          tag: string;
+          text?: { content?: string };
+        }>;
+      };
+      text?: string;
+    }> = [];
+    const uploaded: unknown[] = [];
+    const adapter = new FeishuAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({ sent, uploaded }),
+      now: () => 1_700_000_000_000,
+    });
+    const longText = `${"This is a full sentence that keeps going. ".repeat(240)}END`;
+
+    await expect(adapter.deliver({
+      id: "assistant-message-with-image",
+      kind: "message",
+      createdAt: 1,
+      role: "assistant",
+      parts: [
+        { type: "text", text: longText, markdown: "markdown" },
+        { type: "image", url: "data:image/png;base64,AQID", alt: "Screenshot" },
+      ],
+      audit: {
+        actor: { platformUserId: "ou_user" },
+        bindingId: "binding-1",
+        channel: {
+          channel: "feishu",
+          conversation: { id: "ou_user", kind: "dm" },
+        },
+        occurredAt: 1,
+      },
+    } satisfies MessagingSurfaceIntent)).resolves.toMatchObject({
+      channel: "feishu",
+      outcome: "presented",
+    });
+
+    expect(sent.length).toBeGreaterThan(1);
+    expect(uploaded).toHaveLength(1);
+    expect(
+      sent.slice(0, -1).flatMap((message) => message.card?.elements ?? [])
+        .some((element) => element.tag === "img"),
+    ).toBe(false);
+    expect(sent.at(-1)?.card?.elements).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        tag: "img",
+        img_key: "img_1",
+      }),
+    ]));
+    expect(
+      sent.at(-1)?.card?.elements.find((element) => element.tag === "div")
+        ?.text?.content,
+    ).toContain("END");
   });
 
   it("sends interactive cards with persisted callback handles", async () => {
@@ -782,7 +911,10 @@ describe("FeishuAdapter", () => {
   });
 
   it("calls the Feishu message resource endpoint with type when downloading", async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const fetchMock = vi.fn(async (
+      input: RequestInfo | URL,
+      _init?: RequestInit,
+    ) => {
       const url = String(input);
       if (url.endsWith("/open-apis/auth/v3/tenant_access_token/internal")) {
         return new Response(JSON.stringify({
@@ -813,6 +945,45 @@ describe("FeishuAdapter", () => {
         headers: { authorization: "Bearer tenant-token" },
       },
     );
+  });
+
+  it("uploads message images through the Feishu image resource endpoint", async () => {
+    const fetchMock = vi.fn(async (
+      input: RequestInfo | URL,
+      _init?: RequestInit,
+    ) => {
+      const url = String(input);
+      if (url.endsWith("/open-apis/auth/v3/tenant_access_token/internal")) {
+        return new Response(JSON.stringify({
+          code: 0,
+          expire: 3600,
+          tenant_access_token: "tenant-token",
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify({
+        code: 0,
+        data: { image_key: "img_uploaded" },
+      }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(createFeishuApi(baseConfig).uploadImage({
+      data: new Uint8Array([1, 2, 3]),
+      mimeType: "image/png",
+      name: "assistant-image.png",
+    })).resolves.toEqual({ imageKey: "img_uploaded" });
+
+    const uploadCall = fetchMock.mock.calls[1];
+    expect(String(uploadCall?.[0])).toBe(
+      "https://open.feishu.cn/open-apis/im/v1/images",
+    );
+    const init = uploadCall?.[1] as RequestInit;
+    expect(init.method).toBe("POST");
+    expect(init.headers).toEqual({ authorization: "Bearer tenant-token" });
+    expect(init.body).toBeInstanceOf(FormData);
+    const formData = init.body as FormData;
+    expect(formData.get("image_type")).toBe("message");
+    expect(formData.get("image")).toMatchObject({ size: 3, type: "image/png" });
   });
 
   it("decrypts encrypted webhook event envelopes", async () => {

@@ -218,6 +218,105 @@ export async function materializeTranscriptImageUrlsForRenderer(
   };
 }
 
+/**
+ * Resolve the images belonging to one assistant message into provider-safe
+ * image parts. Local files, data images, and signed PwrSnap loopback URLs are
+ * first copied into the durable transcript cache, then returned as data URLs
+ * so messaging adapters never receive renderer-only `pwragent-image://` URLs.
+ * Ordinary remote URLs remain remote URLs for adapters that can embed them.
+ */
+export async function materializeTranscriptMessageImagesForMessaging(
+  response: AppServerReadThreadResponse,
+  message: AppServerThreadMessage,
+  dependencies: Partial<TranscriptImageMaterializerDependencies> = {},
+  options: TranscriptImageMaterializationOptions = {},
+): Promise<AppServerThreadImagePart[]> {
+  const scopedMessage = message.parts?.some((part) => part.type === "text")
+    ? message
+    : {
+        ...message,
+        parts: [
+          { type: "text" as const, text: message.text },
+          ...(message.parts ?? []),
+        ],
+      };
+  const scopedResponse: AppServerReadThreadResponse = {
+    ...response,
+    replay: {
+      ...response.replay,
+      entries: [],
+      messages: [scopedMessage],
+    },
+  };
+  const materialized = await materializeTranscriptImageUrlsForRenderer(
+    scopedResponse,
+    dependencies,
+    options,
+  );
+  const materializedMessage = materialized.replay.messages[0];
+  if (!materializedMessage) {
+    return [];
+  }
+
+  const approvedLocalImageRoots = await createApprovedLocalImageRootResolver(options)();
+  const imageParts = materializedMessage.parts?.filter(
+    (part): part is AppServerThreadImagePart => part.type === "image",
+  ) ?? [];
+  const output: AppServerThreadImagePart[] = [];
+  for (const part of imageParts) {
+    const providerUrl = await transcriptImageUrlForMessaging(
+      part.url,
+      approvedLocalImageRoots,
+    );
+    if (!providerUrl) {
+      continue;
+    }
+    output.push({
+      ...part,
+      url: providerUrl,
+    });
+  }
+  return output;
+}
+
+async function transcriptImageUrlForMessaging(
+  url: string,
+  approvedLocalImageRoots: readonly string[],
+): Promise<string | undefined> {
+  if (url.startsWith("data:image/") || /^https:\/\//iu.test(url)) {
+    return url;
+  }
+
+  const sourcePath = url.startsWith(`${TRANSCRIPT_IMAGE_PROTOCOL_SCHEME}://`)
+    ? decodeTranscriptImageProtocolRequest(url)
+    : isFileImageUrl(url)
+      ? localImageLinkPath(url)
+      : undefined;
+  if (!sourcePath) {
+    return undefined;
+  }
+
+  const resolution = await resolveTranscriptImageFile(sourcePath, {
+    additionalAllowedRoots: approvedLocalImageRoots,
+  });
+  if (!resolution.ok) {
+    return undefined;
+  }
+  let buffer: Buffer;
+  try {
+    buffer = await readFile(resolution.path);
+  } catch {
+    return undefined;
+  }
+  if (
+    buffer.byteLength === 0
+    || buffer.byteLength > MAX_FETCHED_TRANSCRIPT_IMAGE_BYTES
+  ) {
+    return undefined;
+  }
+  return `data:${resolution.mimeType};base64,${buffer.toString("base64")}`;
+}
+
 export function registerTranscriptImageProtocolScheme(): void {
   protocol.registerSchemesAsPrivileged([
     {

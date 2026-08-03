@@ -555,11 +555,11 @@ export class SlackAdapter implements SlackProviderAdapter {
       capabilityProfile: this.capabilityProfile,
       layout: intent.actionLayout,
     });
-    // Long text-only messages: split into several posts at clean boundaries so
+    // Long assistant messages: split into several posts at clean boundaries so
     // neither a 12,000-char standard-Markdown block nor a legacy 3,000-char
-    // section block truncates the tail. Restricted to the simple case — a
-    // message with no buttons, attachments, or in-place edit — which is exactly
-    // the assistant-response path.
+    // section block truncates the tail. Images are attached to the final chunk;
+    // file attachments and interactive/update surfaces retain the single-post
+    // path because their placement and update semantics are more specialized.
     if (
       intent.kind === "message" &&
       (actionBlocks?.length ?? 0) === 0 &&
@@ -1122,10 +1122,11 @@ export class SlackAdapter implements SlackProviderAdapter {
   }
 
   /**
-   * Post a long text-only message as several Slack messages, one per chunk, so
+   * Post a long message as several Slack messages, one per chunk, so
    * the content is never truncated at the 3000-char section-block limit. The
-   * chunks are already boundary-split by the caller. Returns the first message
-   * as the surface (mirrors a single-post delivery).
+   * chunks are already boundary-split by the caller. Remote image blocks and
+   * uploaded data images are associated with the final chunk. Returns the first
+   * message as the surface (mirrors a single-post delivery).
    */
   private async deliverChunkedTextMessage(params: {
     intent: Extract<MessagingSurfaceIntent, { kind: "message" }>;
@@ -1134,9 +1135,17 @@ export class SlackAdapter implements SlackProviderAdapter {
   }): Promise<MessagingDeliveryResult> {
     let firstSurface: MessagingSurfaceRef | undefined;
     let deliveredAny = false;
+    let lastTs: string | undefined;
     try {
-      for (const chunk of params.chunks) {
-        const blocks = buildSlackBlocksForIntent({ intent: params.intent, text: chunk });
+      for (const [index, chunk] of params.chunks.entries()) {
+        const isLastChunk = index === params.chunks.length - 1;
+        const chunkIntent = isLastChunk
+          ? params.intent
+          : {
+              ...params.intent,
+              parts: params.intent.parts.filter((part) => part.type !== "image"),
+            };
+        const blocks = buildSlackBlocksForIntent({ intent: chunkIntent, text: chunk });
         const result = await this.api.postMessage({
           channel: params.target.channelId,
           text: clampSlackMessage(markdownToSlackMrkdwn(chunk)) || "PwrAgent",
@@ -1147,6 +1156,7 @@ export class SlackAdapter implements SlackProviderAdapter {
         });
         deliveredAny = true;
         const ts = result.ts;
+        lastTs = ts ?? lastTs;
         if (ts && !firstSurface) {
           firstSurface = {
             channel: this.channel,
@@ -1161,6 +1171,11 @@ export class SlackAdapter implements SlackProviderAdapter {
           };
         }
       }
+      await this.uploadOutboundFiles({
+        channelId: params.target.channelId,
+        intent: params.intent,
+        threadTs: params.target.threadTs ?? lastTs,
+      });
       return {
         outcome: "presented",
         channel: this.channel,
@@ -2076,15 +2091,25 @@ export class SlackAdapter implements SlackProviderAdapter {
     threadTs?: string;
   }): Promise<void> {
     if (!this.api.uploadFile || params.intent.kind !== "message") return;
-    for (const part of params.intent.parts) {
-      if (part.type !== "file" || !part.data) continue;
+    for (const [index, part] of params.intent.parts.entries()) {
+      const image = part.type === "image" ? parseSlackDataImageUrl(part.url) : undefined;
+      if (part.type !== "file" && !image) continue;
+      const data = part.type === "file" ? part.data : image?.data;
+      if (!data) continue;
+      const filename = part.type === "file"
+        ? part.name
+        : `image-${index + 1}.${image?.extension ?? "png"}`;
       await this.api.uploadFile({
         channel: params.channelId,
-        data: part.data,
-        filename: part.name,
-        mimeType: part.mimeType,
+        data,
+        filename,
+        mimeType: part.type === "file" ? part.mimeType : image?.mimeType,
         threadTs: params.threadTs,
-        title: part.description ?? part.name,
+        title: part.type === "file"
+          ? part.description ?? part.name
+          : "alt" in part
+            ? part.alt ?? filename
+            : filename,
       });
     }
   }
@@ -2539,6 +2564,28 @@ function kindForSlackMime(mimeType: string | undefined): MessagingAttachmentDesc
   if (mimeType.startsWith("audio/")) return "audio";
   if (mimeType.startsWith("video/")) return "video";
   return "file";
+}
+
+function parseSlackDataImageUrl(
+  url: string,
+): { data: Uint8Array; extension: string; mimeType: string } | undefined {
+  const match = /^data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/]+={0,2})$/iu.exec(url);
+  if (!match) {
+    return undefined;
+  }
+  const mimeType = match[1]?.toLowerCase();
+  const payload = match[2];
+  if (!mimeType || !payload) {
+    return undefined;
+  }
+  const extension = mimeType === "image/jpeg"
+    ? "jpg"
+    : mimeType.split("/")[1]?.replace(/[^a-z0-9]/giu, "") || "png";
+  return {
+    data: Buffer.from(payload, "base64"),
+    extension,
+    mimeType,
+  };
 }
 
 function normalizeSlackConversationTitle(value: string | undefined): string | undefined {

@@ -30,6 +30,11 @@ export type FeishuCardElement =
       tag: "action";
       actions: FeishuButtonElement[];
       layout?: "bisected" | "flow";
+    }
+  | {
+      tag: "img";
+      img_key: string;
+      alt: { tag: "plain_text"; content: string };
     };
 
 export type FeishuButtonElement = {
@@ -125,6 +130,7 @@ export function buildFeishuActionElements(params: {
 
 export function buildFeishuCardForIntent(params: {
   actionElements?: FeishuCardElement[];
+  images?: Array<{ alt: string; imageKey: string }>;
   intent: MessagingSurfaceIntent;
   text: string;
 }): FeishuInteractiveCard {
@@ -145,6 +151,16 @@ export function buildFeishuCardForIntent(params: {
       text: {
         tag: "plain_text",
         content: `Progress: ${params.intent.value}/${params.intent.max ?? 100}`,
+      },
+    });
+  }
+  for (const image of params.images ?? []) {
+    elements.push({
+      tag: "img",
+      img_key: image.imageKey,
+      alt: {
+        tag: "plain_text",
+        content: image.alt,
       },
     });
   }

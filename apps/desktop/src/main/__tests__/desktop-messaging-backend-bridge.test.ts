@@ -191,6 +191,193 @@ describe("DesktopMessagingBackendBridge", () => {
       createdAt: 3_000,
     });
   });
+
+  it("resolves and shares final assistant images across messaging controllers", async () => {
+    const response: AppServerReadThreadResponse = {
+      backend: "codex",
+      fetchedAt: 1,
+      threadId: "thread-1",
+      replay: {
+        entries: [],
+        messages: [
+          {
+            id: "assistant-final",
+            role: "assistant",
+            text: "Final screenshot.",
+            parts: [
+              { type: "text", text: "Final screenshot." },
+              {
+                type: "image",
+                url: "https://example.com/final.png",
+                alt: "Final screenshot",
+              },
+            ],
+          },
+        ],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+      },
+    };
+    const readThread = vi.fn(async () => response);
+    const bridge = new DesktopMessagingBackendBridge({
+      getThreadTranscriptImageRoots: vi.fn(async () => []),
+      readThread,
+    } as unknown as DesktopBackendRegistry);
+    const request = {
+      backend: "codex" as const,
+      text: "Final screenshot.",
+      threadId: "thread-1",
+      turnId: "turn-1",
+    };
+
+    await expect(Promise.all([
+      bridge.resolveAssistantMessageImages(request),
+      bridge.resolveAssistantMessageImages(request),
+    ])).resolves.toEqual([
+      [
+        {
+          type: "image",
+          url: "https://example.com/final.png",
+          alt: "Final screenshot",
+          source: "assistant",
+        },
+      ],
+      [
+        {
+          type: "image",
+          url: "https://example.com/final.png",
+          alt: "Final screenshot",
+          source: "assistant",
+        },
+      ],
+    ]);
+    expect(readThread).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves the exact image-only assistant replay message by item id", async () => {
+    const response: AppServerReadThreadResponse = {
+      backend: "codex",
+      fetchedAt: 1,
+      threadId: "thread-1",
+      replay: {
+        entries: [],
+        messages: [
+          {
+            id: "other-empty-assistant",
+            role: "assistant",
+            text: "",
+            parts: [{ type: "image", url: "https://example.com/other.png" }],
+          },
+          {
+            id: "target-empty-assistant",
+            role: "assistant",
+            text: "",
+            parts: [{ type: "image", url: "https://example.com/target.png" }],
+          },
+        ],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+      },
+    };
+    const bridge = new DesktopMessagingBackendBridge({
+      getThreadTranscriptImageRoots: vi.fn(async () => []),
+      readThread: vi.fn(async () => response),
+    } as unknown as DesktopBackendRegistry);
+
+    await expect(bridge.resolveAssistantMessageImages({
+      backend: "codex",
+      itemId: "other-empty-assistant",
+      text: "",
+      threadId: "thread-1",
+      turnId: "turn-1",
+    })).resolves.toEqual([
+      expect.objectContaining({
+        type: "image",
+        url: "https://example.com/other.png",
+      }),
+    ]);
+  });
+
+  it("does not reuse an older image-only message for an unrelated empty turn", async () => {
+    const response: AppServerReadThreadResponse = {
+      backend: "codex",
+      fetchedAt: 1,
+      threadId: "thread-1",
+      replay: {
+        entries: [
+          {
+            id: "older-image-only",
+            role: "assistant",
+            text: "",
+            type: "message",
+            turn: { id: "turn-older" },
+            parts: [{ type: "image", url: "https://example.com/older.png" }],
+          },
+        ],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+      },
+    };
+    const bridge = new DesktopMessagingBackendBridge({
+      getThreadTranscriptImageRoots: vi.fn(async () => []),
+      readThread: vi.fn(async () => response),
+    } as unknown as DesktopBackendRegistry);
+
+    await expect(bridge.resolveAssistantMessageImages({
+      backend: "codex",
+      text: "",
+      threadId: "thread-1",
+      turnId: "turn-current",
+    })).resolves.toEqual([]);
+  });
+
+  it("resolves an image-only assistant replay entry by turn id", async () => {
+    const response: AppServerReadThreadResponse = {
+      backend: "codex",
+      fetchedAt: 1,
+      threadId: "thread-1",
+      replay: {
+        entries: [
+          {
+            id: "current-image-only",
+            role: "assistant",
+            text: "",
+            type: "message",
+            turn: { id: "turn-current" },
+            parts: [{ type: "image", url: "https://example.com/current.png" }],
+          },
+        ],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+      },
+    };
+    const bridge = new DesktopMessagingBackendBridge({
+      getThreadTranscriptImageRoots: vi.fn(async () => []),
+      readThread: vi.fn(async () => response),
+    } as unknown as DesktopBackendRegistry);
+
+    await expect(bridge.resolveAssistantMessageImages({
+      backend: "codex",
+      text: "",
+      threadId: "thread-1",
+      turnId: "turn-current",
+    })).resolves.toEqual([
+      expect.objectContaining({
+        type: "image",
+        url: "https://example.com/current.png",
+      }),
+    ]);
+  });
 });
 
 function createBridge(replay: AppServerThreadReplay): DesktopMessagingBackendBridge {
