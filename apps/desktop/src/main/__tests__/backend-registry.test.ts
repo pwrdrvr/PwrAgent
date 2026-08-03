@@ -28327,22 +28327,7 @@ script = "printf setup"
     ) as Record<string, unknown>;
 
     expect(completionResponse).toMatchObject({ success: true });
-    expect(codexClient.injectedThreadItems).toHaveLength(1);
-    expect(codexClient.injectedThreadItems[0]).toMatchObject({
-      threadId: "thread-1",
-      items: [
-        {
-          type: "message",
-          role: "assistant",
-          content: [
-            {
-              type: "output_text",
-              text: expect.not.stringContaining("Monitor usage"),
-            },
-          ],
-        },
-      ],
-    });
+    expect(codexClient.injectedThreadItems).toHaveLength(0);
     const completionUsageEvent = events.find((event) => {
       if (event.notification.method !== "item/completed") {
         return false;
@@ -28509,6 +28494,127 @@ script = "printf setup"
     });
 
     unsubscribeEvents();
+    await registry.close();
+  });
+
+  it("queues task monitor handoffs behind an active parent without transcript injection", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      models: TEST_TASK_MONITOR_MODELS,
+      startThreadResult: { threadId: "monitor-thread" },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "parent-turn",
+          turn: { id: "parent-turn" },
+        },
+      },
+    });
+    const delegationResponse = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "parent-turn",
+        callId: "call-create",
+        requestId: "call-create",
+        namespace: "pwragent_task_monitors",
+        tool: "create_monitor_delegation",
+        arguments: {
+          task: "Watch an asynchronous task until it finishes.",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+    const monitorId = JSON.parse(
+      (delegationResponse as { contentItems: Array<{ text: string }> })
+        .contentItems[0]?.text ?? "{}",
+    ).monitorId as string;
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "parent-turn",
+          turn: { id: "parent-turn", status: "completed", output: [] },
+        },
+      },
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "review-turn",
+          turn: { id: "review-turn" },
+        },
+      },
+    });
+
+    const completionResponse = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "monitor-thread",
+        turnId: "turn-1",
+        callId: "call-complete",
+        requestId: "call-complete",
+        namespace: "pwragent_task_monitors",
+        tool: "complete_monitoring",
+        arguments: {
+          monitorId,
+          outcome: "failure",
+          summary: "The monitored task failed.",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+    const completionPayload = JSON.parse(
+      (completionResponse as { contentItems: Array<{ text: string }> })
+        .contentItems[0]?.text ?? "{}",
+    ) as Record<string, unknown>;
+
+    expect(completionResponse).toMatchObject({ success: true });
+    expect(completionPayload).toMatchObject({
+      parentTurn: {
+        status: "queued",
+        position: 1,
+      },
+    });
+    expect(codexClient.injectedThreadItems).toHaveLength(0);
+    expect(codexClient.startTurnCallCount).toBe(1);
+
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "review-turn",
+          turn: { id: "review-turn", status: "completed", output: [] },
+        },
+      },
+    });
+
+    await expect.poll(() => codexClient.startTurnCallCount).toBe(2);
+    expect(codexClient.lastStartTurnParams).toMatchObject({
+      threadId: "thread-1",
+      input: [
+        {
+          type: "text",
+          text: expect.stringContaining("The monitored task failed."),
+        },
+      ],
+    });
     await registry.close();
   });
 
@@ -28717,24 +28823,7 @@ script = "printf setup"
       turnId: "turn-1",
     });
     expect(codexClient.startTurnCallCount).toBe(1);
-    expect(codexClient.injectedThreadItems).toHaveLength(1);
-    expect(codexClient.injectedThreadItems[0]).toMatchObject({
-      threadId: "thread-1",
-      items: [
-        {
-          type: "message",
-          role: "assistant",
-          content: [
-            {
-              type: "output_text",
-              text: expect.stringContaining(
-                "The monitor was targeting the wrong runner.",
-              ),
-            },
-          ],
-        },
-      ],
-    });
+    expect(codexClient.injectedThreadItems).toHaveLength(0);
     await expect(
       overlayStore.getThreadOverlayState({
         backend: "codex",
@@ -28767,7 +28856,7 @@ script = "printf setup"
     } as AppServerPendingRequestNotification);
     expect(repeatedResponse).toMatchObject({ success: true });
     expect(codexClient.interruptTurnCallCount).toBe(1);
-    expect(codexClient.injectedThreadItems).toHaveLength(1);
+    expect(codexClient.injectedThreadItems).toHaveLength(0);
     expect(codexClient.startTurnCallCount).toBe(1);
 
     await registry.close();
@@ -28882,22 +28971,7 @@ script = "printf setup"
       },
     });
 
-    expect(codexClient.injectedThreadItems).toHaveLength(1);
-    expect(codexClient.injectedThreadItems[0]).toMatchObject({
-      threadId: "thread-1",
-      items: [
-        {
-          type: "message",
-          role: "assistant",
-          content: [
-            {
-              type: "output_text",
-              text: expect.stringContaining("Completion source: PwrAgent fallback"),
-            },
-          ],
-        },
-      ],
-    });
+    expect(codexClient.injectedThreadItems).toHaveLength(0);
     expect(codexClient.startTurnCallCount).toBe(3);
     expect(codexClient.lastStartTurnParams).toMatchObject({
       threadId: "thread-1",
@@ -28992,6 +29066,18 @@ script = "printf setup"
       (delegationResponse as { contentItems: Array<{ text: string }> })
         .contentItems[0]?.text ?? "{}",
     ).monitorId as string;
+    const monitorRecord = (registry as unknown as {
+      taskMonitorDelegations: Map<string, { finalizationStarted?: boolean }>;
+    }).taskMonitorDelegations.get(monitorId);
+    expect(monitorRecord).toBeDefined();
+    monitorRecord!.finalizationStarted = true;
+    await expect(registry.stopSubAgent({
+      backend: "codex",
+      threadId: "thread-1",
+      monitorId,
+    })).rejects.toThrow("Sub-agent is already completing.");
+    expect(codexClient.interruptTurnCallCount).toBe(0);
+    monitorRecord!.finalizationStarted = false;
 
     await expect(registry.stopSubAgent({
       backend: "codex",
@@ -29344,22 +29430,7 @@ script = "printf setup"
 
     await checkStaleTaskMonitors(Date.now() + 180_000);
 
-    expect(codexClient.injectedThreadItems).toHaveLength(1);
-    expect(codexClient.injectedThreadItems[0]).toMatchObject({
-      threadId: "thread-1",
-      items: [
-        {
-          type: "message",
-          role: "assistant",
-          content: [
-            {
-              type: "output_text",
-              text: expect.stringContaining("Completion source: PwrAgent fallback"),
-            },
-          ],
-        },
-      ],
-    });
+    expect(codexClient.injectedThreadItems).toHaveLength(0);
     const completionStateEvent = events.find((event) => {
       if (event.notification.method !== "item/completed") {
         return false;
