@@ -66,6 +66,10 @@ jobs:
         timeout-minutes: 10
         run: pnpm lint:colors
 
+      - name: Electron version policy
+        timeout-minutes: 10
+        run: pnpm lint:electron-version
+
       - name: ESLint
         timeout-minutes: 10
         run: pnpm lint:eslint
