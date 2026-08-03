@@ -63,6 +63,15 @@ export function SubAgentsPanel(props: SubAgentsPanelProps) {
             const originSentence = subAgentOriginSentence(subAgent);
             const backend = subAgent.backend ?? props.thread.source;
             const running = !isTerminalSubAgent(subAgent);
+            const model =
+              subAgent.preferredModel
+              ?? subAgent.monitorUsage?.model
+              ?? subAgent.monitorUsage?.cost?.model;
+            const runtimeDetails = [
+              model,
+              subAgent.preferredReasoningEffort,
+              subAgent.preferredFastMode ? "Fast" : undefined,
+            ].filter((value): value is string => Boolean(value));
             const latestMessage =
               subAgent.lastMessage && subAgent.lastMessage !== originSentence
                 ? subAgent.lastMessage
@@ -88,9 +97,9 @@ export function SubAgentsPanel(props: SubAgentsPanelProps) {
                   <span className="rail-card__provider-chip">
                     {formatBackendLabel(backend)}
                   </span>
-                  {subAgent.preferredModel ? (
+                  {runtimeDetails.length > 0 ? (
                     <span className="rail-card__model">
-                      {subAgent.preferredModel}
+                      {runtimeDetails.join(" · ")}
                     </span>
                   ) : null}
                 </p>

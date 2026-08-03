@@ -14645,10 +14645,16 @@ a.transcript-message__messaging-origin:focus-visible {
   color: var(--text-secondary);
 }
 
-.rail-card__duration[title] {
+.rail-card__duration--exact-end {
   cursor: help;
   text-decoration: underline dotted var(--border-strong);
   text-underline-offset: 2px;
+}
+
+.rail-card__duration--exact-end:focus-visible {
+  border-radius: 3px;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 /* Generic muted meta line (e.g. a PR's repo + number). */
@@ -14727,8 +14733,9 @@ a.transcript-message__messaging-origin:focus-visible {
   box-shadow: inset 2px 0 0 0 var(--accent);
 }
 
-/* Title + Live chip share the top row; the title wraps/clamps while the
-   chip stays pinned to the right at its natural width. */
+/* Provider/model identity and live/actions share the compact top row. Normal
+   turns omit the repetitive "Turn usage" heading; special rows keep a quiet
+   title above their runtime identity. */
 .pricing-usage-row__header {
   display: flex;
   align-items: flex-start;
@@ -14737,12 +14744,63 @@ a.transcript-message__messaging-origin:focus-visible {
   min-width: 0;
 }
 
+.pricing-usage-row__identity {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
 .pricing-usage-row__header .rail-card__title {
   min-width: 0;
 }
 
+.pricing-usage-row__controls {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+}
+
 .pricing-usage-row__live {
   flex: 0 0 auto;
+}
+
+.pricing-usage-row__menu-trigger {
+  display: inline-grid;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    background 120ms ease,
+    color 120ms ease,
+    opacity 120ms ease;
+}
+
+.pricing-usage-row:hover .pricing-usage-row__menu-trigger,
+.pricing-usage-row:focus-within .pricing-usage-row__menu-trigger,
+.pricing-usage-row__menu-trigger[aria-expanded="true"] {
+  opacity: 1;
+}
+
+.pricing-usage-row__menu-trigger:hover {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.pricing-usage-row__menu-trigger:focus-visible {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
 }
 
 .pricing-running-total {

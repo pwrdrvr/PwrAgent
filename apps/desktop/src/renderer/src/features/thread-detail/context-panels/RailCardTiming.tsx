@@ -1,8 +1,9 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 import {
   formatDurationMs,
   formatRunningDurationMs,
 } from "../../../lib/format-duration";
+import { useViewportTooltip } from "../../../lib/useViewportTooltip";
 import { formatTimestamp } from "./context-rail-shared";
 
 type RailCardTimingProps = {
@@ -13,7 +14,6 @@ type RailCardTimingProps = {
   startActionLabel?: string;
   startActionTitle?: string;
   startedAt: number;
-  trailing?: ReactNode;
 };
 
 /**
@@ -24,6 +24,7 @@ type RailCardTimingProps = {
  * end timestamp from the duration's tooltip after the run settles.
  */
 export function RailCardTiming(props: RailCardTimingProps) {
+  const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
   const startedTimestamp = formatTimestamp(props.startedAt, {
     includeSeconds: true,
   });
@@ -58,15 +59,27 @@ export function RailCardTiming(props: RailCardTimingProps) {
         <>
           {" · "}
           <span
-            className="rail-card__duration"
-            title={durationDescription}
+            className={`rail-card__duration${
+              completedTimestamp ? " rail-card__duration--exact-end" : ""
+            }`}
+            tabIndex={completedTimestamp ? 0 : undefined}
             aria-label={`${duration}. ${durationDescription}`}
+            onBlur={tooltip.hide}
+            onFocus={(event) =>
+              durationDescription &&
+              tooltip.show(event.currentTarget, durationDescription)
+            }
+            onMouseEnter={(event) =>
+              durationDescription &&
+              tooltip.show(event.currentTarget, durationDescription)
+            }
+            onMouseLeave={tooltip.hide}
           >
             {duration}
           </span>
         </>
       ) : null}
-      {props.trailing ? <>{" · "}{props.trailing}</> : null}
+      {tooltip.tooltipNode}
     </p>
   );
 }

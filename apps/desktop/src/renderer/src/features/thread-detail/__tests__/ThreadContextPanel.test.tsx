@@ -327,11 +327,16 @@ describe("ThreadContextPanel", () => {
     const timeRows = document.querySelectorAll(".rail-card__times");
     expect(timeRows[0]?.textContent).toMatch(/\d+:\d{2}:\d{2} [AP]M · 1s/);
     expect(timeRows[1]?.textContent).toMatch(/\d+:\d{2}:\d{2} [AP]M · 500ms/);
-    expect(
-      timeRows[1]?.querySelector(".rail-card__duration"),
-    ).toHaveAttribute(
-      "title",
-      expect.stringMatching(/^Ended .*:\d{2}:\d{2} [AP]M$/),
+    const completedDuration = timeRows[1]?.querySelector(
+      ".rail-card__duration",
+    );
+    expect(completedDuration).toHaveAttribute(
+      "aria-label",
+      expect.stringMatching(/^500ms\. Ended .*:\d{2}:\d{2} [AP]M$/),
+    );
+    fireEvent.focus(completedDuration as HTMLElement);
+    expect(screen.getByRole("tooltip")).toHaveTextContent(
+      /^Ended .*:\d{2}:\d{2} [AP]M$/,
     );
 
     // Details (renamed from the disabled History button) opens a modal with
@@ -611,6 +616,7 @@ describe("ThreadContextPanel", () => {
       screen.getByText("System usage: 80 uncached in · 20 cached · 10 out"),
     ).toBeInTheDocument();
     expect(screen.getByText("PwrAgent")).toBeInTheDocument();
+    expect(screen.getByText("gpt-5.4-mini · low")).toBeInTheDocument();
     expect(screen.getByText("Spawned by PwrAgent system helper.")).toBeInTheDocument();
     expect(screen.getByText("Generated title: Readable thread title")).toBeInTheDocument();
     expect(
@@ -843,7 +849,9 @@ describe("ThreadContextPanel", () => {
 
     expect(screen.getByRole("heading", { level: 3, name: "Pricing" })).toBeInTheDocument();
     expect(screen.getByText("$0.010")).toBeInTheDocument();
+    expect(screen.getByText("OpenAI")).toBeInTheDocument();
     expect(screen.getByText("gpt-5.5 · high · Fast")).toBeInTheDocument();
+    expect(screen.queryByText("Turn usage")).not.toBeInTheDocument();
     expect(
       screen.queryByText("gpt-5.5 · high · Fast · priority"),
     ).not.toBeInTheDocument();
@@ -1771,6 +1779,57 @@ describe("ThreadContextPanel", () => {
     expect(onScrollToTurn).toHaveBeenCalledWith("turn-1", 1_800_000_000_000);
   });
 
+  it("moves pricing identifiers into an accessible usage-actions menu", async () => {
+    const copyText = vi.fn(async () => undefined);
+    const onScrollToTurn = vi.fn();
+    (window as Window & { pwragent?: unknown }).pwragent = { copyText };
+
+    const { container } = renderPanel({
+      activeTab: "pricing",
+      onScrollToTurn,
+      pinned: true,
+      pricing: {
+        lines: [
+          buildMonitorLine({
+            scope: "turn",
+            source: "hydration",
+            sourceItemId: undefined,
+            turnId: "turn-1",
+            usageLineId: "line-1",
+          }),
+        ],
+        summaries: [],
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    const card = container.querySelector<HTMLElement>(".pricing-usage-row");
+    expect(card).not.toHaveTextContent("turn-1");
+    const trigger = screen.getByRole("button", { name: "Usage actions" });
+    fireEvent.focus(trigger);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Usage actions");
+    fireEvent.click(trigger);
+
+    const menu = screen.getByRole("menu");
+    expect(
+      within(menu).getAllByRole("menuitem").map((item) => item.textContent),
+    ).toEqual([
+        "Go to Turn",
+        "Copy Turn ID",
+        "Copy Thread ID",
+        "Copy Thread + Turn IDs",
+    ]);
+
+    fireEvent.click(
+      within(menu).getByRole("menuitem", { name: "Copy Thread + Turn IDs" }),
+    );
+    await waitFor(() => {
+      expect(copyText).toHaveBeenCalledWith(
+        "Thread ID: thread-1\nTurn ID: turn-1",
+      );
+    });
+  });
+
   it("marks the active live turn with a Live chip and a running duration", () => {
     const startedAt = 1_800_000_000_000;
     vi.useFakeTimers();
@@ -1816,7 +1875,7 @@ describe("ThreadContextPanel", () => {
     expect(activeRow).not.toBeNull();
     expect(within(activeRow as HTMLElement).getByText("Live")).toBeInTheDocument();
     const times = activeRow?.querySelector(".rail-card__times");
-    expect(times?.textContent).toContain("· 1m 5s ·");
+    expect(times?.textContent).toContain("· 1m 5s");
     expect(times?.textContent).toMatch(/Started .*:\d{2}:\d{2} [AP]M/);
   });
 
@@ -1870,7 +1929,7 @@ describe("ThreadContextPanel", () => {
     expect(activeRow).not.toBeNull();
     expect(within(activeRow as HTMLElement).getByText("Live")).toBeInTheDocument();
     const times = activeRow?.querySelector(".rail-card__times");
-    expect(times?.textContent).toContain("· 1m 5s ·");
+    expect(times?.textContent).toContain("· 1m 5s");
   });
 
   it("shows a finished duration and no Live chip on a completed turn", () => {
@@ -1916,10 +1975,10 @@ describe("ThreadContextPanel", () => {
     expect(container.querySelector(".pricing-usage-row--active")).toBeNull();
     expect(screen.queryByText("Live")).not.toBeInTheDocument();
     const times = container.querySelector(".rail-card__times");
-    expect(times?.textContent).toContain("· 2m 5s ·");
+    expect(times?.textContent).toContain("· 2m 5s");
     expect(times?.querySelector(".rail-card__duration")).toHaveAttribute(
-      "title",
-      expect.stringMatching(/^Ended .*:\d{2}:\d{2} [AP]M$/),
+      "aria-label",
+      expect.stringMatching(/^2m 5s\. Ended .*:\d{2}:\d{2} [AP]M$/),
     );
   });
 
@@ -1989,8 +2048,8 @@ describe("ThreadContextPanel", () => {
     const times = container.querySelector(".rail-card__times");
     expect(times?.textContent).toMatch(/Started .*:\d{2}:\d{2} [AP]M · 2m 5s/);
     expect(times?.querySelector(".rail-card__duration")).toHaveAttribute(
-      "title",
-      expect.stringMatching(/^Ended .*:\d{2}:\d{2} [AP]M$/),
+      "aria-label",
+      expect.stringMatching(/^2m 5s\. Ended .*:\d{2}:\d{2} [AP]M$/),
     );
   });
 
@@ -2245,6 +2304,7 @@ describe("ThreadContextPanel", () => {
             backend: "codex",
             cachedInputCostMicros: 7_000_000,
             cachedInputTokens: 70_463_104,
+            completedAt: 1_800_000_125_000,
             createdAt: 1_800_000_000_000,
             currency: "USD",
             inputTokens: 73_251_863,
@@ -2256,7 +2316,8 @@ describe("ThreadContextPanel", () => {
             reasoningOutputTokens: 37_030,
             scope: "turn",
             source: "live",
-            status: "pending",
+            startedAt: 1_800_000_000_000,
+            status: "finalized",
             threadId: "thread-1",
             totalCostMicros: 55_830_000,
             totalTokens: 73_473_538,
@@ -2293,6 +2354,8 @@ describe("ThreadContextPanel", () => {
     expect(screen.getByText("Historical usage summary")).toBeInTheDocument();
     expect(screen.getByText("$55.83 list price")).toBeInTheDocument();
     expect(screen.queryByText("$55.83 list price this turn")).not.toBeInTheDocument();
+    const historicalCard = screen.getByText("Historical usage summary").closest("li");
+    expect(historicalCard?.querySelector(".rail-card__duration")).toBeNull();
   });
 
   it("treats a large attributed live turn as a turn, not a summary", () => {
@@ -2334,7 +2397,7 @@ describe("ThreadContextPanel", () => {
       threadPricingSummaryEnabled: true,
     });
 
-    expect(screen.getByText("Turn usage")).toBeInTheDocument();
+    expect(screen.queryByText("Turn usage")).not.toBeInTheDocument();
     expect(screen.queryByText("Historical usage summary")).not.toBeInTheDocument();
     expect(screen.getByText("$55.83 list price this turn")).toBeInTheDocument();
   });

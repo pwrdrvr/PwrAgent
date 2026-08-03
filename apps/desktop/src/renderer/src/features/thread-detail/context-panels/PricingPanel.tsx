@@ -1,4 +1,5 @@
 import type {
+  AppServerBackendKind,
   ThreadPricingSummary,
   ThreadSubAgentSummary,
   ThreadToolAccounting,
@@ -11,7 +12,15 @@ import {
   estimateTokenUsageCost,
   formatTokenUsageMicrosAsUsd,
 } from "@pwragent/shared";
-import { useState } from "react";
+import { useRef, useState } from "react";
+import {
+  ChipContextMenu,
+  type ChipContextMenuItem,
+  type ChipContextMenuPosition,
+} from "../../chrome/ChipContextMenu";
+import { MoreVerticalIcon } from "../../../icons";
+import { formatBackendLabel } from "../../../lib/backend-label";
+import { useViewportTooltip } from "../../../lib/useViewportTooltip";
 import {
   formatTokenCount,
   isTerminalSubAgent,
@@ -296,6 +305,8 @@ export function PricingPanel(props: PricingPanelProps) {
                 ? subAgentsById.get(line.sourceItemId)
                 : undefined;
             const isActive = isActiveUsageLine({ activeTurnId, line, subAgentsById });
+            const usageTitle = formatUsageLineTitle(line, subAgent);
+            const showUsageTitle = usageTitle !== "Turn usage";
 
             return (
               <li
@@ -305,29 +316,46 @@ export function PricingPanel(props: PricingPanelProps) {
                 }`}
               >
                 <div className="pricing-usage-row__header">
-                  <p className="rail-card__title">
-                    {formatUsageLineTitle(line, subAgent)}
-                  </p>
-                  {isActive ? (
-                    <span className="rail-chip pricing-usage-row__live">
-                      <span
-                        className="rail-chip__dot rail-chip__dot--active"
-                        aria-hidden="true"
-                      />
-                      Live
-                    </span>
-                  ) : null}
+                  <div className="pricing-usage-row__identity">
+                    {showUsageTitle ? (
+                      <p className="rail-card__title">{usageTitle}</p>
+                    ) : null}
+                    <p className="rail-card__runtime">
+                      <span className="rail-card__provider-chip">
+                        {formatBackendLabel(line.backend as AppServerBackendKind)}
+                      </span>
+                      <span className="rail-card__model">
+                        {line.model ?? "Unknown model"}
+                        {line.reasoningEffort ? ` · ${line.reasoningEffort}` : ""}
+                        {formatServiceTierLabel(line)}
+                      </span>
+                    </p>
+                  </div>
+                  <div className="pricing-usage-row__controls">
+                    {isActive ? (
+                      <span className="rail-chip pricing-usage-row__live">
+                        <span
+                          className="rail-chip__dot rail-chip__dot--active"
+                          aria-hidden="true"
+                        />
+                        Live
+                      </span>
+                    ) : null}
+                    <PricingUsageActions
+                      line={line}
+                      onScrollToTurn={props.onScrollToTurn}
+                      startedAt={
+                        subAgent?.createdAt ?? line.startedAt ?? line.createdAt
+                      }
+                      subAgent={subAgent}
+                    />
+                  </div>
                 </div>
                 {subAgent?.agentName ? (
                   <p className="rail-card__agent-name" title={subAgent.agentName}>
                     {subAgent.agentName}
                   </p>
                 ) : null}
-                <p className="rail-card__model">
-                  {line.model ?? "Unknown model"}
-                  {line.reasoningEffort ? ` · ${line.reasoningEffort}` : ""}
-                  {formatServiceTierLabel(line)}
-                </p>
                 <p className="rail-card__usage">
                   {formatTokenCount(line.uncachedInputTokens)} uncached in ·{" "}
                   {formatTokenCount(line.cachedInputTokens)} cached ·{" "}
@@ -1264,9 +1292,12 @@ function PricingUsageTimestamp(props: {
   const startedAt =
     props.subAgent?.createdAt ?? props.line.startedAt ?? props.line.createdAt;
   const completedAt =
-    props.subAgent !== undefined
-      ? subAgentCompletedAt(props.subAgent)
-      : props.line.completedAt;
+    !props.isActive &&
+    (isEstimatedUsageGap(props.line) || isHistoricalUsageSummary(props.line))
+      ? undefined
+      : props.subAgent !== undefined
+        ? subAgentCompletedAt(props.subAgent)
+        : props.line.completedAt;
   const timestamp = formatTimestamp(startedAt, { includeSeconds: true });
   const canScrollToTurn = Boolean(props.line.turnId && props.onScrollToTurn);
 
@@ -1276,7 +1307,6 @@ function PricingUsageTimestamp(props: {
       now={props.now}
       running={props.isActive}
       startedAt={startedAt}
-      trailing={props.line.turnId}
       {...(canScrollToTurn
         ? {
             onStartClick: () => {
@@ -1289,6 +1319,97 @@ function PricingUsageTimestamp(props: {
           }
         : {})}
     />
+  );
+}
+
+function PricingUsageActions(props: {
+  line: ThreadUsageLineRecord;
+  onScrollToTurn?: (turnId: string, turnTimeMs?: number) => void;
+  startedAt: number;
+  subAgent?: ThreadSubAgentSummary;
+}) {
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const [position, setPosition] = useState<ChipContextMenuPosition>();
+  const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
+  const turnId = props.line.turnId ?? props.subAgent?.monitorTurnId;
+  const threadId = props.line.parentThreadId ?? props.line.threadId;
+  const canScrollToTurn = Boolean(turnId && props.onScrollToTurn);
+  const items: ChipContextMenuItem[] = [];
+
+  if (canScrollToTurn && turnId) {
+    items.push({
+      action: () => props.onScrollToTurn?.(turnId, props.startedAt),
+      label: "Go to Turn",
+    });
+  }
+  if (turnId) {
+    items.push({
+      copyValue: turnId,
+      label: "Copy Turn ID",
+      separated: canScrollToTurn,
+    });
+  }
+  items.push({
+    copyValue: threadId,
+    label: "Copy Thread ID",
+    separated: !turnId && canScrollToTurn,
+  });
+  if (turnId) {
+    items.push({
+      copyValue: `Thread ID: ${threadId}\nTurn ID: ${turnId}`,
+      label: "Copy Thread + Turn IDs",
+    });
+  }
+
+  const openMenu = (): void => {
+    const trigger = triggerRef.current;
+    if (!trigger) {
+      return;
+    }
+    tooltip.hide();
+    const rect = trigger.getBoundingClientRect();
+    setPosition({
+      anchorTop: rect.top,
+      x: rect.right - 220,
+      y: rect.bottom + 4,
+    });
+  };
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        aria-expanded={position !== undefined}
+        aria-haspopup="menu"
+        aria-label="Usage actions"
+        className="pricing-usage-row__menu-trigger"
+        type="button"
+        onBlur={tooltip.hide}
+        onClick={() => {
+          if (position) {
+            setPosition(undefined);
+          } else {
+            openMenu();
+          }
+        }}
+        onFocus={(event) => tooltip.show(event.currentTarget, "Usage actions")}
+        onMouseEnter={(event) =>
+          tooltip.show(event.currentTarget, "Usage actions")
+        }
+        onMouseLeave={tooltip.hide}
+      >
+        <MoreVerticalIcon size={15} aria-hidden="true" />
+      </button>
+      {position && triggerRef.current ? (
+        <ChipContextMenu
+          items={items}
+          onClose={() => setPosition(undefined)}
+          position={position}
+          returnFocusTo={triggerRef.current}
+        />
+      ) : null}
+      {tooltip.tooltipNode}
+    </>
   );
 }
 
