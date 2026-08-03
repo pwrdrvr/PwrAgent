@@ -13,7 +13,9 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 
 const REQUEST_TIMEOUT_MS = 60_000;
-const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
+// Resource reads can carry a full-resolution screenshot as base64. Keep the
+// local framing bound finite without rejecting ordinary high-DPI captures.
+const MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
 
 type RpcResponse =
   | { ok: true; result: unknown }

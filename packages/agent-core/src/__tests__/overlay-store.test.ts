@@ -478,6 +478,36 @@ describe("OverlayStore", () => {
     });
   });
 
+  it("persists and clears a thread's selected MCP connections", async () => {
+    const store = await createStore();
+
+    await store.setThreadMcpConnectionIds({
+      backend: "codex",
+      threadId: "thread-1",
+      connectionIds: ["pwrsnap", " pwrsnap ", ""],
+    });
+
+    const filePath = path.join(tempDirs[0]!, "overlay-state.json");
+    const reloaded = new OverlayStore(filePath);
+    await expect(
+      reloaded.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }),
+    ).resolves.toMatchObject({
+      mcpConnectionIds: ["pwrsnap"],
+    });
+
+    await reloaded.setThreadMcpConnectionIds({
+      backend: "codex",
+      threadId: "thread-1",
+      connectionIds: [],
+    });
+    await expect(
+      new OverlayStore(filePath).getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-1",
+      }).then((overlay) => overlay?.mcpConnectionIds),
+    ).resolves.toBeUndefined();
+  });
+
   it("does not rewrite the overlay file for read-only thread lookups", async () => {
     const store = await createStore();
 

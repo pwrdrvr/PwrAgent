@@ -39,6 +39,35 @@ function readDefaultValue(key: string): unknown {
 }
 
 describe("SqliteOverlayStore - launchpad defaults", () => {
+  it("persists and clears a thread's selected MCP connections", async () => {
+    await store.setThreadMcpConnectionIds({
+      backend: "acp:gemini",
+      threadId: "thread-1",
+      connectionIds: ["pwrsnap", " pwrsnap ", ""],
+    });
+
+    await expect(
+      store.getThreadOverlayState({
+        backend: "acp:gemini",
+        threadId: "thread-1",
+      }),
+    ).resolves.toMatchObject({
+      mcpConnectionIds: ["pwrsnap"],
+    });
+
+    await store.setThreadMcpConnectionIds({
+      backend: "acp:gemini",
+      threadId: "thread-1",
+      connectionIds: [],
+    });
+    await expect(
+      store.getThreadOverlayState({
+        backend: "acp:gemini",
+        threadId: "thread-1",
+      }).then((overlay) => overlay?.mcpConnectionIds),
+    ).resolves.toBeUndefined();
+  });
+
   it("persists the selected navigation browse mode", async () => {
     const { dbPath, tempDir } = createTempStateDb(
       "pwragent-launchpad-defaults-test-",

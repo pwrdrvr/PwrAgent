@@ -38,7 +38,6 @@ const PWRSNAP_SCOPES = [
   "capture.edit",
 ].join(" ");
 const OAUTH_CALLBACK_TIMEOUT_MS = 5 * 60_000;
-const MCP_RPC_TIMEOUT_MS = 60_000;
 const MAX_RPC_LINE_BYTES = 1024 * 1024;
 const MAX_RPC_CONNECTIONS = 32;
 

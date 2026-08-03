@@ -31,6 +31,11 @@ export function PwrSnapConnectionPrompt(props: {
 
   useEffect(() => {
     void refresh();
+    const onFocus = (): void => {
+      void refresh();
+    };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
   }, [refresh]);
 
   const runAction = async (action: () => Promise<void>): Promise<void> => {
