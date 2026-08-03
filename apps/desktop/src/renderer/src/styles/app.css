@@ -1471,6 +1471,43 @@ textarea,
   font: 500 11px/1.3 var(--font-sans, sans-serif);
 }
 
+.messaging-status-popover__head-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+}
+
+.messaging-status-popover__settings {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition:
+    color 80ms ease,
+    background 80ms ease;
+}
+
+.messaging-status-popover__settings:hover {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.messaging-status-popover__settings:focus-visible {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .messaging-status-popover__switch {
   flex: 0 0 auto;
 }

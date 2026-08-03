@@ -324,6 +324,10 @@ function DesktopAppShell(props: {
   const openMessagingActivityWindow = useCallback(() => {
     void desktopApi?.openMessagingActivityWindow?.();
   }, [desktopApi]);
+  const openMessagingSettings = useCallback(() => {
+    setSettingsInitialSection("messaging");
+    setMainView("settings");
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -1187,6 +1191,7 @@ function DesktopAppShell(props: {
       }
     },
     onOpenMessagingActivity: openMessagingActivityWindow,
+    onOpenMessagingSettings: openMessagingSettings,
     onRevealSelectedThreadInList: revealSelectedThreadInList,
     contextRailPinned,
     onContextRailPinnedChange: setContextRailPinnedPersisted,
@@ -1391,6 +1396,7 @@ function DesktopAppShell(props: {
       <AppTitleBar
         desktopApi={desktopApi}
         onOpenMessagingActivity={openMessagingActivityWindow}
+        onOpenMessagingSettings={openMessagingSettings}
         layout={{
           sidebarOpen: !sidebarHidden,
           railOpen: contextRailPinned,
@@ -1549,6 +1555,7 @@ function DesktopAppShell(props: {
             <ThreadSearchPanel
               desktopApi={desktopApi}
               onOpenMessagingActivity={openMessagingActivityWindow}
+              onOpenMessagingSettings={openMessagingSettings}
               layout={{
                 sidebarOpen: !sidebarHidden,
                 railOpen: contextRailPinned,
@@ -1597,6 +1604,7 @@ function DesktopAppShell(props: {
                 desktopApi={desktopApi}
                 title="Loading..."
                 onOpenMessagingActivity={openMessagingActivityWindow}
+                onOpenMessagingSettings={openMessagingSettings}
                 layout={{
                   sidebarOpen: !sidebarHidden,
                   railOpen: contextRailPinned,
@@ -1646,6 +1654,7 @@ function DesktopAppShell(props: {
               threads={navigation.threads}
               onClose={() => setMainView("thread")}
               onOpenMessagingActivity={openMessagingActivityWindow}
+              onOpenMessagingSettings={openMessagingSettings}
               onRefreshNavigation={navigation.refresh}
               onSelectThread={(thread) => {
                 setMainView("thread");

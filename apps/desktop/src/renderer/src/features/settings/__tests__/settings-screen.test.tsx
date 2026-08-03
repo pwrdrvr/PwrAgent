@@ -3993,6 +3993,40 @@ describe("SettingsScreen", () => {
     expect(current?.textContent).not.toBe("Messaging activity");
   });
 
+  it("opens the Messaging section from the title-bar popover gear", async () => {
+    const desktopApi = {
+      getMessagingPlatformStatuses: vi.fn(async () => [
+        {
+          platform: "telegram" as const,
+          health: "enabled" as const,
+          changedAt: 0,
+        },
+      ]),
+    } as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"];
+
+    render(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: /Telegram/i }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Open Messaging Settings" }),
+    );
+
+    await waitFor(() => {
+      expect(document.querySelector(".settings-titlebar__current")).toHaveTextContent(
+        "Messaging",
+      );
+    });
+    expect(
+      screen.getByRole("button", { name: "Messaging" }),
+    ).toHaveAttribute("aria-current", "page");
+  });
+
   it("places Exit Settings as the first row of the settings nav (NOT in the title bar)", () => {
     // Regression lock for the design contract: Exit Settings lives
     // INSIDE `.settings-nav` (left column), not inside the title-bar

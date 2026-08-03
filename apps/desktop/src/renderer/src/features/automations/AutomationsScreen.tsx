@@ -27,6 +27,7 @@ type AutomationsScreenProps = {
   desktopApi?: DesktopApi;
   onClose: () => void;
   onOpenMessagingActivity?: (platform?: MessagingChannelKind) => void;
+  onOpenMessagingSettings?: () => void;
   onRefreshNavigation?: () => Promise<void>;
   onSelectThread?: (thread: NavigationThreadSummary) => void;
   threads: NavigationThreadSummary[];
@@ -121,6 +122,7 @@ export function AutomationsScreen(props: AutomationsScreenProps) {
           <MessagingStatusBar
             desktopApi={props.desktopApi}
             onOpenActivity={props.onOpenMessagingActivity}
+            onOpenSettings={props.onOpenMessagingSettings}
           />
         </header>
 
