@@ -173,7 +173,24 @@ export async function launchElectronApp(params: {
   }
 
   const electronApp = await electron.launch({
-    args: [path.resolve(fixtureDir, "../../out/main/index.js")],
+    args: [
+      path.resolve(fixtureDir, "../../out/main/index.js"),
+      // Hardware video codecs leak kernel objects inside a
+      // Virtualization.framework guest (the Tart macOS VMs): every
+      // VideoToolbox init creates an
+      // AppleVideoToolboxParavirtualizationUserClient that the vmapple
+      // paravirt driver never frees, even at process death. Chromium
+      // initializes them once per app launch, so a suite run leaks
+      // roughly one per spec. Past ~1.1k live clients the driver's
+      // IOService::newUserClient wedges, every new Electron helper
+      // hangs at birth in-kernel, and app teardown blocks ~6s per spec
+      // until the guest is rebooted. --disable-gpu and
+      // disableHardwareAcceleration() do NOT cover media codecs, so
+      // the codec switches have to be explicit. Harmless elsewhere:
+      // no spec plays video.
+      "--disable-accelerated-video-decode",
+      "--disable-accelerated-video-encode",
+    ],
     cwd: path.resolve(fixtureDir, "../.."),
     env,
   });
