@@ -1,7 +1,8 @@
 import { execFile as execFileCallback } from "node:child_process";
-import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
@@ -71,6 +72,10 @@ import type {
   AgentToolMcpRegistration,
   AgentToolMcpServerLike,
 } from "../agent-tools/agent-tool-mcp-server";
+
+const jeepStickerPageFixture = fileURLToPath(
+  new URL("./fixtures/pdf/jeep-sticker-page-size.pdf", import.meta.url),
+);
 
 const mainLoggerMock = vi.hoisted(() => ({
   debug: vi.fn(),
@@ -7288,6 +7293,63 @@ script = "echo setup"
 
     await registry.close();
     expect(pdfMcp.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the single-page PDF preparation fallback for an extensionless Composer reference", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-registry-pdf-"));
+    const pdfPath = path.join(root, "Jeep");
+    await copyFile(jeepStickerPageFixture, pdfPath);
+    const codexClient = new MockBackendClient({ threads: [] });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:thread-1": {
+            backend: "codex",
+            threadId: "thread-1",
+            executionMode: "default",
+            extraLinkedDirectories: [],
+            messagingPdfToolCatalogVersion:
+              PWRAGENT_MESSAGING_PDF_TOOL_CATALOG_VERSION,
+          },
+        },
+      }),
+      resolvePdfAnalysisEnabled: () => true,
+    });
+
+    try {
+      await registry.startTurn({
+        backend: "codex",
+        threadId: "thread-1",
+        input: [
+          { type: "text", text: "Compare [@Jeep](~/Downloads/Jeep)" },
+          { type: "localFile", name: "Jeep", path: pdfPath },
+        ],
+      });
+
+      expect(codexClient.lastStartTurnParams?.input).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            text: expect.stringContaining(
+              "PwrAgent rendered PDF attachment `Jeep` into 1 page image",
+            ),
+            type: "text",
+          }),
+          {
+            type: "localImage",
+            name: "Jeep-page-1.png",
+            path: expect.stringMatching(/Jeep-page-1\.png$/u),
+          },
+        ]),
+      );
+      expect(codexClient.lastStartTurnParams?.input).not.toContainEqual(
+        expect.objectContaining({ type: "localFile", path: pdfPath }),
+      );
+    } finally {
+      await registry.close();
+      await rm(root, { force: true, recursive: true });
+    }
   });
 
   it("passes Agent dynamic tools when starting Agent Codex threads", async () => {

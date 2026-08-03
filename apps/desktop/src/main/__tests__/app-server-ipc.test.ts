@@ -741,9 +741,9 @@ describe("app server ipc", () => {
   it("identifies explicitly selected extensionless PDFs by their magic bytes", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-pdf-ipc-"));
     const pdfPath = path.join(root, "Jeep");
-    const textPath = path.join(root, "notes.txt");
+    const nonPdfPath = path.join(root, "notes.pdf");
     await writeFile(pdfPath, "%PDF-1.7\n");
-    await writeFile(textPath, "not a PDF");
+    await writeFile(nonPdfPath, "not a PDF");
     try {
       const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
       const { NAVIGATION_INSPECT_PDF_REFERENCE_PATHS_CHANNEL } = await import(
@@ -753,9 +753,12 @@ describe("app server ipc", () => {
 
       await expect(
         handlers.get(NAVIGATION_INSPECT_PDF_REFERENCE_PATHS_CHANNEL)?.({}, {
-          paths: [pdfPath, textPath],
+          paths: [pdfPath, nonPdfPath],
         }),
-      ).resolves.toEqual({ pdfPaths: [pdfPath] });
+      ).resolves.toEqual({
+        filePaths: [pdfPath, nonPdfPath],
+        pdfPaths: [pdfPath],
+      });
     } finally {
       await rm(root, { force: true, recursive: true });
     }
