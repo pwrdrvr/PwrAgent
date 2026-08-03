@@ -51,6 +51,7 @@ import type {
   MessagingCapabilityProfile,
   MessagingClientRateLimitStrategy,
   MessagingInboundEvent,
+  MessagingImagePart,
   MessagingActorIdentity,
   MessagingAdapterState,
   MessagingAdapterAuthorizationUpdate,
@@ -148,6 +149,13 @@ export type MessagingBackendBridge = {
     backend: AppServerBackendKind;
     threadId: string;
   }): Promise<MessagingLastAssistantReply | undefined>;
+  resolveAssistantMessageImages?(request: {
+    backend: AppServerBackendKind;
+    itemId?: string;
+    text: string;
+    threadId: string;
+    turnId?: string;
+  }): Promise<MessagingImagePart[]>;
   handoffThreadWorkspace?(
     request: HandoffThreadWorkspaceRequest,
   ): Promise<HandoffThreadWorkspaceResponse>;

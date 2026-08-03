@@ -56,6 +56,13 @@ export type SlackMarkdownBlock = {
   text: string;
 };
 
+export type SlackImageBlock = {
+  type: "image";
+  image_url: string;
+  alt_text: string;
+  title?: SlackTextObject & { type: "plain_text" };
+};
+
 export type SlackContextBlock = {
   type: "context";
   block_id?: string;
@@ -79,6 +86,7 @@ export type SlackActionsBlock = {
 export type SlackBlock =
   | SlackActionsBlock
   | SlackContextBlock
+  | SlackImageBlock
   | SlackMarkdownBlock
   | SlackSectionBlock;
 
@@ -201,6 +209,24 @@ export function buildSlackBlocksForIntent(params: {
         },
       ],
     });
+  }
+
+  if (params.intent.kind === "message") {
+    for (const [index, part] of params.intent.parts.entries()) {
+      if (part.type !== "image" || !/^https:\/\//iu.test(part.url)) {
+        continue;
+      }
+      const alt = part.alt?.trim() || `Assistant image ${index + 1}`;
+      blocks.push({
+        type: "image",
+        image_url: part.url,
+        alt_text: alt,
+        title: {
+          type: "plain_text",
+          text: truncateSlackPlainText(alt, 2_000),
+        },
+      });
+    }
   }
 
   if (params.actionBlocks) {
@@ -685,7 +711,7 @@ function renderContentParts(parts: MessagingContentPart[]): string {
     .map((part) => {
       if (part.type === "text") return part.text;
       if (part.type === "file") return part.description ?? part.name;
-      if (part.type === "image") return "[image]";
+      if (part.type === "image") return part.alt ?? "[image]";
       return "";
     })
     .filter(Boolean)

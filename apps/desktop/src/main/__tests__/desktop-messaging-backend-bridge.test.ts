@@ -191,6 +191,70 @@ describe("DesktopMessagingBackendBridge", () => {
       createdAt: 3_000,
     });
   });
+
+  it("resolves and shares final assistant images across messaging controllers", async () => {
+    const response: AppServerReadThreadResponse = {
+      backend: "codex",
+      fetchedAt: 1,
+      threadId: "thread-1",
+      replay: {
+        entries: [],
+        messages: [
+          {
+            id: "assistant-final",
+            role: "assistant",
+            text: "Final screenshot.",
+            parts: [
+              { type: "text", text: "Final screenshot." },
+              {
+                type: "image",
+                url: "https://example.com/final.png",
+                alt: "Final screenshot",
+              },
+            ],
+          },
+        ],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+      },
+    };
+    const readThread = vi.fn(async () => response);
+    const bridge = new DesktopMessagingBackendBridge({
+      getThreadTranscriptImageRoots: vi.fn(async () => []),
+      readThread,
+    } as unknown as DesktopBackendRegistry);
+    const request = {
+      backend: "codex" as const,
+      text: "Final screenshot.",
+      threadId: "thread-1",
+      turnId: "turn-1",
+    };
+
+    await expect(Promise.all([
+      bridge.resolveAssistantMessageImages(request),
+      bridge.resolveAssistantMessageImages(request),
+    ])).resolves.toEqual([
+      [
+        {
+          type: "image",
+          url: "https://example.com/final.png",
+          alt: "Final screenshot",
+          source: "assistant",
+        },
+      ],
+      [
+        {
+          type: "image",
+          url: "https://example.com/final.png",
+          alt: "Final screenshot",
+          source: "assistant",
+        },
+      ],
+    ]);
+    expect(readThread).toHaveBeenCalledTimes(1);
+  });
 });
 
 function createBridge(replay: AppServerThreadReplay): DesktopMessagingBackendBridge {

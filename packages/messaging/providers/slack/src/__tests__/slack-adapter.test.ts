@@ -645,6 +645,78 @@ describe("SlackAdapter", () => {
     });
   });
 
+  it("uploads data images and renders remote images as Slack blocks", async () => {
+    const posted: unknown[] = [];
+    const uploads: Array<{
+      channel: string;
+      data: Uint8Array;
+      filename: string;
+      mimeType?: string;
+      threadTs?: string;
+      title?: string;
+    }> = [];
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: {
+        ...fakeApi({ posted }),
+        uploadFile: async (params) => {
+          uploads.push(params);
+        },
+      },
+      socketClient: fakeSocket(),
+      now: () => 1_700_000_000_000,
+    });
+
+    await adapter.deliver({
+      id: "message-images",
+      kind: "message",
+      createdAt: 1,
+      role: "assistant",
+      parts: [
+        { type: "text", text: "Final screenshots" },
+        {
+          type: "image",
+          url: "data:image/png;base64,AQID",
+          alt: "Local screenshot",
+        },
+        {
+          type: "image",
+          url: "https://example.com/remote.png",
+          alt: "Remote screenshot",
+        },
+      ],
+      audit: {
+        actor: { platformUserId: "U012ABCDEF0" },
+        channel: {
+          channel: "slack",
+          conversation: { id: "D012ABCDEF0", kind: "dm" },
+        },
+        occurredAt: 1,
+      },
+    });
+
+    expect(posted).toEqual([
+      expect.objectContaining({
+        blocks: expect.arrayContaining([
+          expect.objectContaining({
+            type: "image",
+            image_url: "https://example.com/remote.png",
+            alt_text: "Remote screenshot",
+          }),
+        ]),
+      }),
+    ]);
+    expect(uploads).toHaveLength(1);
+    expect(uploads[0]).toMatchObject({
+      channel: "D012ABCDEF0",
+      filename: "image-2.png",
+      mimeType: "image/png",
+      title: "Local screenshot",
+    });
+    expect(Array.from(uploads[0]?.data ?? [])).toEqual([1, 2, 3]);
+  });
+
   it("delivers interactive status cards as Block Kit messages", async () => {
     const store = fakeStore();
     const spies: { posted: unknown[] } = { posted: [] };

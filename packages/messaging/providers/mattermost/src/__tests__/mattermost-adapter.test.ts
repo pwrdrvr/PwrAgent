@@ -498,6 +498,57 @@ describe("MattermostAdapter — outbound deliver", () => {
     expect(spies.createdPosts[0].root_id).toBeUndefined();
   });
 
+  it("uploads data images and embeds remote images in Mattermost posts", async () => {
+    const spies = {
+      createdPosts: [] as CreatedPost[],
+      patchedPosts: [] as PatchedPost[],
+      uploadedFiles: [] as FormData[],
+    };
+    const adapter = makeAdapter(spies);
+
+    await adapter.deliver({
+      id: "intent-images",
+      kind: "message",
+      createdAt: 1_700_000_000_000,
+      parts: [
+        { type: "text", text: "Final screenshots" },
+        {
+          type: "image",
+          url: "data:image/png;base64,AQID",
+          alt: "Local screenshot",
+        },
+        {
+          type: "image",
+          url: "https://example.com/remote.png",
+          alt: "Remote screenshot",
+        },
+      ],
+      audit: {
+        channel: dmChannel("dm-1"),
+        actor: { platformUserId: "user-1" },
+      },
+    } as unknown as MessagingSurfaceIntent);
+
+    expect(spies.uploadedFiles).toHaveLength(1);
+    const uploaded = spies.uploadedFiles[0]?.get("files");
+    expect(uploaded).toBeInstanceOf(Blob);
+    expect(uploaded).toMatchObject({ size: 3, type: "image/png" });
+    expect(spies.createdPosts).toEqual([
+      expect.objectContaining({
+        channel_id: "dm-1",
+        file_ids: ["file-1"],
+        message: "Final screenshots",
+        props: {
+          attachments: [
+            expect.objectContaining({
+              image_url: "https://example.com/remote.png",
+            }),
+          ],
+        },
+      }),
+    ]);
+  });
+
   function makeStreamIntent(params: {
     id: string;
     text: string;

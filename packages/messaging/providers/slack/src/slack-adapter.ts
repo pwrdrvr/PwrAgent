@@ -564,7 +564,7 @@ export class SlackAdapter implements SlackProviderAdapter {
       intent.kind === "message" &&
       (actionBlocks?.length ?? 0) === 0 &&
       intent.delivery?.mode !== "update" &&
-      !intent.parts.some((part) => part.type === "file")
+      !intent.parts.some((part) => part.type === "file" || part.type === "image")
     ) {
       const chunks = splitSlackTextForDelivery(intent, rawText);
       if (chunks.length > 1) {
@@ -2076,15 +2076,25 @@ export class SlackAdapter implements SlackProviderAdapter {
     threadTs?: string;
   }): Promise<void> {
     if (!this.api.uploadFile || params.intent.kind !== "message") return;
-    for (const part of params.intent.parts) {
-      if (part.type !== "file" || !part.data) continue;
+    for (const [index, part] of params.intent.parts.entries()) {
+      const image = part.type === "image" ? parseSlackDataImageUrl(part.url) : undefined;
+      if (part.type !== "file" && !image) continue;
+      const data = part.type === "file" ? part.data : image?.data;
+      if (!data) continue;
+      const filename = part.type === "file"
+        ? part.name
+        : `image-${index + 1}.${image?.extension ?? "png"}`;
       await this.api.uploadFile({
         channel: params.channelId,
-        data: part.data,
-        filename: part.name,
-        mimeType: part.mimeType,
+        data,
+        filename,
+        mimeType: part.type === "file" ? part.mimeType : image?.mimeType,
         threadTs: params.threadTs,
-        title: part.description ?? part.name,
+        title: part.type === "file"
+          ? part.description ?? part.name
+          : "alt" in part
+            ? part.alt ?? filename
+            : filename,
       });
     }
   }
@@ -2539,6 +2549,28 @@ function kindForSlackMime(mimeType: string | undefined): MessagingAttachmentDesc
   if (mimeType.startsWith("audio/")) return "audio";
   if (mimeType.startsWith("video/")) return "video";
   return "file";
+}
+
+function parseSlackDataImageUrl(
+  url: string,
+): { data: Uint8Array; extension: string; mimeType: string } | undefined {
+  const match = /^data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/]+={0,2})$/iu.exec(url);
+  if (!match) {
+    return undefined;
+  }
+  const mimeType = match[1]?.toLowerCase();
+  const payload = match[2];
+  if (!mimeType || !payload) {
+    return undefined;
+  }
+  const extension = mimeType === "image/jpeg"
+    ? "jpg"
+    : mimeType.split("/")[1]?.replace(/[^a-z0-9]/giu, "") || "png";
+  return {
+    data: Buffer.from(payload, "base64"),
+    extension,
+    mimeType,
+  };
 }
 
 function normalizeSlackConversationTitle(value: string | undefined): string | undefined {

@@ -11762,6 +11762,182 @@ describe("MessagingController", () => {
     ]);
   });
 
+  it("includes resolved assistant images in the final provider message", async () => {
+    const resolveAssistantMessageImages = vi.fn(async () => [
+      {
+        type: "image" as const,
+        url: "data:image/png;base64,AQID",
+        alt: "Worktrees overview",
+        source: "assistant" as const,
+        sourceUrl: "file:///tmp/worktrees.png",
+      },
+      {
+        type: "image" as const,
+        url: "https://example.com/remote.png",
+        alt: "Remote preview",
+        source: "assistant" as const,
+      },
+    ]);
+    const harness = await createHarness({ resolveAssistantMessageImages });
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "assistant-message-1",
+            type: "agentMessage",
+            phase: "final",
+            text: "Screenshots attached.",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(resolveAssistantMessageImages).toHaveBeenCalledWith({
+      backend: "codex",
+      itemId: "assistant-message-1",
+      text: "Screenshots attached.",
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+    expect(
+      harness.delivered.filter((intent) => intent.kind === "message"),
+    ).toEqual([
+      expect.objectContaining({
+        kind: "message",
+        role: "assistant",
+        parts: [
+          expect.objectContaining({
+            type: "text",
+            text: "Screenshots attached.",
+          }),
+          expect.objectContaining({
+            type: "image",
+            url: "data:image/png;base64,AQID",
+          }),
+          expect.objectContaining({
+            type: "image",
+            url: "https://example.com/remote.png",
+          }),
+        ],
+      }),
+    ]);
+  });
+
+  it("posts resolved images after finalizing a streamed assistant response", async () => {
+    const harness = await createHarness({
+      streamingResponsesDefault: true,
+      resolveAssistantMessageImages: async () => [{
+        type: "image",
+        url: "data:image/png;base64,AQID",
+        alt: "Final screenshot",
+      }],
+    });
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "assistant-message-1",
+          delta: "Done.",
+          phase: "final",
+        },
+      },
+    } satisfies AgentEvent);
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [{ type: "text", text: "Done." }],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.delivered).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: "stream_update",
+        stream: expect.objectContaining({ isFinal: true }),
+      }),
+      expect.objectContaining({
+        kind: "message",
+        role: "assistant",
+        parts: [expect.objectContaining({ type: "image" })],
+      }),
+    ]));
+  });
+
+  it("delivers images discovered on the terminal event after final text was deduped", async () => {
+    const resolveAssistantMessageImages = vi.fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{
+        type: "image",
+        url: "data:image/png;base64,AQID",
+        alt: "Late replay image",
+      }]);
+    const harness = await createHarness({ resolveAssistantMessageImages });
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "assistant-message-1",
+            type: "agentMessage",
+            phase: "final",
+            text: "Done.",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [{ type: "text", text: "Done." }],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.delivered.filter((intent) => intent.kind === "message")).toEqual([
+      expect.objectContaining({
+        parts: [expect.objectContaining({ type: "text", text: "Done." })],
+      }),
+      expect.objectContaining({
+        parts: [expect.objectContaining({ type: "image", alt: "Late replay image" })],
+      }),
+    ]);
+  });
+
   it("falls back with a final assistant message per binding", async () => {
     const delivered: MessagingSurfaceIntent[] = [];
     const harness = await createHarness({
@@ -18597,6 +18773,9 @@ async function createHarness(options?: {
   readThreadLastAssistantReply?: NonNullable<
     MessagingBackendBridge["readThreadLastAssistantReply"]
   >;
+  resolveAssistantMessageImages?: NonNullable<
+    MessagingBackendBridge["resolveAssistantMessageImages"]
+  >;
   readActiveTurn?: NonNullable<MessagingBackendBridge["readActiveTurn"]>;
   setAcpSessionRuntimeOption?: NonNullable<
     MessagingBackendBridge["setAcpSessionRuntimeOption"]
@@ -18997,6 +19176,9 @@ async function createHarness(options?: {
     readThreadLastAssistantReply,
     readThreadLastAssistantMessage,
     readThreadStatus,
+    ...(options?.resolveAssistantMessageImages
+      ? { resolveAssistantMessageImages: options.resolveAssistantMessageImages }
+      : {}),
     recordMessagingBindingTransition,
     setAcpSessionRuntimeOption,
     setThreadExecutionMode,

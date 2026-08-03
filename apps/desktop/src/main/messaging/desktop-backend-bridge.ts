@@ -1,7 +1,9 @@
+import { createHash } from "node:crypto";
 import type {
   AgentEvent,
   AppServerBackendKind,
   AppServerThreadMessageOrigin,
+  AppServerThreadMessage,
   AppServerThreadReplay,
   AppServerListSkillsRequest,
   AppServerListSkillsResponse,
@@ -42,6 +44,7 @@ import type {
   UpdateDirectoryLaunchpadRequest,
   UpdateDirectoryLaunchpadResponse,
 } from "@pwragent/shared";
+import type { MessagingImagePart } from "@pwragent/messaging-interface";
 import type {
   MessagingBackendBridge,
   MessagingLastAssistantReply,
@@ -51,8 +54,14 @@ import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
 import { resolveScratchProjectsRoots } from "../app-server/scratch-projects";
 import { buildMessagingBindingsByThreadKey } from "./messaging-bindings-snapshot";
+import { materializeTranscriptMessageImagesForMessaging } from "../transcript-image-protocol";
 
 export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
+  private readonly assistantImageResolutions = new Map<
+    string,
+    Promise<MessagingImagePart[]>
+  >();
+
   constructor(
     private readonly registry: DesktopBackendRegistry = getDesktopBackendRegistry(),
   ) {}
@@ -170,6 +179,79 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
       };
     }
     return undefined;
+  }
+
+  async resolveAssistantMessageImages(request: {
+    backend: AppServerBackendKind;
+    itemId?: string;
+    text: string;
+    threadId: string;
+    turnId?: string;
+  }): Promise<MessagingImagePart[]> {
+    const key = [
+      request.backend,
+      request.threadId,
+      request.turnId ?? "",
+      request.itemId ?? "",
+      createHash("sha256").update(request.text).digest("base64url"),
+    ].join("\0");
+    const existing = this.assistantImageResolutions.get(key);
+    if (existing) {
+      return await existing;
+    }
+
+    const resolution = this.resolveAssistantMessageImagesOnce(request);
+    this.assistantImageResolutions.set(key, resolution);
+    const expiry = setTimeout(() => {
+      if (this.assistantImageResolutions.get(key) === resolution) {
+        this.assistantImageResolutions.delete(key);
+      }
+    }, 5_000);
+    expiry.unref?.();
+    while (this.assistantImageResolutions.size > 64) {
+      const oldest = this.assistantImageResolutions.keys().next().value;
+      if (typeof oldest !== "string") {
+        break;
+      }
+      this.assistantImageResolutions.delete(oldest);
+    }
+    return await resolution;
+  }
+
+  private async resolveAssistantMessageImagesOnce(request: {
+    backend: AppServerBackendKind;
+    itemId?: string;
+    text: string;
+    threadId: string;
+    turnId?: string;
+  }): Promise<MessagingImagePart[]> {
+    const response = await this.registry.readThread({
+      backend: request.backend,
+      limit: 20,
+      threadId: request.threadId,
+    });
+    const message = findAssistantMessageForText(response.replay, request.text) ?? {
+      id: request.itemId ?? `turn:${request.turnId ?? "unknown"}:assistant`,
+      role: "assistant" as const,
+      text: request.text,
+    };
+    const roots = await this.registry.getThreadTranscriptImageRoots({
+      backend: request.backend,
+      threadId: request.threadId,
+    });
+    const parts = await materializeTranscriptMessageImagesForMessaging(
+      response,
+      message,
+      {},
+      {
+        approvedLocalImageRoots: roots,
+        includeTemporaryImageRoots: true,
+      },
+    );
+    return parts.map((part) => ({
+      ...part,
+      source: "assistant" as const,
+    }));
   }
 
   async handoffThreadWorkspace(
@@ -307,6 +389,30 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
   onEvent(listener: (event: AgentEvent) => void | Promise<void>): () => void {
     return this.registry.onEvent(listener);
   }
+}
+
+function findAssistantMessageForText(
+  replay: AppServerThreadReplay,
+  text: string,
+): AppServerThreadMessage | undefined {
+  const expected = text.trim();
+  for (let index = replay.messages.length - 1; index >= 0; index -= 1) {
+    const message = replay.messages[index];
+    if (message?.role === "assistant" && message.text.trim() === expected) {
+      return message;
+    }
+  }
+  for (let index = replay.entries.length - 1; index >= 0; index -= 1) {
+    const entry = replay.entries[index];
+    if (
+      entry?.type === "message"
+      && entry.role === "assistant"
+      && entry.text.trim() === expected
+    ) {
+      return entry;
+    }
+  }
+  return undefined;
 }
 
 function findLastAssistantMessageReply(

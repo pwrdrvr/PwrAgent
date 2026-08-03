@@ -869,17 +869,17 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     const replyMarkup = await this.buildReplyMarkup(intent, actions);
     const files = uploadableFileParts(intent);
     const text = files.length > 0 ? textForTelegramIntentWithoutFiles(intent) : textForTelegramIntent(intent);
-    const image = this.firstImagePayload(intent);
+    const images = this.imagePayloads(intent);
     const sentMessages: TelegramSentMessage[] = [];
     let outcome: MessagingDeliveryResult["outcome"] = "presented";
     this.options.logger?.debug(
-      `telegram deliver begin kind=${intent.kind} mode=${intent.delivery?.mode ?? "new"} target=${this.compactTypingTarget(target)} chars=${text.length} actions=${actions.length} image=${Boolean(image)} files=${files.length} preview="${compactPreview(text)}"`,
+      `telegram deliver begin kind=${intent.kind} mode=${intent.delivery?.mode ?? "new"} target=${this.compactTypingTarget(target)} chars=${text.length} actions=${actions.length} images=${images.length} files=${files.length} preview="${compactPreview(text)}"`,
     );
 
     if (
       intent.delivery?.mode === "update" &&
       target.messageId &&
-      !image &&
+      images.length === 0 &&
       files.length === 0 &&
       Buffer.byteLength(text || " ", "utf8") <= 4096
     ) {
@@ -943,18 +943,39 @@ export class TelegramAdapter implements TelegramProviderAdapter {
           }),
         );
       }
-    } else if (image) {
-      sentMessages.push(
-        await this.bot.api.sendPhoto({
-          caption: text.slice(0, 1024) || undefined,
-          chat_id: target.chatId,
-          message_thread_id: target.messageThreadId,
-          parse_mode: text ? "HTML" : undefined,
-          filename: image.filename,
-          photo: image.source,
-          reply_markup: replyMarkup,
-        }),
-      );
+    } else if (images.length > 0) {
+      const caption = text && Buffer.byteLength(text, "utf8") <= 1024
+        ? text
+        : undefined;
+      if (text && !caption) {
+        const chunks = splitTelegramHtml(text);
+        for (const chunk of chunks) {
+          sentMessages.push(
+            await this.bot.api.sendMessage({
+              chat_id: target.chatId,
+              disable_web_page_preview: true,
+              message_thread_id: target.messageThreadId,
+              parse_mode: "HTML",
+              text: chunk,
+            }),
+          );
+        }
+      }
+
+      const lastImageIndex = images.length - 1;
+      for (const [index, image] of images.entries()) {
+        sentMessages.push(
+          await this.bot.api.sendPhoto({
+            caption: index === 0 ? caption : undefined,
+            chat_id: target.chatId,
+            message_thread_id: target.messageThreadId,
+            parse_mode: caption && index === 0 ? "HTML" : undefined,
+            filename: image.filename,
+            photo: image.source,
+            reply_markup: index === lastImageIndex ? replyMarkup : undefined,
+          }),
+        );
+      }
     } else {
       const chunks = splitTelegramHtml(text || " ");
       const lastChunkIndex = chunks.length - 1;
@@ -2115,24 +2136,20 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     };
   }
 
-  private firstImagePayload(
+  private imagePayloads(
     intent: MessagingSurfaceIntent,
-  ): { filename?: string; source: string | Uint8Array } | undefined {
+  ): Array<{ filename?: string; source: string | Uint8Array }> {
     if (intent.kind !== "message") {
-      return undefined;
+      return [];
     }
 
-    const url = intent.parts.find((part) => part.type === "image" && "url" in part)?.url;
-    if (!url) {
-      return undefined;
-    }
-
-    const dataImage = parseDataImageUrl(url);
-    if (dataImage) {
-      return dataImage;
-    }
-
-    return { source: url };
+    return intent.parts.flatMap((part) => {
+      if (part.type !== "image" || !part.url) {
+        return [];
+      }
+      const dataImage = parseDataImageUrl(part.url);
+      return [dataImage ?? { source: part.url }];
+    });
   }
 
   private async deliverActivity(

@@ -148,6 +148,16 @@ returns user-visible rejection reasons for unsupported or oversized files.
 Downloaded bytes and extracted file contents are not persisted in messaging
 state.
 
+For outbound final responses, desktop messaging core resolves structured
+assistant image parts and local Markdown image links before constructing the
+provider intent. Local files and signed loopback media are copied into the
+profile-owned transcript image cache and emitted as bounded data-image parts;
+ordinary HTTPS images remain remote-image parts. Providers consume only those
+generic parts and apply their declared capabilities. Telegram, Discord, Slack,
+Mattermost, and Feishu upload local image data. LINE can render HTTPS image
+parts but cannot accept local bytes, so local-only images degrade to the text
+response on LINE.
+
 ## Typing Activity
 
 `activity: "typing"` is a semantic lease signal from the messaging controller.

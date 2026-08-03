@@ -30,6 +30,8 @@ import type {
   MessagingInboundEvent,
   MessagingInboundRejectedListener,
   MessagingJsonValue,
+  MessagingFilePart,
+  MessagingImagePart,
   MessagingRejectedInboundEvent,
   MessagingReconnectInfo,
   MessagingSurfaceAction,
@@ -1730,8 +1732,17 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       layout: intent.actionLayout,
     });
 
-    const attachment: MattermostMessageAttachment | undefined = buttons
-      ? { actions: buttons }
+    const remoteImageUrl = intent.kind === "message"
+      ? intent.parts.find(
+          (part): part is MessagingImagePart =>
+            part.type === "image" && /^https:\/\//iu.test(part.url),
+        )?.url
+      : undefined;
+    const attachment: MattermostMessageAttachment | undefined = buttons || remoteImageUrl
+      ? {
+          ...(buttons ? { actions: buttons } : {}),
+          ...(remoteImageUrl ? { image_url: remoteImageUrl } : {}),
+        }
       : undefined;
 
     const fileIds = await this.uploadOutboundFiles({
@@ -1745,7 +1756,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     // response_url delivery — which is the assistant-response path.
     if (
       intent.kind === "message" &&
-      !buttons &&
+      !attachment &&
       fileIds.length === 0 &&
       !(target.existingPostId && target.canUpdate) &&
       !target.responseUrl
@@ -2405,10 +2416,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     if (params.intent.kind !== "message") {
       return [];
     }
-    const fileParts = params.intent.parts.filter(
-      (part): part is import("@pwragent/messaging-interface").MessagingFilePart =>
-        part.type === "file",
-    );
+    const fileParts = mattermostUploadParts(params.intent);
     if (fileParts.length === 0) {
       return [];
     }
@@ -2576,6 +2584,54 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       void listener(event);
     }
   }
+}
+
+function mattermostUploadParts(intent: MessagingSurfaceIntent): MessagingFilePart[] {
+  if (intent.kind !== "message") {
+    return [];
+  }
+  return intent.parts.flatMap((part, index): MessagingFilePart[] => {
+    if (part.type === "file") {
+      return [part];
+    }
+    if (part.type !== "image") {
+      return [];
+    }
+    const image = parseMattermostDataImageUrl(part.url);
+    if (!image) {
+      return [];
+    }
+    return [{
+      data: image.data,
+      description: part.alt,
+      mimeType: image.mimeType,
+      name: `image-${index + 1}.${image.extension}`,
+      sizeBytes: image.data.byteLength,
+      type: "file",
+    }];
+  });
+}
+
+function parseMattermostDataImageUrl(
+  url: string,
+): { data: Uint8Array; extension: string; mimeType: string } | undefined {
+  const match = /^data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/]+={0,2})$/iu.exec(url);
+  if (!match) {
+    return undefined;
+  }
+  const mimeType = match[1]?.toLowerCase();
+  const payload = match[2];
+  if (!mimeType || !payload) {
+    return undefined;
+  }
+  const extension = mimeType === "image/jpeg"
+    ? "jpg"
+    : mimeType.split("/")[1]?.replace(/[^a-z0-9]/giu, "") || "png";
+  return {
+    data: Buffer.from(payload, "base64"),
+    extension,
+    mimeType,
+  };
 }
 
 /**

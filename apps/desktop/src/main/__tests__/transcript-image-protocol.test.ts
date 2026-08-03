@@ -533,6 +533,73 @@ describe("transcript image protocol", () => {
     }
   });
 
+  it("returns durable data images for messaging after temporary source cleanup", async () => {
+    const { materializeTranscriptMessageImagesForMessaging } = await import(
+      "../transcript-image-protocol"
+    );
+    const agentTempDir = await mkdtemp(
+      path.join(os.tmpdir(), "pwragent-messaging-image-")
+    );
+    const imagePath = path.join(agentTempDir, "final-overview.png");
+    const imageBytes = Buffer.from([20, 21, 22, 23]);
+    await writeFile(imagePath, imageBytes);
+
+    try {
+      const message = {
+        id: "assistant-final-image",
+        role: "assistant" as const,
+        text: `See [Final overview](${imagePath}).`,
+      };
+      const response = {
+        backend: "codex" as const,
+        fetchedAt: 1,
+        threadId: "thread-messaging-image",
+        replay: {
+          entries: [],
+          messages: [message],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      };
+      const dependencies = {
+        resolveRoot: () => path.join(tempDir, "thread-images"),
+      };
+      const options = {
+        includeTemporaryImageRoots: true,
+      };
+
+      const first = await materializeTranscriptMessageImagesForMessaging(
+        response,
+        message,
+        dependencies,
+        options,
+      );
+      expect(first).toEqual([
+        {
+          type: "image",
+          url: `data:image/png;base64,${imageBytes.toString("base64")}`,
+          sourceUrl: pathToFileURL(imagePath).toString(),
+          alt: "Final overview",
+        },
+      ]);
+
+      await rm(agentTempDir, { recursive: true, force: true });
+
+      await expect(
+        materializeTranscriptMessageImagesForMessaging(
+          response,
+          message,
+          dependencies,
+          options,
+        ),
+      ).resolves.toEqual(first);
+    } finally {
+      await rm(agentTempDir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps data image URLs when materialization writes fail", async () => {
     const { materializeTranscriptImageUrlsForRenderer } = await import(
       "../transcript-image-protocol"

@@ -25,6 +25,7 @@ import type {
   MessagingDeliveryResult,
   MessagingDeliveryScope,
   MessagingFilePart,
+  MessagingImagePart,
   MessagingInboundEvent,
   MessagingInboundRejectedListener,
   MessagingRateLimitInfo,
@@ -488,9 +489,9 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         this.capabilityProfile,
       );
       await Promise.all(callbackHandleWrites);
-      const imageUpload = uploadableImagePart(intent);
-      const imageUrl = imageUpload ? undefined : this.firstImageUrl(intent);
-      const files = [...uploadableFileParts(intent), ...(imageUpload ? [imageUpload] : [])];
+      const imageUploads = uploadableImageParts(intent);
+      const imageUrls = this.remoteImageUrls(intent);
+      const files = [...uploadableFileParts(intent), ...imageUploads];
       const chunks = splitDiscordContent(
         (files.length > 0
           ? textForDiscordIntentWithoutUploads(intent)
@@ -503,7 +504,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         target.applicationId &&
         target.interactionToken &&
         chunks.length === 1 &&
-        !imageUrl &&
+        imageUrls.length === 0 &&
         files.length === 0
       ) {
         const message = await this.api.updateInteractionOriginalResponse(
@@ -528,7 +529,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         intent.delivery?.mode === "update" &&
         target.messageId &&
         chunks.length === 1 &&
-        !imageUrl
+        imageUrls.length === 0
       ) {
         try {
           const message = await this.api.updateMessage(
@@ -566,14 +567,8 @@ export class DiscordAdapter implements DiscordProviderAdapter {
           components: index === chunks.length - 1 ? components : undefined,
           content: chunk,
           embeds:
-            index === chunks.length - 1 && imageUrl
-              ? [
-                  {
-                    image: {
-                      url: imageUrl,
-                    },
-                  },
-                ]
+            index === chunks.length - 1 && imageUrls.length > 0
+              ? imageUrls.map((url) => ({ image: { url } }))
               : undefined,
           files: index === chunks.length - 1 ? filesForDiscordRequest(files) : undefined,
         };
@@ -1415,12 +1410,16 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     }
   }
 
-  private firstImageUrl(intent: MessagingSurfaceIntent): string | undefined {
+  private remoteImageUrls(intent: MessagingSurfaceIntent): string[] {
     if (intent.kind !== "message") {
-      return undefined;
+      return [];
     }
 
-    return intent.parts.find((part) => part.type === "image")?.url;
+    return intent.parts.flatMap((part) =>
+      part.type === "image" && !part.url.startsWith("data:image/")
+        ? [part.url]
+        : [],
+    ).slice(0, 10);
   }
 
   private async deliverActivity(
@@ -1869,28 +1868,30 @@ function uploadableFileParts(intent: MessagingSurfaceIntent): MessagingFilePart[
   );
 }
 
-function uploadableImagePart(intent: MessagingSurfaceIntent): MessagingFilePart | undefined {
+function uploadableImageParts(intent: MessagingSurfaceIntent): MessagingFilePart[] {
   if (intent.kind !== "message") {
-    return undefined;
+    return [];
   }
 
-  const url = intent.parts.find((part) => part.type === "image")?.url;
-  if (!url) {
-    return undefined;
-  }
-
-  const dataImage = parseDataImageUrl(url);
-  if (!dataImage) {
-    return undefined;
-  }
-
-  return {
-    data: dataImage.data,
-    mimeType: dataImage.mimeType,
-    name: dataImage.name,
-    sizeBytes: dataImage.data.byteLength,
-    type: "file",
-  };
+  return intent.parts.filter(
+    (part): part is MessagingImagePart => part.type === "image",
+  ).flatMap((part, index): MessagingFilePart[] => {
+    const dataImage = parseDataImageUrl(part.url);
+    if (!dataImage) {
+      return [];
+    }
+    const extension = dataImage.name.split(".").at(-1) ?? "png";
+    return [{
+      data: dataImage.data,
+      description: part.alt,
+      mimeType: dataImage.mimeType,
+      name: index === 0
+        ? `assistant-image.${extension}`
+        : `assistant-image-${index + 1}.${extension}`,
+      sizeBytes: dataImage.data.byteLength,
+      type: "file",
+    }];
+  }).slice(0, 10);
 }
 
 function textForDiscordIntentWithoutUploads(intent: MessagingSurfaceIntent): string {

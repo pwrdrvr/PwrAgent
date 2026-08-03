@@ -72,6 +72,7 @@ import type {
   MessagingInboundEvent,
   MessagingInboundMediaEvent,
   MessagingInboundTextEvent,
+  MessagingImagePart,
   MessagingAdapterState,
   MessagingJsonValue,
   MessagingManagedConversationActionResult,
@@ -1426,6 +1427,11 @@ export class MessagingController {
           !isNonFinalAssistantTextForBackendEvent(event)
           && !isTaskMonitorProgressEvent(event)
         ) {
+          const assistantImages = await this.resolveAssistantMessageImages(
+            assistantText,
+            event,
+            binding,
+          );
           const deliveredFinalStream = await this.flushAssistantStreamForEvent(
             event,
             binding,
@@ -1433,8 +1439,14 @@ export class MessagingController {
           );
           if (deliveredFinalStream) {
             this.markAssistantMessageDelivered(event, binding, assistantText);
+            await this.deliverAssistantImages(assistantImages, event, binding);
           } else {
-            await this.deliverAssistantMessage(assistantText, event, binding);
+            await this.deliverAssistantMessage(
+              assistantText,
+              event,
+              binding,
+              assistantImages,
+            );
           }
         } else if (!automationTurnEvent) {
           // NON-final agentMessage completions (e.g. Codex "commentary" phases
@@ -5006,12 +5018,21 @@ export class MessagingController {
     text: string,
     event: AgentEvent,
     binding: MessagingBindingRecord,
+    images: MessagingImagePart[] = [],
   ): Promise<void> {
     if (!this.markAssistantMessageDelivered(event, binding, text)) {
+      await this.deliverAssistantImages(images, event, binding);
       return;
     }
+    if (images.length > 0) {
+      this.markAssistantMessageDelivered(
+        event,
+        binding,
+        assistantImageDeliverySignature(images),
+      );
+    }
     this.logger.debug?.(
-      `messaging assistant deliver thread=${binding.threadId} binding=${binding.id} chars=${text.length} preview="${compactLogPreview(text)}"`,
+      `messaging assistant deliver thread=${binding.threadId} binding=${binding.id} chars=${text.length} images=${images.length} preview="${compactLogPreview(text)}"`,
     );
 
     await this.deliver(
@@ -5027,10 +5048,69 @@ export class MessagingController {
             text,
             markdown: "markdown",
           },
+          ...images,
         ],
       },
       binding,
     );
+  }
+
+  private async deliverAssistantImages(
+    images: MessagingImagePart[],
+    event: AgentEvent,
+    binding: MessagingBindingRecord,
+  ): Promise<void> {
+    if (images.length === 0) {
+      return;
+    }
+    if (
+      !this.markAssistantMessageDelivered(
+        event,
+        binding,
+        assistantImageDeliverySignature(images),
+      )
+    ) {
+      return;
+    }
+    await this.deliver(
+      {
+        id: this.newIntentId("assistant-images"),
+        kind: "message",
+        bindingId: binding.id,
+        createdAt: this.now(),
+        role: "assistant",
+        parts: images,
+      },
+      binding,
+    );
+  }
+
+  private async resolveAssistantMessageImages(
+    text: string,
+    event: AgentEvent,
+    binding: MessagingBindingRecord,
+  ): Promise<MessagingImagePart[]> {
+    const resolveImages = this.options.backend.resolveAssistantMessageImages;
+    if (!resolveImages) {
+      return [];
+    }
+    try {
+      const images = await resolveImages.call(this.options.backend, {
+        backend: binding.backend,
+        itemId: assistantItemIdForBackendEvent(event),
+        text,
+        threadId: binding.threadId,
+        turnId: turnIdForBackendEvent(event),
+      });
+      return selectAssistantImagesForCapability(images, this.capabilityProfile);
+    } catch (error) {
+      this.logger.debug?.("messaging assistant image resolution failed", {
+        backend: binding.backend,
+        error: error instanceof Error ? error.message : String(error),
+        threadId: binding.threadId,
+      });
+      return [];
+    }
   }
 
   /**
@@ -5101,6 +5181,26 @@ export class MessagingController {
       return;
     }
 
+    let images: MessagingImagePart[] = [];
+    if (this.options.backend.resolveAssistantMessageImages) {
+      try {
+        images = selectAssistantImagesForCapability(
+          await this.options.backend.resolveAssistantMessageImages({
+            backend: binding.backend,
+            text: trimmed,
+            threadId: binding.threadId,
+          }),
+          this.capabilityProfile,
+        );
+      } catch (error) {
+        this.logger.debug?.("messaging resume assistant image resolution failed", {
+          backend: binding.backend,
+          error: error instanceof Error ? error.message : String(error),
+          threadId: binding.threadId,
+        });
+      }
+    }
+
     await this.deliver(
       {
         id: this.newIntentId(
@@ -5122,6 +5222,7 @@ export class MessagingController {
             }),
             markdown: "markdown",
           },
+          ...images,
         ],
       },
       binding,
@@ -16377,6 +16478,72 @@ function turnIdForBackendEvent(event: AgentEvent): string | undefined {
     return params.turnId;
   }
   return typeof params.turn?.id === "string" ? params.turn.id : undefined;
+}
+
+function assistantItemIdForBackendEvent(event: AgentEvent): string | undefined {
+  if (
+    event.notification.method !== "item/started"
+    && event.notification.method !== "item/completed"
+  ) {
+    return undefined;
+  }
+  const item = (event.notification.params as {
+    item?: { id?: unknown; itemId?: unknown; item_id?: unknown };
+  }).item;
+  for (const value of [item?.id, item?.itemId, item?.item_id]) {
+    if (typeof value === "string" && value) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function selectAssistantImagesForCapability(
+  images: readonly MessagingImagePart[],
+  capabilityProfile: MessagingCapabilityProfile,
+): MessagingImagePart[] {
+  const attachments = capabilityProfile.outboundAttachments;
+  if (!attachments) {
+    return [];
+  }
+  const selected: MessagingImagePart[] = [];
+  const seen = new Set<string>();
+  for (const image of images) {
+    if (seen.has(image.url)) {
+      continue;
+    }
+    if (image.url.startsWith("data:image/")) {
+      const sizeBytes = imageDataUrlSizeBytes(image.url);
+      if (
+        !attachments.supportsImageUpload
+        || sizeBytes === undefined
+        || sizeBytes > (attachments.maxUploadBytes ?? Infinity)
+      ) {
+        continue;
+      }
+    } else if (
+      !attachments.supportsRemoteImageUrl
+      || !/^https:\/\//iu.test(image.url)
+    ) {
+      continue;
+    }
+    seen.add(image.url);
+    selected.push(image);
+  }
+  return selected;
+}
+
+function imageDataUrlSizeBytes(url: string): number | undefined {
+  const payload = /^data:image\/[a-z0-9.+-]+;base64,([a-z0-9+/]+={0,2})$/iu.exec(url)?.[1];
+  if (!payload) {
+    return undefined;
+  }
+  const padding = payload.endsWith("==") ? 2 : payload.endsWith("=") ? 1 : 0;
+  return Math.floor(payload.length * 3 / 4) - padding;
+}
+
+function assistantImageDeliverySignature(images: readonly MessagingImagePart[]): string {
+  return `images:${images.map((image) => image.sourceUrl ?? image.url).join("\0")}`;
 }
 
 function automationTurnKey(params: {

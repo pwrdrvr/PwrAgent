@@ -104,6 +104,11 @@ export type FeishuApi = {
     resourceType: FeishuMessageResourceType;
   }): Promise<Uint8Array>;
   getBotInfo(): Promise<FeishuBotInfo>;
+  uploadImage(params: {
+    data: Uint8Array;
+    mimeType: string;
+    name: string;
+  }): Promise<{ imageKey: string }>;
   sendMessage(params: FeishuSendMessageParams): Promise<FeishuSendMessageResult>;
   updateMessage(params: { card: FeishuInteractiveCard; messageId: string }): Promise<FeishuSendMessageResult>;
 };
@@ -300,9 +305,9 @@ export class FeishuAdapter implements FeishuProviderAdapter {
       supportsDownload: true,
     },
     outboundAttachments: {
-      maxUploadBytes: 30 * 1024 * 1024,
+      maxUploadBytes: 10 * 1024 * 1024,
       supportsFileUpload: false,
-      supportsImageUpload: false,
+      supportsImageUpload: true,
       supportsRemoteImageUrl: false,
     },
   };
@@ -489,6 +494,7 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     }
 
     const rawText = textForFeishuIntent(intent);
+    const uploadedImages = await this.uploadOutboundImages(intent);
     const actions = actionsForFeishuIntent(intent);
     const callbackBuilder = this.buildCallbackValueBuilder({
       allowedActorIds: callbackAllowedActorIds(intent, this.authorizedActorIds[0] ?? ""),
@@ -509,6 +515,7 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     if (
       intent.kind === "message" &&
       actionElements.length === 0 &&
+      uploadedImages.length === 0 &&
       intent.delivery?.mode !== "update"
     ) {
       const chunks = splitTextForDelivery(rawText, {
@@ -564,6 +571,7 @@ export class FeishuAdapter implements FeishuProviderAdapter {
 
     const card = buildFeishuCardForIntent({
       actionElements,
+      images: uploadedImages,
       intent,
       text: rawText,
     });
@@ -573,7 +581,8 @@ export class FeishuAdapter implements FeishuProviderAdapter {
         intent.delivery?.mode === "update" && target.messageId
           ? await this.api.updateMessage({ card, messageId: target.messageId })
           : undefined;
-      const shouldSendCard = shouldSendFeishuCard(intent, rawText, actionElements.length);
+      const shouldSendCard = uploadedImages.length > 0
+        || shouldSendFeishuCard(intent, rawText, actionElements.length);
       const result = updated ?? (await this.api.sendMessage({
         card: shouldSendCard ? card : undefined,
         receiveId: target.receiveId,
@@ -619,6 +628,42 @@ export class FeishuAdapter implements FeishuProviderAdapter {
         ...(rateLimit ? { rateLimit } : {}),
       };
     }
+  }
+
+  private async uploadOutboundImages(
+    intent: MessagingSurfaceIntent,
+  ): Promise<Array<{ alt: string; imageKey: string }>> {
+    if (intent.kind !== "message") {
+      return [];
+    }
+    const maxBytes = this.capabilityProfile.outboundAttachments?.maxUploadBytes ?? Infinity;
+    const output: Array<{ alt: string; imageKey: string }> = [];
+    for (const [index, part] of intent.parts.entries()) {
+      if (part.type !== "image") {
+        continue;
+      }
+      const image = parseFeishuDataImageUrl(part.url);
+      if (!image || image.data.byteLength > maxBytes) {
+        continue;
+      }
+      try {
+        const uploaded = await this.api.uploadImage({
+          data: image.data,
+          mimeType: image.mimeType,
+          name: `assistant-image-${index + 1}.${image.extension}`,
+        });
+        output.push({
+          alt: part.alt?.trim() || `Assistant image ${index + 1}`,
+          imageKey: uploaded.imageKey,
+        });
+      } catch (error) {
+        this.logger.warn?.("feishu outbound image upload failed", {
+          error: error instanceof Error ? error.message : String(error),
+          index,
+        });
+      }
+    }
+    return output;
   }
 
   async downloadAttachment(
@@ -1753,6 +1798,40 @@ class DirectFeishuApi implements FeishuApi {
     };
   }
 
+  async uploadImage(params: {
+    data: Uint8Array;
+    mimeType: string;
+    name: string;
+  }): Promise<{ imageKey: string }> {
+    const token = await this.getTenantAccessToken();
+    const formData = new FormData();
+    formData.append("image_type", "message");
+    const buffer = new ArrayBuffer(params.data.byteLength);
+    new Uint8Array(buffer).set(params.data);
+    formData.append(
+      "image",
+      new Blob([buffer], { type: params.mimeType }),
+      params.name,
+    );
+    const response = await fetch(`${this.baseUrl}/open-apis/im/v1/images`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}` },
+      body: formData,
+    });
+    const text = await response.text();
+    let payload: { code?: number; data?: { image_key?: string }; msg?: string } = {};
+    try {
+      payload = text ? JSON.parse(text) : {};
+    } catch {
+      // Keep raw text below for error reporting.
+    }
+    const imageKey = payload.data?.image_key;
+    if (!response.ok || payload.code !== 0 || !imageKey) {
+      throw new Error(payload.msg || text || `Feishu image upload failed: ${response.status}`);
+    }
+    return { imageKey };
+  }
+
   async updateMessage(params: { card: FeishuInteractiveCard; messageId: string }): Promise<FeishuSendMessageResult> {
     const data = await this.request<{ message_id?: string }>(
       `/open-apis/im/v1/messages/${encodeURIComponent(params.messageId)}`,
@@ -2098,6 +2177,28 @@ function shouldSendFeishuCard(
     && part.markdown === "markdown"
     && containsMarkdownTable(part.text || text)
   );
+}
+
+function parseFeishuDataImageUrl(
+  url: string,
+): { data: Uint8Array; extension: string; mimeType: string } | undefined {
+  const match = /^data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/]+={0,2})$/iu.exec(url);
+  if (!match) {
+    return undefined;
+  }
+  const mimeType = match[1]?.toLowerCase();
+  const payload = match[2];
+  if (!mimeType || !payload) {
+    return undefined;
+  }
+  const extension = mimeType === "image/jpeg"
+    ? "jpg"
+    : mimeType.split("/")[1]?.replace(/[^a-z0-9]/giu, "") || "png";
+  return {
+    data: Buffer.from(payload, "base64"),
+    extension,
+    mimeType,
+  };
 }
 
 function containsMarkdownTable(text: string): boolean {

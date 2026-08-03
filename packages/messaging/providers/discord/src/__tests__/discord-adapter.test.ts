@@ -410,6 +410,57 @@ describe("discord adapter", () => {
     );
   });
 
+  it("delivers every final image as an upload or remote embed", async () => {
+    const createMessage = vi.fn(async (channelId: string) => ({
+      channel_id: channelId,
+      id: "message-images",
+    }));
+    const adapter = new DiscordAdapter({
+      api: createApi({ createMessage }),
+      config: {
+        authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
+        botToken: "token",
+        channel: "discord",
+      },
+      now: () => 1234,
+    });
+
+    await adapter.deliver({
+      audit: discordAudit(),
+      createdAt: 1234,
+      id: "message-images",
+      kind: "message",
+      parts: [
+        { type: "text", text: "Rendered images" },
+        { type: "image", url: "data:image/png;base64,AQID" },
+        { type: "image", url: "data:image/jpeg;base64,BAUG" },
+        { type: "image", url: "https://example.com/one.png" },
+        { type: "image", url: "https://example.com/two.png" },
+      ],
+      role: "assistant",
+    });
+
+    expect(createMessage).toHaveBeenCalledWith(
+      "channel-1",
+      expect.objectContaining({
+        embeds: [
+          { image: { url: "https://example.com/one.png" } },
+          { image: { url: "https://example.com/two.png" } },
+        ],
+        files: [
+          {
+            data: new Uint8Array([1, 2, 3]),
+            name: "assistant-image.png",
+          },
+          {
+            data: new Uint8Array([4, 5, 6]),
+            name: "assistant-image-2.jpg",
+          },
+        ],
+      }),
+    );
+  });
+
   it("resolves persisted component handles after an adapter restart", async () => {
     const store = createCallbackHandleStore();
     let createdRequest: Parameters<DiscordApi["createMessage"]>[1] | undefined;
