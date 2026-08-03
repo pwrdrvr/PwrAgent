@@ -646,9 +646,11 @@ test("directory launchpad opens without an environment picker when no environmen
       .getByRole("button", { name: "Open new thread launchpad for NoEnvRepo" })
       .click();
 
+    const header = app.window.locator(".thread-header");
     await expect(
-      app.window.getByRole("heading", { level: 2, name: "NoEnvRepo" }),
+      header.getByRole("heading", { level: 2, name: "New thread" }),
     ).toBeVisible();
+    await expect(header.getByText("NoEnvRepo", { exact: true })).toBeVisible();
     await expect(app.window.getByRole("textbox", { name: "New thread" })).toBeVisible();
     await expect(
       app.window.getByRole("button", { name: "Environment", exact: true }),

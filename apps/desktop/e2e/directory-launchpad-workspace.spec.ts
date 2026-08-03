@@ -646,6 +646,17 @@ function readOverlayState(homeRoot: string): {
   }
 }
 
+async function expectDirectoryLaunchpadHeader(
+  app: Awaited<ReturnType<typeof launchElectronApp>>,
+  projectName: string,
+): Promise<void> {
+  const header = app.window.locator(".thread-header");
+  await expect(
+    header.getByRole("heading", { level: 2, name: "New thread" }),
+  ).toBeVisible();
+  await expect(header.getByText(projectName, { exact: true })).toBeVisible();
+}
+
 test("directory launchpad can switch from local checkout to a new worktree", async () => {
   const fixture = await createDirectoryLaunchpadFixture();
   const app = await launchElectronApp({
@@ -658,9 +669,7 @@ test("directory launchpad can switch from local checkout to a new worktree", asy
       .getByRole("button", { name: "Open new thread launchpad for FixtureRepo" })
       .click();
 
-    await expect(
-      app.window.getByRole("heading", { level: 2, name: "FixtureRepo" }),
-    ).toBeVisible();
+    await expectDirectoryLaunchpadHeader(app, "FixtureRepo");
 
     const settings = app.window.getByLabel("New thread settings");
     const workspaceMode = settings.getByLabel("Workspace mode");
@@ -703,9 +712,7 @@ test("directory launchpad does not show workspace application buttons before a t
       .getByRole("button", { name: "Open new thread launchpad for FixtureRepo" })
       .click();
 
-    await expect(
-      app.window.getByRole("heading", { level: 2, name: "FixtureRepo" }),
-    ).toBeVisible();
+    await expectDirectoryLaunchpadHeader(app, "FixtureRepo");
     await expect(app.window.getByRole("textbox", { name: "New thread" })).toBeVisible();
     await expect(app.window.getByRole("button", { name: "VS Code" })).toHaveCount(0);
     await expect(app.window.getByRole("button", { name: "Ghostty" })).toHaveCount(0);
@@ -735,9 +742,7 @@ test("new-thread picker hydrates git status for a newly added directory", async 
     await app.window.getByRole("button", { name: /^(Project:|Choose a project)/ }).click();
     await app.window.getByRole("button", { name: /Add directory/ }).click();
 
-    await expect(
-      app.window.getByRole("heading", { level: 2, name: "PickedRepo" }),
-    ).toBeVisible();
+    await expectDirectoryLaunchpadHeader(app, "PickedRepo");
 
     const settings = app.window.getByLabel("New thread settings");
     const workspaceMode = settings.getByLabel("Workspace mode");
@@ -809,9 +814,7 @@ test("directory launchpad starts a local thread from an unborn git HEAD", async 
       .getByRole("button", { name: "Open new thread launchpad for PwrTester" })
       .click();
 
-    await expect(
-      app.window.getByRole("heading", { level: 2, name: "PwrTester" }),
-    ).toBeVisible();
+    await expectDirectoryLaunchpadHeader(app, "PwrTester");
 
     const directoryKey = `directory:${fixture.repoDir}`;
     await app.window.evaluate(async (key) => {
@@ -860,9 +863,7 @@ test("opening a directory launchpad persists directory identity for future draft
       .getByRole("button", { name: "Open new thread launchpad for FixtureRepo" })
       .click();
 
-    await expect(
-      app.window.getByRole("heading", { level: 2, name: "FixtureRepo" }),
-    ).toBeVisible();
+    await expectDirectoryLaunchpadHeader(app, "FixtureRepo");
 
     const rootDir = path.dirname(fixture.fixturePath);
     const repoDir = path.join(rootDir, "FixtureRepo");
@@ -900,9 +901,7 @@ test("directory launchpad draft save does not leak the directory key into projec
       .getByRole("button", { name: "Open new thread launchpad for FixtureRepo" })
       .click();
 
-    await expect(
-      app.window.getByRole("heading", { level: 2, name: "FixtureRepo" }),
-    ).toBeVisible();
+    await expectDirectoryLaunchpadHeader(app, "FixtureRepo");
 
     await app.window
       .getByRole("textbox", { name: "New thread" })
@@ -921,9 +920,7 @@ test("directory launchpad draft save does not leak the directory key into projec
         prompt: "Keep the project identity stable",
       });
 
-    await expect(
-      app.window.getByRole("heading", { level: 2, name: "FixtureRepo" }),
-    ).toBeVisible();
+    await expectDirectoryLaunchpadHeader(app, "FixtureRepo");
     await expect(app.window.getByText(/^directory:/)).toHaveCount(0);
     await expect(app.window.getByText("FixtureRepo").first()).toBeVisible();
   } finally {
@@ -957,9 +954,7 @@ test("directory launchpad repairs stale drafts that saved the internal directory
       .getByRole("button", { name: "Open new thread launchpad for FixtureRepo" })
       .click();
 
-    await expect(
-      app.window.getByRole("heading", { level: 2, name: "FixtureRepo" }),
-    ).toBeVisible();
+    await expectDirectoryLaunchpadHeader(app, "FixtureRepo");
     await expect(app.window.getByText(/^directory:/)).toHaveCount(0);
 
     await expect
@@ -1013,9 +1008,7 @@ test("directory launchpad keeps full access as the sticky default after user cha
     await app.window
       .getByRole("button", { name: "Open new thread launchpad for OtherRepo" })
       .click();
-    await expect(
-      app.window.getByRole("heading", { level: 2, name: "OtherRepo" }),
-    ).toBeVisible();
+    await expectDirectoryLaunchpadHeader(app, "OtherRepo");
     await expect(settings.getByLabel("Access mode")).toHaveAttribute(
       "data-value",
       "full-access",
@@ -1094,9 +1087,7 @@ test("directory launchpad keeps new worktree as the sticky default after startin
     await app.window
       .getByRole("button", { name: "Open new thread launchpad for FixtureRepo" })
       .click();
-    await expect(
-      app.window.getByRole("heading", { level: 2, name: "FixtureRepo" }),
-    ).toBeVisible();
+    await expectDirectoryLaunchpadHeader(app, "FixtureRepo");
 
     await expect(settings.getByLabel("Workspace mode")).toHaveAttribute("data-value", "worktree");
     await expect(settings.getByLabel("Base branch")).toHaveAttribute("data-value", "main");
@@ -1284,9 +1275,7 @@ test("directory launchpad applies new worktree sticky defaults to stale empty dr
     await app.window
       .getByRole("button", { name: "Open new thread launchpad for OtherRepo" })
       .click();
-    await expect(
-      app.window.getByRole("heading", { level: 2, name: "OtherRepo" }),
-    ).toBeVisible();
+    await expectDirectoryLaunchpadHeader(app, "OtherRepo");
     const otherWorkspaceMode = settings.getByLabel("Workspace mode");
     await otherWorkspaceMode.click();
     await expect(app.window.getByRole("option", { name: "New worktree" })).toHaveCount(1);
@@ -1296,9 +1285,7 @@ test("directory launchpad applies new worktree sticky defaults to stale empty dr
     await app.window
       .getByRole("button", { name: "Open new thread launchpad for FixtureRepo" })
       .click();
-    await expect(
-      app.window.getByRole("heading", { level: 2, name: "FixtureRepo" }),
-    ).toBeVisible();
+    await expectDirectoryLaunchpadHeader(app, "FixtureRepo");
 
     await expect(settings.getByLabel("Workspace mode")).toHaveAttribute("data-value", "worktree");
     await expect(settings.getByLabel("Base branch")).toHaveAttribute("data-value", "main");
