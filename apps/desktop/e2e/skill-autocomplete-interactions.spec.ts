@@ -37,17 +37,6 @@ async function getActiveOptionIndex(
   );
 }
 
-async function seedComposerDraft(input: Locator, value: string): Promise<void> {
-  await input.fill(value);
-  await input.evaluate((element, selectionIndex) => {
-    const editor = element as HTMLElement & {
-      setSelectionRange: (start: number, end: number) => void;
-    };
-    editor.setSelectionRange(selectionIndex, selectionIndex);
-  }, value.length);
-  await input.focus();
-}
-
 test("thread reply Tiptap skill autocomplete filters and commits the reported multi-line draft", async () => {
   const app = await launchElectronApp({
     fixturePath,
@@ -62,7 +51,22 @@ test("thread reply Tiptap skill autocomplete filters and commits the reported mu
 
     const tiptapInput = app.window.getByTestId("composer-tiptap-input");
     const textbox = app.window.getByRole("textbox", { name: "Reply" });
-    await seedComposerDraft(textbox, reportedDraftPrefix);
+    await textbox.fill(reportedDraftPrefix);
+    await expect(tiptapInput).toHaveAttribute("data-value", reportedDraftPrefix);
+    await textbox.focus();
+    const selectionRange = await textbox.evaluate((element, selectionIndex) => {
+      const editor = element as HTMLElement & {
+        selectionEnd: number;
+        selectionStart: number;
+        setSelectionRange: (start: number, end: number) => void;
+      };
+      editor.setSelectionRange(selectionIndex, selectionIndex);
+      return [editor.selectionStart, editor.selectionEnd];
+    }, reportedDraftPrefix.length);
+    expect(selectionRange).toEqual([
+      reportedDraftPrefix.length,
+      reportedDraftPrefix.length,
+    ]);
     const seededDraft = await tiptapInput.getAttribute("data-value");
     expect(seededDraft).toMatch(/Let's use $/);
 
