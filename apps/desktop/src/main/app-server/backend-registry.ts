@@ -6392,6 +6392,9 @@ export class DesktopBackendRegistry {
         resolveArgs: settingsService
           ? async (env) => buildCodexClientArgs(env)
           : undefined,
+        resolveCommand: settingsService
+          ? async () => await settingsService.resolveCodexCommand()
+          : undefined,
         resolveEnv: settingsService
           ? async () => await settingsService.resolveCodexSpawnEnvAsync()
           : undefined,

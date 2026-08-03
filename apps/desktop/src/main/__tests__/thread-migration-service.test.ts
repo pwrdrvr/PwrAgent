@@ -3,6 +3,7 @@ import type {
   AppServerThreadReplay,
   DesktopSettingsSnapshot,
 } from "@pwragent/shared";
+import type { ResolvedCodexCommandCandidate } from "@pwrdrvr/codex-discovery";
 import type { CodexThreadMigrationMetadata } from "../codex-app-server/client";
 import { ThreadMigrationService } from "../app-server/thread-migration-service";
 
@@ -120,6 +121,11 @@ describe("ThreadMigrationService", () => {
 
   it("lists source threads through a captive CAS client without exposing rollout paths", async () => {
     let capturedEnv: NodeJS.ProcessEnv | undefined;
+    let capturedResolveCommand:
+      | ((params: { command: string; env: NodeJS.ProcessEnv }) => Promise<
+          ResolvedCodexCommandCandidate
+        >)
+      | undefined;
     const sourceClient = {
       listThreadsForMigration: vi.fn(async () => [makeSourceThread()]),
       readThread: vi.fn(),
@@ -132,10 +138,20 @@ describe("ThreadMigrationService", () => {
       settingsService: {
         readSettings: async () => makeSettingsSnapshot("work"),
         resolveCodexCommandPreference: () => "codex",
-        resolveCodexSpawnEnv: () => ({ PATH: "/bin" }),
+        resolveCodexCommand: async () => ({
+          command: "/nvm/bin/codex",
+          source: "path",
+          version: "0.126.0",
+        }),
+        resolveCodexSpawnEnv: () => ({ PATH: "/raw/bin" }),
+        resolveCodexSpawnEnvAsync: async () => ({
+          NVM_DIR: "/nvm",
+          PATH: "/nvm/bin:/usr/bin",
+        }),
       },
-      sourceClientFactory: ({ env }) => {
+      sourceClientFactory: ({ env, resolveCommand }) => {
         capturedEnv = env;
+        capturedResolveCommand = resolveCommand;
         return sourceClient;
       },
       now: () => 1234,
@@ -144,6 +160,13 @@ describe("ThreadMigrationService", () => {
     const response = await service.listSourceThreads({ sourceProfile: "" });
 
     expect(capturedEnv?.CODEX_HOME).toBe("/Users/alice/.codex");
+    expect(capturedEnv).toMatchObject({
+      NVM_DIR: "/nvm",
+      PATH: "/nvm/bin:/usr/bin",
+    });
+    await expect(
+      capturedResolveCommand?.({ command: "codex", env: capturedEnv ?? {} }),
+    ).resolves.toMatchObject({ command: "/nvm/bin/codex" });
     expect(response).toMatchObject({
       sourceProfile: "",
       fetchedAt: 1234,

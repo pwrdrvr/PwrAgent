@@ -10,6 +10,7 @@ import { terminateOwnedProcessTree } from "../process-tree";
 import {
   compareCodexCliVersions,
   resolveCodexCommand,
+  type ResolvedCodexCommandCandidate,
 } from "@pwrdrvr/codex-discovery";
 
 const codexTransportLog = getMainLogger("pwragent:codex-transport");
@@ -30,6 +31,10 @@ export type StdioJsonRpcTransportOptions = {
   args?: string[];
   env?: NodeJS.ProcessEnv;
   resolveArgs?: (env: NodeJS.ProcessEnv) => Promise<string[]> | string[];
+  resolveCommand?: (params: {
+    command: string;
+    env: NodeJS.ProcessEnv;
+  }) => Promise<ResolvedCodexCommandCandidate>;
   resolveEnv?: () => Promise<NodeJS.ProcessEnv>;
 };
 
@@ -111,7 +116,9 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
       : this.options.args ?? [];
     this.assertCurrentGeneration(generation);
     const commandEnv = buildPwrAgentChildProcessEnv(env);
-    const command = await resolveCodexCommand({
+    const command = await (
+      this.options.resolveCommand ?? resolveCodexCommand
+    )({
       command: this.options.command,
       env: commandEnv,
     });

@@ -262,4 +262,36 @@ describe("StdioJsonRpcTransport", () => {
     expect(spawnMock).toHaveBeenCalledTimes(2);
     await transport.close();
   });
+
+  it("uses the shared command resolver instead of probing discovery directly", async () => {
+    const firstChild = new MockCodexChildProcess();
+    const secondChild = new MockCodexChildProcess();
+    spawnMock
+      .mockReturnValueOnce(firstChild)
+      .mockReturnValueOnce(secondChild);
+    const sharedResolver = vi.fn(async () => ({
+      command: "/hydrated/bin/codex",
+      source: "path" as const,
+      version: "0.126.0",
+    }));
+    const transport = new StdioJsonRpcTransport({
+      command: "codex",
+      env: { PATH: "/hydrated/bin:/usr/bin" },
+      resolveCommand: sharedResolver,
+    });
+
+    await transport.connect();
+    await transport.close();
+    await transport.connect();
+
+    expect(sharedResolver).toHaveBeenCalledTimes(2);
+    expect(resolveCodexCommandMock).not.toHaveBeenCalled();
+    expect(spawnMock).toHaveBeenNthCalledWith(
+      1,
+      "/hydrated/bin/codex",
+      ["app-server"],
+      expect.any(Object),
+    );
+    await transport.close();
+  });
 });
