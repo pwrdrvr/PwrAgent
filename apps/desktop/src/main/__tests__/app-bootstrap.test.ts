@@ -115,7 +115,7 @@ const BrowserWindowMock = vi.fn(function BrowserWindow(
     }
   );
   browserWindowState.setWindowOpenHandler = vi.fn();
-  browserWindowState.show = vi.fn();
+  browserWindowState.show = vi.fn(() => emitWindowEvent("show"));
 
   return {
     loadFile: browserWindowState.loadFile,
@@ -478,6 +478,16 @@ describe("createMainWindow", () => {
 
     expect(startupCpuProfiler.attachWindow).toHaveBeenCalledTimes(1);
     expect(browserWindowState.loadURL).toHaveBeenCalledWith("http://127.0.0.1:5173");
+  });
+
+  it("reports an early show event before createMainWindow returns", async () => {
+    const onShown = vi.fn();
+
+    const { createMainWindow } = await import("../window");
+    createMainWindow({ onShown });
+
+    expect(browserWindowState.show).toHaveBeenCalledTimes(1);
+    expect(onShown).toHaveBeenCalledTimes(1);
   });
 
   it("starts and stops heap diagnostics when enabled", async () => {
