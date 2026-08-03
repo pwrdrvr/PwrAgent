@@ -14,17 +14,21 @@ import {
   type JsonRpcTransport,
 } from "@pwrdrvr/agent-transport";
 import { getMainLogger } from "../log.js";
+import {
+  terminateOwnedProcessTree,
+  type OwnedChildProcess,
+} from "../process-tree.js";
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 10 * 60_000;
+const PROCESS_CLOSE_TIMEOUT_MS = 5_000;
+const PROCESS_FORCE_CLOSE_TIMEOUT_MS = 5_000;
 
 const acpTransportLog = getMainLogger("pwragent:acp-transport");
 
-type AcpStdioChildProcess = {
+type AcpStdioChildProcess = OwnedChildProcess & {
   stdin: Writable | null;
   stdout: Readable | null;
   stderr: Readable | null;
-  kill(): void;
-  on(event: string, listener: (...args: any[]) => void): unknown;
 };
 
 export type AcpStdioSpawn = (
@@ -79,6 +83,7 @@ export class AcpStdioJsonRpcTransport implements AcpJsonRpcTransport {
         id?: JsonRpcId,
       ) => Promise<unknown> | unknown)
     | undefined;
+  private closed = false;
 
   constructor(options: AcpStdioJsonRpcTransportOptions) {
     this.lineTransport = new AcpLineStdioTransport({
@@ -109,10 +114,12 @@ export class AcpStdioJsonRpcTransport implements AcpJsonRpcTransport {
   }
 
   async connect(): Promise<void> {
+    this.assertOpen();
     await this.connection.connect();
   }
 
   async close(): Promise<void> {
+    this.closed = true;
     await this.connection.close();
   }
 
@@ -121,11 +128,13 @@ export class AcpStdioJsonRpcTransport implements AcpJsonRpcTransport {
     params?: Record<string, unknown>,
     timeoutMs?: number,
   ): Promise<unknown> {
+    this.assertOpen();
     await this.connection.connect();
     return await this.connection.request(method, params, timeoutMs);
   }
 
   async notify(method: string, params?: Record<string, unknown>): Promise<void> {
+    this.assertOpen();
     await this.connection.connect();
     await this.connection.notify(method, params);
   }
@@ -153,12 +162,21 @@ export class AcpStdioJsonRpcTransport implements AcpJsonRpcTransport {
       }
     };
   }
+
+  private assertOpen(): void {
+    if (this.closed) {
+      throw new Error("ACP stdio transport is closed");
+    }
+  }
 }
 
 class AcpLineStdioTransport implements JsonRpcTransport {
   private childProcess: AcpStdioChildProcess | null = null;
   private messageHandler: (message: string) => void = () => undefined;
   private closeHandler: (error?: Error) => void = () => undefined;
+  private closed = false;
+  private closePromise?: Promise<void>;
+  private lifecycleGeneration = 0;
 
   constructor(
     private readonly options: {
@@ -176,9 +194,13 @@ class AcpLineStdioTransport implements JsonRpcTransport {
   }
 
   async connect(): Promise<void> {
+    if (this.closed) {
+      throw new Error("ACP stdio transport is closed");
+    }
     if (this.childProcess) {
       return;
     }
+    const generation = ++this.lifecycleGeneration;
 
     const descriptor = normalizeAcpLaunchDescriptor(this.options.launchDescriptor);
     const env = appendExecutableSearchPaths({ ...process.env, ...descriptor.env });
@@ -194,13 +216,29 @@ class AcpLineStdioTransport implements JsonRpcTransport {
       stdio: ["pipe", "pipe", "pipe"],
       env,
       cwd: descriptor.cwd,
+      detached: process.platform !== "win32",
     });
 
-    if (!child.stdin || !child.stdout || !child.stderr) {
-      throw new Error("ACP stdio pipes unavailable");
+    if (this.closed || generation !== this.lifecycleGeneration) {
+      await terminateOwnedProcessTree(child, {
+        gracefulTimeoutMs: PROCESS_CLOSE_TIMEOUT_MS,
+        forceTimeoutMs: PROCESS_FORCE_CLOSE_TIMEOUT_MS,
+      });
+      throw new Error("ACP stdio transport is closed");
     }
 
     this.childProcess = child;
+
+    if (!child.stdin || !child.stdout || !child.stderr) {
+      await terminateOwnedProcessTree(child, {
+        gracefulTimeoutMs: PROCESS_CLOSE_TIMEOUT_MS,
+        forceTimeoutMs: PROCESS_FORCE_CLOSE_TIMEOUT_MS,
+      });
+      if (this.childProcess === child) {
+        this.childProcess = null;
+      }
+      throw new Error("ACP stdio pipes unavailable");
+    }
 
     const stdoutReader = readline.createInterface({ input: child.stdout });
     stdoutReader.on("line", (line: string) => {
@@ -209,21 +247,39 @@ class AcpLineStdioTransport implements JsonRpcTransport {
 
     child.stderr.on("data", () => undefined);
     child.on("error", (error: Error) => {
+      if (this.childProcess === child && child.pid === undefined) {
+        this.childProcess = null;
+      }
       this.closeHandler(error);
     });
     child.on("close", () => {
-      this.childProcess = null;
+      if (this.childProcess === child) {
+        this.childProcess = null;
+      }
       this.closeHandler();
     });
   }
 
   async close(): Promise<void> {
+    this.closed = true;
+    this.lifecycleGeneration += 1;
+    if (this.closePromise) {
+      return await this.closePromise;
+    }
     const child = this.childProcess;
-    this.childProcess = null;
     if (!child) {
       return;
     }
-    child.kill();
+    this.closePromise = terminateOwnedProcessTree(child, {
+      gracefulTimeoutMs: PROCESS_CLOSE_TIMEOUT_MS,
+      forceTimeoutMs: PROCESS_FORCE_CLOSE_TIMEOUT_MS,
+    }).finally(() => {
+      if (this.childProcess === child) {
+        this.childProcess = null;
+      }
+      this.closePromise = undefined;
+    });
+    return await this.closePromise;
   }
 
   send(message: string): void {
