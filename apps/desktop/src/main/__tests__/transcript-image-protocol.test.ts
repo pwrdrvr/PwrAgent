@@ -444,6 +444,62 @@ describe("transcript image protocol", () => {
     await expect(readFile(materializedPath)).resolves.toEqual(Buffer.from([7, 8, 9]));
   });
 
+  it("snapshots Markdown image links from agent temporary directories", async () => {
+    const { materializeTranscriptImageUrlsForRenderer } = await import(
+      "../transcript-image-protocol"
+    );
+    const temporaryRoot = path.sep === "/" ? "/tmp" : os.tmpdir();
+    const agentTempDir = await mkdtemp(
+      path.join(temporaryRoot, "pwragent-markdown-image-")
+    );
+    const imagePath = path.join(agentTempDir, "pwrgit-ui-qa-overview.png");
+    const sourceUrl = pathToFileURL(imagePath).toString();
+    await writeFile(imagePath, Buffer.from([10, 11, 12]));
+
+    try {
+      const message = {
+        id: "message-temporary-image-link",
+        role: "assistant" as const,
+        text: `Open [Worktrees overview](${imagePath}).`,
+      };
+      const response = await materializeTranscriptImageUrlsForRenderer(
+        {
+          backend: "codex",
+          fetchedAt: 1,
+          threadId: "thread-temporary-image-link",
+          replay: {
+            entries: [{ type: "message", ...message }],
+            messages: [message],
+            pagination: {
+              supportsPagination: false,
+              hasPreviousPage: false,
+            },
+          },
+        },
+        {
+          resolveRoot: () => path.join(tempDir, "thread-images"),
+        },
+        {
+          includeTemporaryImageRoots: true,
+        },
+      );
+
+      expect(response.replay.messages[0]).toMatchObject({
+        parts: [
+          { type: "text", text: message.text },
+          {
+            type: "image",
+            url: expect.stringMatching(/^pwragent-image:\/\/file\//),
+            sourceUrl,
+            alt: "Worktrees overview",
+          },
+        ],
+      });
+    } finally {
+      await rm(agentTempDir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps data image URLs when materialization writes fail", async () => {
     const { materializeTranscriptImageUrlsForRenderer } = await import(
       "../transcript-image-protocol"

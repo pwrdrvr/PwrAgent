@@ -67,6 +67,63 @@ describe("ImageLightbox", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it("navigates galleries with edge controls and the Left/Right Arrow keys", () => {
+    const onNext = vi.fn();
+    const onPrevious = vi.fn();
+    render(
+      <ImageLightbox
+        src="https://example.test/cat.png"
+        alt="A cat"
+        position={2}
+        total={3}
+        onClose={() => {}}
+        onNext={onNext}
+        onPrevious={onPrevious}
+      />,
+    );
+
+    const dialog = screen.getByRole("dialog", { name: "Expanded image" });
+    expect(dialog).toHaveTextContent("2 / 3");
+
+    fireEvent.click(screen.getByRole("button", { name: "Previous image" }));
+    fireEvent.keyDown(window, { key: "ArrowLeft" });
+    fireEvent.click(screen.getByRole("button", { name: "Next image" }));
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+
+    expect(onPrevious).toHaveBeenCalledTimes(2);
+    expect(onNext).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows disabled gallery controls at the first and last image", () => {
+    const { rerender } = render(
+      <ImageLightbox
+        src="https://example.test/first.png"
+        alt="First"
+        position={1}
+        total={2}
+        onClose={() => {}}
+        onNext={() => {}}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Previous image" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Next image" })).toBeEnabled();
+
+    rerender(
+      <ImageLightbox
+        src="https://example.test/last.png"
+        alt="Last"
+        position={2}
+        total={2}
+        onClose={() => {}}
+        onPrevious={() => {}}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Previous image" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Next image" })).toBeDisabled();
+  });
+
   it("stops listening for Escape after unmount", () => {
     const onClose = vi.fn();
     const { unmount } = render(

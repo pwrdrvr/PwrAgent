@@ -54,6 +54,8 @@ export type TranscriptImageProtocolOptions = {
 export type TranscriptImageMaterializationOptions = {
   /** Linked project/worktree roots approved for this thread's Markdown image links. */
   approvedLocalImageRoots?: readonly string[];
+  /** Agent-authored screenshots commonly live in the OS temporary directories. */
+  includeTemporaryImageRoots?: boolean;
   /** Lazily resolves approved roots only when the transcript contains a Markdown image link. */
   resolveApprovedLocalImageRoots?: () => Promise<readonly string[]>;
 };
@@ -118,16 +120,25 @@ const defaultMaterializerDependencies: TranscriptImageMaterializerDependencies =
 function createApprovedLocalImageRootResolver(
   options: TranscriptImageMaterializationOptions,
 ): ApprovedLocalImageRootResolver {
-  if (options.approvedLocalImageRoots) {
-    return async () => options.approvedLocalImageRoots ?? [];
-  }
-
   let roots: Promise<readonly string[]> | undefined;
   return async () => {
     if (!roots) {
-      roots =
-        options.resolveApprovedLocalImageRoots?.().catch(() => []) ??
-        Promise.resolve([]);
+      roots = (async () => {
+        const configuredRoots = options.approvedLocalImageRoots
+          ?? await options.resolveApprovedLocalImageRoots?.().catch(() => [])
+          ?? [];
+        if (!options.includeTemporaryImageRoots) {
+          return configuredRoots;
+        }
+
+        const temporaryRoots = [os.tmpdir()];
+        // macOS agent/browser tools frequently return explicit `/tmp/...`
+        // paths even though Node's TMPDIR points at `/var/folders/...`.
+        if (path.sep === "/") {
+          temporaryRoots.push("/tmp");
+        }
+        return [...new Set([...configuredRoots, ...temporaryRoots])];
+      })();
     }
     return await roots;
   };
