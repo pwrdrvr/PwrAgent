@@ -25,8 +25,6 @@ import type {
   DynamicToolSpec,
 } from "@pwrdrvr/codex-app-server-protocol/v2";
 import {
-  TASK_MONITOR_CANCEL_TOOL_DESCRIPTION,
-  TASK_MONITOR_CANCEL_TOOL_INPUT_SCHEMA,
   TASK_MONITOR_CREATE_TOOL_DESCRIPTION,
   TASK_MONITOR_CREATE_TOOL_INPUT_SCHEMA,
 } from "../agent-tools/pwragent-task-monitor-agent-tools.js";
@@ -34,6 +32,15 @@ import {
 export type TaskMonitorHandler = (
   request: TaskMonitorRequest,
 ) => TaskMonitorResponse | Promise<TaskMonitorResponse>;
+
+const LEGACY_TASK_MONITOR_OPERATION_NAMES = [
+  "create_monitor_delegation",
+  "inject_progress",
+  "complete_monitoring",
+] as const satisfies readonly TaskMonitorOperationName[];
+
+type LegacyTaskMonitorOperationName =
+  (typeof LEGACY_TASK_MONITOR_OPERATION_NAMES)[number];
 
 export function buildTaskMonitorDynamicToolSpecs(
   role: "parent" | "monitor" | "all" = "all",
@@ -43,13 +50,6 @@ export function buildTaskMonitorDynamicToolSpecs(
     name: "create_monitor_delegation",
     description: TASK_MONITOR_CREATE_TOOL_DESCRIPTION,
     inputSchema: TASK_MONITOR_CREATE_TOOL_INPUT_SCHEMA,
-    deferLoading: false,
-  };
-  const cancelTool: DynamicToolNamespaceTool = {
-    type: "function",
-    name: "cancel_monitor_delegation",
-    description: TASK_MONITOR_CANCEL_TOOL_DESCRIPTION,
-    inputSchema: TASK_MONITOR_CANCEL_TOOL_INPUT_SCHEMA,
     deferLoading: false,
   };
   const monitorTools: DynamicToolNamespaceTool[] = [
@@ -98,10 +98,10 @@ export function buildTaskMonitorDynamicToolSpecs(
   ];
   const tools =
     role === "parent"
-      ? [createTool, cancelTool]
+      ? [createTool]
       : role === "monitor"
         ? monitorTools
-        : [createTool, cancelTool, ...monitorTools];
+        : [createTool, ...monitorTools];
   return [
     {
       type: "namespace",
@@ -173,6 +173,15 @@ export async function handleTaskMonitorDynamicToolCall(params: {
       message: "Unsupported PwrAgent task monitor tool.",
     });
   }
+  if (
+    params.call.namespace === TASK_MONITOR_TOOL_NAMESPACE
+    && !isLegacyTaskMonitorOperationName(params.call.tool)
+  ) {
+    return buildTaskMonitorDynamicToolErrorResponse({
+      code: "unsupported_operation",
+      message: "Unsupported legacy PwrAgent task monitor tool.",
+    });
+  }
 
   const context: TaskMonitorContext = {
     backend: params.backend,
@@ -188,6 +197,14 @@ export async function handleTaskMonitorDynamicToolCall(params: {
     ),
   } as TaskMonitorRequest);
   return toDynamicToolResponse(response);
+}
+
+function isLegacyTaskMonitorOperationName(
+  value: string,
+): value is LegacyTaskMonitorOperationName {
+  return (
+    LEGACY_TASK_MONITOR_OPERATION_NAMES as readonly string[]
+  ).includes(value);
 }
 
 export function buildTaskMonitorDynamicToolErrorResponse(params: {

@@ -28542,7 +28542,7 @@ script = "printf setup"
         turnId: "turn-1",
         callId: "call-1",
         requestId: "call-1",
-        namespace: "pwragent_task_monitors",
+        namespace: "pwragent",
         tool: "create_monitor_delegation",
         arguments: {
           task: "Recover the runner after its current job finishes.",
@@ -28553,6 +28553,20 @@ script = "printf setup"
       (delegationResponse as { contentItems: Array<{ text: string }> })
         .contentItems[0]?.text ?? "{}",
     ).monitorId as string;
+    const legacyCancellationResponse = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-cancel-legacy",
+        requestId: "call-cancel-legacy",
+        namespace: "pwragent_task_monitors",
+        tool: "cancel_monitor_delegation",
+        arguments: { monitorId },
+      },
+    } as AppServerPendingRequestNotification);
+    expect(legacyCancellationResponse).toMatchObject({ success: false });
+    expect(codexClient.interruptTurnCallCount).toBe(0);
     await registry.publishLocalEvent({
       backend: "codex",
       notification: {
@@ -28572,7 +28586,7 @@ script = "printf setup"
         turnId: "turn-2",
         callId: "call-forbidden",
         requestId: "call-forbidden",
-        namespace: "pwragent_task_monitors",
+        namespace: "pwragent",
         tool: "cancel_monitor_delegation",
         arguments: { monitorId },
       },
@@ -28587,7 +28601,7 @@ script = "printf setup"
         turnId: "turn-1",
         callId: "call-cancel",
         requestId: "call-cancel",
-        namespace: "pwragent_task_monitors",
+        namespace: "pwragent",
         tool: "cancel_monitor_delegation",
         arguments: {
           monitorId,
@@ -28606,7 +28620,7 @@ script = "printf setup"
         turnId: "turn-1",
         callId: "call-cancel-overlap",
         requestId: "call-cancel-overlap",
-        namespace: "pwragent_task_monitors",
+        namespace: "pwragent",
         tool: "cancel_monitor_delegation",
         arguments: { monitorId },
       },
@@ -28744,7 +28758,7 @@ script = "printf setup"
         turnId: "turn-1",
         callId: "call-cancel-again",
         requestId: "call-cancel-again",
-        namespace: "pwragent_task_monitors",
+        namespace: "pwragent",
         tool: "cancel_monitor_delegation",
         arguments: { monitorId },
       },

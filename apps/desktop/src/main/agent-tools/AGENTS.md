@@ -17,3 +17,19 @@ shape as backwards-compatible API surfaces.
 - Envelope metadata such as `threadId`, `turnId`, and `callId` may be forwarded
   through `AgentToolCallContext`, but must not become required tool input.
 
+## Frozen Legacy Dynamic Namespaces
+
+Codex persists dynamic tool definitions when a thread is created. PwrAgent does
+not resend or refresh those definitions when starting later turns on an existing
+thread.
+
+- New threads receive only the unified `pwragent` dynamic namespace. Add new
+  tools there through the agent-tool catalog so both dynamic-tool and MCP
+  dispatch expose the same contract.
+- Deprecated namespaces are compatibility-only for threads that already have
+  their definitions persisted. They are never advertised to new threads and
+  cannot discover additive tool changes.
+- Keep the deprecated `pwragent_task_monitors` namespace frozen at its historical
+  operations: `create_monitor_delegation`, `inject_progress`, and
+  `complete_monitoring`. Do not add new operations or schemas to it; retain only
+  the dispatch needed for those existing threads.
