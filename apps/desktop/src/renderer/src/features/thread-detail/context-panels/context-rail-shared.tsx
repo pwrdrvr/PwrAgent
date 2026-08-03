@@ -118,12 +118,16 @@ export function buildRailTooltipText(
     : formatTooltipValue(value, maxLength);
 }
 
-export function formatTimestamp(timestamp: number): string {
+export function formatTimestamp(
+  timestamp: number,
+  options?: { includeSeconds?: boolean },
+): string {
   return new Intl.DateTimeFormat(undefined, {
     month: "short",
     day: "numeric",
     hour: "numeric",
     minute: "2-digit",
+    ...(options?.includeSeconds ? { second: "2-digit" } : {}),
   }).format(timestamp);
 }
 

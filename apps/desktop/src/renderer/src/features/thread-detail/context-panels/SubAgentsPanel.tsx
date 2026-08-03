@@ -5,14 +5,16 @@ import type {
 } from "@pwragent/shared";
 import { formatBackendLabel } from "../../../lib/backend-label";
 import { useSubAgents } from "./useSubAgents";
-import { formatTimestamp } from "./context-rail-shared";
 import {
   formatSubAgentUsageSummary,
+  isTerminalSubAgent,
   type PricingDisplayOptions,
+  subAgentCompletedAt,
   subAgentStatusLabel,
   subAgentTone,
 } from "./subagent-format";
 import { RailStatusChip } from "./RailStatusChip";
+import { RailCardTiming, useNowWhileActive } from "./RailCardTiming";
 import { SubAgentDetailsModal } from "./SubAgentDetailsModal";
 import {
   subAgentOriginSentence,
@@ -30,6 +32,10 @@ export function SubAgentsPanel(props: SubAgentsPanelProps) {
   const { subAgents, loading } = useSubAgents(props.thread);
   const { onDetailsModalOpenChange } = props;
   const [detailsFor, setDetailsFor] = useState<ThreadSubAgentSummary | null>(null);
+  const hasRunningSubAgent = subAgents.some(
+    (subAgent) => !isTerminalSubAgent(subAgent),
+  );
+  const now = useNowWhileActive(hasRunningSubAgent);
 
   useEffect(() => {
     return () => onDetailsModalOpenChange?.(false);
@@ -56,6 +62,16 @@ export function SubAgentsPanel(props: SubAgentsPanelProps) {
             const tone = subAgentTone(subAgent.status);
             const originSentence = subAgentOriginSentence(subAgent);
             const backend = subAgent.backend ?? props.thread.source;
+            const running = !isTerminalSubAgent(subAgent);
+            const model =
+              subAgent.preferredModel
+              ?? subAgent.monitorUsage?.model
+              ?? subAgent.monitorUsage?.cost?.model;
+            const runtimeDetails = [
+              model,
+              subAgent.preferredReasoningEffort,
+              subAgent.preferredFastMode ? "Fast" : undefined,
+            ].filter((value): value is string => Boolean(value));
             const latestMessage =
               subAgent.lastMessage && subAgent.lastMessage !== originSentence
                 ? subAgent.lastMessage
@@ -81,23 +97,18 @@ export function SubAgentsPanel(props: SubAgentsPanelProps) {
                   <span className="rail-card__provider-chip">
                     {formatBackendLabel(backend)}
                   </span>
-                  {subAgent.preferredModel ? (
+                  {runtimeDetails.length > 0 ? (
                     <span className="rail-card__model">
-                      {subAgent.preferredModel}
+                      {runtimeDetails.join(" · ")}
                     </span>
                   ) : null}
                 </p>
-                <p className="rail-card__times">
-                  <span className="rail-card__time-label">Started</span>{" "}
-                  {formatTimestamp(subAgent.createdAt)}
-                  {subAgent.completedAt ? (
-                    <>
-                      {" · "}
-                      <span className="rail-card__time-label">Ended</span>{" "}
-                      {formatTimestamp(subAgent.completedAt)}
-                    </>
-                  ) : null}
-                </p>
+                <RailCardTiming
+                  completedAt={subAgentCompletedAt(subAgent)}
+                  now={now}
+                  running={running}
+                  startedAt={subAgent.createdAt}
+                />
                 {originSentence ? (
                   <p className="rail-card__message">{originSentence}</p>
                 ) : null}

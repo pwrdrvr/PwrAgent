@@ -3743,6 +3743,7 @@ function buildLiveThreadUsageLine(params: {
   fastMode?: boolean;
   model?: string;
   observedReplays?: ObservedContextReplayTally;
+  reasoningEffort?: string;
   serviceTier?: string;
   startedAt?: number;
   threadId: string;
@@ -3825,6 +3826,9 @@ function buildLiveThreadUsageLine(params: {
     ...(cost?.catalogId ? { pricingCatalogId: cost.catalogId } : {}),
     ...(cost?.catalogVersion ? { pricingCatalogVersion: cost.catalogVersion } : {}),
     ...(cost?.rateId ? { pricingRateId: cost.rateId } : {}),
+    ...(params.reasoningEffort
+      ? { reasoningEffort: params.reasoningEffort }
+      : {}),
     reasoningOutputTokens,
     scope: "turn",
     ...(params.serviceTier ? { serviceTier: params.serviceTier } : {}),
@@ -16841,6 +16845,13 @@ export class DesktopBackendRegistry {
     const fastMode =
       readUsageBoolean(tokenUsage, ["fastMode", "fast_mode"]) ??
       overlay?.fastMode;
+    const reasoningEffort =
+      readUsageString(tokenUsage, [
+        "reasoningEffort",
+        "reasoning_effort",
+        "effort",
+      ]) ??
+      overlay?.reasoningEffort;
     const derivedUsage = this.deriveLiveThreadTokenUsage({
       backend: event.backend,
       threadId,
@@ -16865,6 +16876,7 @@ export class DesktopBackendRegistry {
       fastMode,
       model,
       observedReplays,
+      reasoningEffort,
       serviceTier,
       threadId,
       tokenUsage: derivedUsage.turnTokenUsage,
