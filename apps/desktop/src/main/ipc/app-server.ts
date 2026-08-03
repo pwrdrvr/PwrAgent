@@ -1065,6 +1065,7 @@ class DesktopAppServerService {
   private prStatusRegistryLoaded = false;
   private prStatusRegistryLoadPromise: Promise<void> | undefined;
   private prLookupRegistryLoaded = false;
+  private prLookupRegistryLoadPromise: Promise<void> | undefined;
   private prGraphqlClient: GithubGraphqlPrClient | undefined;
   private prPollingScheduler: PrPollingScheduler | undefined;
   private backgroundPrPollingEnabled = false;
@@ -3838,11 +3839,23 @@ class DesktopAppServerService {
     if (this.prLookupRegistryLoaded) {
       return;
     }
-    this.prLookupRegistryLoaded = true;
-    const entries = await this.getOverlayStore().readPrLookupCache();
-    for (const entry of Object.values(entries)) {
-      this.rememberPrLookup(entry);
-      this.rememberPrStatuses(entry.prs, entry.fetchedAt, "pr-lookup-cache");
+    if (!this.prLookupRegistryLoadPromise) {
+      this.prLookupRegistryLoadPromise = (async () => {
+        const entries = await this.getOverlayStore().readPrLookupCache();
+        for (const entry of Object.values(entries)) {
+          this.rememberPrLookup(entry);
+          this.rememberPrStatuses(entry.prs, entry.fetchedAt, "pr-lookup-cache");
+        }
+        this.prLookupRegistryLoaded = true;
+      })();
+    }
+    const loadPromise = this.prLookupRegistryLoadPromise;
+    try {
+      await loadPromise;
+    } finally {
+      if (this.prLookupRegistryLoadPromise === loadPromise) {
+        this.prLookupRegistryLoadPromise = undefined;
+      }
     }
   }
 
@@ -5357,6 +5370,7 @@ class DesktopAppServerService {
     this.prStatusRegistryLoaded = false;
     this.prStatusRegistryLoadPromise = undefined;
     this.prLookupRegistryLoaded = false;
+    this.prLookupRegistryLoadPromise = undefined;
     this.pendingDirectoryGitStatusRefreshes.clear();
     this.pendingDirectoryGitStatusKeys.clear();
     this.previousDirectoriesByBackend.clear();

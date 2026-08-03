@@ -2833,6 +2833,14 @@ describe("app server ipc", () => {
       state: "passing",
       lifecycleState: "merged",
     });
+    const firstStaleFetchedAt = Date.now() - 120_001;
+    const secondStaleFetchedAt = firstStaleFetchedAt + 1;
+    let releasePrLookupCache: (() => void) | undefined;
+    readPrLookupCache.mockImplementationOnce(
+      () => new Promise((resolve) => {
+        releasePrLookupCache = () => resolve({});
+      }),
+    );
     getThreadOverlayState
       .mockResolvedValueOnce({
         backend: "codex",
@@ -2840,7 +2848,7 @@ describe("app server ipc", () => {
         executionMode: "default",
         extraLinkedDirectories: [],
         prs: [firstStalePr],
-        prsFetchedAt: Date.now() - 120_000,
+        prsFetchedAt: firstStaleFetchedAt,
         prsRefreshKey: firstRequestKey,
       })
       .mockResolvedValueOnce({
@@ -2849,7 +2857,7 @@ describe("app server ipc", () => {
         executionMode: "default",
         extraLinkedDirectories: [],
         prs: [secondStalePr],
-        prsFetchedAt: Date.now() - 120_000,
+        prsFetchedAt: secondStaleFetchedAt,
         prsRefreshKey: secondRequestKey,
       });
     let resolveFetch: ((prs: PrSummary[]) => void) | undefined;
@@ -2868,7 +2876,16 @@ describe("app server ipc", () => {
 
     const handler = handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)!;
     const first = handler({}, firstRequest);
+    await vi.waitFor(() => {
+      expect(readPrLookupCache).toHaveBeenCalledOnce();
+    });
     const second = handler({}, secondRequest);
+    await vi.waitFor(() => {
+      expect(getThreadOverlayState).toHaveBeenCalledTimes(2);
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(isGhAvailable).not.toHaveBeenCalled();
+    releasePrLookupCache?.();
     await expect(Promise.all([first, second])).resolves.toEqual([
       {
         backend: "codex",
