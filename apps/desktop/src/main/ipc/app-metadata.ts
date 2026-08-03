@@ -24,6 +24,7 @@ import {
 } from "../../shared/app-metadata";
 import { readAppLogSnapshot, subscribeAppLogEntries } from "../app-logs";
 import { showAppLogWindow } from "../app-log-window";
+import { resolveApplicationVersion } from "../app-version";
 import { showChangelogWindow } from "../changelog-window";
 import { showThirdPartyNoticesWindow } from "../license-document-window";
 import {
@@ -50,7 +51,7 @@ export function resolveAppMetadata(
 ): AppMetadata {
   return {
     applicationName: app.getName(),
-    applicationVersion: app.getVersion(),
+    applicationVersion: resolveApplicationVersion(app.getVersion()),
     copyright: APP_COPYRIGHT,
     homepage: PWRAGENT_HOMEPAGE_URL,
     documentationUrl: PWRAGENT_DOCUMENTATION_URL,

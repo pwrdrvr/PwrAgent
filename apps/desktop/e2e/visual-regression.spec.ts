@@ -17,6 +17,7 @@ import { launchElectronApp } from "./fixtures/electron-app";
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 const VISUAL_WINDOW_SIZE = { width: 1440, height: 900 };
 const VISUAL_CLOCK_TIME = new Date("2026-08-02T12:00:00.000Z");
+const VISUAL_APP_VERSION = "1.2.3-beta.1";
 
 async function waitForFonts(page: Page): Promise<void> {
   await page.evaluate(async () => {
@@ -40,6 +41,7 @@ test.describe("visual regression", () => {
         specDir,
         "fixtures/codex-todo-list/replay.fixture.json",
       ),
+      env: { PWRAGENT_E2E_APP_VERSION: VISUAL_APP_VERSION },
       windowSize: VISUAL_WINDOW_SIZE,
     });
 
@@ -60,6 +62,16 @@ test.describe("visual regression", () => {
           /Existing Codex threads cannot be converted/,
         ),
       ).toBeVisible();
+      await expect.poll(async () =>
+        await app.window.evaluate(async () => {
+          const bridge = globalThis as typeof globalThis & {
+            pwragent?: {
+              readAppMetadata?: () => Promise<{ applicationVersion: string }>;
+            };
+          };
+          return (await bridge.pwragent?.readAppMetadata?.())?.applicationVersion;
+        })
+      ).toBe(VISUAL_APP_VERSION);
 
       const shell = app.window.locator(".app-shell");
       await expect(shell).toBeVisible();
@@ -80,6 +92,7 @@ test.describe("visual regression", () => {
         specDir,
         "fixtures/approval-pending/replay.fixture.json",
       ),
+      env: { PWRAGENT_E2E_APP_VERSION: VISUAL_APP_VERSION },
       windowSize: VISUAL_WINDOW_SIZE,
     });
 
