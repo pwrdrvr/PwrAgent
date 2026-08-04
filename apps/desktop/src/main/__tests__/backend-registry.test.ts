@@ -20261,6 +20261,12 @@ command = "pnpm dev"
           initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
         }),
         gitDirectoryService: {
+          inspectWorkspaceGit: vi.fn(async () => ({
+            kind: "worktree" as const,
+            branch: "main",
+            hasCommits: true,
+            worktreeCreationAvailable: true,
+          })),
           resolvePrimaryWorkspacePath: vi.fn(async (cwd?: string) => {
             if (cwd?.startsWith(targetRepoPath)) return targetRepoPath;
             if (cwd?.startsWith(parentRepoPath)) return parentRepoPath;
@@ -20460,6 +20466,12 @@ command = "pnpm dev"
       }),
       codexEnvironmentCommandRunner: commandRunner,
       gitDirectoryService: {
+        inspectWorkspaceGit: vi.fn(async (cwd: string) => ({
+          kind: "worktree" as const,
+          branch: cwd === worktreePath ? "HEAD" : "main",
+          hasCommits: true,
+          worktreeCreationAvailable: true,
+        })),
         prepareLaunchpadWorkspace,
         recordCodexWorktreeOwnerThread,
       } as never,
@@ -20654,6 +20666,12 @@ script = "printf setup"
       }),
       codexEnvironmentCommandRunner: commandRunner,
       gitDirectoryService: {
+        inspectWorkspaceGit: vi.fn(async (cwd: string) => ({
+          kind: "worktree" as const,
+          branch: cwd === worktreePath ? "HEAD" : "main",
+          hasCommits: true,
+          worktreeCreationAvailable: true,
+        })),
         prepareLaunchpadWorkspace: vi.fn(async () => ({
           cwd: worktreePath,
           repositoryPath: repoPath,
@@ -22287,6 +22305,12 @@ script = "printf setup"
       }),
       codexEnvironmentCommandRunner: commandRunner,
       gitDirectoryService: {
+        inspectWorkspaceGit: vi.fn(async (cwd: string) => ({
+          kind: "worktree" as const,
+          branch: cwd === worktreePath ? "HEAD" : "main",
+          hasCommits: true,
+          worktreeCreationAvailable: true,
+        })),
         prepareLaunchpadWorkspace,
         recordCodexWorktreeOwnerThread: vi.fn(async () => {}),
       } as never,
