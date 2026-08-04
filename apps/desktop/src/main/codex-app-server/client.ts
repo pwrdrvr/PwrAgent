@@ -2980,6 +2980,9 @@ function buildFileChangeDiff(params: {
 }
 
 function formatByteSize(bytes: number): string {
+  if (bytes >= 1024 * 1024 * 1024) {
+    return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
+  }
   if (bytes >= 1024 * 1024) {
     return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
   }
@@ -6376,7 +6379,9 @@ async function prepareCodexUserInput(params: {
   for (const input of params.input) {
     if (input.type === "localFile") {
       const name = input.name?.trim() || path.basename(input.path);
-      fileReferences.push(formatCodexFileReference({ name }, input.path));
+      fileReferences.push(
+        formatCodexFileReference({ ...input, name }, input.path),
+      );
       prepared.push({
         type: "mention",
         name,
@@ -6409,7 +6414,7 @@ async function prepareCodexUserInput(params: {
       text: [
         "Files attached or referenced from PwrAgent are available locally for this turn:",
         ...fileReferences,
-        "Use local tools to inspect these files as needed.",
+        "PwrAgent provided local path references rather than raw file payloads. Small validated text previews may appear above; use local tools to inspect files as needed.",
       ].join("\n"),
       text_elements: [],
     },
@@ -6419,17 +6424,38 @@ async function prepareCodexUserInput(params: {
 
 function formatCodexFileReference(
   file: Pick<AppServerFileInputItem, "name" | "mimeType" | "sizeBytes">
-    | Pick<AppServerLocalFileInputItem, "name">,
+    | Pick<
+        AppServerLocalFileInputItem,
+        | "mimeType"
+        | "name"
+        | "sizeBytes"
+        | "textPreview"
+        | "textPreviewTruncated"
+      >,
   filePath: string,
 ): string {
-  const type = "mimeType" in file ? file.mimeType : undefined;
-  const size =
-    "sizeBytes" in file && typeof file.sizeBytes === "number"
-      ? ` | Size: ${formatByteSize(file.sizeBytes)}`
-      : "";
-  return type
-    ? `- ${file.name}: ${filePath} (Type: ${type}${size})`
+  const metadata = [
+    file.mimeType ? `Type: ${file.mimeType}` : undefined,
+    typeof file.sizeBytes === "number"
+      ? `Size: ${formatByteSize(file.sizeBytes)}`
+      : undefined,
+  ].filter((value): value is string => Boolean(value));
+  const reference = metadata.length > 0
+    ? `- ${file.name}: ${filePath} (${metadata.join(" | ")})`
     : `- ${file.name}: ${filePath}`;
+  if (!("textPreview" in file) || !file.textPreview) {
+    return reference;
+  }
+  const previewLabel = file.textPreviewTruncated
+    ? "Validated text preview (truncated):"
+    : "Validated text preview:";
+  return [
+    reference,
+    previewLabel,
+    "<pwragent-local-file-preview>",
+    file.textPreview,
+    "</pwragent-local-file-preview>",
+  ].join("\n");
 }
 
 function buildTurnStartPayload(params: {

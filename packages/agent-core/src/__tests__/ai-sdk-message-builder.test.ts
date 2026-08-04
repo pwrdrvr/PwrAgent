@@ -139,6 +139,9 @@ describe("buildAiSdkMessages", () => {
             type: "localFile",
             name: "Jeep",
             path: "/tmp/Jeep",
+            mimeType: "text/plain",
+            sizeBytes: 12,
+            textPreview: "hello world\n",
             pdfRenderProfile: "high",
           },
         ],
@@ -148,7 +151,17 @@ describe("buildAiSdkMessages", () => {
         role: "user",
         content: [
           { type: "text", text: "Compare this document." },
-          { type: "text", text: "[Local file reference: Jeep (/tmp/Jeep)]" },
+          {
+            type: "text",
+            text: [
+              "[Local file reference: Jeep (/tmp/Jeep) | Type: text/plain | Size: 12 B]",
+              "Validated text preview:",
+              "<pwragent-local-file-preview>",
+              "hello world",
+              "",
+              "</pwragent-local-file-preview>",
+            ].join("\n"),
+          },
         ],
       },
     ]);

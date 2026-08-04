@@ -49,6 +49,14 @@ export type AppServerLocalFileInputItem = {
   /** User-visible filename / attachment label when available. */
   name?: string;
   path: string;
+  /** Best-effort MIME type inferred without reading the full file. */
+  mimeType?: string;
+  /** Size observed from the explicitly referenced local file. */
+  sizeBytes?: number;
+  /** Bounded preview included only for a validated, small UTF-8 text file. */
+  textPreview?: string;
+  /** True when textPreview contains only a prefix of the validated file. */
+  textPreviewTruncated?: boolean;
   /** Rendering preference when this local file is classified as a PDF. */
   pdfRenderProfile?: AppServerPdfRenderProfile;
 };

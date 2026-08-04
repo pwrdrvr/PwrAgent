@@ -21,6 +21,9 @@ describe("Codex turn lifecycle", () => {
           type: "localFile",
           name: "Jeep",
           path: "/tmp/Jeep",
+          mimeType: "text/plain",
+          sizeBytes: 12,
+          textPreview: "hello world\n",
           pdfRenderProfile: "high",
         },
         {
@@ -47,6 +50,9 @@ describe("Codex turn lifecycle", () => {
         type: "localFile",
         name: "Jeep",
         path: "/tmp/Jeep",
+        mimeType: "text/plain",
+        sizeBytes: 12,
+        textPreview: "hello world\n",
         pdfRenderProfile: "high",
       },
       {

@@ -404,6 +404,7 @@ import {
   type ThreadTurnQueueSubmissionResult,
 } from "./thread-turn-queue";
 import { materializeLocalImageInputs } from "./image-input-files";
+import { enrichLocalFileInputs } from "./local-file-input";
 import type { MessagingStoreLike } from "../state/messaging-store-sqlite";
 import {
   PdfAttachmentStore,
@@ -10269,7 +10270,7 @@ export class DesktopBackendRegistry {
         });
         // ACP adapters already accept data-URL image parts. Keeping those
         // intact avoids changing their established image payload contract.
-        const input = preparedPdfInput.input;
+        const input = await enrichLocalFileInputs(preparedPdfInput.input);
         if (this.usesSlashControlledAcpExecutionModes(params.backend)) {
           await this.flushQueuedExecutionModeIfPresent(
             params.threadId,
@@ -10378,7 +10379,9 @@ export class DesktopBackendRegistry {
         input: params.input,
       });
       pdfAttachments = preparedPdfInput.pdfAttachments;
-      input = await materializeLocalImageInputs(preparedPdfInput.input);
+      input = await materializeLocalImageInputs(
+        await enrichLocalFileInputs(preparedPdfInput.input),
+      );
       turnParams = await this.resolveModelSettings(params.backend, {
         ...params,
         model: migrationApplied
@@ -11663,6 +11666,7 @@ export class DesktopBackendRegistry {
     params: SteerTurnRequest,
     messageOrigin?: AppServerThreadMessageOrigin,
   ): Promise<SteerTurnResponse> {
+    const input = await enrichLocalFileInputs(params.input);
     const pendingMessageOriginId = this.registerPendingThreadMessageOrigin({
       backend: params.backend,
       threadId: params.threadId,
@@ -11678,7 +11682,7 @@ export class DesktopBackendRegistry {
       }
       return await client.steerTurn({
         threadId: params.threadId,
-        input: params.input,
+        input,
         expectedTurnId: params.expectedTurnId,
       });
     };
