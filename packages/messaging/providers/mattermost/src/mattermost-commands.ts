@@ -77,7 +77,8 @@ type CanonicalCommandBase = {
 
 /**
  * Canonical command set as base verbs. Match Discord's surface
- * (`resume`, `agent`, `new`, `status`, `detach`, `monitor`, `help`) so users on different platforms see
+ * (`resume`, `agent`, `new`, `status`, `detach`, `monitor`, `schedule`,
+ * `scheduled`, `help`) so users on different platforms see
  * the same primitives. Add new entries here; the reconciler picks
  * them up automatically once the per-prefix trigger is computed.
  */
@@ -120,6 +121,20 @@ const CANONICAL_COMMAND_BASES: readonly CanonicalCommandBase[] = [
     displayNameSuffix: "Monitor",
     description: "Monitor recent PwrAgent threads once per minute.",
     autoCompleteDesc: "Monitor recent PwrAgent threads once per minute.",
+  },
+  {
+    base: "schedule",
+    displayNameSuffix: "Schedule",
+    description: "Schedule a message for the bound PwrAgent thread.",
+    autoCompleteDesc: "Schedule a message for the bound PwrAgent thread.",
+    autoCompleteHint: "<10m | 2h | 1d | ISO time> <message>",
+  },
+  {
+    base: "scheduled",
+    displayNameSuffix: "Scheduled",
+    description: "List or manage scheduled PwrAgent messages.",
+    autoCompleteDesc: "List or manage scheduled PwrAgent messages.",
+    autoCompleteHint: "[send | cancel | edit] [id] [time] [message]",
   },
   {
     base: "help",

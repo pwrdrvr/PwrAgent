@@ -26,6 +26,8 @@ export type ComposerQueuedTurnSnapshot = {
   backendQueuePending?: boolean;
   /** Main-process FIFO entry once the renderer has handed off dispatch ownership. */
   queueEntryId?: string;
+  /** Durable main-process scheduled action represented by this renderer chip. */
+  scheduledActionId?: string;
   input?: AppServerTurnInputItem[];
   text: string;
   imageAttachments: NavigationLaunchpadImageAttachment[];
@@ -98,13 +100,20 @@ export function getQueuedTurnReleaseDelayMs(
 export function getNextReleasableQueuedTurn<
   T extends Pick<
     ComposerQueuedTurnSnapshot,
-    "backendQueuePending" | "queueEntryId" | "scheduledSendAt"
+    | "backendQueuePending"
+    | "queueEntryId"
+    | "scheduledActionId"
+    | "scheduledSendAt"
   >,
 >(queuedTurns: readonly T[], now = Date.now()): T | undefined {
   for (const queuedTurn of queuedTurns) {
     // A backend-owned entry is already in the authoritative FIFO. Local
     // scheduled turns and reviews behind it must not leapfrog that entry.
-    if (queuedTurn.backendQueuePending || queuedTurn.queueEntryId) {
+    if (
+      queuedTurn.backendQueuePending
+      || queuedTurn.queueEntryId
+      || queuedTurn.scheduledActionId
+    ) {
       return undefined;
     }
     if (getQueuedTurnReleaseDelayMs(queuedTurn, now) === 0) {

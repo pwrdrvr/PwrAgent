@@ -123,6 +123,36 @@ export const DISCORD_APPLICATION_COMMANDS: DiscordApplicationCommandBody[] = [
     name: "monitor",
     type: ApplicationCommandType.ChatInput,
   },
+  {
+    contexts: COMMAND_CONTEXTS,
+    description: "Schedule a message for the bound PwrAgent thread.",
+    integration_types: COMMAND_INTEGRATION_TYPES,
+    name: "schedule",
+    options: [
+      {
+        description: "Time and message, such as: 2h Follow up",
+        name: "args",
+        required: true,
+        type: ApplicationCommandOptionType.String,
+      },
+    ],
+    type: ApplicationCommandType.ChatInput,
+  },
+  {
+    contexts: COMMAND_CONTEXTS,
+    description: "List or manage scheduled PwrAgent messages.",
+    integration_types: COMMAND_INTEGRATION_TYPES,
+    name: "scheduled",
+    options: [
+      {
+        description: "Optional action, such as: cancel abcdef12",
+        name: "args",
+        required: false,
+        type: ApplicationCommandOptionType.String,
+      },
+    ],
+    type: ApplicationCommandType.ChatInput,
+  },
 ];
 
 export async function reconcileDiscordApplicationCommands(params: {

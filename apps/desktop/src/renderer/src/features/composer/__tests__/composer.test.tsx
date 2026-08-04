@@ -6,12 +6,15 @@ import {
   type BackendSummary,
   type CompactThreadRequest,
   type ComposerDraftRecoveryCandidate,
+  type CreateScheduledThreadActionRequest,
   type NavigationDirectorySummary,
   type NavigationThreadSummary,
   type NavigationLaunchpadDraft,
   type StartReviewRequest,
   type StartTurnRequest,
   type StartTurnResponse,
+  type ScheduledThreadAction,
+  type ScheduledThreadActionIdRequest,
 } from "@pwragent/shared";
 import type { JSONContent } from "@tiptap/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -476,6 +479,58 @@ function renderComposerWithRegressionSkills(
   );
 
   return { startTurn };
+}
+
+function createScheduledActionApi(options?: {
+  sendNowStatus?: "dispatching" | "queued" | "started";
+}) {
+  let sequence = 0;
+  const actions = new Map<string, ScheduledThreadAction>();
+  const createScheduledThreadAction = vi.fn(async (
+    request: CreateScheduledThreadActionRequest,
+  ) => {
+    sequence += 1;
+    const action: ScheduledThreadAction = {
+      ...request,
+      id: `scheduled-${sequence}`,
+      origin: request.origin ?? "desktop",
+      status: "scheduled",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    actions.set(action.id, action);
+    return { action };
+  });
+  const cancelScheduledThreadAction = vi.fn(async (
+    request: ScheduledThreadActionIdRequest,
+  ) => {
+    const action = actions.get(request.id);
+    if (!action) throw new Error("Scheduled action not found.");
+    const cancelled = { ...action, status: "cancelled" as const };
+    actions.set(action.id, cancelled);
+    return { action: cancelled };
+  });
+  const sendScheduledThreadActionNow = vi.fn(async (
+    request: ScheduledThreadActionIdRequest,
+  ) => {
+    const action = actions.get(request.id);
+    if (!action) throw new Error("Scheduled action not found.");
+    const status = options?.sendNowStatus ?? "started";
+    const sent: ScheduledThreadAction = {
+      ...action,
+      status,
+      ...(status === "queued"
+        ? { queueEntryId: `scheduled-turn:${action.id}` }
+        : {}),
+    };
+    actions.set(action.id, sent);
+    return { action: sent };
+  });
+  return {
+    cancelScheduledThreadAction,
+    createScheduledThreadAction,
+    sendScheduledThreadActionNow,
+  };
 }
 
 describe("Composer", () => {
@@ -3032,6 +3087,7 @@ describe("Composer", () => {
           }),
         ]}
         desktopApi={{
+          ...createScheduledActionApi(),
           onAgentEvent: () => () => undefined,
           startTurn,
         }}
@@ -3264,6 +3320,7 @@ describe("Composer", () => {
     render(
       <Composer
         desktopApi={{
+          ...createScheduledActionApi(),
           onAgentEvent: () => () => undefined,
           startTurn,
         }}
@@ -3284,7 +3341,9 @@ describe("Composer", () => {
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "Check this in a bit" } });
     fireEvent.click(screen.getByRole("button", { name: "Schedule message" }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Send in 15m" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: "Send in 15m" }));
+    });
 
     expect(startTurn).not.toHaveBeenCalled();
     expect(textarea).toHaveValue("");
@@ -3308,6 +3367,7 @@ describe("Composer", () => {
     render(
       <Composer
         desktopApi={{
+          ...createScheduledActionApi(),
           onAgentEvent: () => () => undefined,
           startTurn,
         }}
@@ -3328,9 +3388,13 @@ describe("Composer", () => {
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "Original scheduled text" } });
     fireEvent.click(screen.getByRole("button", { name: "Schedule message" }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Send in 1h" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: "Send in 1h" }));
+    });
 
-    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    });
     expect(textarea).toHaveValue("Original scheduled text");
     // The Send button is plain "Send"; the schedule surfaces as an armed
     // toggle beside it rather than a countdown label on Send itself.
@@ -3341,7 +3405,9 @@ describe("Composer", () => {
 
     fireEvent.change(textarea, { target: { value: "Edited scheduled text" } });
     // Toggle stays armed → Send keeps the schedule (re-queues at the same time).
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    });
 
     expect(startTurn).not.toHaveBeenCalled();
     expect(textarea).toHaveValue("");
@@ -3365,6 +3431,7 @@ describe("Composer", () => {
     render(
       <Composer
         desktopApi={{
+          ...createScheduledActionApi(),
           onAgentEvent: () => () => undefined,
           startTurn,
         }}
@@ -3385,9 +3452,13 @@ describe("Composer", () => {
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "Scheduled text" } });
     fireEvent.click(screen.getByRole("button", { name: "Schedule message" }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Send in 1h" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: "Send in 1h" }));
+    });
 
-    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    });
     // Uncheck the schedule so Send fires immediately instead of re-queuing.
     fireEvent.click(screen.getByRole("switch"));
     expect(screen.getByRole("switch")).not.toBeChecked();
@@ -3411,10 +3482,12 @@ describe("Composer", () => {
       threadId: request.threadId,
       turnId: "turn-scheduled",
     }));
+    const scheduledApi = createScheduledActionApi();
 
     render(
       <Composer
         desktopApi={{
+          ...scheduledApi,
           onAgentEvent: () => () => undefined,
           startTurn,
         }}
@@ -3435,7 +3508,9 @@ describe("Composer", () => {
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "Scheduled for later" } });
     fireEvent.click(screen.getByRole("button", { name: "Schedule message" }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Send in 1h" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: "Send in 1h" }));
+    });
 
     // No active turn → the queued entry offers "Send now", not a dead "Steer".
     expect(screen.queryByRole("button", { name: "Steer" })).not.toBeInTheDocument();
@@ -3445,11 +3520,59 @@ describe("Composer", () => {
       fireEvent.click(sendNow);
     });
 
-    expect(startTurn).toHaveBeenCalledTimes(1);
-    expect(startTurn.mock.calls[0]![0].input).toEqual([
-      { type: "text", text: "Scheduled for later" },
-    ]);
+    expect(startTurn).not.toHaveBeenCalled();
+    expect(scheduledApi.sendScheduledThreadActionNow).toHaveBeenCalledWith({
+      id: "scheduled-1",
+    });
     expect(screen.queryByLabelText("Queued message")).not.toBeInTheDocument();
+  });
+
+  it("keeps a scheduled message visible when Send now admits it to the backend queue", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-10T12:00:00Z"));
+    const scheduledApi = createScheduledActionApi({
+      sendNowStatus: "queued",
+    });
+
+    render(
+      <Composer
+        desktopApi={{
+          ...scheduledApi,
+          onAgentEvent: () => () => undefined,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Queue scheduled now",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "Wait behind the active backend turn" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Schedule message" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: "Send in 1h" }));
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Send now" }));
+    });
+
+    expect(screen.getByLabelText("Queued message")).toHaveTextContent(
+      "Queued next",
+    );
+    expect(screen.getByLabelText("Queued message")).toHaveTextContent(
+      "Wait behind the active backend turn",
+    );
+    expect(screen.queryByRole("button", { name: "Send now" })).not.toBeInTheDocument();
   });
 
   it("preserves schedule selection through bare review configuration", async () => {
@@ -3465,6 +3588,7 @@ describe("Composer", () => {
     render(
       <Composer
         desktopApi={{
+          ...createScheduledActionApi(),
           onAgentEvent: () => () => undefined,
           startReview,
         }}
@@ -3494,9 +3618,11 @@ describe("Composer", () => {
       within(reviewTarget).getByRole("button", { name: "Send in 30m" })
     ).toBeEnabled();
 
-    fireEvent.click(
-      within(reviewTarget).getByRole("button", { name: "Send in 30m" })
-    );
+    await act(async () => {
+      fireEvent.click(
+        within(reviewTarget).getByRole("button", { name: "Send in 30m" })
+      );
+    });
 
     expect(startReview).not.toHaveBeenCalled();
     expect(screen.queryByRole("group", { name: "Review target" })).not.toBeInTheDocument();
@@ -3574,6 +3700,7 @@ describe("Composer", () => {
           },
         ]}
         desktopApi={{
+          ...createScheduledActionApi(),
           onAgentEvent: () => () => undefined,
           startTurn,
         }}
@@ -3594,11 +3721,13 @@ describe("Composer", () => {
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "After the reset" } });
     fireEvent.click(screen.getByRole("button", { name: "Schedule message" }));
-    fireEvent.click(
-      screen.getByRole("menuitem", {
-        name: "Send in 2h 34m (5h context reset)",
-      })
-    );
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("menuitem", {
+          name: "Send in 2h 34m (5h context reset)",
+        })
+      );
+    });
 
     expect(startTurn).not.toHaveBeenCalled();
     expect(screen.getByLabelText("Queued message")).toHaveTextContent(
@@ -3667,10 +3796,12 @@ describe("Composer", () => {
             });
         })
     );
+    const scheduledApi = createScheduledActionApi();
 
     const baseProps = {
       backends: [backendSummary("codex")],
       desktopApi: {
+        ...scheduledApi,
         onAgentEvent: (callback: NonNullable<DesktopApi["onAgentEvent"]> extends (
           listener: infer Listener,
         ) => unknown
@@ -3705,9 +3836,11 @@ describe("Composer", () => {
 
     expect(startTurn).toHaveBeenCalledTimes(1);
     expect(startReview).not.toHaveBeenCalled();
-    expect(screen.getByLabelText("Queued message")).toHaveTextContent(
-      "Review changes against main"
-    );
+    await waitFor(() => {
+      expect(screen.getByLabelText("Queued message")).toHaveTextContent(
+        "Review changes against main"
+      );
+    });
 
     await act(async () => {
       resolveStartTurn?.({
@@ -3730,14 +3863,17 @@ describe("Composer", () => {
       });
     });
 
-    await waitFor(() => {
-      expect(startReview).toHaveBeenCalledWith({
+    expect(startReview).not.toHaveBeenCalled();
+    expect(scheduledApi.createScheduledThreadAction).toHaveBeenCalledWith(
+      expect.objectContaining({
         backend: "codex",
         threadId: "thread-1",
-        target: { type: "baseBranch", branch: "main" },
-        delivery: "inline",
-      });
-    });
+        kind: "review",
+        review: expect.objectContaining({
+          target: { type: "baseBranch", branch: "main" },
+        }),
+      }),
+    );
   });
 
   it("keeps the review target picker for bare reviews while a turn start is pending", async () => {
@@ -4238,9 +4374,11 @@ describe("Composer", () => {
       reviewThreadId: request.threadId,
       turnId: "turn-review-1",
     }));
+    const scheduledApi = createScheduledActionApi();
     const baseProps = {
       backends: [backendSummary("codex")],
       desktopApi: {
+        ...scheduledApi,
         onAgentEvent: (callback: NonNullable<DesktopApi["onAgentEvent"]> extends (
           listener: infer Listener,
         ) => unknown
@@ -4347,14 +4485,10 @@ describe("Composer", () => {
       });
     });
 
-    await waitFor(() => {
-      expect(startReview).toHaveBeenCalledWith({
-        backend: "codex",
-        threadId: "thread-1",
-        target: { type: "baseBranch", branch: "main" },
-        delivery: "inline",
-      });
-    });
+    expect(startReview).not.toHaveBeenCalled();
+    expect(scheduledApi.createScheduledThreadAction).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "review" }),
+    );
   });
 
   it("resets server queued turn state when switching composer scopes", async () => {
@@ -4465,9 +4599,11 @@ describe("Composer", () => {
       reviewThreadId: request.threadId,
       turnId: "turn-review-1",
     }));
+    const scheduledApi = createScheduledActionApi();
     const baseProps = {
       backends: [backendSummary("codex")],
       desktopApi: {
+        ...scheduledApi,
         onAgentEvent: () => () => undefined,
         startReview,
         startTurn,
@@ -4573,9 +4709,11 @@ describe("Composer", () => {
       reviewThreadId: request.threadId,
       turnId: "turn-review-1",
     }));
+    const scheduledApi = createScheduledActionApi();
     const baseProps = {
       backends: [backendSummary("codex")],
       desktopApi: {
+        ...scheduledApi,
         onAgentEvent: () => () => undefined,
         startReview,
         startTurn,
@@ -6053,22 +6191,18 @@ describe("Composer", () => {
           };
         }) => void)
       | undefined;
-    const startTurn = vi.fn(async (request: StartTurnRequest) => ({
-      backend: request.backend,
-      threadId: request.threadId,
-      turnId: "turn-2",
-    }));
+    const scheduledApi = createScheduledActionApi();
 
     render(
       <Composer
         activeTurnId="turn-1"
         backends={[backendSummary("codex")]}
         desktopApi={{
+          ...scheduledApi,
           onAgentEvent: (callback) => {
             agentEventHandler = callback as typeof agentEventHandler;
             return () => undefined;
           },
-          startTurn,
         }}
         disabled={false}
         draftStore={draftStore}
@@ -6100,19 +6234,23 @@ describe("Composer", () => {
     });
 
     await waitFor(() => {
-      expect(startTurn).toHaveBeenCalledWith(
+      expect(scheduledApi.createScheduledThreadAction).toHaveBeenCalledWith(
         expect.objectContaining({
           backend: "codex",
           threadId: "thread-1",
-          input: [
-            { type: "text", text: "Compare [@Jeep](~/Downloads/Jeep)" },
-            {
-              type: "localFile",
-              name: "Jeep",
-              path: "/Users/huntharo/Downloads/Jeep",
-              pdfRenderProfile: "high",
-            },
-          ],
+          kind: "turn",
+          origin: "desktop",
+          turn: expect.objectContaining({
+            input: [
+              { type: "text", text: "Compare [@Jeep](~/Downloads/Jeep)" },
+              {
+                type: "localFile",
+                name: "Jeep",
+                path: "/Users/huntharo/Downloads/Jeep",
+                pdfRenderProfile: "high",
+              },
+            ],
+          }),
         }),
       );
     });
@@ -7832,11 +7970,13 @@ describe("Composer", () => {
       turnId: string;
     }>();
     const startReview = vi.fn(() => startReviewDeferred.promise);
+    const scheduledApi = createScheduledActionApi();
 
     render(
       <Composer
         addOptimisticReviewEntry={addOptimisticReviewEntry}
         desktopApi={{
+          ...scheduledApi,
           onAgentEvent: () => () => undefined,
           startReview,
           startTurn,
@@ -7876,6 +8016,7 @@ describe("Composer", () => {
     await clickButton("Queue");
 
     expect(startReview).toHaveBeenCalledTimes(1);
+    expect(scheduledApi.createScheduledThreadAction).toHaveBeenCalledTimes(1);
     expect(addOptimisticReviewEntry).toHaveBeenCalledTimes(1);
     expect(startTurn).not.toHaveBeenCalled();
     expect(screen.getByText("Queued next")).toBeInTheDocument();
@@ -8042,8 +8183,10 @@ describe("Composer", () => {
       reviewThreadId: request.threadId,
       turnId: "turn-review-1",
     }));
+    const scheduledApi = createScheduledActionApi();
     const baseProps = {
       desktopApi: {
+        ...scheduledApi,
         onAgentEvent: () => () => undefined,
         startReview,
       },
@@ -8095,21 +8238,20 @@ describe("Composer", () => {
     fireEvent.click(screen.getByRole("button", { name: "Start review" }));
 
     expect(startReview).not.toHaveBeenCalled();
-    expect(screen.getByText("Queued next")).toBeInTheDocument();
+    expect(await screen.findByText("Queued next")).toBeInTheDocument();
     expect(screen.getByText("Review changes against main")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Steer" })).not.toBeInTheDocument();
 
     rerender(<Composer {...baseProps} activeTurnId={undefined} />);
 
-    await waitFor(() => {
-      expect(startReview).toHaveBeenCalledWith({
+    expect(startReview).not.toHaveBeenCalled();
+    expect(scheduledApi.createScheduledThreadAction).toHaveBeenCalledWith(
+      expect.objectContaining({
         backend: "codex",
         threadId: "thread-1",
-        target: { type: "baseBranch", branch: "main" },
-        delivery: "inline",
-        model: "gpt-5.5",
-      });
-    });
+        kind: "review",
+      }),
+    );
   });
 
   it("keeps the review target picker for bare review commands during an active turn", async () => {
@@ -8156,8 +8298,10 @@ describe("Composer", () => {
     const imageFile = new File([new Uint8Array([1, 2, 3])], "next-draft.png", {
       type: "image/png",
     });
+    const scheduledApi = createScheduledActionApi();
     const baseProps = {
       desktopApi: {
+        ...scheduledApi,
         onAgentEvent: () => () => undefined,
         startReview,
       },
@@ -8200,14 +8344,10 @@ describe("Composer", () => {
 
     rerender(<Composer {...baseProps} activeTurnId={undefined} />);
 
-    await waitFor(() => {
-      expect(startReview).toHaveBeenCalledWith({
-        backend: "codex",
-        threadId: "thread-1",
-        target: { type: "baseBranch", branch: "main" },
-        delivery: "inline",
-      });
-    });
+    expect(startReview).not.toHaveBeenCalled();
+    expect(scheduledApi.createScheduledThreadAction).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "review" }),
+    );
     expect(
       screen.queryByText("/review does not accept image attachments.")
     ).not.toBeInTheDocument();

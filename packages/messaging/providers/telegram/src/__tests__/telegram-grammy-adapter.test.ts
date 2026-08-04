@@ -212,7 +212,7 @@ describe("TelegramAdapter callback persistence", () => {
     });
   });
 
-  it("registers Agent and Monitor with Telegram bot commands", async () => {
+  it("registers Agent, Monitor, and scheduled messages with Telegram bot commands", async () => {
     const grammyBot = createGrammyBot();
     const adapter = new TelegramAdapter({
       api: adaptGrammyBot(grammyBot).api,
@@ -251,6 +251,14 @@ describe("TelegramAdapter callback persistence", () => {
       {
         command: "monitor",
         description: "Monitor recent PwrAgent threads",
+      },
+      {
+        command: "schedule",
+        description: "Schedule a message for this thread",
+      },
+      {
+        command: "scheduled",
+        description: "List or manage scheduled messages",
       },
     ]);
   });

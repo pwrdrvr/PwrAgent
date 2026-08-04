@@ -52,6 +52,8 @@ export type MessagingCommandVerb =
   | "status"
   | "detach"
   | "monitor"
+  | "schedule"
+  | "scheduled"
   | "help";
 
 export type MessagingCommandSpec = {
@@ -79,6 +81,17 @@ export const MESSAGING_REVIEW_HELP_SPEC: MessagingCommandHelpSpec = {
   verb: "review",
   description: "start a code review for the bound thread",
 };
+
+export const MESSAGING_SCHEDULE_HELP_SPECS: readonly MessagingCommandHelpSpec[] = [
+  {
+    verb: "schedule",
+    description: "schedule a message for the bound thread",
+  },
+  {
+    verb: "scheduled",
+    description: "list or manage scheduled messages",
+  },
+];
 
 /**
  * Canonical command set, in the order they should appear in the

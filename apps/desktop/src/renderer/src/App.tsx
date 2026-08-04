@@ -72,6 +72,7 @@ import { setSidebarResizing } from "./lib/sidebar-resize-signal";
 import { useIntegratedTerminals } from "./lib/useIntegratedTerminals";
 import { useThreadSkills } from "./lib/useThreadSkills";
 import { useQueuedTurnRelease } from "./lib/useQueuedTurnRelease";
+import { useScheduledThreadActionProjection } from "./lib/useScheduledThreadActionProjection";
 import { useThreadQueuedMessageIndicators } from "./lib/useThreadQueuedMessageIndicators";
 import { CodexConfigWarningBanner } from "./features/codex-config/CodexConfigWarningBanner";
 import { AppNoticeToast } from "./features/notifications/AppNoticeToast";
@@ -873,6 +874,10 @@ function DesktopAppShell(props: {
     baseComposerDraftStore,
     desktopApi,
   );
+  useScheduledThreadActionProjection({
+    composerDraftStore,
+    desktopApi,
+  });
   const replayCodexProfileSetup = settings.snapshot
     ? inferReplayCodexProfileSetup(
         settings.snapshot.general.codexProfileModel?.value ?? "shared",

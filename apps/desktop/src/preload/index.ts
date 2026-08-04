@@ -11,6 +11,7 @@ import type {
   ArchiveThreadResponse,
   CancelQueuedTurnRequest,
   CancelQueuedTurnResponse,
+  CreateScheduledThreadActionRequest,
   DesktopAppearanceDensity,
   DesktopAppearanceTheme,
   CancelThreadExecutionModeQueueRequest,
@@ -198,6 +199,8 @@ import type {
   StartThreadResponse,
   StartTurnRequest,
   StartTurnResponse,
+  ScheduledThreadActionIdRequest,
+  ScheduledThreadActionMutationResponse,
   SubmitServerRequestRequest,
   SubmitServerRequestResponse,
   TrustCodexProjectRequest,
@@ -205,6 +208,7 @@ import type {
   CheckDesktopCodexAuthProfileStatusRequest,
   CheckDesktopCodexAuthProfileStatusResponse,
   UpdateAutomationRequest,
+  UpdateScheduledThreadActionRequest,
   ClearDesktopSettingsSecretRequest,
   CompleteOnboardingCodexBootstrapRequest,
   CompleteOnboardingCodexBootstrapResponse,
@@ -213,6 +217,8 @@ import type {
   ListComposerDraftLatestResponse,
   ListComposerDraftRecoveryCandidatesRequest,
   ListComposerDraftRecoveryCandidatesResponse,
+  ListScheduledThreadActionsRequest,
+  ListScheduledThreadActionsResponse,
   CreateDesktopPwrAgentProfileRequest,
   CreateDesktopPwrAgentProfileResponse,
   CreateDesktopCodexAuthProfileRequest,
@@ -320,6 +326,11 @@ import type {
 } from "../shared/integrated-terminal";
 import {
   AGENT_CANCEL_QUEUED_TURN_CHANNEL,
+  SCHEDULED_ACTIONS_CANCEL_CHANNEL,
+  SCHEDULED_ACTIONS_CREATE_CHANNEL,
+  SCHEDULED_ACTIONS_LIST_CHANNEL,
+  SCHEDULED_ACTIONS_SEND_NOW_CHANNEL,
+  SCHEDULED_ACTIONS_UPDATE_CHANNEL,
   AGENT_CANCEL_THREAD_EXECUTION_MODE_QUEUE_CHANNEL,
   AGENT_APPLY_THREAD_MODEL_MIGRATION_CHANNEL,
   AGENT_EVENT_CHANNEL,
@@ -1163,6 +1174,26 @@ const desktopApi = Object.freeze({
     request: CancelQueuedTurnRequest,
   ): Promise<CancelQueuedTurnResponse> =>
     await ipcRenderer.invoke(AGENT_CANCEL_QUEUED_TURN_CHANNEL, request),
+  listScheduledThreadActions: async (
+    request?: ListScheduledThreadActionsRequest,
+  ): Promise<ListScheduledThreadActionsResponse> =>
+    await ipcRenderer.invoke(SCHEDULED_ACTIONS_LIST_CHANNEL, request),
+  createScheduledThreadAction: async (
+    request: CreateScheduledThreadActionRequest,
+  ): Promise<ScheduledThreadActionMutationResponse> =>
+    await ipcRenderer.invoke(SCHEDULED_ACTIONS_CREATE_CHANNEL, request),
+  updateScheduledThreadAction: async (
+    request: UpdateScheduledThreadActionRequest,
+  ): Promise<ScheduledThreadActionMutationResponse> =>
+    await ipcRenderer.invoke(SCHEDULED_ACTIONS_UPDATE_CHANNEL, request),
+  cancelScheduledThreadAction: async (
+    request: ScheduledThreadActionIdRequest,
+  ): Promise<ScheduledThreadActionMutationResponse> =>
+    await ipcRenderer.invoke(SCHEDULED_ACTIONS_CANCEL_CHANNEL, request),
+  sendScheduledThreadActionNow: async (
+    request: ScheduledThreadActionIdRequest,
+  ): Promise<ScheduledThreadActionMutationResponse> =>
+    await ipcRenderer.invoke(SCHEDULED_ACTIONS_SEND_NOW_CHANNEL, request),
   interruptTurn: async (
     request: InterruptTurnRequest
   ): Promise<InterruptTurnResponse> =>

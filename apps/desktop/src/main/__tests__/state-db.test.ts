@@ -73,6 +73,32 @@ describe("StateDb", () => {
     expect(prLookupColumns.map((column) => column.name)).toContain("provider");
   });
 
+  it("creates durable scheduled thread action storage", () => {
+    const table = stateDb.raw
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+      )
+      .get("scheduled_thread_actions") as { name: string } | undefined;
+    expect(table?.name).toBe("scheduled_thread_actions");
+
+    const columns = stateDb.raw
+      .prepare("PRAGMA table_info(scheduled_thread_actions)")
+      .all() as Array<{ name: string }>;
+    expect(columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining([
+        "action_id",
+        "backend",
+        "thread_id",
+        "kind",
+        "origin",
+        "status",
+        "scheduled_for",
+        "queue_entry_id",
+        "payload",
+      ]),
+    );
+  });
+
   it("creates durable pull request status watch storage", () => {
     const table = stateDb.raw
       .prepare(

@@ -24816,6 +24816,147 @@ script = "printf setup"
     await registry.close();
   });
 
+  it("keeps independently scheduled reviews distinct behind one active turn", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: {
+        methods: ["turn/start", "review/start", "thread/resume"],
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null,
+    });
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "parent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const first = await registry.submitReview({
+      backend: "codex",
+      threadId: "parent-thread",
+      idempotencyKey: "scheduled-action:first",
+      target: { type: "baseBranch", branch: "main" },
+      delivery: "inline",
+    });
+    const second = await registry.submitReview({
+      backend: "codex",
+      threadId: "parent-thread",
+      idempotencyKey: "scheduled-action:second",
+      target: { type: "uncommittedChanges" },
+      delivery: "inline",
+    });
+    const third = await registry.submitReview({
+      backend: "codex",
+      threadId: "parent-thread",
+      idempotencyKey: "scheduled-action:third",
+      target: { type: "baseBranch", branch: "develop" },
+      delivery: "inline",
+    });
+    expect(first.status).toBe("scheduled");
+    expect(second.status).toBe("scheduled");
+    expect(third.status).toBe("scheduled");
+    if (
+      first.status !== "scheduled"
+      || second.status !== "scheduled"
+      || third.status !== "scheduled"
+    ) {
+      throw new Error("Expected all reviews to wait behind the active turn.");
+    }
+    expect(first.pendingReviewId).not.toBe(second.pendingReviewId);
+    expect(second.pendingReviewId).not.toBe(third.pendingReviewId);
+    expect(registry.cancelPendingReview(
+      first.pendingReviewId,
+      "Cancelled first scheduled review.",
+    )).toBe(true);
+
+    await codexClient.emit({
+      method: "turn/completed",
+      params: {
+        threadId: "parent-thread",
+        turnId: "turn-1",
+        turn: { id: "turn-1", status: "completed", output: [] },
+      },
+    });
+
+    expect(codexClient.lastStartReviewParams).toEqual({
+      threadId: "parent-thread",
+      target: { type: "uncommittedChanges" },
+      delivery: "inline",
+    });
+    expect(events).toContainEqual({
+      backend: "codex",
+      notification: {
+        method: "thread/reviewStart/updated",
+        params: expect.objectContaining({
+          pendingReviewId: second.pendingReviewId,
+          status: "started",
+        }),
+      },
+    });
+    expect(events).not.toContainEqual({
+      backend: "codex",
+      notification: {
+        method: "thread/reviewStart/updated",
+        params: expect.objectContaining({
+          pendingReviewId: first.pendingReviewId,
+          status: "started",
+        }),
+      },
+    });
+    expect(events).not.toContainEqual({
+      backend: "codex",
+      notification: {
+        method: "thread/reviewStart/updated",
+        params: expect.objectContaining({
+          pendingReviewId: third.pendingReviewId,
+          status: "started",
+        }),
+      },
+    });
+
+    await codexClient.emit({
+      method: "turn/completed",
+      params: {
+        threadId: "parent-thread",
+        turnId: "turn-review-1",
+        turn: { id: "turn-review-1", status: "completed", output: [] },
+      },
+    });
+
+    expect(codexClient.lastStartReviewParams).toEqual({
+      threadId: "parent-thread",
+      target: { type: "baseBranch", branch: "develop" },
+      delivery: "inline",
+    });
+    expect(events).toContainEqual({
+      backend: "codex",
+      notification: {
+        method: "thread/reviewStart/updated",
+        params: expect.objectContaining({
+          pendingReviewId: third.pendingReviewId,
+          status: "started",
+        }),
+      },
+    });
+
+    await registry.close();
+  });
+
   it("emits a terminal outcome when a deferred review cannot start", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: {

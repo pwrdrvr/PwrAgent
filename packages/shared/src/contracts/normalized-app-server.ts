@@ -1,4 +1,5 @@
 import type { AutomationRunOutputDecision } from "./automations";
+import type { ScheduledThreadAction } from "./scheduled-thread-actions";
 import type {
   MessagingChannelKind,
   MessagingConversationKind,
@@ -1524,7 +1525,7 @@ export type AppServerNotification =
       params: {
         threadId: string;
         queueEntryId: string;
-        origin: "manual" | "automation" | "messaging";
+        origin: "manual" | "automation" | "messaging" | "scheduled";
         status: "queued" | "started" | "failed" | "cancelled" | "terminal";
         position?: number;
         turnId?: string;
@@ -1533,6 +1534,12 @@ export type AppServerNotification =
         errorMessage?: string;
         finalText?: string;
         terminalStatus?: string;
+      };
+    }
+  | {
+      method: "thread/scheduledAction/updated";
+      params: {
+        action: ScheduledThreadAction;
       };
     }
   | {

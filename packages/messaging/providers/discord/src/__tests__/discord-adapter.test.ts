@@ -32,7 +32,7 @@ const TEST_OTHER_USER_ID = "1480556454498009356";
 const TEST_AUTHORIZED_GUILD_IDS = [{ id: TEST_GUILD_ID, displayName: "" }];
 
 describe("discord adapter", () => {
-  it("declares Monitor as a desired Discord application command", () => {
+  it("declares backend-owned scheduling as Discord application commands", () => {
     expect(DISCORD_APPLICATION_COMMANDS.map((command) => command.name)).toEqual([
       "resume",
       "agent",
@@ -40,6 +40,8 @@ describe("discord adapter", () => {
       "status",
       "detach",
       "monitor",
+      "schedule",
+      "scheduled",
     ]);
   });
 

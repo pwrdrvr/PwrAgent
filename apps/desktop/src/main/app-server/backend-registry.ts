@@ -10255,6 +10255,7 @@ export class DesktopBackendRegistry {
   }
 
   async submitTurn(params: {
+    queueEntryId?: string;
     backend: AppServerBackendKind;
     threadId: string;
     input: AppServerTurnInputItem[];
@@ -10270,9 +10271,10 @@ export class DesktopBackendRegistry {
     automationRunId?: string;
     messageOrigin?: AppServerThreadMessageOrigin;
   }): Promise<ThreadTurnQueueSubmissionResult> {
-    const { origin = "manual", ...entry } = params;
+    const { origin = "manual", queueEntryId, ...entry } = params;
     return await this.threadTurnQueue.submit({
       ...entry,
+      ...(queueEntryId ? { id: queueEntryId } : {}),
       origin,
     });
   }
@@ -11472,7 +11474,9 @@ export class DesktopBackendRegistry {
     });
   }
 
-  async submitReview(params: StartReviewRequest): Promise<
+  async submitReview(params: StartReviewRequest & {
+    idempotencyKey?: string;
+  }): Promise<
     | {
         status: "started";
         response: StartReviewResponse;
@@ -11483,37 +11487,53 @@ export class DesktopBackendRegistry {
         invokingTurnId: string;
       }
   > {
+    const { idempotencyKey, ...request } = params;
     const activeTurn = this.getActiveTurnForThread({
-      backend: params.backend,
-      threadId: params.threadId,
+      backend: request.backend,
+      threadId: request.threadId,
     });
     const invokingTurnId =
       activeTurn?.turnId
       ?? this.getPendingTurnForThread({
-        backend: params.backend,
-        threadId: params.threadId,
+        backend: request.backend,
+        threadId: request.threadId,
       })?.turnId
       ?? (
-        params.backend === "codex"
-        && this.reservedCodexStartThreadIds.has(params.threadId)
-          ? `pending:${params.threadId}`
+        request.backend === "codex"
+        && this.reservedCodexStartThreadIds.has(request.threadId)
+          ? `pending:${request.threadId}`
           : undefined
       );
     if (!invokingTurnId) {
       return {
         status: "started",
-        response: await this.startReview(params),
+        response: await this.startReview(request),
       };
     }
     const pending = this.scheduleReviewStart({
       invokingTurnId,
-      request: params,
+      request,
+      idempotencyKey,
     });
     return {
       status: "scheduled",
       pendingReviewId: pending.pendingReviewId,
       invokingTurnId: pending.invokingTurnId,
     };
+  }
+
+  cancelPendingReview(pendingReviewId: string, reason: string): boolean {
+    const pending = this.pendingReviewStarts.get(pendingReviewId);
+    if (!pending || pending.status !== "scheduled") {
+      return false;
+    }
+    this.pendingReviewStarts.set(pendingReviewId, {
+      ...pending,
+      status: "cancelled",
+      error: reason,
+      updatedAt: Date.now(),
+    });
+    return true;
   }
 
   private scheduleReviewStart(params: {
@@ -11532,13 +11552,15 @@ export class DesktopBackendRegistry {
         return existing;
       }
     }
-    const duplicate = [...this.pendingReviewStarts.values()].find(
-      (candidate) =>
-        candidate.backend === params.request.backend &&
-        candidate.threadId === params.request.threadId &&
-        candidate.invokingTurnId === params.invokingTurnId &&
-        candidate.status === "scheduled",
-    );
+    const duplicate = params.idempotencyKey
+      ? undefined
+      : [...this.pendingReviewStarts.values()].find(
+          (candidate) =>
+            candidate.backend === params.request.backend &&
+            candidate.threadId === params.request.threadId &&
+            candidate.invokingTurnId === params.invokingTurnId &&
+            candidate.status === "scheduled",
+        );
     if (duplicate) {
       return duplicate;
     }
@@ -11644,6 +11666,23 @@ export class DesktopBackendRegistry {
             },
           },
         });
+        for (const waiting of pending) {
+          if (waiting.pendingReviewId === candidate.pendingReviewId) {
+            continue;
+          }
+          const currentWaiting = this.pendingReviewStarts.get(
+            waiting.pendingReviewId,
+          );
+          if (!currentWaiting || currentWaiting.status !== "scheduled") continue;
+          this.pendingReviewStarts.set(waiting.pendingReviewId, {
+            ...currentWaiting,
+            invokingTurnId: response.turnId,
+            updatedAt: Date.now(),
+          });
+        }
+        // An inline review is now the active turn. Remaining reviews wait for
+        // its terminal lifecycle instead of starting concurrently.
+        break;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         this.pendingReviewStarts.set(candidate.pendingReviewId, {

@@ -8,7 +8,11 @@ import type {
   ThreadIdentifier,
 } from "@pwragent/shared";
 
-export type ThreadTurnQueueOrigin = "manual" | "automation" | "messaging";
+export type ThreadTurnQueueOrigin =
+  | "manual"
+  | "automation"
+  | "messaging"
+  | "scheduled";
 
 export type ThreadTurnQueueEntry = {
   id: string;

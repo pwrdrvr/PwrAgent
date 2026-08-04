@@ -4,6 +4,10 @@ import { getDesktopBackendRegistry } from "./app-server/backend-registry";
 import { createPwrAgentAppManagementHandler } from "./agent-tools/pwragent-app-management-service";
 import { disposeAgentIpcHandlers, registerAgentIpcHandlers } from "./ipc/agent-ipc";
 import {
+  disposeScheduledActionIpcHandlers,
+  registerScheduledActionIpcHandlers,
+} from "./ipc/scheduled-actions-ipc";
+import {
   disposeAppMetadataIpcHandlers,
   registerAppMetadataIpcHandlers,
 } from "./ipc/app-metadata";
@@ -401,6 +405,7 @@ function disposeMainProcessResourcesSync(): void {
   profileFocusRequestWatcher = null;
   startupCpuProfilerForNewWindows = undefined;
   disposeAgentIpcHandlers();
+  disposeScheduledActionIpcHandlers();
   disposeApplicationIpcHandlers();
   disposeAutomationIpcHandlers();
   disposeAppMetadataIpcHandlers();
@@ -847,6 +852,7 @@ export function bootstrapApp(): void {
     installWindowMenuRefreshHandlers();
     registerAppServerIpcHandlers();
     registerAgentIpcHandlers();
+    registerScheduledActionIpcHandlers();
     registerApplicationIpcHandlers();
     registerAutomationIpcHandlers();
     registerAppMetadataIpcHandlers();
