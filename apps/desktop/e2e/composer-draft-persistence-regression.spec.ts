@@ -490,8 +490,9 @@ test("recovers an accidentally deleted Tiptap reply draft from another blank com
     const tiptapInput = app.window.getByTestId("composer-tiptap-input");
     const textbox = app.window.getByRole("textbox", { name: "Reply" });
 
-    await textbox.focus();
-    await app.window.keyboard.type(deletedDraft);
+    // The recovery keystrokes are load-bearing here, not per-character typing.
+    // Avoid zero-delay key event loss on an overloaded shared macOS VM.
+    await textbox.fill(deletedDraft);
     await expect(tiptapInput).toHaveAttribute("data-value", deletedDraft);
 
     await app.window.keyboard.press(

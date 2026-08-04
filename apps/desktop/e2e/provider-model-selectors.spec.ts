@@ -6,9 +6,23 @@ import type { AppServerBackendKind, NavigationLaunchpadDefaults } from "@pwragen
 import { launchElectronApp } from "./fixtures/electron-app";
 
 async function assertTangerineFocusRing(locator: Locator) {
-  await locator.focus();
-  await expect(locator).toHaveCSS("outline-color", "rgb(255, 138, 31)");
-  await expect(locator).toHaveCSS("outline-style", "solid");
+  await expect
+    .poll(async () =>
+      await locator.evaluate((element) => {
+        (element as HTMLElement).focus();
+        const style = getComputedStyle(element);
+        return {
+          isActive: document.activeElement === element,
+          outlineColor: style.outlineColor,
+          outlineStyle: style.outlineStyle,
+        };
+      })
+    )
+    .toEqual({
+      isActive: true,
+      outlineColor: "rgb(255, 138, 31)",
+      outlineStyle: "solid",
+    });
 }
 
 async function selectComposerOption(params: {
