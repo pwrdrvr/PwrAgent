@@ -23,8 +23,9 @@ import ReactMarkdown, { type Components, type UrlTransform } from "react-markdow
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import { AppIcon } from "../../components/AppIcon";
-import { CloseIcon, FolderIcon, PopoutIcon } from "../../icons";
+import { CloseIcon, CopyIcon, FolderIcon, PopoutIcon } from "../../icons";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { copyText } from "../../lib/copy-text";
 import { repairNestedLanguageFences } from "../../lib/markdown-fences";
 import { useMarkdownMathRuntime } from "../../lib/markdown-rendering-options";
 import {
@@ -353,7 +354,9 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
             }}
             rel="noopener noreferrer"
             target="_blank"
-            title={isLocalMarkdownFile ? "Open in PwrAgent" : href || undefined}
+            title={isLocalMarkdownFile && localTarget
+              ? tildifyPath(localTarget.path)
+              : href || undefined}
           >
             {anchorProps.children}
           </a>
@@ -723,7 +726,22 @@ function MarkdownDocumentModal(props: {
         <header className="markdown-document-modal__head">
           <div className="markdown-document-modal__title-wrap">
             <h2 className="markdown-document-modal__title">{props.target.label}</h2>
-            <p className="markdown-document-modal__path">{props.target.path}</p>
+            <div className="markdown-document-modal__path-row">
+              <p className="markdown-document-modal__path">
+                {tildifyPath(props.target.path)}
+              </p>
+              <button
+                type="button"
+                className="markdown-document-modal__path-copy"
+                aria-label="Copy path"
+                title="Copy path to clipboard"
+                onClick={() => {
+                  void copyText(props.target.path, props.desktopApi);
+                }}
+              >
+                <CopyIcon size={13} aria-hidden="true" />
+              </button>
+            </div>
           </div>
           <div className="markdown-document-modal__actions">
             {props.editorApplication ? (

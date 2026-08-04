@@ -103,8 +103,55 @@ describe("ThreadMarkdown", () => {
     );
     expect(screen.getByRole("link", { name: "AGENTS.md" })).toHaveAttribute(
       "title",
-      "Open in PwrAgent"
+      "/Users/huntharo/PwrAgent/AGENTS.md"
     );
+  });
+
+  it("tildifies PwrAgent file-link tooltips inside the home directory", () => {
+    const windowWithHomeDir = window as Window & { __pwragentHomeDir?: string };
+    const previousHomeDir = windowWithHomeDir.__pwragentHomeDir;
+    windowWithHomeDir.__pwragentHomeDir = "/Users/huntharo";
+
+    try {
+      render(
+        <ThreadMarkdown
+          text={"Open [`AGENTS.md`](/Users/huntharo/PwrAgent/AGENTS.md)."}
+        />
+      );
+
+      expect(screen.getByRole("link", { name: "AGENTS.md" })).toHaveAttribute(
+        "title",
+        "~/PwrAgent/AGENTS.md"
+      );
+    } finally {
+      windowWithHomeDir.__pwragentHomeDir = previousHomeDir;
+    }
+  });
+
+  it("shows a POSIX home-relative path in the PwrAgent document header", async () => {
+    const windowWithHomeDir = window as Window & { __pwragentHomeDir?: string };
+    const previousHomeDir = windowWithHomeDir.__pwragentHomeDir;
+    windowWithHomeDir.__pwragentHomeDir = "/Users/huntharo";
+
+    try {
+      render(
+        <ThreadMarkdown
+          desktopApi={{
+            readMarkdownFile: vi.fn(async (request: { path: string }) => ({
+              path: request.path,
+              content: "# AGENTS",
+            })),
+          }}
+          text={"Open [`AGENTS.md`](/Users/huntharo/PwrAgent/AGENTS.md)."}
+        />
+      );
+
+      fireEvent.click(screen.getByRole("link", { name: "AGENTS.md" }));
+
+      expect(await screen.findByText("~/PwrAgent/AGENTS.md")).toBeInTheDocument();
+    } finally {
+      windowWithHomeDir.__pwragentHomeDir = previousHomeDir;
+    }
   });
 
   it("leaves LaTeX untypeset when experimental math rendering is disabled", () => {
@@ -330,6 +377,7 @@ describe("ThreadMarkdown", () => {
   it("opens markdown file links in a document modal and keeps the editor icon separate", async () => {
     const openApplication = vi.fn(async () => ({ opened: true as const }));
     const openMarkdownFileViewer = vi.fn(async () => ({ opened: true as const }));
+    const copyPath = vi.fn(async () => undefined);
     const readMarkdownFile = vi.fn(async (request: { path: string }) => ({
       path: request.path,
       content: "# AGENTS\n\nUse the repo guidance.",
@@ -359,7 +407,12 @@ describe("ThreadMarkdown", () => {
             discovery: { candidates: [] },
           },
         }}
-        desktopApi={{ openApplication, openMarkdownFileViewer, readMarkdownFile }}
+        desktopApi={{
+          copyText: copyPath,
+          openApplication,
+          openMarkdownFileViewer,
+          readMarkdownFile,
+        }}
         fileViewerContext={{
           key: "codex:thread-1",
           title: "Files - Thread title",
@@ -372,7 +425,7 @@ describe("ThreadMarkdown", () => {
 
     expect(screen.getByRole("link", { name: "AGENTS.md" })).toHaveAttribute(
       "title",
-      "Open in PwrAgent"
+      "/repo/PwrAgent/AGENTS.md"
     );
 
     fireEvent.click(
@@ -399,6 +452,11 @@ describe("ThreadMarkdown", () => {
     });
     expect(screen.getByRole("heading", { name: "AGENTS" })).toBeInTheDocument();
     expect(openApplication).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy path" }));
+    await waitFor(() => {
+      expect(copyPath).toHaveBeenCalledWith("/repo/PwrAgent/AGENTS.md");
+    });
 
     fireEvent.click(screen.getByRole("button", { name: "Open in detached files window" }));
 

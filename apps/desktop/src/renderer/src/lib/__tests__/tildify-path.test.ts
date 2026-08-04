@@ -26,8 +26,10 @@ describe("tildifyPath", () => {
     );
   });
 
-  it("matches a back-slashed Windows home against a forward-slashed path", () => {
-    expect(tildifyPath("C:/Users/foo/dev/app", "C:\\Users\\foo")).toBe("~/dev/app");
+  it("keeps Windows home paths in their native form", () => {
+    expect(tildifyPath("C:\\Users\\foo\\dev\\app", "C:\\Users\\foo")).toBe(
+      "C:\\Users\\foo\\dev\\app",
+    );
   });
 
   it("returns the path unchanged when the home directory is unknown", () => {
