@@ -297,9 +297,11 @@ function mergePrSummariesByStatusKey(
     const normalized = normalizePrSummary(pr);
     byKey.set(buildPullRequestStatusKey(normalized), normalized);
   }
-  const merged = [...byKey.values()].sort((left, right) =>
-    buildPullRequestStatusKey(left).localeCompare(buildPullRequestStatusKey(right)),
-  );
+  // Map replacement retains the existing key's position, while a genuinely
+  // new attachment is appended. The renderer uses this persisted order for
+  // its left-to-right PR chips, so the most recently attached PR stays at the
+  // right edge instead of being reordered by its canonical string key.
+  const merged = [...byKey.values()];
   return merged.length > 0 ? merged : undefined;
 }
 
