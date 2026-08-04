@@ -946,6 +946,40 @@ describe("Tangerine Terminal theme contract", () => {
     expect(inlineCodeRule).toContain("max-width: 100%;");
   });
 
+  it("overlays the inline code copy affordance on hover and keyboard focus", () => {
+    const inlineCodeWrapperRule = extractRuleBody(
+      css,
+      ".transcript-message__inline-code",
+    );
+    expect(inlineCodeWrapperRule).toContain("position: relative;");
+    expect(inlineCodeWrapperRule).toContain("max-width: 100%;");
+    expect(inlineCodeWrapperRule).toContain("vertical-align: baseline;");
+
+    const inlineCopyRule = extractRuleBody(css, ".transcript-copy-button--inline");
+    expect(inlineCopyRule).toContain("opacity: 1;");
+    expect(inlineCopyRule).toContain("background: transparent;");
+    expect(inlineCopyRule).not.toContain("vertical-align: text-bottom;");
+    expect(css).not.toMatch(
+      /\.transcript-message__inline-code \.transcript-message__code\s*\{/,
+    );
+
+    const inlineOverlayRule = extractRuleBody(
+      css,
+      ".transcript-copy-button--inline::after",
+    );
+    expect(inlineOverlayRule).toContain("border: 1px solid var(--border-subtle);");
+    expect(inlineOverlayRule).toContain(
+      "background: color-mix(in srgb, var(--bg-panel-elevated) 92%, transparent);",
+    );
+
+    expect(css).toMatch(
+      /\.transcript-copy-button--inline:hover::before,\s*\.transcript-copy-button--inline:focus-visible::before,[\s\S]*?\{[\s\S]*?opacity:\s*1;[\s\S]*?\}/,
+    );
+    expect(css).toMatch(
+      /\.transcript-copy-button--inline:hover::after,\s*\.transcript-copy-button--inline:focus-visible::after,[\s\S]*?\{[\s\S]*?border-color:\s*var\(--accent-border\);[\s\S]*?opacity:\s*1;[\s\S]*?\}/,
+    );
+  });
+
   it("wraps fenced code blocks the same way the composer does", () => {
     // The composer's `<pre>` uses `white-space: pre-wrap` so a pasted
     // long line wraps inside the input rather than scrolling. The

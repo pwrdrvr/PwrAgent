@@ -105,6 +105,22 @@ describe("ThreadMarkdown", () => {
       "title",
       "/Users/huntharo/PwrAgent/AGENTS.md"
     );
+    expect(
+      screen.getByRole("link", { name: "AGENTS.md" }).querySelector('[role="button"]')
+    ).toBeNull();
+  });
+
+  it("keeps inline code link text navigable instead of turning it into a copy control", () => {
+    render(
+      <ThreadMarkdown text={"Read [`npm install`](https://example.com/install)."} />
+    );
+
+    const link = screen.getByRole("link", { name: "npm install" });
+    const code = link.querySelector<HTMLElement>("code.transcript-message__code");
+    expect(link).toHaveAttribute("href", "https://example.com/install");
+    expect(code).toHaveTextContent("npm install");
+    expect(link.querySelector('[role="button"]')).toBeNull();
+    expect(fireEvent.click(code!)).toBe(true);
   });
 
   it("tildifies PwrAgent file-link tooltips inside the home directory", () => {
@@ -920,6 +936,32 @@ describe("ThreadMarkdown", () => {
     await waitFor(() => {
       expect(copyText).toHaveBeenCalledWith("const answer = 42;\n");
     });
+  });
+
+  it("copies inline code without its markdown delimiters", async () => {
+    const desktopCopyText = vi.fn(async () => undefined);
+
+    const { container } = render(
+      <ThreadMarkdown
+        desktopApi={{ copyText: desktopCopyText }}
+        text={"Switch to `agent/inline-code-copy` when ready."}
+      />
+    );
+
+    const inlineCode = container.querySelector(".transcript-message__inline-code");
+    expect(inlineCode).toContainElement(
+      screen.getByText("agent/inline-code-copy", { selector: "code" })
+    );
+
+    const inlineCopyButton = screen.getByRole("button", { name: "Copy inline code" });
+    expect(inlineCopyButton.tagName).toBe("SPAN");
+    fireEvent.keyDown(inlineCopyButton, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(desktopCopyText).toHaveBeenCalledWith("agent/inline-code-copy");
+    });
+    expect(screen.getByRole("button", { name: "Copied inline code" }))
+      .toBeInTheDocument();
   });
 
   it("renders long fenced code blocks without expand controls", () => {

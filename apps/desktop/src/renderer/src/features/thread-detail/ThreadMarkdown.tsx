@@ -76,19 +76,22 @@ type EditorApplication = DesktopApplicationsSnapshot["editors"][number];
  * from an inline span.
  */
 const CodeBlockContext = createContext(false);
+const MarkdownLinkContext = createContext(false);
 
 function TranscriptCode(props: {
   children: ReactNode;
   className?: string;
+  desktopApi?: Pick<DesktopApi, "copyText">;
   threadLinks: ThreadLinkContextValue | undefined;
 }) {
   const insideCodeBlock = useContext(CodeBlockContext);
+  const insideLink = useContext(MarkdownLinkContext);
   const isBlockCode = insideCodeBlock || (props.className?.includes("language-") ?? false);
 
   // Only inline code on a navigation-capable surface can become a chip; skip
   // the text extraction entirely on block code and on the Activity/Changelog/
   // file-viewer surfaces (no `threadLinks` context there).
-  if (!isBlockCode && props.threadLinks) {
+  if (!isBlockCode && !insideLink && props.threadLinks) {
     // Transcripts written before the link protocol existed — and any model
     // that ignores the `threadLink` convention — put the bare thread id in a
     // code span. Recognizing it makes those threads reachable without asking
@@ -103,10 +106,31 @@ function TranscriptCode(props: {
     }
   }
 
+  if (isBlockCode) {
+    return <code className={props.className}>{props.children}</code>;
+  }
+
+  if (insideLink) {
+    return <code className="transcript-message__code">{props.children}</code>;
+  }
+
+  const copyText = extractTextContent(props.children);
+
+  if (!copyText) {
+    return <code className="transcript-message__code">{props.children}</code>;
+  }
+
   return (
-    <code className={isBlockCode ? props.className : "transcript-message__code"}>
-      {props.children}
-    </code>
+    <TranscriptCopyButton
+      as="span"
+      className="transcript-message__inline-code transcript-copy-button--inline"
+      copiedLabel="Copied inline code"
+      desktopApi={props.desktopApi}
+      label="Copy inline code"
+      text={copyText}
+    >
+      <code className="transcript-message__code">{props.children}</code>
+    </TranscriptCopyButton>
   );
 }
 
@@ -241,6 +265,11 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
         const label = extractTextContent(anchorProps.children).trim();
         const linkedImage = findMarkdownLinkedImagePart(props.imageParts, localTarget);
         const source = sourceForNode(markdownText, anchorProps.node);
+        const linkedChildren = (
+          <MarkdownLinkContext.Provider value={true}>
+            {anchorProps.children}
+          </MarkdownLinkContext.Provider>
+        );
 
         if (isImplicitBareAutolink({ href, label, source })) {
           return <>{anchorProps.children}</>;
@@ -269,7 +298,7 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
         if (pullRequestNumber) {
           return (
             <PullRequestNumberLinkChip number={pullRequestNumber}>
-              {anchorProps.children}
+              {linkedChildren}
             </PullRequestNumberLinkChip>
           );
         }
@@ -290,7 +319,7 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
               }}
               title="Open image in PwrAgent"
             >
-              {anchorProps.children}
+              {linkedChildren}
             </a>
           );
         }
@@ -358,7 +387,7 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
               ? tildifyPath(localTarget.path)
               : href || undefined}
           >
-            {anchorProps.children}
+            {linkedChildren}
           </a>
         );
 
@@ -420,7 +449,11 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
       },
       code(codeProps) {
         return (
-          <TranscriptCode className={codeProps.className} threadLinks={threadLinks}>
+          <TranscriptCode
+            className={codeProps.className}
+            desktopApi={props.desktopApi}
+            threadLinks={threadLinks}
+          >
             {codeProps.children}
           </TranscriptCode>
         );

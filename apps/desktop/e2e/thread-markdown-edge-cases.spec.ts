@@ -47,9 +47,40 @@ test("renders markdown edge cases without breaking transcript boundaries", async
     await expect(transcript.locator("br")).toHaveCount(1);
     await expect(transcript.locator("em", { hasText: "Italic text" })).toBeVisible();
     await expect(transcript.locator("del", { hasText: "struck text" })).toBeVisible();
-    await expect(
-      transcript.locator("code.transcript-message__code", { hasText: "inline code" })
-    ).toBeVisible();
+    const inlineCode = transcript.locator(".transcript-message__inline-code", {
+      hasText: "inline code",
+    });
+    await expect(inlineCode.locator("code.transcript-message__code"))
+      .toBeVisible();
+
+    const inlineCopyButton = inlineCode;
+    await expect(inlineCopyButton).toHaveAccessibleName("Copy inline code");
+    await expect
+      .poll(async () =>
+        await inlineCopyButton.evaluate((element) =>
+          getComputedStyle(element, "::before").opacity
+        )
+      )
+      .toBe("0");
+    await inlineCode.hover();
+    await expect
+      .poll(async () =>
+        await inlineCopyButton.evaluate((element) =>
+          getComputedStyle(element, "::before").opacity
+        )
+      )
+      .toBe("1");
+
+    await app.electronApp.evaluate(({ clipboard }) => {
+      clipboard.writeText("");
+    });
+    await inlineCopyButton.click();
+    await expect
+      .poll(async () =>
+        await app.electronApp.evaluate(({ clipboard }) => clipboard.readText())
+      )
+      .toBe("inline code");
+    await expect(inlineCopyButton).toHaveAccessibleName("Copied inline code");
 
     const markdownLiteralBlock = transcript.locator("pre code").filter({
       hasText: "**not bold**",
