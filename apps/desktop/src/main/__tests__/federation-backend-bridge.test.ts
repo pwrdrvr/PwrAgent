@@ -167,6 +167,77 @@ describe("federation backend bridge", () => {
       threadId: "thread-1",
       cleanup: [],
     });
+
+    const refreshPending = client.refreshDirectoryGitStatuses({
+      directoryKeys: ["directory:/remote/repo"],
+      force: true,
+    });
+    const refreshRequest = sent.at(-1)!;
+    expect(refreshRequest).toMatchObject({
+      kind: "request",
+      method: FEDERATION_BACKEND_METHODS.refreshDirectoryGitStatuses,
+      params: {
+        directoryKeys: ["directory:/remote/repo"],
+        force: true,
+      },
+    });
+    rpc.receiveEnvelope({
+      id: "response-3",
+      kind: "response",
+      requestId: refreshRequest.id,
+      protocolVersion: 1,
+      sourceInstanceId: "client_one",
+      targetInstanceId: "gateway_one",
+      createdAt: 1_300,
+      result: { scheduledCount: 1 },
+    });
+    await expect(refreshPending).resolves.toEqual({ scheduledCount: 1 });
+  });
+
+  it("executes directory Git status refreshes on the target instance", async () => {
+    const backend = {
+      refreshDirectoryGitStatuses: vi.fn(async () => ({ scheduledCount: 1 })),
+    } as unknown as FederationBackendOperations;
+    const replies: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({
+      localInstanceId: "client_one",
+      methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+    });
+    router.registerConnection({
+      peerId: "gateway_one",
+      capabilities: ["thread_navigation"],
+      sendEnvelope: (envelope) => replies.push(envelope),
+    });
+    registerFederationBackendHandlers({ router, backend });
+
+    await router.routeEnvelope({
+      sourcePeerId: "gateway_one",
+      envelope: {
+        id: "refresh-request",
+        kind: "request",
+        method: FEDERATION_BACKEND_METHODS.refreshDirectoryGitStatuses,
+        params: {
+          directoryKeys: ["directory:/remote/repo"],
+          force: true,
+        },
+        protocolVersion: 1,
+        sourceInstanceId: "gateway_one",
+        targetInstanceId: "client_one",
+        createdAt: 1_000,
+      },
+    });
+
+    expect(backend.refreshDirectoryGitStatuses).toHaveBeenCalledExactlyOnceWith({
+      directoryKeys: ["directory:/remote/repo"],
+      force: true,
+    });
+    expect(replies).toMatchObject([
+      {
+        kind: "response",
+        requestId: "refresh-request",
+        result: { scheduledCount: 1 },
+      },
+    ]);
   });
 
   it("requires thread-detail capability for remote thread reads", async () => {
@@ -312,6 +383,7 @@ describe("federation backend bridge", () => {
       stopCodexEnvironmentAction: vi.fn(),
       setCodexThreadEnvironment: vi.fn(),
       materializeDirectoryLaunchpad: vi.fn(),
+      refreshDirectoryGitStatuses: vi.fn(),
       handoffThreadWorkspace: vi.fn(),
       renameThread: vi.fn(),
       readApplications: vi.fn(),
@@ -458,6 +530,7 @@ describe("federation backend bridge", () => {
         runCodexEnvironmentAction: vi.fn(),
         stopCodexEnvironmentAction: vi.fn(),
         setCodexThreadEnvironment: vi.fn(),
+        refreshDirectoryGitStatuses: vi.fn(),
         materializeDirectoryLaunchpad: vi.fn(),
         handoffThreadWorkspace: vi.fn(),
         renameThread: vi.fn(),

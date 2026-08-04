@@ -2177,6 +2177,15 @@ class DesktopAppServerService {
   async refreshDirectoryGitStatusesForKeys(
     request: RefreshDirectoryGitStatusesRequest,
   ): Promise<RefreshDirectoryGitStatusesResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .refreshDirectoryGitStatuses(remoteRequest);
+    }
     await this.loadDirectoryGitStatusCache();
     const directoryKeys = [
       ...new Set(request.directoryKeys.map((key) => key.trim()).filter(Boolean)),

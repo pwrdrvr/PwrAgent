@@ -2229,6 +2229,95 @@ function rememberCollapsedDirectoryWithPinnedThread(params: {
 }
 
 describe("DesktopBackendRegistry", () => {
+  it("refreshes only owner-known directory Git state for federation requests", async () => {
+    const invalidateDirectoryStatus = vi.fn();
+    const readDirectoryStatusEntries = vi.fn(
+      (directories: Array<{ key: string }>) =>
+        (async function* () {
+          for (const directory of directories) {
+            yield {
+              directoryKey: directory.key,
+              gitStatus: {
+                currentBranch: "main",
+                syncState: "in-sync" as const,
+              },
+            };
+          }
+        })(),
+    );
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      gitDirectoryService: {
+        invalidateDirectoryStatus,
+        readDirectoryStatusEntries,
+      } as never,
+    });
+    const events: AgentEvent[] = [];
+    const unsubscribe = registry.onEvent((event) => {
+      events.push(event);
+    });
+    registry.rememberCompleteNavigationSnapshot({
+      backend: "all",
+      directories: [
+        {
+          key: "directory:/owner/repo",
+          kind: "directory",
+          label: "repo",
+          path: "/owner/repo",
+          threadKeys: ["codex:thread-1"],
+          needsAttentionCount: 0,
+        },
+      ],
+      fetchedAt: 1_000,
+      inboxThreadKeys: ["codex:thread-1"],
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+      threads: [],
+      unchanged: false,
+    });
+
+    try {
+      await expect(registry.refreshDirectoryGitStatuses({
+        directoryKeys: [
+          "directory:/owner/repo",
+          "directory:/viewer/secret",
+        ],
+        force: true,
+      })).resolves.toEqual({ scheduledCount: 1 });
+
+      expect(invalidateDirectoryStatus).toHaveBeenCalledExactlyOnceWith(
+        "/owner/repo",
+      );
+      expect(readDirectoryStatusEntries).toHaveBeenCalledExactlyOnceWith([
+        expect.objectContaining({
+          key: "directory:/owner/repo",
+          path: "/owner/repo",
+        }),
+      ]);
+      expect(events).toContainEqual({
+        backend: "codex",
+        notification: {
+          method: "navigation/directoryGitStatus/updated",
+          params: {
+            directoryKey: "directory:/owner/repo",
+            fetchedAt: expect.any(Number),
+            gitStatus: {
+              currentBranch: "main",
+              syncState: "in-sync",
+            },
+          },
+        },
+      });
+    } finally {
+      unsubscribe();
+      await registry.close();
+    }
+  });
+
   it("evaluates the current PR state when auto-fix is enabled", async () => {
     const preferenceChanged = vi.fn(async () => undefined);
     const sendPendingNow = vi.fn(async () => true);

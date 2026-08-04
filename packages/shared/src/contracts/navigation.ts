@@ -767,6 +767,8 @@ export type NavigationThreadGitWorkingStateUpdatedNotification = {
 
 export type RefreshDirectoryGitStatusesRequest = {
   directoryKeys: string[];
+  /** Route filesystem inspection to the instance that owns these directories. */
+  federationTarget?: FederationTarget;
   force?: boolean;
 };
 

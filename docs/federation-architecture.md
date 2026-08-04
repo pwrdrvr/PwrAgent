@@ -54,8 +54,11 @@ The RPC surface maps navigation and thread reads plus the remote operation
 surface used by desktop windows and messaging. It includes thread creation,
 fork/review, turn start/steer/interrupt/compact, pending-request submission,
 model and execution settings, environment actions, environment setup progress,
-and workspace handoff. Capability checks remain attached to every method, so an
-older or restricted peer fails closed instead of silently executing locally.
+workspace handoff, and explicit directory Git-status refreshes. Directory
+refresh requests carry owner-known directory keys rather than viewer-resolved
+paths; the target instance resolves those keys and runs Git locally. Capability
+checks remain attached to every method, so an older or restricted peer fails
+closed instead of silently executing locally.
 
 ## Diagnostics
 

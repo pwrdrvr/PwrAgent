@@ -3,10 +3,14 @@ import type { DesktopApi } from "../desktop-api";
 import { scopeDesktopApiToFederationTarget } from "../federation-desktop-api";
 
 describe("scopeDesktopApiToFederationTarget", () => {
-  it("routes application opens remotely and removes local path helpers", async () => {
+  it("routes remote filesystem operations to the owning peer and removes local path helpers", async () => {
     const openApplication = vi.fn(async () => ({ opened: true }));
+    const refreshDirectoryGitStatuses = vi.fn(async () => ({
+      scheduledCount: 1,
+    }));
     const desktopApi = {
       openApplication,
+      refreshDirectoryGitStatuses,
       openPath: vi.fn(),
       revealPath: vi.fn(),
       readMarkdownFile: vi.fn(),
@@ -28,11 +32,20 @@ describe("scopeDesktopApiToFederationTarget", () => {
       kind: "editor",
       targetPath: "/remote/repo/file.ts",
     });
+    await scopedApi?.refreshDirectoryGitStatuses?.({
+      directoryKeys: ["directory:/remote/repo"],
+      force: true,
+    });
 
     expect(openApplication).toHaveBeenCalledWith({
       applicationId: "vscode",
       kind: "editor",
       targetPath: "/remote/repo/file.ts",
+      federationTarget,
+    });
+    expect(refreshDirectoryGitStatuses).toHaveBeenCalledWith({
+      directoryKeys: ["directory:/remote/repo"],
+      force: true,
       federationTarget,
     });
     expect(scopedApi?.openPath).toBeUndefined();

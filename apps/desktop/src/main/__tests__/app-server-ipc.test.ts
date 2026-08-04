@@ -41,6 +41,7 @@ const federationMock = vi.hoisted(() => {
       threadId: request.threadId,
       renamedAt: 6_000,
     })),
+    refreshDirectoryGitStatuses: vi.fn(async () => ({ scheduledCount: 1 })),
   };
   return {
     remoteBackend,
@@ -760,6 +761,7 @@ describe("app server ipc", () => {
     renameThread.mockClear();
     federationMock.remoteBackend.renameThread.mockClear();
     federationMock.remoteBackend.archiveThread.mockClear();
+    federationMock.remoteBackend.refreshDirectoryGitStatuses.mockClear();
     federationMock.runtime.remoteBackend.mockClear();
     listThreads.mockClear();
     readThread.mockClear();
@@ -4749,6 +4751,40 @@ describe("app server ipc", () => {
     expect(readDirectoryStatusEntries.mock.calls[0]?.[0]).toEqual([
       expect.objectContaining({ key: "directory:/repo/app" }),
     ]);
+  });
+
+  it("routes remote directory git status refreshes to the owning federation peer", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL } = await import("../../shared/ipc");
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "remote-instance",
+    };
+
+    registerAppServerIpcHandlers();
+
+    await expect(
+      handlers.get(NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL)?.(
+        {},
+        {
+          directoryKeys: ["directory:/remote/repo"],
+          federationTarget,
+          force: true,
+        },
+      ),
+    ).resolves.toEqual({ scheduledCount: 1 });
+
+    expect(federationMock.runtime.remoteBackend).toHaveBeenCalledWith(
+      federationTarget,
+    );
+    expect(
+      federationMock.remoteBackend.refreshDirectoryGitStatuses,
+    ).toHaveBeenCalledExactlyOnceWith({
+      directoryKeys: ["directory:/remote/repo"],
+      force: true,
+    });
+    expect(readDirectoryStatusEntries).not.toHaveBeenCalled();
+    expect(invalidateDirectoryStatus).not.toHaveBeenCalled();
   });
 
   it("coalesces rapid forced directory git status re-enqueues for the same key", async () => {

@@ -136,6 +136,9 @@ import {
   type TurnOffCodexFastEverywhereResponse,
   type QueueThreadExecutionModeRequest,
   type QueueThreadExecutionModeResponse,
+  type RefreshDirectoryGitStatusesRequest,
+  type RefreshDirectoryGitStatusesResponse,
+  type NavigationDirectoryGitStatusUpdatedNotification,
   type CancelThreadExecutionModeQueueRequest,
   type CancelThreadExecutionModeQueueResponse,
   type ThreadMessagingBindingTransition,
@@ -5959,6 +5962,10 @@ export class DesktopBackendRegistry {
     string,
     CreatedThreadDirectoryVisibility
   >();
+  private navigationDirectoriesByKey = new Map<
+    string,
+    NavigationDirectorySummary
+  >();
   private createdThreadVisibilityPinnedRanks: string[] = [];
   private readonly createdThreadVisibilityLock = new PerKeyAsyncLock();
   private readonly activeThreadIdsByBackend = new Map<AppServerBackendKind, Set<string>>();
@@ -6835,6 +6842,9 @@ export class DesktopBackendRegistry {
           }),
         },
       ]),
+    );
+    this.navigationDirectoriesByKey = new Map(
+      snapshot.directories.map((directory) => [directory.key, directory]),
     );
   }
 
@@ -8871,6 +8881,41 @@ export class DesktopBackendRegistry {
 
   invalidateDirectoryStatus(directoryPath?: string): void {
     this.gitDirectoryService.invalidateDirectoryStatus(directoryPath);
+  }
+
+  async refreshDirectoryGitStatuses(
+    request: RefreshDirectoryGitStatusesRequest,
+  ): Promise<RefreshDirectoryGitStatusesResponse> {
+    const directoryKeys = [
+      ...new Set(request.directoryKeys.map((key) => key.trim()).filter(Boolean)),
+    ];
+    const directories = directoryKeys
+      .map((key) => this.navigationDirectoriesByKey.get(key))
+      .filter((directory): directory is NavigationDirectorySummary =>
+        Boolean(directory?.path?.trim()),
+      );
+    if (request.force !== false) {
+      for (const directory of directories) {
+        this.gitDirectoryService.invalidateDirectoryStatus(directory.path);
+      }
+    }
+    for await (const entry of this.gitDirectoryService.readDirectoryStatusEntries(
+      directories,
+    )) {
+      const notification: NavigationDirectoryGitStatusUpdatedNotification = {
+        method: "navigation/directoryGitStatus/updated",
+        params: {
+          directoryKey: entry.directoryKey,
+          gitStatus: entry.gitStatus ?? null,
+          fetchedAt: Date.now(),
+        },
+      };
+      await this.emit({
+        backend: "codex",
+        notification,
+      } as unknown as AgentEvent);
+    }
+    return { scheduledCount: directories.length };
   }
 
   readWorktreeWorkingStateEntries(

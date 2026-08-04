@@ -22,6 +22,7 @@ import type {
   MaterializeDirectoryLaunchpadResponse,
   OpenDesktopApplicationResponse,
   QueueThreadExecutionModeResponse,
+  RefreshDirectoryGitStatusesResponse,
   RenameThreadResponse,
   RunCodexEnvironmentActionResponse,
   SetAcpSessionRuntimeOptionResponse,
@@ -54,6 +55,7 @@ import {
   type NavigationSnapshot,
   type OpenDesktopApplicationRequest,
   type QueueThreadExecutionModeRequest,
+  type RefreshDirectoryGitStatusesRequest,
   type RenameThreadRequest,
   type RunCodexEnvironmentActionRequest,
   type SetAcpSessionRuntimeOptionRequest,
@@ -1168,6 +1170,11 @@ function localBackendOperations(): FederationBackendOperations {
       request: SetCodexThreadEnvironmentRequest,
     ): Promise<SetCodexThreadEnvironmentResponse> {
       return await getDesktopBackendRegistry().setCodexThreadEnvironment(request);
+    },
+    async refreshDirectoryGitStatuses(
+      request: RefreshDirectoryGitStatusesRequest,
+    ): Promise<RefreshDirectoryGitStatusesResponse> {
+      return await getDesktopBackendRegistry().refreshDirectoryGitStatuses(request);
     },
     async materializeDirectoryLaunchpad(
       request: MaterializeDirectoryLaunchpadRequest,
