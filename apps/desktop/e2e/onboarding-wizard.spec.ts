@@ -15,14 +15,16 @@ import { launchElectronApp } from "./fixtures/electron-app";
  * a real browser flow; integration of the login button is left to
  * unit tests (see `apps/desktop/src/main/__tests__/`).
  *
- * Defaults to xAI as the backend to satisfy the Models / Providers
- * gate, since the test runner doesn't have Codex CLI on PATH.
+ * Uses the test runner's executable as a deterministic discovery candidate.
+ * Its version output satisfies the provider gate without depending on a real
+ * Codex install or attempting an external login.
  */
 
 const wizardLaunchOptions = {
   // No `fixturePath`: thread replay isn't relevant for wizard-only specs.
   suppressOnboarding: false,
   requiresReplayDriver: false,
+  env: { PWRAGENT_CODEX_COMMAND: process.execPath },
 };
 
 test.describe("Onboarding wizard", () => {
@@ -81,18 +83,13 @@ test.describe("Onboarding wizard", () => {
       await app.window.getByText("Just the title", { exact: false }).click();
       await app.window.getByRole("button", { name: /^Continue/i }).click();
 
-      // Models / Providers — paste an xAI key to satisfy the gate (Codex
-      // CLI isn't on PATH in test env).
+      // AI Providers — the deterministic executable override satisfies
+      // discovery without collecting credentials in the wizard.
       await expect(
         app.window.getByRole("heading", {
-          name: /Pick at least one model backend/i,
+          name: /Install at least one AI provider/i,
         }),
       ).toBeVisible();
-      await app.window
-        .locator('input[type="password"]')
-        .first()
-        .fill("xai-e2e-test-key");
-      await app.window.getByRole("button", { name: /Use this key/i }).click();
       await app.window.getByRole("button", { name: /^Continue/i }).click();
 
       // Codex profile — pick Shared. The fresh HOME has no Codex auth.json,
@@ -145,11 +142,6 @@ test.describe("Onboarding wizard", () => {
       // Walk to the messaging-safety step (same path as the Shared walk).
       await app.window.getByRole("button", { name: /Get started/i }).click();
       await app.window.getByRole("button", { name: /^Continue/i }).click();
-      await app.window
-        .locator('input[type="password"]')
-        .first()
-        .fill("xai-e2e-test-key");
-      await app.window.getByRole("button", { name: /Use this key/i }).click();
       await app.window.getByRole("button", { name: /^Continue/i }).click();
       await app.window
         .getByText("Reuse your existing Codex login", { exact: false })
@@ -213,11 +205,6 @@ test.describe("Onboarding wizard", () => {
       // Walk to the messaging-safety step (same Shared-mode path).
       await app.window.getByRole("button", { name: /Get started/i }).click();
       await app.window.getByRole("button", { name: /^Continue/i }).click();
-      await app.window
-        .locator('input[type="password"]')
-        .first()
-        .fill("xai-e2e-test-key");
-      await app.window.getByRole("button", { name: /Use this key/i }).click();
       await app.window.getByRole("button", { name: /^Continue/i }).click();
       await app.window
         .getByText("Reuse your existing Codex login", { exact: false })
@@ -281,7 +268,7 @@ test.describe("Onboarding wizard", () => {
       await app.window.getByRole("button", { name: /^Continue/i }).click();
       await expect(
         app.window.getByRole("heading", {
-          name: /Pick at least one model backend/i,
+          name: /Install at least one AI provider/i,
         }),
       ).toBeVisible();
 
@@ -412,16 +399,11 @@ test.describe("Onboarding wizard", () => {
         ),
       ).toBe("1");
 
-      // Walk the full wizard: Welcome → Thread → Models (xAI key) →
+      // Walk the full wizard: Welcome → Thread → Models →
       // Codex profile (Multiple) → Name profiles (personal, work) →
       // Messaging warning (Skip).
       await app.window.getByRole("button", { name: /Get started/i }).click();
       await app.window.getByRole("button", { name: /^Continue/i }).click();
-      await app.window
-        .locator('input[type="password"]')
-        .first()
-        .fill("xai-multi-key");
-      await app.window.getByRole("button", { name: /Use this key/i }).click();
       await app.window.getByRole("button", { name: /^Continue/i }).click();
       await app.window
         .getByText(/Set up several profiles at once/i)
@@ -443,6 +425,7 @@ test.describe("Onboarding wizard", () => {
       await expect(
         app.window.getByRole("heading", { name: /You.re operating/i }),
       ).toBeVisible();
+      await expect(app.window.getByText("Multiple — personal, work")).toBeVisible();
       await app.window
         .getByRole("button", { name: /Open my workspace/i })
         .click();
@@ -504,52 +487,26 @@ test.describe("Onboarding wizard", () => {
     }
   });
 
-  test("name step's xAI override is collapsed by default and expands on click", async () => {
+  test("provider tabs show CLI-specific install instructions", async () => {
     const app = await launchElectronApp(wizardLaunchOptions);
     try {
-      // Welcome → Thread presentation → Models → Codex profile.
+      // Welcome → Thread presentation → Models.
       await app.window.getByRole("button", { name: /Get started/i }).click();
       await app.window.getByRole("button", { name: /^Continue/i }).click();
-      // xAI key on Models step (satisfy backend gate).
-      await app.window
-        .locator('input[type="password"]')
-        .first()
-        .fill("xai-default-key");
-      await app.window.getByRole("button", { name: /Use this key/i }).click();
-      await app.window.getByRole("button", { name: /^Continue/i }).click();
-
-      // Pick Isolated mode.
-      await app.window
-        .getByText(/Create a fresh Codex profile/i)
-        .click();
-      await app.window.getByRole("button", { name: /^Continue/i }).click();
-
-      // Naming step appears.
       await expect(
         app.window.getByRole("heading", {
-          name: /Name and log in to your isolated profile/i,
+          name: /Install at least one AI provider/i,
         }),
       ).toBeVisible();
-
-      // Per-row xAI override is collapsed by default; the global key
-      // hint is shown because we set a global xAI key on Models step.
+      await app.window.getByRole("tab", { name: /Kimi Code/i }).click();
       await expect(
-        app.window.getByRole("button", {
-          name: /Override xAI key for this profile/i,
-        }),
+        app.window.getByText(/@moonshot-ai\/kimi-code/i),
       ).toBeVisible();
-
-      // Click to expand.
-      await app.window
-        .getByRole("button", {
-          name: /Override xAI key for this profile/i,
-        })
-        .click();
-
-      // Expanded — the password input becomes visible inside the row.
-      await expect(
-        app.window.locator(".onboarding-wizard__profile-row-xai input"),
-      ).toBeVisible();
+      await app.window.getByRole("tab", { name: /Qwen Code/i }).click();
+      await expect(app.window.getByText(/brew install qwen-code/i)).toBeVisible();
+      await app.window.getByRole("tab", { name: /Grok Build/i }).click();
+      await expect(app.window.getByText(/x\.ai\/cli\/install\.sh/i)).toBeVisible();
+      await expect(app.window.getByText(/xAI API key/i)).toHaveCount(0);
     } finally {
       await app.close();
     }

@@ -7,8 +7,19 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { DesktopSettingsSecretName } from "@pwragent/shared";
-import { SecretFieldRow, validateProfileNames } from "../OnboardingWizard";
+import type {
+  AcpAgentSettingsEntry,
+  DesktopSettingsSecretName,
+  DesktopSettingsSnapshot,
+} from "@pwragent/shared";
+import type { DesktopApi } from "../../../lib/desktop-api";
+import type { DesktopSettingsState } from "../../settings/useDesktopSettings";
+import {
+  BackendRequirementsStep,
+  isBackendRequirementSatisfied,
+  SecretFieldRow,
+  validateProfileNames,
+} from "../OnboardingWizard";
 
 afterEach(() => {
   cleanup();
@@ -26,6 +37,130 @@ describe("validateProfileNames", () => {
 
   it("rejects duplicate normalized profile ids", () => {
     expect(validateProfileNames(["My Work", "my-work"])).toBe(false);
+  });
+});
+
+const noCodexSnapshot = {
+  models: {
+    codex: {
+      discovery: { candidates: [] },
+    },
+  },
+} as unknown as DesktopSettingsSnapshot;
+
+function acpEntry(
+  registryId: "kimi" | "qwen" | "grok",
+  installed = true,
+): AcpAgentSettingsEntry {
+  return {
+    backendId: `acp:${registryId}`,
+    registryId,
+    name: registryId,
+    authors: [],
+    distributionKind: "local",
+    distributionSource: registryId,
+    installable: false,
+    installed,
+    installStatus: installed ? "installed" : "not-installed",
+    authStatus: "not-required",
+    verificationStatus: "not-applicable",
+    ...(installed
+      ? {
+          activeCommand: `/usr/local/bin/${registryId}`,
+          instances: [
+            {
+              command: `/usr/local/bin/${registryId}`,
+              source: "fallback" as const,
+            },
+          ],
+        }
+      : { instances: [] }),
+  };
+}
+
+describe("AI provider onboarding", () => {
+  it("accepts any supported installed ACP provider", () => {
+    expect(isBackendRequirementSatisfied(noCodexSnapshot, [])).toBe(false);
+    expect(
+      isBackendRequirementSatisfied(noCodexSnapshot, [acpEntry("kimi")]),
+    ).toBe(true);
+    expect(
+      isBackendRequirementSatisfied(noCodexSnapshot, [acpEntry("qwen")]),
+    ).toBe(true);
+    expect(
+      isBackendRequirementSatisfied(noCodexSnapshot, [acpEntry("grok")]),
+    ).toBe(true);
+  });
+
+  it("shows provider-specific official install commands without an xAI key field", () => {
+    const settings = {
+      snapshot: noCodexSnapshot,
+      refresh: vi.fn(async () => undefined),
+    } as unknown as DesktopSettingsState;
+
+    render(
+      <BackendRequirementsStep
+        settings={settings}
+        acpEntries={[]}
+        onAcpEntriesChange={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText(/brew install --cask codex/i)).toBeVisible();
+    fireEvent.click(screen.getByRole("tab", { name: /Kimi Code/i }));
+    expect(screen.getByText(/@moonshot-ai\/kimi-code/i)).toBeVisible();
+    fireEvent.click(screen.getByRole("tab", { name: /Qwen Code/i }));
+    expect(screen.getByText(/brew install qwen-code/i)).toBeVisible();
+    fireEvent.click(screen.getByRole("tab", { name: /Grok Build/i }));
+    expect(screen.getByText(/x\.ai\/cli\/install\.sh/i)).toBeVisible();
+    expect(screen.queryByText(/xAI API key/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+  });
+
+  it("refreshes Codex and ACP discovery together", async () => {
+    const settingsRefresh = vi.fn(async () => undefined);
+    const applySnapshot = vi.fn();
+    const listAcpAgents = vi.fn(async () => ({
+      fetchedAt: Date.now(),
+      entries: [acpEntry("qwen")],
+    }));
+    const refreshCodexDiscovery = vi.fn(async () => ({
+      snapshot: noCodexSnapshot,
+    }));
+    const onAcpEntriesChange = vi.fn();
+    const settings = {
+      snapshot: noCodexSnapshot,
+      refresh: settingsRefresh,
+      applySnapshot,
+    } as unknown as DesktopSettingsState;
+    const desktopApi = {
+      listAcpAgents,
+      refreshCodexDiscovery,
+    } as DesktopApi;
+
+    render(
+      <BackendRequirementsStep
+        settings={settings}
+        desktopApi={desktopApi}
+        acpEntries={[]}
+        onAcpEntriesChange={onAcpEntriesChange}
+      />,
+    );
+    await waitFor(() => expect(listAcpAgents).toHaveBeenCalledTimes(2));
+    listAcpAgents.mockClear();
+    onAcpEntriesChange.mockClear();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /Refresh after install/i }),
+    );
+
+    await waitFor(() => {
+      expect(refreshCodexDiscovery).toHaveBeenCalledOnce();
+      expect(listAcpAgents).toHaveBeenCalledWith({ refresh: true, force: true });
+      expect(applySnapshot).toHaveBeenCalledWith(noCodexSnapshot);
+      expect(settingsRefresh).not.toHaveBeenCalled();
+      expect(onAcpEntriesChange).toHaveBeenCalledWith([acpEntry("qwen")]);
+    });
   });
 });
 
