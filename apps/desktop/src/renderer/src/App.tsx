@@ -55,6 +55,7 @@ import { useBackendSummaries } from "./lib/useBackendSummaries";
 import { useDesktopApi, type DesktopApi } from "./lib/desktop-api";
 import { useDesktopApplications } from "./lib/useDesktopApplications";
 import { readRendererFederationTarget } from "./lib/federation-window";
+import { scopeDesktopApiToFederationTarget } from "./lib/federation-desktop-api";
 import { useRuntimeIdentity } from "./lib/runtime-identity";
 import {
   useNavigationHistory,
@@ -674,6 +675,16 @@ function DesktopAppShell(props: {
     && isRemoteFederationTarget(selectedThreadFederationTarget)
       ? selectedThreadFederationTarget.instanceId
       : readRendererFederationTarget()?.instanceId;
+  const activeFederationTarget = useMemo(
+    () => remoteApplicationInstanceId
+      ? { scope: "remote" as const, instanceId: remoteApplicationInstanceId }
+      : undefined,
+    [remoteApplicationInstanceId],
+  );
+  const threadDesktopApi = useMemo(
+    () => scopeDesktopApiToFederationTarget(desktopApi, activeFederationTarget),
+    [activeFederationTarget, desktopApi],
+  );
   const applications = useDesktopApplications({
     desktopApi,
     localApplications: settings.snapshot?.applications,
@@ -686,6 +697,7 @@ function DesktopAppShell(props: {
   }, [navigation.threads]);
   const backendSummaries = useBackendSummaries(desktopApi, {
     enabled: normalAppEnabled,
+    federationTarget: activeFederationTarget,
   });
   const refreshAcpAgents = backendSummaries.refreshAcpAgents;
   const refreshSelectedAcpProvider = useCallback(
@@ -1099,7 +1111,7 @@ function DesktopAppShell(props: {
       ),
     composerImplementation: settings.composerImplementation,
     composerDraftStore,
-    desktopApi,
+    desktopApi: threadDesktopApi,
     launchpadError: navigation.launchpadError,
     onProviderSelected: refreshSelectedAcpProvider,
     onShowNotice: setComposerNotice,

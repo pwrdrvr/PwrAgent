@@ -1,10 +1,12 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import WebSocket from "ws";
+import WebSocket, { WebSocketServer } from "ws";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { FederationProtocolEnvelope } from "@pwragent/shared";
 import {
+  buildFederationGatewayAcceptedMessage,
+  buildFederationGatewayChallengeMessage,
   buildFederationProofMessage,
   createFederationEnrollmentInvite,
 } from "../federation/federation-enrollment";
@@ -23,16 +25,24 @@ let stateDb: StateDb;
 let store: FederationStore;
 let tempDir: string;
 let server: FederationGatewayWebSocketServer | undefined;
+let rawServer: WebSocketServer | undefined;
+let gatewayKeyPair: ReturnType<typeof generateFederationIdentityKeyPair>;
 
 beforeEach(() => {
   tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-federation-transport-"));
   stateDb = StateDb.open(path.join(tempDir, "state.db"));
   store = new FederationStore(stateDb);
+  gatewayKeyPair = generateFederationIdentityKeyPair();
 });
 
 afterEach(async () => {
   await server?.stop();
   server = undefined;
+  for (const client of rawServer?.clients ?? []) {
+    client.terminate();
+  }
+  await new Promise<void>((resolve) => rawServer?.close(() => resolve()) ?? resolve());
+  rawServer = undefined;
   stateDb.close();
   rmSync(tempDir, { recursive: true, force: true });
 });
@@ -50,6 +60,8 @@ describe("federation transport", () => {
     const received = new Promise<FederationProtocolEnvelope>((resolve) => {
       server = new FederationGatewayWebSocketServer({
         gatewayInstanceId: "gateway_one",
+        gatewayPrivateKeyPem: gatewayKeyPair.privateKeyPem,
+        gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
         host: "127.0.0.1",
         port: 0,
         store,
@@ -75,6 +87,7 @@ describe("federation transport", () => {
         url,
         mode: "enroll",
         gatewayInstanceId: "gateway_one",
+        gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
         peerInstanceId: "client_one",
         privateKeyPem: clientKeyPair.privateKeyPem,
         publicKeyPem: clientKeyPair.publicKeyPem,
@@ -129,6 +142,8 @@ describe("federation transport", () => {
     const clientKeyPair = generateFederationIdentityKeyPair();
     server = new FederationGatewayWebSocketServer({
       gatewayInstanceId: "gateway_one",
+      gatewayPrivateKeyPem: gatewayKeyPair.privateKeyPem,
+      gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
       host: "127.0.0.1",
       port: 0,
       store,
@@ -140,6 +155,7 @@ describe("federation transport", () => {
         url,
         mode: "reconnect",
         gatewayInstanceId: "gateway_one",
+        gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
         peerInstanceId: "client_one",
         privateKeyPem: clientKeyPair.privateKeyPem,
         publicKeyPem: clientKeyPair.publicKeyPem,
@@ -169,6 +185,8 @@ describe("federation transport", () => {
     });
     server = new FederationGatewayWebSocketServer({
       gatewayInstanceId: "gateway_one",
+      gatewayPrivateKeyPem: gatewayKeyPair.privateKeyPem,
+      gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
       host: "127.0.0.1",
       port: 0,
       store,
@@ -218,7 +236,115 @@ describe("federation transport", () => {
     socket.close();
     expect(store.getPeer("client_one")).toBeUndefined();
   });
+
+  it("rejects an auth challenge not signed by the pinned gateway", async () => {
+    const attackerKeyPair = generateFederationIdentityKeyPair();
+    const clientKeyPair = generateFederationIdentityKeyPair();
+    const nonce = "challenge:forged";
+    rawServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    rawServer.on("connection", (socket) => {
+      socket.send(JSON.stringify({
+        kind: "auth.challenge",
+        gatewayInstanceId: "gateway_one",
+        gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+        protocolVersion: 1,
+        nonce,
+        signatureBase64: signFederationMessage({
+          privateKeyPem: attackerKeyPair.privateKeyPem,
+          message: buildFederationGatewayChallengeMessage({
+            gatewayInstanceId: "gateway_one",
+            gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+            protocolVersion: 1,
+            nonce,
+          }),
+        }),
+      }));
+    });
+    const url = await websocketServerUrl(rawServer);
+
+    await expect(connectFederationClient({
+      url,
+      mode: "reconnect",
+      gatewayInstanceId: "gateway_one",
+      gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+      peerInstanceId: "client_one",
+      privateKeyPem: clientKeyPair.privateKeyPem,
+      publicKeyPem: clientKeyPair.publicKeyPem,
+      capabilities: ["remote_window"],
+    })).rejects.toThrow("Invalid federation auth challenge signature");
+  });
+
+  it("rejects an auth acceptance not signed by the pinned gateway", async () => {
+    const attackerKeyPair = generateFederationIdentityKeyPair();
+    const clientKeyPair = generateFederationIdentityKeyPair();
+    const nonce = "challenge:trusted";
+    rawServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    rawServer.on("connection", (socket) => {
+      socket.send(JSON.stringify({
+        kind: "auth.challenge",
+        gatewayInstanceId: "gateway_one",
+        gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+        protocolVersion: 1,
+        nonce,
+        signatureBase64: signFederationMessage({
+          privateKeyPem: gatewayKeyPair.privateKeyPem,
+          message: buildFederationGatewayChallengeMessage({
+            gatewayInstanceId: "gateway_one",
+            gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+            protocolVersion: 1,
+            nonce,
+          }),
+        }),
+      }));
+      socket.once("message", () => {
+        const sessionId = "federation-session:forged";
+        const capabilities = ["remote_window"] as const;
+        socket.send(JSON.stringify({
+          kind: "auth.accepted",
+          gatewayInstanceId: "gateway_one",
+          sessionId,
+          protocolVersion: 1,
+          nonce,
+          capabilities,
+          signatureBase64: signFederationMessage({
+            privateKeyPem: attackerKeyPair.privateKeyPem,
+            message: buildFederationGatewayAcceptedMessage({
+              gatewayInstanceId: "gateway_one",
+              peerInstanceId: "client_one",
+              sessionId,
+              protocolVersion: 1,
+              nonce,
+              capabilities,
+            }),
+          }),
+        }));
+      });
+    });
+    const url = await websocketServerUrl(rawServer);
+
+    await expect(connectFederationClient({
+      url,
+      mode: "reconnect",
+      gatewayInstanceId: "gateway_one",
+      gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+      peerInstanceId: "client_one",
+      privateKeyPem: clientKeyPair.privateKeyPem,
+      publicKeyPem: clientKeyPair.publicKeyPem,
+      capabilities: ["remote_window"],
+    })).rejects.toThrow("Invalid federation auth acceptance signature");
+  });
 });
+
+async function websocketServerUrl(wsServer: WebSocketServer): Promise<string> {
+  if (!wsServer.address()) {
+    await new Promise<void>((resolve) => wsServer.once("listening", () => resolve()));
+  }
+  const address = wsServer.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Expected websocket server to listen on a TCP port");
+  }
+  return `ws://127.0.0.1:${address.port}`;
+}
 
 function waitForSocketOpen(socket: WebSocket): Promise<void> {
   return new Promise((resolve, reject) => {

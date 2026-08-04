@@ -35,9 +35,18 @@ type RuntimeHarness = {
     sourcePeerId: FederationInstanceId,
   ) => boolean;
   remotePeerDirectory: Map<FederationInstanceId, unknown>;
+  disconnectAdvertisedPeers: (reason: string) => void;
   registerGatewayConnection: (connection: FederationGatewayConnection) => void;
-  remoteBackend: () => {
+  remoteBackend: (target?: {
+    scope: "remote";
+    instanceId: FederationInstanceId;
+  }) => {
     getNavigationSnapshot: () => Promise<NavigationSnapshot>;
+    listThreads: (request: { backend: "codex" }) => Promise<{
+      backend: "codex";
+      fetchedAt: number;
+      threads: [];
+    }>;
   };
   remoteNavigationSnapshot: (
     target: { scope: "remote"; instanceId: FederationInstanceId },
@@ -63,6 +72,10 @@ type RuntimeHarness = {
     id: FederationInstanceId;
     status: string;
   }>;
+  connectedPeerTargets: () => Array<{
+    target: { scope: "remote"; instanceId: FederationInstanceId };
+    label: string;
+  }>;
 };
 
 function createConnection(params: {
@@ -80,7 +93,7 @@ function createConnection(params: {
 }
 
 describe("DesktopFederationRuntime", () => {
-  it("preserves remote navigation lenses while federating thread keys", async () => {
+  it("preserves renderer-compatible thread keys in remote navigation lenses", async () => {
     const response: NavigationSnapshot = {
       backend: "all",
       fetchedAt: 1_000,
@@ -114,6 +127,7 @@ describe("DesktopFederationRuntime", () => {
     const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
     runtime.remoteBackend = () => ({
       getNavigationSnapshot: async () => response,
+      listThreads: async () => ({ backend: "codex", fetchedAt: 1_000, threads: [] }),
     });
     runtime.store = () => ({
       getPeer: () => ({
@@ -144,9 +158,7 @@ describe("DesktopFederationRuntime", () => {
       },
     });
     expect(snapshot.inboxThreadKeys).toEqual([]);
-    expect(snapshot.directories[0]?.threadKeys).toEqual([
-      "remote:client_one:codex:thread-1",
-    ]);
+    expect(snapshot.directories[0]?.threadKeys).toEqual(["codex:thread-1"]);
   });
 
   it("records gateway-advertised peers for client instance health and opening", () => {
@@ -199,18 +211,72 @@ describe("DesktopFederationRuntime", () => {
         label: "Studio",
         role: "gateway",
         status: "connected",
+        canRevoke: false,
       },
       {
         id: "client_two",
         label: "Laptop",
         role: "client",
         status: "connected",
+        canRevoke: false,
       },
     ]);
     expect(runtime.visiblePeers()).toMatchObject([
       { id: "gateway_one", status: "connected" },
       { id: "client_two", status: "connected" },
     ]);
+  });
+
+  it("marks gateway-advertised routes disconnected when the gateway closes", () => {
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.localInstanceId = "client_one";
+    runtime.store = () => ({
+      getPeer: () => undefined,
+      listPeers: () => [],
+    });
+    runtime.applyPeerDirectory({
+      id: "peers-1",
+      kind: "notification",
+      method: "federation.peerDirectory",
+      params: {
+        peers: [
+          {
+            id: "gateway_one",
+            label: "Studio",
+            role: "gateway",
+            status: "connected",
+            capabilities: ["gateway_relay"],
+          },
+          {
+            id: "client_two",
+            label: "Laptop",
+            role: "client",
+            status: "connected",
+            capabilities: ["thread_detail"],
+          },
+        ],
+      },
+      protocolVersion: FEDERATION_PROTOCOL_VERSION,
+      sourceInstanceId: "gateway_one",
+      targetInstanceId: "client_one",
+      createdAt: 2_000,
+    });
+
+    runtime.disconnectAdvertisedPeers("Gateway transport closed.");
+
+    expect(runtime.visiblePeers()).toMatchObject([
+      {
+        id: "gateway_one",
+        status: "disconnected",
+        unavailableReason: "Gateway transport closed.",
+      },
+      {
+        id: "client_two",
+        status: "disconnected",
+        unavailableReason: "Gateway transport closed.",
+      },
+    ]);
+    expect(runtime.connectedPeerTargets()).toEqual([]);
   });
 
   it("falls back to the gateway when a client targets a sibling peer", () => {
@@ -242,6 +308,48 @@ describe("DesktopFederationRuntime", () => {
     runtime.sendEnvelopeToTarget("client_two", request);
 
     expect(sentToGateway).toEqual([request]);
+  });
+
+  it("resolves sibling RPC responses received from the gateway transport", async () => {
+    const sentToGateway: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({ localInstanceId: "client_one" });
+    router.registerConnection(
+      createConnection({
+        peerId: "gateway_one",
+        capabilities: ["gateway_relay"],
+        sendEnvelope: (envelope) => sentToGateway.push(envelope),
+      }),
+    );
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.gatewayInstanceId = "gateway_one";
+    runtime.localInstanceId = "client_one";
+    runtime.router = router;
+
+    const pending = runtime.remoteBackend({
+      scope: "remote",
+      instanceId: "client_two",
+    }).listThreads({ backend: "codex" });
+    const request = sentToGateway[0]!;
+
+    await runtime.receiveEnvelope(
+      {
+        id: "response-1",
+        kind: "response",
+        requestId: request.id,
+        protocolVersion: FEDERATION_PROTOCOL_VERSION,
+        sourceInstanceId: "client_two",
+        targetInstanceId: "client_one",
+        createdAt: 2_000,
+        result: { backend: "codex", fetchedAt: 2_000, threads: [] },
+      },
+      "gateway_one",
+    );
+
+    await expect(pending).resolves.toEqual({
+      backend: "codex",
+      fetchedAt: 2_000,
+      threads: [],
+    });
   });
 
   it("forwards local backend events to remote-capable peers", () => {

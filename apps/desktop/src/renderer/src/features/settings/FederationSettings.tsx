@@ -423,31 +423,33 @@ export function FederationSettings(props: FederationSettingsProps) {
                   >
                     Open
                   </button>
-                  <button
-                    className="button button--ghost"
-                    type="button"
-                    disabled={
-                      peer.status === "revoked" ||
-                      revokingPeerId === peer.id ||
-                      !props.desktopApi?.revokeFederationPeer
-                    }
-                    onClick={() => {
-                      setActionError(undefined);
-                      setRevokingPeerId(peer.id);
-                      props.desktopApi?.revokeFederationPeer?.({
-                        peerId: peer.id,
-                      })
-                        .then(() => loadHealth())
-                        .catch((err: unknown) =>
-                          setActionError(
-                            err instanceof Error ? err.message : String(err),
-                          ),
-                        )
-                        .finally(() => setRevokingPeerId(undefined));
-                    }}
-                  >
-                    {revokingPeerId === peer.id ? "Revoking..." : "Revoke"}
-                  </button>
+                  {peer.canRevoke ? (
+                    <button
+                      className="button button--ghost"
+                      type="button"
+                      disabled={
+                        peer.status === "revoked" ||
+                        revokingPeerId === peer.id ||
+                        !props.desktopApi?.revokeFederationPeer
+                      }
+                      onClick={() => {
+                        setActionError(undefined);
+                        setRevokingPeerId(peer.id);
+                        props.desktopApi?.revokeFederationPeer?.({
+                          peerId: peer.id,
+                        })
+                          .then(() => loadHealth())
+                          .catch((err: unknown) =>
+                            setActionError(
+                              err instanceof Error ? err.message : String(err),
+                            ),
+                          )
+                          .finally(() => setRevokingPeerId(undefined));
+                      }}
+                    >
+                      {revokingPeerId === peer.id ? "Revoking..." : "Revoke"}
+                    </button>
+                  ) : null}
                 </dd>
               </div>
             ))}

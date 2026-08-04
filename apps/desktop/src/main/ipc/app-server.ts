@@ -1448,6 +1448,15 @@ class DesktopAppServerService {
   async archiveThread(
     request: ArchiveThreadRequest,
   ): Promise<ArchiveThreadResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .archiveThread(remoteRequest);
+    }
     const backend = request.backend ?? "codex";
     const response = await getDesktopBackendRegistry().archiveThread({
       ...request,

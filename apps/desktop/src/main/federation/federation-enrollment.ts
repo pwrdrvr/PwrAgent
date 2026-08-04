@@ -25,6 +25,15 @@ export type FederationEnrollmentInvite = FederationEnrollmentEntry & {
   token: string;
 };
 
+export type FederationInvitePayload = {
+  version: 1;
+  token: string;
+  gatewayInstanceId: FederationInstanceId;
+  gatewayPublicKeyPem: string;
+  gatewayUrl: string;
+  expiresAt: number;
+};
+
 export type FederationAuthDecision =
   | {
       accepted: true;
@@ -59,6 +68,34 @@ export function createFederationEnrollmentInvite(params: {
     ...entry,
     token: params.token,
   };
+}
+
+export function encodeFederationInvite(payload: FederationInvitePayload): string {
+  return `pwragent-federation:${Buffer.from(JSON.stringify(payload), "utf8").toString("base64url")}`;
+}
+
+export function decodeFederationInvite(
+  invite: string,
+  now = Date.now(),
+): FederationInvitePayload {
+  const encoded = invite.trim().replace(/^pwragent-federation:/, "");
+  const parsed = JSON.parse(
+    Buffer.from(encoded, "base64url").toString("utf8"),
+  ) as Partial<FederationInvitePayload>;
+  if (
+    parsed.version !== 1 ||
+    typeof parsed.token !== "string" ||
+    typeof parsed.gatewayInstanceId !== "string" ||
+    typeof parsed.gatewayPublicKeyPem !== "string" ||
+    typeof parsed.gatewayUrl !== "string" ||
+    typeof parsed.expiresAt !== "number"
+  ) {
+    throw new Error("Invalid federation invite.");
+  }
+  if (parsed.expiresAt <= now) {
+    throw new Error("Federation invite has expired.");
+  }
+  return parsed as FederationInvitePayload;
 }
 
 export function completeFederationEnrollment(params: {
@@ -251,5 +288,39 @@ export function buildFederationProofMessage(params: {
     protocolVersion: params.protocolVersion,
     publicKeyPem: params.publicKeyPem,
     purpose: params.purpose,
+  });
+}
+
+export function buildFederationGatewayChallengeMessage(params: {
+  gatewayInstanceId: FederationInstanceId;
+  gatewayPublicKeyPem: string;
+  protocolVersion: number;
+  nonce: string;
+}): string {
+  return JSON.stringify({
+    gatewayInstanceId: params.gatewayInstanceId,
+    gatewayPublicKeyPem: params.gatewayPublicKeyPem,
+    nonce: params.nonce,
+    protocolVersion: params.protocolVersion,
+    purpose: "gateway_challenge",
+  });
+}
+
+export function buildFederationGatewayAcceptedMessage(params: {
+  gatewayInstanceId: FederationInstanceId;
+  peerInstanceId: FederationInstanceId;
+  sessionId: string;
+  protocolVersion: number;
+  nonce: string;
+  capabilities: readonly FederationCapability[];
+}): string {
+  return JSON.stringify({
+    capabilities: params.capabilities.slice().sort(),
+    gatewayInstanceId: params.gatewayInstanceId,
+    nonce: params.nonce,
+    peerInstanceId: params.peerInstanceId,
+    protocolVersion: params.protocolVersion,
+    purpose: "gateway_accepted",
+    sessionId: params.sessionId,
   });
 }

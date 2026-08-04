@@ -100,6 +100,7 @@ const registry = {
 
 const federationMock = vi.hoisted(() => {
   const remoteBackend = {
+    listBackends: vi.fn(async () => ({ fetchedAt: 1, backends: [] })),
     startThread: vi.fn(async (request: StartThreadRequest) => ({
       backend: request.backend,
       threadId: "remote-thread-1",
@@ -537,6 +538,32 @@ describe("agent ipc", () => {
       directoryKey: "directory:/repo/app",
     });
 
+    disposeAgentIpcHandlers();
+  });
+
+  it("loads backend summaries from the selected federation peer", async () => {
+    const { registerAgentIpcHandlers, disposeAgentIpcHandlers } = await import(
+      "../ipc/agent-ipc"
+    );
+    const { BACKEND_LIST_CHANNEL } = await import("../../shared/ipc");
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "client_one",
+    };
+    registerAgentIpcHandlers();
+
+    await handlers.get(BACKEND_LIST_CHANNEL)?.({}, {
+      includeUnavailable: true,
+      federationTarget,
+    });
+
+    expect(federationMock.runtime.remoteBackend).toHaveBeenCalledWith(
+      federationTarget,
+    );
+    expect(federationMock.remoteBackend.listBackends).toHaveBeenCalledWith({
+      includeUnavailable: true,
+    });
+    expect(registry.listBackends).not.toHaveBeenCalled();
     disposeAgentIpcHandlers();
   });
 

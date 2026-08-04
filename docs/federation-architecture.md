@@ -13,7 +13,9 @@ instances connecting back over WebSocket.
 - PwrAgent still authenticates peers inside the federation protocol. Each
   instance owns an Ed25519 identity key stored through the desktop secret store.
   Enrollment pins the accepted peer public key, and later handshakes must prove
-  possession of the matching private key.
+  possession of the matching private key. The invite also carries the gateway
+  public key so a client verifies the gateway's signed challenge before it
+  installs the connection.
 - Enrollment tokens are one-time bootstrap material. The sqlite store keeps an
   HMAC of the invite token, not the token itself.
 - Diagnostics and renderer IPC must not expose private keys, client certificate

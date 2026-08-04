@@ -5424,9 +5424,12 @@ export function useThreadNavigation(
 
       try {
         for (const target of targetThreads) {
+          const federationTarget = target.federation?.ref.target
+            ?? readRendererFederationTarget();
           const response = await archiveThreadRequest({
             backend: target.source,
             threadId: target.id,
+            ...(federationTarget ? { federationTarget } : {}),
           });
           const cleanupNotice = formatArchiveCleanupNotice(response.cleanup);
           if (cleanupNotice) {

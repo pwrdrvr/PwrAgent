@@ -59,6 +59,8 @@ describe("FederationSettings", () => {
       screen.getByText("wss://pwragent.example.com/federation"),
     ).toBeInTheDocument();
     expect(screen.getByText("Studio Mac")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Revoke" }))
+      .not.toBeInTheDocument();
     expect(screen.queryByText("secret-public-key")).not.toBeInTheDocument();
     await waitFor(() =>
       expect(desktopApi.readFederationHealth).toHaveBeenCalledWith({}),
@@ -110,6 +112,7 @@ describe("FederationSettings", () => {
                 role: "client",
                 status: "disconnected",
                 capabilities: ["thread_navigation", "turn_control"],
+                canRevoke: true,
                 protocolVersion: 1,
                 unavailableReason: "Transport closed.",
               },

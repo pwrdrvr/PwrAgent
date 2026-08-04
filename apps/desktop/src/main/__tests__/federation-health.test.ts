@@ -29,6 +29,7 @@ describe("federation health", () => {
       }),
       peers: [peer],
       instanceId: "master_one",
+      listenUrl: "ws://127.0.0.1:8765",
     });
 
     expect(health).toMatchObject({
@@ -45,6 +46,7 @@ describe("federation health", () => {
       role: "client",
       status: "connected",
       capabilities: ["thread_navigation"],
+      canRevoke: undefined,
       protocolVersion: 1,
       endpoint: "wss://pwragent.example.com/federation",
       profileName: undefined,
@@ -66,6 +68,18 @@ describe("federation health", () => {
     expect(health.status).toBe("disabled");
     expect(health.listenUrl).toBeUndefined();
     expect(health.publicUrl).toBeUndefined();
+  });
+
+  it("reports a bind failure instead of claiming the configured listener", () => {
+    const health = buildFederationHealthStatus({
+      settings: settingsSnapshot({ mode: "gateway", publicUrl: "" }),
+      peers: [],
+      unavailableReason: "listen EADDRINUSE: address already in use 127.0.0.1:8765",
+    });
+
+    expect(health.status).toBe("degraded");
+    expect(health.listenUrl).toBeUndefined();
+    expect(health.unavailableReason).toContain("EADDRINUSE");
   });
 
   it("copies peer capabilities when normalizing public summaries", () => {

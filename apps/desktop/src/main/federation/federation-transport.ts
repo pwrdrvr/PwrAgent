@@ -15,10 +15,15 @@ import {
 } from "@pwragent/shared";
 import {
   authenticateFederationReconnect,
+  buildFederationGatewayAcceptedMessage,
+  buildFederationGatewayChallengeMessage,
   buildFederationProofMessage,
   completeFederationEnrollment,
 } from "./federation-enrollment";
-import { signFederationMessage } from "./federation-identity";
+import {
+  signFederationMessage,
+  verifyFederationMessageSignature,
+} from "./federation-identity";
 import {
   federationFailure,
   type FederationRedactedFailure,
@@ -46,15 +51,20 @@ type FederationSocketAuthMessage = {
 type FederationSocketChallengeMessage = {
   kind: "auth.challenge";
   gatewayInstanceId: FederationInstanceId;
+  gatewayPublicKeyPem: string;
   protocolVersion: number;
   nonce: string;
+  signatureBase64: string;
 };
 
 type FederationSocketAcceptedMessage = {
   kind: "auth.accepted";
+  gatewayInstanceId: FederationInstanceId;
   sessionId: FederationSessionId;
   protocolVersion: number;
+  nonce: string;
   capabilities: FederationCapability[];
+  signatureBase64: string;
 };
 
 type FederationSocketRejectedMessage = {
@@ -84,6 +94,8 @@ export type FederationGatewayConnection = {
 
 export type FederationGatewayWebSocketServerOptions = {
   gatewayInstanceId: FederationInstanceId;
+  gatewayPrivateKeyPem: string;
+  gatewayPublicKeyPem: string;
   host: string;
   port: number;
   store: FederationStore;
@@ -171,11 +183,22 @@ export class FederationGatewayWebSocketServer {
   private handleSocket(socket: WebSocket): void {
     let connection: FederationGatewayConnection | undefined;
     const challengeNonce = `challenge:${randomUUID()}`;
+    const challengeMessage = buildFederationGatewayChallengeMessage({
+      gatewayInstanceId: this.options.gatewayInstanceId,
+      gatewayPublicKeyPem: this.options.gatewayPublicKeyPem,
+      protocolVersion: FEDERATION_PROTOCOL_VERSION,
+      nonce: challengeNonce,
+    });
     sendSocketMessage(socket, {
       kind: "auth.challenge",
       gatewayInstanceId: this.options.gatewayInstanceId,
+      gatewayPublicKeyPem: this.options.gatewayPublicKeyPem,
       protocolVersion: FEDERATION_PROTOCOL_VERSION,
       nonce: challengeNonce,
+      signatureBase64: signFederationMessage({
+        privateKeyPem: this.options.gatewayPrivateKeyPem,
+        message: challengeMessage,
+      }),
     });
     socket.once("message", (raw) => {
       const message = parseSocketMessage(raw);
@@ -264,9 +287,22 @@ export class FederationGatewayWebSocketServer {
       });
       sendSocketMessage(socket, {
         kind: "auth.accepted",
+        gatewayInstanceId: this.options.gatewayInstanceId,
         sessionId,
         protocolVersion: FEDERATION_PROTOCOL_VERSION,
+        nonce: challengeNonce,
         capabilities: decision.capabilities,
+        signatureBase64: signFederationMessage({
+          privateKeyPem: this.options.gatewayPrivateKeyPem,
+          message: buildFederationGatewayAcceptedMessage({
+            gatewayInstanceId: this.options.gatewayInstanceId,
+            peerInstanceId: decision.peer.id,
+            sessionId,
+            protocolVersion: FEDERATION_PROTOCOL_VERSION,
+            nonce: challengeNonce,
+            capabilities: decision.capabilities,
+          }),
+        }),
       });
       this.options.onConnection?.(connection);
 
@@ -358,6 +394,7 @@ export async function connectFederationClient(params: {
   url: string;
   mode: "enroll" | "reconnect";
   gatewayInstanceId: FederationInstanceId;
+  gatewayPublicKeyPem: string;
   peerInstanceId: FederationInstanceId;
   privateKeyPem: string;
   publicKeyPem: string;
@@ -384,10 +421,25 @@ export async function connectFederationClient(params: {
   ]);
   if (
     challenge.gatewayInstanceId !== params.gatewayInstanceId ||
+    challenge.gatewayPublicKeyPem !== params.gatewayPublicKeyPem ||
     challenge.protocolVersion !== FEDERATION_PROTOCOL_VERSION
   ) {
     socket.close();
     throw new Error("Invalid federation auth challenge");
+  }
+  const challengeSignatureValid = verifyFederationMessageSignature({
+    publicKeyPem: params.gatewayPublicKeyPem,
+    message: buildFederationGatewayChallengeMessage({
+      gatewayInstanceId: challenge.gatewayInstanceId,
+      gatewayPublicKeyPem: challenge.gatewayPublicKeyPem,
+      protocolVersion: challenge.protocolVersion,
+      nonce: challenge.nonce,
+    }),
+    signatureBase64: challenge.signatureBase64,
+  });
+  if (!challengeSignatureValid) {
+    socket.close();
+    throw new Error("Invalid federation auth challenge signature");
   }
   const messageToSign = buildFederationProofMessage({
     purpose: params.mode === "enroll" ? "enroll" : "reconnect",
@@ -420,6 +472,26 @@ export async function connectFederationClient(params: {
 
   sendSocketMessage(socket, authMessage);
   const accepted = await waitForAuthResult(socket);
+  const acceptedSignatureValid =
+    accepted.gatewayInstanceId === params.gatewayInstanceId &&
+    accepted.nonce === challenge.nonce &&
+    accepted.protocolVersion === FEDERATION_PROTOCOL_VERSION &&
+    verifyFederationMessageSignature({
+      publicKeyPem: params.gatewayPublicKeyPem,
+      message: buildFederationGatewayAcceptedMessage({
+        gatewayInstanceId: accepted.gatewayInstanceId,
+        peerInstanceId: params.peerInstanceId,
+        sessionId: accepted.sessionId,
+        protocolVersion: accepted.protocolVersion,
+        nonce: accepted.nonce,
+        capabilities: accepted.capabilities,
+      }),
+      signatureBase64: accepted.signatureBase64,
+    });
+  if (!acceptedSignatureValid) {
+    socket.close();
+    throw new Error("Invalid federation auth acceptance signature");
+  }
   socket.once("close", () => params.onClose?.());
   socket.on("message", (raw) => {
     const message = parseSocketMessage(raw);
@@ -523,8 +595,10 @@ function isChallengeMessage(
   return (
     value.kind === "auth.challenge" &&
     typeof value.gatewayInstanceId === "string" &&
+    typeof value.gatewayPublicKeyPem === "string" &&
     typeof value.protocolVersion === "number" &&
-    typeof value.nonce === "string"
+    typeof value.nonce === "string" &&
+    typeof value.signatureBase64 === "string"
   );
 }
 
@@ -533,8 +607,11 @@ function isAcceptedMessage(
 ): value is FederationSocketAcceptedMessage {
   return (
     value.kind === "auth.accepted" &&
+    typeof value.gatewayInstanceId === "string" &&
     typeof value.sessionId === "string" &&
     typeof value.protocolVersion === "number" &&
+    typeof value.nonce === "string" &&
+    typeof value.signatureBase64 === "string" &&
     Array.isArray(value.capabilities) &&
     value.capabilities.every(isFederationCapability)
   );

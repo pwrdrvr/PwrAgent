@@ -6,6 +6,8 @@ import {
   buildFederationProofMessage,
   completeFederationEnrollment,
   createFederationEnrollmentInvite,
+  decodeFederationInvite,
+  encodeFederationInvite,
   authenticateFederationReconnect,
 } from "../federation/federation-enrollment";
 import {
@@ -31,6 +33,30 @@ afterEach(() => {
 });
 
 describe("federation enrollment", () => {
+  it("carries the pinned gateway public key in a one-time invite", () => {
+    const gatewayKeyPair = generateFederationIdentityKeyPair();
+    const invite = encodeFederationInvite({
+      version: 1,
+      token: "invite-token-1234567890",
+      gatewayInstanceId: "gateway_one",
+      gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+      gatewayUrl: "ws://127.0.0.1:47830",
+      expiresAt: 2_000,
+    });
+
+    expect(decodeFederationInvite(invite, 1_000)).toEqual({
+      version: 1,
+      token: "invite-token-1234567890",
+      gatewayInstanceId: "gateway_one",
+      gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+      gatewayUrl: "ws://127.0.0.1:47830",
+      expiresAt: 2_000,
+    });
+    expect(() => decodeFederationInvite(invite, 2_000)).toThrow(
+      "Federation invite has expired.",
+    );
+  });
+
   it("enrolls a peer with a valid invite and signed key proof", () => {
     const keyPair = generateFederationIdentityKeyPair();
     const capabilities = ["remote_window", "federated_search"] as const;

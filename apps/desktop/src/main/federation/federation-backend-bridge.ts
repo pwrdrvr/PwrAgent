@@ -6,6 +6,8 @@ import type {
   AppServerReadThreadRequest,
   AppServerReadThreadResponse,
   AgentEvent,
+  ArchiveThreadRequest,
+  ArchiveThreadResponse,
   CancelThreadExecutionModeQueueRequest,
   CancelThreadExecutionModeQueueResponse,
   CompactThreadRequest,
@@ -66,6 +68,7 @@ export const FEDERATION_BACKEND_METHODS = {
   readThread: "backend.readThread",
   listSkills: "backend.listSkills",
   listBackends: "backend.listBackends",
+  archiveThread: "backend.archiveThread",
   startThread: "backend.startThread",
   forkThread: "backend.forkThread",
   startTurn: "backend.startTurn",
@@ -116,6 +119,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.readThread]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.listSkills]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.listBackends]: "thread_detail",
+  [FEDERATION_BACKEND_METHODS.archiveThread]: "turn_control",
   [FEDERATION_BACKEND_METHODS.startThread]: "turn_control",
   [FEDERATION_BACKEND_METHODS.forkThread]: "turn_control",
   [FEDERATION_BACKEND_METHODS.startTurn]: "turn_control",
@@ -154,6 +158,7 @@ export type FederationBackendOperations = {
     request?: AppServerListSkillsRequest,
   ): Promise<AppServerListSkillsResponse>;
   listBackends(request?: ListBackendsRequest): Promise<ListBackendsResponse>;
+  archiveThread(request: ArchiveThreadRequest): Promise<ArchiveThreadResponse>;
   startThread(request: StartThreadRequest): Promise<StartThreadResponse>;
   forkThread(
     request: ForkThreadRequest,
@@ -252,6 +257,13 @@ export function registerFederationBackendHandlers(params: {
     async (envelope) =>
       await params.backend.listBackends(
         (envelope.params ?? {}) as ListBackendsRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.archiveThread,
+    async (envelope) =>
+      await params.backend.archiveThread(
+        envelope.params as ArchiveThreadRequest,
       ),
   );
   params.router.registerHandler(
@@ -467,6 +479,15 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   ): Promise<ListBackendsResponse> {
     return await this.rpc.request<ListBackendsResponse>({
       method: FEDERATION_BACKEND_METHODS.listBackends,
+      params: request,
+    });
+  }
+
+  async archiveThread(
+    request: ArchiveThreadRequest,
+  ): Promise<ArchiveThreadResponse> {
+    return await this.rpc.request<ArchiveThreadResponse>({
+      method: FEDERATION_BACKEND_METHODS.archiveThread,
       params: request,
     });
   }

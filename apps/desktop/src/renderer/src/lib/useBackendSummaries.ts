@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { BackendSummary } from "@pwragent/shared";
+import type { BackendSummary, FederationTarget } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
+import { federationTargetsEqual } from "./federated-thread-events";
 
 type BackendSummaryData = {
   backends: BackendSummary[];
@@ -16,9 +17,13 @@ export const BACKEND_SUMMARIES_REFRESH_EVENT =
 
 export function useBackendSummaries(
   desktopApi?: DesktopApi,
-  options: { enabled?: boolean } = {},
+  options: {
+    enabled?: boolean;
+    federationTarget?: FederationTarget;
+  } = {},
 ): BackendSummaryState {
   const enabled = options.enabled ?? true;
+  const federationTarget = options.federationTarget;
   const [state, setState] = useState<BackendSummaryData>({
     backends: []
   });
@@ -44,7 +49,8 @@ export function useBackendSummaries(
 
     try {
       const response = await desktopApi.listBackends({
-        includeUnavailable: true
+        includeUnavailable: true,
+        ...(federationTarget ? { federationTarget } : {}),
       });
       setState({
         backends: response.backends,
@@ -58,9 +64,12 @@ export function useBackendSummaries(
       });
       return [];
     }
-  }, [desktopApi, enabled]);
+  }, [desktopApi, enabled, federationTarget]);
 
   const refreshAcpAgents = useCallback(async (): Promise<BackendSummary[]> => {
+    if (federationTarget?.scope === "remote") {
+      return await refresh();
+    }
     if (!enabled || !desktopApi?.listAcpAgents) {
       return [];
     }
@@ -89,7 +98,7 @@ export function useBackendSummaries(
         acpRefreshPromiseRef.current = undefined;
       }
     }
-  }, [desktopApi, enabled, refresh]);
+  }, [desktopApi, enabled, federationTarget, refresh]);
 
   useEffect(() => {
     void refresh();
@@ -110,6 +119,9 @@ export function useBackendSummaries(
       return;
     }
     return desktopApi.onAgentEvent((event) => {
+      if (!federationTargetsEqual(event.federationTarget, federationTarget)) {
+        return;
+      }
       if (
         (event.backend === "codex" &&
           (event.notification.method === "account/rateLimits/updated" ||
@@ -120,7 +132,7 @@ export function useBackendSummaries(
         void refresh();
       }
     });
-  }, [desktopApi, enabled, refresh]);
+  }, [desktopApi, enabled, federationTarget, refresh]);
 
   return {
     ...state,

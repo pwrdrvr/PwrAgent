@@ -11,6 +11,8 @@ export function buildFederationHealthStatus(params: {
   settings: DesktopSettingsSnapshot;
   peers: FederationPeerSummary[];
   instanceId?: FederationInstanceId;
+  listenUrl?: string;
+  unavailableReason?: string;
 }): FederationHealthStatus {
   const mode = params.settings.federation.mode.value;
   const enabled = mode !== "disabled";
@@ -19,10 +21,13 @@ export function buildFederationHealthStatus(params: {
   return {
     enabled,
     role: roleForMode(mode),
-    status: enabled ? statusForMode(mode) : "disabled",
+    status: enabled
+      ? statusForMode(mode, params.listenUrl, params.unavailableReason)
+      : "disabled",
     instanceId: params.instanceId,
-    listenUrl: enabled ? listenUrlForSettings(params.settings) : undefined,
+    listenUrl: enabled ? params.listenUrl : undefined,
     publicUrl: publicUrl.length > 0 ? publicUrl : undefined,
+    unavailableReason: enabled ? params.unavailableReason : undefined,
     peers: params.peers.map(publicPeerSummary),
   };
 }
@@ -34,6 +39,7 @@ export function publicPeerSummary(peer: FederationPeerSummary): FederationPeerSu
     role: peer.role,
     status: peer.status,
     capabilities: [...peer.capabilities],
+    canRevoke: peer.canRevoke,
     protocolVersion: peer.protocolVersion,
     endpoint: peer.endpoint,
     profileName: peer.profileName,
@@ -56,10 +62,16 @@ function roleForMode(mode: DesktopFederationMode): FederationInstanceRole {
   }
 }
 
-function statusForMode(mode: DesktopFederationMode): FederationHealthStatus["status"] {
-  return mode === "client" ? "connecting" : "listening";
-}
-
-function listenUrlForSettings(settings: DesktopSettingsSnapshot): string {
-  return `ws://${settings.federation.listenHost.value}:${settings.federation.listenPort.value}`;
+function statusForMode(
+  mode: DesktopFederationMode,
+  listenUrl: string | undefined,
+  unavailableReason: string | undefined,
+): FederationHealthStatus["status"] {
+  if (unavailableReason) {
+    return "degraded";
+  }
+  if (mode === "client") {
+    return "connecting";
+  }
+  return listenUrl ? "listening" : "connecting";
 }

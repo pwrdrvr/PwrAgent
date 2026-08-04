@@ -30,6 +30,12 @@ const backendRegistryLifecycle = vi.hoisted(() => ({
 }));
 const federationMock = vi.hoisted(() => {
   const remoteBackend = {
+    archiveThread: vi.fn(async (request: ArchiveThreadRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      archivedAt: 6_000,
+      cleanup: [],
+    })),
     renameThread: vi.fn(async (request: RenameThreadRequest) => ({
       backend: request.backend,
       threadId: request.threadId,
@@ -751,6 +757,7 @@ describe("app server ipc", () => {
     handoffThreadWorkspace.mockClear();
     renameThread.mockClear();
     federationMock.remoteBackend.renameThread.mockClear();
+    federationMock.remoteBackend.archiveThread.mockClear();
     federationMock.runtime.remoteBackend.mockClear();
     listThreads.mockClear();
     readThread.mockClear();
@@ -1990,6 +1997,37 @@ describe("app server ipc", () => {
       backend: "codex",
       threadId: "thread-1",
       archivedAt: 3000,
+      cleanup: [],
+    });
+  });
+
+  it("archives remote threads on the selected federation peer", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { APP_SERVER_ARCHIVE_THREAD_CHANNEL } = await import("../../shared/ipc");
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "remote-instance",
+    };
+    registerAppServerIpcHandlers();
+
+    const response = await handlers.get(APP_SERVER_ARCHIVE_THREAD_CHANNEL)?.({}, {
+      backend: "codex",
+      federationTarget,
+      threadId: "thread-remote",
+    } satisfies ArchiveThreadRequest);
+
+    expect(federationMock.runtime.remoteBackend).toHaveBeenCalledWith(
+      federationTarget,
+    );
+    expect(federationMock.remoteBackend.archiveThread).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-remote",
+    });
+    expect(archiveThread).not.toHaveBeenCalled();
+    expect(response).toEqual({
+      backend: "codex",
+      threadId: "thread-remote",
+      archivedAt: 6_000,
       cleanup: [],
     });
   });

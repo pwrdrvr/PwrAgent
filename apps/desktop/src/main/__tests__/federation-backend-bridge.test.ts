@@ -24,6 +24,12 @@ describe("federation backend bridge", () => {
       readThread: vi.fn(),
       listSkills: vi.fn(),
       listBackends: vi.fn(),
+      archiveThread: vi.fn(async () => ({
+        backend: "codex",
+        threadId: "thread-1",
+        archivedAt: 2_000,
+        cleanup: [],
+      })),
       startTurn: vi.fn(),
     } as unknown as FederationBackendOperations;
     const replies: FederationProtocolEnvelope[] = [];
@@ -34,7 +40,7 @@ describe("federation backend bridge", () => {
     });
     router.registerConnection({
       peerId: "client_one",
-      capabilities: ["thread_navigation"],
+      capabilities: ["thread_navigation", "turn_control"],
       sendEnvelope: (envelope) => replies.push(envelope),
     });
     registerFederationBackendHandlers({ router, backend });
@@ -52,8 +58,25 @@ describe("federation backend bridge", () => {
         createdAt: 1_000,
       },
     });
+    await router.routeEnvelope({
+      sourcePeerId: "client_one",
+      envelope: {
+        id: "request-2",
+        kind: "request",
+        method: FEDERATION_BACKEND_METHODS.archiveThread,
+        params: { backend: "codex", threadId: "thread-1" },
+        protocolVersion: 1,
+        sourceInstanceId: "client_one",
+        targetInstanceId: "gateway_one",
+        createdAt: 1_100,
+      },
+    });
 
     expect(backend.listThreads).toHaveBeenCalledWith({ backend: "codex" });
+    expect(backend.archiveThread).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+    });
     expect(replies).toMatchObject([
       {
         kind: "response",
@@ -61,6 +84,14 @@ describe("federation backend bridge", () => {
         result: {
           backend: "codex",
           threads: [],
+        },
+      },
+      {
+        kind: "response",
+        requestId: "request-2",
+        result: {
+          backend: "codex",
+          threadId: "thread-1",
         },
       },
     ]);
@@ -105,6 +136,36 @@ describe("federation backend bridge", () => {
     await expect(pending).resolves.toMatchObject({
       backend: "codex",
       threads: [],
+    });
+
+    const archivePending = client.archiveThread({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    const archiveRequest = sent.at(-1)!;
+    expect(archiveRequest).toMatchObject({
+      kind: "request",
+      method: FEDERATION_BACKEND_METHODS.archiveThread,
+      params: { backend: "codex", threadId: "thread-1" },
+    });
+    rpc.receiveEnvelope({
+      id: "response-2",
+      kind: "response",
+      requestId: archiveRequest.id,
+      protocolVersion: 1,
+      sourceInstanceId: "client_one",
+      targetInstanceId: "gateway_one",
+      createdAt: 1_200,
+      result: {
+        backend: "codex",
+        threadId: "thread-1",
+        archivedAt: 1_200,
+        cleanup: [],
+      },
+    });
+    await expect(archivePending).resolves.toMatchObject({
+      threadId: "thread-1",
+      cleanup: [],
     });
   });
 
@@ -217,6 +278,7 @@ describe("federation backend bridge", () => {
       readThread: vi.fn(),
       listSkills: vi.fn(),
       listBackends: vi.fn(),
+      archiveThread: vi.fn(),
       startThread: vi.fn(),
       forkThread: vi.fn(),
       startTurn: vi.fn(),
@@ -379,6 +441,7 @@ describe("federation backend bridge", () => {
         readThread: vi.fn(),
         listSkills: vi.fn(),
         listBackends: vi.fn(),
+        archiveThread: vi.fn(),
         startThread: vi.fn(),
         forkThread: vi.fn(),
         startTurn: vi.fn(),

@@ -21,8 +21,9 @@ Federation uses two independent admission layers:
 
 Each PwrAgent profile owns an Ed25519 identity key in encrypted desktop secret
 storage. Enrollment invites are short-lived and single-use. The gateway stores
-the enrolled public identity and can revoke it. Revocation closes the active
-gateway connection and blocks reconnects with that identity.
+the enrolled public identity, while the client pins the gateway public identity
+from the invite. Revocation closes the active gateway connection and blocks
+reconnects with that identity.
 
 Keep the gateway listener on `127.0.0.1` when using `cloudflared`. Do not expose
 the listener port through a router or host firewall.

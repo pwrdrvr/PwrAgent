@@ -678,6 +678,7 @@ export type ArchiveThreadCleanupResult = {
 export type ArchiveThreadRequest = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
+  federationTarget?: FederationTarget;
 };
 
 export type ArchiveThreadResponse = {

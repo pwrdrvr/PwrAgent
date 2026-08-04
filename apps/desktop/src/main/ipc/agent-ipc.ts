@@ -355,7 +355,17 @@ export function registerAgentIpcHandlers(): void {
         detail: {
           hasRequest: request !== undefined,
         },
-        operation: async () => await registry.listBackends(request),
+        operation: async () => {
+          if (
+            request?.federationTarget
+            && isRemoteFederationTarget(request.federationTarget)
+          ) {
+            return await getDesktopFederationRuntime()
+              .remoteBackend(request.federationTarget)
+              .listBackends(stripFederationTarget(request));
+          }
+          return await registry.listBackends(request);
+        },
       });
     },
   );

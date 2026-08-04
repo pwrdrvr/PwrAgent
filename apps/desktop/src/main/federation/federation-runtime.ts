@@ -37,9 +37,7 @@ import type {
 } from "@pwragent/shared";
 import {
   FEDERATION_PROTOCOL_VERSION,
-  buildThreadIdentityKey,
   buildFederatedThreadRef,
-  federatedThreadIdentityKey,
   isRemoteFederationTarget,
   type AppServerListSkillsRequest,
   type AppServerListThreadsRequest,
@@ -83,6 +81,8 @@ import { getAppStateDb, isAppStateInitialized } from "../state/app-state";
 import { DesktopMessagingBackendBridge } from "../messaging/desktop-backend-bridge";
 import {
   createFederationEnrollmentInvite,
+  decodeFederationInvite,
+  encodeFederationInvite,
 } from "./federation-enrollment";
 import { FederatedSearchService } from "./federated-search-service";
 import {
@@ -113,6 +113,7 @@ import {
 const log = getMainLogger("pwragent:federation-runtime");
 const INSTANCE_ID_META_KEY = "federation_instance_id";
 const GATEWAY_INSTANCE_ID_META_KEY = "federation_gateway_instance_id";
+const GATEWAY_PUBLIC_KEY_META_KEY = "federation_gateway_public_key_pem";
 const PENDING_INVITE_TOKEN_META_KEY = "federation_pending_invite_token";
 const FEDERATION_PEER_DIRECTORY_METHOD = "federation.peerDirectory";
 const FEDERATION_RECONNECT_MAX_DELAY_MS = 30_000;
@@ -127,14 +128,6 @@ const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "federated_search",
   "gateway_relay",
 ];
-
-type FederationInvitePayload = {
-  version: 1;
-  token: string;
-  gatewayInstanceId: FederationInstanceId;
-  gatewayUrl: string;
-  expiresAt: number;
-};
 
 type FederationPeerDirectoryNotification = {
   method: typeof FEDERATION_PEER_DIRECTORY_METHOD;
@@ -170,6 +163,7 @@ export class DesktopFederationRuntime {
   private connectionGeneration = 0;
   private stopping = true;
   private lastConnectionError?: string;
+  private gatewayListenerError?: string;
 
   setAgentEventPublisher(publisher: (event: AgentEvent) => void): void {
     this.publishAgentEvent = publisher;
@@ -230,6 +224,7 @@ export class DesktopFederationRuntime {
     this.remotePeerDirectory.clear();
     this.reconnectAttempt = 0;
     this.lastConnectionError = undefined;
+    this.gatewayListenerError = undefined;
   }
 
   async health(): Promise<FederationHealthStatus> {
@@ -238,6 +233,8 @@ export class DesktopFederationRuntime {
       settings,
       peers: this.visiblePeers(),
       instanceId: this.ensureLocalInstanceId(),
+      listenUrl: this.listenUrl,
+      unavailableReason: this.gatewayListenerError,
     });
     if (
       settings.federation.mode.value === "client" ||
@@ -249,6 +246,10 @@ export class DesktopFederationRuntime {
           ? "connecting"
           : "disconnected";
       health.unavailableReason = this.lastConnectionError;
+    }
+    if (this.gatewayListenerError) {
+      health.status = "degraded";
+      health.unavailableReason = this.gatewayListenerError;
     }
     return health;
   }
@@ -301,6 +302,8 @@ export class DesktopFederationRuntime {
     }
     const now = Date.now();
     const expiresAt = now + Math.max(60_000, Math.min(request.ttlMs ?? 3_600_000, 86_400_000));
+    const gatewayIdentity = await getDesktopSettingsService()
+      .getOrCreateFederationIdentityKeyPair();
     const entry = createFederationEnrollmentInvite({
       store: this.store(),
       token: randomBytes(24).toString("base64url"),
@@ -312,10 +315,11 @@ export class DesktopFederationRuntime {
       endpoint: gatewayUrl,
     });
     return {
-      invite: encodeInvite({
+      invite: encodeFederationInvite({
         version: 1,
         token: entry.token,
         gatewayInstanceId: this.ensureLocalInstanceId(),
+        gatewayPublicKeyPem: gatewayIdentity.publicKeyPem,
         gatewayUrl,
         expiresAt,
       }),
@@ -328,9 +332,10 @@ export class DesktopFederationRuntime {
     gatewayInstanceId: FederationInstanceId;
     gatewayUrl: string;
   }> {
-    const payload = decodeInvite(invite);
+    const payload = decodeFederationInvite(invite);
     const stateDb = getAppStateDb();
     stateDb.setMeta(GATEWAY_INSTANCE_ID_META_KEY, payload.gatewayInstanceId);
+    stateDb.setMeta(GATEWAY_PUBLIC_KEY_META_KEY, payload.gatewayPublicKeyPem);
     stateDb.setMeta(PENDING_INVITE_TOKEN_META_KEY, payload.token);
     await getDesktopSettingsService().writeConfigPatch({
       federation: {
@@ -375,17 +380,12 @@ export class DesktopFederationRuntime {
     });
     const peer = this.store().getPeer(target.instanceId);
     const instanceLabel = peer?.label ?? target.instanceId;
-    const remoteThreadKeyByLocalKey = new Map<string, string>();
     const threads = response.threads.map((thread) => {
       const ref = buildFederatedThreadRef({
         backend: thread.source,
         instanceId: target.instanceId,
         threadId: thread.id,
       });
-      remoteThreadKeyByLocalKey.set(
-        buildThreadIdentityKey(thread.source, thread.id),
-        federatedThreadIdentityKey(ref),
-      );
       return {
         ...thread,
         federation: {
@@ -400,15 +400,6 @@ export class DesktopFederationRuntime {
       federationTarget: target,
       unchanged: false,
       threads,
-      inboxThreadKeys: response.inboxThreadKeys.map(
-        (threadKey) => remoteThreadKeyByLocalKey.get(threadKey) ?? threadKey,
-      ),
-      directories: response.directories.map((directory) => ({
-        ...directory,
-        threadKeys: directory.threadKeys.map(
-          (threadKey) => remoteThreadKeyByLocalKey.get(threadKey) ?? threadKey,
-        ),
-      })),
     };
   }
 
@@ -463,8 +454,12 @@ export class DesktopFederationRuntime {
     this.subscribeLocalBackendEvents();
 
     if (mode === "gateway" || mode === "dual") {
+      const gatewayIdentity = await getDesktopSettingsService()
+        .getOrCreateFederationIdentityKeyPair();
       this.server = new FederationGatewayWebSocketServer({
         gatewayInstanceId: localInstanceId,
+        gatewayPrivateKeyPem: gatewayIdentity.privateKeyPem,
+        gatewayPublicKeyPem: gatewayIdentity.publicKeyPem,
         host: settings.federation.listenHost.value,
         port: settings.federation.listenPort.value,
         store: this.store(),
@@ -473,9 +468,20 @@ export class DesktopFederationRuntime {
         onEnvelope: (envelope, connection) =>
           void this.receiveEnvelope(envelope, connection.peerId),
       });
-      const started = await this.server.start();
-      this.listenUrl = started.url;
-      log.info("federation gateway listening", { url: started.url });
+      try {
+        const started = await this.server.start();
+        this.listenUrl = started.url;
+        log.info("federation gateway listening", { url: started.url });
+      } catch (error) {
+        this.gatewayListenerError = redactFederationDiagnostic(
+          error instanceof Error ? error.message : String(error),
+        );
+        await this.server.stop().catch(() => undefined);
+        this.server = undefined;
+        log.error("federation gateway failed to listen", {
+          error: this.gatewayListenerError,
+        });
+      }
     }
 
     if (mode === "client" || mode === "dual") {
@@ -495,6 +501,10 @@ export class DesktopFederationRuntime {
     const gatewayInstanceId = getAppStateDb().getMeta(GATEWAY_INSTANCE_ID_META_KEY);
     if (!gatewayInstanceId) {
       throw new Error("Federation client mode is missing its gateway identity.");
+    }
+    const gatewayPublicKeyPem = getAppStateDb().getMeta(GATEWAY_PUBLIC_KEY_META_KEY);
+    if (!gatewayPublicKeyPem) {
+      throw new Error("Federation client mode is missing its pinned gateway key.");
     }
     this.gatewayInstanceId = gatewayInstanceId;
     const pendingInviteToken = getAppStateDb().getMeta(PENDING_INVITE_TOKEN_META_KEY);
@@ -532,6 +542,7 @@ export class DesktopFederationRuntime {
       url: gatewayUrl,
       mode: pendingInviteToken ? "enroll" : "reconnect",
       gatewayInstanceId,
+      gatewayPublicKeyPem,
       peerInstanceId: this.ensureLocalInstanceId(),
       privateKeyPem: keyPair.privateKeyPem,
       publicKeyPem: keyPair.publicKeyPem,
@@ -562,6 +573,7 @@ export class DesktopFederationRuntime {
         this.client = undefined;
         this.lastConnectionError = "Federation gateway connection closed.";
         this.unregisterPeer(gatewayInstanceId);
+        this.disconnectAdvertisedPeers(this.lastConnectionError);
         this.scheduleReconnect(gatewayUrl);
       },
       onEnvelope: (envelope) =>
@@ -597,6 +609,7 @@ export class DesktopFederationRuntime {
     this.lastConnectionError = redactFederationDiagnostic(
       error instanceof Error ? error.message : String(error),
     );
+    this.disconnectAdvertisedPeers(this.lastConnectionError);
     this.store().appendAudit({
       peerId: this.gatewayInstanceId,
       kind: "error",
@@ -646,7 +659,24 @@ export class DesktopFederationRuntime {
 
   private unregisterPeer(peerId: FederationInstanceId): void {
     this.router?.unregisterConnection(peerId);
+    this.rpcByPeer.get(peerId)?.rejectAll(
+      new Error(`Federation peer ${peerId} disconnected.`),
+    );
     this.rpcByPeer.delete(peerId);
+  }
+
+  private disconnectAdvertisedPeers(reason: string): void {
+    for (const [peerId, peer] of this.remotePeerDirectory) {
+      this.remotePeerDirectory.set(peerId, {
+        ...peer,
+        status: peer.status === "revoked" ? "revoked" : "disconnected",
+        unavailableReason: reason,
+      });
+    }
+    for (const rpc of this.rpcByPeer.values()) {
+      rpc.rejectAll(new Error(reason));
+    }
+    this.rpcByPeer.clear();
   }
 
   private async receiveEnvelope(
@@ -663,7 +693,15 @@ export class DesktopFederationRuntime {
       return;
     }
     if (envelope.kind === "response" || envelope.kind === "error") {
-      const handled = this.rpcByPeer.get(sourcePeerId)?.receiveEnvelope(envelope) ?? false;
+      const sourceInstanceId = envelope.sourceInstanceId;
+      const originatingRpc = sourceInstanceId
+        ? this.rpcByPeer.get(sourceInstanceId)
+        : undefined;
+      const handledByOrigin = originatingRpc?.receiveEnvelope(envelope) ?? false;
+      const handled = handledByOrigin || [...this.rpcByPeer.entries()].some(
+        ([peerId, rpc]) =>
+          peerId !== sourceInstanceId && rpc.receiveEnvelope(envelope),
+      );
       if (handled) return;
     }
     await this.router?.routeEnvelope({ envelope, sourcePeerId });
@@ -760,13 +798,13 @@ export class DesktopFederationRuntime {
 
     for (const peer of this.remotePeerDirectory.values()) {
       if (peer.id !== localInstanceId) {
-        visible.set(peer.id, peer);
+        visible.set(peer.id, { ...peer, canRevoke: false });
       }
     }
 
     for (const peer of this.store().listPeers({ includeRevoked: true })) {
       if (peer.id === localInstanceId) continue;
-      visible.set(peer.id, peer);
+      visible.set(peer.id, { ...peer, canRevoke: true });
     }
 
     for (const connection of this.router?.listConnections() ?? []) {
@@ -785,6 +823,7 @@ export class DesktopFederationRuntime {
         lastActivityAt: existing?.lastActivityAt,
         revokedAt: existing?.revokedAt,
         unavailableReason: existing?.unavailableReason,
+        canRevoke: existing?.canRevoke ?? false,
       });
     }
 
@@ -871,7 +910,7 @@ export class DesktopFederationRuntime {
     this.remotePeerDirectory.clear();
     for (const peer of notification.params.peers) {
       if (peer.id !== this.ensureLocalInstanceId()) {
-        this.remotePeerDirectory.set(peer.id, peer);
+        this.remotePeerDirectory.set(peer.id, { ...peer, canRevoke: false });
       }
     }
     return true;
@@ -1027,6 +1066,9 @@ function localBackendOperations(): FederationBackendOperations {
     async listBackends(request = {}) {
       return await getDesktopBackendRegistry().listBackends(request);
     },
+    async archiveThread(request) {
+      return await getDesktopBackendRegistry().archiveThread(request);
+    },
     async startThread(request: StartThreadRequest): Promise<StartThreadResponse> {
       return await getDesktopBackendRegistry().startThread(request);
     },
@@ -1158,28 +1200,6 @@ function localBackendOperations(): FederationBackendOperations {
       return await getDesktopBackendRegistry().trustCodexProject(request);
     },
   };
-}
-
-function encodeInvite(payload: FederationInvitePayload): string {
-  return `pwragent-federation:${Buffer.from(JSON.stringify(payload), "utf8").toString("base64url")}`;
-}
-
-function decodeInvite(invite: string): FederationInvitePayload {
-  const encoded = invite.trim().replace(/^pwragent-federation:/, "");
-  const parsed = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) as Partial<FederationInvitePayload>;
-  if (
-    parsed.version !== 1 ||
-    typeof parsed.token !== "string" ||
-    typeof parsed.gatewayInstanceId !== "string" ||
-    typeof parsed.gatewayUrl !== "string" ||
-    typeof parsed.expiresAt !== "number"
-  ) {
-    throw new Error("Invalid federation invite.");
-  }
-  if (parsed.expiresAt <= Date.now()) {
-    throw new Error("Federation invite has expired.");
-  }
-  return parsed as FederationInvitePayload;
 }
 
 let runtime: DesktopFederationRuntime | undefined;

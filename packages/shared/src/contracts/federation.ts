@@ -74,6 +74,7 @@ export type FederationPeerSummary = {
   role: FederationInstanceRole;
   status: FederationConnectionState;
   capabilities: FederationCapability[];
+  canRevoke?: boolean;
   protocolVersion?: number;
   endpoint?: string;
   profileName?: string;
