@@ -145,29 +145,49 @@ export function FederationSettings(props: FederationSettingsProps) {
   }, [props.desktopApi]);
 
   const configureTailscale = async (tailscaleMode: FederationTailscaleMode) => {
-    if (!props.desktopApi?.configureFederationTailscale) return;
+    if (
+      !props.desktopApi?.configureFederationTailscale
+      || !props.desktopApi.readFederationHealth
+    ) return;
     setActionError(undefined);
     setTailscaleConfiguring(tailscaleMode);
     try {
       const parsedListenPort = Number.parseInt(listenPort, 10);
+      const gatewayMode = mode === "dual" ? "dual" : "gateway";
+      const listenerWritten = await props.onWriteConfig({
+        federation: {
+          mode: gatewayMode,
+          listenHost: "127.0.0.1",
+          listenPort: parsedListenPort,
+        },
+      });
+      if (!listenerWritten) {
+        throw new Error(
+          "PwrAgent could not start the federation listener. Tailscale was not changed.",
+        );
+      }
+      const listenerHealth = await props.desktopApi.readFederationHealth({});
+      const expectedListenUrl = `ws://127.0.0.1:${parsedListenPort}`;
+      if (listenerHealth.health.listenUrl !== expectedListenUrl) {
+        throw new Error(
+          "PwrAgent did not bind the selected loopback port. Tailscale was not changed.",
+        );
+      }
       const response = await props.desktopApi.configureFederationTailscale({
         mode: tailscaleMode,
         listenPort: parsedListenPort,
       });
       const written = await props.onWriteConfig({
         federation: {
-          mode: mode === "dual" ? "dual" : "gateway",
-          listenHost: "127.0.0.1",
-          listenPort: parsedListenPort,
           publicUrl: response.gatewayUrl,
         },
       });
       if (!written) {
         throw new Error(
-          "Tailscale was configured, but PwrAgent federation settings could not be saved.",
+          "Tailscale was configured, but its Public URL could not be saved.",
         );
       }
-      setMode(mode === "dual" ? "dual" : "gateway");
+      setMode(gatewayMode);
       setListenHost("127.0.0.1");
       setPublicUrl(response.gatewayUrl);
       setTailscaleStatus(response.status);
@@ -641,7 +661,8 @@ export function FederationSettings(props: FederationSettingsProps) {
                   props.saving ||
                   Boolean(tailscaleConfiguring) ||
                   !tailscaleStatus?.connected ||
-                  !props.desktopApi?.configureFederationTailscale
+                  !props.desktopApi?.configureFederationTailscale ||
+                  !props.desktopApi?.readFederationHealth
                 }
                 onClick={() => void configureTailscale("serve")}
               >
@@ -673,7 +694,8 @@ export function FederationSettings(props: FederationSettingsProps) {
                     Boolean(tailscaleConfiguring) ||
                     !tailscaleStatus?.connected ||
                     !funnelAcknowledged ||
-                    !props.desktopApi?.configureFederationTailscale
+                    !props.desktopApi?.configureFederationTailscale ||
+                    !props.desktopApi?.readFederationHealth
                   }
                   onClick={() => void configureTailscale("funnel")}
                 >

@@ -174,10 +174,13 @@ https://<device>.<tailnet>.ts.net/pwragent-federation
   -> http://127.0.0.1:<federation-port>
 ```
 
-PwrAgent then switches the gateway listener to loopback and stores the matching
-`wss://` URL as its Public URL. Tailscale owns login, device identity, HTTPS
-certificates, and tailnet policy; PwrAgent never reads or stores Tailscale
-credentials.
+Before invoking Tailscale, Settings switches the gateway listener to loopback,
+waits for the runtime restart, and verifies that PwrAgent owns the selected
+port. The main process repeats that ownership check immediately before the CLI
+mutation. A failed or occupied listener therefore cannot publish an unrelated
+localhost service. After setup succeeds, PwrAgent stores the matching `wss://`
+URL as its Public URL. Tailscale owns login, device identity, HTTPS certificates,
+and tailnet policy; PwrAgent never reads or stores Tailscale credentials.
 
 ### Tailscale Funnel
 

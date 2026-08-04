@@ -6,9 +6,11 @@ import type {
 } from "@pwragent/shared";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { discoverCommands } from "../settings/command-discovery";
+import { getDesktopFederationRuntime } from "./federation-runtime";
 
 const PWRAGENT_TAILSCALE_PATH = "/pwragent-federation";
 const COMMAND_TIMEOUT_MS = 15_000;
+const COMMAND_MAX_BUFFER_BYTES = 8 * 1024 * 1024;
 
 type TailscaleCommandSource = "path" | "application";
 
@@ -29,17 +31,20 @@ type FederationTailscaleServiceOptions = {
     command: string,
     args: string[],
   ) => Promise<TailscaleCommandResult>;
+  verifyListener?: (listenPort: number) => Promise<void>;
 };
 
 export class FederationTailscaleService {
   private readonly env: NodeJS.ProcessEnv;
   private readonly discoverCommandOverride?: FederationTailscaleServiceOptions["discoverCommand"];
   private readonly runCommandOverride?: FederationTailscaleServiceOptions["runCommand"];
+  private readonly verifyListener: (listenPort: number) => Promise<void>;
 
   constructor(options: FederationTailscaleServiceOptions = {}) {
     this.env = options.env ?? process.env;
     this.discoverCommandOverride = options.discoverCommand;
     this.runCommandOverride = options.runCommand;
+    this.verifyListener = options.verifyListener ?? verifyPwrAgentListener;
   }
 
   async readStatus(): Promise<FederationTailscaleStatus> {
@@ -56,7 +61,11 @@ export class FederationTailscaleService {
 
     try {
       const [statusResult, serveResult, funnelResult] = await Promise.all([
-        this.runCommand(discovered.command, ["status", "--json"]),
+        this.runCommand(discovered.command, [
+          "status",
+          "--json",
+          "--peers=false",
+        ]),
         this.runCommand(discovered.command, ["serve", "status", "--json"]),
         this.runCommand(discovered.command, ["funnel", "status", "--json"]),
       ]);
@@ -88,7 +97,10 @@ export class FederationTailscaleService {
         version: discovered.version,
         serveConfigured: false,
         funnelConfigured: false,
-        unavailableReason: errorMessage(error),
+        unavailableReason: publicTailscaleError(
+          error,
+          "Unable to read Tailscale status.",
+        ),
       };
     }
   }
@@ -115,6 +127,7 @@ export class FederationTailscaleService {
       );
     }
 
+    await this.verifyListener(request.listenPort);
     await this.runCommand(discovered.command, [
       request.mode,
       "--bg",
@@ -168,7 +181,11 @@ export class FederationTailscaleService {
     args: string[],
   ): Promise<TailscaleCommandResult> {
     if (this.runCommandOverride) {
-      return await this.runCommandOverride(command, args);
+      try {
+        return await this.runCommandOverride(command, args);
+      } catch (error) {
+        throw commandError(args, error);
+      }
     }
     return await new Promise<TailscaleCommandResult>((resolve, reject) => {
       execFileCallback(
@@ -177,12 +194,11 @@ export class FederationTailscaleService {
         {
           env: buildPwrAgentChildProcessEnv(this.env),
           timeout: COMMAND_TIMEOUT_MS,
-          maxBuffer: 1024 * 1024,
+          maxBuffer: COMMAND_MAX_BUFFER_BYTES,
         },
         (error, stdout, stderr) => {
           if (error) {
-            const detail = `${stderr || stdout}`.trim();
-            reject(new Error(detail || error.message));
+            reject(commandError(args, error));
             return;
           }
           resolve({ stdout: String(stdout), stderr: String(stderr) });
@@ -231,8 +247,37 @@ function buildGatewayUrl(dnsName: string): string {
   return `wss://${dnsName}${PWRAGENT_TAILSCALE_PATH}`;
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+class TailscaleCommandError extends Error {
+  constructor(message: string, cause: unknown) {
+    super(message, { cause });
+    this.name = "TailscaleCommandError";
+  }
+}
+
+function commandError(args: string[], cause: unknown): TailscaleCommandError {
+  const label = args[0] === "serve"
+    ? "Tailscale Serve"
+    : args[0] === "funnel"
+      ? "Tailscale Funnel"
+      : "Tailscale status";
+  return new TailscaleCommandError(
+    `${label} command failed. Run it in Terminal for details.`,
+    cause,
+  );
+}
+
+function publicTailscaleError(error: unknown, fallback: string): string {
+  return error instanceof TailscaleCommandError ? error.message : fallback;
+}
+
+async function verifyPwrAgentListener(listenPort: number): Promise<void> {
+  const health = await getDesktopFederationRuntime().health();
+  const expectedListenUrl = `ws://127.0.0.1:${listenPort}`;
+  if (health.listenUrl !== expectedListenUrl) {
+    throw new Error(
+      "PwrAgent must be listening on the selected loopback port before Tailscale setup.",
+    );
+  }
 }
 
 let federationTailscaleService: FederationTailscaleService | undefined;

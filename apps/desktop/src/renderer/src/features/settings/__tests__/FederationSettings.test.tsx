@@ -9,6 +9,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
+  DesktopSettingsConfigPatch,
   DesktopSettingsSnapshot,
   FederationHealthStatus,
   ReadFederationDiagnosticsResponse,
@@ -273,6 +274,7 @@ describe("FederationSettings", () => {
   });
 
   it("requires public exposure acknowledgement before setting up Tailscale Funnel", async () => {
+    const events: string[] = [];
     const status = {
       installed: true,
       connected: true,
@@ -283,15 +285,30 @@ describe("FederationSettings", () => {
       funnelConfigured: false,
       gatewayUrl: "wss://studio.example.ts.net/pwragent-federation",
     };
-    const configureFederationTailscale = vi.fn(async () => ({
-      status: { ...status, funnelConfigured: true },
-      gatewayUrl: status.gatewayUrl,
-    }));
-    const onWriteConfig = vi.fn(async () => true);
+    const configureFederationTailscale = vi.fn(async () => {
+      events.push("publish");
+      return {
+        status: { ...status, funnelConfigured: true },
+        gatewayUrl: status.gatewayUrl,
+      };
+    });
+    const onWriteConfig = vi.fn(async (patch: DesktopSettingsConfigPatch) => {
+      events.push(patch.federation?.publicUrl ? "save-url" : "bind-listener");
+      return true;
+    });
     render(
       <FederationSettings
         desktopApi={{
           configureFederationTailscale,
+          readFederationHealth: vi.fn(async () => ({
+            health: {
+              enabled: true,
+              role: "gateway" as const,
+              status: "listening" as const,
+              listenUrl: "ws://127.0.0.1:8765",
+              peers: [],
+            },
+          })),
           readFederationTailscaleStatus: vi.fn(async () => ({ status })),
         }}
         onClearSecret={vi.fn(async () => true)}
@@ -316,21 +333,73 @@ describe("FederationSettings", () => {
     fireEvent.click(funnelButton);
 
     await waitFor(() =>
+      expect(onWriteConfig).toHaveBeenNthCalledWith(1, {
+        federation: {
+          mode: "gateway",
+          listenHost: "127.0.0.1",
+          listenPort: 8765,
+        },
+      }),
+    );
+    await waitFor(() =>
       expect(configureFederationTailscale).toHaveBeenCalledWith({
         mode: "funnel",
         listenPort: 8765,
       }),
     );
     await waitFor(() =>
-      expect(onWriteConfig).toHaveBeenCalledWith({
+      expect(onWriteConfig).toHaveBeenNthCalledWith(2, {
         federation: {
-          mode: "gateway",
-          listenHost: "127.0.0.1",
-          listenPort: 8765,
           publicUrl: "wss://studio.example.ts.net/pwragent-federation",
         },
       }),
     );
+    expect(events).toEqual(["bind-listener", "publish", "save-url"]);
+  });
+
+  it("does not publish a Tailscale route when the listener cannot bind", async () => {
+    const status = {
+      installed: true,
+      connected: true,
+      serveConfigured: false,
+      funnelConfigured: false,
+      gatewayUrl: "wss://studio.example.ts.net/pwragent-federation",
+    };
+    const configureFederationTailscale = vi.fn();
+    render(
+      <FederationSettings
+        desktopApi={{
+          configureFederationTailscale,
+          readFederationHealth: vi.fn(async () => ({
+            health: {
+              enabled: true,
+              role: "gateway" as const,
+              status: "degraded" as const,
+              unavailableReason: "listen EADDRINUSE: address already in use",
+              peers: [],
+            },
+          })),
+          readFederationTailscaleStatus: vi.fn(async () => ({ status })),
+        }}
+        onClearSecret={vi.fn(async () => true)}
+        onReplaceSecret={vi.fn(async () => true)}
+        saving={false}
+        snapshot={settingsSnapshot()}
+        onSettingsChanged={vi.fn()}
+        onWriteConfig={vi.fn(async () => true)}
+      />,
+    );
+
+    const serveButton = await screen.findByRole("button", {
+      name: "Set up Tailscale Serve",
+    });
+    await waitFor(() => expect(serveButton).toBeEnabled());
+    fireEvent.click(serveButton);
+
+    expect(await screen.findByText(
+      "PwrAgent did not bind the selected loopback port. Tailscale was not changed.",
+    )).toBeInTheDocument();
+    expect(configureFederationTailscale).not.toHaveBeenCalled();
   });
 });
 
