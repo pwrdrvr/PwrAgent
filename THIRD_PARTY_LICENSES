@@ -42,7 +42,7 @@ BSD-2-Clause
 
 BSD-3-Clause
 ~~~~~~~~~~~~
-- fast-uri@3.1.4 | https://github.com/fastify/fast-uri
+- fast-uri@3.1.5 | https://github.com/fastify/fast-uri
 - ieee754@1.2.1 | https://github.com/feross/ieee754
 - qs@6.15.2 | https://github.com/ljharb/qs
 
@@ -69,7 +69,7 @@ MIT
 - @floating-ui/core@1.8.0 | https://github.com/floating-ui/floating-ui
 - @floating-ui/dom@1.8.0 | https://github.com/floating-ui/floating-ui
 - @floating-ui/utils@0.2.12 | https://github.com/floating-ui/floating-ui
-- @hono/node-server@2.0.5 | https://github.com/honojs/node-server
+- @hono/node-server@2.0.10 | https://github.com/honojs/node-server
 - @modelcontextprotocol/sdk@1.30.0 | https://github.com/modelcontextprotocol/typescript-sdk
 - @napi-rs/canvas@0.1.100 | https://github.com/Brooooooklyn/canvas
 - @napi-rs/canvas-android-arm64@0.1.100 | https://github.com/Brooooooklyn/canvas
@@ -225,14 +225,14 @@ MIT
 - hast-util-to-text@4.0.2 | syntax-tree/hast-util-to-text
 - hast-util-whitespace@3.0.0 | syntax-tree/hast-util-whitespace
 - hastscript@9.0.1 | syntax-tree/hastscript
-- hono@4.12.31 | https://github.com/honojs/hono
+- hono@4.12.34 | https://github.com/honojs/hono
 - html-url-attributes@3.0.1 | https://github.com/rehypejs/rehype-minify/tree/main/packages/html-url-attributes
 - http-errors@2.0.1 | jshttp/http-errors
 - iconv-lite@0.6.3 | https://github.com/ashtuchkin/iconv-lite
 - iconv-lite@0.7.3 | https://github.com/pillarjs/iconv-lite
 - indent-string@4.0.0 | sindresorhus/indent-string
 - inline-style-parser@0.2.7 | https://github.com/remarkablemark/inline-style-parser
-- ip-address@10.2.0 | https://github.com/beaugunderson/ip-address
+- ip-address@10.3.1 | https://github.com/beaugunderson/ip-address
 - ipaddr.js@1.9.1 | https://github.com/whitequark/ipaddr.js
 - is-alphabetical@2.0.1 | wooorm/is-alphabetical
 - is-alphanumerical@2.0.1 | wooorm/is-alphanumerical
@@ -447,13 +447,13 @@ COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
 IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-@hono/node-server@2.0.5 (MIT)
------------------------------
+@hono/node-server@2.0.10 (MIT)
+------------------------------
 
 Applies to:
-- @hono/node-server@2.0.5 (MIT)
+- @hono/node-server@2.0.10 (MIT)
 
-Representative file: @hono/node-server@2.0.5/LICENSE
+Representative file: @hono/node-server@2.0.10/LICENSE
 
 MIT License
 
@@ -3230,13 +3230,13 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-fast-uri@3.1.4 (BSD-3-Clause)
+fast-uri@3.1.5 (BSD-3-Clause)
 -----------------------------
 
 Applies to:
-- fast-uri@3.1.4 (BSD-3-Clause)
+- fast-uri@3.1.5 (BSD-3-Clause)
 
-Representative file: fast-uri@3.1.4/LICENSE
+Representative file: fast-uri@3.1.5/LICENSE
 
 Copyright (c) 2011-2021, Gary Court until https://github.com/garycourt/uri-js/commit/a1acf730b4bba3f1097c9f52e7d9d3aba8cdcaae
 Copyright (c) 2021-present The Fastify team <https://github.com/fastify/fastify#team>
@@ -3762,13 +3762,13 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
 TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-hono@4.12.31 (MIT)
+hono@4.12.34 (MIT)
 ------------------
 
 Applies to:
-- hono@4.12.31 (MIT)
+- hono@4.12.34 (MIT)
 
-Representative file: hono@4.12.31/LICENSE
+Representative file: hono@4.12.34/LICENSE
 
 MIT License
 
@@ -3945,13 +3945,13 @@ The above copyright notice and this permission notice shall be included in all c
 
 THE SOFTWARE IS PROVIDED 'AS IS', WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-ip-address@10.2.0 (MIT)
+ip-address@10.3.1 (MIT)
 -----------------------
 
 Applies to:
-- ip-address@10.2.0 (MIT)
+- ip-address@10.3.1 (MIT)
 
-Representative file: ip-address@10.2.0/LICENSE
+Representative file: ip-address@10.3.1/LICENSE
 
 Copyright (C) 2011 by Beau Gunderson
 
