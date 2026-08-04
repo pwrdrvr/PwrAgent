@@ -1756,6 +1756,14 @@ describe("TelegramAdapter", () => {
           command: "monitor",
           description: "Monitor recent PwrAgent threads",
         },
+        {
+          command: "schedule",
+          description: "Schedule a message for this thread",
+        },
+        {
+          command: "scheduled",
+          description: "List or manage scheduled messages",
+        },
       ],
     });
   });
