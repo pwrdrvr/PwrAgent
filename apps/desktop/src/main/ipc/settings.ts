@@ -95,8 +95,12 @@ import type {
   AcpRegistryDistribution,
   AcpRegistrySnapshot,
 } from "../acp/acp-registry-types";
-import { getAppStateDb } from "../state/app-state";
-import { normalizeProfileName, resolveActiveProfileDir } from "../profile";
+import { getAppStateDb, getAppStateMode } from "../state/app-state";
+import {
+  normalizeProfileName,
+  resolveActiveProfileDir,
+  resolveBootstrapProfileDir,
+} from "../profile";
 
 const settingsIpcLog = getMainLogger("pwragent:settings");
 // Codex profile login now runs through @pwrdrvr/codex-discovery's
@@ -428,7 +432,9 @@ async function refreshAcpRuntimeCapabilities(
 
 async function ensureAcpRuntimeDiscoveryWorkspace(): Promise<string> {
   const directory = path.join(
-    resolveActiveProfileDir(),
+    getAppStateMode() === "bootstrap"
+      ? resolveBootstrapProfileDir()
+      : resolveActiveProfileDir(),
     "state",
     "acp-discovery-workspace",
   );

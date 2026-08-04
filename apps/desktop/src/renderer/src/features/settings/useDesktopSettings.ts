@@ -18,6 +18,9 @@ export type DesktopSettingsState = {
   loading: boolean;
   saving: boolean;
   snapshot?: DesktopSettingsSnapshot;
+  /** Adopt a snapshot returned by a specialized refresh IPC without issuing
+   *  a second read that can race or obscure the result. */
+  applySnapshot?: (snapshot: DesktopSettingsSnapshot) => void;
   clearSecret: (secret: DesktopSettingsSecretName) => Promise<boolean>;
   refresh: () => Promise<void>;
   replaceSecret: (
@@ -148,6 +151,7 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
 
   return useMemo(
     () => ({
+      applySnapshot: setSnapshot,
       clearSecret,
       composerImplementation: DESKTOP_CHAT_REPLY_COMPOSER_DEFAULT,
       error,

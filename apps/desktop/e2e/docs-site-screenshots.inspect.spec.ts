@@ -977,10 +977,11 @@ test("desktop-onboarding-wizard — Codex profile step", async () => {
     requiresReplayDriver: false,
     windowSize: WINDOW_SIZE,
     appearance: SCREENSHOT_APPEARANCE,
+    env: { PWRAGENT_CODEX_COMMAND: process.execPath },
   });
 
   try {
-    // Welcome → Thread presentation → Models / Providers → Codex
+    // Welcome → Thread presentation → AI Providers → Codex
     // profile. The Codex profile step is the most distinctive shot —
     // it shows the Shared / Isolated / Multiple cards that frame how
     // PwrAgent relates to a Codex install.
@@ -997,18 +998,13 @@ test("desktop-onboarding-wizard — Codex profile step", async () => {
     ).toBeVisible();
     await app.window.getByRole("button", { name: /^Continue/i }).click();
 
-    // Models / Providers — paste a dummy xAI key to clear the gate
-    // (Codex CLI isn't on PATH in the screenshot run env).
+    // AI Providers — the deterministic executable override clears the
+    // gate without collecting credentials in the wizard.
     await expect(
       app.window.getByRole("heading", {
-        name: /Pick at least one model backend/i,
+        name: /Install at least one AI provider/i,
       }),
     ).toBeVisible();
-    await app.window
-      .locator('input[type="password"]')
-      .first()
-      .fill("xai-screenshot-placeholder-key");
-    await app.window.getByRole("button", { name: /Use this key/i }).click();
     await app.window.getByRole("button", { name: /^Continue/i }).click();
 
     // Codex profile — this is the screenshot target.

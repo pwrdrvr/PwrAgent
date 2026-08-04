@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import type {
+  AcpAgentSettingsEntry,
   DesktopAppearanceDensity,
   DesktopAppearanceTheme,
   DesktopBootInfo,
@@ -24,6 +25,7 @@ import type {
 } from "@pwragent/shared";
 import { isMessagingRuntimeSecret } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
 import {
   SLACK_APPROVAL_TARGET_LABELS,
   slackApplicableApprovalTargets,
@@ -71,7 +73,7 @@ type RailIndex = 0 | 1 | 2 | 3 | 4;
 
 const RAIL_STEPS: ReadonlyArray<{ label: string }> = [
   { label: "Thread presentation" },
-  { label: "Models / Providers" },
+  { label: "AI Providers" },
   { label: "Profiles" },
   { label: "Messaging" },
   { label: "Review" },
@@ -164,7 +166,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
   //   - everything else (first-run, replay, missing-default-profile,
   //     bootstrap with no name supplied) → Welcome.
   // The flow from Welcome onward is:
-  //   Welcome → Thread presentation → Models / Providers (the backend
+  //   Welcome → Thread presentation → AI Providers (the backend
   //   gate) → Codex profile → optional Name profiles → Messaging
   //   warning → optional Messaging providers / Provider setup → Done.
   // Replay just doesn't persist `onboarding.completed` at Finish.
@@ -224,37 +226,20 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
   // flashing then fading over 5s — to point the operator at the
   // checkbox they have to tick before the Continue button unlocks.
   const [ackFlashNonce, setAckFlashNonce] = useState(0);
-  // Buffered secrets (xAI API key + messaging tokens). The wizard
+  // Buffered messaging tokens. The wizard
   // collects values in renderer memory rather than writing them
   // through `replaceSecret` on input change. At Finish, the
   // `persistAndComplete` callback writes them to the operator's
   // chosen target profile(s) via `writeSecretsToProfile`. This
   // avoids stranding secrets in `.bootstrap/state.db` in bootstrap
-  // mode and supports per-profile xAI keys in Multiple mode (each
-  // profile row can override the global value below; see
-  // `bufferedSecretsPerProfile`).
+  // mode.
   const [bufferedSecrets, setBufferedSecrets] = useState<
     Record<string, string>
   >({});
   const setBufferedSecret = useCallback((name: string, value: string): void => {
     setBufferedSecrets((prev) => ({ ...prev, [name]: value }));
   }, []);
-  const bufferedGrokKey = bufferedSecrets.grokApiKey ?? "";
-  // Per-profile xAI key overrides keyed by the profile's committed
-  // name in the naming step. In Multiple mode the operator can keep
-  // some profiles on the global key (from Models / Providers) and
-  // override others — e.g. "personal profile uses my personal xAI
-  // key, work profile uses the work xAI key." A row without an
-  // entry here inherits the global `bufferedGrokKey` at graduation.
-  const [xaiKeyByProfile, setXaiKeyByProfile] = useState<Record<string, string>>(
-    {},
-  );
-  const setXaiKeyForProfile = useCallback(
-    (profileName: string, value: string): void => {
-      setXaiKeyByProfile((prev) => ({ ...prev, [profileName]: value }));
-    },
-    [],
-  );
+  const [acpEntries, setAcpEntries] = useState<AcpAgentSettingsEntry[]>([]);
   // Snapshot reported by the name-codex-profiles step: are all named
   // rows authenticated? Drives the footer Continue button's enabled
   // state. `codexLoginDeferred` is the operator's escape hatch — a
@@ -360,6 +345,9 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
   );
   const sharedNeedsLogin =
     codexProfileModel === "shared" && !codexDefaultProfile?.hasAuthFile;
+  const codexBackendReady = Boolean(
+    selectedCodexCandidate(props.settings.snapshot),
+  );
 
   // Conditional step graph — codexProfileModel="multiple" inserts the
   // name-codex-profiles step between codex-profile and messaging-safety;
@@ -379,7 +367,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
         case "thread-presentation":
           return "models-providers";
         case "models-providers":
-          return "codex-profile";
+          return codexBackendReady ? "codex-profile" : "messaging-safety";
         case "codex-profile":
           // Both Isolated (single new profile) and Multiple (1–5)
           // route through the naming step — they both need paired
@@ -417,6 +405,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
     },
     [
       codexProfileModel,
+      codexBackendReady,
       orderedProviders.length,
       props.isReplay,
       providerSetupIndex,
@@ -447,6 +436,9 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
         case "shared-codex-login":
           return "codex-profile";
         case "messaging-safety":
+          if (!codexBackendReady) {
+            return "models-providers";
+          }
           // Back-out symmetry with `nextStep`: Shared bypasses the
           // naming step, anything else routes through it. Within
           // Shared, the login step only sits in the back chain when
@@ -472,6 +464,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
     },
     [
       codexProfileModel,
+      codexBackendReady,
       entryWasBootstrapConfirm,
       orderedProviders.length,
       props.isReplay,
@@ -494,6 +487,12 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
     if (next !== null) setStep(next);
   }, [orderedProviders.length, prevStep, providerSetupIndex, step]);
   const goNext = useCallback(() => {
+    if (step === "models-providers" && !codexBackendReady) {
+      // ACP-only operators do not need to configure or authenticate a Codex
+      // profile. Shared still gives bootstrap graduation the single default
+      // PwrAgent profile it needs at Finish.
+      setCodexProfileModel("shared");
+    }
     if (
       step === "provider-setup" &&
       providerSetupIndex + 1 < orderedProviders.length
@@ -506,7 +505,13 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
     }
     const next = nextStep(step);
     if (next !== null) setStep(next);
-  }, [nextStep, orderedProviders.length, providerSetupIndex, step]);
+  }, [
+    codexBackendReady,
+    nextStep,
+    orderedProviders.length,
+    providerSetupIndex,
+    step,
+  ]);
 
   // Inline "Skip messaging setup" button on the messaging-safety step.
   // Different from the footer skip link (which exits the wizard entirely
@@ -767,22 +772,10 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
             props.desktopApi,
             codexProfileNames,
           );
-          // Per-profile secret graduation: each created profile gets
-          // its own xAI key + messaging tokens written into ITS
-          // state.db keychain (not the bootstrap/active profile's).
-          // xAI key resolution per profile: a per-row override beats
-          // the global buffer. Messaging tokens stay global across
-          // profiles (the operator usually has one bot per platform).
+          // Secret graduation: messaging tokens are written into each
+          // created profile's state.db keychain, not the bootstrap profile.
           for (const target of created) {
-            const override = xaiKeyByProfile[target]?.trim();
-            const resolvedGrokKey =
-              override !== undefined && override.length > 0
-                ? override
-                : bufferedSecrets.grokApiKey ?? "";
-            await writeBufferedSecretsIfAny(target, {
-              ...bufferedSecrets,
-              grokApiKey: resolvedGrokKey,
-            });
+            await writeBufferedSecretsIfAny(target, bufferedSecrets);
           }
           const switchTo = created[0];
           if (switchTo) {
@@ -876,7 +869,6 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
       submitting,
       theme,
       writeBufferedSecretsIfAny,
-      xaiKeyByProfile,
     ],
   );
 
@@ -994,6 +986,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
             currentIndex={currentRailIndex}
             chosenDensity={density}
             chosenCodexProfileModel={codexProfileModel}
+            codexProfileSkipped={!codexBackendReady}
           />
         ) : null}
         <div className="onboarding-wizard__body">
@@ -1023,8 +1016,8 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
             <BackendRequirementsStep
               settings={props.settings}
               desktopApi={props.desktopApi}
-              bufferedGrokKey={bufferedGrokKey}
-              onBufferGrokKey={(value) => setBufferedSecret("grokApiKey", value)}
+              acpEntries={acpEntries}
+              onAcpEntriesChange={setAcpEntries}
             />
           ) : null}
           {step === "welcome" ? <WelcomeStep /> : null}
@@ -1055,9 +1048,6 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
               onChange={setCodexProfileNames}
               desktopApi={props.desktopApi}
               onAuthStateChange={setCodexAuthSnapshot}
-              globalXaiKey={bufferedGrokKey}
-              xaiKeyByProfile={xaiKeyByProfile}
-              onSetXaiKeyForProfile={setXaiKeyForProfile}
             />
           ) : null}
           {step === "shared-codex-login" ? (
@@ -1113,6 +1103,11 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
           {step === "done" ? (
             <DoneStep
               density={density}
+              aiProviders={installedOnboardingBackendNames(
+                props.settings.snapshot,
+                acpEntries,
+              )}
+              codexAvailable={codexBackendReady}
               codexProfileModel={codexProfileModel}
               codexProfileNames={
                 codexProfileModel === "multiple" ? codexProfileNames : undefined
@@ -1142,7 +1137,7 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
           onDeferSharedLogin={() => setSharedLoginDeferred(true)}
           backendRequirementSatisfied={isBackendRequirementSatisfied(
             props.settings.snapshot,
-            bufferedGrokKey,
+            acpEntries,
           )}
           density={density}
           codexProfileModel={codexProfileModel}
@@ -1177,9 +1172,9 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
  *
  * The middle button ("Skip and use default") runs the same
  * provisioning path that picking Shared mode + clicking Finish
- * would. The settings buffer (theme/density/messaging ack, plus
- * any xAI key the operator typed) still graduates onto the new
- * default profile, so they don't lose what they already typed.
+ * would. The settings buffer (theme/density, messaging acknowledgment,
+ * and any messaging credentials) still graduates onto the new default
+ * profile, so they don't lose what they already entered.
  */
 function DismissConfirmModal(props: {
   submitting: boolean;
@@ -1286,7 +1281,7 @@ function WizardTitlebar(props: {
       case "thread-presentation":
         return "Step 1 — Thread presentation";
       case "models-providers":
-        return "Step 2 — Models / Providers";
+        return "Step 2 — AI Providers";
       case "codex-profile":
         return "Step 3 — Codex profile";
       case "name-codex-profiles":
@@ -1327,13 +1322,16 @@ function WizardRail(props: {
   currentIndex: number;
   chosenDensity: DesktopAppearanceDensity;
   chosenCodexProfileModel: DesktopCodexProfileModel;
+  codexProfileSkipped?: boolean;
 }) {
   const labelOverrides: Record<number, string> = {
     0: props.currentIndex > 0 ? densityLabel(props.chosenDensity) : "Thread presentation",
-    1: "Models / Providers",
+    1: "AI Providers",
     2:
       props.currentIndex > 2
-        ? codexProfileLabel(props.chosenCodexProfileModel)
+        ? props.codexProfileSkipped
+          ? "Not needed"
+          : codexProfileLabel(props.chosenCodexProfileModel)
         : "Profiles",
     3: "Messaging",
     4: "Review",
@@ -1464,7 +1462,7 @@ function WizardFooter(props: {
   } else if (props.step === "models-providers") {
     hint = props.backendRequirementSatisfied
       ? "Ready"
-      : "Install Codex CLI or paste an xAI API key to continue";
+      : "Install Codex, Kimi Code, Qwen Code, or Grok Build to continue";
   } else if (props.step === "shared-codex-login") {
     if (props.sharedAuthed) {
       hint = "Codex logged in";
@@ -1667,249 +1665,349 @@ function WizardFooter(props: {
    Step bodies
    ---------------------------------------------------------------- */
 
-/**
- * Returns true when the live snapshot shows at least one valid backend
- * — either a discoverable Codex CLI candidate that's executable and at
- * the minimum supported version, OR an xAI/Grok API key configured in
- * the keychain. The wizard's Step 0 footer enables Continue based on
- * this; downstream wizard steps assume this has already been satisfied,
- * which lets them defer Codex CLI execution until a known-good backend
- * exists (see `CodexAppServerClient.isCodexBootstrapDeferred`).
- */
-function isBackendRequirementSatisfied(
+type OnboardingBackendId =
+  | "codex"
+  | "gemini"
+  | "kimi"
+  | "qwen"
+  | "grok";
+
+const ONBOARDING_BACKENDS: ReadonlyArray<{
+  id: OnboardingBackendId;
+  name: string;
+  description: string;
+  docsUrl: string;
+  installCommands: ReadonlyArray<{ label: string; command: string }>;
+}> = [
+  {
+    id: "codex",
+    name: "Codex CLI",
+    description:
+      "OpenAI's coding agent. Sign in with your ChatGPT account after install.",
+    docsUrl: "https://github.com/openai/codex",
+    installCommands: [
+      {
+        label: "Homebrew (refresh first)",
+        command: "brew update && brew install --cask codex",
+      },
+      { label: "npm", command: "npm install -g @openai/codex" },
+    ],
+  },
+  {
+    id: "gemini",
+    name: "Gemini CLI",
+    description:
+      "Google's terminal coding agent with Google-account and API-key login options.",
+    docsUrl: "https://geminicli.com/docs/get-started/installation/",
+    installCommands: [
+      { label: "Homebrew", command: "brew install gemini-cli" },
+      { label: "npm", command: "npm install -g @google/gemini-cli" },
+    ],
+  },
+  {
+    id: "kimi",
+    name: "Kimi Code",
+    description:
+      "Moonshot AI's terminal coding agent with account or API-key login.",
+    docsUrl: "https://www.kimi.com/help/kimi-code/cli-getting-started",
+    installCommands: [
+      {
+        label: "macOS / Linux",
+        command: "curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash",
+      },
+      { label: "npm", command: "npm install -g @moonshot-ai/kimi-code" },
+    ],
+  },
+  {
+    id: "qwen",
+    name: "Qwen Code",
+    description:
+      "Qwen's agentic coding CLI with account and API-provider options.",
+    docsUrl: "https://qwenlm.github.io/qwen-code-docs/en/users/quickstart/",
+    installCommands: [
+      { label: "Homebrew", command: "brew install qwen-code" },
+      { label: "npm", command: "npm install -g @qwen-code/qwen-code@latest" },
+    ],
+  },
+  {
+    id: "grok",
+    name: "Grok Build",
+    description:
+      "xAI's coding agent. The CLI opens browser sign-in on first launch.",
+    docsUrl: "https://docs.x.ai/build/overview",
+    installCommands: [
+      {
+        label: "macOS / Linux",
+        command: "curl -fsSL https://x.ai/cli/install.sh | bash",
+      },
+    ],
+  },
+];
+
+function installedOnboardingBackendNames(
   snapshot: DesktopSettingsSnapshot | undefined,
-  bufferedGrokKey: string,
-): boolean {
-  if (!snapshot) return false;
-  const codexSelected = snapshot.models.codex.discovery.candidates.some(
-    (candidate) => candidate.selected && candidate.executable,
-  );
-  const grokConfigured = snapshot.models.grok.apiKey.configured;
-  // Buffered xAI key (entered in this wizard session but not yet
-  // written to a profile keychain) satisfies the gate too — the
-  // value will graduate to the chosen profile at Finish.
-  const grokBuffered = bufferedGrokKey.trim().length > 0;
-  return codexSelected || grokConfigured || grokBuffered;
+  acpEntries: readonly AcpAgentSettingsEntry[],
+): string[] {
+  return ONBOARDING_BACKENDS.flatMap((backend) => {
+    const installed =
+      backend.id === "codex"
+        ? Boolean(selectedCodexCandidate(snapshot))
+        : Boolean(acpEntryFor(acpEntries, backend.id)?.installed);
+    return installed ? [backend.name] : [];
+  });
 }
 
-function BackendRequirementsStep(props: {
-  settings: DesktopSettingsState;
-  desktopApi?: DesktopApi;
-  /** Buffered xAI key value (held in wizard state, not yet
-   *  encrypted+written to the keychain). Empty string means "no
-   *  key in buffer." */
-  bufferedGrokKey: string;
-  onBufferGrokKey: (value: string) => void;
-}) {
-  const snapshot = props.settings.snapshot;
-  const discovery = snapshot?.models.codex.discovery;
-  const grokKey = snapshot?.models.grok.apiKey;
-  const codexCandidate = discovery?.candidates.find(
+function selectedCodexCandidate(snapshot: DesktopSettingsSnapshot | undefined) {
+  return snapshot?.models.codex.discovery.candidates.find(
     (candidate) => candidate.selected && candidate.executable,
   );
-  const codexOk = Boolean(codexCandidate);
-  // Buffered key counts as "Grok configured" for the wizard's gate.
-  // The actual encrypt + write to the chosen profile's state.db
-  // happens at Finish via `writeSecretsToProfile` — see the comment
-  // on `WriteDesktopSecretsToProfileRequest` for why we defer.
-  const grokOk = Boolean(grokKey?.configured) || props.bufferedGrokKey.length > 0;
+}
 
+function acpEntryFor(
+  entries: readonly AcpAgentSettingsEntry[],
+  registryId: Exclude<OnboardingBackendId, "codex">,
+): AcpAgentSettingsEntry | undefined {
+  return entries.find((entry) => entry.registryId === registryId);
+}
+
+export function isBackendRequirementSatisfied(
+  snapshot: DesktopSettingsSnapshot | undefined,
+  acpEntries: readonly AcpAgentSettingsEntry[],
+): boolean {
+  return installedOnboardingBackendNames(snapshot, acpEntries).length > 0;
+}
+
+export function BackendRequirementsStep(props: {
+  settings: DesktopSettingsState;
+  desktopApi?: DesktopApi;
+  acpEntries: AcpAgentSettingsEntry[];
+  onAcpEntriesChange: (entries: AcpAgentSettingsEntry[]) => void;
+}) {
+  const [activeBackend, setActiveBackend] = useState<OnboardingBackendId>("codex");
   const [refreshing, setRefreshing] = useState(false);
-  const [grokKeyInput, setGrokKeyInput] = useState("");
+  const [error, setError] = useState<string>();
+  const initialAcpLoadStarted = useRef(false);
+  const snapshot = props.settings.snapshot;
+  const discovery = snapshot?.models.codex.discovery;
+  const codexCandidate = selectedCodexCandidate(snapshot);
+  const onAcpEntriesChange = props.onAcpEntriesChange;
 
-  const refresh = async (): Promise<void> => {
-    if (!props.desktopApi?.refreshCodexDiscovery || refreshing) return;
+  const updateAcpEntries = useCallback(
+    (entries: AcpAgentSettingsEntry[]): void => {
+      onAcpEntriesChange(entries);
+    },
+    [onAcpEntriesChange],
+  );
+
+  const refresh = useCallback(async (): Promise<void> => {
+    if (refreshing) return;
     setRefreshing(true);
+    setError(undefined);
     try {
-      await props.desktopApi.refreshCodexDiscovery({});
-      await props.settings.refresh();
-    } catch (caught) {
-       
-      console.warn("Onboarding: refreshCodexDiscovery failed", caught);
+      const results = await Promise.allSettled([
+        props.desktopApi?.refreshCodexDiscovery?.({}),
+        props.desktopApi?.listAcpAgents?.({ refresh: true, force: true }),
+      ]);
+      const codexResult = results[0];
+      if (
+        codexResult?.status === "fulfilled"
+        && codexResult.value
+        && props.settings.applySnapshot
+      ) {
+        props.settings.applySnapshot(codexResult.value.snapshot);
+      } else {
+        await props.settings.refresh();
+      }
+      const acpResult = results[1];
+      if (acpResult?.status === "fulfilled" && acpResult.value) {
+        updateAcpEntries(acpResult.value.entries);
+        window.dispatchEvent(new Event(BACKEND_SUMMARIES_REFRESH_EVENT));
+        if (acpResult.value.error) setError(acpResult.value.error);
+      }
+      const failures = results.flatMap((result) =>
+        result.status === "rejected" ? [String(result.reason)] : [],
+      );
+      if (failures.length > 0) setError(failures.join("; "));
     } finally {
       setRefreshing(false);
     }
-  };
+  }, [props.desktopApi, props.settings, refreshing, updateAcpEntries]);
 
-  const saveGrokKey = (): void => {
-    const value = grokKeyInput.trim();
-    if (!value) return;
-    props.onBufferGrokKey(value);
-    setGrokKeyInput("");
-  };
-  const clearGrokKey = (): void => {
-    props.onBufferGrokKey("");
-  };
+  useEffect(() => {
+    if (initialAcpLoadStarted.current || !props.desktopApi?.listAcpAgents) return;
+    initialAcpLoadStarted.current = true;
+    void props.desktopApi
+      .listAcpAgents({ refresh: false })
+      .then((response) => {
+        updateAcpEntries(response.entries);
+        return props.desktopApi?.listAcpAgents?.({ refresh: true });
+      })
+      .then((response) => {
+        if (!response) return;
+        updateAcpEntries(response.entries);
+        window.dispatchEvent(new Event(BACKEND_SUMMARIES_REFRESH_EVENT));
+        if (response.error) setError(response.error);
+      })
+      .catch((caught: unknown) => {
+        setError(caught instanceof Error ? caught.message : String(caught));
+      });
+  }, [props.desktopApi, updateAcpEntries]);
+
+  const backendInstalled = (id: OnboardingBackendId): boolean =>
+    id === "codex"
+      ? Boolean(codexCandidate)
+      : Boolean(acpEntryFor(props.acpEntries, id)?.installed);
+  const activeDefinition =
+    ONBOARDING_BACKENDS.find((backend) => backend.id === activeBackend)
+    ?? ONBOARDING_BACKENDS[0];
+  const activeAcpEntry =
+    activeBackend === "codex"
+      ? undefined
+      : acpEntryFor(props.acpEntries, activeBackend);
+  const activeCommand =
+    activeBackend === "codex"
+      ? codexCandidate?.command
+      : activeAcpEntry?.activeCommand;
+  const activeVersion =
+    activeBackend === "codex"
+      ? codexCandidate?.version
+      : activeAcpEntry?.version;
 
   return (
     <div className="onboarding-wizard__prereqs">
       <header className="onboarding-wizard__head">
         <h1 className="onboarding-wizard__title">
-          Pick at least one model backend to continue
+          Install at least one AI provider
         </h1>
         <p className="onboarding-wizard__sub">
-          PwrAgent runs on top of one or both of these providers. You only
-          need one to get started — the rest of the wizard configures
-          profiles and (optionally) messaging on top.
+          PwrAgent connects to provider CLIs already installed on this Mac.
+          Pick a tab for setup instructions, then refresh discovery.
         </p>
       </header>
 
-      <div className="onboarding-wizard__prereq-card">
+      <div
+        className="onboarding-wizard__backend-tabs"
+        role="tablist"
+        aria-label="AI providers"
+      >
+        {ONBOARDING_BACKENDS.map((backend) => {
+          const installed = backendInstalled(backend.id);
+          return (
+            <button
+              key={backend.id}
+              id={`onboarding-backend-tab-${backend.id}`}
+              type="button"
+              role="tab"
+              aria-controls="onboarding-backend-panel"
+              aria-selected={activeBackend === backend.id}
+              className={`onboarding-wizard__backend-tab${
+                activeBackend === backend.id ? " is-active" : ""
+              }`}
+              onClick={() => setActiveBackend(backend.id)}
+            >
+              <span>{backend.name}</span>
+              <span
+                className={`onboarding-wizard__backend-tab-dot${
+                  installed ? " is-installed" : ""
+                }`}
+                aria-label={installed ? "Installed" : "Not found"}
+              />
+            </button>
+          );
+        })}
+      </div>
+
+      <div
+        id="onboarding-backend-panel"
+        className="onboarding-wizard__prereq-card"
+        role="tabpanel"
+        aria-labelledby={`onboarding-backend-tab-${activeBackend}`}
+      >
         <div className="onboarding-wizard__prereq-head">
           <div>
-            <div className="onboarding-wizard__prereq-title">Codex CLI</div>
+            <div className="onboarding-wizard__prereq-title">
+              {activeDefinition.name}
+            </div>
             <div className="onboarding-wizard__prereq-sub">
-              Required for the Codex backend. PwrAgent shells out to the
-              installed binary; we don&rsquo;t bundle it.
+              {activeDefinition.description}
             </div>
           </div>
           <span
             className={`onboarding-wizard__prereq-status ${
-              codexOk
+              backendInstalled(activeBackend)
                 ? "onboarding-wizard__prereq-status--ok"
                 : "onboarding-wizard__prereq-status--missing"
             }`}
           >
-            {codexOk ? (
-              <>
-                ✓ Found{codexCandidate?.version ? ` v${codexCandidate.version}` : ""}
-              </>
-            ) : (
-              "Not found"
-            )}
+            {backendInstalled(activeBackend)
+              ? `✓ Found${activeVersion ? ` v${activeVersion}` : ""}`
+              : "Not found"}
           </span>
         </div>
-        {codexOk ? (
+
+        {activeCommand ? (
           <div className="onboarding-wizard__prereq-detail">
-            <code>{codexCandidate?.command}</code>
-            <button
-              type="button"
-              className="onboarding-wizard__btn onboarding-wizard__btn--ghost"
-              disabled={refreshing}
-              onClick={() => void refresh()}
-            >
-              {refreshing ? "Refreshing…" : "Refresh"}
-            </button>
+            <code>{activeCommand}</code>
           </div>
-        ) : (
+        ) : activeBackend === "codex" ? (
           <div className="onboarding-wizard__prereq-detail">
             <details className="onboarding-wizard__prereq-paths">
               <summary>
-                Searched {discovery?.candidates.length ?? 0} location
-                {discovery && discovery.candidates.length === 1 ? "" : "s"}{" "}
-                — none with a usable Codex
+                Checked PATH and common install locations — no usable Codex
+                CLI found
               </summary>
-              <ul>
-                {discovery?.candidates.map((candidate) => (
-                  <li key={candidate.command}>
-                    <code>{candidate.command}</code>
-                    <span className="onboarding-wizard__prereq-paths-reason">
-                      {candidate.executable
-                        ? candidate.failureReason ?? "no version"
-                        : candidate.failureReason === "not_found"
-                          ? "not found"
-                          : candidate.failureReason ?? "not executable"}
-                    </span>
-                  </li>
-                ))}
-              </ul>
+              {discovery?.candidates.length ? (
+                <ul>
+                  {discovery.candidates.map((candidate) => (
+                    <li key={candidate.command}>
+                      <code>{candidate.command}</code>
+                      <span className="onboarding-wizard__prereq-paths-reason">
+                        {candidate.failureReason ?? "not executable"}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p>
+                  Homebrew installs are checked directly at both{" "}
+                  <code>/usr/local/bin/codex</code> (Intel) and{" "}
+                  <code>/opt/homebrew/bin/codex</code> (Apple silicon), even
+                  when the app&rsquo;s PATH does not include them.
+                </p>
+              )}
             </details>
-            <div className="onboarding-wizard__prereq-install">
-              <strong>Install:</strong>
-              <ul>
-                <li>
-                  npm: <code>npm install -g @openai/codex</code>
-                </li>
-                <li>
-                  pnpm: <code>pnpm add -g @openai/codex</code>
-                </li>
-                <li>
-                  Homebrew (macOS / Linux):{" "}
-                  <code>brew install --cask codex</code>
-                </li>
-              </ul>
-              <button
-                type="button"
-                className="onboarding-wizard__btn onboarding-wizard__btn--ghost"
-                disabled={refreshing}
-                onClick={() => void refresh()}
-              >
-                {refreshing ? "Refreshing…" : "Refresh after install"}
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
-
-      <div className="onboarding-wizard__prereq-card">
-        <div className="onboarding-wizard__prereq-head">
-          <div>
-            <div className="onboarding-wizard__prereq-title">xAI API key</div>
-            <div className="onboarding-wizard__prereq-sub">
-              Required for the Grok backend. Encrypted with your OS keychain
-              and saved to the profile you pick on the next steps.
-            </div>
-          </div>
-          <span
-            className={`onboarding-wizard__prereq-status ${
-              grokOk
-                ? "onboarding-wizard__prereq-status--ok"
-                : "onboarding-wizard__prereq-status--missing"
-            }`}
-          >
-            {grokOk
-              ? props.bufferedGrokKey.length > 0
-                ? "✓ Ready"
-                : "✓ Configured"
-              : "Not configured"}
-          </span>
-        </div>
-        {!grokOk ? (
-          <div className="onboarding-wizard__prereq-detail">
-            <div className="onboarding-wizard__field-row">
-              <input
-                type="password"
-                className="onboarding-wizard__input"
-                placeholder="xai-…"
-                value={grokKeyInput}
-                onChange={(e) => setGrokKeyInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    saveGrokKey();
-                  }
-                }}
-              />
-              <button
-                type="button"
-                className="onboarding-wizard__btn onboarding-wizard__btn--ghost"
-                disabled={!grokKeyInput.trim()}
-                onClick={saveGrokKey}
-              >
-                Use this key
-              </button>
-            </div>
-            <div className="onboarding-wizard__prereq-link">
-              Get a key at{" "}
-              <code>https://console.x.ai/team/default/api-keys</code>
-            </div>
-          </div>
-        ) : props.bufferedGrokKey.length > 0 ? (
-          // Buffered (entered now, not yet saved). Show a small undo so
-          // the operator can clear/replace before Finish.
-          <div className="onboarding-wizard__prereq-detail">
-            <span className="onboarding-wizard__prereq-link">
-              We&rsquo;ll save this key into the profile you pick next.
-            </span>
-            <button
-              type="button"
-              className="onboarding-wizard__btn onboarding-wizard__btn--link"
-              onClick={clearGrokKey}
-            >
-              Clear / re-enter
-            </button>
           </div>
         ) : null}
+
+        <div className="onboarding-wizard__prereq-install">
+          <strong>Install or update {activeDefinition.name}:</strong>
+          <ul>
+            {activeDefinition.installCommands.map((install) => (
+              <li key={install.command}>
+                {install.label}: <code>{install.command}</code>
+              </li>
+            ))}
+          </ul>
+          <a href={activeDefinition.docsUrl} target="_blank" rel="noreferrer">
+            Open official setup guide ↗
+          </a>
+        </div>
+
+        <div className="onboarding-wizard__prereq-actions">
+          <button
+            type="button"
+            className="onboarding-wizard__btn onboarding-wizard__btn--ghost"
+            disabled={refreshing}
+            onClick={() => void refresh()}
+          >
+            {refreshing ? "Refreshing all providers…" : "Refresh after install"}
+          </button>
+          {error ? (
+            <span className="onboarding-wizard__prereq-error" role="status">
+              {error}
+            </span>
+          ) : null}
+        </div>
       </div>
     </div>
   );
@@ -2025,10 +2123,10 @@ function WelcomeStep() {
           <span className="onboarding-wizard__welcome-num">2</span>
           <div>
             <div className="onboarding-wizard__welcome-row-title">
-              Models / Providers
+              AI Providers
             </div>
             <div className="onboarding-wizard__welcome-row-sub">
-              Confirm Codex CLI is installed, or paste an xAI API key — one is
+              Install Codex CLI, Kimi Code, Qwen Code, or Grok Build — one is
               enough.
             </div>
           </div>
@@ -2496,6 +2594,8 @@ function MessagingProvidersStep(props: {
 
 function DoneStep(props: {
   density: DesktopAppearanceDensity;
+  aiProviders: string[];
+  codexAvailable: boolean;
   codexProfileModel: DesktopCodexProfileModel;
   codexProfileNames?: string[];
   messagingProviders: readonly OnboardingProvider[];
@@ -2540,9 +2640,15 @@ function DoneStep(props: {
           <dd>{densityLabel(props.density)}</dd>
         </div>
         <div>
-          <dt>Codex profile</dt>
-          <dd>{codexSummary}</dd>
+          <dt>AI providers</dt>
+          <dd>{props.aiProviders.join(", ")}</dd>
         </div>
+        {props.codexAvailable ? (
+          <div>
+            <dt>Codex profile</dt>
+            <dd>{codexSummary}</dd>
+          </div>
+        ) : null}
         <div>
           <dt>Messaging</dt>
           <dd>{messagingSummary}</dd>
@@ -2922,14 +3028,6 @@ function NameCodexProfilesStep(props: {
    *  root can gate the footer Continue button on "all named rows
    *  authenticated". `namedRows` excludes blank inputs. */
   onAuthStateChange: (snapshot: { allAuthed: boolean; namedRows: number }) => void;
-  /** Global xAI key from Models / Providers step (renderer buffer,
-   *  not yet written to a keychain). When a row's per-profile
-   *  override is unset, this value graduates to that profile. */
-  globalXaiKey: string;
-  /** Per-profile xAI key overrides keyed by the row's committed
-   *  name. Empty string = "no override; inherit global". */
-  xaiKeyByProfile: Record<string, string>;
-  onSetXaiKeyForProfile: (profileName: string, value: string) => void;
 }) {
   const maxCount = props.mode === "isolated" ? 1 : 5;
   const isSingle = props.mode === "isolated";
@@ -3215,16 +3313,6 @@ function NameCodexProfilesStep(props: {
                 ) : null}
               </div>
               <ProfileRowLoginStatus state={state} />
-              {normalized ? (
-                <ProfileRowXaiKey
-                  profileName={normalized}
-                  globalKey={props.globalXaiKey}
-                  override={props.xaiKeyByProfile[normalized] ?? ""}
-                  onChange={(value) =>
-                    props.onSetXaiKeyForProfile(normalized, value)
-                  }
-                />
-              ) : null}
             </div>
           );
         })}
@@ -3499,117 +3587,6 @@ function SharedCodexLoginStep(props: {
           <ProfileRowLoginStatus state={state} />
         </div>
       </div>
-    </div>
-  );
-}
-
-/**
- * Inline xAI API key control per profile row. Three states:
- *   - Hidden chip ("Add xAI key (optional)"): default when no global
- *     key set and no override. Expanding shows the input.
- *   - "Uses global xAI key" chip: rendered when the operator typed
- *     a global key on Models / Providers but didn't override here.
- *     Expanding shows the input with the global value pre-filled
- *     (operator can replace).
- *   - "Override active" chip: rendered when an override is set.
- *     Always shows the input collapsed-style with Clear button.
- *
- * Override values flow into the wizard's `xaiKeyByProfile` map and
- * graduate to the matching profile's keychain at Finish. Per-row
- * keys NEVER write to `replaceSecret` — same defer-and-graduate
- * pattern as the global key on Models / Providers.
- */
-function ProfileRowXaiKey(props: {
-  profileName: string;
-  globalKey: string;
-  override: string;
-  onChange: (value: string) => void;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const [value, setValue] = useState("");
-  const hasGlobal = props.globalKey.length > 0;
-  const hasOverride = props.override.length > 0;
-
-  const save = (): void => {
-    if (!value.trim()) return;
-    props.onChange(value.trim());
-    setValue("");
-    setExpanded(false);
-  };
-  const clear = (): void => {
-    props.onChange("");
-    setValue("");
-  };
-
-  if (!expanded && !hasOverride) {
-    return (
-      <div className="onboarding-wizard__profile-row-xai is-collapsed">
-        <button
-          type="button"
-          className="onboarding-wizard__btn onboarding-wizard__btn--link"
-          onClick={() => setExpanded(true)}
-        >
-          {hasGlobal
-            ? "Override xAI key for this profile"
-            : "+ Add xAI key (optional)"}
-        </button>
-        {hasGlobal ? (
-          <span className="onboarding-wizard__profile-row-xai-hint">
-            Uses global xAI key
-          </span>
-        ) : null}
-      </div>
-    );
-  }
-
-  return (
-    <div className="onboarding-wizard__profile-row-xai">
-      <input
-        type="password"
-        className="onboarding-wizard__input"
-        placeholder={
-          hasOverride
-            ? "Replace stored override (already set)"
-            : hasGlobal
-              ? "Override global xAI key"
-              : "xai-…"
-        }
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            e.preventDefault();
-            save();
-          }
-        }}
-      />
-      <button
-        type="button"
-        className="onboarding-wizard__btn onboarding-wizard__btn--ghost"
-        disabled={!value.trim()}
-        onClick={save}
-      >
-        {hasOverride ? "Replace" : "Use this"}
-      </button>
-      {hasOverride ? (
-        <button
-          type="button"
-          className="onboarding-wizard__btn onboarding-wizard__btn--link"
-          onClick={clear}
-        >
-          Clear override
-        </button>
-      ) : null}
-      <button
-        type="button"
-        className="onboarding-wizard__btn onboarding-wizard__btn--link"
-        onClick={() => {
-          setExpanded(false);
-          setValue("");
-        }}
-      >
-        Cancel
-      </button>
     </div>
   );
 }
