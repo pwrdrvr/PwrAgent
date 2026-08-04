@@ -492,7 +492,16 @@ export async function connectFederationClient(params: {
     socket.close();
     throw new Error("Invalid federation auth acceptance signature");
   }
-  socket.once("close", () => params.onClose?.());
+  let transportEnded = false;
+  const notifyTransportEnded = () => {
+    if (transportEnded) return;
+    transportEnded = true;
+    socket.off("close", notifyTransportEnded);
+    socket.off("error", notifyTransportEnded);
+    params.onClose?.();
+  };
+  socket.once("close", notifyTransportEnded);
+  socket.once("error", notifyTransportEnded);
   socket.on("message", (raw) => {
     const message = parseSocketMessage(raw);
     if (message?.kind === "envelope") {
@@ -511,14 +520,31 @@ export async function connectFederationClient(params: {
 
 function waitForOpen(socket: WebSocket): Promise<void> {
   return new Promise((resolve, reject) => {
-    socket.once("open", () => resolve());
-    socket.once("error", reject);
+    const cleanup = () => {
+      socket.off("open", onOpen);
+      socket.off("error", onError);
+    };
+    const onOpen = () => {
+      cleanup();
+      resolve();
+    };
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    socket.once("open", onOpen);
+    socket.once("error", onError);
   });
 }
 
 function waitForAuthChallenge(socket: WebSocket): Promise<FederationSocketChallengeMessage> {
   return new Promise((resolve, reject) => {
-    socket.once("message", (raw) => {
+    const cleanup = () => {
+      socket.off("message", onMessage);
+      socket.off("error", onError);
+    };
+    const onMessage = (raw: WebSocket.RawData) => {
+      cleanup();
       const message = parseSocketMessage(raw);
       if (message?.kind === "auth.challenge") {
         resolve(message);
@@ -529,14 +555,24 @@ function waitForAuthChallenge(socket: WebSocket): Promise<FederationSocketChalle
         return;
       }
       reject(new Error("Unexpected federation auth challenge"));
-    });
-    socket.once("error", reject);
+    };
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    socket.once("message", onMessage);
+    socket.once("error", onError);
   });
 }
 
 function waitForAuthResult(socket: WebSocket): Promise<FederationSocketAcceptedMessage> {
   return new Promise((resolve, reject) => {
-    socket.once("message", (raw) => {
+    const cleanup = () => {
+      socket.off("message", onMessage);
+      socket.off("error", onError);
+    };
+    const onMessage = (raw: WebSocket.RawData) => {
+      cleanup();
       const message = parseSocketMessage(raw);
       if (message?.kind === "auth.accepted") {
         resolve(message);
@@ -547,8 +583,13 @@ function waitForAuthResult(socket: WebSocket): Promise<FederationSocketAcceptedM
         return;
       }
       reject(new Error("Unexpected federation auth response"));
-    });
-    socket.once("error", reject);
+    };
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    socket.once("message", onMessage);
+    socket.once("error", onError);
   });
 }
 

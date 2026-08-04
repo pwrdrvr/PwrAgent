@@ -50,6 +50,11 @@ afterEach(async () => {
 describe("federation transport", () => {
   it("authenticates a client and carries protocol envelopes", async () => {
     const clientKeyPair = generateFederationIdentityKeyPair();
+    let closeCount = 0;
+    let resolveClosed: (() => void) | undefined;
+    const closed = new Promise<void>((resolve) => {
+      resolveClosed = resolve;
+    });
     const invite = createFederationEnrollmentInvite({
       store,
       token: "invite-token-transport",
@@ -96,6 +101,10 @@ describe("federation transport", () => {
         label: "Client",
         role: "client",
         onEnvelope: resolve,
+        onClose: () => {
+          closeCount += 1;
+          resolveClosed?.();
+        },
       }).then((client) => {
         client.sendEnvelope({
           id: "request-1",
@@ -135,6 +144,8 @@ describe("federation transport", () => {
       },
     ]);
     expect(server?.closePeer("client_one")).toBe(true);
+    await closed;
+    expect(closeCount).toBe(1);
     expect(server?.closePeer("client_one")).toBe(false);
   });
 
