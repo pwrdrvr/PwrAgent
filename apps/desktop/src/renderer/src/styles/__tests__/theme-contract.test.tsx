@@ -961,8 +961,20 @@ describe("Tangerine Terminal theme contract", () => {
       /\.transcript-message__inline-code \.transcript-message__code\s*\{/,
     );
 
+    const inlineOverlayRule = extractRuleBody(
+      css,
+      ".transcript-copy-button--inline::after",
+    );
+    expect(inlineOverlayRule).toContain("border: 1px solid var(--border-subtle);");
+    expect(inlineOverlayRule).toContain(
+      "background: color-mix(in srgb, var(--bg-panel-elevated) 92%, transparent);",
+    );
+
     expect(css).toMatch(
       /\.transcript-copy-button--inline:hover::before,\s*\.transcript-copy-button--inline:focus-visible::before,[\s\S]*?\{[\s\S]*?opacity:\s*1;[\s\S]*?\}/,
+    );
+    expect(css).toMatch(
+      /\.transcript-copy-button--inline:hover::after,\s*\.transcript-copy-button--inline:focus-visible::after,[\s\S]*?\{[\s\S]*?border-color:\s*var\(--accent-border\);[\s\S]*?opacity:\s*1;[\s\S]*?\}/,
     );
   });
 

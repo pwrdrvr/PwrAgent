@@ -10052,13 +10052,33 @@ a.transcript-message__messaging-origin:focus-visible {
 .transcript-copy-button--inline::before {
   position: absolute;
   right: 6px;
-  bottom: 6px;
+  top: 50%;
+  z-index: 2;
   width: 11px;
   height: 11px;
   background: var(--text-muted);
   opacity: 0;
+  transform: translateY(-50%);
   transition:
     background 120ms ease,
+    opacity 120ms ease;
+}
+
+.transcript-copy-button--inline::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: 0;
+  z-index: 1;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--bg-panel-elevated) 92%, transparent);
+  opacity: 0;
+  transform: translateY(-50%);
+  transition:
+    border-color 120ms ease,
     opacity 120ms ease;
 }
 
@@ -10074,6 +10094,13 @@ a.transcript-message__messaging-origin:focus-visible {
 .transcript-copy-button--inline:focus-visible::before,
 .transcript-copy-button--inline[data-copied="true"]::before {
   background: var(--accent-bright);
+  opacity: 1;
+}
+
+.transcript-copy-button--inline:hover::after,
+.transcript-copy-button--inline:focus-visible::after,
+.transcript-copy-button--inline[data-copied="true"]::after {
+  border-color: var(--accent-border);
   opacity: 1;
 }
 
@@ -10111,6 +10138,10 @@ a.transcript-message__messaging-origin:focus-visible {
   }
 
   .transcript-copy-button--inline::before {
+    opacity: 1;
+  }
+
+  .transcript-copy-button--inline::after {
     opacity: 1;
   }
 }
