@@ -198,7 +198,7 @@ test("renders the desktop shell with the black-first Tangerine Terminal theme", 
   }
 });
 
-test("keeps workflow states and narrow desktop layout readable", async ({}, testInfo) => {
+test("keeps workflow states, scanner phases, and narrow desktop layout stable", async ({}, testInfo) => {
   const app = await launchElectronApp({
     fixturePath: path.resolve(
       themeSpecDir,
@@ -257,6 +257,15 @@ test("keeps workflow states and narrow desktop layout readable", async ({}, test
     );
     await expect(app.window.getByRole("status")).toContainText("Waiting for approval");
     await expect(app.window.locator(".thinking-scanner").first()).toBeVisible();
+    const scannerStartTimes = await app.window
+      .locator(".thinking-scanner__beam")
+      .evaluateAll((elements) =>
+        elements.flatMap((element) =>
+          element.getAnimations().map((animation) => animation.startTime)
+        )
+      );
+    expect(scannerStartTimes.length).toBeGreaterThan(1);
+    expect(new Set(scannerStartTimes)).toEqual(new Set([0]));
 
     // Issue #240: transcript-panel is transparent — read against the
     // app-shell `--bg-app` for the readability calc.
