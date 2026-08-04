@@ -17,6 +17,7 @@ import {
   MAX_TRACKED_BRANCHES,
   capRecentBranchDetails,
   computeWorktreePath,
+  inspectGitWorkspace,
 } from "../app-server/git-directory-service";
 
 // The service forward-slashes the directory/worktree identifiers it returns
@@ -152,6 +153,90 @@ describe("GitDirectoryService", () => {
       cwd: toForwardSlashes(repoDir),
       workMode: "local",
     });
+  });
+
+  it("recognizes an unborn worktree with an empty origin as Git without a worktree base", async () => {
+    const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-unborn-inspection-"));
+    cleanupPaths.push(rootDir);
+    const repoDir = path.join(rootDir, "repo");
+    const remoteDir = path.join(rootDir, "origin.git");
+    execFileSync("git", ["init", "--bare", "-b", "main", remoteDir], {
+      stdio: "ignore",
+    });
+    execFileSync("git", ["init", "-b", "main", repoDir], { stdio: "ignore" });
+    runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+    runGit(repoDir, ["config", "branch.main.remote", "origin"]);
+    runGit(repoDir, ["config", "branch.main.merge", "refs/heads/main"]);
+
+    expect(runGit(repoDir, ["status", "--short", "--branch"])).toContain(
+      "No commits yet on main...origin/main [gone]",
+    );
+    await expect(inspectGitWorkspace(repoDir)).resolves.toEqual({
+      kind: "worktree",
+      branch: "main",
+      hasCommits: false,
+      worktreeCreationAvailable: false,
+    });
+  });
+
+  it("keeps ordinary repositories and linked worktrees worktree-capable", async () => {
+    const repoDir = await createFixtureRepo();
+    cleanupPaths.push(repoDir);
+    const worktreeDir = path.join(repoDir, ".worktrees", "release");
+    await mkdir(path.dirname(worktreeDir), { recursive: true });
+    runGit(repoDir, ["worktree", "add", worktreeDir, "release"]);
+
+    await expect(inspectGitWorkspace(repoDir)).resolves.toEqual({
+      kind: "worktree",
+      branch: "main",
+      hasCommits: true,
+      worktreeCreationAvailable: true,
+    });
+    await expect(inspectGitWorkspace(worktreeDir)).resolves.toEqual({
+      kind: "worktree",
+      branch: "release",
+      hasCommits: true,
+      worktreeCreationAvailable: true,
+    });
+  });
+
+  it("keeps normal non-Git directories classified as non-Git", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "pwragent-non-git-inspection-"));
+    cleanupPaths.push(directory);
+
+    await expect(inspectGitWorkspace(directory)).resolves.toEqual({
+      kind: "non_git",
+    });
+  });
+
+  it("recognizes an empty bare repository without treating it as a workspace", async () => {
+    const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-bare-inspection-"));
+    cleanupPaths.push(rootDir);
+    const bareDir = path.join(rootDir, "empty.git");
+    execFileSync("git", ["init", "--bare", "-b", "main", bareDir], {
+      stdio: "ignore",
+    });
+
+    await expect(inspectGitWorkspace(bareDir)).resolves.toEqual({
+      kind: "bare",
+      branch: "main",
+      hasCommits: false,
+      worktreeCreationAvailable: false,
+    });
+  });
+
+  it("does not turn unexpected Git probe failures into non-Git results", async () => {
+    const failure = Object.assign(new Error("Git workspace probe failed"), {
+      stderr: "fatal: bad object database",
+    });
+
+    await expect(
+      inspectGitWorkspace("/repo", {
+        runGit: vi.fn(async () => {
+          throw failure;
+        }),
+      }),
+    ).rejects.toBe(failure);
   });
 
   it("reports unborn git directories without surfacing raw HEAD errors", async () => {

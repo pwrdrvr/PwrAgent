@@ -24,6 +24,21 @@ type GitCommandRunner = (
   env?: NodeJS.ProcessEnv,
 ) => Promise<string>;
 
+export type GitWorkspaceInspection =
+  | { kind: "non_git" }
+  | {
+      kind: "worktree";
+      branch?: string;
+      hasCommits: boolean;
+      worktreeCreationAvailable: boolean;
+    }
+  | {
+      kind: "bare" | "git_directory";
+      branch?: string;
+      hasCommits: boolean;
+      worktreeCreationAvailable: false;
+    };
+
 // Directory/worktree identifiers are surfaced to the rest of the app
 // (thread links, navigation, cleanup results) as stable string keys.
 // `path.resolve`/`path.join` emit backslashes on Windows, so normalize
@@ -64,7 +79,73 @@ function errorText(error: unknown): string {
 }
 
 function isNotGitRepositoryError(error: unknown): boolean {
-  return errorText(error).includes("not a git repository");
+  return errorText(error).toLowerCase().includes("not a git repository");
+}
+
+export async function inspectGitWorkspace(
+  cwd: string,
+  options: {
+    env?: NodeJS.ProcessEnv;
+    runGit?: GitCommandRunner;
+  } = {},
+): Promise<GitWorkspaceInspection> {
+  const runGit = options.runGit ?? defaultRunGit;
+  let insideWorktree: string;
+  try {
+    insideWorktree = (
+      await runGit(cwd, ["rev-parse", "--is-inside-work-tree"], options.env)
+    ).trim();
+  } catch (error) {
+    if (isNotGitRepositoryError(error)) {
+      return { kind: "non_git" };
+    }
+    throw error;
+  }
+  if (insideWorktree !== "true" && insideWorktree !== "false") {
+    throw new Error(
+      `Git returned an unexpected workspace probe result for ${cwd}: ${insideWorktree}`,
+    );
+  }
+
+  let kind: Exclude<GitWorkspaceInspection["kind"], "non_git"> = "worktree";
+  if (insideWorktree === "false") {
+    const bareRepository = (
+      await runGit(cwd, ["rev-parse", "--is-bare-repository"], options.env)
+    ).trim();
+    if (bareRepository !== "true" && bareRepository !== "false") {
+      throw new Error(
+        `Git returned an unexpected bare-repository probe result for ${cwd}: ${bareRepository}`,
+      );
+    }
+    kind = bareRepository === "true" ? "bare" : "git_directory";
+  }
+
+  const [rawBranch, anyCommit, worktreeBaseCommit] = await Promise.all([
+    runGit(cwd, ["branch", "--show-current"], options.env),
+    runGit(cwd, ["rev-list", "--max-count=1", "--all"], options.env),
+    runGit(
+      cwd,
+      ["rev-list", "--max-count=1", "--branches", "--remotes=origin/HEAD"],
+      options.env,
+    ),
+  ]);
+  const hasCommits = Boolean(anyCommit.trim());
+  const branch = rawBranch.trim() || (hasCommits ? "HEAD" : undefined);
+  if (kind !== "worktree") {
+    return {
+      kind,
+      branch,
+      hasCommits,
+      worktreeCreationAvailable: false,
+    };
+  }
+
+  return {
+    kind,
+    branch,
+    hasCommits,
+    worktreeCreationAvailable: Boolean(worktreeBaseCommit.trim()),
+  };
 }
 
 async function readGitRoot(
@@ -659,6 +740,13 @@ export class GitDirectoryService {
     const resolveStorage = normalized.resolveWorktreeStorage;
     this.resolveStorage = async () =>
       (await resolveStorage?.()) ?? DESKTOP_WORKTREE_STORAGE_DEFAULT;
+  }
+
+  async inspectWorkspaceGit(cwd: string): Promise<GitWorkspaceInspection> {
+    return await inspectGitWorkspace(cwd, {
+      env: this.gitEnv,
+      runGit: this.runGitCommand,
+    });
   }
 
   async readDirectoryStatuses(

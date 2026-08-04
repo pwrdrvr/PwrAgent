@@ -277,6 +277,7 @@ export type ThreadHandoffOriginWorkspace = {
       }
     | {
         kind: "git_local" | "git_worktree";
+        repositoryState?: "unborn" | "bare" | "git_directory";
         worktreeCreationAvailable: boolean;
         unavailableReason?: string;
       };

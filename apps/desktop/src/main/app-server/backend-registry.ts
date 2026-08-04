@@ -5733,9 +5733,17 @@ function buildHandoffTaskPrompt(params: {
       : []),
     ...(params.workspace.branch ? [`- Branch: ${params.workspace.branch}`] : []),
     `- Git: ${params.workspace.git.kind}`,
+    ...(params.workspace.git.kind !== "none"
+      && params.workspace.git.kind !== "non_git"
+      && params.workspace.git.repositoryState
+      ? [`- Git repository state: ${params.workspace.git.repositoryState}`]
+      : []),
     `- New worktree supported: ${
       params.workspace.git.worktreeCreationAvailable ? "yes" : "no"
     }`,
+    ...(!params.workspace.git.worktreeCreationAvailable
+      ? [`- New worktree unavailable: ${params.workspace.git.unavailableReason}`]
+      : []),
     ...(params.codexEnvironmentStartupFailure
       ? [
           "",
@@ -21957,8 +21965,8 @@ export class DesktopBackendRegistry {
         },
       };
     }
-    const branch = await readCurrentGitBranch(cwd).catch(() => undefined);
-    if (!branch) {
+    const repository = await this.gitDirectoryService.inspectWorkspaceGit(cwd);
+    if (repository.kind === "non_git") {
       return {
         mode: params.mode,
         cwd,
@@ -21970,17 +21978,57 @@ export class DesktopBackendRegistry {
         },
       };
     }
+    const kind: "git_local" | "git_worktree" =
+      params.linkedDirectory?.kind === "worktree"
+        ? "git_worktree"
+        : "git_local";
+    if (repository.kind === "bare") {
+      return {
+        mode: params.mode,
+        cwd,
+        branch: repository.branch,
+        linkedDirectory: params.linkedDirectory,
+        git: {
+          kind,
+          repositoryState: "bare",
+          worktreeCreationAvailable: false,
+          unavailableReason:
+            "Bare Git repositories are not supported as handoff workspaces.",
+        },
+      };
+    }
+    if (repository.kind === "git_directory") {
+      return {
+        mode: params.mode,
+        cwd,
+        branch: repository.branch,
+        linkedDirectory: params.linkedDirectory,
+        git: {
+          kind,
+          repositoryState: "git_directory",
+          worktreeCreationAvailable: false,
+          unavailableReason:
+            "Git administration directories are not supported as handoff workspaces.",
+        },
+      };
+    }
+    const unavailableReason = !repository.hasCommits
+      ? "Repository has no commits yet; create the initial commit before allocating a worktree."
+      : !repository.worktreeCreationAvailable
+        ? "Repository has no local or remote branch commit available; create or fetch a branch before allocating a worktree."
+        : undefined;
     return {
       mode: params.mode,
       cwd,
-      branch,
+      branch: repository.branch,
       linkedDirectory: params.linkedDirectory,
       git: {
-        kind:
-          params.linkedDirectory?.kind === "worktree"
-            ? "git_worktree"
-            : "git_local",
-        worktreeCreationAvailable: true,
+        kind,
+        ...(!repository.hasCommits
+          ? { repositoryState: "unborn" as const }
+          : {}),
+        worktreeCreationAvailable: repository.worktreeCreationAvailable,
+        ...(unavailableReason ? { unavailableReason } : {}),
       },
     };
   }

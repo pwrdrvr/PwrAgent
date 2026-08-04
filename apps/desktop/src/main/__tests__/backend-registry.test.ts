@@ -20107,6 +20107,12 @@ command = "pnpm dev"
           initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
         }),
         gitDirectoryService: {
+          inspectWorkspaceGit: vi.fn(async (cwd: string) => ({
+            kind: "worktree" as const,
+            branch: cwd === targetWorktreePath ? "HEAD" : "main",
+            hasCommits: true,
+            worktreeCreationAvailable: true,
+          })),
           prepareLaunchpadWorkspace: vi.fn(async () => ({
             cwd: targetWorktreePath,
             repositoryPath: targetRepoPath,
@@ -20841,6 +20847,9 @@ script = "printf setup"
       grokClient: new MockBackendClient({
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
+      gitDirectoryService: {
+        inspectWorkspaceGit: vi.fn(async () => ({ kind: "non_git" as const })),
+      } as never,
       overlayStore,
       threadTitleGenerationService: null,
     });
@@ -22424,6 +22433,164 @@ script = "printf setup"
     await registry.close();
   });
 
+  it("describes unborn Git workspaces and rejects new worktree handoffs precisely", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-handoff-unborn-"));
+    const repoPath = path.join(root, "repo");
+    const remotePath = path.join(root, "origin.git");
+    try {
+      await git(root, ["init", "--bare", "-b", "main", remotePath]);
+      await mkdir(repoPath, { recursive: true });
+      await git(repoPath, ["init", "-b", "main"]);
+      await git(repoPath, ["remote", "add", "origin", remotePath]);
+      await git(repoPath, ["config", "branch.main.remote", "origin"]);
+      await git(repoPath, ["config", "branch.main.merge", "refs/heads/main"]);
+      expect(await git(repoPath, ["status", "--short", "--branch"])).toContain(
+        "No commits yet on main...origin/main [gone]",
+      );
+
+      const linkedDirectory = {
+        id: expectedDir(repoPath),
+        kind: "local" as const,
+        label: "repo",
+        path: expectedDir(repoPath),
+      };
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["thread/start", "thread/list", "turn/start"] },
+        threads: [
+          {
+            id: "ordinary-thread",
+            title: "Parent Thread",
+            titleSource: "explicit",
+            source: "codex",
+            linkedDirectories: [linkedDirectory],
+            updatedAt: 1000,
+          },
+        ],
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        grokClient: new MockBackendClient({
+          initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+        }),
+        gitDirectoryService: new GitDirectoryService({
+          resolveWorktreeStorage: () => "in-repo",
+        }),
+        overlayStore: createOverlayStoreMock({
+          overlays: {
+            "codex:ordinary-thread": {
+              backend: "codex",
+              threadId: "ordinary-thread",
+              executionMode: "full-access",
+              extraLinkedDirectories: [linkedDirectory],
+            },
+          },
+        }),
+        threadTitleGenerationService: null,
+      });
+      await registry.publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: "ordinary-thread",
+            turnId: "turn-1",
+            turn: { id: "turn-1" },
+          },
+        },
+      });
+
+      const projectLocalResponse = await codexClient.emitRequest({
+        method: "item/tool/call",
+        params: {
+          threadId: "ordinary-thread",
+          turnId: "turn-1",
+          callId: "call-project-local",
+          requestId: "call-project-local",
+          namespace: "pwragent",
+          tool: "handoff_task",
+          arguments: {
+            task: "Initialize the repository.",
+            title: "Initial commit",
+            workspaceMode: "project_local",
+          },
+        },
+      } as AppServerPendingRequestNotification);
+
+      expect(projectLocalResponse).toMatchObject({ success: true });
+      const projectLocalPayload = JSON.parse(
+        (projectLocalResponse as { contentItems: Array<{ text: string }> })
+          .contentItems[0]!.text,
+      );
+      expect(projectLocalPayload.workspace).toMatchObject({
+        mode: "project_local",
+        cwd: expectedDir(repoPath),
+        branch: "main",
+        git: {
+          kind: "git_local",
+          repositoryState: "unborn",
+          worktreeCreationAvailable: false,
+          unavailableReason:
+            "Repository has no commits yet; create the initial commit before allocating a worktree.",
+        },
+      });
+      const prompt =
+        codexClient.lastStartTurnParams?.input[0]?.type === "text"
+          ? codexClient.lastStartTurnParams.input[0].text
+          : "";
+      expect(prompt).toContain("- Git: git_local");
+      expect(prompt).toContain("- Git repository state: unborn");
+      expect(prompt).toContain(
+        "- New worktree unavailable: Repository has no commits yet; create the initial commit before allocating a worktree.",
+      );
+      const projectLocalStartParams = codexClient.lastStartThreadParams;
+
+      const worktreeResponse = await codexClient.emitRequest({
+        method: "item/tool/call",
+        params: {
+          threadId: "ordinary-thread",
+          turnId: "turn-1",
+          callId: "call-worktree",
+          requestId: "call-worktree",
+          namespace: "pwragent",
+          tool: "handoff_task",
+          arguments: {
+            task: "Work in an isolated checkout.",
+            title: "Isolated work",
+            workspaceMode: "new_worktree",
+          },
+        },
+      } as AppServerPendingRequestNotification);
+
+      expect(worktreeResponse).toMatchObject({ success: false });
+      const worktreePayload = JSON.parse(
+        (worktreeResponse as { contentItems: Array<{ text: string }> })
+          .contentItems[0]!.text,
+      );
+      expect(worktreePayload).toMatchObject({
+        code: "unsupported_workspace",
+        message:
+          "Repository has no commits yet; create the initial commit before allocating a worktree.",
+        data: {
+          workspace: {
+            branch: "main",
+            git: {
+              kind: "git_local",
+              repositoryState: "unborn",
+              worktreeCreationAvailable: false,
+              unavailableReason:
+                "Repository has no commits yet; create the initial commit before allocating a worktree.",
+            },
+          },
+        },
+      });
+      expect(codexClient.lastStartThreadParams).toBe(projectLocalStartParams);
+
+      await registry.close();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("starts project-local handoffs in the primary repo checkout instead of the caller worktree", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-handoff-project-local-"));
     const repoPath = path.join(root, "repo");
@@ -23537,6 +23704,7 @@ script = "printf setup"
     try {
       await mkdir(repoPath, { recursive: true });
       await mkdir(ignoredCwd, { recursive: true });
+      await mkdir(scratchPath, { recursive: true });
       try {
         await git(repoPath, ["init", "-b", "main"]);
       } catch {
@@ -34866,6 +35034,9 @@ script = "printf setup"
       sessions,
       sessionId: childThreadId,
       startPrompt,
+      gitDirectoryService: {
+        inspectWorkspaceGit: vi.fn(async () => ({ kind: "non_git" as const })),
+      },
       overlayStore: createOverlayStoreMock({
         overlays: {
           [`${acpBackendId}:${parentThreadId}`]: {
