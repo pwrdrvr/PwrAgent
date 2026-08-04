@@ -13,6 +13,7 @@ import type {
   DesktopSettingsSnapshot,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
+import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../../lib/useBackendSummaries";
 import type { DesktopSettingsState } from "../../settings/useDesktopSettings";
 import {
   BackendRequirementsStep,
@@ -49,7 +50,7 @@ const noCodexSnapshot = {
 } as unknown as DesktopSettingsSnapshot;
 
 function acpEntry(
-  registryId: "kimi" | "qwen" | "grok",
+  registryId: "gemini" | "kimi" | "qwen" | "grok",
   installed = true,
 ): AcpAgentSettingsEntry {
   return {
@@ -82,6 +83,9 @@ describe("AI provider onboarding", () => {
   it("accepts any supported installed ACP provider", () => {
     expect(isBackendRequirementSatisfied(noCodexSnapshot, [])).toBe(false);
     expect(
+      isBackendRequirementSatisfied(noCodexSnapshot, [acpEntry("gemini")]),
+    ).toBe(true);
+    expect(
       isBackendRequirementSatisfied(noCodexSnapshot, [acpEntry("kimi")]),
     ).toBe(true);
     expect(
@@ -109,6 +113,8 @@ describe("AI provider onboarding", () => {
     expect(
       screen.getByText(/brew update && brew install --cask codex/i),
     ).toBeVisible();
+    fireEvent.click(screen.getByRole("tab", { name: /Gemini CLI/i }));
+    expect(screen.getByText(/@google\/gemini-cli/i)).toBeVisible();
     fireEvent.click(screen.getByRole("tab", { name: /Kimi Code/i }));
     expect(screen.getByText(/@moonshot-ai\/kimi-code/i)).toBeVisible();
     fireEvent.click(screen.getByRole("tab", { name: /Qwen Code/i }));
@@ -130,6 +136,7 @@ describe("AI provider onboarding", () => {
       snapshot: noCodexSnapshot,
     }));
     const onAcpEntriesChange = vi.fn();
+    const dispatchEvent = vi.spyOn(window, "dispatchEvent");
     const settings = {
       snapshot: noCodexSnapshot,
       refresh: settingsRefresh,
@@ -151,6 +158,7 @@ describe("AI provider onboarding", () => {
     await waitFor(() => expect(listAcpAgents).toHaveBeenCalledTimes(2));
     listAcpAgents.mockClear();
     onAcpEntriesChange.mockClear();
+    dispatchEvent.mockClear();
 
     fireEvent.click(
       screen.getByRole("button", { name: /Refresh after install/i }),
@@ -162,6 +170,9 @@ describe("AI provider onboarding", () => {
       expect(applySnapshot).toHaveBeenCalledWith(noCodexSnapshot);
       expect(settingsRefresh).not.toHaveBeenCalled();
       expect(onAcpEntriesChange).toHaveBeenCalledWith([acpEntry("qwen")]);
+      expect(dispatchEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ type: BACKEND_SUMMARIES_REFRESH_EVENT }),
+      );
     });
   });
 });

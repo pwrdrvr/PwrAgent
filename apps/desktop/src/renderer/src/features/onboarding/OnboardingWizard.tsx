@@ -25,6 +25,7 @@ import type {
 } from "@pwragent/shared";
 import { isMessagingRuntimeSecret } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
 import {
   SLACK_APPROVAL_TARGET_LABELS,
   slackApplicableApprovalTargets,
@@ -1664,7 +1665,12 @@ function WizardFooter(props: {
    Step bodies
    ---------------------------------------------------------------- */
 
-type OnboardingBackendId = "codex" | "kimi" | "qwen" | "grok";
+type OnboardingBackendId =
+  | "codex"
+  | "gemini"
+  | "kimi"
+  | "qwen"
+  | "grok";
 
 const ONBOARDING_BACKENDS: ReadonlyArray<{
   id: OnboardingBackendId;
@@ -1685,6 +1691,17 @@ const ONBOARDING_BACKENDS: ReadonlyArray<{
         command: "brew update && brew install --cask codex",
       },
       { label: "npm", command: "npm install -g @openai/codex" },
+    ],
+  },
+  {
+    id: "gemini",
+    name: "Gemini CLI",
+    description:
+      "Google's terminal coding agent with Google-account and API-key login options.",
+    docsUrl: "https://geminicli.com/docs/get-started/installation/",
+    installCommands: [
+      { label: "Homebrew", command: "brew install gemini-cli" },
+      { label: "npm", command: "npm install -g @google/gemini-cli" },
     ],
   },
   {
@@ -1757,14 +1774,7 @@ export function isBackendRequirementSatisfied(
   snapshot: DesktopSettingsSnapshot | undefined,
   acpEntries: readonly AcpAgentSettingsEntry[],
 ): boolean {
-  return Boolean(selectedCodexCandidate(snapshot))
-    || acpEntries.some(
-      (entry) =>
-        (entry.registryId === "kimi"
-          || entry.registryId === "qwen"
-          || entry.registryId === "grok")
-        && entry.installed,
-    );
+  return installedOnboardingBackendNames(snapshot, acpEntries).length > 0;
 }
 
 export function BackendRequirementsStep(props: {
@@ -1811,6 +1821,7 @@ export function BackendRequirementsStep(props: {
       const acpResult = results[1];
       if (acpResult?.status === "fulfilled" && acpResult.value) {
         updateAcpEntries(acpResult.value.entries);
+        window.dispatchEvent(new Event(BACKEND_SUMMARIES_REFRESH_EVENT));
         if (acpResult.value.error) setError(acpResult.value.error);
       }
       const failures = results.flatMap((result) =>
@@ -1834,6 +1845,7 @@ export function BackendRequirementsStep(props: {
       .then((response) => {
         if (!response) return;
         updateAcpEntries(response.entries);
+        window.dispatchEvent(new Event(BACKEND_SUMMARIES_REFRESH_EVENT));
         if (response.error) setError(response.error);
       })
       .catch((caught: unknown) => {

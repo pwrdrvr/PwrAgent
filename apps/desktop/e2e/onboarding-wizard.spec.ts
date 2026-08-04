@@ -28,7 +28,13 @@ const wizardLaunchOptions = {
   env: { PWRAGENT_CODEX_COMMAND: process.execPath },
 };
 
-const fakeProviderNames = ["codex", "kimi", "qwen", "grok"] as const;
+const fakeProviderNames = [
+  "codex",
+  "gemini",
+  "kimi",
+  "qwen",
+  "grok",
+] as const;
 type FakeProviderName = (typeof fakeProviderNames)[number];
 
 function fakeProviderScript(): string {
@@ -48,6 +54,8 @@ if (name === "qwen") {
   console.log("Run the agent over stdio");
 } else if (name === "kimi") {
   console.log("Agent Client Protocol server over stdio");
+} else if (name === "gemini") {
+  console.log("--acp");
 } else {
   console.log("Codex CLI");
 }
@@ -69,6 +77,7 @@ function wellKnownFakeProviderCommands(
           "codex",
         )
         : path.join(homeRoot, ".local", "bin", "codex"),
+    gemini: path.join(homeRoot, ".local", "bin", "gemini"),
     kimi: path.join(homeRoot, ".kimi-code", "bin", "kimi"),
     qwen: path.join(homeRoot, ".qwen", "bin", "qwen"),
     grok: path.join(homeRoot, ".grok", "bin", "grok"),
@@ -141,6 +150,7 @@ async function expectFakeProvidersFound(
 ): Promise<void> {
   const providerLabels: Record<FakeProviderName, string> = {
     codex: "Codex CLI",
+    gemini: "Gemini CLI",
     kimi: "Kimi Code",
     qwen: "Qwen Code",
     grok: "Grok Build",
@@ -629,6 +639,10 @@ test.describe("Onboarding wizard", () => {
       await expect(
         app.window.getByText(/brew update && brew install --cask codex/i),
       ).toBeVisible();
+      await app.window.getByRole("tab", { name: /Gemini CLI/i }).click();
+      await expect(
+        app.window.getByText(/@google\/gemini-cli/i),
+      ).toBeVisible();
       await app.window.getByRole("tab", { name: /Kimi Code/i }).click();
       await expect(
         app.window.getByText(/@moonshot-ai\/kimi-code/i),
@@ -644,7 +658,7 @@ test.describe("Onboarding wizard", () => {
   });
 
   test(
-    "refresh discovers Codex, Kimi, Qwen, and Grok from a custom PATH",
+    "refresh discovers Codex, Gemini, Kimi, Qwen, and Grok from a custom PATH",
     async () => {
       test.skip(process.platform === "win32", "Unix executable discovery only");
       const { app, commands } = await launchWizardWithFakeProviders("path");
@@ -658,7 +672,7 @@ test.describe("Onboarding wizard", () => {
   );
 
   test(
-    "refresh discovers Codex, Kimi, Qwen, and Grok from well-known locations",
+    "refresh discovers Codex, Gemini, Kimi, Qwen, and Grok from well-known locations",
     async () => {
       test.skip(process.platform === "win32", "Unix executable discovery only");
       const { app, commands } = await launchWizardWithFakeProviders("well-known");
