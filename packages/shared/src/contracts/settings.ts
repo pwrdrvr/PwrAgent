@@ -1397,6 +1397,14 @@ export type OpenDesktopApplicationResponse = {
   opened: true;
 };
 
+export type ReadDesktopApplicationsRequest = {
+  federationTarget?: FederationTarget;
+};
+
+export type ReadDesktopApplicationsResponse = {
+  applications: DesktopApplicationsSnapshot;
+};
+
 /**
  * Open a filesystem path with the OS default handler (`shell.openPath`). The
  * fallback for "open this edited file" when no editor application is

@@ -350,6 +350,7 @@ export const SETTINGS_PICK_GH_COMMAND_CHANNEL =
   "settings:pick-gh-command";
 export const ONBOARDING_COMPLETE_CODEX_BOOTSTRAP_CHANNEL =
   "onboarding:complete-codex-bootstrap";
+export const APPLICATIONS_READ_CHANNEL = "applications:read";
 export const APPLICATION_OPEN_CHANNEL = "application:open";
 export const PATH_OPEN_CHANNEL = "path:open";
 export const PATH_REVEAL_CHANNEL = "path:reveal";

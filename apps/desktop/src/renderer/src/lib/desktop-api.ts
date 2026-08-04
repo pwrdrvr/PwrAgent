@@ -259,6 +259,8 @@ import type {
   ImportFederationInviteResponse,
   OpenDesktopApplicationRequest,
   OpenDesktopApplicationResponse,
+  ReadDesktopApplicationsRequest,
+  ReadDesktopApplicationsResponse,
   OpenMarkdownFileViewerRequest,
   OpenMarkdownFileViewerResponse,
   OpenSubAgentTranscriptWindowRequest,
@@ -625,6 +627,9 @@ export type DesktopApi = {
   openApplication?: (
     request: OpenDesktopApplicationRequest
   ) => Promise<OpenDesktopApplicationResponse>;
+  readApplications?: (
+    request: ReadDesktopApplicationsRequest
+  ) => Promise<ReadDesktopApplicationsResponse>;
   openPath?: (request: OpenPathRequest) => Promise<OpenPathResponse>;
   revealPath?: (request: OpenPathRequest) => Promise<OpenPathResponse>;
   readMarkdownFile?: (

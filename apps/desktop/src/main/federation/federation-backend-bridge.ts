@@ -25,6 +25,7 @@ import type {
   MaterializeDirectoryLaunchpadRequest,
   MaterializeDirectoryLaunchpadResponse,
   NavigationSnapshot,
+  DesktopApplicationsSnapshot,
   OpenDesktopApplicationRequest,
   OpenDesktopApplicationResponse,
   QueueThreadExecutionModeRequest,
@@ -84,6 +85,7 @@ export const FEDERATION_BACKEND_METHODS = {
   materializeDirectoryLaunchpad: "backend.materializeDirectoryLaunchpad",
   handoffThreadWorkspace: "backend.handoffThreadWorkspace",
   renameThread: "backend.renameThread",
+  readApplications: "backend.readApplications",
   openApplication: "backend.openApplication",
   trustCodexProject: "backend.trustCodexProject",
 } as const;
@@ -133,6 +135,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.materializeDirectoryLaunchpad]: "environment_actions",
   [FEDERATION_BACKEND_METHODS.handoffThreadWorkspace]: "turn_control",
   [FEDERATION_BACKEND_METHODS.renameThread]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.readApplications]: "remote_window",
   [FEDERATION_BACKEND_METHODS.openApplication]: "remote_window",
   [FEDERATION_BACKEND_METHODS.trustCodexProject]: "environment_actions",
 };
@@ -199,6 +202,7 @@ export type FederationBackendOperations = {
     request: HandoffThreadWorkspaceRequest,
   ): Promise<HandoffThreadWorkspaceResponse>;
   renameThread(request: RenameThreadRequest): Promise<RenameThreadResponse>;
+  readApplications(): Promise<DesktopApplicationsSnapshot>;
   openApplication(
     request: OpenDesktopApplicationRequest,
   ): Promise<OpenDesktopApplicationResponse>;
@@ -398,6 +402,10 @@ export function registerFederationBackendHandlers(params: {
       await params.backend.renameThread(
         envelope.params as RenameThreadRequest,
       ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.readApplications,
+    async () => await params.backend.readApplications(),
   );
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.openApplication,
@@ -630,6 +638,13 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
     return await this.rpc.request<OpenDesktopApplicationResponse>({
       method: FEDERATION_BACKEND_METHODS.openApplication,
       params: request,
+    });
+  }
+
+  async readApplications(): Promise<DesktopApplicationsSnapshot> {
+    return await this.rpc.request<DesktopApplicationsSnapshot>({
+      method: FEDERATION_BACKEND_METHODS.readApplications,
+      params: {},
     });
   }
 

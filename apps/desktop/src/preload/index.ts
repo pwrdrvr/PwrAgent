@@ -228,6 +228,8 @@ import type {
   ImportFederationInviteResponse,
   OpenDesktopApplicationRequest,
   OpenDesktopApplicationResponse,
+  ReadDesktopApplicationsRequest,
+  ReadDesktopApplicationsResponse,
   OpenFederationWindowRequest,
   OpenFederationWindowResponse,
   OpenMarkdownFileViewerRequest,
@@ -386,6 +388,7 @@ import {
   APP_SERVER_RENAME_THREAD_CHANNEL,
   APP_SERVER_READ_THREAD_CHANNEL,
   APP_SERVER_GET_THREAD_FILE_DIFF_CHANNEL,
+  APPLICATIONS_READ_CHANNEL,
   APPLICATION_OPEN_CHANNEL,
   MARKDOWN_FILE_READ_CHANNEL,
   MARKDOWN_FILE_VIEWER_OPEN_CHANNEL,
@@ -913,6 +916,10 @@ const desktopApi = Object.freeze({
     request: OpenDesktopApplicationRequest,
   ): Promise<OpenDesktopApplicationResponse> =>
     await ipcRenderer.invoke(APPLICATION_OPEN_CHANNEL, request),
+  readApplications: async (
+    request: ReadDesktopApplicationsRequest,
+  ): Promise<ReadDesktopApplicationsResponse> =>
+    await ipcRenderer.invoke(APPLICATIONS_READ_CHANNEL, request),
   openPath: async (request: OpenPathRequest): Promise<OpenPathResponse> =>
     await ipcRenderer.invoke(PATH_OPEN_CHANNEL, request),
   revealPath: async (request: OpenPathRequest): Promise<OpenPathResponse> =>

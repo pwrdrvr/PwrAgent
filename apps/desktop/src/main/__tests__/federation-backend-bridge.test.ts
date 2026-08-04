@@ -252,6 +252,7 @@ describe("federation backend bridge", () => {
       materializeDirectoryLaunchpad: vi.fn(),
       handoffThreadWorkspace: vi.fn(),
       renameThread: vi.fn(),
+      readApplications: vi.fn(),
       openApplication: vi.fn(),
       trustCodexProject: vi.fn(),
     };
@@ -397,6 +398,7 @@ describe("federation backend bridge", () => {
         materializeDirectoryLaunchpad: vi.fn(),
         handoffThreadWorkspace: vi.fn(),
         renameThread: vi.fn(),
+        readApplications: vi.fn(),
         openApplication: vi.fn(),
         trustCodexProject: vi.fn(),
       } as FederationBackendOperations,
@@ -433,12 +435,29 @@ describe("federation backend bridge", () => {
     ]);
   });
 
-  it("routes remote thread renames and application opens to the target instance", async () => {
+  it("routes remote thread renames and application operations to the target instance", async () => {
     const backend = {
       renameThread: vi.fn(async () => ({
         backend: "codex" as const,
         threadId: "thread-1",
         renamedAt: 2_000,
+      })),
+      readApplications: vi.fn(async () => ({
+        editors: [],
+        terminals: [{
+          id: "terminal",
+          kind: "terminal" as const,
+          name: "Terminal",
+          source: "application" as const,
+          canOpenWorkspace: true,
+        }],
+        preferredEditorId: { value: "", source: "default" as const },
+        preferredTerminalId: { value: "", source: "default" as const },
+        gh: {
+          path: { value: "", source: "default" as const },
+          discovery: { candidates: [] },
+        },
+        git: { discovery: { candidates: [] } },
       })),
       openApplication: vi.fn(async () => ({ opened: true as const })),
       trustCodexProject: vi.fn(async (request: TrustCodexProjectRequest) => ({
@@ -482,6 +501,19 @@ describe("federation backend bridge", () => {
     await router.routeEnvelope({
       sourcePeerId: "gateway_one",
       envelope: {
+        id: "applications-read-request",
+        kind: "request",
+        method: FEDERATION_BACKEND_METHODS.readApplications,
+        params: {},
+        protocolVersion: 1,
+        sourceInstanceId: "gateway_one",
+        targetInstanceId: "client_one",
+        createdAt: 1_050,
+      },
+    });
+    await router.routeEnvelope({
+      sourcePeerId: "gateway_one",
+      envelope: {
         id: "application-request",
         kind: "request",
         method: FEDERATION_BACKEND_METHODS.openApplication,
@@ -518,6 +550,7 @@ describe("federation backend bridge", () => {
       threadId: "thread-1",
       name: "Remote title",
     });
+    expect(backend.readApplications).toHaveBeenCalledTimes(1);
     expect(backend.openApplication).toHaveBeenCalledWith({
       applicationId: "terminal",
       kind: "terminal",
@@ -532,6 +565,13 @@ describe("federation backend bridge", () => {
         kind: "response",
         requestId: "rename-request",
         result: { renamedAt: 2_000 },
+      },
+      {
+        kind: "response",
+        requestId: "applications-read-request",
+        result: {
+          terminals: [{ id: "terminal" }],
+        },
       },
       {
         kind: "response",

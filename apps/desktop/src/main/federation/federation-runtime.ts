@@ -48,6 +48,7 @@ import {
   type CompactThreadRequest,
   type ForkThreadRequest,
   type FederationRemoteTarget,
+  type DesktopApplicationsSnapshot,
   type HandoffThreadWorkspaceRequest,
   type InterruptTurnRequest,
   type MaterializeDirectoryLaunchpadRequest,
@@ -73,7 +74,10 @@ import {
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { rewriteTranscriptImageUrlsForRenderer } from "../transcript-image-protocol";
 import { getMainLogger } from "../log";
-import { openDesktopApplication } from "../settings/application-discovery";
+import {
+  discoverDesktopApplications,
+  openDesktopApplication,
+} from "../settings/application-discovery";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { getAppStateDb, isAppStateInitialized } from "../state/app-state";
 import { DesktopMessagingBackendBridge } from "../messaging/desktop-backend-bridge";
@@ -1139,6 +1143,9 @@ function localBackendOperations(): FederationBackendOperations {
       request: RenameThreadRequest,
     ): Promise<RenameThreadResponse> {
       return await getDesktopBackendRegistry().renameThread(request);
+    },
+    async readApplications(): Promise<DesktopApplicationsSnapshot> {
+      return await discoverDesktopApplications();
     },
     async openApplication(
       request: OpenDesktopApplicationRequest,

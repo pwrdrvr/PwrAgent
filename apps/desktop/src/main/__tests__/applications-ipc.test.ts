@@ -1,8 +1,29 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+  DesktopApplicationsSnapshot,
   OpenDesktopApplicationRequest,
   OpenDesktopApplicationResponse,
+  ReadDesktopApplicationsRequest,
 } from "@pwragent/shared";
+
+const remoteApplications: DesktopApplicationsSnapshot = {
+  editors: [],
+  terminals: [{
+    id: "terminal",
+    kind: "terminal",
+    name: "Terminal",
+    source: "application",
+    appPath: "/System/Applications/Utilities/Terminal.app",
+    canOpenWorkspace: true,
+  }],
+  preferredEditorId: { value: "", source: "default" },
+  preferredTerminalId: { value: "", source: "default" },
+  gh: {
+    path: { value: "", source: "default" },
+    discovery: { candidates: [] },
+  },
+  git: { discovery: { candidates: [] } },
+};
 
 const mocks = vi.hoisted(() => {
   const handlers = new Map<
@@ -12,10 +33,13 @@ const mocks = vi.hoisted(() => {
   const openApplication = vi.fn(
     async (): Promise<OpenDesktopApplicationResponse> => ({ opened: true }),
   );
-  const remoteBackend = { openApplication };
+  const readApplications = vi.fn(async () => remoteApplications);
+  const remoteBackend = { openApplication, readApplications };
   return {
     handlers,
     openApplication,
+    readApplications,
+    discoverDesktopApplications: vi.fn(async () => remoteApplications),
     openDesktopApplication: vi.fn(
       async (): Promise<OpenDesktopApplicationResponse> => ({ opened: true }),
     ),
@@ -43,6 +67,7 @@ vi.mock("electron", () => ({
 }));
 
 vi.mock("../settings/application-discovery", () => ({
+  discoverDesktopApplications: mocks.discoverDesktopApplications,
   openDesktopApplication: mocks.openDesktopApplication,
 }));
 
@@ -65,6 +90,8 @@ describe("application IPC", () => {
   beforeEach(() => {
     mocks.handlers.clear();
     mocks.openApplication.mockClear();
+    mocks.readApplications.mockClear();
+    mocks.discoverDesktopApplications.mockClear();
     mocks.openDesktopApplication.mockClear();
     mocks.remoteBackendForTarget.mockClear();
   });
@@ -93,5 +120,24 @@ describe("application IPC", () => {
     });
     expect(mocks.openDesktopApplication).not.toHaveBeenCalled();
     expect(response).toEqual({ opened: true });
+  });
+
+  it("reads application candidates from the selected federation peer", async () => {
+    const { registerApplicationIpcHandlers } = await import("../ipc/applications");
+    const { APPLICATIONS_READ_CHANNEL } = await import("../../shared/ipc");
+    registerApplicationIpcHandlers();
+
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "remote-instance",
+    };
+    const response = await mocks.handlers.get(APPLICATIONS_READ_CHANNEL)?.({}, {
+      federationTarget,
+    } satisfies ReadDesktopApplicationsRequest);
+
+    expect(mocks.remoteBackendForTarget).toHaveBeenCalledWith(federationTarget);
+    expect(mocks.readApplications).toHaveBeenCalledTimes(1);
+    expect(mocks.discoverDesktopApplications).not.toHaveBeenCalled();
+    expect(response).toEqual({ applications: remoteApplications });
   });
 });

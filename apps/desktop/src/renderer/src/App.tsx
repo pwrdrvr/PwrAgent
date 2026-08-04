@@ -53,6 +53,8 @@ import { useDurableComposerDraftStore } from "./features/composer/useDurableComp
 import { useAppearance, type AppearanceController } from "./lib/useAppearance";
 import { useBackendSummaries } from "./lib/useBackendSummaries";
 import { useDesktopApi, type DesktopApi } from "./lib/desktop-api";
+import { useDesktopApplications } from "./lib/useDesktopApplications";
+import { readRendererFederationTarget } from "./lib/federation-window";
 import { useRuntimeIdentity } from "./lib/runtime-identity";
 import {
   useNavigationHistory,
@@ -665,6 +667,18 @@ function DesktopAppShell(props: {
       settings.snapshot?.experimental.lightweightNavigationRefresh?.value ?? false,
     threadViewVisible: mainView === "thread",
   });
+  const selectedThreadFederationTarget =
+    navigation.selectedThread?.federation?.ref.target;
+  const remoteApplicationInstanceId =
+    selectedThreadFederationTarget
+    && isRemoteFederationTarget(selectedThreadFederationTarget)
+      ? selectedThreadFederationTarget.instanceId
+      : readRendererFederationTarget()?.instanceId;
+  const applications = useDesktopApplications({
+    desktopApi,
+    localApplications: settings.snapshot?.applications,
+    remoteInstanceId: remoteApplicationInstanceId,
+  });
   // Keep the backend-error toast's thread lookup fresh without making the
   // toast subscription depend on (and re-subscribe to) the thread list.
   useEffect(() => {
@@ -1068,7 +1082,7 @@ function DesktopAppShell(props: {
     addOptimisticUserMessage: session.addOptimisticUserMessage,
     backendError: backendSummaries.error,
     backends: backendSummaries.backends,
-    applications: settings.snapshot?.applications,
+    applications,
     codexFastAllowed:
       settings.snapshot?.models?.codex.allowFast?.value ?? true,
     providerModelDefaults: settings.snapshot?.models?.providerDefaults,
