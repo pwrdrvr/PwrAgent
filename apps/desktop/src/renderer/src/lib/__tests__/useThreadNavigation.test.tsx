@@ -2087,6 +2087,59 @@ describe("useThreadNavigation", () => {
     });
   });
 
+  it("retries a failed remote snapshot until its route recovers", async () => {
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "remote-instance",
+    };
+    (window as unknown as {
+      __pwragentFederationTarget?: unknown;
+    }).__pwragentFederationTarget = federationTarget;
+    const snapshot = {
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: ["codex:thread-remote"],
+      threads: [
+        {
+          id: "thread-remote",
+          title: "Recovered remotely",
+          titleSource: "explicit" as const,
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: { inInbox: true },
+        },
+      ],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    };
+    const getNavigationSnapshot = vi.fn()
+      .mockRejectedValueOnce(new Error("Unexpected server response: 502"))
+      .mockResolvedValue(snapshot);
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+    };
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.error).toBe("Unexpected server response: 502");
+    });
+    await waitFor(() => {
+      expect(result.current.selectedThread?.title).toBe("Recovered remotely");
+      expect(result.current.error).toBeUndefined();
+    }, { timeout: 2_500 });
+    expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
+    expect(getNavigationSnapshot).toHaveBeenLastCalledWith({
+      federationTarget,
+      forceRefresh: true,
+      refreshMode: "full",
+    });
+  });
+
   it("surfaces archive worktree cleanup failures returned by the desktop bridge", async () => {
     let archived = false;
     const getNavigationSnapshot = vi.fn(async () => ({

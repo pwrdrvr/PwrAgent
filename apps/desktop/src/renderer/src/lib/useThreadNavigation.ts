@@ -84,6 +84,7 @@ const ROOT_NEW_THREAD_WORKSPACE_LABEL = "Workspaces";
 const NAVIGATION_BACKGROUND_REFRESH_INTERVAL_MS = 5 * 60_000;
 const NAVIGATION_BACKGROUND_REFRESH_IDLE_AFTER_MS = 30 * 60_000;
 const NAVIGATION_FOCUS_REFRESH_MIN_INTERVAL_MS = 60_000;
+const NAVIGATION_REMOTE_RECOVERY_MAX_DELAY_MS = 30_000;
 const DEFAULT_BROWSE_MODE: BrowseMode = "inbox";
 const NAVIGATION_ACTIVITY_EVENTS = [
   "input",
@@ -2582,6 +2583,7 @@ export function useThreadNavigation(
   const focusRefreshInFlightRef = useRef(false);
   const focusRefreshQueuedRef = useRef(false);
   const lastFocusRefreshCompletedAtRef = useRef(0);
+  const remoteRecoveryAttemptRef = useRef(0);
   const lastNavigationActivityAtRef = useRef(Date.now());
   const backgroundRefreshIdleRef = useRef(false);
   const launchpadUpdateRevisionRef = useRef(new Map<string, number>());
@@ -2695,6 +2697,7 @@ export function useThreadNavigation(
         const snapshot = snapshotRequest
           ? await desktopApi.getNavigationSnapshot(snapshotRequest)
           : await desktopApi.getNavigationSnapshot();
+        remoteRecoveryAttemptRef.current = 0;
         desktopApi.recordStartupProfileEvent?.("navigation-refresh:snapshot", {
           directoryCount: snapshot.directories.length,
           forceRefresh: Boolean(options?.forceRefresh),
@@ -3028,6 +3031,38 @@ export function useThreadNavigation(
 
     void refresh();
   }, [enabled, refresh]);
+
+  useEffect(() => {
+    if (
+      !enabled
+      || !desktopApi?.getNavigationSnapshot
+      || !state.error
+      || !readRendererFederationTarget()
+    ) {
+      return;
+    }
+
+    const delayMs = Math.min(
+      1_000 * 2 ** remoteRecoveryAttemptRef.current,
+      NAVIGATION_REMOTE_RECOVERY_MAX_DELAY_MS,
+    );
+    remoteRecoveryAttemptRef.current += 1;
+    const timer = setTimeout(() => {
+      scheduleRefresh(undefined, undefined, false, {
+        forceRefresh: true,
+        refreshMode: "full",
+      });
+    }, delayMs);
+
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [
+    desktopApi?.getNavigationSnapshot,
+    enabled,
+    scheduleRefresh,
+    state.error,
+  ]);
 
   useEffect(() => {
     if (
