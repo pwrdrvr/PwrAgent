@@ -626,6 +626,9 @@ test.describe("Onboarding wizard", () => {
           name: /Install at least one AI provider/i,
         }),
       ).toBeVisible();
+      await expect(
+        app.window.getByText(/brew update && brew install --cask codex/i),
+      ).toBeVisible();
       await app.window.getByRole("tab", { name: /Kimi Code/i }).click();
       await expect(
         app.window.getByText(/@moonshot-ai\/kimi-code/i),

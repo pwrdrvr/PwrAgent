@@ -106,7 +106,9 @@ describe("AI provider onboarding", () => {
       />,
     );
 
-    expect(screen.getByText(/brew install --cask codex/i)).toBeVisible();
+    expect(
+      screen.getByText(/brew update && brew install --cask codex/i),
+    ).toBeVisible();
     fireEvent.click(screen.getByRole("tab", { name: /Kimi Code/i }));
     expect(screen.getByText(/@moonshot-ai\/kimi-code/i)).toBeVisible();
     fireEvent.click(screen.getByRole("tab", { name: /Qwen Code/i }));

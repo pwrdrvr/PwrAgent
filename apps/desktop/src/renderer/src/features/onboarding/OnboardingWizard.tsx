@@ -1680,7 +1680,10 @@ const ONBOARDING_BACKENDS: ReadonlyArray<{
       "OpenAI's coding agent. Sign in with your ChatGPT account after install.",
     docsUrl: "https://github.com/openai/codex",
     installCommands: [
-      { label: "Homebrew", command: "brew install --cask codex" },
+      {
+        label: "Homebrew (refresh first)",
+        command: "brew update && brew install --cask codex",
+      },
       { label: "npm", command: "npm install -g @openai/codex" },
     ],
   },
