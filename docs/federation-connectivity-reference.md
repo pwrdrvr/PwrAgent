@@ -337,34 +337,59 @@ PwrAgent connection alone cannot prove that an edge rejection policy was active.
 
 ## Current Validation Status
 
-The federation baseline has been manually exercised between a host and a macOS
-development VM through an SSH reverse tunnel. That proves the remote workflow
-and the SSH-protected route, not Cloudflare or Tailscale.
+The following results were recorded on August 4, 2026 between a host macOS
+PwrAgent gateway and the trusted `pwrsnap-dev` Tart macOS VM. Both applications
+used isolated PwrAgent roots and the `dev` profile. The gateway listened only on
+`127.0.0.1:47830`; Tailscale Serve published the dedicated federation path.
 
-The Noise implementation passes the official Noise protocol vectors plus
-focused coverage for tampering, replay/counter behavior, wrong gateway pins,
-real-socket encrypted RPC, invite key pinning, identity channel binding, and
-credential-store persistence. A fresh two-machine manual run and raw-frame
-inspection remain to be completed before documentation claims live validation.
+| Workflow | Direction | Result | Latency and UX observation | Evidence |
+|---|---|---|---|---|
+| Tailscale Serve setup | Host gateway | Pass | Settings verified the loopback listener before changing Tailscale and stored the generated `wss://` URL. | `tailscale serve status --json` mapped only `/pwragent-federation` to `127.0.0.1:47830`; both instances reported Connected. |
+| Noise encrypted transport | Both directions | Pass | Transparent after enrollment. An Electron cipher-availability defect was found and fixed by using the supported AES-GCM Noise suite. | Live remote RPC and event streams worked through `Noise_IK_25519_AESGCM_SHA256`; non-Noise WebSocket attempts were rejected before federation authentication. |
+| Enrollment | VM client to host gateway | Pass with UX concern | The one-time invite was about 599 characters. Moving it between machines through Screen Sharing was awkward and error-prone; direct-port pairing was not comfortable. | The VM imported the invite, pinned the gateway, and reconnected with the same peer identity. |
+| Browse, open, resume, and rename threads | Both directions | Pass | Thread lists generally appeared within a few seconds. A remote window could briefly select a stale first thread during connection recovery; choosing the isolated test thread succeeded. | VM renamed the host test thread to `tailscale host dogfood`; host opened `VM federation ready`. |
+| Prompt and live event streaming | Both directions | Pass | Assistant, reasoning, command, usage, and lifecycle events arrived without a manual refresh. | Host and VM test threads displayed live remote turns. |
+| Queue, compact, interrupt, and steer | VM to host | Pass after fix | Remote steering initially canceled the queue on the VM and failed. Queue cancellation is now routed to the owning peer; the retest entered `Steering now` and completed normally. | Host replied `remote steer passed` in the same active turn; focused RPC, IPC, and composer tests cover the routing fix. |
+| Model and execution settings | VM to host | Pass | Remote model and access changes updated the owning host thread. | Model changed from GPT-5.5 to GPT-5.4; Default Access changed to Full Access. |
+| Approval handling | VM to host | Pass | The approval appeared on the controlling VM, not on the host desktop, and the accepted result streamed back. | Full Access command approval completed on the host thread. |
+| Federated search | VM controlling host | Pass | Results included both machines and displayed their instance label. | A VM-owned result opened as remote; no local substitute thread was used. |
+| Filesystem ownership / no fallback | Both directions | Pass | Absolute paths remained visibly machine-specific. | Host-only project `2026-08-04-401004` did not exist on the VM; VM-only project `2026-08-04-943759` did not exist on the host. |
+| Gateway unavailable state | VM viewing host | Pass after fix | The already-open remote window retained its transcript and immediately replaced the sidebar with an explicit route error. | Stopping the host gateway produced a remote `navigation:get-snapshot` unavailable error; no local thread list appeared. |
+| Gateway recovery | VM viewing host | Pass after fix, delayed | The open window recovered in the background without reopening Settings or the peer. A sustained outage took roughly two minutes because reconnect backoff and a 30-second RPC timeout overlapped. Bounded navigation retries and unroutable-RPC cleanup were added. | The error cleared and the host thread list repopulated while the remote window was unfocused. |
+| Peer revocation | Host gateway to VM client | Pass | Revocation immediately closed the active connection and disabled Open and Revoke for the peer. Re-enrollment was not repeated during teardown. | The peer changed from Connected to Revoked and a `transport_closed` diagnostic appeared at the same time. |
+| Tailscale Funnel setup | Host gateway | Partial | Settings correctly required public-exposure acknowledgement. Enabling Funnel required a one-time tailnet policy change. | Funnel status, public DNS, dedicated path, and Settings `Funnel` badge were verified. A true off-tailnet WebSocket session was not completed. |
+| Tailscale Funnel external reachability | External client | Not proven | Host and VM shared the same public egress. Forced public-edge TLS attempts hit Tailscale's same-egress/hairpin behavior and ended before a WebSocket handshake. | Public DNS and Funnel status proved publication, not successful off-network federation. |
+| Cloudflare Tunnel, Access token, and mTLS | External client | Not run live | The account and local `cloudflared` installation were inspected only for later test preparation. | Automated configuration and credential-plumbing tests pass; no live Access rejection boundary was claimed. |
+| Environment setup streaming and worktree handoff | Both directions | Not completed | Deferred from this transport-focused run. | No manual pass should be claimed. |
+| Sibling client relay | Client through gateway to client | Not run | Optional third-profile scenario was not used. | No manual pass should be claimed. |
 
-Cloudflare configuration, secret storage, and client credential plumbing have
+Tailscale Funnel was disabled after the public test and the private Serve route
+was restored for the remaining scenarios. Final teardown removed that Serve
+handler too. The tailnet-level Funnel capability remains enabled because the
+one-time Tailscale account action applies to tailnet policy rather than a single
+PwrAgent handler. Documentation should distinguish that persistent account
+capability from an actively published Funnel route.
+
+The live run did not inspect packet payloads directly. It proved that the Noise
+handshake and encrypted remote workflow operate in Electron and that malformed
+non-Noise connections fail closed. Automated coverage still supplies the
+protocol-vector, tampering, replay/counter, wrong-pin, identity-binding,
+real-socket encrypted-RPC, and credential-store checks.
+
+Cloudflare configuration, secret storage, and client-credential plumbing have
 automated coverage, but the Cloudflare Tunnel, Access service-token, and mTLS
-paths still require live validation against a real Cloudflare account.
+paths still require live testing against a deny-by-default Access application.
+That future test must verify both the Cloudflare response and the absence of a
+corresponding connection at the local PwrAgent listener.
 
-Tailscale Serve/Funnel discovery and setup now have focused automated coverage.
-The implementation reports only sanitized local device status to the renderer,
-uses a dedicated path, never invokes a broad reset, requires Funnel exposure
-acknowledgement, and writes the resulting `wss://` URL into PwrAgent gateway
-settings. Live Serve and Funnel validation remain to be completed after the
-operator selects the intended Tailscale account.
-
-## Dogfood Environment Readiness and Morning Runbook
+## Dogfood Environment Baseline and Follow-up Runbook
 
 The following observations were read-only and specific to the test environment
-on August 4, 2026. They are not product prerequisites:
+before the August 4, 2026 live run. They are not product prerequisites or a
+description of the post-test state:
 
-- the Tailscale CLI is installed and connected; no Serve or Funnel handler was
-  configured during the overnight implementation
+- the Tailscale CLI was installed and connected; no Serve or Funnel handler was
+  configured before the live test
 - `cloudflared` 2026.2.0 is installed, but the local CLI has no default origin
   certificate and therefore cannot administer account tunnels by name
 - the Cloudflare Zero Trust account is on the Free plan and already has working
