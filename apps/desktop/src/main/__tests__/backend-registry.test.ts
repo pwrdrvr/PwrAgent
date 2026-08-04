@@ -14678,6 +14678,46 @@ command = "pnpm dev"
     }
   });
 
+  it("preserves enriched local file references for Grok turns", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-grok-local-file-"));
+    const filePath = path.join(root, "notes.txt");
+    const text = "Inspect the disk image only if needed.\n";
+    await writeFile(filePath, text, "utf8");
+    const grokClient = new MockBackendClient({ threads: [] });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient,
+      overlayStore: createOverlayStoreMock(),
+      resolvePdfAnalysisEnabled: () => false,
+    });
+
+    try {
+      await registry.startTurn({
+        backend: "grok",
+        threadId: "thread-grok-local-file",
+        input: [
+          { type: "text", text: "Use the attached notes." },
+          { type: "localFile", name: "notes.txt", path: filePath },
+        ],
+      });
+
+      expect(grokClient.lastStartTurnParams?.input).toEqual([
+        { type: "text", text: "Use the attached notes." },
+        {
+          type: "localFile",
+          name: "notes.txt",
+          path: filePath,
+          mimeType: "text/plain",
+          sizeBytes: Buffer.byteLength(text),
+          textPreview: text,
+        },
+      ]);
+    } finally {
+      await registry.close();
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
   it("persists the Codex title helper as a system sub-agent with usage", async () => {
     const titleService = {
       generateTitle: vi.fn(async () => ({

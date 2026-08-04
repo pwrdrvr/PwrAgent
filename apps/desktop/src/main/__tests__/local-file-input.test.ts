@@ -1,4 +1,11 @@
-import { mkdtemp, rm, truncate, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  rm,
+  symlink,
+  truncate,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -103,7 +110,15 @@ describe("enrichLocalFileInputs", () => {
 
     await expect(
       enrichLocalFileInputs([
-        { type: "localFile", name: "large.log", path: logPath },
+        {
+          type: "localFile",
+          name: "large.log",
+          path: logPath,
+          mimeType: "text/injected",
+          sizeBytes: 1,
+          textPreview: "caller-supplied preview",
+          textPreviewTruncated: true,
+        },
       ]),
     ).resolves.toEqual([
       {
@@ -123,7 +138,12 @@ describe("enrichLocalFileInputs", () => {
 
     await expect(
       enrichLocalFileInputs([
-        { type: "localFile", name: "not-really-text.txt", path: textPath },
+        {
+          type: "localFile",
+          name: "not-really-text.txt",
+          path: textPath,
+          textPreview: "caller-supplied preview",
+        },
       ]),
     ).resolves.toEqual([
       {
@@ -151,6 +171,7 @@ describe("enrichLocalFileInputs", () => {
         type: "localFile" as const,
         name: `notes-${index}.txt`,
         path: filePath,
+        ...(index === 4 ? { textPreview: "caller-supplied preview" } : {}),
       })),
     );
 
@@ -168,5 +189,114 @@ describe("enrichLocalFileInputs", () => {
       );
     }
     expect(results[4]).not.toHaveProperty("textPreview");
+  });
+
+  it("does not inspect Codex-owned session storage", async () => {
+    const root = await makeTempRoot();
+    const sessionPath = path.join(
+      root,
+      ".codex",
+      "sessions",
+      "2026",
+      "08",
+      "04",
+      "rollout-private.jsonl",
+    );
+    await mkdir(path.dirname(sessionPath), { recursive: true });
+    await writeFile(sessionPath, "private rollout data\n");
+
+    await expect(
+      enrichLocalFileInputs([
+        {
+          type: "localFile",
+          name: "rollout-private.jsonl",
+          path: sessionPath,
+          mimeType: "application/x-injected",
+          sizeBytes: 1,
+          textPreview: "caller-supplied preview",
+          textPreviewTruncated: true,
+        },
+      ]),
+    ).resolves.toEqual([
+      {
+        type: "localFile",
+        name: "rollout-private.jsonl",
+        path: sessionPath,
+      },
+    ]);
+  });
+
+  it("does not inspect symlinks into Codex-owned session storage", async () => {
+    const root = await makeTempRoot();
+    const privateRoot = path.join(root, "custom-codex-home");
+    const sessionPath = path.join(privateRoot, "sessions", "rollout-private.jsonl");
+    const linkedPath = path.join(root, "notes.jsonl");
+    await mkdir(path.dirname(sessionPath), { recursive: true });
+    await writeFile(sessionPath, "private rollout data\n");
+    await symlink(sessionPath, linkedPath);
+
+    await expect(
+      enrichLocalFileInputs(
+        [{ type: "localFile", name: "notes.jsonl", path: linkedPath }],
+        { privateStorageRoots: [privateRoot] },
+      ),
+    ).resolves.toEqual([
+      { type: "localFile", name: "notes.jsonl", path: linkedPath },
+    ]);
+  });
+
+  it("still previews repository files inside Codex-managed worktrees", async () => {
+    const root = await makeTempRoot();
+    const notesPath = path.join(
+      root,
+      ".codex",
+      "worktrees",
+      "test-worktree",
+      "project",
+      "notes.txt",
+    );
+    const text = "Repository-owned notes\n";
+    await mkdir(path.dirname(notesPath), { recursive: true });
+    await writeFile(notesPath, text);
+
+    await expect(
+      enrichLocalFileInputs([
+        { type: "localFile", name: "notes.txt", path: notesPath },
+      ]),
+    ).resolves.toEqual([
+      {
+        type: "localFile",
+        name: "notes.txt",
+        path: notesPath,
+        mimeType: "text/plain",
+        sizeBytes: Buffer.byteLength(text),
+        textPreview: text,
+      },
+    ]);
+  });
+
+  it("discards caller-derived context when local inspection fails", async () => {
+    const root = await makeTempRoot();
+    const missingPath = path.join(root, "missing.txt");
+
+    await expect(
+      enrichLocalFileInputs([
+        {
+          type: "localFile",
+          name: "missing.txt",
+          path: missingPath,
+          mimeType: "text/injected",
+          sizeBytes: 999,
+          textPreview: "caller-supplied preview",
+          textPreviewTruncated: true,
+        },
+      ]),
+    ).resolves.toEqual([
+      {
+        type: "localFile",
+        name: "missing.txt",
+        path: missingPath,
+      },
+    ]);
   });
 });
