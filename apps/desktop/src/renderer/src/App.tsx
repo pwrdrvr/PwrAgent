@@ -14,6 +14,7 @@ import {
   buildThreadIdentityKey,
   DEFAULT_BACKGROUND_PR_POLLING,
   DEFAULT_PR_AUTO_DISPATCH_ALLOWED,
+  isRemoteFederationTarget,
   parseThreadIdentityKey,
   type AppServerBackendKind,
   type DesktopBootInfo,
@@ -52,6 +53,9 @@ import { useDurableComposerDraftStore } from "./features/composer/useDurableComp
 import { useAppearance, type AppearanceController } from "./lib/useAppearance";
 import { useBackendSummaries } from "./lib/useBackendSummaries";
 import { useDesktopApi, type DesktopApi } from "./lib/desktop-api";
+import { useDesktopApplications } from "./lib/useDesktopApplications";
+import { readRendererFederationTarget } from "./lib/federation-window";
+import { scopeDesktopApiToFederationTarget } from "./lib/federation-desktop-api";
 import { useRuntimeIdentity } from "./lib/runtime-identity";
 import {
   useNavigationHistory,
@@ -664,6 +668,28 @@ function DesktopAppShell(props: {
       settings.snapshot?.experimental.lightweightNavigationRefresh?.value ?? false,
     threadViewVisible: mainView === "thread",
   });
+  const selectedThreadFederationTarget =
+    navigation.selectedThread?.federation?.ref.target;
+  const remoteApplicationInstanceId =
+    selectedThreadFederationTarget
+    && isRemoteFederationTarget(selectedThreadFederationTarget)
+      ? selectedThreadFederationTarget.instanceId
+      : readRendererFederationTarget()?.instanceId;
+  const activeFederationTarget = useMemo(
+    () => remoteApplicationInstanceId
+      ? { scope: "remote" as const, instanceId: remoteApplicationInstanceId }
+      : undefined,
+    [remoteApplicationInstanceId],
+  );
+  const threadDesktopApi = useMemo(
+    () => scopeDesktopApiToFederationTarget(desktopApi, activeFederationTarget),
+    [activeFederationTarget, desktopApi],
+  );
+  const applications = useDesktopApplications({
+    desktopApi,
+    localApplications: settings.snapshot?.applications,
+    remoteInstanceId: remoteApplicationInstanceId,
+  });
   // Keep the backend-error toast's thread lookup fresh without making the
   // toast subscription depend on (and re-subscribe to) the thread list.
   useEffect(() => {
@@ -671,6 +697,7 @@ function DesktopAppShell(props: {
   }, [navigation.threads]);
   const backendSummaries = useBackendSummaries(desktopApi, {
     enabled: normalAppEnabled,
+    federationTarget: activeFederationTarget,
   });
   const refreshAcpAgents = backendSummaries.refreshAcpAgents;
   const refreshSelectedAcpProvider = useCallback(
@@ -1067,7 +1094,7 @@ function DesktopAppShell(props: {
     addOptimisticUserMessage: session.addOptimisticUserMessage,
     backendError: backendSummaries.error,
     backends: backendSummaries.backends,
-    applications: settings.snapshot?.applications,
+    applications,
     codexFastAllowed:
       settings.snapshot?.models?.codex.allowFast?.value ?? true,
     providerModelDefaults: settings.snapshot?.models?.providerDefaults,
@@ -1084,7 +1111,7 @@ function DesktopAppShell(props: {
       ),
     composerImplementation: settings.composerImplementation,
     composerDraftStore,
-    desktopApi,
+    desktopApi: threadDesktopApi,
     launchpadError: navigation.launchpadError,
     onProviderSelected: refreshSelectedAcpProvider,
     onShowNotice: setComposerNotice,
@@ -1577,6 +1604,17 @@ function DesktopAppShell(props: {
                 }
               }}
               onOpenResult={async (result) => {
+                if (
+                  result.federation &&
+                  isRemoteFederationTarget(result.federation.ref.target)
+                ) {
+                  await desktopApi?.openFederationWindow?.({
+                    target: result.federation.ref.target,
+                    label: result.federation.instanceLabel,
+                    initialThread: result.federation.ref,
+                  });
+                  return;
+                }
                 // Deep-link to the match: open the thread with the find bar
                 // seeded with the search query so it highlights + scrolls the
                 // matched message into view (auto-loading older history if the

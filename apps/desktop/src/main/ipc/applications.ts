@@ -1,20 +1,24 @@
 import { access, readFile, stat } from "node:fs/promises";
 import { BrowserWindow, ipcMain, shell } from "electron";
-import type {
-  OpenDesktopApplicationRequest,
-  OpenDesktopApplicationResponse,
-  OpenMarkdownFileViewerRequest,
-  OpenMarkdownFileViewerResponse,
-  OpenSubAgentTranscriptWindowRequest,
-  OpenSubAgentTranscriptWindowResponse,
-  OpenPathRequest,
-  OpenPathResponse,
-  ReadMarkdownFileRequest,
-  ReadMarkdownFileResponse,
-  ReadMarkdownFileViewerSnapshotRequest,
-  ReadMarkdownFileViewerSnapshotResponse,
+import {
+  isRemoteFederationTarget,
+  type OpenDesktopApplicationRequest,
+  type OpenDesktopApplicationResponse,
+  type ReadDesktopApplicationsRequest,
+  type ReadDesktopApplicationsResponse,
+  type OpenMarkdownFileViewerRequest,
+  type OpenMarkdownFileViewerResponse,
+  type OpenSubAgentTranscriptWindowRequest,
+  type OpenSubAgentTranscriptWindowResponse,
+  type OpenPathRequest,
+  type OpenPathResponse,
+  type ReadMarkdownFileRequest,
+  type ReadMarkdownFileResponse,
+  type ReadMarkdownFileViewerSnapshotRequest,
+  type ReadMarkdownFileViewerSnapshotResponse,
 } from "@pwragent/shared";
 import {
+  APPLICATIONS_READ_CHANNEL,
   APPLICATION_OPEN_CHANNEL,
   MARKDOWN_FILE_READ_CHANNEL,
   MARKDOWN_FILE_VIEWER_OPEN_CHANNEL,
@@ -27,8 +31,12 @@ import {
   readMarkdownFileViewerSnapshot,
   showMarkdownFileViewerWindow,
 } from "../markdown-files-window";
+import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { showSubAgentTranscriptWindow } from "../subagent-transcript-window";
-import { openDesktopApplication } from "../settings/application-discovery";
+import {
+  discoverDesktopApplications,
+  openDesktopApplication,
+} from "../settings/application-discovery";
 
 const MAX_MARKDOWN_FILE_BYTES = 2 * 1024 * 1024;
 
@@ -105,14 +113,48 @@ async function readMarkdownFile(
   }
 }
 
+async function openApplication(
+  request: OpenDesktopApplicationRequest,
+): Promise<OpenDesktopApplicationResponse> {
+  if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+    const { federationTarget: _federationTarget, ...remoteRequest } = request;
+    return await getDesktopFederationRuntime()
+      .remoteBackend(request.federationTarget)
+      .openApplication(remoteRequest);
+  }
+  return await openDesktopApplication(request);
+}
+
+async function readApplications(
+  request: ReadDesktopApplicationsRequest,
+): Promise<ReadDesktopApplicationsResponse> {
+  if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+    return {
+      applications: await getDesktopFederationRuntime()
+        .remoteBackend(request.federationTarget)
+        .readApplications(),
+    };
+  }
+  return { applications: await discoverDesktopApplications() };
+}
+
 export function registerApplicationIpcHandlers(): void {
+  ipcMain.removeHandler(APPLICATIONS_READ_CHANNEL);
+  ipcMain.handle(
+    APPLICATIONS_READ_CHANNEL,
+    async (
+      _event,
+      request: ReadDesktopApplicationsRequest,
+    ): Promise<ReadDesktopApplicationsResponse> => readApplications(request),
+  );
+
   ipcMain.removeHandler(APPLICATION_OPEN_CHANNEL);
   ipcMain.handle(
     APPLICATION_OPEN_CHANNEL,
     async (
       _event,
       request: OpenDesktopApplicationRequest,
-    ): Promise<OpenDesktopApplicationResponse> => openDesktopApplication(request),
+    ): Promise<OpenDesktopApplicationResponse> => openApplication(request),
   );
 
   ipcMain.removeHandler(PATH_OPEN_CHANNEL);

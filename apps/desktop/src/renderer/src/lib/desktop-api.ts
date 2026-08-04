@@ -90,6 +90,14 @@ import type {
   MaterializeDirectoryLaunchpadRequest,
   MaterializeDirectoryLaunchpadResponse,
   MarkThreadSeenRequest,
+  OpenFederationWindowRequest,
+  OpenFederationWindowResponse,
+  ReadFederationHealthRequest,
+  ReadFederationHealthResponse,
+  ReadFederationDiagnosticsRequest,
+  ReadFederationDiagnosticsResponse,
+  RevokeFederationPeerRequest,
+  RevokeFederationPeerResponse,
   ReorderDirectoryPinsRequest,
   ReorderDirectoryPinsResponse,
   ReorderThreadPinsRequest,
@@ -245,8 +253,14 @@ import type {
   DesktopMessagingContactLookupRequest,
   DesktopMessagingContactLookupResponse,
   DesktopSettingsWriteResponse,
+  GenerateFederationInviteRequest,
+  GenerateFederationInviteResponse,
+  ImportFederationInviteRequest,
+  ImportFederationInviteResponse,
   OpenDesktopApplicationRequest,
   OpenDesktopApplicationResponse,
+  ReadDesktopApplicationsRequest,
+  ReadDesktopApplicationsResponse,
   OpenMarkdownFileViewerRequest,
   OpenMarkdownFileViewerResponse,
   OpenSubAgentTranscriptWindowRequest,
@@ -420,6 +434,24 @@ export type DesktopApi = {
   waitForProfileAlive?: (
     request: WaitForDesktopProfileAliveRequest,
   ) => Promise<WaitForDesktopProfileAliveResponse>;
+  openFederationWindow?: (
+    request: OpenFederationWindowRequest,
+  ) => Promise<OpenFederationWindowResponse>;
+  readFederationHealth?: (
+    request?: ReadFederationHealthRequest,
+  ) => Promise<ReadFederationHealthResponse>;
+  readFederationDiagnostics?: (
+    request?: ReadFederationDiagnosticsRequest,
+  ) => Promise<ReadFederationDiagnosticsResponse>;
+  generateFederationInvite?: (
+    request?: GenerateFederationInviteRequest,
+  ) => Promise<GenerateFederationInviteResponse>;
+  importFederationInvite?: (
+    request: ImportFederationInviteRequest,
+  ) => Promise<ImportFederationInviteResponse>;
+  revokeFederationPeer?: (
+    request: RevokeFederationPeerRequest,
+  ) => Promise<RevokeFederationPeerResponse>;
   ping?: () => string;
   listSkills?: (
     request?: AppServerListSkillsRequest
@@ -595,6 +627,9 @@ export type DesktopApi = {
   openApplication?: (
     request: OpenDesktopApplicationRequest
   ) => Promise<OpenDesktopApplicationResponse>;
+  readApplications?: (
+    request: ReadDesktopApplicationsRequest
+  ) => Promise<ReadDesktopApplicationsResponse>;
   openPath?: (request: OpenPathRequest) => Promise<OpenPathResponse>;
   revealPath?: (request: OpenPathRequest) => Promise<OpenPathResponse>;
   readMarkdownFile?: (

@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import type { AgentEvent } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { readRendererFederationTarget } from "../../lib/federation-window";
+import { federationTargetsEqual } from "../../lib/federated-thread-events";
 
 type ConfigWarningNotice = {
   id: string;
@@ -53,6 +55,7 @@ export function CodexConfigWarningBanner(props: { desktopApi?: DesktopApi }) {
   const [trusting, setTrusting] = useState(false);
   const [trustError, setTrustError] = useState<string | null>(null);
   const desktopApi = props.desktopApi;
+  const federationTargetInstanceId = readRendererFederationTarget()?.instanceId;
 
   useEffect(() => {
     if (!desktopApi?.onAgentEvent && !desktopApi?.getLatestCodexConfigWarning) {
@@ -62,6 +65,12 @@ export function CodexConfigWarningBanner(props: { desktopApi?: DesktopApi }) {
     let cancelled = false;
     const applyEvent = (event: AgentEvent): void => {
       if (cancelled) {
+        return;
+      }
+      const rendererTarget = federationTargetInstanceId
+        ? { scope: "remote" as const, instanceId: federationTargetInstanceId }
+        : undefined;
+      if (!federationTargetsEqual(event.federationTarget, rendererTarget)) {
         return;
       }
       const nextNotice = noticeFromEvent(event);
@@ -91,7 +100,7 @@ export function CodexConfigWarningBanner(props: { desktopApi?: DesktopApi }) {
       cancelled = true;
       unsubscribe?.();
     };
-  }, [desktopApi, dismissedIds]);
+  }, [desktopApi, dismissedIds, federationTargetInstanceId]);
 
   const actionLabel = useMemo(() => {
     const projectPath = notice?.trustedProjectPath;
@@ -116,6 +125,14 @@ export function CodexConfigWarningBanner(props: { desktopApi?: DesktopApi }) {
     setTrustError(null);
     try {
       await desktopApi.trustCodexProject({
+        ...(federationTargetInstanceId
+          ? {
+              federationTarget: {
+                scope: "remote",
+                instanceId: federationTargetInstanceId,
+              } as const,
+            }
+          : {}),
         projectPath: notice.trustedProjectPath,
         ...(notice.configPath ? { configPath: notice.configPath } : {}),
       });

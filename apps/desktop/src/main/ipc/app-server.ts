@@ -144,7 +144,9 @@ import {
   DEFAULT_PULL_REQUEST_PROVIDER,
   buildPullRequestStatusKey,
   buildThreadIdentityKey,
+  federatedThreadIdentityKey,
   isAppServerBackendKind,
+  isRemoteFederationTarget,
   normalizePullRequestProvider as normalizeSharedPullRequestProvider,
   parseThreadIdentityKey,
 } from "@pwragent/shared";
@@ -220,6 +222,7 @@ import {
   NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL,
 } from "../../shared/ipc";
 import { subscribersForChannel } from "../window-channels";
+import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { FocusedDiffService } from "../diff-focus/focused-diff-service";
 import { renderComposerPdfPreview } from "../pdf/composer-pdf-preview";
 import { getMainLogger } from "../log";
@@ -621,6 +624,7 @@ function getNavigationSnapshotRequestKey(
 ): string {
   return JSON.stringify({
     backend: request.backend ?? "all",
+    federationTarget: request.federationTarget ?? { scope: "local" },
     filter: request.filter ?? "",
     forceRefresh: request.forceRefresh === true,
     refreshMode: request.refreshMode ?? "full",
@@ -1214,6 +1218,15 @@ class DesktopAppServerService {
   async listThreads(
     request: AppServerListThreadsRequest = {}
   ): Promise<AppServerListThreadsResponse> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      return await getDesktopFederationRuntime()
+        .remoteBackend(request.federationTarget)
+        .listThreads({
+          backend: request.backend,
+          archived: request.archived,
+          filter: request.filter,
+        });
+    }
     const backend = request.backend;
     const threads = await getDesktopBackendRegistry().listThreads({
       backend,
@@ -1243,12 +1256,101 @@ class DesktopAppServerService {
   async searchThreads(
     request: ThreadSearchRequest = {},
   ): Promise<ThreadSearchResponse> {
-    return await this.getThreadSearchService().search(request);
+    const local = await this.getThreadSearchService().search(request);
+    const federated = await getDesktopFederationRuntime().searchConnectedPeers({
+      query: local.query,
+      limit: request.limit,
+      backend: request.filters?.backend,
+    });
+    const remoteResults = federated.results
+      .filter((result) => isRemoteFederationTarget(result.ref.target))
+      .map((result) => ({
+        backend: result.thread.source,
+        threadId: result.thread.id,
+        identityKey: federatedThreadIdentityKey(result.ref),
+        title: result.thread.title,
+        titleSource: result.thread.titleSource,
+        summary: result.thread.summary,
+        projectKey: result.thread.projectKey,
+        createdAt: result.thread.createdAt,
+        updatedAt: result.thread.updatedAt,
+        archivedAt: result.thread.archivedAt,
+        linkedDirectories: result.thread.linkedDirectories,
+        source: result.thread.source,
+        gitBranch: result.thread.gitBranch,
+        model: result.thread.model,
+        score: result.score,
+        confidence: result.thread.title.trim().toLowerCase() ===
+          local.query.trim().toLowerCase()
+          ? "high" as const
+          : "medium" as const,
+        matchReasons: [
+          {
+            kind: result.thread.title.trim().toLowerCase() ===
+              local.query.trim().toLowerCase()
+              ? "exact_title" as const
+              : "title_token_overlap" as const,
+            field: "title",
+            value: result.thread.title,
+          },
+        ],
+        snippets: [
+          {
+            scope: "metadata" as const,
+            field: "title",
+            text: result.thread.title,
+          },
+          ...(result.thread.summary
+            ? [{
+                scope: "metadata" as const,
+                field: "summary",
+                text: result.thread.summary,
+              }]
+            : []),
+        ],
+        federation: {
+          ref: result.ref,
+          instanceLabel: result.instanceLabel,
+          peerStatus: result.peerStatus,
+        },
+      }));
+    const limit = Math.max(1, Math.min(request.limit ?? 20, 100));
+    const confidenceRank = { high: 3, medium: 2, low: 1 };
+    const results = [...local.results, ...remoteResults]
+      .sort(
+        (left, right) =>
+          confidenceRank[right.confidence] - confidenceRank[left.confidence],
+      )
+      .slice(0, limit);
+    return {
+      ...local,
+      results,
+      unavailableScopes: [
+        ...local.unavailableScopes,
+        ...federated.failures.map((failure) => ({
+          scope: "metadata" as const,
+          reason: "error" as const,
+          message: `${failure.instanceLabel}: ${failure.error}`,
+        })),
+      ],
+      truncated: local.truncated ||
+        local.results.length + remoteResults.length > results.length,
+    };
   }
 
   async listSkills(
     request: AppServerListSkillsRequest = {},
   ): Promise<AppServerListSkillsResponse> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      return await getDesktopFederationRuntime()
+        .remoteBackend(request.federationTarget)
+        .listSkills({
+          backend: request.backend,
+          cwd: request.cwd,
+          cwds: request.cwds,
+          threadId: request.threadId,
+        });
+    }
     const backend = request.backend ?? "codex";
     const response = await getDesktopBackendRegistry().listSkills({
       backend,
@@ -1279,6 +1381,16 @@ class DesktopAppServerService {
   async readThread(
     request: AppServerReadThreadRequest
   ): Promise<AppServerReadThreadResponse> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      return await getDesktopFederationRuntime()
+        .remoteBackend(request.federationTarget)
+        .readThread({
+          backend: request.backend,
+          threadId: request.threadId,
+          before: request.before,
+          limit: request.limit,
+        });
+    }
     const backend = request.backend ?? "codex";
     const registry = getDesktopBackendRegistry();
     const response = await registry.readThread({
@@ -1336,6 +1448,15 @@ class DesktopAppServerService {
   async archiveThread(
     request: ArchiveThreadRequest,
   ): Promise<ArchiveThreadResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .archiveThread(remoteRequest);
+    }
     const backend = request.backend ?? "codex";
     const response = await getDesktopBackendRegistry().archiveThread({
       ...request,
@@ -1423,6 +1544,21 @@ class DesktopAppServerService {
   async handoffThreadWorkspace(
     request: HandoffThreadWorkspaceRequest,
   ): Promise<HandoffThreadWorkspaceResponse> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      const { federationTarget: _federationTarget, ...remoteRequest } = request;
+      const response = await getDesktopFederationRuntime()
+        .remoteBackend(request.federationTarget)
+        .handoffThreadWorkspace(remoteRequest);
+      logDebug("handoffThreadWorkspace", {
+        backend: request.backend,
+        threadId: request.threadId,
+        direction: request.direction,
+        workMode: response.workMode,
+        targetPath: response.targetPath,
+        federationTarget: request.federationTarget.instanceId,
+      });
+      return response;
+    }
     const response = await getDesktopBackendRegistry().handoffThreadWorkspace(request);
 
     logDebug("handoffThreadWorkspace", {
@@ -1440,6 +1576,21 @@ class DesktopAppServerService {
     request: RenameThreadRequest,
   ): Promise<RenameThreadResponse> {
     const backend = request.backend ?? "codex";
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      const { federationTarget: _federationTarget, ...remoteRequest } = request;
+      const response = await getDesktopFederationRuntime()
+        .remoteBackend(request.federationTarget)
+        .renameThread({
+          ...remoteRequest,
+          backend,
+        });
+      logDebug("renameThread", {
+        backend,
+        threadId: request.threadId,
+        federationTarget: request.federationTarget.instanceId,
+      });
+      return response;
+    }
     const response = await getDesktopBackendRegistry().renameThread({
       ...request,
       backend,
@@ -1487,6 +1638,15 @@ class DesktopAppServerService {
   private async readNavigationSnapshot(
     request: GetNavigationSnapshotRequest,
   ): Promise<NavigationSnapshot> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      return await getDesktopFederationRuntime().remoteNavigationSnapshot(
+        request.federationTarget,
+        {
+          backend: request.backend === "all" ? undefined : request.backend,
+          filter: request.filter,
+        },
+      );
+    }
     const backend: AppServerBackendScope = request.backend ?? "all";
     const refreshMode = request.refreshMode ?? "full";
     const activeRecentRefresh = refreshMode === "active-recent";

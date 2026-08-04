@@ -11,6 +11,7 @@ import {
   type CancelThreadExecutionModeQueueResponse,
   type CheckThreadBranchDriftRequest,
   type CheckThreadBranchDriftResponse,
+  type CodexEnvironmentSetupProgressEvent,
   type CompactThreadRequest,
   type CompactThreadResponse,
   type ForkThreadRequest,
@@ -62,6 +63,8 @@ import {
   type UpdateThreadExpectedBranchRequest,
   type UpdateThreadExpectedBranchResponse,
 } from "@pwragent/shared";
+import { isRemoteFederationTarget } from "@pwragent/shared";
+import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { buildLiveDiffActivityEntry } from "../app-server/live-diff-activity";
 import { timeStartupProfileOperation } from "../diagnostics/startup-profile-events";
@@ -143,6 +146,13 @@ function summarizeTurnInput(input: StartTurnRequest["input"]): Record<string, un
     imageCount,
     fileCount,
   };
+}
+
+function stripFederationTarget<T extends { federationTarget?: unknown }>(
+  request: T,
+): Omit<T, "federationTarget"> {
+  const { federationTarget: _federationTarget, ...rest } = request;
+  return rest;
 }
 
 function summarizeAgentEvent(event: AgentEvent): Record<string, unknown> | undefined {
@@ -293,7 +303,7 @@ function withRendererActivityEntry(event: AgentEvent): AgentEvent {
   return rendererActivityEntry ? { ...event, rendererActivityEntry } : event;
 }
 
-function broadcastAgentEvent(event: AgentEvent): void {
+export function broadcastAgentEvent(event: AgentEvent): void {
   const eventSummary = summarizeAgentEvent(event);
   if (eventSummary) {
     logAgentEventSummary(eventSummary);
@@ -309,10 +319,26 @@ function broadcastAgentEvent(event: AgentEvent): void {
   }
 }
 
+function broadcastCodexEnvironmentSetupProgress(
+  event: CodexEnvironmentSetupProgressEvent,
+): void {
+  const rendererEvent = sanitizeRendererPayload(event);
+  for (const webContents of subscribersForChannel(
+    CODEX_ENVIRONMENT_SETUP_PROGRESS_CHANNEL,
+  )) {
+    if (typeof webContents.send !== "function") continue;
+    webContents.send(CODEX_ENVIRONMENT_SETUP_PROGRESS_CHANNEL, rendererEvent);
+  }
+}
+
 export function registerAgentIpcHandlers(): void {
   const registry = getDesktopBackendRegistry();
 
   unsubscribeRegistryEvents?.();
+  getDesktopFederationRuntime().setAgentEventPublisher(broadcastAgentEvent);
+  getDesktopFederationRuntime().setEnvironmentSetupProgressPublisher(
+    broadcastCodexEnvironmentSetupProgress,
+  );
   unsubscribeRegistryEvents = registry.onEvent((event) => {
     broadcastAgentEvent(event);
   });
@@ -329,7 +355,17 @@ export function registerAgentIpcHandlers(): void {
         detail: {
           hasRequest: request !== undefined,
         },
-        operation: async () => await registry.listBackends(request),
+        operation: async () => {
+          if (
+            request?.federationTarget
+            && isRemoteFederationTarget(request.federationTarget)
+          ) {
+            return await getDesktopFederationRuntime()
+              .remoteBackend(request.federationTarget)
+              .listBackends(stripFederationTarget(request));
+          }
+          return await registry.listBackends(request);
+        },
       });
     },
   );
@@ -363,6 +399,14 @@ export function registerAgentIpcHandlers(): void {
       _event,
       request: StartThreadRequest
     ): Promise<StartThreadResponse> => {
+      if (
+        request.federationTarget &&
+        isRemoteFederationTarget(request.federationTarget)
+      ) {
+        return await getDesktopFederationRuntime()
+          .remoteBackend(request.federationTarget)
+          .startThread(stripFederationTarget(request));
+      }
       return await registry.startThread(request);
     },
   );
@@ -374,6 +418,14 @@ export function registerAgentIpcHandlers(): void {
       event: IpcMainInvokeEvent,
       request: ForkThreadRequest,
     ): Promise<ForkThreadResponse> => {
+      if (
+        request.federationTarget &&
+        isRemoteFederationTarget(request.federationTarget)
+      ) {
+        return await getDesktopFederationRuntime()
+          .remoteBackend(request.federationTarget)
+          .forkThread(stripFederationTarget(request));
+      }
       return await registry.forkThread({
         ...request,
         onCodexEnvironmentSetupProgress: (progress) => {
@@ -401,6 +453,14 @@ export function registerAgentIpcHandlers(): void {
       });
 
       try {
+        if (
+          request.federationTarget &&
+          isRemoteFederationTarget(request.federationTarget)
+        ) {
+          return await getDesktopFederationRuntime()
+            .remoteBackend(request.federationTarget)
+            .startTurn(stripFederationTarget(request));
+        }
         const submitted = await registry.submitTurn({
           ...request,
           origin: "manual",
@@ -469,6 +529,14 @@ export function registerAgentIpcHandlers(): void {
       });
 
       try {
+        if (
+          request.federationTarget &&
+          isRemoteFederationTarget(request.federationTarget)
+        ) {
+          return await getDesktopFederationRuntime()
+            .remoteBackend(request.federationTarget)
+            .startReview(stripFederationTarget(request));
+        }
         const response = await registry.startReview(request);
         logDebug("startReviewResult", {
           backend: response.backend,
@@ -501,6 +569,21 @@ export function registerAgentIpcHandlers(): void {
       });
 
       try {
+        if (
+          request.federationTarget &&
+          isRemoteFederationTarget(request.federationTarget)
+        ) {
+          const response = await getDesktopFederationRuntime()
+            .remoteBackend(request.federationTarget)
+            .compactThread(stripFederationTarget(request));
+          logDebug("compactThreadResult", {
+            backend: response.backend,
+            threadId: response.threadId,
+            turnId: response.turnId,
+            itemId: response.itemId,
+          });
+          return response;
+        }
         const response = await registry.compactThread(request);
         logDebug("compactThreadResult", {
           backend: response.backend,
@@ -534,6 +617,14 @@ export function registerAgentIpcHandlers(): void {
       });
 
       try {
+        if (
+          request.federationTarget &&
+          isRemoteFederationTarget(request.federationTarget)
+        ) {
+          return await getDesktopFederationRuntime()
+            .remoteBackend(request.federationTarget)
+            .interruptTurn(stripFederationTarget(request));
+        }
         return await registry.interruptTurn(request);
       } catch (error) {
         appServerLog.error("interruptTurn failed", {
@@ -590,6 +681,14 @@ export function registerAgentIpcHandlers(): void {
       });
 
       try {
+        if (
+          request.federationTarget &&
+          isRemoteFederationTarget(request.federationTarget)
+        ) {
+          return await getDesktopFederationRuntime()
+            .remoteBackend(request.federationTarget)
+            .steerTurn(stripFederationTarget(request));
+        }
         return await registry.steerTurn(request);
       } catch (error) {
         appServerLog.error("steerTurn failed", {
@@ -611,6 +710,14 @@ export function registerAgentIpcHandlers(): void {
       _event,
       request: SetThreadExecutionModeRequest
     ): Promise<SetThreadExecutionModeResponse> => {
+      if (
+        request.federationTarget &&
+        isRemoteFederationTarget(request.federationTarget)
+      ) {
+        return await getDesktopFederationRuntime()
+          .remoteBackend(request.federationTarget)
+          .setThreadExecutionMode(stripFederationTarget(request));
+      }
       return await registry.setThreadExecutionMode(request);
     },
   );
@@ -622,6 +729,14 @@ export function registerAgentIpcHandlers(): void {
       _event,
       request: QueueThreadExecutionModeRequest,
     ): Promise<QueueThreadExecutionModeResponse> => {
+      if (
+        request.federationTarget &&
+        isRemoteFederationTarget(request.federationTarget)
+      ) {
+        return await getDesktopFederationRuntime()
+          .remoteBackend(request.federationTarget)
+          .queueThreadExecutionMode(stripFederationTarget(request));
+      }
       return await registry.queueThreadExecutionMode(request);
     },
   );
@@ -633,6 +748,14 @@ export function registerAgentIpcHandlers(): void {
       _event,
       request: CancelThreadExecutionModeQueueRequest,
     ): Promise<CancelThreadExecutionModeQueueResponse> => {
+      if (
+        request.federationTarget &&
+        isRemoteFederationTarget(request.federationTarget)
+      ) {
+        return await getDesktopFederationRuntime()
+          .remoteBackend(request.federationTarget)
+          .cancelThreadExecutionModeQueue(stripFederationTarget(request));
+      }
       return await registry.cancelThreadExecutionModeQueue(request);
     },
   );
@@ -644,6 +767,14 @@ export function registerAgentIpcHandlers(): void {
       _event,
       request: SetAcpSessionRuntimeOptionRequest,
     ): Promise<SetAcpSessionRuntimeOptionResponse> => {
+      if (
+        request.federationTarget &&
+        isRemoteFederationTarget(request.federationTarget)
+      ) {
+        return await getDesktopFederationRuntime()
+          .remoteBackend(request.federationTarget)
+          .setAcpSessionRuntimeOption(stripFederationTarget(request));
+      }
       return await registry.setAcpSessionRuntimeOption(request);
     },
   );
@@ -655,6 +786,14 @@ export function registerAgentIpcHandlers(): void {
       _event,
       request: SetThreadModelSettingsRequest
     ): Promise<SetThreadModelSettingsResponse> => {
+      if (
+        request.federationTarget &&
+        isRemoteFederationTarget(request.federationTarget)
+      ) {
+        return await getDesktopFederationRuntime()
+          .remoteBackend(request.federationTarget)
+          .setThreadModelSettings(stripFederationTarget(request));
+      }
       return await registry.setThreadModelSettings(request);
     },
   );
@@ -729,6 +868,14 @@ export function registerAgentIpcHandlers(): void {
       event,
       request: MaterializeDirectoryLaunchpadRequest
     ): Promise<MaterializeDirectoryLaunchpadResponse> => {
+      if (
+        request.federationTarget &&
+        isRemoteFederationTarget(request.federationTarget)
+      ) {
+        return await getDesktopFederationRuntime()
+          .remoteBackend(request.federationTarget)
+          .materializeDirectoryLaunchpad(stripFederationTarget(request));
+      }
       return await registry.materializeDirectoryLaunchpad(request, {
         onCodexEnvironmentSetupProgress: (progress) => {
           event.sender?.send?.(CODEX_ENVIRONMENT_SETUP_PROGRESS_CHANNEL, progress);
@@ -744,6 +891,14 @@ export function registerAgentIpcHandlers(): void {
       _event,
       request: RunCodexEnvironmentActionRequest,
     ): Promise<RunCodexEnvironmentActionResponse> => {
+      if (
+        request.federationTarget &&
+        isRemoteFederationTarget(request.federationTarget)
+      ) {
+        return await getDesktopFederationRuntime()
+          .remoteBackend(request.federationTarget)
+          .runCodexEnvironmentAction(stripFederationTarget(request));
+      }
       return await registry.runCodexEnvironmentAction(request);
     },
   );
@@ -755,6 +910,14 @@ export function registerAgentIpcHandlers(): void {
       _event,
       request: StopCodexEnvironmentActionRequest,
     ): Promise<StopCodexEnvironmentActionResponse> => {
+      if (
+        request.federationTarget &&
+        isRemoteFederationTarget(request.federationTarget)
+      ) {
+        return await getDesktopFederationRuntime()
+          .remoteBackend(request.federationTarget)
+          .stopCodexEnvironmentAction(stripFederationTarget(request));
+      }
       return await registry.stopCodexEnvironmentAction(request);
     },
   );
@@ -766,6 +929,14 @@ export function registerAgentIpcHandlers(): void {
       _event,
       request: SetCodexThreadEnvironmentRequest,
     ): Promise<SetCodexThreadEnvironmentResponse> => {
+      if (
+        request.federationTarget &&
+        isRemoteFederationTarget(request.federationTarget)
+      ) {
+        return await getDesktopFederationRuntime()
+          .remoteBackend(request.federationTarget)
+          .setCodexThreadEnvironment(stripFederationTarget(request));
+      }
       return await registry.setCodexThreadEnvironment(request);
     },
   );
@@ -777,6 +948,14 @@ export function registerAgentIpcHandlers(): void {
       _event,
       request: SubmitServerRequestRequest
     ): Promise<SubmitServerRequestResponse> => {
+      if (
+        request.federationTarget &&
+        isRemoteFederationTarget(request.federationTarget)
+      ) {
+        return await getDesktopFederationRuntime()
+          .remoteBackend(request.federationTarget)
+          .submitServerRequest(stripFederationTarget(request));
+      }
       return await registry.submitServerRequest(request);
     },
   );
@@ -788,6 +967,14 @@ export function registerAgentIpcHandlers(): void {
       _event,
       request: TrustCodexProjectRequest,
     ): Promise<TrustCodexProjectResponse> => {
+      if (
+        request.federationTarget &&
+        isRemoteFederationTarget(request.federationTarget)
+      ) {
+        return await getDesktopFederationRuntime()
+          .remoteBackend(request.federationTarget)
+          .trustCodexProject(stripFederationTarget(request));
+      }
       return await registry.trustCodexProject(request);
     },
   );

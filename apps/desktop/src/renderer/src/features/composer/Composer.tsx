@@ -71,6 +71,8 @@ import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
 import { formatBackendLabel } from "../../lib/backend-label";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
+import { readRendererFederationTarget } from "../../lib/federation-window";
+import { agentEventMatchesThread } from "../../lib/federated-thread-events";
 import {
   acpRuntimeModeRequiresFullAccess,
   formatExecutionModeLabel,
@@ -2716,6 +2718,7 @@ function CopyableComposerError(props: {
 
 export function Composer(props: ComposerProps) {
   const threadLinks = useThreadLinks();
+  const rendererFederationTarget = readRendererFederationTarget();
   const inputRef = useRef<ComposerInputHandle>(null);
   const inputWrapRef = useRef<HTMLDivElement>(null);
   const autocompleteListRef = useRef<HTMLDivElement>(null);
@@ -4882,7 +4885,7 @@ export function Composer(props: ComposerProps) {
           notificationThreadId,
         );
         const queueEventIsCurrentThread =
-          event.backend === thread.source && notificationThreadId === thread.id;
+          agentEventMatchesThread(event, thread, notificationThreadId);
         if (
           queueEventIsCurrentThread &&
           (turnQueueRecord.status === "started" ||
@@ -4937,7 +4940,7 @@ export function Composer(props: ComposerProps) {
         }
       }
 
-      if (event.backend !== thread.source || notificationThreadId !== thread.id) {
+      if (!agentEventMatchesThread(event, thread, notificationThreadId)) {
         return;
       }
 
@@ -5247,6 +5250,8 @@ export function Composer(props: ComposerProps) {
     try {
       const response = await props.desktopApi.startReview({
         backend: props.thread.source,
+        federationTarget: props.thread.federation?.ref.target ??
+          readRendererFederationTarget(),
         threadId: props.thread.id,
         target: reviewCommand.target,
         delivery: "inline",
@@ -5349,6 +5354,8 @@ export function Composer(props: ComposerProps) {
     try {
       const response = await props.desktopApi.compactThread({
         backend: props.thread.source,
+        federationTarget: props.thread.federation?.ref.target ??
+          readRendererFederationTarget(),
         threadId: props.thread.id,
       });
       updateActiveTurnId(response.turnId);
@@ -5709,6 +5716,8 @@ export function Composer(props: ComposerProps) {
     try {
       const response = await props.desktopApi.startTurn({
         backend: props.thread.source,
+        federationTarget: props.thread.federation?.ref.target ??
+          readRendererFederationTarget(),
         threadId: props.thread.id,
         input: payload.input,
         executionMode: props.thread.executionMode,
@@ -6139,6 +6148,8 @@ export function Composer(props: ComposerProps) {
     try {
       await props.desktopApi.steerTurn({
         backend: props.thread.source,
+        federationTarget: props.thread.federation?.ref.target ??
+          readRendererFederationTarget(),
         threadId: props.thread.id,
         expectedTurnId: turnId,
         input: payload.input,
@@ -6612,6 +6623,8 @@ export function Composer(props: ComposerProps) {
     try {
       await props.desktopApi.interruptTurn({
         backend: props.thread.source,
+        federationTarget: props.thread.federation?.ref.target ??
+          readRendererFederationTarget(),
         threadId: props.thread.id,
         turnId,
       });
@@ -7695,6 +7708,8 @@ export function Composer(props: ComposerProps) {
     try {
       await props.desktopApi.runCodexEnvironmentAction({
         backend: thread.source,
+        federationTarget: thread.federation?.ref.target ??
+          readRendererFederationTarget(),
         threadId: thread.id,
         actionId: action.id,
         ...(cwd ? { cwd } : {}),
@@ -7730,6 +7745,8 @@ export function Composer(props: ComposerProps) {
     try {
       await props.desktopApi.setCodexThreadEnvironment({
         backend: props.thread.source,
+        federationTarget: props.thread.federation?.ref.target ??
+          readRendererFederationTarget(),
         threadId: props.thread.id,
         environmentId,
         actionId,
@@ -8193,6 +8210,12 @@ export function Composer(props: ComposerProps) {
     try {
       await props.desktopApi.openApplication({
         applicationId: application.id,
+        ...(props.thread?.federation?.ref.target || rendererFederationTarget
+          ? {
+              federationTarget:
+                props.thread?.federation?.ref.target ?? rendererFederationTarget,
+            }
+          : {}),
         kind: application.kind,
         targetPath: workspaceOpenPath,
       });
@@ -9891,10 +9914,14 @@ export function Composer(props: ComposerProps) {
                     }
                   : undefined
               }
-              onPickFromDisk={() => {
-                props.onClearPickDirectoryError?.();
-                props.onPickAndRegisterDirectory?.();
-              }}
+              onPickFromDisk={
+                rendererFederationTarget
+                  ? undefined
+                  : () => {
+                      props.onClearPickDirectoryError?.();
+                      props.onPickAndRegisterDirectory?.();
+                    }
+              }
             />
           ) : null}
 

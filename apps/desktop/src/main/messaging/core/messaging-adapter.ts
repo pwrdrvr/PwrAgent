@@ -16,6 +16,7 @@ import type {
   InterruptTurnRequest,
   InterruptTurnResponse,
   GetNavigationSnapshotRequest,
+  FederationTarget,
   ListBackendsRequest,
   ListBackendsResponse,
   MaterializeDirectoryLaunchpadOptions,
@@ -135,18 +136,22 @@ export type MessagingBackendBridge = {
   ): Promise<NavigationSnapshot>;
   readThreadStatus?(request: {
     backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
     threadId: string;
   }): Promise<AppServerThreadStatus | undefined>;
   readActiveTurn?(request: {
     backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
     threadId: string;
   }): Promise<MessagingActiveBackendTurn | undefined>;
   readThreadLastAssistantMessage?(request: {
     backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
     threadId: string;
   }): Promise<string | undefined>;
   readThreadLastAssistantReply?(request: {
     backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
     threadId: string;
   }): Promise<MessagingLastAssistantReply | undefined>;
   resolveAssistantMessageImages?(request: {

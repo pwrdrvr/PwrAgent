@@ -2,7 +2,10 @@ import type {
   AppServerThreadSummary,
   MessagingThreadBindingSummary,
 } from "@pwragent/shared";
-import { buildThreadIdentityKey } from "@pwragent/shared";
+import {
+  buildThreadIdentityKey,
+  isRemoteFederationTarget,
+} from "@pwragent/shared";
 import { getDesktopMessagingStore } from "./desktop-messaging-store";
 import { getMainLogger } from "../log";
 
@@ -41,6 +44,11 @@ export async function buildMessagingBindingsByThreadKey(
         backend: thread.source,
         threadId: thread.id,
       });
+      bindings = bindings.filter(
+        (binding) =>
+          !binding.federatedThread ||
+          !isRemoteFederationTarget(binding.federatedThread.target),
+      );
     } catch (error) {
       log.warn("failed to resolve bindings for thread", {
         backend: thread.source,

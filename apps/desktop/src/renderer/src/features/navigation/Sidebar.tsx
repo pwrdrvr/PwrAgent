@@ -25,6 +25,10 @@ import {
   moveDirectoryKey,
   moveThreadKey,
 } from "@pwragent/shared";
+import {
+  readRendererFederationLabel,
+  readRendererFederationTarget,
+} from "../../lib/federation-window";
 import type { RuntimeIdentity } from "../../../../shared/runtime-identity";
 import { copyText } from "../../lib/copy-text";
 import { BranchIcon, FolderIcon, SearchIcon } from "../../icons";
@@ -244,6 +248,11 @@ function uniqueContextMenuValues(
 }
 
 export function Sidebar(props: SidebarProps) {
+  const federationLabel = readRendererFederationLabel();
+  const federationTarget = readRendererFederationTarget();
+  const federationInstanceTag = federationTarget?.instanceId
+    .replace(/^pwr_/, "")
+    .slice(0, 4);
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const directoryContextMenuRef = useRef<HTMLDivElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
@@ -1315,7 +1324,20 @@ export function Sidebar(props: SidebarProps) {
         onPointerDown={props.onResizeStart}
       />
       <header className="sidebar__masthead">
-        <p className="sidebar__brand">Pwr<span className="sidebar__brand-accent">Agent</span></p>
+        <p className="sidebar__brand">
+          Pwr<span className="sidebar__brand-accent">Agent</span>
+          {federationLabel ? (
+            <span
+              className="sidebar__federation-label"
+              title={federationTarget
+                ? `${federationLabel} · ${federationTarget.instanceId}`
+                : federationLabel}
+            >
+              Remote · {federationLabel}
+              {federationInstanceTag ? ` · ${federationInstanceTag}` : ""}
+            </span>
+          ) : null}
+        </p>
 
         <div className="sidebar__masthead-actions">
           <MastheadActionButton
@@ -1360,7 +1382,7 @@ export function Sidebar(props: SidebarProps) {
         </div>
       </header>
 
-      {props.runtimeIdentity ? (
+      {!federationLabel && props.runtimeIdentity ? (
         <div className="runtime-identity" aria-label="Runtime identity">
           <RuntimeIdentityButton
             copied={copiedRuntimeValue === "cwd"}
@@ -1384,7 +1406,7 @@ export function Sidebar(props: SidebarProps) {
         </div>
       ) : null}
 
-      {props.activeProfile ? (
+      {!federationLabel && props.activeProfile ? (
         <div className="runtime-identity" aria-label="PwrAgent profile">
           <ProfileIdentityButton
             label={profileLabel ?? `profile:${props.activeProfile}`}

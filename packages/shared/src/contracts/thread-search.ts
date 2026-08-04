@@ -5,6 +5,10 @@ import type {
   LinkedDirectorySummary,
   ThreadIdentifier,
 } from "./normalized-app-server";
+import type {
+  FederatedThreadRef,
+  FederationPeerSummary,
+} from "./federation";
 
 export const DEFAULT_THREAD_SEARCH_LIMIT = 20;
 export const MAX_THREAD_SEARCH_LIMIT = 100;
@@ -142,6 +146,11 @@ export type ThreadSearchResult = {
   confidence: ThreadSearchConfidenceBand;
   matchReasons: ThreadSearchMatchReason[];
   snippets: ThreadSearchSnippet[];
+  federation?: {
+    ref: FederatedThreadRef;
+    instanceLabel: string;
+    peerStatus?: FederationPeerSummary["status"];
+  };
 };
 
 export type ThreadSearchResponse = {

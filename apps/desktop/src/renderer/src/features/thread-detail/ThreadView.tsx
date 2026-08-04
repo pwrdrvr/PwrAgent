@@ -50,6 +50,8 @@ import {
   readCodexEnvironmentActionRuns,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { agentEventMatchesThread } from "../../lib/federated-thread-events";
+import { readRendererFederationTarget } from "../../lib/federation-window";
 import type { IntegratedTerminalsController } from "../../lib/useIntegratedTerminals";
 import type { ThreadContextWindowState } from "../../lib/useThreadSessionState";
 import type { PendingForkEnvironmentSetup } from "../../lib/useThreadNavigation";
@@ -1654,6 +1656,8 @@ export function ThreadView(props: ThreadViewProps) {
     try {
       const response = await props.desktopApi.startTurn({
         backend: selectedThread.source,
+        federationTarget: selectedThread.federation?.ref.target ??
+          readRendererFederationTarget(),
         threadId: selectedThread.id,
         input,
         executionMode: selectedThread.executionMode,
@@ -2231,6 +2235,8 @@ export function ThreadView(props: ThreadViewProps) {
       void props.desktopApi
         .stopCodexEnvironmentAction({
           backend: selectedThread.source,
+          federationTarget: selectedThread.federation?.ref.target ??
+            readRendererFederationTarget(),
           threadId: selectedThread.id,
           runId: run.runId,
           mode,
@@ -2302,8 +2308,9 @@ export function ThreadView(props: ThreadViewProps) {
           event.notification.method === "mcpServer/oauthLogin/completed");
 
       if (
-        event.backend !== selectedThread.source ||
-        (notificationThreadId !== selectedThread.id && !isGlobalMcpStatus)
+        isGlobalMcpStatus
+          ? event.backend !== selectedThread.source
+          : !agentEventMatchesThread(event, selectedThread, notificationThreadId)
       ) {
         return;
       }
@@ -2570,6 +2577,8 @@ export function ThreadView(props: ThreadViewProps) {
     try {
       await props.desktopApi.submitServerRequest({
         backend: selectedThread.source,
+        federationTarget: selectedThread.federation?.ref.target ??
+          readRendererFederationTarget(),
         threadId: selectedThread.id,
         turnId:
           typeof props.pendingRequest.params.turnId === "string"
@@ -2610,6 +2619,8 @@ export function ThreadView(props: ThreadViewProps) {
     try {
       await props.desktopApi.submitServerRequest({
         backend: selectedThread.source,
+        federationTarget: selectedThread.federation?.ref.target ??
+          readRendererFederationTarget(),
         threadId: selectedThread.id,
         turnId: pendingUserInput.turnId,
         requestId: pendingUserInput.requestId,
@@ -2638,6 +2649,8 @@ export function ThreadView(props: ThreadViewProps) {
     try {
       await props.desktopApi.submitServerRequest({
         backend: selectedThread.source,
+        federationTarget: selectedThread.federation?.ref.target ??
+          readRendererFederationTarget(),
         threadId: selectedThread.id,
         turnId:
           typeof pendingMcpInteraction.turnId === "string"

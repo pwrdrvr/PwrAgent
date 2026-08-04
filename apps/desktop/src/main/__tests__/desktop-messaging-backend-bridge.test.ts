@@ -1,10 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import type {
+  AgentEvent,
   AppServerReadThreadResponse,
   AppServerThreadReplay,
+  NavigationSnapshot,
 } from "@pwragent/shared";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
-import { DesktopMessagingBackendBridge } from "../messaging/desktop-backend-bridge";
+import type { FederationBackendOperations } from "../federation/federation-backend-bridge";
+import {
+  DesktopMessagingBackendBridge,
+  type DesktopMessagingFederationBridge,
+} from "../messaging/desktop-backend-bridge";
 
 describe("DesktopMessagingBackendBridge", () => {
   it("preserves enriched messaging provenance when starting a turn", async () => {
@@ -377,6 +383,151 @@ describe("DesktopMessagingBackendBridge", () => {
         url: "https://example.com/current.png",
       }),
     ]);
+  });
+
+  it("routes targeted messaging turns and navigation to the remote backend", async () => {
+    const startTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      turnId: "turn-remote",
+      queueStatus: "started" as const,
+    }));
+    const remoteNavigation: NavigationSnapshot = {
+      backend: "all",
+      fetchedAt: 2_000,
+      unchanged: false,
+      threads: [],
+      inboxThreadKeys: [],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+    };
+    const remoteNavigationSnapshot = vi.fn(async () => remoteNavigation);
+    const listBackends = vi.fn(async () => ({
+      fetchedAt: 2_000,
+      backends: [
+        {
+          kind: "codex" as const,
+          label: "Remote Codex",
+          available: true,
+          methods: [],
+          capabilities: {},
+          executionModes: [],
+        },
+      ],
+    }));
+    const federation = {
+      connectedPeerTargets: () => [],
+      onRemoteBackendEvent: () => () => undefined,
+      remoteBackend: () => ({
+        listBackends,
+        startTurn,
+      } as unknown as FederationBackendOperations),
+      remoteNavigationSnapshot,
+    } satisfies DesktopMessagingFederationBridge;
+    const registry = {
+      submitTurn: vi.fn(() => {
+        throw new Error("local turn should not run");
+      }),
+    } as unknown as DesktopBackendRegistry;
+    const bridge = new DesktopMessagingBackendBridge(registry, federation);
+    const target = { scope: "remote" as const, instanceId: "client_one" };
+
+    await expect(
+      bridge.startTurn({
+        backend: "codex",
+        federationTarget: target,
+        threadId: "thread-1",
+        input: [{ type: "text", text: "ship it" }],
+      }),
+    ).resolves.toMatchObject({ turnId: "turn-remote" });
+    await expect(
+      bridge.getNavigationSnapshot({
+        backend: "all",
+        federationTarget: target,
+      }),
+    ).resolves.toBe(remoteNavigation);
+    await expect(
+      bridge.listBackends({
+        includeUnavailable: true,
+        federationTarget: target,
+      }),
+    ).resolves.toMatchObject({
+      backends: [{ label: "Remote Codex" }],
+    });
+
+    expect(startTurn).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      input: [{ type: "text", text: "ship it" }],
+    });
+    expect(remoteNavigationSnapshot).toHaveBeenCalledWith(target, {
+      backend: "all",
+      federationTarget: target,
+    });
+    expect(listBackends).toHaveBeenCalledWith({
+      includeUnavailable: true,
+    });
+  });
+
+  it("subscribes messaging controllers to local and remote backend events", async () => {
+    let localListener: ((event: AgentEvent) => void | Promise<void>) | undefined;
+    let remoteListener: ((event: AgentEvent) => void | Promise<void>) | undefined;
+    const unsubscribeLocal = vi.fn();
+    const unsubscribeRemote = vi.fn();
+    const registry = {
+      onEvent: vi.fn(
+        (listener: (event: AgentEvent) => void | Promise<void>) => {
+          localListener = listener;
+          return unsubscribeLocal;
+        },
+      ),
+    } as unknown as DesktopBackendRegistry;
+    const federation = {
+      connectedPeerTargets: () => [],
+      onRemoteBackendEvent: (
+        listener: (event: AgentEvent) => void | Promise<void>,
+      ) => {
+        remoteListener = listener;
+        return unsubscribeRemote;
+      },
+      remoteBackend: vi.fn(),
+      remoteNavigationSnapshot: vi.fn(),
+    } as unknown as DesktopMessagingFederationBridge;
+    const bridge = new DesktopMessagingBackendBridge(registry, federation);
+    const listener = vi.fn();
+
+    const unsubscribe = bridge.onEvent(listener);
+    await remoteListener?.({
+      backend: "codex",
+      federationTarget: { scope: "remote", instanceId: "client_one" },
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+    await localListener?.({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-2",
+          turnId: "turn-2",
+          turn: { id: "turn-2" },
+        },
+      },
+    });
+    unsubscribe();
+
+    expect(listener).toHaveBeenCalledTimes(2);
+    expect(unsubscribeLocal).toHaveBeenCalledOnce();
+    expect(unsubscribeRemote).toHaveBeenCalledOnce();
   });
 });
 

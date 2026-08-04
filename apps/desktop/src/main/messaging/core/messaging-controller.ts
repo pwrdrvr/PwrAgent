@@ -3,8 +3,10 @@ import path from "node:path";
 import {
   applyNavigationLaunchpadProviderSettingsPatch,
   buildReviewBranchOptions,
+  buildFederatedThreadRef,
   buildThreadIdentityKey,
   findPreferredReviewWorkspaceCwd,
+  federatedThreadIdentityKey,
   isAcpBackendId,
   isAppServerBackendKind,
   isMessagingBindingTargetKind,
@@ -33,6 +35,8 @@ import type {
   AppServerToolRequestUserInputNotification,
   DesktopAuthorizedContact,
   DesktopMessagingFullAccessWarningGlobalPolicy,
+  FederatedThreadRef,
+  FederationTarget,
   HandoffThreadWorkspaceRequest,
   HandoffThreadWorkspaceResponse,
   LinkedDirectorySummary,
@@ -422,8 +426,60 @@ function findThreadForBinding(
   binding: MessagingBindingRecord,
 ): NavigationThreadSummary | undefined {
   return navigation?.threads.find(
-    (thread) => thread.source === binding.backend && thread.id === binding.threadId,
+    (thread) =>
+      thread.source === binding.backend &&
+      thread.id === binding.threadId &&
+      federationRefsMatch(thread.federation?.ref, binding.federatedThread),
   );
+}
+
+function federationRefsMatch(
+  left: FederatedThreadRef | undefined,
+  right: FederatedThreadRef | undefined,
+): boolean {
+  const leftTarget = left?.target ?? { scope: "local" as const };
+  const rightTarget = right?.target ?? { scope: "local" as const };
+  return leftTarget.scope === rightTarget.scope &&
+    (leftTarget.scope === "local" ||
+      (rightTarget.scope === "remote" &&
+        leftTarget.instanceId === rightTarget.instanceId));
+}
+
+function federationTargetForBinding(
+  binding: MessagingBindingRecord,
+): FederationTarget | undefined {
+  return binding.federatedThread?.target.scope === "remote"
+    ? binding.federatedThread.target
+    : undefined;
+}
+
+function bindingMatchesFederationTarget(
+  binding: MessagingBindingRecord,
+  target: FederationTarget | undefined,
+): boolean {
+  const bindingTarget = federationTargetForBinding(binding);
+  if (!bindingTarget) {
+    return !target || target.scope === "local";
+  }
+  return target?.scope === "remote" &&
+    bindingTarget.scope === "remote" &&
+    bindingTarget.instanceId === target.instanceId;
+}
+
+function federationTargetForThread(
+  thread: NavigationThreadSummary,
+): FederationTarget | undefined {
+  return thread.federation?.ref.target.scope === "remote"
+    ? thread.federation.ref.target
+    : undefined;
+}
+
+function threadKeyForNavigationThread(
+  thread: NavigationThreadSummary,
+): string {
+  return thread.federation
+    ? federatedThreadIdentityKey(thread.federation.ref)
+    : buildThreadIdentityKey(thread.source, thread.id);
 }
 
 function formatAttachmentRejections(
@@ -519,6 +575,7 @@ type FullAccessEscalationContext =
     }
   | {
       backend: AppServerBackendKind;
+      federatedThread?: FederatedThreadRef;
       kind: "resume-thread";
       session: MessagingBrowseSessionRecord;
       threadId: ThreadIdentifier;
@@ -537,6 +594,7 @@ type FullAccessRiskWarningContext =
     }
   | {
       backend: AppServerBackendKind;
+      federationInstanceId?: string;
       kind: "resume-thread";
       sessionId: string;
       threadId: ThreadIdentifier;
@@ -1211,6 +1269,7 @@ export class MessagingController {
         event.backend,
         threadId,
         event.notification.method,
+        event.federationTarget,
       );
       return;
     }
@@ -1221,6 +1280,7 @@ export class MessagingController {
         event.backend,
         threadId,
         event.notification.method,
+        event.federationTarget,
       );
       return;
     }
@@ -1239,6 +1299,7 @@ export class MessagingController {
         event.backend,
         threadId,
         event.notification.method,
+        event.federationTarget,
       );
       return;
     }
@@ -1248,6 +1309,8 @@ export class MessagingController {
         backend: event.backend,
         threadId,
       }),
+    ).filter((binding) =>
+      bindingMatchesFederationTarget(binding, event.federationTarget)
     );
     const bindings = this.bindingsForAgentTurn(
       event.backend,
@@ -1643,12 +1706,15 @@ export class MessagingController {
   async handleBackendPendingRequest(
     backend: AppServerBackendKind,
     request: AppServerPendingRequestNotification,
+    federationTarget?: FederationTarget,
   ): Promise<void> {
     const persistentBindings = this.filterBindingsForChannel(
       await this.options.store.findActiveBindingsForThread({
         backend,
         threadId: request.params.threadId,
       }),
+    ).filter((binding) =>
+      bindingMatchesFederationTarget(binding, federationTarget)
     );
     const bindings = this.bindingsForAgentTurn(
       backend,
@@ -3132,6 +3198,7 @@ export class MessagingController {
       });
       const started = await this.options.backend.startTurn({
         backend: params.binding.backend,
+        federationTarget: federationTargetForBinding(params.binding),
         threadId: params.binding.threadId,
         input: params.input,
         messageOrigin: messageOriginForInboundEvent(params.event),
@@ -3430,6 +3497,7 @@ export class MessagingController {
     try {
       await this.options.backend.steerTurn({
         backend: entry.binding.backend,
+        federationTarget: federationTargetForBinding(entry.binding),
         threadId: entry.binding.threadId,
         expectedTurnId: activeTurn.turnId,
         input: entry.input,
@@ -4378,9 +4446,15 @@ export class MessagingController {
     if (!requestContext || !this.options.backend.submitServerRequest) {
       return;
     }
+    const binding = intent.bindingId
+      ? await this.options.store.getBinding(intent.bindingId)
+      : undefined;
 
     await this.options.backend.submitServerRequest({
       backend: requestContext.backend,
+      federationTarget: binding
+        ? federationTargetForBinding(binding)
+        : undefined,
       threadId: requestContext.threadId,
       turnId: requestContext.turnId,
       requestId: requestContext.requestId,
@@ -4407,9 +4481,15 @@ export class MessagingController {
     if (!requestContext || !action || !this.options.backend.submitServerRequest) {
       return decision;
     }
+    const binding = intent.bindingId
+      ? await this.options.store.getBinding(intent.bindingId)
+      : undefined;
 
     await this.options.backend.submitServerRequest({
       backend: requestContext.backend,
+      federationTarget: binding
+        ? federationTargetForBinding(binding)
+        : undefined,
       threadId: requestContext.threadId,
       turnId: requestContext.turnId,
       requestId: requestContext.requestId,
@@ -4429,12 +4509,15 @@ export class MessagingController {
     backend: AppServerBackendKind,
     threadId: ThreadIdentifier,
     reason: string,
+    federationTarget?: FederationTarget,
   ): Promise<void> {
     const bindings = this.filterBindingsForChannel(
       await this.options.store.findActiveBindingsForThread({
         backend,
         threadId,
       }),
+    ).filter((binding) =>
+      bindingMatchesFederationTarget(binding, federationTarget)
     );
     const renderableBindings = bindings.filter(
       (binding) => binding.statusSurface || binding.pinnedStatusSurface,
@@ -4688,6 +4771,15 @@ export class MessagingController {
     for (const pendingIntent of pendingIntents.filter((intent) =>
       this.isChannelInScope(intent.channel),
     )) {
+      const binding = pendingIntent.bindingId
+        ? await this.options.store.getBinding(pendingIntent.bindingId)
+        : undefined;
+      if (
+        binding &&
+        !bindingMatchesFederationTarget(binding, event.federationTarget)
+      ) {
+        continue;
+      }
       await this.retireApprovalIntent(pendingIntent, undefined, "Resolved");
       await this.options.store.deletePendingIntent(pendingIntent.id);
       await this.resumeBindingForPendingIntent(
@@ -5245,11 +5337,13 @@ export class MessagingController {
       if (readLastAssistantReply) {
         reply = await readLastAssistantReply.call(this.options.backend, {
           backend: binding.backend,
+          federationTarget: federationTargetForBinding(binding),
           threadId: binding.threadId,
         });
       } else if (readLastAssistantMessage) {
         const text = await readLastAssistantMessage.call(this.options.backend, {
           backend: binding.backend,
+          federationTarget: federationTargetForBinding(binding),
           threadId: binding.threadId,
         });
         reply = text ? { text } : undefined;
@@ -6446,7 +6540,10 @@ export class MessagingController {
         return;
       }
       const targetThread = navigation.threads.find(
-        (thread) => thread.source === target.backend && thread.id === target.threadId,
+        (thread) =>
+          thread.source === target.backend &&
+          thread.id === target.threadId &&
+          federationRefsMatch(thread.federation?.ref, target.federatedThread),
       );
       if (session.mode === "agents" && !targetThread?.agent) {
         await this.deliverInvalidBrowseSelection(event);
@@ -6506,6 +6603,7 @@ export class MessagingController {
         const allowed = await this.ensureFullAccessEscalationAllowed(
           {
             backend: target.backend,
+            federatedThread: target.federatedThread,
             kind: "resume-thread",
             session,
             threadId: target.threadId,
@@ -6526,6 +6624,7 @@ export class MessagingController {
       if (shouldEscalateTarget) {
         await this.options.backend.setThreadExecutionMode?.({
           backend: target.backend,
+          federationTarget: target.federatedThread?.target,
           threadId: target.threadId,
           executionMode: "full-access",
         });
@@ -9534,9 +9633,13 @@ export class MessagingController {
     }
     if (actionId === "status:permissions") {
       if (isAcpBackendId(binding.backend)) {
-        const summary = await this.getBackendSummary(binding.backend);
+        const summary = await this.getBackendSummary(
+          binding.backend,
+          federationTargetForBinding(binding),
+        );
         const navigation = await this.options.backend.getNavigationSnapshot({
           backend: "all",
+          federationTarget: federationTargetForBinding(binding),
         });
         const thread = findThreadForBinding(navigation, binding);
         const runtimeMode = buildMessagingAcpRuntimeModeSummary({
@@ -9622,6 +9725,7 @@ export class MessagingController {
       const cwds = skillSearchCwdsForThreadState(threadState);
       const response = await this.options.backend.listSkills({
         backend: binding.backend,
+        federationTarget: federationTargetForBinding(binding),
         ...(cwds.length > 0 ? { cwds: [...new Set(cwds)] } : {}),
       });
       const targetSurface = options.targetSurface ??
@@ -10039,7 +10143,10 @@ export class MessagingController {
     );
 
     try {
-      const result = await this.options.backend.handoffThreadWorkspace(request);
+      const result = await this.options.backend.handoffThreadWorkspace({
+        ...request,
+        federationTarget: federationTargetForBinding(currentBinding),
+      });
       await this.clearActiveHandoffIntent(event);
       const refreshedNavigation = await this.options.backend.getNavigationSnapshot({
         backend: "all",
@@ -10240,7 +10347,15 @@ export class MessagingController {
     binding: MessagingBindingRecord,
     event: MessagingInboundEvent,
   ): Promise<void> {
-    const summary = await this.getBackendSummary(binding.backend);
+    const summary = await this.getBackendSummary(
+      binding.backend,
+      federationTargetForBinding(binding),
+    );
+    const navigation = await this.options.backend.getNavigationSnapshot({
+      backend: "all",
+      federationTarget: federationTargetForBinding(binding),
+    });
+    const thread = findThreadForBinding(navigation, binding);
     const models = summary?.launchpadOptions?.models ?? [];
     if (models.length === 0) {
       await this.deliver(
@@ -10257,10 +10372,6 @@ export class MessagingController {
       return;
     }
 
-    const navigation = await this.options.backend.getNavigationSnapshot({
-      backend: "all",
-    });
-    const thread = findThreadForBinding(navigation, binding);
     const currentModelId =
       thread?.model ??
       binding.preferences?.model ??
@@ -10285,9 +10396,13 @@ export class MessagingController {
     binding: MessagingBindingRecord,
     event: MessagingInboundEvent,
   ): Promise<void> {
-    const summary = await this.getBackendSummary(binding.backend);
+    const summary = await this.getBackendSummary(
+      binding.backend,
+      federationTargetForBinding(binding),
+    );
     const navigation = await this.options.backend.getNavigationSnapshot({
       backend: "all",
+      federationTarget: federationTargetForBinding(binding),
     });
     const thread = findThreadForBinding(navigation, binding);
     const models = summary?.launchpadOptions?.models ?? [];
@@ -10327,7 +10442,10 @@ export class MessagingController {
     binding: MessagingBindingRecord,
     event: MessagingInboundEvent,
   ): Promise<void> {
-    const summary = await this.getBackendSummary(binding.backend);
+    const summary = await this.getBackendSummary(
+      binding.backend,
+      federationTargetForBinding(binding),
+    );
     const navigation = await this.options.backend.getNavigationSnapshot({
       backend: "all",
     });
@@ -10438,9 +10556,13 @@ export class MessagingController {
       return;
     }
 
-    const summary = await this.getBackendSummary(binding.backend);
+    const summary = await this.getBackendSummary(
+      binding.backend,
+      federationTargetForBinding(binding),
+    );
     const navigation = await this.options.backend.getNavigationSnapshot({
       backend: "all",
+      federationTarget: federationTargetForBinding(binding),
     });
     const models = summary?.launchpadOptions?.models ?? [];
     const modelOption = models.find((candidate) => candidate.id === model);
@@ -10451,6 +10573,7 @@ export class MessagingController {
     let updatedBinding = await this.updateBindingPreferences(binding, { model });
     const settingsResponse = await this.options.backend.setThreadModelSettings?.({
       backend: binding.backend,
+      federationTarget: federationTargetForBinding(binding),
       threadId: binding.threadId,
       model,
       fastMode: updatedBinding.preferences?.fastMode,
@@ -10468,7 +10591,9 @@ export class MessagingController {
     const optimisticNavigation: NavigationSnapshot = {
       ...navigation,
       threads: navigation.threads.map((candidate) =>
-        candidate.source === binding.backend && candidate.id === binding.threadId
+        candidate.source === binding.backend &&
+        candidate.id === binding.threadId &&
+        federationRefsMatch(candidate.federation?.ref, binding.federatedThread)
           ? {
               ...candidate,
               model,
@@ -10490,9 +10615,13 @@ export class MessagingController {
       await this.deliverInvalidStatusSelection(event);
       return;
     }
-    const summary = await this.getBackendSummary(binding.backend);
+    const summary = await this.getBackendSummary(
+      binding.backend,
+      federationTargetForBinding(binding),
+    );
     const navigation = await this.options.backend.getNavigationSnapshot({
       backend: "all",
+      federationTarget: federationTargetForBinding(binding),
     });
     const thread = findThreadForBinding(navigation, binding);
     const models = summary?.launchpadOptions?.models ?? [];
@@ -10512,6 +10641,7 @@ export class MessagingController {
     });
     await this.options.backend.setThreadModelSettings?.({
       backend: binding.backend,
+      federationTarget: federationTargetForBinding(binding),
       threadId: binding.threadId,
       fastMode: updatedBinding.preferences?.fastMode,
       model: updatedBinding.preferences?.model,
@@ -10521,7 +10651,9 @@ export class MessagingController {
     const optimisticNavigation: NavigationSnapshot = {
       ...navigation,
       threads: navigation.threads.map((candidate) =>
-        candidate.source === binding.backend && candidate.id === binding.threadId
+        candidate.source === binding.backend &&
+        candidate.id === binding.threadId &&
+        federationRefsMatch(candidate.federation?.ref, binding.federatedThread)
           ? { ...candidate, reasoningEffort }
           : candidate,
       ),
@@ -10546,9 +10678,13 @@ export class MessagingController {
       return;
     }
 
-    const summary = await this.getBackendSummary(binding.backend);
+    const summary = await this.getBackendSummary(
+      binding.backend,
+      federationTargetForBinding(binding),
+    );
     const navigation = await this.options.backend.getNavigationSnapshot({
       backend: "all",
+      federationTarget: federationTargetForBinding(binding),
     });
     const thread = findThreadForBinding(navigation, binding);
     const currentRuntime = thread?.acpRuntime ?? binding.preferences?.acpRuntime;
@@ -10625,6 +10761,7 @@ export class MessagingController {
     });
     await this.options.backend.setAcpSessionRuntimeOption({
       backend: binding.backend,
+      federationTarget: federationTargetForBinding(binding),
       threadId: binding.threadId,
       source: selection.source,
       optionId: selection.optionId,
@@ -10633,7 +10770,9 @@ export class MessagingController {
     const optimisticNavigation: NavigationSnapshot = {
       ...navigation,
       threads: navigation.threads.map((candidate) =>
-        candidate.source === binding.backend && candidate.id === binding.threadId
+        candidate.source === binding.backend &&
+        candidate.id === binding.threadId &&
+        federationRefsMatch(candidate.federation?.ref, binding.federatedThread)
           ? { ...candidate, acpRuntime }
           : candidate,
       ),
@@ -10646,7 +10785,10 @@ export class MessagingController {
     binding: MessagingBindingRecord,
     event: MessagingInboundEvent,
   ): Promise<void> {
-    const summary = await this.getBackendSummary(binding.backend);
+    const summary = await this.getBackendSummary(
+      binding.backend,
+      federationTargetForBinding(binding),
+    );
     if (
       summary &&
       (summary.kind !== "codex" || summary.launchpadOptions?.supportsFastMode === false)
@@ -10660,6 +10802,7 @@ export class MessagingController {
     });
     await this.options.backend.setThreadModelSettings?.({
       backend: binding.backend,
+      federationTarget: federationTargetForBinding(binding),
       threadId: binding.threadId,
       fastMode,
       model: updatedBinding.preferences?.model,
@@ -10720,6 +10863,7 @@ export class MessagingController {
     });
     await this.options.backend.setThreadExecutionMode?.({
       backend: binding.backend,
+      federationTarget: federationTargetForBinding(binding),
       threadId: binding.threadId,
       executionMode,
     });
@@ -10770,6 +10914,7 @@ export class MessagingController {
     await this.clearActiveBindingSubmodeIntent(event, binding);
     await this.options.backend.setThreadExecutionMode?.({
       backend: binding.backend,
+      federationTarget: federationTargetForBinding(binding),
       threadId: binding.threadId,
       executionMode,
     });
@@ -10944,6 +11089,12 @@ export class MessagingController {
           }
           : {
               backend: context.backend,
+              ...(context.federatedThread?.target.scope === "remote"
+                ? {
+                    federationInstanceId:
+                      context.federatedThread.target.instanceId,
+                  }
+                : {}),
               kind: "resume-thread",
               sessionId: context.session.id,
               threadId: context.threadId,
@@ -11160,6 +11311,7 @@ export class MessagingController {
       const { session } = escalationContext;
       const target = {
         backend: escalationContext.backend,
+        federatedThread: escalationContext.federatedThread,
         threadId: escalationContext.threadId,
       };
       const binding = await this.bindChannelToThread(event, target);
@@ -11172,6 +11324,7 @@ export class MessagingController {
       const updatedBinding = await this.updateBindingPreferences(binding, preferences);
       await this.options.backend.setThreadExecutionMode?.({
         backend: escalationContext.backend,
+        federationTarget: escalationContext.federatedThread?.target,
         threadId: escalationContext.threadId,
         executionMode: "full-access",
       });
@@ -11212,6 +11365,7 @@ export class MessagingController {
     await this.clearActiveBindingSubmodeIntent(event, binding);
     await this.options.backend.setThreadExecutionMode?.({
       backend: binding.backend,
+      federationTarget: federationTargetForBinding(binding),
       threadId: escalationContext.threadId,
       executionMode: "full-access",
     });
@@ -11335,6 +11489,15 @@ export class MessagingController {
       }
       return {
         backend: context.backend,
+        ...(context.federationInstanceId
+          ? {
+              federatedThread: buildFederatedThreadRef({
+                backend: context.backend,
+                instanceId: context.federationInstanceId,
+                threadId: context.threadId,
+              }),
+            }
+          : {}),
         kind: "resume-thread",
         session,
         threadId: context.threadId,
@@ -11578,6 +11741,7 @@ export class MessagingController {
     try {
       await this.options.backend.cancelThreadExecutionModeQueue({
         backend: binding.backend,
+        federationTarget: federationTargetForBinding(binding),
         threadId: binding.threadId,
       });
     } catch (error) {
@@ -11616,6 +11780,7 @@ export class MessagingController {
     }
     await this.options.backend.interruptTurn?.({
       backend: binding.backend,
+      federationTarget: federationTargetForBinding(binding),
       threadId: binding.threadId,
       turnId: targetTurn.turnId,
     });
@@ -11657,6 +11822,7 @@ export class MessagingController {
 
     const compacted = await this.options.backend.compactThread({
       backend: binding.backend,
+      federationTarget: federationTargetForBinding(binding),
       threadId: binding.threadId,
     });
     const activeTurn: MessagingActiveTurnSummary = {
@@ -11857,9 +12023,13 @@ export class MessagingController {
     });
   }
 
-  private async getBackendSummary(backend: AppServerBackendKind) {
+  private async getBackendSummary(
+    backend: AppServerBackendKind,
+    federationTarget?: FederationTarget,
+  ) {
     const response = await this.options.backend.listBackends?.({
       includeUnavailable: true,
+      federationTarget,
     });
     return response?.backends.find((candidate) => candidate.kind === backend);
   }
@@ -11895,7 +12065,15 @@ export class MessagingController {
       return;
     }
     this.contextUsageSummariesByThreadKey.set(
-      buildThreadIdentityKey(event.backend, params.threadId),
+      event.federationTarget?.scope === "remote"
+        ? federatedThreadIdentityKey(
+            buildFederatedThreadRef({
+              backend: event.backend,
+              instanceId: event.federationTarget.instanceId,
+              threadId: params.threadId,
+            }),
+          )
+        : buildThreadIdentityKey(event.backend, params.threadId),
       summary,
     );
   }
@@ -11904,7 +12082,7 @@ export class MessagingController {
     binding: MessagingBindingRecord,
   ): string | undefined {
     return this.contextUsageSummariesByThreadKey.get(
-      buildThreadIdentityKey(binding.backend, binding.threadId),
+      this.threadKeyForBinding(binding),
     );
   }
 
@@ -12218,7 +12396,10 @@ export class MessagingController {
       binding,
       "status_refresh",
     );
-    const backendSummary = await this.getBackendSummary(binding.backend);
+    const backendSummary = await this.getBackendSummary(
+      binding.backend,
+      federationTargetForBinding(binding),
+    );
     const intent = buildBindingStatusIntent({
       id: this.newIntentId("status"),
       allowFullAccessEscalation: (await this.resolveFullAccessControls())
@@ -12560,11 +12741,12 @@ export class MessagingController {
     const threads = selectMonitorThreads({ monitor, navigation }).threads;
     await Promise.all(
       threads.map(async (thread) => {
-        const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+        const threadKey = threadKeyForNavigationThread(thread);
         const existing = activeTurns.get(threadKey);
         try {
           const status = await this.options.backend.readThreadStatus?.({
             backend: thread.source,
+            federationTarget: federationTargetForThread(thread),
             threadId: thread.id,
           });
           if (status === "active") {
@@ -12611,11 +12793,12 @@ export class MessagingController {
     const threads = selectMonitorThreads({ monitor, navigation }).threads;
     await Promise.all(
       threads.map(async (thread) => {
-        const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+        const threadKey = threadKeyForNavigationThread(thread);
         try {
           const text =
             await this.options.backend.readThreadLastAssistantMessage?.({
               backend: thread.source,
+              federationTarget: federationTargetForThread(thread),
               threadId: thread.id,
             });
           const trimmed = text?.trim();
@@ -12694,6 +12877,7 @@ export class MessagingController {
 
     const backendTurn = await this.options.backend.readActiveTurn?.({
       backend: binding.backend,
+      federationTarget: federationTargetForBinding(binding),
       threadId: binding.threadId,
     });
     if (!backendTurn?.turnId) {
@@ -12768,6 +12952,7 @@ export class MessagingController {
   ): Promise<string | undefined> {
     return await this.options.backend.readThreadStatus?.({
       backend: binding.backend,
+      federationTarget: federationTargetForBinding(binding),
       threadId: binding.threadId,
     });
   }
@@ -13343,6 +13528,7 @@ export class MessagingController {
     event: MessagingInboundEvent,
     target: {
       backend: AppServerBackendKind;
+      federatedThread?: FederatedThreadRef;
       threadId: ThreadIdentifier;
       targetKind?: MessagingBindingRecord["targetKind"];
     },
@@ -13351,12 +13537,16 @@ export class MessagingController {
     const previousBinding = await this.options.store.findActiveBindingForChannel(
       event.channel,
     );
+    const targetIdentity = target.federatedThread
+      ? federatedThreadIdentityKey(target.federatedThread)
+      : buildThreadIdentityKey(target.backend, target.threadId);
     const binding: MessagingBindingRecord = {
-      id: `binding:${buildMessagingConversationKey(event.channel)}:${target.backend}:${target.threadId}`,
+      id: `binding:${buildMessagingConversationKey(event.channel)}:${targetIdentity}`,
       channel: event.channel,
       targetKind: target.targetKind ?? "thread",
       backend: target.backend,
       threadId: target.threadId,
+      federatedThread: target.federatedThread,
       authorizedActorIds: [event.actor.platformUserId],
       routingState: event.routingState,
       createdAt: now,
@@ -13367,7 +13557,11 @@ export class MessagingController {
       previousBinding &&
       (previousBinding.id !== binding.id ||
         previousBinding.backend !== binding.backend ||
-        previousBinding.threadId !== binding.threadId)
+        previousBinding.threadId !== binding.threadId ||
+        !federationRefsMatch(
+          previousBinding.federatedThread,
+          binding.federatedThread,
+        ))
     ) {
       await this.options.store.revokeBinding({
         bindingId: previousBinding.id,
@@ -13378,14 +13572,22 @@ export class MessagingController {
     if (
       previousBinding &&
       (previousBinding.backend !== upserted.backend ||
-        previousBinding.threadId !== upserted.threadId)
+        previousBinding.threadId !== upserted.threadId ||
+        !federationRefsMatch(
+          previousBinding.federatedThread,
+          upserted.federatedThread,
+        ))
     ) {
       await this.recordBindingTransition("unbound", previousBinding, now);
     }
     if (
       !previousBinding ||
       previousBinding.backend !== upserted.backend ||
-      previousBinding.threadId !== upserted.threadId
+      previousBinding.threadId !== upserted.threadId ||
+      !federationRefsMatch(
+        previousBinding.federatedThread,
+        upserted.federatedThread,
+      )
     ) {
       await this.recordBindingTransition("bound", upserted, now);
     }
@@ -15309,6 +15511,9 @@ function readFullAccessRiskContext(
   ) {
     return {
       backend: value.backend,
+      ...(typeof value.federationInstanceId === "string"
+        ? { federationInstanceId: value.federationInstanceId }
+        : {}),
       kind: "resume-thread",
       sessionId: value.sessionId,
       threadId: value.threadId,
@@ -17981,7 +18186,11 @@ function isStreamFallbackText(text: string): boolean {
 
 function readBindingTarget(
   event: MessagingInboundCallbackEvent,
-): { backend: AppServerBackendKind; threadId: ThreadIdentifier } | undefined {
+): {
+  backend: AppServerBackendKind;
+  federatedThread?: FederatedThreadRef;
+  threadId: ThreadIdentifier;
+} | undefined {
   const fromValue = readBindingTargetFromValue(event.value);
   if (fromValue) {
     return fromValue;
@@ -18005,16 +18214,30 @@ function readBindingTarget(
 
 function readBindingTargetFromValue(
   value: MessagingJsonValue | undefined,
-): { backend: AppServerBackendKind; threadId: ThreadIdentifier } | undefined {
+): {
+  backend: AppServerBackendKind;
+  federatedThread?: FederatedThreadRef;
+  threadId: ThreadIdentifier;
+} | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }
 
   const backend = value.backend;
+  const federationInstanceId = value.federationInstanceId;
   const threadId = value.threadId;
   if (typeof backend === "string" && isAppServerBackendKind(backend) && typeof threadId === "string") {
     return {
       backend,
+      ...(typeof federationInstanceId === "string"
+        ? {
+            federatedThread: buildFederatedThreadRef({
+              backend,
+              instanceId: federationInstanceId,
+              threadId,
+            }),
+          }
+        : {}),
       threadId,
     };
   }

@@ -213,6 +213,12 @@ function createDataTransfer(threadKey: string) {
 }
 
 afterEach(() => {
+  delete (window as unknown as {
+    __pwragentFederationLabel?: unknown;
+  }).__pwragentFederationLabel;
+  delete (window as unknown as {
+    __pwragentFederationTarget?: unknown;
+  }).__pwragentFederationTarget;
   vi.restoreAllMocks();
   document
     .querySelectorAll(".thread-row--drag-image")
@@ -221,6 +227,51 @@ afterEach(() => {
 });
 
 describe("Sidebar", () => {
+  it("labels a remote window without showing the controller's runtime identity", () => {
+    (window as unknown as {
+      __pwragentFederationLabel?: unknown;
+    }).__pwragentFederationLabel = "Tart VM";
+    (window as unknown as {
+      __pwragentFederationTarget?: unknown;
+    }).__pwragentFederationTarget = {
+      scope: "remote",
+      instanceId: "remote-instance",
+    };
+
+    render(
+      <Sidebar
+        activeProfile="dev"
+        backends={backends}
+        browseMode="recents"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        profiles={[]}
+        runtimeIdentity={{
+          branch: "controller-branch",
+          cwd: "/controller/repo",
+        }}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    expect(screen.getByText("Remote · Tart VM · remo")).toHaveAttribute(
+      "title",
+      "Tart VM · remote-instance",
+    );
+    expect(screen.queryByLabelText("Runtime identity")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("PwrAgent profile")).not.toBeInTheDocument();
+    expect(screen.queryByText("controller-branch")).not.toBeInTheDocument();
+  });
+
   it("scrolls a newly selected thread row into view", () => {
     const { scrollIntoView, restore } = withMockScrollIntoView();
     const nextThread: NavigationThreadSummary = {

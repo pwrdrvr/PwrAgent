@@ -189,6 +189,22 @@ describe("ProjectPicker", () => {
     expect(onPickFromDisk).toHaveBeenCalledOnce();
   });
 
+  it("hides the local disk action when no picker callback is available", () => {
+    render(
+      <ProjectPicker
+        directories={[dirA]}
+        onSelect={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /choose a project/i }));
+
+    expect(screen.getByRole("option", { name: /pwragent/i })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /add directory/i }),
+    ).not.toBeInTheDocument();
+  });
+
   it("disables the Add directory… row while picking is in flight", () => {
     render(
       <ProjectPicker

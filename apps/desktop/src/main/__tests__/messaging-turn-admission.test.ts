@@ -141,6 +141,24 @@ describe("MessagingTurnAdmission", () => {
 
     expect(first.id).not.toBe(second.id);
   });
+
+  it("separates identical thread ids owned by different instances", () => {
+    const local = buildBinding();
+    const remote: MessagingBindingRecord = {
+      ...buildBinding(),
+      id: "binding-remote",
+      federatedThread: {
+        backend: "codex",
+        target: { scope: "remote", instanceId: "client_one" },
+        threadId: "thread-1",
+      },
+    };
+
+    expect(threadKeyForBinding(local)).toBe("codex:thread-1");
+    expect(threadKeyForBinding(remote)).toBe(
+      "remote:client_one:codex:thread-1",
+    );
+  });
 });
 
 function buildBinding(): MessagingBindingRecord {

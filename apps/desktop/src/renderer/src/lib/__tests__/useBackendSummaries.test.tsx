@@ -465,4 +465,63 @@ describe("useBackendSummaries", () => {
     });
     expect(listBackends).toHaveBeenCalledTimes(2);
   });
+
+  it("loads backend summaries from the selected remote instance", async () => {
+    let eventHandler: ((event: AgentEvent) => void) | undefined;
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "remote-instance",
+    };
+    const listAcpAgents = vi.fn();
+    const listBackends = vi
+      .fn<NonNullable<DesktopApi["listBackends"]>>()
+      .mockResolvedValue({ fetchedAt: 1, backends: [] });
+    const desktopApi: DesktopApi = {
+      listAcpAgents,
+      listBackends,
+      onAgentEvent: (callback) => {
+        eventHandler = callback;
+        return () => undefined;
+      },
+    };
+
+    const { result } = renderHook(() => useBackendSummaries(desktopApi, {
+      federationTarget,
+    }));
+
+    await waitFor(() => {
+      expect(listBackends).toHaveBeenCalledWith({
+        includeUnavailable: true,
+        federationTarget,
+      });
+    });
+
+    await act(async () => {
+      await result.current.refreshAcpAgents();
+    });
+    expect(listAcpAgents).not.toHaveBeenCalled();
+    expect(listBackends).toHaveBeenCalledTimes(2);
+
+    eventHandler?.({
+      backend: "codex",
+      notification: {
+        method: "account/updated",
+        params: {},
+      },
+    });
+    await act(async () => undefined);
+    expect(listBackends).toHaveBeenCalledTimes(2);
+
+    eventHandler?.({
+      backend: "codex",
+      federationTarget,
+      notification: {
+        method: "account/updated",
+        params: {},
+      },
+    });
+    await waitFor(() => {
+      expect(listBackends).toHaveBeenCalledTimes(3);
+    });
+  });
 });

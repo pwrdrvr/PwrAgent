@@ -1,4 +1,5 @@
 import type { MessagingToolUpdateMode } from "./messaging";
+import type { FederationTarget } from "./federation";
 
 export const DESKTOP_CHAT_REPLY_COMPOSERS = [
   "tiptap-wysiwyg-markdown-chips",
@@ -87,7 +88,11 @@ export type DesktopCodexProfileModel =
 export const DESKTOP_CODEX_PROFILE_MODEL_DEFAULT: DesktopCodexProfileModel =
   "shared";
 
-export const DESKTOP_HOT_CPU_PROFILE_START_DELAYS_MS = [0, 5_000, 10_000] as const;
+export const DESKTOP_HOT_CPU_PROFILE_START_DELAYS_MS = [
+  0,
+  5_000,
+  10_000,
+] as const;
 export type DesktopHotCpuProfileStartDelayMs =
   (typeof DESKTOP_HOT_CPU_PROFILE_START_DELAYS_MS)[number];
 export const DESKTOP_HOT_CPU_PROFILE_START_DELAY_DEFAULT_MS: DesktopHotCpuProfileStartDelayMs =
@@ -103,6 +108,18 @@ export type DesktopHotCpuProfileTriggerMode =
 export const DESKTOP_HOT_CPU_PROFILE_TRIGGER_MODE_DEFAULT: DesktopHotCpuProfileTriggerMode =
   "sustained";
 export const DESKTOP_HOT_CPU_PROFILE_SLOWBURN_THRESHOLD_DEFAULT_PERCENT = 15;
+
+export const DESKTOP_FEDERATION_MODES = [
+  "disabled",
+  "gateway",
+  "client",
+  "dual",
+] as const;
+
+export type DesktopFederationMode = (typeof DESKTOP_FEDERATION_MODES)[number];
+
+export const DESKTOP_FEDERATION_MODE_DEFAULT: DesktopFederationMode =
+  "disabled";
 
 /**
  * Persisted record that the operator acknowledged the messaging-safety
@@ -253,7 +270,12 @@ export type DesktopSettingsSecretName =
   | "feishuEncryptKey"
   | "feishuVerificationToken"
   | "lineChannelAccessToken"
-  | "lineChannelSecret";
+  | "lineChannelSecret"
+  | "federationInstancePrivateKey"
+  | "federationCloudflareClientCertificate"
+  | "federationCloudflareClientPrivateKey"
+  | "federationCloudflareAccessClientId"
+  | "federationCloudflareAccessClientSecret";
 
 /**
  * Predicate: does writing or clearing this secret affect the
@@ -288,6 +310,11 @@ export function isMessagingRuntimeSecret(
     case "lineChannelSecret":
       return true;
     case "grokApiKey":
+    case "federationInstancePrivateKey":
+    case "federationCloudflareClientCertificate":
+    case "federationCloudflareClientPrivateKey":
+    case "federationCloudflareAccessClientId":
+    case "federationCloudflareAccessClientSecret":
       return false;
   }
 }
@@ -506,6 +533,21 @@ export type DesktopApplicationsSnapshot = {
   };
 };
 
+export type DesktopFederationSettingsSnapshot = {
+  mode: DesktopSettingsValue<DesktopFederationMode>;
+  listenHost: DesktopSettingsValue<string>;
+  listenPort: DesktopSettingsValue<number>;
+  publicUrl: DesktopSettingsValue<string>;
+  gatewayUrl: DesktopSettingsValue<string>;
+  cloudflareMtlsEnabled: DesktopSettingsValue<boolean>;
+  cloudflareAccessServiceAuthEnabled: DesktopSettingsValue<boolean>;
+  instancePrivateKey: DesktopSettingsSecretState;
+  cloudflareClientCertificate: DesktopSettingsSecretState;
+  cloudflareClientPrivateKey: DesktopSettingsSecretState;
+  cloudflareAccessClientId: DesktopSettingsSecretState;
+  cloudflareAccessClientSecret: DesktopSettingsSecretState;
+};
+
 export type DesktopSettingsSnapshot = {
   fetchedAt: number;
   configPath: string;
@@ -635,6 +677,7 @@ export type DesktopSettingsSnapshot = {
     editedFilesDock: DesktopSettingsValue<string>;
     actionRunsDock: DesktopSettingsValue<string>;
   };
+  federation: DesktopFederationSettingsSnapshot;
   messaging: {
     enabled: DesktopSettingsValue<boolean>;
     allowFullAccessEscalation: DesktopSettingsValue<boolean>;
@@ -882,6 +925,15 @@ export type DesktopSettingsConfigPatch = {
     activeContextTab?: string;
     editedFilesDock?: string;
     actionRunsDock?: string;
+  };
+  federation?: {
+    mode?: DesktopFederationMode;
+    listenHost?: string;
+    listenPort?: number;
+    publicUrl?: string;
+    gatewayUrl?: string;
+    cloudflareMtlsEnabled?: boolean;
+    cloudflareAccessServiceAuthEnabled?: boolean;
   };
   messaging?: {
     enabled?: boolean;
@@ -1334,6 +1386,7 @@ export type SetDesktopPwrAgentProfileCodexProfileResponse = {
 
 export type OpenDesktopApplicationRequest = {
   applicationId: string;
+  federationTarget?: FederationTarget;
   kind: DesktopApplicationKind;
   targetPath: string;
   targetLine?: number;
@@ -1342,6 +1395,14 @@ export type OpenDesktopApplicationRequest = {
 
 export type OpenDesktopApplicationResponse = {
   opened: true;
+};
+
+export type ReadDesktopApplicationsRequest = {
+  federationTarget?: FederationTarget;
+};
+
+export type ReadDesktopApplicationsResponse = {
+  applications: DesktopApplicationsSnapshot;
 };
 
 /**
@@ -1474,6 +1535,12 @@ export function isDesktopHotCpuProfileTriggerMode(
   return DESKTOP_HOT_CPU_PROFILE_TRIGGER_MODES.includes(
     value as DesktopHotCpuProfileTriggerMode,
   );
+}
+
+export function isDesktopFederationMode(
+  value: string,
+): value is DesktopFederationMode {
+  return DESKTOP_FEDERATION_MODES.includes(value as DesktopFederationMode);
 }
 
 /**

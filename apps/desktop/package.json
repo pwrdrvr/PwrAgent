@@ -91,7 +91,8 @@
     "rehype-katex": "^7.0.1",
     "remark-breaks": "^4.0.0",
     "remark-gfm": "^4.0.1",
-    "remark-math": "^6.0.0"
+    "remark-math": "^6.0.0",
+    "ws": "8.21.0"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.11.3",
@@ -102,6 +103,7 @@
     "@types/better-sqlite3": "^7.6.13",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
+    "@types/ws": "8.18.1",
     "@vitejs/plugin-react": "^5.2.0",
     "axe-core": "^4.11.4",
     "electron": "^41.10.3",

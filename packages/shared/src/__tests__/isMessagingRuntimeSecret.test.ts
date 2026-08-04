@@ -29,6 +29,11 @@ describe("isMessagingRuntimeSecret", () => {
     { name: "lineChannelAccessToken", expected: true },
     { name: "lineChannelSecret", expected: true },
     { name: "grokApiKey", expected: false },
+    { name: "federationInstancePrivateKey", expected: false },
+    { name: "federationCloudflareClientCertificate", expected: false },
+    { name: "federationCloudflareClientPrivateKey", expected: false },
+    { name: "federationCloudflareAccessClientId", expected: false },
+    { name: "federationCloudflareAccessClientSecret", expected: false },
   ];
 
   for (const { name, expected } of cases) {

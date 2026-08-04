@@ -1,5 +1,6 @@
 import type {
   AppServerBackendKind,
+  FederatedThreadRef,
   NavigationDirectorySummary,
   NavigationSnapshot,
   NavigationThreadSummary,
@@ -17,7 +18,12 @@ import type {
   MessagingSurfaceAction,
   MessagingThreadPickerIntent,
 } from "@pwragent/messaging-interface";
-import { buildThreadIdentityKey, isAppServerBackendKind } from "@pwragent/shared";
+import {
+  buildFederatedThreadRef,
+  buildThreadIdentityKey,
+  federatedThreadIdentityKey,
+  isAppServerBackendKind,
+} from "@pwragent/shared";
 import type { MessagingCapabilityProfile } from "@pwragent/messaging-interface";
 import { capabilityProfilePageSize } from "@pwragent/messaging-interface";
 
@@ -49,6 +55,7 @@ export type ParsedResumeCommand = {
 
 export type ResumeBrowserThreadSelection = {
   backend: AppServerBackendKind;
+  federatedThread?: FederatedThreadRef;
   threadId: ThreadIdentifier;
 };
 
@@ -190,6 +197,15 @@ export function selectThreadFromValue(
 
   return {
     backend: value.backend,
+    ...(typeof value.federationInstanceId === "string"
+      ? {
+          federatedThread: buildFederatedThreadRef({
+            backend: value.backend,
+            instanceId: value.federationInstanceId,
+            threadId: value.threadId,
+          }),
+        }
+      : {}),
     threadId: value.threadId,
   };
 }
@@ -235,6 +251,12 @@ function buildThreadPickerIntent(params: {
       fallbackText: String(index + 1),
       value: {
         backend: thread.source,
+        ...(thread.federation?.ref.target.scope === "remote"
+          ? {
+              federationInstanceId:
+                thread.federation.ref.target.instanceId,
+            }
+          : {}),
         threadId: thread.id,
       },
     })),
@@ -346,7 +368,11 @@ function threadsForSession(
   if (selectedDirectory) {
     const threadKeys = new Set(selectedDirectory.threadKeys);
     threads = threads.filter((thread) =>
-      threadKeys.has(buildThreadIdentityKey(thread.source, thread.id)),
+      threadKeys.has(
+        thread.federation
+          ? federatedThreadIdentityKey(thread.federation.ref)
+          : buildThreadIdentityKey(thread.source, thread.id),
+      ),
     );
   }
 
@@ -765,7 +791,10 @@ function formatThreadLabel(thread: NavigationThreadSummary): string {
   const directory = thread.linkedDirectories.find((item) => item.kind === "worktree") ??
     thread.linkedDirectories[0];
   const suffix = directory?.label ? ` (${directory.label})` : "";
-  return `${thread.title}${suffix}`;
+  const instancePrefix = thread.federation
+    ? `[${thread.federation.instanceLabel}] `
+    : "";
+  return `${instancePrefix}${thread.title}${suffix}`;
 }
 
 function formatControlList(controls: Array<string | undefined>): string {

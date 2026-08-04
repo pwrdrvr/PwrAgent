@@ -222,8 +222,16 @@ import type {
   DesktopMessagingContactLookupRequest,
   DesktopMessagingContactLookupResponse,
   DesktopSettingsWriteResponse,
+  GenerateFederationInviteRequest,
+  GenerateFederationInviteResponse,
+  ImportFederationInviteRequest,
+  ImportFederationInviteResponse,
   OpenDesktopApplicationRequest,
   OpenDesktopApplicationResponse,
+  ReadDesktopApplicationsRequest,
+  ReadDesktopApplicationsResponse,
+  OpenFederationWindowRequest,
+  OpenFederationWindowResponse,
   OpenMarkdownFileViewerRequest,
   OpenMarkdownFileViewerResponse,
   OpenSubAgentTranscriptWindowRequest,
@@ -236,6 +244,12 @@ import type {
   ReadMarkdownFileViewerSnapshotResponse,
   OpenDesktopPwrAgentProfileRequest,
   OpenDesktopPwrAgentProfileResponse,
+  ReadFederationHealthRequest,
+  ReadFederationHealthResponse,
+  ReadFederationDiagnosticsRequest,
+  ReadFederationDiagnosticsResponse,
+  RevokeFederationPeerRequest,
+  RevokeFederationPeerResponse,
   ReadDesktopSettingsRequest,
   ReadDesktopSettingsResponse,
   RefreshDesktopCodexDiscoveryRequest,
@@ -272,6 +286,10 @@ import type {
 } from "@pwragent/shared";
 import type { RendererErrorReport } from "../shared/renderer-error";
 import type { RendererDiagnosticLogRequest } from "../shared/renderer-diagnostic";
+import {
+  readFederationWindowLabelFromArgv,
+  readFederationWindowTargetFromArgv,
+} from "../shared/federation-window";
 import type {
   ImageUploadFallbackRequest,
   ImageUploadFallbackResponse,
@@ -370,6 +388,7 @@ import {
   APP_SERVER_RENAME_THREAD_CHANNEL,
   APP_SERVER_READ_THREAD_CHANNEL,
   APP_SERVER_GET_THREAD_FILE_DIFF_CHANNEL,
+  APPLICATIONS_READ_CHANNEL,
   APPLICATION_OPEN_CHANNEL,
   MARKDOWN_FILE_READ_CHANNEL,
   MARKDOWN_FILE_VIEWER_OPEN_CHANNEL,
@@ -392,6 +411,12 @@ import {
   PATH_OPEN_CHANNEL,
   PATH_REVEAL_CHANNEL,
   BACKEND_LIST_CHANNEL,
+  FEDERATION_GET_HEALTH_CHANNEL,
+  FEDERATION_GET_DIAGNOSTICS_CHANNEL,
+  FEDERATION_GENERATE_INVITE_CHANNEL,
+  FEDERATION_IMPORT_INVITE_CHANNEL,
+  FEDERATION_OPEN_WINDOW_CHANNEL,
+  FEDERATION_REVOKE_PEER_CHANNEL,
   CODEX_ENVIRONMENT_SETUP_PROGRESS_CHANNEL,
   COMPOSER_DRAFT_CLEAR_CHANNEL,
   COMPOSER_DRAFT_LIST_CANDIDATES_CHANNEL,
@@ -759,6 +784,30 @@ const desktopApi = Object.freeze({
     request: WaitForDesktopProfileAliveRequest,
   ): Promise<WaitForDesktopProfileAliveResponse> =>
     await ipcRenderer.invoke(APP_WAIT_FOR_PROFILE_ALIVE_CHANNEL, request),
+  openFederationWindow: async (
+    request: OpenFederationWindowRequest,
+  ): Promise<OpenFederationWindowResponse> =>
+    await ipcRenderer.invoke(FEDERATION_OPEN_WINDOW_CHANNEL, request),
+  readFederationHealth: async (
+    request?: ReadFederationHealthRequest,
+  ): Promise<ReadFederationHealthResponse> =>
+    await ipcRenderer.invoke(FEDERATION_GET_HEALTH_CHANNEL, request),
+  readFederationDiagnostics: async (
+    request?: ReadFederationDiagnosticsRequest,
+  ): Promise<ReadFederationDiagnosticsResponse> =>
+    await ipcRenderer.invoke(FEDERATION_GET_DIAGNOSTICS_CHANNEL, request),
+  generateFederationInvite: async (
+    request?: GenerateFederationInviteRequest,
+  ): Promise<GenerateFederationInviteResponse> =>
+    await ipcRenderer.invoke(FEDERATION_GENERATE_INVITE_CHANNEL, request),
+  importFederationInvite: async (
+    request: ImportFederationInviteRequest,
+  ): Promise<ImportFederationInviteResponse> =>
+    await ipcRenderer.invoke(FEDERATION_IMPORT_INVITE_CHANNEL, request),
+  revokeFederationPeer: async (
+    request: RevokeFederationPeerRequest,
+  ): Promise<RevokeFederationPeerResponse> =>
+    await ipcRenderer.invoke(FEDERATION_REVOKE_PEER_CHANNEL, request),
   ...(isDevelopment
     ? {
         getRuntimeIdentity: async (): Promise<RuntimeIdentity> =>
@@ -867,6 +916,10 @@ const desktopApi = Object.freeze({
     request: OpenDesktopApplicationRequest,
   ): Promise<OpenDesktopApplicationResponse> =>
     await ipcRenderer.invoke(APPLICATION_OPEN_CHANNEL, request),
+  readApplications: async (
+    request: ReadDesktopApplicationsRequest,
+  ): Promise<ReadDesktopApplicationsResponse> =>
+    await ipcRenderer.invoke(APPLICATIONS_READ_CHANNEL, request),
   openPath: async (request: OpenPathRequest): Promise<OpenPathResponse> =>
     await ipcRenderer.invoke(PATH_OPEN_CHANNEL, request),
   revealPath: async (request: OpenPathRequest): Promise<OpenPathResponse> =>
@@ -1760,6 +1813,12 @@ function readBootstrapNavigationPreferences(): {
   return { browseMode: "inbox" };
 }
 const bootstrapNavigationPreferences = readBootstrapNavigationPreferences();
+const bootstrapFederationTarget = readFederationWindowTargetFromArgv(
+  process.argv,
+);
+const bootstrapFederationLabel = readFederationWindowLabelFromArgv(
+  process.argv,
+);
 
 // Decode the OS home directory passed from main via
 // `webPreferences.additionalArguments`. The sandboxed preload can't call
@@ -1816,6 +1875,14 @@ if (process.contextIsolated) {
   contextBridge.exposeInMainWorld(
     "__pwragentLogFilePath",
     bootstrapLogFilePath,
+  );
+  contextBridge.exposeInMainWorld(
+    "__pwragentFederationTarget",
+    bootstrapFederationTarget,
+  );
+  contextBridge.exposeInMainWorld(
+    "__pwragentFederationLabel",
+    bootstrapFederationLabel,
   );
   recordPreloadLog("info", "exposed context bridge", {
     keyCount: Object.keys(desktopApi).length

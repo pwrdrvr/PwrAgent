@@ -38,6 +38,11 @@ import {
 } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 import { fileLabelFromPath } from "./directory-references";
+import { readRendererFederationTarget } from "./federation-window";
+import {
+  agentEventThreadIdentityKey,
+  federationTargetsEqual,
+} from "./federated-thread-events";
 import {
   buildSubthreadLaunchpadKey,
   getParentThreadIdFromSubthreadLaunchpadKey,
@@ -2678,11 +2683,13 @@ export function useThreadNavigation(
           hasCurrentResponse: Boolean(stateRef.current.response),
           preferredSelectionKey: preferredSelectionKey ?? null,
         });
+        const federationTarget = readRendererFederationTarget();
         const snapshotRequest =
-          options?.forceRefresh || options?.refreshMode
+          options?.forceRefresh || options?.refreshMode || federationTarget
             ? {
                 ...(options?.forceRefresh ? { forceRefresh: true } : {}),
                 ...(options?.refreshMode ? { refreshMode: options.refreshMode } : {}),
+                ...(federationTarget ? { federationTarget } : {}),
               }
             : undefined;
         const snapshot = snapshotRequest
@@ -3083,6 +3090,10 @@ export function useThreadNavigation(
     }
 
     return desktopApi.onAgentEvent((event) => {
+      if (!federationTargetsEqual(event.federationTarget, readRendererFederationTarget())) {
+        return;
+      }
+
       markNavigationActivity({ refreshOnIdleResume: false });
       const method = event.notification.method as string;
       if (method === "navigation/directoryGitStatus/updated") {
@@ -3245,7 +3256,7 @@ export function useThreadNavigation(
         const { threadId } = event.notification.params as {
           threadId: string;
         };
-        const threadKey = buildThreadIdentityKey(event.backend, threadId);
+        const threadKey = agentEventThreadIdentityKey(event, threadId);
         suppressedArchivedThreadKeysRef.current.add(threadKey);
 
         setState((current) => ({
@@ -3697,7 +3708,7 @@ export function useThreadNavigation(
           threadId: string;
         };
         suppressedArchivedThreadKeysRef.current.delete(
-          buildThreadIdentityKey(event.backend, threadId)
+          agentEventThreadIdentityKey(event, threadId)
         );
         scheduleRefresh();
         return;
@@ -4467,6 +4478,8 @@ export function useThreadNavigation(
       try {
         const response = await forkThreadRequest({
           backend: parent.source,
+          federationTarget: parent.federation?.ref.target ??
+            readRendererFederationTarget(),
           sourceThreadId: parent.id,
           parentThreadId: groupRoot.id,
           executionMode,
@@ -5143,6 +5156,7 @@ export function useThreadNavigation(
       try {
         response = await desktopApi.materializeDirectoryLaunchpad({
           directoryKey,
+          federationTarget: readRendererFederationTarget(),
           launchpad,
           input,
           collaborationMode,
@@ -5410,9 +5424,12 @@ export function useThreadNavigation(
 
       try {
         for (const target of targetThreads) {
+          const federationTarget = target.federation?.ref.target
+            ?? readRendererFederationTarget();
           const response = await archiveThreadRequest({
             backend: target.source,
             threadId: target.id,
+            ...(federationTarget ? { federationTarget } : {}),
           });
           const cleanupNotice = formatArchiveCleanupNotice(response.cleanup);
           if (cleanupNotice) {
@@ -5507,6 +5524,8 @@ export function useThreadNavigation(
         await handoffThreadWorkspaceRequest({
           ...request,
           backend: thread.source,
+          federationTarget: thread.federation?.ref.target ??
+            readRendererFederationTarget(),
           threadId: thread.id,
         });
         await refresh(buildThreadIdentityKey(thread.source, thread.id));
@@ -5568,8 +5587,11 @@ export function useThreadNavigation(
       );
 
       try {
+        const federationTarget = thread.federation?.ref.target ??
+          readRendererFederationTarget();
         await renameThreadRequest({
           backend: thread.source,
+          ...(federationTarget ? { federationTarget } : {}),
           threadId: thread.id,
           name: nextName,
         });
@@ -6031,6 +6053,8 @@ export function useThreadNavigation(
       try {
         await setThreadExecutionMode({
           backend: thread.source,
+          federationTarget: thread.federation?.ref.target ??
+            readRendererFederationTarget(),
           threadId: thread.id,
           executionMode,
         });
@@ -6057,6 +6081,8 @@ export function useThreadNavigation(
       try {
         await cancelThreadExecutionModeQueueRequest({
           backend: thread.source,
+          federationTarget: thread.federation?.ref.target ??
+            readRendererFederationTarget(),
           threadId: thread.id,
         });
         await refresh(buildThreadIdentityKey(thread.source, thread.id));
@@ -6120,6 +6146,8 @@ export function useThreadNavigation(
       try {
         await setThreadModelSettings({
           backend: thread.source,
+          federationTarget: thread.federation?.ref.target ??
+            readRendererFederationTarget(),
           threadId: thread.id,
           ...nextSettings,
         });
@@ -6254,6 +6282,8 @@ export function useThreadNavigation(
       try {
         await setAcpSessionRuntimeOption({
           backend: thread.source,
+          federationTarget: thread.federation?.ref.target ??
+            readRendererFederationTarget(),
           threadId: thread.id,
           ...params,
         });

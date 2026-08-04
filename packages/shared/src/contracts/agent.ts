@@ -24,9 +24,11 @@ import type {
   NavigationLaunchpadDraft,
   NavigationLaunchpadDefaults,
 } from "./navigation";
+import type { FederationTarget } from "./federation";
 
 export type StartThreadRequest = {
   backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   /**
    * When present, start the thread with Agent/persona metadata.
    */
@@ -69,6 +71,7 @@ export type ThreadAutoPinFailure = {
 
 export type ForkThreadRequest = {
   backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   sourceThreadId: ThreadIdentifier;
   parentThreadId?: ThreadIdentifier;
   executionMode?: ThreadExecutionMode;
@@ -228,6 +231,7 @@ export type StartThreadMigrationResponse = {
 
 export type StartTurnRequest = {
   backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   input: AppServerTurnInputItem[];
   executionMode?: ThreadExecutionMode;
@@ -260,6 +264,7 @@ export type CancelQueuedTurnResponse = {
 
 export type StartReviewRequest = {
   backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   target: AppServerReviewTarget;
   delivery?: AppServerReviewDelivery;
@@ -279,6 +284,7 @@ export type StartReviewResponse = {
 
 export type InterruptTurnRequest = {
   backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   turnId: string;
 };
@@ -304,6 +310,7 @@ export type StopSubAgentResponse = {
 
 export type CompactThreadRequest = {
   backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
 };
 
@@ -316,6 +323,7 @@ export type CompactThreadResponse = {
 
 export type SteerTurnRequest = {
   backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   input: AppServerTurnInputItem[];
   expectedTurnId: string;
@@ -330,6 +338,7 @@ export type SteerTurnResponse = {
 
 export type SetThreadExecutionModeRequest = {
   backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   executionMode: ThreadExecutionMode;
 };
@@ -342,6 +351,7 @@ export type SetThreadExecutionModeResponse = {
 
 export type QueueThreadExecutionModeRequest = {
   backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   executionMode: ThreadExecutionMode;
 };
@@ -360,6 +370,7 @@ export type QueueThreadExecutionModeResponse = {
 
 export type CancelThreadExecutionModeQueueRequest = {
   backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
 };
 
@@ -375,6 +386,7 @@ export type CancelThreadExecutionModeQueueResponse = {
 
 export type SetThreadModelSettingsRequest = {
   backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   model?: string;
   serviceTier?: string;
@@ -460,6 +472,7 @@ export type TurnOffCodexFastEverywhereResponse = {
 
 export type SetAcpSessionRuntimeOptionRequest = {
   backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   source: BackendAcpRuntimeOptionSource;
   optionId: string;
@@ -513,6 +526,7 @@ export type RetainThreadBranchDriftResponse = RetainThreadBranchDriftRequest & {
 
 export type SubmitServerRequestRequest = {
   backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   turnId?: string;
   requestId: string;
@@ -527,6 +541,7 @@ export type SubmitServerRequestResponse = {
 };
 
 export type TrustCodexProjectRequest = {
+  federationTarget?: FederationTarget;
   projectPath: string;
   configPath?: string;
 };
@@ -613,6 +628,7 @@ export type ResetDirectoryLaunchpadResponse = {
 
 export type MaterializeDirectoryLaunchpadRequest = {
   directoryKey: string;
+  federationTarget?: FederationTarget;
   launchpad?: NavigationLaunchpadDraft;
   /**
    * When present, materialize the launchpad with Agent/persona metadata.
@@ -656,6 +672,7 @@ export type MaterializeDirectoryLaunchpadResponse = MaterializedDirectoryLaunchp
 
 export type CodexEnvironmentSetupProgressEvent = {
   directoryKey: string;
+  federationTarget?: FederationTarget;
   environmentId: string;
   environmentName: string;
   command: string;
@@ -671,6 +688,7 @@ export type CodexEnvironmentSetupProgressEvent = {
 
 export type RunCodexEnvironmentActionRequest = {
   backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   actionId: string;
   /**
@@ -689,6 +707,7 @@ export type RunCodexEnvironmentActionResponse = {
 
 export type StopCodexEnvironmentActionRequest = {
   backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   runId: string;
   mode: "stop" | "terminate";
@@ -702,6 +721,7 @@ export type StopCodexEnvironmentActionResponse = {
 
 export type SetCodexThreadEnvironmentRequest = {
   backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   environmentId?: string;
   actionId?: string;
@@ -849,6 +869,7 @@ export type RegisterDirectoryFromDiskResponse =
 
 export type AgentEvent = {
   backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   notification: AppServerNotification;
   /**
    * Optional main-process display model for live protocol notifications whose

@@ -14,6 +14,8 @@ import type {
   CompactThreadResponse,
   EnsureDirectoryLaunchpadRequest,
   EnsureDirectoryLaunchpadResponse,
+  FederationRemoteTarget,
+  FederationTarget,
   GetNavigationSnapshotRequest,
   HandoffThreadWorkspaceRequest,
   HandoffThreadWorkspaceResponse,
@@ -45,6 +47,7 @@ import type {
   UpdateDirectoryLaunchpadResponse,
 } from "@pwragent/shared";
 import type { MessagingImagePart } from "@pwragent/messaging-interface";
+import { isRemoteFederationTarget } from "@pwragent/shared";
 import type {
   MessagingBackendBridge,
   MessagingLastAssistantReply,
@@ -55,6 +58,22 @@ import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
 import { resolveScratchProjectsRoots } from "../app-server/scratch-projects";
 import { buildMessagingBindingsByThreadKey } from "./messaging-bindings-snapshot";
 import { materializeTranscriptMessageImagesForMessaging } from "../transcript-image-protocol";
+import type { FederationBackendOperations } from "../federation/federation-backend-bridge";
+
+export type DesktopMessagingFederationBridge = {
+  connectedPeerTargets(): Array<{
+    target: FederationRemoteTarget;
+    label: string;
+  }>;
+  onRemoteBackendEvent(
+    listener: (event: AgentEvent) => void | Promise<void>,
+  ): () => void;
+  remoteBackend(target: FederationRemoteTarget): FederationBackendOperations;
+  remoteNavigationSnapshot(
+    target: FederationRemoteTarget,
+    request: GetNavigationSnapshotRequest,
+  ): Promise<NavigationSnapshot>;
+};
 
 export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
   private readonly assistantImageResolutions = new Map<
@@ -64,11 +83,22 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
 
   constructor(
     private readonly registry: DesktopBackendRegistry = getDesktopBackendRegistry(),
+    private readonly federation?: DesktopMessagingFederationBridge,
   ) {}
 
   async getNavigationSnapshot(
     request: GetNavigationSnapshotRequest = {},
   ): Promise<NavigationSnapshot> {
+    if (
+      request.federationTarget &&
+      isRemoteFederationTarget(request.federationTarget) &&
+      this.federation
+    ) {
+      return await this.federation.remoteNavigationSnapshot(
+        request.federationTarget,
+        request,
+      );
+    }
     const backend = request.backend ?? "all";
     const threads = await this.registry.listThreads({
       backend: backend === "all" ? undefined : backend,
@@ -101,30 +131,58 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
       snapshot.directories,
     );
 
-    return {
+    const localSnapshot: NavigationSnapshot = {
       ...snapshot,
       directories: snapshot.directories.map((directory) => ({
         ...directory,
         gitStatus: directoryStatuses[directory.key],
       })),
     };
+    if (!this.federation) {
+      return localSnapshot;
+    }
+    const remoteSnapshots = await Promise.allSettled(
+      this.federation.connectedPeerTargets().map(({ target }) =>
+        this.federation!.remoteNavigationSnapshot(target, request)
+      ),
+    );
+    const availableRemoteSnapshots = remoteSnapshots.flatMap((result) =>
+      result.status === "fulfilled" ? [result.value] : []
+    );
+    return {
+      ...localSnapshot,
+      fetchedAt: Math.max(
+        localSnapshot.fetchedAt,
+        ...availableRemoteSnapshots.map((remote) => remote.fetchedAt),
+      ),
+      unchanged: false,
+      threads: [
+        ...localSnapshot.threads,
+        ...availableRemoteSnapshots.flatMap((remote) => remote.threads),
+      ],
+      inboxThreadKeys: [
+        ...localSnapshot.inboxThreadKeys,
+        ...availableRemoteSnapshots.flatMap((remote) => remote.inboxThreadKeys),
+      ],
+    };
   }
 
   async readThreadStatus(request: {
     backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
     threadId: string;
   }): Promise<AppServerThreadStatus | undefined> {
-    const response = await this.registry.readThread({
-      backend: request.backend,
+    const response = await this.readThread({
+      ...request,
       includeTurns: false,
       limit: 0,
-      threadId: request.threadId,
     });
     return response.threadStatus ?? response.replay.threadStatus;
   }
 
   async readActiveTurn(request: {
     backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
     threadId: string;
   }): Promise<
     | {
@@ -134,11 +192,31 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
       }
     | undefined
   > {
+    if (this.remoteBackend(request.federationTarget)) {
+      const response = await this.readThread({
+        ...request,
+        includeTurns: true,
+        limit: 20,
+      });
+      const status = response.threadStatus ?? response.replay.threadStatus;
+      if (status !== "active") return undefined;
+      const entry = [...response.replay.entries]
+        .reverse()
+        .find((candidate) => candidate.turn?.id);
+      return entry?.turn?.id
+        ? {
+            backend: request.backend,
+            threadId: request.threadId,
+            turnId: entry.turn.id,
+          }
+        : undefined;
+    }
     return this.registry.getActiveTurnForThread(request);
   }
 
   async readThreadLastAssistantMessage(request: {
     backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
     threadId: string;
   }): Promise<string | undefined> {
     return (await this.readThreadLastAssistantReply(request))?.text;
@@ -146,12 +224,12 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
 
   async readThreadLastAssistantReply(request: {
     backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
     threadId: string;
   }): Promise<MessagingLastAssistantReply | undefined> {
-    const response = await this.registry.readThread({
-      backend: request.backend,
+    const response = await this.readThread({
+      ...request,
       limit: 20,
-      threadId: request.threadId,
     });
     const entryReply = findLastAssistantEntryReply(response.replay);
     const messageReply = findLastAssistantMessageReply(response.replay);
@@ -262,6 +340,12 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
   async handoffThreadWorkspace(
     request: HandoffThreadWorkspaceRequest,
   ): Promise<HandoffThreadWorkspaceResponse> {
+    const remote = this.remoteBackend(request.federationTarget);
+    if (remote) {
+      return await remote.handoffThreadWorkspace(
+        stripFederationTarget(request),
+      );
+    }
     return await this.registry.handoffThreadWorkspace(request);
   }
 
@@ -275,6 +359,12 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
     request: MaterializeDirectoryLaunchpadRequest,
     options?: MaterializeDirectoryLaunchpadOptions,
   ): Promise<MaterializeDirectoryLaunchpadResponse> {
+    const remote = this.remoteBackend(request.federationTarget);
+    if (remote) {
+      return await remote.materializeDirectoryLaunchpad(
+        stripFederationTarget(request),
+      );
+    }
     return await this.registry.materializeDirectoryLaunchpad(request, options);
   }
 
@@ -287,6 +377,10 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
   async startTurn(
     request: StartTurnRequest & { messageOrigin?: AppServerThreadMessageOrigin },
   ): Promise<StartTurnResponse> {
+    const remote = this.remoteBackend(request.federationTarget);
+    if (remote) {
+      return await remote.startTurn(stripFederationTarget(request));
+    }
     const submitted = await this.registry.submitTurn({
       ...request,
       origin: "messaging",
@@ -319,12 +413,23 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
         invokingTurnId: string;
       }
   > {
+    const remote = this.remoteBackend(request.federationTarget);
+    if (remote) {
+      return {
+        status: "started",
+        response: await remote.startReview(stripFederationTarget(request)),
+      };
+    }
     return await this.registry.submitReview(request);
   }
 
   async steerTurn(
     request: SteerTurnRequest & { messageOrigin?: AppServerThreadMessageOrigin },
   ): Promise<SteerTurnResponse> {
+    const remote = this.remoteBackend(request.federationTarget);
+    if (remote) {
+      return await remote.steerTurn(stripFederationTarget(request));
+    }
     return await this.registry.steerTurn(
       request,
       request.messageOrigin ?? { kind: "messaging" },
@@ -332,48 +437,92 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
   }
 
   async startThread(request: StartThreadRequest): Promise<StartThreadResponse> {
+    const remote = this.remoteBackend(request.federationTarget);
+    if (remote) {
+      return await remote.startThread(stripFederationTarget(request));
+    }
     return await this.registry.startThread(request);
   }
 
   async compactThread(request: CompactThreadRequest): Promise<CompactThreadResponse> {
+    const remote = this.remoteBackend(request.federationTarget);
+    if (remote) {
+      return await remote.compactThread(stripFederationTarget(request));
+    }
     return await this.registry.compactThread(request);
   }
 
   async interruptTurn(request: InterruptTurnRequest): Promise<InterruptTurnResponse> {
+    const remote = this.remoteBackend(request.federationTarget);
+    if (remote) {
+      return await remote.interruptTurn(stripFederationTarget(request));
+    }
     return await this.registry.interruptTurn(request);
   }
 
   async listSkills(
     request: AppServerListSkillsRequest = {},
   ): Promise<Pick<AppServerListSkillsResponse, "data">> {
+    const remote = this.remoteBackend(request.federationTarget);
+    if (remote) {
+      return await remote.listSkills(stripFederationTarget(request));
+    }
     return await this.registry.listSkills(request);
   }
 
   async listBackends(request: ListBackendsRequest = {}): Promise<ListBackendsResponse> {
+    const remote = this.remoteBackend(request.federationTarget);
+    if (remote) {
+      return await remote.listBackends(stripFederationTarget(request));
+    }
     return await this.registry.listBackends(request);
   }
 
   async setThreadExecutionMode(
     request: SetThreadExecutionModeRequest,
   ): Promise<SetThreadExecutionModeResponse> {
+    const remote = this.remoteBackend(request.federationTarget);
+    if (remote) {
+      return await remote.setThreadExecutionMode(
+        stripFederationTarget(request),
+      );
+    }
     return await this.registry.setThreadExecutionMode(request);
   }
 
   async setAcpSessionRuntimeOption(
     request: SetAcpSessionRuntimeOptionRequest,
   ): Promise<SetAcpSessionRuntimeOptionResponse> {
+    const remote = this.remoteBackend(request.federationTarget);
+    if (remote) {
+      return await remote.setAcpSessionRuntimeOption(
+        stripFederationTarget(request),
+      );
+    }
     return await this.registry.setAcpSessionRuntimeOption(request);
   }
 
   async cancelThreadExecutionModeQueue(
     request: CancelThreadExecutionModeQueueRequest,
   ): Promise<CancelThreadExecutionModeQueueResponse> {
+    const remote = this.remoteBackend(request.federationTarget);
+    if (remote) {
+      return await remote.cancelThreadExecutionModeQueue(
+        stripFederationTarget(request),
+      );
+    }
     return await this.registry.cancelThreadExecutionModeQueue(request);
   }
 
   async setThreadModelSettings(
     request: SetThreadModelSettingsRequest,
   ): Promise<SetThreadModelSettingsResponse> {
+    const remote = this.remoteBackend(request.federationTarget);
+    if (remote) {
+      return await remote.setThreadModelSettings(
+        stripFederationTarget(request),
+      );
+    }
     return await this.registry.setThreadModelSettings(request);
   }
 
@@ -388,12 +537,54 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
   async submitServerRequest(
     request: SubmitServerRequestRequest,
   ): Promise<SubmitServerRequestResponse> {
+    const remote = this.remoteBackend(request.federationTarget);
+    if (remote) {
+      return await remote.submitServerRequest(
+        stripFederationTarget(request),
+      );
+    }
     return await this.registry.submitServerRequest(request);
   }
 
   onEvent(listener: (event: AgentEvent) => void | Promise<void>): () => void {
-    return this.registry.onEvent(listener);
+    const unsubscribeLocal = this.registry.onEvent(listener);
+    const unsubscribeRemote = this.federation?.onRemoteBackendEvent(listener);
+    return () => {
+      unsubscribeLocal();
+      unsubscribeRemote?.();
+    };
   }
+
+  private remoteBackend(
+    target: FederationTarget | undefined,
+  ): FederationBackendOperations | undefined {
+    return target &&
+      isRemoteFederationTarget(target) &&
+      this.federation
+      ? this.federation.remoteBackend(target)
+      : undefined;
+  }
+
+  private async readThread(request: {
+    backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
+    threadId: string;
+    includeTurns?: boolean;
+    limit?: number;
+  }) {
+    const remote = this.remoteBackend(request.federationTarget);
+    if (remote) {
+      return await remote.readThread(stripFederationTarget(request));
+    }
+    return await this.registry.readThread(request);
+  }
+}
+
+function stripFederationTarget<T extends { federationTarget?: FederationTarget }>(
+  request: T,
+): Omit<T, "federationTarget"> {
+  const { federationTarget: _federationTarget, ...localRequest } = request;
+  return localRequest;
 }
 
 function findAssistantMessageForText(

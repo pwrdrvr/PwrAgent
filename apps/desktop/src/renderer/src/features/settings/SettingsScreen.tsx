@@ -15,6 +15,7 @@ import type { PwrAgentProfilesState } from "../../lib/usePwrAgentProfiles";
 import type { DesktopSettingsState } from "./useDesktopSettings";
 import { AboutSettings } from "./AboutSettings";
 import { ExperimentalSettings } from "./ExperimentalSettings";
+import { FederationSettings } from "./FederationSettings";
 import { GeneralSettings } from "./GeneralSettings";
 import { GitSettings } from "./GitSettings";
 import { MessagingSettings } from "./MessagingSettings";
@@ -41,6 +42,7 @@ export type SettingsSection =
   | "git"
   | "experimental"
   | "messaging"
+  | "federation"
   | "models"
   | "profiles"
   | "applications"
@@ -57,6 +59,7 @@ const SECTIONS: Array<{ id: SettingsSection; label: string }> = [
   { id: "models", label: "AI Providers" },
   { id: "messaging", label: "Messaging" },
   { id: "git", label: "Git" },
+  { id: "federation", label: "Federation" },
   { id: "worktrees", label: "Worktrees" },
   { id: "thread-management", label: "Thread Management" },
   { id: "archived", label: "Archived Threads" },
@@ -71,9 +74,10 @@ const PRIMARY_SECTIONS: SettingsSection[] = [
   "profiles",
   "models",
   "messaging",
+  "federation",
 ];
 
-const SETTINGS_NAV_DIVIDER_AFTER: SettingsSection = "messaging";
+const SETTINGS_NAV_DIVIDER_AFTER: SettingsSection = "federation";
 
 const SECTION_LABELS = new Map(
   SECTIONS.map((section) => [section.id, section.label] as const),
@@ -645,6 +649,20 @@ function SettingsSectionBody(props: {
             messaging: { line: delta },
           });
         }}
+      />
+    );
+  }
+
+  if (props.section === "federation") {
+    return (
+      <FederationSettings
+        desktopApi={props.desktopApi}
+        saving={props.settings.saving}
+        snapshot={props.snapshot}
+        onClearSecret={props.settings.clearSecret}
+        onReplaceSecret={props.settings.replaceSecret}
+        onSettingsChanged={props.settings.refresh}
+        onWriteConfig={props.settings.writeConfig}
       />
     );
   }

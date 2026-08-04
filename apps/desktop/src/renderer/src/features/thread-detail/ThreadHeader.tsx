@@ -142,6 +142,11 @@ export function ThreadHeader(props: ThreadHeaderProps) {
                 )}
               </h2>
             </div>
+            {props.thread.federation ? (
+              <span className="chip">
+                {props.thread.federation.instanceLabel}
+              </span>
+            ) : null}
             <span className="chip chip--backend">
               {formatBackendLabel(props.thread.source)}
             </span>

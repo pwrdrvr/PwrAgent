@@ -197,6 +197,43 @@ function createSnapshot(
       editedFilesDock: { value: "above", source: "default" },
       actionRunsDock: { value: "above", source: "default" },
     },
+    federation: {
+      mode: { value: "disabled", source: "default" },
+      listenHost: { value: "127.0.0.1", source: "default" },
+      listenPort: { value: 47830, source: "default" },
+      publicUrl: { value: "", source: "default" },
+      gatewayUrl: { value: "", source: "default" },
+      cloudflareMtlsEnabled: { value: false, source: "default" },
+      cloudflareAccessServiceAuthEnabled: {
+        value: false,
+        source: "default",
+      },
+      instancePrivateKey: {
+        configured: false,
+        source: "unset",
+        writable: true,
+      },
+      cloudflareClientCertificate: {
+        configured: false,
+        source: "unset",
+        writable: true,
+      },
+      cloudflareClientPrivateKey: {
+        configured: false,
+        source: "unset",
+        writable: true,
+      },
+      cloudflareAccessClientId: {
+        configured: false,
+        source: "unset",
+        writable: true,
+      },
+      cloudflareAccessClientSecret: {
+        configured: false,
+        source: "unset",
+        writable: true,
+      },
+    },
     messaging: {
       enabled: { value: true, source: "default" },
       allowFullAccessEscalation: { value: true, source: "default" },
@@ -4077,6 +4114,7 @@ describe("SettingsScreen", () => {
       "Profiles",
       "AI Providers",
       "Messaging",
+      "Federation",
       "Git",
       "Worktrees",
       "Thread Management",

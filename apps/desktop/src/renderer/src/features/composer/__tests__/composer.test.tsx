@@ -94,6 +94,9 @@ function createDeferred<T>(): {
 }
 
 afterEach(async () => {
+  delete (window as unknown as {
+    __pwragentFederationTarget?: unknown;
+  }).__pwragentFederationTarget;
   vi.useRealTimers();
   await flushReactUpdates();
   vi.mocked(normalizeImageFile).mockClear();
@@ -1100,7 +1103,7 @@ describe("Composer", () => {
     expect(screen.getByText(unavailableReason)).toHaveClass("composer__meta--error");
   });
 
-  it("opens the current workspace in discovered applications", async () => {
+  it("opens a remote thread workspace on its owning instance", async () => {
     const openApplication = vi.fn(async () => ({ opened: true as const }));
 
     render(
@@ -1154,6 +1157,18 @@ describe("Composer", () => {
           titleSource: "explicit",
           source: "codex",
           executionMode: "default",
+          federation: {
+            ref: {
+              backend: "codex",
+              target: {
+                scope: "remote",
+                instanceId: "remote-instance",
+              },
+              threadId: "thread-1",
+            },
+            instanceLabel: "Tart VM",
+            peerStatus: "connected",
+          },
           linkedDirectories: [
             {
               id: "directory-1",
@@ -1171,6 +1186,10 @@ describe("Composer", () => {
     await waitFor(() => {
       expect(openApplication).toHaveBeenCalledWith({
         applicationId: "vscode",
+        federationTarget: {
+          scope: "remote",
+          instanceId: "remote-instance",
+        },
         kind: "editor",
         targetPath: "/repo/PwrAgent",
       });
@@ -1180,6 +1199,10 @@ describe("Composer", () => {
     await waitFor(() => {
       expect(openApplication).toHaveBeenCalledWith({
         applicationId: "ghostty",
+        federationTarget: {
+          scope: "remote",
+          instanceId: "remote-instance",
+        },
         kind: "terminal",
         targetPath: "/repo/PwrAgent",
       });
@@ -1330,6 +1353,55 @@ describe("Composer", () => {
 
     expect(screen.queryByRole("button", { name: "VS Code" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Ghostty" })).not.toBeInTheDocument();
+  });
+
+  it("does not offer the controller's disk picker in a remote launchpad", () => {
+    (window as unknown as {
+      __pwragentFederationTarget?: unknown;
+    }).__pwragentFederationTarget = {
+      scope: "remote",
+      instanceId: "remote-instance",
+    };
+    const onPickAndRegisterDirectory = vi.fn();
+
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        directories={[
+          {
+            key: "directory:/remote/repo",
+            kind: "directory",
+            label: "Remote repo",
+            path: "/remote/repo",
+            threadKeys: [],
+            needsAttentionCount: 0,
+          },
+        ]}
+        disabled={false}
+        launchpad={{
+          directoryKey: "workspace:new-thread",
+          directoryKind: "workspace",
+          directoryLabel: "Workspaces",
+          backend: "codex",
+          executionMode: "default",
+          prompt: "",
+          workMode: "local",
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+        onPickAndRegisterDirectory={onPickAndRegisterDirectory}
+        onSelectDirectoryFromPicker={() => undefined}
+        skills={[]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Choose a project" }));
+
+    expect(screen.getByRole("option", { name: /remote repo/i })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /add directory/i }),
+    ).not.toBeInTheDocument();
+    expect(onPickAndRegisterDirectory).not.toHaveBeenCalled();
   });
 
   it("shows thread environment commands from refreshed environment options", async () => {

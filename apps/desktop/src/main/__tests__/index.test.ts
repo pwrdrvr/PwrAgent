@@ -34,6 +34,8 @@ const disposeDiagnosticsIpcHandlersMock = vi.fn();
 const stopAllCodexEnvironmentDetachedCommandsMock = vi.fn(() => 0);
 const registerComposerDraftIpcHandlersMock = vi.fn();
 const disposeComposerDraftIpcHandlersMock = vi.fn();
+const registerFederationIpcHandlersMock = vi.fn();
+const disposeFederationIpcHandlersMock = vi.fn();
 const registerPreloadLogIpcHandlersMock = vi.fn();
 const disposePreloadLogIpcHandlersMock = vi.fn();
 const registerProfilesIpcHandlersMock = vi.fn();
@@ -76,6 +78,8 @@ const initializeAppStateMock = vi.fn();
 const disposeAppStateMock = vi.fn();
 const isAppStateInitializedMock = vi.fn();
 const messagingRuntimeStartMock = vi.fn<() => Promise<void>>();
+const federationRuntimeRestartMock = vi.fn<() => Promise<void>>();
+const disposeDesktopFederationRuntimeMock = vi.fn<() => Promise<void>>();
 const messagingLeaseStartMock = vi.fn<() => Promise<void>>();
 const messagingLeaseShutdownSyncMock = vi.fn();
 const getRuntimeMessagingLeaseCoordinatorMock = vi.fn();
@@ -291,6 +295,11 @@ vi.mock("../ipc/composer-drafts", () => ({
   disposeComposerDraftIpcHandlers: disposeComposerDraftIpcHandlersMock,
 }));
 
+vi.mock("../ipc/federation", () => ({
+  registerFederationIpcHandlers: registerFederationIpcHandlersMock,
+  disposeFederationIpcHandlers: disposeFederationIpcHandlersMock,
+}));
+
 vi.mock("../ipc/preload-log", () => ({
   registerPreloadLogIpcHandlers: registerPreloadLogIpcHandlersMock,
   disposePreloadLogIpcHandlers: disposePreloadLogIpcHandlersMock,
@@ -346,6 +355,13 @@ vi.mock("../messaging/messaging-runtime", () => ({
     getPlatformStatuses: vi.fn(() => []),
   })),
   disposeDesktopMessagingRuntime: disposeDesktopMessagingRuntimeMock,
+}));
+
+vi.mock("../federation/federation-runtime", () => ({
+  getDesktopFederationRuntime: vi.fn(() => ({
+    restart: federationRuntimeRestartMock,
+  })),
+  disposeDesktopFederationRuntime: disposeDesktopFederationRuntimeMock,
 }));
 
 vi.mock("../runtime-messaging-lease", () => ({
@@ -456,6 +472,8 @@ describe("bootstrapApp", () => {
     disposeIntegratedTerminalIpcHandlersMock.mockReset();
     registerComposerDraftIpcHandlersMock.mockReset();
     disposeComposerDraftIpcHandlersMock.mockReset();
+    registerFederationIpcHandlersMock.mockReset();
+    disposeFederationIpcHandlersMock.mockReset();
     registerPreloadLogIpcHandlersMock.mockReset();
     disposePreloadLogIpcHandlersMock.mockReset();
     registerProfilesIpcHandlersMock.mockReset();
@@ -522,6 +540,10 @@ describe("bootstrapApp", () => {
     isAppStateInitializedMock.mockReturnValue(true);
     messagingRuntimeStartMock.mockReset();
     messagingRuntimeStartMock.mockResolvedValue();
+    federationRuntimeRestartMock.mockReset();
+    federationRuntimeRestartMock.mockResolvedValue();
+    disposeDesktopFederationRuntimeMock.mockReset();
+    disposeDesktopFederationRuntimeMock.mockResolvedValue();
     messagingLeaseStartMock.mockReset();
     messagingLeaseStartMock.mockResolvedValue();
     messagingLeaseShutdownSyncMock.mockReset();
@@ -628,6 +650,7 @@ describe("bootstrapApp", () => {
     expect(registerAgentIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(registerApplicationIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(registerComposerDraftIpcHandlersMock).toHaveBeenCalledTimes(1);
+    expect(registerFederationIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(registerImageNormalizationIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(registerIntegratedTerminalIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(registerPreloadLogIpcHandlersMock).toHaveBeenCalledTimes(1);
@@ -1208,12 +1231,14 @@ describe("bootstrapApp", () => {
     expect(event.preventDefault).toHaveBeenCalledOnce();
     expect(disposeComposerDraftIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeIntegratedTerminalIpcHandlersMock).toHaveBeenCalledTimes(1);
+    expect(disposeFederationIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeSettingsIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeAppServerIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeAppServerIpcHandlersMock.mock.invocationCallOrder[0]).toBeLessThan(
       disposeAppStateMock.mock.invocationCallOrder[0],
     );
     expect(disposeDesktopMessagingRuntimeMock).toHaveBeenCalledTimes(1);
+    expect(disposeDesktopFederationRuntimeMock).toHaveBeenCalledTimes(1);
     expect(disposeAppStateMock).toHaveBeenCalledTimes(1);
     expect(quitMock).toHaveBeenCalledTimes(1);
 
@@ -1221,6 +1246,7 @@ describe("bootstrapApp", () => {
     await flushMicrotasks();
     expect(disposeAppServerIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeDesktopMessagingRuntimeMock).toHaveBeenCalledTimes(1);
+    expect(disposeDesktopFederationRuntimeMock).toHaveBeenCalledTimes(1);
   });
 
   it("reuses one quit barrier while messaging and app-server teardown settle", async () => {
@@ -1413,6 +1439,7 @@ describe("bootstrapApp", () => {
     expect(disposeApplicationIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeComposerDraftIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeIntegratedTerminalIpcHandlersMock).toHaveBeenCalledTimes(1);
+    expect(disposeFederationIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeSettingsIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeWindowPointerIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeRuntimeIdentityIpcHandlersMock).not.toHaveBeenCalled();

@@ -25,6 +25,9 @@ describe("useThreadNavigation", () => {
     delete (window as unknown as {
       __pwragentNavigationPreferences?: unknown;
     }).__pwragentNavigationPreferences;
+    delete (window as unknown as {
+      __pwragentFederationTarget?: unknown;
+    }).__pwragentFederationTarget;
     vi.restoreAllMocks();
   });
 
@@ -1926,6 +1929,67 @@ describe("useThreadNavigation", () => {
     expect(result.current.directories[0]?.needsAttentionCount).toBe(0);
   });
 
+  it("archives a remote thread through its owning federation target", async () => {
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "remote-instance",
+    };
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: 1_000,
+      unchanged: false,
+      inboxThreadKeys: ["codex:thread-remote"],
+      threads: [
+        {
+          id: "thread-remote",
+          title: "Remote thread",
+          titleSource: "explicit" as const,
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: { inInbox: true },
+          federation: {
+            instanceLabel: "Remote Mac",
+            ref: {
+              backend: "codex" as const,
+              target: federationTarget,
+              threadId: "thread-remote",
+            },
+          },
+        },
+      ],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const archiveThread = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-remote",
+      archivedAt: 2_000,
+      cleanup: [],
+    }));
+    const desktopApi: DesktopApi = {
+      archiveThread,
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+    };
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.threads[0]?.id).toBe("thread-remote");
+    });
+    await act(async () => {
+      await result.current.archiveThread(result.current.threads[0]!);
+    });
+
+    expect(archiveThread).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-remote",
+      federationTarget,
+    });
+  });
+
   it("surfaces archive worktree cleanup failures returned by the desktop bridge", async () => {
     let archived = false;
     const getNavigationSnapshot = vi.fn(async () => ({
@@ -2402,6 +2466,12 @@ describe("useThreadNavigation", () => {
   });
 
   it("renames a thread and refreshes navigation with the explicit title", async () => {
+    (window as unknown as {
+      __pwragentFederationTarget?: unknown;
+    }).__pwragentFederationTarget = {
+      scope: "remote",
+      instanceId: "remote-instance",
+    };
     let threadTitle = "First thread";
     const renameThread = vi.fn(async ({ name }: { name: string }) => {
       threadTitle = name;
@@ -2461,6 +2531,10 @@ describe("useThreadNavigation", () => {
 
     expect(renameThread).toHaveBeenCalledWith({
       backend: "codex",
+      federationTarget: {
+        scope: "remote",
+        instanceId: "remote-instance",
+      },
       threadId: "thread-1",
       name: "Renamed thread",
     });

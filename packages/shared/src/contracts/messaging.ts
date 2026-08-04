@@ -8,6 +8,7 @@ import type {
   AppServerBackendKind,
   ThreadIdentifier,
 } from "./normalized-app-server";
+import type { FederatedThreadRef } from "./federation";
 
 export const MESSAGING_TOOL_UPDATE_MODES = [
   "show_none",
@@ -212,6 +213,8 @@ export type MessagingActivityEntry = {
   kind: MessagingActivityKind;
   /** Backend the entry routed to / from, if known. */
   backend?: AppServerBackendKind;
+  /** Remote thread target for federation-routed messaging activity. */
+  federatedThread?: FederatedThreadRef;
   threadId?: ThreadIdentifier;
   bindingId?: string;
   conversationId?: string;

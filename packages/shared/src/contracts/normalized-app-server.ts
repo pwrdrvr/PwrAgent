@@ -3,6 +3,7 @@ import type {
   MessagingChannelKind,
   MessagingConversationKind,
 } from "./messaging";
+import type { FederationTarget } from "./federation";
 import type {
   PrSummary,
   ThreadPrAutoDispatchEventKind,
@@ -662,6 +663,7 @@ export type AppServerThreadReplay = {
 export type AppServerListThreadsRequest = {
   backend?: AppServerBackendKind;
   archived?: boolean;
+  federationTarget?: FederationTarget;
   filter?: string;
 };
 
@@ -684,6 +686,7 @@ export type ArchiveThreadCleanupResult = {
 export type ArchiveThreadRequest = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
+  federationTarget?: FederationTarget;
 };
 
 export type ArchiveThreadResponse = {
@@ -756,6 +759,7 @@ export type ThreadWorkspaceHandoffStashSummary = {
 
 export type HandoffThreadWorkspaceRequest = {
   backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   direction: ThreadWorkspaceHandoffDirection;
   strategy?: ThreadWorkspaceHandoffStrategy;
@@ -806,6 +810,7 @@ export type RestoreWorktreeResponse = {
 
 export type RenameThreadRequest = {
   backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   name: string;
 };
@@ -818,6 +823,7 @@ export type RenameThreadResponse = {
 
 export type AppServerReadThreadRequest = {
   backend?: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   includeTurns?: boolean;
   before?: string;
@@ -949,6 +955,7 @@ export type AppServerListSkillsRequest = {
   backend?: AppServerBackendKind;
   cwd?: string;
   cwds?: string[];
+  federationTarget?: FederationTarget;
   threadId?: ThreadIdentifier;
 };
 

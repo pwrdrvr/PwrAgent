@@ -1,14 +1,26 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AgentEvent,
+  CancelThreadExecutionModeQueueRequest,
+  CompactThreadRequest,
+  ForkThreadRequest,
   InterruptTurnRequest,
   ListBackendsRequest,
   MaterializeDirectoryLaunchpadRequest,
+  QueueThreadExecutionModeRequest,
+  RunCodexEnvironmentActionRequest,
+  StopCodexEnvironmentActionRequest,
+  SetAcpSessionRuntimeOptionRequest,
+  SetCodexThreadEnvironmentRequest,
+  SetThreadExecutionModeRequest,
+  SetThreadModelSettingsRequest,
   StopSubAgentRequest,
   StartReviewRequest,
   StartThreadRequest,
   StartTurnRequest,
   SteerTurnRequest,
+  SubmitServerRequestRequest,
+  TrustCodexProjectRequest,
 } from "@pwragent/shared";
 
 const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
@@ -79,7 +91,149 @@ const registry = {
       turnId: "turn-2",
     }),
   ),
+  trustCodexProject: vi.fn(async (request: TrustCodexProjectRequest) => ({
+    ...request,
+    trusted: true,
+  })),
+  getLatestCodexConfigWarning: vi.fn(() => ({})),
 };
+
+const federationMock = vi.hoisted(() => {
+  const remoteBackend = {
+    listBackends: vi.fn(async () => ({ fetchedAt: 1, backends: [] })),
+    startThread: vi.fn(async (request: StartThreadRequest) => ({
+      backend: request.backend,
+      threadId: "remote-thread-1",
+      executionMode: "default" as const,
+    })),
+    forkThread: vi.fn(async (request: ForkThreadRequest) => ({
+      backend: request.backend,
+      sourceThreadId: request.sourceThreadId,
+      threadId: "remote-fork-1",
+      executionMode: "default" as const,
+      workMode: "local" as const,
+    })),
+    startTurn: vi.fn(async (request: StartTurnRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: "remote-turn-1",
+      queueStatus: "started" as const,
+    })),
+    startReview: vi.fn(async (request: StartReviewRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      reviewThreadId: request.threadId,
+      turnId: "remote-review-1",
+    })),
+    compactThread: vi.fn(async (request: CompactThreadRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: "remote-compact-1",
+    })),
+    interruptTurn: vi.fn(async (request: InterruptTurnRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: request.turnId,
+    })),
+    steerTurn: vi.fn(async (request: SteerTurnRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: request.expectedTurnId,
+    })),
+    setThreadExecutionMode: vi.fn(
+      async (request: SetThreadExecutionModeRequest) => ({
+        backend: request.backend,
+        threadId: request.threadId,
+        executionMode: request.executionMode,
+      }),
+    ),
+    queueThreadExecutionMode: vi.fn(
+      async (request: QueueThreadExecutionModeRequest) => ({
+        backend: request.backend,
+        threadId: request.threadId,
+        queuedExecutionMode: request.executionMode,
+        queuedAt: 1_000,
+      }),
+    ),
+    cancelThreadExecutionModeQueue: vi.fn(
+      async (request: CancelThreadExecutionModeQueueRequest) => ({
+        backend: request.backend,
+        threadId: request.threadId,
+        executionMode: "default" as const,
+      }),
+    ),
+    setAcpSessionRuntimeOption: vi.fn(
+      async (request: SetAcpSessionRuntimeOptionRequest) => ({
+        backend: request.backend,
+        threadId: request.threadId,
+      }),
+    ),
+    setThreadModelSettings: vi.fn(
+      async (request: SetThreadModelSettingsRequest) => request,
+    ),
+    runCodexEnvironmentAction: vi.fn(
+      async (request: RunCodexEnvironmentActionRequest) => ({
+        backend: request.backend,
+        threadId: request.threadId,
+        codexEnvironmentRuntime: {
+          environmentId: "node",
+          environmentName: "Node",
+          executionTarget: "local" as const,
+        },
+      }),
+    ),
+    stopCodexEnvironmentAction: vi.fn(
+      async (request: StopCodexEnvironmentActionRequest) => ({
+        backend: request.backend,
+        threadId: request.threadId,
+        codexEnvironmentRuntime: {
+          environmentId: "node",
+          environmentName: "Node",
+          executionTarget: "local" as const,
+        },
+      }),
+    ),
+    setCodexThreadEnvironment: vi.fn(
+      async (request: SetCodexThreadEnvironmentRequest) => ({
+        backend: request.backend,
+        threadId: request.threadId,
+        codexEnvironmentRuntime: request.environmentId
+          ? {
+              environmentId: request.environmentId,
+              environmentName: request.environmentId,
+              executionTarget: "local" as const,
+            }
+          : undefined,
+      }),
+    ),
+    materializeDirectoryLaunchpad: vi.fn(
+      async (request: MaterializeDirectoryLaunchpadRequest) => ({
+        backend: "codex" as const,
+        threadId: `remote:${request.directoryKey}`,
+        executionMode: "default" as const,
+        workMode: "local" as const,
+      }),
+    ),
+    submitServerRequest: vi.fn(async (request: SubmitServerRequestRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: request.turnId,
+      requestId: request.requestId,
+    })),
+    trustCodexProject: vi.fn(async (request: TrustCodexProjectRequest) => ({
+      ...request,
+      trusted: true,
+    })),
+  };
+  return {
+    remoteBackend,
+    runtime: {
+      remoteBackend: vi.fn(() => remoteBackend),
+      setAgentEventPublisher: vi.fn(),
+      setEnvironmentSetupProgressPublisher: vi.fn(),
+    },
+  };
+});
 
 vi.mock("electron", () => ({
   BrowserWindow: {
@@ -118,6 +272,10 @@ vi.mock("../app-server/backend-registry", () => ({
   getDesktopBackendRegistry: () => registry,
 }));
 
+vi.mock("../federation/federation-runtime", () => ({
+  getDesktopFederationRuntime: () => federationMock.runtime,
+}));
+
 describe("agent ipc", () => {
   beforeEach(() => {
     handlers.clear();
@@ -133,7 +291,280 @@ describe("agent ipc", () => {
     registry.stopSubAgent.mockClear();
     registry.steerTurn.mockClear();
     registry.materializeDirectoryLaunchpad.mockClear();
+    federationMock.runtime.remoteBackend.mockClear();
+    federationMock.runtime.setAgentEventPublisher.mockClear();
+    federationMock.runtime.setEnvironmentSetupProgressPublisher.mockClear();
+    for (const method of Object.values(federationMock.remoteBackend)) {
+      method.mockClear();
+    }
     registryListener = undefined;
+  });
+
+  it("routes remote thread controls through federation without leaking the target", async () => {
+    const { registerAgentIpcHandlers, disposeAgentIpcHandlers } = await import(
+      "../ipc/agent-ipc"
+    );
+    const {
+      AGENT_CANCEL_THREAD_EXECUTION_MODE_QUEUE_CHANNEL,
+      AGENT_COMPACT_THREAD_CHANNEL,
+      AGENT_FORK_THREAD_CHANNEL,
+      AGENT_INTERRUPT_TURN_CHANNEL,
+      AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
+      AGENT_QUEUE_THREAD_EXECUTION_MODE_CHANNEL,
+      AGENT_RUN_CODEX_ENVIRONMENT_ACTION_CHANNEL,
+      AGENT_STOP_CODEX_ENVIRONMENT_ACTION_CHANNEL,
+      AGENT_SET_ACP_SESSION_RUNTIME_OPTION_CHANNEL,
+      AGENT_SET_CODEX_THREAD_ENVIRONMENT_CHANNEL,
+      AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL,
+      AGENT_SET_THREAD_MODEL_SETTINGS_CHANNEL,
+      AGENT_START_TURN_CHANNEL,
+      AGENT_START_REVIEW_CHANNEL,
+      AGENT_START_THREAD_CHANNEL,
+      AGENT_STEER_TURN_CHANNEL,
+      AGENT_SUBMIT_SERVER_REQUEST_CHANNEL,
+      AGENT_TRUST_CODEX_PROJECT_CHANNEL,
+    } = await import("../../shared/ipc");
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "client_one",
+    };
+
+    registerAgentIpcHandlers();
+
+    await handlers.get(AGENT_START_THREAD_CHANNEL)?.({}, {
+      backend: "codex",
+      federationTarget,
+      cwd: "/repo/app",
+    });
+    await handlers.get(AGENT_TRUST_CODEX_PROJECT_CHANNEL)?.({}, {
+      federationTarget,
+      projectPath: "/repo/app",
+      configPath: "/remote/.codex/config.toml",
+    });
+    await handlers.get(AGENT_FORK_THREAD_CHANNEL)?.({}, {
+      backend: "codex",
+      federationTarget,
+      sourceThreadId: "thread-1",
+    });
+    await handlers.get(AGENT_START_TURN_CHANNEL)?.({}, {
+      backend: "codex",
+      federationTarget,
+      threadId: "thread-1",
+      input: [{ type: "text", text: "Ship it" }],
+    });
+    await handlers.get(AGENT_START_REVIEW_CHANNEL)?.({}, {
+      backend: "codex",
+      federationTarget,
+      threadId: "thread-1",
+      target: { type: "uncommittedChanges" },
+    });
+    await handlers.get(AGENT_COMPACT_THREAD_CHANNEL)?.({}, {
+      backend: "codex",
+      federationTarget,
+      threadId: "thread-1",
+    });
+    await handlers.get(AGENT_INTERRUPT_TURN_CHANNEL)?.({}, {
+      backend: "codex",
+      federationTarget,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+    await handlers.get(AGENT_STEER_TURN_CHANNEL)?.({}, {
+      backend: "codex",
+      federationTarget,
+      threadId: "thread-1",
+      expectedTurnId: "turn-1",
+      input: [{ type: "text", text: "Actually do this" }],
+    });
+    await handlers.get(AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL)?.({}, {
+      backend: "codex",
+      federationTarget,
+      threadId: "thread-1",
+      executionMode: "plan",
+    });
+    await handlers.get(AGENT_QUEUE_THREAD_EXECUTION_MODE_CHANNEL)?.({}, {
+      backend: "codex",
+      federationTarget,
+      threadId: "thread-1",
+      executionMode: "default",
+    });
+    await handlers.get(AGENT_CANCEL_THREAD_EXECUTION_MODE_QUEUE_CHANNEL)?.({}, {
+      backend: "codex",
+      federationTarget,
+      threadId: "thread-1",
+    });
+    await handlers.get(AGENT_SET_ACP_SESSION_RUNTIME_OPTION_CHANNEL)?.({}, {
+      backend: "acp:gemini",
+      federationTarget,
+      threadId: "thread-1",
+      source: "model",
+      optionId: "model",
+      value: "gemini-pro",
+    });
+    await handlers.get(AGENT_SET_THREAD_MODEL_SETTINGS_CHANNEL)?.({}, {
+      backend: "codex",
+      federationTarget,
+      threadId: "thread-1",
+      model: "gpt-5-codex",
+    });
+    await handlers.get(AGENT_RUN_CODEX_ENVIRONMENT_ACTION_CHANNEL)?.({}, {
+      backend: "codex",
+      federationTarget,
+      threadId: "thread-1",
+      actionId: "setup",
+      cwd: "/repo/app",
+    });
+    await handlers.get(AGENT_STOP_CODEX_ENVIRONMENT_ACTION_CHANNEL)?.({}, {
+      backend: "codex",
+      federationTarget,
+      threadId: "thread-1",
+      runId: "run-1",
+      mode: "stop",
+    });
+    await handlers.get(AGENT_SET_CODEX_THREAD_ENVIRONMENT_CHANNEL)?.({}, {
+      backend: "codex",
+      federationTarget,
+      threadId: "thread-1",
+      environmentId: "node",
+      actionId: "setup",
+    });
+    await handlers.get(AGENT_SUBMIT_SERVER_REQUEST_CHANNEL)?.({}, {
+      backend: "codex",
+      federationTarget,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      requestId: "approval-1",
+      response: { decision: "approve" },
+    });
+    await handlers.get(AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL)?.({}, {
+      directoryKey: "directory:/repo/app",
+      federationTarget,
+    });
+
+    expect(federationMock.runtime.remoteBackend).toHaveBeenCalledWith(federationTarget);
+    expect(federationMock.remoteBackend.startThread).toHaveBeenCalledWith({
+      backend: "codex",
+      cwd: "/repo/app",
+    });
+    expect(federationMock.remoteBackend.forkThread).toHaveBeenCalledWith({
+      backend: "codex",
+      sourceThreadId: "thread-1",
+    });
+    expect(federationMock.remoteBackend.startTurn).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      input: [{ type: "text", text: "Ship it" }],
+    });
+    expect(federationMock.remoteBackend.startReview).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      target: { type: "uncommittedChanges" },
+    });
+    expect(federationMock.remoteBackend.compactThread).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(federationMock.remoteBackend.interruptTurn).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+    expect(federationMock.remoteBackend.steerTurn).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      expectedTurnId: "turn-1",
+      input: [{ type: "text", text: "Actually do this" }],
+    });
+    expect(federationMock.remoteBackend.setThreadExecutionMode).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      executionMode: "plan",
+    });
+    expect(federationMock.remoteBackend.queueThreadExecutionMode).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      executionMode: "default",
+    });
+    expect(
+      federationMock.remoteBackend.cancelThreadExecutionModeQueue,
+    ).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(federationMock.remoteBackend.setAcpSessionRuntimeOption).toHaveBeenCalledWith({
+      backend: "acp:gemini",
+      threadId: "thread-1",
+      source: "model",
+      optionId: "model",
+      value: "gemini-pro",
+    });
+    expect(federationMock.remoteBackend.setThreadModelSettings).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      model: "gpt-5-codex",
+    });
+    expect(federationMock.remoteBackend.runCodexEnvironmentAction).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      actionId: "setup",
+      cwd: "/repo/app",
+    });
+    expect(federationMock.remoteBackend.stopCodexEnvironmentAction).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      runId: "run-1",
+      mode: "stop",
+    });
+    expect(federationMock.remoteBackend.setCodexThreadEnvironment).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      environmentId: "node",
+      actionId: "setup",
+    });
+    expect(federationMock.remoteBackend.submitServerRequest).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      requestId: "approval-1",
+      response: { decision: "approve" },
+    });
+    expect(federationMock.remoteBackend.trustCodexProject).toHaveBeenCalledWith({
+      projectPath: "/repo/app",
+      configPath: "/remote/.codex/config.toml",
+    });
+    expect(
+      federationMock.remoteBackend.materializeDirectoryLaunchpad,
+    ).toHaveBeenCalledWith({
+      directoryKey: "directory:/repo/app",
+    });
+
+    disposeAgentIpcHandlers();
+  });
+
+  it("loads backend summaries from the selected federation peer", async () => {
+    const { registerAgentIpcHandlers, disposeAgentIpcHandlers } = await import(
+      "../ipc/agent-ipc"
+    );
+    const { BACKEND_LIST_CHANNEL } = await import("../../shared/ipc");
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "client_one",
+    };
+    registerAgentIpcHandlers();
+
+    await handlers.get(BACKEND_LIST_CHANNEL)?.({}, {
+      includeUnavailable: true,
+      federationTarget,
+    });
+
+    expect(federationMock.runtime.remoteBackend).toHaveBeenCalledWith(
+      federationTarget,
+    );
+    expect(federationMock.remoteBackend.listBackends).toHaveBeenCalledWith({
+      includeUnavailable: true,
+    });
+    expect(registry.listBackends).not.toHaveBeenCalled();
+    disposeAgentIpcHandlers();
   });
 
   it("registers backend and agent handlers and broadcasts backend-tagged events", async () => {

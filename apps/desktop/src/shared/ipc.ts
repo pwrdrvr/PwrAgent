@@ -1,5 +1,11 @@
 export const APP_SERVER_LIST_THREADS_CHANNEL = "app-server:list-threads";
 export const THREAD_SEARCH_CHANNEL = "thread-search:search";
+export const FEDERATION_OPEN_WINDOW_CHANNEL = "federation:open-window";
+export const FEDERATION_GET_HEALTH_CHANNEL = "federation:get-health";
+export const FEDERATION_GET_DIAGNOSTICS_CHANNEL = "federation:get-diagnostics";
+export const FEDERATION_GENERATE_INVITE_CHANNEL = "federation:generate-invite";
+export const FEDERATION_IMPORT_INVITE_CHANNEL = "federation:import-invite";
+export const FEDERATION_REVOKE_PEER_CHANNEL = "federation:revoke-peer";
 export const APP_SERVER_READ_THREAD_CHANNEL = "app-server:read-thread";
 export const APP_SERVER_GET_THREAD_FILE_DIFF_CHANNEL =
   "app-server:get-thread-file-diff";
@@ -344,6 +350,7 @@ export const SETTINGS_PICK_GH_COMMAND_CHANNEL =
   "settings:pick-gh-command";
 export const ONBOARDING_COMPLETE_CODEX_BOOTSTRAP_CHANNEL =
   "onboarding:complete-codex-bootstrap";
+export const APPLICATIONS_READ_CHANNEL = "applications:read";
 export const APPLICATION_OPEN_CHANNEL = "application:open";
 export const PATH_OPEN_CHANNEL = "path:open";
 export const PATH_REVEAL_CHANNEL = "path:reveal";
