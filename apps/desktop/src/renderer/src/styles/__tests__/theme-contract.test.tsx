@@ -953,10 +953,12 @@ describe("Tangerine Terminal theme contract", () => {
     );
     expect(inlineCodeWrapperRule).toContain("position: relative;");
     expect(inlineCodeWrapperRule).toContain("max-width: 100%;");
+    expect(inlineCodeWrapperRule).toContain("vertical-align: baseline;");
 
     const inlineCopyRule = extractRuleBody(css, ".transcript-copy-button--inline");
     expect(inlineCopyRule).toContain("opacity: 1;");
     expect(inlineCopyRule).toContain("background: transparent;");
+    expect(inlineCopyRule).not.toContain("vertical-align: text-bottom;");
     expect(css).not.toMatch(
       /\.transcript-message__inline-code \.transcript-message__code\s*\{/,
     );

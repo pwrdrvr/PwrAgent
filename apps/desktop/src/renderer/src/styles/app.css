@@ -10034,7 +10034,7 @@ a.transcript-message__messaging-origin:focus-visible {
   position: relative;
   display: inline-block;
   max-width: 100%;
-  vertical-align: text-bottom;
+  vertical-align: baseline;
 }
 
 .transcript-copy-button--inline {
@@ -10046,7 +10046,6 @@ a.transcript-message__messaging-origin:focus-visible {
   color: inherit;
   background: transparent;
   opacity: 1;
-  vertical-align: text-bottom;
 }
 
 .transcript-copy-button--inline::before {
