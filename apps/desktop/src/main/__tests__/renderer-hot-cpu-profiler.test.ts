@@ -443,6 +443,9 @@ describe("RendererHotCpuProfiler", () => {
 
       expect(debuggerApi.sendCommand).toHaveBeenCalledWith("Profiler.start");
       expect(getAppMetrics).toHaveBeenCalledTimes(3);
+      // `Profiler.start` precedes async profile-start bookkeeping. Wait until
+      // its duration timer is registered before asking fake timers to run it.
+      await vi.waitFor(() => expect(vi.getTimerCount()).toBe(1));
 
       await vi.advanceTimersByTimeAsync(config.intervalMs * 4);
       expect(getAppMetrics).toHaveBeenCalledTimes(3);
