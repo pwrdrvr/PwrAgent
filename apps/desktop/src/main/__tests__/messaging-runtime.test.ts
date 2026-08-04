@@ -1288,7 +1288,7 @@ describe("DesktopMessagingRuntime", () => {
     );
   });
 
-  it("cancels pending adapter startup before stopping the runtime", async () => {
+  it("preserves a stop request that arrives before adapters register", async () => {
     await prepareRuntimeStore();
     const telegramStart = createDeferred<void>();
     const slowTelegramAdapter = createAdapter("telegram");
@@ -1318,14 +1318,15 @@ describe("DesktopMessagingRuntime", () => {
     });
 
     const startPromise = runtime.start();
-    await flushMicrotasks();
     const stopPromise = runtime.stop();
     await Promise.all([startPromise, stopPromise]);
 
     expect(slowTelegramAdapter.start).toHaveBeenCalledTimes(1);
     expect(workingDiscordAdapter.start).toHaveBeenCalledTimes(1);
     expect(slowTelegramAdapter.stop).toHaveBeenCalledTimes(1);
-    expect(workingDiscordAdapter.stop).toHaveBeenCalledTimes(1);
+    // The fast adapter settles after cancellation wins the race, so it gets
+    // both immediate failed-start cleanup and the late-start zombie guard.
+    expect(workingDiscordAdapter.stop).toHaveBeenCalledTimes(2);
     expect(runtime.isEnabled()).toBe(false);
     expect(runtime.getPlatformStatuses()).toEqual(
       expect.arrayContaining([
@@ -1375,7 +1376,6 @@ describe("DesktopMessagingRuntime", () => {
     }));
 
     const startPromise = runtime.start();
-    await flushMicrotasks();
     const applyPromise = runtime.applyConfig({
       telegram: {
         channel: "telegram",

@@ -226,6 +226,14 @@ const DELIVERY_BUDGET_WARNING_TTL_MS = 30_000;
 const DELIVERY_BUDGET_DIAGNOSTIC_THROTTLE_MS = 30_000;
 const DEFAULT_ADAPTER_START_TIMEOUT_MS = 90_000;
 const FAILED_START_STOP_TIMEOUT_MS = 3_000;
+const CONFIGURABLE_MESSAGING_CHANNELS = [
+  "discord",
+  "feishu",
+  "line",
+  "mattermost",
+  "slack",
+  "telegram",
+] as const satisfies readonly MessagingChannelKind[];
 
 export type MessagingPairingChangedEvent = {
   at: number;
@@ -339,6 +347,11 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     MessagingChannelKind,
     PendingAdapterStart
   >();
+  private readonly pendingAdapterStartCancellationReasons = new Map<
+    MessagingChannelKind,
+    string
+  >();
+  private pendingAdapterStopReason?: string;
   private lifecycleQueue: Promise<void> = Promise.resolve();
   /**
    * Listeners notified whenever any controller mutates a binding
@@ -365,6 +378,8 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   ) {}
 
   async start(): Promise<void> {
+    this.pendingAdapterStopReason = undefined;
+    this.pendingAdapterStartCancellationReasons.clear();
     await this.enqueueLifecycle(async () => {
       const config = await this.loadConfig({ logStartupEligibility: true });
       await this.applyConfigNow(config);
@@ -372,9 +387,9 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   }
 
   async stop(): Promise<void> {
-    this.cancelPendingAdapterStarts(
-      "Messaging was stopped while adapter startup was still pending.",
-    );
+    const reason = "Messaging was stopped while adapter startup was still pending.";
+    this.pendingAdapterStopReason = reason;
+    this.cancelPendingAdapterStarts(reason);
     await this.enqueueLifecycle(async () => {
       await this.stopNow();
     });
@@ -433,7 +448,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     config: DesktopMessagingConfig,
     options: { allowStart?: boolean } = {},
   ): Promise<void> {
-    this.cancelPendingAdapterStartsDisabledBy(config);
+    this.updatePendingAdapterStartIntent(config);
     await this.enqueueLifecycle(async () => {
       await this.applyConfigNow(config, options);
     });
@@ -972,23 +987,26 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     }
   }
 
-  private cancelPendingAdapterStartsDisabledBy(
+  private updatePendingAdapterStartIntent(
     config: DesktopMessagingConfig,
   ): void {
     if (config.enabled === false) {
-      this.cancelPendingAdapterStarts(
-        "Messaging was disabled while adapter startup was still pending.",
-      );
+      const reason =
+        "Messaging was disabled while adapter startup was still pending.";
+      this.pendingAdapterStopReason = reason;
+      this.cancelPendingAdapterStarts(reason);
       return;
     }
 
-    for (const [channel, pending] of this.pendingAdapterStarts) {
+    this.pendingAdapterStopReason = undefined;
+    for (const channel of CONFIGURABLE_MESSAGING_CHANNELS) {
       if (messagingChannelConfig(config, channel)) {
+        this.pendingAdapterStartCancellationReasons.delete(channel);
         continue;
       }
-      pending.cancel(
-        `${channel} was disabled while adapter startup was still pending.`,
-      );
+      const reason = `${channel} was disabled while adapter startup was still pending.`;
+      this.pendingAdapterStartCancellationReasons.set(channel, reason);
+      this.pendingAdapterStarts.get(channel)?.cancel(reason);
     }
   }
 
@@ -1316,6 +1334,11 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       cancel: (reason) => cancel?.(reason),
     };
     this.pendingAdapterStarts.set(adapter.channel, pending);
+    const queuedCancellationReason = this.pendingAdapterStopReason
+      ?? this.pendingAdapterStartCancellationReasons.get(adapter.channel);
+    if (queuedCancellationReason) {
+      pending.cancel(queuedCancellationReason);
+    }
 
     try {
       await Promise.race([startPromise, cancellation, timeout]);
