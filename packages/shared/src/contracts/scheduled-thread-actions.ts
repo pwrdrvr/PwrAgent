@@ -40,6 +40,7 @@ export type ScheduledThreadTurnPayload = {
 
 export type ScheduledThreadReviewPayload = {
   target: AppServerReviewTarget;
+  draftText?: string;
   delivery?: AppServerReviewDelivery;
   cwd?: string;
   model?: string;

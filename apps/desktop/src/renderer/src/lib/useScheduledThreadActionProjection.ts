@@ -112,7 +112,7 @@ function projectionFromAction(action: ScheduledThreadAction) {
       ? { queueEntryId: action.queueEntryId }
       : {}),
     input: action.turn?.input,
-    text: action.displayText,
+    text: action.review?.draftText ?? action.displayText,
     imageAttachments: action.imageAttachments ?? [],
     fileAttachments: action.fileAttachments ?? [],
     ...(action.review

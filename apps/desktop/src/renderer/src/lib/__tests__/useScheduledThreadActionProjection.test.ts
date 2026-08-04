@@ -64,6 +64,31 @@ describe("scheduled thread action projections", () => {
     expect(store.getQueuedTurns(scopeKey)).toEqual([]);
   });
 
+  it("keeps review display copy separate from its editable slash command", () => {
+    const { result } = renderHook(() => useComposerDraftStore());
+    const store = result.current;
+    const scopeKey = "thread:codex:thread-1";
+
+    applyScheduledActionProjection(store, scheduledAction({
+      kind: "review",
+      displayText: "Review changes against main",
+      turn: undefined,
+      review: {
+        target: { type: "baseBranch", branch: "main" },
+        draftText: "/review main",
+      },
+    }));
+
+    expect(store.getQueuedTurns(scopeKey)).toEqual([
+      expect.objectContaining({
+        text: "/review main",
+        reviewCommand: expect.objectContaining({
+          displayText: "Review changes against main",
+        }),
+      }),
+    ]);
+  });
+
   it("removes stale projections when a refresh no longer returns their scope", () => {
     const { result } = renderHook(() => useComposerDraftStore());
     const store = result.current;

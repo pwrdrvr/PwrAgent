@@ -6249,9 +6249,10 @@ export function Composer(props: ComposerProps) {
         kind: "review",
         origin: "desktop",
         scheduledFor: options?.scheduledSendAt ?? Date.now(),
-        displayText: text,
+        displayText: reviewCommand.displayText,
         review: {
           target: reviewCommand.target,
+          draftText: text,
           delivery: "inline",
           cwd: reviewCommand.cwd,
           model: props.thread.model,
