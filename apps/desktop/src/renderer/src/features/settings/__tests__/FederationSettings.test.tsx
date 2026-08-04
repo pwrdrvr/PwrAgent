@@ -1,5 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -17,6 +18,7 @@ import { FederationSettings } from "../FederationSettings";
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
 });
 
 describe("FederationSettings", () => {
@@ -156,6 +158,68 @@ describe("FederationSettings", () => {
       }),
     );
     expect(openFederationWindow).not.toHaveBeenCalled();
+  });
+
+  it("refreshes stale connection health while settings remains open", async () => {
+    vi.useFakeTimers();
+    const connected: FederationHealthStatus = {
+      enabled: true,
+      role: "client",
+      status: "connected",
+      peers: [
+        {
+          id: "gateway_one",
+          label: "Studio Mac",
+          role: "gateway",
+          status: "connected",
+          capabilities: ["remote_window"],
+        },
+      ],
+    };
+    const disconnected: FederationHealthStatus = {
+      ...connected,
+      status: "connecting",
+      unavailableReason: "Federation gateway connection closed.",
+      peers: connected.peers.map((peer) => ({
+        ...peer,
+        status: "disconnected",
+        unavailableReason: "Federation gateway connection closed.",
+      })),
+    };
+    const readFederationHealth = vi.fn()
+      .mockResolvedValueOnce({ health: connected })
+      .mockResolvedValue({ health: disconnected });
+    const view = render(
+      <FederationSettings
+        desktopApi={{
+          openFederationWindow: vi.fn(),
+          readFederationHealth,
+        }}
+        onClearSecret={vi.fn(async () => true)}
+        onReplaceSecret={vi.fn(async () => true)}
+        saving={false}
+        snapshot={settingsSnapshot()}
+        onSettingsChanged={vi.fn()}
+        onWriteConfig={vi.fn(async () => true)}
+      />,
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.getByText("Connected")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open" })).toBeEnabled();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+
+    expect(screen.getByText("Connecting")).toBeInTheDocument();
+    expect(screen.getAllByText("Federation gateway connection closed."))
+      .toHaveLength(2);
+    expect(screen.getByRole("button", { name: "Open" })).toBeDisabled();
+    view.unmount();
+    vi.useRealTimers();
   });
 
   it("stores Cloudflare client credentials before enabling edge policy", async () => {

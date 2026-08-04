@@ -116,6 +116,10 @@ export function FederationSettings(props: FederationSettingsProps) {
 
   useEffect(() => {
     void loadHealth();
+    const refreshInterval = window.setInterval(() => {
+      void loadHealth();
+    }, 2_000);
+    return () => window.clearInterval(refreshInterval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.desktopApi]);
 
