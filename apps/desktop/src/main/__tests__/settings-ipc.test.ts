@@ -827,7 +827,7 @@ describe("settings ipc", () => {
       now: () => 20,
     });
 
-    initializeAppState();
+    initializeAppState("bootstrap");
     try {
       registerSettingsIpcHandlers(service);
       // Even before any discovery (cache-only read), all four supported
@@ -885,9 +885,17 @@ describe("settings ipc", () => {
       ).toHaveBeenCalledWith(
         expect.objectContaining({ backendId: "acp:gemini" }),
         expect.objectContaining({
-          cwd: expect.stringContaining("acp-discovery-workspace"),
+          cwd: path.join(
+            tempRoot,
+            ".bootstrap",
+            "state",
+            "acp-discovery-workspace",
+          ),
         }),
       );
+      expect(
+        fs.existsSync(path.join(tempRoot, "profiles", "default")),
+      ).toBe(false);
     } finally {
       disposeAppState();
     }

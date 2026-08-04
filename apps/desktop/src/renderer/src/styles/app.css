@@ -18954,32 +18954,6 @@ a.transcript-message__messaging-origin:focus-visible {
   color: var(--status-error);
 }
 
-/* Per-row xAI key control on Multiple/Isolated name step. Collapsed
-   state is a single subtle link (so a row without an override stays
-   visually quiet); expanding reveals an inline password input that
-   commits to the operator's per-profile override map at wizard
-   state level, then graduates at Finish. */
-.onboarding-wizard__profile-row-xai {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding-left: 42px;
-  margin-top: 2px;
-  flex-wrap: wrap;
-}
-.onboarding-wizard__profile-row-xai.is-collapsed {
-  gap: 10px;
-}
-.onboarding-wizard__profile-row-xai .onboarding-wizard__input {
-  flex: 1 1 200px;
-  min-width: 200px;
-  font: 500 12px/1 var(--font-mono);
-}
-.onboarding-wizard__profile-row-xai-hint {
-  font: 400 11px/1.4 var(--font-sans, sans-serif);
-  color: var(--text-muted);
-}
-
 /* "I'll log in later" deferral link — intentionally low-affordance,
    sits between the spacer and the hint so the operator's eye still
    goes to the disabled Continue button first. */
@@ -19352,27 +19326,68 @@ a.transcript-message__messaging-origin:focus-visible {
 }
 
 /* ============================================================
-   ONBOARDING WIZARD — Step 0: Backend requirements
+   ONBOARDING WIZARD — AI provider requirements
    Pre-rail prerequisite check shown before Welcome. Uses the
-   --narrow width (same as Welcome / Done) — two stacked cards
-   (Codex CLI + xAI key) read fine at 720px; anything wider just
-   leaves dead horizontal space.
+   --narrow width (same as Welcome / Done). Provider tabs keep four
+   CLI setup paths compact without stacking four full cards.
    ============================================================ */
 .onboarding-wizard__prereqs {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  /* Backend gate is two stacked cards (Codex CLI, xAI key). Constrain
-     the column so they don't stretch all the way across the 1120px
-     canvas and feel like wasted white space. */
+  /* Constrain the provider panel so it doesn't stretch across the
+     full 1120px canvas and feel like wasted horizontal space. */
   max-width: 720px;
   width: 100%;
   margin: 0 auto;
 }
+.onboarding-wizard__backend-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+.onboarding-wizard__backend-tab {
+  appearance: none;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel-elevated);
+  color: var(--text-secondary);
+  font: 600 12px/1.2 var(--font-sans, sans-serif);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  cursor: pointer;
+}
+.onboarding-wizard__backend-tab:hover {
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+}
+.onboarding-wizard__backend-tab.is-active {
+  color: var(--text-primary);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.onboarding-wizard__backend-tab:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.onboarding-wizard__backend-tab-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  flex: 0 0 auto;
+}
+.onboarding-wizard__backend-tab-dot.is-installed {
+  background: var(--status-ok);
+}
 .onboarding-wizard__prereq-card {
   background: var(--bg-panel-elevated);
   border: 1px solid var(--border-subtle);
-  border-radius: 10px;
+  border-radius: 8px;
   padding: 14px 16px 16px;
   display: flex;
   flex-direction: column;
@@ -19431,6 +19446,11 @@ a.transcript-message__messaging-origin:focus-visible {
   cursor: pointer;
   list-style: revert;
 }
+.onboarding-wizard__prereq-paths p {
+  margin: 8px 0 0;
+  font: 400 11px/1.5 var(--font-sans, sans-serif);
+  color: var(--text-muted);
+}
 .onboarding-wizard__prereq-paths ul {
   list-style: none;
   margin: 8px 0 0;
@@ -19473,6 +19493,24 @@ a.transcript-message__messaging-origin:focus-visible {
   border: 1px solid var(--border-strong);
   border-radius: 3px;
   padding: 1px 5px;
+}
+.onboarding-wizard__prereq-install a {
+  color: var(--accent);
+  font: 600 11px/1.3 var(--font-sans, sans-serif);
+  text-decoration: none;
+}
+.onboarding-wizard__prereq-install a:hover {
+  text-decoration: underline;
+}
+.onboarding-wizard__prereq-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 30px;
+}
+.onboarding-wizard__prereq-error {
+  color: var(--danger-text);
+  font: 500 11px/1.35 var(--font-sans, sans-serif);
 }
 .onboarding-wizard__prereq-link {
   font: 400 12px/1.4 var(--font-sans, sans-serif);

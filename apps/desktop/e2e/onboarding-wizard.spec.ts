@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
@@ -15,15 +16,154 @@ import { launchElectronApp } from "./fixtures/electron-app";
  * a real browser flow; integration of the login button is left to
  * unit tests (see `apps/desktop/src/main/__tests__/`).
  *
- * Defaults to xAI as the backend to satisfy the Models / Providers
- * gate, since the test runner doesn't have Codex CLI on PATH.
+ * Uses the test runner's executable as a deterministic discovery candidate.
+ * Its version output satisfies the provider gate without depending on a real
+ * Codex install or attempting an external login.
  */
 
 const wizardLaunchOptions = {
   // No `fixturePath`: thread replay isn't relevant for wizard-only specs.
   suppressOnboarding: false,
   requiresReplayDriver: false,
+  env: { PWRAGENT_CODEX_COMMAND: process.execPath },
 };
+
+const fakeProviderNames = [
+  "codex",
+  "gemini",
+  "kimi",
+  "qwen",
+  "grok",
+] as const;
+type FakeProviderName = (typeof fakeProviderNames)[number];
+
+function fakeProviderScript(): string {
+  return `#!${process.execPath}
+const path = require("node:path");
+const name = path.basename(process.argv[1]);
+const args = process.argv.slice(2);
+
+if (args.includes("--version")) {
+  console.log(name + " 999.0.0");
+  process.exit(0);
+}
+
+if (name === "qwen") {
+  console.log("Qwen Code");
+} else if (name === "grok") {
+  console.log("Run the agent over stdio");
+} else if (name === "kimi") {
+  console.log("Agent Client Protocol server over stdio");
+} else if (name === "gemini") {
+  console.log("--acp");
+} else {
+  console.log("Codex CLI");
+}
+`;
+}
+
+function wellKnownFakeProviderCommands(
+  homeRoot: string,
+): Record<FakeProviderName, string> {
+  return {
+    codex:
+      process.platform === "darwin"
+        ? path.join(
+          homeRoot,
+          "Applications",
+          "Codex.app",
+          "Contents",
+          "Resources",
+          "codex",
+        )
+        : path.join(homeRoot, ".local", "bin", "codex"),
+    gemini: path.join(homeRoot, ".local", "bin", "gemini"),
+    kimi: path.join(homeRoot, ".kimi-code", "bin", "kimi"),
+    qwen: path.join(homeRoot, ".qwen", "bin", "qwen"),
+    grok: path.join(homeRoot, ".grok", "bin", "grok"),
+  };
+}
+
+async function launchWizardWithFakeProviders(
+  source: "path" | "well-known",
+) {
+  const homeRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), "pwragent-provider-discovery-e2e-"),
+  );
+  const customBin = path.join(homeRoot, ".bin");
+  const commands =
+    source === "path"
+      ? Object.fromEntries(
+        fakeProviderNames.map((name) => [name, path.join(customBin, name)]),
+      ) as Record<FakeProviderName, string>
+      : wellKnownFakeProviderCommands(homeRoot);
+
+  for (const command of Object.values(commands)) {
+    fs.mkdirSync(path.dirname(command), { recursive: true });
+    fs.writeFileSync(command, fakeProviderScript(), "utf8");
+    fs.chmodSync(command, 0o755);
+  }
+
+  const systemPath = "/usr/bin:/bin:/usr/sbin:/sbin";
+  const discoveryPath =
+    source === "path"
+      ? `${customBin}${path.delimiter}${systemPath}`
+      : systemPath;
+  const profile = `export PATH="${discoveryPath}"\n`;
+  for (const profileName of [".profile", ".bash_profile", ".zprofile"]) {
+    fs.writeFileSync(path.join(homeRoot, profileName), profile, "utf8");
+  }
+
+  try {
+    const app = await launchElectronApp({
+      homeRoot,
+      suppressOnboarding: false,
+      requiresReplayDriver: false,
+      env: {
+        PATH: discoveryPath,
+        PWRAGENT_CODEX_COMMAND: undefined,
+        SHELL: process.platform === "darwin" ? "/bin/zsh" : "/bin/bash",
+      },
+    });
+    return { app, commands };
+  } catch (error) {
+    fs.rmSync(homeRoot, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+async function openProviderStepAndRefresh(
+  app: Awaited<ReturnType<typeof launchElectronApp>>,
+): Promise<void> {
+  await app.window.getByRole("button", { name: /Get started/i }).click();
+  await app.window.getByRole("button", { name: /^Continue/i }).click();
+  const refresh = app.window.getByRole("button", {
+    name: /Refresh after install/i,
+  });
+  await refresh.click();
+  await expect(refresh).toHaveText("Refresh after install", { timeout: 20_000 });
+}
+
+async function expectFakeProvidersFound(
+  app: Awaited<ReturnType<typeof launchElectronApp>>,
+  commands: Record<FakeProviderName, string>,
+): Promise<void> {
+  const providerLabels: Record<FakeProviderName, string> = {
+    codex: "Codex CLI",
+    gemini: "Gemini CLI",
+    kimi: "Kimi Code",
+    qwen: "Qwen Code",
+    grok: "Grok Build",
+  };
+  for (const name of fakeProviderNames) {
+    await app.window
+      .getByRole("tab", { name: new RegExp(providerLabels[name], "i") })
+      .click();
+    const panel = app.window.getByRole("tabpanel");
+    await expect(panel.getByText("✓ Found v999.0.0")).toBeVisible();
+    await expect(panel.getByText(commands[name], { exact: true })).toBeVisible();
+  }
+}
 
 test.describe("Onboarding wizard", () => {
   test("Get started and Back buttons are clickable", async () => {
@@ -81,18 +221,13 @@ test.describe("Onboarding wizard", () => {
       await app.window.getByText("Just the title", { exact: false }).click();
       await app.window.getByRole("button", { name: /^Continue/i }).click();
 
-      // Models / Providers — paste an xAI key to satisfy the gate (Codex
-      // CLI isn't on PATH in test env).
+      // AI Providers — the deterministic executable override satisfies
+      // discovery without collecting credentials in the wizard.
       await expect(
         app.window.getByRole("heading", {
-          name: /Pick at least one model backend/i,
+          name: /Install at least one AI provider/i,
         }),
       ).toBeVisible();
-      await app.window
-        .locator('input[type="password"]')
-        .first()
-        .fill("xai-e2e-test-key");
-      await app.window.getByRole("button", { name: /Use this key/i }).click();
       await app.window.getByRole("button", { name: /^Continue/i }).click();
 
       // Codex profile — pick Shared. The fresh HOME has no Codex auth.json,
@@ -145,11 +280,6 @@ test.describe("Onboarding wizard", () => {
       // Walk to the messaging-safety step (same path as the Shared walk).
       await app.window.getByRole("button", { name: /Get started/i }).click();
       await app.window.getByRole("button", { name: /^Continue/i }).click();
-      await app.window
-        .locator('input[type="password"]')
-        .first()
-        .fill("xai-e2e-test-key");
-      await app.window.getByRole("button", { name: /Use this key/i }).click();
       await app.window.getByRole("button", { name: /^Continue/i }).click();
       await app.window
         .getByText("Reuse your existing Codex login", { exact: false })
@@ -213,11 +343,6 @@ test.describe("Onboarding wizard", () => {
       // Walk to the messaging-safety step (same Shared-mode path).
       await app.window.getByRole("button", { name: /Get started/i }).click();
       await app.window.getByRole("button", { name: /^Continue/i }).click();
-      await app.window
-        .locator('input[type="password"]')
-        .first()
-        .fill("xai-e2e-test-key");
-      await app.window.getByRole("button", { name: /Use this key/i }).click();
       await app.window.getByRole("button", { name: /^Continue/i }).click();
       await app.window
         .getByText("Reuse your existing Codex login", { exact: false })
@@ -281,7 +406,7 @@ test.describe("Onboarding wizard", () => {
       await app.window.getByRole("button", { name: /^Continue/i }).click();
       await expect(
         app.window.getByRole("heading", {
-          name: /Pick at least one model backend/i,
+          name: /Install at least one AI provider/i,
         }),
       ).toBeVisible();
 
@@ -403,16 +528,20 @@ test.describe("Onboarding wizard", () => {
     // (only `personal/` and `work/`).
     const app = await launchElectronApp(wizardLaunchOptions);
     try {
-      // Walk the full wizard: Welcome → Thread → Models (xAI key) →
+      // Unsigned Electron must never reach macOS safeStorage during E2E.
+      // This value is inherited by the detached `personal` process below;
+      // profiles-ipc.test.ts locks that spawn contract independently.
+      expect(
+        await app.electronApp.evaluate(() =>
+          process.env.PWRAGENT_DEV_DISABLE_SECRET_STORAGE
+        ),
+      ).toBe("1");
+
+      // Walk the full wizard: Welcome → Thread → Models →
       // Codex profile (Multiple) → Name profiles (personal, work) →
       // Messaging warning (Skip).
       await app.window.getByRole("button", { name: /Get started/i }).click();
       await app.window.getByRole("button", { name: /^Continue/i }).click();
-      await app.window
-        .locator('input[type="password"]')
-        .first()
-        .fill("xai-multi-key");
-      await app.window.getByRole("button", { name: /Use this key/i }).click();
       await app.window.getByRole("button", { name: /^Continue/i }).click();
       await app.window
         .getByText(/Set up several profiles at once/i)
@@ -434,6 +563,7 @@ test.describe("Onboarding wizard", () => {
       await expect(
         app.window.getByRole("heading", { name: /You.re operating/i }),
       ).toBeVisible();
+      await expect(app.window.getByText("Multiple — personal, work")).toBeVisible();
       await app.window
         .getByRole("button", { name: /Open my workspace/i })
         .click();
@@ -495,54 +625,63 @@ test.describe("Onboarding wizard", () => {
     }
   });
 
-  test("name step's xAI override is collapsed by default and expands on click", async () => {
+  test("provider tabs show CLI-specific install instructions", async () => {
     const app = await launchElectronApp(wizardLaunchOptions);
     try {
-      // Welcome → Thread presentation → Models → Codex profile.
+      // Welcome → Thread presentation → Models.
       await app.window.getByRole("button", { name: /Get started/i }).click();
       await app.window.getByRole("button", { name: /^Continue/i }).click();
-      // xAI key on Models step (satisfy backend gate).
-      await app.window
-        .locator('input[type="password"]')
-        .first()
-        .fill("xai-default-key");
-      await app.window.getByRole("button", { name: /Use this key/i }).click();
-      await app.window.getByRole("button", { name: /^Continue/i }).click();
-
-      // Pick Isolated mode.
-      await app.window
-        .getByText(/Create a fresh Codex profile/i)
-        .click();
-      await app.window.getByRole("button", { name: /^Continue/i }).click();
-
-      // Naming step appears.
       await expect(
         app.window.getByRole("heading", {
-          name: /Name and log in to your isolated profile/i,
+          name: /Install at least one AI provider/i,
         }),
       ).toBeVisible();
-
-      // Per-row xAI override is collapsed by default; the global key
-      // hint is shown because we set a global xAI key on Models step.
       await expect(
-        app.window.getByRole("button", {
-          name: /Override xAI key for this profile/i,
-        }),
+        app.window.getByText(/brew update && brew install --cask codex/i),
       ).toBeVisible();
-
-      // Click to expand.
-      await app.window
-        .getByRole("button", {
-          name: /Override xAI key for this profile/i,
-        })
-        .click();
-
-      // Expanded — the password input becomes visible inside the row.
+      await app.window.getByRole("tab", { name: /Gemini CLI/i }).click();
       await expect(
-        app.window.locator(".onboarding-wizard__profile-row-xai input"),
+        app.window.getByText(/@google\/gemini-cli/i),
       ).toBeVisible();
+      await app.window.getByRole("tab", { name: /Kimi Code/i }).click();
+      await expect(
+        app.window.getByText(/@moonshot-ai\/kimi-code/i),
+      ).toBeVisible();
+      await app.window.getByRole("tab", { name: /Qwen Code/i }).click();
+      await expect(app.window.getByText(/brew install qwen-code/i)).toBeVisible();
+      await app.window.getByRole("tab", { name: /Grok Build/i }).click();
+      await expect(app.window.getByText(/x\.ai\/cli\/install\.sh/i)).toBeVisible();
+      await expect(app.window.getByText(/xAI API key/i)).toHaveCount(0);
     } finally {
       await app.close();
     }
   });
+
+  test(
+    "refresh discovers Codex, Gemini, Kimi, Qwen, and Grok from a custom PATH",
+    async () => {
+      test.skip(process.platform === "win32", "Unix executable discovery only");
+      const { app, commands } = await launchWizardWithFakeProviders("path");
+      try {
+        await openProviderStepAndRefresh(app);
+        await expectFakeProvidersFound(app, commands);
+      } finally {
+        await app.close();
+      }
+    },
+  );
+
+  test(
+    "refresh discovers Codex, Gemini, Kimi, Qwen, and Grok from well-known locations",
+    async () => {
+      test.skip(process.platform === "win32", "Unix executable discovery only");
+      const { app, commands } = await launchWizardWithFakeProviders("well-known");
+      try {
+        await openProviderStepAndRefresh(app);
+        await expectFakeProvidersFound(app, commands);
+      } finally {
+        await app.close();
+      }
+    },
+  );
 });
