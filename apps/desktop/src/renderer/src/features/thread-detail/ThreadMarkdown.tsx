@@ -114,6 +114,7 @@ function TranscriptCode(props: {
       <code className="transcript-message__code">{props.children}</code>
       {copyText ? (
         <TranscriptCopyButton
+          as="span"
           className="transcript-copy-button--inline"
           copiedLabel="Copied inline code"
           desktopApi={props.desktopApi}

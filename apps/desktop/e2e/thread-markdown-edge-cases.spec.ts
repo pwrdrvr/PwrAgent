@@ -53,9 +53,8 @@ test("renders markdown edge cases without breaking transcript boundaries", async
     await expect(inlineCode.locator("code.transcript-message__code"))
       .toBeVisible();
 
-    const inlineCopyButton = inlineCode.getByRole("button", {
-      name: "Copy inline code",
-    });
+    const inlineCopyButton = inlineCode.locator(".transcript-copy-button--inline");
+    await expect(inlineCopyButton).toHaveAccessibleName("Copy inline code");
     await expect(inlineCopyButton).toHaveCSS("opacity", "0");
     await inlineCode.hover();
     await expect(inlineCopyButton).toHaveCSS("opacity", "1");

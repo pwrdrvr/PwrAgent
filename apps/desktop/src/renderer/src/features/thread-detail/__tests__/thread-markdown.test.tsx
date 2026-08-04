@@ -879,7 +879,9 @@ describe("ThreadMarkdown", () => {
       screen.getByText("agent/inline-code-copy", { selector: "code" })
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Copy inline code" }));
+    const inlineCopyButton = screen.getByRole("button", { name: "Copy inline code" });
+    expect(inlineCopyButton.tagName).toBe("SPAN");
+    fireEvent.keyDown(inlineCopyButton, { key: "Enter" });
 
     await waitFor(() => {
       expect(desktopCopyText).toHaveBeenCalledWith("agent/inline-code-copy");
