@@ -105,6 +105,22 @@ describe("ThreadMarkdown", () => {
       "title",
       "Open in PwrAgent"
     );
+    expect(
+      screen.getByRole("link", { name: "AGENTS.md" }).querySelector('[role="button"]')
+    ).toBeNull();
+  });
+
+  it("keeps inline code link text navigable instead of turning it into a copy control", () => {
+    render(
+      <ThreadMarkdown text={"Read [`npm install`](https://example.com/install)."} />
+    );
+
+    const link = screen.getByRole("link", { name: "npm install" });
+    const code = link.querySelector<HTMLElement>("code.transcript-message__code");
+    expect(link).toHaveAttribute("href", "https://example.com/install");
+    expect(code).toHaveTextContent("npm install");
+    expect(link.querySelector('[role="button"]')).toBeNull();
+    expect(fireEvent.click(code!)).toBe(true);
   });
 
   it("leaves LaTeX untypeset when experimental math rendering is disabled", () => {
