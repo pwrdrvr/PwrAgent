@@ -1,0 +1,121 @@
+import { describe, expect, it, vi } from "vitest";
+import { FederationTailscaleService } from "../federation/federation-tailscale";
+
+describe("FederationTailscaleService", () => {
+  it("reports only sanitized local Tailscale status", async () => {
+    const service = new FederationTailscaleService({
+      discoverCommand: async () => ({
+        command: "/usr/local/bin/tailscale",
+        version: "1.98.10",
+      }),
+      runCommand: async (_command, args) => {
+        if (args[0] === "status") {
+          return commandResult(JSON.stringify({
+            BackendState: "Running",
+            Self: {
+              Online: true,
+              DNSName: "studio.example.ts.net.",
+              TailscaleIPs: ["100.64.0.1"],
+              NodeKey: "nodekey:secret",
+            },
+            CurrentTailnet: { Name: "Example Tailnet" },
+            Peer: { secret: { HostName: "private-peer" } },
+          }));
+        }
+        if (args[0] === "serve") {
+          return commandResult(JSON.stringify({
+            Web: { "studio.example.ts.net:443": { Handlers: {
+              "/pwragent-federation": { Proxy: "http://127.0.0.1:47830" },
+            } } },
+          }));
+        }
+        return commandResult("{}");
+      },
+    });
+
+    await expect(service.readStatus()).resolves.toEqual({
+      installed: true,
+      connected: true,
+      version: "1.98.10",
+      backendState: "Running",
+      dnsName: "studio.example.ts.net",
+      tailnetName: "Example Tailnet",
+      serveConfigured: true,
+      funnelConfigured: false,
+      gatewayUrl: "wss://studio.example.ts.net/pwragent-federation",
+      unavailableReason: undefined,
+    });
+  });
+
+  it("configures only the dedicated PwrAgent Funnel path", async () => {
+    let configured = false;
+    const runCommand = vi.fn(async (_command: string, args: string[]) => {
+      if (args[0] === "status") {
+        return commandResult(JSON.stringify({
+          BackendState: "Running",
+          Self: { Online: true, DNSName: "studio.example.ts.net." },
+        }));
+      }
+      if (args[0] === "funnel" && args[1] === "--bg") {
+        configured = true;
+        return commandResult("");
+      }
+      if (args[0] === "funnel") {
+        return commandResult(configured
+          ? JSON.stringify({
+              Web: { Handlers: {
+                "/pwragent-federation": {
+                  Proxy: "http://127.0.0.1:47830",
+                },
+              } },
+            })
+          : "{}");
+      }
+      return commandResult("{}");
+    });
+    const service = new FederationTailscaleService({
+      discoverCommand: async () => ({ command: "tailscale" }),
+      runCommand,
+    });
+
+    await expect(service.configure({
+      mode: "funnel",
+      listenPort: 47_830,
+    })).resolves.toMatchObject({
+      gatewayUrl: "wss://studio.example.ts.net/pwragent-federation",
+      status: { funnelConfigured: true },
+    });
+    expect(runCommand).toHaveBeenCalledWith("tailscale", [
+      "funnel",
+      "--bg",
+      "--yes",
+      "--set-path=/pwragent-federation",
+      "http://127.0.0.1:47830",
+    ]);
+    expect(runCommand.mock.calls.flatMap((call) => call[1])).not.toContain("reset");
+  });
+
+  it("does not run setup while Tailscale is disconnected", async () => {
+    const runCommand = vi.fn(async (_command: string, args: string[]) => {
+      if (args[0] === "status") {
+        return commandResult(JSON.stringify({ BackendState: "Stopped" }));
+      }
+      return commandResult("{}");
+    });
+    const service = new FederationTailscaleService({
+      discoverCommand: async () => ({ command: "tailscale" }),
+      runCommand,
+    });
+
+    await expect(service.configure({ mode: "serve", listenPort: 47_830 }))
+      .rejects.toThrow("not connected");
+    expect(runCommand).not.toHaveBeenCalledWith(
+      "tailscale",
+      expect.arrayContaining(["--bg"]),
+    );
+  });
+});
+
+function commandResult(stdout: string) {
+  return { stdout, stderr: "" };
+}

@@ -63,6 +63,8 @@ import type {
   PrAutoDispatchBudgetStatus,
   DraftAutomationPromptRequest,
   DraftAutomationPromptResponse,
+  ConfigureFederationTailscaleRequest,
+  ConfigureFederationTailscaleResponse,
   GetAutomationRunArtifactRequest,
   GetAutomationRunArtifactResponse,
   EnsureDirectoryLaunchpadRequest,
@@ -96,6 +98,8 @@ import type {
   ReadFederationHealthResponse,
   ReadFederationDiagnosticsRequest,
   ReadFederationDiagnosticsResponse,
+  ReadFederationTailscaleStatusRequest,
+  ReadFederationTailscaleStatusResponse,
   RevokeFederationPeerRequest,
   RevokeFederationPeerResponse,
   ReorderDirectoryPinsRequest,
@@ -452,6 +456,12 @@ export type DesktopApi = {
   revokeFederationPeer?: (
     request: RevokeFederationPeerRequest,
   ) => Promise<RevokeFederationPeerResponse>;
+  readFederationTailscaleStatus?: (
+    request?: ReadFederationTailscaleStatusRequest,
+  ) => Promise<ReadFederationTailscaleStatusResponse>;
+  configureFederationTailscale?: (
+    request: ConfigureFederationTailscaleRequest,
+  ) => Promise<ConfigureFederationTailscaleResponse>;
   ping?: () => string;
   listSkills?: (
     request?: AppServerListSkillsRequest

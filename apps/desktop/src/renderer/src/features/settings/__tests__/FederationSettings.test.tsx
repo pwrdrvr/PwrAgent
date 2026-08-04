@@ -271,6 +271,67 @@ describe("FederationSettings", () => {
       });
     });
   });
+
+  it("requires public exposure acknowledgement before setting up Tailscale Funnel", async () => {
+    const status = {
+      installed: true,
+      connected: true,
+      version: "1.98.10",
+      dnsName: "studio.example.ts.net",
+      tailnetName: "Example Tailnet",
+      serveConfigured: false,
+      funnelConfigured: false,
+      gatewayUrl: "wss://studio.example.ts.net/pwragent-federation",
+    };
+    const configureFederationTailscale = vi.fn(async () => ({
+      status: { ...status, funnelConfigured: true },
+      gatewayUrl: status.gatewayUrl,
+    }));
+    const onWriteConfig = vi.fn(async () => true);
+    render(
+      <FederationSettings
+        desktopApi={{
+          configureFederationTailscale,
+          readFederationTailscaleStatus: vi.fn(async () => ({ status })),
+        }}
+        onClearSecret={vi.fn(async () => true)}
+        onReplaceSecret={vi.fn(async () => true)}
+        saving={false}
+        snapshot={settingsSnapshot()}
+        onSettingsChanged={vi.fn()}
+        onWriteConfig={onWriteConfig}
+      />,
+    );
+
+    expect(await screen.findByText("Example Tailnet")).toBeInTheDocument();
+    const funnelButton = screen.getByRole("button", {
+      name: "Set up Tailscale Funnel",
+    });
+    expect(funnelButton).toBeDisabled();
+
+    fireEvent.click(screen.getByRole("checkbox", {
+      name: "Acknowledge public Funnel exposure",
+    }));
+    expect(funnelButton).toBeEnabled();
+    fireEvent.click(funnelButton);
+
+    await waitFor(() =>
+      expect(configureFederationTailscale).toHaveBeenCalledWith({
+        mode: "funnel",
+        listenPort: 8765,
+      }),
+    );
+    await waitFor(() =>
+      expect(onWriteConfig).toHaveBeenCalledWith({
+        federation: {
+          mode: "gateway",
+          listenHost: "127.0.0.1",
+          listenPort: 8765,
+          publicUrl: "wss://studio.example.ts.net/pwragent-federation",
+        },
+      }),
+    );
+  });
 });
 
 function settingsSnapshot(): DesktopSettingsSnapshot {

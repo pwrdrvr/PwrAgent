@@ -101,6 +101,37 @@ export type ReadFederationHealthResponse = {
   health: FederationHealthStatus;
 };
 
+export type FederationTailscaleMode = "serve" | "funnel";
+
+export type FederationTailscaleStatus = {
+  installed: boolean;
+  connected: boolean;
+  version?: string;
+  backendState?: string;
+  dnsName?: string;
+  tailnetName?: string;
+  serveConfigured: boolean;
+  funnelConfigured: boolean;
+  gatewayUrl?: string;
+  unavailableReason?: string;
+};
+
+export type ReadFederationTailscaleStatusRequest = Record<string, never>;
+
+export type ReadFederationTailscaleStatusResponse = {
+  status: FederationTailscaleStatus;
+};
+
+export type ConfigureFederationTailscaleRequest = {
+  mode: FederationTailscaleMode;
+  listenPort: number;
+};
+
+export type ConfigureFederationTailscaleResponse = {
+  status: FederationTailscaleStatus;
+  gatewayUrl: string;
+};
+
 export type FederationDiagnosticEventKind =
   | "connect_attempt"
   | "connected"

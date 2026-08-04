@@ -8,6 +8,8 @@ import type {
   FederationDiagnosticEvent,
   FederationHealthStatus,
   FederationInstanceRole,
+  FederationTailscaleMode,
+  FederationTailscaleStatus,
 } from "@pwragent/shared";
 import { DESKTOP_FEDERATION_MODES } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -39,6 +41,11 @@ export function FederationSettings(props: FederationSettingsProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
   const [actionError, setActionError] = useState<string>();
+  const [tailscaleStatus, setTailscaleStatus] = useState<FederationTailscaleStatus>();
+  const [tailscaleLoading, setTailscaleLoading] = useState(false);
+  const [tailscaleConfiguring, setTailscaleConfiguring] =
+    useState<FederationTailscaleMode>();
+  const [funnelAcknowledged, setFunnelAcknowledged] = useState(false);
   const [generatedInvite, setGeneratedInvite] = useState("");
   const [inviteToImport, setInviteToImport] = useState("");
   const [revokingPeerId, setRevokingPeerId] = useState<string>();
@@ -114,14 +121,64 @@ export function FederationSettings(props: FederationSettingsProps) {
     }
   };
 
+  const loadTailscaleStatus = async () => {
+    if (!props.desktopApi?.readFederationTailscaleStatus) return;
+    setTailscaleLoading(true);
+    try {
+      const response = await props.desktopApi.readFederationTailscaleStatus({});
+      setTailscaleStatus(response.status);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setTailscaleLoading(false);
+    }
+  };
+
   useEffect(() => {
     void loadHealth();
+    void loadTailscaleStatus();
     const refreshInterval = window.setInterval(() => {
       void loadHealth();
     }, 2_000);
     return () => window.clearInterval(refreshInterval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.desktopApi]);
+
+  const configureTailscale = async (tailscaleMode: FederationTailscaleMode) => {
+    if (!props.desktopApi?.configureFederationTailscale) return;
+    setActionError(undefined);
+    setTailscaleConfiguring(tailscaleMode);
+    try {
+      const parsedListenPort = Number.parseInt(listenPort, 10);
+      const response = await props.desktopApi.configureFederationTailscale({
+        mode: tailscaleMode,
+        listenPort: parsedListenPort,
+      });
+      const written = await props.onWriteConfig({
+        federation: {
+          mode: mode === "dual" ? "dual" : "gateway",
+          listenHost: "127.0.0.1",
+          listenPort: parsedListenPort,
+          publicUrl: response.gatewayUrl,
+        },
+      });
+      if (!written) {
+        throw new Error(
+          "Tailscale was configured, but PwrAgent federation settings could not be saved.",
+        );
+      }
+      setMode(mode === "dual" ? "dual" : "gateway");
+      setListenHost("127.0.0.1");
+      setPublicUrl(response.gatewayUrl);
+      setTailscaleStatus(response.status);
+      await props.onSettingsChanged();
+      await loadHealth();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setTailscaleConfiguring(undefined);
+    }
+  };
 
   const effectiveHealth =
     health ??
@@ -157,6 +214,7 @@ export function FederationSettings(props: FederationSettingsProps) {
             }
             onClick={() => {
               void loadHealth();
+              void loadTailscaleStatus();
             }}
           >
             {loading ? "Refreshing..." : "Refresh"}
@@ -165,6 +223,9 @@ export function FederationSettings(props: FederationSettingsProps) {
       />
 
       {error ? <p className="settings-row__error">{error}</p> : null}
+      {actionError ? (
+        <p className="settings-row__error">{actionError}</p>
+      ) : null}
 
       <SettingsSection
         eyebrow="Setup"
@@ -215,7 +276,7 @@ export function FederationSettings(props: FederationSettingsProps) {
           />
           <SettingsField
             label="Public URL"
-            sub="Cloudflare Tunnel URL or local WebSocket URL for peers."
+            sub="Cloudflare Tunnel, Tailscale, or local WebSocket URL for peers."
             control={
               <input
                 value={publicUrl}
@@ -288,7 +349,7 @@ export function FederationSettings(props: FederationSettingsProps) {
             sub="Enrollment invites pin both the gateway signing key and Noise channel key."
             control={<span>Required</span>}
           />
-          <p className="settings-note">
+          <p className="federation-security-note">
             The signed federation identity proof is bound to the Noise handshake.
             Cloudflare, Tailscale, SSH, and TLS can add outer transport controls,
             but they do not replace this application-level encryption.
@@ -370,9 +431,6 @@ export function FederationSettings(props: FederationSettingsProps) {
               Import invite
             </button>
           </div>
-          {actionError ? (
-            <p className="settings-row__error">{actionError}</p>
-          ) : null}
         </div>
       </SettingsSection>
 
@@ -520,6 +578,118 @@ export function FederationSettings(props: FederationSettingsProps) {
             ))}
           </dl>
         )}
+      </SettingsSection>
+
+      <SettingsSection
+        eyebrow="Private network / public relay"
+        title="Tailscale Serve / Funnel Setup"
+        chip={
+          tailscaleStatus?.funnelConfigured
+            ? "Funnel"
+            : tailscaleStatus?.serveConfigured
+              ? "Serve"
+              : tailscaleStatus?.connected
+                ? "Ready"
+                : "Not ready"
+        }
+        chipKind={
+          tailscaleStatus?.serveConfigured || tailscaleStatus?.funnelConfigured
+            ? "ok"
+            : "muted"
+        }
+      >
+        <div className="settings-fields">
+          <SettingsField
+            label="Tailscale CLI"
+            sub="PwrAgent delegates account login, HTTPS certificates, and routing to Tailscale."
+            control={
+              <span>
+                {tailscaleLoading
+                  ? "Checking..."
+                  : tailscaleStatus?.installed
+                    ? `Installed${tailscaleStatus.version ? ` · ${tailscaleStatus.version}` : ""}`
+                    : "Not found"}
+              </span>
+            }
+          />
+          <SettingsField
+            label="Tailnet"
+            sub="Serve is reachable only by devices authorized in this tailnet."
+            control={
+              <span>
+                {tailscaleStatus?.connected
+                  ? tailscaleStatus.tailnetName ?? "Connected"
+                  : tailscaleStatus?.unavailableReason ?? "Not connected"}
+              </span>
+            }
+          />
+          <SettingsField
+            label="Gateway URL"
+            sub="A dedicated path avoids replacing unrelated Serve or Funnel handlers."
+            control={
+              <code>{tailscaleStatus?.gatewayUrl ?? "Available after Tailscale login"}</code>
+            }
+          />
+          <SettingsField
+            label="Tailscale Serve"
+            sub="Private HTTPS/WebSocket reachability for authenticated tailnet devices."
+            control={
+              <button
+                className="button button--secondary"
+                type="button"
+                disabled={
+                  props.saving ||
+                  Boolean(tailscaleConfiguring) ||
+                  !tailscaleStatus?.connected ||
+                  !props.desktopApi?.configureFederationTailscale
+                }
+                onClick={() => void configureTailscale("serve")}
+              >
+                {tailscaleConfiguring === "serve"
+                  ? "Setting up Serve..."
+                  : "Set up Tailscale Serve"}
+              </button>
+            }
+          />
+          <SettingsField
+            label="Tailscale Funnel"
+            sub="Public HTTPS/WebSocket reachability. Internet traffic reaches Tailscale's edge before PwrAgent authentication rejects unknown peers."
+            control={
+              <div className="federation-tailscale-actions">
+                <label>
+                  <input
+                    aria-label="Acknowledge public Funnel exposure"
+                    type="checkbox"
+                    checked={funnelAcknowledged}
+                    onChange={(event) => setFunnelAcknowledged(event.target.checked)}
+                  />{" "}
+                  I understand this creates a public endpoint
+                </label>
+                <button
+                  className="button button--secondary"
+                  type="button"
+                  disabled={
+                    props.saving ||
+                    Boolean(tailscaleConfiguring) ||
+                    !tailscaleStatus?.connected ||
+                    !funnelAcknowledged ||
+                    !props.desktopApi?.configureFederationTailscale
+                  }
+                  onClick={() => void configureTailscale("funnel")}
+                >
+                  {tailscaleConfiguring === "funnel"
+                    ? "Setting up Funnel..."
+                    : "Set up Tailscale Funnel"}
+                </button>
+              </div>
+            }
+          />
+          <p className="federation-security-note">
+            Both modes proxy only <code>/pwragent-federation</code> to the local
+            loopback listener. PwrAgent does not run Tailscale reset commands or
+            remove other handlers.
+          </p>
+        </div>
       </SettingsSection>
 
       <SettingsSection

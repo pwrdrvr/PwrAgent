@@ -8540,6 +8540,28 @@ textarea,
   gap: 6px;
 }
 
+.federation-tailscale-actions {
+  display: flex;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.federation-tailscale-actions label {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.federation-security-note {
+  margin: 0;
+  padding: 14px 18px;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .settings-license-actions {
   display: flex;
   flex-direction: column;

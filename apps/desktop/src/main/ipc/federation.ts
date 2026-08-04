@@ -1,5 +1,7 @@
 import { ipcMain } from "electron";
 import type {
+  ConfigureFederationTailscaleRequest,
+  ConfigureFederationTailscaleResponse,
   GenerateFederationInviteRequest,
   GenerateFederationInviteResponse,
   ImportFederationInviteRequest,
@@ -10,6 +12,8 @@ import type {
   ReadFederationHealthResponse,
   ReadFederationDiagnosticsRequest,
   ReadFederationDiagnosticsResponse,
+  ReadFederationTailscaleStatusRequest,
+  ReadFederationTailscaleStatusResponse,
   RevokeFederationPeerRequest,
   RevokeFederationPeerResponse,
 } from "@pwragent/shared";
@@ -21,8 +25,11 @@ import {
   FEDERATION_IMPORT_INVITE_CHANNEL,
   FEDERATION_OPEN_WINDOW_CHANNEL,
   FEDERATION_REVOKE_PEER_CHANNEL,
+  FEDERATION_TAILSCALE_CONFIGURE_CHANNEL,
+  FEDERATION_TAILSCALE_STATUS_CHANNEL,
 } from "../../shared/ipc";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
+import { getFederationTailscaleService } from "../federation/federation-tailscale";
 import { createMainWindow } from "../window";
 
 export function registerFederationIpcHandlers(): void {
@@ -32,6 +39,25 @@ export function registerFederationIpcHandlers(): void {
   ipcMain.removeHandler(FEDERATION_GENERATE_INVITE_CHANNEL);
   ipcMain.removeHandler(FEDERATION_IMPORT_INVITE_CHANNEL);
   ipcMain.removeHandler(FEDERATION_REVOKE_PEER_CHANNEL);
+  ipcMain.removeHandler(FEDERATION_TAILSCALE_STATUS_CHANNEL);
+  ipcMain.removeHandler(FEDERATION_TAILSCALE_CONFIGURE_CHANNEL);
+  ipcMain.handle(
+    FEDERATION_TAILSCALE_STATUS_CHANNEL,
+    async (
+      _event,
+      _request?: ReadFederationTailscaleStatusRequest,
+    ): Promise<ReadFederationTailscaleStatusResponse> => ({
+      status: await getFederationTailscaleService().readStatus(),
+    }),
+  );
+  ipcMain.handle(
+    FEDERATION_TAILSCALE_CONFIGURE_CHANNEL,
+    async (
+      _event,
+      request: ConfigureFederationTailscaleRequest,
+    ): Promise<ConfigureFederationTailscaleResponse> =>
+      await getFederationTailscaleService().configure(request),
+  );
   ipcMain.handle(
     FEDERATION_GET_DIAGNOSTICS_CHANNEL,
     async (
@@ -136,4 +162,6 @@ export function disposeFederationIpcHandlers(): void {
   ipcMain.removeHandler(FEDERATION_GENERATE_INVITE_CHANNEL);
   ipcMain.removeHandler(FEDERATION_IMPORT_INVITE_CHANNEL);
   ipcMain.removeHandler(FEDERATION_REVOKE_PEER_CHANNEL);
+  ipcMain.removeHandler(FEDERATION_TAILSCALE_STATUS_CHANNEL);
+  ipcMain.removeHandler(FEDERATION_TAILSCALE_CONFIGURE_CHANNEL);
 }
