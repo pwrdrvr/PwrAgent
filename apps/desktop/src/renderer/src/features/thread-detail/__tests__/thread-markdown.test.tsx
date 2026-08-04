@@ -864,6 +864,30 @@ describe("ThreadMarkdown", () => {
     });
   });
 
+  it("copies inline code without its markdown delimiters", async () => {
+    const desktopCopyText = vi.fn(async () => undefined);
+
+    const { container } = render(
+      <ThreadMarkdown
+        desktopApi={{ copyText: desktopCopyText }}
+        text={"Switch to `agent/inline-code-copy` when ready."}
+      />
+    );
+
+    const inlineCode = container.querySelector(".transcript-message__inline-code");
+    expect(inlineCode).toContainElement(
+      screen.getByText("agent/inline-code-copy", { selector: "code" })
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy inline code" }));
+
+    await waitFor(() => {
+      expect(desktopCopyText).toHaveBeenCalledWith("agent/inline-code-copy");
+    });
+    expect(screen.getByRole("button", { name: "Copied inline code" }))
+      .toBeInTheDocument();
+  });
+
   it("renders long fenced code blocks without expand controls", () => {
     const lines = Array.from({ length: 21 }, (_, index) => `line ${index + 1}`);
 

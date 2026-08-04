@@ -946,6 +946,23 @@ describe("Tangerine Terminal theme contract", () => {
     expect(inlineCodeRule).toContain("max-width: 100%;");
   });
 
+  it("reveals the inline code copy affordance on hover and keyboard focus", () => {
+    const inlineCodeWrapperRule = extractRuleBody(
+      css,
+      ".transcript-message__inline-code",
+    );
+    expect(inlineCodeWrapperRule).toContain("position: relative;");
+    expect(inlineCodeWrapperRule).toContain("max-width: 100%;");
+
+    const inlineCopyRule = extractRuleBody(css, ".transcript-copy-button--inline");
+    expect(inlineCopyRule).toContain("position: absolute;");
+    expect(inlineCopyRule).toContain("right: 3px;");
+
+    expect(css).toMatch(
+      /\.transcript-message__inline-code:hover \.transcript-copy-button--inline,\s*\.transcript-message__inline-code:focus-within \.transcript-copy-button--inline,[\s\S]*?\{[\s\S]*?opacity:\s*1;[\s\S]*?\}/,
+    );
+  });
+
   it("wraps fenced code blocks the same way the composer does", () => {
     // The composer's `<pre>` uses `white-space: pre-wrap` so a pasted
     // long line wraps inside the input rather than scrolling. The

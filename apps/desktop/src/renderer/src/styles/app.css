@@ -10030,6 +10030,38 @@ a.transcript-message__messaging-origin:focus-visible {
   overflow-wrap: anywhere;
 }
 
+.transcript-message__inline-code {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  vertical-align: text-bottom;
+}
+
+.transcript-message__inline-code .transcript-message__code {
+  padding-right: 27px;
+}
+
+.transcript-copy-button--inline {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  background: var(--bg-panel-elevated);
+}
+
+.transcript-copy-button--inline::before {
+  width: 11px;
+  height: 11px;
+}
+
+.transcript-message__inline-code:hover .transcript-copy-button--inline,
+.transcript-message__inline-code:focus-within .transcript-copy-button--inline,
+.transcript-copy-button--inline[data-copied="true"] {
+  opacity: 1;
+}
+
 .transcript-message__pre-wrap {
   position: relative;
 }
@@ -10058,6 +10090,7 @@ a.transcript-message__messaging-origin:focus-visible {
 @media (hover: none) {
   .transcript-copy-button--message,
   .transcript-copy-button--section,
+  .transcript-copy-button--inline,
   .transcript-copy-button--activity {
     opacity: 1;
   }

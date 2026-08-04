@@ -79,6 +79,7 @@ const CodeBlockContext = createContext(false);
 function TranscriptCode(props: {
   children: ReactNode;
   className?: string;
+  desktopApi?: Pick<DesktopApi, "copyText">;
   threadLinks: ThreadLinkContextValue | undefined;
 }) {
   const insideCodeBlock = useContext(CodeBlockContext);
@@ -102,10 +103,25 @@ function TranscriptCode(props: {
     }
   }
 
+  if (isBlockCode) {
+    return <code className={props.className}>{props.children}</code>;
+  }
+
+  const copyText = extractTextContent(props.children);
+
   return (
-    <code className={isBlockCode ? props.className : "transcript-message__code"}>
-      {props.children}
-    </code>
+    <span className="transcript-message__inline-code">
+      <code className="transcript-message__code">{props.children}</code>
+      {copyText ? (
+        <TranscriptCopyButton
+          className="transcript-copy-button--inline"
+          copiedLabel="Copied inline code"
+          desktopApi={props.desktopApi}
+          label="Copy inline code"
+          text={copyText}
+        />
+      ) : null}
+    </span>
   );
 }
 
@@ -417,7 +433,11 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
       },
       code(codeProps) {
         return (
-          <TranscriptCode className={codeProps.className} threadLinks={threadLinks}>
+          <TranscriptCode
+            className={codeProps.className}
+            desktopApi={props.desktopApi}
+            threadLinks={threadLinks}
+          >
             {codeProps.children}
           </TranscriptCode>
         );
