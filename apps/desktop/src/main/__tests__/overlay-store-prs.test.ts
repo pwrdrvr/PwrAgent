@@ -317,6 +317,35 @@ describe("SqliteOverlayStore — thread PRs", () => {
     ]);
   });
 
+  it("appends explicitly attached PRs in attachment order", async () => {
+    const olderAttachment = pr({
+      ...prPassing,
+      number: 735,
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/735",
+    });
+    const newerAttachment = pr({
+      ...prPassing,
+      number: 1191,
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/1191",
+    });
+
+    await store.addThreadPullRequestReference({
+      backend: "codex",
+      threadId: "thread-1",
+      pr: olderAttachment,
+    });
+    const added = await store.addThreadPullRequestReference({
+      backend: "codex",
+      threadId: "thread-1",
+      pr: newerAttachment,
+    });
+
+    expect(added.prs?.map((pullRequest) => pullRequest.number)).toEqual([
+      735,
+      1191,
+    ]);
+  });
+
   it("persists canonical PR status cache rows across reopen", async () => {
     await store.writePrStatusCacheEntries([
       {
