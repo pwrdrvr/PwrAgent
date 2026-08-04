@@ -29,7 +29,10 @@ export type GitWorkspaceInspection =
   | {
       kind: "worktree";
       branch?: string;
+      /** Whether any repository ref resolves to a commit. */
       hasCommits: boolean;
+      /** Whether the selected workspace's HEAD resolves to a commit. */
+      headHasCommit: boolean;
       worktreeCreationAvailable: boolean;
     }
   | {
@@ -120,17 +123,13 @@ export async function inspectGitWorkspace(
     kind = bareRepository === "true" ? "bare" : "git_directory";
   }
 
-  const [rawBranch, anyCommit, worktreeBaseCommit] = await Promise.all([
+  const [rawBranch, anyCommit] = await Promise.all([
     runGit(cwd, ["branch", "--show-current"], options.env),
     runGit(cwd, ["rev-list", "--max-count=1", "--all"], options.env),
-    runGit(
-      cwd,
-      ["rev-list", "--max-count=1", "--branches", "--remotes=origin/HEAD"],
-      options.env,
-    ),
   ]);
   const hasCommits = Boolean(anyCommit.trim());
-  const branch = rawBranch.trim() || (hasCommits ? "HEAD" : undefined);
+  const currentBranch = rawBranch.trim();
+  const branch = currentBranch || (hasCommits ? "HEAD" : undefined);
   if (kind !== "worktree") {
     return {
       kind,
@@ -140,11 +139,34 @@ export async function inspectGitWorkspace(
     };
   }
 
+  let headHasCommit = true;
+  try {
+    await runGit(
+      cwd,
+      ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"],
+      options.env,
+    );
+  } catch (error) {
+    if (!currentBranch) {
+      throw error;
+    }
+    const currentBranchObject = await runGit(
+      cwd,
+      ["for-each-ref", "--format=%(objectname)", `refs/heads/${currentBranch}`],
+      options.env,
+    );
+    if (currentBranchObject.trim()) {
+      throw error;
+    }
+    headHasCommit = false;
+  }
+
   return {
     kind,
     branch,
     hasCommits,
-    worktreeCreationAvailable: Boolean(worktreeBaseCommit.trim()),
+    headHasCommit,
+    worktreeCreationAvailable: hasCommits,
   };
 }
 

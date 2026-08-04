@@ -21982,7 +21982,8 @@ export class DesktopBackendRegistry {
       params.linkedDirectory?.kind === "worktree"
         ? "git_worktree"
         : "git_local";
-    if (repository.kind === "bare") {
+    if (repository.kind !== "worktree") {
+      const isBare = repository.kind === "bare";
       return {
         mode: params.mode,
         cwd,
@@ -21990,25 +21991,11 @@ export class DesktopBackendRegistry {
         linkedDirectory: params.linkedDirectory,
         git: {
           kind,
-          repositoryState: "bare",
+          repositoryState: repository.kind,
           worktreeCreationAvailable: false,
-          unavailableReason:
-            "Bare Git repositories are not supported as handoff workspaces.",
-        },
-      };
-    }
-    if (repository.kind === "git_directory") {
-      return {
-        mode: params.mode,
-        cwd,
-        branch: repository.branch,
-        linkedDirectory: params.linkedDirectory,
-        git: {
-          kind,
-          repositoryState: "git_directory",
-          worktreeCreationAvailable: false,
-          unavailableReason:
-            "Git administration directories are not supported as handoff workspaces.",
+          unavailableReason: isBare
+            ? "Bare Git repositories are not supported as handoff workspaces."
+            : "Git administration directories are not supported as handoff workspaces.",
         },
       };
     }
@@ -22024,7 +22011,7 @@ export class DesktopBackendRegistry {
       linkedDirectory: params.linkedDirectory,
       git: {
         kind,
-        ...(!repository.hasCommits
+        ...(!repository.headHasCommit
           ? { repositoryState: "unborn" as const }
           : {}),
         worktreeCreationAvailable: repository.worktreeCreationAvailable,

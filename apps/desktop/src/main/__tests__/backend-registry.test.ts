@@ -20111,6 +20111,7 @@ command = "pnpm dev"
             kind: "worktree" as const,
             branch: cwd === targetWorktreePath ? "HEAD" : "main",
             hasCommits: true,
+            headHasCommit: true,
             worktreeCreationAvailable: true,
           })),
           prepareLaunchpadWorkspace: vi.fn(async () => ({
@@ -20265,6 +20266,7 @@ command = "pnpm dev"
             kind: "worktree" as const,
             branch: "main",
             hasCommits: true,
+            headHasCommit: true,
             worktreeCreationAvailable: true,
           })),
           resolvePrimaryWorkspacePath: vi.fn(async (cwd?: string) => {
@@ -20470,6 +20472,7 @@ command = "pnpm dev"
           kind: "worktree" as const,
           branch: cwd === worktreePath ? "HEAD" : "main",
           hasCommits: true,
+          headHasCommit: true,
           worktreeCreationAvailable: true,
         })),
         prepareLaunchpadWorkspace,
@@ -20670,6 +20673,7 @@ script = "printf setup"
           kind: "worktree" as const,
           branch: cwd === worktreePath ? "HEAD" : "main",
           hasCommits: true,
+          headHasCommit: true,
           worktreeCreationAvailable: true,
         })),
         prepareLaunchpadWorkspace: vi.fn(async () => ({
@@ -22309,6 +22313,7 @@ script = "printf setup"
           kind: "worktree" as const,
           branch: cwd === worktreePath ? "HEAD" : "main",
           hasCommits: true,
+          headHasCommit: true,
           worktreeCreationAvailable: true,
         })),
         prepareLaunchpadWorkspace,
@@ -22457,7 +22462,7 @@ script = "printf setup"
     await registry.close();
   });
 
-  it("describes unborn Git workspaces and rejects new worktree handoffs precisely", async () => {
+  it("describes unborn Git workspaces and gates worktrees on available refs", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-handoff-unborn-"));
     const repoPath = path.join(root, "repo");
     const remotePath = path.join(root, "origin.git");
@@ -22609,11 +22614,95 @@ script = "printf setup"
       });
       expect(codexClient.lastStartThreadParams).toBe(projectLocalStartParams);
 
+      const seedPath = path.join(root, "seed");
+      await mkdir(seedPath, { recursive: true });
+      await git(seedPath, ["init", "-b", "main"]);
+      await writeFile(path.join(seedPath, "README.md"), "seed\n", "utf8");
+      await git(seedPath, ["add", "README.md"]);
+      await git(seedPath, [
+        "-c",
+        "user.name=PwrAgent Tests",
+        "-c",
+        "user.email=tests@pwragent.local",
+        "commit",
+        "-m",
+        "initial",
+      ]);
+      await git(seedPath, ["remote", "add", "origin", remotePath]);
+      await git(seedPath, ["push", "origin", "main"]);
+      await git(repoPath, [
+        "fetch",
+        "origin",
+        "main:refs/remotes/origin/main",
+      ]);
+
+      const fetchedProjectLocalResponse = await codexClient.emitRequest({
+        method: "item/tool/call",
+        params: {
+          threadId: "ordinary-thread",
+          turnId: "turn-1",
+          callId: "call-project-local-fetched",
+          requestId: "call-project-local-fetched",
+          namespace: "pwragent",
+          tool: "handoff_task",
+          arguments: {
+            task: "Inspect the fetched base.",
+            title: "Fetched base",
+            workspaceMode: "project_local",
+          },
+        },
+      } as AppServerPendingRequestNotification);
+
+      expect(fetchedProjectLocalResponse).toMatchObject({ success: true });
+      const fetchedProjectLocalPayload = JSON.parse(
+        (fetchedProjectLocalResponse as { contentItems: Array<{ text: string }> })
+          .contentItems[0]!.text,
+      );
+      expect(fetchedProjectLocalPayload.workspace).toMatchObject({
+        mode: "project_local",
+        cwd: expectedDir(repoPath),
+        branch: "main",
+        git: {
+          kind: "git_local",
+          repositoryState: "unborn",
+          worktreeCreationAvailable: true,
+        },
+      });
+      expect(fetchedProjectLocalPayload.workspace.git).not.toHaveProperty(
+        "unavailableReason",
+      );
+
+      const remoteWorktreeResponse = await codexClient.emitRequest({
+        method: "item/tool/call",
+        params: {
+          threadId: "ordinary-thread",
+          turnId: "turn-1",
+          callId: "call-worktree-fetched",
+          requestId: "call-worktree-fetched",
+          namespace: "pwragent",
+          tool: "handoff_task",
+          arguments: {
+            task: "Work from the fetched base.",
+            title: "Fetched worktree",
+            workspaceMode: "new_worktree",
+            branchName: "origin/main",
+          },
+        },
+      } as AppServerPendingRequestNotification);
+
+      expect(remoteWorktreeResponse).toMatchObject({ success: true });
+      const createdWorktree = codexClient.lastStartThreadParams?.cwd;
+      expect(createdWorktree).toBeDefined();
+      expect(createdWorktree).not.toBe(expectedDir(repoPath));
+      expect(await git(createdWorktree!, ["rev-parse", "HEAD"])).toBe(
+        await git(repoPath, ["rev-parse", "origin/main"]),
+      );
+
       await registry.close();
     } finally {
       await rm(root, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 
   it("starts project-local handoffs in the primary repo checkout instead of the caller worktree", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-handoff-project-local-"));
