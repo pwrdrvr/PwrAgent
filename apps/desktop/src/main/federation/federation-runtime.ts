@@ -1331,7 +1331,18 @@ function localBackendOperations(): FederationBackendOperations {
       return await getDesktopBackendRegistry().interruptTurn(request);
     },
     async steerTurn(request: SteerTurnRequest): Promise<SteerTurnResponse> {
-      return await getDesktopBackendRegistry().steerTurn(request);
+      const registry = getDesktopBackendRegistry();
+      const { admitSteerTurn } = await import(
+        "../scheduled-actions/steer-turn-admission.js"
+      );
+      const { getScheduledThreadActionService } = await import(
+        "../scheduled-actions/scheduled-thread-action-service.js"
+      );
+      return await admitSteerTurn(
+        registry,
+        getScheduledThreadActionService(registry),
+        request,
+      );
     },
     async setThreadExecutionMode(
       request: SetThreadExecutionModeRequest,

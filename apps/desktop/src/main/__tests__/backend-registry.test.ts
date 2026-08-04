@@ -1463,6 +1463,7 @@ class MockBackendClient {
         reviewThreadId: string;
         turnId: string;
       };
+      startReviewDelay?: Promise<unknown>;
       startReviewError?: Error;
     }
   ) {}
@@ -1722,10 +1723,11 @@ class MockBackendClient {
     cwd?: string;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   }): Promise<{ threadId: string; reviewThreadId: string; turnId: string }> {
+    this.lastStartReviewParams = params;
+    await this.options.startReviewDelay;
     if (this.options.startReviewError) {
       throw this.options.startReviewError;
     }
-    this.lastStartReviewParams = params;
     return this.options.startReviewResult ?? {
       threadId: params.threadId,
       reviewThreadId: params.threadId,
@@ -24813,6 +24815,64 @@ script = "printf setup"
       delivery: "inline",
     });
 
+    await registry.close();
+  });
+
+  it("rejects cancellation once a deferred review has begun backend admission", async () => {
+    const startReviewDelay = createDeferred<void>();
+    const codexClient = new MockBackendClient({
+      initializeResult: {
+        methods: ["turn/start", "review/start", "thread/resume"],
+      },
+      startReviewDelay: startReviewDelay.promise,
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null,
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "parent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+    const scheduled = await registry.submitReview({
+      backend: "codex",
+      threadId: "parent-thread",
+      target: { type: "uncommittedChanges" },
+      delivery: "inline",
+    });
+    expect(scheduled.status).toBe("scheduled");
+    if (scheduled.status !== "scheduled") throw new Error("Expected deferred review.");
+
+    const completion = codexClient.emit({
+      method: "turn/completed",
+      params: {
+        threadId: "parent-thread",
+        turnId: "turn-1",
+        turn: { id: "turn-1", status: "completed", output: [] },
+      },
+    });
+    await vi.waitFor(() => {
+      expect(codexClient.lastStartReviewParams).toBeDefined();
+    });
+
+    expect(registry.cancelPendingReview(
+      scheduled.pendingReviewId,
+      "Too late",
+    )).toBe(false);
+
+    startReviewDelay.resolve();
+    await completion;
     await registry.close();
   });
 

@@ -89,6 +89,50 @@ describe("ScheduledThreadActionService", () => {
     expect(store.get(response.action.id)).toMatchObject({ status: "scheduled" });
   });
 
+  it("returns the same durable action for an idempotent admission retry", async () => {
+    const harness = createHarness();
+    const request = {
+      backend: "codex" as const,
+      threadId: "thread-1",
+      kind: "turn" as const,
+      scheduledFor: 20_000,
+      displayText: "Follow up",
+      turn: { input: [{ type: "text" as const, text: "Follow up" }] },
+    };
+
+    const first = await harness.service.create(request, { id: "stable-action" });
+    const second = await harness.service.create(
+      { ...request, scheduledFor: 20_001 },
+      { id: "stable-action" },
+    );
+
+    expect(second.action).toEqual(first.action);
+    expect(store.list()).toHaveLength(1);
+  });
+
+  it("accepts attachment-only scheduled turns", async () => {
+    const harness = createHarness();
+    const response = await harness.service.create({
+      backend: "codex",
+      threadId: "thread-1",
+      kind: "turn",
+      scheduledFor: 20_000,
+      displayText: "",
+      turn: {
+        input: [{
+          type: "image",
+          name: "diagram.png",
+          url: "data:image/png;base64,aW1hZ2U=",
+        }],
+      },
+    });
+
+    expect(response.action).toMatchObject({
+      displayText: "",
+      status: "scheduled",
+    });
+  });
+
   it("dispatches from its main-process timer without any renderer activity", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
@@ -143,6 +187,96 @@ describe("ScheduledThreadActionService", () => {
       status: "queued",
       queueEntryId: "scheduled-turn:scheduled-1",
     });
+  });
+
+  it("does not claim a later action until the current admission settles", async () => {
+    const harness = createHarness(20_000);
+    let releaseFirst!: () => void;
+    harness.submitTurn.mockImplementationOnce(() => new Promise((resolve) => {
+      releaseFirst = () => resolve({
+        status: "queued" as const,
+        entry: {
+          id: "scheduled-turn:scheduled-1",
+          backend: "codex" as const,
+          threadId: "thread-1",
+          origin: "scheduled" as const,
+          input: [{ type: "text" as const, text: "First" }],
+          createdAt: 20_000,
+        },
+        position: 1,
+      });
+    }));
+    for (const [id, text, createdAt] of [
+      ["scheduled-1", "First", 1_000],
+      ["scheduled-2", "Second", 2_000],
+    ] as const) {
+      store.create({
+        id,
+        backend: "codex",
+        threadId: "thread-1",
+        kind: "turn",
+        origin: "desktop",
+        scheduledFor: 10_000,
+        displayText: text,
+        turn: { input: [{ type: "text", text }] },
+        now: createdAt,
+      });
+    }
+
+    const evaluating = harness.service.evaluateDueActions();
+    await vi.waitFor(() => expect(harness.submitTurn).toHaveBeenCalledTimes(1));
+
+    expect(store.get("scheduled-1")?.status).toBe("dispatching");
+    expect(store.get("scheduled-2")?.status).toBe("scheduled");
+
+    releaseFirst();
+    await evaluating;
+    expect(harness.submitTurn).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not recover claims held by another live scheduler instance", async () => {
+    const harness = createHarness(20_000);
+    store.create({
+      id: "scheduled-1",
+      backend: "codex",
+      threadId: "thread-1",
+      kind: "turn",
+      origin: "desktop",
+      scheduledFor: 10_000,
+      displayText: "Follow up",
+      turn: { input: [{ type: "text", text: "Follow up" }] },
+      now: 1_000,
+    });
+    const first = new ScheduledThreadActionService({
+      registry: harness.registry,
+      store,
+      now: () => 20_000,
+      ownerId: "instance-1",
+      setTimer: vi.fn(() => ({}) as ReturnType<typeof setTimeout>),
+      clearTimer: vi.fn(),
+      setLeaseTimer: vi.fn(() => ({}) as ReturnType<typeof setInterval>),
+      clearLeaseTimer: vi.fn(),
+    });
+    first.start();
+    await vi.waitFor(() => expect(harness.submitTurn).toHaveBeenCalledTimes(1));
+    const second = new ScheduledThreadActionService({
+      registry: harness.registry,
+      store,
+      now: () => 20_001,
+      ownerId: "instance-2",
+      setTimer: vi.fn(() => ({}) as ReturnType<typeof setTimeout>),
+      clearTimer: vi.fn(),
+      setLeaseTimer: vi.fn(() => ({}) as ReturnType<typeof setInterval>),
+      clearLeaseTimer: vi.fn(),
+    });
+
+    second.start();
+    await Promise.resolve();
+
+    expect(harness.submitTurn).toHaveBeenCalledTimes(1);
+    expect(store.get("scheduled-1")?.status).toBe("queued");
+    second.dispose();
+    first.dispose();
   });
 
   it("sends a future action now through the same atomic claim", async () => {

@@ -436,6 +436,8 @@ type QueuedTurnDraft = {
 };
 
 type PendingSteerDraft = QueuedTurnDraft & {
+  clearComposerDraftOnAdmission?: boolean;
+  expectedTurnId: string;
   status: "pending" | "steering";
 };
 
@@ -1224,29 +1226,6 @@ function notificationIncludesDraftContent(
 
   const notificationImageUrls = new Set(collectImageUrls(params));
   return attachmentUrls.every((url) => notificationImageUrls.has(url));
-}
-
-function parseStaleSteerError(
-  error: unknown
-): { activeTurnId?: string; active: boolean } | undefined {
-  const message = error instanceof Error ? error.message : String(error);
-  const normalized = message.toLowerCase();
-  if (normalized.includes("no active turn to steer")) {
-    return { active: false };
-  }
-
-  const activeTurnMatch = message.match(/found `([^`]+)`/);
-  if (
-    normalized.includes("expected active turn id") &&
-    activeTurnMatch?.[1]
-  ) {
-    return {
-      active: true,
-      activeTurnId: activeTurnMatch[1],
-    };
-  }
-
-  return undefined;
 }
 
 function parseStaleInterruptError(error: unknown): boolean {
@@ -2875,6 +2854,9 @@ export function Composer(props: ComposerProps) {
   // duplicate renderer calls; the registry request ID provides the durable
   // idempotency boundary shared with messaging.
   const steeringRequestIdRef = useRef<string | undefined>(undefined);
+  const pendingSteerAutoAdmissionAttemptIdRef = useRef<string | undefined>(
+    undefined,
+  );
   const [queuedTurns, setQueuedTurnsState] = useState<QueuedTurnDraft[]>(
     savedInitialQueuedTurns ?? []
   );
@@ -3927,13 +3909,6 @@ export function Composer(props: ComposerProps) {
 
     draftStore.setQueuedTurns(scopeKey, snapshots);
   };
-  const setQueuedTurns = (nextQueuedTurns: QueuedTurnDraft[]): void => {
-    saveQueuedTurnSnapshots(composerScopeKey, nextQueuedTurns);
-    setQueuedTurnsState(nextQueuedTurns);
-  };
-  const setQueuedTurn = (nextQueuedTurn?: QueuedTurnDraft): void => {
-    setQueuedTurns(nextQueuedTurn ? [nextQueuedTurn] : []);
-  };
   const enqueueQueuedTurn = (nextQueuedTurn: QueuedTurnDraft): void => {
     setQueuedTurnsState((current) => {
       const nextQueuedTurns = [...current, nextQueuedTurn];
@@ -4884,89 +4859,6 @@ export function Composer(props: ComposerProps) {
     }
   }, [props.activeTurnId]);
 
-  const handoffPendingSteerToBackendQueue = async (
-    pending: PendingSteerDraft,
-  ): Promise<void> => {
-    const thread = props.thread;
-    const createScheduledAction = props.desktopApi?.createScheduledThreadAction;
-    const input = pending.input ?? [];
-    const restore = (): void => {
-      const snapshot: ComposerDraftSnapshot = {
-        draft: pending.text,
-        editorDocument: undefined,
-        imageAttachments: pending.imageAttachments,
-        fileAttachments: pending.fileAttachments,
-        skillTokens: [],
-      };
-      if (
-        activeComposerScopeKeyRef.current === composerScopeKey
-        && !hasComposerDraftSnapshotContent(latestDraftSnapshotRef.current.snapshot)
-      ) {
-        setComposerDraftFromCanonical(pending.text);
-        setImageAttachments(pending.imageAttachments);
-        setFileAttachments(pending.fileAttachments);
-      } else {
-        draftStore.pushDraft(composerScopeKey, snapshot);
-      }
-    };
-    if (!thread || !createScheduledAction || input.length === 0) {
-      restore();
-      setSendError("The steer ended before backend queue handoff completed.");
-      return;
-    }
-    try {
-      const response = await createScheduledAction({
-        backend: thread.source,
-        threadId: thread.id,
-        kind: "turn",
-        origin: "desktop",
-        scheduledFor: Date.now(),
-        displayText: pending.text,
-        imageAttachments: pending.imageAttachments,
-        fileAttachments: pending.fileAttachments,
-        turn: {
-          input,
-          executionMode: thread.executionMode,
-          model: selectedModelOption?.id,
-          reasoningEffort: supportsReasoning
-            ? selectedReasoningEffort
-            : undefined,
-          serviceTier: selectedServiceTier,
-          fastMode:
-            thread.source === "codex" && supportsFast
-              ? Boolean(currentSettings?.fastMode)
-              : undefined,
-        },
-      });
-      if (
-        response.action.status === "scheduled"
-        || response.action.status === "dispatching"
-        || response.action.status === "queued"
-      ) {
-        upsertScheduledProjectionInScope(composerScopeKey, {
-          id: `scheduled-projection:${response.action.id}`,
-          scheduledActionId: response.action.id,
-          input,
-          text: pending.text,
-          imageAttachments: pending.imageAttachments,
-          fileAttachments: pending.fileAttachments,
-          ...(response.action.status === "scheduled"
-            ? { scheduledSendAt: response.action.scheduledFor }
-            : {}),
-          ...(response.action.status === "dispatching"
-            ? { backendQueuePending: true }
-            : {}),
-          ...(response.action.status === "queued" && response.action.queueEntryId
-            ? { queueEntryId: response.action.queueEntryId }
-            : {}),
-        });
-      }
-    } catch (error) {
-      restore();
-      setSendError(error instanceof Error ? error.message : String(error));
-    }
-  };
-
   useEffect(() => {
     if (!props.desktopApi?.onAgentEvent || !props.thread) {
       return;
@@ -5186,7 +5078,11 @@ export function Composer(props: ComposerProps) {
         setSteering(false);
         steeringRequestIdRef.current = undefined;
         if (pendingSteer?.status === "pending") {
-          void handoffPendingSteerToBackendQueue(pendingSteer);
+          void submitPendingSteer(
+            pendingSteer,
+            pendingSteer.expectedTurnId,
+            composerScopeKey,
+          );
         }
         setPendingSteer(undefined);
         updateActiveTurnId(undefined);
@@ -6107,12 +6003,17 @@ export function Composer(props: ComposerProps) {
       pendingSteer.status !== "pending" ||
       activeTurnId ||
       props.launchpad
+      || pendingSteerAutoAdmissionAttemptIdRef.current === pendingSteer.id
     ) {
       return;
     }
 
-    void handoffPendingSteerToBackendQueue(pendingSteer);
-    setPendingSteer(undefined);
+    pendingSteerAutoAdmissionAttemptIdRef.current = pendingSteer.id;
+    void submitPendingSteer(
+      pendingSteer,
+      pendingSteer.expectedTurnId,
+      composerScopeKey,
+    );
   }, [activeTurnId, pendingSteer, props.launchpad, queuedTurn]);
 
   const queueCurrentDraft = (
@@ -6365,7 +6266,7 @@ export function Composer(props: ComposerProps) {
   };
 
   const submitPendingSteer = async (
-    pending: QueuedTurnDraft,
+    pending: PendingSteerDraft,
     expectedTurnId = activeTurnIdRef.current,
     expectedScopeKey = composerScopeKey,
   ): Promise<void> => {
@@ -6374,22 +6275,15 @@ export function Composer(props: ComposerProps) {
       setSendError("Steering is not available for this backend.");
       return;
     }
-    if (!supportsSteering) {
-      setSendError("Steering is not available for this model.");
-      return;
-    }
-
-    const payloadOrPromise = buildQueuedTurnPayload(pending);
+    const payloadOrPromise = pending.input
+      ? { input: pending.input }
+      : buildQueuedTurnPayload(pending);
     const payload = isPromiseLike(payloadOrPromise)
       ? await payloadOrPromise
       : payloadOrPromise;
     if (
-      activeTurnIdRef.current !== turnId
-      || activeComposerScopeKeyRef.current !== expectedScopeKey
+      activeComposerScopeKeyRef.current !== expectedScopeKey
     ) {
-      if (activeComposerScopeKeyRef.current === expectedScopeKey) {
-        setSendError("The target turn changed before steering could start.");
-      }
       return;
     }
     if (
@@ -6411,7 +6305,7 @@ export function Composer(props: ComposerProps) {
     );
     props.onPendingStatusChange?.("Steering");
     try {
-      await props.desktopApi.steerTurn({
+      const responsePromise = props.desktopApi.steerTurn({
         backend: props.thread.source,
         federationTarget: props.thread.federation?.ref.target ??
           readRendererFederationTarget(),
@@ -6419,33 +6313,66 @@ export function Composer(props: ComposerProps) {
         expectedTurnId: turnId,
         input: payload.input,
         requestId: pending.id,
+        fallback: {
+          displayText: pending.text,
+          imageAttachments: pending.imageAttachments,
+          fileAttachments: pending.fileAttachments,
+          turn: {
+            input: payload.input,
+            executionMode: props.thread.executionMode,
+            model: selectedModelOption?.id,
+            reasoningEffort: supportsReasoning
+              ? selectedReasoningEffort
+              : undefined,
+            serviceTier: selectedServiceTier,
+            fastMode:
+              props.thread.source === "codex" && supportsFast
+                ? Boolean(currentSettings?.fastMode)
+                : undefined,
+          },
+        },
       });
+      if (
+        pending.clearComposerDraftOnAdmission
+        && activeComposerScopeKeyRef.current === expectedScopeKey
+      ) {
+        recordComposerDraftHistory(
+          expectedScopeKey,
+          latestDraftSnapshotRef.current.snapshot,
+          "unsent",
+        );
+        clearComposerDraftSnapshot(expectedScopeKey);
+        clearComposerDraft();
+        setImageAttachments([]);
+        setFileAttachments([]);
+        setReviewConfig(undefined);
+      }
+      const response = await responsePromise;
+      if (response.disposition === "scheduled" && response.scheduledAction) {
+        const action = response.scheduledAction;
+        upsertScheduledProjectionInScope(expectedScopeKey, {
+          id: `scheduled-projection:${action.id}`,
+          scheduledActionId: action.id,
+          input: payload.input,
+          text: pending.text,
+          imageAttachments: pending.imageAttachments,
+          fileAttachments: pending.fileAttachments,
+          ...(action.status === "scheduled"
+            ? { scheduledSendAt: action.scheduledFor }
+            : {}),
+          ...(action.status === "dispatching"
+            ? { backendQueuePending: true }
+            : {}),
+          ...(action.status === "queued" && action.queueEntryId
+            ? { queueEntryId: action.queueEntryId }
+            : {}),
+        });
+        setPendingSteer(undefined);
+        setSendError(undefined);
+      }
     } catch (error) {
       if (steeringRequestIdRef.current === pending.id) {
         steeringRequestIdRef.current = undefined;
-      }
-      const staleSteer = parseStaleSteerError(error);
-      if (staleSteer) {
-        if (queuedTurn) {
-          setDraft(pending.text);
-          setImageAttachments(pending.imageAttachments);
-          setFileAttachments(pending.fileAttachments);
-        } else {
-          setQueuedTurn({
-            id: createQueuedTurnId(),
-            input: pending.input,
-            text: pending.text,
-            imageAttachments: pending.imageAttachments,
-            fileAttachments: pending.fileAttachments,
-          });
-        }
-        setPendingSteer(undefined);
-        setSendError(undefined);
-        const nextActiveTurnId = staleSteer.active ? staleSteer.activeTurnId : undefined;
-        updateActiveTurnId(nextActiveTurnId);
-        props.onActiveTurnIdChange?.(nextActiveTurnId);
-        props.onPendingStatusChange?.(staleSteer.active ? "Thinking" : undefined);
-        return;
       }
       updatePendingSteer((current) =>
         current?.text === pending.text &&
@@ -6464,10 +6391,14 @@ export function Composer(props: ComposerProps) {
     pending: QueuedTurnDraft,
     expectedTurnId = activeTurnIdRef.current,
     expectedScopeKey = composerScopeKey,
-  ): boolean | Promise<boolean> => {
+    clearComposerDraftOnAdmission = false,
+  ):
+    | PendingSteerDraft
+    | Promise<PendingSteerDraft | undefined>
+    | undefined => {
     const turnId = expectedTurnId;
     if (pendingSteerCreationInFlightRef.current) {
-      return false;
+      return undefined;
     }
     if (
       !props.thread
@@ -6478,12 +6409,14 @@ export function Composer(props: ComposerProps) {
       || !supportsSteering
     ) {
       setSendError("Steering is not available for this model.");
-      return false;
+      return undefined;
     }
 
     pendingSteerCreationInFlightRef.current = true;
     const inputOrPayload = buildQueuedTurnPayload(pending);
-    const complete = (input: AppServerTurnInputItem[]): boolean => {
+    const complete = (
+      input: AppServerTurnInputItem[],
+    ): PendingSteerDraft | undefined => {
       try {
         if (
           input.length === 0
@@ -6492,29 +6425,19 @@ export function Composer(props: ComposerProps) {
           || activeTurnIdRef.current !== turnId
           || activeComposerScopeKeyRef.current !== expectedScopeKey
         ) {
-          return false;
+          return undefined;
         }
 
-        setSendError(undefined);
-        setPendingSteer({
-          id: pending.id,
+        const accepted: PendingSteerDraft = {
+          ...pending,
+          clearComposerDraftOnAdmission,
+          expectedTurnId: turnId,
           input,
-          text: pending.text,
-          imageAttachments: pending.imageAttachments,
-          fileAttachments: pending.fileAttachments,
           status: "pending",
-        });
-        recordComposerDraftHistory(
-          composerScopeKey,
-          latestDraftSnapshotRef.current.snapshot,
-          "unsent",
-        );
-        clearComposerDraftSnapshot(composerScopeKey);
-        clearComposerDraft();
-        setImageAttachments([]);
-        setFileAttachments([]);
-        setReviewConfig(undefined);
-        return true;
+        };
+        setSendError(undefined);
+        setPendingSteer(accepted);
+        return accepted;
       } finally {
         pendingSteerCreationInFlightRef.current = false;
       }
@@ -6524,7 +6447,7 @@ export function Composer(props: ComposerProps) {
         (payload) => complete(payload.input),
         () => {
           pendingSteerCreationInFlightRef.current = false;
-          return false;
+          return undefined;
         },
       );
     }
@@ -6555,11 +6478,12 @@ export function Composer(props: ComposerProps) {
       pending,
       expectedTurnId,
       expectedScopeKey,
+      true,
     );
-    const continueSteering = (accepted: boolean): void => {
+    const continueSteering = (accepted?: PendingSteerDraft): void => {
       if (accepted) {
         void submitPendingSteer(
-          pending,
+          accepted,
           expectedTurnId,
           expectedScopeKey,
         );
@@ -6587,14 +6511,14 @@ export function Composer(props: ComposerProps) {
       preserveCancelledQueuedTurnInScope(expectedScopeKey, queued);
       return;
     }
-    const continueSteering = (created: boolean): void => {
-      if (!created) {
+    const continueSteering = (accepted?: PendingSteerDraft): void => {
+      if (!accepted) {
         preserveCancelledQueuedTurnInScope(expectedScopeKey, queued);
         return;
       }
       removeQueuedTurnInScope(expectedScopeKey, queued);
       void submitPendingSteer(
-        queued,
+        accepted,
         expectedTurnId,
         expectedScopeKey,
       );

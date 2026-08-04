@@ -17,6 +17,10 @@ import type { ScheduledThreadActionStore } from "./scheduled-thread-action-store
 
 const scheduledActionLog = getMainLogger("pwragent:scheduled-actions");
 const MAX_TIMER_DELAY_MS = 2_147_000_000;
+const DEFAULT_CLAIM_LEASE_MS = 30_000;
+const DEFAULT_CLAIM_HEARTBEAT_MS = 10_000;
+const HISTORY_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
+const HISTORY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 export type ScheduledThreadActionServiceOptions = {
   registry: DesktopBackendRegistry;
@@ -27,6 +31,13 @@ export type ScheduledThreadActionServiceOptions = {
     delayMs: number,
   ) => ReturnType<typeof setTimeout>;
   clearTimer?: (timer: ReturnType<typeof setTimeout>) => void;
+  ownerId?: string;
+  claimLeaseMs?: number;
+  setLeaseTimer?: (
+    callback: () => void,
+    delayMs: number,
+  ) => ReturnType<typeof setInterval>;
+  clearLeaseTimer?: (timer: ReturnType<typeof setInterval>) => void;
 };
 
 let service: ScheduledThreadActionService | null = null;
@@ -53,24 +64,27 @@ export class ScheduledThreadActionService {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private running = false;
   private evaluating = false;
+  private leaseTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly ownerId: string;
+  private lastHistoryCleanupAt = 0;
   private unsubscribeRegistryEvents?: () => void;
 
-  constructor(private readonly options: ScheduledThreadActionServiceOptions) {}
+  constructor(private readonly options: ScheduledThreadActionServiceOptions) {
+    this.ownerId = options.ownerId ?? `scheduler:${process.pid}:${randomUUID()}`;
+  }
 
   start(): void {
     if (this.running) return;
     this.running = true;
-    const failed = this.options.store.failInterruptedDispatches(this.now());
-    for (const action of failed) {
-      void this.publish(action);
-    }
-    const recovered = this.options.store.recoverInterruptedQueues(this.now());
+    this.cleanupExpiredHistory();
+    const recovered = this.options.store.recoverExpiredClaims(this.now());
     for (const action of recovered) {
       void this.publish(action);
     }
     this.unsubscribeRegistryEvents = this.options.registry.onEvent((event) =>
       this.handleRegistryEvent(event),
     );
+    this.startLeaseHeartbeat();
     this.scheduleNextTimer();
     void this.evaluateDueActions();
   }
@@ -81,8 +95,13 @@ export class ScheduledThreadActionService {
       this.clearTimer(this.timer);
       this.timer = null;
     }
+    if (this.leaseTimer) {
+      this.clearLeaseTimer(this.leaseTimer);
+      this.leaseTimer = null;
+    }
     this.unsubscribeRegistryEvents?.();
     this.unsubscribeRegistryEvents = undefined;
+    this.options.store.releaseOwnedClaims(this.ownerId, this.now());
   }
 
   list(
@@ -93,12 +112,21 @@ export class ScheduledThreadActionService {
 
   async create(
     request: CreateScheduledThreadActionRequest,
+    options?: { id?: string },
   ): Promise<ScheduledThreadActionMutationResponse> {
     validateScheduledActionRequest(request);
     const now = this.now();
+    const id = options?.id ?? `scheduled-action:${randomUUID()}`;
+    const existing = this.options.store.get(id);
+    if (existing) {
+      if (!matchesCreateRequest(existing, request)) {
+        throw new Error(`Scheduled action id ${id} was reused with different input.`);
+      }
+      return { action: existing };
+    }
     const action = this.options.store.create({
       ...request,
-      id: `scheduled-action:${randomUUID()}`,
+      id,
       origin: request.origin ?? "desktop",
       now,
     });
@@ -176,7 +204,7 @@ export class ScheduledThreadActionService {
   async sendNow(
     request: ScheduledThreadActionIdRequest,
   ): Promise<ScheduledThreadActionMutationResponse> {
-    const claimed = this.options.store.claim(request.id, this.now());
+    const claimed = this.options.store.claim(request.id, this.claimParams());
     if (!claimed) {
       throw new Error("The scheduled action is no longer scheduled.");
     }
@@ -190,8 +218,9 @@ export class ScheduledThreadActionService {
     if (this.evaluating) return;
     this.evaluating = true;
     try {
-      const claimed = this.options.store.claimDue({ now: this.now() });
-      for (const action of claimed) {
+      while (true) {
+        const action = this.options.store.claimNextDue(this.claimParams());
+        if (!action) break;
         await this.publish(action);
         await this.dispatch(action);
       }
@@ -224,11 +253,13 @@ export class ScheduledThreadActionService {
               action.id,
               response.response.turnId,
               this.now(),
+              this.ownerId,
             )
           : this.options.store.markQueued(
               action.id,
               response.pendingReviewId,
               this.now(),
+              this.ownerId,
             );
         if (updated) await this.publish(updated);
         return;
@@ -245,14 +276,25 @@ export class ScheduledThreadActionService {
         queueEntryId,
       });
       const updated = response.status === "queued"
-        ? this.options.store.markQueued(action.id, response.entry.id, this.now())
-        : this.options.store.markStarted(action.id, response.turnId, this.now());
+        ? this.options.store.markQueued(
+            action.id,
+            response.entry.id,
+            this.now(),
+            this.ownerId,
+          )
+        : this.options.store.markStarted(
+            action.id,
+            response.turnId,
+            this.now(),
+            this.ownerId,
+          );
       if (updated) await this.publish(updated);
     } catch (error) {
       const failed = this.options.store.markFailed(
         action.id,
         error instanceof Error ? error.message : String(error),
         this.now(),
+        this.ownerId,
       );
       if (failed) await this.publish(failed);
       scheduledActionLog.error("scheduled action dispatch failed", {
@@ -377,6 +419,50 @@ export class ScheduledThreadActionService {
     return this.options.now?.() ?? Date.now();
   }
 
+  private claimParams(): {
+    now: number;
+    ownerId: string;
+    leaseExpiresAt: number;
+  } {
+    const now = this.now();
+    return {
+      now,
+      ownerId: this.ownerId,
+      leaseExpiresAt: now + (this.options.claimLeaseMs ?? DEFAULT_CLAIM_LEASE_MS),
+    };
+  }
+
+  private startLeaseHeartbeat(): void {
+    const callback = (): void => {
+      if (!this.running) return;
+      const params = this.claimParams();
+      this.options.store.renewClaims(
+        params.ownerId,
+        params.now,
+        params.leaseExpiresAt,
+      );
+      const recovered = this.options.store.recoverExpiredClaims(params.now);
+      for (const action of recovered) void this.publish(action);
+      this.cleanupExpiredHistory();
+      void this.evaluateDueActions();
+    };
+    this.leaseTimer = this.options.setLeaseTimer?.(
+      callback,
+      DEFAULT_CLAIM_HEARTBEAT_MS,
+    ) ?? setInterval(callback, DEFAULT_CLAIM_HEARTBEAT_MS);
+    this.leaseTimer.unref?.();
+  }
+
+  private cleanupExpiredHistory(): void {
+    const now = this.now();
+    if (
+      this.lastHistoryCleanupAt !== 0
+      && now - this.lastHistoryCleanupAt < HISTORY_CLEANUP_INTERVAL_MS
+    ) return;
+    this.options.store.cleanupTerminalBefore(now - HISTORY_RETENTION_MS);
+    this.lastHistoryCleanupAt = now;
+  }
+
   private setTimer(
     callback: () => void,
     delayMs: number,
@@ -391,6 +477,14 @@ export class ScheduledThreadActionService {
       clearTimeout(timer);
     }
   }
+
+  private clearLeaseTimer(timer: ReturnType<typeof setInterval>): void {
+    if (this.options.clearLeaseTimer) {
+      this.options.clearLeaseTimer(timer);
+    } else {
+      clearInterval(timer);
+    }
+  }
 }
 
 function validateScheduledActionRequest(
@@ -402,19 +496,36 @@ function validateScheduledActionRequest(
   if (!Number.isFinite(request.scheduledFor) || request.scheduledFor < 0) {
     throw new Error("Scheduled time must be a finite Unix timestamp.");
   }
-  if (!request.displayText.trim()) {
-    throw new Error("Scheduled action display text is required.");
-  }
   if (request.kind === "turn" && !request.turn?.input.length) {
     throw new Error("Scheduled turns require non-empty input.");
   }
   if (request.kind === "review" && !request.review) {
     throw new Error("Scheduled reviews require review configuration.");
   }
+  if (request.kind === "review" && !request.displayText.trim()) {
+    throw new Error("Scheduled review display text is required.");
+  }
 }
 
 function queueEntryIdForAction(actionId: string): string {
   return `scheduled-turn:${actionId}`;
+}
+
+function matchesCreateRequest(
+  action: ScheduledThreadAction,
+  request: CreateScheduledThreadActionRequest,
+): boolean {
+  return action.backend === request.backend
+    && action.threadId === request.threadId
+    && action.kind === request.kind
+    && action.origin === (request.origin ?? "desktop")
+    && action.displayText === request.displayText
+    && JSON.stringify(action.imageAttachments)
+      === JSON.stringify(request.imageAttachments)
+    && JSON.stringify(action.fileAttachments)
+      === JSON.stringify(request.fileAttachments)
+    && JSON.stringify(action.turn) === JSON.stringify(request.turn)
+    && JSON.stringify(action.review) === JSON.stringify(request.review);
 }
 
 function actionIdFromQueueEntryId(queueEntryId: string): string | undefined {

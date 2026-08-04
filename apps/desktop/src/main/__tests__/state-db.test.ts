@@ -94,9 +94,14 @@ describe("StateDb", () => {
         "status",
         "scheduled_for",
         "queue_entry_id",
-        "payload",
+        "turn_id",
+        "error_message",
+        "payload_ref",
+        "claim_owner",
+        "claim_expires_at",
       ]),
     );
+    expect(columns.map((column) => column.name)).not.toContain("payload");
   });
 
   it("adds scheduled actions to federation-era version 38 databases", () => {

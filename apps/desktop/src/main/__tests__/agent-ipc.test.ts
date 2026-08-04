@@ -281,6 +281,10 @@ vi.mock("../federation/federation-runtime", () => ({
   getDesktopFederationRuntime: () => federationMock.runtime,
 }));
 
+vi.mock("../scheduled-actions/scheduled-thread-action-service", () => ({
+  getScheduledThreadActionService: () => ({ create: vi.fn() }),
+}));
+
 describe("agent ipc", () => {
   beforeEach(() => {
     handlers.clear();
@@ -681,6 +685,7 @@ describe("agent ipc", () => {
       }),
     ).toEqual({
       backend: "codex",
+      disposition: "steered",
       threadId: "thread-1",
       turnId: "turn-1",
     });

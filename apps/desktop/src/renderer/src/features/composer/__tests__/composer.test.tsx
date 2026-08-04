@@ -15,6 +15,7 @@ import {
   type StartTurnResponse,
   type ScheduledThreadAction,
   type ScheduledThreadActionIdRequest,
+  type SteerTurnRequest,
 } from "@pwragent/shared";
 import type { JSONContent } from "@tiptap/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -5688,13 +5689,13 @@ describe("Composer", () => {
     fireEvent.keyDown(textarea, { key: "Enter", metaKey: true });
 
     await waitFor(() => {
-      expect(steerTurn).toHaveBeenCalledWith({
+      expect(steerTurn).toHaveBeenCalledWith(expect.objectContaining({
         backend: "codex",
         threadId: "thread-1",
         expectedTurnId: "turn-1",
         input: [{ type: "text", text: "Change direction" }],
         requestId: expect.any(String),
-      });
+      }));
     });
     expect(screen.getByText("Steering now")).toBeInTheDocument();
     expect(screen.getByText("Change direction")).toBeInTheDocument();
@@ -5821,7 +5822,7 @@ describe("Composer", () => {
     });
 
     await waitFor(() => {
-      expect(steerTurn).toHaveBeenCalledWith({
+      expect(steerTurn).toHaveBeenCalledWith(expect.objectContaining({
         backend: "codex",
         threadId: "thread-1",
         expectedTurnId: "turn-1",
@@ -5833,7 +5834,7 @@ describe("Composer", () => {
           },
         ],
         requestId: expect.any(String),
-      });
+      }));
     });
     expect(screen.getByText("Steering now")).toBeInTheDocument();
 
@@ -5982,13 +5983,13 @@ describe("Composer", () => {
     });
 
     await waitFor(() => {
-      expect(steerTurn).toHaveBeenCalledWith({
+      expect(steerTurn).toHaveBeenCalledWith(expect.objectContaining({
         backend: "codex",
         threadId: "thread-1",
         expectedTurnId: "turn-1",
         input: [{ type: "text", text: "Keep steering direction" }],
         requestId: expect.any(String),
-      });
+      }));
     });
     expect(steerTurn).toHaveBeenCalledTimes(1);
   });
@@ -6169,6 +6170,7 @@ describe("Composer", () => {
     const draftStore = createComposerDraftStore();
     draftStore.setPendingSteer("thread:codex:thread-1", {
       id: "pending-jeep",
+      expectedTurnId: "turn-1",
       input: [
         { type: "text", text: "Compare [@Jeep](~/Downloads/Jeep)" },
         {
@@ -6192,6 +6194,25 @@ describe("Composer", () => {
         }) => void)
       | undefined;
     const scheduledApi = createScheduledActionApi();
+    const steerTurn = vi.fn(async (request: SteerTurnRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: request.expectedTurnId,
+      disposition: "scheduled" as const,
+      scheduledAction: {
+        id: "scheduled-steer-1",
+        backend: request.backend,
+        threadId: request.threadId,
+        kind: "turn" as const,
+        origin: "desktop" as const,
+        status: "scheduled" as const,
+        scheduledFor: Date.now(),
+        displayText: request.fallback?.displayText ?? "",
+        turn: request.fallback?.turn,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+    }));
 
     render(
       <Composer
@@ -6199,6 +6220,7 @@ describe("Composer", () => {
         backends={[backendSummary("codex")]}
         desktopApi={{
           ...scheduledApi,
+          steerTurn,
           onAgentEvent: (callback) => {
             agentEventHandler = callback as typeof agentEventHandler;
             return () => undefined;
@@ -6234,13 +6256,13 @@ describe("Composer", () => {
     });
 
     await waitFor(() => {
-      expect(scheduledApi.createScheduledThreadAction).toHaveBeenCalledWith(
+      expect(steerTurn).toHaveBeenCalledWith(
         expect.objectContaining({
           backend: "codex",
           threadId: "thread-1",
-          kind: "turn",
-          origin: "desktop",
-          turn: expect.objectContaining({
+          expectedTurnId: "turn-1",
+          fallback: expect.objectContaining({
+            turn: expect.objectContaining({
             input: [
               { type: "text", text: "Compare [@Jeep](~/Downloads/Jeep)" },
               {
@@ -6250,9 +6272,11 @@ describe("Composer", () => {
                 pdfRenderProfile: "high",
               },
             ],
+            }),
           }),
         }),
       );
+      expect(scheduledApi.createScheduledThreadAction).not.toHaveBeenCalled();
     });
   });
 
@@ -6392,6 +6416,7 @@ describe("Composer", () => {
       });
       draftStore.setPendingSteer("thread:codex:thread-1", {
         id: "steer-jeep",
+        expectedTurnId: "turn-1",
         input: [{ type: "text", text: "Compare [@SteerJeep](~/Downloads/Jeep)" }],
         text: "Compare [@SteerJeep](~/Downloads/Jeep)",
         imageAttachments: [],
@@ -6684,7 +6709,7 @@ describe("Composer", () => {
     });
   });
 
-  it("sends a pending steer as the next turn when Codex reports no active turn", async () => {
+  it("projects the backend-owned fallback when a steer target is no longer active", async () => {
     let agentEventHandler:
       | ((event: {
           backend: "codex";
@@ -6694,9 +6719,26 @@ describe("Composer", () => {
           };
         }) => void)
       | undefined;
-    const steerTurn = vi.fn(async () => {
-      throw new Error("json-rpc error (-32600): no active turn to steer");
-    });
+    const steerTurn = vi.fn(async (request: SteerTurnRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: request.expectedTurnId,
+      disposition: "scheduled" as const,
+      scheduledAction: {
+        id: "scheduled-fallback-1",
+        backend: request.backend,
+        threadId: request.threadId,
+        kind: "turn" as const,
+        origin: "desktop" as const,
+        status: "queued" as const,
+        scheduledFor: Date.now(),
+        displayText: request.fallback?.displayText ?? "",
+        turn: request.fallback?.turn,
+        queueEntryId: "scheduled-turn:scheduled-fallback-1",
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+    }));
     const startTurn = vi.fn(async (request: StartTurnRequest) => ({
       backend: request.backend,
       threadId: request.threadId,
@@ -6772,20 +6814,22 @@ describe("Composer", () => {
 
     await waitFor(() => {
       expect(steerTurn).toHaveBeenCalledTimes(1);
-      expect(startTurn).toHaveBeenCalledWith(
-        expect.objectContaining({
-          backend: "codex",
-          threadId: "thread-1",
-          input: [{ type: "text", text: "Send after stale steer" }],
+      expect(steerTurn).toHaveBeenCalledWith(expect.objectContaining({
+        expectedTurnId: "turn-1",
+        fallback: expect.objectContaining({
+          displayText: "Send after stale steer",
+          turn: expect.objectContaining({
+            input: [{ type: "text", text: "Send after stale steer" }],
+          }),
         }),
-      );
+      }));
     });
-    expect(onActiveTurnIdChange).toHaveBeenCalledWith(undefined);
+    expect(startTurn).not.toHaveBeenCalled();
     expect(screen.queryByText("Pending steer")).not.toBeInTheDocument();
-    expect(screen.queryByText("no active turn to steer")).not.toBeInTheDocument();
+    expect(screen.getByText("Queued next")).toBeInTheDocument();
   });
 
-  it("queues a stale pending steer behind the active turn Codex reports", async () => {
+  it("does not reinterpret a backend-owned stale steer fallback in React", async () => {
     let agentEventHandler:
       | ((event: {
           backend: "codex";
@@ -6795,11 +6839,26 @@ describe("Composer", () => {
           };
         }) => void)
       | undefined;
-    const steerTurn = vi.fn(async () => {
-      throw new Error(
-        "json-rpc error (-32600): expected active turn id `turn-1` but found `turn-2`",
-      );
-    });
+    const steerTurn = vi.fn(async (request: SteerTurnRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: request.expectedTurnId,
+      disposition: "scheduled" as const,
+      scheduledAction: {
+        id: "scheduled-fallback-2",
+        backend: request.backend,
+        threadId: request.threadId,
+        kind: "turn" as const,
+        origin: "desktop" as const,
+        status: "queued" as const,
+        scheduledFor: Date.now(),
+        displayText: request.fallback?.displayText ?? "",
+        turn: request.fallback?.turn,
+        queueEntryId: "scheduled-turn:scheduled-fallback-2",
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+    }));
     const startTurn = vi.fn(async (request: StartTurnRequest) => ({
       backend: request.backend,
       threadId: request.threadId,
@@ -6875,7 +6934,6 @@ describe("Composer", () => {
 
     await waitFor(() => {
       expect(steerTurn).toHaveBeenCalledTimes(1);
-      expect(onActiveTurnIdChange).toHaveBeenCalledWith("turn-2");
     });
     expect(startTurn).not.toHaveBeenCalled();
     expect(screen.getByText("Queued next")).toBeInTheDocument();
@@ -6897,15 +6955,7 @@ describe("Composer", () => {
       });
     });
 
-    await waitFor(() => {
-      expect(startTurn).toHaveBeenCalledWith(
-        expect.objectContaining({
-          backend: "codex",
-          threadId: "thread-1",
-          input: [{ type: "text", text: "Queue after the real active turn" }],
-        }),
-      );
-    });
+    expect(startTurn).not.toHaveBeenCalled();
   });
 
   it("does not restore a handed-off steer when turn completion leaves a backend queue", async () => {

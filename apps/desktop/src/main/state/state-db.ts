@@ -9,7 +9,7 @@ import {
 } from "@pwragent/shared";
 import { getNativeBinding } from "./native-binding.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 39;
+export const CURRENT_STATE_DB_USER_VERSION = 40;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -420,9 +420,13 @@ CREATE TABLE IF NOT EXISTS scheduled_thread_actions (
   status          TEXT NOT NULL,
   scheduled_for   INTEGER NOT NULL,
   queue_entry_id  TEXT,
+  turn_id         TEXT,
+  error_message   TEXT,
+  payload_ref     TEXT NOT NULL,
+  claim_owner     TEXT,
+  claim_expires_at INTEGER,
   created_at      INTEGER NOT NULL,
-  updated_at      INTEGER NOT NULL,
-  payload         TEXT NOT NULL
+  updated_at      INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_scheduled_thread_actions_due
   ON scheduled_thread_actions(status, scheduled_for, created_at);
@@ -915,7 +919,6 @@ const APP_RUNTIME_INSTANCE_RETENTION_MS = 60 * 60 * 1000;
 const COMPOSER_DRAFT_JOURNAL_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const COMPOSER_DRAFT_JOURNAL_CAP = 300;
 const PR_STATUS_WATCH_HISTORY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
-const SCHEDULED_THREAD_ACTION_HISTORY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 /**
  * Per-platform cap for the messaging activity log. Older rows are
  * evicted FIFO so the table stays small even on busy platforms. Tuned
@@ -1221,6 +1224,12 @@ export class StateDb {
         db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
       })();
     }
+    if ((db.pragma("user_version", { simple: true }) as number) < 40) {
+      db.transaction(() => {
+        ensureScheduledThreadActionMetadataColumns(db);
+        db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
+      })();
+    }
     // Keep current-version databases converged without asking pre-v36 profiles
     // to install the unique index before the migration above removes duplicates.
     db.exec(PR_AUTO_DISPATCH_GLOBAL_FINGERPRINT_INDEX);
@@ -1318,13 +1327,6 @@ export class StateDb {
         .run(now - PR_STATUS_WATCH_HISTORY_RETENTION_MS);
       this.db
         .prepare(
-          `DELETE FROM scheduled_thread_actions
-           WHERE status NOT IN ('scheduled', 'dispatching', 'queued')
-             AND updated_at < ?`,
-        )
-        .run(now - SCHEDULED_THREAD_ACTION_HISTORY_RETENTION_MS);
-      this.db
-        .prepare(
           `DELETE FROM composer_draft_journal
            WHERE id IN (
              SELECT id FROM composer_draft_journal
@@ -1383,6 +1385,7 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     db.exec(ACP_SESSION_SCHEMA);
     db.exec(AUTOMATION_SCHEMA);
     db.exec(SCHEDULED_THREAD_ACTION_SCHEMA);
+    ensureScheduledThreadActionMetadataColumns(db);
     db.exec(MESSAGING_ACTIVITY_SUMMARY_SCHEMA);
     db.exec(MESSAGING_DEFAULT_AGENT_ASSIGNMENT_SCHEMA);
     db.exec(MESSAGING_OBSERVED_SURFACE_SCHEMA);
@@ -1412,6 +1415,33 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
 CREATE INDEX IF NOT EXISTS idx_app_runtime_instances_profile_cwd_hash
   ON app_runtime_instances(profile_name, cwd_hash, heartbeat_at DESC);
 `);
+}
+
+function ensureScheduledThreadActionMetadataColumns(
+  db: BetterSqlite3.Database,
+): void {
+  const columns = new Set(
+    (db.prepare("PRAGMA table_info(scheduled_thread_actions)").all() as Array<{
+      name: string;
+    }>).map((column) => column.name),
+  );
+  if (!columns.has("turn_id")) {
+    db.exec("ALTER TABLE scheduled_thread_actions ADD COLUMN turn_id TEXT");
+  }
+  if (!columns.has("error_message")) {
+    db.exec("ALTER TABLE scheduled_thread_actions ADD COLUMN error_message TEXT");
+  }
+  if (!columns.has("payload_ref")) {
+    db.exec("ALTER TABLE scheduled_thread_actions ADD COLUMN payload_ref TEXT");
+  }
+  if (!columns.has("claim_owner")) {
+    db.exec("ALTER TABLE scheduled_thread_actions ADD COLUMN claim_owner TEXT");
+  }
+  if (!columns.has("claim_expires_at")) {
+    db.exec(
+      "ALTER TABLE scheduled_thread_actions ADD COLUMN claim_expires_at INTEGER",
+    );
+  }
 }
 
 function ensureThreadUsagePricingProviderScope(db: BetterSqlite3.Database): void {

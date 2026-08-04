@@ -2466,7 +2466,7 @@ type PendingReviewStartRecord = {
   createdAt: number;
   updatedAt: number;
   idempotencyKey?: string;
-  status: "scheduled" | "started" | "cancelled" | "failed";
+  status: "scheduled" | "starting" | "started" | "cancelled" | "failed";
   reviewThreadId?: string;
   reviewTurnId?: string;
   error?: string;
@@ -11644,10 +11644,18 @@ export class DesktopBackendRegistry {
         });
         continue;
       }
+      const current = this.pendingReviewStarts.get(candidate.pendingReviewId);
+      if (!current || current.status !== "scheduled") continue;
+      const starting: PendingReviewStartRecord = {
+        ...current,
+        status: "starting",
+        updatedAt: Date.now(),
+      };
+      this.pendingReviewStarts.set(candidate.pendingReviewId, starting);
       try {
-        const response = await this.startReview(candidate.request);
+        const response = await this.startReview(starting.request);
         this.pendingReviewStarts.set(candidate.pendingReviewId, {
-          ...candidate,
+          ...starting,
           status: "started",
           reviewThreadId: response.reviewThreadId,
           reviewTurnId: response.turnId,
@@ -11686,7 +11694,7 @@ export class DesktopBackendRegistry {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         this.pendingReviewStarts.set(candidate.pendingReviewId, {
-          ...candidate,
+          ...starting,
           status: "failed",
           error: message,
           updatedAt: Date.now(),

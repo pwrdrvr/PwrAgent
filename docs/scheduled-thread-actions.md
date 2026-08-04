@@ -6,12 +6,14 @@ own the clock or decide when the action enters a backend.
 
 ## Boundary
 
-The durable boundary is `ScheduledThreadActionService`, backed by
-`scheduled_thread_actions` in the profile state database. The service atomically
-claims due actions, then hands turns to `ThreadTurnQueue` and reviews to the
-registry's review admission path. It publishes lifecycle events after every
-state transition. Desktop chips and messaging confirmations are projections of
-that state.
+The durable boundary is `ScheduledThreadActionService`. Scheduler metadata and
+an opaque payload reference live in `scheduled_thread_actions`; accepted prompt,
+attachment, path, and review content lives in atomic per-action files beside the
+profile database, never in desktop SQLite. The service atomically claims due
+actions, then hands turns to `ThreadTurnQueue` and reviews to the registry's
+review admission path. It publishes lifecycle events after every state
+transition. Desktop chips and messaging confirmations are projections of that
+state.
 
 ```text
 Desktop composer ─┐
@@ -31,8 +33,11 @@ not stop the main-process timer.
 
 - `scheduled`: durable and editable; eligible for atomic claim at
   `scheduledFor`.
-- `dispatching`: claimed by one service instance; no longer editable.
-- `queued`: accepted by the registry but waiting behind an active turn.
+- `dispatching`: claimed by one service instance under a renewable lease; no
+  longer editable.
+- `queued`: accepted by the registry but waiting behind an active turn. It
+  remains owned by the same renewable lease while the in-memory registry holds
+  it.
 - `started`: handed to a backend turn or review.
 - `cancelled` / `failed`: terminal.
 
@@ -41,10 +46,14 @@ behind one active turn keep distinct pending IDs; the registry chains them
 across review terminal events instead of deduplicating or starting them
 concurrently.
 
-Queued registry work is re-admitted from its durable action after a main-process
-restart because the registry FIFO itself is in memory. An action interrupted in
-the narrower `dispatching` window is marked failed instead: whether the backend
-accepted it is ambiguous, so automatic replay could duplicate operator work.
+Only expired claims are recovered, so a second live process sharing the profile
+cannot take another instance's work. Queued registry work with an expired lease
+is re-admitted from its durable action because the registry FIFO itself is in
+memory. An expired action in the narrower `dispatching` window is marked failed
+instead: whether the backend accepted it is ambiguous, so automatic replay
+could duplicate operator work. Due actions are claimed individually immediately
+before backend admission; later due work stays scheduled if an earlier admission
+blocks.
 
 ## Surface contract
 
@@ -66,7 +75,7 @@ bound thread before resolving an action ID.
 | Feature | Owner | Assessment |
 |---|---|---|
 | Immediate queued turns | `ThreadTurnQueue` in the backend registry | Correct. Desktop and messaging submit immediately and only project queue state. |
-| Steering | Backend registry / backend client | Correct after payload preparation. If the target turn ends during preparation, the payload is registered as an immediate scheduled action instead of waiting for a renderer release. |
+| Steering | Backend registry / backend client | Correct after payload preparation. The main-process steer admission accepts the fallback payload in the same request and durably schedules it if the expected target is stale; React never decides or releases that fallback. |
 | Reviews behind active turns | Scheduled action service, then registry review admission | Correct. The renderer no longer waits for idle to release a review. |
 | Scheduled messages and reviews | Scheduled action service | Correct. Durable clock and lifecycle are independent of GUI focus. |
 | Messaging input debounce/admission | Main-process messaging controller | Correct. It is independent of renderer presence. |
