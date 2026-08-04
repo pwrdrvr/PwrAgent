@@ -10009,8 +10009,8 @@ export class DesktopBackendRegistry {
     });
   }
 
-  cancelQueuedTurn(entryId: string, reason?: string): void {
-    this.threadTurnQueue.cancelEntry(entryId, reason);
+  cancelQueuedTurn(entryId: string, reason?: string): boolean {
+    return Boolean(this.threadTurnQueue.cancelEntry(entryId, reason));
   }
 
   updateQueuedTurnInput(

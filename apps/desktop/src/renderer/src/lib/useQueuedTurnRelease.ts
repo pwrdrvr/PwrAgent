@@ -424,6 +424,28 @@ export function useQueuedTurnRelease(params: {
 
     return desktopApi.onAgentEvent((event) => {
       const current = paramsRef.current;
+      if (event.notification.method === "thread/turnQueue/updated") {
+        const notification = event.notification.params as {
+          queueEntryId?: unknown;
+          status?: unknown;
+          threadId?: unknown;
+        };
+        if (
+          typeof notification.threadId === "string" &&
+          typeof notification.queueEntryId === "string" &&
+          notification.status !== "queued"
+        ) {
+          const scopeKey = `thread:${event.backend}:${notification.threadId}`;
+          const queued = current.composerDraftStore.getQueuedTurns(scopeKey);
+          const next = queued.filter(
+            (candidate) => candidate.queueEntryId !== notification.queueEntryId,
+          );
+          if (next.length !== queued.length) {
+            current.composerDraftStore.setQueuedTurns(scopeKey, next);
+          }
+        }
+        return;
+      }
       if (
         !TERMINAL_TURN_METHODS.has(event.notification.method) &&
         !isIdleStatusNotification(event)

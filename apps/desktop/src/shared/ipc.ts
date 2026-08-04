@@ -31,6 +31,7 @@ export const ACP_AGENTS_LIST_CHANNEL = "acp-agents:list";
 export const AGENT_START_THREAD_CHANNEL = "agent:start-thread";
 export const AGENT_FORK_THREAD_CHANNEL = "agent:fork-thread";
 export const AGENT_START_TURN_CHANNEL = "agent:start-turn";
+export const AGENT_CANCEL_QUEUED_TURN_CHANNEL = "agent:cancel-queued-turn";
 export const AGENT_START_REVIEW_CHANNEL = "agent:start-review";
 export const AGENT_COMPACT_THREAD_CHANNEL = "agent:compact-thread";
 export const AGENT_INTERRUPT_TURN_CHANNEL = "agent:interrupt-turn";

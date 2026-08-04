@@ -9,6 +9,8 @@ import type {
   ArchiveWorktreeResponse,
   ArchiveThreadRequest,
   ArchiveThreadResponse,
+  CancelQueuedTurnRequest,
+  CancelQueuedTurnResponse,
   DesktopAppearanceDensity,
   DesktopAppearanceTheme,
   CancelThreadExecutionModeQueueRequest,
@@ -295,6 +297,7 @@ import type {
   IntegratedTerminalWriteRequest,
 } from "../shared/integrated-terminal";
 import {
+  AGENT_CANCEL_QUEUED_TURN_CHANNEL,
   AGENT_CANCEL_THREAD_EXECUTION_MODE_QUEUE_CHANNEL,
   AGENT_APPLY_THREAD_MODEL_MIGRATION_CHANNEL,
   AGENT_EVENT_CHANNEL,
@@ -1089,6 +1092,10 @@ const desktopApi = Object.freeze({
     request: StartTurnRequest
   ): Promise<StartTurnResponse> =>
     await ipcRenderer.invoke(AGENT_START_TURN_CHANNEL, request),
+  cancelQueuedTurn: async (
+    request: CancelQueuedTurnRequest,
+  ): Promise<CancelQueuedTurnResponse> =>
+    await ipcRenderer.invoke(AGENT_CANCEL_QUEUED_TURN_CHANNEL, request),
   interruptTurn: async (
     request: InterruptTurnRequest
   ): Promise<InterruptTurnResponse> =>
