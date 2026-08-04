@@ -589,6 +589,56 @@ describe("DesktopFederationRuntime", () => {
     ]);
   });
 
+  it("forwards scheduler lifecycle events to scheduler-capable peers", () => {
+    const forwarded: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({ localInstanceId: "gateway_one" });
+    router.registerConnection(
+      createConnection({
+        peerId: "client_one",
+        capabilities: ["scheduled_actions"],
+        sendEnvelope: (envelope) => forwarded.push(envelope),
+      }),
+    );
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.localInstanceId = "gateway_one";
+    runtime.router = router;
+
+    runtime.forwardLocalBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/scheduledAction/updated",
+        params: {
+          action: {
+            id: "scheduled-1",
+            backend: "codex",
+            threadId: "thread-1",
+            kind: "turn",
+            origin: "desktop",
+            status: "scheduled",
+            scheduledFor: 3_000,
+            displayText: "Follow up",
+            turn: { input: [{ type: "text", text: "Follow up" }] },
+            createdAt: 1_000,
+            updatedAt: 1_000,
+          },
+        },
+      },
+    } as AgentEvent);
+
+    expect(forwarded).toMatchObject([
+      {
+        kind: "notification",
+        method: FEDERATION_BACKEND_EVENT_METHOD,
+        params: {
+          notification: {
+            method: "thread/scheduledAction/updated",
+          },
+        },
+        targetInstanceId: "client_one",
+      },
+    ]);
+  });
+
   it("publishes remote backend events with the source peer as federation target", () => {
     const published: AgentEvent[] = [];
     const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
@@ -821,7 +871,7 @@ describe("DesktopFederationRuntime", () => {
         id: "response-1",
         kind: "response",
         requestId: "request-1",
-        protocolVersion: 1,
+        protocolVersion: 2,
         sourceInstanceId: "client_two",
         targetInstanceId: "client_one",
         createdAt: 2_000,

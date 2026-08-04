@@ -271,6 +271,8 @@ export function authenticateFederationReconnect(params: {
 
   const connectedPeer: FederationPeerSummary & { pinnedPublicKeyPem?: string } = {
     ...peer,
+    capabilities: policy.capabilities,
+    protocolVersion: params.protocolVersion,
     status: "connected",
     lastConnectedAt: params.now,
     lastActivityAt: params.now,

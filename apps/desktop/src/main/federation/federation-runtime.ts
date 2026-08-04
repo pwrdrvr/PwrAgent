@@ -141,6 +141,7 @@ const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "thread_navigation",
   "thread_detail",
   "turn_control",
+  "scheduled_actions",
   "pending_request_control",
   "environment_actions",
   "federated_search",
@@ -679,7 +680,7 @@ export class DesktopFederationRuntime {
     this.client = client;
     this.router?.registerConnection({
       peerId: gatewayInstanceId,
-      capabilities: DEFAULT_CAPABILITIES,
+      capabilities: client.capabilities,
       sendEnvelope: (envelope) => this.client?.sendEnvelope(envelope),
     });
     this.recordClientConnection({
@@ -1123,7 +1124,11 @@ export class DesktopFederationRuntime {
     for (const connection of router.listConnections()) {
       if (
         !connection.capabilities.includes("remote_window") &&
-        !connection.capabilities.includes("thread_detail")
+        !connection.capabilities.includes("thread_detail") &&
+        !(
+          event.notification.method === "thread/scheduledAction/updated"
+          && connection.capabilities.includes("scheduled_actions")
+        )
       ) {
         continue;
       }
@@ -1190,11 +1195,17 @@ export class DesktopFederationRuntime {
       return;
     }
 
+    const notification = envelope as FederationBackendEventNotification & typeof envelope;
     for (const connection of router.listConnections()) {
       if (connection.peerId === sourcePeerId) continue;
       if (
         !connection.capabilities.includes("remote_window") &&
-        !connection.capabilities.includes("thread_detail")
+        !connection.capabilities.includes("thread_detail") &&
+        !(
+          notification.params.notification.method
+            === "thread/scheduledAction/updated"
+          && connection.capabilities.includes("scheduled_actions")
+        )
       ) {
         continue;
       }

@@ -108,8 +108,8 @@ import {
   formatMessagingCommandHelpBody,
   matchMessagingCommandVerb,
   MESSAGING_COMMAND_CATALOG,
+  MESSAGING_HELP_ACTION_COMMANDS,
   MESSAGING_REVIEW_HELP_SPEC,
-  MESSAGING_SCHEDULE_HELP_SPECS,
   paginateHelpCatalog,
 } from "./messaging-command-catalog.js";
 import {
@@ -1882,16 +1882,15 @@ export class MessagingController {
       targetSurface?: MessagingSurfaceRef;
     },
   ): Promise<void> {
-    const rawVerb = event.command.trim().replace(/^\/+/, "").toLowerCase();
-    if (rawVerb === "schedule") {
+    const verb = matchMessagingCommandVerb(event.command);
+    if (verb === "schedule") {
       await this.handleScheduleCommand(event);
       return;
     }
-    if (rawVerb === "scheduled") {
+    if (verb === "scheduled") {
       await this.handleScheduledCommand(event);
       return;
     }
-    const verb = matchMessagingCommandVerb(event.command);
     if (verb === "status") {
       await this.presentStatus(event);
       return;
@@ -1943,7 +1942,10 @@ export class MessagingController {
       });
       return;
     }
-    if (rawVerb === "review") {
+    if (
+      event.command.trim().replace(/^\/+/, "").toLowerCase()
+        === "review"
+    ) {
       await this.handleReviewCommand(event);
       return;
     }
@@ -2636,11 +2638,14 @@ export class MessagingController {
       : false;
     const actionCatalog =
       reviewSupported
-        ? [...MESSAGING_COMMAND_CATALOG, MESSAGING_REVIEW_HELP_SPEC]
-        : MESSAGING_COMMAND_CATALOG;
+        ? MESSAGING_HELP_ACTION_COMMANDS.flatMap((command) =>
+            command.verb === "help"
+              ? [MESSAGING_REVIEW_HELP_SPEC, command]
+              : [command],
+          )
+        : MESSAGING_HELP_ACTION_COMMANDS;
     const helpCatalog = [
       ...MESSAGING_COMMAND_CATALOG,
-      ...MESSAGING_SCHEDULE_HELP_SPECS,
       ...(reviewSupported
         ? [MESSAGING_REVIEW_HELP_SPEC]
         : []),

@@ -42,6 +42,7 @@ describe("discord adapter", () => {
       "monitor",
       "schedule",
       "scheduled",
+      "help",
     ]);
   });
 

@@ -92,7 +92,7 @@ describe("federation enrollment", () => {
       gatewayInstanceId: "gateway_one",
       peerInstanceId: "client_one",
       publicKeyPem: keyPair.publicKeyPem,
-      protocolVersion: 1,
+      protocolVersion: 2,
       nonce: "nonce-1",
       capabilities,
     });
@@ -108,7 +108,7 @@ describe("federation enrollment", () => {
         role: "client",
         publicKeyPem: keyPair.publicKeyPem,
         capabilities,
-        protocolVersion: 1,
+        protocolVersion: 2,
         nonce: "nonce-1",
         signatureBase64: signFederationMessage({
           privateKeyPem: keyPair.privateKeyPem,
@@ -149,7 +149,7 @@ describe("federation enrollment", () => {
       gatewayInstanceId: "gateway_one",
       peerInstanceId: "client_one",
       publicKeyPem: keyPair.publicKeyPem,
-      protocolVersion: 1,
+      protocolVersion: 2,
       nonce: "nonce-1",
       capabilities: ["remote_window"],
     });
@@ -166,7 +166,7 @@ describe("federation enrollment", () => {
           role: "client",
           publicKeyPem: keyPair.publicKeyPem,
           capabilities: ["remote_window"],
-          protocolVersion: 1,
+          protocolVersion: 2,
           nonce: "nonce-1",
           signatureBase64: signFederationMessage({
             privateKeyPem: keyPair.privateKeyPem,
@@ -191,7 +191,7 @@ describe("federation enrollment", () => {
           role: "client",
           publicKeyPem: keyPair.publicKeyPem,
           capabilities: ["remote_window"],
-          protocolVersion: 1,
+          protocolVersion: 2,
           nonce: "nonce-1",
           signatureBase64: signFederationMessage({
             privateKeyPem: keyPair.privateKeyPem,
@@ -215,7 +215,7 @@ describe("federation enrollment", () => {
         role: "client",
         publicKeyPem: keyPair.publicKeyPem,
         capabilities: ["remote_window"],
-        protocolVersion: 1,
+        protocolVersion: 2,
         nonce: "nonce-1",
         signatureBase64: signFederationMessage({
           privateKeyPem: keyPair.privateKeyPem,
@@ -236,7 +236,7 @@ describe("federation enrollment", () => {
           role: "client",
           publicKeyPem: keyPair.publicKeyPem,
           capabilities: ["remote_window"],
-          protocolVersion: 1,
+          protocolVersion: 2,
           nonce: "nonce-2",
           signatureBase64: signFederationMessage({
             privateKeyPem: keyPair.privateKeyPem,
@@ -260,7 +260,7 @@ describe("federation enrollment", () => {
         role: "client",
         status: "disconnected",
         capabilities: ["remote_window"],
-        protocolVersion: 1,
+        protocolVersion: 2,
         pinnedPublicKeyPem: keyPair.publicKeyPem,
       },
     });
@@ -269,7 +269,7 @@ describe("federation enrollment", () => {
       gatewayInstanceId: "gateway_one",
       peerInstanceId: "client_one",
       publicKeyPem: keyPair.publicKeyPem,
-      protocolVersion: 1,
+      protocolVersion: 2,
       nonce: "nonce-3",
       capabilities: ["remote_window"],
     });
@@ -279,7 +279,7 @@ describe("federation enrollment", () => {
         store,
         gatewayInstanceId: "gateway_one",
         peerInstanceId: "client_one",
-        protocolVersion: 1,
+        protocolVersion: 2,
         nonce: "nonce-3",
         requestedCapabilities: ["remote_window"],
         signatureBase64: signFederationMessage({
@@ -298,7 +298,7 @@ describe("federation enrollment", () => {
         store,
         gatewayInstanceId: "gateway_one",
         peerInstanceId: "client_one",
-        protocolVersion: 1,
+        protocolVersion: 2,
         nonce: "nonce-4",
         requestedCapabilities: ["gateway_relay"],
         signatureBase64: signFederationMessage({
@@ -310,6 +310,62 @@ describe("federation enrollment", () => {
     ).toMatchObject({
       accepted: false,
       failure: { code: "capability_denied" },
+    });
+  });
+
+  it("persists the v2 scheduler capability when a v1 turn-control peer reconnects", () => {
+    const keyPair = generateFederationIdentityKeyPair();
+    store.upsertPeer({
+      updatedAt: 1_000,
+      peer: {
+        id: "client_one",
+        label: "Client",
+        role: "client",
+        status: "disconnected",
+        capabilities: ["turn_control"],
+        protocolVersion: 1,
+        pinnedPublicKeyPem: keyPair.publicKeyPem,
+      },
+    });
+    const requestedCapabilities = [
+      "turn_control",
+      "scheduled_actions",
+    ] as const;
+    const message = buildFederationProofMessage({
+      purpose: "reconnect",
+      gatewayInstanceId: "gateway_one",
+      peerInstanceId: "client_one",
+      publicKeyPem: keyPair.publicKeyPem,
+      protocolVersion: 2,
+      nonce: "nonce-scheduler-v2",
+      capabilities: requestedCapabilities,
+    });
+
+    expect(
+      authenticateFederationReconnect({
+        store,
+        gatewayInstanceId: "gateway_one",
+        peerInstanceId: "client_one",
+        protocolVersion: 2,
+        nonce: "nonce-scheduler-v2",
+        requestedCapabilities,
+        signatureBase64: signFederationMessage({
+          privateKeyPem: keyPair.privateKeyPem,
+          message,
+        }),
+        now: 2_000,
+      }),
+    ).toMatchObject({
+      accepted: true,
+      capabilities: ["turn_control", "scheduled_actions"],
+      peer: {
+        capabilities: ["turn_control", "scheduled_actions"],
+        protocolVersion: 2,
+      },
+    });
+    expect(store.getPeer("client_one")).toMatchObject({
+      capabilities: ["turn_control", "scheduled_actions"],
+      protocolVersion: 2,
     });
   });
 });

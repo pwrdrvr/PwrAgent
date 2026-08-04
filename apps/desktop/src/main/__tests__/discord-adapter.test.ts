@@ -118,6 +118,10 @@ describe("DiscordAdapter", () => {
             },
           ],
         }),
+        createApplicationCommand("cmd-help", {
+          description: "Show available PwrAgent commands and how to invoke them.",
+          name: "help",
+        }),
       ],
     });
     const adapter = new DiscordAdapter({
@@ -179,7 +183,7 @@ describe("DiscordAdapter", () => {
         name: "resume",
       }),
     );
-    expect(api.createApplicationCommand).toHaveBeenCalledTimes(6);
+    expect(api.createApplicationCommand).toHaveBeenCalledTimes(7);
     expect(api.createApplicationCommand).toHaveBeenCalledWith(
       DISCORD_APP_ID,
       expect.objectContaining({
@@ -223,7 +227,7 @@ describe("DiscordAdapter", () => {
     await adapter.start(async () => {});
 
     expect(api.listApplicationCommands).toHaveBeenCalledWith(DISCORD_APP_ID);
-    expect(api.createApplicationCommand).toHaveBeenCalledTimes(8);
+    expect(api.createApplicationCommand).toHaveBeenCalledTimes(9);
     expect(api.createApplicationCommand).toHaveBeenCalledWith(
       DISCORD_APP_ID,
       expect.objectContaining({

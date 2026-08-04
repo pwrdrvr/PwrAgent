@@ -54,7 +54,11 @@ describe("federation backend bridge", () => {
     });
     router.registerConnection({
       peerId: "client_one",
-      capabilities: ["thread_navigation", "turn_control"],
+      capabilities: [
+        "thread_navigation",
+        "turn_control",
+        "scheduled_actions",
+      ],
       sendEnvelope: (envelope) => replies.push(envelope),
     });
     registerFederationBackendHandlers({ router, backend });
@@ -66,7 +70,7 @@ describe("federation backend bridge", () => {
         kind: "request",
         method: FEDERATION_BACKEND_METHODS.listThreads,
         params: { backend: "codex" },
-        protocolVersion: 1,
+        protocolVersion: 2,
         sourceInstanceId: "client_one",
         targetInstanceId: "gateway_one",
         createdAt: 1_000,
@@ -86,7 +90,7 @@ describe("federation backend bridge", () => {
           displayText: "Follow up",
           turn: { input: [{ type: "text", text: "Follow up" }] },
         },
-        protocolVersion: 1,
+        protocolVersion: 2,
         sourceInstanceId: "client_one",
         targetInstanceId: "gateway_one",
         createdAt: 1_200,
@@ -99,7 +103,7 @@ describe("federation backend bridge", () => {
         kind: "request",
         method: FEDERATION_BACKEND_METHODS.archiveThread,
         params: { backend: "codex", threadId: "thread-1" },
-        protocolVersion: 1,
+        protocolVersion: 2,
         sourceInstanceId: "client_one",
         targetInstanceId: "gateway_one",
         createdAt: 1_100,
@@ -196,7 +200,7 @@ describe("federation backend bridge", () => {
       id: "response-1",
       kind: "response",
       requestId: sent[0]!.id,
-      protocolVersion: 1,
+      protocolVersion: 2,
       sourceInstanceId: "client_one",
       targetInstanceId: "gateway_one",
       createdAt: 1_100,
@@ -226,7 +230,7 @@ describe("federation backend bridge", () => {
       id: "response-2",
       kind: "response",
       requestId: archiveRequest.id,
-      protocolVersion: 1,
+      protocolVersion: 2,
       sourceInstanceId: "client_one",
       targetInstanceId: "gateway_one",
       createdAt: 1_200,
@@ -470,7 +474,7 @@ describe("federation backend bridge", () => {
       id: "response-scheduled-1",
       kind: "response",
       requestId: envelope.id,
-      protocolVersion: 1,
+      protocolVersion: 2,
       sourceInstanceId: "client_one",
       targetInstanceId: "gateway_one",
       createdAt: 1_100,
@@ -489,6 +493,53 @@ describe("federation backend bridge", () => {
     await expect(pending).resolves.toMatchObject({
       action: { id: "scheduled-1", status: "scheduled" },
     });
+  });
+
+  it("requires scheduled_actions independently from turn_control", async () => {
+    const backend = {
+      createScheduledThreadAction: vi.fn(),
+    } as unknown as FederationBackendOperations;
+    const replies: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({
+      localInstanceId: "gateway_one",
+      methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+    });
+    router.registerConnection({
+      peerId: "client_one",
+      capabilities: ["turn_control"],
+      sendEnvelope: (envelope) => replies.push(envelope),
+    });
+    registerFederationBackendHandlers({ router, backend });
+
+    await router.routeEnvelope({
+      sourcePeerId: "client_one",
+      envelope: {
+        id: "request-scheduled-denied",
+        kind: "request",
+        method: FEDERATION_BACKEND_METHODS.createScheduledThreadAction,
+        params: {
+          backend: "codex",
+          threadId: "thread-1",
+          kind: "turn",
+          scheduledFor: 3_000,
+          displayText: "Follow up",
+          turn: { input: [{ type: "text", text: "Follow up" }] },
+        },
+        protocolVersion: 2,
+        sourceInstanceId: "client_one",
+        targetInstanceId: "gateway_one",
+        createdAt: 1_000,
+      },
+    });
+
+    expect(backend.createScheduledThreadAction).not.toHaveBeenCalled();
+    expect(replies).toMatchObject([
+      {
+        kind: "error",
+        requestId: "request-scheduled-denied",
+        error: { code: "capability_denied" },
+      },
+    ]);
   });
 
   it("requires thread-detail capability for remote thread reads", async () => {
@@ -521,7 +572,7 @@ describe("federation backend bridge", () => {
           kind: "request",
           method: FEDERATION_BACKEND_METHODS.readThread,
           params: { backend: "codex", threadId: "thread-1" },
-          protocolVersion: 1,
+          protocolVersion: 2,
           sourceInstanceId: "client_one",
           targetInstanceId: "gateway_one",
           createdAt: 1_000,
@@ -568,7 +619,7 @@ describe("federation backend bridge", () => {
           threadId: "thread-1",
           input: [{ type: "text", text: "ship it" }],
         },
-        protocolVersion: 1,
+        protocolVersion: 2,
         sourceInstanceId: "gateway_one",
         targetInstanceId: "client_one",
         createdAt: 1_000,
@@ -672,7 +723,7 @@ describe("federation backend bridge", () => {
         kind: "request",
         method: FEDERATION_BACKEND_METHODS.compactThread,
         params: { backend: "codex", threadId: "thread-1" },
-        protocolVersion: 1,
+        protocolVersion: 2,
         sourceInstanceId: "gateway_one",
         targetInstanceId: "client_one",
         createdAt: 1_000,
@@ -690,7 +741,7 @@ describe("federation backend bridge", () => {
           requestId: "approval-1",
           response: { decision: "approve" },
         },
-        protocolVersion: 1,
+        protocolVersion: 2,
         sourceInstanceId: "gateway_one",
         targetInstanceId: "client_one",
         createdAt: 1_100,
@@ -707,7 +758,7 @@ describe("federation backend bridge", () => {
           backend: "codex",
           threadId: "thread-1",
         },
-        protocolVersion: 1,
+        protocolVersion: 2,
         sourceInstanceId: "gateway_one",
         targetInstanceId: "client_one",
         createdAt: 1_200,
@@ -817,7 +868,7 @@ describe("federation backend bridge", () => {
             environmentId: "node",
             threadId: "thread-1",
           },
-          protocolVersion: 1,
+          protocolVersion: 2,
           sourceInstanceId: "gateway_one",
           targetInstanceId: "client_one",
           createdAt: 1_000,
@@ -893,7 +944,7 @@ describe("federation backend bridge", () => {
           threadId: "thread-1",
           name: "Remote title",
         },
-        protocolVersion: 1,
+        protocolVersion: 2,
         sourceInstanceId: "gateway_one",
         targetInstanceId: "client_one",
         createdAt: 1_000,
@@ -906,7 +957,7 @@ describe("federation backend bridge", () => {
         kind: "request",
         method: FEDERATION_BACKEND_METHODS.readApplications,
         params: {},
-        protocolVersion: 1,
+        protocolVersion: 2,
         sourceInstanceId: "gateway_one",
         targetInstanceId: "client_one",
         createdAt: 1_050,
@@ -923,7 +974,7 @@ describe("federation backend bridge", () => {
           kind: "terminal",
           targetPath: "/remote/repo",
         },
-        protocolVersion: 1,
+        protocolVersion: 2,
         sourceInstanceId: "gateway_one",
         targetInstanceId: "client_one",
         createdAt: 1_100,
@@ -939,7 +990,7 @@ describe("federation backend bridge", () => {
           projectPath: "/remote/repo",
           configPath: "/remote/.codex/config.toml",
         },
-        protocolVersion: 1,
+        protocolVersion: 2,
         sourceInstanceId: "gateway_one",
         targetInstanceId: "client_one",
         createdAt: 1_200,

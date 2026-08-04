@@ -260,6 +260,10 @@ describe("TelegramAdapter callback persistence", () => {
         command: "scheduled",
         description: "List or manage scheduled messages",
       },
+      {
+        command: "help",
+        description: "Show available PwrAgent commands",
+      },
     ]);
   });
 

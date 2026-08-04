@@ -7627,6 +7627,7 @@ describe("MessagingController", () => {
       "command:status",
       "command:detach",
       "command:monitor",
+      "command:scheduled",
       "command:help",
     ]);
     // Resume retains primary styling — matches the previous

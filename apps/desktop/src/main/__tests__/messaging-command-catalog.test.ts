@@ -23,6 +23,8 @@ describe("MESSAGING_COMMAND_CATALOG", () => {
       "status",
       "detach",
       "monitor",
+      "schedule",
+      "scheduled",
       "help",
     ]);
   });
@@ -53,6 +55,8 @@ describe("matchMessagingCommandVerb", () => {
     expect(matchMessagingCommandVerb("/new")).toBe("new");
     expect(matchMessagingCommandVerb("/status")).toBe("status");
     expect(matchMessagingCommandVerb("/monitor")).toBe("monitor");
+    expect(matchMessagingCommandVerb("/schedule")).toBe("schedule");
+    expect(matchMessagingCommandVerb("/scheduled")).toBe("scheduled");
   });
 
   it("is case-insensitive", () => {
@@ -98,6 +102,8 @@ describe("formatMessagingCommandHelpBody", () => {
     const statusIdx = body.indexOf("/status");
     const detachIdx = body.indexOf("/detach");
     const monitorIdx = body.indexOf("/monitor");
+    const scheduleIdx = body.indexOf("/schedule");
+    const scheduledIdx = body.indexOf("/scheduled");
     const helpIdx = body.indexOf("/help");
     expect(resumeIdx).toBeGreaterThanOrEqual(0);
     expect(agentIdx).toBeGreaterThan(resumeIdx);
@@ -105,7 +111,9 @@ describe("formatMessagingCommandHelpBody", () => {
     expect(statusIdx).toBeGreaterThan(newIdx);
     expect(detachIdx).toBeGreaterThan(statusIdx);
     expect(monitorIdx).toBeGreaterThan(detachIdx);
-    expect(helpIdx).toBeGreaterThan(monitorIdx);
+    expect(scheduleIdx).toBeGreaterThan(monitorIdx);
+    expect(scheduledIdx).toBeGreaterThan(scheduleIdx);
+    expect(helpIdx).toBeGreaterThan(scheduledIdx);
   });
 
   it("appends the default invocation footer with both styles", () => {
@@ -173,6 +181,7 @@ function syntheticCatalog(count: number): MessagingCommandSpec[] {
     // tests; the catalog never exposes these names at runtime.
     verb: (`v${i}` as unknown) as MessagingCommandSpec["verb"],
     description: `synthetic verb ${i}`,
+    helpAction: true,
   }));
 }
 
@@ -210,6 +219,7 @@ describe("paginateHelpCatalog", () => {
       "status",
       "detach",
       "monitor",
+      "scheduled",
       "help",
     ]);
   });
@@ -281,6 +291,7 @@ describe("buildHelpActions", () => {
       "command:status",
       "command:detach",
       "command:monitor",
+      "command:scheduled",
       "command:help",
     ]);
   });
@@ -312,6 +323,7 @@ describe("buildHelpActions", () => {
       { row: 2, column: 0 },
       { row: 2, column: 1 },
       { row: 3, column: 0 },
+      { row: 3, column: 1 },
     ]);
   });
 

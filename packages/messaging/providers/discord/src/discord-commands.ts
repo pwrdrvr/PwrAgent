@@ -4,6 +4,10 @@ import {
   ApplicationIntegrationType,
   InteractionContextType,
 } from "discord.js";
+import {
+  MESSAGING_COMMAND_CATALOG,
+  type MessagingCommandVerb,
+} from "@pwragent/messaging-interface";
 
 export type DiscordApplicationCommandOption = {
   description: string;
@@ -56,7 +60,9 @@ const COMMAND_INTEGRATION_TYPES = [
   ApplicationIntegrationType.UserInstall,
 ];
 
-export const DISCORD_APPLICATION_COMMANDS: DiscordApplicationCommandBody[] = [
+const DISCORD_COMMAND_DEFINITIONS: Array<
+  DiscordApplicationCommandBody & { name: MessagingCommandVerb }
+> = [
   {
     contexts: COMMAND_CONTEXTS,
     description: "Choose a PwrAgent thread to control from this conversation.",
@@ -153,7 +159,27 @@ export const DISCORD_APPLICATION_COMMANDS: DiscordApplicationCommandBody[] = [
     ],
     type: ApplicationCommandType.ChatInput,
   },
+  {
+    contexts: COMMAND_CONTEXTS,
+    description: "Show available PwrAgent commands and how to invoke them.",
+    integration_types: COMMAND_INTEGRATION_TYPES,
+    name: "help",
+    type: ApplicationCommandType.ChatInput,
+  },
 ];
+
+const DISCORD_COMMAND_BY_VERB = new Map(
+  DISCORD_COMMAND_DEFINITIONS.map((command) => [command.name, command]),
+);
+
+export const DISCORD_APPLICATION_COMMANDS: DiscordApplicationCommandBody[] =
+  MESSAGING_COMMAND_CATALOG.map(({ verb }) => {
+    const command = DISCORD_COMMAND_BY_VERB.get(verb);
+    if (!command) {
+      throw new Error(`Discord command metadata is missing for ${verb}.`);
+    }
+    return command;
+  });
 
 export async function reconcileDiscordApplicationCommands(params: {
   api: DiscordApplicationCommandApi;

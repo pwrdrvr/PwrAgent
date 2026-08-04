@@ -402,20 +402,36 @@ The forthcoming Plan/Review attachment delivery work ([issue #193](https://githu
 
 ## Step 7.5 — Slash commands (when the platform supports them)
 
-If the platform has native slash commands with autocomplete UX (Discord, Mattermost, Slack), **register the canonical command set on adapter start**. Skip this step only when the platform genuinely has no slash-command surface (Telegram's `/cmd` syntax counts; SMS does not).
+If the platform has a native command catalog API, **register the canonical
+command set on adapter start**. Import `MESSAGING_COMMAND_CATALOG` from
+`@pwragent/messaging-interface` for the verb set and ordering; keep only
+platform-specific descriptions, argument metadata, and namespacing in the
+adapter. Skip registration only when the platform genuinely has no command
+catalog API (Telegram's `/cmd` catalog counts; SMS does not). Slack accepts
+configured slash-command callbacks, but the PwrAgent Slack adapter does not
+register commands; its app manifest/operator setup must declare each canonical
+trigger.
 
-The canonical set today mirrors what Discord and Mattermost both register:
+The canonical set exported by `@pwragent/messaging-interface` is:
 
 | trigger | description |
 |---|---|
-| `resume` | Bind this conversation to a PwrAgent thread |
-| `status` | Show the current binding's controls |
-| `detach` | Detach this conversation from its current thread |
+| `resume` | Choose a thread to control from this conversation |
+| `agent` | Choose an Agent thread or manage the default |
+| `new` | Start a new thread from a project |
+| `status` | Show the current binding and controls |
+| `detach` | Detach this conversation from its thread |
+| `monitor` | Monitor recent PwrAgent threads |
+| `schedule` | Schedule a message for the bound thread |
+| `scheduled` | List or manage scheduled messages |
+| `help` | Show the command reference |
 
 Reference implementations:
 
 - Discord: [`packages/messaging/providers/discord/src/discord-commands.ts`](../packages/messaging/providers/discord/src/discord-commands.ts) — application commands API, registered globally on the bot at startup
 - Mattermost: [`packages/messaging/providers/mattermost/src/mattermost-commands.ts`](../packages/messaging/providers/mattermost/src/mattermost-commands.ts) — team-scoped, registered per team the bot belongs to
+- Telegram: [`packages/messaging/providers/telegram/src/telegram-adapter.ts`](../packages/messaging/providers/telegram/src/telegram-adapter.ts) — bot-scoped command catalog registered with `setMyCommands`
+- Slack: callback parsing accepts every canonical verb, but command creation lives in the Slack app manifest/operator configuration rather than an adapter API
 
 ### What you must do
 
@@ -425,7 +441,7 @@ Reference implementations:
 4. **Listener routing.** If the platform's slash-command POSTs share the same callback URL as interactive callbacks (Mattermost does), route by Content-Type at the listener: `application/x-www-form-urlencoded` → command branch; `application/json` → interactive callback branch. This keeps the operator's tunnel mapping single-path simple.
 5. **Authorization.** Apply the same `authorizedActorIds` allowlist to slash commands as to inbound text events — an unauthorized user typing `/resume` shouldn't bind anything. Drop unauthorized invocations silently from the platform's point of view; log the actionable attempt without returning an explanatory "not authorized" message.
 6. **Thread context.** If the user invokes the command from inside a thread reply, the platform's command body usually carries a thread/root identifier (Mattermost: `root_id`; Slack: `thread_ts`). Use it to build a `kind: "thread"` channel ref so the bot's response renders in-thread instead of escaping to the parent channel. Without this, `/resume` from a thread breaks user expectations.
-7. **Dispatch.** Translate the platform's command body into a `MessagingInboundCommandEvent` (`kind: "command"`) and call `listener(event)`. Reuse the same dispatch path as inbound `/cmd` text-mention parsing — the controller handles both identically. Strip the namespace prefix back to the canonical base verb (`resume`/`status`/`detach`) before dispatching so the controller routes on stable names regardless of how the operator namespaced.
+7. **Dispatch.** Translate the platform's command body into a `MessagingInboundCommandEvent` (`kind: "command"`) and call `listener(event)`. Reuse the same dispatch path as inbound `/cmd` text-mention parsing — the controller handles both identically. Strip the namespace prefix back to the verb from `MESSAGING_COMMAND_CATALOG` before dispatching so the controller routes on stable names regardless of how the operator namespaced it.
 8. **Defensive failure.** Slash-command registration is autocomplete UX, not correctness. If reconciliation fails (no permission, network blip, platform outage), log and continue starting the adapter. Text-mention invocations (`@<bot> resume`) cover parity if the user knows the names.
 
 ### What you do NOT need to do

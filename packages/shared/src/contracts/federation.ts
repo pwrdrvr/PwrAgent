@@ -14,6 +14,7 @@ export const FEDERATION_CAPABILITIES = [
   "thread_navigation",
   "thread_detail",
   "turn_control",
+  "scheduled_actions",
   "pending_request_control",
   "environment_actions",
   "federated_search",

@@ -5,6 +5,8 @@ import type {
   MessagingSurfaceIntent,
 } from "../index";
 import {
+  MESSAGING_COMMAND_CATALOG,
+  MESSAGING_HELP_ACTION_COMMANDS,
   MESSAGING_SURFACE_INTENT_KINDS,
   extractMessagingPairingToken,
   formatMessagingQuestionnaireText,
@@ -12,6 +14,7 @@ import {
   messagingQuestionnaireAnswerDisplay,
   messagingQuestionnaireActions,
   normalizeMessagingQuestionnaireIntent,
+  matchMessagingCommandVerb,
 } from "../index";
 
 type FakeProvider = {
@@ -20,6 +23,31 @@ type FakeProvider = {
 };
 
 describe("messaging interface package", () => {
+  it("exposes one canonical command surface to orchestration and providers", () => {
+    expect(MESSAGING_COMMAND_CATALOG.map((command) => command.verb)).toEqual([
+      "resume",
+      "agent",
+      "new",
+      "status",
+      "detach",
+      "monitor",
+      "schedule",
+      "scheduled",
+      "help",
+    ]);
+    expect(MESSAGING_HELP_ACTION_COMMANDS.map((command) => command.verb)).toEqual([
+      "resume",
+      "agent",
+      "new",
+      "status",
+      "detach",
+      "monitor",
+      "scheduled",
+      "help",
+    ]);
+    expect(matchMessagingCommandVerb(" /SCHEDULE ")).toBe("schedule");
+  });
+
   it("exports provider-facing contracts from a single entry point", async () => {
     const provider: FakeProvider = {
       async deliver(intent) {

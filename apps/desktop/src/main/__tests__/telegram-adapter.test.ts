@@ -659,7 +659,7 @@ describe("TelegramAdapter", () => {
       ["Resume", "Agent"],
       ["New", "Status"],
       ["Detach", "Monitor"],
-      ["Help"],
+      ["Scheduled", "Help"],
     ]);
   });
 
@@ -1763,6 +1763,10 @@ describe("TelegramAdapter", () => {
         {
           command: "scheduled",
           description: "List or manage scheduled messages",
+        },
+        {
+          command: "help",
+          description: "Show available PwrAgent commands",
         },
       ],
     });

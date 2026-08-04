@@ -1552,6 +1552,46 @@ describe("SlackAdapter", () => {
     ]);
   });
 
+  it("normalizes an operator-configured Slack schedule command", async () => {
+    const socket = fakeSocket();
+    const adapter = new SlackAdapter({
+      config: {
+        ...baseConfig,
+        slashCommandPrefix: "pwragent_",
+      },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      socketClient: socket,
+      now: () => 1_700_000_000_000,
+    });
+    const events: MessagingInboundEvent[] = [];
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await socket.emitEvent("slash_commands", {
+      ack: async () => undefined,
+      body: {
+        channel_id: "C012ABCDEF0",
+        channel_name: "signals-chat",
+        command: "/pwragent_schedule",
+        team_id: "T012ABCDEF0",
+        text: "2h Follow up",
+        user_id: "U012ABCDEF0",
+        user_name: "alice",
+      },
+    });
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        kind: "command",
+        command: "schedule",
+        args: ["2h", "Follow", "up"],
+        rawText: "/pwragent_schedule 2h Follow up",
+      }),
+    ]);
+  });
+
   it("uses users.info display names for DM labels when users:read is granted", async () => {
     const socket = fakeSocket();
     const adapter = new SlackAdapter({
