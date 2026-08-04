@@ -1784,6 +1784,7 @@ function ComposerDropdown(props: {
   kind?: "branch";
   tone?: "danger";
   onChange: (value: string) => void;
+  onPointerEnter?: () => void;
   options: ComposerDropdownOption[];
   tooltip?: string;
   value: string;
@@ -1808,6 +1809,7 @@ function ComposerDropdown(props: {
         .filter(Boolean)
         .join(" ")}
       data-tooltip={props.tooltip}
+      onPointerEnter={props.onPointerEnter}
       ref={ref}
     >
       <button
@@ -9981,6 +9983,17 @@ export function Composer(props: ComposerProps) {
               tooltip={
                 props.directory?.gitStatus?.worktreeCreationAvailable === false
                   ? props.directory.gitStatus.worktreeCreationUnavailableReason
+                  : undefined
+              }
+              onPointerEnter={
+                props.directory?.gitStatus?.worktreeCreationAvailable === false
+                && props.desktopApi?.refreshDirectoryGitStatuses
+                  ? () => {
+                      void props.desktopApi?.refreshDirectoryGitStatuses?.({
+                        directoryKeys: [props.launchpad!.directoryKey],
+                        force: true,
+                      });
+                    }
                   : undefined
               }
               onChange={(value) => {

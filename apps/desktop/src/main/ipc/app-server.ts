@@ -2244,7 +2244,10 @@ class DesktopAppServerService {
       automaticLimit: STARTUP_DIRECTORY_GIT_STATUS_REFRESH_LIMIT,
     });
 
-    const promise = this.refreshDirectoryGitStatuses(directories)
+    const promise = this.refreshDirectoryGitStatuses(
+      directories,
+      params.force === true,
+    )
       .catch((error) => {
         logDebug("directoryGitStatusRefresh:failed", {
           error: error instanceof Error ? error.message : String(error),
@@ -2421,6 +2424,7 @@ class DesktopAppServerService {
 
   private async refreshDirectoryGitStatuses(
     directories: NavigationSnapshot["directories"],
+    force = false,
   ): Promise<void> {
     const refreshableDirectories = directories.filter((directory) => directory.path?.trim());
     if (refreshableDirectories.length === 0) {
@@ -2428,6 +2432,11 @@ class DesktopAppServerService {
     }
 
     const registry = getDesktopBackendRegistry();
+    if (force) {
+      for (const directory of refreshableDirectories) {
+        registry.invalidateDirectoryStatus(directory.path);
+      }
+    }
     const directoryByKey = new Map(
       refreshableDirectories.map((directory) => [directory.key, directory]),
     );

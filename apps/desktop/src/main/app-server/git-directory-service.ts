@@ -395,13 +395,6 @@ async function readPrimaryWorktreePath(
   return parseGitWorktreeEntries(worktreeList)[0]?.path;
 }
 
-function parseGitLines(output: string): string[] {
-  return output
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-}
-
 /**
  * Parses `for-each-ref refs/heads` output formatted as
  * `<short-name>\t<committerdate:unix>`, preserving the input order (which the
@@ -622,7 +615,7 @@ async function resolveVerifiedWorktreeBaseBranch(params: {
   }
 
   const sourceRoot = params.sourceRoot ?? params.repoRoot;
-  const [rawCurrentBranch, branchesOutput, remoteHead] = await Promise.all([
+  const [rawCurrentBranch, baseBranchesOutput, remoteHead] = await Promise.all([
     runGit(sourceRoot, ["rev-parse", "--abbrev-ref", "HEAD"], params.gitEnv).catch(
       () => "",
     ),
@@ -631,8 +624,9 @@ async function resolveVerifiedWorktreeBaseBranch(params: {
       [
         "for-each-ref",
         "refs/heads",
+        "refs/remotes",
         "--sort=-committerdate",
-        "--format=%(refname:short)",
+        "--format=%(refname)%09%(refname:short)%09%(committerdate:unix)%09%(symref)",
       ],
       params.gitEnv,
     ).catch(() => ""),
@@ -643,12 +637,17 @@ async function resolveVerifiedWorktreeBaseBranch(params: {
     ).catch(() => ""),
   ]);
   const currentBranch = rawCurrentBranch.trim() === "HEAD" ? "" : rawCurrentBranch;
-  const branches = parseGitLines(branchesOutput);
-  const defaultBranch = resolveDefaultBranch({ branches, remoteHead });
+  const baseBranches = parseGitBaseBranchDetails(baseBranchesOutput).map(
+    (detail) => detail.name,
+  );
+  const defaultBranch = resolveDefaultBranch({
+    branches: baseBranches,
+    remoteHead,
+  });
   const candidates = uniqueBranches([
     currentBranch,
     defaultBranch,
-    ...branches,
+    ...baseBranches,
   ]);
 
   for (const branch of candidates) {

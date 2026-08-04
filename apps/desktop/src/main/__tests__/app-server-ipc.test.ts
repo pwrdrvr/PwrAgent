@@ -277,6 +277,7 @@ const readDirectoryStatusEntries = vi.fn((directories: Array<{ key: string }>) =
 );
 const readDirectoryGitStatusCache = vi.fn(async () => ({}));
 const writeDirectoryGitStatusCacheEntry = vi.fn(async () => undefined);
+const invalidateDirectoryStatus = vi.fn((_directoryPath?: string) => undefined);
 const readThreadGitWorkingStateCache = vi.fn(async () => ({}));
 const writeThreadGitWorkingStateCacheEntry = vi.fn(async () => undefined);
 type WorkingStateEntry = {
@@ -684,6 +685,7 @@ vi.mock("../app-server/backend-registry", () => {
     getThreadTranscriptImageRoots,
     readDirectoryStatuses,
     readDirectoryStatusEntries,
+    invalidateDirectoryStatus,
     readWorktreeWorkingStateEntries,
     invalidateWorktreeWorkingState,
     resolveEditCommitStates,
@@ -766,6 +768,7 @@ describe("app server ipc", () => {
     rememberCompleteNavigationSnapshot.mockClear();
     readDirectoryStatuses.mockClear();
     readDirectoryStatusEntries.mockClear();
+    invalidateDirectoryStatus.mockClear();
     readDirectoryGitStatusCache.mockClear();
     readDirectoryGitStatusCache.mockResolvedValue({});
     writeDirectoryGitStatusCacheEntry.mockClear();
@@ -4740,6 +4743,9 @@ describe("app server ipc", () => {
     await vi.waitFor(() => {
       expect(readDirectoryStatusEntries).toHaveBeenCalled();
     });
+    expect(invalidateDirectoryStatus).toHaveBeenCalledExactlyOnceWith(
+      "/repo/app",
+    );
     expect(readDirectoryStatusEntries.mock.calls[0]?.[0]).toEqual([
       expect.objectContaining({ key: "directory:/repo/app" }),
     ]);

@@ -33,6 +33,10 @@ function runGit(cwd: string, args: string[]): string {
   return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
 }
 
+async function runGitAsync(cwd: string, args: string[]): Promise<string> {
+  return runGit(cwd, args);
+}
+
 async function createFixtureRepo(): Promise<string> {
   const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-git-directory-service-"));
   execFileSync("git", ["init", rootDir], { stdio: "ignore" });
@@ -207,7 +211,7 @@ describe("GitDirectoryService", () => {
     });
   });
 
-  it("keeps an unborn HEAD distinct from a fetched remote worktree base", async () => {
+  it("uses a fetched remote worktree base implicitly for an unborn HEAD", async () => {
     const remoteDir = await createFixtureRepo();
     const repoDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-unborn-remote-base-"));
     cleanupPaths.push(remoteDir, repoDir);
@@ -218,7 +222,9 @@ describe("GitDirectoryService", () => {
 
     expect(runGit(repoDir, ["branch", "--show-current"])).toBe("main");
     expect(runGit(repoDir, ["branch", "--list"])).toBe("");
-    await expect(inspectGitWorkspace(repoDir)).resolves.toEqual({
+    await expect(
+      inspectGitWorkspace(repoDir, { runGit: runGitAsync }),
+    ).resolves.toEqual({
       kind: "worktree",
       branch: "main",
       hasCommits: true,
@@ -228,6 +234,7 @@ describe("GitDirectoryService", () => {
 
     const service = new GitDirectoryService({
       resolveWorktreeStorage: () => "in-repo",
+      runGit: runGitAsync,
     });
     await expect(service.readDirectoryStatus({ path: repoDir })).resolves.toMatchObject({
       worktreeCreationAvailable: true,
@@ -237,13 +244,49 @@ describe("GitDirectoryService", () => {
       directoryLabel: "FixtureRepo",
       directoryPath: repoDir,
       workMode: "worktree",
-      branchName: "origin/main",
     });
 
     expect(workspace.workMode).toBe("worktree");
     expect(runGit(workspace.cwd!, ["rev-parse", "HEAD"])).toBe(originRevision);
     await workspace.rollback?.();
-  });
+  }, 15_000);
+
+  it("refreshes cached unborn status after the initial branch is published", async () => {
+    const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-unborn-refresh-"));
+    cleanupPaths.push(rootDir);
+    const repoDir = path.join(rootDir, "repo");
+    const remoteDir = path.join(rootDir, "origin.git");
+    execFileSync("git", ["init", "--bare", "-b", "main", remoteDir], {
+      stdio: "ignore",
+    });
+    execFileSync("git", ["init", "-b", "main", repoDir], { stdio: "ignore" });
+    runGit(repoDir, ["config", "user.name", "PwrAgent Tests"]);
+    runGit(repoDir, ["config", "user.email", "pwragent-tests@example.invalid"]);
+    runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+    const service = new GitDirectoryService({
+      cacheTtlMs: 60_000,
+      runGit: runGitAsync,
+    });
+
+    await expect(service.readDirectoryStatus({ path: repoDir })).resolves.toMatchObject({
+      worktreeCreationAvailable: false,
+    });
+
+    runGit(repoDir, ["commit", "--allow-empty", "-m", "Publish main"]);
+    runGit(repoDir, ["push", "--set-upstream", "origin", "main"]);
+    await expect(service.readDirectoryStatus({ path: repoDir })).resolves.toMatchObject({
+      worktreeCreationAvailable: false,
+    });
+
+    service.invalidateDirectoryStatus(repoDir);
+    const refreshed = await service.readDirectoryStatus({ path: repoDir });
+    expect(refreshed).toMatchObject({
+      currentBranch: "main",
+      upstreamBranch: "origin/main",
+      syncState: "in-sync",
+    });
+    expect(refreshed?.worktreeCreationAvailable).toBeUndefined();
+  }, 15_000);
 
   it("keeps ordinary repositories and linked worktrees worktree-capable", async () => {
     const repoDir = await createFixtureRepo();

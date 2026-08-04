@@ -8866,6 +8866,10 @@ export class DesktopBackendRegistry {
     return this.gitDirectoryService.readDirectoryStatusEntries(directories);
   }
 
+  invalidateDirectoryStatus(directoryPath?: string): void {
+    this.gitDirectoryService.invalidateDirectoryStatus(directoryPath);
+  }
+
   readWorktreeWorkingStateEntries(
     worktreePaths: string[],
     options?: GitWorkingStateEntryOptions,
