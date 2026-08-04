@@ -8,6 +8,7 @@ import type {
   FederationProtocolEnvelope,
   FederationSessionId,
 } from "@pwragent/shared";
+import { getMainLogger } from "../log";
 import {
   FEDERATION_PROTOCOL_VERSION,
   isFederationCapability,
@@ -35,6 +36,8 @@ import {
 } from "./federation-redaction";
 import { FederationSessionRegistry } from "./federation-session-state";
 import type { FederationStore } from "./federation-store";
+
+const log = getMainLogger("pwragent:federation-transport");
 
 type FederationSocketAuthMessage = {
   kind: "auth";
@@ -209,6 +212,7 @@ export class FederationGatewayWebSocketServer {
         transport = handshake.split();
         channelBinding = transport.handshakeHash.toString("base64");
       } catch {
+        log.warn("federation Noise handshake rejected");
         socket.close();
         return;
       }

@@ -86,10 +86,10 @@ direct connections that do not use a public tunnel, external certificate
 authority, or stable DNS hostname. It uses a persistent channel key in addition
 to the canonical Ed25519 instance identity.
 
-The implementation uses `Noise_IK_25519_ChaChaPoly_SHA256`:
+The implementation uses `Noise_IK_25519_AESGCM_SHA256`:
 
 - X25519 static and ephemeral keys establish the channel
-- ChaCha20-Poly1305 encrypts and authenticates every frame
+- AES-256-GCM encrypts and authenticates every frame
 - SHA-256 supplies the Noise transcript and key derivation hash
 - the initiator knows the gateway's static Noise key before connecting
 - the gateway learns and authenticates the enrolled client's static key during

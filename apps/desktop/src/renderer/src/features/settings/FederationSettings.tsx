@@ -351,7 +351,7 @@ export function FederationSettings(props: FederationSettingsProps) {
           <SettingsField
             label="Protocol"
             sub="Every federation frame is encrypted before it enters the WebSocket transport."
-            control={<code>Noise IK · X25519 · ChaCha20-Poly1305 · SHA-256</code>}
+            control={<code>Noise IK · X25519 · AES-256-GCM · SHA-256</code>}
           />
           <SettingsField
             label="Channel key"

@@ -1,6 +1,6 @@
-// Noise_IK_25519_ChaChaPoly_SHA256 — a hand-written implementation of the one
+// Noise_IK_25519_AESGCM_SHA256 — a hand-written implementation of the one
 // Noise handshake pattern federation needs, built on Node's audited crypto
-// primitives (X25519, ChaCha20-Poly1305, HMAC-SHA256). We implement only the
+// primitives (X25519, AES-256-GCM, HMAC-SHA256). We implement only the
 // state-machine plumbing; every cryptographic primitive is delegated to
 // OpenSSL via node:crypto. Correctness is locked down against the official
 // Noise test vectors in federation-noise.test.ts.
@@ -30,7 +30,7 @@ import {
   type KeyObject,
 } from "node:crypto";
 
-const PROTOCOL_NAME = "Noise_IK_25519_ChaChaPoly_SHA256";
+const PROTOCOL_NAME = "Noise_IK_25519_AESGCM_SHA256";
 const HASHLEN = 32;
 const TAGLEN = 16;
 const KEYLEN = 32;
@@ -160,9 +160,10 @@ class CipherState {
   }
 
   private nextNonce(): Buffer {
-    // Noise nonce: 4 zero bytes followed by the 64-bit counter, little-endian.
+    // AESGCM Noise nonce: 4 zero bytes followed by the 64-bit counter,
+    // big-endian (Noise Protocol Framework section 14.3).
     const buf = Buffer.alloc(12);
-    buf.writeBigUInt64LE(this.nonce, 4);
+    buf.writeBigUInt64BE(this.nonce, 4);
     return buf;
   }
 
@@ -171,7 +172,7 @@ class CipherState {
     if (this.nonce >= 0xffffffffffffffffn) {
       throw new Error("Noise nonce exhausted");
     }
-    const cipher = createCipheriv("chacha20-poly1305", this.key, this.nextNonce(), {
+    const cipher = createCipheriv("aes-256-gcm", this.key, this.nextNonce(), {
       authTagLength: TAGLEN,
     });
     cipher.setAAD(ad, { plaintextLength: plaintext.length });
@@ -192,7 +193,7 @@ class CipherState {
     const ciphertext = data.subarray(0, data.length - TAGLEN);
     const tag = data.subarray(data.length - TAGLEN);
     const decipher = createDecipheriv(
-      "chacha20-poly1305",
+      "aes-256-gcm",
       this.key,
       this.nextNonce(),
       { authTagLength: TAGLEN },

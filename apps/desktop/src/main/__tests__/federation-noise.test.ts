@@ -6,41 +6,40 @@ import {
   type NoiseKeyPair,
 } from "../federation/federation-noise";
 
-// Official test vector for Noise_IK_25519_ChaChaPoly_SHA256 (snow / noise-c
-// vector set). Fixed static + ephemeral keys make the handshake deterministic
-// so we can byte-compare against the canonical ciphertexts. This is the real
-// correctness guarantee for the hand-written state machine.
+// Independent screech/titanous-noise test vector for
+// Noise_IK_25519_AESGCM_SHA256. Fixed static + ephemeral keys make the
+// handshake deterministic so we can byte-compare against canonical
+// ciphertexts from another implementation.
 const VECTOR = {
-  prologue:
-    "5468657265206973206e6f20726967687420616e642077726f6e672e2054686572652773206f6e6c792066756e20616e6420626f72696e672e",
-  initStatic: "f49f93c5112c0787acc808d61716d7e090e076a58f15a3f78d92773f8dcb473b",
+  prologue: "6e6f74736563726574",
+  initStatic: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
   initEphemeral:
-    "dae68498c41315cff7e4a34dded8d973199d8f0cf3fcb8b6651c169de77de8be",
+    "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
   initRemoteStatic:
-    "2ea5942829bac414e25aa4cbb1bcc43394816ebb1bd12550d7d0eb4415e42951",
-  respStatic: "b790546f98b1e933c48cd01f17e7b281469d46fcacc9a3b584ae65b1d6272e8e",
+    "07a37cbc142093c8b755dc1b10e86cb426374ad16aa853ed0bdfc0b2b86d1c7c",
+  respStatic: "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
   respEphemeral:
-    "c0875a5b59c8492bd2135e5432d7d484f938e0a1f5009428c4bcb70b2f69f69f",
+    "4142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f60",
   messages: [
     {
-      payload: "95a8f51c435a9530ff1f30868ed7b23ec952eb513c26a0774fed82d2978a8c81",
+      payload: "746573745f6d73675f30",
       ciphertext:
-        "6d21fec9141f3f37cc464e936a48b2d9521b5a44e0f3d960895d3c3fba30282f731f445c25e898e2534ac0536715b24308c108fc46bd260c887b36c3f68e3a05654fc8295c068ed53fb2022560961224e0b10b0835e1efc82fc587cd50f7178fe3d9eb06e0351c6e7334162c10bed670bfa2a105f7b2768a140b3fd597782601",
+        "358072d6365880d1aeea329adf9121383851ed21a28e3b75e965d0d2cd16625419d6fab175300a577115c701c41ed681373f0432f81d3bf8676bd05216cd1919e61b75ccef0c0cf0b216fcdf371d0859e6d8177aa9777fe9b8435bb6f8202c3acd9051a9aee0a63e76f6",
     },
     {
-      payload: "b866b807a6d8b83182b884dbfedc861843c5082bd6e480cb54e4245a72083041",
+      payload: "746573745f6d73675f31",
       ciphertext:
-        "e64e1fb8701c4f4bc3850b255fea657d4d835338b059c89acc99628fbe52473b41a4e79e3c1e6abc46bf80f078a005e15d8a3e04f989af3e6cb99b52031165006163ac3e17b928af8c116009d7bf4fb2",
+        "64b101b1d0be5a8704bd078f9895001fc03e8e9f9522f188dd128d9846d4846658a7bb8caac5097833909e90778571d34ce0e5b6ea4c3a76f102",
     },
     {
-      payload: "e3a4937faef391028f759758b428b57652e0069a8dee64dfed01b60846938740",
+      payload: "79656c6c6f777375626d6172696e65",
       ciphertext:
-        "2bebe19102169cdfe79cf41e38930bfd20a5b2fc78ccf33e853ddd939c0983174656eb27b61464a607762848892ca1c0",
+        "80a75e75c8e8d2e9c2a6c7bc6e550c4997d6d2b45429a530821c4aa5d36f27",
     },
     {
-      payload: "693972f27b0cb98aeac1fb54d782125431e7540e0cb2fa882cf51a8184d724fd",
+      payload: "7375626d6172696e6579656c6c6f77",
       ciphertext:
-        "c7c56da33b45d12f4754e17978bd49999c9c8f51d00db460f902aba2e6e245d0c46662f507915de8596f43b1d175f1db",
+        "b8475410da62a98493d33a1e669f8f56dd8f61d449b53bd375299c3435424a",
     },
   ],
 } as const;
@@ -53,7 +52,7 @@ function fixedEphemeral(rawPrivateHex: string): () => NoiseKeyPair {
   return () => noiseKeyPairFromRawPrivate(hex(rawPrivateHex));
 }
 
-describe("Noise_IK_25519_ChaChaPoly_SHA256", () => {
+describe("Noise_IK_25519_AESGCM_SHA256", () => {
   it("derives the responder static public key from the vector private seed", () => {
     const resp = noiseKeyPairFromRawPrivate(hex(VECTOR.respStatic));
     expect(resp.publicKeyRaw.toString("hex")).toBe(VECTOR.initRemoteStatic);

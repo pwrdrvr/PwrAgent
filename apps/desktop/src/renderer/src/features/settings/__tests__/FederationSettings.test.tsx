@@ -59,7 +59,7 @@ describe("FederationSettings", () => {
     expect(await screen.findByText("Instance Federation")).toBeInTheDocument();
     expect(screen.getByText("PwrAgent Encrypted Transport")).toBeInTheDocument();
     expect(
-      screen.getByText("Noise IK · X25519 · ChaCha20-Poly1305 · SHA-256"),
+      screen.getByText("Noise IK · X25519 · AES-256-GCM · SHA-256"),
     ).toBeInTheDocument();
     expect(screen.getByText("Stored securely")).toBeInTheDocument();
     expect(screen.getByText("ws://127.0.0.1:8765")).toBeInTheDocument();
