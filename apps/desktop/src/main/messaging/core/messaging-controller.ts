@@ -5091,16 +5091,21 @@ export class MessagingController {
       await this.deliverAssistantImages(images, event, binding, identity);
       return;
     }
-    if (images.length > 0) {
-      this.rememberAssistantMessageContentDelivered(
+    // Text and image ownership are independent. Another completion event may
+    // have posted these images while this path awaited resolution, even though
+    // this path already owns the backend item/text delivery.
+    const messageImages =
+      images.length > 0
+      && this.claimAssistantMessageContentDelivery(
         event,
         binding,
         assistantImageDeliverySignature(images),
         identity,
-      );
-    }
+      )
+        ? images
+        : [];
     this.logger.debug?.(
-      `messaging assistant deliver thread=${binding.threadId} binding=${binding.id} chars=${text.length} images=${images.length} preview="${compactLogPreview(text)}"`,
+      `messaging assistant deliver thread=${binding.threadId} binding=${binding.id} chars=${text.length} images=${messageImages.length} preview="${compactLogPreview(text)}"`,
     );
 
     await this.deliver(
@@ -5116,7 +5121,7 @@ export class MessagingController {
             text,
             markdown: "markdown",
           },
-          ...images,
+          ...messageImages,
         ],
       },
       binding,
@@ -5133,9 +5138,19 @@ export class MessagingController {
     if (images.length === 0) {
       return;
     }
-    if (
-      !deliveryClaimed
-      && !this.markAssistantMessageDelivered(
+    if (!deliveryClaimed) {
+      if (
+        !this.markAssistantMessageDelivered(
+          event,
+          binding,
+          assistantImageDeliverySignature(images),
+          identity,
+        )
+      ) {
+        return;
+      }
+    } else if (
+      !this.claimAssistantMessageContentDelivery(
         event,
         binding,
         assistantImageDeliverySignature(images),
@@ -5144,12 +5159,6 @@ export class MessagingController {
     ) {
       return;
     }
-    this.rememberAssistantMessageContentDelivered(
-      event,
-      binding,
-      assistantImageDeliverySignature(images),
-      identity,
-    );
     await this.deliver(
       {
         id: this.newIntentId("assistant-images"),
@@ -5323,15 +5332,18 @@ export class MessagingController {
     return true;
   }
 
-  private rememberAssistantMessageContentDelivered(
+  private claimAssistantMessageContentDelivery(
     event: AgentEvent,
     binding: MessagingBindingRecord,
     text: string,
     identity?: AssistantMessageDeliveryIdentity,
-  ): void {
-    this.deliveredAssistantMessageKeys.add(
-      assistantMessageContentDeliveryKey(event, binding, text, identity),
-    );
+  ): boolean {
+    const key = assistantMessageContentDeliveryKey(event, binding, text, identity);
+    if (this.deliveredAssistantMessageKeys.has(key)) {
+      return false;
+    }
+    this.deliveredAssistantMessageKeys.add(key);
+    return true;
   }
 
   updateAuthorizedActorIds(actorIds: readonly string[]): void {

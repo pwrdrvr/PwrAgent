@@ -12080,6 +12080,84 @@ describe("MessagingController", () => {
     ]);
   });
 
+  it("delivers resolved assistant images once when terminal resolution wins the race", async () => {
+    let releaseItemResolution: (() => void) | undefined;
+    let markItemResolutionStarted: (() => void) | undefined;
+    const itemResolutionStarted = new Promise<void>((resolve) => {
+      markItemResolutionStarted = resolve;
+    });
+    const itemResolutionReleased = new Promise<void>((resolve) => {
+      releaseItemResolution = resolve;
+    });
+    const image = {
+      type: "image" as const,
+      url: "data:image/png;base64,AQID",
+      alt: "Race result",
+      source: "assistant" as const,
+    };
+    let resolutionCount = 0;
+    const harness = await createHarness({
+      resolveAssistantMessageImages: async () => {
+        resolutionCount += 1;
+        if (resolutionCount === 1) {
+          markItemResolutionStarted?.();
+          await itemResolutionReleased;
+        }
+        return [image];
+      },
+    });
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    const itemCompleted = harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "assistant-message-1",
+            type: "agentMessage",
+            phase: "final",
+            text: "Done.",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+    await itemResolutionStarted;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [{ type: "text", text: "Done." }],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+    releaseItemResolution?.();
+    await itemCompleted;
+
+    const deliveredImages = harness.delivered.flatMap((intent) =>
+      intent.kind === "message"
+        ? intent.parts.filter((part) => part.type === "image")
+        : [],
+    );
+    expect(deliveredImages).toEqual([
+      expect.objectContaining({
+        alt: "Race result",
+        url: "data:image/png;base64,AQID",
+      }),
+    ]);
+  });
+
   it("falls back with a final assistant message per binding", async () => {
     const delivered: MessagingSurfaceIntent[] = [];
     const harness = await createHarness({
