@@ -542,12 +542,29 @@ function normalizeTurnInput(value: unknown): AppServerTurnInputItem[] {
     }
     if (type === "localFile") {
       const pdfRenderProfile = record.pdfRenderProfile;
+      const mimeType = typeof record.mimeType === "string"
+        ? record.mimeType.trim()
+        : "";
+      const sizeBytes = record.sizeBytes;
+      const textPreview = typeof record.textPreview === "string"
+        ? record.textPreview
+        : "";
       return {
         type: "localFile",
         ...(typeof record.name === "string" && record.name.trim()
           ? { name: record.name.trim() }
           : {}),
         path: asRequiredString(record.path, "localFile input requires path"),
+        ...(mimeType ? { mimeType } : {}),
+        ...(typeof sizeBytes === "number"
+          && Number.isFinite(sizeBytes)
+          && sizeBytes >= 0
+          ? { sizeBytes }
+          : {}),
+        ...(textPreview ? { textPreview } : {}),
+        ...(textPreview && record.textPreviewTruncated === true
+          ? { textPreviewTruncated: true }
+          : {}),
         ...(pdfRenderProfile === "low"
           || pdfRenderProfile === "medium"
           || pdfRenderProfile === "high"

@@ -7068,6 +7068,9 @@ describe("CodexAppServerClient", () => {
           type: "localFile",
           name: "Jeep",
           path: "/Users/huntharo/Downloads/Jeep",
+          mimeType: "text/plain",
+          sizeBytes: 12,
+          textPreview: "hello world\n",
         },
       ],
     });
@@ -7076,10 +7079,22 @@ describe("CodexAppServerClient", () => {
     const turnStart = transport!.sentMessages
       .map((message) => JSON.parse(message) as { method?: string; params?: { input?: unknown[] } })
       .find((payload) => payload.method === "turn/start");
+    const fileContext = turnStart?.params?.input?.[0] as
+      | { text?: string }
+      | undefined;
+    expect(fileContext?.text).toContain(
+      "Jeep: /Users/huntharo/Downloads/Jeep (Type: text/plain | Size: 12 B)",
+    );
+    expect(fileContext?.text).toContain(
+      "<pwragent-local-file-preview>\nhello world\n\n</pwragent-local-file-preview>",
+    );
+    expect(fileContext?.text).toContain(
+      "provided local path references rather than raw file payloads",
+    );
     expect(turnStart?.params?.input).toEqual([
       expect.objectContaining({
         type: "text",
-        text: expect.stringContaining("Files attached or referenced from PwrAgent"),
+        text: expect.any(String),
       }),
       {
         type: "text",

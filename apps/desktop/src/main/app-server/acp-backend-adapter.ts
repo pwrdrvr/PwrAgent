@@ -796,8 +796,7 @@ export function inputToAcpPrompt(
     }
 
     if (item.type === "localFile") {
-      const fileName = item.name?.trim() || path.basename(item.path);
-      const text = `[Local file: ${fileName} (${item.path})]`;
+      const text = formatAcpLocalFileReference(item);
       promptContent.push({ type: "text", text });
       parts.push({ type: "text", text });
       continue;
@@ -823,6 +822,46 @@ export function inputToAcpPrompt(
     promptContent,
     parts,
   };
+}
+
+function formatAcpLocalFileReference(
+  item: Extract<AppServerTurnInputItem, { type: "localFile" }>,
+): string {
+  const fileName = item.name?.trim() || path.basename(item.path);
+  const metadata = [
+    item.mimeType ? `Type: ${item.mimeType}` : undefined,
+    typeof item.sizeBytes === "number"
+      ? `Size: ${formatAcpByteSize(item.sizeBytes)}`
+      : undefined,
+  ].filter((value): value is string => Boolean(value));
+  const reference = metadata.length > 0
+    ? `[Local file reference: ${fileName} (${item.path}) | ${metadata.join(" | ")}]`
+    : `[Local file reference: ${fileName} (${item.path})]`;
+  if (!item.textPreview) {
+    return reference;
+  }
+  return [
+    reference,
+    item.textPreviewTruncated
+      ? "Validated text preview (truncated):"
+      : "Validated text preview:",
+    "<pwragent-local-file-preview>",
+    item.textPreview,
+    "</pwragent-local-file-preview>",
+  ].join("\n");
+}
+
+function formatAcpByteSize(bytes: number): string {
+  if (bytes >= 1024 * 1024 * 1024) {
+    return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
+  }
+  if (bytes >= 1024 * 1024) {
+    return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  }
+  if (bytes >= 1024) {
+    return `${Math.round(bytes / 1024)} KB`;
+  }
+  return `${bytes} B`;
 }
 
 function parseImageDataUrl(

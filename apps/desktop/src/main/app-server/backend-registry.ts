@@ -404,6 +404,7 @@ import {
   type ThreadTurnQueueSubmissionResult,
 } from "./thread-turn-queue";
 import { materializeLocalImageInputs } from "./image-input-files";
+import { enrichLocalFileInputs } from "./local-file-input";
 import type { MessagingStoreLike } from "../state/messaging-store-sqlite";
 import {
   PdfAttachmentStore,
@@ -482,23 +483,6 @@ async function pathExists(filePath: string): Promise<boolean> {
 
     throw error;
   }
-}
-
-function localFilesAsTextInput(
-  input: AppServerTurnInputItem[],
-): AppServerTurnInputItem[] {
-  return input.flatMap((item) => {
-    if (item.type !== "localFile") {
-      return [item];
-    }
-    const name = item.name?.trim() || path.basename(item.path);
-    return [
-      {
-        type: "text" as const,
-        text: `[Local file reference: ${name} (${item.path})]`,
-      },
-    ];
-  });
 }
 
 function assistantOutputForTurn(
@@ -6197,6 +6181,7 @@ export class DesktopBackendRegistry {
   >;
   private readonly resolveCodexFastAllowedFn: () => boolean;
   private readonly resolvePdfAnalysisEnabledFn: () => boolean;
+  private readonly localFilePrivateStorageRoots: readonly string[];
   private readonly pdfAttachmentStore = new PdfAttachmentStore();
   private readonly pdfToolMcpServer?: AgentToolMcpServerLike;
   /**
@@ -6380,6 +6365,7 @@ export class DesktopBackendRegistry {
       options?.codexEnvironmentHydrationStore ??
       createDefaultCodexEnvironmentHydrationStore();
     const codexHome = codexEnv?.CODEX_HOME?.trim() || undefined;
+    this.localFilePrivateStorageRoots = codexHome ? [codexHome] : [];
     const createsLiveGrokClient = !options?.grokClient && !replayClients?.grokClient;
     const isLiveGrokAvailable = (): boolean => resolveAgentCoreGrokEnabled();
     const resolveLiveGrokApiKey = (): string | undefined => {
@@ -10279,7 +10265,9 @@ export class DesktopBackendRegistry {
         });
         // ACP adapters already accept data-URL image parts. Keeping those
         // intact avoids changing their established image payload contract.
-        const input = preparedPdfInput.input;
+        const input = await enrichLocalFileInputs(preparedPdfInput.input, {
+          privateStorageRoots: this.localFilePrivateStorageRoots,
+        });
         if (this.usesSlashControlledAcpExecutionModes(params.backend)) {
           await this.flushQueuedExecutionModeIfPresent(
             params.threadId,
@@ -10388,7 +10376,11 @@ export class DesktopBackendRegistry {
         input: params.input,
       });
       pdfAttachments = preparedPdfInput.pdfAttachments;
-      input = await materializeLocalImageInputs(preparedPdfInput.input);
+      input = await materializeLocalImageInputs(
+        await enrichLocalFileInputs(preparedPdfInput.input, {
+          privateStorageRoots: this.localFilePrivateStorageRoots,
+        }),
+      );
       turnParams = await this.resolveModelSettings(params.backend, {
         ...params,
         model: migrationApplied
@@ -10510,7 +10502,7 @@ export class DesktopBackendRegistry {
             }, params.executionMode)
           : await this.grokClient.startTurn({
               threadId: params.threadId,
-              input: localFilesAsTextInput(input),
+              input,
               model: turnParams.model,
               serviceTier: turnParams.serviceTier,
               reasoningEffort: turnParams.reasoningEffort,
@@ -11673,6 +11665,9 @@ export class DesktopBackendRegistry {
     params: SteerTurnRequest,
     messageOrigin?: AppServerThreadMessageOrigin,
   ): Promise<SteerTurnResponse> {
+    const input = await enrichLocalFileInputs(params.input, {
+      privateStorageRoots: this.localFilePrivateStorageRoots,
+    });
     const pendingMessageOriginId = this.registerPendingThreadMessageOrigin({
       backend: params.backend,
       threadId: params.threadId,
@@ -11688,7 +11683,7 @@ export class DesktopBackendRegistry {
       }
       return await client.steerTurn({
         threadId: params.threadId,
-        input: params.input,
+        input,
         expectedTurnId: params.expectedTurnId,
       });
     };
