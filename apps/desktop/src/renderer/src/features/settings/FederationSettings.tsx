@@ -261,6 +261,42 @@ export function FederationSettings(props: FederationSettingsProps) {
       </SettingsSection>
 
       <SettingsSection
+        eyebrow="End-to-end security"
+        title="PwrAgent Encrypted Transport"
+        chip="Required"
+        chipKind="ok"
+      >
+        <div className="settings-fields">
+          <SettingsField
+            label="Protocol"
+            sub="Every federation frame is encrypted before it enters the WebSocket transport."
+            control={<code>Noise IK · X25519 · ChaCha20-Poly1305 · SHA-256</code>}
+          />
+          <SettingsField
+            label="Channel key"
+            sub="Created automatically and stored in the system credential store."
+            control={
+              <span>
+                {props.snapshot.federation.noiseStaticPrivateKey.configured
+                  ? "Stored securely"
+                  : "Created when federation starts"}
+              </span>
+            }
+          />
+          <SettingsField
+            label="Gateway pinning"
+            sub="Enrollment invites pin both the gateway signing key and Noise channel key."
+            control={<span>Required</span>}
+          />
+          <p className="settings-note">
+            The signed federation identity proof is bound to the Noise handshake.
+            Cloudflare, Tailscale, SSH, and TLS can add outer transport controls,
+            but they do not replace this application-level encryption.
+          </p>
+        </div>
+      </SettingsSection>
+
+      <SettingsSection
         eyebrow="Enrollment"
         title="Invites"
         chip={generatedInvite ? "Generated" : "Ready"}

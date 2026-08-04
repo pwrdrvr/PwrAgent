@@ -544,6 +544,7 @@ export type DesktopFederationSettingsSnapshot = {
   cloudflareMtlsEnabled: DesktopSettingsValue<boolean>;
   cloudflareAccessServiceAuthEnabled: DesktopSettingsValue<boolean>;
   instancePrivateKey: DesktopSettingsSecretState;
+  noiseStaticPrivateKey: DesktopSettingsSecretState;
   cloudflareClientCertificate: DesktopSettingsSecretState;
   cloudflareClientPrivateKey: DesktopSettingsSecretState;
   cloudflareAccessClientId: DesktopSettingsSecretState;

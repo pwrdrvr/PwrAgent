@@ -33,13 +33,15 @@ afterEach(() => {
 });
 
 describe("federation enrollment", () => {
-  it("carries the pinned gateway public key in a one-time invite", () => {
+  it("carries the pinned gateway signing and Noise keys in a one-time invite", () => {
     const gatewayKeyPair = generateFederationIdentityKeyPair();
+    const gatewayNoisePublicKey = "gateway-noise-public-key";
     const invite = encodeFederationInvite({
       version: 1,
       token: "invite-token-1234567890",
       gatewayInstanceId: "gateway_one",
       gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+      gatewayNoisePublicKey,
       gatewayUrl: "ws://127.0.0.1:47830",
       expiresAt: 2_000,
     });
@@ -49,6 +51,7 @@ describe("federation enrollment", () => {
       token: "invite-token-1234567890",
       gatewayInstanceId: "gateway_one",
       gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+      gatewayNoisePublicKey,
       gatewayUrl: "ws://127.0.0.1:47830",
       expiresAt: 2_000,
     });

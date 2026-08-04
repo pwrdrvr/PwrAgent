@@ -502,6 +502,11 @@ export class DesktopSettingsService {
       undefined,
       secretStorage.available,
     );
+    const federationNoiseStaticPrivateKey = await this.readSecretState(
+      "federationNoiseStaticPrivateKey",
+      undefined,
+      secretStorage.available,
+    );
     const federationCloudflareClientCertificate = await this.readSecretState(
       "federationCloudflareClientCertificate",
       undefined,
@@ -764,6 +769,7 @@ export class DesktopSettingsService {
           false,
         ),
         instancePrivateKey: federationInstancePrivateKey,
+        noiseStaticPrivateKey: federationNoiseStaticPrivateKey,
         cloudflareClientCertificate: federationCloudflareClientCertificate,
         cloudflareClientPrivateKey: federationCloudflareClientPrivateKey,
         cloudflareAccessClientId: federationCloudflareAccessClientId,

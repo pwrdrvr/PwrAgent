@@ -213,6 +213,11 @@ function createSnapshot(
         source: "unset",
         writable: true,
       },
+      noiseStaticPrivateKey: {
+        configured: false,
+        source: "unset",
+        writable: true,
+      },
       cloudflareClientCertificate: {
         configured: false,
         source: "unset",

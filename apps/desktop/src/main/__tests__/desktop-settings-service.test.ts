@@ -217,6 +217,11 @@ describe("DesktopSettingsService", () => {
       cloudflareMtlsEnabled: { value: true, source: "config" },
       cloudflareAccessServiceAuthEnabled: { value: true, source: "config" },
       instancePrivateKey: { configured: false, source: "unset", writable: true },
+      noiseStaticPrivateKey: {
+        configured: false,
+        source: "unset",
+        writable: true,
+      },
       cloudflareClientCertificate: {
         configured: false,
         source: "unset",
@@ -390,6 +395,11 @@ describe("DesktopSettingsService", () => {
         source: "default",
       },
       instancePrivateKey: { configured: false, source: "unset", writable: true },
+      noiseStaticPrivateKey: {
+        configured: false,
+        source: "unset",
+        writable: true,
+      },
     });
 
     await service.writeConfigPatch({

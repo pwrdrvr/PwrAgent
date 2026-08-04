@@ -200,6 +200,8 @@ describe("federation transport", () => {
     const received = new Promise<FederationProtocolEnvelope>((resolve) => {
       server = new FederationGatewayWebSocketServer({
         gatewayInstanceId: "gateway_one",
+        gatewayPrivateKeyPem: gatewayKeyPair.privateKeyPem,
+        gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
         host: "127.0.0.1",
         port: 0,
         store,
@@ -226,6 +228,7 @@ describe("federation transport", () => {
         url,
         mode: "enroll",
         gatewayInstanceId: "gateway_one",
+        gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
         peerInstanceId: "client_one",
         privateKeyPem: clientKeyPair.privateKeyPem,
         publicKeyPem: clientKeyPair.publicKeyPem,
@@ -276,6 +279,8 @@ describe("federation transport", () => {
     });
     server = new FederationGatewayWebSocketServer({
       gatewayInstanceId: "gateway_one",
+      gatewayPrivateKeyPem: gatewayKeyPair.privateKeyPem,
+      gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
       host: "127.0.0.1",
       port: 0,
       store,
@@ -288,6 +293,7 @@ describe("federation transport", () => {
         url,
         mode: "enroll",
         gatewayInstanceId: "gateway_one",
+        gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
         peerInstanceId: "client_one",
         privateKeyPem: clientKeyPair.privateKeyPem,
         publicKeyPem: clientKeyPair.publicKeyPem,
