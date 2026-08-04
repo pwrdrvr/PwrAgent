@@ -4,10 +4,12 @@ import type {
   AppServerListSkillsResponse,
   AppServerListThreadsResponse,
   AppServerReadThreadResponse,
+  CancelQueuedTurnResponse,
   CancelThreadExecutionModeQueueResponse,
   CompactThreadResponse,
   CodexEnvironmentSetupProgressEvent,
   FederationCapability,
+  FederationConnectionState,
   FederationDiagnosticEvent,
   FederatedSearchRequest,
   FederatedSearchResponse,
@@ -43,6 +45,7 @@ import {
   type AppServerListSkillsRequest,
   type AppServerListThreadsRequest,
   type AppServerReadThreadRequest,
+  type CancelQueuedTurnRequest,
   type CancelThreadExecutionModeQueueRequest,
   type CompactThreadRequest,
   type ForkThreadRequest,
@@ -153,6 +156,13 @@ export class DesktopFederationRuntime {
     FederationInstanceId,
     FederationPeerSummary
   >();
+  private readonly publishedPeerStatuses = new Map<
+    FederationInstanceId,
+    {
+      status: FederationConnectionState;
+      unavailableReason?: string;
+    }
+  >();
   private publishAgentEvent?: (event: AgentEvent) => void;
   private publishEnvironmentSetupProgress?: (
     event: CodexEnvironmentSetupProgressEvent,
@@ -210,6 +220,17 @@ export class DesktopFederationRuntime {
   async stop(): Promise<void> {
     this.stopping = true;
     this.connectionGeneration += 1;
+    if (isAppStateInitialized()) {
+      for (const peer of this.visiblePeers()) {
+        if (peer.status === "connected") {
+          this.publishPeerStatus(
+            peer.id,
+            "disconnected",
+            "Federation runtime stopped.",
+          );
+        }
+      }
+    }
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = undefined;
@@ -226,6 +247,7 @@ export class DesktopFederationRuntime {
     this.gatewayInstanceId = undefined;
     this.rpcByPeer.clear();
     this.remotePeerDirectory.clear();
+    this.publishedPeerStatuses.clear();
     this.reconnectAttempt = 0;
     this.lastConnectionError = undefined;
     this.gatewayListenerError = undefined;
@@ -287,6 +309,7 @@ export class DesktopFederationRuntime {
     this.server?.closePeer(peerId);
     this.unregisterPeer(peerId);
     this.remotePeerDirectory.delete(peerId);
+    this.publishPeerStatus(peerId, "revoked");
     this.broadcastPeerDirectory();
     return publicPeerSummary({
       ...peer,
@@ -608,6 +631,11 @@ export class DesktopFederationRuntime {
         this.client = undefined;
         this.lastConnectionError = "Federation gateway connection closed.";
         this.unregisterPeer(gatewayInstanceId);
+        this.publishPeerStatus(
+          gatewayInstanceId,
+          "disconnected",
+          this.lastConnectionError,
+        );
         this.disconnectAdvertisedPeers(this.lastConnectionError);
         this.scheduleReconnect(gatewayUrl);
       },
@@ -627,6 +655,7 @@ export class DesktopFederationRuntime {
       capabilities: DEFAULT_CAPABILITIES,
       sendEnvelope: (envelope) => this.client?.sendEnvelope(envelope),
     });
+    this.publishPeerStatus(gatewayInstanceId, "connected");
     if (pendingInviteToken) {
       getAppStateDb().setMeta(PENDING_INVITE_TOKEN_META_KEY, "");
     }
@@ -644,6 +673,13 @@ export class DesktopFederationRuntime {
     this.lastConnectionError = redactFederationDiagnostic(
       error instanceof Error ? error.message : String(error),
     );
+    if (this.gatewayInstanceId) {
+      this.publishPeerStatus(
+        this.gatewayInstanceId,
+        "disconnected",
+        this.lastConnectionError,
+      );
+    }
     this.disconnectAdvertisedPeers(this.lastConnectionError);
     this.store().appendAudit({
       peerId: this.gatewayInstanceId,
@@ -680,6 +716,7 @@ export class DesktopFederationRuntime {
       capabilities: connection.capabilities,
       sendEnvelope: connection.sendEnvelope,
     });
+    this.publishPeerStatus(connection.peerId, "connected");
     this.broadcastPeerDirectory();
   }
 
@@ -689,6 +726,11 @@ export class DesktopFederationRuntime {
       return;
     }
     this.unregisterPeer(connection.peerId);
+    this.publishPeerStatus(
+      connection.peerId,
+      "disconnected",
+      "Federation peer connection closed.",
+    );
     this.broadcastPeerDirectory();
   }
 
@@ -707,6 +749,11 @@ export class DesktopFederationRuntime {
         status: peer.status === "revoked" ? "revoked" : "disconnected",
         unavailableReason: reason,
       });
+      this.publishPeerStatus(
+        peerId,
+        peer.status === "revoked" ? "revoked" : "disconnected",
+        reason,
+      );
     }
     for (const rpc of this.rpcByPeer.values()) {
       rpc.rejectAll(new Error(reason));
@@ -942,13 +989,53 @@ export class DesktopFederationRuntime {
     }
 
     const notification = envelope as FederationPeerDirectoryNotification & typeof envelope;
+    const previousPeers = new Map(this.remotePeerDirectory);
     this.remotePeerDirectory.clear();
     for (const peer of notification.params.peers) {
       if (peer.id !== this.ensureLocalInstanceId()) {
         this.remotePeerDirectory.set(peer.id, { ...peer, canRevoke: false });
+        previousPeers.delete(peer.id);
+        this.publishPeerStatus(peer.id, peer.status, peer.unavailableReason);
       }
     }
+    for (const peerId of previousPeers.keys()) {
+      this.publishPeerStatus(
+        peerId,
+        "disconnected",
+        "Federation peer is no longer advertised by the gateway.",
+      );
+    }
     return true;
+  }
+
+  private publishPeerStatus(
+    instanceId: FederationInstanceId,
+    status: FederationConnectionState,
+    unavailableReason?: string,
+  ): void {
+    const previous = this.publishedPeerStatuses.get(instanceId);
+    if (
+      previous?.status === status
+      && previous.unavailableReason === unavailableReason
+    ) {
+      return;
+    }
+    this.publishedPeerStatuses.set(instanceId, { status, unavailableReason });
+    this.publishAgentEvent?.({
+      backend: "codex",
+      federationTarget: {
+        scope: "remote",
+        instanceId,
+      },
+      notification: {
+        method: "federation/peerStatus/changed",
+        params: {
+          instanceId,
+          status,
+          ...(unavailableReason ? { unavailableReason } : {}),
+        },
+      },
+    });
   }
 
   private subscribeLocalBackendEvents(): void {
@@ -1145,6 +1232,17 @@ function localBackendOperations(): FederationBackendOperations {
       request: StartReviewRequest,
     ): Promise<StartReviewResponse> {
       return await getDesktopBackendRegistry().startReview(request);
+    },
+    async cancelQueuedTurn(
+      request: CancelQueuedTurnRequest,
+    ): Promise<CancelQueuedTurnResponse> {
+      return {
+        queueEntryId: request.queueEntryId,
+        cancelled: getDesktopBackendRegistry().cancelQueuedTurn(
+          request.queueEntryId,
+          "Cancelled from a federated desktop composer.",
+        ),
+      };
     },
     async compactThread(
       request: CompactThreadRequest,

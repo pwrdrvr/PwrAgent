@@ -4036,7 +4036,11 @@ export function Composer(props: ComposerProps) {
       return false;
     }
     try {
+      const federationTarget =
+        props.thread?.federation?.ref.target
+        ?? readRendererFederationTarget();
       const response = await props.desktopApi.cancelQueuedTurn({
+        ...(federationTarget ? { federationTarget } : {}),
         queueEntryId: queued.queueEntryId,
       });
       if (!response.cancelled) {

@@ -229,7 +229,9 @@ describe("DesktopFederationRuntime", () => {
 
   it("marks gateway-advertised routes disconnected when the gateway closes", () => {
     const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    const publishedEvents: AgentEvent[] = [];
     runtime.localInstanceId = "client_one";
+    runtime.setAgentEventPublisher((event) => publishedEvents.push(event));
     runtime.store = () => ({
       getPeer: () => undefined,
       listPeers: () => [],
@@ -277,6 +279,49 @@ describe("DesktopFederationRuntime", () => {
       },
     ]);
     expect(runtime.connectedPeerTargets()).toEqual([]);
+    expect(
+      publishedEvents.map((event) => ({
+        target: event.federationTarget,
+        notification: event.notification,
+      })),
+    ).toMatchObject([
+      {
+        target: { scope: "remote", instanceId: "gateway_one" },
+        notification: {
+          method: "federation/peerStatus/changed",
+          params: { instanceId: "gateway_one", status: "connected" },
+        },
+      },
+      {
+        target: { scope: "remote", instanceId: "client_two" },
+        notification: {
+          method: "federation/peerStatus/changed",
+          params: { instanceId: "client_two", status: "connected" },
+        },
+      },
+      {
+        target: { scope: "remote", instanceId: "gateway_one" },
+        notification: {
+          method: "federation/peerStatus/changed",
+          params: {
+            instanceId: "gateway_one",
+            status: "disconnected",
+            unavailableReason: "Gateway transport closed.",
+          },
+        },
+      },
+      {
+        target: { scope: "remote", instanceId: "client_two" },
+        notification: {
+          method: "federation/peerStatus/changed",
+          params: {
+            instanceId: "client_two",
+            status: "disconnected",
+            unavailableReason: "Gateway transport closed.",
+          },
+        },
+      },
+    ]);
   });
 
   it("falls back to the gateway when a client targets a sibling peer", () => {

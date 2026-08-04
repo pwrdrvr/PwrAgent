@@ -3096,6 +3096,28 @@ export function useThreadNavigation(
 
       markNavigationActivity({ refreshOnIdleResume: false });
       const method = event.notification.method as string;
+      if (method === "federation/peerStatus/changed") {
+        const params = event.notification.params as {
+          instanceId: string;
+          status: string;
+          unavailableReason?: string;
+        };
+        if (params.status === "connected") {
+          scheduleRefresh(undefined, undefined, false, {
+            forceRefresh: true,
+            refreshMode: "full",
+          });
+          return;
+        }
+        setState((current) => ({
+          ...current,
+          loading: false,
+          refreshing: false,
+          error: params.unavailableReason ??
+            `Federation peer ${params.instanceId} is ${params.status}.`,
+        }));
+        return;
+      }
       if (method === "navigation/directoryGitStatus/updated") {
         const params = event.notification
           .params as NavigationDirectoryGitStatusUpdatedNotification["params"];

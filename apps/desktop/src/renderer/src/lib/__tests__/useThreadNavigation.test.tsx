@@ -1990,6 +1990,103 @@ describe("useThreadNavigation", () => {
     });
   });
 
+  it("marks a remote snapshot unavailable and refreshes it after reconnect", async () => {
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "remote-instance",
+    };
+    (window as unknown as {
+      __pwragentFederationTarget?: unknown;
+    }).__pwragentFederationTarget = federationTarget;
+    const listeners = new Set<
+      Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+    >();
+    let title = "Before disconnect";
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: ["codex:thread-remote"],
+      threads: [
+        {
+          id: "thread-remote",
+          title,
+          titleSource: "explicit" as const,
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: { inInbox: true },
+        },
+      ],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      onAgentEvent: (callback) => {
+        listeners.add(callback);
+        return () => {
+          listeners.delete(callback);
+        };
+      },
+    };
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.title).toBe("Before disconnect");
+    });
+
+    act(() => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          federationTarget,
+          notification: {
+            method: "federation/peerStatus/changed",
+            params: {
+              instanceId: "remote-instance",
+              status: "disconnected",
+              unavailableReason: "Federation gateway connection closed.",
+            },
+          },
+        });
+      }
+    });
+
+    expect(result.current.error).toBe("Federation gateway connection closed.");
+    expect(result.current.selectedThread?.title).toBe("Before disconnect");
+
+    title = "After reconnect";
+    act(() => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          federationTarget,
+          notification: {
+            method: "federation/peerStatus/changed",
+            params: {
+              instanceId: "remote-instance",
+              status: "connected",
+            },
+          },
+        });
+      }
+    });
+
+    await waitFor(() => {
+      expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
+      expect(result.current.selectedThread?.title).toBe("After reconnect");
+      expect(result.current.error).toBeUndefined();
+    });
+    expect(getNavigationSnapshot).toHaveBeenLastCalledWith({
+      federationTarget,
+      forceRefresh: true,
+      refreshMode: "full",
+    });
+  });
+
   it("surfaces archive worktree cleanup failures returned by the desktop bridge", async () => {
     let archived = false;
     const getNavigationSnapshot = vi.fn(async () => ({

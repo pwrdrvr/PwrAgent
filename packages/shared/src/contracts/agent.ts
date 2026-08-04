@@ -254,6 +254,7 @@ export type StartTurnResponse = {
 };
 
 export type CancelQueuedTurnRequest = {
+  federationTarget?: FederationTarget;
   queueEntryId: string;
 };
 

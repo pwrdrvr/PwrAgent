@@ -505,13 +505,24 @@ export function registerAgentIpcHandlers(): void {
     async (
       _event,
       request: CancelQueuedTurnRequest,
-    ): Promise<CancelQueuedTurnResponse> => ({
-      queueEntryId: request.queueEntryId,
-      cancelled: registry.cancelQueuedTurn(
-        request.queueEntryId,
-        "Cancelled from the desktop composer.",
-      ),
-    }),
+    ): Promise<CancelQueuedTurnResponse> => {
+      if (
+        request.federationTarget
+        && isRemoteFederationTarget(request.federationTarget)
+      ) {
+        const { federationTarget, ...remoteRequest } = request;
+        return await getDesktopFederationRuntime()
+          .remoteBackend(federationTarget)
+          .cancelQueuedTurn(remoteRequest);
+      }
+      return {
+        queueEntryId: request.queueEntryId,
+        cancelled: registry.cancelQueuedTurn(
+          request.queueEntryId,
+          "Cancelled from the desktop composer.",
+        ),
+      };
+    },
   );
 
   ipcMain.removeHandler(AGENT_START_REVIEW_CHANNEL);

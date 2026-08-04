@@ -31,6 +31,10 @@ describe("federation backend bridge", () => {
         cleanup: [],
       })),
       startTurn: vi.fn(),
+      cancelQueuedTurn: vi.fn(async ({ queueEntryId }) => ({
+        queueEntryId,
+        cancelled: true,
+      })),
     } as unknown as FederationBackendOperations;
     const replies: FederationProtocolEnvelope[] = [];
     const router = new FederationRouter({
@@ -71,11 +75,27 @@ describe("federation backend bridge", () => {
         createdAt: 1_100,
       },
     });
+    await router.routeEnvelope({
+      sourcePeerId: "client_one",
+      envelope: {
+        id: "request-3",
+        kind: "request",
+        method: FEDERATION_BACKEND_METHODS.cancelQueuedTurn,
+        params: { queueEntryId: "queue-1" },
+        protocolVersion: 1,
+        sourceInstanceId: "client_one",
+        targetInstanceId: "gateway_one",
+        createdAt: 1_200,
+      },
+    });
 
     expect(backend.listThreads).toHaveBeenCalledWith({ backend: "codex" });
     expect(backend.archiveThread).toHaveBeenCalledWith({
       backend: "codex",
       threadId: "thread-1",
+    });
+    expect(backend.cancelQueuedTurn).toHaveBeenCalledWith({
+      queueEntryId: "queue-1",
     });
     expect(replies).toMatchObject([
       {
@@ -92,6 +112,14 @@ describe("federation backend bridge", () => {
         result: {
           backend: "codex",
           threadId: "thread-1",
+        },
+      },
+      {
+        kind: "response",
+        requestId: "request-3",
+        result: {
+          queueEntryId: "queue-1",
+          cancelled: true,
         },
       },
     ]);
@@ -192,6 +220,31 @@ describe("federation backend bridge", () => {
       result: { scheduledCount: 1 },
     });
     await expect(refreshPending).resolves.toEqual({ scheduledCount: 1 });
+
+    const cancelPending = client.cancelQueuedTurn({ queueEntryId: "queue-1" });
+    const cancelRequest = sent.at(-1)!;
+    expect(cancelRequest).toMatchObject({
+      kind: "request",
+      method: FEDERATION_BACKEND_METHODS.cancelQueuedTurn,
+      params: { queueEntryId: "queue-1" },
+    });
+    rpc.receiveEnvelope({
+      id: "response-4",
+      kind: "response",
+      requestId: cancelRequest.id,
+      protocolVersion: 1,
+      sourceInstanceId: "client_one",
+      targetInstanceId: "gateway_one",
+      createdAt: 1_400,
+      result: {
+        queueEntryId: "queue-1",
+        cancelled: true,
+      },
+    });
+    await expect(cancelPending).resolves.toEqual({
+      queueEntryId: "queue-1",
+      cancelled: true,
+    });
   });
 
   it("executes directory Git status refreshes on the target instance", async () => {
@@ -353,6 +406,7 @@ describe("federation backend bridge", () => {
       startThread: vi.fn(),
       forkThread: vi.fn(),
       startTurn: vi.fn(),
+      cancelQueuedTurn: vi.fn(),
       startReview: vi.fn(),
       compactThread: vi.fn(async () => ({
         backend: "codex" as const,
@@ -517,6 +571,7 @@ describe("federation backend bridge", () => {
         startThread: vi.fn(),
         forkThread: vi.fn(),
         startTurn: vi.fn(),
+        cancelQueuedTurn: vi.fn(),
         startReview: vi.fn(),
         compactThread: vi.fn(),
         interruptTurn: vi.fn(),
