@@ -50,6 +50,40 @@ describe("FederationTailscaleService", () => {
       "/usr/local/bin/tailscale",
       ["status", "--json", "--peers=false"],
     );
+    expect(runCommand).not.toHaveBeenCalledWith(
+      "/usr/local/bin/tailscale",
+      ["funnel", "status", "--json"],
+    );
+  });
+
+  it("does not mistake a private Serve handler for Funnel", async () => {
+    const service = new FederationTailscaleService({
+      discoverCommand: async () => ({ command: "tailscale" }),
+      runCommand: async (_command, args) => commandResult(
+        args[0] === "status"
+          ? JSON.stringify({
+              BackendState: "Running",
+              Self: { Online: true, DNSName: "studio.example.ts.net." },
+            })
+          : JSON.stringify({
+              TCP: { "443": { HTTPS: true } },
+              Web: {
+                "studio.example.ts.net:443": {
+                  Handlers: {
+                    "/pwragent-federation": {
+                      Proxy: "http://127.0.0.1:47830",
+                    },
+                  },
+                },
+              },
+            }),
+      ),
+    });
+
+    await expect(service.readStatus()).resolves.toMatchObject({
+      serveConfigured: true,
+      funnelConfigured: false,
+    });
   });
 
   it("configures only the dedicated PwrAgent Funnel path", async () => {
@@ -67,14 +101,21 @@ describe("FederationTailscaleService", () => {
         configured = true;
         return commandResult("");
       }
-      if (args[0] === "funnel") {
+      if (args[0] === "serve") {
         return commandResult(configured
           ? JSON.stringify({
-              Web: { Handlers: {
-                "/pwragent-federation": {
-                  Proxy: "http://127.0.0.1:47830",
+              Web: {
+                "studio.example.ts.net:443": {
+                  Handlers: {
+                    "/pwragent-federation": {
+                      Proxy: "http://127.0.0.1:47830",
+                    },
+                  },
                 },
-              } },
+              },
+              AllowFunnel: {
+                "studio.example.ts.net:443": true,
+              },
             })
           : "{}");
       }

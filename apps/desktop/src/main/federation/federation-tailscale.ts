@@ -60,16 +60,16 @@ export class FederationTailscaleService {
     }
 
     try {
-      const [statusResult, serveResult, funnelResult] = await Promise.all([
+      const [statusResult, serveResult] = await Promise.all([
         this.runCommand(discovered.command, [
           "status",
           "--json",
           "--peers=false",
         ]),
         this.runCommand(discovered.command, ["serve", "status", "--json"]),
-        this.runCommand(discovered.command, ["funnel", "status", "--json"]),
       ]);
       const statusJson = parseJsonObject(statusResult.stdout, "Tailscale status");
+      const serveJson = parseJsonObject(serveResult.stdout, "Tailscale Serve status");
       const self = readObject(statusJson.Self);
       const currentTailnet = readObject(statusJson.CurrentTailnet);
       const dnsName = readString(self?.DNSName)?.replace(/\.$/, "");
@@ -83,8 +83,8 @@ export class FederationTailscaleService {
         backendState,
         dnsName,
         tailnetName: readString(currentTailnet?.Name),
-        serveConfigured: hasPwrAgentHandler(serveResult.stdout),
-        funnelConfigured: hasPwrAgentHandler(funnelResult.stdout),
+        serveConfigured: hasPwrAgentHandler(serveJson),
+        funnelConfigured: hasPwrAgentFunnel(serveJson),
         gatewayUrl: dnsName ? buildGatewayUrl(dnsName) : undefined,
         unavailableReason: connected
           ? undefined
@@ -234,13 +234,28 @@ function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function hasPwrAgentHandler(value: string): boolean {
-  try {
-    const parsed: unknown = JSON.parse(value);
-    return JSON.stringify(parsed).includes(PWRAGENT_TAILSCALE_PATH);
-  } catch {
-    return false;
-  }
+function pwrAgentHandlerHostPorts(
+  serveConfig: Record<string, unknown>,
+): string[] {
+  const web = readObject(serveConfig.Web);
+  if (!web) return [];
+  return Object.entries(web)
+    .filter(([, value]) => {
+      const handlers = readObject(readObject(value)?.Handlers);
+      return handlers?.[PWRAGENT_TAILSCALE_PATH] !== undefined;
+    })
+    .map(([hostPort]) => hostPort);
+}
+
+function hasPwrAgentHandler(serveConfig: Record<string, unknown>): boolean {
+  return pwrAgentHandlerHostPorts(serveConfig).length > 0;
+}
+
+function hasPwrAgentFunnel(serveConfig: Record<string, unknown>): boolean {
+  const allowFunnel = readObject(serveConfig.AllowFunnel);
+  if (!allowFunnel) return false;
+  return pwrAgentHandlerHostPorts(serveConfig)
+    .some((hostPort) => allowFunnel[hostPort] === true);
 }
 
 function buildGatewayUrl(dnsName: string): string {
