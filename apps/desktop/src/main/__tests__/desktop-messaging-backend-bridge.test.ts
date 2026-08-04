@@ -5,6 +5,7 @@ import type {
   AppServerThreadSummary,
   AppServerReadThreadResponse,
   AppServerThreadReplay,
+  CreateScheduledThreadActionRequest,
   NavigationSnapshot,
 } from "@pwragent/shared";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
@@ -522,11 +523,26 @@ describe("DesktopMessagingBackendBridge", () => {
         },
       ],
     }));
+    const createScheduledThreadAction = vi.fn(async (
+      request: CreateScheduledThreadActionRequest,
+    ) => ({
+      action: {
+        ...request,
+        id: "scheduled-remote",
+        origin: "messaging" as const,
+        status: "scheduled" as const,
+        createdAt: 2_000,
+        updatedAt: 2_000,
+      },
+    }));
+    const listScheduledThreadActions = vi.fn(async () => ({ actions: [] }));
     const federation = {
       connectedPeerTargets: () => [],
       onRemoteBackendEvent: () => () => undefined,
       remoteBackend: () => ({
+        createScheduledThreadAction,
         listBackends,
+        listScheduledThreadActions,
         startTurn,
       } as unknown as FederationBackendOperations),
       remoteNavigationSnapshot,
@@ -561,6 +577,23 @@ describe("DesktopMessagingBackendBridge", () => {
     ).resolves.toMatchObject({
       backends: [{ label: "Remote Codex" }],
     });
+    await expect(
+      bridge.createScheduledThreadAction({
+        backend: "codex",
+        federationTarget: target,
+        threadId: "thread-1",
+        kind: "turn",
+        origin: "messaging",
+        scheduledFor: 3_000,
+        displayText: "Follow up",
+        turn: { input: [{ type: "text", text: "Follow up" }] },
+      }),
+    ).resolves.toMatchObject({ action: { id: "scheduled-remote" } });
+    await bridge.listScheduledThreadActions({
+      backend: "codex",
+      federationTarget: target,
+      threadId: "thread-1",
+    });
 
     expect(startTurn).toHaveBeenCalledWith({
       backend: "codex",
@@ -573,6 +606,19 @@ describe("DesktopMessagingBackendBridge", () => {
     });
     expect(listBackends).toHaveBeenCalledWith({
       includeUnavailable: true,
+    });
+    expect(createScheduledThreadAction).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      kind: "turn",
+      origin: "messaging",
+      scheduledFor: 3_000,
+      displayText: "Follow up",
+      turn: { input: [{ type: "text", text: "Follow up" }] },
+    });
+    expect(listScheduledThreadActions).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
     });
   });
 

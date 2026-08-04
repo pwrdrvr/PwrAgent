@@ -4028,6 +4028,8 @@ export function Composer(props: ComposerProps) {
       }
       try {
         await props.desktopApi.cancelScheduledThreadAction({
+          federationTarget: props.thread?.federation?.ref.target
+            ?? rendererFederationTarget,
           id: queued.scheduledActionId,
         });
         return true;
@@ -5914,6 +5916,8 @@ export function Composer(props: ComposerProps) {
       }
       updateSending(true);
       void props.desktopApi.sendScheduledThreadActionNow({
+        federationTarget: props.thread?.federation?.ref.target
+          ?? rendererFederationTarget,
         id: queued.scheduledActionId,
       }).then(
         (response) => {
@@ -6044,6 +6048,8 @@ export function Composer(props: ComposerProps) {
           }
           const response = await props.desktopApi.createScheduledThreadAction({
             backend: props.thread.source,
+            federationTarget: props.thread.federation?.ref.target
+              ?? rendererFederationTarget,
             threadId: props.thread.id,
             kind: "turn",
             origin: "desktop",
@@ -6146,6 +6152,8 @@ export function Composer(props: ComposerProps) {
       }
       const response = await props.desktopApi.createScheduledThreadAction({
         backend: props.thread.source,
+        federationTarget: props.thread.federation?.ref.target
+          ?? rendererFederationTarget,
         threadId: props.thread.id,
         kind: "review",
         origin: "desktop",

@@ -1,11 +1,13 @@
 import { useEffect, useRef } from "react";
-import type { ScheduledThreadAction } from "@pwragent/shared";
+import type { FederationTarget, ScheduledThreadAction } from "@pwragent/shared";
 import type { ComposerDraftStore } from "../features/composer/useComposerDraftStore";
 import type { DesktopApi } from "./desktop-api";
+import { federationTargetsEqual } from "./federated-thread-events";
 
 export function useScheduledThreadActionProjection(params: {
   composerDraftStore: ComposerDraftStore;
   desktopApi?: DesktopApi;
+  federationTarget?: FederationTarget;
 }): void {
   const refreshSequenceRef = useRef(0);
   const projectedScopeKeysRef = useRef<Set<string>>(new Set());
@@ -19,7 +21,9 @@ export function useScheduledThreadActionProjection(params: {
       const sequence = refreshSequenceRef.current + 1;
       refreshSequenceRef.current = sequence;
       try {
-        const response = await desktopApi.listScheduledThreadActions!();
+        const response = await desktopApi.listScheduledThreadActions!({
+          federationTarget: params.federationTarget,
+        });
         if (cancelled || sequence !== refreshSequenceRef.current) return;
         projectedScopeKeysRef.current = syncScheduledActionProjections(
           params.composerDraftStore,
@@ -34,6 +38,12 @@ export function useScheduledThreadActionProjection(params: {
     void refresh();
     const unsubscribe = desktopApi.onAgentEvent?.((event) => {
       if (event.notification.method === "thread/scheduledAction/updated") {
+        if (!federationTargetsEqual(
+          event.federationTarget,
+          params.federationTarget,
+        )) {
+          return;
+        }
         const action = (event.notification.params as { action?: unknown }).action;
         if (!isScheduledThreadAction(action)) return;
         applyScheduledActionProjection(
@@ -47,7 +57,11 @@ export function useScheduledThreadActionProjection(params: {
       cancelled = true;
       unsubscribe?.();
     };
-  }, [params.composerDraftStore, params.desktopApi]);
+  }, [
+    params.composerDraftStore,
+    params.desktopApi,
+    params.federationTarget,
+  ]);
 }
 
 export function syncScheduledActionProjections(

@@ -877,6 +877,7 @@ function DesktopAppShell(props: {
   useScheduledThreadActionProjection({
     composerDraftStore,
     desktopApi,
+    federationTarget: activeFederationTarget,
   });
   const replayCodexProfileSetup = settings.snapshot
     ? inferReplayCodexProfileSetup(

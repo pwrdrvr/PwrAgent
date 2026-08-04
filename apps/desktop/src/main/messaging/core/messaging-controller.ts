@@ -1973,6 +1973,7 @@ export class MessagingController {
     }
     const response = await this.options.backend.createScheduledThreadAction({
       backend: binding.backend,
+      federationTarget: federationTargetForBinding(binding),
       threadId: binding.threadId,
       kind: "turn",
       origin: "messaging",
@@ -1980,7 +1981,7 @@ export class MessagingController {
       displayText: parsed.text,
       turn: {
         input: [{ type: "text", text: parsed.text }],
-        messageOrigin: { kind: "messaging" },
+        messageOrigin: messageOriginForInboundEvent(event),
       },
     });
     await this.deliver(
@@ -2020,6 +2021,7 @@ export class MessagingController {
     }
     const response = await list({
       backend: binding.backend,
+      federationTarget: federationTargetForBinding(binding),
       threadId: binding.threadId,
     });
     const [operation, candidateId, ...remaining] = event.args;
@@ -2058,6 +2060,7 @@ export class MessagingController {
           throw new Error("Sending scheduled messages now is unavailable.");
         }
         await this.options.backend.sendScheduledThreadActionNow({
+          federationTarget: federationTargetForBinding(binding),
           id: resolved.action.id,
         });
       } else if (operation === "cancel" || operation === "remove") {
@@ -2065,6 +2068,7 @@ export class MessagingController {
           throw new Error("Cancelling scheduled messages is unavailable.");
         }
         await this.options.backend.cancelScheduledThreadAction({
+          federationTarget: federationTargetForBinding(binding),
           id: resolved.action.id,
         });
       } else if (operation === "edit") {
@@ -2077,13 +2081,16 @@ export class MessagingController {
         const parsed = parseMessagingSchedule(remaining, this.now());
         if (!parsed.ok) throw new Error(parsed.error);
         await this.options.backend.updateScheduledThreadAction({
+          federationTarget: federationTargetForBinding(binding),
           id: resolved.action.id,
           scheduledFor: parsed.scheduledFor,
           displayText: parsed.text,
           turn: {
             ...resolved.action.turn,
             input: [{ type: "text", text: parsed.text }],
-            messageOrigin: { kind: "messaging" },
+            messageOrigin:
+              resolved.action.turn?.messageOrigin
+              ?? messageOriginForInboundEvent(event),
           },
         });
       } else {

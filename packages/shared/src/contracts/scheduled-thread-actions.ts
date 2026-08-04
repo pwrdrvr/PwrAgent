@@ -8,6 +8,7 @@ import type {
   ThreadIdentifier,
 } from "./normalized-app-server";
 import type { AppServerCollaborationModeRequest } from "./agent";
+import type { FederationTarget } from "./federation";
 import type {
   NavigationLaunchpadFileAttachment,
   NavigationLaunchpadImageAttachment,
@@ -71,6 +72,7 @@ export type ScheduledThreadAction = {
 
 export type CreateScheduledThreadActionRequest = {
   backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   kind: ScheduledThreadActionKind;
   origin?: ScheduledThreadActionOrigin;
@@ -84,6 +86,7 @@ export type CreateScheduledThreadActionRequest = {
 
 export type UpdateScheduledThreadActionRequest = {
   id: string;
+  federationTarget?: FederationTarget;
   scheduledFor?: number;
   displayText?: string;
   imageAttachments?: NavigationLaunchpadImageAttachment[];
@@ -94,10 +97,12 @@ export type UpdateScheduledThreadActionRequest = {
 
 export type ScheduledThreadActionIdRequest = {
   id: string;
+  federationTarget?: FederationTarget;
 };
 
 export type ListScheduledThreadActionsRequest = {
   backend?: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   threadId?: ThreadIdentifier;
   includeTerminal?: boolean;
 };

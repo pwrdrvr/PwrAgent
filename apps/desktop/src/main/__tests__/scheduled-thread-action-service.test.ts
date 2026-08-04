@@ -279,6 +279,51 @@ describe("ScheduledThreadActionService", () => {
     first.dispose();
   });
 
+  it("keeps queued claims leased when the scheduler stops before the registry", async () => {
+    const harness = createHarness(20_000);
+    store.create({
+      id: "scheduled-1",
+      backend: "codex",
+      threadId: "thread-1",
+      kind: "turn",
+      origin: "desktop",
+      scheduledFor: 10_000,
+      displayText: "Follow up",
+      turn: { input: [{ type: "text", text: "Follow up" }] },
+      now: 1_000,
+    });
+    const first = new ScheduledThreadActionService({
+      registry: harness.registry,
+      store,
+      now: () => 20_000,
+      ownerId: "instance-1",
+      setTimer: vi.fn(() => ({}) as ReturnType<typeof setTimeout>),
+      clearTimer: vi.fn(),
+      setLeaseTimer: vi.fn(() => ({}) as ReturnType<typeof setInterval>),
+      clearLeaseTimer: vi.fn(),
+    });
+    first.start();
+    await vi.waitFor(() => expect(harness.submitTurn).toHaveBeenCalledTimes(1));
+
+    first.dispose();
+    const second = new ScheduledThreadActionService({
+      registry: harness.registry,
+      store,
+      now: () => 20_001,
+      ownerId: "instance-2",
+      setTimer: vi.fn(() => ({}) as ReturnType<typeof setTimeout>),
+      clearTimer: vi.fn(),
+      setLeaseTimer: vi.fn(() => ({}) as ReturnType<typeof setInterval>),
+      clearLeaseTimer: vi.fn(),
+    });
+    second.start();
+    await Promise.resolve();
+
+    expect(store.get("scheduled-1")?.status).toBe("queued");
+    expect(harness.submitTurn).toHaveBeenCalledTimes(1);
+    second.dispose();
+  });
+
   it("sends a future action now through the same atomic claim", async () => {
     const harness = createHarness(5_000);
     store.create({

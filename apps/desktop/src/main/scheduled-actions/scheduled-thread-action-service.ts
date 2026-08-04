@@ -101,7 +101,9 @@ export class ScheduledThreadActionService {
     }
     this.unsubscribeRegistryEvents?.();
     this.unsubscribeRegistryEvents = undefined;
-    this.options.store.releaseOwnedClaims(this.ownerId, this.now());
+    // Claims intentionally expire through their lease. Releasing a queued
+    // claim here is unsafe unless the registry is already quiescent, because
+    // its in-memory FIFO may still start the same action during shutdown.
   }
 
   list(

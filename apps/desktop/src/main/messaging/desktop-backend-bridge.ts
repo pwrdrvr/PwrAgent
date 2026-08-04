@@ -422,30 +422,60 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
   async listScheduledThreadActions(
     request: ListScheduledThreadActionsRequest = {},
   ): Promise<ListScheduledThreadActionsResponse> {
+    const remote = this.remoteBackend(request.federationTarget);
+    if (remote) {
+      return await remote.listScheduledThreadActions(
+        stripFederationTarget(request),
+      );
+    }
     return getScheduledThreadActionService().list(request);
   }
 
   async createScheduledThreadAction(
     request: CreateScheduledThreadActionRequest,
   ): Promise<ScheduledThreadActionMutationResponse> {
+    const remote = this.remoteBackend(request.federationTarget);
+    if (remote) {
+      return await remote.createScheduledThreadAction(
+        stripFederationTarget(request),
+      );
+    }
     return await getScheduledThreadActionService().create(request);
   }
 
   async updateScheduledThreadAction(
     request: UpdateScheduledThreadActionRequest,
   ): Promise<ScheduledThreadActionMutationResponse> {
+    const remote = this.remoteBackend(request.federationTarget);
+    if (remote) {
+      return await remote.updateScheduledThreadAction(
+        stripFederationTarget(request),
+      );
+    }
     return await getScheduledThreadActionService().update(request);
   }
 
   async cancelScheduledThreadAction(
     request: ScheduledThreadActionIdRequest,
   ): Promise<ScheduledThreadActionMutationResponse> {
+    const remote = this.remoteBackend(request.federationTarget);
+    if (remote) {
+      return await remote.cancelScheduledThreadAction(
+        stripFederationTarget(request),
+      );
+    }
     return await getScheduledThreadActionService().cancel(request);
   }
 
   async sendScheduledThreadActionNow(
     request: ScheduledThreadActionIdRequest,
   ): Promise<ScheduledThreadActionMutationResponse> {
+    const remote = this.remoteBackend(request.federationTarget);
+    if (remote) {
+      return await remote.sendScheduledThreadActionNow(
+        stripFederationTarget(request),
+      );
+    }
     return await getScheduledThreadActionService().sendNow(request);
   }
 

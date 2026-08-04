@@ -7,6 +7,7 @@ import type {
   CancelQueuedTurnResponse,
   CancelThreadExecutionModeQueueResponse,
   CompactThreadResponse,
+  CreateScheduledThreadActionRequest,
   CodexEnvironmentSetupProgressEvent,
   FederationCapability,
   FederationConnectionState,
@@ -22,6 +23,8 @@ import type {
   ForkThreadResponse,
   HandoffThreadWorkspaceResponse,
   InterruptTurnResponse,
+  ListScheduledThreadActionsRequest,
+  ListScheduledThreadActionsResponse,
   MaterializeDirectoryLaunchpadResponse,
   MarkThreadSeenResponse,
   OpenDesktopApplicationResponse,
@@ -29,6 +32,8 @@ import type {
   RefreshDirectoryGitStatusesResponse,
   RenameThreadResponse,
   RunCodexEnvironmentActionResponse,
+  ScheduledThreadActionIdRequest,
+  ScheduledThreadActionMutationResponse,
   SetAcpSessionRuntimeOptionResponse,
   SetCodexThreadEnvironmentResponse,
   SetThreadExecutionModeResponse,
@@ -39,6 +44,7 @@ import type {
   StopCodexEnvironmentActionResponse,
   SubmitServerRequestResponse,
   TrustCodexProjectResponse,
+  UpdateScheduledThreadActionRequest,
 } from "@pwragent/shared";
 import {
   FEDERATION_INVITE_VERSION,
@@ -1319,6 +1325,46 @@ function localBackendOperations(): FederationBackendOperations {
           "Cancelled from a federated desktop composer.",
         ),
       };
+    },
+    async listScheduledThreadActions(
+      request: ListScheduledThreadActionsRequest = {},
+    ): Promise<ListScheduledThreadActionsResponse> {
+      const { getScheduledThreadActionService } = await import(
+        "../scheduled-actions/scheduled-thread-action-service.js"
+      );
+      return getScheduledThreadActionService().list(request);
+    },
+    async createScheduledThreadAction(
+      request: CreateScheduledThreadActionRequest,
+    ): Promise<ScheduledThreadActionMutationResponse> {
+      const { getScheduledThreadActionService } = await import(
+        "../scheduled-actions/scheduled-thread-action-service.js"
+      );
+      return await getScheduledThreadActionService().create(request);
+    },
+    async updateScheduledThreadAction(
+      request: UpdateScheduledThreadActionRequest,
+    ): Promise<ScheduledThreadActionMutationResponse> {
+      const { getScheduledThreadActionService } = await import(
+        "../scheduled-actions/scheduled-thread-action-service.js"
+      );
+      return await getScheduledThreadActionService().update(request);
+    },
+    async cancelScheduledThreadAction(
+      request: ScheduledThreadActionIdRequest,
+    ): Promise<ScheduledThreadActionMutationResponse> {
+      const { getScheduledThreadActionService } = await import(
+        "../scheduled-actions/scheduled-thread-action-service.js"
+      );
+      return await getScheduledThreadActionService().cancel(request);
+    },
+    async sendScheduledThreadActionNow(
+      request: ScheduledThreadActionIdRequest,
+    ): Promise<ScheduledThreadActionMutationResponse> {
+      const { getScheduledThreadActionService } = await import(
+        "../scheduled-actions/scheduled-thread-action-service.js"
+      );
+      return await getScheduledThreadActionService().sendNow(request);
     },
     async compactThread(
       request: CompactThreadRequest,

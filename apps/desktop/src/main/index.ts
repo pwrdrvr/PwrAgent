@@ -8,6 +8,9 @@ import {
   registerScheduledActionIpcHandlers,
 } from "./ipc/scheduled-actions-ipc";
 import {
+  disposeScheduledThreadActionService,
+} from "./scheduled-actions/scheduled-thread-action-service";
+import {
   disposeAppMetadataIpcHandlers,
   registerAppMetadataIpcHandlers,
 } from "./ipc/app-metadata";
@@ -468,6 +471,10 @@ async function disposeMainProcessResources(source: string): Promise<void> {
   mainProcessShutdownPromise ??= (async () => {
     disposeMainProcessResourcesSync();
     await runMainProcessShutdownBarrier(source);
+    // Keep the scheduler subscribed until the app-server registry is closed.
+    // A queued registry entry can otherwise start after its durable lease was
+    // released, leaving the next process free to dispatch the same action.
+    disposeScheduledThreadActionService();
     disposeAppState();
     mainProcessShutdownComplete = true;
   })();

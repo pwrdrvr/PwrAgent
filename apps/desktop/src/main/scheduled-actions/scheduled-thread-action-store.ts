@@ -349,15 +349,6 @@ export class ScheduledThreadActionStore {
     })();
   }
 
-  releaseOwnedClaims(ownerId: string, now: number): ScheduledThreadAction[] {
-    this.stateDb.raw.prepare(
-      `UPDATE scheduled_thread_actions
-       SET claim_expires_at = ?
-       WHERE claim_owner = ? AND status IN ('dispatching', 'queued')`,
-    ).run(now, ownerId);
-    return this.recoverExpiredClaims(now);
-  }
-
   cleanupTerminalBefore(cutoff: number): void {
     const rows = this.stateDb.raw.prepare(
       `SELECT action_id, payload_ref
