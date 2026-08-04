@@ -4,6 +4,10 @@ import { DbBackedSafeStorageSecretStore } from "../state/secret-store-sqlite";
 import { getAppStateDb, getAppStateMode } from "../state/app-state";
 import { broadcastAppearanceChange } from "../appearance-broadcast";
 import { resolveBootstrapProfilePath } from "../profile";
+import {
+  isE2eMemorySecretStorageEnabled,
+  MemoryDesktopSecretStore,
+} from "./desktop-secret-store";
 
 let desktopSettingsService: DesktopSettingsService | undefined;
 
@@ -15,9 +19,15 @@ export function getDesktopSettingsService(): DesktopSettingsService {
     // them to the operator's chosen real profile before tearing the
     // bootstrap state down.
     const bootstrap = getAppStateMode() === "bootstrap";
+    const secretStore = isE2eMemorySecretStorageEnabled(
+      process.env,
+      app.isPackaged,
+    )
+      ? new MemoryDesktopSecretStore()
+      : new DbBackedSafeStorageSecretStore(safeStorage, getAppStateDb());
     desktopSettingsService = new DesktopSettingsService({
       defaultDeveloperMode: app.isPackaged === true ? false : true,
-      secretStore: new DbBackedSafeStorageSecretStore(safeStorage, getAppStateDb()),
+      secretStore,
       ...(bootstrap
         ? { configPath: resolveBootstrapProfilePath("config.toml") }
         : {}),

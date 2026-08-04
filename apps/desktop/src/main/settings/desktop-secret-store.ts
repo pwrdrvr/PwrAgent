@@ -22,10 +22,30 @@ import type {
 export const SECRET_STORAGE_DISABLED_ENV =
   "PWRAGENT_DEV_DISABLE_SECRET_STORAGE";
 
+/**
+ * E2E-only writable secret-store mode. Documentation screenshot captures need
+ * production-like empty credential fields, but must not let unsigned Electron
+ * reach macOS safeStorage. The desktop singleton honors this only when the app
+ * is unpackaged and PWRAGENT_E2E=1 is also present.
+ */
+export const E2E_MEMORY_SECRET_STORAGE_ENV =
+  "PWRAGENT_E2E_MEMORY_SECRET_STORAGE";
+
 export function isSecretStorageDisabledByEnv(
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
   const raw = env[SECRET_STORAGE_DISABLED_ENV]?.trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes";
+}
+
+export function isE2eMemorySecretStorageEnabled(
+  env: NodeJS.ProcessEnv = process.env,
+  isPackaged = false,
+): boolean {
+  if (isPackaged || env.PWRAGENT_E2E !== "1") {
+    return false;
+  }
+  const raw = env[E2E_MEMORY_SECRET_STORAGE_ENV]?.trim().toLowerCase();
   return raw === "1" || raw === "true" || raw === "yes";
 }
 

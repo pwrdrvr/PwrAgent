@@ -10,7 +10,10 @@ import type {
 } from "@pwragent/shared";
 import { _electron as electron, expect, type ElectronApplication, type Page } from "@playwright/test";
 import { applyDesktopSettingsPatch } from "../../src/main/settings/desktop-config";
-import { SECRET_STORAGE_DISABLED_ENV } from "../../src/main/settings/desktop-secret-store";
+import {
+  E2E_MEMORY_SECRET_STORAGE_ENV,
+  SECRET_STORAGE_DISABLED_ENV,
+} from "../../src/main/settings/desktop-secret-store";
 
 const fixtureDir = path.dirname(fileURLToPath(import.meta.url));
 const ELECTRON_EVALUATE_QUIT_TIMEOUT_MS = 1_000;
@@ -95,6 +98,12 @@ export async function launchElectronApp(params: {
    * (every replay-backed spec).
    */
   contextRailPinned?: boolean;
+  /**
+   * Secret-store presentation for the launched E2E app. The default reports
+   * storage as unavailable while preventing native keychain access. `memory`
+   * keeps storage writable without safeStorage for production-facing captures.
+   */
+  secretStorage?: "disabled" | "memory";
   /**
    * Whether to seed `onboarding.completed = true` into the
    * `default` profile's config.toml before launch. Defaults to
@@ -187,7 +196,7 @@ export async function launchElectronApp(params: {
   // no E2E can accidentally re-enable OS keychain UI. Profile instances
   // spawned during onboarding graduation inherit this environment through
   // openDesktopPwrAgentProfile(), covering both Electron processes.
-  env[SECRET_STORAGE_DISABLED_ENV] = "1";
+  configureElectronE2eSecretStorageEnv(env, params.secretStorage);
 
   const electronApp = await electron.launch({
     args: [
@@ -318,6 +327,19 @@ export async function launchElectronApp(params: {
       await rm(homeRoot, { recursive: true, force: true });
     },
   };
+}
+
+export function configureElectronE2eSecretStorageEnv(
+  env: Record<string, string>,
+  mode: "disabled" | "memory" = "disabled",
+): void {
+  env[SECRET_STORAGE_DISABLED_ENV] = "1";
+  if (mode === "memory") {
+    env[E2E_MEMORY_SECRET_STORAGE_ENV] = "1";
+  } else {
+    // Do not inherit a screenshot process's memory mode into normal E2Es.
+    delete env[E2E_MEMORY_SECRET_STORAGE_ENV];
+  }
 }
 
 /**
