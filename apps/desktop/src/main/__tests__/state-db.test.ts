@@ -99,6 +99,27 @@ describe("StateDb", () => {
     );
   });
 
+  it("adds scheduled actions to federation-era version 38 databases", () => {
+    const dbPath = path.join(tempDir, "state.db");
+    stateDb.raw.exec(`
+      DROP TABLE scheduled_thread_actions;
+      PRAGMA user_version = 38;
+    `);
+    stateDb.close();
+
+    stateDb = StateDb.open(dbPath);
+
+    const table = stateDb.raw
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+      )
+      .get("scheduled_thread_actions") as { name: string } | undefined;
+    expect(table?.name).toBe("scheduled_thread_actions");
+    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(
+      CURRENT_STATE_DB_USER_VERSION,
+    );
+  });
+
   it("creates durable pull request status watch storage", () => {
     const table = stateDb.raw
       .prepare(
