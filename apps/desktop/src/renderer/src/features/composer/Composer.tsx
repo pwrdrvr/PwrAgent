@@ -1785,6 +1785,7 @@ function ComposerDropdown(props: {
   tone?: "danger";
   onChange: (value: string) => void;
   options: ComposerDropdownOption[];
+  tooltip?: string;
   value: string;
 }) {
   const [open, setOpen] = useState(false);
@@ -1801,13 +1802,16 @@ function ComposerDropdown(props: {
         props.compact ? "composer-dropdown--compact" : "",
         props.kind === "branch" ? "composer-dropdown--branch" : "",
         props.tone === "danger" ? "composer-dropdown--danger" : "",
+        props.tooltip ? "tooltip-target" : "",
         open ? "composer-dropdown--open" : "",
       ]
         .filter(Boolean)
         .join(" ")}
+      data-tooltip={props.tooltip}
       ref={ref}
     >
       <button
+        aria-description={props.tooltip}
         aria-controls={open ? listboxId : undefined}
         aria-expanded={open}
         aria-haspopup="listbox"
@@ -9974,6 +9978,11 @@ export function Composer(props: ComposerProps) {
                 label: option.label,
                 value: option.value,
               }))}
+              tooltip={
+                props.directory?.gitStatus?.worktreeCreationAvailable === false
+                  ? props.directory.gitStatus.worktreeCreationUnavailableReason
+                  : undefined
+              }
               onChange={(value) => {
                 handleLaunchpadPatch({
                   workMode: value as NavigationLaunchpadDraft["workMode"],
@@ -11227,9 +11236,11 @@ function buildLaunchpadWorkspaceOptions(
   }
 
   const canCreateWorktree = Boolean(
-    directory?.path &&
+    directory?.gitStatus?.worktreeCreationAvailable !== false &&
+      directory?.path &&
       directory.kind === "directory" &&
-      (directory.gitStatus?.currentBranch ||
+      (directory.gitStatus?.worktreeCreationAvailable === true ||
+        directory.gitStatus?.currentBranch ||
         (directory.gitStatus?.branches?.length ?? 0) > 0 ||
         (launchpad.workMode === "worktree" &&
           Boolean(launchpad.parentThreadId)))

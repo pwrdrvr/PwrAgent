@@ -337,7 +337,10 @@ import { getDesktopOverlayStore } from "./desktop-overlay-store";
 import { createProtocolCaptureFromEnv } from "../testing/protocol-capture";
 import type { ProtocolCaptureStore } from "../testing/capture-store";
 import { createReplayClientsFromEnv } from "../testing/replay-runtime";
-import { GitDirectoryService } from "./git-directory-service";
+import {
+  GitDirectoryService,
+  UNPUBLISHED_BASE_BRANCH_WORKTREE_REASON,
+} from "./git-directory-service";
 import type { DirectoryGitStatusEntry } from "./git-directory-service";
 import { GitWorkingStateService } from "./git-working-state-service";
 import type {
@@ -21999,11 +22002,18 @@ export class DesktopBackendRegistry {
         },
       };
     }
-    const unavailableReason = !repository.hasCommits
-      ? "Repository has no commits yet; create the initial commit before allocating a worktree."
-      : !repository.worktreeCreationAvailable
-        ? "Repository has no local or remote branch commit available; create or fetch a branch before allocating a worktree."
-        : undefined;
+    let unavailableReason: string | undefined;
+    if (!repository.worktreeCreationAvailable) {
+      if (!repository.headHasCommit) {
+        unavailableReason = UNPUBLISHED_BASE_BRANCH_WORKTREE_REASON;
+      } else if (!repository.hasCommits) {
+        unavailableReason =
+          "Repository has no commits yet; create the initial commit before allocating a worktree.";
+      } else {
+        unavailableReason =
+          "Repository has no local or remote branch commit available; create or fetch a branch before allocating a worktree.";
+      }
+    }
     return {
       mode: params.mode,
       cwd,

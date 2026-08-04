@@ -42,6 +42,9 @@ export type GitWorkspaceInspection =
       worktreeCreationAvailable: false;
     };
 
+export const UNPUBLISHED_BASE_BRANCH_WORKTREE_REASON =
+  "Worktrees are unavailable because this repository has no published base branch yet. Create the initial commit in the Local checkout and publish the default branch. Worktrees will be enabled once a remote base branch is available.";
+
 // Directory/worktree identifiers are surfaced to the rest of the app
 // (thread links, navigation, cleanup results) as stable string keys.
 // `path.resolve`/`path.join` emit backslashes on Windows, so normalize
@@ -160,13 +163,22 @@ export async function inspectGitWorkspace(
     }
     headHasCommit = false;
   }
+  let remoteBranchCommit = "";
+  if (!headHasCommit) {
+    remoteBranchCommit = await runGit(
+      cwd,
+      ["rev-list", "--max-count=1", "--remotes"],
+      options.env,
+    );
+  }
 
   return {
     kind,
     branch,
     hasCommits,
     headHasCommit,
-    worktreeCreationAvailable: hasCommits,
+    worktreeCreationAvailable:
+      headHasCommit || Boolean(remoteBranchCommit.trim()),
   };
 }
 
@@ -879,21 +891,23 @@ export class GitDirectoryService {
       rawCurrentBranch,
       branchInventory,
       recentCommitsOutput,
+      workspaceInspection,
     ] = await Promise.all([
-        runGit(repoRoot, ["rev-parse", "--abbrev-ref", "HEAD"], gitEnv).catch(
-          () => "",
-        ),
-        this.readBranchInventory({ commonGitDir, repoRoot }),
-        runGit(
-          repoRoot,
-          [
-            "log",
-            `--max-count=${MAX_TRACKED_COMMITS}`,
-            "--format=%H%x1f%h%x1f%ct%x1f%s",
-          ],
-          gitEnv,
-        ).catch(() => ""),
-      ]);
+      runGit(repoRoot, ["rev-parse", "--abbrev-ref", "HEAD"], gitEnv).catch(
+        () => "",
+      ),
+      this.readBranchInventory({ commonGitDir, repoRoot }),
+      runGit(
+        repoRoot,
+        [
+          "log",
+          `--max-count=${MAX_TRACKED_COMMITS}`,
+          "--format=%H%x1f%h%x1f%ct%x1f%s",
+        ],
+        gitEnv,
+      ).catch(() => ""),
+      inspectGitWorkspace(cwd, { env: gitEnv, runGit }),
+    ]);
     const currentBranch =
       rawCurrentBranch.trim() === "HEAD" ? "" : rawCurrentBranch.trim();
     const upstreamBranch = await runGit(
@@ -932,6 +946,19 @@ export class GitDirectoryService {
     });
     const branches = parsedBranchDetails.map((detail) => detail.name);
     const baseBranches = parsedBaseBranchDetails.map((detail) => detail.name);
+    const unbornWorktreeAvailability =
+      workspaceInspection.kind === "worktree" && !workspaceInspection.headHasCommit
+        ? {
+            worktreeCreationAvailable:
+              workspaceInspection.worktreeCreationAvailable,
+            ...(!workspaceInspection.worktreeCreationAvailable
+              ? {
+                  worktreeCreationUnavailableReason:
+                    UNPUBLISHED_BASE_BRANCH_WORKTREE_REASON,
+                }
+              : {}),
+          }
+        : {};
     const worktreeBranchNames = new Set(
       parseGitWorktreeEntries(branchInventory.worktreeList)
         .map((entry) => entry.branch)
@@ -951,6 +978,7 @@ export class GitDirectoryService {
       );
     if (!currentBranch) {
       return {
+        ...unbornWorktreeAvailability,
         defaultBranch,
         branches,
         baseBranches,
@@ -971,6 +999,7 @@ export class GitDirectoryService {
 
     if (!upstreamBranch) {
       return {
+        ...unbornWorktreeAvailability,
         currentBranch,
         defaultBranch,
         branches,
@@ -1003,6 +1032,7 @@ export class GitDirectoryService {
             : "in-sync";
 
     return {
+      ...unbornWorktreeAvailability,
       currentBranch,
       upstreamBranch,
       ahead,
@@ -1189,6 +1219,19 @@ export class GitDirectoryService {
       this.gitEnv,
     );
     if (!sourceRoot) {
+      return {
+        cwd: directoryPath,
+        workMode: "local",
+      };
+    }
+    const workspaceInspection = await inspectGitWorkspace(directoryPath, {
+      env: this.gitEnv,
+      runGit: this.runGitCommand,
+    });
+    if (
+      workspaceInspection.kind !== "worktree"
+      || !workspaceInspection.worktreeCreationAvailable
+    ) {
       return {
         cwd: directoryPath,
         workMode: "local",

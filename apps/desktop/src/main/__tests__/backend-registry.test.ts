@@ -22466,6 +22466,8 @@ script = "printf setup"
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-handoff-unborn-"));
     const repoPath = path.join(root, "repo");
     const remotePath = path.join(root, "origin.git");
+    const unpublishedBaseReason =
+      "Worktrees are unavailable because this repository has no published base branch yet. Create the initial commit in the Local checkout and publish the default branch. Worktrees will be enabled once a remote base branch is available.";
     try {
       await git(root, ["init", "--bare", "-b", "main", remotePath]);
       await mkdir(repoPath, { recursive: true });
@@ -22558,8 +22560,7 @@ script = "printf setup"
           kind: "git_local",
           repositoryState: "unborn",
           worktreeCreationAvailable: false,
-          unavailableReason:
-            "Repository has no commits yet; create the initial commit before allocating a worktree.",
+          unavailableReason: unpublishedBaseReason,
         },
       });
       const prompt =
@@ -22569,7 +22570,7 @@ script = "printf setup"
       expect(prompt).toContain("- Git: git_local");
       expect(prompt).toContain("- Git repository state: unborn");
       expect(prompt).toContain(
-        "- New worktree unavailable: Repository has no commits yet; create the initial commit before allocating a worktree.",
+        `- New worktree unavailable: ${unpublishedBaseReason}`,
       );
       const projectLocalStartParams = codexClient.lastStartThreadParams;
 
@@ -22597,8 +22598,7 @@ script = "printf setup"
       );
       expect(worktreePayload).toMatchObject({
         code: "unsupported_workspace",
-        message:
-          "Repository has no commits yet; create the initial commit before allocating a worktree.",
+        message: unpublishedBaseReason,
         data: {
           workspace: {
             branch: "main",
@@ -22606,8 +22606,7 @@ script = "printf setup"
               kind: "git_local",
               repositoryState: "unborn",
               worktreeCreationAvailable: false,
-              unavailableReason:
-                "Repository has no commits yet; create the initial commit before allocating a worktree.",
+              unavailableReason: unpublishedBaseReason,
             },
           },
         },

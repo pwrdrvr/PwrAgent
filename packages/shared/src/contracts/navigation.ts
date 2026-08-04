@@ -684,6 +684,9 @@ export type NavigationDirectoryGitStatus = {
   currentBranch?: string;
   defaultBranch?: string;
   upstreamBranch?: string;
+  /** Reported when the selected checkout has an unborn HEAD. */
+  worktreeCreationAvailable?: boolean;
+  worktreeCreationUnavailableReason?: string;
   ahead?: number;
   behind?: number;
   branches?: string[];

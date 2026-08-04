@@ -167,7 +167,7 @@ describe("thread orchestration tool contracts", () => {
           repositoryState: "unborn",
           worktreeCreationAvailable: false,
           unavailableReason:
-            "Repository has no commits yet; create the initial commit before allocating a worktree.",
+            "Worktrees are unavailable because this repository has no published base branch yet. Create the initial commit in the Local checkout and publish the default branch. Worktrees will be enabled once a remote base branch is available.",
         },
       },
     } satisfies ThreadHandoffOrigin;
