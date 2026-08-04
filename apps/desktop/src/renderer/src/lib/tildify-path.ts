@@ -21,14 +21,17 @@ export function getHomeDir(): string | undefined {
  * unchanged when it doesn't live under home, or when the home directory is
  * unknown (e.g. in tests, or before the preload value is present).
  *
- * Separator-tolerant so a forward-slashed app path still matches a
- * back-slashed Windows home directory.
+ * `~` is a POSIX shell convention, so Windows paths remain native even when
+ * they are under the user's home directory.
  */
 export function tildifyPath(
   absolutePath: string,
   homeDir: string | undefined = getHomeDir(),
 ): string {
   if (!absolutePath || !homeDir) {
+    return absolutePath;
+  }
+  if (isWindowsPath(absolutePath)) {
     return absolutePath;
   }
   const home = homeDir.replace(/[/\\]+$/, "");
@@ -44,6 +47,10 @@ export function tildifyPath(
     return `~${absolutePath.slice(home.length)}`;
   }
   return absolutePath;
+}
+
+function isWindowsPath(path: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(path) || path.startsWith("\\\\");
 }
 
 /**

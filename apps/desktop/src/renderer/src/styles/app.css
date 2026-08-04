@@ -10284,11 +10284,41 @@ a.transcript-message__messaging-origin:focus-visible {
 
 .markdown-document-modal__path {
   margin: 3px 0 0;
+  min-width: 0;
   color: var(--text-muted);
   font-family: var(--font-mono);
   font-size: 11px;
   line-height: 1.35;
   overflow-wrap: anywhere;
+}
+
+.markdown-document-modal__path-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.markdown-document-modal__path-copy {
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  align-items: center;
+  justify-content: center;
+  margin-top: 2px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.markdown-document-modal__path-copy:hover,
+.markdown-document-modal__path-copy:focus-visible {
+  background: var(--bg-row-active);
+  color: var(--text-primary);
+  outline: none;
 }
 
 .markdown-document-modal__actions {
