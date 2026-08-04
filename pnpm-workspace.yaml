@@ -13,6 +13,7 @@ minimumReleaseAgeExclude:
   - '@pwrdrvr/agent-acp'
   - '@pwrdrvr/agent-client'
   - '@babel/core@7.29.6'
+  - '@hono/node-server'
   - '@esbuild/aix-ppc64@0.28.1'
   - '@esbuild/android-arm64@0.28.1'
   - '@esbuild/android-arm@0.28.1'
@@ -40,9 +41,15 @@ minimumReleaseAgeExclude:
   - '@esbuild/win32-ia32@0.28.1'
   - '@esbuild/win32-x64@0.28.1'
   - esbuild@0.28.1
+  - brace-expansion
+  - fast-uri
   - form-data@4.0.6
+  - hono
+  - ip-address
+  - postcss
   - protobufjs@7.6.5
   - tmp@0.2.7
+  - undici
   - ws@8.21.0
 globalPnpmfile: ''
 ignoreScripts: false
