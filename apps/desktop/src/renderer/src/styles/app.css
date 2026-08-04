@@ -10279,9 +10279,9 @@ a.transcript-message__messaging-origin:focus-visible {
 
 .markdown-document-modal__path-copy {
   display: inline-flex;
-  width: 18px;
-  height: 18px;
-  flex: 0 0 18px;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
   align-items: center;
   justify-content: center;
   margin-top: 2px;
