@@ -403,6 +403,15 @@ test.describe("Onboarding wizard", () => {
     // (only `personal/` and `work/`).
     const app = await launchElectronApp(wizardLaunchOptions);
     try {
+      // Unsigned Electron must never reach macOS safeStorage during E2E.
+      // This value is inherited by the detached `personal` process below;
+      // profiles-ipc.test.ts locks that spawn contract independently.
+      expect(
+        await app.electronApp.evaluate(() =>
+          process.env.PWRAGENT_DEV_DISABLE_SECRET_STORAGE
+        ),
+      ).toBe("1");
+
       // Walk the full wizard: Welcome → Thread → Models (xAI key) →
       // Codex profile (Multiple) → Name profiles (personal, work) →
       // Messaging warning (Skip).

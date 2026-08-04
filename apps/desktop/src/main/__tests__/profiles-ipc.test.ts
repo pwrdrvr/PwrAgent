@@ -10,6 +10,7 @@ import {
   setDefaultProfileName,
   startProfileRuntimeHeartbeat,
 } from "../profile";
+import { SECRET_STORAGE_DISABLED_ENV } from "../settings/desktop-secret-store";
 
 const spawnMock = vi.fn(() => ({
   unref: vi.fn(),
@@ -259,7 +260,7 @@ describe("profile IPC helpers", () => {
     expect(fs.existsSync(response.profileDir)).toBe(true);
   });
 
-  it("openDesktopPwrAgentProfile normalizes before launching", async () => {
+  it("openDesktopPwrAgentProfile normalizes and preserves the E2E secret-storage opt-out", async () => {
     const root = createRoot();
     const env = {
       [PWRAGENT_HOME_ENV]: root,
@@ -269,6 +270,7 @@ describe("profile IPC helpers", () => {
     ensureNamedProfileExists("my-work-profile", { env });
     vi.stubEnv(PWRAGENT_HOME_ENV, root);
     vi.stubEnv(PWRAGENT_PROFILE_ENV, "dev");
+    vi.stubEnv(SECRET_STORAGE_DISABLED_ENV, "1");
     const { openDesktopPwrAgentProfile } = await import("../ipc/profiles");
 
     const response = openDesktopPwrAgentProfile({ profile: "My Work Profile" });
@@ -280,6 +282,7 @@ describe("profile IPC helpers", () => {
       expect.objectContaining({
         env: expect.objectContaining({
           [PWRAGENT_PROFILE_ENV]: "my-work-profile",
+          [SECRET_STORAGE_DISABLED_ENV]: "1",
         }),
       }),
     );

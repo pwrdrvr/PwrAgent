@@ -54,6 +54,17 @@ const WINDOW_SIZE = { width: 1440, height: 900 } as const;
 // See `fixtures/screenshot-appearance.ts` for the env-var contract.
 const SCREENSHOT_APPEARANCE = resolveScreenshotAppearance();
 
+function launchDocsSiteApp(
+  params: Parameters<typeof launchElectronApp>[0],
+): ReturnType<typeof launchElectronApp> {
+  return launchElectronApp({
+    ...params,
+    // Preserve production-like writable credential controls without allowing
+    // unsigned screenshot Electron to invoke the macOS keychain.
+    secretStorage: "memory",
+  });
+}
+
 test.skip(
   process.env.PWRAGENT_DOCS_SITE_SCREENSHOT_CAPTURE !== "1",
   "Set PWRAGENT_DOCS_SITE_SCREENSHOT_CAPTURE=1 via the package script to capture docs-site screenshots.",
@@ -143,7 +154,7 @@ async function scrollMessagingPlatformIntoView(
 test("settings-applications — Settings → Applications panel", async () => {
   test.setTimeout(120_000);
 
-  const app = await launchElectronApp({
+  const app = await launchDocsSiteApp({
     fixturePath: path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
     windowSize: WINDOW_SIZE,
     appearance: SCREENSHOT_APPEARANCE,
@@ -165,7 +176,7 @@ test("settings-applications — Settings → Applications panel", async () => {
 test("settings-worktrees — Settings → Worktrees panel", async () => {
   test.setTimeout(120_000);
 
-  const app = await launchElectronApp({
+  const app = await launchDocsSiteApp({
     fixturePath: path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
     windowSize: WINDOW_SIZE,
     appearance: SCREENSHOT_APPEARANCE,
@@ -187,7 +198,7 @@ test("settings-worktrees — Settings → Worktrees panel", async () => {
 test("settings-models — Settings → Models panel", async () => {
   test.setTimeout(120_000);
 
-  const app = await launchElectronApp({
+  const app = await launchDocsSiteApp({
     fixturePath: path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
     windowSize: WINDOW_SIZE,
     appearance: SCREENSHOT_APPEARANCE,
@@ -209,7 +220,7 @@ test("settings-models — Settings → Models panel", async () => {
 test("settings-profiles — Settings → Profiles panel", async () => {
   test.setTimeout(120_000);
 
-  const app = await launchElectronApp({
+  const app = await launchDocsSiteApp({
     fixturePath: path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
     windowSize: WINDOW_SIZE,
     appearance: SCREENSHOT_APPEARANCE,
@@ -231,7 +242,7 @@ test("settings-profiles — Settings → Profiles panel", async () => {
 test("settings-general — Settings → General panel", async () => {
   test.setTimeout(120_000);
 
-  const app = await launchElectronApp({
+  const app = await launchDocsSiteApp({
     fixturePath: path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
     windowSize: WINDOW_SIZE,
     appearance: SCREENSHOT_APPEARANCE,
@@ -253,7 +264,7 @@ test("settings-general — Settings → General panel", async () => {
 test("settings-experimental — Settings → Experimental panel", async () => {
   test.setTimeout(120_000);
 
-  const app = await launchElectronApp({
+  const app = await launchDocsSiteApp({
     fixturePath: path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
     windowSize: WINDOW_SIZE,
     appearance: SCREENSHOT_APPEARANCE,
@@ -287,7 +298,7 @@ for (const shot of MESSAGING_PLATFORM_SHOTS) {
   test(`settings-messaging — ${shot.label}`, async () => {
     test.setTimeout(120_000);
 
-    const app = await launchElectronApp({
+    const app = await launchDocsSiteApp({
       fixturePath: path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
       windowSize: WINDOW_SIZE,
     appearance: SCREENSHOT_APPEARANCE,
@@ -299,6 +310,16 @@ for (const shot of MESSAGING_PLATFORM_SHOTS) {
         navLabel: "Messaging",
         regionLabel: "Messaging settings",
       });
+
+      const messagingRegion = app.window.getByRole("region", {
+        name: "Messaging settings",
+      });
+      await expect(
+        messagingRegion.locator('input[type="password"]:disabled'),
+      ).toHaveCount(0);
+      await expect(
+        messagingRegion.getByText(/Secret storage disabled via/i),
+      ).toHaveCount(0);
 
       await scrollMessagingPlatformIntoView(app.window, shot.label);
 
@@ -352,7 +373,7 @@ async function navigateToTelegramPairing(page: Page): Promise<void> {
 test("messaging-pairing — frame 1: pairing token generated", async () => {
   test.setTimeout(120_000);
 
-  const app = await launchElectronApp({
+  const app = await launchDocsSiteApp({
     fixturePath: path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
     windowSize: WINDOW_SIZE,
     appearance: SCREENSHOT_APPEARANCE,
@@ -393,7 +414,7 @@ test("messaging-pairing — frame 1: pairing token generated", async () => {
 test("messaging-pairing — frame 2: observed, approval prompt visible", async () => {
   test.setTimeout(120_000);
 
-  const app = await launchElectronApp({
+  const app = await launchDocsSiteApp({
     fixturePath: path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
     windowSize: WINDOW_SIZE,
     appearance: SCREENSHOT_APPEARANCE,
@@ -466,7 +487,7 @@ test("messaging-pairing — frame 2: observed, approval prompt visible", async (
 test("messaging-pairing — frame 3: approved, user in authorized list", async () => {
   test.setTimeout(120_000);
 
-  const app = await launchElectronApp({
+  const app = await launchDocsSiteApp({
     fixturePath: path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
     windowSize: WINDOW_SIZE,
     appearance: SCREENSHOT_APPEARANCE,
@@ -558,7 +579,7 @@ test("messaging-pairing — frame 3: approved, user in authorized list", async (
 test("messaging-activity-blocked — Messaging Activity showing rejected inbound", async () => {
   test.setTimeout(120_000);
 
-  const app = await launchElectronApp({
+  const app = await launchDocsSiteApp({
     fixturePath: path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
     windowSize: WINDOW_SIZE,
     appearance: SCREENSHOT_APPEARANCE,
@@ -709,7 +730,7 @@ test("desktop-recents — Recents lens populated", async () => {
   // sidebar shows realistic thread titles rather than the smoke
   // fixture's blank state. The capture goes to docs-site/ under a
   // different filename so the docs-site/ folder is self-contained.
-  const app = await launchElectronApp({
+  const app = await launchDocsSiteApp({
     fixturePath: path.resolve(
       specDir,
       "fixtures/readme-recents-hero/replay.fixture.json",
@@ -753,7 +774,7 @@ test("desktop-skills-autocomplete — composer $ autocomplete showing skill list
   // realistic skill set (ce:plan, ce:brainstorm, ce:compound, ce:work,
   // adversarial-document-reviewer, …) so the dropdown reads as a
   // believable Codex setup rather than a synthetic stub.
-  const app = await launchElectronApp({
+  const app = await launchDocsSiteApp({
     fixturePath: path.resolve(
       specDir,
       "fixtures/skill-autocomplete-interactions/replay.fixture.json",
@@ -882,7 +903,7 @@ test("desktop-queued-turns — composer with /review queued behind an in-flight 
     "utf8",
   );
 
-  const app = await launchElectronApp({
+  const app = await launchDocsSiteApp({
     fixturePath,
     windowSize: WINDOW_SIZE,
     appearance: SCREENSHOT_APPEARANCE,
@@ -951,7 +972,7 @@ test("desktop-onboarding-wizard — Codex profile step", async () => {
   // `suppressOnboarding: false` is the explicit opt-in, and the
   // wizard doesn't need the replay driver until it tries to spawn a
   // thread (which we won't do — we stop on the Codex Profile step).
-  const app = await launchElectronApp({
+  const app = await launchDocsSiteApp({
     suppressOnboarding: false,
     requiresReplayDriver: false,
     windowSize: WINDOW_SIZE,
@@ -1013,7 +1034,7 @@ test("desktop-live-work-rail — in-flight turn with diff + plan in the rail", a
   // test suite. That fixture's turn/diff/updated landing ends with
   // the protocol-summary "Edited 2 files, +4, -1" — a tight, visually
   // interesting state for the rail.
-  const app = await launchElectronApp({
+  const app = await launchDocsSiteApp({
     fixturePath: path.resolve(
       specDir,
       "fixtures/live-work-rail-toggle/replay.fixture.json",
