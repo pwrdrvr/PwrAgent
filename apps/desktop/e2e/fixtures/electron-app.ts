@@ -352,7 +352,7 @@ export function configureElectronE2eSecretStorageEnv(
 export async function closeElectronApplication(
   electronApp: ElectronApplication,
 ): Promise<void> {
-  let child: ElectronChildProcess;
+  let child: ElectronChildProcess | undefined;
   try {
     child = electronApp.process();
   } catch {
@@ -360,6 +360,12 @@ export async function closeElectronApplication(
     // before the test reaches finally. Once Playwright has disposed its
     // Electron connection, process() throws while resolving the remote
     // object; there is no remaining process tree for this helper to close.
+    return;
+  }
+  if (!child) {
+    // Depending on the Playwright client version and disposal timing,
+    // `process()` can return undefined rather than throw after the channel is
+    // released. That has the same no-process-left-to-clean-up meaning.
     return;
   }
   try {
