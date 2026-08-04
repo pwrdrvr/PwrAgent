@@ -1,4 +1,5 @@
 import type { MessagingToolUpdateMode } from "./messaging";
+import type { FederationTarget } from "./federation";
 
 export const DESKTOP_CHAT_REPLY_COMPOSERS = [
   "tiptap-wysiwyg-markdown-chips",
@@ -1385,6 +1386,7 @@ export type SetDesktopPwrAgentProfileCodexProfileResponse = {
 
 export type OpenDesktopApplicationRequest = {
   applicationId: string;
+  federationTarget?: FederationTarget;
   kind: DesktopApplicationKind;
   targetPath: string;
   targetLine?: number;

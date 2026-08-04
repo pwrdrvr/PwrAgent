@@ -801,6 +801,7 @@ export type RestoreWorktreeResponse = {
 
 export type RenameThreadRequest = {
   backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   name: string;
 };

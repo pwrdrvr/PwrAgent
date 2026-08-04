@@ -25,6 +25,9 @@ describe("useThreadNavigation", () => {
     delete (window as unknown as {
       __pwragentNavigationPreferences?: unknown;
     }).__pwragentNavigationPreferences;
+    delete (window as unknown as {
+      __pwragentFederationTarget?: unknown;
+    }).__pwragentFederationTarget;
     vi.restoreAllMocks();
   });
 
@@ -2402,6 +2405,12 @@ describe("useThreadNavigation", () => {
   });
 
   it("renames a thread and refreshes navigation with the explicit title", async () => {
+    (window as unknown as {
+      __pwragentFederationTarget?: unknown;
+    }).__pwragentFederationTarget = {
+      scope: "remote",
+      instanceId: "remote-instance",
+    };
     let threadTitle = "First thread";
     const renameThread = vi.fn(async ({ name }: { name: string }) => {
       threadTitle = name;
@@ -2461,6 +2470,10 @@ describe("useThreadNavigation", () => {
 
     expect(renameThread).toHaveBeenCalledWith({
       backend: "codex",
+      federationTarget: {
+        scope: "remote",
+        instanceId: "remote-instance",
+      },
       threadId: "thread-1",
       name: "Renamed thread",
     });

@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import type { FederationProtocolEnvelope } from "@pwragent/shared";
+import type {
+  FederationProtocolEnvelope,
+  TrustCodexProjectRequest,
+} from "@pwragent/shared";
 import {
   FEDERATION_BACKEND_METHODS,
   FEDERATION_BACKEND_METHOD_CAPABILITIES,
@@ -248,6 +251,9 @@ describe("federation backend bridge", () => {
       setCodexThreadEnvironment: vi.fn(),
       materializeDirectoryLaunchpad: vi.fn(),
       handoffThreadWorkspace: vi.fn(),
+      renameThread: vi.fn(),
+      openApplication: vi.fn(),
+      trustCodexProject: vi.fn(),
     };
     const replies: FederationProtocolEnvelope[] = [];
     const router = new FederationRouter({
@@ -390,6 +396,9 @@ describe("federation backend bridge", () => {
         setCodexThreadEnvironment: vi.fn(),
         materializeDirectoryLaunchpad: vi.fn(),
         handoffThreadWorkspace: vi.fn(),
+        renameThread: vi.fn(),
+        openApplication: vi.fn(),
+        trustCodexProject: vi.fn(),
       } as FederationBackendOperations,
     });
 
@@ -420,6 +429,119 @@ describe("federation backend bridge", () => {
         kind: "error",
         requestId: "env-request",
         error: { code: "capability_denied" },
+      },
+    ]);
+  });
+
+  it("routes remote thread renames and application opens to the target instance", async () => {
+    const backend = {
+      renameThread: vi.fn(async () => ({
+        backend: "codex" as const,
+        threadId: "thread-1",
+        renamedAt: 2_000,
+      })),
+      openApplication: vi.fn(async () => ({ opened: true as const })),
+      trustCodexProject: vi.fn(async (request: TrustCodexProjectRequest) => ({
+        ...request,
+        trusted: true,
+      })),
+    } as unknown as FederationBackendOperations;
+    const replies: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({
+      localInstanceId: "client_one",
+      methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+    });
+    router.registerConnection({
+      peerId: "gateway_one",
+      capabilities: [
+        "turn_control",
+        "remote_window",
+        "environment_actions",
+      ],
+      sendEnvelope: (envelope) => replies.push(envelope),
+    });
+    registerFederationBackendHandlers({ router, backend });
+
+    await router.routeEnvelope({
+      sourcePeerId: "gateway_one",
+      envelope: {
+        id: "rename-request",
+        kind: "request",
+        method: FEDERATION_BACKEND_METHODS.renameThread,
+        params: {
+          backend: "codex",
+          threadId: "thread-1",
+          name: "Remote title",
+        },
+        protocolVersion: 1,
+        sourceInstanceId: "gateway_one",
+        targetInstanceId: "client_one",
+        createdAt: 1_000,
+      },
+    });
+    await router.routeEnvelope({
+      sourcePeerId: "gateway_one",
+      envelope: {
+        id: "application-request",
+        kind: "request",
+        method: FEDERATION_BACKEND_METHODS.openApplication,
+        params: {
+          applicationId: "terminal",
+          kind: "terminal",
+          targetPath: "/remote/repo",
+        },
+        protocolVersion: 1,
+        sourceInstanceId: "gateway_one",
+        targetInstanceId: "client_one",
+        createdAt: 1_100,
+      },
+    });
+    await router.routeEnvelope({
+      sourcePeerId: "gateway_one",
+      envelope: {
+        id: "trust-request",
+        kind: "request",
+        method: FEDERATION_BACKEND_METHODS.trustCodexProject,
+        params: {
+          projectPath: "/remote/repo",
+          configPath: "/remote/.codex/config.toml",
+        },
+        protocolVersion: 1,
+        sourceInstanceId: "gateway_one",
+        targetInstanceId: "client_one",
+        createdAt: 1_200,
+      },
+    });
+
+    expect(backend.renameThread).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Remote title",
+    });
+    expect(backend.openApplication).toHaveBeenCalledWith({
+      applicationId: "terminal",
+      kind: "terminal",
+      targetPath: "/remote/repo",
+    });
+    expect(backend.trustCodexProject).toHaveBeenCalledWith({
+      projectPath: "/remote/repo",
+      configPath: "/remote/.codex/config.toml",
+    });
+    expect(replies).toMatchObject([
+      {
+        kind: "response",
+        requestId: "rename-request",
+        result: { renamedAt: 2_000 },
+      },
+      {
+        kind: "response",
+        requestId: "application-request",
+        result: { opened: true },
+      },
+      {
+        kind: "response",
+        requestId: "trust-request",
+        result: { trusted: true },
       },
     ]);
   });

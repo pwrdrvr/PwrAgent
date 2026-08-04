@@ -25,8 +25,12 @@ import type {
   MaterializeDirectoryLaunchpadRequest,
   MaterializeDirectoryLaunchpadResponse,
   NavigationSnapshot,
+  OpenDesktopApplicationRequest,
+  OpenDesktopApplicationResponse,
   QueueThreadExecutionModeRequest,
   QueueThreadExecutionModeResponse,
+  RenameThreadRequest,
+  RenameThreadResponse,
   RunCodexEnvironmentActionRequest,
   RunCodexEnvironmentActionResponse,
   SetAcpSessionRuntimeOptionRequest,
@@ -49,6 +53,8 @@ import type {
   StopCodexEnvironmentActionResponse,
   SubmitServerRequestRequest,
   SubmitServerRequestResponse,
+  TrustCodexProjectRequest,
+  TrustCodexProjectResponse,
 } from "@pwragent/shared";
 import type { FederationRouter } from "./federation-router";
 import type { FederationRpcEndpoint } from "./federation-rpc";
@@ -77,6 +83,9 @@ export const FEDERATION_BACKEND_METHODS = {
   setCodexThreadEnvironment: "backend.setCodexThreadEnvironment",
   materializeDirectoryLaunchpad: "backend.materializeDirectoryLaunchpad",
   handoffThreadWorkspace: "backend.handoffThreadWorkspace",
+  renameThread: "backend.renameThread",
+  openApplication: "backend.openApplication",
+  trustCodexProject: "backend.trustCodexProject",
 } as const;
 
 export const FEDERATION_BACKEND_EVENT_METHOD = "backend.event";
@@ -123,6 +132,9 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.setCodexThreadEnvironment]: "environment_actions",
   [FEDERATION_BACKEND_METHODS.materializeDirectoryLaunchpad]: "environment_actions",
   [FEDERATION_BACKEND_METHODS.handoffThreadWorkspace]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.renameThread]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.openApplication]: "remote_window",
+  [FEDERATION_BACKEND_METHODS.trustCodexProject]: "environment_actions",
 };
 
 export type FederationBackendOperations = {
@@ -186,6 +198,13 @@ export type FederationBackendOperations = {
   handoffThreadWorkspace(
     request: HandoffThreadWorkspaceRequest,
   ): Promise<HandoffThreadWorkspaceResponse>;
+  renameThread(request: RenameThreadRequest): Promise<RenameThreadResponse>;
+  openApplication(
+    request: OpenDesktopApplicationRequest,
+  ): Promise<OpenDesktopApplicationResponse>;
+  trustCodexProject(
+    request: TrustCodexProjectRequest,
+  ): Promise<TrustCodexProjectResponse>;
 };
 
 export function registerFederationBackendHandlers(params: {
@@ -371,6 +390,27 @@ export function registerFederationBackendHandlers(params: {
     async (envelope) =>
       await params.backend.handoffThreadWorkspace(
         envelope.params as HandoffThreadWorkspaceRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.renameThread,
+    async (envelope) =>
+      await params.backend.renameThread(
+        envelope.params as RenameThreadRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.openApplication,
+    async (envelope) =>
+      await params.backend.openApplication(
+        envelope.params as OpenDesktopApplicationRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.trustCodexProject,
+    async (envelope) =>
+      await params.backend.trustCodexProject(
+        envelope.params as TrustCodexProjectRequest,
       ),
   );
 }
@@ -571,6 +611,33 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   ): Promise<HandoffThreadWorkspaceResponse> {
     return await this.rpc.request<HandoffThreadWorkspaceResponse>({
       method: FEDERATION_BACKEND_METHODS.handoffThreadWorkspace,
+      params: request,
+    });
+  }
+
+  async renameThread(
+    request: RenameThreadRequest,
+  ): Promise<RenameThreadResponse> {
+    return await this.rpc.request<RenameThreadResponse>({
+      method: FEDERATION_BACKEND_METHODS.renameThread,
+      params: request,
+    });
+  }
+
+  async openApplication(
+    request: OpenDesktopApplicationRequest,
+  ): Promise<OpenDesktopApplicationResponse> {
+    return await this.rpc.request<OpenDesktopApplicationResponse>({
+      method: FEDERATION_BACKEND_METHODS.openApplication,
+      params: request,
+    });
+  }
+
+  async trustCodexProject(
+    request: TrustCodexProjectRequest,
+  ): Promise<TrustCodexProjectResponse> {
+    return await this.rpc.request<TrustCodexProjectResponse>({
+      method: FEDERATION_BACKEND_METHODS.trustCodexProject,
       params: request,
     });
   }

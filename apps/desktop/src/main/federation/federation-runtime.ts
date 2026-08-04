@@ -20,7 +20,9 @@ import type {
   HandoffThreadWorkspaceResponse,
   InterruptTurnResponse,
   MaterializeDirectoryLaunchpadResponse,
+  OpenDesktopApplicationResponse,
   QueueThreadExecutionModeResponse,
+  RenameThreadResponse,
   RunCodexEnvironmentActionResponse,
   SetAcpSessionRuntimeOptionResponse,
   SetCodexThreadEnvironmentResponse,
@@ -31,6 +33,7 @@ import type {
   SteerTurnResponse,
   StopCodexEnvironmentActionResponse,
   SubmitServerRequestResponse,
+  TrustCodexProjectResponse,
 } from "@pwragent/shared";
 import {
   FEDERATION_PROTOCOL_VERSION,
@@ -50,7 +53,9 @@ import {
   type MaterializeDirectoryLaunchpadRequest,
   type MaterializeDirectoryLaunchpadOptions,
   type NavigationSnapshot,
+  type OpenDesktopApplicationRequest,
   type QueueThreadExecutionModeRequest,
+  type RenameThreadRequest,
   type RunCodexEnvironmentActionRequest,
   type SetAcpSessionRuntimeOptionRequest,
   type SetCodexThreadEnvironmentRequest,
@@ -63,10 +68,12 @@ import {
   type StartTurnResponse,
   type SubmitServerRequestRequest,
   type StopCodexEnvironmentActionRequest,
+  type TrustCodexProjectRequest,
 } from "@pwragent/shared";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { rewriteTranscriptImageUrlsForRenderer } from "../transcript-image-protocol";
 import { getMainLogger } from "../log";
+import { openDesktopApplication } from "../settings/application-discovery";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { getAppStateDb, isAppStateInitialized } from "../state/app-state";
 import { DesktopMessagingBackendBridge } from "../messaging/desktop-backend-bridge";
@@ -1127,6 +1134,21 @@ function localBackendOperations(): FederationBackendOperations {
       request: HandoffThreadWorkspaceRequest,
     ): Promise<HandoffThreadWorkspaceResponse> {
       return await getDesktopBackendRegistry().handoffThreadWorkspace(request);
+    },
+    async renameThread(
+      request: RenameThreadRequest,
+    ): Promise<RenameThreadResponse> {
+      return await getDesktopBackendRegistry().renameThread(request);
+    },
+    async openApplication(
+      request: OpenDesktopApplicationRequest,
+    ): Promise<OpenDesktopApplicationResponse> {
+      return await openDesktopApplication(request);
+    },
+    async trustCodexProject(
+      request: TrustCodexProjectRequest,
+    ): Promise<TrustCodexProjectResponse> {
+      return await getDesktopBackendRegistry().trustCodexProject(request);
     },
   };
 }

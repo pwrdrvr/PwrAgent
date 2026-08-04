@@ -2718,6 +2718,7 @@ function CopyableComposerError(props: {
 
 export function Composer(props: ComposerProps) {
   const threadLinks = useThreadLinks();
+  const rendererFederationTarget = readRendererFederationTarget();
   const inputRef = useRef<ComposerInputHandle>(null);
   const inputWrapRef = useRef<HTMLDivElement>(null);
   const autocompleteListRef = useRef<HTMLDivElement>(null);
@@ -8209,6 +8210,12 @@ export function Composer(props: ComposerProps) {
     try {
       await props.desktopApi.openApplication({
         applicationId: application.id,
+        ...(props.thread?.federation?.ref.target || rendererFederationTarget
+          ? {
+              federationTarget:
+                props.thread?.federation?.ref.target ?? rendererFederationTarget,
+            }
+          : {}),
         kind: application.kind,
         targetPath: workspaceOpenPath,
       });
@@ -9907,10 +9914,14 @@ export function Composer(props: ComposerProps) {
                     }
                   : undefined
               }
-              onPickFromDisk={() => {
-                props.onClearPickDirectoryError?.();
-                props.onPickAndRegisterDirectory?.();
-              }}
+              onPickFromDisk={
+                rendererFederationTarget
+                  ? undefined
+                  : () => {
+                      props.onClearPickDirectoryError?.();
+                      props.onPickAndRegisterDirectory?.();
+                    }
+              }
             />
           ) : null}
 

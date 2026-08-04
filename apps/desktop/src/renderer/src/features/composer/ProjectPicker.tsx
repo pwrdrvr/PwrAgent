@@ -36,7 +36,7 @@ export type ProjectPickerProps = {
   /** Whether the system dialog is currently open / register in flight. */
   picking?: boolean;
   onSelect: (directory: NavigationDirectorySummary) => void;
-  onPickFromDisk: () => void;
+  onPickFromDisk?: () => void;
   /**
    * Switch the launchpad to a directory-less ("workspace") thread. When
    * omitted, the "Chat without a directory" row is not rendered.
@@ -229,25 +229,29 @@ export function ProjectPicker(props: ProjectPickerProps): ReactElement {
             )}
           </ul>
 
-          <div className="project-picker__separator" />
+          {props.onPickFromDisk ? (
+            <>
+              <div className="project-picker__separator" />
 
-          <button
-            type="button"
-            className="project-picker__row project-picker__row--action"
-            disabled={props.picking}
-            onClick={() => {
-              setOpen(false);
-              props.onPickFromDisk();
-            }}
-          >
-            <span aria-hidden="true" className="project-picker__row-check" />
-            <span aria-hidden="true" className="project-picker__plus">
-              +
-            </span>
-            <span className="project-picker__row-name">
-              {props.picking ? "Picking…" : "Add directory…"}
-            </span>
-          </button>
+              <button
+                type="button"
+                className="project-picker__row project-picker__row--action"
+                disabled={props.picking}
+                onClick={() => {
+                  setOpen(false);
+                  props.onPickFromDisk?.();
+                }}
+              >
+                <span aria-hidden="true" className="project-picker__row-check" />
+                <span aria-hidden="true" className="project-picker__plus">
+                  +
+                </span>
+                <span className="project-picker__row-name">
+                  {props.picking ? "Picking…" : "Add directory…"}
+                </span>
+              </button>
+            </>
+          ) : null}
 
           {props.pickError ? (
             <p

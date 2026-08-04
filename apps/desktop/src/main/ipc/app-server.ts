@@ -1567,6 +1567,21 @@ class DesktopAppServerService {
     request: RenameThreadRequest,
   ): Promise<RenameThreadResponse> {
     const backend = request.backend ?? "codex";
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      const { federationTarget: _federationTarget, ...remoteRequest } = request;
+      const response = await getDesktopFederationRuntime()
+        .remoteBackend(request.federationTarget)
+        .renameThread({
+          ...remoteRequest,
+          backend,
+        });
+      logDebug("renameThread", {
+        backend,
+        threadId: request.threadId,
+        federationTarget: request.federationTarget.instanceId,
+      });
+      return response;
+    }
     const response = await getDesktopBackendRegistry().renameThread({
       ...request,
       backend,

@@ -1,18 +1,19 @@
 import { access, readFile, stat } from "node:fs/promises";
 import { BrowserWindow, ipcMain, shell } from "electron";
-import type {
-  OpenDesktopApplicationRequest,
-  OpenDesktopApplicationResponse,
-  OpenMarkdownFileViewerRequest,
-  OpenMarkdownFileViewerResponse,
-  OpenSubAgentTranscriptWindowRequest,
-  OpenSubAgentTranscriptWindowResponse,
-  OpenPathRequest,
-  OpenPathResponse,
-  ReadMarkdownFileRequest,
-  ReadMarkdownFileResponse,
-  ReadMarkdownFileViewerSnapshotRequest,
-  ReadMarkdownFileViewerSnapshotResponse,
+import {
+  isRemoteFederationTarget,
+  type OpenDesktopApplicationRequest,
+  type OpenDesktopApplicationResponse,
+  type OpenMarkdownFileViewerRequest,
+  type OpenMarkdownFileViewerResponse,
+  type OpenSubAgentTranscriptWindowRequest,
+  type OpenSubAgentTranscriptWindowResponse,
+  type OpenPathRequest,
+  type OpenPathResponse,
+  type ReadMarkdownFileRequest,
+  type ReadMarkdownFileResponse,
+  type ReadMarkdownFileViewerSnapshotRequest,
+  type ReadMarkdownFileViewerSnapshotResponse,
 } from "@pwragent/shared";
 import {
   APPLICATION_OPEN_CHANNEL,
@@ -27,6 +28,7 @@ import {
   readMarkdownFileViewerSnapshot,
   showMarkdownFileViewerWindow,
 } from "../markdown-files-window";
+import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { showSubAgentTranscriptWindow } from "../subagent-transcript-window";
 import { openDesktopApplication } from "../settings/application-discovery";
 
@@ -105,6 +107,18 @@ async function readMarkdownFile(
   }
 }
 
+async function openApplication(
+  request: OpenDesktopApplicationRequest,
+): Promise<OpenDesktopApplicationResponse> {
+  if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+    const { federationTarget: _federationTarget, ...remoteRequest } = request;
+    return await getDesktopFederationRuntime()
+      .remoteBackend(request.federationTarget)
+      .openApplication(remoteRequest);
+  }
+  return await openDesktopApplication(request);
+}
+
 export function registerApplicationIpcHandlers(): void {
   ipcMain.removeHandler(APPLICATION_OPEN_CHANNEL);
   ipcMain.handle(
@@ -112,7 +126,7 @@ export function registerApplicationIpcHandlers(): void {
     async (
       _event,
       request: OpenDesktopApplicationRequest,
-    ): Promise<OpenDesktopApplicationResponse> => openDesktopApplication(request),
+    ): Promise<OpenDesktopApplicationResponse> => openApplication(request),
   );
 
   ipcMain.removeHandler(PATH_OPEN_CHANNEL);

@@ -28,6 +28,21 @@ const backendRegistryLifecycle = vi.hoisted(() => ({
   existing: true,
   get: vi.fn(),
 }));
+const federationMock = vi.hoisted(() => {
+  const remoteBackend = {
+    renameThread: vi.fn(async (request: RenameThreadRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      renamedAt: 6_000,
+    })),
+  };
+  return {
+    remoteBackend,
+    runtime: {
+      remoteBackend: vi.fn(() => remoteBackend),
+    },
+  };
+});
 
 const prAutoDispatchBudgetStatusSend = vi.hoisted(() => vi.fn());
 
@@ -686,6 +701,10 @@ vi.mock("../app-server/backend-registry", () => {
   };
 });
 
+vi.mock("../federation/federation-runtime", () => ({
+  getDesktopFederationRuntime: () => federationMock.runtime,
+}));
+
 vi.mock("../pr-status/github-pr-fetcher", () => ({
   GithubPrFetcher: vi.fn(function GithubPrFetcher() {
     return {
@@ -731,6 +750,8 @@ describe("app server ipc", () => {
     restoreWorktree.mockClear();
     handoffThreadWorkspace.mockClear();
     renameThread.mockClear();
+    federationMock.remoteBackend.renameThread.mockClear();
+    federationMock.runtime.remoteBackend.mockClear();
     listThreads.mockClear();
     readThread.mockClear();
     getThreadTranscriptImageRoots.mockClear();
@@ -2117,6 +2138,39 @@ describe("app server ipc", () => {
       backend: "grok",
       threadId: "thread-1",
       renamedAt: 3000,
+    });
+  });
+
+  it("renames remote threads on the selected federation peer", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { APP_SERVER_RENAME_THREAD_CHANNEL } = await import("../../shared/ipc");
+
+    registerAppServerIpcHandlers();
+
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "remote-instance",
+    };
+    const response = await handlers.get(APP_SERVER_RENAME_THREAD_CHANNEL)?.({}, {
+      backend: "codex",
+      federationTarget,
+      threadId: "thread-remote",
+      name: "Remote title",
+    } satisfies RenameThreadRequest);
+
+    expect(federationMock.runtime.remoteBackend).toHaveBeenCalledWith(
+      federationTarget,
+    );
+    expect(federationMock.remoteBackend.renameThread).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-remote",
+      name: "Remote title",
+    });
+    expect(renameThread).not.toHaveBeenCalled();
+    expect(response).toEqual({
+      backend: "codex",
+      threadId: "thread-remote",
+      renamedAt: 6_000,
     });
   });
 

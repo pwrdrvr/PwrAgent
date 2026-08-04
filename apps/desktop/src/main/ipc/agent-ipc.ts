@@ -957,6 +957,14 @@ export function registerAgentIpcHandlers(): void {
       _event,
       request: TrustCodexProjectRequest,
     ): Promise<TrustCodexProjectResponse> => {
+      if (
+        request.federationTarget &&
+        isRemoteFederationTarget(request.federationTarget)
+      ) {
+        return await getDesktopFederationRuntime()
+          .remoteBackend(request.federationTarget)
+          .trustCodexProject(stripFederationTarget(request));
+      }
       return await registry.trustCodexProject(request);
     },
   );

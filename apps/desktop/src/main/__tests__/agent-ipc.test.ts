@@ -20,6 +20,7 @@ import type {
   StartTurnRequest,
   SteerTurnRequest,
   SubmitServerRequestRequest,
+  TrustCodexProjectRequest,
 } from "@pwragent/shared";
 
 const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
@@ -90,6 +91,11 @@ const registry = {
       turnId: "turn-2",
     }),
   ),
+  trustCodexProject: vi.fn(async (request: TrustCodexProjectRequest) => ({
+    ...request,
+    trusted: true,
+  })),
+  getLatestCodexConfigWarning: vi.fn(() => ({})),
 };
 
 const federationMock = vi.hoisted(() => {
@@ -213,6 +219,10 @@ const federationMock = vi.hoisted(() => {
       turnId: request.turnId,
       requestId: request.requestId,
     })),
+    trustCodexProject: vi.fn(async (request: TrustCodexProjectRequest) => ({
+      ...request,
+      trusted: true,
+    })),
   };
   return {
     remoteBackend,
@@ -311,6 +321,7 @@ describe("agent ipc", () => {
       AGENT_START_THREAD_CHANNEL,
       AGENT_STEER_TURN_CHANNEL,
       AGENT_SUBMIT_SERVER_REQUEST_CHANNEL,
+      AGENT_TRUST_CODEX_PROJECT_CHANNEL,
     } = await import("../../shared/ipc");
     const federationTarget = {
       scope: "remote" as const,
@@ -323,6 +334,11 @@ describe("agent ipc", () => {
       backend: "codex",
       federationTarget,
       cwd: "/repo/app",
+    });
+    await handlers.get(AGENT_TRUST_CODEX_PROJECT_CHANNEL)?.({}, {
+      federationTarget,
+      projectPath: "/repo/app",
+      configPath: "/remote/.codex/config.toml",
     });
     await handlers.get(AGENT_FORK_THREAD_CHANNEL)?.({}, {
       backend: "codex",
@@ -510,6 +526,10 @@ describe("agent ipc", () => {
       turnId: "turn-1",
       requestId: "approval-1",
       response: { decision: "approve" },
+    });
+    expect(federationMock.remoteBackend.trustCodexProject).toHaveBeenCalledWith({
+      projectPath: "/repo/app",
+      configPath: "/remote/.codex/config.toml",
     });
     expect(
       federationMock.remoteBackend.materializeDirectoryLaunchpad,

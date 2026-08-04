@@ -541,6 +541,7 @@ export type SubmitServerRequestResponse = {
 };
 
 export type TrustCodexProjectRequest = {
+  federationTarget?: FederationTarget;
   projectPath: string;
   configPath?: string;
 };

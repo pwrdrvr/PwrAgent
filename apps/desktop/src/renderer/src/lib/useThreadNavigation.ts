@@ -5584,8 +5584,11 @@ export function useThreadNavigation(
       );
 
       try {
+        const federationTarget = thread.federation?.ref.target ??
+          readRendererFederationTarget();
         await renameThreadRequest({
           backend: thread.source,
+          ...(federationTarget ? { federationTarget } : {}),
           threadId: thread.id,
           name: nextName,
         });

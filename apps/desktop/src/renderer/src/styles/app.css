@@ -2604,7 +2604,7 @@ textarea,
 
 .sidebar__federation-label {
   display: inline-block;
-  max-width: 110px;
+  max-width: 140px;
   margin-left: 8px;
   overflow: hidden;
   color: var(--text-muted);
