@@ -946,7 +946,7 @@ describe("Tangerine Terminal theme contract", () => {
     expect(inlineCodeRule).toContain("max-width: 100%;");
   });
 
-  it("reveals the inline code copy affordance on hover and keyboard focus", () => {
+  it("overlays the inline code copy affordance on hover and keyboard focus", () => {
     const inlineCodeWrapperRule = extractRuleBody(
       css,
       ".transcript-message__inline-code",
@@ -957,6 +957,9 @@ describe("Tangerine Terminal theme contract", () => {
     const inlineCopyRule = extractRuleBody(css, ".transcript-copy-button--inline");
     expect(inlineCopyRule).toContain("opacity: 1;");
     expect(inlineCopyRule).toContain("background: transparent;");
+    expect(css).not.toMatch(
+      /\.transcript-message__inline-code \.transcript-message__code\s*\{/,
+    );
 
     expect(css).toMatch(
       /\.transcript-copy-button--inline:hover::before,\s*\.transcript-copy-button--inline:focus-visible::before,[\s\S]*?\{[\s\S]*?opacity:\s*1;[\s\S]*?\}/,

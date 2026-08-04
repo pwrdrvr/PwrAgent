@@ -10037,10 +10037,6 @@ a.transcript-message__messaging-origin:focus-visible {
   vertical-align: text-bottom;
 }
 
-.transcript-message__inline-code .transcript-message__code {
-  padding-right: 27px;
-}
-
 .transcript-copy-button--inline {
   width: auto;
   height: auto;
