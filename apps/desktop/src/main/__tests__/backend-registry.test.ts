@@ -24252,7 +24252,7 @@ script = "printf setup"
     );
     expect(payload.workspace).toMatchObject({
       mode: "none",
-      cwd: "/repo/scratch",
+      cwd: expectedDir("/repo/scratch"),
     });
     expect(payload.workspace.git).toEqual({
       kind: "unavailable",
