@@ -81,12 +81,21 @@ Tailscale, SSH, or another trusted VPN.
 
 ## PwrAgent Encrypted Transport
 
-PwrAgent's encrypted transport is intended to protect direct connections
-without requiring a public tunnel, external certificate authority, or stable
-DNS hostname. It uses a persistent channel key in addition to the canonical
-Ed25519 instance identity.
+PwrAgent's encrypted transport protects every federation connection, including
+direct connections that do not use a public tunnel, external certificate
+authority, or stable DNS hostname. It uses a persistent channel key in addition
+to the canonical Ed25519 instance identity.
 
-The secure channel must provide:
+The implementation uses `Noise_IK_25519_ChaChaPoly_SHA256`:
+
+- X25519 static and ephemeral keys establish the channel
+- ChaCha20-Poly1305 encrypts and authenticates every frame
+- SHA-256 supplies the Noise transcript and key derivation hash
+- the initiator knows the gateway's static Noise key before connecting
+- the gateway learns and authenticates the enrolled client's static key during
+  the handshake
+
+The secure channel provides:
 
 - mutual proof that the parties possess the expected channel keys
 - confidentiality and authenticated encryption for every federation frame
@@ -96,8 +105,15 @@ The secure channel must provide:
 - a pinned gateway channel key carried by the enrollment invite
 - fail-closed behavior when the expected gateway key is missing or wrong
 
-The WebSocket remains the framing and streaming transport. Application frames
-inside it are ciphertext rather than readable JSON.
+The WebSocket remains the framing and streaming transport. The Noise handshake
+runs before PwrAgent identity authentication, and the signed identity proof is
+bound to the Noise handshake hash. Application frames inside the WebSocket are
+ciphertext rather than readable JSON.
+
+The gateway Noise public key is embedded in the one-time enrollment invite and
+pinned by the importing client. The private key is generated automatically and
+stored through the desktop credential store. There is deliberately no setting
+that disables Noise: encryption is part of the federation transport contract.
 
 This protects PwrAgent traffic, but it does not provide automatic LAN discovery,
 NAT traversal, a public hostname, or a firewall. Operators still choose how one
@@ -149,6 +165,20 @@ Keep the PwrAgent gateway on loopback. Do not trust forwarded identity headers
 as a replacement for PwrAgent enrollment. Devices outside the tailnet should
 not be able to reach the Serve URL.
 
+Settings -> Federation -> Tailscale Serve / Funnel Setup detects the local
+Tailscale CLI and connected tailnet. **Set up Tailscale Serve** asks the CLI to
+proxy only this route:
+
+```text
+https://<device>.<tailnet>.ts.net/pwragent-federation
+  -> http://127.0.0.1:<federation-port>
+```
+
+PwrAgent then switches the gateway listener to loopback and stores the matching
+`wss://` URL as its Public URL. Tailscale owns login, device identity, HTTPS
+certificates, and tailnet policy; PwrAgent never reads or stores Tailscale
+credentials.
+
 ### Tailscale Funnel
 
 Tailscale Funnel publishes a local service to the public Internet through a
@@ -160,6 +190,14 @@ Random Internet clients can therefore reach the public Funnel edge and attempt
 the WebSocket upgrade. PwrAgent authentication is the primary admission gate at
 the application. Use Funnel only when public reachability is intentional and
 document its wider attack surface.
+
+The Settings action requires an explicit acknowledgement that Funnel creates a
+public endpoint. It uses the same dedicated `/pwragent-federation` path. Setup
+never calls `tailscale serve reset` or `tailscale funnel reset`, because those
+commands can delete unrelated routes. Current Tailscale CLI releases do not
+offer a path-scoped removal command for a node-level handler, so operators must
+inspect `tailscale serve status --json` and `tailscale funnel status --json`
+before manually changing or resetting a machine with other handlers.
 
 ## Cloudflare Tunnel
 
@@ -296,19 +334,94 @@ PwrAgent connection alone cannot prove that an edge rejection policy was active.
 
 ## Current Validation Status
 
-The merged federation baseline has been manually exercised between a host and a
-macOS development VM through an SSH reverse tunnel. That proves the remote
-workflow and the SSH-protected route, not Cloudflare, Tailscale, or the PwrAgent
-encrypted transport.
+The federation baseline has been manually exercised between a host and a macOS
+development VM through an SSH reverse tunnel. That proves the remote workflow
+and the SSH-protected route, not Cloudflare or Tailscale.
+
+The Noise implementation passes the official Noise protocol vectors plus
+focused coverage for tampering, replay/counter behavior, wrong gateway pins,
+real-socket encrypted RPC, invite key pinning, identity channel binding, and
+credential-store persistence. A fresh two-machine manual run and raw-frame
+inspection remain to be completed before documentation claims live validation.
 
 Cloudflare configuration, secret storage, and client credential plumbing have
 automated coverage, but the Cloudflare Tunnel, Access service-token, and mTLS
 paths still require live validation against a real Cloudflare account.
 
-Tailscale-specific federation setup and live validation have not yet been
-completed.
+Tailscale Serve/Funnel discovery and setup now have focused automated coverage.
+The implementation reports only sanitized local device status to the renderer,
+uses a dedicated path, never invokes a broad reset, requires Funnel exposure
+acknowledgement, and writes the resulting `wss://` URL into PwrAgent gateway
+settings. Live Serve and Funnel validation remain to be completed after the
+operator selects the intended Tailscale account.
 
-An earlier Noise-based encrypted transport implementation passed official Noise
-vectors, tamper and wrong-gateway tests, real-socket encrypted RPC coverage, and
-project CI. It is being reintroduced on top of the merged federation baseline;
-the validation status in this document should be updated when that work lands.
+## Dogfood Environment Readiness and Morning Runbook
+
+The following observations were read-only and specific to the test environment
+on August 4, 2026. They are not product prerequisites:
+
+- the Tailscale CLI is installed and connected; no Serve or Funnel handler was
+  configured during the overnight implementation
+- `cloudflared` 2026.2.0 is installed, but the local CLI has no default origin
+  certificate and therefore cannot administer account tunnels by name
+- the Cloudflare Zero Trust account is on the Free plan and already has working
+  Tunnel and Access resources, so the required product surfaces are available
+- no dedicated PwrAgent federation tunnel, Access application, service token,
+  or mTLS root certificate was created
+- the Cloudflare mTLS certificate list is currently empty
+
+### Tailscale live test
+
+1. Confirm the host and VM are signed into the intended test tailnet.
+2. Start isolated host and VM PwrAgent profiles with the gateway listener on
+   `127.0.0.1`.
+3. In host Settings, confirm Tailscale reports the expected tailnet and DNS
+   name. Do not continue if the account is wrong.
+4. Select **Set up Tailscale Serve**. Verify the dedicated path appears in
+   `tailscale serve status --json` without changing unrelated handlers.
+5. Enroll the VM from the new invite and run browse, prompt streaming, steer,
+   interrupt, approval, remote-file, and reconnect scenarios.
+6. Confirm the Serve URL is unavailable from a device outside the authorized
+   tailnet or outside the applicable grants.
+7. After the private workflow passes, acknowledge public exposure and select
+   **Set up Tailscale Funnel**.
+8. Confirm the hostname is publicly reachable, an unenrolled caller is rejected
+   by PwrAgent, and an enrolled client completes the Noise and identity
+   handshakes.
+9. Inspect both status documents before cleanup. Do not use a broad Tailscale
+   reset if the machine has unrelated Serve/Funnel handlers.
+
+### Cloudflare live test
+
+Use new, clearly named dogfood resources. Do not edit or reuse an existing
+tunnel, Access application, policy, service credential, or hostname.
+
+1. Choose a temporary hostname in a Cloudflare-managed test domain, for example
+   `federation-dogfood.example.com`.
+2. Create a dedicated remotely managed tunnel and run its token-based
+   `cloudflared` connector on the host. Do not depend on the absent local origin
+   certificate.
+3. Map only the temporary hostname/path to
+   `http://127.0.0.1:<federation-port>` and set the PwrAgent Public URL to the
+   corresponding `wss://` URL.
+4. Create a dedicated self-hosted Access application with a deny-by-default
+   Service Auth policy. Do not add a Bypass policy covering the hostname.
+5. For the service-token pass, create a short-lived dedicated token, require it
+   in the Access policy, store its ID and secret in PwrAgent Settings, and enable
+   Access service auth.
+6. Verify a request without the token is rejected at the Cloudflare edge and
+   produces no PwrAgent connection diagnostic. Then verify the correct token
+   passes the edge but an unenrolled PwrAgent still fails the inner handshake.
+7. For the mTLS pass, create a temporary test CA and client certificate, upload
+   only the CA certificate to Cloudflare, associate the exact hostname, and add
+   a `Valid Certificate` or narrower Common Name Service Auth rule. Store the
+   client certificate and key in PwrAgent Settings and enable mTLS.
+8. Verify a request without the client certificate is rejected at Cloudflare
+   and never reaches the local listener. Then verify the valid certificate
+   passes the edge but still requires the pinned Noise gateway and enrolled
+   PwrAgent identity.
+9. Run the full remote workflow, interrupt the connector to observe unavailable
+   and recovery states, and compare Cloudflare Access logs with PwrAgent
+   diagnostic timestamps.
+10. Remove only the temporary dogfood hostname, Access application, policies,
+    credentials, certificate objects, and tunnel after recording evidence.
