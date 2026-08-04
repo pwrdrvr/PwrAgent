@@ -82,9 +82,29 @@ async function assertReadableText(params: {
 }
 
 async function assertTangerineFocusRing(locator: Locator, focusTarget = locator) {
-  await focusTarget.focus();
-  await expect(locator).toHaveCSS("outline-color", "rgb(255, 138, 31)");
-  await expect(locator).toHaveCSS("outline-style", "solid");
+  await expect
+    .poll(async () => {
+      await focusTarget.focus();
+      const [isActive, outline] = await Promise.all([
+        focusTarget.evaluate((element) => document.activeElement === element),
+        locator.evaluate((element) => {
+          const style = getComputedStyle(element);
+          return {
+            outlineColor: style.outlineColor,
+            outlineStyle: style.outlineStyle,
+          };
+        }),
+      ]);
+      return {
+        isActive,
+        ...outline,
+      };
+    })
+    .toEqual({
+      isActive: true,
+      outlineColor: "rgb(255, 138, 31)",
+      outlineStyle: "solid",
+    });
 }
 
 async function openTodoThread(page: Page) {
