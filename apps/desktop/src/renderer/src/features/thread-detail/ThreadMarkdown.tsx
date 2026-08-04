@@ -109,20 +109,21 @@ function TranscriptCode(props: {
 
   const copyText = extractTextContent(props.children);
 
+  if (!copyText) {
+    return <code className="transcript-message__code">{props.children}</code>;
+  }
+
   return (
-    <span className="transcript-message__inline-code">
+    <TranscriptCopyButton
+      as="span"
+      className="transcript-message__inline-code transcript-copy-button--inline"
+      copiedLabel="Copied inline code"
+      desktopApi={props.desktopApi}
+      label="Copy inline code"
+      text={copyText}
+    >
       <code className="transcript-message__code">{props.children}</code>
-      {copyText ? (
-        <TranscriptCopyButton
-          as="span"
-          className="transcript-copy-button--inline"
-          copiedLabel="Copied inline code"
-          desktopApi={props.desktopApi}
-          label="Copy inline code"
-          text={copyText}
-        />
-      ) : null}
-    </span>
+    </TranscriptCopyButton>
   );
 }
 

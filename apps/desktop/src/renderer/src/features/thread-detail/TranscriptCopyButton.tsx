@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { copyText } from "../../lib/copy-text";
 import type { DesktopApi } from "../../lib/desktop-api";
 
 type TranscriptCopyButtonProps = {
   as?: "button" | "span";
+  children?: ReactNode;
   className?: string;
   copiedLabel?: string;
   desktopApi?: Pick<DesktopApi, "copyText">;
@@ -62,6 +63,7 @@ export function TranscriptCopyButton(props: TranscriptCopyButtonProps) {
           }
         }}
       >
+        {props.children}
       </span>
     );
   }
@@ -75,6 +77,7 @@ export function TranscriptCopyButton(props: TranscriptCopyButtonProps) {
       title={label}
       onClick={activate}
     >
+      {props.children}
     </button>
   );
 }

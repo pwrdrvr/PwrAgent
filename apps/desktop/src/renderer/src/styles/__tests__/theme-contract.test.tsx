@@ -955,11 +955,11 @@ describe("Tangerine Terminal theme contract", () => {
     expect(inlineCodeWrapperRule).toContain("max-width: 100%;");
 
     const inlineCopyRule = extractRuleBody(css, ".transcript-copy-button--inline");
-    expect(inlineCopyRule).toContain("position: absolute;");
-    expect(inlineCopyRule).toContain("right: 3px;");
+    expect(inlineCopyRule).toContain("opacity: 1;");
+    expect(inlineCopyRule).toContain("background: transparent;");
 
     expect(css).toMatch(
-      /\.transcript-message__inline-code:hover \.transcript-copy-button--inline,\s*\.transcript-message__inline-code:focus-within \.transcript-copy-button--inline,[\s\S]*?\{[\s\S]*?opacity:\s*1;[\s\S]*?\}/,
+      /\.transcript-copy-button--inline:hover::before,\s*\.transcript-copy-button--inline:focus-visible::before,[\s\S]*?\{[\s\S]*?opacity:\s*1;[\s\S]*?\}/,
     );
   });
 

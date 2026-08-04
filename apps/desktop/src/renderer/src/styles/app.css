@@ -10042,23 +10042,42 @@ a.transcript-message__messaging-origin:focus-visible {
 }
 
 .transcript-copy-button--inline {
-  position: absolute;
-  right: 3px;
-  bottom: 3px;
-  width: 18px;
-  height: 18px;
-  border-radius: 4px;
-  background: var(--bg-panel-elevated);
+  width: auto;
+  height: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  color: inherit;
+  background: transparent;
+  opacity: 1;
+  vertical-align: text-bottom;
 }
 
 .transcript-copy-button--inline::before {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
   width: 11px;
   height: 11px;
+  background: var(--text-muted);
+  opacity: 0;
+  transition:
+    background 120ms ease,
+    opacity 120ms ease;
 }
 
-.transcript-message__inline-code:hover .transcript-copy-button--inline,
-.transcript-message__inline-code:focus-within .transcript-copy-button--inline,
+.transcript-copy-button--inline:hover,
+.transcript-copy-button--inline:focus-visible,
 .transcript-copy-button--inline[data-copied="true"] {
+  border-color: transparent;
+  color: inherit;
+  background: transparent;
+}
+
+.transcript-copy-button--inline:hover::before,
+.transcript-copy-button--inline:focus-visible::before,
+.transcript-copy-button--inline[data-copied="true"]::before {
+  background: var(--accent-bright);
   opacity: 1;
 }
 
@@ -10092,6 +10111,10 @@ a.transcript-message__messaging-origin:focus-visible {
   .transcript-copy-button--section,
   .transcript-copy-button--inline,
   .transcript-copy-button--activity {
+    opacity: 1;
+  }
+
+  .transcript-copy-button--inline::before {
     opacity: 1;
   }
 }
