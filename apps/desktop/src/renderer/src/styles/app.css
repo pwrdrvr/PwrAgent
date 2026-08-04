@@ -12254,7 +12254,6 @@ a.transcript-message__messaging-origin:focus-visible {
 .thinking-scanner {
   position: relative;
   --thinking-scanner-beam-width: 18px;
-  --thinking-scanner-delay: 0ms;
   --thinking-scanner-travel: 44px;
   width: 62px;
   height: 6px;
@@ -12289,7 +12288,6 @@ a.transcript-message__messaging-origin:focus-visible {
     0 0 10px color-mix(in srgb, var(--accent) 42%, transparent),
     0 0 18px color-mix(in srgb, var(--accent) 22%, transparent);
   animation: pwragent-thinking-scanner-sweep 1800ms ease-in-out infinite;
-  animation-delay: var(--thinking-scanner-delay);
   opacity: 0.76;
   transform: translateX(0);
   will-change: opacity, transform;

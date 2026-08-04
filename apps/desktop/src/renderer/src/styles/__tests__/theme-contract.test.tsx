@@ -178,7 +178,6 @@ describe("Tangerine Terminal theme contract", () => {
   it("does not leave unresolved theme token references in app.css", () => {
     const localTokens = new Set([
       "thinking-scanner-beam-width",
-      "thinking-scanner-delay",
       "thinking-scanner-travel",
       // Sidebar rail/lane inset system — defined on `.sidebar`, not `:root`.
       "sidebar-rail-inset",
@@ -1117,13 +1116,13 @@ describe("Tangerine Terminal theme contract", () => {
     expect(css).not.toContain("--thinking-scanner-mini-offset");
     expect(css).toContain("@keyframes pwragent-thinking-scanner-sweep");
     expect(css).toMatch(
-      /\.thinking-scanner\s*\{[\s\S]*?--thinking-scanner-beam-width:\s*18px;[\s\S]*?--thinking-scanner-delay:\s*0ms;[\s\S]*?--thinking-scanner-travel:\s*44px;[\s\S]*?width:\s*62px;[\s\S]*?\}/
+      /\.thinking-scanner\s*\{[\s\S]*?--thinking-scanner-beam-width:\s*18px;[\s\S]*?--thinking-scanner-travel:\s*44px;[\s\S]*?width:\s*62px;[\s\S]*?\}/
     );
     expect(css).toMatch(
       /\.thinking-scanner--mini\s*\{[\s\S]*?--thinking-scanner-beam-width:\s*6px;[\s\S]*?--thinking-scanner-travel:\s*10px;[\s\S]*?width:\s*16px;[\s\S]*?\}/
     );
     expect(css).toMatch(
-      /\.thinking-scanner__beam\s*\{[\s\S]*?animation:\s*pwragent-thinking-scanner-sweep 1800ms ease-in-out infinite;[\s\S]*?animation-delay:\s*var\(--thinking-scanner-delay\);[\s\S]*?\}/
+      /\.thinking-scanner__beam\s*\{[\s\S]*?animation:\s*pwragent-thinking-scanner-sweep 1800ms ease-in-out infinite;[\s\S]*?\}/
     );
   });
 });
