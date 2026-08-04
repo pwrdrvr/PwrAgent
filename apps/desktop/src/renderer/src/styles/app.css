@@ -8540,6 +8540,14 @@ textarea,
   gap: 6px;
 }
 
+.federation-peer-help {
+  margin: 0;
+  padding: 14px 18px 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .federation-tailscale-actions {
   display: flex;
   align-items: flex-start;

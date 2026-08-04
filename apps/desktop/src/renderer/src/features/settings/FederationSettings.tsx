@@ -5,6 +5,7 @@ import type {
   DesktopSettingsConfigPatch,
   DesktopSettingsSnapshot,
   FederationConnectionState,
+  FederationCapability,
   FederationDiagnosticEvent,
   FederationHealthStatus,
   FederationInstanceRole,
@@ -13,6 +14,7 @@ import type {
 } from "@pwragent/shared";
 import { DESKTOP_FEDERATION_MODES } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { formatRunningDurationMs } from "../../lib/format-duration";
 import {
   SettingsField,
   SettingsPanelHead,
@@ -216,6 +218,7 @@ export function FederationSettings(props: FederationSettingsProps) {
       publicUrl: trimmedOrUndefined(props.snapshot.federation.publicUrl.value),
       peers: [],
     } satisfies FederationHealthStatus);
+  const now = Date.now();
 
   return (
     <SettingsSectionStack paneId="federation" aria-label="Federation settings">
@@ -504,6 +507,11 @@ export function FederationSettings(props: FederationSettingsProps) {
         title="Federation Instances"
         chip={`${effectiveHealth.peers.length}`}
       >
+        <p className="federation-peer-help">
+          Choose Browse remote threads to open a separate window for a
+          connected instance. Threads, prompts, approvals, environments, and
+          files stay on that machine.
+        </p>
         {effectiveHealth.peers.length === 0 ? (
           <p className="settings-empty">No federation instances.</p>
         ) : (
@@ -518,15 +526,29 @@ export function FederationSettings(props: FederationSettingsProps) {
                   <span>
                     Protocol {peer.protocolVersion ?? "unknown"} ·{" "}
                     {peer.capabilities.length} capabilities
-                    {peer.lastActivityAt
-                      ? ` · Active ${formatTimestamp(peer.lastActivityAt)}`
-                      : ""}
+                  </span>
+                  {peer.lastConnectedAt ? (
+                    <span>
+                      Connected {formatTimestamp(peer.lastConnectedAt)}
+                      {peer.status === "connected"
+                        ? ` · Current session ${formatRunningDurationMs(
+                            Math.max(0, now - peer.lastConnectedAt),
+                          )}`
+                        : ""}
+                    </span>
+                  ) : null}
+                  {peer.lastActivityAt
+                  && peer.lastActivityAt !== peer.lastConnectedAt ? (
+                    <span>Last activity {formatTimestamp(peer.lastActivityAt)}</span>
+                  ) : null}
+                  <span>
+                    Available: {formatFederationCapabilities(peer.capabilities)}
                   </span>
                   {peer.unavailableReason ? (
                     <span>{peer.unavailableReason}</span>
                   ) : null}
                   <button
-                    className="button button--ghost"
+                    className="button button--secondary"
                     type="button"
                     disabled={
                       peer.status !== "connected" ||
@@ -539,7 +561,7 @@ export function FederationSettings(props: FederationSettingsProps) {
                       });
                     }}
                   >
-                    Open
+                    Browse remote threads
                   </button>
                   {peer.canRevoke ? (
                     <button
@@ -976,6 +998,27 @@ function diagnosticEventLabel(kind: FederationDiagnosticEvent["kind"]): string {
 
 function formatTimestamp(value: number): string {
   return new Date(value).toLocaleString();
+}
+
+const FEDERATION_CAPABILITY_LABELS: Record<FederationCapability, string> = {
+  remote_window: "open a remote workspace",
+  thread_navigation: "browse and create threads",
+  thread_detail: "read transcripts",
+  turn_control: "prompt, steer, and interrupt",
+  pending_request_control: "handle approvals and questions",
+  environment_actions: "run environments and scripts",
+  federated_search: "search remote threads",
+  messaging_route: "route messaging threads",
+  gateway_relay: "reach sibling instances",
+};
+
+function formatFederationCapabilities(
+  capabilities: FederationCapability[],
+): string {
+  if (capabilities.length === 0) return "no remote actions advertised";
+  return capabilities
+    .map((capability) => FEDERATION_CAPABILITY_LABELS[capability])
+    .join(" · ");
 }
 
 function trimmedOrUndefined(value: string): string | undefined {

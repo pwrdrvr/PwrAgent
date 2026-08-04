@@ -363,6 +363,17 @@ used isolated PwrAgent roots and the `dev` profile. The gateway listened only on
 | Environment setup streaming and worktree handoff | Both directions | Not completed | Deferred from this transport-focused run. | No manual pass should be claimed. |
 | Sibling client relay | Client through gateway to client | Not run | Optional third-profile scenario was not used. | No manual pass should be claimed. |
 
+A same-day follow-up used a packaged PwrAgent client and a Mac Mini gateway over
+the local LAN. The transport connected, but the client activity list ended on
+an earlier failure because successful client handshakes were not audited. The
+gateway card also omitted its connection timestamp and reduced negotiated
+features to a capability count behind a generic **Open** button. The follow-up
+fix records client attempts, successful connections, and disconnects; preserves
+the current session timestamp; shows its running duration; names the available
+remote actions; and uses **Browse remote threads** as the entry point. Focused
+automated coverage passes, but this presentation change still needs a packaged
+two-machine visual retest.
+
 Tailscale Funnel was disabled after the public test and the private Serve route
 was restored for the remaining scenarios. Final teardown removed that Serve
 handler too. The tailnet-level Funnel capability remains enabled because the

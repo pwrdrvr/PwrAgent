@@ -75,6 +75,72 @@ describe("FederationSettings", () => {
     );
   });
 
+  it("explains remote actions and shows current connection timing", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-04T21:07:05.000Z"));
+    const lastConnectedAt = Date.now() - 65_000;
+    const openFederationWindow = vi.fn();
+    const health: FederationHealthStatus = {
+      enabled: true,
+      role: "client",
+      status: "connected",
+      peers: [
+        {
+          id: "gateway_one",
+          label: "Mac Mini",
+          role: "gateway",
+          status: "connected",
+          capabilities: [
+            "remote_window",
+            "thread_navigation",
+            "turn_control",
+            "pending_request_control",
+          ],
+          protocolVersion: 1,
+          lastConnectedAt,
+          lastActivityAt: lastConnectedAt,
+        },
+      ],
+    };
+
+    render(
+      <FederationSettings
+        desktopApi={{
+          openFederationWindow,
+          readFederationDiagnostics: vi.fn(async () => ({
+            health,
+            events: [],
+          })),
+        }}
+        onClearSecret={vi.fn(async () => true)}
+        onReplaceSecret={vi.fn(async () => true)}
+        saving={false}
+        snapshot={settingsSnapshot()}
+        onSettingsChanged={vi.fn()}
+        onWriteConfig={vi.fn(async () => true)}
+      />,
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.getByText(
+      "Choose Browse remote threads to open a separate window for a connected instance. Threads, prompts, approvals, environments, and files stay on that machine.",
+    )).toBeInTheDocument();
+    expect(screen.getByText(/Current session 1m 5s/)).toBeInTheDocument();
+    expect(screen.getByText(
+      /Available: open a remote workspace · browse and create threads/,
+    )).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", {
+      name: "Browse remote threads",
+    }));
+    expect(openFederationWindow).toHaveBeenCalledWith({
+      target: { scope: "remote", instanceId: "gateway_one" },
+      label: "Mac Mini",
+    });
+  });
+
   it("falls back to the settings snapshot when diagnostics are unavailable", () => {
     render(
       <FederationSettings
@@ -154,7 +220,8 @@ describe("FederationSettings", () => {
 
     expect(await screen.findByText("bad_signature")).toBeInTheDocument();
     expect(screen.getByText("Transport closed.")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Open" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Browse remote threads" }))
+      .toBeDisabled();
 
     fireEvent.click(screen.getByRole("button", { name: "Revoke" }));
 
@@ -214,7 +281,8 @@ describe("FederationSettings", () => {
       await Promise.resolve();
     });
     expect(screen.getByText("Connected")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Open" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Browse remote threads" }))
+      .toBeEnabled();
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(2_000);
@@ -223,7 +291,8 @@ describe("FederationSettings", () => {
     expect(screen.getByText("Connecting")).toBeInTheDocument();
     expect(screen.getAllByText("Federation gateway connection closed."))
       .toHaveLength(2);
-    expect(screen.getByRole("button", { name: "Open" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Browse remote threads" }))
+      .toBeDisabled();
     view.unmount();
     vi.useRealTimers();
   });
