@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
@@ -26,6 +27,133 @@ const wizardLaunchOptions = {
   requiresReplayDriver: false,
   env: { PWRAGENT_CODEX_COMMAND: process.execPath },
 };
+
+const fakeProviderNames = ["codex", "kimi", "qwen", "grok"] as const;
+type FakeProviderName = (typeof fakeProviderNames)[number];
+
+function fakeProviderScript(): string {
+  return `#!${process.execPath}
+const path = require("node:path");
+const name = path.basename(process.argv[1]);
+const args = process.argv.slice(2);
+
+if (args.includes("--version")) {
+  console.log(name + " 999.0.0");
+  process.exit(0);
+}
+
+if (name === "qwen") {
+  console.log("Qwen Code");
+} else if (name === "grok") {
+  console.log("Run the agent over stdio");
+} else if (name === "kimi") {
+  console.log("Agent Client Protocol server over stdio");
+} else {
+  console.log("Codex CLI");
+}
+`;
+}
+
+function wellKnownFakeProviderCommands(
+  homeRoot: string,
+): Record<FakeProviderName, string> {
+  return {
+    codex:
+      process.platform === "darwin"
+        ? path.join(
+          homeRoot,
+          "Applications",
+          "Codex.app",
+          "Contents",
+          "Resources",
+          "codex",
+        )
+        : path.join(homeRoot, ".local", "bin", "codex"),
+    kimi: path.join(homeRoot, ".kimi-code", "bin", "kimi"),
+    qwen: path.join(homeRoot, ".qwen", "bin", "qwen"),
+    grok: path.join(homeRoot, ".grok", "bin", "grok"),
+  };
+}
+
+async function launchWizardWithFakeProviders(
+  source: "path" | "well-known",
+) {
+  const homeRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), "pwragent-provider-discovery-e2e-"),
+  );
+  const customBin = path.join(homeRoot, ".bin");
+  const commands =
+    source === "path"
+      ? Object.fromEntries(
+        fakeProviderNames.map((name) => [name, path.join(customBin, name)]),
+      ) as Record<FakeProviderName, string>
+      : wellKnownFakeProviderCommands(homeRoot);
+
+  for (const command of Object.values(commands)) {
+    fs.mkdirSync(path.dirname(command), { recursive: true });
+    fs.writeFileSync(command, fakeProviderScript(), "utf8");
+    fs.chmodSync(command, 0o755);
+  }
+
+  const systemPath = "/usr/bin:/bin:/usr/sbin:/sbin";
+  const discoveryPath =
+    source === "path"
+      ? `${customBin}${path.delimiter}${systemPath}`
+      : systemPath;
+  const profile = `export PATH="${discoveryPath}"\n`;
+  for (const profileName of [".profile", ".bash_profile", ".zprofile"]) {
+    fs.writeFileSync(path.join(homeRoot, profileName), profile, "utf8");
+  }
+
+  try {
+    const app = await launchElectronApp({
+      homeRoot,
+      suppressOnboarding: false,
+      requiresReplayDriver: false,
+      env: {
+        PATH: discoveryPath,
+        PWRAGENT_CODEX_COMMAND: undefined,
+        SHELL: process.platform === "darwin" ? "/bin/zsh" : "/bin/bash",
+      },
+    });
+    return { app, commands };
+  } catch (error) {
+    fs.rmSync(homeRoot, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+async function openProviderStepAndRefresh(
+  app: Awaited<ReturnType<typeof launchElectronApp>>,
+): Promise<void> {
+  await app.window.getByRole("button", { name: /Get started/i }).click();
+  await app.window.getByRole("button", { name: /^Continue/i }).click();
+  const refresh = app.window.getByRole("button", {
+    name: /Refresh after install/i,
+  });
+  await refresh.click();
+  await expect(refresh).toHaveText("Refresh after install", { timeout: 20_000 });
+}
+
+async function expectFakeProvidersFound(
+  app: Awaited<ReturnType<typeof launchElectronApp>>,
+  commands: Record<FakeProviderName, string>,
+): Promise<void> {
+  const providerLabels: Record<FakeProviderName, string> = {
+    codex: "Codex CLI",
+    kimi: "Kimi Code",
+    qwen: "Qwen Code",
+    grok: "Grok Build",
+  };
+  for (const name of fakeProviderNames) {
+    await app.window
+      .getByRole("tab", { name: new RegExp(providerLabels[name], "i") })
+      .click();
+    const panel = app.window.getByRole("tabpanel");
+    await expect(panel.getByText("✓ Found v999.0.0")).toBeVisible();
+    await expect(panel.getByText(commands[name], { exact: true })).toBeVisible();
+  }
+}
 
 test.describe("Onboarding wizard", () => {
   test("Get started and Back buttons are clickable", async () => {
@@ -511,4 +639,32 @@ test.describe("Onboarding wizard", () => {
       await app.close();
     }
   });
+
+  test(
+    "refresh discovers Codex, Kimi, Qwen, and Grok from a custom PATH",
+    async () => {
+      test.skip(process.platform === "win32", "Unix executable discovery only");
+      const { app, commands } = await launchWizardWithFakeProviders("path");
+      try {
+        await openProviderStepAndRefresh(app);
+        await expectFakeProvidersFound(app, commands);
+      } finally {
+        await app.close();
+      }
+    },
+  );
+
+  test(
+    "refresh discovers Codex, Kimi, Qwen, and Grok from well-known locations",
+    async () => {
+      test.skip(process.platform === "win32", "Unix executable discovery only");
+      const { app, commands } = await launchWizardWithFakeProviders("well-known");
+      try {
+        await openProviderStepAndRefresh(app);
+        await expectFakeProvidersFound(app, commands);
+      } finally {
+        await app.close();
+      }
+    },
+  );
 });
