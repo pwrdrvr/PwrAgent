@@ -251,6 +251,68 @@ describe("GitDirectoryService", () => {
     await workspace.rollback?.();
   }, 15_000);
 
+  it("prefers remote HEAD over a newer remote branch for an unborn HEAD", async () => {
+    const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-unborn-default-"));
+    cleanupPaths.push(rootDir);
+    const remoteDir = path.join(rootDir, "origin");
+    const repoDir = path.join(rootDir, "repo");
+    execFileSync("git", ["init", "-b", "main", remoteDir], { stdio: "ignore" });
+    runGit(remoteDir, ["config", "user.name", "PwrAgent Tests"]);
+    runGit(remoteDir, ["config", "user.email", "pwragent-tests@example.invalid"]);
+    execFileSync(
+      "git",
+      ["-C", remoteDir, "commit", "--allow-empty", "-m", "Main base"],
+      {
+        env: {
+          ...process.env,
+          GIT_AUTHOR_DATE: "2020-01-01T00:00:00Z",
+          GIT_COMMITTER_DATE: "2020-01-01T00:00:00Z",
+        },
+        stdio: "ignore",
+      },
+    );
+    runGit(remoteDir, ["checkout", "-b", "feature"]);
+    execFileSync(
+      "git",
+      ["-C", remoteDir, "commit", "--allow-empty", "-m", "Newer feature"],
+      {
+        env: {
+          ...process.env,
+          GIT_AUTHOR_DATE: "2020-01-02T00:00:00Z",
+          GIT_COMMITTER_DATE: "2020-01-02T00:00:00Z",
+        },
+        stdio: "ignore",
+      },
+    );
+    runGit(remoteDir, ["checkout", "main"]);
+    execFileSync("git", ["init", "-b", "main", repoDir], { stdio: "ignore" });
+    runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+    runGit(repoDir, ["fetch", "origin"]);
+    runGit(repoDir, ["remote", "set-head", "origin", "main"]);
+    const mainRevision = runGit(repoDir, ["rev-parse", "origin/main^{commit}"]);
+    const service = new GitDirectoryService({
+      resolveWorktreeStorage: () => "in-repo",
+      runGit: runGitAsync,
+    });
+
+    const status = await service.readDirectoryStatus({ path: repoDir });
+    expect(status).toMatchObject({
+      defaultBranch: "origin/main",
+      baseBranches: ["origin/feature", "origin/main"],
+      worktreeCreationAvailable: true,
+    });
+    const workspace = await service.prepareLaunchpadWorkspace({
+      directoryKind: "directory",
+      directoryLabel: "FixtureRepo",
+      directoryPath: repoDir,
+      workMode: "worktree",
+    });
+
+    expect(workspace.workMode).toBe("worktree");
+    expect(runGit(workspace.cwd!, ["rev-parse", "HEAD"])).toBe(mainRevision);
+    await workspace.rollback?.();
+  }, 15_000);
+
   it("refreshes cached unborn status after the initial branch is published", async () => {
     const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-unborn-refresh-"));
     cleanupPaths.push(rootDir);

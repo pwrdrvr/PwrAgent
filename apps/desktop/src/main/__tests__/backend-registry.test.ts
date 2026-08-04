@@ -24064,6 +24064,215 @@ script = "printf setup"
     await rm(root, { recursive: true, force: true });
   });
 
+  it("marks required-worktree handoffs failed when Git inspection fails", async () => {
+    const sourceDirectory = {
+      id: "directory:/repo/app",
+      kind: "local" as const,
+      label: "app",
+      path: "/repo/app",
+    };
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "thread/list", "turn/start"] },
+      threads: [
+        {
+          id: "ordinary-thread",
+          title: "Parent Thread",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [sourceDirectory],
+          updatedAt: 1000,
+        },
+      ],
+    });
+    const inspectError = new Error("fatal: bad object refs/heads/main");
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      gitDirectoryService: {
+        inspectWorkspaceGit: vi.fn(async () => {
+          throw inspectError;
+        }),
+      } as never,
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:ordinary-thread": {
+            backend: "codex",
+            threadId: "ordinary-thread",
+            executionMode: "full-access",
+            extraLinkedDirectories: [sourceDirectory],
+          },
+        },
+      }),
+      threadTitleGenerationService: null,
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "ordinary-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "ordinary-thread",
+        turnId: "turn-1",
+        callId: "handoff-call-1",
+        requestId: "handoff-call-1",
+        namespace: "pwragent",
+        tool: "handoff_task",
+        arguments: {
+          task: "Repair the malformed repository.",
+          title: "Malformed repository repair",
+          workspaceMode: "new_worktree",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toMatchObject({
+      success: false,
+      contentItems: [
+        {
+          type: "inputText",
+          text: expect.stringContaining("Git workspace inspection failed"),
+        },
+      ],
+    });
+    expect(codexClient.lastStartThreadParams).toBeUndefined();
+
+    const searchResponse = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "ordinary-thread",
+        turnId: "turn-1",
+        callId: "search-call-1",
+        requestId: "search-call-1",
+        namespace: "pwragent",
+        tool: "search_threads",
+        arguments: { query: "Malformed repository repair" },
+      },
+    } as AppServerPendingRequestNotification);
+    const searchPayload = JSON.parse(
+      (searchResponse as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+    );
+    expect(searchPayload.pendingHandoffs).toEqual([
+      expect.objectContaining({
+        status: "failed",
+        phase: "failed",
+        error: expect.stringContaining("Git workspace inspection failed"),
+      }),
+    ]);
+
+    await registry.close();
+  });
+
+  it("continues a no-workspace handoff when Git inspection is unavailable", async () => {
+    const sourceDirectory = {
+      id: "directory:/repo/app",
+      kind: "local" as const,
+      label: "app",
+      path: "/repo/app",
+    };
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "thread/list", "turn/start"] },
+      threads: [
+        {
+          id: "ordinary-thread",
+          title: "Parent Thread",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [sourceDirectory],
+          updatedAt: 1000,
+        },
+      ],
+    });
+    const inspectWorkspaceGit = vi.fn(async () => {
+      throw new Error("EACCES: cannot inspect child workspace");
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      createScratchProjectDirectory: async () => "/repo/scratch",
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      gitDirectoryService: {
+        inspectWorkspaceGit,
+      } as never,
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:ordinary-thread": {
+            backend: "codex",
+            threadId: "ordinary-thread",
+            executionMode: "full-access",
+            extraLinkedDirectories: [sourceDirectory],
+          },
+        },
+      }),
+      threadTitleGenerationService: null,
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "ordinary-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "ordinary-thread",
+        turnId: "turn-1",
+        callId: "handoff-call-1",
+        requestId: "handoff-call-1",
+        namespace: "pwragent",
+        tool: "handoff_task",
+        arguments: {
+          task: "Continue even if Git metadata cannot be read.",
+          title: "Unavailable child metadata",
+          workspaceMode: "none",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toMatchObject({ success: true });
+    const payload = JSON.parse(
+      (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+    );
+    expect(payload.workspace).toMatchObject({
+      mode: "none",
+      cwd: "/repo/scratch",
+    });
+    expect(payload.workspace.git).toEqual({
+      kind: "unavailable",
+      worktreeCreationAvailable: false,
+      unavailableReason:
+        "Git workspace inspection failed: EACCES: cannot inspect child workspace",
+    });
+    expect(inspectWorkspaceGit).toHaveBeenCalledTimes(2);
+    expect(codexClient.lastStartTurnParams?.threadId).toBe("thread-1");
+    const prompt =
+      (codexClient.lastStartTurnParams?.input[0] as { text?: string } | undefined)
+        ?.text ?? "";
+    expect(prompt).toContain("- Git: unavailable");
+    expect(prompt).toContain(
+      "- New worktree unavailable: Git workspace inspection failed: EACCES: cannot inspect child workspace",
+    );
+
+    await registry.close();
+  });
+
   it("schedules a dynamic-tool review until the invoking turn completes", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: {

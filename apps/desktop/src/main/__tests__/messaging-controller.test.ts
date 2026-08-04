@@ -3605,7 +3605,8 @@ describe("MessagingController", () => {
       ...navigation.directories[0]!,
       gitStatus: {
         branches: [],
-        baseBranches: ["origin/main"],
+        baseBranches: ["origin/feature", "origin/main"],
+        defaultBranch: "origin/main",
         syncState: "untracked",
         worktreeCreationAvailable: true,
       },

@@ -341,7 +341,10 @@ import {
   GitDirectoryService,
   UNPUBLISHED_BASE_BRANCH_WORKTREE_REASON,
 } from "./git-directory-service";
-import type { DirectoryGitStatusEntry } from "./git-directory-service";
+import type {
+  DirectoryGitStatusEntry,
+  GitWorkspaceInspection,
+} from "./git-directory-service";
 import { GitWorkingStateService } from "./git-working-state-service";
 import type {
   GitWorkingStateEntryOptions,
@@ -5736,8 +5739,8 @@ function buildHandoffTaskPrompt(params: {
       : []),
     ...(params.workspace.branch ? [`- Branch: ${params.workspace.branch}`] : []),
     `- Git: ${params.workspace.git.kind}`,
-    ...(params.workspace.git.kind !== "none"
-      && params.workspace.git.kind !== "non_git"
+    ...((params.workspace.git.kind === "git_local"
+      || params.workspace.git.kind === "git_worktree")
       && params.workspace.git.repositoryState
       ? [`- Git repository state: ${params.workspace.git.repositoryState}`]
       : []),
@@ -21972,7 +21975,26 @@ export class DesktopBackendRegistry {
         },
       };
     }
-    const repository = await this.gitDirectoryService.inspectWorkspaceGit(cwd);
+    let repository: GitWorkspaceInspection;
+    try {
+      repository = await this.gitDirectoryService.inspectWorkspaceGit(cwd);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      backendRegistryLog.warn("thread handoff Git workspace inspection failed", {
+        cwd,
+        error: detail,
+      });
+      return {
+        mode: params.mode,
+        cwd,
+        linkedDirectory: params.linkedDirectory,
+        git: {
+          kind: "unavailable",
+          worktreeCreationAvailable: false,
+          unavailableReason: `Git workspace inspection failed: ${detail}`,
+        },
+      };
+    }
     if (repository.kind === "non_git") {
       return {
         mode: params.mode,

@@ -201,6 +201,29 @@ describe("thread orchestration tool contracts", () => {
     expect(origin.workspace.git.worktreeCreationAvailable).toBe(true);
   });
 
+  it("models Git inspection failures without misclassifying the workspace", () => {
+    const origin = {
+      sourceBackend: "codex",
+      sourceThreadId: "thread-parent",
+      seedMode: "clean",
+      groupingMode: "none",
+      createdAt: 1_773_000_000_000,
+      workspace: {
+        mode: "project_local",
+        cwd: "/repo",
+        git: {
+          kind: "unavailable",
+          worktreeCreationAvailable: false,
+          unavailableReason:
+            "Git workspace inspection failed: fatal: bad object refs/heads/main",
+        },
+      },
+    } satisfies ThreadHandoffOrigin;
+
+    expect(JSON.parse(JSON.stringify(origin))).toEqual(origin);
+    expect(origin.workspace.git.kind).toBe("unavailable");
+  });
+
   it("models pending same-thread workspace moves separately from task handoffs", () => {
     expect(DEFAULT_MOVE_THREAD_WORKSPACE_STRATEGY).toBe("detached-changes");
 

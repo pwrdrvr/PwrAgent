@@ -538,7 +538,11 @@ function resolveDefaultBranch(params: {
   branches: string[];
   remoteHead: string;
 }): string | undefined {
-  const remoteHead = params.remoteHead.replace(/^origin\//, "").trim();
+  const remoteHead = params.remoteHead.trim();
+  const localRemoteHead = remoteHead.replace(/^origin\//, "");
+  if (localRemoteHead && params.branches.includes(localRemoteHead)) {
+    return localRemoteHead;
+  }
   if (remoteHead && params.branches.includes(remoteHead)) {
     return remoteHead;
   }
@@ -929,10 +933,10 @@ export class GitDirectoryService {
       0,
       MAX_TRACKED_COMMITS,
     );
-    // Resolve the default branch against the FULL list so a rarely-committed
-    // `main` is still found, then cap everything we hold/persist downstream.
+    // Resolve against the full local + remote list so an unborn checkout can
+    // retain its remote default even when a newer remote branch sorts first.
     const defaultBranch = resolveDefaultBranch({
-      branches: parsedBranchDetailsAll.map((detail) => detail.name),
+      branches: parsedBaseBranchDetailsAll.map((detail) => detail.name),
       remoteHead: branchInventory.remoteHead,
     });
     const parsedBranchDetails = capRecentBranchDetails(parsedBranchDetailsAll, {
