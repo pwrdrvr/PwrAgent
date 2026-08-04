@@ -14831,6 +14831,80 @@ describe("Composer", () => {
     }
   });
 
+  it("keeps a 400 MB unsupported TIFF drop as a path-only file reference", async () => {
+    (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
+      "/Users/huntharo";
+    try {
+      const startTurn = vi.fn(async () => ({
+        backend: "codex" as const,
+        threadId: "thread-1",
+        turnId: "turn-1",
+      }));
+      const tiffFile = new File(
+        [new Uint8Array([73, 73, 42, 0])],
+        "large-scan.tiff",
+        { type: "image/tiff" },
+      );
+      Object.defineProperty(tiffFile, "size", { value: 400 * 1024 * 1024 });
+
+      render(
+        <Composer
+          desktopApi={{
+            onAgentEvent: () => () => undefined,
+            getPathForFile: () => "/Users/huntharo/Scans/large-scan.tiff",
+            startTurn,
+          }}
+          disabled={false}
+          skills={[]}
+          thread={{
+            id: "thread-1",
+            title: "Inspect scan",
+            titleSource: "explicit",
+            source: "codex",
+            linkedDirectories: [],
+            inbox: { inInbox: false },
+          }}
+        />
+      );
+
+      const textarea = screen.getByLabelText("Reply");
+      fireEvent.drop(textarea, {
+        dataTransfer: {
+          files: [],
+          items: [
+            { kind: "file", type: "image/tiff", getAsFile: () => tiffFile },
+          ],
+        },
+      });
+
+      expect(await screen.findByText("large-scan.tiff")).toBeInTheDocument();
+      expect(normalizeImageFile).not.toHaveBeenCalled();
+
+      await clickButton("Send");
+
+      await waitFor(() => {
+        expect(startTurn).toHaveBeenCalledWith({
+          backend: "codex",
+          threadId: "thread-1",
+          input: [
+            {
+              type: "text",
+              text: "[@large-scan.tiff](~/Scans/large-scan.tiff)",
+            },
+            {
+              type: "localFile",
+              name: "large-scan.tiff",
+              path: "/Users/huntharo/Scans/large-scan.tiff",
+            },
+          ],
+        });
+      });
+    } finally {
+      delete (window as unknown as { __pwragentHomeDir?: string })
+        .__pwragentHomeDir;
+    }
+  });
+
   it("shows the PDF analysis indicator for an extensionless explicit file reference", async () => {
     (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
       "/Users/huntharo";

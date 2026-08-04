@@ -285,13 +285,13 @@ async function readLocalPdfCandidate(
       if (!stats.isFile()) {
         return { kind: "not_pdf" };
       }
-      if (stats.size > maxAttachmentBytes) {
-        return { kind: "too_large", name };
-      }
       const header = Buffer.alloc(PDF_MAGIC.byteLength);
       await handle.read(header, 0, header.byteLength, 0);
       if (!isPdfData(header)) {
         return { kind: "not_pdf" };
+      }
+      if (stats.size > maxAttachmentBytes) {
+        return { kind: "too_large", name };
       }
       const data = Buffer.allocUnsafe(stats.size);
       let bytesRead = 0;

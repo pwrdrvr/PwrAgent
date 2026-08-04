@@ -203,4 +203,28 @@ describe("preparePdfTurnInput", () => {
       pdfAttachments: [],
     });
   });
+
+  it("does not apply the PDF size limit to a large non-PDF local file", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-file-turn-"));
+    tempRoots.push(root);
+    const isoPath = path.join(root, "windows-11.iso");
+    await writeFile(isoPath, "CD001-not-a-pdf");
+
+    await expect(
+      preparePdfTurnInput({
+        handling: "model_directed",
+        input: [
+          { type: "text", text: "Inspect this disk image if needed." },
+          { type: "localFile", name: "windows-11.iso", path: isoPath },
+        ],
+        maxAttachmentBytes: 5,
+      }),
+    ).resolves.toEqual({
+      input: [
+        { type: "text", text: "Inspect this disk image if needed." },
+        { type: "localFile", name: "windows-11.iso", path: isoPath },
+      ],
+      pdfAttachments: [],
+    });
+  });
 });

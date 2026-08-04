@@ -10501,7 +10501,9 @@ function getImageFilesFromDataTransfer(dataTransfer: DataTransfer): ComposerImag
       continue;
     }
 
-    const type = isImageMimeType(item.type) ? item.type : inferTransferImageType(file);
+    const type = isSupportedComposerImageMimeType(item.type)
+      ? item.type
+      : inferTransferImageType(file);
     if (!type) {
       continue;
     }
@@ -10555,7 +10557,10 @@ function getNonImageFilesFromDataTransfer(dataTransfer: DataTransfer): File[] {
     }
 
     foundFileItem = true;
-    if (isImageMimeType(item.type) || inferTransferImageType(file)) {
+    if (
+      isSupportedComposerImageMimeType(item.type)
+      || inferTransferImageType(file)
+    ) {
       continue;
     }
 
@@ -10600,7 +10605,7 @@ function buildFileKey(file: File): string {
 }
 
 function inferTransferImageType(file: File): string | undefined {
-  if (isImageMimeType(file.type)) {
+  if (isSupportedComposerImageMimeType(file.type)) {
     return file.type;
   }
 
@@ -10608,8 +10613,23 @@ function inferTransferImageType(file: File): string | undefined {
   return extension === "gif" ? "image/gif" : undefined;
 }
 
-function isImageMimeType(type: string): boolean {
-  return type.toLowerCase().startsWith("image/");
+// Keep this list aligned with formats the composer deliberately normalizes or
+// preserves. An arbitrary `image/*` MIME (for example, a huge TIFF) is a local
+// file reference, not authorization to read and upload its contents.
+function isSupportedComposerImageMimeType(type: string): boolean {
+  switch (type.trim().toLowerCase()) {
+    case "image/gif":
+    case "image/heic":
+    case "image/heif":
+    case "image/jpeg":
+    case "image/jpg":
+    case "image/png":
+    case "image/svg+xml":
+    case "image/webp":
+      return true;
+    default:
+      return false;
+  }
 }
 
 function isGifFile(file: File, type: string): boolean {
