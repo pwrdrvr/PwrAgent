@@ -83,6 +83,43 @@ describe("transcript disclosure chevron placement", () => {
     expect(screen.getByText("found 20 matches")).toBeInTheDocument();
   });
 
+  it("renders a single code search as one disclosure", () => {
+    const { container } = render(
+      <TranscriptActivity
+        entry={{
+          type: "activity",
+          id: "grep-1",
+          summary: "Searched code: supportsImage|Grok|grok",
+          details: [
+            {
+              id: "grep-1:detail",
+              kind: "read",
+              label: "Searched code: supportsImage|Grok|grok",
+              command: {
+                displayCommand: 'grep(pattern="supportsImage|Grok|grok")',
+                source: "tool",
+                output: "found 9 matches",
+              },
+            },
+          ],
+        }}
+      />
+    );
+
+    const toggle = screen.getByRole("button", {
+      name: "Searched code: supportsImage|Grok|grok",
+    });
+    expect(container.querySelectorAll(".transcript-activity__toggle")).toHaveLength(1);
+    expect(container.querySelectorAll(".transcript-activity__detail-toggle")).toHaveLength(0);
+
+    fireEvent.click(toggle);
+
+    expect(container.querySelectorAll(".transcript-activity__toggle")).toHaveLength(1);
+    expect(container.querySelectorAll(".transcript-activity__detail-toggle")).toHaveLength(0);
+    expect(screen.getByText('grep(pattern="supportsImage|Grok|grok")')).toBeInTheDocument();
+    expect(screen.getByText("found 9 matches")).toBeInTheDocument();
+  });
+
   it("opens a rendered tool image through the shared lightbox callback", () => {
     const onOpenImage = vi.fn();
     const image = {

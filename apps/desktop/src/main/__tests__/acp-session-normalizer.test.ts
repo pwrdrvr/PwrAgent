@@ -844,7 +844,7 @@ describe("AcpSessionReplayNormalizer", () => {
       expect.objectContaining({
         type: "activity",
         id: "grep-1",
-        summary: "Searching code",
+        summary: "Searching code: grok",
         status: "in_progress",
         details: [
           expect.objectContaining({
@@ -877,7 +877,7 @@ describe("AcpSessionReplayNormalizer", () => {
       expect.objectContaining({
         type: "activity",
         id: "grep-1",
-        summary: "Searched code",
+        summary: "Searched code: grok",
         status: "completed",
         details: [
           expect.objectContaining({

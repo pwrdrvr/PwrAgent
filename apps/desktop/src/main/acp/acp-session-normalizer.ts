@@ -1095,7 +1095,7 @@ function toolActivity(
       type: "activity",
       id,
       createdAt,
-      summary,
+      summary: detailLabel,
       status,
       details: [
         {
