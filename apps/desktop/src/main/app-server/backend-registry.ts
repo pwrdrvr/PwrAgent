@@ -148,6 +148,7 @@ import {
   type SendThreadPrAutoDispatchNowResponse,
   type DetachThreadPullRequestRequest,
   type DetachThreadPullRequestResponse,
+  type ThreadQueuedTurnSummary,
   type ApplyThreadModelMigrationRequest,
   type ApplyThreadModelMigrationResponse,
   type TurnOffCodexFastEverywhereResponse,
@@ -7335,6 +7336,10 @@ export class DesktopBackendRegistry {
                 ...baseParams,
                 status: "queued",
                 position: event.position,
+                // Windows that did not submit this entry mirror a chip
+                // from the event; carry the text so they need not wait
+                // for the next navigation snapshot.
+                displayText: queuedTurnDisplayText(event.entry.input),
               }
             : event.type === "started"
               ? {
@@ -12566,6 +12571,31 @@ export class DesktopBackendRegistry {
    * persisted — but the audit log entries are, so historical context
    * survives restarts.
    */
+  /**
+   * Read projection of the main-process turn FIFO, keyed by thread
+   * identity. Mirrors getQueuedExecutionModesSnapshot: the queue itself
+   * is registry memory, but every navigation snapshot carries this so
+   * ALL windows — the owner's, other local windows, and federated
+   * viewers — can render and rehydrate queued messages instead of only
+   * the window that submitted them.
+   */
+  getQueuedTurnsSnapshot(): Record<string, ThreadQueuedTurnSummary[]> {
+    const snapshot: Record<string, ThreadQueuedTurnSummary[]> = {};
+    for (const entry of this.threadTurnQueue.getAllQueuedEntries()) {
+      const threadKey = buildThreadIdentityKey(entry.backend, entry.threadId);
+      const queue = snapshot[threadKey] ?? [];
+      queue.push({
+        queueEntryId: entry.id,
+        origin: entry.origin,
+        displayText: queuedTurnDisplayText(entry.input),
+        createdAt: entry.createdAt,
+        position: queue.length,
+      });
+      snapshot[threadKey] = queue;
+    }
+    return snapshot;
+  }
+
   getQueuedExecutionModesSnapshot(): Record<
     string,
     { mode: ThreadExecutionMode; queuedAt: number } | undefined
@@ -26606,4 +26636,17 @@ export async function disposeDesktopBackendRegistry(): Promise<void> {
   const current = registry;
   registry = null;
   await current.close();
+}
+
+/** First text of a queued turn's input, truncated for chip display. */
+function queuedTurnDisplayText(input: AppServerTurnInputItem[]): string {
+  const text = input
+    .filter(
+      (item): item is Extract<AppServerTurnInputItem, { type: "text" }> =>
+        item.type === "text",
+    )
+    .map((item) => item.text)
+    .join("\n")
+    .trim();
+  return text.length > 200 ? `${text.slice(0, 200)}\u2026` : text;
 }

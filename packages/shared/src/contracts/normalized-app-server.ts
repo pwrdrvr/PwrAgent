@@ -1551,6 +1551,12 @@ export type AppServerNotification =
         queueEntryId: string;
         origin: "manual" | "automation" | "messaging" | "scheduled";
         status: "queued" | "started" | "failed" | "cancelled" | "terminal";
+        /**
+         * Truncated first text of the queued input on "queued" events, so
+         * windows that did not submit the entry can mirror a chip without
+         * waiting for the next navigation snapshot.
+         */
+        displayText?: string;
         position?: number;
         turnId?: string;
         automationRunId?: string;

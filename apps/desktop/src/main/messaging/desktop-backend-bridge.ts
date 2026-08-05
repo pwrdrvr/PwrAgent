@@ -124,11 +124,13 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
     );
     const queuedExecutionModesByThreadKey =
       this.registry.getQueuedExecutionModesSnapshot();
+    const queuedTurnsByThreadKey = this.registry.getQueuedTurnsSnapshot();
     const snapshot = await getDesktopOverlayStore().reconcileNavigationSnapshot({
       backend,
       fetchedAt: Date.now(),
       messagingBindingsByThreadKey,
       queuedExecutionModesByThreadKey,
+      queuedTurnsByThreadKey,
       threads: listedThreads,
       workspaceRoots: resolveScratchProjectsRoots(),
     });

@@ -116,6 +116,7 @@ describe("DesktopMessagingBackendBridge", () => {
     });
     const registry = {
       getQueuedExecutionModesSnapshot: vi.fn(() => ({})),
+      getQueuedTurnsSnapshot: vi.fn(() => ({})),
       hydrateThreadGitWorkingStates: vi.fn(async (
         threads: NavigationSnapshot["threads"],
       ) =>
@@ -177,6 +178,7 @@ describe("DesktopMessagingBackendBridge", () => {
     } as unknown as NavigationSnapshot);
     const registry = {
       getQueuedExecutionModesSnapshot: vi.fn(() => ({})),
+      getQueuedTurnsSnapshot: vi.fn(() => ({})),
       hydrateThreadGitWorkingStates: vi.fn(
         async (threads: NavigationSnapshot["threads"]) => threads,
       ),

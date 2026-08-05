@@ -4920,6 +4920,43 @@ export function Composer(props: ComposerProps) {
       if (
         notificationThreadId &&
         typeof turnQueueRecord?.queueEntryId === "string" &&
+        turnQueueRecord.status === "queued"
+      ) {
+        // Mirror entries queued by OTHER windows (or other federated
+        // viewers) — the FIFO lives in the owning instance's main
+        // process and every surface should show its contents, not just
+        // the window that submitted. Known ids and in-flight local
+        // submissions keep their richer local state untouched.
+        const mirrorScopeKey = getThreadComposerScopeKey(
+          event.backend,
+          notificationThreadId,
+        );
+        const mirrorCurrent = draftStore.getQueuedTurns(mirrorScopeKey);
+        const alreadyKnown = mirrorCurrent.some(
+          (queued) =>
+            queued.queueEntryId === turnQueueRecord.queueEntryId
+            || queued.backendQueuePending,
+        );
+        if (!alreadyKnown) {
+          const displayText = (
+            event.notification.params as { displayText?: unknown }
+          ).displayText;
+          draftStore.setQueuedTurns(mirrorScopeKey, [
+            ...mirrorCurrent,
+            {
+              id: `backend-queued:${turnQueueRecord.queueEntryId}`,
+              queueEntryId: turnQueueRecord.queueEntryId,
+              text: typeof displayText === "string" ? displayText : "",
+              imageAttachments: [],
+              fileAttachments: [],
+            },
+          ]);
+        }
+      }
+
+      if (
+        notificationThreadId &&
+        typeof turnQueueRecord?.queueEntryId === "string" &&
         (
           draftStore.getQueuedTurns(
             getThreadComposerScopeKey(event.backend, notificationThreadId),
@@ -6406,14 +6443,86 @@ export function Composer(props: ComposerProps) {
       if (steeringRequestIdRef.current === pending.id) {
         steeringRequestIdRef.current = undefined;
       }
-      updatePendingSteer((current) =>
-        current?.text === pending.text &&
-        current.imageAttachments === pending.imageAttachments
-          ? { ...current, status: "pending" }
-          : current
-      );
+      // Rescue ONLY failures that prove the steer never left this
+      // machine (the synchronous "peer is not connected" pre-send
+      // throw). A timeout is ambiguous — the steer may have been
+      // delivered and applied, and scheduling a rescue then would send
+      // the message twice; those stay renderer-parked with retry.
+      const provenUndelivered =
+        error instanceof Error && error.message.includes("is not connected");
+      const rescued = await (async () => {
+        if (
+          !provenUndelivered
+          || !props.thread
+          || !props.desktopApi?.createScheduledThreadAction
+        ) {
+          return false;
+        }
+        try {
+          const rescueResponse =
+            await props.desktopApi.createScheduledThreadAction({
+              backend: props.thread.source,
+              federationTarget: props.thread.federation?.ref.target ??
+                readRendererFederationTarget(),
+              threadId: props.thread.id,
+              kind: "turn",
+              origin: "desktop",
+              scheduledFor: Date.now(),
+              displayText: pending.text,
+              imageAttachments: pending.imageAttachments,
+              fileAttachments: pending.fileAttachments,
+              turn: {
+                input: payload.input,
+                executionMode: props.thread.executionMode,
+                model: selectedModelOption?.id,
+                reasoningEffort: supportsReasoning
+                  ? selectedReasoningEffort
+                  : undefined,
+                serviceTier: selectedServiceTier,
+                fastMode:
+                  props.thread.source === "codex" && supportsFast
+                    ? Boolean(currentSettings?.fastMode)
+                    : undefined,
+              },
+            });
+          const action = rescueResponse.action;
+          if (scheduledActionFailureMessage(action)) {
+            return false;
+          }
+          upsertScheduledProjectionInScope(expectedScopeKey, {
+            id: `scheduled-projection:${action.id}`,
+            scheduledActionId: action.id,
+            input: payload.input,
+            text: pending.text,
+            imageAttachments: pending.imageAttachments,
+            fileAttachments: pending.fileAttachments,
+            ...(action.status === "dispatching"
+              ? { backendQueuePending: true }
+              : {}),
+            ...(action.status === "queued" && action.queueEntryId
+              ? { queueEntryId: action.queueEntryId }
+              : {}),
+          });
+          setPendingSteer(undefined);
+          return true;
+        } catch {
+          // Owner unreachable for the rescue too — fall through to the
+          // renderer-parked pending state and its retry loop.
+          return false;
+        }
+      })();
+      if (!rescued) {
+        updatePendingSteer((current) =>
+          current?.text === pending.text &&
+          current.imageAttachments === pending.imageAttachments
+            ? { ...current, status: "pending" }
+            : current
+        );
+        setSendError(error instanceof Error ? error.message : String(error));
+      } else {
+        setSendError(undefined);
+      }
       props.onPendingStatusChange?.("Thinking");
-      setSendError(error instanceof Error ? error.message : String(error));
     } finally {
       setSteering(false);
     }
@@ -6527,6 +6636,65 @@ export function Composer(props: ComposerProps) {
     continueSteering(created);
   };
 
+  const rescueCancelledQueuedTurn = async (
+    scopeKey: string,
+    queued: QueuedTurnDraft,
+  ): Promise<void> => {
+    // The owner-side FIFO entry was already cancelled on the way into a
+    // steer; parking the message in this renderer would strand it if the
+    // window closes (and hide it from every other window). Re-create it
+    // in the owner's durable scheduled-action store, and only fall back
+    // to the local park when the owner is unreachable.
+    const thread = props.thread;
+    if (
+      thread
+      && props.desktopApi?.createScheduledThreadAction
+      && queued.input
+      && !queued.reviewCommand
+    ) {
+      try {
+        const response = await props.desktopApi.createScheduledThreadAction({
+          backend: thread.source,
+          federationTarget: thread.federation?.ref.target ??
+            readRendererFederationTarget(),
+          threadId: thread.id,
+          kind: "turn",
+          origin: "desktop",
+          scheduledFor: Date.now(),
+          displayText: queued.text,
+          imageAttachments: queued.imageAttachments,
+          fileAttachments: queued.fileAttachments,
+          turn: {
+            input: queued.input,
+            executionMode: thread.executionMode,
+          },
+        });
+        const action = response.action;
+        if (!scheduledActionFailureMessage(action)) {
+          removeQueuedTurnInScope(scopeKey, queued);
+          upsertScheduledProjectionInScope(scopeKey, {
+            id: `scheduled-projection:${action.id}`,
+            scheduledActionId: action.id,
+            input: queued.input,
+            text: queued.text,
+            imageAttachments: queued.imageAttachments,
+            fileAttachments: queued.fileAttachments,
+            ...(action.status === "dispatching"
+              ? { backendQueuePending: true }
+              : {}),
+            ...(action.status === "queued" && action.queueEntryId
+              ? { queueEntryId: action.queueEntryId }
+              : {}),
+          });
+          return;
+        }
+      } catch {
+        // Owner unreachable — fall through to the local park below.
+      }
+    }
+    preserveCancelledQueuedTurnInScope(scopeKey, queued);
+  };
+
   const steerQueuedTurn = async (queued: QueuedTurnDraft): Promise<void> => {
     const expectedTurnId = activeTurnIdRef.current;
     const expectedScopeKey = composerScopeKey;
@@ -6540,12 +6708,12 @@ export function Composer(props: ComposerProps) {
       activeTurnIdRef.current !== expectedTurnId
       || activeComposerScopeKeyRef.current !== expectedScopeKey
     ) {
-      preserveCancelledQueuedTurnInScope(expectedScopeKey, queued);
+      void rescueCancelledQueuedTurn(expectedScopeKey, queued);
       return;
     }
     const continueSteering = (accepted?: PendingSteerDraft): void => {
       if (!accepted) {
-        preserveCancelledQueuedTurnInScope(expectedScopeKey, queued);
+        void rescueCancelledQueuedTurn(expectedScopeKey, queued);
         return;
       }
       removeQueuedTurnInScope(expectedScopeKey, queued);
