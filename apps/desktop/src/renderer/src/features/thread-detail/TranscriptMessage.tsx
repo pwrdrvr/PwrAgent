@@ -792,17 +792,18 @@ function MessagingOriginChip(props: {
   const surface = surfaceParts.join(" / ");
   const actor = formatMessagingOriginActor(props.origin.actor);
   const directMessage = props.origin.surface.kind === "dm";
-  const surfaceDetail = directMessage ? `DM with ${surface}` : surface;
-  const actorDetail = directMessage ? `From ${actor.detail}` : actor.detail;
-  const actorLabel = directMessage && actor.usernameLabel
-    ? actor.usernameLabel
-    : actor.label;
-  const description = `${platform}: ${surfaceDetail} · ${actorDetail}`;
+  const chipSurfaceParts = directMessage
+    ? [`DM with ${actor.label}`]
+    : surfaceParts;
+  const surfaceDetail = directMessage ? `DM with ${actor.detail}` : surface;
+  const description = directMessage
+    ? `${platform}: ${surfaceDetail}`
+    : `${platform}: ${surfaceDetail} · ${actor.detail}`;
   const sourceUrl = safeMessagingSourceUrl(props.origin.sourceUrl);
   const tooltipText = [
     platform,
     surfaceDetail,
-    actorDetail,
+    directMessage ? undefined : actor.detail,
     sourceUrl ? `Open in ${platform}` : undefined,
   ].filter(Boolean).join("\n");
   const content = (
@@ -820,7 +821,7 @@ function MessagingOriginChip(props: {
         )}
       </span>
       <span className="transcript-message__messaging-surface">
-        {surfaceParts.map((part, index) => (
+        {chipSurfaceParts.map((part, index) => (
           <span
             className="transcript-message__messaging-surface-segment"
             key={`${index}:${part}`}
@@ -839,13 +840,17 @@ function MessagingOriginChip(props: {
           </span>
         ))}
       </span>
-      <span
-        aria-hidden="true"
-        className="transcript-message__messaging-separator"
-      >
-        ·
-      </span>
-      <span className="transcript-message__messaging-actor">{actorLabel}</span>
+      {!directMessage ? (
+        <>
+          <span
+            aria-hidden="true"
+            className="transcript-message__messaging-separator"
+          >
+            ·
+          </span>
+          <span className="transcript-message__messaging-actor">{actor.label}</span>
+        </>
+      ) : null}
     </>
   );
   const sharedProps = {
@@ -938,7 +943,7 @@ function messagingSurfaceParts(
 
 function formatMessagingOriginActor(
   actor: NonNullable<AppServerThreadMessageOrigin["messaging"]>["actor"],
-): { detail: string; label: string; usernameLabel?: string } {
+): { detail: string; label: string } {
   const displayName = actor.displayName?.trim();
   const username = actor.username?.trim().replace(/^@/, "");
   const usernameLabel = username ? `@${username}` : undefined;
@@ -949,7 +954,6 @@ function formatMessagingOriginActor(
     || actor.platformUserId;
   return {
     label,
-    usernameLabel,
     detail: displayName && usernameLabel
       ? `${displayName} (${usernameLabel})`
       : label,

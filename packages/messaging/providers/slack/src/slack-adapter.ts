@@ -1846,7 +1846,6 @@ export class SlackAdapter implements SlackProviderAdapter {
         user?.profile?.real_name?.trim()
         || user?.real_name?.trim()
         || user?.profile?.display_name?.trim()
-        || user?.name?.trim()
         || undefined;
       const username = user?.name?.trim().replace(/^@/, "") || undefined;
       const profile = displayName || username

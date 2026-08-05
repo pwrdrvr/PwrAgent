@@ -453,7 +453,7 @@ describe("TranscriptList", () => {
     expect(container.querySelector(".transcript-message--injected")).toBeInTheDocument();
   });
 
-  it("distinguishes a DM peer from its sender by full name and handle", async () => {
+  it("collapses a single-user DM to its peer's full name and handle", async () => {
     const { container } = render(
       <TranscriptList
         entries={[
@@ -489,24 +489,66 @@ describe("TranscriptList", () => {
     );
 
     const origin = screen.getByLabelText(
-      "Slack: DM with Harold Hunt · From Harold Hunt (@hhunt)",
+      "Slack: DM with Harold Hunt (@hhunt)",
     );
     expect(
       origin.querySelector(".transcript-message__messaging-surface"),
-    ).toHaveTextContent("Harold Hunt");
-    expect(
-      origin.querySelector(".transcript-message__messaging-actor"),
-    ).toHaveTextContent("@hhunt");
+    ).toHaveTextContent("DM with Harold Hunt");
+    expect(origin.querySelector(".transcript-message__messaging-actor")).toBeNull();
+    expect(origin.querySelector(".transcript-message__messaging-separator")).toBeNull();
     fireEvent.mouseEnter(origin);
     expect((await screen.findByRole("tooltip")).textContent).toBe(
       [
         "Slack",
-        "DM with Harold Hunt",
-        "From Harold Hunt (@hhunt)",
+        "DM with Harold Hunt (@hhunt)",
         "Open in Slack",
       ].join("\n"),
     );
     expect(container.querySelector(".transcript-message--injected")).toBeInTheDocument();
+  });
+
+  it("does not duplicate a historical DM origin without a saved handle", async () => {
+    render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "historical-message-from-slack-dm",
+            role: "user",
+            text: "Bro this is literally a DM",
+            origin: {
+              kind: "messaging",
+              messaging: {
+                platform: "slack",
+                surface: {
+                  id: "D012ABCDEF0",
+                  kind: "dm",
+                  title: "Harold",
+                },
+                actor: {
+                  platformUserId: "U079K80HTGS",
+                  displayName: "Harold",
+                },
+              },
+            },
+          },
+        ]}
+        loading={false}
+        loadingMore={false}
+        onLoadOlder={async () => undefined}
+      />,
+    );
+
+    const origin = screen.getByLabelText("Slack: DM with Harold");
+    expect(
+      origin.querySelector(".transcript-message__messaging-surface"),
+    ).toHaveTextContent("DM with Harold");
+    expect(origin.querySelector(".transcript-message__messaging-actor")).toBeNull();
+    expect(origin.querySelector(".transcript-message__messaging-separator")).toBeNull();
+    fireEvent.mouseEnter(origin);
+    expect((await screen.findByRole("tooltip")).textContent).toBe(
+      ["Slack", "DM with Harold"].join("\n"),
+    );
   });
 
   it("renders transcript history without a persistent older-history button", () => {
