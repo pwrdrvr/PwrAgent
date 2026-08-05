@@ -14,6 +14,7 @@ import {
   HistoryNavButtons,
   type HistoryNavControls,
 } from "../chrome/HistoryNavButtons";
+import { FederationRemoteBadge } from "../chrome/FederationRemoteBadge";
 import { MastheadActions, type MastheadActionsProps } from "../chrome/MastheadActions";
 import { formatAutomationRelative } from "../automations/automation-format";
 
@@ -105,6 +106,9 @@ export function ThreadHeader(props: ThreadHeaderProps) {
             <p className="sidebar__brand">
               Pwr<span className="sidebar__brand-accent">Agent</span>
             </p>
+            {/* With the sidebar hidden its remote-instance pill is gone,
+                so the title bar becomes the window's only remote marker. */}
+            <FederationRemoteBadge />
             <MastheadActions {...props.masthead} />
           </div>
         ) : null}
@@ -142,11 +146,6 @@ export function ThreadHeader(props: ThreadHeaderProps) {
                 )}
               </h2>
             </div>
-            {props.thread.federation ? (
-              <span className="chip">
-                {props.thread.federation.instanceLabel}
-              </span>
-            ) : null}
             <span className="chip chip--backend">
               {formatBackendLabel(props.thread.source)}
             </span>

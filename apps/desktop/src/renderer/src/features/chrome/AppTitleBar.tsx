@@ -1,6 +1,7 @@
 import type { ReactElement } from "react";
 import { getDesktopApi, type DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
+import { FederationRemoteBadge } from "./FederationRemoteBadge";
 import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import { AppMenuBar } from "./AppMenuBar";
 import { PanelToggleButtons } from "./PanelToggleButtons";
@@ -54,6 +55,9 @@ export function AppTitleBar(props: {
         <p className="app-titlebar__brand">
           Pwr<span className="app-titlebar__brand-accent">Agent</span>
         </p>
+        {/* On Windows the title bar is the masthead's only home, so the
+            remote-instance marker lives here regardless of sidebar state. */}
+        <FederationRemoteBadge />
         <AppMenuBar />
         {actions ? (
           <div className="app-titlebar__actions">

@@ -32,6 +32,7 @@ import {
 import type { RuntimeIdentity } from "../../../../shared/runtime-identity";
 import { copyText } from "../../lib/copy-text";
 import { BranchIcon, FolderIcon, SearchIcon } from "../../icons";
+import { FederationRemoteBadge } from "../chrome/FederationRemoteBadge";
 import { NewThreadButton } from "../chrome/NewThreadButton";
 import type {
   ArchiveThreadOptions,
@@ -251,9 +252,6 @@ function uniqueContextMenuValues(
 export function Sidebar(props: SidebarProps) {
   const federationLabel = readRendererFederationLabel();
   const federationTarget = readRendererFederationTarget();
-  const federationInstanceTag = federationTarget?.instanceId
-    .replace(/^pwr_/, "")
-    .slice(0, 4);
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const directoryContextMenuRef = useRef<HTMLDivElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
@@ -1340,17 +1338,6 @@ export function Sidebar(props: SidebarProps) {
       <header className="sidebar__masthead">
         <p className="sidebar__brand">
           Pwr<span className="sidebar__brand-accent">Agent</span>
-          {federationLabel ? (
-            <span
-              className="sidebar__federation-label"
-              title={federationTarget
-                ? `${federationLabel} · ${federationTarget.instanceId}`
-                : federationLabel}
-            >
-              Remote · {federationLabel}
-              {federationInstanceTag ? ` · ${federationInstanceTag}` : ""}
-            </span>
-          ) : null}
         </p>
 
         <div className="sidebar__masthead-actions">
@@ -1403,6 +1390,19 @@ export function Sidebar(props: SidebarProps) {
           />
         </div>
       </header>
+
+      {federationLabel || federationTarget ? (
+        // The remote machine's identity gets the same pill treatment as
+        // the local profile/runtime rows below (which are hidden in a
+        // federation window) — full name visible, tooltip + copy for the
+        // instance id, instead of a truncated masthead suffix.
+        <div className="runtime-identity" aria-label="Remote instance">
+          <FederationRemoteBadge
+            className="runtime-identity__button"
+            textClassName="runtime-identity__text sidebar__federation-label"
+          />
+        </div>
+      ) : null}
 
       {!federationLabel && props.runtimeIdentity ? (
         <div className="runtime-identity" aria-label="Runtime identity">

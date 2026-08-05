@@ -263,10 +263,16 @@ describe("Sidebar", () => {
       />,
     );
 
-    expect(screen.getByText("Remote · Tart VM · remo")).toHaveAttribute(
-      "title",
-      "Tart VM · remote-instance",
-    );
+    // The remote identity is a profile-style pill (full name, tooltip +
+    // copy carry the instance id), not a truncated masthead suffix.
+    const remotePill = screen.getByLabelText("Remote instance");
+    expect(remotePill).toHaveTextContent("Remote · Tart VM");
+    expect(remotePill).not.toHaveTextContent("remote-instance");
+    expect(
+      screen.getByRole("button", {
+        name: "Remote instance: Tart VM. Copy instance id.",
+      }),
+    ).toBeInTheDocument();
     expect(screen.queryByLabelText("Runtime identity")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("PwrAgent profile")).not.toBeInTheDocument();
     expect(screen.queryByText("controller-branch")).not.toBeInTheDocument();
