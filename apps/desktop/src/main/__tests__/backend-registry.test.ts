@@ -1,5 +1,15 @@
 import { execFile as execFileCallback } from "node:child_process";
-import { copyFile, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import {
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13025,6 +13035,62 @@ script = "printf setup-output"
     ).resolves.toMatchObject({ extraLinkedDirectories: [] });
 
     await registry.close();
+  });
+
+  it("preserves an equivalent requested repository path as the worktree identity", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-repo-alias-"));
+    const repositoryPath = path.join(root, "repository");
+    const requestedRepositoryPath = path.join(root, "requested-repository");
+    const worktreePath = path.join(root, "worktree");
+    await mkdir(repositoryPath, { recursive: true });
+    await symlink(
+      repositoryPath,
+      requestedRepositoryPath,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/start"] },
+      }),
+      grokClient: new MockBackendClient({}),
+      overlayStore: createOverlayStoreMock(),
+      gitDirectoryService: {
+        prepareLaunchpadWorkspace: vi.fn(async () => ({
+          cwd: worktreePath,
+          repositoryPath,
+          workMode: "worktree" as const,
+        })),
+        recordCodexWorktreeOwnerThread: vi.fn(async () => {}),
+      } as never,
+    });
+
+    try {
+      const response = await registry.materializeDirectoryLaunchpad({
+        directoryKey: `directory:${requestedRepositoryPath}`,
+        launchpad: {
+          directoryKey: `directory:${requestedRepositoryPath}`,
+          directoryKind: "directory",
+          directoryLabel: "repository",
+          directoryPath: requestedRepositoryPath,
+          backend: "codex",
+          executionMode: "default",
+          prompt: "",
+          workMode: "worktree",
+          createdAt: 1_000,
+          updatedAt: 2_000,
+        },
+      });
+
+      expect(response.linkedDirectory).toMatchObject({
+        kind: "worktree",
+        path: expectedDir(requestedRepositoryPath),
+        worktreePath: expectedDir(worktreePath),
+      });
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
   });
 
   it("passes launchpad-selected Agent metadata through materialized starts", async () => {

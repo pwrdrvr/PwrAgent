@@ -884,6 +884,30 @@ function buildWorktreeLinkedDirectory(params: {
   ];
 }
 
+async function resolvePreparedRepositoryIdentityPath(params: {
+  preparedPath?: string;
+  requestedPath?: string;
+}): Promise<string | undefined> {
+  const preparedPath = params.preparedPath?.trim();
+  const requestedPath = params.requestedPath?.trim();
+  if (!preparedPath || !requestedPath) {
+    return preparedPath || requestedPath || undefined;
+  }
+
+  const [preparedRealPath, requestedRealPath] = await Promise.all([
+    realpath(preparedPath).catch(() => undefined),
+    realpath(requestedPath).catch(() => undefined),
+  ]);
+  if (
+    preparedRealPath
+    && requestedRealPath
+    && path.resolve(preparedRealPath) === path.resolve(requestedRealPath)
+  ) {
+    return requestedPath;
+  }
+  return preparedPath;
+}
+
 function normalizeLinkedDirectoryPathForMatch(
   value: string | undefined,
 ): string | undefined {
@@ -14710,11 +14734,15 @@ export class DesktopBackendRegistry {
             cwd: await this.createScratchProjectDirectory(),
           }
         : preparedWorkspace;
+    const repositoryPath = await resolvePreparedRepositoryIdentityPath({
+      preparedPath: workspace.repositoryPath,
+      requestedPath: launchpad.directoryPath,
+    });
     const linkedDirectories =
       workspace.workMode === "worktree"
         ? buildWorktreeLinkedDirectory({
             label: launchpad.directoryLabel,
-            repositoryPath: workspace.repositoryPath ?? launchpad.directoryPath,
+            repositoryPath,
             worktreePath: workspace.cwd,
           })
         : undefined;
