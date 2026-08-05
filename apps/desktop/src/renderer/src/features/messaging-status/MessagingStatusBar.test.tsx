@@ -494,6 +494,74 @@ describe("MessagingStatusBar", () => {
       ).not.toBeInTheDocument();
     });
   });
+
+  it("renders the peer's statuses read-only in a federation window", async () => {
+    const federationWindow = window as typeof window & {
+      __pwragentFederationTarget?: { scope: string; instanceId: string };
+    };
+    federationWindow.__pwragentFederationTarget = {
+      scope: "remote",
+      instanceId: "peer_one",
+    };
+    const statuses = [
+      {
+        changedAt: 1000,
+        health: "enabled",
+        platform: "telegram",
+        account: "@peer_bot",
+      },
+    ] satisfies MessagingPlatformStatus[];
+    const getMessagingPlatformStatuses = vi.fn(async () => statuses);
+    const onMessagingPlatformStatusEvent = vi.fn(() => () => {});
+    const desktopApi: DesktopApi = {
+      getMessagingPlatformStatuses,
+      onMessagingPlatformStatusEvent,
+      readSettings: vi.fn(),
+      setMessagingEnabled: vi.fn(),
+      writeSettingsConfig: vi.fn(),
+      getMessagingActivitySummary: vi.fn(),
+    };
+
+    try {
+      render(
+        <MessagingStatusBar
+          desktopApi={desktopApi}
+          onOpenActivity={() => {}}
+          onOpenSettings={() => {}}
+        />,
+      );
+
+      fireEvent.click(await screen.findByRole("button", { name: /1 online/ }));
+      const popover = await screen.findByRole("dialog", {
+        name: "Messaging platforms",
+      });
+      expect(popover).toHaveTextContent("Telegram");
+      expect(popover).toHaveTextContent("@peer_bot");
+
+      // The read routes to the owning instance, not the local runtime.
+      expect(getMessagingPlatformStatuses).toHaveBeenCalledWith({
+        federationTarget: { scope: "remote", instanceId: "peer_one" },
+      });
+      // Local status events describe THIS machine; a remote window must
+      // not fold them into the peer's list.
+      expect(onMessagingPlatformStatusEvent).not.toHaveBeenCalled();
+      // No local settings/activity polling for a remote window.
+      expect(desktopApi.readSettings).not.toHaveBeenCalled();
+      expect(desktopApi.getMessagingActivitySummary).not.toHaveBeenCalled();
+
+      // Read-only: no master toggle, no per-platform switches, no
+      // Settings gear, no Activity shortcut.
+      expect(popover.querySelector(".settings-switch")).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: "Open Messaging Settings" }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "Open Messaging Activity" }),
+      ).not.toBeInTheDocument();
+    } finally {
+      delete federationWindow.__pwragentFederationTarget;
+    }
+  });
 });
 
 function messagingSettingsSnapshot(enabled: {

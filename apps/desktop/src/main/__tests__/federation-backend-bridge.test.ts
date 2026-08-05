@@ -855,6 +855,7 @@ describe("federation backend bridge", () => {
       renameThread: vi.fn(),
       readApplications: vi.fn(),
       openApplication: vi.fn(),
+      readMessagingPlatformStatuses: vi.fn(),
       trustCodexProject: vi.fn(),
     };
     const replies: FederationProtocolEnvelope[] = [];
@@ -1014,6 +1015,7 @@ describe("federation backend bridge", () => {
         renameThread: vi.fn(),
         readApplications: vi.fn(),
         openApplication: vi.fn(),
+        readMessagingPlatformStatuses: vi.fn(),
         trustCodexProject: vi.fn(),
       } as FederationBackendOperations,
     });

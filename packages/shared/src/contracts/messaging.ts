@@ -8,7 +8,7 @@ import type {
   AppServerBackendKind,
   ThreadIdentifier,
 } from "./normalized-app-server";
-import type { FederatedThreadRef } from "./federation";
+import type { FederatedThreadRef, FederationTarget } from "./federation";
 
 export const MESSAGING_TOOL_UPDATE_MODES = [
   "show_none",
@@ -178,6 +178,15 @@ export type MessagingPlatformStatus = {
    * a short tail (~2s) after the last event.
    */
   lastActivityAt?: number;
+};
+
+/**
+ * Optional scoping for the platform-status read. A remote federationTarget
+ * routes the read to the owning instance so a federation window renders the
+ * peer's messaging state instead of this machine's.
+ */
+export type GetMessagingPlatformStatusesRequest = {
+  federationTarget?: FederationTarget;
 };
 
 export type MessagingPlatformStatusEvent =

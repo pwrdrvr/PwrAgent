@@ -28,6 +28,7 @@ import type {
   ListScheduledThreadActionsResponse,
   MaterializeDirectoryLaunchpadResponse,
   MarkThreadSeenResponse,
+  MessagingPlatformStatus,
   OpenDesktopApplicationResponse,
   QueueThreadExecutionModeResponse,
   RefreshDirectoryGitStatusesResponse,
@@ -1353,6 +1354,24 @@ function defaultInstanceLabel(): string {
   return host || "PwrAgent";
 }
 
+let messagingPlatformStatusReader:
+  | (() => MessagingPlatformStatus[] | Promise<MessagingPlatformStatus[]>)
+  | undefined;
+
+/**
+ * Wire the local messaging runtime's platform statuses into the federation
+ * backend so remote viewers can render this instance's MSG chip. Registered
+ * by the messaging IPC layer (which owns the runtime singleton) to keep the
+ * federation runtime free of a messaging-runtime import cycle.
+ */
+export function setFederationMessagingPlatformStatusReader(
+  reader:
+    | (() => MessagingPlatformStatus[] | Promise<MessagingPlatformStatus[]>)
+    | undefined,
+): void {
+  messagingPlatformStatusReader = reader;
+}
+
 function localBackendOperations(): FederationBackendOperations {
   return {
     async getNavigationSnapshot(request = {}): Promise<NavigationSnapshot> {
@@ -1449,6 +1468,13 @@ function localBackendOperations(): FederationBackendOperations {
         threadId: request.threadId,
         pinnedRank: overlay.pinnedRank,
       };
+    },
+    async readMessagingPlatformStatuses(): Promise<MessagingPlatformStatus[]> {
+      // Registered by the messaging IPC layer — messaging-runtime imports
+      // this module for event fan-out, so importing it back would be a
+      // cycle. An unregistered reader (messaging not wired yet) reads as
+      // "no platforms configured", which renders as no MSG chip.
+      return await (messagingPlatformStatusReader?.() ?? []);
     },
     async detachThreadPullRequest(
       request: DetachThreadPullRequestRequest,
