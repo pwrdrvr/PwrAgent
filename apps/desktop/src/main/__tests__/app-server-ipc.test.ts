@@ -51,10 +51,21 @@ const federationMock = vi.hoisted(() => {
     })),
     refreshDirectoryGitStatuses: vi.fn(async () => ({ scheduledCount: 1 })),
   };
+  const remoteThreadSummaries = {
+    resolvePinnedThreads: vi.fn(
+      async (): Promise<{ threads: unknown[]; refreshed: unknown[] }> => ({
+        threads: [],
+        refreshed: [],
+      }),
+    ),
+    searchForJump: vi.fn(async () => ({ results: [] })),
+  };
   return {
     remoteBackend,
+    remoteThreadSummaries,
     runtime: {
       remoteBackend: vi.fn(() => remoteBackend),
+      remoteThreadSummaries: vi.fn(() => remoteThreadSummaries),
     },
   };
 });
@@ -263,6 +274,8 @@ const reconcileNavigationSnapshot = vi.fn(async (params: unknown) => ({
   },
 }));
 const rememberCompleteNavigationSnapshot = vi.fn();
+const listRemoteThreadPins = vi.fn(async (): Promise<unknown[]> => []);
+const updateRemoteThreadPinSnapshots = vi.fn(async () => {});
 const readDirectoryStatuses = vi.fn(async () => ({
   "directory:/repo/app": {
     currentBranch: "main",
@@ -698,6 +711,8 @@ vi.mock("../app-server/desktop-overlay-store", () => ({
     writeDirectoryGitStatusCacheEntry,
     readThreadGitWorkingStateCache,
     writeThreadGitWorkingStateCacheEntry,
+    listRemoteThreadPins,
+    updateRemoteThreadPinSnapshots,
   }),
 }));
 
@@ -1635,6 +1650,125 @@ describe("app server ipc", () => {
         executionMode: "default",
       },
     });
+  });
+
+  it("merges pinned remote threads into the main-window navigation snapshot", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+    const { buildFederatedThreadRef } = await import("@pwragent/shared");
+
+    const ref = buildFederatedThreadRef({
+      backend: "codex",
+      instanceId: "peer-laptop",
+      threadId: "remote-1",
+    });
+    const pin = {
+      ref,
+      addedAt: 1_000,
+      instanceLabel: "Laptop",
+    };
+    const remoteRow = {
+      source: "codex" as const,
+      id: "remote-1",
+      title: "Remote fix",
+      titleSource: "derived" as const,
+      linkedDirectories: [],
+      inbox: { inInbox: true, reason: "updated-since-seen" as const },
+      updatedAt: 9_000,
+      federation: {
+        ref,
+        instanceLabel: "Laptop",
+        peerStatus: "connected" as const,
+        capabilities: [],
+      },
+    };
+    listRemoteThreadPins.mockResolvedValueOnce([pin]);
+    federationMock.remoteThreadSummaries.resolvePinnedThreads.mockResolvedValueOnce({
+      threads: [remoteRow],
+      refreshed: [{ ref, summary: remoteRow, instanceLabel: "Laptop" }],
+    });
+
+    registerAppServerIpcHandlers();
+
+    const response = (await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.(
+      {},
+      {} satisfies GetNavigationSnapshotRequest,
+    )) as {
+      threads: Array<{ id: string }>;
+      inboxThreadKeys: string[];
+      unchanged: boolean;
+    };
+
+    expect(
+      federationMock.remoteThreadSummaries.resolvePinnedThreads,
+    ).toHaveBeenCalledWith([pin]);
+    expect(updateRemoteThreadPinSnapshots).toHaveBeenCalledWith([
+      { ref, summary: remoteRow, instanceLabel: "Laptop" },
+    ]);
+    expect(response.threads).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "remote-1" })]),
+    );
+    // The remote row joins the inbox ranking behind the local keys.
+    expect(response.inboxThreadKeys).toContain("codex:remote-1");
+    // A newly appearing remote row must defeat the unchanged optimization.
+    expect(response.unchanged).toBe(false);
+  });
+
+  it("keeps pinned remote rows, dimmed, when the owner is unreachable", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+    const { buildFederatedThreadRef } = await import("@pwragent/shared");
+
+    const ref = buildFederatedThreadRef({
+      backend: "codex",
+      instanceId: "peer-laptop",
+      threadId: "remote-1",
+    });
+    updateRemoteThreadPinSnapshots.mockClear();
+    listRemoteThreadPins.mockResolvedValueOnce([
+      { ref, addedAt: 1_000, instanceLabel: "Laptop" },
+    ]);
+    federationMock.remoteThreadSummaries.resolvePinnedThreads.mockResolvedValueOnce({
+      threads: [
+        {
+          source: "codex" as const,
+          id: "remote-1",
+          title: "Cached remote title",
+          titleSource: "derived" as const,
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+          federation: {
+            ref,
+            instanceLabel: "Laptop",
+            peerStatus: "disconnected" as const,
+            capabilities: [],
+          },
+        },
+      ],
+      refreshed: [],
+    });
+
+    registerAppServerIpcHandlers();
+
+    const response = (await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.(
+      {},
+      {} satisfies GetNavigationSnapshotRequest,
+    )) as {
+      threads: Array<{
+        id: string;
+        title: string;
+        federation?: { peerStatus?: string };
+      }>;
+      inboxThreadKeys: string[];
+    };
+
+    const remoteRow = response.threads.find(
+      (thread) => thread.id === "remote-1",
+    );
+    expect(remoteRow?.federation?.peerStatus).toBe("disconnected");
+    expect(remoteRow?.title).toBe("Cached remote title");
+    expect(updateRemoteThreadPinSnapshots).not.toHaveBeenCalled();
+    expect(response.inboxThreadKeys).not.toContain("codex:remote-1");
   });
 
   it("publishes the primary repository resolved from a worktree to the composer", async () => {

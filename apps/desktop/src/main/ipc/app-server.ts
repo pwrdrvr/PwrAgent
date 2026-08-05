@@ -82,10 +82,17 @@ import {
   type NavigationDirectoryGitStatusUpdatedNotification,
   type NavigationThreadGitWorkingStateUpdatedNotification,
   type NavigationSnapshot,
+  type NavigationThreadSummary,
   type AutomationThreadSummary,
   type PrSummary,
   type PrAutoDispatchBudgetConfig,
   type PrAutoDispatchBudgetStatus,
+  type AddRemoteThreadPinRequest,
+  type AddRemoteThreadPinResponse,
+  type FederationJumpSearchRequest,
+  type FederationJumpSearchResponse,
+  type RemoveRemoteThreadPinRequest,
+  type RemoveRemoteThreadPinResponse,
   type ReorderDirectoryPinsRequest,
   type ReorderDirectoryPinsResponse,
   type ReorderThreadPinsRequest,
@@ -149,6 +156,7 @@ import {
   isRemoteFederationTarget,
   normalizePullRequestProvider as normalizeSharedPullRequestProvider,
   parseThreadIdentityKey,
+  rankInboxThreadKeys,
 } from "@pwragent/shared";
 import { registerDirectoryFromDisk } from "../app-server/directory-registration-service";
 import {
@@ -192,8 +200,11 @@ import {
   NAVIGATION_RESOLVE_EDIT_COMMIT_STATES_CHANNEL,
   NAVIGATION_LIST_WORKTREE_OTHER_CHANGES_CHANNEL,
   NAVIGATION_GET_WORKTREE_OTHER_CHANGE_DIFF_CHANNEL,
+  FEDERATION_JUMP_SEARCH_CHANNEL,
+  NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL,
   NAVIGATION_ATTACH_DIRECTORY_TO_THREAD_CHANNEL,
   NAVIGATION_DETACH_DIRECTORY_FROM_THREAD_CHANNEL,
+  NAVIGATION_REMOVE_REMOTE_THREAD_PIN_CHANNEL,
   NAVIGATION_DETACH_THREAD_PR_CHANNEL,
   NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
   NAVIGATION_SET_PR_POLLING_FOCUS_CHANNEL,
@@ -311,6 +322,10 @@ type AppServerOverlayStoreLike = OverlayStoreLike &
     | "writeDirectoryGitStatusCacheEntry"
     | "readThreadGitWorkingStateCache"
     | "writeThreadGitWorkingStateCacheEntry"
+    | "addRemoteThreadPin"
+    | "removeRemoteThreadPin"
+    | "listRemoteThreadPins"
+    | "updateRemoteThreadPinSnapshots"
   >;
 
 type ThreadPrRefreshContext = {
@@ -1137,6 +1152,9 @@ class DesktopAppServerService {
     string,
     AppServerThreadSummary[]
   >();
+  // Seeded with the empty-list hash so a pinless boot never flips
+  // `unchanged` on the first snapshot.
+  private lastRemoteThreadPinsMergeHash = "[]";
   private readonly directoryGitStatusByKey = new Map<
     string,
     DirectoryGitStatusCacheEntry
@@ -1773,16 +1791,72 @@ class DesktopAppServerService {
       worktreePaths: this.collectThreadWorktreePaths(canonicalSnapshot.threads),
     });
 
+    const remotePins = await this.mergePinnedRemoteThreads();
+
     return {
       ...snapshot,
-      threads: threadsWithWorkingState,
+      threads: [...threadsWithWorkingState, ...remotePins.threads],
+      inboxThreadKeys: [
+        ...snapshot.inboxThreadKeys,
+        ...rankInboxThreadKeys(remotePins.threads),
+      ],
       directories,
       unchanged:
         snapshot.unchanged
         && directoriesUnchanged
         && !canonicalSnapshot.changed
-        && !primaryGitRepositoriesChanged,
+        && !primaryGitRepositoriesChanged
+        && !remotePins.changed,
     };
+  }
+
+  /**
+   * Viewer-side remote thread pins, merged into the main window's snapshot.
+   * Reachable owners serve fresh stamped rows (and refresh the cached pin
+   * payload); unreachable owners fall back to the cached payload stamped
+   * with their current non-connected status so rows render dimmed. The
+   * merged rows get their own change hash so a peer-side title/PR/status
+   * change can never be suppressed by the local `unchanged` optimization.
+   */
+  private async mergePinnedRemoteThreads(): Promise<{
+    threads: NavigationThreadSummary[];
+    changed: boolean;
+  }> {
+    let resolved: { threads: NavigationThreadSummary[] } = { threads: [] };
+    try {
+      const overlayStore = this.getOverlayStore();
+      const pins =
+        typeof overlayStore.listRemoteThreadPins === "function"
+          ? await overlayStore.listRemoteThreadPins()
+          : [];
+      if (pins.length > 0) {
+        const cache = getDesktopFederationRuntime().remoteThreadSummaries();
+        const resolution = await cache.resolvePinnedThreads(pins);
+        resolved = resolution;
+        if (resolution.refreshed.length > 0) {
+          await this.getOverlayStore().updateRemoteThreadPinSnapshots(
+            resolution.refreshed,
+          );
+        }
+      }
+    } catch (error) {
+      appServerLog.warn("Pinned remote thread merge failed.", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    const hash = JSON.stringify(
+      resolved.threads.map((thread) => ({
+        id: thread.id,
+        source: thread.source,
+        title: thread.title,
+        updatedAt: thread.updatedAt,
+        prs: thread.prs,
+        federation: thread.federation,
+      })),
+    );
+    const changed = hash !== this.lastRemoteThreadPinsMergeHash;
+    this.lastRemoteThreadPinsMergeHash = hash;
+    return { threads: resolved.threads, changed };
   }
 
   async resolveEditCommitStates(
@@ -5197,6 +5271,88 @@ class DesktopAppServerService {
     return { pinnedRanks };
   }
 
+  async addRemoteThreadPin(
+    request: AddRemoteThreadPinRequest,
+  ): Promise<AddRemoteThreadPinResponse> {
+    if (!isRemoteFederationTarget(request.ref.target)) {
+      throw new Error("Remote thread pins require a remote federation target.");
+    }
+    const instanceId = request.ref.target.instanceId;
+    const instanceLabel =
+      request.instanceLabel
+      ?? request.summary?.federation?.instanceLabel
+      ?? instanceId;
+    const pin = await this.getOverlayStore().addRemoteThreadPin({
+      ref: request.ref,
+      summary: request.summary,
+      instanceLabel,
+    });
+
+    logDebug("addRemoteThreadPin", {
+      backend: request.ref.backend,
+      instanceId,
+      threadId: request.ref.threadId,
+    });
+
+    await getDesktopBackendRegistry().publishLocalEvent({
+      backend: request.ref.backend,
+      notification: {
+        method: "navigation/remoteThreadPins/changed",
+        params: {
+          instanceId,
+          threadId: request.ref.threadId,
+          pinned: true,
+        },
+      },
+    });
+
+    return { pin };
+  }
+
+  async removeRemoteThreadPin(
+    request: RemoveRemoteThreadPinRequest,
+  ): Promise<RemoveRemoteThreadPinResponse> {
+    if (!isRemoteFederationTarget(request.ref.target)) {
+      throw new Error("Remote thread pins require a remote federation target.");
+    }
+    // Local DELETE only — removal must keep working while the owning
+    // instance is unreachable, and the owner's thread is untouched.
+    const removed = await this.getOverlayStore().removeRemoteThreadPin({
+      ref: request.ref,
+    });
+
+    logDebug("removeRemoteThreadPin", {
+      backend: request.ref.backend,
+      instanceId: request.ref.target.instanceId,
+      threadId: request.ref.threadId,
+      removed,
+    });
+
+    if (removed) {
+      await getDesktopBackendRegistry().publishLocalEvent({
+        backend: request.ref.backend,
+        notification: {
+          method: "navigation/remoteThreadPins/changed",
+          params: {
+            instanceId: request.ref.target.instanceId,
+            threadId: request.ref.threadId,
+            pinned: false,
+          },
+        },
+      });
+    }
+
+    return { removed };
+  }
+
+  async jumpSearchRemoteThreads(
+    request: FederationJumpSearchRequest,
+  ): Promise<FederationJumpSearchResponse> {
+    return await getDesktopFederationRuntime()
+      .remoteThreadSummaries()
+      .searchForJump(request);
+  }
+
   async setThreadParent(
     request: SetThreadParentRequest,
   ): Promise<SetThreadParentResponse> {
@@ -6372,6 +6528,36 @@ export function registerAppServerIpcHandlers(): void {
       request: ReorderThreadPinsRequest,
     ): Promise<ReorderThreadPinsResponse> => {
       return await appServerService.reorderThreadPins(request);
+    },
+  );
+  ipcMain.removeHandler(NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL,
+    async (
+      _event,
+      request: AddRemoteThreadPinRequest,
+    ): Promise<AddRemoteThreadPinResponse> => {
+      return await appServerService.addRemoteThreadPin(request);
+    },
+  );
+  ipcMain.removeHandler(NAVIGATION_REMOVE_REMOTE_THREAD_PIN_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_REMOVE_REMOTE_THREAD_PIN_CHANNEL,
+    async (
+      _event,
+      request: RemoveRemoteThreadPinRequest,
+    ): Promise<RemoveRemoteThreadPinResponse> => {
+      return await appServerService.removeRemoteThreadPin(request);
+    },
+  );
+  ipcMain.removeHandler(FEDERATION_JUMP_SEARCH_CHANNEL);
+  ipcMain.handle(
+    FEDERATION_JUMP_SEARCH_CHANNEL,
+    async (
+      _event,
+      request: FederationJumpSearchRequest,
+    ): Promise<FederationJumpSearchResponse> => {
+      return await appServerService.jumpSearchRemoteThreads(request);
     },
   );
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_PARENT_CHANNEL);

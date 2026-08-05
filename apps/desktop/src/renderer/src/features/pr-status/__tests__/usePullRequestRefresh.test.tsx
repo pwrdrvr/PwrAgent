@@ -1,8 +1,9 @@
 import { renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type {
-  NavigationThreadSummary,
-  RefreshThreadPullRequestsResponse,
+import {
+  buildFederatedThreadRef,
+  type NavigationThreadSummary,
+  type RefreshThreadPullRequestsResponse,
 } from "@pwragent/shared";
 import { usePullRequestRefresh } from "../usePullRequestRefresh";
 import type { DesktopApi } from "../../../lib/desktop-api";
@@ -81,6 +82,39 @@ describe("usePullRequestRefresh", () => {
     await waitFor(() => {
       expect(onRefreshNavigation).toHaveBeenCalledOnce();
     });
+  });
+
+  it("never drives local PR lookups for a remote thread pinned into the main window", async () => {
+    const onRefreshNavigation = vi.fn(async () => undefined);
+    const refreshThreadPullRequests = vi.fn(async () => buildResponse());
+    const desktopApi = {
+      refreshThreadPullRequests,
+    } satisfies DesktopApi;
+
+    // Main window (no window-level federation target), but the selected
+    // thread is remote-owned: the per-thread guard must hold — its branch
+    // and paths belong to the peer machine.
+    renderHook(() =>
+      usePullRequestRefresh({
+        desktopApi,
+        onRefreshNavigation,
+        selectedThread: buildThread({
+          federation: {
+            ref: buildFederatedThreadRef({
+              backend: "codex",
+              instanceId: "peer-laptop",
+              threadId: "thread-1",
+            }),
+            instanceLabel: "Laptop",
+            peerStatus: "connected",
+          },
+        }),
+      }),
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(refreshThreadPullRequests).not.toHaveBeenCalled();
+    expect(onRefreshNavigation).not.toHaveBeenCalled();
   });
 
   it("does not refresh navigation when the PR probe matches current PRs", async () => {

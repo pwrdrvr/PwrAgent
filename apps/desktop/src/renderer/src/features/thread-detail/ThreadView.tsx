@@ -1615,6 +1615,7 @@ export function ThreadView(props: ThreadViewProps) {
       : undefined;
   const selectedThreadTerminalDisabledReason = resolveRemoteTerminalDisabledReason(
     selectedThread?.federation,
+    Boolean(readRendererFederationTarget()),
   );
   const toggleSelectedThreadTerminal = useCallback(() => {
     if (!selectedThreadKey) return;
@@ -3580,9 +3581,17 @@ function threadDirectoryPaths(thread: NavigationThreadSummary): string[] {
  */
 function resolveRemoteTerminalDisabledReason(
   federation: NavigationThreadSummary["federation"],
+  isFederationWindow: boolean,
 ): string | undefined {
   if (!federation) {
     return undefined;
+  }
+  if (!isFederationWindow) {
+    // Remote-pinned thread viewed in the MAIN window. The integrated-terminal
+    // IPC routes by window identity (main never trusts a renderer-supplied
+    // target), so a toggle here would spawn a LOCAL shell under a remote
+    // thread — the exact misrepresentation the remote-PTY design forbids.
+    return `Terminal for this thread runs on ${federation.instanceLabel} — open its remote window.`;
   }
   if (
     federation.peerStatus !== undefined &&

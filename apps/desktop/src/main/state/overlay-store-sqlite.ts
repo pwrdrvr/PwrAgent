@@ -6,6 +6,7 @@ import type {
   AutomationThreadSummary,
   DirectoryLaunchpadOverlayState,
   DirectoryOverlayState,
+  FederatedThreadRef,
   LinkedDirectorySummary,
   MarkThreadSeenResponse,
   MessagingThreadBindingSummary,
@@ -14,6 +15,7 @@ import type {
   NavigationDirectoryGitStatus,
   NavigationLaunchpadDefaults,
   NavigationSnapshot,
+  NavigationThreadSummary,
   PrSummary,
   PrAutoDispatchBudgetConfig,
   PrAutoDispatchBudgetStatus,
@@ -31,6 +33,7 @@ import type {
   ThreadPrAutoDispatchEventKind,
   ThreadPrAutoDispatchPending,
   ThreadPullRequestWatchSummary,
+  RemoteThreadPin,
   ThreadSubAgentSummary,
   ThreadTurnFailure,
   ThreadUsageLineRecord,
@@ -45,12 +48,14 @@ import {
   MAX_PERMISSION_TRANSITION_LOG_ENTRIES,
   MAX_TURN_FAILURE_LOG_ENTRIES,
   buildPullRequestStatusKey,
+  buildFederatedThreadRef,
   buildThreadIdentityKey,
   buildNavigationSnapshot,
   buildNavigationSnapshotHash,
   applyNavigationLaunchpadProviderSettingsPatch,
   estimateTokenUsageCost,
   isAcpBackendId,
+  isRemoteFederationTarget,
   parseThreadIdentityKey,
   projectNavigationLaunchpadProviderSettings,
   resolveOpenAiPricingServiceTier,
@@ -463,6 +468,26 @@ function shouldApplyAcpExecutionModeSnapshot(
       )
     )
   );
+}
+
+function remotePinInstanceId(ref: FederatedThreadRef): string {
+  if (!isRemoteFederationTarget(ref.target)) {
+    throw new Error("Remote thread pins require a remote federation target.");
+  }
+  return ref.target.instanceId;
+}
+
+/**
+ * Cached pin summaries persist unstamped: the `federation` stamp (label,
+ * peer status, capabilities) is live state re-applied at snapshot-merge
+ * time, and persisting a stale copy would let an old peerStatus leak into
+ * rendered rows.
+ */
+function stripFederationStamp(
+  summary: NavigationThreadSummary,
+): NavigationThreadSummary {
+  const { federation: _federation, ...rest } = summary;
+  return rest;
 }
 
 export class SqliteOverlayStore {
@@ -1756,6 +1781,134 @@ export class SqliteOverlayStore {
     };
     this.putThread(threadKey, nextState);
     return nextState;
+  }
+
+  async addRemoteThreadPin(params: {
+    ref: FederatedThreadRef;
+    summary?: NavigationThreadSummary;
+    instanceLabel: string;
+    addedAt?: number;
+  }): Promise<RemoteThreadPin> {
+    const instanceId = remotePinInstanceId(params.ref);
+    const addedAt = params.addedAt ?? Date.now();
+    const payload = JSON.stringify({
+      instanceLabel: params.instanceLabel,
+      summary: params.summary ? stripFederationStamp(params.summary) : undefined,
+    });
+    this.stateDb.raw
+      .prepare(
+        `INSERT INTO remote_thread_pins(
+           instance_id,
+           backend,
+           thread_id,
+           added_at,
+           payload
+         ) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(instance_id, backend, thread_id) DO UPDATE SET
+           payload = excluded.payload`,
+      )
+      .run(instanceId, params.ref.backend, params.ref.threadId, addedAt, payload);
+    const row = this.stateDb.raw
+      .prepare(
+        `SELECT added_at FROM remote_thread_pins
+         WHERE instance_id = ? AND backend = ? AND thread_id = ?`,
+      )
+      .get(instanceId, params.ref.backend, params.ref.threadId) as
+        | { added_at: number }
+        | undefined;
+    return {
+      ref: params.ref,
+      addedAt: row?.added_at ?? addedAt,
+      instanceLabel: params.instanceLabel,
+      ...(params.summary ? { summary: stripFederationStamp(params.summary) } : {}),
+    };
+  }
+
+  async removeRemoteThreadPin(params: { ref: FederatedThreadRef }): Promise<boolean> {
+    const result = this.stateDb.raw
+      .prepare(
+        `DELETE FROM remote_thread_pins
+         WHERE instance_id = ? AND backend = ? AND thread_id = ?`,
+      )
+      .run(
+        remotePinInstanceId(params.ref),
+        params.ref.backend,
+        params.ref.threadId,
+      );
+    return result.changes > 0;
+  }
+
+  async listRemoteThreadPins(): Promise<RemoteThreadPin[]> {
+    const rows = this.stateDb.raw
+      .prepare(
+        `SELECT instance_id, backend, thread_id, added_at, payload
+         FROM remote_thread_pins
+         ORDER BY added_at DESC`,
+      )
+      .all() as Array<{
+        instance_id: string;
+        backend: string;
+        thread_id: string;
+        added_at: number;
+        payload: string;
+      }>;
+    const pins: RemoteThreadPin[] = [];
+    for (const row of rows) {
+      let parsed: { instanceLabel?: unknown; summary?: unknown };
+      try {
+        parsed = JSON.parse(row.payload) as typeof parsed;
+      } catch {
+        // A malformed payload must not break the whole list; the row still
+        // identifies a pinned thread and can be re-hydrated on the next fetch.
+        parsed = {};
+      }
+      pins.push({
+        ref: buildFederatedThreadRef({
+          backend: row.backend as FederatedThreadRef["backend"],
+          instanceId: row.instance_id,
+          threadId: row.thread_id,
+        }),
+        addedAt: row.added_at,
+        instanceLabel:
+          typeof parsed.instanceLabel === "string" && parsed.instanceLabel
+            ? parsed.instanceLabel
+            : row.instance_id,
+        ...(parsed.summary && typeof parsed.summary === "object"
+          ? { summary: parsed.summary as NavigationThreadSummary }
+          : {}),
+      });
+    }
+    return pins;
+  }
+
+  async updateRemoteThreadPinSnapshots(
+    entries: Array<{
+      ref: FederatedThreadRef;
+      summary: NavigationThreadSummary;
+      instanceLabel: string;
+    }>,
+  ): Promise<void> {
+    if (entries.length === 0) {
+      return;
+    }
+    const update = this.stateDb.raw.prepare(
+      `UPDATE remote_thread_pins
+       SET payload = ?
+       WHERE instance_id = ? AND backend = ? AND thread_id = ?`,
+    );
+    this.stateDb.raw.transaction(() => {
+      for (const entry of entries) {
+        update.run(
+          JSON.stringify({
+            instanceLabel: entry.instanceLabel,
+            summary: stripFederationStamp(entry.summary),
+          }),
+          remotePinInstanceId(entry.ref),
+          entry.ref.backend,
+          entry.ref.threadId,
+        );
+      }
+    })();
   }
 
   async setThreadAgent(params: {

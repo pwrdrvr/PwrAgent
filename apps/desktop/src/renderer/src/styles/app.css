@@ -955,6 +955,80 @@ textarea,
   text-align: center;
 }
 
+/* ⌘K federated section: remote hits append below the instant local rows. */
+.sidebar-search__section-divider {
+  margin: 2px 0 0;
+  padding: 6px 8px 2px;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.sidebar-search__loading {
+  padding: 6px 8px 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-style: italic;
+}
+
+.sidebar-search__result-meta .chip--instance {
+  flex: none;
+  height: 18px;
+  padding: 0 6px;
+  font-family: var(--font-sans, sans-serif);
+  font-size: 10px;
+}
+
+/* Instance chip: peer glyph + display label. Placeholder glyph until the
+   celestial icon set lands (see InstanceGlyph.tsx swap seam). */
+.chip--instance {
+  gap: 4px;
+  color: var(--text-secondary);
+}
+
+.chip--instance .instance-glyph {
+  flex: none;
+  color: var(--accent);
+}
+
+.chip--instance__label {
+  overflow: hidden;
+  max-width: 140px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Remote-owned row whose peer is unreachable: last-known data, dimmed but
+   still clickable — opening shows the graceful disconnected state. */
+.thread-row.is-remote-offline {
+  opacity: 0.55;
+}
+
+.thread-row.is-remote-offline .thread-row__title {
+  color: var(--text-secondary);
+}
+
+/* Owning-instance watermark behind the thread transcript. Decorative only:
+   very low alpha, no pointer events, sits under the transcript content. */
+.instance-watermark {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.instance-watermark .instance-glyph {
+  color: var(--text-primary);
+  opacity: 0.04;
+}
+
 .sidebar__resize-handle,
 .context-rail__resize-handle {
   position: absolute;

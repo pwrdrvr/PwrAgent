@@ -1049,4 +1049,40 @@ describe("ThreadRow chip flow", () => {
     expect(container.querySelector(".thread-row__chip--dirty")).toBeNull();
     expect(container.querySelector(".thread-row__chip--unpushed")).toBeNull();
   });
+
+  function remoteFederation(
+    peerStatus: "connected" | "disconnected",
+  ): NonNullable<NavigationThreadSummary["federation"]> {
+    return {
+      ref: {
+        backend: "codex",
+        target: { scope: "remote", instanceId: "peer-laptop" },
+        threadId: baseThread.id,
+      },
+      instanceLabel: "Laptop",
+      peerStatus,
+      capabilities: [],
+    };
+  }
+
+  it("shows an instance chip on remote-pinned rows in the main window", () => {
+    const { container } = renderRow({
+      thread: { ...baseThread, federation: remoteFederation("connected") },
+    });
+
+    expect(screen.getByLabelText("Runs on Laptop")).toBeInTheDocument();
+    expect(container.querySelector(".thread-row.is-remote-offline")).toBeNull();
+  });
+
+  it("dims a remote-pinned row while its owner is unreachable", () => {
+    const { container } = renderRow({
+      thread: { ...baseThread, federation: remoteFederation("disconnected") },
+    });
+
+    expect(
+      container.querySelector(".thread-row.is-remote-offline"),
+    ).not.toBeNull();
+    // Dimmed, not dead: the row still selects (graceful disconnected state).
+    expect(screen.getByLabelText("Runs on Laptop")).toBeInTheDocument();
+  });
 });

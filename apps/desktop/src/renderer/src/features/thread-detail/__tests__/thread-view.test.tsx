@@ -168,6 +168,9 @@ function buildRendererLiveDiffEvent(params: {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  delete (window as typeof window & {
+    __pwragentFederationTarget?: unknown;
+  }).__pwragentFederationTarget;
 });
 
 beforeEach(() => {
@@ -1086,7 +1089,20 @@ describe("ThreadView", () => {
     });
   });
 
+
+  function withFederationWindowTarget(instanceId: string): () => void {
+    const win = window as typeof window & {
+      __pwragentFederationTarget?: { scope: "remote"; instanceId: string };
+    };
+    win.__pwragentFederationTarget = { scope: "remote", instanceId };
+    return () => {
+      delete win.__pwragentFederationTarget;
+    };
+  }
+
   it("opens a remote thread's terminal without sending a viewer-side cwd", async () => {
+    // Remote terminals attach only from a peer-branded federation window.
+    withFederationWindowTarget("peer-a");
     const remoteThread: NavigationThreadSummary = {
       id: "remote-thread-1",
       title: "Remote thread",
@@ -1140,6 +1156,7 @@ describe("ThreadView", () => {
   });
 
   it("disables the remote terminal toggle with a reason when the peer lacks remote_pty", () => {
+    withFederationWindowTarget("peer-a");
     const remoteThread: NavigationThreadSummary = {
       id: "remote-thread-1",
       title: "Remote thread",
@@ -1190,6 +1207,7 @@ describe("ThreadView", () => {
   });
 
   it("disables the remote terminal toggle when the peer is disconnected", () => {
+    withFederationWindowTarget("peer-a");
     const remoteThread: NavigationThreadSummary = {
       id: "remote-thread-1",
       title: "Remote thread",
@@ -1233,6 +1251,60 @@ describe("ThreadView", () => {
 
     const toggle = screen.getByRole("button", {
       name: "Remote terminal unavailable: Peer Mac is disconnected.",
+    });
+    expect(toggle).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(toggle);
+    expect(screen.queryByLabelText("Integrated terminal")).not.toBeInTheDocument();
+  });
+
+  it("disables the terminal for a remote-pinned thread in the main window", () => {
+    // No window-level federation target: this is the MAIN window showing a
+    // viewer-pinned remote thread. The integrated-terminal IPC routes by
+    // window identity, so a toggle here would spawn a LOCAL shell under a
+    // remote thread — it must be disabled even with remote_pty granted.
+    const remoteThread: NavigationThreadSummary = {
+      id: "remote-thread-1",
+      title: "Remote thread",
+      titleSource: "explicit",
+      source: "codex",
+      executionMode: "default",
+      updatedAt: Date.now(),
+      linkedDirectories: [],
+      inbox: { inInbox: true },
+      federation: {
+        ref: {
+          backend: "codex",
+          target: { scope: "remote", instanceId: "peer-a" },
+          threadId: "remote-thread-1",
+        },
+        instanceLabel: "Peer Mac",
+        peerStatus: "connected",
+        capabilities: ["thread_detail", "remote_pty"],
+      },
+    };
+
+    render(
+      <ThreadView
+        {...({
+          addOptimisticUserMessage: () => "optimistic-1",
+          backends: [],
+          clearPendingRequest: () => undefined,
+          composerDisabled: false,
+          desktopApi: {},
+          loading: false,
+          loadingMore: false,
+          messageCount: 1,
+          onLoadOlder: async () => undefined,
+          removeOptimisticMessage: () => undefined,
+          skills: [],
+          transcriptEntries: [],
+        } as unknown as Omit<ThreadViewProps, "terminals" | "selectedThread">)}
+        selectedThread={remoteThread}
+      />,
+    );
+
+    const toggle = screen.getByRole("button", {
+      name: "Terminal for this thread runs on Peer Mac — open its remote window.",
     });
     expect(toggle).toHaveAttribute("aria-disabled", "true");
     fireEvent.click(toggle);

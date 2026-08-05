@@ -131,6 +131,15 @@ type SidebarProps = {
   threadJumpOpen?: boolean;
   onThreadJumpOpenChange?: (open: boolean) => void;
   onJumpToThread?: (thread: NavigationThreadSummary) => void;
+  /** ⌘K result owned by another instance: pin it locally, then open it. */
+  onJumpToRemoteThread?: (thread: NavigationThreadSummary) => void;
+  /**
+   * Delete the viewer-side pin for a remote thread row. Local-only: must
+   * work while the owning instance is unreachable.
+   */
+  onRemoveRemoteThreadPin?: (
+    thread: NavigationThreadSummary,
+  ) => Promise<void> | void;
   onOpenLaunchpad: (
     directory: NavigationDirectorySummary,
     preferredBackend?: AppServerBackendKind
@@ -895,6 +904,15 @@ export function Sidebar(props: SidebarProps) {
     void props.onMarkThreadUnread?.(thread);
   };
 
+  const removeRemotePinFromContextMenu = (
+    thread: NavigationThreadSummary,
+  ): void => {
+    setContextMenu(undefined);
+    // Viewer-side delete only: works while the owner is unreachable and
+    // never archives the owner's thread.
+    void props.onRemoveRemoteThreadPin?.(thread);
+  };
+
   const openDirectoryContextMenu = (
     directory: NavigationDirectorySummary,
     position: ThreadContextMenuPosition,
@@ -1107,15 +1125,31 @@ export function Sidebar(props: SidebarProps) {
 
   const contextMenuThreads = contextMenu?.threads ?? [];
   const contextMenuIsBulk = contextMenuThreads.length > 1;
-  const contextMenuCanRename = contextMenu && !contextMenuIsBulk
-    ? canRenameThread(contextMenu.thread)
-    : false;
-  const contextMenuCanArchive = contextMenu && !contextMenuIsBulk
-    ? canArchiveThread(contextMenu.thread)
-    : false;
+  // A remote-owned row pinned into the main window's list: local overlay
+  // actions (pin, archive, rename, sub-thread/fork) don't apply — the only
+  // management action is removing the viewer-side pin. Federation windows
+  // keep their existing behavior (every row there is remote).
+  const contextMenuIsMainWindowRemoteRow = Boolean(
+    contextMenu &&
+      !contextMenuIsBulk &&
+      contextMenu.thread.federation &&
+      !federationTarget,
+  );
+  const contextMenuCanRemoveRemotePin = Boolean(
+    contextMenuIsMainWindowRemoteRow && props.onRemoveRemoteThreadPin,
+  );
+  const contextMenuCanRename =
+    contextMenu && !contextMenuIsBulk && !contextMenuIsMainWindowRemoteRow
+      ? canRenameThread(contextMenu.thread)
+      : false;
+  const contextMenuCanArchive =
+    contextMenu && !contextMenuIsBulk && !contextMenuIsMainWindowRemoteRow
+      ? canArchiveThread(contextMenu.thread)
+      : false;
   const contextMenuCanMarkUnread = Boolean(
     contextMenu &&
       !contextMenuIsBulk &&
+      !contextMenuIsMainWindowRemoteRow &&
       !contextMenu.thread.inbox.inInbox &&
       contextMenu.thread.updatedAt !== undefined &&
       props.onMarkThreadUnread,
@@ -1151,12 +1185,14 @@ export function Sidebar(props: SidebarProps) {
   const contextMenuCanCreateSubthread = Boolean(
     contextMenu &&
       !contextMenuIsBulk &&
+      !contextMenuIsMainWindowRemoteRow &&
       contextMenuHasWorkspace &&
       props.onCreateSubthread,
   );
   const contextMenuCanFork = Boolean(
     contextMenu &&
       !contextMenuIsBulk &&
+      !contextMenuIsMainWindowRemoteRow &&
       contextMenu.thread.source === "codex" &&
       contextMenuHasWorkspace &&
       canForkThread(contextMenu.thread) &&
@@ -1169,6 +1205,7 @@ export function Sidebar(props: SidebarProps) {
     contextMenu &&
       !contextMenuIsBulk &&
       !contextMenuIsSubthread &&
+      !contextMenuIsMainWindowRemoteRow &&
       props.onSetThreadPin,
   );
   /**
@@ -1208,7 +1245,8 @@ export function Sidebar(props: SidebarProps) {
   const contextMenuHasTopActions =
     contextMenuHasPinAction ||
     contextMenuHasCreationActions ||
-    contextMenuHasManagementActions;
+    contextMenuHasManagementActions ||
+    contextMenuCanRemoveRemotePin;
   const contextMenuHasBindings = Boolean(
     !contextMenuIsBulk &&
       contextMenu &&
@@ -1315,6 +1353,7 @@ export function Sidebar(props: SidebarProps) {
         <SidebarSearchPopup
           threads={props.threads}
           onJumpToThread={props.onJumpToThread ?? props.onSelectThread}
+          onJumpToRemoteThread={props.onJumpToRemoteThread}
           onClose={() => props.onThreadJumpOpenChange?.(false)}
         />
       ) : null}
@@ -1704,6 +1743,29 @@ export function Sidebar(props: SidebarProps) {
             </>
           ) : (
             <>
+              {contextMenuCanRemoveRemotePin ? (
+                <div className="thread-context-menu__section">
+                  <button
+                    aria-label="Remove from My List. The thread on the owning instance is untouched."
+                    className="thread-context-menu__button--stacked"
+                    role="menuitem"
+                    type="button"
+                    onClick={() =>
+                      removeRemotePinFromContextMenu(contextMenu.thread)
+                    }
+                  >
+                    <span>Remove from My List</span>
+                    <span className="thread-context-menu__item-detail">
+                      Keeps the thread on{" "}
+                      {contextMenu.thread.federation?.instanceLabel ??
+                        "its instance"}
+                    </span>
+                  </button>
+                </div>
+              ) : null}
+              {contextMenuCanRemoveRemotePin && contextMenuHasPinAction ? (
+                <div className="thread-context-menu__separator" role="separator" />
+              ) : null}
               {contextMenuHasPinAction ? (
                 <div className="thread-context-menu__section">
                   <button

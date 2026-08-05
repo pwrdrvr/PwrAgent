@@ -1047,6 +1047,65 @@ describe("Sidebar", () => {
     expect(onCreateSubthread).toHaveBeenCalledWith(sharedThread, "same-worktree");
   });
 
+  it("offers only pin removal and copy actions for a remote-pinned row", () => {
+    const onRemoveRemoteThreadPin = vi.fn(async () => undefined);
+    const remotePinnedThread: NavigationThreadSummary = {
+      ...sharedThread,
+      id: "thread-remote",
+      title: "Remote pinned thread",
+      federation: {
+        ref: {
+          backend: "codex",
+          target: { scope: "remote", instanceId: "peer-laptop" },
+          threadId: "thread-remote",
+        },
+        instanceLabel: "Laptop",
+        // Removal is a viewer-side delete: it must work while the owning
+        // instance is unreachable.
+        peerStatus: "disconnected",
+        capabilities: [],
+      },
+    };
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="inbox"
+        directories={directories}
+        inboxThreads={[remotePinnedThread]}
+        loading={false}
+        selectedItemKey="codex:thread-remote"
+        threads={[remotePinnedThread]}
+        onArchiveThread={async () => undefined}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onCreateSubthread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onRemoveRemoteThreadPin={onRemoveRemoteThreadPin}
+        onRenameThread={async () => undefined}
+        onSelectThread={() => undefined}
+        onSetThreadPin={async () => undefined}
+      />,
+    );
+
+    fireEvent.contextMenu(
+      screen.getByRole("button", { name: "Remote pinned thread" }),
+    );
+
+    // Owner-mutating and local-overlay actions are absent…
+    expect(screen.queryByRole("menuitem", { name: "Archive Thread" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Rename Thread" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Pin Thread" })).toBeNull();
+    expect(
+      screen.queryByRole("menuitem", { name: /Sub-thread/ }),
+    ).toBeNull();
+
+    // …and the viewer-side removal dispatches even while disconnected.
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: /Remove from My List/ }),
+    );
+    expect(onRemoveRemoteThreadPin).toHaveBeenCalledWith(remotePinnedThread);
+  });
+
   it("closes its context menu when another renderer menu opens", () => {
     render(
       <Sidebar

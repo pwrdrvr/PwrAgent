@@ -4,6 +4,8 @@ import { isBranchDrifted } from "@pwragent/shared";
 import { BranchIcon, FolderIcon, PinIcon, TerminalIcon, WorktreeIcon } from "../../icons";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { copyText } from "../../lib/copy-text";
+import { readRendererFederationTarget } from "../../lib/federation-window";
+import { InstanceChip } from "../federation/InstanceGlyph";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
 import { AgentThreadChip } from "./AgentThreadChip";
@@ -159,11 +161,30 @@ export function ThreadMetaChips({
         )
     : null;
 
+  // The instance chip only appears in the main window: a federation window
+  // is already branded with its peer's identity, so per-row chips there
+  // would be pure noise.
+  const instanceChip =
+    thread.federation && !readRendererFederationTarget()
+      ? (
+          <InstanceChip
+            instanceId={
+              thread.federation.ref.target.scope === "remote"
+                ? thread.federation.ref.target.instanceId
+                : ""
+            }
+            label={thread.federation.instanceLabel}
+          />
+        )
+      : null;
+
   // Returns a fragment (no wrapping container) so the chips flow as
   // direct siblings inside the row's single .thread-row__chips
   // flex-wrap container, alongside PR / binding / reaction chips.
   return (
     <>
+      {instanceChip}
+
       <span className="thread-row__chip thread-row__chip--backend">
         {formatBackendLabel(thread.source)}
       </span>

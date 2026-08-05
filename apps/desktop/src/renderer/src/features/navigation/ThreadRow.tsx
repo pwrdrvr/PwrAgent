@@ -126,6 +126,12 @@ export function ThreadRow(props: ThreadRowProps) {
     : threadKey === props.selectedThreadKey;
   const active = threadKey === props.selectedThreadKey;
   const isComposerSource = threadKey === props.composerSourceThreadKey;
+  // A remote-owned row whose peer isn't currently connected renders dimmed:
+  // the data shown is the last-known snapshot, not live.
+  const isRemoteOffline = Boolean(
+    props.thread.federation?.peerStatus
+    && props.thread.federation.peerStatus !== "connected",
+  );
   const status = getThreadRowStatus(props.thread, props.thinkingThreadKeys);
   const [pickerOpen, setPickerOpen] = useState(false);
   const rowButtonRef = useRef<HTMLButtonElement>(null);
@@ -255,7 +261,9 @@ export function ThreadRow(props: ThreadRowProps) {
         aria-pressed={selected}
         className={`thread-row${props.compact ? " thread-row--compact" : ""}${
           selected ? " is-selected" : ""
-        }${isComposerSource ? " is-composer-source" : ""}`}
+        }${isComposerSource ? " is-composer-source" : ""}${
+          isRemoteOffline ? " is-remote-offline" : ""
+        }`}
         type="button"
         onKeyDown={(event) => {
           // Reorder a pinned thread within its backend's pinned

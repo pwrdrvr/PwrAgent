@@ -1046,6 +1046,53 @@ export type SetThreadPinResponse = {
   pinnedRank?: string;
 };
 
+/**
+ * Viewer-owned pin of a thread that lives on another PwrAgent instance.
+ * Stored only on the viewing instance (`remote_thread_pins`); the owning
+ * instance never learns it has been pinned. The cached summary/label render
+ * the row while the owner is unreachable.
+ */
+export type RemoteThreadPin = {
+  ref: FederatedThreadRef;
+  addedAt: number;
+  /** Peer display label captured at pin/refresh time. */
+  instanceLabel: string;
+  /** Last successfully fetched summary (unstamped), for offline rendering. */
+  summary?: NavigationThreadSummary;
+};
+
+export type AddRemoteThreadPinRequest = {
+  ref: FederatedThreadRef;
+  /** Summary the caller already holds (e.g. a ⌘K result) so the pinned row
+   *  can render before the next peer fetch. */
+  summary?: NavigationThreadSummary;
+  instanceLabel?: string;
+};
+
+export type AddRemoteThreadPinResponse = {
+  pin: RemoteThreadPin;
+};
+
+export type RemoveRemoteThreadPinRequest = {
+  ref: FederatedThreadRef;
+};
+
+export type RemoveRemoteThreadPinResponse = {
+  removed: boolean;
+};
+
+/** ⌘K federated jump search: query connected peers' navigation summaries. */
+export type FederationJumpSearchRequest = {
+  query: string;
+  /** Max remote rows returned. Clamped to 1..50; default 8. */
+  limit?: number;
+};
+
+export type FederationJumpSearchResponse = {
+  /** Stamped remote rows (`federation` set), ordered by updatedAt desc. */
+  results: NavigationThreadSummary[];
+};
+
 export type SetThreadAgentRequest = {
   backend?: AppServerBackendKind;
   threadId: ThreadIdentifier;
