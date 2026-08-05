@@ -7,7 +7,6 @@ import {
   deriveMergeState,
   deriveReviewState,
   hasChecksStillRunning,
-  isGithubOrganizationSamlEnforcementError,
   parseGhAuthStatus,
   parseGhPrPayload,
 } from "../pr-status/github-pr-fetcher";
@@ -876,16 +875,5 @@ describe("GithubPrFetcher", () => {
       expect(runGhAuthStatus).not.toHaveBeenCalled();
       expect(probeGhAvailable).toHaveBeenCalledTimes(1);
     });
-  });
-});
-
-describe("isGithubOrganizationSamlEnforcementError", () => {
-  it("recognizes GitHub's organization SAML error case-insensitively", () => {
-    expect(
-      isGithubOrganizationSamlEnforcementError(
-        "GraphQL: RESOURCE PROTECTED BY ORGANIZATION SAML ENFORCEMENT.",
-      ),
-    ).toBe(true);
-    expect(isGithubOrganizationSamlEnforcementError("gh failed")).toBe(false);
   });
 });

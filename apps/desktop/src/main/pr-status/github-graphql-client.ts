@@ -478,6 +478,7 @@ function readErrorHeaders(error: unknown): Record<string, string> {
 function githubSamlEnforcementAliasIndexes(
   error: unknown,
   refCount: number,
+  partial?: Record<string, unknown>,
 ): number[] {
   const entries = (
     error as { errors?: Array<{ message?: unknown; path?: unknown[] }> } | null
@@ -502,9 +503,15 @@ function githubSamlEnforcementAliasIndexes(
     return [...indexes];
   }
   const message = error instanceof Error ? error.message : String(error);
-  return matching.length > 0 || isGithubOrganizationSamlEnforcementMessage(message)
-    ? Array.from({ length: refCount }, (_, index) => index)
-    : [];
+  if (
+    matching.length === 0
+    && !isGithubOrganizationSamlEnforcementMessage(message)
+  ) {
+    return [];
+  }
+  return Array.from({ length: refCount }, (_, index) => index).filter(
+    (index) => !partial || !partial[`r${index}`],
+  );
 }
 
 export function isGithubOrganizationSamlEnforcementMessage(
@@ -785,8 +792,8 @@ export class GithubGraphqlPrClient {
           unknown
         >;
       } catch (error) {
-        this.notifySamlEnforcement(error, repositoryRefs);
         const partial = (error as { data?: Record<string, unknown> } | null)?.data;
+        this.notifySamlEnforcement(error, repositoryRefs, partial);
         if (partial) {
           graphqlLog.debug("PR batch returned partial data", {
             refCount,
@@ -820,10 +827,10 @@ export class GithubGraphqlPrClient {
         data = (await this.runRequest(query, variables, token)) as BatchedPrResponse;
         break;
       } catch (error) {
-        this.notifySamlEnforcement(error, refs);
         // A GraphQL-level error still carries whatever aliases DID resolve.
         // One missing repo must not blank out the other 39 PRs in the batch.
         const partial = (error as { data?: BatchedPrResponse } | null)?.data;
+        this.notifySamlEnforcement(error, refs, partial);
         if (partial) {
           graphqlLog.debug("PR poll batch returned partial data", {
             refCount: refs.length,
@@ -893,11 +900,16 @@ export class GithubGraphqlPrClient {
     refs:
       | Array<Pick<BranchRef, "owner" | "repo"> & { branch?: string }>
       | undefined,
+    partial?: Record<string, unknown>,
   ): void {
     if (!refs || refs.length === 0) {
       return;
     }
-    for (const index of githubSamlEnforcementAliasIndexes(error, refs.length)) {
+    for (const index of githubSamlEnforcementAliasIndexes(
+      error,
+      refs.length,
+      partial,
+    )) {
       const ref = refs[index];
       if (ref) {
         this.notifyRepositoryAccess(ref, "saml-enforced");
