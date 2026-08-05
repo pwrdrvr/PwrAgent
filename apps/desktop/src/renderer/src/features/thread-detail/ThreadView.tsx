@@ -1858,6 +1858,8 @@ export function ThreadView(props: ThreadViewProps) {
     void migrationDesktopApi
       .applyThreadModelMigration({
         backend: thread.source,
+        federationTarget: thread.federation?.ref.target ??
+          readRendererFederationTarget(),
         threadId: thread.id,
         threadCreatedAt: thread.createdAt,
         threadModel: thread.model,

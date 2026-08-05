@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AgentEvent,
+  ApplyThreadModelMigrationRequest,
   CancelQueuedTurnRequest,
   CancelThreadExecutionModeQueueRequest,
   CompactThreadRequest,
@@ -176,6 +177,12 @@ const federationMock = vi.hoisted(() => {
     setThreadModelSettings: vi.fn(
       async (request: SetThreadModelSettingsRequest) => request,
     ),
+    applyThreadModelMigration: vi.fn(
+      async (request: ApplyThreadModelMigrationRequest) => ({
+        ...request,
+        status: "acknowledged-new-thread" as const,
+      }),
+    ),
     runCodexEnvironmentAction: vi.fn(
       async (request: RunCodexEnvironmentActionRequest) => ({
         backend: request.backend,
@@ -316,6 +323,7 @@ describe("agent ipc", () => {
     const {
       AGENT_CANCEL_QUEUED_TURN_CHANNEL,
       AGENT_CANCEL_THREAD_EXECUTION_MODE_QUEUE_CHANNEL,
+      AGENT_APPLY_THREAD_MODEL_MIGRATION_CHANNEL,
       AGENT_COMPACT_THREAD_CHANNEL,
       AGENT_FORK_THREAD_CHANNEL,
       AGENT_INTERRUPT_TURN_CHANNEL,
@@ -421,6 +429,13 @@ describe("agent ipc", () => {
       threadId: "thread-1",
       model: "gpt-5-codex",
     });
+    await handlers.get(AGENT_APPLY_THREAD_MODEL_MIGRATION_CHANNEL)?.({}, {
+      backend: "codex",
+      federationTarget,
+      threadId: "thread-1",
+      threadCreatedAt: 1_000,
+      threadModel: "gpt-5-codex",
+    });
     await handlers.get(AGENT_RUN_CODEX_ENVIRONMENT_ACTION_CHANNEL)?.({}, {
       backend: "codex",
       federationTarget,
@@ -520,6 +535,14 @@ describe("agent ipc", () => {
       backend: "codex",
       threadId: "thread-1",
       model: "gpt-5-codex",
+    });
+    expect(
+      federationMock.remoteBackend.applyThreadModelMigration,
+    ).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      threadCreatedAt: 1_000,
+      threadModel: "gpt-5-codex",
     });
     expect(federationMock.remoteBackend.runCodexEnvironmentAction).toHaveBeenCalledWith({
       backend: "codex",

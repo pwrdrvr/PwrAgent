@@ -6,6 +6,8 @@ import type {
   AppServerReadThreadRequest,
   AppServerReadThreadResponse,
   AgentEvent,
+  ApplyThreadModelMigrationRequest,
+  ApplyThreadModelMigrationResponse,
   ArchiveThreadRequest,
   ArchiveThreadResponse,
   CancelQueuedTurnRequest,
@@ -114,6 +116,7 @@ export const FEDERATION_BACKEND_METHODS = {
   cancelThreadExecutionModeQueue: "backend.cancelThreadExecutionModeQueue",
   setAcpSessionRuntimeOption: "backend.setAcpSessionRuntimeOption",
   setThreadModelSettings: "backend.setThreadModelSettings",
+  applyThreadModelMigration: "backend.applyThreadModelMigration",
   submitServerRequest: "backend.submitServerRequest",
   runCodexEnvironmentAction: "backend.runCodexEnvironmentAction",
   stopCodexEnvironmentAction: "backend.stopCodexEnvironmentAction",
@@ -181,6 +184,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.cancelThreadExecutionModeQueue]: "turn_control",
   [FEDERATION_BACKEND_METHODS.setAcpSessionRuntimeOption]: "turn_control",
   [FEDERATION_BACKEND_METHODS.setThreadModelSettings]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.applyThreadModelMigration]: "turn_control",
   [FEDERATION_BACKEND_METHODS.submitServerRequest]: "pending_request_control",
   [FEDERATION_BACKEND_METHODS.runCodexEnvironmentAction]: "environment_actions",
   [FEDERATION_BACKEND_METHODS.stopCodexEnvironmentAction]: "environment_actions",
@@ -277,6 +281,9 @@ export type FederationBackendOperations = {
   setThreadModelSettings(
     request: SetThreadModelSettingsRequest,
   ): Promise<SetThreadModelSettingsResponse>;
+  applyThreadModelMigration(
+    request: ApplyThreadModelMigrationRequest,
+  ): Promise<ApplyThreadModelMigrationResponse>;
   submitServerRequest(
     request: SubmitServerRequestRequest,
   ): Promise<SubmitServerRequestResponse>;
@@ -527,6 +534,13 @@ export function registerFederationBackendHandlers(params: {
     async (envelope) =>
       await params.backend.setThreadModelSettings(
         envelope.params as SetThreadModelSettingsRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.applyThreadModelMigration,
+    async (envelope) =>
+      await params.backend.applyThreadModelMigration(
+        envelope.params as ApplyThreadModelMigrationRequest,
       ),
   );
   params.router.registerHandler(
@@ -867,6 +881,15 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   ): Promise<SetThreadModelSettingsResponse> {
     return await this.rpc.request<SetThreadModelSettingsResponse>({
       method: FEDERATION_BACKEND_METHODS.setThreadModelSettings,
+      params: request,
+    });
+  }
+
+  async applyThreadModelMigration(
+    request: ApplyThreadModelMigrationRequest,
+  ): Promise<ApplyThreadModelMigrationResponse> {
+    return await this.rpc.request<ApplyThreadModelMigrationResponse>({
+      method: FEDERATION_BACKEND_METHODS.applyThreadModelMigration,
       params: request,
     });
   }

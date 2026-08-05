@@ -2,6 +2,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import type {
   AgentEvent,
+  ApplyThreadModelMigrationResponse,
   AppServerListSkillsResponse,
   AppServerListThreadsResponse,
   AppServerReadThreadResponse,
@@ -59,6 +60,7 @@ import {
   type AppServerListSkillsRequest,
   type AppServerListThreadsRequest,
   type AppServerReadThreadRequest,
+  type ApplyThreadModelMigrationRequest,
   type CancelQueuedTurnRequest,
   type CancelThreadExecutionModeQueueRequest,
   type CompactThreadRequest,
@@ -1852,6 +1854,11 @@ function localBackendOperations(): FederationBackendOperations {
       request: SetThreadModelSettingsRequest,
     ): Promise<SetThreadModelSettingsResponse> {
       return await getDesktopBackendRegistry().setThreadModelSettings(request);
+    },
+    async applyThreadModelMigration(
+      request: ApplyThreadModelMigrationRequest,
+    ): Promise<ApplyThreadModelMigrationResponse> {
+      return await getDesktopBackendRegistry().applyThreadModelMigration(request);
     },
     async submitServerRequest(
       request: SubmitServerRequestRequest,
