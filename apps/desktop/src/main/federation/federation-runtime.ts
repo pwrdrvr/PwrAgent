@@ -68,6 +68,10 @@ import {
   type MarkThreadSeenRequest,
   type SetThreadPinRequest,
   type SetThreadPinResponse,
+  type SetThreadPrAutoDispatchRequest,
+  type SetThreadPrAutoDispatchResponse,
+  type DetachThreadPullRequestRequest,
+  type DetachThreadPullRequestResponse,
   type ReorderThreadPinsRequest,
   type ReorderThreadPinsResponse,
   type NavigationSnapshot,
@@ -1445,6 +1449,19 @@ function localBackendOperations(): FederationBackendOperations {
         threadId: request.threadId,
         pinnedRank: overlay.pinnedRank,
       };
+    },
+    async detachThreadPullRequest(
+      request: DetachThreadPullRequestRequest,
+    ): Promise<DetachThreadPullRequestResponse> {
+      // Delegates to the app-server service (PR status registry + dispatch
+      // coordinator live there); the resulting thread/pullRequests/updated
+      // event fans back out to remote viewers.
+      return await getDesktopBackendRegistry().detachThreadPullRequest(request);
+    },
+    async setThreadPrAutoDispatch(
+      request: SetThreadPrAutoDispatchRequest,
+    ): Promise<SetThreadPrAutoDispatchResponse> {
+      return await getDesktopBackendRegistry().setThreadPrAutoDispatch(request);
     },
     async reorderThreadPins(
       request: ReorderThreadPinsRequest,

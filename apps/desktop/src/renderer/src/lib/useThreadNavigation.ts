@@ -6344,15 +6344,6 @@ export function useThreadNavigation(
         );
         return;
       }
-      // Not routed over federation yet — the toggle would flip a phantom
-      // row in the viewer's DB while the owner keeps dispatching (or not).
-      if (thread.federation?.ref.target.scope === "remote") {
-        setSetThreadModelSettingsError(
-          "PR auto-dispatch for remote threads must be changed on the owning instance.",
-        );
-        return;
-      }
-
       setSetThreadModelSettingsError(undefined);
       setOptimisticThread((current) =>
         current && current.id === thread.id && current.source === thread.source
@@ -6371,6 +6362,10 @@ export function useThreadNavigation(
       try {
         await setThreadPrAutoDispatchRequest({
           backend: thread.source,
+          // Remote threads toggle Auto-fix on their owning instance; the
+          // owner's thread/prAutoDispatch/updated event converges viewers.
+          federationTarget: thread.federation?.ref.target ??
+            readRendererFederationTarget(),
           threadId: thread.id,
           enabled,
         });

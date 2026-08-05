@@ -135,6 +135,8 @@ import {
   type CancelThreadPrAutoDispatchResponse,
   type SendThreadPrAutoDispatchNowRequest,
   type SendThreadPrAutoDispatchNowResponse,
+  type DetachThreadPullRequestRequest,
+  type DetachThreadPullRequestResponse,
   type ApplyThreadModelMigrationRequest,
   type ApplyThreadModelMigrationResponse,
   type TurnOffCodexFastEverywhereResponse,
@@ -1578,6 +1580,10 @@ type DirectoryGitStatusWriter = (params: {
   fetchedAt: number;
   gitStatus?: NavigationDirectoryGitStatus;
 }) => void | Promise<void>;
+
+type ThreadPullRequestDetachHandler = (
+  request: DetachThreadPullRequestRequest,
+) => Promise<DetachThreadPullRequestResponse>;
 
 type ThreadPrAutoDispatchHandler = {
   preferenceChanged: (request: SetThreadPrAutoDispatchRequest) => Promise<void>;
@@ -6185,6 +6191,9 @@ export class DesktopBackendRegistry {
     | undefined;
   private directoryGitStatusWriter: DirectoryGitStatusWriter | undefined;
   private threadPrAutoDispatchHandler: ThreadPrAutoDispatchHandler | undefined;
+  private threadPullRequestDetachHandler:
+    | ThreadPullRequestDetachHandler
+    | undefined;
   private threadPullRequestCanonicalizer:
     | ThreadPullRequestCanonicalizer
     | undefined;
@@ -6884,6 +6893,28 @@ export class DesktopBackendRegistry {
     handler: ThreadPrAutoDispatchHandler | null | undefined,
   ): void {
     this.threadPrAutoDispatchHandler = handler ?? undefined;
+  }
+
+  setThreadPullRequestDetachHandler(
+    handler: ThreadPullRequestDetachHandler | null | undefined,
+  ): void {
+    this.threadPullRequestDetachHandler = handler ?? undefined;
+  }
+
+  /**
+   * Detach a PR attachment via the desktop app-server service. The service
+   * owns the PR status registry and dispatch coordinator, so the registry
+   * only mediates (mirrors threadPrAutoDispatchHandler); callers such as
+   * the federation runtime use this instead of importing the IPC module.
+   */
+  async detachThreadPullRequest(
+    params: DetachThreadPullRequestRequest,
+  ): Promise<DetachThreadPullRequestResponse> {
+    const handler = this.threadPullRequestDetachHandler;
+    if (!handler) {
+      throw new Error("Pull-request detach service is not available yet.");
+    }
+    return await handler(params);
   }
 
   /**

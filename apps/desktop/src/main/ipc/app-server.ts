@@ -3165,6 +3165,18 @@ class DesktopAppServerService {
   async detachThreadPullRequest(
     request: DetachThreadPullRequestRequest,
   ): Promise<DetachThreadPullRequestResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      // PR attachments live on the owning instance; detaching locally
+      // would only write a phantom row into the viewer's overlay store
+      // that the next remote snapshot reverts.
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .detachThreadPullRequest(remoteRequest);
+    }
     const backend = request.backend ?? "codex";
     const prKey = getPrStatusKey(request.pr);
     const currentPr = this.prStatusRegistry.get(prKey)?.pr;
@@ -6005,6 +6017,9 @@ export function registerAppServerIpcHandlers(): void {
   getDesktopBackendRegistry().setDirectoryGitStatusWriter(
     async (params) => await appServerService.writeDirectoryGitStatusEntry(params),
   );
+  getDesktopBackendRegistry().setThreadPullRequestDetachHandler(
+    async (request) => await appServerService.detachThreadPullRequest(request),
+  );
   getDesktopBackendRegistry().setThreadPrAutoDispatchHandler({
     preferenceChanged: async (request) =>
       await appServerService.handleThreadPrAutoDispatchPreference(request),
@@ -6403,11 +6418,18 @@ export function registerAppServerIpcHandlers(): void {
       event,
       request: DetachThreadPullRequestRequest,
     ): Promise<DetachThreadPullRequestResponse> => {
-      // PR attachments live on the owning instance; a federation window
-      // detaching here would only pollute this machine's overlay store.
-      if (isFederationWindowWebContents(event?.sender)) {
+      // Defense in depth behind renderer stamping: a federation window's
+      // detach must carry a remote target so it routes to the owning
+      // instance instead of polluting this machine's overlay store.
+      if (
+        isFederationWindowWebContents(event?.sender)
+        && !(
+          request.federationTarget
+          && isRemoteFederationTarget(request.federationTarget)
+        )
+      ) {
         throw new Error(
-          "Detaching a pull request is not yet supported for remote threads.",
+          "Detaching a pull request for a remote thread must target the owning instance.",
         );
       }
       return await appServerService.detachThreadPullRequest(request);
@@ -6658,6 +6680,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   registry?.setThreadPullRequestWatchToolHandler(undefined);
   registry?.setDirectoryGitStatusWriter(undefined);
   registry?.setThreadPrAutoDispatchHandler(undefined);
+  registry?.setThreadPullRequestDetachHandler(undefined);
   await appServerService.close();
 }
 

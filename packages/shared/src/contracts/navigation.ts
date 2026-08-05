@@ -1166,6 +1166,7 @@ export type RefreshThreadPullRequestsRequest = {
 
 export type DetachThreadPullRequestRequest = {
   backend?: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   pr: Pick<PrSummary, "provider" | "org" | "repo" | "number">;
 };

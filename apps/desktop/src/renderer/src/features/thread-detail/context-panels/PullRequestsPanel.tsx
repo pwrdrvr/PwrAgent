@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
+import { readRendererFederationTarget } from "../../../lib/federation-window";
 import {
   DetachPullRequestWarning,
   shouldShowDetachPullRequestWarning,
@@ -41,6 +42,11 @@ export function PullRequestsPanel(props: PullRequestsPanelProps) {
     }
     await props.desktopApi.detachThreadPullRequest({
       backend: props.thread.source,
+      // Remote threads detach on their owning instance; without the target
+      // the write lands in the viewer's overlay store and reverts on the
+      // next remote snapshot.
+      federationTarget: props.thread.federation?.ref.target ??
+        readRendererFederationTarget(),
       threadId: props.thread.id,
       pr,
     });
