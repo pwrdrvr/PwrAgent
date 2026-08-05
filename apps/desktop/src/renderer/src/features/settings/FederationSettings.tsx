@@ -903,7 +903,6 @@ export function FederationSettings(props: FederationSettingsProps) {
                     onClick={() => {
                       void props.desktopApi?.openFederationWindow?.({
                         target: { scope: "remote", instanceId: peer.id },
-                        label: peer.label,
                       });
                     }}
                   >
@@ -1486,7 +1485,9 @@ function peerDisplayName(
   peers: FederationHealthStatus["peers"],
 ): string {
   const peer = peers.find((candidate) => candidate.id === peerId);
-  return peer && peer.label !== peerId ? peer.label : peerId;
+  return peer && peer.label !== peerId
+    ? formatFederationPeerDisplayLabel(peer, peers)
+    : peerId;
 }
 
 function trimmedOrUndefined(value: string): string | undefined {

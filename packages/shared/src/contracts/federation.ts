@@ -336,7 +336,6 @@ export type ResetFederationEnrollmentResponse = {
 
 export type OpenFederationWindowRequest = {
   target: FederationRemoteTarget;
-  label?: string;
   initialThread?: FederatedThreadRef;
 };
 
@@ -492,17 +491,22 @@ export function isRemoteFederationTarget(
  * machine enrolled at once) — in that case even "default" shows so the
  * entries stay tellable apart. A lone default-profile peer keeps the
  * bare machine name. Peers that never advertised a profile (older
- * builds) always keep the bare label.
+ * builds) always keep the bare label, and revoked peers are dead
+ * entries that must not force the suffix onto their live sibling.
  */
 export function formatFederationPeerDisplayLabel(
   peer: { label: string; profileName?: string },
-  visiblePeers: readonly { label: string; profileName?: string }[],
+  visiblePeers: readonly {
+    label: string;
+    profileName?: string;
+    revokedAt?: number;
+  }[],
 ): string {
   if (!peer.profileName) {
     return peer.label;
   }
   const sameMachinePeers = visiblePeers.filter(
-    (candidate) => candidate.label === peer.label,
+    (candidate) => !candidate.revokedAt && candidate.label === peer.label,
   );
   if (peer.profileName === "default" && sameMachinePeers.length <= 1) {
     return peer.label;

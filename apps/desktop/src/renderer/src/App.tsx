@@ -1665,7 +1665,6 @@ function DesktopAppShell(props: {
                 ) {
                   await desktopApi?.openFederationWindow?.({
                     target: result.federation.ref.target,
-                    label: result.federation.instanceLabel,
                     initialThread: result.federation.ref,
                   });
                   return;

@@ -155,5 +155,14 @@ describe("federation contracts", () => {
         devProfile,
       ]),
     ).toBe("Mac-Mini-M4");
+
+    // A revoked sibling enrollment is a dead entry — it must not force
+    // "/ default" onto the machine's one live peer.
+    expect(
+      formatFederationPeerDisplayLabel(lonelyDefault, [
+        lonelyDefault,
+        { label: "Mac-Mini-M4", profileName: "dev", revokedAt: 5_000 },
+      ]),
+    ).toBe("Mac-Mini-M4");
   });
 });
