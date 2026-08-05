@@ -1,10 +1,12 @@
-import { describe, expect, it } from "vitest";
-import { renderHook } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { act, renderHook } from "@testing-library/react";
 import type { ScheduledThreadAction } from "@pwragent/shared";
 import { useComposerDraftStore } from "../../features/composer/useComposerDraftStore";
+import type { DesktopApi } from "../desktop-api";
 import {
   applyScheduledActionProjection,
   syncScheduledActionProjections,
+  useScheduledThreadActionProjection,
 } from "../useScheduledThreadActionProjection";
 
 function scheduledAction(
@@ -25,6 +27,10 @@ function scheduledAction(
     ...overrides,
   };
 }
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("scheduled thread action projections", () => {
   it("hydrates durable scheduled actions without replacing local queue state", () => {
@@ -62,6 +68,72 @@ describe("scheduled thread action projections", () => {
     );
 
     expect(store.getQueuedTurns(scopeKey)).toEqual([]);
+  });
+
+  it("turns a failed backend action into a locally recoverable draft", () => {
+    const { result } = renderHook(() => useComposerDraftStore());
+    const store = result.current;
+    const scopeKey = "thread:codex:thread-1";
+
+    applyScheduledActionProjection(store, scheduledAction({
+      status: "failed",
+      errorMessage: "backend offline",
+    }));
+
+    expect(store.getQueuedTurns(scopeKey)).toEqual([
+      expect.objectContaining({
+        failedScheduledActionId: "scheduled-1",
+        errorMessage: "backend offline",
+        text: "Follow up",
+      }),
+    ]);
+    expect(
+      store.getQueuedTurns(scopeKey)[0]?.scheduledActionId,
+    ).toBeUndefined();
+  });
+
+  it("periodically reconciles actions changed by another process", async () => {
+    vi.useFakeTimers();
+    const { result } = renderHook(() => useComposerDraftStore());
+    const listScheduledThreadActions = vi.fn()
+      .mockResolvedValueOnce({ actions: [], observedAt: 1_000 })
+      .mockResolvedValueOnce({
+        actions: [scheduledAction()],
+        observedAt: 2_000,
+      });
+    const desktopApi = {
+      listScheduledThreadActions,
+      onAgentEvent: () => () => undefined,
+    } as unknown as DesktopApi;
+    const projection = renderHook(() => useScheduledThreadActionProjection({
+      composerDraftStore: result.current,
+      desktopApi,
+    }));
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(listScheduledThreadActions).toHaveBeenCalledWith({
+      federationTarget: undefined,
+      terminalUpdatedAfter: undefined,
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(listScheduledThreadActions).toHaveBeenCalledTimes(2);
+    expect(listScheduledThreadActions).toHaveBeenLastCalledWith({
+      federationTarget: undefined,
+      terminalUpdatedAfter: 1_000,
+    });
+    expect(
+      result.current.getQueuedTurns("thread:codex:thread-1"),
+    ).toEqual([
+      expect.objectContaining({ scheduledActionId: "scheduled-1" }),
+    ]);
+
+    projection.unmount();
+    vi.useRealTimers();
   });
 
   it("keeps review display copy separate from its editable slash command", () => {

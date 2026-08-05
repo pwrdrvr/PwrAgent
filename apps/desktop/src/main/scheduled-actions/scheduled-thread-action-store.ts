@@ -152,7 +152,12 @@ export class ScheduledThreadActionStore {
       where.push("thread_id = ?");
       values.push(request.threadId);
     }
-    if (!request.includeTerminal) {
+    if (typeof request.terminalUpdatedAfter === "number") {
+      where.push(
+        `(status IN (${ACTIVE_STATUSES.map(() => "?").join(", ")}) OR updated_at >= ?)`,
+      );
+      values.push(...ACTIVE_STATUSES, request.terminalUpdatedAfter);
+    } else if (!request.includeTerminal) {
       where.push(`status IN (${ACTIVE_STATUSES.map(() => "?").join(", ")})`);
       values.push(...ACTIVE_STATUSES);
     }

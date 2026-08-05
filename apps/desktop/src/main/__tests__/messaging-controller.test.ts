@@ -191,6 +191,85 @@ describe("MessagingController", () => {
     });
   });
 
+  it("reports a failed send-now mutation instead of confirming it", async () => {
+    const harness = await createHarness({
+      sendScheduledThreadActionNow: async () => ({
+        action: {
+          id: "scheduled-action:abcdef12-3456",
+          backend: "codex",
+          threadId: "thread-1",
+          kind: "turn",
+          origin: "messaging",
+          status: "failed",
+          scheduledFor: 7_201_000,
+          displayText: "Follow up",
+          errorMessage: "backend offline",
+          createdAt: 1_000,
+          updatedAt: 2_000,
+        },
+      }),
+    });
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(
+      buildCommandEvent("/scheduled send abcdef12"),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "error",
+      title: "Scheduled message error",
+      body: "backend offline",
+    });
+  });
+
+  it("delivers delayed scheduled failures to their originating surface", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/scheduledAction/updated",
+        params: {
+          action: {
+            id: "scheduled-action:abcdef12-3456",
+            backend: "codex",
+            threadId: "thread-1",
+            kind: "turn",
+            origin: "messaging",
+            status: "failed",
+            scheduledFor: 7_201_000,
+            displayText: "Follow up",
+            errorMessage: "backend offline",
+            turn: {
+              input: [{ type: "text", text: "Follow up" }],
+              messageOrigin: {
+                kind: "messaging",
+                messaging: {
+                  platform: "telegram",
+                  surface: { id: "chat-1", kind: "dm" },
+                  actor: { platformUserId: "user-1" },
+                },
+              },
+            },
+            createdAt: 1_000,
+            updatedAt: 2_000,
+          },
+        },
+      },
+    });
+
+    expect(harness.delivered).toEqual([
+      expect.objectContaining({
+        kind: "error",
+        title: "Scheduled message could not be sent",
+        body: "Follow up\n\nbackend offline",
+      }),
+    ]);
+  });
+
   it("routes scheduled message management to the bound federation peer", async () => {
     const harness = await createHarness();
     const event = buildCommandEvent("/schedule 2h Follow up");

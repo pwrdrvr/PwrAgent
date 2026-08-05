@@ -346,6 +346,51 @@ describe("ScheduledThreadActionService", () => {
     expect(harness.submitTurn).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects send-now when backend admission fails without losing the error", async () => {
+    const harness = createHarness(5_000);
+    harness.submitTurn.mockRejectedValueOnce(new Error("backend offline"));
+    store.create({
+      id: "scheduled-1",
+      backend: "codex",
+      threadId: "thread-1",
+      kind: "turn",
+      origin: "desktop",
+      scheduledFor: 50_000,
+      displayText: "Follow up",
+      turn: { input: [{ type: "text", text: "Follow up" }] },
+      now: 1_000,
+    });
+
+    await expect(harness.service.sendNow({ id: "scheduled-1" }))
+      .rejects.toThrow("backend offline");
+
+    expect(store.get("scheduled-1")).toMatchObject({
+      status: "failed",
+      errorMessage: "backend offline",
+    });
+  });
+
+  it("rejects an immediately due create when backend admission fails", async () => {
+    const harness = createHarness(5_000);
+    harness.submitTurn.mockRejectedValueOnce(new Error("backend unavailable"));
+
+    await expect(harness.service.create({
+      backend: "codex",
+      threadId: "thread-1",
+      kind: "turn",
+      scheduledFor: 5_000,
+      displayText: "Follow up",
+      turn: { input: [{ type: "text", text: "Follow up" }] },
+    })).rejects.toThrow("backend unavailable");
+
+    expect(store.list({ includeTerminal: true })).toEqual([
+      expect.objectContaining({
+        status: "failed",
+        errorMessage: "backend unavailable",
+      }),
+    ]);
+  });
+
   it("cancels an action already waiting in the registry", async () => {
     const harness = createHarness(20_000);
     store.create({

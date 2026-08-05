@@ -53,6 +53,7 @@ import type {
   NavigationLaunchpadDraft,
   NavigationSnapshot,
   NavigationThreadSummary,
+  ScheduledThreadAction,
   ThreadMessagingBindingTransition,
   ThreadExecutionMode,
   ThreadIdentifier,
@@ -1146,6 +1147,38 @@ export class MessagingController {
     if (!threadId) {
       return;
     }
+    const scheduledAction = scheduledActionForBackendEvent(event);
+    if (
+      scheduledAction?.origin === "messaging"
+      && scheduledAction.status === "failed"
+    ) {
+      const bindings = this.filterBindingsForChannel(
+        await this.options.store.findActiveBindingsForThread({
+          backend: event.backend,
+          threadId,
+        }),
+      ).filter((binding) =>
+        bindingMatchesFederationTarget(binding, event.federationTarget)
+        && bindingMatchesScheduledActionOrigin(binding, scheduledAction)
+      );
+      for (const binding of bindings) {
+        await this.deliver(
+          buildErrorIntent({
+            id: this.newIntentId("scheduled-message-dispatch-failed"),
+            createdAt: this.now(),
+            title: "Scheduled message could not be sent",
+            body: [
+              scheduledAction.displayText,
+              scheduledAction.errorMessage
+                ?? "The backend rejected the scheduled message.",
+            ].filter(Boolean).join("\n\n"),
+            recoverable: true,
+          }),
+          binding,
+        );
+      }
+      return;
+    }
     const eventTurnId = turnIdForBackendEvent(event);
     const turnQueueUpdate = turnQueueUpdateForBackendEvent(event);
     if (turnQueueUpdate) {
@@ -1986,6 +2019,11 @@ export class MessagingController {
         messageOrigin: messageOriginForInboundEvent(event),
       },
     });
+    const failureMessage = scheduledActionFailureMessage(response.action);
+    if (failureMessage) {
+      await this.deliverScheduledActionError(binding, event, failureMessage);
+      return;
+    }
     await this.deliver(
       buildConfirmationIntent({
         id: this.newIntentId("scheduled-message-created"),
@@ -2061,10 +2099,12 @@ export class MessagingController {
         if (!this.options.backend.sendScheduledThreadActionNow) {
           throw new Error("Sending scheduled messages now is unavailable.");
         }
-        await this.options.backend.sendScheduledThreadActionNow({
+        const mutation = await this.options.backend.sendScheduledThreadActionNow({
           federationTarget: federationTargetForBinding(binding),
           id: resolved.action.id,
         });
+        const failureMessage = scheduledActionFailureMessage(mutation.action);
+        if (failureMessage) throw new Error(failureMessage);
       } else if (operation === "cancel" || operation === "remove") {
         if (!this.options.backend.cancelScheduledThreadAction) {
           throw new Error("Cancelling scheduled messages is unavailable.");
@@ -2082,7 +2122,7 @@ export class MessagingController {
         }
         const parsed = parseMessagingSchedule(remaining, this.now());
         if (!parsed.ok) throw new Error(parsed.error);
-        await this.options.backend.updateScheduledThreadAction({
+        const mutation = await this.options.backend.updateScheduledThreadAction({
           federationTarget: federationTargetForBinding(binding),
           id: resolved.action.id,
           scheduledFor: parsed.scheduledFor,
@@ -2095,6 +2135,8 @@ export class MessagingController {
               ?? messageOriginForInboundEvent(event),
           },
         });
+        const failureMessage = scheduledActionFailureMessage(mutation.action);
+        if (failureMessage) throw new Error(failureMessage);
       } else {
         throw new Error(
           "Use /scheduled, /scheduled send <id>, /scheduled cancel <id>, or /scheduled edit <id> <time> <message>.",
@@ -16687,13 +16729,46 @@ function sharedConversationMentionInstruction(
 
 function threadIdForBackendEvent(event: AgentEvent): ThreadIdentifier | undefined {
   const params = event.notification.params as {
+    action?: unknown;
     parentThreadId?: unknown;
     threadId?: unknown;
   };
   if (typeof params.threadId === "string") {
     return params.threadId;
   }
-  return typeof params.parentThreadId === "string" ? params.parentThreadId : undefined;
+  if (typeof params.parentThreadId === "string") return params.parentThreadId;
+  const action = params.action as { threadId?: unknown } | undefined;
+  return typeof action?.threadId === "string" ? action.threadId : undefined;
+}
+
+function scheduledActionForBackendEvent(
+  event: AgentEvent,
+): ScheduledThreadAction | undefined {
+  if (event.notification.method !== "thread/scheduledAction/updated") {
+    return undefined;
+  }
+  const action = (event.notification.params as { action?: unknown }).action;
+  return action && typeof action === "object"
+    ? action as ScheduledThreadAction
+    : undefined;
+}
+
+function bindingMatchesScheduledActionOrigin(
+  binding: MessagingBindingRecord,
+  action: ScheduledThreadAction,
+): boolean {
+  const origin = action.turn?.messageOrigin?.messaging;
+  if (!origin) return true;
+  return binding.channel.channel === origin.platform
+    && binding.channel.conversation.id === origin.surface.id;
+}
+
+function scheduledActionFailureMessage(
+  action: ScheduledThreadAction,
+): string | undefined {
+  return action.status === "failed"
+    ? action.errorMessage ?? "The scheduled action could not be dispatched."
+    : undefined;
 }
 
 function reviewStartOutcomeForBackendEvent(

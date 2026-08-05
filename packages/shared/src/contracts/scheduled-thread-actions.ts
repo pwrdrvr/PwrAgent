@@ -105,10 +105,14 @@ export type ListScheduledThreadActionsRequest = {
   federationTarget?: FederationTarget;
   threadId?: ThreadIdentifier;
   includeTerminal?: boolean;
+  /** Include terminal actions changed at or after this timestamp alongside all active actions. */
+  terminalUpdatedAfter?: number;
 };
 
 export type ListScheduledThreadActionsResponse = {
   actions: ScheduledThreadAction[];
+  /** Scheduler clock cursor for a subsequent terminalUpdatedAfter request. */
+  observedAt?: number;
 };
 
 export type ScheduledThreadActionMutationResponse = {

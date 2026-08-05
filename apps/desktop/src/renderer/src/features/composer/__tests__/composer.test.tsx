@@ -5534,17 +5534,16 @@ describe("Composer", () => {
     const draftStore = createComposerDraftStore();
     draftStore.setQueuedTurn("thread:codex:thread-1", {
       id: "queued-steer-1",
-      queueEntryId: "queue-entry-1",
+      scheduledActionId: "scheduled-action-1",
       text: "Steer the original turn",
       imageAttachments: [],
       fileAttachments: [],
       input: [{ type: "text", text: "Steer the original turn" }],
     });
     const cancellation = createDeferred<{
-      queueEntryId: string;
-      cancelled: boolean;
+      action: ScheduledThreadAction;
     }>();
-    const cancelQueuedTurn = vi.fn(() => cancellation.promise);
+    const cancelScheduledThreadAction = vi.fn(() => cancellation.promise);
     const steerTurn = vi.fn();
     const baseProps = {
       backends: [
@@ -5567,7 +5566,7 @@ describe("Composer", () => {
         },
       ],
       desktopApi: {
-        cancelQueuedTurn,
+        cancelScheduledThreadAction,
         onAgentEvent: () => () => undefined,
         steerTurn,
       },
@@ -5592,8 +5591,9 @@ describe("Composer", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Steer" }));
-    expect(cancelQueuedTurn).toHaveBeenCalledWith({
-      queueEntryId: "queue-entry-1",
+    expect(cancelScheduledThreadAction).toHaveBeenCalledWith({
+      federationTarget: undefined,
+      id: "scheduled-action-1",
     });
 
     rerender(
@@ -5604,8 +5604,21 @@ describe("Composer", () => {
     );
     await act(async () => {
       cancellation.resolve({
-        queueEntryId: "queue-entry-1",
-        cancelled: true,
+        action: {
+          id: "scheduled-action-1",
+          backend: "codex",
+          threadId: "thread-1",
+          kind: "turn",
+          origin: "desktop",
+          status: "cancelled",
+          scheduledFor: 1_000,
+          displayText: "Steer the original turn",
+          turn: {
+            input: [{ type: "text", text: "Steer the original turn" }],
+          },
+          createdAt: 1_000,
+          updatedAt: 2_000,
+        },
       });
       await cancellation.promise;
     });
@@ -5619,7 +5632,7 @@ describe("Composer", () => {
       text: "Steer the original turn",
     });
     expect(
-      draftStore.getQueuedTurn("thread:codex:thread-1")?.queueEntryId,
+      draftStore.getQueuedTurn("thread:codex:thread-1")?.scheduledActionId,
     ).toBeUndefined();
   });
 

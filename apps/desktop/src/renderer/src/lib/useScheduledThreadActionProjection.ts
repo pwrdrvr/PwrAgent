@@ -4,6 +4,8 @@ import type { ComposerDraftStore } from "../features/composer/useComposerDraftSt
 import type { DesktopApi } from "./desktop-api";
 import { federationTargetsEqual } from "./federated-thread-events";
 
+const SCHEDULED_ACTION_RECONCILIATION_INTERVAL_MS = 5_000;
+
 export function useScheduledThreadActionProjection(params: {
   composerDraftStore: ComposerDraftStore;
   desktopApi?: DesktopApi;
@@ -11,6 +13,9 @@ export function useScheduledThreadActionProjection(params: {
 }): void {
   const refreshSequenceRef = useRef(0);
   const projectedScopeKeysRef = useRef<Set<string>>(new Set());
+  const projectedFailuresRef = useRef<Map<string, ScheduledThreadAction>>(new Map());
+  const dismissedFailuresRef = useRef<Set<string>>(new Set());
+  const terminalUpdatedAfterRef = useRef<number | undefined>(undefined);
 
   useEffect(() => {
     const desktopApi = params.desktopApi;
@@ -23,11 +28,34 @@ export function useScheduledThreadActionProjection(params: {
       try {
         const response = await desktopApi.listScheduledThreadActions!({
           federationTarget: params.federationTarget,
+          terminalUpdatedAfter: terminalUpdatedAfterRef.current,
         });
         if (cancelled || sequence !== refreshSequenceRef.current) return;
+        terminalUpdatedAfterRef.current = response.observedAt ?? Date.now();
+        for (const [actionId, action] of projectedFailuresRef.current) {
+          const stillProjected = params.composerDraftStore
+            .getQueuedTurns(scopeKeyForAction(action))
+            .some((entry) => entry.failedScheduledActionId === actionId);
+          if (!stillProjected) {
+            dismissedFailuresRef.current.add(actionId);
+            projectedFailuresRef.current.delete(actionId);
+          }
+        }
+        for (const action of response.actions) {
+          if (
+            action.status === "failed"
+            && !dismissedFailuresRef.current.has(action.id)
+          ) {
+            projectedFailuresRef.current.set(action.id, action);
+          }
+        }
+        const visibleActions = [
+          ...response.actions.filter((action) => action.status !== "failed"),
+          ...projectedFailuresRef.current.values(),
+        ];
         projectedScopeKeysRef.current = syncScheduledActionProjections(
           params.composerDraftStore,
-          response.actions,
+          visibleActions,
           projectedScopeKeysRef.current,
         );
       } catch (error) {
@@ -50,11 +78,21 @@ export function useScheduledThreadActionProjection(params: {
           params.composerDraftStore,
           action,
         );
+        if (action.status === "failed") {
+          projectedFailuresRef.current.set(action.id, action);
+        } else {
+          projectedFailuresRef.current.delete(action.id);
+        }
         void refresh();
       }
     });
+    const reconciliationTimer = setInterval(
+      () => void refresh(),
+      SCHEDULED_ACTION_RECONCILIATION_INTERVAL_MS,
+    );
     return () => {
       cancelled = true;
+      clearInterval(reconciliationTimer);
       unsubscribe?.();
     };
   }, [
@@ -71,6 +109,7 @@ export function syncScheduledActionProjections(
 ): Set<string> {
   const byScope = new Map<string, ScheduledThreadAction[]>();
   for (const action of actions) {
+    if (!isProjectableAction(action)) continue;
     const scopeKey = scopeKeyForAction(action);
     const current = byScope.get(scopeKey) ?? [];
     current.push(action);
@@ -83,7 +122,7 @@ export function syncScheduledActionProjections(
   }
   for (const scopeKey of projectedScopes) {
     const local = store.getQueuedTurns(scopeKey).filter(
-      (entry) => !entry.scheduledActionId,
+      (entry) => !entry.scheduledActionId && !entry.failedScheduledActionId,
     );
     const scheduled = (byScope.get(scopeKey) ?? [])
       .sort((left, right) => left.scheduledFor - right.scheduledFor)
@@ -100,9 +139,11 @@ export function applyScheduledActionProjection(
   const scopeKey = scopeKeyForAction(action);
   const current = store.getQueuedTurns(scopeKey);
   const withoutAction = current.filter(
-    (entry) => entry.scheduledActionId !== action.id,
+    (entry) =>
+      entry.scheduledActionId !== action.id
+      && entry.failedScheduledActionId !== action.id,
   );
-  if (["scheduled", "dispatching", "queued"].includes(action.status)) {
+  if (isProjectableAction(action)) {
     store.setQueuedTurns(scopeKey, [
       ...withoutAction,
       projectionFromAction(action),
@@ -115,7 +156,13 @@ export function applyScheduledActionProjection(
 function projectionFromAction(action: ScheduledThreadAction) {
   return {
     id: `scheduled-projection:${action.id}`,
-    scheduledActionId: action.id,
+    ...(action.status === "failed"
+      ? {
+          failedScheduledActionId: action.id,
+          errorMessage:
+            action.errorMessage ?? "The scheduled action could not be dispatched.",
+        }
+      : { scheduledActionId: action.id }),
     ...(action.status === "scheduled"
       ? { scheduledSendAt: action.scheduledFor }
       : {}),
@@ -139,6 +186,12 @@ function projectionFromAction(action: ScheduledThreadAction) {
         }
       : {}),
   };
+}
+
+function isProjectableAction(action: ScheduledThreadAction): boolean {
+  return ["scheduled", "dispatching", "queued", "failed"].includes(
+    action.status,
+  );
 }
 
 function scopeKeyForAction(action: ScheduledThreadAction): string {

@@ -109,7 +109,11 @@ export class ScheduledThreadActionService {
   list(
     request: ListScheduledThreadActionsRequest = {},
   ): ListScheduledThreadActionsResponse {
-    return { actions: this.options.store.list(request) };
+    const observedAt = this.now();
+    return {
+      actions: this.options.store.list(request),
+      observedAt,
+    };
   }
 
   async create(
@@ -124,7 +128,7 @@ export class ScheduledThreadActionService {
       if (!matchesCreateRequest(existing, request)) {
         throw new Error(`Scheduled action id ${id} was reused with different input.`);
       }
-      return { action: existing };
+      return mutationResponseForAction(existing);
     }
     const action = this.options.store.create({
       ...request,
@@ -137,7 +141,9 @@ export class ScheduledThreadActionService {
     if (action.scheduledFor <= now) {
       await this.evaluateDueActions();
     }
-    return { action: this.options.store.get(action.id) ?? action };
+    return mutationResponseForAction(
+      this.options.store.get(action.id) ?? action,
+    );
   }
 
   async update(
@@ -166,7 +172,9 @@ export class ScheduledThreadActionService {
     if (updated.scheduledFor <= this.now()) {
       await this.evaluateDueActions();
     }
-    return { action: this.options.store.get(updated.id) ?? updated };
+    return mutationResponseForAction(
+      this.options.store.get(updated.id) ?? updated,
+    );
   }
 
   async cancel(
@@ -213,7 +221,9 @@ export class ScheduledThreadActionService {
     await this.publish(claimed);
     await this.dispatch(claimed);
     this.scheduleNextTimer();
-    return { action: this.options.store.get(claimed.id) ?? claimed };
+    return mutationResponseForAction(
+      this.options.store.get(claimed.id) ?? claimed,
+    );
   }
 
   async evaluateDueActions(): Promise<void> {
@@ -507,6 +517,17 @@ function validateScheduledActionRequest(
   if (request.kind === "review" && !request.displayText.trim()) {
     throw new Error("Scheduled review display text is required.");
   }
+}
+
+function mutationResponseForAction(
+  action: ScheduledThreadAction,
+): ScheduledThreadActionMutationResponse {
+  if (action.status === "failed") {
+    throw new Error(
+      action.errorMessage ?? "The scheduled action could not be dispatched.",
+    );
+  }
+  return { action };
 }
 
 function queueEntryIdForAction(actionId: string): string {

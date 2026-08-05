@@ -423,6 +423,8 @@ type QueuedTurnDraft = {
   backendQueuePending?: boolean;
   queueEntryId?: string;
   scheduledActionId?: string;
+  failedScheduledActionId?: string;
+  errorMessage?: string;
   input?: AppServerTurnInputItem[];
   imageAttachments: ComposerImageAttachment[];
   fileAttachments: ComposerFileAttachment[];
@@ -440,6 +442,15 @@ type PendingSteerDraft = QueuedTurnDraft & {
   expectedTurnId: string;
   status: "pending" | "steering";
 };
+
+function scheduledActionFailureMessage(action: {
+  errorMessage?: string;
+  status: string;
+}): string | undefined {
+  return action.status === "failed"
+    ? action.errorMessage ?? "The scheduled action could not be dispatched."
+    : undefined;
+}
 
 type ComposerTurnPayload = {
   displayText: string;
@@ -4001,6 +4012,7 @@ export function Composer(props: ComposerProps) {
       ...queued,
       backendQueuePending: false,
       queueEntryId: undefined,
+      scheduledActionId: undefined,
     };
     const nextQueuedTurns = current.some((candidate) => candidate.id === queued.id)
       ? current.map((candidate) =>
@@ -5921,6 +5933,12 @@ export function Composer(props: ComposerProps) {
         id: queued.scheduledActionId,
       }).then(
         (response) => {
+          const failureMessage = scheduledActionFailureMessage(response.action);
+          if (failureMessage) {
+            updateSending(false);
+            setSendError(failureMessage);
+            return;
+          }
           if (
             response.action.status === "scheduled"
             || response.action.status === "dispatching"
@@ -6071,6 +6089,8 @@ export function Composer(props: ComposerProps) {
                   : undefined,
             },
           });
+          const failureMessage = scheduledActionFailureMessage(response.action);
+          if (failureMessage) throw new Error(failureMessage);
           if (
             response.action.status === "scheduled"
             || response.action.status === "dispatching"
@@ -6173,6 +6193,8 @@ export function Composer(props: ComposerProps) {
               : undefined,
         },
       });
+      const failureMessage = scheduledActionFailureMessage(response.action);
+      if (failureMessage) throw new Error(failureMessage);
       if (
         response.action.status === "scheduled"
         || response.action.status === "dispatching"
@@ -6358,6 +6380,8 @@ export function Composer(props: ComposerProps) {
       const response = await responsePromise;
       if (response.disposition === "scheduled" && response.scheduledAction) {
         const action = response.scheduledAction;
+        const failureMessage = scheduledActionFailureMessage(action);
+        if (failureMessage) throw new Error(failureMessage);
         upsertScheduledProjectionInScope(expectedScopeKey, {
           id: `scheduled-projection:${action.id}`,
           scheduledActionId: action.id,
@@ -9246,7 +9270,9 @@ export function Composer(props: ComposerProps) {
           queued.scheduledSendAt,
           scheduleNow,
         );
-        const queuedLabel = scheduledSendAt
+        const queuedLabel = queued.errorMessage
+          ? "Failed to send"
+          : scheduledSendAt
           ? `Sends in ${formatScheduledSendCountdown(scheduledSendAt, scheduleNow)}`
           : index === 0
             ? "Queued next"
@@ -9257,6 +9283,7 @@ export function Composer(props: ComposerProps) {
             className={[
               "composer__queued",
               scheduledSendAt ? "composer__queued--scheduled" : "",
+              queued.errorMessage ? "composer__queued--failed" : "",
             ]
               .filter(Boolean)
               .join(" ")}
@@ -9270,6 +9297,11 @@ export function Composer(props: ComposerProps) {
               <span className="composer__queued-text">
                 {formatDraftPreview(queued)}
               </span>
+              {queued.errorMessage ? (
+                <span className="composer__queued-error">
+                  {queued.errorMessage}
+                </span>
+              ) : null}
             </div>
             <QueuedImageAttachments attachments={queued.imageAttachments} />
             <div className="composer__queued-actions">

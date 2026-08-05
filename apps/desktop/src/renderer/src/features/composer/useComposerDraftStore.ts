@@ -28,6 +28,9 @@ export type ComposerQueuedTurnSnapshot = {
   queueEntryId?: string;
   /** Durable main-process scheduled action represented by this renderer chip. */
   scheduledActionId?: string;
+  /** Terminal scheduled action converted into a locally recoverable draft. */
+  failedScheduledActionId?: string;
+  errorMessage?: string;
   input?: AppServerTurnInputItem[];
   text: string;
   imageAttachments: NavigationLaunchpadImageAttachment[];
