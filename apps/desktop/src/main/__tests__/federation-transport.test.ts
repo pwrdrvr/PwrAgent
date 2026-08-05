@@ -3,7 +3,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import WebSocket, { WebSocketServer } from "ws";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   FEDERATION_PROTOCOL_VERSION,
   FEDERATION_TRANSPORT_VERSION,
@@ -28,6 +28,8 @@ import { FederationStore } from "../federation/federation-store";
 import {
   connectFederationClient,
   FederationGatewayWebSocketServer,
+  FederationSocketKeepalive,
+  type FederationKeepaliveSocket,
 } from "../federation/federation-transport";
 import { StateDb } from "../state/state-db";
 
@@ -1207,6 +1209,121 @@ describe("federation transport liveness", () => {
       closeReason: "timeout",
     });
     expect(registry.getSession("session-live")?.status).toBe("active");
+  });
+});
+
+/**
+ * Congestion forgiveness on the keepalive watchdog, driven with a fake
+ * socket: ws sends control frames in FIFO order, so a large data backlog (a
+ * remote-PTY output burst on a slow link) parks our own ping behind it. A
+ * missed pong while that backlog is demonstrably draining must not read as
+ * death — but a stalled or empty queue must.
+ */
+describe("federation keepalive congestion forgiveness", () => {
+  class FakeKeepaliveSocket implements FederationKeepaliveSocket {
+    readyState = WebSocket.OPEN;
+    bufferedAmount = 0;
+    pings = 0;
+    private pongListeners: (() => void)[] = [];
+
+    ping(): void {
+      this.pings += 1;
+    }
+
+    on(_event: "pong", listener: () => void): void {
+      this.pongListeners.push(listener);
+    }
+
+    once(_event: "close", _listener: () => void): void {
+      // The fake never closes; dispose() is exercised via onDead.
+    }
+
+    emitPong(): void {
+      for (const listener of this.pongListeners) {
+        listener();
+      }
+    }
+  }
+
+  function createHarness() {
+    const socket = new FakeKeepaliveSocket();
+    let deadCount = 0;
+    const keepalive = new FederationSocketKeepalive(socket, {
+      intervalMs: 1_000,
+      onDead: () => {
+        deadCount += 1;
+      },
+    });
+    return { socket, keepalive, isDead: () => deadCount > 0 };
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("declares death after a missed pong with an empty send queue", () => {
+    const { socket, isDead } = createHarness();
+    vi.advanceTimersByTime(1_000);
+    expect(socket.pings).toBe(1);
+    expect(isDead()).toBe(false);
+    // No pong, nothing queued: the probe reached the wire and went
+    // unanswered.
+    vi.advanceTimersByTime(1_000);
+    expect(isDead()).toBe(true);
+  });
+
+  it("forgives missed pongs while the send queue is draining, then recovers on pong", () => {
+    const { socket, keepalive, isDead } = createHarness();
+    // A burst is queued ahead of the probe.
+    socket.bufferedAmount = 1_000_000;
+    vi.advanceTimersByTime(1_000);
+    expect(socket.pings).toBe(1);
+
+    // Slow link: bytes keep moving every interval, pong still stuck behind
+    // the backlog. Each draining tick is forgiven.
+    for (const remaining of [800_000, 500_000, 200_000]) {
+      socket.bufferedAmount = remaining;
+      vi.advanceTimersByTime(1_000);
+      expect(isDead()).toBe(false);
+    }
+
+    // Backlog flushed, probe finally delivered, pong comes back: alive.
+    socket.bufferedAmount = 0;
+    socket.emitPong();
+    vi.advanceTimersByTime(1_000);
+    expect(isDead()).toBe(false);
+    expect(socket.pings).toBeGreaterThanOrEqual(2);
+    keepalive.dispose();
+  });
+
+  it("declares death when the queue stalls without draining", () => {
+    const { socket, isDead } = createHarness();
+    socket.bufferedAmount = 1_000_000;
+    vi.advanceTimersByTime(1_000);
+    expect(socket.pings).toBe(1);
+    // Identical backlog a full interval later: not one byte moved. A dead
+    // link with a queued burst looks exactly like this once the kernel
+    // buffer fills — forgiving it would reintroduce the forever-orphan.
+    vi.advanceTimersByTime(1_000);
+    expect(isDead()).toBe(true);
+  });
+
+  it("declares death when the queue drains fully but no pong arrives", () => {
+    const { socket, isDead } = createHarness();
+    socket.bufferedAmount = 500_000;
+    vi.advanceTimersByTime(1_000);
+    // Draining tick: forgiven.
+    socket.bufferedAmount = 100_000;
+    vi.advanceTimersByTime(1_000);
+    expect(isDead()).toBe(false);
+    // Fully drained, probe delivered, still silent: dead.
+    socket.bufferedAmount = 0;
+    vi.advanceTimersByTime(1_000);
+    expect(isDead()).toBe(true);
   });
 });
 

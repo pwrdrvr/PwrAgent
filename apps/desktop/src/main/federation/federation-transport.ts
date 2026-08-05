@@ -75,11 +75,25 @@ export const FEDERATION_KEEPALIVE_INTERVAL_MS = 15_000;
 export const FEDERATION_MAX_FRAME_BYTES = 16 * 1024 * 1024;
 
 /**
+ * The socket surface the keepalive watchdog needs. Structural (rather than
+ * `WebSocket`) so unit tests can drive the congestion-forgiveness logic with
+ * a fake — simulating a saturated slow link on a real loopback socket is not
+ * deterministic.
+ */
+export type FederationKeepaliveSocket = {
+  readyState: number;
+  bufferedAmount: number;
+  ping(): void;
+  on(event: "pong", listener: () => void): unknown;
+  once(event: "close", listener: () => void): unknown;
+};
+
+/**
  * WebSocket-level ping/pong watchdog. The counterpart answers pongs from the
  * protocol layer (ws auto-pong), so this needs no cooperation from the remote
  * application code — only a live link and an unwedged event loop.
  */
-class FederationSocketKeepalive {
+export class FederationSocketKeepalive {
   /**
    * Fired on every pong. The gateway assigns this once a session exists so
    * pongs count as session heartbeats — assignable after construction
@@ -87,10 +101,11 @@ class FederationSocketKeepalive {
    */
   onLive?: () => void;
   private alive = true;
+  private lastBufferedAmount = 0;
   private timer?: ReturnType<typeof setInterval>;
 
   constructor(
-    socket: WebSocket,
+    socket: FederationKeepaliveSocket,
     options: {
       intervalMs: number;
       onDead: () => void;
@@ -103,6 +118,17 @@ class FederationSocketKeepalive {
     this.timer = setInterval(() => {
       if (socket.readyState !== WebSocket.OPEN) return;
       if (!this.alive) {
+        // A missed pong with a non-empty, SHRINKING outbound queue is
+        // congestion, not death: ws sends control frames in FIFO order, so
+        // our own probe is parked behind data frames — a remote-PTY output
+        // burst queues up to 1 MiB per session ahead of it, which on a slow
+        // link takes longer than the probe interval to flush. Forgive only
+        // while bytes are demonstrably moving; a genuinely dead link stops
+        // draining once the kernel buffer fills, and the next tick counts.
+        const buffered = socket.bufferedAmount;
+        const draining = buffered > 0 && buffered < this.lastBufferedAmount;
+        this.lastBufferedAmount = buffered;
+        if (draining) return;
         this.dispose();
         options.onDead();
         return;
@@ -114,6 +140,9 @@ class FederationSocketKeepalive {
         // The socket died between the readyState check and the ping; the
         // close event owns cleanup.
       }
+      // Snapshot AFTER the ping so the probe's own bytes are inside the
+      // baseline the drain check compares against.
+      this.lastBufferedAmount = socket.bufferedAmount;
     }, options.intervalMs);
     this.timer.unref?.();
     socket.once("close", () => this.dispose());
