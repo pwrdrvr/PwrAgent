@@ -1142,12 +1142,17 @@ function commandSummaryName(label: string): string | undefined {
 
 export function summarizeLiveActivity(details: AppServerThreadActivityDetail[]): string {
   const primaryDetails = details.filter((detail) => !detail.id.includes("-source-"));
+  const directDetail = primaryDetails.length === 1 ? primaryDetails[0] : undefined;
   if (
     details.length === 1
-    && primaryDetails.length === 1
-    && primaryDetails[0]?.command
+    && directDetail?.command
+    && (
+      directDetail.kind === "read"
+      || directDetail.label.trim().toLowerCase()
+        !== formatCommandLabel(directDetail.command.displayCommand).toLowerCase()
+    )
   ) {
-    return primaryDetails[0].label;
+    return directDetail.label;
   }
   const readCount = primaryDetails.filter((detail) => detail.kind === "read").length;
   const commandLabels = [

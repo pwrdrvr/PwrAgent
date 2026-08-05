@@ -3392,9 +3392,9 @@ describe("useThreadSessionState", () => {
       )
     ).toEqual([
       "message:First commentary.",
-      "activity:Explored 1 item",
+      "activity:Read one.ts",
       "message:The first scan shows this is a deep brainstorm.",
-      "activity:Explored 1 item",
+      "activity:Searched src",
       "message:Final answer.",
     ]);
     expect(
@@ -3560,9 +3560,9 @@ describe("useThreadSessionState", () => {
       )
     ).toEqual([
       "message:First commentary.",
-      "activity:Explored 1 item",
+      "activity:Searched src",
       "message:Second commentary.",
-      "activity:Explored 1 item",
+      "activity:Searched src",
       "message:Third commentary.",
     ]);
   });
@@ -3690,9 +3690,9 @@ describe("useThreadSessionState", () => {
             : entry.type
       )
     ).toEqual([
-      "activity:Explored 1 item:1",
+      "activity:Read one.ts:1",
       "message:Starting to look through the project.",
-      "activity:Explored 1 item:1",
+      "activity:Searched src:1",
     ]);
   });
 
@@ -3923,9 +3923,9 @@ describe("useThreadSessionState", () => {
 
     expect(transcriptLabels(result.current.entries)).toEqual([
       "message:First commentary.",
-      "activity:Explored 1 item",
+      "activity:Read one.ts",
       "message:Second commentary.",
-      "activity:Explored 1 item",
+      "activity:Searched src",
       "message:Final answer.",
     ]);
 
@@ -3937,9 +3937,9 @@ describe("useThreadSessionState", () => {
     await waitFor(() => {
       expect(transcriptLabels(result.current.entries)).toEqual([
         "message:First commentary.",
-        "activity:Explored 1 item",
+        "activity:Read one.ts",
         "message:Second commentary.",
-        "activity:Explored 1 item",
+        "activity:Searched src",
         "message:Final answer.",
       ]);
     });
