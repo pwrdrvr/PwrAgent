@@ -121,6 +121,29 @@ describe("AppNoticeToast", () => {
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 
+  it("renders ordered navigation controls for a durable notice stack", () => {
+    const onPrevious = vi.fn();
+    const onNext = vi.fn();
+    render(
+      <AppNoticeToast
+        notice={{ ...notice, autoDismiss: false }}
+        navigation={{
+          current: 2,
+          total: 3,
+          onPrevious,
+          onNext,
+        }}
+        onDismiss={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("2 of 3")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Previous notice" }));
+    fireEvent.click(screen.getByRole("button", { name: "Next notice" }));
+    expect(onPrevious).toHaveBeenCalledTimes(1);
+    expect(onNext).toHaveBeenCalledTimes(1);
+  });
+
   it("uses exactly the supplied operator actions for a persistent safety notice", () => {
     vi.useFakeTimers();
     const leaveDisabled = vi.fn();

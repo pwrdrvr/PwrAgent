@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   MessagingChannelKind,
   MessagingPlatformStatus,
@@ -21,9 +21,16 @@ type MessagingPlatformNoticeState = {
 
 export function MessagingErrorNotices(props: {
   desktopApi?: DesktopApi;
+  onNoticeChanged?: (
+    platform: MessagingChannelKind,
+    notice: AppNoticeToastNotice | undefined,
+  ) => void;
 }) {
   const [statusByPlatform, setStatusByPlatform] = useState(
     () => new Map<MessagingChannelKind, MessagingPlatformNoticeState>(),
+  );
+  const publishedNoticeKeysRef = useRef(
+    new Map<MessagingChannelKind, string>(),
   );
 
   useEffect(() => {
@@ -79,6 +86,20 @@ export function MessagingErrorNotices(props: {
       notices.push({ notice: state.notice, platform });
     }
   }
+
+  useEffect(() => {
+    if (!props.onNoticeChanged) return;
+    for (const [platform, state] of statusByPlatform) {
+      const noticeKey = state.notice?.id ?? `healthy:${state.changedAt}`;
+      if (publishedNoticeKeysRef.current.get(platform) === noticeKey) {
+        continue;
+      }
+      publishedNoticeKeysRef.current.set(platform, noticeKey);
+      props.onNoticeChanged(platform, state.notice);
+    }
+  }, [props.onNoticeChanged, statusByPlatform]);
+
+  if (props.onNoticeChanged) return null;
 
   return notices.map(({ notice, platform }) => (
     <AppNoticeToast

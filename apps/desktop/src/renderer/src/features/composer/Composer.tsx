@@ -7353,11 +7353,14 @@ export function Composer(props: ComposerProps) {
     });
   };
 
-  const showComposerNotice = (notice: Omit<AppNoticeToastNotice, "id">): void => {
+  const showComposerNotice = (
+    notice: Omit<AppNoticeToastNotice, "id" | "transientSlot">,
+  ): void => {
     props.onShowNotice?.({
       id: `composer-notice-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       ...notice,
       tone: notice.tone ?? "warning",
+      transientSlot: "composer",
     });
   };
 
