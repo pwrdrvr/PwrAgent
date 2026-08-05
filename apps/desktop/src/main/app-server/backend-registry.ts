@@ -9926,6 +9926,19 @@ export class DesktopBackendRegistry {
             dynamicTools,
           });
     } catch (error) {
+      for (const registration of mcpConnectionRegistrations) {
+        try {
+          registration.revoke();
+        } catch (revokeError) {
+          backendRegistryLog.warn("startThread MCP connection revocation failed", {
+            backend,
+            error:
+              revokeError instanceof Error
+                ? revokeError.message
+                : String(revokeError),
+          });
+        }
+      }
       await preparedWorkspaceRollback?.().catch((rollbackError) => {
         backendRegistryLog.warn("startThread workspace rollback failed", {
           backend,
