@@ -3997,9 +3997,11 @@ export function useThreadSessionState(params: {
             // status. Re-read after the normal completion grace so that the
             // transcript snapshot can clear the stale active turn without
             // racing an idle-before-turn/completed notification pair.
-            staleThinkingRecheckAt: shouldRecheckStaleThinking
-              ? now + OWN_UPDATE_IDLE_GRACE_MS
-              : current.staleThinkingRecheckAt,
+            staleThinkingRecheckAt: backendReportedActive
+              ? undefined
+              : shouldRecheckStaleThinking
+                ? now + OWN_UPDATE_IDLE_GRACE_MS
+                : current.staleThinkingRecheckAt,
           };
         });
       }
