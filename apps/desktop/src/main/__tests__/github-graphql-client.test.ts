@@ -7,6 +7,7 @@ import {
   buildBranchPrQuery,
   mapGraphqlPrNode,
   parsePrRefFromUrl,
+  readGithubDotComAuthToken,
   retryDelayMs,
 } from "../pr-status/github-graphql-client";
 import type { GraphqlPrNode, PrRef } from "../pr-status/github-graphql-client";
@@ -573,5 +574,20 @@ describe("GithubGraphqlPrClient", () => {
     });
     await expect(noToken.fetchPullRequests(refs)).resolves.toEqual([]);
     expect(request).not.toHaveBeenCalled();
+  });
+});
+
+describe("readGithubDotComAuthToken", () => {
+  it("requests the token for github.com explicitly", async () => {
+    const run = vi.fn(async () => ({ stdout: "github-token\n" }));
+
+    await expect(readGithubDotComAuthToken("/opt/homebrew/bin/gh", run))
+      .resolves.toBe("github-token");
+    expect(run).toHaveBeenCalledWith("/opt/homebrew/bin/gh", [
+      "auth",
+      "token",
+      "--hostname",
+      "github.com",
+    ]);
   });
 });
