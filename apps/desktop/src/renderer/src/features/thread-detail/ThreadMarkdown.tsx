@@ -86,6 +86,21 @@ type EditorApplication = DesktopApplicationsSnapshot["editors"][number];
 const CodeBlockContext = createContext(false);
 const MarkdownLinkContext = createContext(false);
 
+function clipboardTextFromFragment(fragment: DocumentFragment): string {
+  const container = document.createElement("div");
+  container.setAttribute("aria-hidden", "true");
+  container.style.position = "fixed";
+  container.style.left = "-100000px";
+  container.style.top = "0";
+  container.style.pointerEvents = "none";
+  container.style.whiteSpace = "pre-wrap";
+  container.append(fragment.cloneNode(true));
+  document.body.append(container);
+  const text = container.innerText || container.textContent || "";
+  container.remove();
+  return text;
+}
+
 function copySelectedPullRequestLinks(
   event: ClipboardEvent<HTMLDivElement>,
 ): void {
@@ -110,13 +125,14 @@ function copySelectedPullRequestLinks(
 
     const link = document.createElement("a");
     link.href = href;
-    link.textContent = chip.dataset.prLabel || chip.textContent || href;
+    link.textContent = href;
     chip.replaceWith(link);
   });
 
+  const plainText = clipboardTextFromFragment(fragment);
   const html = document.createElement("div");
   html.append(fragment);
-  event.clipboardData.setData("text/plain", selection.toString());
+  event.clipboardData.setData("text/plain", plainText);
   event.clipboardData.setData("text/html", html.innerHTML);
   event.preventDefault();
 }

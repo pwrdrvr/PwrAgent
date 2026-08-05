@@ -99,7 +99,7 @@ describe("pull request links in transcript markdown", () => {
     expect(open).toHaveBeenCalledWith(PR_URL, "_blank", "noopener,noreferrer");
   });
 
-  it("preserves a selected PR chip as text and a link on the clipboard", () => {
+  it("copies a selected PR chip as a full URL that can hydrate in any project", () => {
     const { container } = renderWithPullRequests(
       `> Deploy merged PR [Giphy/giphy-services#13290](${PR_URL}) now.`,
       [prSummary()],
@@ -122,12 +122,12 @@ describe("pull request links in transcript markdown", () => {
 
     expect(setData).toHaveBeenCalledWith(
       "text/plain",
-      expect.stringContaining("Giphy/giphy-services#13290"),
+      expect.stringContaining(PR_URL),
     );
     expect(setData).toHaveBeenCalledWith(
       "text/html",
       expect.stringContaining(
-        `<a href="${PR_URL}">Giphy/giphy-services#13290</a>`,
+        `<a href="${PR_URL}">${PR_URL}</a>`,
       ),
     );
   });

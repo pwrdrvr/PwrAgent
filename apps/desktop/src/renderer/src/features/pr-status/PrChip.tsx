@@ -111,7 +111,6 @@ export function PrChip(props: PrChipProps) {
         aria-label={`Open ${pr.org}/${pr.repo}#${pr.number} (${status}) in browser`}
         className={className}
         data-pr-chip=""
-        data-pr-label={label}
         data-pr-url={pr.url}
         draggable={false}
         onBlur={tooltipController.hide}
