@@ -537,6 +537,112 @@ describe("federation enrollment", () => {
     expect(store.getPeer("client_one")?.profileName).toBe("dev");
   });
 
+  it("stores advertised purpose notes on enrollment", () => {
+    const keyPair = generateFederationIdentityKeyPair();
+    const capabilities = ["remote_window"] as const;
+    const invite = createFederationEnrollmentInvite({
+      store,
+      token: "notes-invite-token-1234567890",
+      gatewayInstanceId: "gateway_one",
+      generatedAt: 1_000,
+      expiresAt: 2_000,
+    });
+    const message = buildFederationProofMessage({
+      purpose: "enroll",
+      gatewayInstanceId: "gateway_one",
+      peerInstanceId: "client_one",
+      publicKeyPem: keyPair.publicKeyPem,
+      protocolVersion: 1,
+      nonce: "nonce-notes",
+      capabilities,
+    });
+
+    const decision = completeFederationEnrollment({
+      store,
+      gatewayInstanceId: "gateway_one",
+      inviteToken: invite.token,
+      now: 1_500,
+      peer: {
+        instanceId: "client_one",
+        label: "Studio Mac",
+        role: "client",
+        publicKeyPem: keyPair.publicKeyPem,
+        capabilities,
+        protocolVersion: 1,
+        nonce: "nonce-notes",
+        signatureBase64: signFederationMessage({
+          privateKeyPem: keyPair.privateKeyPem,
+          message,
+        }),
+        notes: " PwrSnap dev + screen recording ",
+      },
+    });
+
+    expect(decision).toMatchObject({
+      accepted: true,
+      peer: { notes: "PwrSnap dev + screen recording" },
+    });
+    expect(store.getPeer("client_one")).toMatchObject({
+      notes: "PwrSnap dev + screen recording",
+    });
+  });
+
+  it("refreshes purpose notes on reconnect and clears them when advertised empty", () => {
+    const keyPair = generateFederationIdentityKeyPair();
+    store.upsertPeer({
+      updatedAt: 1_000,
+      peer: {
+        id: "client_one",
+        label: "Studio Mac",
+        role: "client",
+        status: "disconnected",
+        capabilities: ["remote_window"],
+        protocolVersion: 1,
+        pinnedPublicKeyPem: keyPair.publicKeyPem,
+        notes: "old notes",
+      },
+    });
+    const reconnect = (nonce: string, fields: { notes?: string }) => {
+      const message = buildFederationProofMessage({
+        purpose: "reconnect",
+        gatewayInstanceId: "gateway_one",
+        peerInstanceId: "client_one",
+        publicKeyPem: keyPair.publicKeyPem,
+        protocolVersion: 1,
+        nonce,
+        capabilities: ["remote_window"],
+      });
+      return authenticateFederationReconnect({
+        store,
+        gatewayInstanceId: "gateway_one",
+        peerInstanceId: "client_one",
+        protocolVersion: 1,
+        nonce,
+        requestedCapabilities: ["remote_window"],
+        signatureBase64: signFederationMessage({
+          privateKeyPem: keyPair.privateKeyPem,
+          message,
+        }),
+        now: 2_000,
+        label: "Studio Mac",
+        ...fields,
+      });
+    };
+
+    // Updated notes replace the stored value.
+    expect(reconnect("nonce-notes-1", { notes: "fresh notes" })).toMatchObject({
+      accepted: true,
+      peer: { notes: "fresh notes" },
+    });
+    expect(store.getPeer("client_one")?.notes).toBe("fresh notes");
+
+    // Present-but-empty clears — the operator erased their notes.
+    expect(reconnect("nonce-notes-2", { notes: "" })).toMatchObject({
+      accepted: true,
+    });
+    expect(store.getPeer("client_one")?.notes).toBeUndefined();
+  });
+
   it("refreshes stored capabilities to the peer's current advertisement", () => {
     const keyPair = generateFederationIdentityKeyPair();
     store.upsertPeer({

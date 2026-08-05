@@ -186,6 +186,7 @@ type FederationSocketAuthMessage = {
   role?: FederationInstanceRole;
   endpoint?: string;
   profileName?: string;
+  notes?: string;
 };
 
 type FederationSocketChallengeMessage = {
@@ -714,6 +715,7 @@ export class FederationGatewayWebSocketServer {
           signatureBase64: message.signatureBase64,
           endpoint: message.endpoint,
           profileName: message.profileName,
+          notes: message.notes,
         },
       });
     }
@@ -729,6 +731,7 @@ export class FederationGatewayWebSocketServer {
       now: Date.now(),
       label: message.label,
       profileName: message.profileName,
+      notes: message.notes,
     });
   }
 }
@@ -754,6 +757,7 @@ export async function connectFederationClient(params: {
   role?: FederationInstanceRole;
   endpoint?: string;
   profileName?: string;
+  notes?: string;
   headers?: Record<string, string>;
   clientCertificate?: string;
   clientPrivateKey?: string;
@@ -954,6 +958,7 @@ async function establishFederationClient(
     role: params.role,
     endpoint: params.endpoint,
     profileName: params.profileName,
+    notes: params.notes,
   };
   sendFrame(socket, authMessage, transport);
 

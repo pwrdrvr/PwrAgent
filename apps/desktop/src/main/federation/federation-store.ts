@@ -71,6 +71,7 @@ type FederationPeerPayload = {
   protocolVersion?: number;
   endpoint?: string;
   profileName?: string;
+  notes?: string;
   pinnedPublicKeyPem?: string;
   lastConnectedAt?: number;
   lastActivityAt?: number;
@@ -148,6 +149,7 @@ export class FederationStore {
       protocolVersion: params.peer.protocolVersion,
       endpoint: params.peer.endpoint,
       profileName: params.peer.profileName,
+      notes: params.peer.notes,
       pinnedPublicKeyPem: params.peer.pinnedPublicKeyPem,
       lastConnectedAt: params.peer.lastConnectedAt,
       lastActivityAt: params.peer.lastActivityAt,
@@ -518,6 +520,7 @@ function rowToPeer(row: FederationPeerRow): FederationPeerSummary & {
     protocolVersion: payload.protocolVersion,
     endpoint: payload.endpoint,
     profileName: payload.profileName,
+    notes: payload.notes,
     pinnedPublicKeyPem: payload.pinnedPublicKeyPem,
     lastConnectedAt: payload.lastConnectedAt,
     lastActivityAt: payload.lastActivityAt,

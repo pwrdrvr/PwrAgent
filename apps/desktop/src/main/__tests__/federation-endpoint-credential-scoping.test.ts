@@ -44,6 +44,7 @@ vi.mock("../settings/desktop-settings-singleton", () => {
       readSettings: async () => ({
         federation: {
           instanceLabel: { value: "" },
+          instanceNotes: { value: "" },
           cloudflareEndpoint: { value: cloudflareEndpoint.value },
           cloudflareMtlsEnabled: { value: true },
           cloudflareAccessServiceAuthEnabled: { value: true },

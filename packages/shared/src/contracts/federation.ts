@@ -86,6 +86,12 @@ export type FederationPeerSummary = {
   profileName?: string;
   /** Assigned celestial identity icon, when the assignment map knows one. */
   celestialIcon?: CelestialIconId;
+  /**
+   * Operator-written purpose notes for the instance ("Studio Mac — PwrSnap
+   * dev + screen recording"). Advertised on handshake and peer-directory
+   * gossip; read by orchestration agents when routing work.
+   */
+  notes?: string;
   lastConnectedAt?: number;
   lastActivityAt?: number;
   revokedAt?: number;

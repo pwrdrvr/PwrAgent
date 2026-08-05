@@ -244,6 +244,7 @@ export class DesktopFederationRuntime {
   private client?: FederationClientWebSocketClient;
   private localInstanceId?: FederationInstanceId;
   private instanceLabel?: string;
+  private instanceNotes?: string;
   private listenUrl?: string;
   private gatewayUrl?: string;
   private gatewayInstanceId?: FederationInstanceId;
@@ -793,6 +794,7 @@ export class DesktopFederationRuntime {
     const settings = await getDesktopSettingsService().readSettings();
     this.instanceLabel =
       settings.federation.instanceLabel.value.trim() || defaultInstanceLabel();
+    this.instanceNotes = settings.federation.instanceNotes.value.trim();
     const mode = settings.federation.mode.value;
     if (mode === "disabled") {
       return;
@@ -1103,6 +1105,9 @@ export class DesktopFederationRuntime {
       // Advertise which profile this instance runs so peers can tell
       // several enrollments of the same machine apart in their UI.
       profileName: getAppStateDb().getMeta("profile_name") || undefined,
+      // Always a string: present-but-empty clears the gateway's stored
+      // notes when the operator erases theirs (absent means "old client").
+      notes: this.instanceNotes ?? settings.federation.instanceNotes.value.trim(),
       role: "client",
       headers: cloudflareAccessEnabled
         ? {
@@ -1275,6 +1280,7 @@ export class DesktopFederationRuntime {
         existing?.protocolVersion ?? FEDERATION_PROTOCOL_VERSION,
       endpoint: existing?.endpoint ?? params.gatewayUrl,
       profileName: existing?.profileName,
+      notes: existing?.notes,
       lastConnectedAt: params.connectedAt,
       lastActivityAt: params.connectedAt,
       canRevoke: false,
@@ -1630,6 +1636,7 @@ export class DesktopFederationRuntime {
         protocolVersion: existing?.protocolVersion,
         endpoint: existing?.endpoint,
         profileName: existing?.profileName,
+        notes: existing?.notes,
         lastConnectedAt: existing?.lastConnectedAt,
         lastActivityAt: existing?.lastActivityAt,
         revokedAt: existing?.revokedAt,
@@ -1705,6 +1712,7 @@ export class DesktopFederationRuntime {
         protocolVersion: FEDERATION_PROTOCOL_VERSION,
         profileName: localProfileName,
         celestialIcon: this.celestialAssignmentMap().get(localInstanceId)?.icon,
+        notes: this.instanceNotes || undefined,
       },
     ];
 
