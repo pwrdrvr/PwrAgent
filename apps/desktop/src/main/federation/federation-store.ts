@@ -129,11 +129,20 @@ export class FederationStore {
     peer: FederationPeerSummary & { pinnedPublicKeyPem?: string };
     createdAt?: number;
     updatedAt: number;
+    /**
+     * A successfully verified one-time enrollment explicitly restores trust
+     * in an instance that was previously revoked. Ordinary peer refreshes
+     * must never clear revocation state implicitly.
+     */
+    clearRevocation?: boolean;
   }): void {
     assertPeerId(params.peer.id);
     const existing = this.getPeer(params.peer.id);
     const createdAt = params.createdAt ?? existing?.createdAt ?? params.updatedAt;
-    const revokedAt = params.peer.revokedAt ?? existing?.revokedAt;
+    const revokedAt = params.clearRevocation
+      ? undefined
+      : params.peer.revokedAt ?? existing?.revokedAt;
+    const status = revokedAt === undefined ? params.peer.status : "revoked";
     const payload: FederationPeerPayload = {
       capabilities: params.peer.capabilities,
       protocolVersion: params.peer.protocolVersion,
@@ -163,7 +172,7 @@ export class FederationStore {
         params.peer.id,
         params.peer.label,
         params.peer.role,
-        params.peer.status,
+        status,
         createdAt,
         params.updatedAt,
         params.peer.lastActivityAt ?? null,

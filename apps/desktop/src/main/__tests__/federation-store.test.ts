@@ -61,6 +61,55 @@ describe("FederationStore", () => {
         revokedAt: 2_000,
       },
     ]);
+
+    store.upsertPeer({
+      updatedAt: 3_000,
+      peer: {
+        id: "laptop_one",
+        label: "Laptop",
+        role: "client",
+        status: "connected",
+        capabilities: ["remote_window"],
+      },
+    });
+
+    expect(store.getPeer("laptop_one")).toMatchObject({
+      status: "revoked",
+      revokedAt: 2_000,
+    });
+  });
+
+  it("clears revocation only for an explicitly reauthorized peer", () => {
+    store.upsertPeer({
+      updatedAt: 1_000,
+      peer: {
+        id: "laptop_one",
+        label: "Laptop",
+        role: "client",
+        status: "connected",
+        capabilities: ["remote_window"],
+      },
+    });
+    store.revokePeer("laptop_one", 2_000);
+
+    store.upsertPeer({
+      updatedAt: 3_000,
+      clearRevocation: true,
+      peer: {
+        id: "laptop_one",
+        label: "Laptop",
+        role: "client",
+        status: "connected",
+        capabilities: ["remote_window"],
+      },
+    });
+
+    expect(store.getPeer("laptop_one")).toMatchObject({
+      status: "connected",
+      updatedAt: 3_000,
+    });
+    expect(store.getPeer("laptop_one")?.revokedAt).toBeUndefined();
+    expect(store.listPeers()).toHaveLength(1);
   });
 
   it("matches pending enrollments without storing the raw token", () => {

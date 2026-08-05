@@ -209,6 +209,95 @@ describe("federation enrollment", () => {
     });
   });
 
+  it("restores a revoked peer through a fresh one-time enrollment", () => {
+    const keyPair = generateFederationIdentityKeyPair();
+    store.upsertPeer({
+      updatedAt: 1_000,
+      peer: {
+        id: "client_one",
+        label: "Client",
+        role: "client",
+        status: "connected",
+        capabilities: ["remote_window"],
+        protocolVersion: 1,
+        pinnedPublicKeyPem: keyPair.publicKeyPem,
+      },
+    });
+    store.revokePeer("client_one", 1_100);
+
+    const invite = createFederationEnrollmentInvite({
+      store,
+      token: "fresh-invite-token-1234567890",
+      gatewayInstanceId: "gateway_one",
+      generatedAt: 1_200,
+      expiresAt: 2_000,
+    });
+    const capabilities = ["remote_window"] as const;
+    const enrollMessage = buildFederationProofMessage({
+      purpose: "enroll",
+      gatewayInstanceId: "gateway_one",
+      peerInstanceId: "client_one",
+      publicKeyPem: keyPair.publicKeyPem,
+      protocolVersion: 1,
+      nonce: "nonce-reenroll",
+      capabilities,
+    });
+
+    expect(
+      completeFederationEnrollment({
+        store,
+        gatewayInstanceId: "gateway_one",
+        inviteToken: invite.token,
+        now: 1_500,
+        peer: {
+          instanceId: "client_one",
+          label: "Client",
+          role: "client",
+          publicKeyPem: keyPair.publicKeyPem,
+          capabilities,
+          protocolVersion: 1,
+          nonce: "nonce-reenroll",
+          signatureBase64: signFederationMessage({
+            privateKeyPem: keyPair.privateKeyPem,
+            message: enrollMessage,
+          }),
+        },
+      }),
+    ).toMatchObject({
+      accepted: true,
+      peer: { id: "client_one", status: "connected" },
+    });
+    expect(store.getPeer("client_one")?.revokedAt).toBeUndefined();
+
+    const reconnectMessage = buildFederationProofMessage({
+      purpose: "reconnect",
+      gatewayInstanceId: "gateway_one",
+      peerInstanceId: "client_one",
+      publicKeyPem: keyPair.publicKeyPem,
+      protocolVersion: 1,
+      nonce: "nonce-after-restart",
+      capabilities,
+    });
+    expect(
+      authenticateFederationReconnect({
+        store,
+        gatewayInstanceId: "gateway_one",
+        peerInstanceId: "client_one",
+        protocolVersion: 1,
+        nonce: "nonce-after-restart",
+        requestedCapabilities: capabilities,
+        signatureBase64: signFederationMessage({
+          privateKeyPem: keyPair.privateKeyPem,
+          message: reconnectMessage,
+        }),
+        now: 1_600,
+      }),
+    ).toMatchObject({
+      accepted: true,
+      peer: { id: "client_one", status: "connected" },
+    });
+  });
+
   it("rejects bad signatures, wrong gateway invites, and reused invites", () => {
     const keyPair = generateFederationIdentityKeyPair();
     const invite = createFederationEnrollmentInvite({

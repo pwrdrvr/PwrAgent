@@ -9,7 +9,7 @@ import {
 } from "@pwragent/shared";
 import { getNativeBinding } from "./native-binding.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 41;
+export const CURRENT_STATE_DB_USER_VERSION = 42;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -1245,6 +1245,12 @@ export class StateDb {
         // badges indefinitely for worktrees outside the startup probe budget.
         // This table is derived state and is safe to repopulate lazily.
         db.prepare("DELETE FROM thread_git_working_state").run();
+        db.pragma("user_version = 41");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 42) {
+      db.transaction(() => {
+        repairReenrolledFederationPeerRevocations(db);
         db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
       })();
     }
@@ -2421,6 +2427,28 @@ SET
   db.exec(`
 UPDATE pr_lookup_cache
 SET provider = COALESCE(NULLIF(provider, ''), 'github.com')
+`);
+}
+
+function repairReenrolledFederationPeerRevocations(
+  db: BetterSqlite3.Database,
+): void {
+  // The original federation upsert preserved revoked_at even after a fresh,
+  // verified enrollment changed the peer back to connected. Only clear rows
+  // with durable proof that a one-time invite was consumed after revocation;
+  // genuinely revoked peers and unrelated inconsistent rows stay revoked.
+  db.exec(`
+UPDATE federation_peers
+SET revoked_at = NULL
+WHERE status != 'revoked'
+  AND revoked_at IS NOT NULL
+  AND EXISTS (
+    SELECT 1
+    FROM federation_enrollment_tokens
+    WHERE federation_enrollment_tokens.peer_id = federation_peers.peer_id
+      AND federation_enrollment_tokens.status = 'used'
+      AND federation_enrollment_tokens.used_at > federation_peers.revoked_at
+  )
 `);
 }
 
