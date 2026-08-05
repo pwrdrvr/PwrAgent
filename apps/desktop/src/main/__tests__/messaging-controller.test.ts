@@ -3557,6 +3557,109 @@ describe("MessagingController", () => {
     );
   });
 
+  it("keeps unpublished unborn repositories local in messaging", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.directories[0] = {
+      ...navigation.directories[0]!,
+      gitStatus: {
+        branches: ["seed"],
+        baseBranches: ["seed"],
+        syncState: "untracked",
+        worktreeCreationAvailable: false,
+      },
+    };
+    const harness = await createHarness({ navigation });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      body: expect.stringContaining("Workspace: Local"),
+      actions: expect.not.arrayContaining([
+        expect.objectContaining({ id: "browse:new:workspace:toggle" }),
+        expect.objectContaining({ id: "browse:new:workspace:worktree" }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "browse:new:workspace:worktree" }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      body: expect.stringContaining("Workspace: Local"),
+    });
+  });
+
+  it("offers a fetched remote base to messaging for an unborn HEAD", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.directories[0] = {
+      ...navigation.directories[0]!,
+      gitStatus: {
+        branches: [],
+        baseBranches: ["origin/feature", "origin/main"],
+        defaultBranch: "origin/main",
+        syncState: "untracked",
+        worktreeCreationAvailable: true,
+      },
+    };
+    const harness = await createHarness({ navigation });
+
+    await harness.controller.handleInboundEvent(buildCommandEvent("/resume --new"));
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({
+        actionId: "browse:select-project",
+        value: {
+          directoryKey: "directory:pwragent",
+          label: "PwrAgent",
+          path: "/repo/pwragent",
+        },
+      }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "browse:new:workspace:toggle",
+          label: "Start In: Local",
+        }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "browse:new:workspace:toggle" }),
+    );
+    expect(harness.delivered.at(-1)).toMatchObject({
+      body: expect.stringContaining("Workspace: New Worktree"),
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          id: "browse:new:base-branch",
+          label: "Base: origin/main",
+        }),
+      ]),
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("Start from the fetched default branch"),
+    );
+    expect(harness.materializeDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({
+        launchpad: expect.objectContaining({
+          workMode: "worktree",
+          branchName: "origin/main",
+        }),
+      }),
+      expectMaterializeOptions(),
+    );
+  });
+
   it("keeps non-git new-thread prompts local when a worktree action is requested", async () => {
     const harness = await createHarness();
 

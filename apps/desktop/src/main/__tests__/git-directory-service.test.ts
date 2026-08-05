@@ -17,6 +17,8 @@ import {
   MAX_TRACKED_BRANCHES,
   capRecentBranchDetails,
   computeWorktreePath,
+  inspectGitWorkspace,
+  UNPUBLISHED_BASE_BRANCH_WORKTREE_REASON,
 } from "../app-server/git-directory-service";
 
 // The service forward-slashes the directory/worktree identifiers it returns
@@ -29,6 +31,10 @@ function toForwardSlashes(value: string): string {
 
 function runGit(cwd: string, args: string[]): string {
   return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
+}
+
+async function runGitAsync(cwd: string, args: string[]): Promise<string> {
+  return runGit(cwd, args);
 }
 
 async function createFixtureRepo(): Promise<string> {
@@ -154,6 +160,307 @@ describe("GitDirectoryService", () => {
     });
   });
 
+  it("recognizes an unborn worktree with an empty origin as Git without a worktree base", async () => {
+    const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-unborn-inspection-"));
+    cleanupPaths.push(rootDir);
+    const repoDir = path.join(rootDir, "repo");
+    const remoteDir = path.join(rootDir, "origin.git");
+    execFileSync("git", ["init", "--bare", "-b", "main", remoteDir], {
+      stdio: "ignore",
+    });
+    execFileSync("git", ["init", "-b", "main", repoDir], { stdio: "ignore" });
+    runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+    runGit(repoDir, ["config", "branch.main.remote", "origin"]);
+    runGit(repoDir, ["config", "branch.main.merge", "refs/heads/main"]);
+
+    expect(runGit(repoDir, ["status", "--short", "--branch"])).toContain(
+      "No commits yet on main...origin/main [gone]",
+    );
+    await expect(inspectGitWorkspace(repoDir)).resolves.toEqual({
+      kind: "worktree",
+      branch: "main",
+      hasCommits: false,
+      headHasCommit: false,
+      worktreeCreationAvailable: false,
+    });
+  });
+
+  it("keeps an unborn HEAD local-only when commits exist only under local refs", async () => {
+    const repoDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-unborn-local-ref-"));
+    cleanupPaths.push(repoDir);
+    execFileSync("git", ["init", "-b", "seed", repoDir], { stdio: "ignore" });
+    execFileSync("git", ["-C", repoDir, "config", "user.name", "PwrAgent Tests"], {
+      stdio: "ignore",
+    });
+    execFileSync(
+      "git",
+      ["-C", repoDir, "config", "user.email", "pwragent-tests@example.invalid"],
+      { stdio: "ignore" },
+    );
+    execFileSync("git", ["-C", repoDir, "commit", "--allow-empty", "-m", "Seed ref"], {
+      stdio: "ignore",
+    });
+    runGit(repoDir, ["checkout", "--orphan", "main"]);
+
+    await expect(inspectGitWorkspace(repoDir)).resolves.toEqual({
+      kind: "worktree",
+      branch: "main",
+      hasCommits: true,
+      headHasCommit: false,
+      worktreeCreationAvailable: false,
+    });
+  });
+
+  it("uses a fetched remote worktree base implicitly for an unborn HEAD", async () => {
+    const remoteDir = await createFixtureRepo();
+    const repoDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-unborn-remote-base-"));
+    cleanupPaths.push(remoteDir, repoDir);
+    execFileSync("git", ["init", "-b", "main", repoDir], { stdio: "ignore" });
+    runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+    runGit(repoDir, ["fetch", "origin", "main:refs/remotes/origin/main"]);
+    const originRevision = runGit(repoDir, ["rev-parse", "origin/main^{commit}"]);
+
+    expect(runGit(repoDir, ["branch", "--show-current"])).toBe("main");
+    expect(runGit(repoDir, ["branch", "--list"])).toBe("");
+    await expect(
+      inspectGitWorkspace(repoDir, { runGit: runGitAsync }),
+    ).resolves.toEqual({
+      kind: "worktree",
+      branch: "main",
+      hasCommits: true,
+      headHasCommit: false,
+      worktreeCreationAvailable: true,
+    });
+
+    const service = new GitDirectoryService({
+      resolveWorktreeStorage: () => "in-repo",
+      runGit: runGitAsync,
+    });
+    await expect(service.readDirectoryStatus({ path: repoDir })).resolves.toMatchObject({
+      worktreeCreationAvailable: true,
+    });
+    const workspace = await service.prepareLaunchpadWorkspace({
+      directoryKind: "directory",
+      directoryLabel: "FixtureRepo",
+      directoryPath: repoDir,
+      workMode: "worktree",
+    });
+
+    expect(workspace.workMode).toBe("worktree");
+    expect(runGit(workspace.cwd!, ["rev-parse", "HEAD"])).toBe(originRevision);
+    await workspace.rollback?.();
+  }, 15_000);
+
+  it("prefers remote HEAD over a newer remote branch for an unborn HEAD", async () => {
+    const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-unborn-default-"));
+    cleanupPaths.push(rootDir);
+    const remoteDir = path.join(rootDir, "origin");
+    const repoDir = path.join(rootDir, "repo");
+    execFileSync("git", ["init", "-b", "main", remoteDir], { stdio: "ignore" });
+    runGit(remoteDir, ["config", "user.name", "PwrAgent Tests"]);
+    runGit(remoteDir, ["config", "user.email", "pwragent-tests@example.invalid"]);
+    execFileSync(
+      "git",
+      ["-C", remoteDir, "commit", "--allow-empty", "-m", "Main base"],
+      {
+        env: {
+          ...process.env,
+          GIT_AUTHOR_DATE: "2020-01-01T00:00:00Z",
+          GIT_COMMITTER_DATE: "2020-01-01T00:00:00Z",
+        },
+        stdio: "ignore",
+      },
+    );
+    runGit(remoteDir, ["checkout", "-b", "feature"]);
+    execFileSync(
+      "git",
+      ["-C", remoteDir, "commit", "--allow-empty", "-m", "Newer feature"],
+      {
+        env: {
+          ...process.env,
+          GIT_AUTHOR_DATE: "2020-01-02T00:00:00Z",
+          GIT_COMMITTER_DATE: "2020-01-02T00:00:00Z",
+        },
+        stdio: "ignore",
+      },
+    );
+    runGit(remoteDir, ["checkout", "main"]);
+    execFileSync("git", ["init", "-b", "main", repoDir], { stdio: "ignore" });
+    runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+    runGit(repoDir, ["fetch", "origin"]);
+    runGit(repoDir, ["remote", "set-head", "origin", "main"]);
+    const mainRevision = runGit(repoDir, ["rev-parse", "origin/main^{commit}"]);
+    const service = new GitDirectoryService({
+      resolveWorktreeStorage: () => "in-repo",
+      runGit: runGitAsync,
+    });
+
+    const status = await service.readDirectoryStatus({ path: repoDir });
+    expect(status).toMatchObject({
+      defaultBranch: "origin/main",
+      baseBranches: ["origin/feature", "origin/main"],
+      worktreeCreationAvailable: true,
+    });
+    const workspace = await service.prepareLaunchpadWorkspace({
+      directoryKind: "directory",
+      directoryLabel: "FixtureRepo",
+      directoryPath: repoDir,
+      workMode: "worktree",
+    });
+
+    expect(workspace.workMode).toBe("worktree");
+    expect(runGit(workspace.cwd!, ["rev-parse", "HEAD"])).toBe(mainRevision);
+    await workspace.rollback?.();
+
+    const explicitAttached = await service.prepareLaunchpadWorkspace({
+      directoryKind: "directory",
+      directoryLabel: "FixtureRepo",
+      directoryPath: repoDir,
+      workMode: "worktree",
+      branchName: "origin/main",
+      worktreeBranchMode: "attached",
+    });
+    expect(explicitAttached).toEqual({
+      cwd: toForwardSlashes(repoDir),
+      workMode: "local",
+    });
+
+    const implicitAttached = await service.prepareLaunchpadWorkspace({
+      directoryKind: "directory",
+      directoryLabel: "FixtureRepo",
+      directoryPath: repoDir,
+      workMode: "worktree",
+      worktreeBranchMode: "attached",
+    });
+    expect(implicitAttached).toEqual({
+      cwd: toForwardSlashes(repoDir),
+      workMode: "local",
+    });
+  }, 15_000);
+
+  it("refreshes cached unborn status after the initial branch is published", async () => {
+    const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-unborn-refresh-"));
+    cleanupPaths.push(rootDir);
+    const repoDir = path.join(rootDir, "repo");
+    const remoteDir = path.join(rootDir, "origin.git");
+    execFileSync("git", ["init", "--bare", "-b", "main", remoteDir], {
+      stdio: "ignore",
+    });
+    execFileSync("git", ["init", "-b", "main", repoDir], { stdio: "ignore" });
+    runGit(repoDir, ["config", "user.name", "PwrAgent Tests"]);
+    runGit(repoDir, ["config", "user.email", "pwragent-tests@example.invalid"]);
+    runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+    const service = new GitDirectoryService({
+      cacheTtlMs: 60_000,
+      runGit: runGitAsync,
+    });
+
+    await expect(service.readDirectoryStatus({ path: repoDir })).resolves.toMatchObject({
+      worktreeCreationAvailable: false,
+    });
+
+    runGit(repoDir, ["commit", "--allow-empty", "-m", "Publish main"]);
+    runGit(repoDir, ["push", "--set-upstream", "origin", "main"]);
+    await expect(service.readDirectoryStatus({ path: repoDir })).resolves.toMatchObject({
+      worktreeCreationAvailable: false,
+    });
+
+    service.invalidateDirectoryStatus(repoDir);
+    const refreshed = await service.readDirectoryStatus({ path: repoDir });
+    expect(refreshed).toMatchObject({
+      currentBranch: "main",
+      upstreamBranch: "origin/main",
+      syncState: "in-sync",
+    });
+    expect(refreshed?.worktreeCreationAvailable).toBeUndefined();
+  }, 15_000);
+
+  it("keeps ordinary repositories and linked worktrees worktree-capable", async () => {
+    const repoDir = await createFixtureRepo();
+    cleanupPaths.push(repoDir);
+    const worktreeDir = path.join(repoDir, ".worktrees", "release");
+    await mkdir(path.dirname(worktreeDir), { recursive: true });
+    runGit(repoDir, ["worktree", "add", worktreeDir, "release"]);
+
+    await expect(inspectGitWorkspace(repoDir)).resolves.toEqual({
+      kind: "worktree",
+      branch: "main",
+      hasCommits: true,
+      headHasCommit: true,
+      worktreeCreationAvailable: true,
+    });
+    await expect(inspectGitWorkspace(worktreeDir)).resolves.toEqual({
+      kind: "worktree",
+      branch: "release",
+      hasCommits: true,
+      headHasCommit: true,
+      worktreeCreationAvailable: true,
+    });
+  });
+
+  it("keeps normal non-Git directories classified as non-Git", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "pwragent-non-git-inspection-"));
+    cleanupPaths.push(directory);
+
+    await expect(inspectGitWorkspace(directory)).resolves.toEqual({
+      kind: "non_git",
+    });
+  });
+
+  it("recognizes an empty bare repository without treating it as a workspace", async () => {
+    const rootDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-bare-inspection-"));
+    cleanupPaths.push(rootDir);
+    const bareDir = path.join(rootDir, "empty.git");
+    execFileSync("git", ["init", "--bare", "-b", "main", bareDir], {
+      stdio: "ignore",
+    });
+
+    await expect(inspectGitWorkspace(bareDir)).resolves.toEqual({
+      kind: "bare",
+      branch: "main",
+      hasCommits: false,
+      worktreeCreationAvailable: false,
+    });
+  });
+
+  it("does not turn unexpected Git probe failures into non-Git results", async () => {
+    const failure = Object.assign(new Error("Git workspace probe failed"), {
+      stderr: "fatal: bad object database",
+    });
+
+    await expect(
+      inspectGitWorkspace("/repo", {
+        runGit: vi.fn(async () => {
+          throw failure;
+        }),
+      }),
+    ).rejects.toBe(failure);
+  });
+
+  it("does not treat a broken current branch ref as an unborn HEAD", async () => {
+    const failure = Object.assign(new Error("Git HEAD probe failed"), {
+      stderr: "fatal: bad object refs/heads/main",
+    });
+    const runGitCommand = vi.fn(async (_cwd: string, args: string[]) => {
+      const command = args.join(" ");
+      if (command === "rev-parse --is-inside-work-tree") return "true";
+      if (command === "branch --show-current") return "main";
+      if (command === "rev-list --max-count=1 --all") return "abc123";
+      if (command === "rev-parse --verify --quiet HEAD^{commit}") throw failure;
+      if (
+        command
+        === "for-each-ref --format=%(objectname) refs/heads/main"
+      ) {
+        return "abc123";
+      }
+      throw new Error(`Unexpected Git command: ${command}`);
+    });
+
+    await expect(
+      inspectGitWorkspace("/repo", { runGit: runGitCommand }),
+    ).rejects.toBe(failure);
+  });
+
   it("reports unborn git directories without surfacing raw HEAD errors", async () => {
     const repoDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-unborn-status-"));
     cleanupPaths.push(repoDir);
@@ -164,13 +471,15 @@ describe("GitDirectoryService", () => {
       branches: [],
       handoffBranches: [],
       syncState: "untracked",
+      worktreeCreationAvailable: false,
+      worktreeCreationUnavailableReason:
+        UNPUBLISHED_BASE_BRANCH_WORKTREE_REASON,
     });
   });
 
-  it("creates a worktree from the default branch when the checked-out branch is unborn", async () => {
+  it("keeps an unborn checkout local when its default branch exists only locally", async () => {
     const repoDir = await createFixtureRepo();
     cleanupPaths.push(repoDir);
-    const mainRevision = runGit(repoDir, ["rev-parse", "main"]);
     runGit(repoDir, ["checkout", "--orphan", "scratch"]);
     const service = new GitDirectoryService({
       resolveWorktreeStorage: () => "in-repo",
@@ -180,6 +489,9 @@ describe("GitDirectoryService", () => {
       branches: expect.arrayContaining(["main"]),
       defaultBranch: "main",
       syncState: "untracked",
+      worktreeCreationAvailable: false,
+      worktreeCreationUnavailableReason:
+        UNPUBLISHED_BASE_BRANCH_WORKTREE_REASON,
     });
     expect(status).not.toHaveProperty("currentBranch");
 
@@ -190,11 +502,10 @@ describe("GitDirectoryService", () => {
       workMode: "worktree",
     });
 
-    expect(workspace.workMode).toBe("worktree");
-    await expect(realpath(workspace.repositoryPath!)).resolves.toBe(await realpath(repoDir));
-    expect(workspace.cwd).toBeDefined();
-    expect(runGit(workspace.cwd!, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe("HEAD");
-    expect(runGit(workspace.cwd!, ["rev-parse", "HEAD"])).toBe(mainRevision);
+    expect(workspace).toEqual({
+      cwd: toForwardSlashes(repoDir),
+      workMode: "local",
+    });
   });
 
   it("falls back to local mode when an explicit worktree base branch is stale", async () => {
@@ -757,6 +1068,18 @@ describe("GitDirectoryService", () => {
         calls.push({ args, cwd, env });
         if (args.join(" ") === "rev-parse --show-toplevel") {
           return repoDir;
+        }
+        if (args.join(" ") === "rev-parse --is-inside-work-tree") {
+          return "true";
+        }
+        if (args.join(" ") === "branch --show-current") {
+          return "main";
+        }
+        if (args.join(" ") === "rev-list --max-count=1 --all") {
+          return "0123456789abcdef0123456789abcdef01234567";
+        }
+        if (args.join(" ") === "rev-parse --verify --quiet HEAD^{commit}") {
+          return "0123456789abcdef0123456789abcdef01234567";
         }
         if (args.join(" ") === "rev-parse --verify main^{commit}") {
           return "0123456789abcdef0123456789abcdef01234567";

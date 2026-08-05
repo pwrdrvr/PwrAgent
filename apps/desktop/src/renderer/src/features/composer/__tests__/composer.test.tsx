@@ -10966,6 +10966,66 @@ describe("Composer", () => {
     expect(screen.queryByRole("option", { name: "New worktree" })).not.toBeInTheDocument();
   });
 
+  it("keeps unpublished unborn repositories local and refreshes Git status on hover", () => {
+    const unavailableReason =
+      "Worktrees are unavailable because this repository has no published base branch yet. Create the initial commit in the Local checkout and publish the default branch. Worktrees will be enabled once a remote base branch is available.";
+    const refreshDirectoryGitStatuses = vi.fn(async () => ({ scheduledCount: 1 }));
+
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        desktopApi={{ refreshDirectoryGitStatuses } as DesktopApi}
+        directory={{
+          key: "directory:/Users/huntharo/pwrdrvr/UnbornRepo",
+          kind: "directory",
+          label: "UnbornRepo",
+          path: "/Users/huntharo/pwrdrvr/UnbornRepo",
+          threadKeys: [],
+          needsAttentionCount: 0,
+          gitStatus: {
+            defaultBranch: "seed",
+            branches: ["seed"],
+            baseBranches: ["seed"],
+            syncState: "untracked",
+            worktreeCreationAvailable: false,
+            worktreeCreationUnavailableReason: unavailableReason,
+          },
+        }}
+        launchpad={{
+          directoryKey: "directory:/Users/huntharo/pwrdrvr/UnbornRepo",
+          directoryKind: "directory",
+          directoryLabel: "UnbornRepo",
+          directoryPath: "/Users/huntharo/pwrdrvr/UnbornRepo",
+          backend: "codex",
+          executionMode: "default",
+          prompt: "",
+          workMode: "worktree",
+          branchName: "seed",
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+        onUpdateLaunchpad={async () => undefined}
+        skills={[]}
+      />
+    );
+
+    const workspaceMode = screen.getByLabelText("Workspace mode");
+    expect(workspaceMode).toBeDisabled();
+    expect(workspaceMode).toHaveValue("local");
+    expect(workspaceMode).toHaveTextContent("Local");
+    expect(workspaceMode).toHaveAttribute("aria-description", unavailableReason);
+    expect(workspaceMode.closest(".composer-dropdown")).toHaveAttribute(
+      "data-tooltip",
+      unavailableReason,
+    );
+    fireEvent.pointerEnter(workspaceMode.closest(".composer-dropdown")!);
+    expect(refreshDirectoryGitStatuses).toHaveBeenCalledExactlyOnceWith({
+      directoryKeys: ["directory:/Users/huntharo/pwrdrvr/UnbornRepo"],
+      force: true,
+    });
+    expect(screen.queryByRole("option", { name: "New worktree" })).not.toBeInTheDocument();
+  });
+
   it("renders the worktree base branch menu as a branch chooser", () => {
     render(
       <Composer

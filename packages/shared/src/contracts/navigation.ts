@@ -684,6 +684,9 @@ export type NavigationDirectoryGitStatus = {
   currentBranch?: string;
   defaultBranch?: string;
   upstreamBranch?: string;
+  /** Reported when the selected checkout has an unborn HEAD. */
+  worktreeCreationAvailable?: boolean;
+  worktreeCreationUnavailableReason?: string;
   ahead?: number;
   behind?: number;
   branches?: string[];
@@ -764,6 +767,8 @@ export type NavigationThreadGitWorkingStateUpdatedNotification = {
 
 export type RefreshDirectoryGitStatusesRequest = {
   directoryKeys: string[];
+  /** Route filesystem inspection to the instance that owns these directories. */
+  federationTarget?: FederationTarget;
   force?: boolean;
 };
 

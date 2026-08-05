@@ -24,6 +24,27 @@ type GitCommandRunner = (
   env?: NodeJS.ProcessEnv,
 ) => Promise<string>;
 
+export type GitWorkspaceInspection =
+  | { kind: "non_git" }
+  | {
+      kind: "worktree";
+      branch?: string;
+      /** Whether any repository ref resolves to a commit. */
+      hasCommits: boolean;
+      /** Whether the selected workspace's HEAD resolves to a commit. */
+      headHasCommit: boolean;
+      worktreeCreationAvailable: boolean;
+    }
+  | {
+      kind: "bare" | "git_directory";
+      branch?: string;
+      hasCommits: boolean;
+      worktreeCreationAvailable: false;
+    };
+
+export const UNPUBLISHED_BASE_BRANCH_WORKTREE_REASON =
+  "Worktrees are unavailable because this repository has no published base branch yet. Create the initial commit in the Local checkout and publish the default branch. Worktrees will be enabled once a remote base branch is available.";
+
 // Directory/worktree identifiers are surfaced to the rest of the app
 // (thread links, navigation, cleanup results) as stable string keys.
 // `path.resolve`/`path.join` emit backslashes on Windows, so normalize
@@ -64,7 +85,101 @@ function errorText(error: unknown): string {
 }
 
 function isNotGitRepositoryError(error: unknown): boolean {
-  return errorText(error).includes("not a git repository");
+  return errorText(error).toLowerCase().includes("not a git repository");
+}
+
+export async function inspectGitWorkspace(
+  cwd: string,
+  options: {
+    env?: NodeJS.ProcessEnv;
+    runGit?: GitCommandRunner;
+  } = {},
+): Promise<GitWorkspaceInspection> {
+  const runGit = options.runGit ?? defaultRunGit;
+  let insideWorktree: string;
+  try {
+    insideWorktree = (
+      await runGit(cwd, ["rev-parse", "--is-inside-work-tree"], options.env)
+    ).trim();
+  } catch (error) {
+    if (isNotGitRepositoryError(error)) {
+      return { kind: "non_git" };
+    }
+    throw error;
+  }
+  if (insideWorktree !== "true" && insideWorktree !== "false") {
+    throw new Error(
+      `Git returned an unexpected workspace probe result for ${cwd}: ${insideWorktree}`,
+    );
+  }
+
+  let kind: Exclude<GitWorkspaceInspection["kind"], "non_git"> = "worktree";
+  if (insideWorktree === "false") {
+    const bareRepository = (
+      await runGit(cwd, ["rev-parse", "--is-bare-repository"], options.env)
+    ).trim();
+    if (bareRepository !== "true" && bareRepository !== "false") {
+      throw new Error(
+        `Git returned an unexpected bare-repository probe result for ${cwd}: ${bareRepository}`,
+      );
+    }
+    kind = bareRepository === "true" ? "bare" : "git_directory";
+  }
+
+  const [rawBranch, anyCommit] = await Promise.all([
+    runGit(cwd, ["branch", "--show-current"], options.env),
+    runGit(cwd, ["rev-list", "--max-count=1", "--all"], options.env),
+  ]);
+  const hasCommits = Boolean(anyCommit.trim());
+  const currentBranch = rawBranch.trim();
+  const branch = currentBranch || (hasCommits ? "HEAD" : undefined);
+  if (kind !== "worktree") {
+    return {
+      kind,
+      branch,
+      hasCommits,
+      worktreeCreationAvailable: false,
+    };
+  }
+
+  let headHasCommit = true;
+  try {
+    await runGit(
+      cwd,
+      ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"],
+      options.env,
+    );
+  } catch (error) {
+    if (!currentBranch) {
+      throw error;
+    }
+    const currentBranchObject = await runGit(
+      cwd,
+      ["for-each-ref", "--format=%(objectname)", `refs/heads/${currentBranch}`],
+      options.env,
+    );
+    if (currentBranchObject.trim()) {
+      throw error;
+    }
+    headHasCommit = false;
+  }
+  let remoteBranchCommit = "";
+  if (!headHasCommit) {
+    remoteBranchCommit = await runGit(
+      cwd,
+      ["rev-list", "--max-count=1", "--remotes"],
+      options.env,
+    );
+  }
+
+  return {
+    kind,
+    branch,
+    hasCommits,
+    headHasCommit,
+    worktreeCreationAvailable:
+      headHasCommit || Boolean(remoteBranchCommit.trim()),
+  };
 }
 
 async function readGitRoot(
@@ -280,13 +395,6 @@ async function readPrimaryWorktreePath(
   return parseGitWorktreeEntries(worktreeList)[0]?.path;
 }
 
-function parseGitLines(output: string): string[] {
-  return output
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-}
-
 /**
  * Parses `for-each-ref refs/heads` output formatted as
  * `<short-name>\t<committerdate:unix>`, preserving the input order (which the
@@ -430,7 +538,11 @@ function resolveDefaultBranch(params: {
   branches: string[];
   remoteHead: string;
 }): string | undefined {
-  const remoteHead = params.remoteHead.replace(/^origin\//, "").trim();
+  const remoteHead = params.remoteHead.trim();
+  const localRemoteHead = remoteHead.replace(/^origin\//, "");
+  if (localRemoteHead && params.branches.includes(localRemoteHead)) {
+    return localRemoteHead;
+  }
   if (remoteHead && params.branches.includes(remoteHead)) {
     return remoteHead;
   }
@@ -492,22 +604,26 @@ async function resolveVerifiedWorktreeBaseBranch(params: {
   repoRoot: string;
   sourceRoot?: string;
   requestedBranch?: string;
+  requireLocalBranch?: boolean;
   gitEnv?: NodeJS.ProcessEnv;
   runGit?: GitCommandRunner;
 }): Promise<string | undefined> {
   const runGit = params.runGit ?? defaultRunGit;
   const requestedBranch = sanitizeBranchName(params.requestedBranch ?? "");
   if (requestedBranch && requestedBranch !== "HEAD") {
+    const requestedRef = params.requireLocalBranch
+      ? `refs/heads/${requestedBranch}`
+      : requestedBranch;
     const commit = await runGit(
       params.repoRoot,
-      ["rev-parse", "--verify", `${requestedBranch}^{commit}`],
+      ["rev-parse", "--verify", `${requestedRef}^{commit}`],
       params.gitEnv,
     ).catch(() => "");
     return commit ? requestedBranch : undefined;
   }
 
   const sourceRoot = params.sourceRoot ?? params.repoRoot;
-  const [rawCurrentBranch, branchesOutput, remoteHead] = await Promise.all([
+  const [rawCurrentBranch, baseBranchesOutput, remoteHead] = await Promise.all([
     runGit(sourceRoot, ["rev-parse", "--abbrev-ref", "HEAD"], params.gitEnv).catch(
       () => "",
     ),
@@ -516,8 +632,9 @@ async function resolveVerifiedWorktreeBaseBranch(params: {
       [
         "for-each-ref",
         "refs/heads",
+        ...(params.requireLocalBranch ? [] : ["refs/remotes"]),
         "--sort=-committerdate",
-        "--format=%(refname:short)",
+        "--format=%(refname)%09%(refname:short)%09%(committerdate:unix)%09%(symref)",
       ],
       params.gitEnv,
     ).catch(() => ""),
@@ -528,12 +645,17 @@ async function resolveVerifiedWorktreeBaseBranch(params: {
     ).catch(() => ""),
   ]);
   const currentBranch = rawCurrentBranch.trim() === "HEAD" ? "" : rawCurrentBranch;
-  const branches = parseGitLines(branchesOutput);
-  const defaultBranch = resolveDefaultBranch({ branches, remoteHead });
+  const baseBranches = parseGitBaseBranchDetails(baseBranchesOutput).map(
+    (detail) => detail.name,
+  );
+  const defaultBranch = resolveDefaultBranch({
+    branches: baseBranches,
+    remoteHead,
+  });
   const candidates = uniqueBranches([
     currentBranch,
     defaultBranch,
-    ...branches,
+    ...baseBranches,
   ]);
 
   for (const branch of candidates) {
@@ -661,6 +783,13 @@ export class GitDirectoryService {
       (await resolveStorage?.()) ?? DESKTOP_WORKTREE_STORAGE_DEFAULT;
   }
 
+  async inspectWorkspaceGit(cwd: string): Promise<GitWorkspaceInspection> {
+    return await inspectGitWorkspace(cwd, {
+      env: this.gitEnv,
+      runGit: this.runGitCommand,
+    });
+  }
+
   async readDirectoryStatuses(
     directories: NavigationDirectorySummary[],
   ): Promise<Record<string, NavigationDirectoryGitStatus | undefined>> {
@@ -769,21 +898,23 @@ export class GitDirectoryService {
       rawCurrentBranch,
       branchInventory,
       recentCommitsOutput,
+      workspaceInspection,
     ] = await Promise.all([
-        runGit(repoRoot, ["rev-parse", "--abbrev-ref", "HEAD"], gitEnv).catch(
-          () => "",
-        ),
-        this.readBranchInventory({ commonGitDir, repoRoot }),
-        runGit(
-          repoRoot,
-          [
-            "log",
-            `--max-count=${MAX_TRACKED_COMMITS}`,
-            "--format=%H%x1f%h%x1f%ct%x1f%s",
-          ],
-          gitEnv,
-        ).catch(() => ""),
-      ]);
+      runGit(repoRoot, ["rev-parse", "--abbrev-ref", "HEAD"], gitEnv).catch(
+        () => "",
+      ),
+      this.readBranchInventory({ commonGitDir, repoRoot }),
+      runGit(
+        repoRoot,
+        [
+          "log",
+          `--max-count=${MAX_TRACKED_COMMITS}`,
+          "--format=%H%x1f%h%x1f%ct%x1f%s",
+        ],
+        gitEnv,
+      ).catch(() => ""),
+      inspectGitWorkspace(cwd, { env: gitEnv, runGit }),
+    ]);
     const currentBranch =
       rawCurrentBranch.trim() === "HEAD" ? "" : rawCurrentBranch.trim();
     const upstreamBranch = await runGit(
@@ -806,10 +937,10 @@ export class GitDirectoryService {
       0,
       MAX_TRACKED_COMMITS,
     );
-    // Resolve the default branch against the FULL list so a rarely-committed
-    // `main` is still found, then cap everything we hold/persist downstream.
+    // Resolve against the full local + remote list so an unborn checkout can
+    // retain its remote default even when a newer remote branch sorts first.
     const defaultBranch = resolveDefaultBranch({
-      branches: parsedBranchDetailsAll.map((detail) => detail.name),
+      branches: parsedBaseBranchDetailsAll.map((detail) => detail.name),
       remoteHead: branchInventory.remoteHead,
     });
     const parsedBranchDetails = capRecentBranchDetails(parsedBranchDetailsAll, {
@@ -822,6 +953,19 @@ export class GitDirectoryService {
     });
     const branches = parsedBranchDetails.map((detail) => detail.name);
     const baseBranches = parsedBaseBranchDetails.map((detail) => detail.name);
+    const unbornWorktreeAvailability =
+      workspaceInspection.kind === "worktree" && !workspaceInspection.headHasCommit
+        ? {
+            worktreeCreationAvailable:
+              workspaceInspection.worktreeCreationAvailable,
+            ...(!workspaceInspection.worktreeCreationAvailable
+              ? {
+                  worktreeCreationUnavailableReason:
+                    UNPUBLISHED_BASE_BRANCH_WORKTREE_REASON,
+                }
+              : {}),
+          }
+        : {};
     const worktreeBranchNames = new Set(
       parseGitWorktreeEntries(branchInventory.worktreeList)
         .map((entry) => entry.branch)
@@ -841,6 +985,7 @@ export class GitDirectoryService {
       );
     if (!currentBranch) {
       return {
+        ...unbornWorktreeAvailability,
         defaultBranch,
         branches,
         baseBranches,
@@ -861,6 +1006,7 @@ export class GitDirectoryService {
 
     if (!upstreamBranch) {
       return {
+        ...unbornWorktreeAvailability,
         currentBranch,
         defaultBranch,
         branches,
@@ -893,6 +1039,7 @@ export class GitDirectoryService {
             : "in-sync";
 
     return {
+      ...unbornWorktreeAvailability,
       currentBranch,
       upstreamBranch,
       ahead,
@@ -1084,6 +1231,19 @@ export class GitDirectoryService {
         workMode: "local",
       };
     }
+    const workspaceInspection = await inspectGitWorkspace(directoryPath, {
+      env: this.gitEnv,
+      runGit: this.runGitCommand,
+    });
+    if (
+      workspaceInspection.kind !== "worktree"
+      || !workspaceInspection.worktreeCreationAvailable
+    ) {
+      return {
+        cwd: directoryPath,
+        workMode: "local",
+      };
+    }
     const repoRoot =
       (await readPrimaryWorktreePath(sourceRoot, this.runGitCommand, this.gitEnv))
       ?? sourceRoot;
@@ -1092,6 +1252,7 @@ export class GitDirectoryService {
       gitEnv: this.gitEnv,
       repoRoot,
       requestedBranch: launchpad.branchName,
+      requireLocalBranch: launchpad.worktreeBranchMode === "attached",
       runGit: this.runGitCommand,
       sourceRoot,
     });

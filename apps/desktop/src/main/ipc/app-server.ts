@@ -2177,6 +2177,15 @@ class DesktopAppServerService {
   async refreshDirectoryGitStatusesForKeys(
     request: RefreshDirectoryGitStatusesRequest,
   ): Promise<RefreshDirectoryGitStatusesResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .refreshDirectoryGitStatuses(remoteRequest);
+    }
     await this.loadDirectoryGitStatusCache();
     const directoryKeys = [
       ...new Set(request.directoryKeys.map((key) => key.trim()).filter(Boolean)),
@@ -2244,7 +2253,10 @@ class DesktopAppServerService {
       automaticLimit: STARTUP_DIRECTORY_GIT_STATUS_REFRESH_LIMIT,
     });
 
-    const promise = this.refreshDirectoryGitStatuses(directories)
+    const promise = this.refreshDirectoryGitStatuses(
+      directories,
+      params.force === true,
+    )
       .catch((error) => {
         logDebug("directoryGitStatusRefresh:failed", {
           error: error instanceof Error ? error.message : String(error),
@@ -2421,6 +2433,7 @@ class DesktopAppServerService {
 
   private async refreshDirectoryGitStatuses(
     directories: NavigationSnapshot["directories"],
+    force = false,
   ): Promise<void> {
     const refreshableDirectories = directories.filter((directory) => directory.path?.trim());
     if (refreshableDirectories.length === 0) {
@@ -2428,6 +2441,11 @@ class DesktopAppServerService {
     }
 
     const registry = getDesktopBackendRegistry();
+    if (force) {
+      for (const directory of refreshableDirectories) {
+        registry.invalidateDirectoryStatus(directory.path);
+      }
+    }
     const directoryByKey = new Map(
       refreshableDirectories.map((directory) => [directory.key, directory]),
     );
@@ -2443,7 +2461,7 @@ class DesktopAppServerService {
     }
   }
 
-  private async writeDirectoryGitStatusEntry(params: {
+  async writeDirectoryGitStatusEntry(params: {
     directory?: NavigationSnapshot["directories"][number];
     directoryKey: string;
     fetchedAt: number;
@@ -5941,6 +5959,9 @@ export function registerAppServerIpcHandlers(): void {
   getDesktopBackendRegistry().setThreadPullRequestWatchToolHandler(
     async (args) => await appServerService.watchThreadPullRequestForTool(args),
   );
+  getDesktopBackendRegistry().setDirectoryGitStatusWriter(
+    async (params) => await appServerService.writeDirectoryGitStatusEntry(params),
+  );
   getDesktopBackendRegistry().setThreadPrAutoDispatchHandler({
     preferenceChanged: async (request) =>
       await appServerService.handleThreadPrAutoDispatchPreference(request),
@@ -6569,6 +6590,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   registry?.setThreadPullRequestStatusToolHandler(undefined);
   registry?.setThreadPullRequestCanonicalizer(undefined);
   registry?.setThreadPullRequestWatchToolHandler(undefined);
+  registry?.setDirectoryGitStatusWriter(undefined);
   registry?.setThreadPrAutoDispatchHandler(undefined);
   await appServerService.close();
 }
