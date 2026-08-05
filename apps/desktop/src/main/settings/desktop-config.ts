@@ -46,6 +46,7 @@ import {
   isDesktopOnboardingCompletedSource,
   isDesktopWorktreeStorageLocation,
   isDesktopUpdateChannel,
+  sanitizeMessagingContactHandle,
   sanitizeMessagingContactLabel,
 } from "@pwragent/shared";
 import { DEFAULT_PASTED_IMAGE_MAX_PATCHES } from "../../shared/image-normalization";
@@ -609,6 +610,7 @@ export function desktopSettingsPatchToEdits(
       value: normalizedContacts.map((contact) => ({
         id: contact.id,
         display_name: contact.displayName,
+        ...(contact.username ? { username: contact.username } : {}),
         ...(contact.fullAccessWarningOverride
           ? { full_access_warning: contact.fullAccessWarningOverride }
           : {}),
@@ -2651,6 +2653,12 @@ function readAuthorizedContactArray(
           : typeof entry.displayName === "string"
             ? entry.displayName
             : "",
+      username:
+        typeof entry.username === "string"
+          ? entry.username
+          : typeof entry.handle === "string"
+            ? entry.handle
+            : undefined,
       fullAccessWarningOverride: isFullAccessWarningUserPolicy(
         entry.full_access_warning,
       )
@@ -2674,20 +2682,24 @@ function normalizeAuthorizedContacts(
   contacts: readonly DesktopAuthorizedContact[],
 ): DesktopAuthorizedContact[] {
   return contacts
-    .map((contact) => ({
-      id: contact.id.trim(),
-      displayName: sanitizeMessagingContactLabel(contact.displayName),
-      ...(isFullAccessWarningUserPolicy(contact.fullAccessWarningOverride) &&
-      contact.fullAccessWarningOverride !== "default"
-        ? { fullAccessWarningOverride: contact.fullAccessWarningOverride }
-        : {}),
-      ...(contact.fullAccessWarningDismissed === true
-        ? { fullAccessWarningDismissed: true }
-        : {}),
-      ...(isMessagingResponseMode(contact.responseMode)
-        ? { responseMode: contact.responseMode }
-        : {}),
-    }))
+    .map((contact) => {
+      const username = sanitizeMessagingContactHandle(contact.username);
+      return {
+        id: contact.id.trim(),
+        displayName: sanitizeMessagingContactLabel(contact.displayName),
+        ...(username ? { username } : {}),
+        ...(isFullAccessWarningUserPolicy(contact.fullAccessWarningOverride) &&
+        contact.fullAccessWarningOverride !== "default"
+          ? { fullAccessWarningOverride: contact.fullAccessWarningOverride }
+          : {}),
+        ...(contact.fullAccessWarningDismissed === true
+          ? { fullAccessWarningDismissed: true }
+          : {}),
+        ...(isMessagingResponseMode(contact.responseMode)
+          ? { responseMode: contact.responseMode }
+          : {}),
+      };
+    })
     .filter((contact) => contact.id.length > 0);
 }
 

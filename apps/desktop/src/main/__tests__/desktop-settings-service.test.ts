@@ -1075,6 +1075,49 @@ describe("DesktopSettingsService", () => {
     ]);
   });
 
+  it("round-trips normalized authorized contact usernames", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(
+      configPath,
+      [
+        "[[messaging.slack.authorized_users]]",
+        'id = "U079K80HTGS"',
+        'display_name = "Harold Hunt"',
+        'username = "@hhunt"',
+      ].join("\n"),
+      "utf8",
+    );
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    const before = await service.readSettings();
+    expect(before.messaging.slack.authorizedUserIds.value).toEqual([{
+      id: "U079K80HTGS",
+      displayName: "Harold Hunt",
+      username: "hhunt",
+    }]);
+
+    await service.writeConfigPatch({
+      messaging: {
+        slack: {
+          authorizedUserIds: before.messaging.slack.authorizedUserIds.value,
+        },
+      },
+    });
+
+    expect(fs.readFileSync(configPath, "utf8")).toContain('username = "hhunt"');
+    const after = await service.readSettings();
+    expect(after.messaging.slack.authorizedUserIds.value).toEqual([{
+      id: "U079K80HTGS",
+      displayName: "Harold Hunt",
+      username: "hhunt",
+    }]);
+  });
+
   it("sanitizes authorized contact display names read from config", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");

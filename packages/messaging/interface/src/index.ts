@@ -339,6 +339,8 @@ export type MessagingActorIdentity = {
 
 export type MessagingAdapterAuthorizationUpdate = {
   authorizedActorIds: readonly string[];
+  /** Current metadata for authorized actors, when the host has it available. */
+  authorizedActors?: readonly MessagingActorIdentity[];
   authorizedConversationIds?: readonly string[];
   conversationAuthorizationMode?: MessagingAuthorizationMode;
   conversationResponseModes?: readonly MessagingConversationResponseMode[];

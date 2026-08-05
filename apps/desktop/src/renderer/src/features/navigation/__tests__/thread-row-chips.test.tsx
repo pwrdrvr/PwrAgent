@@ -138,6 +138,28 @@ describe("ThreadRow chip flow", () => {
     expect(bindingChip?.textContent).not.toContain("sl");
   });
 
+  it("labels a Slack channel with its known channel name", () => {
+    const slackBinding: MessagingThreadBindingSummary = {
+      bindingId: "binding-slack-channel",
+      platform: "slack",
+      conversationKind: "channel",
+      conversationTitle: "p-pwragent-testing",
+    };
+    const { container } = renderRow({
+      thread: {
+        ...baseThread,
+        messagingBindings: [slackBinding],
+        reactions: [],
+      },
+    });
+    const bindingChip = container.querySelector(".thread-row__chip--binding");
+    expect(bindingChip).toHaveTextContent("#p-pwragent-testing");
+    expect(bindingChip).toHaveAttribute(
+      "aria-label",
+      expect.stringContaining("Channel: #p-pwragent-testing"),
+    );
+  });
+
   it("labels a Slack group DM (mpim) as a Group DM, not a channel", () => {
     const groupDmBinding: MessagingThreadBindingSummary = {
       ...telegramBinding,

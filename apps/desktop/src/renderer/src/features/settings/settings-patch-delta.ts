@@ -356,6 +356,7 @@ function authorizedContactArrayEqual(
     if (
       a[i]?.id !== b[i]?.id ||
       a[i]?.displayName !== b[i]?.displayName ||
+      a[i]?.username !== b[i]?.username ||
       a[i]?.fullAccessWarningOverride !== b[i]?.fullAccessWarningOverride ||
       a[i]?.fullAccessWarningDismissed !== b[i]?.fullAccessWarningDismissed ||
       a[i]?.responseMode !== b[i]?.responseMode

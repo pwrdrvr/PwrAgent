@@ -19,6 +19,7 @@ import {
   validateMattermostId,
   validateSlackTeamId,
   validateSlackUserId,
+  sanitizeMessagingContactHandle,
   sanitizeMessagingContactLabel,
   validateTelegramGroupChatId,
   validateTelegramPositiveId,
@@ -1126,6 +1127,7 @@ export function MessagingSettings(props: {
             validateEntry={validateSlackUserIdEntry}
             value={slack.authorizedUserIds.value}
             fullAccessWarningPolicy
+            showUsername
             onSave={(authorizedUserIds) => {
               void props.onSaveSlack({
                 ...slack,
@@ -2355,7 +2357,7 @@ function PairingTokenField(props: {
         if (result?.entry.id === messageEntryId) {
           setGeneratedMessage(undefined, undefined);
         }
-        if (result?.added) {
+        if (result) {
           await props.onSettingsChanged?.();
         }
       } else {
@@ -2379,15 +2381,17 @@ function PairingTokenField(props: {
     setBusyId(entry.id);
     setError(undefined);
     try {
+      let approved = false;
       for (const step of steps) {
         const result = await props.desktopApi?.approveMessagingPairing?.({
           entryId: entry.id,
           target: step.target,
           ...(step.consume ? {} : { consume: false }),
         });
-        if (result?.added) {
-          await props.onSettingsChanged?.();
-        }
+        approved = approved || Boolean(result);
+      }
+      if (approved) {
+        await props.onSettingsChanged?.();
       }
       if (entry.id === messageEntryId) {
         setGeneratedMessage(undefined, undefined);
@@ -2716,6 +2720,7 @@ function AuthorizedListField(props: {
   label: string;
   lookup?: (id: string) => Promise<DesktopMessagingContactLookupResponse>;
   responseModePolicy?: boolean;
+  showUsername?: boolean;
   sub?: ReactNode;
   source: string;
   validateEntry?: (value: string) => string | undefined;
@@ -2724,11 +2729,13 @@ function AuthorizedListField(props: {
 }) {
   const inputId = useId();
   const descriptionId = `${inputId}-validation`;
-  // When a row carries a labeled policy column (Full Access warning /
-  // Response mode), give the ID and Display name columns matching headers
+  // When a row carries a labeled policy or resolved Username column, give
+  // the identity columns matching headers
   // so every input shares a baseline instead of floating.
   const showColumnHeaders = Boolean(
-    props.fullAccessWarningPolicy || props.responseModePolicy,
+    props.fullAccessWarningPolicy
+    || props.responseModePolicy
+    || props.showUsername,
   );
   const [rows, setRowsState] = useState<DesktopAuthorizedContact[]>(props.value);
   const rowsRef = useRef<DesktopAuthorizedContact[]>(props.value);
@@ -2749,8 +2756,8 @@ function AuthorizedListField(props: {
           message:
             row.id.length > 0
               ? props.validateEntry?.(row.id)
-              : row.displayName.length > 0
-                ? "ID cannot be blank when a display name is set."
+              : row.displayName.length > 0 || Boolean(row.username)
+                ? "ID cannot be blank when a display name or username is set."
                 : undefined,
         }))
         .filter(
@@ -2777,7 +2784,8 @@ function AuthorizedListField(props: {
       normalized.some(
         (row) =>
           (row.id.length > 0 && props.validateEntry?.(row.id))
-          || (row.id.length === 0 && row.displayName.length > 0),
+          || (row.id.length === 0
+            && (row.displayName.length > 0 || Boolean(row.username))),
       )
     ) {
       return;
@@ -2832,7 +2840,13 @@ function AuthorizedListField(props: {
         errorMessage: error instanceof Error ? error.message : String(error),
       };
     }
-    if (result.status === "ok" && result.displayName) {
+    const resolvedUsername = props.showUsername
+      ? sanitizeMessagingContactHandle(result.handle)
+      : "";
+    if (
+      result.status === "ok"
+      && (result.displayName || resolvedUsername)
+    ) {
       const latestRows = rowsRef.current;
       const latestRow = normalizeAuthorizedContactRow(
         latestRows[indexToLookup] ?? { id: "", displayName: "" },
@@ -2850,7 +2864,15 @@ function AuthorizedListField(props: {
           ? {
               ...current,
               id: row.id,
-              displayName: result.displayName ?? "",
+              displayName: result.displayName ?? current.displayName,
+              ...(props.showUsername
+                ? {
+                    username:
+                      resolvedUsername
+                      || sanitizeMessagingContactHandle(current.username)
+                      || undefined,
+                  }
+                : {}),
             }
           : current,
       );
@@ -2911,6 +2933,10 @@ function AuthorizedListField(props: {
                         : props.responseModePolicy
                           ? " settings-authorized-list__row--with-response-mode"
                         : ""
+                    }${
+                      props.showUsername
+                        ? " settings-authorized-list__row--with-username"
+                        : ""
                     }`}
                   >
                   <div className="settings-authorized-list__field">
@@ -2938,13 +2964,20 @@ function AuthorizedListField(props: {
                         );
                         setRows(nextRows);
                         saveIfValid(nextRows);
-                        if (normalized.displayName.length === 0) {
+                        if (
+                          normalized.displayName.length === 0
+                          || (props.showUsername && !normalized.username)
+                        ) {
                           void lookupRow(index, nextRows);
                         }
                       }}
-                      onChange={(event) =>
-                        updateRow(index, { id: event.currentTarget.value })
-                      }
+                      onChange={(event) => {
+                        const id = event.currentTarget.value;
+                        updateRow(index, {
+                          id,
+                          ...(id !== row.id ? { username: undefined } : {}),
+                        });
+                      }}
                     />
                   </div>
                   <div className="settings-authorized-list__field">
@@ -2977,6 +3010,26 @@ function AuthorizedListField(props: {
                       }
                     />
                   </div>
+                  {props.showUsername ? (
+                    <div className="settings-authorized-list__field">
+                      {showColumnHeaders ? (
+                        <span
+                          aria-hidden="true"
+                          className="settings-authorized-list__policy-label"
+                        >
+                          Username
+                        </span>
+                      ) : null}
+                      <input
+                        aria-label={`${props.label} username ${index + 1}`}
+                        className="settings-input settings-authorized-list__username"
+                        placeholder="Not resolved"
+                        readOnly
+                        title="Resolved from Slack and stored for identity labels."
+                        value={normalized.username ? `@${normalized.username}` : ""}
+                      />
+                    </div>
+                  ) : null}
                   {props.fullAccessWarningPolicy ? (
                     <div className="settings-authorized-list__policy">
                       <label
@@ -3204,9 +3257,11 @@ function lookupFailureMessage(
 function normalizeAuthorizedContactRow(
   contact: DesktopAuthorizedContact,
 ): DesktopAuthorizedContact {
+  const username = sanitizeMessagingContactHandle(contact.username);
   return {
     id: contact.id.trim(),
     displayName: sanitizeMessagingContactLabel(contact.displayName),
+    ...(username ? { username } : {}),
     ...(contact.fullAccessWarningOverride &&
     contact.fullAccessWarningOverride !== "default"
       ? { fullAccessWarningOverride: contact.fullAccessWarningOverride }

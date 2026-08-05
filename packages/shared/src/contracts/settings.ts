@@ -187,6 +187,8 @@ export type DesktopProviderThreadModelMigration = {
 export type DesktopAuthorizedContact = {
   id: string;
   displayName: string;
+  /** Provider username without presentation punctuation such as a leading `@`. */
+  username?: string;
   fullAccessWarningDismissed?: boolean;
   fullAccessWarningOverride?: DesktopMessagingFullAccessWarningUserPolicy;
   responseMode?: DesktopMessagingResponseMode;

@@ -1592,17 +1592,21 @@ describe("SlackAdapter", () => {
     ]);
   });
 
-  it("uses users.info display names for DM labels when users:read is granted", async () => {
+  it("uses users.info full names and handles for DM origins", async () => {
     const socket = fakeSocket();
     const adapter = new SlackAdapter({
       config: {
         ...baseConfig,
-        authorizedActorIds: [{ id: "U012ABCDEF0", displayName: "" }],
+        authorizedActorIds: [{ id: "U012ABCDEF0", displayName: "Harold" }],
       },
       callbackHandleStore: fakeStore(),
       api: fakeApi({
         users: {
-          U012ABCDEF0: { displayName: "Harold Hunt", username: "hhunt" },
+          U012ABCDEF0: {
+            displayName: "Harold",
+            realName: "Harold Hunt",
+            username: "hhunt",
+          },
         },
       }),
       socketClient: socket,
@@ -1631,6 +1635,7 @@ describe("SlackAdapter", () => {
         actor: expect.objectContaining({
           displayName: "Harold Hunt",
           platformUserId: "U012ABCDEF0",
+          username: "hhunt",
         }),
         channel: expect.objectContaining({
           conversation: expect.objectContaining({
@@ -1638,6 +1643,163 @@ describe("SlackAdapter", () => {
             kind: "dm",
             title: "Harold Hunt",
           }),
+        }),
+      }),
+    ]);
+  });
+
+  it("preserves a configured name when users.info only resolves a handle", async () => {
+    const socket = fakeSocket();
+    const adapter = new SlackAdapter({
+      config: {
+        ...baseConfig,
+        authorizedActorIds: [{
+          id: "U012ABCDEF0",
+          displayName: "Harold Hunt",
+        }],
+      },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({
+        users: {
+          U012ABCDEF0: { username: "hhunt" },
+        },
+      }),
+      socketClient: socket,
+      now: () => 1_700_000_000_000,
+    });
+    const events: MessagingInboundEvent[] = [];
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await socket.emitEvent("slack_event", {
+      ack: async () => undefined,
+      event: {
+        type: "message",
+        channel: "D012ABCDEF0",
+        channel_type: "im",
+        team: "T012ABCDEF0",
+        ts: "1712023032.123456",
+        user: "U012ABCDEF0",
+        text: "hello",
+      },
+    });
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        actor: expect.objectContaining({
+          displayName: "Harold Hunt",
+          platformUserId: "U012ABCDEF0",
+          username: "hhunt",
+        }),
+        channel: expect.objectContaining({
+          conversation: expect.objectContaining({
+            kind: "dm",
+            title: "Harold Hunt",
+          }),
+        }),
+      }),
+    ]);
+  });
+
+  it("uses a persisted username when users.info is unavailable", async () => {
+    const socket = fakeSocket();
+    const adapter = new SlackAdapter({
+      config: {
+        ...baseConfig,
+        authorizedActorIds: [{
+          id: "U012ABCDEF0",
+          displayName: "Harold Hunt",
+          username: "hhunt",
+        }],
+      },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      socketClient: socket,
+      now: () => 1_700_000_000_000,
+    });
+    const events: MessagingInboundEvent[] = [];
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await socket.emitEvent("slack_event", {
+      ack: async () => undefined,
+      event: {
+        type: "message",
+        channel: "D012ABCDEF0",
+        channel_type: "im",
+        team: "T012ABCDEF0",
+        ts: "1712023032.123456",
+        user: "U012ABCDEF0",
+        text: "hello",
+      },
+    });
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        actor: expect.objectContaining({
+          displayName: "Harold Hunt",
+          platformUserId: "U012ABCDEF0",
+          username: "hhunt",
+        }),
+        channel: expect.objectContaining({
+          conversation: expect.objectContaining({
+            kind: "dm",
+            title: "Harold Hunt",
+          }),
+        }),
+      }),
+    ]);
+  });
+
+  it("uses contact metadata received through a hot authorization update", async () => {
+    const socket = fakeSocket();
+    const adapter = new SlackAdapter({
+      config: {
+        ...baseConfig,
+        authorizedActorIds: [{
+          id: "U012ABCDEF0",
+          displayName: "Harold",
+        }],
+      },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      socketClient: socket,
+      now: () => 1_700_000_000_000,
+    });
+    const events: MessagingInboundEvent[] = [];
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+    await adapter.updateAuthorization({
+      authorizedActorIds: ["U012ABCDEF0"],
+      authorizedActors: [{
+        platformUserId: "U012ABCDEF0",
+        displayName: "Harold Hunt",
+        username: "hhunt",
+      }],
+    });
+
+    await socket.emitEvent("slack_event", {
+      ack: async () => undefined,
+      event: {
+        type: "message",
+        channel: "D012ABCDEF0",
+        channel_type: "im",
+        team: "T012ABCDEF0",
+        ts: "1712023032.123456",
+        user: "U012ABCDEF0",
+        text: "hello",
+      },
+    });
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        actor: expect.objectContaining({
+          displayName: "Harold Hunt",
+          platformUserId: "U012ABCDEF0",
+          username: "hhunt",
         }),
       }),
     ]);

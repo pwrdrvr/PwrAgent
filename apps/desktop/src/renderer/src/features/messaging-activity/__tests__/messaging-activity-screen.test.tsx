@@ -141,6 +141,7 @@ describe("MessagingActivityScreen", () => {
             payload: {
               conversationKind: "channel",
               conversationBucketId: "T079K80HTGS",
+              actorUsername: "hhunt",
             },
           },
         ],
@@ -154,11 +155,15 @@ describe("MessagingActivityScreen", () => {
     });
     expect((await screen.findByText("U079K80HTGS")).closest("button"))
       .toHaveTextContent("User ID");
+    expect(screen.getByText("@hhunt").closest("button"))
+      .toHaveTextContent("Username");
+    expect(screen.getByText("Observed pairing token (@hhunt)"))
+      .toBeInTheDocument();
     expect(screen.getByText("T079K80HTGS").closest("button"))
       .toHaveTextContent("Workspace ID");
     expect(screen.getByText("C079K80HTGS").closest("button"))
       .toHaveTextContent("Channel ID");
-    const row = screen.getByText("Observed pairing token").closest("li");
+    const row = screen.getByText("Observed pairing token (@hhunt)").closest("li");
     expect(row).not.toHaveTextContent("sl");
     expect(row?.querySelector("img")).toBeInTheDocument();
   });

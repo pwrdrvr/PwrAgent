@@ -31,7 +31,6 @@ import type {
   MessagingManagedConversationRightsResult,
   MessagingRateLimitInfo,
   MessagingRejectedInboundEvent,
-  MessagingResponseMode,
   MessagingSurfaceAction,
   MessagingSurfaceIntent,
   MessagingSurfaceRef,
@@ -45,7 +44,10 @@ import {
   SLACK_GROUP_DM_ACCESS_MODE_DEFAULT,
   SLACK_TEAM_AUTHORIZATION_MODE_DEFAULT,
 } from "@pwragent/messaging-interface";
-import type { SlackMessagingConfig } from "./slack-config.ts";
+import type {
+  SlackAuthorizedContact,
+  SlackMessagingConfig,
+} from "./slack-config.ts";
 import {
   actionsForSlackIntent,
   buildSlackActionBlocks,
@@ -179,6 +181,11 @@ export type SlackUserInfo = {
     real_name?: string;
   };
   real_name?: string;
+};
+
+type SlackUserProfile = {
+  displayName?: string;
+  username?: string;
 };
 
 export type SlackProviderAdapter = {
@@ -344,7 +351,7 @@ export class SlackAdapter implements SlackProviderAdapter {
   private readonly conversationGroupDmCache = new Map<string, boolean>();
   private readonly recentInboundMessageEvents = new Map<string, number>();
   private readonly threadTitleCache = new Map<string, string | undefined>();
-  private readonly userDisplayNameCache = new Map<string, string | undefined>();
+  private readonly userProfileCache = new Map<string, SlackUserProfile | undefined>();
   // Per-stream posted surfaces, keyed by `intent.stream.key`. Slack has no
   // "create-or-edit" primitive, so the first chunk posts a new message and
   // records its `ts` here; later chunks (and the final) edit it in place — the
@@ -430,6 +437,7 @@ export class SlackAdapter implements SlackProviderAdapter {
     this.config.authorizedActorIds = slackContactsFromIds(
       update.authorizedActorIds,
       this.config.authorizedActorIds,
+      update.authorizedActors,
     );
     this.config.authorizedConversationIds = slackContactsFromIds(
       update.authorizedConversationIds ?? [],
@@ -1802,14 +1810,19 @@ export class SlackAdapter implements SlackProviderAdapter {
     username?: string,
   ): Promise<MessagingActorIdentity> {
     const contact = this.config.authorizedActorIds.find((item) => item.id === userId);
+    const profile = await this.lookupSlackUserProfile(userId);
+    const resolvedUsername =
+      profile?.username
+      || contact?.username
+      || username?.trim().replace(/^@/, "");
     const displayName =
-      contact?.displayName
-      || (await this.lookupSlackUserDisplayName(userId))
-      || username;
+      profile?.displayName
+      || contact?.displayName
+      || resolvedUsername;
     return {
       platformUserId: userId,
       ...(displayName ? { displayName } : {}),
-      ...(username ? { username } : {}),
+      ...(resolvedUsername ? { username: resolvedUsername } : {}),
     };
   }
 
@@ -1822,27 +1835,30 @@ export class SlackAdapter implements SlackProviderAdapter {
     };
   }
 
-  private async lookupSlackUserDisplayName(
+  private async lookupSlackUserProfile(
     userId: string,
-  ): Promise<string | undefined> {
-    if (this.userDisplayNameCache.has(userId)) {
-      return this.userDisplayNameCache.get(userId);
+  ): Promise<SlackUserProfile | undefined> {
+    if (this.userProfileCache.has(userId)) {
+      return this.userProfileCache.get(userId);
     }
     if (this.userInfoLookupDisabled || !this.api.usersInfo) {
-      this.userDisplayNameCache.set(userId, undefined);
+      this.userProfileCache.set(userId, undefined);
       return undefined;
     }
 
     try {
       const user = await this.api.usersInfo({ user: userId });
       const displayName =
-        user?.profile?.display_name?.trim()
-        || user?.profile?.real_name?.trim()
+        user?.profile?.real_name?.trim()
         || user?.real_name?.trim()
-        || user?.name?.trim()
+        || user?.profile?.display_name?.trim()
         || undefined;
-      this.userDisplayNameCache.set(userId, displayName);
-      return displayName;
+      const username = user?.name?.trim().replace(/^@/, "") || undefined;
+      const profile = displayName || username
+        ? { displayName, username }
+        : undefined;
+      this.userProfileCache.set(userId, profile);
+      return profile;
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       if (reason.includes("missing_scope")) {
@@ -1857,7 +1873,7 @@ export class SlackAdapter implements SlackProviderAdapter {
           userHash: createHash("sha256").update(userId).digest("hex").slice(0, 8),
         });
       }
-      this.userDisplayNameCache.set(userId, undefined);
+      this.userProfileCache.set(userId, undefined);
       return undefined;
     }
   }
@@ -2444,16 +2460,29 @@ function callbackAllowedActorIds(
 
 function slackContactsFromIds(
   ids: readonly string[],
-  previous:
-    | readonly {
-        id: string;
-        displayName: string;
-        responseMode?: MessagingResponseMode;
-      }[]
-    | undefined,
-): { id: string; displayName: string; responseMode?: MessagingResponseMode }[] {
+  previous: readonly SlackAuthorizedContact[] | undefined,
+  actors?: readonly MessagingActorIdentity[],
+): SlackAuthorizedContact[] {
   const previousById = new Map((previous ?? []).map((contact) => [contact.id, contact]));
-  return ids.map((id) => previousById.get(id) ?? { id, displayName: "" });
+  if (!actors) {
+    return ids.map((id) => previousById.get(id) ?? { id, displayName: "" });
+  }
+  const actorById = new Map(
+    actors.map((actor) => [actor.platformUserId, actor]),
+  );
+  return ids.map((id) => {
+    const previousContact = previousById.get(id);
+    const actor = actorById.get(id);
+    if (!actor) return previousContact ?? { id, displayName: "" };
+    return {
+      id,
+      displayName: actor.displayName ?? "",
+      ...(actor.username ? { username: actor.username } : {}),
+      ...(previousContact?.responseMode
+        ? { responseMode: previousContact.responseMode }
+        : {}),
+    };
+  });
 }
 
 // All four fall back to the shared locked-down defaults so the adapter's gate

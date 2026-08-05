@@ -13,6 +13,7 @@ import type {
   MessagingChannelKind,
 } from "@pwragent/shared";
 import type {
+  MessagingActorIdentity,
   MessagingAdapterAuthorizationUpdate,
   MessagingAdapterRenderingPreferencesUpdate,
   MessagingConversationResponseMode,
@@ -1460,6 +1461,7 @@ function authorizationUpdateForChannelConfig(
     case "slack":
       return {
         authorizedActorIds: contactIds(config.slack?.authorizedActorIds),
+        authorizedActors: slackAuthorizedActors(config.slack?.authorizedActorIds),
         authorizedConversationIds: contactIds(config.slack?.authorizedConversationIds),
         conversationAuthorizationMode: config.slack?.channelAuthorizationMode,
         conversationResponseModes: conversationResponseModes(
@@ -1491,6 +1493,16 @@ function authorizationUpdateForChannelConfig(
       throw new Error(`unknown messaging channel: ${exhaustive}`);
     }
   }
+}
+
+function slackAuthorizedActors(
+  contacts: readonly DesktopAuthorizedContact[] | undefined,
+): MessagingActorIdentity[] {
+  return (contacts ?? []).map((contact) => ({
+    platformUserId: contact.id,
+    displayName: contact.displayName,
+    ...(contact.username ? { username: contact.username } : {}),
+  }));
 }
 
 function renderingPreferencesForChannelConfig(
