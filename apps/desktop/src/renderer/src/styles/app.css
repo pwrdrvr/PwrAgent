@@ -12630,7 +12630,6 @@ a.transcript-message__messaging-origin:focus-visible {
 .transcript-activity__detail-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 10px;
 }
 
@@ -12670,9 +12669,16 @@ a.transcript-message__messaging-origin:focus-visible {
   color: var(--text-primary);
 }
 
+/* Stats and status pin to the row's right edge via `margin-left: auto` —
+   NOT `justify-content: space-between` on the row, which floats whichever
+   element lands in the middle (label / stats / status is a three-child row
+   for ACP backends) at a label-width-dependent position. When stats and
+   status appear together, only the stats carry the auto margin so the pair
+   stays adjacent at the right edge. */
 .transcript-activity__detail-stats {
   display: inline-flex;
   flex: 0 0 auto;
+  margin-left: auto;
   gap: 8px;
   color: var(--text-muted);
   font-family: var(--font-mono);
@@ -12681,6 +12687,7 @@ a.transcript-message__messaging-origin:focus-visible {
 
 .transcript-activity__detail-status {
   flex: 0 0 auto;
+  margin-left: auto;
   padding: 1px 7px;
   border: 1px solid var(--border-subtle);
   border-radius: 999px;
@@ -12688,6 +12695,10 @@ a.transcript-message__messaging-origin:focus-visible {
   font-family: var(--font-mono);
   font-size: 11px;
   line-height: 1.5;
+}
+
+.transcript-activity__detail-stats + .transcript-activity__detail-status {
+  margin-left: 0;
 }
 
 .transcript-activity__detail-status--completed {
