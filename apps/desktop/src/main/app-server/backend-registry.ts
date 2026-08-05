@@ -5619,6 +5619,8 @@ function buildCodexParentDynamicToolSpecs(
 }
 
 const PWRAGENT_PDF_MCP_SERVER_NAME = "pwragent_pdf";
+const PWRAGENT_CONNECTION_MCP_SERVER_PREFIX = "pwragent_";
+const PWRAGENT_CONNECTION_MCP_SERVER_HASH_LENGTH = 32;
 
 function buildCodexPdfMcpConfig(
   registration: AgentToolMcpRegistration,
@@ -5646,21 +5648,51 @@ function buildCodexPdfMcpDisabledConfig(): CodexThreadStartParams["config"] {
   } as CodexThreadStartParams["config"];
 }
 
+function buildCodexConnectionMcpServerName(
+  server: McpConnectionBridgeRegistration["server"],
+): string {
+  const identity = createHash("sha256")
+    .update(server.command)
+    .update("\0")
+    .update(server.args.join("\0"))
+    .update("\0")
+    .update(
+      Object.entries(server.env)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([name, value]) => `${name}\0${value}`)
+        .join("\0"),
+    )
+    .digest("hex")
+    .slice(0, PWRAGENT_CONNECTION_MCP_SERVER_HASH_LENGTH);
+  return `${PWRAGENT_CONNECTION_MCP_SERVER_PREFIX}${server.name}_${identity}`;
+}
+
 function buildCodexConnectionMcpConfig(
   registrations: McpConnectionBridgeRegistration[],
 ): CodexThreadStartParams["config"] | undefined {
   if (registrations.length === 0) return undefined;
   return {
     mcp_servers: Object.fromEntries(
-      registrations.map(({ server }) => [
-        server.name,
-        {
-          enabled: true,
-          command: server.command,
-          args: server.args,
-          env: server.env,
-          tool_timeout_sec: MCP_CONNECTION_TOOL_TIMEOUT_SECONDS,
-        },
+      registrations.flatMap(({ server }) => [
+        // Codex recursively merges thread config over the operator's global
+        // config. Disable both the original name and our former fixed alias,
+        // then give this grant a stable hashed key so inherited HTTP fields
+        // cannot turn the stdio bridge into an invalid mixed transport.
+        [server.name, { enabled: false }],
+        [
+          `${PWRAGENT_CONNECTION_MCP_SERVER_PREFIX}${server.name}`,
+          { enabled: false },
+        ],
+        [
+          buildCodexConnectionMcpServerName(server),
+          {
+            enabled: true,
+            command: server.command,
+            args: server.args,
+            env: server.env,
+            tool_timeout_sec: MCP_CONNECTION_TOOL_TIMEOUT_SECONDS,
+          },
+        ],
       ]),
     ),
   } as CodexThreadStartParams["config"];
