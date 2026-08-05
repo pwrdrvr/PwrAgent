@@ -30,6 +30,7 @@ import type {
   MaterializeDirectoryLaunchpadResponse,
   MarkThreadSeenResponse,
   MessagingPlatformStatus,
+  PwrSnapConnectionStatus,
   OpenDesktopApplicationResponse,
   QueueThreadExecutionModeResponse,
   RefreshDirectoryGitStatusesResponse,
@@ -108,6 +109,7 @@ import {
   discoverDesktopApplications,
   openDesktopApplication,
 } from "../settings/application-discovery";
+import { getPwrSnapConnectionService } from "../mcp-connections/pwrsnap-connection-service";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { getAppStateDb, isAppStateInitialized } from "../state/app-state";
 import { DesktopMessagingBackendBridge } from "../messaging/desktop-backend-bridge";
@@ -191,6 +193,7 @@ const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "environment_actions",
   "federated_search",
   "messaging_route",
+  "pwrsnap_connection",
   "gateway_relay",
   // Federation is a same-operator trust domain and turn_control already
   // permits code execution via agent turns, so the direct shell defaults to
@@ -2220,6 +2223,9 @@ function localBackendOperations(): FederationBackendOperations {
       request: OpenDesktopApplicationRequest,
     ): Promise<OpenDesktopApplicationResponse> {
       return await openDesktopApplication(request);
+    },
+    async readPwrSnapConnectionStatus(): Promise<PwrSnapConnectionStatus> {
+      return await getPwrSnapConnectionService().readStatus();
     },
     async trustCodexProject(
       request: TrustCodexProjectRequest,

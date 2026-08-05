@@ -10,6 +10,7 @@ export function scopeDesktopApiToFederationTarget(
   }
   const openApplication = desktopApi.openApplication;
   const refreshDirectoryGitStatuses = desktopApi.refreshDirectoryGitStatuses;
+  const readPwrSnapConnectionStatus = desktopApi.readPwrSnapConnectionStatus;
 
   return {
     ...desktopApi,
@@ -25,6 +26,12 @@ export function scopeDesktopApiToFederationTarget(
           federationTarget,
         })
       : undefined,
+    readPwrSnapConnectionStatus: readPwrSnapConnectionStatus
+      ? async () => await readPwrSnapConnectionStatus({ federationTarget })
+      : undefined,
+    connectPwrSnap: undefined,
+    openPwrSnap: undefined,
+    openPwrSnapDownload: undefined,
     openPath: undefined,
     revealPath: undefined,
     readMarkdownFile: undefined,

@@ -1,3 +1,5 @@
+import type { FederationRemoteTarget } from "./federation";
+
 export const PWRSNAP_MCP_CONNECTION_ID = "pwrsnap" as const;
 
 export type McpConnectionId = typeof PWRSNAP_MCP_CONNECTION_ID;
@@ -13,6 +15,10 @@ export type PwrSnapConnectionStatus = {
   availability: PwrSnapConnectionAvailability;
   configured: boolean;
   detail?: string;
+};
+
+export type ReadPwrSnapConnectionStatusRequest = {
+  federationTarget?: FederationRemoteTarget;
 };
 
 export type ConnectPwrSnapResponse = {

@@ -54,7 +54,10 @@ import {
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { agentEventMatchesThread } from "../../lib/federated-thread-events";
-import { readRendererFederationTarget } from "../../lib/federation-window";
+import {
+  readRendererFederationLabel,
+  readRendererFederationTarget,
+} from "../../lib/federation-window";
 import type { IntegratedTerminalsController } from "../../lib/useIntegratedTerminals";
 import type { ThreadContextWindowState } from "../../lib/useThreadSessionState";
 import type { PendingForkEnvironmentSetup } from "../../lib/useThreadNavigation";
@@ -2887,6 +2890,11 @@ export function ThreadView(props: ThreadViewProps) {
                   selectedLaunchpad.mcpConnectionIds?.includes(
                     PWRSNAP_MCP_CONNECTION_ID,
                   ) === true
+                }
+                remoteOwnerLabel={
+                  readRendererFederationTarget()
+                    ? readRendererFederationLabel() ?? "the remote machine"
+                    : undefined
                 }
                 onEnabledChange={async (enabled) => {
                   await props.onUpdateLaunchpad?.(

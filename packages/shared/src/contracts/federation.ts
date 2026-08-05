@@ -19,6 +19,7 @@ export const FEDERATION_CAPABILITIES = [
   "environment_actions",
   "federated_search",
   "messaging_route",
+  "pwrsnap_connection",
   "gateway_relay",
   "remote_pty",
 ] as const;
