@@ -22,6 +22,21 @@ export function readAcpToolInvocation(
     return `web_fetch(url=${formatInvocationValue(webFetchUrl)})`;
   }
 
+  return readAcpCodeSearch(record)?.invocation;
+}
+
+export type AcpCodeSearch = {
+  invocation: string;
+  query?: string;
+};
+
+export function readAcpCodeSearch(
+  record: Record<string, unknown>,
+): AcpCodeSearch | undefined {
+  if (readAcpWebSearch(record)) {
+    return undefined;
+  }
+
   const rawInput = asRecord(record.rawInput);
   if (!rawInput) {
     return undefined;
@@ -35,7 +50,14 @@ export function readAcpToolInvocation(
   const kind =
     readString(metadata ?? {}, "kind") ??
     readString(record, "kind");
-  if (!name || (kind !== "search" && name !== "grep" && variant !== "Grep")) {
+  if (
+    !name
+    || (
+      kind !== "search"
+      && name.toLowerCase() !== "grep"
+      && variant?.toLowerCase() !== "grep"
+    )
+  ) {
     return undefined;
   }
 
@@ -51,7 +73,13 @@ export function readAcpToolInvocation(
       return `${displayKey}=${formatInvocationValue(value)}`;
     })
     .join(", ");
-  return argumentsText ? `${name}(${argumentsText})` : name;
+  const query =
+    readString(rawInput, "pattern") ??
+    readString(rawInput, "query");
+  return {
+    invocation: argumentsText ? `${name}(${argumentsText})` : name,
+    ...(query ? { query } : {}),
+  };
 }
 
 export type AcpWebSearch = {

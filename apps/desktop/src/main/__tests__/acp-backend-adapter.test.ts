@@ -2199,13 +2199,27 @@ describe("AcpBackendAdapter", () => {
       entries: [
         {
           type: "message" as const,
+          id: "user:provider",
+          role: "user" as const,
+          text: "Timestamped provider prompt",
+          createdAt: 1001,
+        },
+        {
+          type: "message" as const,
           id: "assistant:provider",
           role: "assistant" as const,
+          phase: "final" as const,
           text: "Timestamped provider reply",
           createdAt: 1002,
         },
       ],
       messages: [
+        {
+          id: "user:provider",
+          role: "user" as const,
+          text: "Timestamped provider prompt",
+          createdAt: 1001,
+        },
         {
           id: "assistant:provider",
           role: "assistant" as const,
@@ -2213,6 +2227,7 @@ describe("AcpBackendAdapter", () => {
           createdAt: 1002,
         },
       ],
+      lastUserMessage: "Timestamped provider prompt",
       lastAssistantMessage: "Timestamped provider reply",
       pagination: {
         supportsPagination: false,
@@ -2259,9 +2274,26 @@ describe("AcpBackendAdapter", () => {
       handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
     });
 
-    await expect(adapter.readReplay(backendId, "session-1")).resolves.toMatchObject({
+    const replay = await adapter.readReplay(backendId, "session-1");
+    expect(replay).toMatchObject({
       lastAssistantMessage: "Timestamped provider reply",
     });
+    expect(replay.entries.map((entry) => entry.turn)).toEqual([
+      {
+        id: "inferred:user:provider",
+        status: "completed",
+        startedAt: 1001,
+        completedAt: 1002,
+        durationMs: 1,
+      },
+      {
+        id: "inferred:user:provider",
+        status: "completed",
+        startedAt: 1001,
+        completedAt: 1002,
+        durationMs: 1,
+      },
+    ]);
     expect(loadSession).toHaveBeenCalledOnce();
 
     await adapter.close();

@@ -77,6 +77,7 @@ import {
   AcpSessionReplayNormalizer,
   appendAcpTranscriptChunk,
   formatAcpTransientThoughtMessage,
+  inferAcpReplayTurns,
   readAcpContentText,
   shouldSurfaceAcpThoughtsAsMessages,
   shouldSurfaceAcpThoughtsAsTransientMessages,
@@ -1320,7 +1321,7 @@ export class AcpBackendAdapter {
     replay: AppServerThreadReplay,
   ): AppServerThreadReplay {
     if (!this.acpRolloutStore) {
-      return replay;
+      return inferAcpReplayTurns(replay);
     }
     const normalizer = new AcpSessionReplayNormalizer({
       surfaceThoughtsAsMessages: shouldSurfaceAcpThoughtsAsMessages(
@@ -1342,9 +1343,11 @@ export class AcpBackendAdapter {
         update: record.update,
       });
     }
-    return syntheticUpdateCount > 0
-      ? mergeAcpReplayWithSyntheticHistory(replay, normalizer.replay())
-      : replay;
+    return inferAcpReplayTurns(
+      syntheticUpdateCount > 0
+        ? mergeAcpReplayWithSyntheticHistory(replay, normalizer.replay())
+        : replay,
+    );
   }
 
   private providerReplayOrRolloutFallback(params: {

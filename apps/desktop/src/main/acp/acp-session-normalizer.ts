@@ -11,6 +11,7 @@ import type {
 } from "@pwragent/shared";
 import {
   isGenericShellToolTitle,
+  readAcpCodeSearch,
   readAcpToolCommand,
   readAcpToolContentCommand,
   readAcpToolInvocation,
@@ -58,6 +59,109 @@ export function formatAcpTransientThoughtMessage(
   const beforeCodeFence = text.split("```", 1)[0] ?? "";
   const compact = beforeCodeFence.replace(/\s+/gu, " ").trim();
   return compact || undefined;
+}
+
+type InferredAcpTurn = {
+  id: string;
+  indexes: number[];
+  startedAt?: number;
+};
+
+/**
+ * ACP session/load history has ordered transcript phases but no turn IDs.
+ * Fill only missing metadata: a user message opens a window, a final assistant
+ * response completes it, and a later user message interrupts any open window.
+ */
+export function inferAcpReplayTurns(
+  replay: AppServerThreadReplay,
+): AppServerThreadReplay {
+  const entries: AppServerThreadEntry[] = replay.entries.map((entry) => ({
+    ...entry,
+  }));
+  let active: InferredAcpTurn | undefined;
+
+  const applyActiveTurn = (
+    status: "completed" | "interrupted" | "in_progress",
+    completedAt?: number,
+  ): void => {
+    if (!active) {
+      return;
+    }
+    for (const index of active.indexes) {
+      const entry = entries[index];
+      if (!entry || entry.turn) {
+        continue;
+      }
+      entries[index] = {
+        ...entry,
+        turn: {
+          id: active.id,
+          status,
+          ...(active.startedAt !== undefined
+            ? { startedAt: active.startedAt }
+            : {}),
+          ...(completedAt !== undefined ? { completedAt } : {}),
+          ...(active.startedAt !== undefined && completedAt !== undefined
+            ? { durationMs: Math.max(0, completedAt - active.startedAt) }
+            : {}),
+        },
+      };
+    }
+  };
+  const settleActive = (
+    status: "completed" | "interrupted",
+    completedAt?: number,
+  ): void => {
+    applyActiveTurn(status, completedAt);
+    active = undefined;
+  };
+
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index];
+    if (!entry) {
+      continue;
+    }
+    const isUserMessage = entry.type === "message" && entry.role === "user";
+    if (isUserMessage) {
+      const turnId = entry.turn?.id ?? `inferred:${entry.id}`;
+      if (active?.id === turnId) {
+        if (!entry.turn) {
+          active.indexes.push(index);
+        }
+        continue;
+      }
+      settleActive("interrupted", entry.createdAt);
+      active = {
+        id: turnId,
+        indexes: entry.turn ? [] : [index],
+        startedAt: entry.turn?.startedAt ?? entry.createdAt,
+      };
+      continue;
+    }
+    if (!active) {
+      continue;
+    }
+    if (entry.turn && entry.turn.id !== active.id) {
+      settleActive("interrupted", entry.createdAt);
+      continue;
+    }
+    if (!entry.turn) {
+      active.indexes.push(index);
+    }
+    if (
+      entry.type === "message"
+      && entry.role === "assistant"
+      && entry.phase === "final"
+    ) {
+      settleActive("completed", entry.createdAt);
+    }
+  }
+
+  applyActiveTurn("in_progress");
+  return {
+    ...replay,
+    entries,
+  };
 }
 
 export class AcpSessionReplayNormalizer {
@@ -941,6 +1045,39 @@ function toolActivity(
   }
 
   const webFetchUrl = readAcpWebFetchUrl(update.update);
+  const codeSearch = readAcpCodeSearch(update.update);
+  if (codeSearch) {
+    const status = normalizeToolActivityStatus(
+      readString(update.update, "status"),
+    );
+    const summary =
+      status === "in_progress" ? "Searching code" : "Searched code";
+    const detailLabel = codeSearch.query
+      ? `${summary}: ${codeSearch.query}`
+      : summary;
+    const output = readToolOutput(update.update);
+    const exitCode = readNumber(update.update, "exitCode");
+    return {
+      type: "activity",
+      id,
+      createdAt,
+      summary,
+      status,
+      details: [
+        {
+          id: `${id}:detail`,
+          kind: "read",
+          label: detailLabel,
+          command: {
+            displayCommand: codeSearch.invocation,
+            source: "tool",
+            output,
+            exitCode,
+          },
+        },
+      ],
+    };
+  }
   const rawCommand = readAcpToolCommand(update.update);
   const invocation = readAcpToolInvocation(update.update);
   const displayCommand = rawCommand ?? invocation;
@@ -1015,13 +1152,34 @@ function mergeActivity(
   existing: AppServerThreadActivityEntry,
   incoming: AppServerThreadActivityEntry,
 ): AppServerThreadActivityEntry {
+  const status = incoming.status ?? existing.status;
+  const details = mergeActivityEntryDetails(existing.details, incoming.details)
+    .map((detail) => ({
+      ...detail,
+      label: settledSearchLabel(detail.label, status),
+    }));
   return {
     ...existing,
     createdAt: existing.createdAt ?? incoming.createdAt,
-    summary: preferSpecificLabel(existing.summary, incoming.summary),
-    status: incoming.status ?? existing.status,
-    details: mergeActivityEntryDetails(existing.details, incoming.details),
+    summary: settledSearchLabel(
+      preferSpecificLabel(existing.summary, incoming.summary),
+      status,
+    ),
+    status,
+    details,
   };
+}
+
+function settledSearchLabel(
+  label: string,
+  status: AppServerThreadActivityEntry["status"],
+): string {
+  if (status === "in_progress" || status === undefined) {
+    return label;
+  }
+  return label
+    .replace(/^Searching code\b/u, "Searched code")
+    .replace(/^Searching Web\b/u, "Searched Web");
 }
 
 function mergeActivityEntryDetails(
