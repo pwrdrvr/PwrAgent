@@ -79,6 +79,7 @@ import { AppNoticeToast } from "./features/notifications/AppNoticeToast";
 import type { AppNoticeToastNotice } from "./features/notifications/AppNoticeToast";
 import { resolveBackendErrorNotice } from "./features/notifications/backend-error-notice";
 import { buildPrAutoDispatchBudgetNotice } from "./features/notifications/pr-auto-dispatch-budget-notice";
+import { MessagingErrorNotices } from "./features/notifications/MessagingErrorNotices";
 import {
   buildHeapSnapshotHandoffMessage,
   describeHeapSnapshotResult,
@@ -1822,6 +1823,7 @@ function DesktopAppShell(props: {
             notice={backendErrorNotice}
             onDismiss={() => setBackendErrorNotice(undefined)}
           />
+          <MessagingErrorNotices desktopApi={desktopApi} />
           <AppNoticeToast
             desktopApi={desktopApi}
             notice={automationLoadNotice}
