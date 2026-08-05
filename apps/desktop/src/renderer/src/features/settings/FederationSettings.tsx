@@ -15,6 +15,7 @@ import type {
 } from "@pwragent/shared";
 import {
   DESKTOP_FEDERATION_MODES,
+  formatFederationPeerDisplayLabel,
   isFederationGatewayEndpointUrl,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -856,7 +857,12 @@ export function FederationSettings(props: FederationSettingsProps) {
           <dl className="settings-aboutkv">
             {effectiveHealth.peers.map((peer) => (
               <div key={peer.id}>
-                <dt>{peer.label}</dt>
+                <dt>
+                  {formatFederationPeerDisplayLabel(
+                    peer,
+                    effectiveHealth.peers,
+                  )}
+                </dt>
                 <dd className="federation-peer-summary">
                   <span>
                     {roleLabel(peer.role)} · {statusLabel(peer.status)}

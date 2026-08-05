@@ -484,6 +484,32 @@ export function isRemoteFederationTarget(
   return target.scope === "remote";
 }
 
+/**
+ * Display label for a federation peer: the machine label, with the
+ * remote profile appended as "<label> / <profile>" when it matters.
+ * The profile shows when it isn't "default", or when more than one
+ * visible peer shares the machine label (several profiles of one
+ * machine enrolled at once) — in that case even "default" shows so the
+ * entries stay tellable apart. A lone default-profile peer keeps the
+ * bare machine name. Peers that never advertised a profile (older
+ * builds) always keep the bare label.
+ */
+export function formatFederationPeerDisplayLabel(
+  peer: { label: string; profileName?: string },
+  visiblePeers: readonly { label: string; profileName?: string }[],
+): string {
+  if (!peer.profileName) {
+    return peer.label;
+  }
+  const sameMachinePeers = visiblePeers.filter(
+    (candidate) => candidate.label === peer.label,
+  );
+  if (peer.profileName === "default" && sameMachinePeers.length <= 1) {
+    return peer.label;
+  }
+  return `${peer.label} / ${peer.profileName}`;
+}
+
 export function federationTargetKey(target: FederationTarget): string {
   return isRemoteFederationTarget(target) ? `remote:${target.instanceId}` : "local";
 }

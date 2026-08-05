@@ -55,6 +55,7 @@ import {
   buildFederatedThreadRef,
   federationEndpointAcceptsCloudflareCredentials,
   isFederationGatewayEndpointUrl,
+  formatFederationPeerDisplayLabel,
   isRemoteFederationTarget,
   type AppServerListSkillsRequest,
   type AppServerListThreadsRequest,
@@ -265,11 +266,16 @@ export class DesktopFederationRuntime {
     label: string;
     capabilities: FederationCapability[];
   }> {
-    return this.visiblePeers()
+    // Compose display labels against the full visible set so two
+    // profiles of the same machine ("Mac-Mini-M4 / default",
+    // "Mac-Mini-M4 / dev") stay tellable apart in window titles and
+    // the Remote Instances menu.
+    const visible = this.visiblePeers();
+    return visible
       .filter((peer) => peer.status === "connected")
       .map((peer) => ({
         target: { scope: "remote", instanceId: peer.id },
-        label: peer.label,
+        label: formatFederationPeerDisplayLabel(peer, visible),
         capabilities: [...peer.capabilities],
       }));
   }
@@ -592,8 +598,24 @@ export class DesktopFederationRuntime {
       backend: request.backend,
       filter: request.filter,
     });
-    const peer = this.store().getPeer(target.instanceId);
-    const instanceLabel = peer?.label ?? target.instanceId;
+    // visiblePeers reads the app-state db (local instance id); during
+    // early boot or in store-injected test harnesses that db may be
+    // absent — fall back to the bare store record (mirrors the menu's
+    // peer-lookup guard in main/index.ts).
+    let visible: FederationPeerSummary[] = [];
+    try {
+      visible = this.visiblePeers();
+    } catch {
+      visible = [];
+    }
+    const peer =
+      visible.find((candidate) => candidate.id === target.instanceId)
+      ?? this.store().getPeer(target.instanceId);
+    // Same composed label as connectedPeerTargets so search chips and
+    // thread rows agree with the window title on multi-profile peers.
+    const instanceLabel = peer
+      ? formatFederationPeerDisplayLabel(peer, visible)
+      : target.instanceId;
     const threads = response.threads.map((thread) => {
       const ref = buildFederatedThreadRef({
         backend: thread.source,
@@ -623,8 +645,9 @@ export class DesktopFederationRuntime {
     const service = new FederatedSearchService({
       includeLocal: false,
       local: localBackendOperations(),
-      peers: () =>
-        this.visiblePeers()
+      peers: () => {
+        const visible = this.visiblePeers();
+        return visible
           .filter(
             (peer) =>
               peer.status === "connected" &&
@@ -632,13 +655,16 @@ export class DesktopFederationRuntime {
           )
           .map((peer) => ({
             instanceId: peer.id,
-            label: peer.label,
+            // Composed against the full visible set so multi-profile
+            // machines keep distinct labels in search chips.
+            label: formatFederationPeerDisplayLabel(peer, visible),
             status: peer.status,
             backend: this.remoteBackend({
               scope: "remote",
               instanceId: peer.id,
             }),
-          })),
+          }));
+      },
     });
     return await service.search(request);
   }
@@ -902,6 +928,9 @@ export class DesktopFederationRuntime {
         this.instanceLabel ||
         settings.federation.instanceLabel.value.trim() ||
         defaultInstanceLabel(),
+      // Advertise which profile this instance runs so peers can tell
+      // several enrollments of the same machine apart in their UI.
+      profileName: getAppStateDb().getMeta("profile_name") || undefined,
       role: "client",
       headers: cloudflareAccessEnabled
         ? {

@@ -4,6 +4,7 @@ import {
   buildFederatedThreadRef,
   federatedThreadIdentityKey,
   federationTargetKey,
+  formatFederationPeerDisplayLabel,
   isFederationCapability,
   isFederationInstanceId,
   isRemoteFederationTarget,
@@ -110,5 +111,49 @@ describe("federation contracts", () => {
 
     expect(capabilities.capabilities).toContain("remote_window");
     expect(snapshot.federationTarget?.scope).toBe("remote");
+  });
+
+  it("composes peer display labels by profile and machine collisions", () => {
+    const lonelyDefault = { label: "Mac-Mini-M4", profileName: "default" };
+    expect(
+      formatFederationPeerDisplayLabel(lonelyDefault, [lonelyDefault]),
+    ).toBe("Mac-Mini-M4");
+
+    const devProfile = { label: "Mac-Mini-M4", profileName: "dev" };
+    expect(formatFederationPeerDisplayLabel(devProfile, [devProfile])).toBe(
+      "Mac-Mini-M4 / dev",
+    );
+
+    // Several profiles of one machine: even "default" shows its profile
+    // so the entries stay distinguishable.
+    const sameMachine = [
+      { label: "Mac-Mini-M4", profileName: "default" },
+      { label: "Mac-Mini-M4", profileName: "dev" },
+      { label: "Mac-Mini-M4", profileName: "work" },
+    ];
+    expect(
+      formatFederationPeerDisplayLabel(sameMachine[0]!, sameMachine),
+    ).toBe("Mac-Mini-M4 / default");
+    expect(
+      formatFederationPeerDisplayLabel(sameMachine[1]!, sameMachine),
+    ).toBe("Mac-Mini-M4 / dev");
+
+    // A different machine in the set doesn't force the profile suffix.
+    const otherMachine = { label: "MBP-16", profileName: "default" };
+    expect(
+      formatFederationPeerDisplayLabel(otherMachine, [
+        otherMachine,
+        ...sameMachine,
+      ]),
+    ).toBe("MBP-16");
+
+    // Peers that never advertised a profile keep the bare label.
+    const legacyPeer = { label: "Mac-Mini-M4" };
+    expect(
+      formatFederationPeerDisplayLabel(legacyPeer, [
+        legacyPeer,
+        devProfile,
+      ]),
+    ).toBe("Mac-Mini-M4");
   });
 });
