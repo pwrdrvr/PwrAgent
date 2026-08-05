@@ -6,7 +6,17 @@
       name="viewport"
       content="width=device-width, initial-scale=1.0"
     />
-    <title>PwrAgnt</title>
+    <!--
+      Fallback only. The main process owns every window's OS title:
+      shell windows via `lockMainWindowTitle` (main-window-title.ts),
+      auxiliary windows via `registerAuxiliaryWindowTitle`, both of
+      which preventDefault the page-title mirror. This tag exists so a
+      titleless document can't make Electron fall back to the renderer
+      URL, and so the dev-server browser tab reads sensibly. Keep it in
+      sync with `APP_WINDOW_TITLE` — an earlier copy sat at the
+      pre-rename "PwrAgnt" and won over the main-process title on load.
+    -->
+    <title>PwrAgent</title>
     <script>
       // Appearance bootstrap — runs BEFORE the React bundle loads so the
       // first paint matches the persisted theme + density. Without this,

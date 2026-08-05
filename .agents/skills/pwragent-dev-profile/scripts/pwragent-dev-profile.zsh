@@ -326,7 +326,7 @@ describe_dev_window_target() {
 
   pid="${target%%$'\t'*}"
   app_path="${target#*$'\t'}"
-  say "Computer Use target pid=$pid appPath=$app_path expectedWindowTitle=PwrAgnt rendererUrl=${renderer_url:-unknown}"
+  say "Computer Use target pid=$pid appPath=$app_path expectedWindowTitle=PwrAgent rendererUrl=${renderer_url:-unknown}"
 }
 
 describe_root_instances() {

@@ -33,6 +33,18 @@ test("loads the desktop shell without eager skill or manual refresh requests", a
         name: "Thread info"
       })
     ).toBeVisible();
+
+    // The OS-level window title is owned by the main process, not the
+    // renderer document. The renderer's <title> used to clobber it on
+    // load, leaving every local window named "PwrAgnt" — the pre-rename
+    // spelling baked into index.html.
+    await expect
+      .poll(async () =>
+        await app.electronApp.evaluate(({ BrowserWindow }) =>
+          BrowserWindow.getAllWindows().map((win) => win.getTitle())
+        )
+      )
+      .toEqual(["PwrAgent"]);
   } finally {
     await app.close();
   }
