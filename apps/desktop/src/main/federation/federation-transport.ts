@@ -67,6 +67,12 @@ export const FEDERATION_MAX_FRAME_BYTES = 16 * 1024 * 1024;
  * application code — only a live link and an unwedged event loop.
  */
 class FederationSocketKeepalive {
+  /**
+   * Fired on every pong. The gateway assigns this once a session exists so
+   * pongs count as session heartbeats — assignable after construction
+   * because the watchdog is armed pre-auth, before there is a sessionId.
+   */
+  onLive?: () => void;
   private alive = true;
   private timer?: ReturnType<typeof setInterval>;
 
@@ -74,14 +80,12 @@ class FederationSocketKeepalive {
     socket: WebSocket,
     options: {
       intervalMs: number;
-      /** Fired on every pong — the liveness signal for session heartbeats. */
-      onLive?: () => void;
       onDead: () => void;
     },
   ) {
     socket.on("pong", () => {
       this.alive = true;
-      options.onLive?.();
+      this.onLive?.();
     });
     this.timer = setInterval(() => {
       if (socket.readyState !== WebSocket.OPEN) return;
@@ -177,6 +181,9 @@ export type FederationGatewayConnection = {
   capabilities: FederationCapability[];
   sendEnvelope: (envelope: FederationProtocolEnvelope) => void;
   close: () => void;
+  /** Hard socket teardown for peers already presumed dead (stale sweep):
+   *  a graceful close queues a frame a wedged socket may never deliver. */
+  terminate?: () => void;
 };
 
 export type FederationGatewayWebSocketServerOptions = {
@@ -254,7 +261,9 @@ export class FederationGatewayWebSocketServer {
         const connection = [...this.connections.values()].find(
           (candidate) => candidate.sessionId === session.sessionId,
         );
-        connection?.close();
+        // The heartbeat already stopped, so the socket is presumed wedged:
+        // terminate rather than queue a close frame it may never deliver.
+        (connection?.terminate ?? connection?.close)?.();
       }
     }, keepaliveIntervalMs);
     this.sweepTimer.unref?.();
@@ -316,7 +325,7 @@ export class FederationGatewayWebSocketServer {
     // Armed for the socket's whole life, pre-auth included: a link that dies
     // silently is terminated after one missed pong instead of parking a
     // half-open connection forever.
-    new FederationSocketKeepalive(socket, {
+    const keepalive = new FederationSocketKeepalive(socket, {
       intervalMs:
         this.options.keepaliveIntervalMs ?? FEDERATION_KEEPALIVE_INTERVAL_MS,
       onDead: () => {
@@ -477,6 +486,7 @@ export class FederationGatewayWebSocketServer {
         sendFrame(socket, { kind: "envelope", envelope }, transport);
       },
       close: () => socket.close(),
+      terminate: () => socket.terminate(),
     };
     const previous = this.connections.get(connection.peerId);
     if (previous && previous.sessionId !== connection.sessionId) {
@@ -516,9 +526,9 @@ export class FederationGatewayWebSocketServer {
     clearTimeout(authDeadline);
     // Pongs count as session liveness alongside envelopes, so an idle but
     // healthy peer never trips the stale-session sweep.
-    socket.on("pong", () => {
+    keepalive.onLive = () => {
       this.sessions.heartbeat(sessionId, Date.now());
-    });
+    };
     this.options.onConnection?.(connection);
     socket.once("close", () => {
       this.sessions.closeSession({

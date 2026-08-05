@@ -880,6 +880,30 @@ describe("federation transport liveness", () => {
     socket.terminate();
   });
 
+  it("terminates a socket that upgrades but never completes auth", async () => {
+    server = new FederationGatewayWebSocketServer({
+      gatewayInstanceId: "gateway_one",
+      gatewayPrivateKeyPem: gatewayKeyPair.privateKeyPem,
+      gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+      host: "127.0.0.1",
+      port: 0,
+      store,
+      authTimeoutMs: 100,
+      // Keepalive alone cannot catch this: a live-but-stalled peer answers
+      // pings from the ws protocol layer forever. Park it out of the way so
+      // this test isolates the auth deadline.
+      keepaliveIntervalMs: 60_000,
+    });
+    const { url } = await server.start();
+    const socket = new WebSocket(url);
+    await waitForSocketOpen(socket);
+    // Upgrade succeeded, challenge received; now say nothing.
+    const closed = new Promise<boolean>((resolve) => {
+      socket.once("close", () => resolve(true));
+    });
+    await expect(closed).resolves.toBe(true);
+  });
+
   it("keeps an idle authenticated peer connected and counts pongs as heartbeats", async () => {
     const clientKeyPair = generateFederationIdentityKeyPair();
     const invite = createFederationEnrollmentInvite({
