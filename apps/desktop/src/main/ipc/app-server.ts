@@ -4965,10 +4965,9 @@ class DesktopAppServerService {
     prs: PrSummary[],
     fetchedAt: number,
   ): Promise<string[]> {
-    // The poller fetches only the PR's head commit (see the cost note in
-    // github-graphql-client). `commitShas` is load-bearing for merged-PR
-    // "pushed" detection and the `gh` path fills in the full list, so union
-    // forward instead of overwriting a richer set with a poorer one.
+    // The GraphQL client fetches only the PR's head commit (see the cost note
+    // in github-graphql-client). Union forward so a status poll does not
+    // overwrite a richer commit set retained from an older snapshot.
     const merged = prs.map((pr) => {
       const previous = this.prStatusRegistry.get(getPrStatusKey(pr))?.pr;
       const commitShas = mergeCommitShas(previous?.commitShas, pr.commitShas);

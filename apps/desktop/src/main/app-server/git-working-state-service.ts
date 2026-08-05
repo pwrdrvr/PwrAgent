@@ -851,38 +851,28 @@ export async function probeWorktreeWorkingState(
     gitEnv,
   );
 
-  // "Unpushed" means reachable from HEAD but on no remote ref. With no
-  // remotes configured, every commit would count — meaningless for a
-  // local-only repo, so report 0 instead.
+  // "Unpushed" means reachable from HEAD but on no remote ref or accepted
+  // merged-PR head. Excluding an accepted head also excludes its ancestors,
+  // which is load-bearing after squash merge: the in-process GitHub lookup
+  // retains the PR head SHA, while the deleted source branch's earlier commits
+  // are no longer reachable from a remote ref. Commits added after that head
+  // remain countable. With no remotes configured, every commit would count —
+  // meaningless for a local-only repo, so report 0 instead.
   let unpushedCommits = 0;
   if (remotesOutput?.trim()) {
-    const acceptedPushedCommitShas = buildAcceptedPushedCommitSet(
-      options.acceptedPushedCommitShas,
-    );
-    if (acceptedPushedCommitShas.size > 0) {
-      const output = await runGitNoLocks([
-        "rev-list",
-        "HEAD",
-        "--not",
-        "--remotes",
-      ]).catch(() => undefined);
-      unpushedCommits = output === undefined
-        ? 0
-        : output
-          .split("\n")
-          .map((sha) => sha.trim().toLowerCase())
-          .filter((sha) => sha && !acceptedPushedCommitShas.has(sha))
-          .length;
-    } else {
-      const count = await runGitNoLocks([
-        "rev-list",
-        "--count",
-        "HEAD",
-        "--not",
-        "--remotes",
-      ]).catch(() => undefined);
-      unpushedCommits = count !== undefined ? Number(count) || 0 : 0;
-    }
+    const acceptedPushedCommitShas = [
+      ...buildAcceptedPushedCommitSet(options.acceptedPushedCommitShas),
+    ].sort();
+    const count = await runGitNoLocks([
+      "rev-list",
+      "--ignore-missing",
+      "--count",
+      "HEAD",
+      "--not",
+      "--remotes",
+      ...acceptedPushedCommitShas,
+    ]).catch(() => undefined);
+    unpushedCommits = count !== undefined ? Number(count) || 0 : 0;
   }
 
   return {
@@ -1348,15 +1338,21 @@ export class GitWorkingStateService {
       if (existing) {
         return existing;
       }
-      if (acceptedPushedCommitShas.has(sha.trim().toLowerCase())) {
-        const promise = Promise.resolve(true);
-        pushedBySha.set(sha, promise);
-        return promise;
-      }
       // `rev-list -1 <sha> --not --remotes` lists sha only when it (or its
-      // tip) isn't reachable from any remote ref. Empty ⇒ pushed. With no
-      // remotes configured, nothing is excluded ⇒ non-empty ⇒ local-only.
-      const promise = noLocks(["rev-list", "-1", sha, "--not", "--remotes"])
+      // tip) isn't reachable from any remote ref or accepted merged-PR head.
+      // Accepted heads intentionally act as revision exclusions rather than
+      // exact-SHA matches so earlier commits from a squash-merged branch also
+      // read as pushed. Empty ⇒ pushed. With no remotes or accepted heads,
+      // nothing is excluded ⇒ non-empty ⇒ local-only.
+      const promise = noLocks([
+        "rev-list",
+        "--ignore-missing",
+        "-1",
+        sha,
+        "--not",
+        "--remotes",
+        ...acceptedPushedCommitShas,
+      ])
         .then((output) => output.trim() === "")
         .catch(() => true);
       pushedBySha.set(sha, promise);

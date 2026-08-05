@@ -90,24 +90,38 @@ describe("probeWorktreeWorkingState", () => {
     expect(calls.some((call) => call.args.includes("rev-list"))).toBe(false);
   });
 
-  it("does not count commits attached to merged PRs as unpushed", async () => {
-    const mergedPrSha = "a".repeat(40);
+  it("does not count a merged PR head or its ancestors as unpushed", async () => {
+    const mergedPrHeadSha = "a".repeat(40);
+    const mergedPrAncestorSha = "c".repeat(40);
     const localOnlySha = "b".repeat(40);
-    const { runGit } = fakeGit((args) => {
+    const { runGit, calls } = fakeGit((args) => {
       if (args.includes("--numstat")) return "";
       if (args.includes("status")) return "";
       if (args[args.length - 1] === "remote") return "origin\n";
-      if (args.includes("rev-list") && args.includes("--count")) return "2\n";
-      if (args.includes("rev-list")) return `${mergedPrSha}\n${localOnlySha}\n`;
+      if (args.includes("rev-list")) {
+        return args.includes(mergedPrHeadSha)
+          ? "1\n"
+          : `${mergedPrHeadSha}\n${mergedPrAncestorSha}\n${localOnlySha}\n`;
+      }
       return undefined;
     });
 
     const state = await probeWorktreeWorkingState("/repo/wt", {
       runGit,
-      acceptedPushedCommitShas: [mergedPrSha],
+      acceptedPushedCommitShas: [mergedPrHeadSha],
     });
 
     expect(state?.unpushedCommits).toBe(1);
+    expect(calls.find((call) => call.args.includes("rev-list"))?.args).toEqual([
+      "--no-optional-locks",
+      "rev-list",
+      "--ignore-missing",
+      "--count",
+      "HEAD",
+      "--not",
+      "--remotes",
+      mergedPrHeadSha,
+    ]);
   });
 
   it("infers the likely base branch and behind-base count from git refs", async () => {
@@ -726,7 +740,7 @@ describe("GitWorkingStateService.resolveEditCommitStates", () => {
       return "";
     }
     if (args.includes("rev-list")) {
-      const sha = args[args.indexOf("rev-list") + 2];
+      const sha = args[args.indexOf("-1") + 1];
       // c-commit is local-only (rev-list returns it); b-commit is pushed (empty).
       return sha?.startsWith("c") ? sha : "";
     }
@@ -831,30 +845,43 @@ describe("GitWorkingStateService.resolveEditCommitStates", () => {
     expect(calls.filter((call) => call.args.includes("rev-list"))).toHaveLength(1);
   });
 
-  it("treats commits attached to merged PRs as pushed even when no remote ref contains them", async () => {
-    const mergedPrSha = "d".repeat(40);
+  it("treats ancestors of merged PR heads as pushed even when no remote ref contains them", async () => {
+    const mergedPrHeadSha = "d".repeat(40);
+    const mergedPrAncestorSha = "e".repeat(40);
     const responder = (args: string[]): string | undefined => {
       if (args.includes("diff") && args.includes("--name-only")) return "";
       if (args.includes("ls-files")) return "";
       if (args.includes("check-ignore")) return "";
-      if (args.includes("log")) return `${mergedPrSha}\n`;
-      if (args.includes("rev-list")) return `${mergedPrSha}\n`;
+      if (args.includes("log")) return `${mergedPrAncestorSha}\n`;
+      if (args.includes("rev-list")) {
+        return args.includes(mergedPrHeadSha) ? "" : `${mergedPrAncestorSha}\n`;
+      }
       return undefined;
     };
-    const { runGit } = fakeGit(responder);
+    const { runGit, calls } = fakeGit(responder);
     const service = new GitWorkingStateService({ runGit });
 
     const states = await service.resolveEditCommitStates(
       "/repo/wt",
       [{ key: "g-merged", paths: ["/repo/wt/src/merged.ts"] }],
-      { acceptedPushedCommitShas: [mergedPrSha] },
+      { acceptedPushedCommitShas: [mergedPrHeadSha] },
     );
 
     expect(states["g-merged"]).toMatchObject({
       committed: true,
-      commitSha: mergedPrSha,
+      commitSha: mergedPrAncestorSha,
       pushed: true,
     });
+    expect(calls.find((call) => call.args.includes("rev-list"))?.args).toEqual([
+      "--no-optional-locks",
+      "rev-list",
+      "--ignore-missing",
+      "-1",
+      mergedPrAncestorSha,
+      "--not",
+      "--remotes",
+      mergedPrHeadSha,
+    ]);
   });
 
   it("returns an empty map for no worktree or no groups", async () => {
