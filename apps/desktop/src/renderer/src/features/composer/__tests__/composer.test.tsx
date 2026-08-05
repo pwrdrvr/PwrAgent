@@ -4091,6 +4091,9 @@ describe("Composer", () => {
       expect(screen.getByLabelText("Queued message 2")).toHaveTextContent(
         "Second queued reply",
       );
+      expect(
+        screen.getAllByRole("button", { name: "Edit" })[0],
+      ).toBeEnabled();
     });
     expect(screen.queryByText("A message is already queued.")).not.toBeInTheDocument();
 
@@ -5017,7 +5020,14 @@ describe("Composer", () => {
     fireEvent.change(textarea, { target: { value: "Steer remotely" } });
     fireEvent.keyDown(textarea, { key: "Enter" });
     await screen.findByLabelText("Queued message");
-    fireEvent.click(screen.getByRole("button", { name: "Steer" }));
+    const steerButton = screen.getByRole("button", { name: "Steer" });
+    // The local projection renders immediately but remains disabled until the
+    // owning peer returns its stable queue entry id. A click before that
+    // acknowledgement is intentionally ignored.
+    await waitFor(() => {
+      expect(steerButton).toBeEnabled();
+    });
+    fireEvent.click(steerButton);
 
     await waitFor(() => {
       expect(cancelQueuedTurn).toHaveBeenCalledWith({
@@ -5085,7 +5095,10 @@ describe("Composer", () => {
     fireEvent.keyDown(textarea, { key: "Enter" });
 
     await waitFor(() => {
-      expect(screen.getAllByRole("button", { name: "Delete" })).toHaveLength(2);
+      const buttons = screen.getAllByRole("button", { name: "Delete" });
+      expect(buttons).toHaveLength(2);
+      expect(buttons[0]).toBeEnabled();
+      expect(buttons[1]).toBeEnabled();
     });
     const deleteButtons = screen.getAllByRole("button", { name: "Delete" });
     fireEvent.click(deleteButtons[0]!);

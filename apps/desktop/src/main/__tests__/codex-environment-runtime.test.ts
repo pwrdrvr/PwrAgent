@@ -212,9 +212,10 @@ describe("codex environment runtime", () => {
       });
 
       if (isWindows) {
-        await expect(detachedExit).resolves.toMatchObject({
-          exitCode: expect.any(Number),
-          exitSignal: null,
+        const exit = await detachedExit;
+        expect(exit, JSON.stringify(mainLogEntries)).toMatchObject({
+          exitCode: null,
+          exitSignal: "SIGTERM",
         });
       } else {
         await expect(detachedExit).resolves.toMatchObject({
@@ -237,6 +238,8 @@ describe("codex environment runtime", () => {
   it("counts an auto-started environment action as a quit blocker", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-auto-"));
     const runId = "test-run-auto";
+    let detachedExited = false;
+    let registeredPid: number | undefined;
     try {
       await applyLocalCodexEnvironmentSelection({
         cwd: root,
@@ -245,6 +248,9 @@ describe("codex environment runtime", () => {
         // owner arrives without a thread id.
         owner: { backend: "codex" },
         env: { ...process.env, SHELL: spawnableShell("/bin/sh") },
+        onActionDetachedExit: () => {
+          detachedExited = true;
+        },
         selection: {
           executionTarget: "local",
           runSetup: false,
@@ -285,12 +291,22 @@ describe("codex environment runtime", () => {
           threadId: "",
         }),
       ]);
+      registeredPid = running[0]?.pid;
 
       // The thread now exists; the run gets its owner and becomes linkable.
       attachDetachedCommandThreadId(runId, "thread-1");
       expect(listRunningDetachedCommands()[0]?.threadId).toBe("thread-1");
     } finally {
-      stopCodexEnvironmentDetachedCommand(runId, "terminate");
+      const stopResult = stopCodexEnvironmentDetachedCommand(runId, "terminate");
+      if (stopResult.found && !stopResult.alreadyClosed) {
+        await expectEventually(async () => {
+          if (!detachedExited) {
+            throw new Error(
+              `Detached action ${String(registeredPid)} did not exit within 5000ms: ${JSON.stringify(mainLogEntries)}`,
+            );
+          }
+        }, 5_000);
+      }
       await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   }, 15_000);

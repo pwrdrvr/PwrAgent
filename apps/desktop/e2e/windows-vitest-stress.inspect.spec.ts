@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { test } from "@playwright/test";
 
 const STRESS_ARG = "--pwragent-vitest-stress";
+const PROCESS_SAMPLES_ARG = "--pwragent-vitest-process-samples";
 const TARGET_ARG_PREFIX = "--pwragent-vitest-target=";
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(specDir, "../../..");
@@ -54,7 +55,9 @@ async function runCommand(
 
 async function captureRelevantProcesses(): Promise<ProcessSnapshotEntry[]> {
   const powershell = [
-    "$names = @('bash.exe', 'cmd.exe', 'git.exe', 'git-lfs.exe', 'node.exe', 'powershell.exe', 'pwsh.exe')",
+    // Exclude cmd/PowerShell because the lab controller's status probes run
+    // concurrently on the guest and are not descendants of the test process.
+    "$names = @('bash.exe', 'git.exe', 'git-lfs.exe', 'node.exe', 'sh.exe', 'sleep.exe')",
     "$rows = @(Get-CimInstance Win32_Process | Where-Object { $names -contains $_.Name -and $_.ProcessId -ne $PID } | ForEach-Object { [pscustomobject]@{ commandLine = [string]$_.CommandLine; executablePath = [string]$_.ExecutablePath; id = [int]$_.ProcessId; name = [System.IO.Path]::GetFileNameWithoutExtension($_.Name); parentId = [int]$_.ParentProcessId } })",
     "$rows | Sort-Object name, id | ConvertTo-Json -Compress",
   ].join("; ");
@@ -117,6 +120,9 @@ test(
     }
 
     const iteration = testInfo.repeatEachIndex + 1;
+    const captureProcessSamples = testInfo.config.argv.includes(
+      PROCESS_SAMPLES_ARG,
+    );
     const logPath = testInfo.outputPath("vitest.log");
     const log = createWriteStream(logPath, { encoding: "utf8" });
     const before = await captureRelevantProcesses();
@@ -148,6 +154,27 @@ test(
     });
     child.stdout.pipe(log, { end: false });
     child.stderr.pipe(log, { end: false });
+    let processSampling = captureProcessSamples;
+    const processSampler = (async () => {
+      let previousSample = "";
+      while (processSampling) {
+        const sample = newlyRunningProcesses(
+          before,
+          await captureRelevantProcesses(),
+        );
+        const serialized = JSON.stringify(sample);
+        if (serialized !== previousSample) {
+          log.write(
+            `processSample=${JSON.stringify({
+              atMs: Date.now() - startedAt,
+              processes: sample,
+            })}\n`,
+          );
+          previousSample = serialized;
+        }
+        await wait(250);
+      }
+    })();
     const result = await new Promise<{
       code: number | null;
       signal: NodeJS.Signals | null;
@@ -155,6 +182,8 @@ test(
       child.once("error", reject);
       child.once("close", (code, signal) => resolve({ code, signal }));
     });
+    processSampling = false;
+    await processSampler;
 
     const immediate = await captureRelevantProcesses();
     await wait(2_000);
