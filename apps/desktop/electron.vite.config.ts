@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 import react from "@vitejs/plugin-react";
-import { defineConfig, externalizeDepsPlugin } from "electron-vite";
+import { defineConfig } from "electron-vite";
 
 // electron-vite defaults `build.minify` to false for all three targets.
 // For shipped builds we want minified main/preload/renderer with sourcemaps
@@ -20,8 +20,8 @@ export default defineConfig(({ command }) => {
   return {
     main: {
       define: productionDefine,
-      plugins: [
-        externalizeDepsPlugin({
+      build: {
+        externalizeDeps: {
           exclude: [
             "@pwragent/shared",
             "@pwrdrvr/codex-app-server-protocol",
@@ -40,9 +40,7 @@ export default defineConfig(({ command }) => {
             // to an ESM default import whose constructor has no .WebSocket.
             "ws",
           ]
-        })
-      ],
-      build: {
+        },
         commonjsOptions: {
           transformMixedEsModules: true
         },
@@ -62,6 +60,9 @@ export default defineConfig(({ command }) => {
     preload: {
       define: productionDefine,
       build: {
+        externalizeDeps: {
+          exclude: ["@pwragent/shared"]
+        },
         minify: "esbuild",
         sourcemap: false,
         rollupOptions: {
@@ -69,12 +70,7 @@ export default defineConfig(({ command }) => {
             format: "cjs"
           }
         }
-      },
-      plugins: [
-        externalizeDepsPlugin({
-          exclude: ["@pwragent/shared"]
-        })
-      ]
+      }
     },
     renderer: {
       plugins: [react()],

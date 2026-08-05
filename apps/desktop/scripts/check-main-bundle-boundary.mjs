@@ -28,7 +28,12 @@ const forbidden = [
   },
   {
     label: "externalized ws runtime import",
-    pattern: /\bfrom\s+["']ws["']/,
+    pattern: /\b(?:from\s+|import\(|require\()["']ws["']/,
+  },
+  {
+    label: "externalized workspace bundled-dependency import",
+    pattern:
+      /\b(?:from\s+|import\(|require\()["']@pwragent\/(?:shared|messaging-interface|messaging-provider-[^/"']+)["']/,
   },
 ];
 const violations = [];
@@ -54,5 +59,5 @@ if (violations.length > 0) {
 }
 
 console.log(
-  `main bundle boundary: OK (${javascriptFiles.length} files, no AI SDK/xAI runtime or external ws imports)`,
+  `main bundle boundary: OK (${javascriptFiles.length} files, no AI SDK/xAI runtime or external bundled-dependency imports)`,
 );
