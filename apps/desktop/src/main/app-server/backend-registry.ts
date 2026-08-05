@@ -4,6 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import type {
   DynamicToolSpec as CodexDynamicToolSpec,
@@ -27,6 +28,7 @@ import type {
   WorktreeGitWorkingStateCacheEntry,
 } from "../state/overlay-store-sqlite";
 import { requestShowThread } from "../window-show-thread";
+import { toTranscriptImageProtocolUrl } from "../transcript-image-protocol";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import type { AcpMcpServerRegistration } from "../acp/acp-client";
 import { MCP_CONNECTION_TOOL_TIMEOUT_SECONDS } from "../mcp-connections/mcp-connection-timeouts";
@@ -63,6 +65,7 @@ import {
   type AppServerReadThreadResponse,
   type AppServerThreadActivityEntry,
   type AppServerThreadEntry,
+  type AppServerThreadImagePart,
   type AppServerThreadMessage,
   type AppServerThreadMessageOrigin,
   type AppServerThreadReviewEntry,
@@ -6070,15 +6073,53 @@ function buildWorkspaceMoveFailurePrompt(params: {
   ].join("\n");
 }
 
-type PendingThreadMessageOrigin = {
+type PendingThreadMessageContext = {
   backend: AppServerBackendKind;
   createdAt: number;
   id: string;
-  origin: AppServerThreadMessageOrigin;
+  imageParts?: AppServerThreadImagePart[];
+  origin?: AppServerThreadMessageOrigin;
   text?: string;
   threadId: string;
   turnId?: string;
 };
+
+function pendingThreadMessageImageParts(
+  input: AppServerTurnInputItem[] | undefined,
+): AppServerThreadImagePart[] {
+  return (input ?? []).flatMap((item): AppServerThreadImagePart[] => {
+    if (item.type === "localImage") {
+      return [{
+        type: "image",
+        ...(item.name ? { alt: item.name } : {}),
+        url: toTranscriptImageProtocolUrl(pathToFileURL(item.path).toString()),
+      }];
+    }
+    if (item.type === "image") {
+      return [{
+        type: "image",
+        ...(item.name ? { alt: item.name } : {}),
+        url: item.url,
+      }];
+    }
+    return [];
+  });
+}
+
+function contentHasRenderableImage(content: unknown[]): boolean {
+  return content.some((value) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return false;
+    }
+    const item = value as Record<string, unknown>;
+    return (
+      (item.type === "image"
+        || item.type === "input_image"
+        || item.type === "image_url")
+      && (typeof item.url === "string" || typeof item.image_url === "string")
+    );
+  });
+}
 
 type AcceptedSteerRequest = {
   promise: Promise<SteerTurnResponse>;
@@ -6263,9 +6304,9 @@ export class DesktopBackendRegistry {
     string,
     AppServerTurnInputItem[]
   >();
-  private readonly pendingThreadMessageOrigins = new Map<
+  private readonly pendingThreadMessageContexts = new Map<
     string,
-    PendingThreadMessageOrigin
+    PendingThreadMessageContext
   >();
   // Keep accepted requests through the active turn, not just while the RPC is
   // in flight. The backend can acknowledge a steer before its user item is
@@ -10918,7 +10959,7 @@ export class DesktopBackendRegistry {
         throw new Error("A turn is already active for this thread.");
       }
       this.reservedAcpStartThreadKeys.add(reservationKey);
-      let pendingMessageOriginId: string | undefined;
+      let pendingMessageContextId: string | undefined;
       try {
         const preparedPdfInput = await preparePdfTurnInput({
           handling: this.resolvePdfTurnInputHandling({
@@ -10942,8 +10983,9 @@ export class DesktopBackendRegistry {
           params.backend,
           params.threadId,
         );
-        pendingMessageOriginId = this.registerPendingThreadMessageOrigin({
+        pendingMessageContextId = this.registerPendingThreadMessageContext({
           backend: params.backend,
+          input,
           threadId: params.threadId,
           origin: resolveThreadMessageOrigin(params),
           text: extractFirstMeaningfulTextInput(params.input),
@@ -10968,8 +11010,8 @@ export class DesktopBackendRegistry {
           threadId: result.threadId,
           input,
         });
-        this.bindPendingThreadMessageOrigin(
-          pendingMessageOriginId,
+        this.bindPendingThreadMessageContext(
+          pendingMessageContextId,
           result.turnId,
         );
         await this.persistThreadMessageOrigin({
@@ -10978,10 +11020,10 @@ export class DesktopBackendRegistry {
           messageId: buildTurnUserMessageOriginId(result.turnId),
           origin: resolveThreadMessageOrigin(params),
         });
-        this.forgetPendingThreadMessageOrigin(pendingMessageOriginId);
+        this.forgetPendingThreadMessageContext(pendingMessageContextId);
         return result;
       } catch (error) {
-        this.forgetPendingThreadMessageOrigin(pendingMessageOriginId);
+        this.forgetPendingThreadMessageContext(pendingMessageContextId);
         throw error;
       } finally {
         this.reservedAcpStartThreadKeys.delete(reservationKey);
@@ -11114,8 +11156,9 @@ export class DesktopBackendRegistry {
     // turn/start call resolves. It must receive the same prepared input that
     // goes to the agent, not raw local PDF references from the composer.
     this.pendingTitleGenerationInputs.set(titleGenerationKey, input);
-    const pendingMessageOriginId = this.registerPendingThreadMessageOrigin({
+    const pendingMessageContextId = this.registerPendingThreadMessageContext({
       backend: params.backend,
+      input,
       threadId: params.threadId,
       origin: resolveThreadMessageOrigin(params),
       text: extractFirstMeaningfulTextInput(input),
@@ -11208,7 +11251,7 @@ export class DesktopBackendRegistry {
         this.reservedCodexStartThreadIds.delete(params.threadId);
       }
       this.pendingTitleGenerationInputs.delete(titleGenerationKey);
-      this.forgetPendingThreadMessageOrigin(pendingMessageOriginId);
+      this.forgetPendingThreadMessageContext(pendingMessageContextId);
       if (
         retryableCodexTurnStart
         && this.codexClient.recoverInvalidPersistedResponseMessageIds
@@ -11250,7 +11293,7 @@ export class DesktopBackendRegistry {
       },
       pdfAttachments,
     );
-    this.bindPendingThreadMessageOrigin(pendingMessageOriginId, result.turnId);
+    this.bindPendingThreadMessageContext(pendingMessageContextId, result.turnId);
     await this.persistThreadMessageOrigin({
       backend: params.backend,
       threadId: result.threadId,
@@ -11327,28 +11370,31 @@ export class DesktopBackendRegistry {
     return response;
   }
 
-  private registerPendingThreadMessageOrigin(params: {
+  private registerPendingThreadMessageContext(params: {
     backend: AppServerBackendKind;
+    input?: AppServerTurnInputItem[];
     threadId: string;
     origin?: AppServerThreadMessageOrigin;
     text?: string;
     turnId?: string;
   }): string | undefined {
-    if (!params.origin) {
+    const imageParts = pendingThreadMessageImageParts(params.input);
+    if (!params.origin && imageParts.length === 0) {
       return undefined;
     }
     const oldestAllowed = Date.now() - 10 * 60 * 1000;
-    for (const [id, pending] of this.pendingThreadMessageOrigins) {
+    for (const [id, pending] of this.pendingThreadMessageContexts) {
       if (pending.createdAt < oldestAllowed) {
-        this.pendingThreadMessageOrigins.delete(id);
+        this.pendingThreadMessageContexts.delete(id);
       }
     }
     const id = randomUUID();
-    this.pendingThreadMessageOrigins.set(id, {
+    this.pendingThreadMessageContexts.set(id, {
       backend: params.backend,
       createdAt: Date.now(),
       id,
-      origin: params.origin,
+      ...(imageParts.length > 0 ? { imageParts } : {}),
+      ...(params.origin ? { origin: params.origin } : {}),
       ...(params.text ? { text: params.text } : {}),
       threadId: params.threadId,
       ...(params.turnId ? { turnId: params.turnId } : {}),
@@ -11356,32 +11402,32 @@ export class DesktopBackendRegistry {
     return id;
   }
 
-  private bindPendingThreadMessageOrigin(
+  private bindPendingThreadMessageContext(
     id: string | undefined,
     turnId: string,
   ): void {
     if (!id) {
       return;
     }
-    const pending = this.pendingThreadMessageOrigins.get(id);
+    const pending = this.pendingThreadMessageContexts.get(id);
     if (pending) {
       pending.turnId = turnId;
     }
   }
 
-  private forgetPendingThreadMessageOrigin(id: string | undefined): void {
+  private forgetPendingThreadMessageContext(id: string | undefined): void {
     if (id) {
-      this.pendingThreadMessageOrigins.delete(id);
+      this.pendingThreadMessageContexts.delete(id);
     }
   }
 
-  private findPendingThreadMessageOrigin(params: {
+  private findPendingThreadMessageContext(params: {
     backend: AppServerBackendKind;
     threadId: string;
     text?: string;
     turnId?: string;
-  }): PendingThreadMessageOrigin | undefined {
-    const candidates = [...this.pendingThreadMessageOrigins.values()]
+  }): PendingThreadMessageContext | undefined {
+    const candidates = [...this.pendingThreadMessageContexts.values()]
       .filter(
         (pending) =>
           pending.backend === params.backend
@@ -11407,7 +11453,7 @@ export class DesktopBackendRegistry {
     );
   }
 
-  private async withThreadMessageOrigin(event: AgentEvent): Promise<AgentEvent> {
+  private async withThreadMessageContext(event: AgentEvent): Promise<AgentEvent> {
     if (event.notification.method === "turn/started") {
       const notification = event.notification as {
         method: "turn/started";
@@ -11417,7 +11463,7 @@ export class DesktopBackendRegistry {
           turn: { id: string };
         };
       };
-      const pending = this.findPendingThreadMessageOrigin({
+      const pending = this.findPendingThreadMessageContext({
         backend: event.backend,
         threadId: notification.params.threadId,
         turnId:
@@ -11443,6 +11489,7 @@ export class DesktopBackendRegistry {
         threadId: string;
         turnId?: string;
         item: {
+          content?: unknown;
           id: string;
           type: string;
           origin?: AppServerThreadMessageOrigin;
@@ -11453,7 +11500,7 @@ export class DesktopBackendRegistry {
     if (notification.params.item.type !== "userMessage") {
       return event;
     }
-    const pending = this.findPendingThreadMessageOrigin({
+    const pending = this.findPendingThreadMessageContext({
       backend: event.backend,
       threadId: notification.params.threadId,
       text: notification.params.item.text,
@@ -11469,8 +11516,15 @@ export class DesktopBackendRegistry {
       origin: pending.origin,
     });
     if (event.notification.method === "item/completed") {
-      this.pendingThreadMessageOrigins.delete(pending.id);
+      this.pendingThreadMessageContexts.delete(pending.id);
     }
+    const content = Array.isArray(notification.params.item.content)
+      ? notification.params.item.content
+      : [];
+    const imageParts =
+      pending.imageParts?.length && !contentHasRenderableImage(content)
+        ? pending.imageParts
+        : [];
     return {
       ...event,
       notification: {
@@ -11479,7 +11533,10 @@ export class DesktopBackendRegistry {
           ...notification.params,
           item: {
             ...notification.params.item,
-            origin: pending.origin,
+            ...(imageParts.length > 0
+              ? { content: [...content, ...imageParts] }
+              : {}),
+            ...(pending.origin ? { origin: pending.origin } : {}),
           },
         },
       } as AppServerNotification,
@@ -12387,8 +12444,9 @@ export class DesktopBackendRegistry {
     const input = await enrichLocalFileInputs(params.input, {
       privateStorageRoots: this.localFilePrivateStorageRoots,
     });
-    const pendingMessageOriginId = this.registerPendingThreadMessageOrigin({
+    const pendingMessageContextId = this.registerPendingThreadMessageContext({
       backend: params.backend,
+      input,
       threadId: params.threadId,
       turnId: params.expectedTurnId,
       origin: messageOrigin,
@@ -12414,7 +12472,7 @@ export class DesktopBackendRegistry {
           ? await this.withActiveCodexThreadClient(params.threadId, steerWithClient)
           : await steerWithClient(this.grokClient);
     } catch (error) {
-      this.forgetPendingThreadMessageOrigin(pendingMessageOriginId);
+      this.forgetPendingThreadMessageContext(pendingMessageContextId);
       throw error;
     }
 
@@ -25486,7 +25544,7 @@ export class DesktopBackendRegistry {
   }
 
   private async emit(event: AgentEvent): Promise<void> {
-    event = await this.withThreadMessageOrigin(event);
+    event = await this.withThreadMessageContext(event);
     this.rememberFileChangeApprovalContext(event);
     event = this.withEmbeddedFileChangeApprovalContext(event);
 

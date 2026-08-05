@@ -115,6 +115,7 @@ import {
   readTranscriptImageProtocolRequest,
   rewriteFederatedTranscriptImageUrlsForRenderer,
   rewriteTranscriptImageUrlsForRenderer,
+  toFederatedTranscriptImageProtocolUrl,
 } from "../transcript-image-protocol";
 import { getMainLogger } from "../log";
 import {
@@ -194,6 +195,67 @@ const FEDERATION_RECONNECT_MAX_DELAY_MS = 30_000;
 const DUPLICATE_IDENTITY_NOTE_TTL_MS = 5 * 60_000;
 /** A session must last this long before it counts as stable enough to reset backoff. */
 const FEDERATION_STABLE_SESSION_MS = 60_000;
+
+function rewriteLiveTranscriptImagesForFederation(
+  event: AgentEvent,
+  ownerInstanceId: FederationInstanceId,
+): AgentEvent {
+  if (
+    event.notification.method !== "item/started"
+    && event.notification.method !== "item/completed"
+  ) {
+    return event;
+  }
+  const params = event.notification.params as Record<string, unknown>;
+  const itemValue = params.item;
+  if (
+    !itemValue
+    || typeof itemValue !== "object"
+    || Array.isArray(itemValue)
+  ) {
+    return event;
+  }
+  const item = itemValue as Record<string, unknown>;
+  if (item.type !== "userMessage" || !Array.isArray(item.content)) {
+    return event;
+  }
+  let changed = false;
+  const content = item.content.map((part) => {
+    if (
+      !part
+      || typeof part !== "object"
+      || Array.isArray(part)
+      || !("type" in part)
+      || !("url" in part)
+      || part.type !== "image"
+      || typeof part.url !== "string"
+      || !part.url.startsWith("pwragent-image://file/")
+    ) {
+      return part;
+    }
+    changed = true;
+    return {
+      ...part,
+      url: toFederatedTranscriptImageProtocolUrl(ownerInstanceId, part.url),
+    };
+  });
+  if (!changed) {
+    return event;
+  }
+  return {
+    ...event,
+    notification: {
+      ...event.notification,
+      params: {
+        ...params,
+        item: {
+          ...item,
+          content,
+        },
+      },
+    },
+  } as AgentEvent;
+}
 
 const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "remote_window",
@@ -1784,10 +1846,15 @@ export class DesktopFederationRuntime {
   private forwardLocalBackendEvent(event: AgentEvent): void {
     const router = this.router;
     if (!router) return;
+    const ownerInstanceId = this.ensureLocalInstanceId();
+    const federatedEvent = rewriteLiveTranscriptImagesForFederation(
+      event,
+      ownerInstanceId,
+    );
 
     for (const connection of router.listConnections()) {
       const scheduledActionEvent =
-        event.notification.method === "thread/scheduledAction/updated";
+        federatedEvent.notification.method === "thread/scheduledAction/updated";
       if (
         scheduledActionEvent
           ? !connection.capabilities.includes("scheduled_actions")
@@ -1802,11 +1869,11 @@ export class DesktopFederationRuntime {
         kind: "notification",
         method: FEDERATION_BACKEND_EVENT_METHOD,
         params: {
-          backend: event.backend,
-          notification: event.notification,
+          backend: federatedEvent.backend,
+          notification: federatedEvent.notification,
         },
         protocolVersion: FEDERATION_PROTOCOL_VERSION,
-        sourceInstanceId: this.ensureLocalInstanceId(),
+        sourceInstanceId: ownerInstanceId,
         targetInstanceId: connection.peerId,
         createdAt: Date.now(),
       });

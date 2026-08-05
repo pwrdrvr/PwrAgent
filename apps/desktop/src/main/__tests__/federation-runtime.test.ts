@@ -647,6 +647,64 @@ describe("DesktopFederationRuntime", () => {
     ]);
   });
 
+  it("routes live transcript images back through their owning instance", () => {
+    const forwarded: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({ localInstanceId: "gateway_one" });
+    router.registerConnection(
+      createConnection({
+        peerId: "client_one",
+        capabilities: ["remote_window"],
+        sendEnvelope: (envelope) => forwarded.push(envelope),
+      }),
+    );
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.localInstanceId = "gateway_one";
+    runtime.router = router;
+    const ownerUrl =
+      `pwragent-image://file/${encodeURIComponent("file:///Users/owner/.pwragent/profiles/default/state/image-inputs/image.png")}`;
+
+    runtime.forwardLocalBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "user-message-1",
+            type: "userMessage",
+            content: [
+              { type: "text", text: "Describe it" },
+              { type: "image", url: ownerUrl },
+            ],
+          },
+        },
+      },
+    } as AgentEvent);
+
+    expect(forwarded).toMatchObject([{
+      params: {
+        notification: {
+          method: "item/completed",
+          params: {
+            item: {
+              content: [
+                { type: "text", text: "Describe it" },
+                {
+                  type: "image",
+                  url:
+                    `pwragent-image://federation/gateway_one/${encodeURIComponent(ownerUrl)}`,
+                },
+              ],
+            },
+          },
+        },
+      },
+      sourceInstanceId: "gateway_one",
+      targetInstanceId: "client_one",
+    }]);
+  });
+
   it("forwards scheduler lifecycle events to scheduler-capable peers", () => {
     const forwarded: FederationProtocolEnvelope[] = [];
     const unauthorized: FederationProtocolEnvelope[] = [];
