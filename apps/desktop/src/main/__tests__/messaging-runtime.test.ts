@@ -2749,6 +2749,55 @@ describe("DesktopMessagingRuntime", () => {
     );
   });
 
+  it("hot-applies Slack actor metadata without restarting the running adapter", async () => {
+    await prepareRuntimeStore();
+    const updateAuthorization = vi.fn(async () => undefined);
+    const slackAdapter = createAdapter("slack", { updateAuthorization });
+    const factory = vi.fn<DesktopMessagingAdapterFactory>(({ config }) =>
+      config.slack ? [slackAdapter] : [],
+    );
+    const { DesktopMessagingRuntime: Runtime } = await import(
+      "../messaging/messaging-runtime"
+    );
+    const runtime = new Runtime({
+      adapterFactory: factory,
+      backendBridge: createBackendBridge(),
+      config: {
+        inputDebounceMs: 0,
+        slack: {
+          channel: "slack",
+          botToken: "slack-bot-token",
+          authorizedActorIds: [{ id: "U012ABCDEF0", displayName: "Harold" }],
+        },
+      },
+    });
+
+    await runtime.start();
+    await runtime.applyConfig({
+      inputDebounceMs: 0,
+      slack: {
+        channel: "slack",
+        botToken: "slack-bot-token",
+        authorizedActorIds: [{
+          id: "U012ABCDEF0",
+          displayName: "Harold Hunt",
+          username: "hhunt",
+        }],
+      },
+    });
+
+    expect(slackAdapter.start).toHaveBeenCalledTimes(1);
+    expect(slackAdapter.stop).not.toHaveBeenCalled();
+    expect(updateAuthorization).toHaveBeenCalledWith(expect.objectContaining({
+      authorizedActorIds: ["U012ABCDEF0"],
+      authorizedActors: [{
+        platformUserId: "U012ABCDEF0",
+        displayName: "Harold Hunt",
+        username: "hhunt",
+      }],
+    }));
+  });
+
   it("restarts on authorization changes when the adapter has no hot-update hook", async () => {
     await prepareRuntimeStore();
     const firstTelegramAdapter = createAdapter("telegram");

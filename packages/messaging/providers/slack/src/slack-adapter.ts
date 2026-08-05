@@ -31,7 +31,6 @@ import type {
   MessagingManagedConversationRightsResult,
   MessagingRateLimitInfo,
   MessagingRejectedInboundEvent,
-  MessagingResponseMode,
   MessagingSurfaceAction,
   MessagingSurfaceIntent,
   MessagingSurfaceRef,
@@ -45,7 +44,10 @@ import {
   SLACK_GROUP_DM_ACCESS_MODE_DEFAULT,
   SLACK_TEAM_AUTHORIZATION_MODE_DEFAULT,
 } from "@pwragent/messaging-interface";
-import type { SlackMessagingConfig } from "./slack-config.ts";
+import type {
+  SlackAuthorizedContact,
+  SlackMessagingConfig,
+} from "./slack-config.ts";
 import {
   actionsForSlackIntent,
   buildSlackActionBlocks,
@@ -435,6 +437,7 @@ export class SlackAdapter implements SlackProviderAdapter {
     this.config.authorizedActorIds = slackContactsFromIds(
       update.authorizedActorIds,
       this.config.authorizedActorIds,
+      update.authorizedActors,
     );
     this.config.authorizedConversationIds = slackContactsFromIds(
       update.authorizedConversationIds ?? [],
@@ -2457,16 +2460,29 @@ function callbackAllowedActorIds(
 
 function slackContactsFromIds(
   ids: readonly string[],
-  previous:
-    | readonly {
-        id: string;
-        displayName: string;
-        responseMode?: MessagingResponseMode;
-      }[]
-    | undefined,
-): { id: string; displayName: string; responseMode?: MessagingResponseMode }[] {
+  previous: readonly SlackAuthorizedContact[] | undefined,
+  actors?: readonly MessagingActorIdentity[],
+): SlackAuthorizedContact[] {
   const previousById = new Map((previous ?? []).map((contact) => [contact.id, contact]));
-  return ids.map((id) => previousById.get(id) ?? { id, displayName: "" });
+  if (!actors) {
+    return ids.map((id) => previousById.get(id) ?? { id, displayName: "" });
+  }
+  const actorById = new Map(
+    actors.map((actor) => [actor.platformUserId, actor]),
+  );
+  return ids.map((id) => {
+    const previousContact = previousById.get(id);
+    const actor = actorById.get(id);
+    if (!actor) return previousContact ?? { id, displayName: "" };
+    return {
+      id,
+      displayName: actor.displayName ?? "",
+      ...(actor.username ? { username: actor.username } : {}),
+      ...(previousContact?.responseMode
+        ? { responseMode: previousContact.responseMode }
+        : {}),
+    };
+  });
 }
 
 // All four fall back to the shared locked-down defaults so the adapter's gate

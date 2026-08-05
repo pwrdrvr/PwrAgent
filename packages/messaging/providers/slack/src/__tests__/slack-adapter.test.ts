@@ -1753,6 +1753,58 @@ describe("SlackAdapter", () => {
     ]);
   });
 
+  it("uses contact metadata received through a hot authorization update", async () => {
+    const socket = fakeSocket();
+    const adapter = new SlackAdapter({
+      config: {
+        ...baseConfig,
+        authorizedActorIds: [{
+          id: "U012ABCDEF0",
+          displayName: "Harold",
+        }],
+      },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      socketClient: socket,
+      now: () => 1_700_000_000_000,
+    });
+    const events: MessagingInboundEvent[] = [];
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+    await adapter.updateAuthorization({
+      authorizedActorIds: ["U012ABCDEF0"],
+      authorizedActors: [{
+        platformUserId: "U012ABCDEF0",
+        displayName: "Harold Hunt",
+        username: "hhunt",
+      }],
+    });
+
+    await socket.emitEvent("slack_event", {
+      ack: async () => undefined,
+      event: {
+        type: "message",
+        channel: "D012ABCDEF0",
+        channel_type: "im",
+        team: "T012ABCDEF0",
+        ts: "1712023032.123456",
+        user: "U012ABCDEF0",
+        text: "hello",
+      },
+    });
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        actor: expect.objectContaining({
+          displayName: "Harold Hunt",
+          platformUserId: "U012ABCDEF0",
+          username: "hhunt",
+        }),
+      }),
+    ]);
+  });
+
   it("emits rejected activity for unauthorized actors", async () => {
     const socket = fakeSocket();
     const adapter = new SlackAdapter({

@@ -3004,7 +3004,7 @@ describe("SettingsScreen", () => {
     );
   });
 
-  it("shows observed pairing IDs and refreshes authorized IDs after approval", async () => {
+  it("refreshes authorized contacts after metadata-only pairing approval", async () => {
     const snapshot = createSnapshot();
     const initialSnapshot: DesktopSettingsSnapshot = {
       ...snapshot,
@@ -3013,6 +3013,10 @@ describe("SettingsScreen", () => {
         telegram: {
           ...snapshot.messaging.telegram,
           enabled: { value: true, source: "config" },
+          authorizedUserIds: {
+            value: [{ id: "8460800771", displayName: "" }],
+            source: "config" as const,
+          },
         },
       },
     };
@@ -3055,7 +3059,7 @@ describe("SettingsScreen", () => {
     const approveMessagingPairing = vi.fn(async () => {
       approved = true;
       return {
-        added: true,
+        added: false,
         entry: {
           ...observedEntry,
           status: "consumed" as const,
@@ -3353,6 +3357,75 @@ describe("SettingsScreen", () => {
     const username = screen.getByLabelText("Authorized User IDs username 1");
     expect(username).toHaveValue("@hhunt");
     expect(username).toHaveAttribute("readonly");
+  });
+
+  it("clears and re-resolves a Slack username when its user ID changes", async () => {
+    const snapshot = createSnapshot();
+    const settings = createSettingsState({
+      ...snapshot,
+      messaging: {
+        ...snapshot.messaging,
+        slack: {
+          ...snapshot.messaging.slack,
+          authorizedUserIds: {
+            value: [{
+              id: "U079K80HTGS",
+              displayName: "Harold Hunt",
+              username: "hhunt",
+            }],
+            source: "config",
+          },
+        },
+      },
+    });
+    const resolveMessagingContact = vi.fn(async () => ({
+      status: "ok" as const,
+      id: "U012ABCDEF1",
+      displayName: "New User",
+      handle: "@newuser",
+    }));
+    const desktopApi = {
+      resolveMessagingContact,
+    } as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"];
+
+    render(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        settings={settings}
+        initialSection="messaging"
+        onClose={() => undefined}
+      />,
+    );
+
+    const idInput = screen.getByLabelText("Authorized User IDs ID 1");
+    const usernameInput = screen.getByLabelText("Authorized User IDs username 1");
+    expect(usernameInput).toHaveValue("@hhunt");
+
+    fireEvent.change(idInput, { target: { value: "U012ABCDEF1" } });
+    expect(usernameInput).toHaveValue("");
+    fireEvent.blur(idInput);
+
+    await waitFor(() => {
+      expect(resolveMessagingContact).toHaveBeenCalledWith({
+        platform: "slack",
+        kind: "user",
+        id: "U012ABCDEF1",
+      });
+    });
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenLastCalledWith({
+        messaging: {
+          slack: {
+            authorizedUserIds: [{
+              id: "U012ABCDEF1",
+              displayName: "New User",
+              username: "newuser",
+            }],
+          },
+        },
+      });
+    });
+    expect(usernameInput).toHaveValue("@newuser");
   });
 
   it("places Slack channel pairing and defaults with channel authorization", async () => {

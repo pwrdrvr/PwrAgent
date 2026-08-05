@@ -2357,7 +2357,7 @@ function PairingTokenField(props: {
         if (result?.entry.id === messageEntryId) {
           setGeneratedMessage(undefined, undefined);
         }
-        if (result?.added) {
+        if (result) {
           await props.onSettingsChanged?.();
         }
       } else {
@@ -2381,15 +2381,17 @@ function PairingTokenField(props: {
     setBusyId(entry.id);
     setError(undefined);
     try {
+      let approved = false;
       for (const step of steps) {
         const result = await props.desktopApi?.approveMessagingPairing?.({
           entryId: entry.id,
           target: step.target,
           ...(step.consume ? {} : { consume: false }),
         });
-        if (result?.added) {
-          await props.onSettingsChanged?.();
-        }
+        approved = approved || Boolean(result);
+      }
+      if (approved) {
+        await props.onSettingsChanged?.();
       }
       if (entry.id === messageEntryId) {
         setGeneratedMessage(undefined, undefined);
@@ -2962,13 +2964,20 @@ function AuthorizedListField(props: {
                         );
                         setRows(nextRows);
                         saveIfValid(nextRows);
-                        if (normalized.displayName.length === 0) {
+                        if (
+                          normalized.displayName.length === 0
+                          || (props.showUsername && !normalized.username)
+                        ) {
                           void lookupRow(index, nextRows);
                         }
                       }}
-                      onChange={(event) =>
-                        updateRow(index, { id: event.currentTarget.value })
-                      }
+                      onChange={(event) => {
+                        const id = event.currentTarget.value;
+                        updateRow(index, {
+                          id,
+                          ...(id !== row.id ? { username: undefined } : {}),
+                        });
+                      }}
                     />
                   </div>
                   <div className="settings-authorized-list__field">
