@@ -7,7 +7,7 @@ import {
   probeWorktreeWorkingState,
 } from "../app-server/git-working-state-service";
 
-type GitCall = { cwd: string; args: string[] };
+type GitCall = { cwd: string; args: string[]; input?: string };
 
 function makeTempPrefix(): string {
   return path.join(os.tmpdir(), "pwragent-git-working-state-");
@@ -18,12 +18,25 @@ function normalizeTestPath(value: string): string {
 }
 
 function fakeGit(
-  responder: (args: string[]) => string | undefined,
-): { runGit: (cwd: string, args: string[]) => Promise<string>; calls: GitCall[] } {
+  responder: (args: string[], input?: string) => string | undefined,
+): {
+  runGit: (
+    cwd: string,
+    args: string[],
+    env?: NodeJS.ProcessEnv,
+    input?: string,
+  ) => Promise<string>;
+  calls: GitCall[];
+} {
   const calls: GitCall[] = [];
-  const runGit = async (cwd: string, args: string[]): Promise<string> => {
-    calls.push({ cwd, args });
-    const result = responder(args);
+  const runGit = async (
+    cwd: string,
+    args: string[],
+    _env?: NodeJS.ProcessEnv,
+    input?: string,
+  ): Promise<string> => {
+    calls.push({ cwd, args, input });
+    const result = responder(args, input);
     if (result === undefined) {
       throw new Error(`unexpected git invocation: ${args.join(" ")}`);
     }
@@ -94,12 +107,12 @@ describe("probeWorktreeWorkingState", () => {
     const mergedPrHeadSha = "a".repeat(40);
     const mergedPrAncestorSha = "c".repeat(40);
     const localOnlySha = "b".repeat(40);
-    const { runGit, calls } = fakeGit((args) => {
+    const { runGit, calls } = fakeGit((args, input) => {
       if (args.includes("--numstat")) return "";
       if (args.includes("status")) return "";
       if (args[args.length - 1] === "remote") return "origin\n";
       if (args.includes("rev-list")) {
-        return args.includes(mergedPrHeadSha)
+        return input?.includes(mergedPrHeadSha)
           ? "1\n"
           : `${mergedPrHeadSha}\n${mergedPrAncestorSha}\n${localOnlySha}\n`;
       }
@@ -120,8 +133,31 @@ describe("probeWorktreeWorkingState", () => {
       "HEAD",
       "--not",
       "--remotes",
-      mergedPrHeadSha,
+      "--stdin",
     ]);
+    expect(calls.find((call) => call.args.includes("rev-list"))?.input)
+      .toBe(`^${mergedPrHeadSha}\n`);
+  });
+
+  it("falls back to the raw local count when PR exclusion input fails", async () => {
+    const mergedPrHeadSha = "a".repeat(40);
+    const { runGit, calls } = fakeGit((args) => {
+      if (args.includes("--numstat")) return "";
+      if (args.includes("status")) return "";
+      if (args[args.length - 1] === "remote") return "origin\n";
+      if (args.includes("rev-list")) {
+        return args.includes("--stdin") ? undefined : "3\n";
+      }
+      return undefined;
+    });
+
+    const state = await probeWorktreeWorkingState("/repo/wt", {
+      runGit,
+      acceptedPushedCommitShas: [mergedPrHeadSha],
+    });
+
+    expect(state?.unpushedCommits).toBe(3);
+    expect(calls.filter((call) => call.args.includes("rev-list"))).toHaveLength(2);
   });
 
   it("infers the likely base branch and behind-base count from git refs", async () => {
@@ -848,13 +884,13 @@ describe("GitWorkingStateService.resolveEditCommitStates", () => {
   it("treats ancestors of merged PR heads as pushed even when no remote ref contains them", async () => {
     const mergedPrHeadSha = "d".repeat(40);
     const mergedPrAncestorSha = "e".repeat(40);
-    const responder = (args: string[]): string | undefined => {
+    const responder = (args: string[], input?: string): string | undefined => {
       if (args.includes("diff") && args.includes("--name-only")) return "";
       if (args.includes("ls-files")) return "";
       if (args.includes("check-ignore")) return "";
       if (args.includes("log")) return `${mergedPrAncestorSha}\n`;
       if (args.includes("rev-list")) {
-        return args.includes(mergedPrHeadSha) ? "" : `${mergedPrAncestorSha}\n`;
+        return input?.includes(mergedPrHeadSha) ? "" : `${mergedPrAncestorSha}\n`;
       }
       return undefined;
     };
@@ -880,8 +916,33 @@ describe("GitWorkingStateService.resolveEditCommitStates", () => {
       mergedPrAncestorSha,
       "--not",
       "--remotes",
-      mergedPrHeadSha,
+      "--stdin",
     ]);
+    expect(calls.find((call) => call.args.includes("rev-list"))?.input)
+      .toBe(`^${mergedPrHeadSha}\n`);
+  });
+
+  it("fails closed when commit reachability cannot be determined", async () => {
+    const commitSha = "f".repeat(40);
+    const { runGit } = fakeGit((args) => {
+      if (args.includes("diff") && args.includes("--name-only")) return "";
+      if (args.includes("ls-files")) return "";
+      if (args.includes("check-ignore")) return "";
+      if (args.includes("log")) return `${commitSha}\n`;
+      return undefined;
+    });
+    const service = new GitWorkingStateService({ runGit });
+
+    const states = await service.resolveEditCommitStates(
+      "/repo/wt",
+      [{ key: "g-unknown", paths: ["/repo/wt/src/unknown.ts"] }],
+    );
+
+    expect(states["g-unknown"]).toMatchObject({
+      committed: true,
+      commitSha,
+      pushed: false,
+    });
   });
 
   it("returns an empty map for no worktree or no groups", async () => {
