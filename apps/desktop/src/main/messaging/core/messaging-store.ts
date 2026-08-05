@@ -881,6 +881,11 @@ function sanitizeBinding(binding: MessagingBindingRecord): MessagingBindingRecor
     monitorSurface: sanitizeSurfaceRef(binding.monitorSurface),
     pinnedStatusSurface: sanitizeSurfaceRef(binding.pinnedStatusSurface),
     routingState: sanitizeAdapterState(binding.routingState),
+    statusPresentation:
+      binding.statusPresentation === "automatic"
+      || binding.statusPresentation === "on_demand"
+        ? binding.statusPresentation
+        : undefined,
     statusSurface: sanitizeSurfaceRef(binding.statusSurface),
     targetKind: normalizeMessagingBindingTargetKind(binding.targetKind),
   };

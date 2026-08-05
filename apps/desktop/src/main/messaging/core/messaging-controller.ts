@@ -1765,7 +1765,7 @@ export class MessagingController {
       }
 
       if (isThreadNameUpdatedEvent(event)) {
-        await this.renderBindingStatus(
+        await this.renderAutomaticBindingStatus(
           binding,
           undefined,
           await this.navigationSnapshotWithThreadNameFromEvent(event),
@@ -1788,7 +1788,7 @@ export class MessagingController {
           force: true,
         });
         if (shouldRenderStatusForTurnStateChange(event, lifecycle)) {
-          await this.renderBindingStatus(binding);
+          await this.renderAutomaticBindingStatus(binding);
         }
         await this.startNextQueuedTurn(binding);
       } else if (activeTurn?.status === "waiting" && isTurnWorkActivityEvent(event, activeTurn)) {
@@ -1951,7 +1951,7 @@ export class MessagingController {
         await this.signalTurnActivity(binding, activeTurn, {
           force: true,
         });
-        await this.renderBindingStatus(binding);
+        await this.renderAutomaticBindingStatus(binding);
       }
     }
   }
@@ -3234,7 +3234,7 @@ export class MessagingController {
     });
     if (startResult !== "failed" && currentBinding.pendingSkillSelection) {
       const updatedBinding = await this.clearPendingSkillSelection(currentBinding);
-      await this.renderBindingStatus(updatedBinding, bundle.events[0]);
+      await this.renderAutomaticBindingStatus(updatedBinding, bundle.events[0]);
     }
   }
 
@@ -3646,7 +3646,11 @@ export class MessagingController {
       await this.signalTurnActivity(params.binding, activeTurn, {
         force: true,
       });
-      await this.renderBindingStatus(params.binding, undefined, navigation);
+      await this.renderAutomaticBindingStatus(
+        params.binding,
+        undefined,
+        navigation,
+      );
       return "started";
     } catch (error) {
       if (turnStarted) {
@@ -3718,7 +3722,11 @@ export class MessagingController {
       currentTurn?.turnId === params.turnId &&
       isTerminalTurnLifecycle(currentTurn)
     ) {
-      await this.renderBindingStatus(params.binding, undefined, params.navigation);
+      await this.renderAutomaticBindingStatus(
+        params.binding,
+        undefined,
+        params.navigation,
+      );
       return;
     }
     const activeTurn: MessagingActiveTurnSummary = {
@@ -3737,7 +3745,11 @@ export class MessagingController {
     await this.signalTurnActivity(params.binding, activeTurn, {
       force: true,
     });
-    await this.renderBindingStatus(params.binding, undefined, params.navigation);
+    await this.renderAutomaticBindingStatus(
+      params.binding,
+      undefined,
+      params.navigation,
+    );
   }
 
   private async queuePreparedInput(params: {
@@ -13127,6 +13139,21 @@ export class MessagingController {
     });
   }
 
+  private async renderAutomaticBindingStatus(
+    binding: MessagingBindingRecord,
+    event?: MessagingInboundEvent,
+    navigation?: NavigationSnapshot,
+  ): Promise<MessagingBindingRecord> {
+    if (
+      binding.statusPresentation === "on_demand"
+      && !binding.statusSurface
+      && !binding.pinnedStatusSurface
+    ) {
+      return binding;
+    }
+    return await this.renderBindingStatus(binding, event, navigation);
+  }
+
   private async navigationSnapshotWithThreadNameFromEvent(
     event: AgentEvent,
   ): Promise<NavigationSnapshot> {
@@ -14270,6 +14297,7 @@ export class MessagingController {
       backend: AppServerBackendKind;
       federatedThread?: FederatedThreadRef;
       recordTransition?: boolean;
+      statusPresentation?: MessagingBindingRecord["statusPresentation"];
       threadId: ThreadIdentifier;
       targetKind?: MessagingBindingRecord["targetKind"];
     },
@@ -14290,6 +14318,7 @@ export class MessagingController {
       federatedThread: target.federatedThread,
       authorizedActorIds: [event.actor.platformUserId],
       routingState: event.routingState,
+      statusPresentation: target.statusPresentation,
       createdAt: now,
       updatedAt: now,
       displayName: event.actor.displayName ?? event.actor.username,
@@ -15447,6 +15476,7 @@ export class MessagingController {
           {
             backend: request.context.backend,
             recordTransition: false,
+            statusPresentation: "on_demand",
             threadId: request.context.threadId,
             targetKind: sourceBinding.targetKind ?? "agent_thread",
           },

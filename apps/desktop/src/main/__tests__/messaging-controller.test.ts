@@ -1933,6 +1933,7 @@ describe("MessagingController", () => {
           parentId: expect.stringContaining("surface:private-response"),
         },
       },
+      statusPresentation: "on_demand",
       targetKind: "agent_thread",
       threadId: "thread-1",
     });
@@ -2006,6 +2007,7 @@ describe("MessagingController", () => {
     if (!continuationBinding) {
       throw new Error("Expected the private reply continuation binding");
     }
+    harness.delivered.length = 0;
     await harness.controller.handleInboundEvent(
       buildTextEvent("I approved the AWS login.", {
         channel: continuationBinding.channel,
@@ -2022,6 +2024,9 @@ describe("MessagingController", () => {
         })],
       }),
     );
+    expect(
+      harness.delivered.filter((intent) => intent.kind === "status"),
+    ).toEqual([]);
   });
 
   it("privately delivers an explicit DM request when the thread lacks the tool", async () => {

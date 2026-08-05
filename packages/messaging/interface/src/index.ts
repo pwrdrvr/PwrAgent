@@ -1509,6 +1509,12 @@ export type MessagingBindingRecord = {
   pinnedStatusSurface?: MessagingSurfaceRef;
   pendingSkillSelection?: MessagingPendingSkillSelection;
   preferences?: MessagingBindingPreferences;
+  /**
+   * `on_demand` keeps implicitly-created bindings quiet until the user asks
+   * for a status surface. Once a surface exists, ordinary refreshes may update
+   * it. Omitted bindings retain the normal automatic status-card behavior.
+   */
+  statusPresentation?: "automatic" | "on_demand";
   statusSurface?: MessagingSurfaceRef;
   threadDisplay?: MessagingThreadDisplaySummary;
 };

@@ -1024,7 +1024,11 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     if (event.kind !== "text" && event.kind !== "media") {
       return false;
     }
-    if (event.botMention || event.channel.conversation.kind === "dm") {
+    if (
+      event.botMention
+      || event.channel.conversation.kind === "dm"
+      || event.channel.conversation.isDirectMessage === true
+    ) {
       return false;
     }
     if (!params.reportsBotMention) {

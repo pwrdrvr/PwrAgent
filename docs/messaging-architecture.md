@@ -163,10 +163,12 @@ top-level DMs deliberately keep their normal default-Agent routing instead of
 using ambiguous "last Agent wins" state.
 
 The continuation binding is internal routing state: creating it does not emit a
-user-facing bound/unbound transcript transition. Its normalized conversation
-retains whether it lives inside a 1:1 DM so replies bypass shared-channel
-authorization and mention-only response policy. Terminal private delivery also
-clears provider activity on both the source and continuation surfaces and
+user-facing bound/unbound transcript transition, and its status presentation is
+on demand so the first reply does not insert a full binding card. Its normalized
+conversation retains whether it lives inside a 1:1 DM so replies bypass
+shared-channel authorization and mention-only response policy.
+Terminal private delivery also clears provider activity on both the source and
+continuation surfaces and
 suppresses later work events from re-arming that activity. Before it reports
 success, the controller cancels queued and in-flight source streams, prose, and
 tool updates and retracts any surface returned after cancellation.
