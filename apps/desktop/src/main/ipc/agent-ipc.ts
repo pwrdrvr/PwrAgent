@@ -848,6 +848,14 @@ export function registerAgentIpcHandlers(): void {
       _event,
       request: ApplyThreadModelMigrationRequest,
     ): Promise<ApplyThreadModelMigrationResponse> => {
+      if (
+        request.federationTarget
+        && isRemoteFederationTarget(request.federationTarget)
+      ) {
+        return await getDesktopFederationRuntime()
+          .remoteBackend(request.federationTarget)
+          .applyThreadModelMigration(stripFederationTarget(request));
+      }
       return await registry.applyThreadModelMigration(request);
     },
   );

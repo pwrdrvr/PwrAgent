@@ -462,6 +462,7 @@ export type SendThreadPrAutoDispatchNowResponse =
 
 export type ApplyThreadModelMigrationRequest = {
   backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   /** Creation time from the provider summary, used to exclude newer threads. */
   threadCreatedAt?: number;

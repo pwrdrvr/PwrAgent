@@ -243,7 +243,7 @@ describe("ThreadView", () => {
     });
   });
 
-  it("applies a pending provider migration when an existing thread opens", async () => {
+  it("applies a pending provider migration on the federated owner", async () => {
     const applyThreadModelMigration = vi.fn(async () => ({
       backend: "codex" as const,
       threadId: "thread-old",
@@ -280,6 +280,14 @@ describe("ThreadView", () => {
           title: "Old model",
           titleSource: "explicit",
           source: "codex",
+          federation: {
+            ref: {
+              backend: "codex",
+              target: { scope: "remote", instanceId: "remote-instance" },
+              threadId: "thread-old",
+            },
+            instanceLabel: "Remote Mac",
+          },
           model: "gpt-5.5",
           createdAt: 1_000,
           updatedAt: 1_500,
@@ -294,6 +302,10 @@ describe("ThreadView", () => {
     await waitFor(() => {
       expect(applyThreadModelMigration).toHaveBeenCalledWith({
         backend: "codex",
+        federationTarget: {
+          scope: "remote",
+          instanceId: "remote-instance",
+        },
         threadId: "thread-old",
         threadCreatedAt: 1_000,
         threadModel: "gpt-5.5",
