@@ -26,9 +26,12 @@ export function useScheduledThreadActionProjection(params: {
       const sequence = refreshSequenceRef.current + 1;
       refreshSequenceRef.current = sequence;
       try {
+        const terminalUpdatedAfter = terminalUpdatedAfterRef.current;
         const response = await desktopApi.listScheduledThreadActions!({
           federationTarget: params.federationTarget,
-          terminalUpdatedAfter: terminalUpdatedAfterRef.current,
+          ...(terminalUpdatedAfter === undefined
+            ? { includeFailed: true }
+            : { terminalUpdatedAfter }),
         });
         if (cancelled || sequence !== refreshSequenceRef.current) return;
         terminalUpdatedAfterRef.current = response.observedAt ?? Date.now();

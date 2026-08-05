@@ -157,6 +157,11 @@ export class ScheduledThreadActionStore {
         `(status IN (${ACTIVE_STATUSES.map(() => "?").join(", ")}) OR updated_at >= ?)`,
       );
       values.push(...ACTIVE_STATUSES, request.terminalUpdatedAfter);
+    } else if (request.includeFailed && !request.includeTerminal) {
+      where.push(
+        `(status IN (${ACTIVE_STATUSES.map(() => "?").join(", ")}) OR status = 'failed')`,
+      );
+      values.push(...ACTIVE_STATUSES);
     } else if (!request.includeTerminal) {
       where.push(`status IN (${ACTIVE_STATUSES.map(() => "?").join(", ")})`);
       values.push(...ACTIVE_STATUSES);
@@ -318,18 +323,37 @@ export class ScheduledThreadActionStore {
     ).run(leaseExpiresAt, now, ownerId);
   }
 
-  recoverExpiredClaims(now: number): ScheduledThreadAction[] {
+  expiredClaimOwnerIds(now: number): string[] {
+    const rows = this.stateDb.raw.prepare(
+      `SELECT DISTINCT claim_owner
+       FROM scheduled_thread_actions
+       WHERE status IN ('dispatching', 'queued')
+         AND claim_owner IS NOT NULL
+         AND (claim_expires_at IS NULL OR claim_expires_at <= ?)`,
+    ).all(now) as Array<{ claim_owner: string }>;
+    return rows.map((row) => row.claim_owner);
+  }
+
+  recoverExpiredClaims(
+    now: number,
+    protectedOwnerIds: ReadonlySet<string> = new Set(),
+  ): ScheduledThreadAction[] {
     return this.stateDb.raw.transaction(() => {
       const rows = this.stateDb.raw.prepare(
-        `SELECT action_id, status
+        `SELECT action_id, claim_owner, status
          FROM scheduled_thread_actions
          WHERE status IN ('dispatching', 'queued')
            AND (claim_owner IS NULL OR claim_expires_at IS NULL OR claim_expires_at <= ?)`,
       ).all(now) as Array<{
         action_id: string;
+        claim_owner: string | null;
         status: "dispatching" | "queued";
       }>;
       return rows.flatMap((row) => {
+        if (
+          row.claim_owner
+          && protectedOwnerIds.has(row.claim_owner)
+        ) return [];
         const updated = row.status === "dispatching"
           ? this.transition(
               row.action_id,

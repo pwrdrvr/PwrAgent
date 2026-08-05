@@ -591,12 +591,20 @@ describe("DesktopFederationRuntime", () => {
 
   it("forwards scheduler lifecycle events to scheduler-capable peers", () => {
     const forwarded: FederationProtocolEnvelope[] = [];
+    const unauthorized: FederationProtocolEnvelope[] = [];
     const router = new FederationRouter({ localInstanceId: "gateway_one" });
     router.registerConnection(
       createConnection({
         peerId: "client_one",
         capabilities: ["scheduled_actions"],
         sendEnvelope: (envelope) => forwarded.push(envelope),
+      }),
+    );
+    router.registerConnection(
+      createConnection({
+        peerId: "client_two",
+        capabilities: ["remote_window", "thread_detail"],
+        sendEnvelope: (envelope) => unauthorized.push(envelope),
       }),
     );
     const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
@@ -637,6 +645,7 @@ describe("DesktopFederationRuntime", () => {
         targetInstanceId: "client_one",
       },
     ]);
+    expect(unauthorized).toEqual([]);
   });
 
   it("publishes remote backend events with the source peer as federation target", () => {
@@ -846,6 +855,59 @@ describe("DesktopFederationRuntime", () => {
         hopCount: 1,
       },
     ]);
+  });
+
+  it("relays scheduler lifecycle events only to scheduler-capable siblings", () => {
+    const authorized: FederationProtocolEnvelope[] = [];
+    const unauthorized: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({ localInstanceId: "gateway_one" });
+    router.registerConnection(createConnection({ peerId: "client_one" }));
+    router.registerConnection(createConnection({
+      peerId: "client_two",
+      capabilities: ["remote_window", "thread_detail"],
+      sendEnvelope: (envelope) => unauthorized.push(envelope),
+    }));
+    router.registerConnection(createConnection({
+      peerId: "client_three",
+      capabilities: ["scheduled_actions"],
+      sendEnvelope: (envelope) => authorized.push(envelope),
+    }));
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.localInstanceId = "gateway_one";
+    runtime.router = router;
+
+    runtime.publishRemoteBackendEvent({
+      id: "scheduled-event-1",
+      kind: "notification",
+      method: FEDERATION_BACKEND_EVENT_METHOD,
+      params: {
+        backend: "codex",
+        notification: {
+          method: "thread/scheduledAction/updated",
+          params: {
+            action: {
+              id: "scheduled-1",
+              backend: "codex",
+              threadId: "thread-1",
+              kind: "turn",
+              origin: "desktop",
+              status: "scheduled",
+              scheduledFor: 3_000,
+              displayText: "private prompt",
+              createdAt: 1_000,
+              updatedAt: 1_000,
+            },
+          },
+        },
+      },
+      protocolVersion: FEDERATION_PROTOCOL_VERSION,
+      sourceInstanceId: "client_one",
+      targetInstanceId: "gateway_one",
+      createdAt: 2_000,
+    }, "client_one");
+
+    expect(authorized).toHaveLength(1);
+    expect(unauthorized).toEqual([]);
   });
 
   it("routes unmatched relayed responses back to the target peer", async () => {

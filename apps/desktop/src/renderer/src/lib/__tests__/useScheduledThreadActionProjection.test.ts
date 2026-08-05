@@ -115,7 +115,7 @@ describe("scheduled thread action projections", () => {
     });
     expect(listScheduledThreadActions).toHaveBeenCalledWith({
       federationTarget: undefined,
-      terminalUpdatedAfter: undefined,
+      includeFailed: true,
     });
 
     await act(async () => {
@@ -134,6 +134,42 @@ describe("scheduled thread action projections", () => {
 
     projection.unmount();
     vi.useRealTimers();
+  });
+
+  it("hydrates failures retained before the renderer subscribed", async () => {
+    const { result } = renderHook(() => useComposerDraftStore());
+    const listScheduledThreadActions = vi.fn(async () => ({
+      actions: [scheduledAction({
+        status: "failed",
+        errorMessage: "failed before mount",
+      })],
+      observedAt: 2_000,
+    }));
+    const projection = renderHook(() => useScheduledThreadActionProjection({
+      composerDraftStore: result.current,
+      desktopApi: {
+        listScheduledThreadActions,
+        onAgentEvent: () => () => undefined,
+      } as unknown as DesktopApi,
+    }));
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(listScheduledThreadActions).toHaveBeenCalledWith({
+      federationTarget: undefined,
+      includeFailed: true,
+    });
+    expect(
+      result.current.getQueuedTurns("thread:codex:thread-1"),
+    ).toEqual([
+      expect.objectContaining({
+        errorMessage: "failed before mount",
+        failedScheduledActionId: "scheduled-1",
+      }),
+    ]);
+    projection.unmount();
   });
 
   it("keeps review display copy separate from its editable slash command", () => {

@@ -31,6 +31,9 @@ export class FederationRouter {
     private readonly options: {
       localInstanceId: FederationInstanceId;
       methodCapabilities?: Record<string, FederationCapability>;
+      additionalRequiredCapabilities?: (
+        envelope: FederationRequestEnvelope,
+      ) => readonly FederationCapability[];
       maxHopCount?: number;
       now?: () => number;
     },
@@ -78,6 +81,21 @@ export class FederationRouter {
         code: deadlineFailure.error.code,
         message: deadlineFailure.error.message,
       };
+    }
+
+    if (params.envelope.kind === "request") {
+      const additionalCapabilityFailure = this.checkAdditionalCapabilities(
+        params.envelope,
+        params.sourcePeerId,
+      );
+      if (additionalCapabilityFailure) {
+        this.replyToSource(params.sourcePeerId, additionalCapabilityFailure);
+        return {
+          status: "rejected",
+          code: additionalCapabilityFailure.error.code,
+          message: additionalCapabilityFailure.error.message,
+        };
+      }
     }
 
     if (
@@ -221,6 +239,24 @@ export class FederationRouter {
     return this.errorEnvelope(envelope, {
       code: "capability_denied",
       message: `Method ${envelope.method} requires ${requiredCapability}.`,
+    });
+  }
+
+  private checkAdditionalCapabilities(
+    envelope: FederationRequestEnvelope,
+    sourcePeerId: FederationInstanceId | undefined,
+  ): FederationErrorEnvelope | undefined {
+    if (!sourcePeerId) return undefined;
+    const requiredCapabilities =
+      this.options.additionalRequiredCapabilities?.(envelope) ?? [];
+    const source = this.connections.get(sourcePeerId);
+    const denied = requiredCapabilities.find(
+      (capability) => !source?.capabilities.includes(capability),
+    );
+    if (!denied) return undefined;
+    return this.errorEnvelope(envelope, {
+      code: "capability_denied",
+      message: `Method ${envelope.method} requires ${denied}.`,
     });
   }
 

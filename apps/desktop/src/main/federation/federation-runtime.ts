@@ -105,6 +105,7 @@ import {
   FEDERATION_BACKEND_EVENT_METHOD,
   FEDERATION_BACKEND_METHOD_CAPABILITIES,
   FEDERATION_ENVIRONMENT_SETUP_PROGRESS_METHOD,
+  additionalFederationBackendCapabilities,
   FederationRemoteBackendClient,
   registerFederationBackendHandlers,
   type FederationBackendEventNotification,
@@ -488,6 +489,7 @@ export class DesktopFederationRuntime {
     const router = new FederationRouter({
       localInstanceId,
       methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+      additionalRequiredCapabilities: additionalFederationBackendCapabilities,
     });
     registerFederationBackendHandlers({
       router,
@@ -1122,13 +1124,13 @@ export class DesktopFederationRuntime {
     if (!router) return;
 
     for (const connection of router.listConnections()) {
+      const scheduledActionEvent =
+        event.notification.method === "thread/scheduledAction/updated";
       if (
-        !connection.capabilities.includes("remote_window") &&
-        !connection.capabilities.includes("thread_detail") &&
-        !(
-          event.notification.method === "thread/scheduledAction/updated"
-          && connection.capabilities.includes("scheduled_actions")
-        )
+        scheduledActionEvent
+          ? !connection.capabilities.includes("scheduled_actions")
+          : !connection.capabilities.includes("remote_window")
+            && !connection.capabilities.includes("thread_detail")
       ) {
         continue;
       }
@@ -1198,14 +1200,14 @@ export class DesktopFederationRuntime {
     const notification = envelope as FederationBackendEventNotification & typeof envelope;
     for (const connection of router.listConnections()) {
       if (connection.peerId === sourcePeerId) continue;
+      const scheduledActionEvent =
+        notification.params.notification.method
+          === "thread/scheduledAction/updated";
       if (
-        !connection.capabilities.includes("remote_window") &&
-        !connection.capabilities.includes("thread_detail") &&
-        !(
-          notification.params.notification.method
-            === "thread/scheduledAction/updated"
-          && connection.capabilities.includes("scheduled_actions")
-        )
+        scheduledActionEvent
+          ? !connection.capabilities.includes("scheduled_actions")
+          : !connection.capabilities.includes("remote_window")
+            && !connection.capabilities.includes("thread_detail")
       ) {
         continue;
       }

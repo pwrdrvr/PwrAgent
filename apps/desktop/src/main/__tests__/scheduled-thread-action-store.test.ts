@@ -58,6 +58,34 @@ describe("ScheduledThreadActionStore", () => {
     expect(store.nextScheduledAt()).toBe(20_000);
   });
 
+  it("lists retained failures without hydrating unrelated terminal history", () => {
+    for (const [id, scheduledFor] of [
+      ["active", 10_000],
+      ["failed", 20_000],
+      ["cancelled", 30_000],
+    ] as const) {
+      store.create({
+        id,
+        backend: "codex",
+        threadId: "thread-1",
+        kind: "turn",
+        origin: "desktop",
+        scheduledFor,
+        displayText: id,
+        turn: { input: [{ type: "text", text: id }] },
+        now: 1_000,
+      });
+    }
+    store.claim("failed", claim(2_000));
+    store.markFailed("failed", "backend offline", 3_000, "instance-1");
+    store.cancel("cancelled", 4_000);
+
+    expect(store.list({ includeFailed: true })).toEqual([
+      expect.objectContaining({ id: "active", status: "scheduled" }),
+      expect.objectContaining({ id: "failed", status: "failed" }),
+    ]);
+  });
+
   it("atomically claims due actions once", () => {
     store.create({
       id: "scheduled-1",
@@ -137,6 +165,10 @@ describe("ScheduledThreadActionStore", () => {
     store.markQueued("scheduled-1", "queue-1", 10_001, "instance-1");
 
     expect(store.recoverExpiredClaims(20_000)).toEqual([]);
+    expect(store.expiredClaimOwnerIds(40_000)).toEqual(["instance-1"]);
+    expect(
+      store.recoverExpiredClaims(40_000, new Set(["instance-1"])),
+    ).toEqual([]);
     expect(store.recoverExpiredClaims(40_000)).toEqual([
       expect.objectContaining({
         id: "scheduled-1",

@@ -105,6 +105,8 @@ export type ListScheduledThreadActionsRequest = {
   federationTarget?: FederationTarget;
   threadId?: ThreadIdentifier;
   includeTerminal?: boolean;
+  /** Include retained failed actions alongside all active actions. */
+  includeFailed?: boolean;
   /** Include terminal actions changed at or after this timestamp alongside all active actions. */
   terminalUpdatedAfter?: number;
 };

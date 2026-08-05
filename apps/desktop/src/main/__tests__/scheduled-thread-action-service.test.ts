@@ -234,7 +234,7 @@ describe("ScheduledThreadActionService", () => {
     expect(harness.submitTurn).toHaveBeenCalledTimes(2);
   });
 
-  it("does not recover claims held by another live scheduler instance", async () => {
+  it("does not recover an expired claim while its scheduler process is alive", async () => {
     const harness = createHarness(20_000);
     store.create({
       id: "scheduled-1",
@@ -259,14 +259,20 @@ describe("ScheduledThreadActionService", () => {
     });
     first.start();
     await vi.waitFor(() => expect(harness.submitTurn).toHaveBeenCalledTimes(1));
+    let ownerAlive = true;
+    let secondHeartbeat: (() => void) | undefined;
     const second = new ScheduledThreadActionService({
       registry: harness.registry,
       store,
-      now: () => 20_001,
+      now: () => 100_000,
       ownerId: "instance-2",
+      isOwnerAlive: (ownerId) => ownerId === "instance-1" && ownerAlive,
       setTimer: vi.fn(() => ({}) as ReturnType<typeof setTimeout>),
       clearTimer: vi.fn(),
-      setLeaseTimer: vi.fn(() => ({}) as ReturnType<typeof setInterval>),
+      setLeaseTimer: vi.fn((callback) => {
+        secondHeartbeat = callback;
+        return {} as ReturnType<typeof setInterval>;
+      }),
       clearLeaseTimer: vi.fn(),
     });
 
@@ -274,6 +280,11 @@ describe("ScheduledThreadActionService", () => {
     await Promise.resolve();
 
     expect(harness.submitTurn).toHaveBeenCalledTimes(1);
+    expect(store.get("scheduled-1")?.status).toBe("queued");
+
+    ownerAlive = false;
+    secondHeartbeat?.();
+    await vi.waitFor(() => expect(harness.submitTurn).toHaveBeenCalledTimes(2));
     expect(store.get("scheduled-1")?.status).toBe("queued");
     second.dispose();
     first.dispose();

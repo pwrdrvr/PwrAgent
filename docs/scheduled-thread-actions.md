@@ -46,14 +46,15 @@ behind one active turn keep distinct pending IDs; the registry chains them
 across review terminal events instead of deduplicating or starting them
 concurrently.
 
-Only expired claims are recovered, so a second live process sharing the profile
-cannot take another instance's work. Queued registry work with an expired lease
-is re-admitted from its durable action because the registry FIFO itself is in
-memory. An expired action in the narrower `dispatching` window is marked failed
-instead: whether the backend accepted it is ambiguous, so automatic replay
-could duplicate operator work. Due actions are claimed individually immediately
-before backend admission; later due work stays scheduled if an earlier admission
-blocks.
+Only expired claims whose scheduler owner is no longer live are recovered,
+so a second live process sharing the profile cannot take another instance's
+work after a system suspend or event-loop stall. Queued registry work with a
+recoverable expired lease is re-admitted from its durable action because the
+registry FIFO itself is in memory. A recoverable expired action in the narrower
+`dispatching` window is marked failed instead: whether the backend accepted it
+is ambiguous, so automatic replay could duplicate operator work. Due actions
+are claimed individually immediately before backend admission; later due work
+stays scheduled if an earlier admission blocks.
 
 ## Surface contract
 

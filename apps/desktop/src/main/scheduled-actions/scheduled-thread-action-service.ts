@@ -21,6 +21,10 @@ const DEFAULT_CLAIM_LEASE_MS = 30_000;
 const DEFAULT_CLAIM_HEARTBEAT_MS = 10_000;
 const HISTORY_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
 const HISTORY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+// A wall-clock lease can expire while macOS suspends every app instance. Keep
+// exact same-process ownership available so a sibling service cannot recover
+// work from a scheduler that is still active after resume.
+const activeSchedulerOwnerIds = new Set<string>();
 
 export type ScheduledThreadActionServiceOptions = {
   registry: DesktopBackendRegistry;
@@ -33,6 +37,7 @@ export type ScheduledThreadActionServiceOptions = {
   clearTimer?: (timer: ReturnType<typeof setTimeout>) => void;
   ownerId?: string;
   claimLeaseMs?: number;
+  isOwnerAlive?: (ownerId: string) => boolean;
   setLeaseTimer?: (
     callback: () => void,
     delayMs: number,
@@ -76,11 +81,9 @@ export class ScheduledThreadActionService {
   start(): void {
     if (this.running) return;
     this.running = true;
+    activeSchedulerOwnerIds.add(this.ownerId);
     this.cleanupExpiredHistory();
-    const recovered = this.options.store.recoverExpiredClaims(this.now());
-    for (const action of recovered) {
-      void this.publish(action);
-    }
+    this.recoverExpiredClaims(this.now());
     this.unsubscribeRegistryEvents = this.options.registry.onEvent((event) =>
       this.handleRegistryEvent(event),
     );
@@ -91,6 +94,7 @@ export class ScheduledThreadActionService {
 
   dispose(): void {
     this.running = false;
+    activeSchedulerOwnerIds.delete(this.ownerId);
     if (this.timer) {
       this.clearTimer(this.timer);
       this.timer = null;
@@ -453,8 +457,7 @@ export class ScheduledThreadActionService {
         params.now,
         params.leaseExpiresAt,
       );
-      const recovered = this.options.store.recoverExpiredClaims(params.now);
-      for (const action of recovered) void this.publish(action);
+      this.recoverExpiredClaims(params.now);
       this.cleanupExpiredHistory();
       void this.evaluateDueActions();
     };
@@ -463,6 +466,20 @@ export class ScheduledThreadActionService {
       DEFAULT_CLAIM_HEARTBEAT_MS,
     ) ?? setInterval(callback, DEFAULT_CLAIM_HEARTBEAT_MS);
     this.leaseTimer.unref?.();
+  }
+
+  private recoverExpiredClaims(now: number): void {
+    const protectedOwnerIds = new Set(
+      this.options.store.expiredClaimOwnerIds(now).filter((ownerId) =>
+        this.options.isOwnerAlive?.(ownerId)
+          ?? isSchedulerOwnerAlive(ownerId)
+      ),
+    );
+    const recovered = this.options.store.recoverExpiredClaims(
+      now,
+      protectedOwnerIds,
+    );
+    for (const action of recovered) void this.publish(action);
   }
 
   private cleanupExpiredHistory(): void {
@@ -528,6 +545,22 @@ function mutationResponseForAction(
     );
   }
   return { action };
+}
+
+function isSchedulerOwnerAlive(ownerId: string): boolean {
+  const match = /^scheduler:(\d+):/.exec(ownerId);
+  if (!match) return false;
+  const pid = Number(match[1]);
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  // A process can create a replacement scheduler without exiting. For the
+  // current process, require the exact owner token instead of PID alone.
+  if (pid === process.pid) return activeSchedulerOwnerIds.has(ownerId);
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
 }
 
 function queueEntryIdForAction(actionId: string): string {

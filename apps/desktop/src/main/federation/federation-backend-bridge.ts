@@ -17,6 +17,7 @@ import type {
   CreateScheduledThreadActionRequest,
   CodexEnvironmentSetupProgressEvent,
   FederationCapability,
+  FederationRequestEnvelope,
   ForkThreadRequest,
   ForkThreadResponse,
   GetNavigationSnapshotRequest,
@@ -171,6 +172,14 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.openApplication]: "remote_window",
   [FEDERATION_BACKEND_METHODS.trustCodexProject]: "environment_actions",
 };
+
+export function additionalFederationBackendCapabilities(
+  envelope: FederationRequestEnvelope,
+): readonly FederationCapability[] {
+  if (envelope.method !== FEDERATION_BACKEND_METHODS.steerTurn) return [];
+  const request = envelope.params as Partial<SteerTurnRequest> | undefined;
+  return request?.fallback ? ["scheduled_actions"] : [];
+}
 
 export type FederationBackendOperations = {
   getNavigationSnapshot(
