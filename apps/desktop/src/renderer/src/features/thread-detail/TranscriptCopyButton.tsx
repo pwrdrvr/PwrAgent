@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { copyText } from "../../lib/copy-text";
+import { copyText, copyTextWithHtml } from "../../lib/copy-text";
 import type { DesktopApi } from "../../lib/desktop-api";
 
 type TranscriptCopyButtonProps = {
@@ -7,7 +7,11 @@ type TranscriptCopyButtonProps = {
   children?: ReactNode;
   className?: string;
   copiedLabel?: string;
-  desktopApi?: Pick<DesktopApi, "copyText">;
+  desktopApi?: Pick<DesktopApi, "copyText" | "copyRichText">;
+  // When provided, the copy also carries a text/html clipboard flavor so
+  // rich-text targets paste formatted content. Lazy so per-message HTML is
+  // only rendered on click.
+  html?: () => string;
   label: string;
   text: string;
 };
@@ -31,7 +35,7 @@ export function TranscriptCopyButton(props: TranscriptCopyButtonProps) {
   }): void => {
     event.preventDefault();
     event.stopPropagation();
-    void copyText(props.text, props.desktopApi)
+    void copyWithOptionalHtml(props)
       .then(() => {
         if (resetTimerRef.current) {
           window.clearTimeout(resetTimerRef.current);
@@ -80,4 +84,23 @@ export function TranscriptCopyButton(props: TranscriptCopyButtonProps) {
       {props.children}
     </button>
   );
+}
+
+async function copyWithOptionalHtml(
+  props: Pick<TranscriptCopyButtonProps, "desktopApi" | "html" | "text">,
+): Promise<void> {
+  if (props.html) {
+    let html: string | undefined;
+    try {
+      html = props.html();
+    } catch {
+      // Fall back to the plain-text copy path below.
+    }
+    if (html !== undefined) {
+      await copyTextWithHtml(props.text, html, props.desktopApi);
+      return;
+    }
+  }
+
+  await copyText(props.text, props.desktopApi);
 }

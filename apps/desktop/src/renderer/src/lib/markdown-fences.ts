@@ -45,6 +45,46 @@ export function replaceBacktickFenceLine(line: string, length: number): string {
 // inner fence's bare close; we instead lengthen the outer open + its real close
 // so the inner fence is preserved as content. Only fires when a nested
 // language fence was actually seen, so well-formed blocks pass through untouched.
+// Escape list items whose entire content is a hyphen run (`- ----`), which
+// remark would otherwise parse as a thematic break instead of literal text.
+// Fence-aware so hyphen runs inside code blocks stay untouched.
+export function protectComposerHyphenListItems(markdown: string): string {
+  const lines = markdown.split("\n");
+  let fence: { marker: "`" | "~"; length: number } | undefined;
+
+  return lines
+    .map((line) => {
+      const fenceLine = line.match(/^\s{0,3}(`{3,}|~{3,})(.*)$/);
+      if (fenceLine) {
+        const sequence = fenceLine[1] ?? "";
+        const marker = sequence[0] as "`" | "~";
+        const trailing = fenceLine[2] ?? "";
+        if (!fence) {
+          fence = { marker, length: sequence.length };
+        } else if (
+          marker === fence.marker &&
+          sequence.length >= fence.length &&
+          trailing.trim() === ""
+        ) {
+          fence = undefined;
+        }
+        return line;
+      }
+
+      if (fence) {
+        return line;
+      }
+
+      const hyphenOnlyListItem = line.match(/^(\s{0,3})-\s+(-+)(\s*)$/);
+      if (!hyphenOnlyListItem || (hyphenOnlyListItem[2]?.length ?? 0) < 2) {
+        return line;
+      }
+
+      return `${hyphenOnlyListItem[1]}- \\${hyphenOnlyListItem[2]}${hyphenOnlyListItem[3]}`;
+    })
+    .join("\n");
+}
+
 export function repairNestedLanguageFences(markdown: string): string {
   if (!markdown.includes("```")) {
     return markdown;

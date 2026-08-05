@@ -1,4 +1,4 @@
-import { clipboard, contextBridge, ipcRenderer, webUtils } from "electron";
+import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type {
   AgentEvent,
   ApplyThreadModelMigrationRequest,
@@ -391,6 +391,8 @@ import {
   APP_UPDATE_RELEASES_READ_CHANNEL,
   APP_UPDATE_STATUS_EVENT_CHANNEL,
   APP_UPDATE_STATUS_READ_CHANNEL,
+  CLIPBOARD_WRITE_RICH_TEXT_CHANNEL,
+  CLIPBOARD_WRITE_TEXT_CHANNEL,
   APP_SERVER_LIST_SKILLS_CHANNEL,
   APP_SERVER_GET_PR_AUTO_DISPATCH_BUDGET_STATUS_CHANNEL,
   APP_SERVER_RESUME_PR_AUTO_DISPATCH_BUDGET_CHANNEL,
@@ -654,8 +656,13 @@ const isDevelopment = process.env.NODE_ENV !== "production";
 
 const desktopApi = Object.freeze({
   ping: () => "pong",
+  // Clipboard writes go through the main process: the sandboxed preload's
+  // `electron` module does not expose `clipboard`.
   copyText: async (text: string): Promise<void> => {
-    clipboard.writeText(text);
+    await ipcRenderer.invoke(CLIPBOARD_WRITE_TEXT_CHANNEL, text);
+  },
+  copyRichText: async (payload: { text: string; html: string }): Promise<void> => {
+    await ipcRenderer.invoke(CLIPBOARD_WRITE_RICH_TEXT_CHANNEL, payload);
   },
   readAppMetadata: async (): Promise<AppMetadata> =>
     await ipcRenderer.invoke(APP_METADATA_READ_CHANNEL),

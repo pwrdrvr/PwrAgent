@@ -27,6 +27,7 @@ import { useThreadLinks, type ResolvedThreadLink } from "../../lib/thread-links"
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { ThreadChip } from "./ThreadChip";
 import { TranscriptImage } from "./TranscriptImage";
+import { renderMarkdownToClipboardHtml } from "./markdown-clipboard-html";
 import { ThreadMarkdown } from "./ThreadMarkdown";
 import { TranscriptCopyButton } from "./TranscriptCopyButton";
 import { SubAgentDetailsModal } from "./context-panels/SubAgentDetailsModal";
@@ -37,7 +38,11 @@ type TranscriptMessageProps = {
   applications?: DesktopApplicationsSnapshot;
   desktopApi?: Pick<
     DesktopApi,
-    "copyText" | "openApplication" | "openMarkdownFileViewer" | "readMarkdownFile"
+    | "copyText"
+    | "copyRichText"
+    | "openApplication"
+    | "openMarkdownFileViewer"
+    | "readMarkdownFile"
   >;
   fileViewerContext?: MarkdownFileViewerContext;
   message: AppServerThreadMessageEntry;
@@ -709,7 +714,7 @@ function formatByteSize(bytes: number | undefined): string | undefined {
 
 function renderMessageHeader(params: {
   continuation: boolean;
-  desktopApi?: Pick<DesktopApi, "copyText">;
+  desktopApi?: Pick<DesktopApi, "copyText" | "copyRichText">;
   message: AppServerThreadMessageEntry;
   sourceThreadLink?: ResolvedThreadLink;
   threadLinks: ReturnType<typeof useThreadLinks>;
@@ -757,6 +762,7 @@ function renderMessageHeader(params: {
             className="transcript-copy-button--message"
             copiedLabel="Copied message"
             desktopApi={params.desktopApi}
+            html={() => renderMarkdownToClipboardHtml(params.text)}
             label="Copy message"
             text={params.text}
           />

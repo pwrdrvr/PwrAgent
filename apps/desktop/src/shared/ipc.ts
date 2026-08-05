@@ -435,3 +435,9 @@ export const PROFILES_WRITE_SECRETS_CHANNEL = "profiles:write-secrets";
 // native submenu at a button. Unused on macOS/Linux.
 export const APP_MENU_MODEL_CHANNEL = "app-menu:model";
 export const APP_MENU_POPUP_CHANNEL = "app-menu:popup";
+
+// Clipboard writes run in the main process: the sandboxed preload's `electron`
+// module does not expose `clipboard`, so preload-side calls throw and the
+// renderer would silently degrade to browser clipboard fallbacks.
+export const CLIPBOARD_WRITE_TEXT_CHANNEL = "clipboard:write-text";
+export const CLIPBOARD_WRITE_RICH_TEXT_CHANNEL = "clipboard:write-rich-text";

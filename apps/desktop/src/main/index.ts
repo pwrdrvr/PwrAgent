@@ -15,6 +15,10 @@ import {
   registerAppMetadataIpcHandlers,
 } from "./ipc/app-metadata";
 import {
+  disposeClipboardIpcHandlers,
+  registerClipboardIpcHandlers,
+} from "./ipc/clipboard";
+import {
   checkForAppUpdatesNow,
   disposeAppUpdateIpcHandlers,
   initAutoUpdater,
@@ -412,6 +416,7 @@ function disposeMainProcessResourcesSync(): void {
   disposeApplicationIpcHandlers();
   disposeAutomationIpcHandlers();
   disposeAppMetadataIpcHandlers();
+  disposeClipboardIpcHandlers();
   disposeAppUpdateIpcHandlers();
   disposeComposerDraftIpcHandlers();
   disposeDiagnosticsIpcHandlers();
@@ -891,6 +896,7 @@ export function bootstrapApp(): void {
     registerApplicationIpcHandlers();
     registerAutomationIpcHandlers();
     registerAppMetadataIpcHandlers();
+    registerClipboardIpcHandlers();
     registerAppUpdateIpcHandlers({
       requestQuit: async (performQuit) =>
         await requestQuit({ performQuit, source: "update-install" }),

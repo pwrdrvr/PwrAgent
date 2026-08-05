@@ -74,6 +74,7 @@ type TranscriptListProps = {
   desktopApi?: Pick<
     DesktopApi,
     | "copyText"
+    | "copyRichText"
     | "openApplication"
     | "openMarkdownFileViewer"
     | "readMarkdownFile"

@@ -822,6 +822,39 @@ describe("TranscriptList", () => {
     });
   });
 
+  it("copies both markdown text and rendered HTML when the rich clipboard bridge exists", async () => {
+    const copyText = vi.fn(async () => undefined);
+    const copyRichText = vi.fn(async () => undefined);
+    const messageText = "Yes — but **not via** a second official path.";
+
+    render(
+      <TranscriptList
+        desktopApi={{ copyText, copyRichText }}
+        entries={[
+          {
+            type: "message",
+            id: "message-rich-copy",
+            role: "assistant",
+            text: messageText,
+          },
+        ]}
+        loading={false}
+        loadingMore={false}
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy message" }));
+
+    await waitFor(() => {
+      expect(copyRichText).toHaveBeenCalledWith({
+        text: messageText,
+        html: expect.stringContaining("<strong>not via</strong>"),
+      });
+    });
+    expect(copyText).not.toHaveBeenCalled();
+  });
+
   it("preserves boundary whitespace when copying a full message", async () => {
     const copyText = vi.fn(async () => undefined);
     const messageText = "\n  Replay this prompt exactly.  \n\n";
