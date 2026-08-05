@@ -271,7 +271,9 @@ export function authenticateFederationReconnect(params: {
 
   const connectedPeer: FederationPeerSummary & { pinnedPublicKeyPem?: string } = {
     ...peer,
-    capabilities: policy.capabilities,
+    // Reconnect capabilities are the negotiated session subset, not a new
+    // authorization allowlist. Preserve capabilities omitted by this session.
+    capabilities: [...peer.capabilities],
     protocolVersion: params.protocolVersion,
     status: "connected",
     lastConnectedAt: params.now,

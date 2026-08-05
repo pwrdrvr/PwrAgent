@@ -871,7 +871,7 @@ describe("DesktopFederationRuntime", () => {
         id: "response-1",
         kind: "response",
         requestId: "request-1",
-        protocolVersion: 2,
+        protocolVersion: 1,
         sourceInstanceId: "client_two",
         targetInstanceId: "client_one",
         createdAt: 2_000,

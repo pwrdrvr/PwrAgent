@@ -43,12 +43,6 @@ export function evaluateFederationSessionPolicy(params: {
   }
 
   const allowed = new Set(params.peer.capabilities);
-  // Protocol v1 admitted scheduled-action RPCs under turn_control. Preserve
-  // that existing trust decision while v2 gives the surface its own explicit
-  // capability. Newly enrolled peers persist scheduled_actions directly.
-  if (allowed.has("turn_control")) {
-    allowed.add("scheduled_actions");
-  }
   const denied = params.requestedCapabilities.some(
     (capability) => !allowed.has(capability),
   );

@@ -92,7 +92,7 @@ describe("federation enrollment", () => {
       gatewayInstanceId: "gateway_one",
       peerInstanceId: "client_one",
       publicKeyPem: keyPair.publicKeyPem,
-      protocolVersion: 2,
+      protocolVersion: 1,
       nonce: "nonce-1",
       capabilities,
     });
@@ -108,7 +108,7 @@ describe("federation enrollment", () => {
         role: "client",
         publicKeyPem: keyPair.publicKeyPem,
         capabilities,
-        protocolVersion: 2,
+        protocolVersion: 1,
         nonce: "nonce-1",
         signatureBase64: signFederationMessage({
           privateKeyPem: keyPair.privateKeyPem,
@@ -149,7 +149,7 @@ describe("federation enrollment", () => {
       gatewayInstanceId: "gateway_one",
       peerInstanceId: "client_one",
       publicKeyPem: keyPair.publicKeyPem,
-      protocolVersion: 2,
+      protocolVersion: 1,
       nonce: "nonce-1",
       capabilities: ["remote_window"],
     });
@@ -166,7 +166,7 @@ describe("federation enrollment", () => {
           role: "client",
           publicKeyPem: keyPair.publicKeyPem,
           capabilities: ["remote_window"],
-          protocolVersion: 2,
+          protocolVersion: 1,
           nonce: "nonce-1",
           signatureBase64: signFederationMessage({
             privateKeyPem: keyPair.privateKeyPem,
@@ -191,7 +191,7 @@ describe("federation enrollment", () => {
           role: "client",
           publicKeyPem: keyPair.publicKeyPem,
           capabilities: ["remote_window"],
-          protocolVersion: 2,
+          protocolVersion: 1,
           nonce: "nonce-1",
           signatureBase64: signFederationMessage({
             privateKeyPem: keyPair.privateKeyPem,
@@ -215,7 +215,7 @@ describe("federation enrollment", () => {
         role: "client",
         publicKeyPem: keyPair.publicKeyPem,
         capabilities: ["remote_window"],
-        protocolVersion: 2,
+        protocolVersion: 1,
         nonce: "nonce-1",
         signatureBase64: signFederationMessage({
           privateKeyPem: keyPair.privateKeyPem,
@@ -236,7 +236,7 @@ describe("federation enrollment", () => {
           role: "client",
           publicKeyPem: keyPair.publicKeyPem,
           capabilities: ["remote_window"],
-          protocolVersion: 2,
+          protocolVersion: 1,
           nonce: "nonce-2",
           signatureBase64: signFederationMessage({
             privateKeyPem: keyPair.privateKeyPem,
@@ -260,7 +260,7 @@ describe("federation enrollment", () => {
         role: "client",
         status: "disconnected",
         capabilities: ["remote_window"],
-        protocolVersion: 2,
+        protocolVersion: 1,
         pinnedPublicKeyPem: keyPair.publicKeyPem,
       },
     });
@@ -269,7 +269,7 @@ describe("federation enrollment", () => {
       gatewayInstanceId: "gateway_one",
       peerInstanceId: "client_one",
       publicKeyPem: keyPair.publicKeyPem,
-      protocolVersion: 2,
+      protocolVersion: 1,
       nonce: "nonce-3",
       capabilities: ["remote_window"],
     });
@@ -279,7 +279,7 @@ describe("federation enrollment", () => {
         store,
         gatewayInstanceId: "gateway_one",
         peerInstanceId: "client_one",
-        protocolVersion: 2,
+        protocolVersion: 1,
         nonce: "nonce-3",
         requestedCapabilities: ["remote_window"],
         signatureBase64: signFederationMessage({
@@ -298,7 +298,7 @@ describe("federation enrollment", () => {
         store,
         gatewayInstanceId: "gateway_one",
         peerInstanceId: "client_one",
-        protocolVersion: 2,
+        protocolVersion: 1,
         nonce: "nonce-4",
         requestedCapabilities: ["gateway_relay"],
         signatureBase64: signFederationMessage({
@@ -313,7 +313,7 @@ describe("federation enrollment", () => {
     });
   });
 
-  it("persists the v2 scheduler capability when a v1 turn-control peer reconnects", () => {
+  it("preserves capabilities omitted from a reconnect session request", () => {
     const keyPair = generateFederationIdentityKeyPair();
     store.upsertPeer({
       updatedAt: 1_000,
@@ -322,50 +322,42 @@ describe("federation enrollment", () => {
         label: "Client",
         role: "client",
         status: "disconnected",
-        capabilities: ["turn_control"],
+        capabilities: ["remote_window", "federated_search"],
         protocolVersion: 1,
         pinnedPublicKeyPem: keyPair.publicKeyPem,
       },
     });
-    const requestedCapabilities = [
-      "turn_control",
-      "scheduled_actions",
-    ] as const;
     const message = buildFederationProofMessage({
       purpose: "reconnect",
       gatewayInstanceId: "gateway_one",
       peerInstanceId: "client_one",
       publicKeyPem: keyPair.publicKeyPem,
-      protocolVersion: 2,
-      nonce: "nonce-scheduler-v2",
-      capabilities: requestedCapabilities,
+      protocolVersion: 1,
+      nonce: "nonce-subset",
+      capabilities: ["remote_window"],
     });
 
-    expect(
-      authenticateFederationReconnect({
-        store,
-        gatewayInstanceId: "gateway_one",
-        peerInstanceId: "client_one",
-        protocolVersion: 2,
-        nonce: "nonce-scheduler-v2",
-        requestedCapabilities,
-        signatureBase64: signFederationMessage({
-          privateKeyPem: keyPair.privateKeyPem,
-          message,
-        }),
-        now: 2_000,
+    const result = authenticateFederationReconnect({
+      store,
+      gatewayInstanceId: "gateway_one",
+      peerInstanceId: "client_one",
+      protocolVersion: 1,
+      nonce: "nonce-subset",
+      requestedCapabilities: ["remote_window"],
+      signatureBase64: signFederationMessage({
+        privateKeyPem: keyPair.privateKeyPem,
+        message,
       }),
-    ).toMatchObject({
+      now: 2_000,
+    });
+
+    expect(result).toMatchObject({
       accepted: true,
-      capabilities: ["turn_control", "scheduled_actions"],
-      peer: {
-        capabilities: ["turn_control", "scheduled_actions"],
-        protocolVersion: 2,
-      },
+      capabilities: ["remote_window"],
     });
-    expect(store.getPeer("client_one")).toMatchObject({
-      capabilities: ["turn_control", "scheduled_actions"],
-      protocolVersion: 2,
-    });
+    expect(store.getPeer("client_one")?.capabilities).toEqual([
+      "remote_window",
+      "federated_search",
+    ]);
   });
 });

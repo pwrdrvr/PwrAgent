@@ -71,7 +71,7 @@ command catalog. All messaging mutations are scoped to the conversation's
 bound thread before resolving an action ID.
 
 Federated actions cross the RPC boundary before admission and are stored and
-timed by the thread-owning instance. Federation protocol v2 exposes all five
+timed by the thread-owning instance. Federation protocol v1 exposes all five
 operations under the dedicated `scheduled_actions` capability. A remote window
 or messaging binding must never fall back to a same-named local thread when the
 peer is unavailable or does not advertise that capability.

@@ -17,7 +17,7 @@ describe("federation health", () => {
       role: "client",
       status: "connected",
       capabilities: ["thread_navigation"],
-      protocolVersion: 2,
+      protocolVersion: 1,
       endpoint: "wss://pwragent.example.com/federation",
       pinnedPublicKeyPem: "secret-public-key",
     } as FederationPeerSummary & { pinnedPublicKeyPem: string };
@@ -47,7 +47,7 @@ describe("federation health", () => {
       status: "connected",
       capabilities: ["thread_navigation"],
       canRevoke: undefined,
-      protocolVersion: 2,
+      protocolVersion: 1,
       endpoint: "wss://pwragent.example.com/federation",
       profileName: undefined,
       lastConnectedAt: undefined,

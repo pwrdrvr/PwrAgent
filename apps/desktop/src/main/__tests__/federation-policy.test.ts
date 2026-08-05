@@ -8,7 +8,7 @@ describe("federation policy", () => {
     expect(
       evaluateFederationSessionPolicy({
         peer: undefined,
-        protocolVersion: 2,
+        protocolVersion: 1,
         requestedCapabilities: ["remote_window"],
       }),
     ).toMatchObject({
@@ -26,7 +26,7 @@ describe("federation policy", () => {
           revokedAt: 1_000,
           capabilities: ["remote_window"],
         },
-        protocolVersion: 2,
+        protocolVersion: 1,
         requestedCapabilities: ["remote_window"],
       }),
     ).toMatchObject({
@@ -60,7 +60,7 @@ describe("federation policy", () => {
           status: "connected",
           capabilities: ["remote_window"],
         },
-        protocolVersion: 2,
+        protocolVersion: 1,
         requestedCapabilities: ["gateway_relay"],
       }),
     ).toMatchObject({
@@ -69,7 +69,7 @@ describe("federation policy", () => {
     });
   });
 
-  it("upgrades existing turn-control trust to the explicit scheduler capability", () => {
+  it("requires scheduler authorization independently from turn control", () => {
     expect(
       evaluateFederationSessionPolicy({
         peer: {
@@ -80,12 +80,12 @@ describe("federation policy", () => {
           capabilities: ["turn_control"],
           protocolVersion: 1,
         },
-        protocolVersion: 2,
-        requestedCapabilities: ["turn_control", "scheduled_actions"],
+        protocolVersion: 1,
+        requestedCapabilities: ["scheduled_actions"],
       }),
-    ).toEqual({
-      accepted: true,
-      capabilities: ["turn_control", "scheduled_actions"],
+    ).toMatchObject({
+      accepted: false,
+      failure: { code: "capability_denied" },
     });
   });
 
