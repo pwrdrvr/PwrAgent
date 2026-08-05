@@ -2811,6 +2811,109 @@ describe("useThreadNavigation", () => {
     });
   });
 
+  it("clears the viewer-persisted launchpad after remote materialization", async () => {
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "remote-instance",
+    };
+    (window as unknown as {
+      __pwragentFederationTarget?: unknown;
+    }).__pwragentFederationTarget = federationTarget;
+    const directoryKey = "directory:/remote/PwrAgent";
+    const launchpad: NavigationLaunchpadDraft = {
+      directoryKey,
+      directoryKind: "directory",
+      directoryLabel: "PwrAgent",
+      directoryPath: "/remote/PwrAgent",
+      backend: "codex",
+      executionMode: "default",
+      prompt: "Submitted remotely",
+      workMode: "local",
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    const defaults = {
+      backend: "codex" as const,
+      executionMode: "default" as const,
+    };
+    const initialSnapshot: NavigationSnapshot = {
+      backend: "all",
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [
+        {
+          key: directoryKey,
+          kind: "directory",
+          label: "PwrAgent",
+          path: "/remote/PwrAgent",
+          threadKeys: [],
+          needsAttentionCount: 0,
+          launchpad,
+        },
+      ],
+      launchpadDefaults: defaults,
+    };
+    const getNavigationSnapshot = vi
+      .fn()
+      .mockResolvedValueOnce(initialSnapshot)
+      .mockResolvedValue({
+        ...initialSnapshot,
+        inboxThreadKeys: ["codex:remote-thread-new"],
+        threads: [
+          {
+            id: "remote-thread-new",
+            title: "Submitted remotely",
+            titleSource: "derived" as const,
+            source: "codex" as const,
+            linkedDirectories: [],
+            inbox: { inInbox: true, reason: "new-thread" as const },
+            updatedAt: 3,
+          },
+        ],
+        directories: [
+          {
+            ...initialSnapshot.directories[0]!,
+            threadKeys: ["codex:remote-thread-new"],
+            launchpad: undefined,
+          },
+        ],
+      });
+    const materializeDirectoryLaunchpad = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "remote-thread-new",
+      executionMode: "default" as const,
+      workMode: "local" as const,
+    }));
+    const resetDirectoryLaunchpad = vi.fn(async () => ({
+      directoryKey,
+      defaults,
+    }));
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      materializeDirectoryLaunchpad,
+      resetDirectoryLaunchpad,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.selectedLaunchpad?.prompt).toBe("Submitted remotely");
+    });
+
+    await act(async () => {
+      await result.current.materializeDirectoryLaunchpad(directoryKey);
+    });
+
+    expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({ federationTarget }),
+    );
+    expect(resetDirectoryLaunchpad).toHaveBeenCalledWith({ directoryKey });
+    expect(result.current.selectedLaunchpad).toBeUndefined();
+  });
+
   it("shows a newly materialized detached worktree thread as HEAD before the backend snapshot catches up", async () => {
     const getNavigationSnapshot = vi.fn(async () => ({
       backend: "all" as const,

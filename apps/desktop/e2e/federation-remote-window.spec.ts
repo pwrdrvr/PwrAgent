@@ -114,6 +114,13 @@ test.describe("federation remote window", () => {
       gateway = await startInProcessFederationGateway({
         instanceLabel: "E2E Gateway",
         remotePty: { cwd: ownerPtyCwd },
+        directories: [
+          {
+            key: "directory:/remote/FixtureRepo",
+            label: "FixtureRepo",
+            path: "/remote/FixtureRepo",
+          },
+        ],
         threads: [
           {
             id: "remote-thread-1",
@@ -341,6 +348,61 @@ test.describe("federation remote window", () => {
           timeout: 15_000,
         })
         .toBeNull();
+
+      // Remote launchpad drafts live in the viewer's overlay store while the
+      // user composes. After a successful remote materialization, reopening
+      // the same launchpad must start empty instead of rehydrating the message
+      // that was already submitted.
+      await remote.getByRole("tab", { name: "directories" }).click();
+      const openRemoteLaunchpad = remote.getByRole("button", {
+        name: "Open new thread launchpad for FixtureRepo",
+      });
+      await openRemoteLaunchpad.click();
+      const submittedPrompt = "Create a remote thread exactly once";
+      await remote.getByRole("textbox", { name: "New thread" }).fill(submittedPrompt);
+      await expect
+        .poll(
+          async () => await remote.evaluate(async (directoryKey) => {
+            const api = (window as typeof window & {
+              pwragent?: {
+                ensureDirectoryLaunchpad?: (request: unknown) => Promise<{
+                  launchpad: { prompt: string };
+                }>;
+              };
+            }).pwragent;
+            if (!api?.ensureDirectoryLaunchpad) return "missing-api";
+            const response = await api.ensureDirectoryLaunchpad({
+              directoryKey,
+              directoryKind: "directory",
+              directoryLabel: "FixtureRepo",
+              directoryPath: "/remote/FixtureRepo",
+            });
+            return response.launchpad.prompt;
+          }, "directory:/remote/FixtureRepo"),
+          { timeout: 15_000 },
+        )
+        .toBe(submittedPrompt);
+      await remote.getByRole("button", { name: "Start thread" }).click();
+      await expect
+        .poll(
+          () => gateway!.calls.filter(
+            (call) => call.method === "materializeDirectoryLaunchpad",
+          ).length,
+          { timeout: 30_000 },
+        )
+        .toBe(1);
+      await expect(
+        remote.getByRole("heading", { level: 2, name: submittedPrompt }),
+      ).toBeVisible({ timeout: 30_000 });
+
+      await openRemoteLaunchpad.click();
+      await expect(
+        remote.getByTestId("composer-tiptap-input"),
+      ).toHaveAttribute("data-value", "");
+      await remoteRowOne.click();
+      await expect(
+        remote.getByRole("textbox", { name: "Reply" }),
+      ).toBeVisible();
 
       // The gateway only ever served federation RPCs — no local PR
       // refresh or other local-only method leaked across the wire.

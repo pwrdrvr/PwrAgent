@@ -6,6 +6,8 @@ import type {
   AppServerReadThreadRequest,
   AppServerReadThreadResponse,
   AppServerThreadSummary,
+  MaterializeDirectoryLaunchpadRequest,
+  MaterializeDirectoryLaunchpadResponse,
   NavigationSnapshot,
   SetThreadPinRequest,
   SetThreadPinResponse,
@@ -44,6 +46,12 @@ export type GatewayThreadSeed = {
   pinnedRank?: string;
 };
 
+export type GatewayDirectorySeed = {
+  key: string;
+  label: string;
+  path: string;
+};
+
 export type InProcessFederationGateway = {
   /** `pwragent-federation:<base64url>` invite for the Electron client. */
   invite: string;
@@ -75,6 +83,7 @@ export type InProcessFederationGateway = {
  */
 export async function startInProcessFederationGateway(params: {
   threads: GatewayThreadSeed[];
+  directories?: GatewayDirectorySeed[];
   instanceLabel?: string;
   /**
    * Serve remote PTY sessions with a REAL shell spawned via node-pty inside
@@ -93,19 +102,28 @@ export async function startInProcessFederationGateway(params: {
   const noiseStatic = generateNoiseStaticKeyPair();
   const gatewayInstanceId = `e2e_gateway_${randomBytes(4).toString("hex")}`;
   const instanceLabel = params.instanceLabel ?? "E2E Gateway";
+  const directories = params.directories ?? [];
+  const threads = [...params.threads];
 
   const calls: { method: string; params: unknown }[] = [];
   const pinnedRankByThreadId = new Map<string, string | undefined>(
-    params.threads.map((thread) => [thread.id, thread.pinnedRank]),
+    threads.map((thread) => [thread.id, thread.pinnedRank]),
   );
 
   const threadSummaries = (): AppServerThreadSummary[] =>
-    params.threads.map((thread) => ({
+    threads.map((thread) => ({
       id: thread.id,
       title: thread.title,
       titleSource: "explicit" as const,
       source: "codex" as const,
-      linkedDirectories: [],
+      linkedDirectories: directories[0]
+        ? [{
+            id: directories[0].path,
+            label: directories[0].label,
+            path: directories[0].path,
+            kind: "local" as const,
+          }]
+        : [],
       updatedAt: thread.updatedAt,
       createdAt: thread.updatedAt,
       ...(pinnedRankByThreadId.get(thread.id) !== undefined
@@ -121,8 +139,15 @@ export async function startInProcessFederationGateway(params: {
       ...thread,
       inbox: { inInbox: true },
     })),
-    inboxThreadKeys: params.threads.map((thread) => `codex:${thread.id}`),
-    directories: [],
+    inboxThreadKeys: threads.map((thread) => `codex:${thread.id}`),
+    directories: directories.map((directory) => ({
+      key: directory.key,
+      kind: "directory" as const,
+      label: directory.label,
+      path: directory.path,
+      threadKeys: threads.map((thread) => `codex:${thread.id}`),
+      needsAttentionCount: 0,
+    })),
     launchpadDefaults: {
       backend: "codex",
       executionMode: "default",
@@ -146,7 +171,7 @@ export async function startInProcessFederationGateway(params: {
       request: AppServerReadThreadRequest,
     ): Promise<AppServerReadThreadResponse> {
       calls.push({ method: "readThread", params: request });
-      const thread = params.threads.find((entry) => entry.id === request.threadId);
+      const thread = threads.find((entry) => entry.id === request.threadId);
       const text = `Remote transcript for ${thread?.title ?? request.threadId}.`;
       return {
         backend: "codex",
@@ -206,6 +231,28 @@ export async function startInProcessFederationGateway(params: {
     async listScheduledThreadActions() {
       calls.push({ method: "listScheduledThreadActions", params: {} });
       return { actions: [] };
+    },
+    async materializeDirectoryLaunchpad(
+      request: MaterializeDirectoryLaunchpadRequest,
+    ): Promise<MaterializeDirectoryLaunchpadResponse> {
+      calls.push({ method: "materializeDirectoryLaunchpad", params: request });
+      const threadId = `remote-created-${threads.length + 1}`;
+      const prompt =
+        request.input?.find((item) => item.type === "text")?.text.trim()
+        ?? request.launchpad?.prompt.trim()
+        ?? "";
+      threads.unshift({
+        id: threadId,
+        title: prompt || "Remote created thread",
+        updatedAt: Date.now(),
+      });
+      return {
+        backend: request.launchpad?.backend ?? "codex",
+        threadId,
+        executionMode: request.launchpad?.executionMode ?? "default",
+        workMode: request.launchpad?.workMode ?? "local",
+        turnId: `turn-${threadId}`,
+      };
     },
   } as unknown as FederationBackendOperations;
 
