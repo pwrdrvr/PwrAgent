@@ -92,4 +92,40 @@ describe("TranscriptActivity", () => {
     expect(screen.getByText("Read `apps/desktop/src/main.ts`")).toBeInTheDocument();
     expect(screen.getByText(`Read \`${outsidePath}\``)).toBeInTheDocument();
   });
+
+  it("does not replace a matching path prefix inside an outside path", () => {
+    const projectPath = "/repo/PwrAgnt";
+    const outsidePath = "/repo/PwrAgnt-old/file.ts";
+
+    render(
+      <TranscriptActivity
+        directoryPaths={[projectPath]}
+        entry={{
+          type: "activity",
+          id: "shared-prefix-paths",
+          summary: `Compared \`${projectPath}\` with \`${outsidePath}\``,
+          details: [
+            {
+              id: "project-path",
+              kind: "read",
+              label: `Read \`${projectPath}\``,
+              path: projectPath,
+            },
+            {
+              id: "outside-path",
+              kind: "read",
+              label: `Read \`${outsidePath}\``,
+              path: outsidePath,
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", {
+        name: `Compared \`.\` with \`${outsidePath}\``,
+      }),
+    ).toBeInTheDocument();
+  });
 });

@@ -282,19 +282,52 @@ function formatActivityText(
   details: AppServerThreadActivityEntry["details"],
   directoryPaths: string[] | undefined,
 ): string {
-  let displayText = text;
-  const pathDetails = details
+  const paths = details
     .filter((detail): detail is typeof detail & { path: string } => Boolean(detail.path))
-    .sort((left, right) => right.path.length - left.path.length);
+    .map((detail) => ({
+      absolutePath: detail.path,
+      displayPath: formatPathRelativeToDirectories(detail.path, directoryPaths),
+    }))
+    .sort((left, right) => right.absolutePath.length - left.absolutePath.length);
+  let displayText = "";
+  let cursor = 0;
 
-  for (const detail of pathDetails) {
-    const displayPath = formatPathRelativeToDirectories(detail.path, directoryPaths);
-    if (displayPath !== detail.path) {
-      displayText = displayText.replaceAll(detail.path, displayPath);
+  while (cursor < text.length) {
+    const matchingPath = paths.find(
+      (path) =>
+        text.startsWith(path.absolutePath, cursor)
+        && hasPathTextBoundaries(text, cursor, path.absolutePath.length),
+    );
+    if (matchingPath) {
+      displayText += matchingPath.displayPath;
+      cursor += matchingPath.absolutePath.length;
+      continue;
     }
+    displayText += text[cursor];
+    cursor += 1;
   }
 
   return displayText;
+}
+
+function hasPathTextBoundaries(
+  text: string,
+  start: number,
+  length: number,
+): boolean {
+  const before = text[start - 1];
+  const after = text[start + length];
+  return isPathTextBoundary(before, "before") && isPathTextBoundary(after, "after");
+}
+
+function isPathTextBoundary(
+  character: string | undefined,
+  position: "before" | "after",
+): boolean {
+  if (character === undefined || /[\s`'"()[\]{}<>,;:!?=|]/.test(character)) {
+    return true;
+  }
+  return position === "after" && (character === "/" || character === "\\");
 }
 
 function formatActivityDetailStatus(
