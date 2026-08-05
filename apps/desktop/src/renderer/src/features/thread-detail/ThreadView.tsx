@@ -32,6 +32,7 @@ import type {
   DesktopChatReplyComposer,
   DesktopProviderModelDefaults,
   DesktopProviderThreadModelMigration,
+  FederationRemoteTarget,
   HandoffThreadWorkspaceRequest,
   MarkdownFileViewerContext,
   MessagingChannelKind,
@@ -54,10 +55,7 @@ import {
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { agentEventMatchesThread } from "../../lib/federated-thread-events";
-import {
-  readRendererFederationLabel,
-  readRendererFederationTarget,
-} from "../../lib/federation-window";
+import { readRendererFederationTarget } from "../../lib/federation-window";
 import type { IntegratedTerminalsController } from "../../lib/useIntegratedTerminals";
 import type { ThreadContextWindowState } from "../../lib/useThreadSessionState";
 import type { PendingForkEnvironmentSetup } from "../../lib/useThreadNavigation";
@@ -851,6 +849,8 @@ function activityHasFileDiff(entry: AppServerThreadActivityEntry | undefined): b
 }
 
 export type ThreadViewProps = {
+  activeFederationOwnerLabel?: string;
+  activeFederationTarget?: FederationRemoteTarget;
   activeTurnId?: string;
   activeTurnStartedAt?: number;
   /**
@@ -2892,8 +2892,8 @@ export function ThreadView(props: ThreadViewProps) {
                   ) === true
                 }
                 remoteOwnerLabel={
-                  readRendererFederationTarget()
-                    ? readRendererFederationLabel() ?? "the remote machine"
+                  props.activeFederationTarget
+                    ? props.activeFederationOwnerLabel ?? "the remote machine"
                     : undefined
                 }
                 onEnabledChange={async (enabled) => {
