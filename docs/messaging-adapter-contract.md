@@ -153,6 +153,16 @@ durable `D...` conversation ID in its delivery result. This uses the existing
 `chat:write` scope and does not require core workflow code to persist or inspect
 Slack-specific identifiers.
 
+When a provider can identify the native conversation where replies to a newly
+delivered surface will arrive, it should populate
+`MessagingDeliveryResult.continuation`. The continuation contains a normalized
+channel plus opaque routing state; workflow code may persist it as an ordinary
+binding but must not recover it by parsing the delivered surface state. Slack
+uses this to bind the private message's `D...` channel and root timestamp back
+to the originating Agent. Replies in that message's native thread therefore
+survive restarts and route deterministically, while a top-level DM remains
+available to the configured default Agent.
+
 ## Attachment Policy
 
 Providers expose metadata and transport:

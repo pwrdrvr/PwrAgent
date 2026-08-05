@@ -667,6 +667,11 @@ export class SlackAdapter implements SlackProviderAdapter {
         outcome: updated ? "updated" : "presented",
         channel: this.channel,
         deliveredAt: this.now(),
+        continuation: slackReplyContinuation({
+          channelId,
+          channelRef: target.channelRef,
+          rootTs: target.threadTs ?? ts,
+        }),
         surface: {
           channel: this.channel,
           id: ts,
@@ -1262,7 +1267,11 @@ export class SlackAdapter implements SlackProviderAdapter {
    */
   private async deliverChunkedTextMessage(params: {
     intent: Extract<MessagingSurfaceIntent, { kind: "message" }>;
-    target: { channelId: string; threadTs?: string };
+    target: {
+      channelId: string;
+      channelRef: MessagingChannelRef;
+      threadTs?: string;
+    };
     chunks: string[];
   }): Promise<MessagingDeliveryResult> {
     let firstSurface: MessagingSurfaceRef | undefined;
@@ -1312,6 +1321,16 @@ export class SlackAdapter implements SlackProviderAdapter {
         outcome: "presented",
         channel: this.channel,
         deliveredAt: this.now(),
+        ...(firstSurface
+          ? {
+              continuation: slackReplyContinuation({
+                channelId: readSlackSurfaceState(firstSurface)?.channelId
+                  ?? params.target.channelId,
+                channelRef: params.target.channelRef,
+                rootTs: params.target.threadTs ?? firstSurface.id,
+              }),
+            }
+          : {}),
         ...(firstSurface ? { surface: firstSurface } : {}),
       };
     } catch (error) {
@@ -2667,6 +2686,40 @@ function isSlackGroupDm(params: { channelType?: string }): boolean {
 
 function callbackBindingId(intent: MessagingSurfaceIntent): string | undefined {
   return intent.audit?.bindingId ?? intent.bindingId;
+}
+
+function slackReplyContinuation(params: {
+  channelId: string;
+  channelRef: MessagingChannelRef;
+  rootTs: string;
+}): NonNullable<MessagingDeliveryResult["continuation"]> {
+  const sourceConversation = params.channelRef.conversation;
+  return {
+    channel: {
+      channel: "slack",
+      conversation: {
+        id: params.channelId,
+        kind: "thread",
+        parentId: params.rootTs,
+        parentConversationId: params.channelId,
+        ...(sourceConversation.workspaceId
+          ? { workspaceId: sourceConversation.workspaceId }
+          : {}),
+        ...(sourceConversation.title
+          ? { parentTitle: sourceConversation.title }
+          : {}),
+      },
+    },
+    routingState: {
+      opaque: {
+        channelId: params.channelId,
+        threadTs: params.rootTs,
+        ...(sourceConversation.workspaceId
+          ? { teamId: sourceConversation.workspaceId }
+          : {}),
+      },
+    },
+  };
 }
 
 function slackCallbackRecordId(

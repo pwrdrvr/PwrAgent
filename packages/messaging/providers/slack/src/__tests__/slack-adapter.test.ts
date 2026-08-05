@@ -64,6 +64,7 @@ function fakeApi(spies: {
   deleteErrors?: Error[];
   publishedHomes?: Array<{ userId: string; view: SlackHomeView }>;
   posted?: unknown[];
+  postedChannel?: string;
   replies?: Record<string, string>;
   updated?: unknown[];
   users?: Record<string, { displayName?: string; realName?: string; username?: string }>;
@@ -104,7 +105,10 @@ function fakeApi(spies: {
     filesInfo: async () => undefined,
     postMessage: async (params) => {
       spies.posted?.push(params);
-      return { channel: params.channel, ts: "1712023032.123456" };
+      return {
+        channel: spies.postedChannel ?? params.channel,
+        ts: "1712023032.123456",
+      };
     },
     publishHomeView: async (params) => {
       spies.publishedHomes?.push(params);
@@ -428,7 +432,7 @@ describe("SlackAdapter", () => {
     const adapter = new SlackAdapter({
       config: baseConfig,
       callbackHandleStore: fakeStore(),
-      api: fakeApi({ posted }),
+      api: fakeApi({ posted, postedChannel: "D012PRIVATE0" }),
       socketClient: fakeSocket(),
       now: () => 1_700_000_000_000,
     });
@@ -482,6 +486,10 @@ describe("SlackAdapter", () => {
       kind: "message",
       createdAt: 1,
       role: "assistant",
+      attribution: {
+        label: "Signals Agent · Private response",
+        hint: "Reply in this message's thread to continue with this agent.",
+      },
       parts: [{ type: "text", text: "Private details", markdown: "markdown" }],
       audit: {
         actor: { platformUserId: "U012ABCDEF0" },
@@ -498,6 +506,25 @@ describe("SlackAdapter", () => {
       },
     })).resolves.toMatchObject({
       channel: "slack",
+      continuation: {
+        channel: {
+          channel: "slack",
+          conversation: {
+            id: "D012PRIVATE0",
+            kind: "thread",
+            parentConversationId: "D012PRIVATE0",
+            parentId: "1712023032.123456",
+            workspaceId: "T012ABCDEF0",
+          },
+        },
+        routingState: {
+          opaque: {
+            channelId: "D012PRIVATE0",
+            teamId: "T012ABCDEF0",
+            threadTs: "1712023032.123456",
+          },
+        },
+      },
       outcome: "presented",
     });
 
@@ -505,6 +532,17 @@ describe("SlackAdapter", () => {
       expect.objectContaining({
         channel: "U012ABCDEF0",
         text: "Private details",
+        blocks: expect.arrayContaining([
+          {
+            type: "context",
+            elements: [{
+              type: "plain_text",
+              text:
+                "Signals Agent · Private response · Reply in this message's thread to continue with this agent.",
+              emoji: true,
+            }],
+          },
+        ]),
       }),
     ]);
   });

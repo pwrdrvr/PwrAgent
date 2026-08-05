@@ -211,6 +211,24 @@ export function buildSlackBlocksForIntent(params: {
     });
   }
 
+  if (params.intent.kind === "message" && params.intent.attribution) {
+    blocks.push({
+      type: "context",
+      elements: [
+        {
+          type: "plain_text",
+          text: truncateSlackPlainText(
+            [params.intent.attribution.label, params.intent.attribution.hint]
+              .filter((value): value is string => Boolean(value))
+              .join(" · "),
+            2_000,
+          ),
+          emoji: true,
+        },
+      ],
+    });
+  }
+
   if (params.intent.kind === "message") {
     for (const [index, part] of params.intent.parts.entries()) {
       if (part.type !== "image" || !/^https:\/\//iu.test(part.url)) {

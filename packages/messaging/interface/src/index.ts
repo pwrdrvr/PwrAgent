@@ -803,6 +803,10 @@ export type MessagingBaseSurfaceIntent = {
 
 export type MessagingMessageIntent = MessagingBaseSurfaceIntent & {
   kind: "message";
+  attribution?: {
+    label: string;
+    hint?: string;
+  };
   parts: MessagingContentPart[];
   role?: "assistant" | "user" | "system";
 };
@@ -1147,6 +1151,15 @@ export type MessagingDeliveryResult = {
   outcome: MessagingDeliveryOutcome;
   channel: MessagingChannelKind;
   surface?: MessagingSurfaceRef;
+  /**
+   * Native conversation where a reply to the delivered surface arrives.
+   * Providers populate this only when they can identify a stable reply route
+   * without workflow code parsing opaque adapter state.
+   */
+  continuation?: {
+    channel: MessagingChannelRef;
+    routingState?: MessagingAdapterState;
+  };
   errorMessage?: string;
   /**
    * Structured provider rate-limit feedback for this delivery attempt.

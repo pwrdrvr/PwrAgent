@@ -15032,6 +15032,12 @@ export class MessagingController {
       routingState: privateConversation.routingState,
     };
     const sourceBinding = origin.origin.deliveryBinding ?? origin.origin.binding;
+    const sourceThread = sourceBinding
+      ? await this.resolveBoundThreadSummary(sourceBinding)
+      : undefined;
+    const attributionLabel = sourceThread?.agentName
+      ?? sourceThread?.title
+      ?? "PwrAgent Agent";
     const result = await this.deliver(
       {
         id: this.newIntentId("private-response"),
@@ -15039,6 +15045,10 @@ export class MessagingController {
         bindingId: sourceBinding?.id,
         createdAt: this.now(),
         role: "assistant",
+        attribution: {
+          label: `${attributionLabel} · Private response`,
+          hint: "Reply in this message's thread to continue with this agent.",
+        },
         parts: [{ type: "text", text, markdown: "markdown" }],
       },
       undefined,
@@ -15086,6 +15096,37 @@ export class MessagingController {
             "The private response was delivered, but an existing source stream could not be retracted. Further source output remains suppressed.",
         },
       };
+    }
+    if (sourceBinding && result.continuation) {
+      try {
+        await this.bindChannelToThread(
+          {
+            ...privateEvent,
+            id: `${privateEvent.id}:continuation`,
+            channel: result.continuation.channel,
+            routingState: result.continuation.routingState,
+          },
+          {
+            backend: request.context.backend,
+            threadId: request.context.threadId,
+            targetKind: sourceBinding.targetKind ?? "agent_thread",
+          },
+        );
+      } catch (error) {
+        this.logger.warn?.("messaging private response continuation bind failed", {
+          backend: request.context.backend,
+          error: error instanceof Error ? error.message : String(error),
+          threadId: request.context.threadId,
+        });
+        return {
+          ok: false,
+          error: {
+            code: "internal_error",
+            message:
+              "The private response was delivered, but replies to it could not be routed back to this Agent. Further source output remains suppressed.",
+          },
+        };
+      }
     }
     return {
       ok: true,

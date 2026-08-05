@@ -1734,6 +1734,45 @@ describe("MessagingController", () => {
         workspaceId: "T012WORKSPACE",
       },
     };
+    let harnessDelivered: MessagingSurfaceIntent[] | undefined;
+    const deliver = options?.deliver ?? (async (intent: MessagingSurfaceIntent) => {
+      harnessDelivered?.push(intent);
+      const surface = {
+        channel: "slack" as const,
+        id: `surface:${intent.id}`,
+        state: {
+          opaque: {
+            channelId: "D012HAROLD",
+            ts: `surface:${intent.id}`,
+          },
+        },
+      };
+      return {
+        channel: "slack" as const,
+        continuation: {
+          channel: {
+            channel: "slack" as const,
+            conversation: {
+              id: "D012HAROLD",
+              kind: "thread" as const,
+              parentConversationId: "D012HAROLD",
+              parentId: surface.id,
+              workspaceId: "T012WORKSPACE",
+            },
+          },
+          routingState: {
+            opaque: {
+              channelId: "D012HAROLD",
+              teamId: "T012WORKSPACE",
+              threadTs: surface.id,
+            },
+          },
+        },
+        deliveredAt: 1000,
+        outcome: "presented" as const,
+        surface,
+      };
+    });
     const resolvePrivateConversation = vi.fn(async () => ({
       channel: "slack" as const,
       conversation: {
@@ -1766,7 +1805,7 @@ describe("MessagingController", () => {
       ...(options?.deliveryBudget
         ? { deliveryBudget: options.deliveryBudget }
         : {}),
-      ...(options?.deliver ? { deliver: options.deliver } : {}),
+      deliver,
       navigation,
       ...(options?.now ? { now: options.now } : {}),
       resolvePrivateConversation,
@@ -1778,6 +1817,7 @@ describe("MessagingController", () => {
         ? {}
         : { streamingResponsesDefault: options.streamingResponsesDefault }),
     });
+    harnessDelivered = harness.delivered;
     await harness.store.upsertBinding({
       id: "binding-slack-signals",
       authorizedActorIds: ["user-1"],
@@ -1844,6 +1884,10 @@ describe("MessagingController", () => {
             }),
           }),
         }),
+        attribution: {
+          label: "Signals Agent · Private response",
+          hint: "Reply in this message's thread to continue with this agent.",
+        },
         kind: "message",
         parts: [
           expect.objectContaining({
@@ -1855,6 +1899,26 @@ describe("MessagingController", () => {
         }),
       }),
     ]);
+    const continuationBinding = (
+      await harness.store.findActiveBindingsForThread({
+        backend: "codex",
+        threadId: "thread-1",
+      })
+    ).find((binding) => binding.channel.conversation.id === "D012HAROLD");
+    expect(continuationBinding).toMatchObject({
+      authorizedActorIds: ["user-1"],
+      channel: {
+        channel: "slack",
+        conversation: {
+          id: "D012HAROLD",
+          kind: "thread",
+          parentConversationId: "D012HAROLD",
+          parentId: expect.stringContaining("surface:private-response"),
+        },
+      },
+      targetKind: "agent_thread",
+      threadId: "thread-1",
+    });
 
     await harness.controller.handleBackendEvent({
       backend: "codex",
@@ -1908,6 +1972,26 @@ describe("MessagingController", () => {
     expect(
       harness.delivered.filter((intent) => intent.kind === "message"),
     ).toHaveLength(1);
+
+    if (!continuationBinding) {
+      throw new Error("Expected the private reply continuation binding");
+    }
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("I approved the AWS login.", {
+        channel: continuationBinding.channel,
+        routingState: continuationBinding.routingState,
+      }),
+    );
+    expect(harness.startTurn).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        threadId: "thread-1",
+        input: [expect.objectContaining({
+          text: "I approved the AWS login.",
+          type: "text",
+        })],
+      }),
+    );
   });
 
   it("dismisses an existing source stream before private delivery succeeds", async () => {

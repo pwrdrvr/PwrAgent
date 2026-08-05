@@ -148,6 +148,13 @@ private delivery suppresses the source-conversation final response. Provider
 user IDs and DM routing remain validated and opaque inside the adapter; the
 Agent cannot select an arbitrary recipient.
 
+Private messages carry controller-generated Agent attribution rather than a
+provider-specific sender-name override. When delivery returns a normalized
+reply continuation, the controller persists that exact native thread as a
+binding to the originating Agent. Thread replies then route back to that Agent;
+top-level DMs deliberately keep their normal default-Agent routing instead of
+using ambiguous "last Agent wins" state.
+
 ## 1:1 controller:adapter mapping
 
 Each adapter gets its own controller. Backend events broadcast to all controllers in parallel; each one decides whether the event is relevant to any of its bindings and renders to its own adapter.
