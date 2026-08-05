@@ -16212,11 +16212,16 @@ function newThreadOptionsForSession(
 function canCreateNewThreadWorktree(
   directory: NavigationDirectorySummary | undefined,
 ): boolean {
+  if (!directory?.path || directory.kind !== "directory") {
+    return false;
+  }
+  if (directory.gitStatus?.worktreeCreationAvailable !== undefined) {
+    return directory.gitStatus.worktreeCreationAvailable;
+  }
   return Boolean(
-    directory?.path &&
-      directory.kind === "directory" &&
-      (directory.gitStatus?.currentBranch ||
-        (directory.gitStatus?.branches?.length ?? 0) > 0),
+    directory.gitStatus?.currentBranch
+    || (directory.gitStatus?.baseBranches?.length ?? 0) > 0
+    || (directory.gitStatus?.branches?.length ?? 0) > 0,
   );
 }
 
@@ -16376,6 +16381,7 @@ function resolveNewThreadBaseBranch(
   return (
     sanitizeBranchLabel(session.branchName) ??
     sanitizeBranchLabel(selectedDirectory?.gitStatus?.defaultBranch) ??
+    sanitizeBranchLabel(selectedDirectory?.gitStatus?.baseBranches?.[0]) ??
     sanitizeBranchLabel(selectedDirectory?.gitStatus?.branches?.[0]) ??
     sanitizeBranchLabel(selectedDirectory?.gitStatus?.currentBranch) ??
     "main"
@@ -16390,6 +16396,7 @@ function newThreadBranchChoices(
   const defaultBranch = resolveNewThreadBaseBranch(session, navigation, directory);
   const branches = [
     defaultBranch,
+    ...(directory?.gitStatus?.baseBranches ?? []),
     ...(directory?.gitStatus?.branches ?? []),
     directory?.gitStatus?.currentBranch,
   ].flatMap((branch) => {

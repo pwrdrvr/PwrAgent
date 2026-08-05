@@ -151,6 +151,79 @@ describe("thread orchestration tool contracts", () => {
     expect(result.groupedUnderThreadId).toBeUndefined();
   });
 
+  it("models empty unborn repositories as Git workspaces that cannot allocate worktrees", () => {
+    const origin = {
+      sourceBackend: "codex",
+      sourceThreadId: "thread-parent",
+      seedMode: "clean",
+      groupingMode: "none",
+      createdAt: 1_773_000_000_000,
+      workspace: {
+        mode: "project_local",
+        cwd: "/repo",
+        branch: "main",
+        git: {
+          kind: "git_local",
+          repositoryState: "unborn",
+          worktreeCreationAvailable: false,
+          unavailableReason:
+            "Worktrees are unavailable because this repository has no published base branch yet. Create the initial commit in the Local checkout and publish the default branch. Worktrees will be enabled once a remote base branch is available.",
+        },
+      },
+    } satisfies ThreadHandoffOrigin;
+
+    expect(JSON.parse(JSON.stringify(origin))).toEqual(origin);
+    expect(origin.workspace.git.kind).toBe("git_local");
+    expect(origin.workspace.git.worktreeCreationAvailable).toBe(false);
+  });
+
+  it("models unborn repositories with fetched refs as worktree-capable", () => {
+    const origin = {
+      sourceBackend: "codex",
+      sourceThreadId: "thread-parent",
+      seedMode: "clean",
+      groupingMode: "none",
+      createdAt: 1_773_000_000_000,
+      workspace: {
+        mode: "project_local",
+        cwd: "/repo",
+        branch: "main",
+        git: {
+          kind: "git_local",
+          repositoryState: "unborn",
+          worktreeCreationAvailable: true,
+        },
+      },
+    } satisfies ThreadHandoffOrigin;
+
+    expect(JSON.parse(JSON.stringify(origin))).toEqual(origin);
+    expect(origin.workspace.git.repositoryState).toBe("unborn");
+    expect(origin.workspace.git.worktreeCreationAvailable).toBe(true);
+  });
+
+  it("models Git inspection failures without misclassifying the workspace", () => {
+    const origin = {
+      sourceBackend: "codex",
+      sourceThreadId: "thread-parent",
+      seedMode: "clean",
+      groupingMode: "none",
+      createdAt: 1_773_000_000_000,
+      workspace: {
+        mode: "project_local",
+        cwd: "/repo",
+        git: {
+          kind: "unavailable",
+          worktreeCreationAvailable: false,
+          unavailableReason:
+            "Git workspace inspection failed: fatal: bad object refs/heads/main",
+        },
+      },
+    } satisfies ThreadHandoffOrigin;
+
+    expect(JSON.parse(JSON.stringify(origin))).toEqual(origin);
+    expect(origin.workspace.git.kind).toBe("unavailable");
+  });
+
   it("models pending same-thread workspace moves separately from task handoffs", () => {
     expect(DEFAULT_MOVE_THREAD_WORKSPACE_STRATEGY).toBe("detached-changes");
 

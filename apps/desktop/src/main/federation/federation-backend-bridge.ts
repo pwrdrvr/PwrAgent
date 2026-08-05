@@ -34,6 +34,8 @@ import type {
   OpenDesktopApplicationResponse,
   QueueThreadExecutionModeRequest,
   QueueThreadExecutionModeResponse,
+  RefreshDirectoryGitStatusesRequest,
+  RefreshDirectoryGitStatusesResponse,
   RenameThreadRequest,
   RenameThreadResponse,
   RunCodexEnvironmentActionRequest,
@@ -88,6 +90,7 @@ export const FEDERATION_BACKEND_METHODS = {
   runCodexEnvironmentAction: "backend.runCodexEnvironmentAction",
   stopCodexEnvironmentAction: "backend.stopCodexEnvironmentAction",
   setCodexThreadEnvironment: "backend.setCodexThreadEnvironment",
+  refreshDirectoryGitStatuses: "backend.refreshDirectoryGitStatuses",
   materializeDirectoryLaunchpad: "backend.materializeDirectoryLaunchpad",
   handoffThreadWorkspace: "backend.handoffThreadWorkspace",
   renameThread: "backend.renameThread",
@@ -140,6 +143,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.runCodexEnvironmentAction]: "environment_actions",
   [FEDERATION_BACKEND_METHODS.stopCodexEnvironmentAction]: "environment_actions",
   [FEDERATION_BACKEND_METHODS.setCodexThreadEnvironment]: "environment_actions",
+  [FEDERATION_BACKEND_METHODS.refreshDirectoryGitStatuses]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.materializeDirectoryLaunchpad]: "environment_actions",
   [FEDERATION_BACKEND_METHODS.handoffThreadWorkspace]: "turn_control",
   [FEDERATION_BACKEND_METHODS.renameThread]: "turn_control",
@@ -204,6 +208,9 @@ export type FederationBackendOperations = {
   setCodexThreadEnvironment(
     request: SetCodexThreadEnvironmentRequest,
   ): Promise<SetCodexThreadEnvironmentResponse>;
+  refreshDirectoryGitStatuses(
+    request: RefreshDirectoryGitStatusesRequest,
+  ): Promise<RefreshDirectoryGitStatusesResponse>;
   materializeDirectoryLaunchpad(
     request: MaterializeDirectoryLaunchpadRequest,
     options?: MaterializeDirectoryLaunchpadOptions,
@@ -396,6 +403,13 @@ export function registerFederationBackendHandlers(params: {
     async (envelope) =>
       await params.backend.setCodexThreadEnvironment(
         envelope.params as SetCodexThreadEnvironmentRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.refreshDirectoryGitStatuses,
+    async (envelope) =>
+      await params.backend.refreshDirectoryGitStatuses(
+        envelope.params as RefreshDirectoryGitStatusesRequest,
       ),
   );
   params.router.registerHandler(
@@ -643,6 +657,15 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   ): Promise<SetCodexThreadEnvironmentResponse> {
     return await this.rpc.request<SetCodexThreadEnvironmentResponse>({
       method: FEDERATION_BACKEND_METHODS.setCodexThreadEnvironment,
+      params: request,
+    });
+  }
+
+  async refreshDirectoryGitStatuses(
+    request: RefreshDirectoryGitStatusesRequest,
+  ): Promise<RefreshDirectoryGitStatusesResponse> {
+    return await this.rpc.request<RefreshDirectoryGitStatusesResponse>({
+      method: FEDERATION_BACKEND_METHODS.refreshDirectoryGitStatuses,
       params: request,
     });
   }

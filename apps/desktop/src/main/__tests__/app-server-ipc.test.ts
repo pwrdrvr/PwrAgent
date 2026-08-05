@@ -47,6 +47,7 @@ const federationMock = vi.hoisted(() => {
       threadId: request.threadId,
       renamedAt: 6_000,
     })),
+    refreshDirectoryGitStatuses: vi.fn(async () => ({ scheduledCount: 1 })),
   };
   return {
     remoteBackend,
@@ -283,6 +284,7 @@ const readDirectoryStatusEntries = vi.fn((directories: Array<{ key: string }>) =
 );
 const readDirectoryGitStatusCache = vi.fn(async () => ({}));
 const writeDirectoryGitStatusCacheEntry = vi.fn(async () => undefined);
+const invalidateDirectoryStatus = vi.fn((_directoryPath?: string) => undefined);
 const readThreadGitWorkingStateCache = vi.fn(async () => ({}));
 const writeThreadGitWorkingStateCacheEntry = vi.fn(async () => undefined);
 type WorkingStateEntry = {
@@ -341,6 +343,7 @@ const setThreadPullRequestStatusToolHandler = vi.fn();
 const setThreadPullRequestCanonicalizer = vi.fn();
 const setThreadPullRequestWatchToolHandler = vi.fn();
 const setThreadPrAutoDispatchHandler = vi.fn();
+const setDirectoryGitStatusWriter = vi.fn();
 const setThreadPrAutoDispatchBatch = vi.fn(async () => undefined);
 const ensureDirectoryLaunchpad = vi.fn(async (request: {
   directoryKey: string;
@@ -690,6 +693,7 @@ vi.mock("../app-server/backend-registry", () => {
     getThreadTranscriptImageRoots,
     readDirectoryStatuses,
     readDirectoryStatusEntries,
+    invalidateDirectoryStatus,
     readWorktreeWorkingStateEntries,
     invalidateWorktreeWorkingState,
     resolveEditCommitStates,
@@ -699,6 +703,7 @@ vi.mock("../app-server/backend-registry", () => {
     setThreadPullRequestCanonicalizer,
     setThreadPullRequestWatchToolHandler,
     setThreadPrAutoDispatchHandler,
+    setDirectoryGitStatusWriter,
     setThreadPrAutoDispatchBatch,
     ensureDirectoryLaunchpad,
     getQueuedExecutionModesSnapshot: () => ({}),
@@ -765,6 +770,7 @@ describe("app server ipc", () => {
     federationMock.remoteBackend.renameThread.mockClear();
     federationMock.remoteBackend.archiveThread.mockClear();
     federationMock.remoteBackend.markThreadSeen.mockClear();
+    federationMock.remoteBackend.refreshDirectoryGitStatuses.mockClear();
     federationMock.runtime.remoteBackend.mockClear();
     listThreads.mockClear();
     readThread.mockClear();
@@ -773,6 +779,7 @@ describe("app server ipc", () => {
     rememberCompleteNavigationSnapshot.mockClear();
     readDirectoryStatuses.mockClear();
     readDirectoryStatusEntries.mockClear();
+    invalidateDirectoryStatus.mockClear();
     readDirectoryGitStatusCache.mockClear();
     readDirectoryGitStatusCache.mockResolvedValue({});
     writeDirectoryGitStatusCacheEntry.mockClear();
@@ -790,6 +797,7 @@ describe("app server ipc", () => {
     setThreadPullRequestCanonicalizer.mockClear();
     setThreadPullRequestWatchToolHandler.mockClear();
     setThreadPrAutoDispatchHandler.mockClear();
+    setDirectoryGitStatusWriter.mockClear();
     setThreadPrAutoDispatchBatch.mockClear();
     ensureDirectoryLaunchpad.mockClear();
     markThreadSeen.mockClear();
@@ -958,6 +966,54 @@ describe("app server ipc", () => {
     expect(setThreadPullRequestCanonicalizer).toHaveBeenCalledWith(
       expect.any(Function),
     );
+  });
+
+  it("persists owner-refreshed directory Git status before publishing it", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+
+    registerAppServerIpcHandlers();
+
+    const writer = setDirectoryGitStatusWriter.mock.calls.at(-1)?.[0];
+    await writer?.({
+      directory: {
+        key: "directory:/owner/repo",
+        kind: "directory",
+        label: "repo",
+        path: "/owner/repo",
+        threadKeys: [],
+        needsAttentionCount: 0,
+      },
+      directoryKey: "directory:/owner/repo",
+      fetchedAt: 2_000,
+      gitStatus: {
+        currentBranch: "main",
+        syncState: "in-sync",
+      },
+    });
+
+    expect(writeDirectoryGitStatusCacheEntry).toHaveBeenCalledExactlyOnceWith({
+      directoryKey: "directory:/owner/repo",
+      directoryPath: "/owner/repo",
+      fetchedAt: 2_000,
+      gitStatus: {
+        currentBranch: "main",
+        syncState: "in-sync",
+      },
+    });
+    expect(publishLocalEvent).toHaveBeenCalledExactlyOnceWith({
+      backend: "codex",
+      notification: {
+        method: "navigation/directoryGitStatus/updated",
+        params: {
+          directoryKey: "directory:/owner/repo",
+          fetchedAt: 2_000,
+          gitStatus: {
+            currentBranch: "main",
+            syncState: "in-sync",
+          },
+        },
+      },
+    });
   });
 
   it("hydrates the thread inspection PR canonicalizer from durable cache", async () => {
@@ -4781,9 +4837,46 @@ describe("app server ipc", () => {
     await vi.waitFor(() => {
       expect(readDirectoryStatusEntries).toHaveBeenCalled();
     });
+    expect(invalidateDirectoryStatus).toHaveBeenCalledExactlyOnceWith(
+      "/repo/app",
+    );
     expect(readDirectoryStatusEntries.mock.calls[0]?.[0]).toEqual([
       expect.objectContaining({ key: "directory:/repo/app" }),
     ]);
+  });
+
+  it("routes remote directory git status refreshes to the owning federation peer", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL } = await import("../../shared/ipc");
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "remote-instance",
+    };
+
+    registerAppServerIpcHandlers();
+
+    await expect(
+      handlers.get(NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL)?.(
+        {},
+        {
+          directoryKeys: ["directory:/remote/repo"],
+          federationTarget,
+          force: true,
+        },
+      ),
+    ).resolves.toEqual({ scheduledCount: 1 });
+
+    expect(federationMock.runtime.remoteBackend).toHaveBeenCalledWith(
+      federationTarget,
+    );
+    expect(
+      federationMock.remoteBackend.refreshDirectoryGitStatuses,
+    ).toHaveBeenCalledExactlyOnceWith({
+      directoryKeys: ["directory:/remote/repo"],
+      force: true,
+    });
+    expect(readDirectoryStatusEntries).not.toHaveBeenCalled();
+    expect(invalidateDirectoryStatus).not.toHaveBeenCalled();
   });
 
   it("coalesces rapid forced directory git status re-enqueues for the same key", async () => {

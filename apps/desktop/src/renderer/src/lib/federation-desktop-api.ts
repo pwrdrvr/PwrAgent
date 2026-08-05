@@ -9,11 +9,18 @@ export function scopeDesktopApiToFederationTarget(
     return desktopApi;
   }
   const openApplication = desktopApi.openApplication;
+  const refreshDirectoryGitStatuses = desktopApi.refreshDirectoryGitStatuses;
 
   return {
     ...desktopApi,
     openApplication: openApplication
       ? async (request) => await openApplication({
+          ...request,
+          federationTarget,
+        })
+      : undefined,
+    refreshDirectoryGitStatuses: refreshDirectoryGitStatuses
+      ? async (request) => await refreshDirectoryGitStatuses({
           ...request,
           federationTarget,
         })

@@ -136,6 +136,9 @@ import {
   type TurnOffCodexFastEverywhereResponse,
   type QueueThreadExecutionModeRequest,
   type QueueThreadExecutionModeResponse,
+  type RefreshDirectoryGitStatusesRequest,
+  type RefreshDirectoryGitStatusesResponse,
+  type NavigationDirectoryGitStatusUpdatedNotification,
   type CancelThreadExecutionModeQueueRequest,
   type CancelThreadExecutionModeQueueResponse,
   type ThreadMessagingBindingTransition,
@@ -337,8 +340,14 @@ import { getDesktopOverlayStore } from "./desktop-overlay-store";
 import { createProtocolCaptureFromEnv } from "../testing/protocol-capture";
 import type { ProtocolCaptureStore } from "../testing/capture-store";
 import { createReplayClientsFromEnv } from "../testing/replay-runtime";
-import { GitDirectoryService } from "./git-directory-service";
-import type { DirectoryGitStatusEntry } from "./git-directory-service";
+import {
+  GitDirectoryService,
+  UNPUBLISHED_BASE_BRANCH_WORKTREE_REASON,
+} from "./git-directory-service";
+import type {
+  DirectoryGitStatusEntry,
+  GitWorkspaceInspection,
+} from "./git-directory-service";
 import { GitWorkingStateService } from "./git-working-state-service";
 import type {
   GitWorkingStateEntryOptions,
@@ -1513,6 +1522,13 @@ type ThreadPullRequestCanonicalizer = (
 type ThreadPullRequestWatchToolHandler = (
   args: WatchThreadPullRequestToolArgs,
 ) => PwrAgentThreadInspectionResponse | Promise<PwrAgentThreadInspectionResponse>;
+
+type DirectoryGitStatusWriter = (params: {
+  directory?: NavigationDirectorySummary;
+  directoryKey: string;
+  fetchedAt: number;
+  gitStatus?: NavigationDirectoryGitStatus;
+}) => void | Promise<void>;
 
 type ThreadPrAutoDispatchHandler = {
   preferenceChanged: (request: SetThreadPrAutoDispatchRequest) => Promise<void>;
@@ -5733,9 +5749,17 @@ function buildHandoffTaskPrompt(params: {
       : []),
     ...(params.workspace.branch ? [`- Branch: ${params.workspace.branch}`] : []),
     `- Git: ${params.workspace.git.kind}`,
+    ...((params.workspace.git.kind === "git_local"
+      || params.workspace.git.kind === "git_worktree")
+      && params.workspace.git.repositoryState
+      ? [`- Git repository state: ${params.workspace.git.repositoryState}`]
+      : []),
     `- New worktree supported: ${
       params.workspace.git.worktreeCreationAvailable ? "yes" : "no"
     }`,
+    ...(!params.workspace.git.worktreeCreationAvailable
+      ? [`- New worktree unavailable: ${params.workspace.git.unavailableReason}`]
+      : []),
     ...(params.codexEnvironmentStartupFailure
       ? [
           "",
@@ -5945,6 +5969,10 @@ export class DesktopBackendRegistry {
     string,
     CreatedThreadDirectoryVisibility
   >();
+  private navigationDirectoriesByKey = new Map<
+    string,
+    NavigationDirectorySummary
+  >();
   private createdThreadVisibilityPinnedRanks: string[] = [];
   private readonly createdThreadVisibilityLock = new PerKeyAsyncLock();
   private readonly activeThreadIdsByBackend = new Map<AppServerBackendKind, Set<string>>();
@@ -6093,6 +6121,7 @@ export class DesktopBackendRegistry {
   private threadPullRequestWatchToolHandler:
     | ThreadPullRequestWatchToolHandler
     | undefined;
+  private directoryGitStatusWriter: DirectoryGitStatusWriter | undefined;
   private threadPrAutoDispatchHandler: ThreadPrAutoDispatchHandler | undefined;
   private threadPullRequestCanonicalizer:
     | ThreadPullRequestCanonicalizer
@@ -6783,6 +6812,12 @@ export class DesktopBackendRegistry {
     this.threadPullRequestWatchToolHandler = handler ?? undefined;
   }
 
+  setDirectoryGitStatusWriter(
+    writer: DirectoryGitStatusWriter | null | undefined,
+  ): void {
+    this.directoryGitStatusWriter = writer ?? undefined;
+  }
+
   setThreadPrAutoDispatchHandler(
     handler: ThreadPrAutoDispatchHandler | null | undefined,
   ): void {
@@ -6821,6 +6856,9 @@ export class DesktopBackendRegistry {
           }),
         },
       ]),
+    );
+    this.navigationDirectoriesByKey = new Map(
+      snapshot.directories.map((directory) => [directory.key, directory]),
     );
   }
 
@@ -8853,6 +8891,56 @@ export class DesktopBackendRegistry {
     directories: NavigationDirectorySummary[],
   ): AsyncIterable<DirectoryGitStatusEntry> {
     return this.gitDirectoryService.readDirectoryStatusEntries(directories);
+  }
+
+  invalidateDirectoryStatus(directoryPath?: string): void {
+    this.gitDirectoryService.invalidateDirectoryStatus(directoryPath);
+  }
+
+  async refreshDirectoryGitStatuses(
+    request: RefreshDirectoryGitStatusesRequest,
+  ): Promise<RefreshDirectoryGitStatusesResponse> {
+    const directoryKeys = [
+      ...new Set(request.directoryKeys.map((key) => key.trim()).filter(Boolean)),
+    ];
+    const directories = directoryKeys
+      .map((key) => this.navigationDirectoriesByKey.get(key))
+      .filter((directory): directory is NavigationDirectorySummary =>
+        Boolean(directory?.path?.trim()),
+      );
+    if (request.force !== false) {
+      for (const directory of directories) {
+        this.gitDirectoryService.invalidateDirectoryStatus(directory.path);
+      }
+    }
+    for await (const entry of this.gitDirectoryService.readDirectoryStatusEntries(
+      directories,
+    )) {
+      const fetchedAt = Date.now();
+      const directory = this.navigationDirectoriesByKey.get(entry.directoryKey);
+      if (this.directoryGitStatusWriter) {
+        await this.directoryGitStatusWriter({
+          directory,
+          directoryKey: entry.directoryKey,
+          fetchedAt,
+          gitStatus: entry.gitStatus,
+        });
+        continue;
+      }
+      const notification: NavigationDirectoryGitStatusUpdatedNotification = {
+        method: "navigation/directoryGitStatus/updated",
+        params: {
+          directoryKey: entry.directoryKey,
+          gitStatus: entry.gitStatus ?? null,
+          fetchedAt,
+        },
+      };
+      await this.emit({
+        backend: "codex",
+        notification,
+      } as unknown as AgentEvent);
+    }
+    return { scheduledCount: directories.length };
   }
 
   readWorktreeWorkingStateEntries(
@@ -21957,8 +22045,27 @@ export class DesktopBackendRegistry {
         },
       };
     }
-    const branch = await readCurrentGitBranch(cwd).catch(() => undefined);
-    if (!branch) {
+    let repository: GitWorkspaceInspection;
+    try {
+      repository = await this.gitDirectoryService.inspectWorkspaceGit(cwd);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      backendRegistryLog.warn("thread handoff Git workspace inspection failed", {
+        cwd,
+        error: detail,
+      });
+      return {
+        mode: params.mode,
+        cwd,
+        linkedDirectory: params.linkedDirectory,
+        git: {
+          kind: "unavailable",
+          worktreeCreationAvailable: false,
+          unavailableReason: `Git workspace inspection failed: ${detail}`,
+        },
+      };
+    }
+    if (repository.kind === "non_git") {
       return {
         mode: params.mode,
         cwd,
@@ -21970,17 +22077,51 @@ export class DesktopBackendRegistry {
         },
       };
     }
+    const kind: "git_local" | "git_worktree" =
+      params.linkedDirectory?.kind === "worktree"
+        ? "git_worktree"
+        : "git_local";
+    if (repository.kind !== "worktree") {
+      const isBare = repository.kind === "bare";
+      return {
+        mode: params.mode,
+        cwd,
+        branch: repository.branch,
+        linkedDirectory: params.linkedDirectory,
+        git: {
+          kind,
+          repositoryState: repository.kind,
+          worktreeCreationAvailable: false,
+          unavailableReason: isBare
+            ? "Bare Git repositories are not supported as handoff workspaces."
+            : "Git administration directories are not supported as handoff workspaces.",
+        },
+      };
+    }
+    let unavailableReason: string | undefined;
+    if (!repository.worktreeCreationAvailable) {
+      if (!repository.headHasCommit) {
+        unavailableReason = UNPUBLISHED_BASE_BRANCH_WORKTREE_REASON;
+      } else if (!repository.hasCommits) {
+        unavailableReason =
+          "Repository has no commits yet; create the initial commit before allocating a worktree.";
+      } else {
+        unavailableReason =
+          "Repository has no local or remote branch commit available; create or fetch a branch before allocating a worktree.";
+      }
+    }
     return {
       mode: params.mode,
       cwd,
-      branch,
+      branch: repository.branch,
       linkedDirectory: params.linkedDirectory,
       git: {
-        kind:
-          params.linkedDirectory?.kind === "worktree"
-            ? "git_worktree"
-            : "git_local",
-        worktreeCreationAvailable: true,
+        kind,
+        ...(!repository.headHasCommit
+          ? { repositoryState: "unborn" as const }
+          : {}),
+        worktreeCreationAvailable: repository.worktreeCreationAvailable,
+        ...(unavailableReason ? { unavailableReason } : {}),
       },
     };
   }
