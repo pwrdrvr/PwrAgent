@@ -113,6 +113,13 @@ const resolveGitHubRepoForDirectory = vi.hoisted(() =>
     > => undefined,
   ),
 );
+const resolveGitHubReposForDirectory = vi.hoisted(() =>
+  vi.fn(
+    async (): Promise<
+      Array<{ host: string; owner: string; repo: string }>
+    > => [],
+  ),
+);
 
 const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
 const listThreads = vi.fn(async (request?: {
@@ -762,6 +769,7 @@ vi.mock("../pr-status/git-remote", async () => {
   return {
     ...actual,
     resolveGitHubRepoForDirectory,
+    resolveGitHubReposForDirectory,
   };
 });
 
@@ -871,6 +879,8 @@ describe("app server ipc", () => {
     detectPullRequestsForThread.mockResolvedValue([]);
     resolveGitHubRepoForDirectory.mockReset();
     resolveGitHubRepoForDirectory.mockResolvedValue(undefined);
+    resolveGitHubReposForDirectory.mockReset();
+    resolveGitHubReposForDirectory.mockResolvedValue([]);
     mockAppServerLog.debug.mockClear();
     mockAppServerLog.error.mockClear();
     mockAppServerLog.info.mockClear();

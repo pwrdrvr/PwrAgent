@@ -4,6 +4,7 @@ import {
   hasGitHubRemoteForDirectory,
   parseGitHubRemote,
   resolveGitHubRepoForDirectory,
+  resolveGitHubReposForDirectory,
 } from "../pr-status/git-remote";
 
 describe("parseGitHubRemote", () => {
@@ -124,6 +125,11 @@ describe("resolveGitHubRepoForDirectory", () => {
     await expect(
       resolveGitHubRepoForDirectory("/repo", { readRemotes }),
     ).resolves.toEqual({ host: "gitlab.com", owner: "group", repo: "project" });
+    await expect(
+      resolveGitHubReposForDirectory("/repo", { readRemotes }),
+    ).resolves.toEqual([
+      { host: "github.com", owner: "pwrdrvr", repo: "PwrAgent" },
+    ]);
   });
 
   it("recognizes a GitHub SSH HostName behind a remote host alias", async () => {
@@ -148,6 +154,21 @@ describe("resolveGitHubRepoForDirectory", () => {
     ).resolves.toEqual({ host: "github.com", owner: "pwrdrvr", repo: "PwrAgent" });
     expect(resolveSshHostname).toHaveBeenCalledOnce();
     expect(resolveSshHostname).toHaveBeenCalledWith("github-work");
+  });
+
+  it("resolves every distinct GitHub fork and upstream remote", async () => {
+    const readRemotes = vi.fn(async () => [
+      { name: "origin", url: "git@github.com:operator/PwrAgent.git" },
+      { name: "upstream", url: "git@github.com:pwrdrvr/PwrAgent.git" },
+      { name: "backup", url: "https://github.com/pwrdrvr/PwrAgent.git" },
+    ]);
+
+    await expect(
+      resolveGitHubReposForDirectory("/repo", { readRemotes }),
+    ).resolves.toEqual([
+      { host: "github.com", owner: "operator", repo: "PwrAgent" },
+      { host: "github.com", owner: "pwrdrvr", repo: "PwrAgent" },
+    ]);
   });
 
   it("does not apply SSH host aliases to HTTPS remotes", async () => {

@@ -141,8 +141,30 @@ export async function hasGitHubRemoteForDirectory(
   cwd: string,
   options: ResolveGitHubRepoOptions = {},
 ): Promise<boolean> {
+  return (await resolveGitHubReposForDirectory(cwd, options)).length > 0;
+}
+
+/**
+ * Resolve every distinct GitHub repository in the checkout's configured
+ * remotes. Branch PR lookup queries all of them because a fork checkout may
+ * have `origin` pointing at the fork while the PR belongs to `upstream`.
+ */
+export async function resolveGitHubReposForDirectory(
+  cwd: string,
+  options: ResolveGitHubRepoOptions = {},
+): Promise<GitHubRepoRef[]> {
   const remotes = await readParsedGitRemotes(cwd, options);
-  return remotes.some((remote) => remote.repo?.host === "github.com");
+  const repos = new Map<string, GitHubRepoRef>();
+  for (const remote of remotes) {
+    if (remote.repo?.host !== "github.com") {
+      continue;
+    }
+    const key = `${remote.repo.owner.toLowerCase()}/${remote.repo.repo.toLowerCase()}`;
+    if (!repos.has(key)) {
+      repos.set(key, remote.repo);
+    }
+  }
+  return [...repos.values()];
 }
 
 async function readParsedGitRemotes(

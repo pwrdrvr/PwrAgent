@@ -27,12 +27,11 @@ type TrackedRemoteBranch = {
 
 /**
  * Detect PRs for a single thread by walking the resolved directory paths that
- * have a configured GitHub remote and asking
- * `gh pr list --head <branch> --state all` per eligible directory.
+ * have a configured GitHub remote and querying each branch in-process.
  * Aggregates results, dedupes by URL (in case multiple linked dirs point
  * at the same repo).
  *
- * `--state all` is intentional: this is the on-focus / on-selection
+ * All lifecycle states are intentional: this is the on-focus / on-selection
  * authoritative fetch, so we want to surface merged/closed PRs too.
  * That state then sticks in the persistence overlay and the IPC layer
  * short-circuits future refreshes once any PR reaches a terminal state.

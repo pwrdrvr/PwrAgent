@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { PrSummary } from "@pwragent/shared";
 import {
   GithubPrFetcher,
   deriveChipState,
@@ -386,34 +387,78 @@ describe("parseGhAuthStatus", () => {
 });
 
 describe("GithubPrFetcher", () => {
+  const primedPr = {
+    provider: "github.com",
+    number: 42,
+    org: "pwrdrvr",
+    repo: "PwrAgent",
+    state: "passing" as const,
+    checkState: "passing" as const,
+    lifecycleState: "open" as const,
+    url: "https://github.com/pwrdrvr/PwrAgent/pull/42",
+  };
+  const mergedPr = parseGhPrPayload(rawMergedPr());
+
   function buildFetcher(overrides: {
-    stdout?: string;
-    error?: Error;
+    branchError?: Error;
+    branchResults?: (ref: {
+      owner: string;
+      repo: string;
+      branch: string;
+    }) => PrSummary[] | undefined;
     ghAvailable?: boolean;
+    repos?: Array<{ host: string; owner: string; repo: string }>;
+    retainedError?: Error;
+    retainedPrs?: PrSummary[];
   } = {}) {
-    const exec = vi.fn(async (_cwd: string, _args: string[]) => {
-      if (overrides.error) throw overrides.error;
-      return { stdout: overrides.stdout ?? "[]", stderr: "" };
+    const fetchPullRequestsForBranches = vi.fn(async (refs: Array<{
+      owner: string;
+      repo: string;
+      branch: string;
+    }>) => {
+      if (overrides.branchError) throw overrides.branchError;
+      return new Map(
+        refs.flatMap((ref) => {
+          const prs = overrides.branchResults?.(ref) ?? [];
+          return [[
+            `${ref.owner.toLowerCase()}/${ref.repo.toLowerCase()}#${ref.branch}`,
+            prs,
+          ] as const];
+        }),
+      );
     });
+    const fetchPullRequests = vi.fn(async () => {
+      if (overrides.retainedError) throw overrides.retainedError;
+      return overrides.retainedPrs ?? [];
+    });
+    const resolveGitHubRepos = vi.fn(async () =>
+      overrides.repos ?? [{
+        host: "github.com",
+        owner: "pwrdrvr",
+        repo: "PwrAgent",
+      }],
+    );
     const probeGhAvailable = vi.fn(async () => overrides.ghAvailable ?? true);
-    const fetcher = new GithubPrFetcher({ exec, probeGhAvailable });
-    return { fetcher, exec, probeGhAvailable };
+    const fetcher = new GithubPrFetcher({
+      graphqlClient: {
+        fetchPullRequests,
+        fetchPullRequestsForBranches,
+      },
+      probeGhAvailable,
+      resolveGitHubRepos,
+    });
+    return {
+      fetcher,
+      fetchPullRequests,
+      fetchPullRequestsForBranches,
+      probeGhAvailable,
+      resolveGitHubRepos,
+    };
   }
 
   describe("primeBranchLookup (batched in-process discovery)", () => {
-    const primedPr = {
-      provider: "github.com",
-      number: 42,
-      org: "pwrdrvr",
-      repo: "PwrAgent",
-      state: "passing" as const,
-      checkState: "passing" as const,
-      lifecycleState: "open" as const,
-      url: "https://github.com/pwrdrvr/PwrAgent/pull/42",
-    };
-
-    it("answers from the primed value without spawning gh", async () => {
-      const { fetcher, exec } = buildFetcher();
+    it("answers from the primed value without another GraphQL request", async () => {
+      const { fetcher, fetchPullRequestsForBranches } = buildFetcher();
       fetcher.primeBranchLookup([
         { cwd: "/repo", branch: "feat/x", prs: [primedPr] },
       ]);
@@ -424,21 +469,21 @@ describe("GithubPrFetcher", () => {
       });
 
       expect(result).toEqual([primedPr]);
-      expect(exec).not.toHaveBeenCalled();
+      expect(fetchPullRequestsForBranches).not.toHaveBeenCalled();
     });
 
     it("honors a primed empty answer — that is an authoritative 'no PRs'", async () => {
-      const { fetcher, exec } = buildFetcher();
+      const { fetcher, fetchPullRequestsForBranches } = buildFetcher();
       fetcher.primeBranchLookup([{ cwd: "/repo", branch: "feat/x", prs: [] }]);
 
       await expect(
         fetcher.fetchAllPullRequestsForBranch({ cwd: "/repo", branch: "feat/x" }),
       ).resolves.toEqual([]);
-      expect(exec).not.toHaveBeenCalled();
+      expect(fetchPullRequestsForBranches).not.toHaveBeenCalled();
     });
 
     it("is single-use, so a later refresh gets its own fresh read", async () => {
-      const { fetcher, exec } = buildFetcher();
+      const { fetcher, fetchPullRequestsForBranches } = buildFetcher();
       fetcher.primeBranchLookup([
         { cwd: "/repo", branch: "feat/x", prs: [primedPr] },
       ]);
@@ -452,9 +497,7 @@ describe("GithubPrFetcher", () => {
         branch: "feat/x",
       });
 
-      // Second call fell through to gh rather than silently reusing the
-      // prefetch a user-triggered refresh did not ask for.
-      expect(exec).toHaveBeenCalledTimes(1);
+      expect(fetchPullRequestsForBranches).toHaveBeenCalledTimes(1);
     });
 
     it("discards a primed discovery result for an authoritative user refresh", async () => {
@@ -462,22 +505,8 @@ describe("GithubPrFetcher", () => {
         ...primedPr,
         mergeState: "conflicting" as const,
       };
-      const { fetcher, exec } = buildFetcher({
-        stdout: JSON.stringify([{
-          number: freshPr.number,
-          title: "Fresh PR state",
-          url: freshPr.url,
-          state: "OPEN",
-          isDraft: false,
-          mergeable: "CONFLICTING",
-          mergeStateStatus: "DIRTY",
-          mergedAt: null,
-          commits: [],
-          headRefName: "feat/x",
-          headRepository: { name: freshPr.repo },
-          headRepositoryOwner: { login: freshPr.org },
-          statusCheckRollup: [],
-        }]),
+      const { fetcher, fetchPullRequestsForBranches } = buildFetcher({
+        branchResults: () => [freshPr],
       });
       fetcher.primeBranchLookup([
         { cwd: "/repo", branch: "feat/x", prs: [primedPr] },
@@ -495,17 +524,17 @@ describe("GithubPrFetcher", () => {
           mergeState: "conflicting",
         }),
       ]);
-      expect(exec).toHaveBeenCalledOnce();
+      expect(fetchPullRequestsForBranches).toHaveBeenCalledOnce();
 
       await fetcher.fetchAllPullRequestsForBranch({
         cwd: "/repo",
         branch: "feat/x",
       });
-      expect(exec).toHaveBeenCalledTimes(2);
+      expect(fetchPullRequestsForBranches).toHaveBeenCalledTimes(2);
     });
 
     it("does not answer for a different branch or directory", async () => {
-      const { fetcher, exec } = buildFetcher();
+      const { fetcher, fetchPullRequestsForBranches } = buildFetcher();
       fetcher.primeBranchLookup([
         { cwd: "/repo", branch: "feat/x", prs: [primedPr] },
       ]);
@@ -519,11 +548,11 @@ describe("GithubPrFetcher", () => {
         branch: "feat/x",
       });
 
-      expect(exec).toHaveBeenCalledTimes(2);
+      expect(fetchPullRequestsForBranches).toHaveBeenCalledTimes(2);
     });
 
-    it("falls back to gh once the primed value has expired", async () => {
-      const { fetcher, exec } = buildFetcher();
+    it("runs GraphQL once the primed value has expired", async () => {
+      const { fetcher, fetchPullRequestsForBranches } = buildFetcher();
       fetcher.primeBranchLookup(
         [{ cwd: "/repo", branch: "feat/x", prs: [primedPr] }],
         -1,
@@ -534,53 +563,58 @@ describe("GithubPrFetcher", () => {
         branch: "feat/x",
       });
 
-      expect(exec).toHaveBeenCalledTimes(1);
+      expect(fetchPullRequestsForBranches).toHaveBeenCalledTimes(1);
     });
   });
 
   describe("fetchOpenPullRequests (batched by repo)", () => {
-    it("returns [] without invoking gh when gh is not available", async () => {
-      const { fetcher, exec } = buildFetcher({ ghAvailable: false });
+    it("returns [] without GraphQL when gh auth is not available", async () => {
+      const { fetcher, fetchPullRequestsForBranches } = buildFetcher({
+        ghAvailable: false,
+      });
       const result = await fetcher.fetchOpenPullRequests({
         cwd: "/tmp/repo",
         branches: ["feat/x"],
       });
       expect(result).toEqual([]);
-      expect(exec).not.toHaveBeenCalled();
+      expect(fetchPullRequestsForBranches).not.toHaveBeenCalled();
     });
 
-    it("returns [] without invoking gh when no branches are requested", async () => {
-      const { fetcher, exec } = buildFetcher();
+    it("returns [] without GraphQL when no branches are requested", async () => {
+      const { fetcher, fetchPullRequestsForBranches } = buildFetcher();
       const result = await fetcher.fetchOpenPullRequests({
         cwd: "/tmp/repo",
         branches: [],
       });
       expect(result).toEqual([]);
-      expect(exec).not.toHaveBeenCalled();
+      expect(fetchPullRequestsForBranches).not.toHaveBeenCalled();
     });
 
-    it("filters gh output by requested branches", async () => {
-      const { fetcher, exec } = buildFetcher({
-        stdout: JSON.stringify([
-          { ...rawMergedPr(), state: "OPEN", headRefName: "feat/a", number: 1 },
-          { ...rawMergedPr(), state: "OPEN", headRefName: "feat/b", number: 2 },
-          { ...rawMergedPr(), state: "OPEN", headRefName: "feat/c", number: 3 },
-        ]),
+    it("combines requested branches and filters terminal PRs", async () => {
+      const { fetcher, fetchPullRequestsForBranches } = buildFetcher({
+        branchResults: (ref) => [
+          {
+            ...primedPr,
+            number: ref.branch === "feat/a" ? 1 : 3,
+            url: `${primedPr.url}-${ref.branch}`,
+          },
+          mergedPr,
+        ],
       });
       const result = await fetcher.fetchOpenPullRequests({
         cwd: "/tmp/repo",
         branches: ["feat/a", "feat/c"],
       });
       expect(result.map((pr) => pr.number)).toEqual([1, 3]);
-      expect(exec).toHaveBeenCalledTimes(1);
-      const args = exec.mock.calls[0]![1];
-      expect(args).toContain("--state");
-      expect(args).toContain("open");
+      expect(fetchPullRequestsForBranches).toHaveBeenCalledWith([
+        { owner: "pwrdrvr", repo: "PwrAgent", branch: "feat/a" },
+        { owner: "pwrdrvr", repo: "PwrAgent", branch: "feat/c" },
+      ]);
     });
 
-    it("returns [] on subprocess failure (no caching — overlay handles persistence)", async () => {
-      const { fetcher, exec } = buildFetcher({
-        error: new Error("gh: not authorized"),
+    it("returns [] on in-process lookup failure", async () => {
+      const { fetcher, fetchPullRequestsForBranches } = buildFetcher({
+        branchError: new Error("GraphQL unavailable"),
       });
       const first = await fetcher.fetchOpenPullRequests({
         cwd: "/tmp/repo",
@@ -592,108 +626,109 @@ describe("GithubPrFetcher", () => {
       });
       expect(first).toEqual([]);
       expect(second).toEqual([]);
-      expect(exec).toHaveBeenCalledTimes(2);
+      expect(fetchPullRequestsForBranches).toHaveBeenCalledTimes(2);
+    });
+
+    it("does not probe gh or GraphQL for a non-GitHub checkout", async () => {
+      const {
+        fetcher,
+        fetchPullRequestsForBranches,
+        probeGhAvailable,
+      } = buildFetcher({ repos: [] });
+
+      await expect(fetcher.fetchOpenPullRequests({
+        cwd: "/tmp/repo",
+        branches: ["feat/x"],
+      })).resolves.toEqual([]);
+      expect(probeGhAvailable).not.toHaveBeenCalled();
+      expect(fetchPullRequestsForBranches).not.toHaveBeenCalled();
     });
   });
 
   describe("fetchAllPullRequestsForBranch (single thread, all states)", () => {
-    it("uses --state all so we catch merged + closed too", async () => {
-      const { fetcher, exec } = buildFetcher({
-        stdout: JSON.stringify([rawMergedPr()]),
+    it("uses the in-process all-state branch query", async () => {
+      const { fetcher, fetchPullRequestsForBranches } = buildFetcher({
+        branchResults: () => [mergedPr],
       });
       const result = await fetcher.fetchAllPullRequestsForBranch({
         cwd: "/tmp/repo",
         branch: "feat/x",
       });
-      expect(result).toEqual([
-        {
-          provider: "github.com",
-          number: 178,
-          org: "pwrdrvr",
-          repo: "PwrAgent",
-          title: "Retain thread pull request history",
-          baseRefName: "agent/github-pr-auto-fix-settings",
-          headRefName: "feat/desktop-thread-reactions-and-pr-chips",
-          state: "passing",
-          checkState: "passing",
-          lifecycleState: "merged",
-          reviewState: "ready_for_review",
-          mergeState: "unknown",
-          headSha: "b".repeat(40),
-          commitShas: ["a".repeat(40), "b".repeat(40)],
-          url: "https://github.com/pwrdrvr/PwrAgent/pull/178",
-        },
+      expect(result).toEqual([mergedPr]);
+      expect(fetchPullRequestsForBranches).toHaveBeenCalledWith([
+        { owner: "pwrdrvr", repo: "PwrAgent", branch: "feat/x" },
       ]);
-      const args = exec.mock.calls[0]![1];
-      expect(args).toEqual([
-        "pr",
-        "list",
-        "--state",
-        "all",
-        "--head",
-        "feat/x",
-        "--json",
-        expect.any(String),
-        "--limit",
-        "5",
-      ]);
-      expect(args[args.indexOf("--json") + 1]).toContain("title");
-      expect(args[args.indexOf("--json") + 1]).toContain("baseRefName");
-      expect(args[args.indexOf("--json") + 1]).toContain("headRefName");
     });
 
-    it("returns [] on subprocess failure", async () => {
-      const { fetcher } = buildFetcher({ error: new Error("gh failed") });
+    it("returns [] on in-process lookup failure", async () => {
+      const { fetcher } = buildFetcher({
+        branchError: new Error("GraphQL unavailable"),
+      });
       const result = await fetcher.fetchAllPullRequestsForBranch({
         cwd: "/tmp/repo",
         branch: "feat/x",
       });
       expect(result).toEqual([]);
     });
+
+    it("queries fork and upstream remotes and deduplicates their answers", async () => {
+      const upstreamPr = { ...primedPr, number: 43, url: `${primedPr.url}-43` };
+      const { fetcher, fetchPullRequestsForBranches } = buildFetcher({
+        repos: [
+          { host: "github.com", owner: "operator", repo: "PwrAgent" },
+          { host: "github.com", owner: "pwrdrvr", repo: "PwrAgent" },
+        ],
+        branchResults: (ref) =>
+          ref.owner === "operator"
+            ? [primedPr]
+            : [primedPr, upstreamPr],
+      });
+
+      await expect(fetcher.fetchAllPullRequestsForBranch({
+        cwd: "/tmp/repo",
+        branch: "feat/x",
+      })).resolves.toEqual([primedPr, upstreamPr]);
+      expect(fetchPullRequestsForBranches).toHaveBeenCalledWith([
+        { owner: "operator", repo: "PwrAgent", branch: "feat/x" },
+        { owner: "pwrdrvr", repo: "PwrAgent", branch: "feat/x" },
+      ]);
+    });
   });
 
   describe("fetchPullRequestByUrl", () => {
-    it("uses gh pr view for retained PR chips whose head branch is no longer current", async () => {
-      const { fetcher, exec } = buildFetcher({
-        stdout: JSON.stringify(rawMergedPr()),
+    it("uses the in-process by-number query for retained PR chips", async () => {
+      const { fetcher, fetchPullRequests } = buildFetcher({
+        retainedPrs: [mergedPr],
       });
       const result = await fetcher.fetchPullRequestByUrl({
         cwd: "/tmp/repo",
         url: "https://github.com/pwrdrvr/PwrAgent/pull/178",
       });
-      expect(result).toEqual({
-        provider: "github.com",
-        number: 178,
-        org: "pwrdrvr",
-        repo: "PwrAgent",
-        title: "Retain thread pull request history",
-        baseRefName: "agent/github-pr-auto-fix-settings",
-        headRefName: "feat/desktop-thread-reactions-and-pr-chips",
-        state: "passing",
-        checkState: "passing",
-        lifecycleState: "merged",
-        reviewState: "ready_for_review",
-        mergeState: "unknown",
-        headSha: "b".repeat(40),
-        commitShas: ["a".repeat(40), "b".repeat(40)],
-        url: "https://github.com/pwrdrvr/PwrAgent/pull/178",
-      });
-      expect(exec).toHaveBeenCalledWith("/tmp/repo", [
-        "pr",
-        "view",
-        "https://github.com/pwrdrvr/PwrAgent/pull/178",
-        "--json",
-        expect.any(String),
+      expect(result).toEqual(mergedPr);
+      expect(fetchPullRequests).toHaveBeenCalledWith([
+        { owner: "pwrdrvr", repo: "PwrAgent", number: 178 },
       ]);
     });
 
-    it("returns undefined on subprocess failure", async () => {
-      const { fetcher } = buildFetcher({ error: new Error("gh failed") });
+    it("returns undefined on in-process lookup failure", async () => {
+      const { fetcher } = buildFetcher({
+        retainedError: new Error("GraphQL unavailable"),
+      });
       const result = await fetcher.fetchPullRequestByUrl({
         cwd: "/tmp/repo",
         url: "https://github.com/pwrdrvr/PwrAgent/pull/178",
       });
       expect(result).toBeUndefined();
+    });
+
+    it("rejects a URL that does not identify a GitHub pull request", async () => {
+      const { fetcher, fetchPullRequests } = buildFetcher();
+
+      await expect(fetcher.fetchPullRequestByUrl({
+        cwd: "/tmp/repo",
+        url: "https://github.com/pwrdrvr/PwrAgent/issues/178",
+      })).resolves.toBeUndefined();
+      expect(fetchPullRequests).not.toHaveBeenCalled();
     });
   });
 

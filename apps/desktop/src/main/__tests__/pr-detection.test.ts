@@ -334,6 +334,23 @@ describe("detectPullRequestsForThread", () => {
     expect(fetcher.fetchAllPullRequestsForBranch).not.toHaveBeenCalled();
   });
 
+  it("skips named-branch lookups for deleted worktree paths", async () => {
+    const staleDirectory = await createNonGitDirectory();
+    await rm(staleDirectory, { recursive: true, force: true });
+    const fetcher = {
+      fetchAllPullRequestsForBranch: vi.fn(async () => []),
+    } as unknown as GithubPrFetcher;
+
+    const prs = await detectPullRequestsForThread({
+      fetcher,
+      branch: "fix/pr-chip",
+      directoryPaths: [staleDirectory],
+    });
+
+    expect(prs).toEqual([]);
+    expect(fetcher.fetchAllPullRequestsForBranch).not.toHaveBeenCalled();
+  });
+
   it("skips named-branch lookups for git repositories with no remotes", async () => {
     const repo = await createRepoWithBranch("fix/local-only");
     const fetcher = {
