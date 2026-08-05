@@ -153,9 +153,9 @@ test.describe("federation remote window", () => {
       const connectionSection = window.getByRole("region", {
         name: "Connection",
       });
-      await expect(connectionSection.getByText("Connected")).toBeVisible({
-        timeout: 30_000,
-      });
+      await expect(
+        connectionSection.getByText("Connected", { exact: true }),
+      ).toBeVisible({ timeout: 30_000 });
 
       // Browse the peer: a dedicated remote window opens.
       const remoteWindowPromise = electronApp.waitForEvent("window");
