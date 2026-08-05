@@ -125,6 +125,36 @@ describe("StateDb", () => {
     );
   });
 
+  it("invalidates working-state counts computed before squash-merge support", () => {
+    const dbPath = path.join(tempDir, "state.db");
+    stateDb.raw.prepare(
+      `INSERT INTO thread_git_working_state(worktree_path, fetched_at, payload)
+       VALUES (?, ?, ?)`,
+    ).run(
+      "/repo/stale-worktree",
+      Date.now(),
+      JSON.stringify({
+        dirtyFiles: 0,
+        dirtyAdditions: 0,
+        dirtyDeletions: 0,
+        untrackedFiles: 0,
+        unpushedCommits: 3,
+      }),
+    );
+    stateDb.raw.pragma("user_version = 40");
+    stateDb.close();
+
+    stateDb = StateDb.open(dbPath);
+
+    const cachedRows = stateDb.raw
+      .prepare("SELECT worktree_path FROM thread_git_working_state")
+      .all();
+    expect(cachedRows).toEqual([]);
+    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(
+      CURRENT_STATE_DB_USER_VERSION,
+    );
+  });
+
   it("creates durable pull request status watch storage", () => {
     const table = stateDb.raw
       .prepare(

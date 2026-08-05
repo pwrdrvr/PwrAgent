@@ -9,7 +9,7 @@ import {
 } from "@pwragent/shared";
 import { getNativeBinding } from "./native-binding.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 40;
+export const CURRENT_STATE_DB_USER_VERSION = 41;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -1229,12 +1229,22 @@ export class StateDb {
     if ((db.pragma("user_version", { simple: true }) as number) < 39) {
       db.transaction(() => {
         db.exec(SCHEDULED_THREAD_ACTION_SCHEMA);
-        db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
+        db.pragma("user_version = 39");
       })();
     }
     if ((db.pragma("user_version", { simple: true }) as number) < 40) {
       db.transaction(() => {
         ensureScheduledThreadActionMetadataColumns(db);
+        db.pragma("user_version = 40");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 41) {
+      db.transaction(() => {
+        // Working-state semantics now account for deleted squash-merged PR
+        // heads. Cached pre-v41 counts can therefore show false unpushed
+        // badges indefinitely for worktrees outside the startup probe budget.
+        // This table is derived state and is safe to repopulate lazily.
+        db.prepare("DELETE FROM thread_git_working_state").run();
         db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
       })();
     }
