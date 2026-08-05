@@ -8,6 +8,8 @@ import type {
   ImportFederationInviteResponse,
   OpenFederationWindowRequest,
   OpenFederationWindowResponse,
+  ResetFederationEnrollmentRequest,
+  ResetFederationEnrollmentResponse,
   ReadFederationHealthRequest,
   ReadFederationHealthResponse,
   ReadFederationDiagnosticsRequest,
@@ -24,6 +26,7 @@ import {
   FEDERATION_GENERATE_INVITE_CHANNEL,
   FEDERATION_IMPORT_INVITE_CHANNEL,
   FEDERATION_OPEN_WINDOW_CHANNEL,
+  FEDERATION_RESET_ENROLLMENT_CHANNEL,
   FEDERATION_REVOKE_PEER_CHANNEL,
   FEDERATION_TAILSCALE_CONFIGURE_CHANNEL,
   FEDERATION_TAILSCALE_STATUS_CHANNEL,
@@ -39,6 +42,7 @@ export function registerFederationIpcHandlers(): void {
   ipcMain.removeHandler(FEDERATION_GENERATE_INVITE_CHANNEL);
   ipcMain.removeHandler(FEDERATION_IMPORT_INVITE_CHANNEL);
   ipcMain.removeHandler(FEDERATION_REVOKE_PEER_CHANNEL);
+  ipcMain.removeHandler(FEDERATION_RESET_ENROLLMENT_CHANNEL);
   ipcMain.removeHandler(FEDERATION_TAILSCALE_STATUS_CHANNEL);
   ipcMain.removeHandler(FEDERATION_TAILSCALE_CONFIGURE_CHANNEL);
   ipcMain.handle(
@@ -85,6 +89,11 @@ export function registerFederationIpcHandlers(): void {
       );
       if (!peer) {
         throw new Error("Federation peer is not connected.");
+      }
+      if (!peer.capabilities.includes("remote_window")) {
+        throw new Error(
+          "Federation peer does not allow remote windows (remote_window capability).",
+        );
       }
       if (
         request.initialThread &&
@@ -140,6 +149,14 @@ export function registerFederationIpcHandlers(): void {
       await getDesktopFederationRuntime().importInvite(request.invite),
   );
   ipcMain.handle(
+    FEDERATION_RESET_ENROLLMENT_CHANNEL,
+    async (
+      _event,
+      _request?: ResetFederationEnrollmentRequest,
+    ): Promise<ResetFederationEnrollmentResponse> =>
+      await getDesktopFederationRuntime().resetEnrollment(),
+  );
+  ipcMain.handle(
     FEDERATION_REVOKE_PEER_CHANNEL,
     async (
       _event,
@@ -162,6 +179,7 @@ export function disposeFederationIpcHandlers(): void {
   ipcMain.removeHandler(FEDERATION_GENERATE_INVITE_CHANNEL);
   ipcMain.removeHandler(FEDERATION_IMPORT_INVITE_CHANNEL);
   ipcMain.removeHandler(FEDERATION_REVOKE_PEER_CHANNEL);
+  ipcMain.removeHandler(FEDERATION_RESET_ENROLLMENT_CHANNEL);
   ipcMain.removeHandler(FEDERATION_TAILSCALE_STATUS_CHANNEL);
   ipcMain.removeHandler(FEDERATION_TAILSCALE_CONFIGURE_CHANNEL);
 }

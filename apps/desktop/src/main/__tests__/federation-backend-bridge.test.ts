@@ -175,6 +175,54 @@ describe("federation backend bridge", () => {
     ]);
   });
 
+  it("routes pin reorder over RPC with thread_navigation authorization", async () => {
+    const sent: FederationProtocolEnvelope[] = [];
+    const rpc = new FederationRpcEndpoint({
+      localInstanceId: "viewer_one",
+      remoteInstanceId: "owner_one",
+      sendEnvelope: (envelope) => sent.push(envelope),
+      now: () => 1_000,
+    });
+    const client = new FederationRemoteBackendClient(rpc);
+
+    const pending = client.reorderThreadPins({
+      threadKeys: ["codex:thread-2", "codex:thread-1"],
+    });
+    const request = sent.at(-1)!;
+    expect(request).toMatchObject({
+      kind: "request",
+      method: FEDERATION_BACKEND_METHODS.reorderThreadPins,
+      params: { threadKeys: ["codex:thread-2", "codex:thread-1"] },
+    });
+    expect(
+      FEDERATION_BACKEND_METHOD_CAPABILITIES[
+        FEDERATION_BACKEND_METHODS.reorderThreadPins
+      ],
+    ).toBe("thread_navigation");
+
+    rpc.receiveEnvelope({
+      id: "response-reorder",
+      kind: "response",
+      requestId: request.id,
+      protocolVersion: 1,
+      sourceInstanceId: "owner_one",
+      targetInstanceId: "viewer_one",
+      createdAt: 1_100,
+      result: {
+        pinnedRanks: {
+          "codex:thread-2": "a0",
+          "codex:thread-1": "a1",
+        },
+      },
+    });
+    await expect(pending).resolves.toMatchObject({
+      pinnedRanks: {
+        "codex:thread-2": "a0",
+        "codex:thread-1": "a1",
+      },
+    });
+  });
+
   it("serializes remote backend requests over RPC envelopes", async () => {
     const sent: FederationProtocolEnvelope[] = [];
     const rpc = new FederationRpcEndpoint({
@@ -652,6 +700,8 @@ describe("federation backend bridge", () => {
       listSkills: vi.fn(),
       listBackends: vi.fn(),
       markThreadSeen: vi.fn(),
+      setThreadPin: vi.fn(),
+      reorderThreadPins: vi.fn(),
       archiveThread: vi.fn(),
       startThread: vi.fn(),
       forkThread: vi.fn(),
@@ -823,6 +873,8 @@ describe("federation backend bridge", () => {
         listSkills: vi.fn(),
         listBackends: vi.fn(),
         markThreadSeen: vi.fn(),
+      setThreadPin: vi.fn(),
+      reorderThreadPins: vi.fn(),
         archiveThread: vi.fn(),
         startThread: vi.fn(),
         forkThread: vi.fn(),

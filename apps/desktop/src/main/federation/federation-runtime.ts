@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
+import { hostname } from "node:os";
 import type {
   AgentEvent,
   AppServerListSkillsResponse,
@@ -65,6 +66,10 @@ import {
   type MaterializeDirectoryLaunchpadRequest,
   type MaterializeDirectoryLaunchpadOptions,
   type MarkThreadSeenRequest,
+  type SetThreadPinRequest,
+  type SetThreadPinResponse,
+  type ReorderThreadPinsRequest,
+  type ReorderThreadPinsResponse,
   type NavigationSnapshot,
   type OpenDesktopApplicationRequest,
   type QueueThreadExecutionModeRequest,
@@ -119,7 +124,10 @@ import {
 import { FederationRouter } from "./federation-router";
 import { FederationRpcEndpoint } from "./federation-rpc";
 import { FederationStore } from "./federation-store";
-import { redactFederationDiagnostic } from "./federation-redaction";
+import {
+  classifyFederationClientFailure,
+  redactFederationDiagnostic,
+} from "./federation-redaction";
 import {
   connectFederationClient,
   FederationGatewayWebSocketServer,
@@ -134,6 +142,7 @@ const GATEWAY_INSTANCE_ID_META_KEY = "federation_gateway_instance_id";
 const GATEWAY_PUBLIC_KEY_META_KEY = "federation_gateway_public_key_pem";
 const GATEWAY_NOISE_PUBLIC_KEY_META_KEY = "federation_gateway_noise_public_key";
 const PENDING_INVITE_TOKEN_META_KEY = "federation_pending_invite_token";
+const GATEWAY_ENROLLED_AT_META_KEY = "federation_gateway_enrolled_at";
 const FEDERATION_PEER_DIRECTORY_METHOD = "federation.peerDirectory";
 const FEDERATION_RECONNECT_MAX_DELAY_MS = 30_000;
 
@@ -146,6 +155,7 @@ const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "pending_request_control",
   "environment_actions",
   "federated_search",
+  "messaging_route",
   "gateway_relay",
 ];
 
@@ -161,6 +171,7 @@ export class DesktopFederationRuntime {
   private server?: FederationGatewayWebSocketServer;
   private client?: FederationClientWebSocketClient;
   private localInstanceId?: FederationInstanceId;
+  private instanceLabel?: string;
   private listenUrl?: string;
   private gatewayUrl?: string;
   private gatewayInstanceId?: FederationInstanceId;
@@ -183,6 +194,7 @@ export class DesktopFederationRuntime {
   private readonly remoteBackendEventListeners = new Set<
     (event: AgentEvent) => void | Promise<void>
   >();
+  private readonly peerStatusListeners = new Set<() => void>();
   private unsubscribeLocalBackendEvents?: () => void;
   private restartPromise: Promise<void> | undefined;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
@@ -190,6 +202,7 @@ export class DesktopFederationRuntime {
   private connectionGeneration = 0;
   private stopping = true;
   private lastConnectionError?: string;
+  private lastConnectionFailureKind?: "auth" | "transport";
   private gatewayListenerError?: string;
 
   setAgentEventPublisher(publisher: (event: AgentEvent) => void): void {
@@ -211,15 +224,28 @@ export class DesktopFederationRuntime {
     };
   }
 
+  /**
+   * Fires whenever any peer's connection status changes. Used by the
+   * application menu to keep its Remote Instances listing current.
+   */
+  onPeerStatusChanged(listener: () => void): () => void {
+    this.peerStatusListeners.add(listener);
+    return () => {
+      this.peerStatusListeners.delete(listener);
+    };
+  }
+
   connectedPeerTargets(): Array<{
     target: FederationRemoteTarget;
     label: string;
+    capabilities: FederationCapability[];
   }> {
     return this.visiblePeers()
       .filter((peer) => peer.status === "connected")
       .map((peer) => ({
         target: { scope: "remote", instanceId: peer.id },
         label: peer.label,
+        capabilities: [...peer.capabilities],
       }));
   }
 
@@ -263,6 +289,7 @@ export class DesktopFederationRuntime {
     this.publishedPeerStatuses.clear();
     this.reconnectAttempt = 0;
     this.lastConnectionError = undefined;
+    this.lastConnectionFailureKind = undefined;
     this.gatewayListenerError = undefined;
   }
 
@@ -279,18 +306,80 @@ export class DesktopFederationRuntime {
       settings.federation.mode.value === "client" ||
       settings.federation.mode.value === "dual"
     ) {
+      // An auth-class failure (bad pin, revoked enrollment, version
+      // skew) is terminal until the operator re-pairs — reporting it as
+      // "connecting" hides the problem behind an infinite retry loop.
       health.status = this.client
         ? "connected"
-        : this.reconnectTimer
-          ? "connecting"
-          : "disconnected";
+        : this.lastConnectionFailureKind === "auth"
+          ? "rejected"
+          : this.reconnectTimer
+            ? "connecting"
+            : "disconnected";
       health.unavailableReason = this.lastConnectionError;
     }
     if (this.gatewayListenerError) {
       health.status = "degraded";
       health.unavailableReason = this.gatewayListenerError;
     }
+    health.clientEnrollment = this.readClientEnrollment(
+      settings.federation.gatewayUrl.value.trim(),
+    );
     return health;
+  }
+
+  private readClientEnrollment(
+    configuredGatewayUrl: string,
+  ): FederationHealthStatus["clientEnrollment"] {
+    if (!isAppStateInitialized()) return undefined;
+    const stateDb = getAppStateDb();
+    const gatewayInstanceId = stateDb.getMeta(GATEWAY_INSTANCE_ID_META_KEY);
+    if (!gatewayInstanceId) return undefined;
+    const enrolledAtRaw = stateDb.getMeta(GATEWAY_ENROLLED_AT_META_KEY);
+    const enrolledAt = enrolledAtRaw ? Number(enrolledAtRaw) : Number.NaN;
+    return {
+      gatewayInstanceId,
+      gatewayUrl: configuredGatewayUrl || undefined,
+      enrolledAt: Number.isFinite(enrolledAt) ? enrolledAt : undefined,
+      pendingInvite: Boolean(stateDb.getMeta(PENDING_INVITE_TOKEN_META_KEY)),
+    };
+  }
+
+  /**
+   * Forget the client-side pairing: drop the pinned gateway identity,
+   * signing key, Noise key, and any pending invite token, then restart
+   * the runtime. A client-only instance falls back to disabled mode so
+   * it does not sit in a doomed reconnect loop against nothing.
+   */
+  async resetEnrollment(): Promise<{ cleared: boolean }> {
+    const stateDb = getAppStateDb();
+    const hadEnrollment = Boolean(stateDb.getMeta(GATEWAY_INSTANCE_ID_META_KEY));
+    stateDb.setMeta(GATEWAY_INSTANCE_ID_META_KEY, "");
+    stateDb.setMeta(GATEWAY_PUBLIC_KEY_META_KEY, "");
+    stateDb.setMeta(GATEWAY_NOISE_PUBLIC_KEY_META_KEY, "");
+    stateDb.setMeta(PENDING_INVITE_TOKEN_META_KEY, "");
+    stateDb.setMeta(GATEWAY_ENROLLED_AT_META_KEY, "");
+    const settingsService = getDesktopSettingsService();
+    const settings = await settingsService.readSettings();
+    const mode = settings.federation.mode.value;
+    if (mode === "client" || mode === "disabled") {
+      // A pure client's own key material only matters to the gateway it
+      // just forgot, so drop it too. This is the documented recovery when
+      // the stored keys became undecryptable (keychain identity change):
+      // the next enrollment mints fresh keys and the new invite pins
+      // them. Gateway/dual instances keep their keys — enrolled clients
+      // pinned them.
+      await settingsService.clearSecret("federationInstancePrivateKey");
+      await settingsService.clearSecret("federationNoiseStaticPrivateKey");
+    }
+    await settingsService.writeConfigPatch({
+      federation: {
+        gatewayUrl: "",
+        ...(mode === "client" ? { mode: "disabled" as const } : {}),
+      },
+    });
+    await this.restart();
+    return { cleared: hadEnrollment };
   }
 
   async diagnostics(request: {
@@ -336,6 +425,12 @@ export class DesktopFederationRuntime {
     ttlMs?: number;
   }): Promise<{ invite: string; expiresAt: number }> {
     const settings = await getDesktopSettingsService().readSettings();
+    const mode = settings.federation.mode.value;
+    if (mode !== "gateway" && mode !== "dual") {
+      throw new Error(
+        "Invites are issued by the gateway. Switch Mode to gateway or dual first.",
+      );
+    }
     const gatewayUrl = settings.federation.publicUrl.value.trim() || this.listenUrl;
     if (!gatewayUrl) {
       throw new Error("Federation gateway URL is not configured.");
@@ -384,9 +479,17 @@ export class DesktopFederationRuntime {
       payload.gatewayNoisePublicKey,
     );
     stateDb.setMeta(PENDING_INVITE_TOKEN_META_KEY, payload.token);
+    stateDb.setMeta(GATEWAY_ENROLLED_AT_META_KEY, String(Date.now()));
+    // Importing on a listening instance must not silently kill its
+    // listener: gateway/dual become dual, everything else becomes client.
+    const currentMode = (await getDesktopSettingsService().readSettings())
+      .federation.mode.value;
     await getDesktopSettingsService().writeConfigPatch({
       federation: {
-        mode: "client",
+        mode:
+          currentMode === "gateway" || currentMode === "dual"
+            ? "dual"
+            : "client",
         gatewayUrl: payload.gatewayUrl,
       },
     });
@@ -479,6 +582,8 @@ export class DesktopFederationRuntime {
   private async restartNow(): Promise<void> {
     await this.stop();
     const settings = await getDesktopSettingsService().readSettings();
+    this.instanceLabel =
+      settings.federation.instanceLabel.value.trim() || defaultInstanceLabel();
     const mode = settings.federation.mode.value;
     if (mode === "disabled") {
       return;
@@ -621,7 +726,10 @@ export class DesktopFederationRuntime {
       publicKeyPem: keyPair.publicKeyPem,
       capabilities: DEFAULT_CAPABILITIES,
       inviteToken: pendingInviteToken || undefined,
-      label: getAppStateDb().getMeta("profile_name") || this.ensureLocalInstanceId(),
+      label:
+        this.instanceLabel ||
+        settings.federation.instanceLabel.value.trim() ||
+        defaultInstanceLabel(),
       role: "client",
       headers: cloudflareAccessEnabled
         ? {
@@ -652,6 +760,7 @@ export class DesktopFederationRuntime {
         }
         this.client = undefined;
         this.lastConnectionError = "Federation gateway connection closed.";
+        this.lastConnectionFailureKind = "transport";
         this.store().appendAudit({
           peerId: gatewayInstanceId,
           sessionId: clientSession.id,
@@ -698,6 +807,7 @@ export class DesktopFederationRuntime {
     }
     this.reconnectAttempt = 0;
     this.lastConnectionError = undefined;
+    this.lastConnectionFailureKind = undefined;
     log.info("federation client connected", { gatewayUrl });
   }
 
@@ -738,9 +848,9 @@ export class DesktopFederationRuntime {
   ): void {
     if (this.stopping) return;
     this.client = undefined;
-    this.lastConnectionError = redactFederationDiagnostic(
-      error instanceof Error ? error.message : String(error),
-    );
+    const rawMessage = error instanceof Error ? error.message : String(error);
+    this.lastConnectionFailureKind = classifyFederationClientFailure(rawMessage);
+    this.lastConnectionError = redactFederationDiagnostic(rawMessage);
     if (this.gatewayInstanceId) {
       this.publishPeerStatus(
         this.gatewayInstanceId,
@@ -1009,7 +1119,7 @@ export class DesktopFederationRuntime {
     const peers: FederationPeerSummary[] = [
       {
         id: localInstanceId,
-        label: localProfileName || "Gateway",
+        label: this.instanceLabel || localProfileName || "Gateway",
         role: "gateway",
         status: "connected",
         capabilities: DEFAULT_CAPABILITIES,
@@ -1095,6 +1205,15 @@ export class DesktopFederationRuntime {
       return;
     }
     this.publishedPeerStatuses.set(instanceId, { status, unavailableReason });
+    for (const listener of this.peerStatusListeners) {
+      try {
+        listener();
+      } catch (error) {
+        log.warn("federation peer status listener failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
     this.publishAgentEvent?.({
       backend: "codex",
       federationTarget: {
@@ -1220,6 +1339,16 @@ export class DesktopFederationRuntime {
   }
 }
 
+/**
+ * Fallback display name when the operator has not set one: the machine
+ * hostname (minus the mDNS suffix) beats both the profile name (almost
+ * always "default") and the raw instance GUID for recognizing a peer.
+ */
+function defaultInstanceLabel(): string {
+  const host = hostname().trim().replace(/\.local$/i, "");
+  return host || "PwrAgent";
+}
+
 function localBackendOperations(): FederationBackendOperations {
   return {
     async getNavigationSnapshot(request = {}): Promise<NavigationSnapshot> {
@@ -1282,6 +1411,60 @@ function localBackendOperations(): FederationBackendOperations {
         seenUpdatedAt: request.seenUpdatedAt,
         threadId: request.threadId,
       });
+    },
+    async setThreadPin(
+      request: SetThreadPinRequest,
+    ): Promise<SetThreadPinResponse> {
+      const backend = request.backend ?? "codex";
+      const overlay = await getDesktopOverlayStore().setThreadPin({
+        backend,
+        threadId: request.threadId,
+        pinnedRank: request.pinnedRank,
+      });
+      // Publish so this instance's own windows AND connected remote
+      // viewers converge on the new pin state.
+      await getDesktopBackendRegistry().publishLocalEvent({
+        backend,
+        notification: overlay.pinnedRank
+          ? {
+              method: "thread/pin/added",
+              params: {
+                threadId: request.threadId,
+                pinnedRank: overlay.pinnedRank,
+              },
+            }
+          : {
+              method: "thread/pin/removed",
+              params: {
+                threadId: request.threadId,
+              },
+            },
+      });
+      return {
+        backend,
+        threadId: request.threadId,
+        pinnedRank: overlay.pinnedRank,
+      };
+    },
+    async reorderThreadPins(
+      request: ReorderThreadPinsRequest,
+    ): Promise<ReorderThreadPinsResponse> {
+      const pinnedRanks = await getDesktopOverlayStore().reorderThreadPins({
+        threadKeys: request.threadKeys,
+      });
+      // Pin order is global across backends; the backend field is
+      // required by publishLocalEvent but irrelevant here (matches the
+      // app-server reorder handler).
+      await getDesktopBackendRegistry().publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "thread/pin/reordered",
+          params: {
+            pinnedRanks,
+          },
+        },
+      });
+      return { pinnedRanks };
     },
     async archiveThread(request) {
       return await getDesktopBackendRegistry().archiveThread(request);

@@ -7,6 +7,7 @@ import type {
 import {
   FEDERATION_INVITE_VERSION,
   FEDERATION_PROTOCOL_VERSION,
+  filterKnownFederationCapabilities,
   isFederationInstanceId,
 } from "@pwragent/shared";
 import {
@@ -185,7 +186,9 @@ export function completeFederationEnrollment(params: {
     label: params.peer.label,
     role: params.peer.role,
     status: "connected",
-    capabilities: params.peer.capabilities.slice(),
+    // The proof above signed the raw advertised list; store and grant
+    // only the capabilities this build understands.
+    capabilities: filterKnownFederationCapabilities(params.peer.capabilities),
     protocolVersion: params.peer.protocolVersion,
     endpoint: params.peer.endpoint ?? enrollment.endpoint,
     profileName: params.peer.profileName,
@@ -218,6 +221,8 @@ export function authenticateFederationReconnect(params: {
   now: number;
   /** Base64 Noise handshake hash to bind the identity proof to the channel. */
   channelBinding?: string;
+  /** Display label advertised by the peer; refreshes the stored label. */
+  label?: string;
 }): FederationAuthDecision {
   if (!isFederationInstanceId(params.peerInstanceId)) {
     return {
@@ -226,10 +231,16 @@ export function authenticateFederationReconnect(params: {
     };
   }
   const peer = params.store.getPeer(params.peerInstanceId);
+  // Grant only capabilities this build understands; the raw advertised
+  // list (which may include names from a newer build) still feeds the
+  // signature proof below, because the peer signed what it sent.
+  const grantedCapabilities = filterKnownFederationCapabilities(
+    params.requestedCapabilities,
+  );
   const policy = evaluateFederationSessionPolicy({
     peer,
     protocolVersion: params.protocolVersion,
-    requestedCapabilities: params.requestedCapabilities,
+    requestedCapabilities: grantedCapabilities,
   });
   if (!policy.accepted) {
     return policy;
@@ -271,9 +282,12 @@ export function authenticateFederationReconnect(params: {
 
   const connectedPeer: FederationPeerSummary & { pinnedPublicKeyPem?: string } = {
     ...peer,
-    // Reconnect capabilities are the negotiated session subset, not a new
-    // authorization allowlist. Preserve capabilities omitted by this session.
-    capabilities: [...peer.capabilities],
+    label: params.label?.trim() || peer.label,
+    // Stored capabilities are informational, not an allowlist: refresh
+    // them to what the peer's current build advertises so peer cards and
+    // capability-gated surfaces (messaging fan-out, event forwarding)
+    // track upgrades. Enrollment identity stays the trust anchor.
+    capabilities: policy.capabilities,
     protocolVersion: params.protocolVersion,
     status: "connected",
     lastConnectedAt: params.now,

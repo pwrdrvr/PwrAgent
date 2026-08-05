@@ -172,4 +172,98 @@ describe("FederationStore", () => {
     ]);
     expect(store.listAudit({ peerId: "missing_peer" })).toEqual([]);
   });
+
+  it("collapses identical consecutive audit events into one repeat-counted row", () => {
+    const first = store.appendAudit({
+      peerId: "desktop_one",
+      kind: "error",
+      createdAt: 1_000,
+      detail: "unknown_peer",
+    });
+    const second = store.appendAudit({
+      peerId: "desktop_one",
+      kind: "error",
+      createdAt: 31_000,
+      detail: "unknown_peer",
+    });
+    // Interleaved connect_attempt rows (the retry loop's other event)
+    // collapse into their own row without breaking the error run.
+    store.appendAudit({
+      peerId: "desktop_one",
+      kind: "connect_attempt",
+      createdAt: 31_100,
+      detail: "reconnect",
+    });
+    store.appendAudit({
+      peerId: "desktop_one",
+      kind: "connect_attempt",
+      createdAt: 61_100,
+      detail: "reconnect",
+    });
+    const third = store.appendAudit({
+      peerId: "desktop_one",
+      kind: "error",
+      createdAt: 61_000,
+      detail: "unknown_peer",
+    });
+
+    expect(second.eventId).toBe(first.eventId);
+    expect(third).toMatchObject({
+      eventId: first.eventId,
+      repeatCount: 3,
+      firstSeenAt: 1_000,
+      createdAt: 61_000,
+    });
+    const audit = store.listAudit({ peerId: "desktop_one" });
+    expect(audit).toHaveLength(2);
+    expect(audit).toMatchObject([
+      { kind: "connect_attempt", repeatCount: 2, firstSeenAt: 31_100 },
+      { kind: "error", repeatCount: 3, firstSeenAt: 1_000 },
+    ]);
+  });
+
+  it("does not collapse events with different details or beyond the repeat window", () => {
+    store.appendAudit({
+      peerId: "desktop_one",
+      kind: "error",
+      createdAt: 1_000,
+      detail: "unknown_peer",
+    });
+    store.appendAudit({
+      peerId: "desktop_one",
+      kind: "error",
+      createdAt: 2_000,
+      detail: "bad_signature",
+    });
+    // Same detail again but 11 minutes after the last matching row —
+    // outside the collapse window, so it starts a fresh row.
+    store.appendAudit({
+      peerId: "desktop_one",
+      kind: "error",
+      createdAt: 2_000 + 11 * 60 * 1000,
+      detail: "bad_signature",
+    });
+
+    expect(store.listAudit({ peerId: "desktop_one" })).toHaveLength(3);
+  });
+
+  it("evicts audit rows beyond the retention cap in the GC pass", () => {
+    for (let index = 0; index < 520; index += 1) {
+      store.appendAudit({
+        peerId: "desktop_one",
+        kind: "connected",
+        // Distinct details defeat repeat-collapsing so each append is a row.
+        createdAt: 1_000 + index * 20 * 60 * 1000,
+        detail: `session ${index}`,
+      });
+    }
+
+    stateDb.cleanupExpired();
+
+    const audit = store.listAudit({ peerId: "desktop_one", limit: 500 });
+    expect(audit).toHaveLength(500);
+    // Newest rows survive; the oldest 20 are gone.
+    expect(audit[0]?.detail).toBe("session 519");
+    expect(audit[audit.length - 1]?.detail).toBe("session 20");
+  });
 });

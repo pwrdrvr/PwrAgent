@@ -1563,6 +1563,10 @@ function DesktopAppShell(props: {
           onPrefetchPullRequests={pullRequests.prefetch}
           onDetachPullRequest={async (thread, pr) => {
             if (!desktopApi?.detachThreadPullRequest) return;
+            // Detach mutates the owning instance's overlay; not routed
+            // over federation yet, so a remote detach would only write a
+            // phantom row into this machine's DB and revert on refresh.
+            if (thread.federation?.ref.target.scope === "remote") return;
             await desktopApi.detachThreadPullRequest({
               backend: thread.source,
               threadId: thread.id,

@@ -87,6 +87,20 @@ export type FederationPeerSummary = {
   unavailableReason?: string;
 };
 
+/**
+ * Client-side pairing record: which gateway this instance imported an
+ * invite for. Present whenever pinned gateway material exists, even
+ * while the connection is failing — an enrolled-but-broken client must
+ * be distinguishable from a never-enrolled one.
+ */
+export type FederationClientEnrollment = {
+  gatewayInstanceId: FederationInstanceId;
+  gatewayUrl?: string;
+  enrolledAt?: number;
+  /** Invite imported but the first enroll connection has not completed. */
+  pendingInvite: boolean;
+};
+
 export type FederationHealthStatus = {
   enabled: boolean;
   role: FederationInstanceRole;
@@ -96,6 +110,7 @@ export type FederationHealthStatus = {
   publicUrl?: string;
   unavailableReason?: string;
   peers: FederationPeerSummary[];
+  clientEnrollment?: FederationClientEnrollment;
 };
 
 export type ReadFederationHealthRequest = Record<string, never>;
@@ -148,8 +163,13 @@ export type FederationDiagnosticEvent = {
   peerId?: FederationPeerId;
   sessionId?: FederationSessionId;
   kind: FederationDiagnosticEventKind;
+  /** Most recent occurrence when the row collapses repeats. */
   createdAt: number;
   detail?: string;
+  /** Number of identical consecutive occurrences collapsed into this row. */
+  repeatCount?: number;
+  /** First occurrence when `repeatCount` > 1. */
+  firstSeenAt?: number;
 };
 
 export type ReadFederationDiagnosticsRequest = {
@@ -190,6 +210,12 @@ export type ImportFederationInviteResponse = {
   gatewayUrl: string;
 };
 
+export type ResetFederationEnrollmentRequest = Record<string, never>;
+
+export type ResetFederationEnrollmentResponse = {
+  cleared: boolean;
+};
+
 export type OpenFederationWindowRequest = {
   target: FederationRemoteTarget;
   label?: string;
@@ -222,11 +248,19 @@ export type FederatedSearchPeerFailure = {
   error: string;
 };
 
+export type FederatedSearchInstanceSummary = {
+  instanceId: FederationInstanceId;
+  instanceLabel: string;
+  resultCount: number;
+};
+
 export type FederatedSearchResponse = {
   query: string;
   searchedAt: number;
   results: FederatedSearchResult[];
   failures: FederatedSearchPeerFailure[];
+  /** Peers that were queried successfully, so the UI can disclose scope. */
+  searchedInstances?: FederatedSearchInstanceSummary[];
 };
 
 export type FederationEnvelopeBase = {
@@ -284,6 +318,17 @@ export function isFederationCapability(
     typeof value === "string" &&
     (FEDERATION_CAPABILITIES as readonly string[]).includes(value)
   );
+}
+
+/**
+ * Narrow a capability-name list to the capabilities THIS build knows.
+ * Unknown names from newer builds are ignored, never an error — that is
+ * what lets capability additions ship without breaking older peers.
+ */
+export function filterKnownFederationCapabilities(
+  value: readonly string[],
+): FederationCapability[] {
+  return value.filter(isFederationCapability);
 }
 
 export function isFederationInstanceId(value: unknown): value is FederationInstanceId {

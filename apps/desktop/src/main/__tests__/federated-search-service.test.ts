@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AppServerThreadSummary } from "@pwragent/shared";
+import type {
+  AppServerListThreadsResponse,
+  AppServerThreadSummary,
+} from "@pwragent/shared";
 import { FederatedSearchService } from "../federation/federated-search-service";
 
 function thread(
@@ -122,6 +125,51 @@ describe("FederatedSearchService", () => {
           error: "offline",
         },
       ],
+      searchedInstances: [
+        {
+          instanceId: "child_two",
+          instanceLabel: "Desktop",
+          resultCount: 1,
+        },
+      ],
+    });
+  });
+
+  it("times out a hung peer instead of stalling the search", async () => {
+    const service = new FederatedSearchService({
+      peerTimeoutMs: 25,
+      local: {
+        listThreads: vi.fn(async () => ({
+          backend: "codex" as const,
+          fetchedAt: 1_000,
+          threads: [thread("local-1", "Timeout resilience", 1_000)],
+        })),
+      },
+      peers: () => [
+        {
+          instanceId: "child_hung",
+          label: "Hung Peer",
+          backend: {
+            // Never resolves — simulates a peer that accepted the RPC
+            // but will not answer within the interactive window.
+            listThreads: vi.fn(
+              () => new Promise<AppServerListThreadsResponse>(() => {}),
+            ),
+          },
+        },
+      ],
+    });
+
+    await expect(service.search({ query: "timeout" })).resolves.toMatchObject({
+      results: [{ ref: { target: { scope: "local" }, threadId: "local-1" } }],
+      failures: [
+        {
+          instanceId: "child_hung",
+          instanceLabel: "Hung Peer",
+          error: "Federated search timed out after 0s.",
+        },
+      ],
+      searchedInstances: [],
     });
   });
 });

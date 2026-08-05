@@ -1005,6 +1005,7 @@ export type SetThreadReactionResponse = {
 
 export type SetThreadPinRequest = {
   backend?: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   /** Rank within the pinned section. Null/undefined removes the pin. */
   pinnedRank?: string | null;
@@ -1036,6 +1037,7 @@ export type SetThreadAgentResponse = {
 };
 
 export type ReorderThreadPinsRequest = {
+  federationTarget?: FederationTarget;
   /**
    * Complete pinned order across ALL backends, first item at the top.
    * Entries are thread identity keys (`buildThreadIdentityKey`), so a Codex

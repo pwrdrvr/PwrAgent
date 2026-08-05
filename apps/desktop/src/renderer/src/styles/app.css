@@ -8548,6 +8548,35 @@ textarea,
   line-height: 1.5;
 }
 
+/* Generated invite payload: single-line code chip + Copy button,
+   mirroring the messaging pairing message pattern. */
+.federation-invite {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.federation-invite > .button {
+  justify-self: start;
+}
+
+.federation-invite__message {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.federation-invite__message code {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .federation-tailscale-actions {
   display: flex;
   align-items: flex-start;
@@ -8577,11 +8606,13 @@ textarea,
   padding-bottom: 18px;
 }
 
+/* Action rows sit against a section's bottom edge; the vertical padding
+   keeps buttons off the bounding box instead of touching the border. */
 .settings-button-row {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
-  padding: 0 18px;
+  padding: 12px 18px 16px;
 }
 
 .settings-license-viewer {

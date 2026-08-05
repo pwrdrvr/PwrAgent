@@ -1,10 +1,16 @@
 import type { MenuItemConstructorOptions } from "electron";
 import type { DesktopPwrAgentProfileSummary } from "@pwragent/shared";
 
+export type ApplicationMenuFederationPeer = {
+  instanceId: string;
+  label: string;
+};
+
 export type ApplicationMenuActions = {
   checkForUpdates: () => void;
   focusWindow: (windowId: number) => void;
   openDocumentation: () => void | Promise<void>;
+  openFederationWindow: (peer: ApplicationMenuFederationPeer) => void;
   openIssueReporter: () => void | Promise<void>;
   openNewThread: () => void;
   openProfile: (profile: string) => void | Promise<void>;
@@ -30,6 +36,8 @@ export type ApplicationMenuOptions = {
   appName: string;
   developerMode: boolean;
   isMac: boolean;
+  /** Connected federation peers; empty hides the Remote Instances menu. */
+  federationPeers: ApplicationMenuFederationPeer[];
   profiles: DesktopPwrAgentProfileSummary[];
   windows: ApplicationMenuWindow[];
   actions: ApplicationMenuActions;
@@ -99,6 +107,23 @@ function buildFileMenu(options: ApplicationMenuOptions): MenuItemConstructorOpti
         accelerator: "CmdOrCtrl+N",
         click: options.actions.openNewThread,
       },
+      // Federation's browse entry point outside Settings: each connected
+      // peer opens its remote-threads window. Hidden entirely when no
+      // peer is connected so non-federation users never see the item.
+      ...(options.federationPeers.length > 0
+        ? [
+            { type: "separator" as const },
+            {
+              label: "Remote Instances",
+              submenu: options.federationPeers.map((peer) => ({
+                label: peer.label,
+                click: () => {
+                  options.actions.openFederationWindow(peer);
+                },
+              })),
+            },
+          ]
+        : []),
       { type: "separator" },
       { role: "close" },
       ...(options.isMac

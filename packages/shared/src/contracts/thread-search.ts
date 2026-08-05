@@ -153,6 +153,20 @@ export type ThreadSearchResult = {
   };
 };
 
+/**
+ * One federation peer that participated in (or failed out of) a global
+ * search, so the results surface can disclose which remote instances
+ * were covered. Remote matching is title/metadata filtering only —
+ * message content is never searched across the federation link.
+ */
+export type ThreadSearchRemoteInstance = {
+  instanceId: string;
+  instanceLabel: string;
+  resultCount: number;
+  failed?: boolean;
+  error?: string;
+};
+
 export type ThreadSearchResponse = {
   backend: AppServerBackendScope;
   fetchedAt: number;
@@ -163,6 +177,7 @@ export type ThreadSearchResponse = {
   results: ThreadSearchResult[];
   searchedScopes: ThreadSearchScopeName[];
   unavailableScopes: ThreadSearchUnavailableScope[];
+  remoteInstances?: ThreadSearchRemoteInstance[];
   truncated?: boolean;
 };
 

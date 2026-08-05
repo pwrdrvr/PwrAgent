@@ -250,7 +250,7 @@ describe("federation enrollment", () => {
     });
   });
 
-  it("authenticates enrolled reconnects and rejects denied capabilities", () => {
+  it("authenticates enrolled reconnects and grants newly advertised capabilities", () => {
     const keyPair = generateFederationIdentityKeyPair();
     store.upsertPeer({
       updatedAt: 1_000,
@@ -293,6 +293,19 @@ describe("federation enrollment", () => {
       peer: { id: "client_one", status: "connected" },
     });
 
+    // Enrollment is identity trust, not a capability allowlist: a
+    // capability the stored row has never seen (e.g. added by a newer
+    // build) is granted, not rejected — rejecting would break every
+    // pairing on upgrade. Note the proof must sign the actual request.
+    const relayMessage = buildFederationProofMessage({
+      purpose: "reconnect",
+      gatewayInstanceId: "gateway_one",
+      peerInstanceId: "client_one",
+      publicKeyPem: keyPair.publicKeyPem,
+      protocolVersion: 1,
+      nonce: "nonce-4",
+      capabilities: ["gateway_relay"],
+    });
     expect(
       authenticateFederationReconnect({
         store,
@@ -303,17 +316,17 @@ describe("federation enrollment", () => {
         requestedCapabilities: ["gateway_relay"],
         signatureBase64: signFederationMessage({
           privateKeyPem: keyPair.privateKeyPem,
-          message,
+          message: relayMessage,
         }),
         now: 2_100,
       }),
     ).toMatchObject({
-      accepted: false,
-      failure: { code: "capability_denied" },
+      accepted: true,
+      capabilities: ["gateway_relay"],
     });
   });
 
-  it("preserves capabilities omitted from a reconnect session request", () => {
+  it("refreshes stored capabilities to the peer's current advertisement", () => {
     const keyPair = generateFederationIdentityKeyPair();
     store.upsertPeer({
       updatedAt: 1_000,
@@ -355,9 +368,11 @@ describe("federation enrollment", () => {
       accepted: true,
       capabilities: ["remote_window"],
     });
+    // The stored row tracks what the peer's current build advertises —
+    // it is informational, not an allowlist, so the dropped capability
+    // disappears rather than being preserved.
     expect(store.getPeer("client_one")?.capabilities).toEqual([
       "remote_window",
-      "federated_search",
     ]);
   });
 });

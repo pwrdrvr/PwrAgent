@@ -537,6 +537,12 @@ export type DesktopApplicationsSnapshot = {
 
 export type DesktopFederationSettingsSnapshot = {
   mode: DesktopSettingsValue<DesktopFederationMode>;
+  /**
+   * Human-readable name this instance advertises to federation peers.
+   * Empty means "use the machine hostname" — peers should never have to
+   * recognize a raw instance GUID.
+   */
+  instanceLabel: DesktopSettingsValue<string>;
   listenHost: DesktopSettingsValue<string>;
   listenPort: DesktopSettingsValue<number>;
   publicUrl: DesktopSettingsValue<string>;
@@ -931,6 +937,7 @@ export type DesktopSettingsConfigPatch = {
   };
   federation?: {
     mode?: DesktopFederationMode;
+    instanceLabel?: string;
     listenHost?: string;
     listenPort?: number;
     publicUrl?: string;

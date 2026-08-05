@@ -524,12 +524,145 @@ describe("FederationSettings", () => {
     )).toBeInTheDocument();
     expect(configureFederationTailscale).not.toHaveBeenCalled();
   });
+
+  it("disables fields that do not apply to the selected mode", async () => {
+    const gatewaySnapshot = settingsSnapshot();
+    const { unmount } = render(
+      <FederationSettings
+        desktopApi={{
+          generateFederationInvite: vi.fn(),
+          readFederationHealth: vi.fn(async () => ({
+            health: {
+              enabled: true,
+              role: "gateway" as const,
+              status: "listening" as const,
+              peers: [],
+            },
+          })),
+        }}
+        onClearSecret={vi.fn(async () => true)}
+        onReplaceSecret={vi.fn(async () => true)}
+        saving={false}
+        snapshot={gatewaySnapshot}
+        onSettingsChanged={vi.fn()}
+        onWriteConfig={vi.fn(async () => true)}
+      />,
+    );
+
+    expect(await screen.findByLabelText("Listen host")).toBeEnabled();
+    expect(screen.getByLabelText("Listen port")).toBeEnabled();
+    expect(screen.getByLabelText("Public URL")).toBeEnabled();
+    expect(screen.getByLabelText("Gateway URL")).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Generate invite" }),
+    ).toBeEnabled();
+    unmount();
+
+    const clientSnapshot: DesktopSettingsSnapshot = {
+      ...gatewaySnapshot,
+      federation: {
+        ...gatewaySnapshot.federation,
+        mode: { value: "client", source: "config" },
+      },
+    };
+    render(
+      <FederationSettings
+        desktopApi={{
+          generateFederationInvite: vi.fn(),
+          readFederationHealth: vi.fn(async () => ({
+            health: {
+              enabled: true,
+              role: "client" as const,
+              status: "connecting" as const,
+              peers: [],
+            },
+          })),
+        }}
+        onClearSecret={vi.fn(async () => true)}
+        onReplaceSecret={vi.fn(async () => true)}
+        saving={false}
+        snapshot={clientSnapshot}
+        onSettingsChanged={vi.fn()}
+        onWriteConfig={vi.fn(async () => true)}
+      />,
+    );
+
+    expect(await screen.findByLabelText("Listen host")).toBeDisabled();
+    expect(screen.getByLabelText("Listen port")).toBeDisabled();
+    expect(screen.getByLabelText("Public URL")).toBeDisabled();
+    expect(screen.getByLabelText("Gateway URL")).toBeEnabled();
+    // Only the listening side issues invites.
+    expect(
+      screen.getByRole("button", { name: "Generate invite" }),
+    ).toBeDisabled();
+  });
+
+  it("shows gateway enrollment and forgets it after confirmation", async () => {
+    const resetFederationEnrollment = vi.fn(async () => ({ cleared: true }));
+    const gatewaySnapshot = settingsSnapshot();
+    const clientSnapshot: DesktopSettingsSnapshot = {
+      ...gatewaySnapshot,
+      federation: {
+        ...gatewaySnapshot.federation,
+        mode: { value: "client", source: "config" },
+      },
+    };
+    const health: FederationHealthStatus = {
+      enabled: true,
+      role: "client",
+      status: "rejected",
+      unavailableReason: "unknown_peer",
+      peers: [],
+      clientEnrollment: {
+        gatewayInstanceId: "pwr_gateway_one",
+        gatewayUrl: "ws://192.168.6.163:47830",
+        enrolledAt: Date.parse("2026-08-01T12:00:00Z"),
+        pendingInvite: false,
+      },
+    };
+
+    render(
+      <FederationSettings
+        desktopApi={{
+          readFederationDiagnostics: vi.fn(async () => ({
+            health,
+            events: [],
+          })),
+          resetFederationEnrollment,
+        }}
+        onClearSecret={vi.fn(async () => true)}
+        onReplaceSecret={vi.fn(async () => true)}
+        saving={false}
+        snapshot={clientSnapshot}
+        onSettingsChanged={vi.fn()}
+        onWriteConfig={vi.fn(async () => true)}
+      />,
+    );
+
+    expect(await screen.findByText("Gateway Enrollment")).toBeInTheDocument();
+    expect(screen.getByText("pwr_gateway_one")).toBeInTheDocument();
+    // Auth-class failures also surface remediation guidance.
+    expect(
+      screen.getByText(
+        "This instance is not enrolled with the gateway anymore. Generate a fresh invite on the gateway and import it here.",
+      ),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Forget gateway" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Confirm forget" }),
+    );
+    await waitFor(() =>
+      expect(resetFederationEnrollment).toHaveBeenCalledWith({}),
+    );
+  });
 });
 
 function settingsSnapshot(): DesktopSettingsSnapshot {
   return {
     federation: {
       mode: { value: "gateway", source: "config" },
+      instanceLabel: { value: "", source: "default" },
       listenHost: { value: "127.0.0.1", source: "config" },
       listenPort: { value: 8765, source: "config" },
       publicUrl: {

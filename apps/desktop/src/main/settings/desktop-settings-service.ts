@@ -753,6 +753,7 @@ export class DesktopSettingsService {
       },
       federation: {
         mode: this.resolveFederationMode(config.federation?.mode),
+        instanceLabel: this.resolveConfigString(config.federation?.instanceLabel),
         listenHost: this.resolveConfigStringWithDefault(
           config.federation?.listenHost,
           "127.0.0.1",
@@ -1400,12 +1401,42 @@ export class DesktopSettingsService {
         publicKeyPem: publicKeyPemFromPrivateKey(existing),
       };
     }
+    this.assertFederationKeyMaterialWritable("federationInstancePrivateKey");
     const keyPair = generateFederationIdentityKeyPair();
     await this.options.secretStore.setSecret(
       "federationInstancePrivateKey",
       keyPair.privateKeyPem,
     );
     return keyPair;
+  }
+
+  /**
+   * Refuse to mint a replacement federation key when a stored one exists
+   * but cannot be read, or when secret storage cannot persist a new one.
+   * Silently generating a fresh key here is how a previously-working
+   * pairing turns into "the key was invalid": every peer that pinned the
+   * old key rejects the new identity with no explanation. Failing loudly
+   * lets the operator rotate deliberately (Forget gateway + fresh invite)
+   * instead of by accident.
+   */
+  private assertFederationKeyMaterialWritable(
+    name: "federationInstancePrivateKey" | "federationNoiseStaticPrivateKey",
+  ): void {
+    const accessError = this.options.secretStore.getSecretAccessError?.(name);
+    if (accessError) {
+      throw new Error(
+        `The stored federation key cannot be decrypted (${accessError}) ` +
+          "PwrAgent will not silently replace it because peers pin this key. " +
+          "To rotate deliberately, forget the gateway pairing in Settings → Federation and import a fresh invite.",
+      );
+    }
+    const storage = this.options.secretStore.describe();
+    if (!storage.available) {
+      throw new Error(
+        "Federation requires secret storage for its key material, but secret storage is unavailable" +
+          `${storage.unavailableReason ? `: ${storage.unavailableReason}` : "."}`,
+      );
+    }
   }
 
   async resolveFederationCloudflareCredentials(): Promise<{
@@ -1451,6 +1482,7 @@ export class DesktopSettingsService {
         publicKeyBase64: noisePublicKeyBase64FromPrivateBase64(existing),
       };
     }
+    this.assertFederationKeyMaterialWritable("federationNoiseStaticPrivateKey");
     const keyPair = generateFederationNoiseStaticKeyPair();
     await this.options.secretStore.setSecret(
       "federationNoiseStaticPrivateKey",

@@ -6,6 +6,8 @@ export const FEDERATION_GET_DIAGNOSTICS_CHANNEL = "federation:get-diagnostics";
 export const FEDERATION_GENERATE_INVITE_CHANNEL = "federation:generate-invite";
 export const FEDERATION_IMPORT_INVITE_CHANNEL = "federation:import-invite";
 export const FEDERATION_REVOKE_PEER_CHANNEL = "federation:revoke-peer";
+export const FEDERATION_RESET_ENROLLMENT_CHANNEL =
+  "federation:reset-enrollment";
 export const FEDERATION_TAILSCALE_STATUS_CHANNEL = "federation:tailscale-status";
 export const FEDERATION_TAILSCALE_CONFIGURE_CHANNEL =
   "federation:tailscale-configure";

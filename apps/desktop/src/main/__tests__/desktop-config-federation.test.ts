@@ -10,6 +10,7 @@ describe("desktop config [federation] section", () => {
     const src = [
       "[federation]",
       'mode = "gateway"',
+      'instance_label = "Studio Mac"',
       'listen_host = "127.0.0.1"',
       "listen_port = 47830",
       'public_url = "https://pwragent.example.com"',
@@ -23,6 +24,7 @@ describe("desktop config [federation] section", () => {
 
     expect(config.federation).toEqual({
       mode: "gateway",
+      instanceLabel: "Studio Mac",
       listenHost: "127.0.0.1",
       listenPort: 47830,
       publicUrl: "https://pwragent.example.com",
@@ -36,6 +38,7 @@ describe("desktop config [federation] section", () => {
     const edits = desktopSettingsPatchToEdits({
       federation: {
         mode: "dual",
+        instanceLabel: "Studio Mac",
         listenHost: "0.0.0.0",
         listenPort: 47831,
         publicUrl: "https://gateway.example.com",
@@ -49,6 +52,7 @@ describe("desktop config [federation] section", () => {
 
     expect(config.federation).toEqual({
       mode: "dual",
+      instanceLabel: "Studio Mac",
       listenHost: "0.0.0.0",
       listenPort: 47831,
       publicUrl: "https://gateway.example.com",
@@ -62,6 +66,7 @@ describe("desktop config [federation] section", () => {
     const existing = [
       "[federation]",
       'mode = "gateway"',
+      'instance_label = "Studio Mac"',
       'listen_host = "127.0.0.1"',
       "listen_port = 47830",
       'public_url = "https://gateway.example.com"',
@@ -74,6 +79,7 @@ describe("desktop config [federation] section", () => {
       {
         federation: {
           mode: "disabled",
+          instanceLabel: "",
           listenHost: "",
           listenPort: 0,
           publicUrl: "",

@@ -52,7 +52,17 @@ export type FederationSessionAuditEntry = {
   kind: FederationSessionAuditKind;
   createdAt: number;
   detail?: string;
+  repeatCount?: number;
+  firstSeenAt?: number;
 };
+
+/**
+ * A repeat of the newest matching audit row inside this window collapses
+ * into that row (repeat_count bump) instead of inserting. Sized to cover
+ * the client reconnect loop's 30s max backoff with a wide margin while
+ * still letting a failure that recurs after a quiet gap start a fresh row.
+ */
+const FEDERATION_AUDIT_REPEAT_COLLAPSE_WINDOW_MS = 10 * 60 * 1000;
 
 type FederationPeerPayload = {
   capabilities?: FederationCapability[];
@@ -74,6 +84,8 @@ type FederationEnrollmentPayload = {
 
 type FederationSessionAuditPayload = {
   detail?: string;
+  repeatCount?: number;
+  firstSeenAt?: number;
 };
 
 type FederationPeerRow = {
@@ -324,6 +336,8 @@ export class FederationStore {
     detail?: string;
   }): FederationSessionAuditEntry {
     if (params.peerId) assertPeerId(params.peerId);
+    const collapsed = this.collapseRepeatAudit(params);
+    if (collapsed) return collapsed;
     const result = this.stateDb.raw
       .prepare(
         `INSERT INTO federation_session_audit(
@@ -344,6 +358,72 @@ export class FederationStore {
       kind: params.kind,
       createdAt: params.createdAt,
       detail: params.detail,
+    };
+  }
+
+  /**
+   * The client reconnect loop emits an identical connect_attempt + error
+   * pair every backoff cycle; without collapsing, a broken pairing writes
+   * thousands of duplicate rows a day. When the newest row for the same
+   * kind/peer/session carries the same detail and is recent, bump its
+   * repeat count and refresh created_at instead of inserting a new row.
+   */
+  private collapseRepeatAudit(params: {
+    peerId?: FederationPeerId;
+    sessionId?: FederationSessionId;
+    kind: FederationSessionAuditKind;
+    createdAt: number;
+    detail?: string;
+  }): FederationSessionAuditEntry | undefined {
+    const newest = this.stateDb.raw
+      .prepare(
+        `SELECT event_id, peer_id, session_id, kind, created_at, payload
+         FROM federation_session_audit
+         WHERE kind = ?
+           AND peer_id IS ?
+           AND session_id IS ?
+         ORDER BY created_at DESC, event_id DESC
+         LIMIT 1`,
+      )
+      .get(
+        params.kind,
+        params.peerId ?? null,
+        params.sessionId ?? null,
+      ) as FederationSessionAuditRow | undefined;
+    if (!newest) return undefined;
+    if (params.createdAt - newest.created_at > FEDERATION_AUDIT_REPEAT_COLLAPSE_WINDOW_MS) {
+      return undefined;
+    }
+    const payload = parseJson<FederationSessionAuditPayload>(newest.payload);
+    if ((payload.detail ?? undefined) !== (params.detail ?? undefined)) {
+      return undefined;
+    }
+    const repeatCount = (payload.repeatCount ?? 1) + 1;
+    const firstSeenAt = payload.firstSeenAt ?? newest.created_at;
+    this.stateDb.raw
+      .prepare(
+        `UPDATE federation_session_audit
+         SET created_at = ?, payload = ?
+         WHERE event_id = ?`,
+      )
+      .run(
+        params.createdAt,
+        JSON.stringify({
+          detail: params.detail,
+          repeatCount,
+          firstSeenAt,
+        } satisfies FederationSessionAuditPayload),
+        newest.event_id,
+      );
+    return {
+      eventId: newest.event_id,
+      peerId: params.peerId,
+      sessionId: params.sessionId,
+      kind: params.kind,
+      createdAt: params.createdAt,
+      detail: params.detail,
+      repeatCount,
+      firstSeenAt,
     };
   }
 
@@ -474,6 +554,8 @@ function rowToAudit(row: FederationSessionAuditRow): FederationSessionAuditEntry
     kind: row.kind as FederationSessionAuditKind,
     createdAt: row.created_at,
     detail: payload.detail,
+    repeatCount: payload.repeatCount,
+    firstSeenAt: payload.firstSeenAt,
   };
 }
 

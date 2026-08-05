@@ -1588,8 +1588,12 @@ export function ThreadView(props: ThreadViewProps) {
     : undefined;
   const toggleSelectedThreadTerminal = useCallback(() => {
     if (!selectedThreadKey) return;
+    // No remote PTY exists in the federation protocol yet — opening the
+    // panel for a remote thread would run a shell on THIS machine while
+    // the window is branded as the peer instance.
+    if (selectedThread?.federation) return;
     terminals.togglePanel(selectedThreadKey, selectedThreadTerminalCwd);
-  }, [selectedThreadKey, selectedThreadTerminalCwd, terminals]);
+  }, [selectedThread, selectedThreadKey, selectedThreadTerminalCwd, terminals]);
   const suppressBranchDriftDialogRef = useRef(
     props.suppressBranchDriftDialog ?? false
   );

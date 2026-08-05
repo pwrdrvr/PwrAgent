@@ -61,7 +61,7 @@ describe("federation policy", () => {
           capabilities: ["remote_window"],
         },
         protocolVersion: 1,
-        requestedCapabilities: ["gateway_relay"],
+        requestedCapabilities: [],
       }),
     ).toMatchObject({
       accepted: false,
@@ -69,7 +69,11 @@ describe("federation policy", () => {
     });
   });
 
-  it("requires scheduler authorization independently from turn control", () => {
+  it("grants an enrolled peer whatever its current build advertises", () => {
+    // Enrollment is identity trust, not a capability allowlist: a peer
+    // enrolled before `messaging_route` existed reconnects with a newer
+    // build advertising it and simply gets it. The stored row's
+    // capabilities are informational and refresh on reconnect.
     expect(
       evaluateFederationSessionPolicy({
         peer: {
@@ -77,15 +81,22 @@ describe("federation policy", () => {
           label: "Client",
           role: "client",
           status: "connected",
-          capabilities: ["turn_control"],
-          protocolVersion: 1,
+          capabilities: ["remote_window", "thread_navigation"],
         },
         protocolVersion: 1,
-        requestedCapabilities: ["scheduled_actions"],
+        requestedCapabilities: [
+          "remote_window",
+          "thread_navigation",
+          "messaging_route",
+        ],
       }),
     ).toMatchObject({
-      accepted: false,
-      failure: { code: "capability_denied" },
+      accepted: true,
+      capabilities: [
+        "remote_window",
+        "thread_navigation",
+        "messaging_route",
+      ],
     });
   });
 
