@@ -16,6 +16,8 @@ import type {
   CompactThreadResponse,
   CreateScheduledThreadActionRequest,
   CodexEnvironmentSetupProgressEvent,
+  DetachThreadPullRequestRequest,
+  DetachThreadPullRequestResponse,
   FederationCapability,
   FederationRequestEnvelope,
   ForkThreadRequest,
@@ -34,8 +36,11 @@ import type {
   MaterializeDirectoryLaunchpadResponse,
   MarkThreadSeenRequest,
   MarkThreadSeenResponse,
+  MessagingPlatformStatus,
   SetThreadPinRequest,
   SetThreadPinResponse,
+  SetThreadPrAutoDispatchRequest,
+  SetThreadPrAutoDispatchResponse,
   ReorderThreadPinsRequest,
   ReorderThreadPinsResponse,
   NavigationSnapshot,
@@ -88,6 +93,8 @@ export const FEDERATION_BACKEND_METHODS = {
   markThreadSeen: "backend.markThreadSeen",
   setThreadPin: "backend.setThreadPin",
   reorderThreadPins: "backend.reorderThreadPins",
+  detachThreadPullRequest: "backend.detachThreadPullRequest",
+  setThreadPrAutoDispatch: "backend.setThreadPrAutoDispatch",
   archiveThread: "backend.archiveThread",
   startThread: "backend.startThread",
   forkThread: "backend.forkThread",
@@ -117,6 +124,7 @@ export const FEDERATION_BACKEND_METHODS = {
   renameThread: "backend.renameThread",
   readApplications: "backend.readApplications",
   openApplication: "backend.openApplication",
+  readMessagingPlatformStatuses: "backend.readMessagingPlatformStatuses",
   trustCodexProject: "backend.trustCodexProject",
 } as const;
 
@@ -149,6 +157,11 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.markThreadSeen]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.setThreadPin]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.reorderThreadPins]: "thread_navigation",
+  // PR detach cancels pending auto-dispatch work and auto-dispatch arms
+  // automatic repair turns, so both sit with the turn-control grants
+  // (like archiveThread) rather than the browse-level navigation grants.
+  [FEDERATION_BACKEND_METHODS.detachThreadPullRequest]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.setThreadPrAutoDispatch]: "turn_control",
   [FEDERATION_BACKEND_METHODS.archiveThread]: "turn_control",
   [FEDERATION_BACKEND_METHODS.startThread]: "turn_control",
   [FEDERATION_BACKEND_METHODS.forkThread]: "turn_control",
@@ -178,6 +191,9 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.renameThread]: "turn_control",
   [FEDERATION_BACKEND_METHODS.readApplications]: "remote_window",
   [FEDERATION_BACKEND_METHODS.openApplication]: "remote_window",
+  // Read-only peer messaging health for the remote window's MSG chip.
+  // messaging_route stays reserved for messaging-originated remote control.
+  [FEDERATION_BACKEND_METHODS.readMessagingPlatformStatuses]: "remote_window",
   [FEDERATION_BACKEND_METHODS.trustCodexProject]: "environment_actions",
 };
 
@@ -208,6 +224,12 @@ export type FederationBackendOperations = {
   reorderThreadPins(
     request: ReorderThreadPinsRequest,
   ): Promise<ReorderThreadPinsResponse>;
+  detachThreadPullRequest(
+    request: DetachThreadPullRequestRequest,
+  ): Promise<DetachThreadPullRequestResponse>;
+  setThreadPrAutoDispatch(
+    request: SetThreadPrAutoDispatchRequest,
+  ): Promise<SetThreadPrAutoDispatchResponse>;
   archiveThread(request: ArchiveThreadRequest): Promise<ArchiveThreadResponse>;
   startThread(request: StartThreadRequest): Promise<StartThreadResponse>;
   forkThread(
@@ -282,6 +304,7 @@ export type FederationBackendOperations = {
   openApplication(
     request: OpenDesktopApplicationRequest,
   ): Promise<OpenDesktopApplicationResponse>;
+  readMessagingPlatformStatuses(): Promise<MessagingPlatformStatus[]>;
   trustCodexProject(
     request: TrustCodexProjectRequest,
   ): Promise<TrustCodexProjectResponse>;
@@ -349,6 +372,20 @@ export function registerFederationBackendHandlers(params: {
     async (envelope) =>
       await params.backend.reorderThreadPins(
         envelope.params as ReorderThreadPinsRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.detachThreadPullRequest,
+    async (envelope) =>
+      await params.backend.detachThreadPullRequest(
+        envelope.params as DetachThreadPullRequestRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.setThreadPrAutoDispatch,
+    async (envelope) =>
+      await params.backend.setThreadPrAutoDispatch(
+        envelope.params as SetThreadPrAutoDispatchRequest,
       ),
   );
   params.router.registerHandler(
@@ -561,6 +598,10 @@ export function registerFederationBackendHandlers(params: {
     async () => await params.backend.readApplications(),
   );
   params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.readMessagingPlatformStatuses,
+    async () => await params.backend.readMessagingPlatformStatuses(),
+  );
+  params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.openApplication,
     async (envelope) =>
       await params.backend.openApplication(
@@ -656,6 +697,24 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   ): Promise<MarkThreadSeenResponse> {
     return await this.rpc.request<MarkThreadSeenResponse>({
       method: FEDERATION_BACKEND_METHODS.markThreadSeen,
+      params: request,
+    });
+  }
+
+  async detachThreadPullRequest(
+    request: DetachThreadPullRequestRequest,
+  ): Promise<DetachThreadPullRequestResponse> {
+    return await this.rpc.request<DetachThreadPullRequestResponse>({
+      method: FEDERATION_BACKEND_METHODS.detachThreadPullRequest,
+      params: request,
+    });
+  }
+
+  async setThreadPrAutoDispatch(
+    request: SetThreadPrAutoDispatchRequest,
+  ): Promise<SetThreadPrAutoDispatchResponse> {
+    return await this.rpc.request<SetThreadPrAutoDispatchResponse>({
+      method: FEDERATION_BACKEND_METHODS.setThreadPrAutoDispatch,
       params: request,
     });
   }
@@ -896,6 +955,13 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   async readApplications(): Promise<DesktopApplicationsSnapshot> {
     return await this.rpc.request<DesktopApplicationsSnapshot>({
       method: FEDERATION_BACKEND_METHODS.readApplications,
+      params: {},
+    });
+  }
+
+  async readMessagingPlatformStatuses(): Promise<MessagingPlatformStatus[]> {
+    return await this.rpc.request<MessagingPlatformStatus[]>({
+      method: FEDERATION_BACKEND_METHODS.readMessagingPlatformStatuses,
       params: {},
     });
   }

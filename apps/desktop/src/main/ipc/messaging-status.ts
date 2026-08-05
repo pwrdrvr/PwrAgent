@@ -10,6 +10,7 @@ import type {
   GenerateMessagingPairingTokenRequest,
   GenerateMessagingPairingTokenResponse,
   GetMessagingActivitySummaryResponse,
+  GetMessagingPlatformStatusesRequest,
   InboundPreviewMessage,
   ListInboundTopicsRequest,
   ListInboundTopicsResponse,
@@ -37,11 +38,16 @@ import type {
   UnbindMessagingThreadResponse,
 } from "@pwragent/shared";
 import {
+  isRemoteFederationTarget,
   validateSlackChannelId,
   validateSlackTeamId,
   validateSlackUserId,
 } from "@pwragent/shared";
 import { getDesktopMessagingRuntime } from "../messaging/messaging-runtime";
+import {
+  getDesktopFederationRuntime,
+  setFederationMessagingPlatformStatusReader,
+} from "../federation/federation-runtime";
 import { loadDesktopMessagingConfigFromSettings } from "../messaging/messaging-config";
 import { getDesktopMessagingActivityLog } from "../messaging/desktop-messaging-activity-log";
 import { getDesktopMessagingPairingStore } from "../messaging/desktop-messaging-pairing-store";
@@ -495,6 +501,13 @@ function recordPairingActivity(entry: MessagingPairingEntry, summary: string): v
 export function registerMessagingStatusIpcHandlers(): void {
   const runtime = getDesktopMessagingRuntime();
 
+  // Let remote federation viewers read this instance's messaging health
+  // for their MSG chip. Registered here (not in the federation runtime)
+  // because messaging-runtime already imports the federation runtime.
+  setFederationMessagingPlatformStatusReader(() =>
+    runtime.getPlatformStatuses(),
+  );
+
   unsubscribePlatformStatus?.();
   unsubscribePlatformStatus = runtime.onPlatformStatus(
     broadcastPlatformStatusEvent,
@@ -507,7 +520,20 @@ export function registerMessagingStatusIpcHandlers(): void {
   ipcMain.removeHandler(MESSAGING_GET_PLATFORM_STATUSES_CHANNEL);
   ipcMain.handle(
     MESSAGING_GET_PLATFORM_STATUSES_CHANNEL,
-    async (): Promise<MessagingPlatformStatus[]> => {
+    async (
+      _event,
+      request?: GetMessagingPlatformStatusesRequest,
+    ): Promise<MessagingPlatformStatus[]> => {
+      if (
+        request?.federationTarget
+        && isRemoteFederationTarget(request.federationTarget)
+      ) {
+        // A federation window's MSG chip shows the OWNING instance's
+        // messaging health; local runtime state would read as the peer's.
+        return await getDesktopFederationRuntime()
+          .remoteBackend(request.federationTarget)
+          .readMessagingPlatformStatuses();
+      }
       return await timeStartupProfileOperation({
         type: "ipc-main:getMessagingPlatformStatuses",
         operation: async () => runtime.getPlatformStatuses(),

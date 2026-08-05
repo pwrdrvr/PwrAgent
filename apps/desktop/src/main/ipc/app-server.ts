@@ -247,6 +247,7 @@ import {
 } from "../pr-status/git-remote";
 import { PrPollingScheduler } from "../pr-status/pr-polling-scheduler";
 import type { PrPollTarget } from "../pr-status/pr-polling-scheduler";
+import { PrPollingFocusTracker } from "../pr-status/pr-polling-focus";
 import {
   PrAutoDispatchCoordinator,
   buildPrRepositoryKey,
@@ -1120,9 +1121,10 @@ class DesktopAppServerService {
   private prPollingSettingsSyncGeneration = 0;
   /**
    * Threads the operator currently has selected / on screen, pushed from the
-   * renderer. Drives the poller's fast tier — main cannot infer selection.
+   * renderer per window. Drives the poller's fast tier — main cannot infer
+   * selection.
    */
-  private prPollingFocusThreadKeys: ReadonlySet<string> = new Set();
+  private readonly prPollingFocus = new PrPollingFocusTracker();
   /** prKey → backend to publish its status updates on. Rebuilt per poll pass. */
   private readonly prPollBackendByKey = new Map<string, AppServerBackendKind>();
   /** Subscribers to typed PR status transitions. */
@@ -3169,6 +3171,18 @@ class DesktopAppServerService {
   async detachThreadPullRequest(
     request: DetachThreadPullRequestRequest,
   ): Promise<DetachThreadPullRequestResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      // PR attachments live on the owning instance; detaching locally
+      // would only write a phantom row into the viewer's overlay store
+      // that the next remote snapshot reverts.
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .detachThreadPullRequest(remoteRequest);
+    }
     const backend = request.backend ?? "codex";
     const prKey = getPrStatusKey(request.pr);
     const currentPr = this.prStatusRegistry.get(prKey)?.pr;
@@ -4227,10 +4241,19 @@ class DesktopAppServerService {
   /**
    * Renderer tells us which threads are selected / on screen. Their PRs move to
    * the poller's fast tier; everything else backs off. Cheap and idempotent —
-   * the renderer debounces, and this only swaps a Set.
+   * the renderer debounces, and this only swaps a Set. Each window's focus is
+   * tracked under its webContents id so windows don't clobber each other.
    */
-  setPullRequestPollingFocus(request: SetPullRequestPollingFocusRequest): void {
-    this.prPollingFocusThreadKeys = new Set(request.threadKeys);
+  setPullRequestPollingFocus(
+    request: SetPullRequestPollingFocusRequest,
+    senderKey = 0,
+  ): void {
+    this.prPollingFocus.set(senderKey, request.threadKeys);
+  }
+
+  /** Drop a closed window's focus so its threads leave the fast tier. */
+  clearPullRequestPollingFocusForSender(senderKey: number): void {
+    this.prPollingFocus.clearSender(senderKey);
   }
 
   private getPrGraphqlClient(): GithubGraphqlPrClient {
@@ -4480,7 +4503,7 @@ class DesktopAppServerService {
     appServerLog.info("background PR polling enabled — starting poller");
     const scheduler = new PrPollingScheduler({
       listTargets: () => this.collectPrPollTargets(),
-      getFocusedThreadKeys: () => this.prPollingFocusThreadKeys,
+      getFocusedThreadKeys: () => this.prPollingFocus.union(),
       isWindowVisible: () =>
         BrowserWindow.getAllWindows().some(
           (window) =>
@@ -4558,7 +4581,7 @@ class DesktopAppServerService {
       maxPerTick: PR_DISCOVERY_MAX_PER_TICK,
       // The selected / on-screen threads already get a fast branch-lookup from
       // the renderer — re-doing it here would just burn budget.
-      skipThreadKeys: this.prPollingFocusThreadKeys,
+      skipThreadKeys: this.prPollingFocus.union(),
     });
 
     const dueContexts: ThreadPrRefreshContext[] = [];
@@ -5764,7 +5787,7 @@ class DesktopAppServerService {
     this.prPollingSettingsUnsubscribe = undefined;
     this.prGraphqlClient = undefined;
     this.githubSamlBlockedRepositories.clear();
-    this.prPollingFocusThreadKeys = new Set();
+    this.prPollingFocus.clear();
     this.prPollBackendByKey.clear();
     this.prStatusTransitionListeners.clear();
     this.prAutoDispatchCoordinator?.close();
@@ -6031,6 +6054,9 @@ const GIT_MUTATION_COMMAND =
 
 const appServerService = new DesktopAppServerService();
 
+/** Sender ids that already have a destroyed-listener reaping their PR focus. */
+const prPollingFocusCleanupSenderIds = new Set<number>();
+
 let unsubscribeWorkingStateEvents: (() => void) | undefined;
 
 export function registerAppServerIpcHandlers(): void {
@@ -6054,6 +6080,9 @@ export function registerAppServerIpcHandlers(): void {
   );
   getDesktopBackendRegistry().setDirectoryGitStatusWriter(
     async (params) => await appServerService.writeDirectoryGitStatusEntry(params),
+  );
+  getDesktopBackendRegistry().setThreadPullRequestDetachHandler(
+    async (request) => await appServerService.detachThreadPullRequest(request),
   );
   getDesktopBackendRegistry().setThreadPrAutoDispatchHandler({
     preferenceChanged: async (request) =>
@@ -6438,12 +6467,26 @@ export function registerAppServerIpcHandlers(): void {
   ipcMain.handle(
     NAVIGATION_SET_PR_POLLING_FOCUS_CHANNEL,
     async (event, request: SetPullRequestPollingFocusRequest): Promise<void> => {
-      // The focus set is shared main-process state; a federation window's
-      // remote thread keys would clobber the local window's fast tier.
+      // A federation window's selection is a remote thread key — it would
+      // never match a local poll target, so don't track it at all.
       if (isFederationWindowWebContents(event?.sender)) {
         return;
       }
-      appServerService.setPullRequestPollingFocus(request);
+      const sender = event?.sender;
+      if (!sender) {
+        appServerService.setPullRequestPollingFocus(request);
+        return;
+      }
+      appServerService.setPullRequestPollingFocus(request, sender.id);
+      // Focus entries are per-window; reap this window's entry when it
+      // closes so its threads fall back out of the fast tier.
+      if (!prPollingFocusCleanupSenderIds.has(sender.id)) {
+        prPollingFocusCleanupSenderIds.add(sender.id);
+        sender.once("destroyed", () => {
+          prPollingFocusCleanupSenderIds.delete(sender.id);
+          appServerService.clearPullRequestPollingFocusForSender(sender.id);
+        });
+      }
     },
   );
   ipcMain.removeHandler(NAVIGATION_DETACH_THREAD_PR_CHANNEL);
@@ -6453,11 +6496,18 @@ export function registerAppServerIpcHandlers(): void {
       event,
       request: DetachThreadPullRequestRequest,
     ): Promise<DetachThreadPullRequestResponse> => {
-      // PR attachments live on the owning instance; a federation window
-      // detaching here would only pollute this machine's overlay store.
-      if (isFederationWindowWebContents(event?.sender)) {
+      // Defense in depth behind renderer stamping: a federation window's
+      // detach must carry a remote target so it routes to the owning
+      // instance instead of polluting this machine's overlay store.
+      if (
+        isFederationWindowWebContents(event?.sender)
+        && !(
+          request.federationTarget
+          && isRemoteFederationTarget(request.federationTarget)
+        )
+      ) {
         throw new Error(
-          "Detaching a pull request is not yet supported for remote threads.",
+          "Detaching a pull request for a remote thread must target the owning instance.",
         );
       }
       return await appServerService.detachThreadPullRequest(request);
@@ -6708,6 +6758,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   registry?.setThreadPullRequestWatchToolHandler(undefined);
   registry?.setDirectoryGitStatusWriter(undefined);
   registry?.setThreadPrAutoDispatchHandler(undefined);
+  registry?.setThreadPullRequestDetachHandler(undefined);
   await appServerService.close();
 }
 

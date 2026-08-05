@@ -135,6 +135,7 @@ import type {
   ListThreadMigrationSourceThreadsResponse,
   ListThreadMigrationSourcesResponse,
   RetryThreadMigrationRequest,
+  GetMessagingPlatformStatusesRequest,
   MessagingPlatformStatus,
   MessagingPlatformStatusEvent,
   MessagingPairingEntry,
@@ -1690,10 +1691,13 @@ const desktopApi = Object.freeze({
       ipcRenderer.off(CODEX_ENVIRONMENT_SETUP_PROGRESS_CHANNEL, listener);
     };
   },
-  getMessagingPlatformStatuses: async (): Promise<MessagingPlatformStatus[]> =>
+  getMessagingPlatformStatuses: async (
+    request?: GetMessagingPlatformStatusesRequest,
+  ): Promise<MessagingPlatformStatus[]> =>
     await invokeWithStartupProfileTiming(
       "getMessagingPlatformStatuses",
       MESSAGING_GET_PLATFORM_STATUSES_CHANNEL,
+      request,
     ),
   setMessagingEnabled: async (
     request: SetMessagingEnabledRequest,

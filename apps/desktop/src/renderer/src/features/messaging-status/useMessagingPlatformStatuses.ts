@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type {
+  FederationRemoteTarget,
   MessagingChannelKind,
   MessagingPlatformStatus,
   MessagingPlatformStatusEvent,
@@ -7,6 +8,7 @@ import type {
 import type { DesktopApi } from "../../lib/desktop-api";
 
 const ACTIVITY_TAIL_MS = 2_000;
+const REMOTE_STATUS_POLL_INTERVAL_MS = 30_000;
 
 /**
  * Subscribes to per-platform messaging health + activity. Maintains the
@@ -15,9 +17,15 @@ const ACTIVITY_TAIL_MS = 2_000;
  * health changes — activity-driven re-renders go through a separate
  * `activeAtByPlatform` map so the rest of the row doesn't re-render
  * just because a dot flickered.
+ *
+ * With a remote `federationTarget`, the hook reads the OWNING instance's
+ * statuses over federation instead: an initial fetch plus a slow poll.
+ * Local status events are ignored (they describe this machine), and the
+ * activity map stays empty — remote activity isn't relayed yet.
  */
 export function useMessagingPlatformStatuses(
   desktopApi: DesktopApi | undefined,
+  federationTarget?: FederationRemoteTarget,
 ): {
   statuses: MessagingPlatformStatus[];
   activeAtByPlatform: Record<string, number>;
@@ -32,6 +40,29 @@ export function useMessagingPlatformStatuses(
       return;
     }
     let cancelled = false;
+
+    if (federationTarget) {
+      const refresh = async (): Promise<void> => {
+        try {
+          const remote = await desktopApi.getMessagingPlatformStatuses!({
+            federationTarget,
+          });
+          if (!cancelled) setStatuses(remote);
+        } catch {
+          // Peer offline or capability denied — keep the last snapshot;
+          // the next poll retries.
+        }
+      };
+      void refresh();
+      const intervalId = window.setInterval(() => {
+        void refresh();
+      }, REMOTE_STATUS_POLL_INTERVAL_MS);
+      return () => {
+        cancelled = true;
+        window.clearInterval(intervalId);
+      };
+    }
+
     void (async () => {
       try {
         const initial = await desktopApi.getMessagingPlatformStatuses!();
@@ -60,7 +91,7 @@ export function useMessagingPlatformStatuses(
       cancelled = true;
       unsubscribe?.();
     };
-  }, [desktopApi]);
+  }, [desktopApi, federationTarget]);
 
   // Sweep stale activity timestamps so the dot stops blinking even if
   // we never receive an "activity end" event (we don't; the runtime

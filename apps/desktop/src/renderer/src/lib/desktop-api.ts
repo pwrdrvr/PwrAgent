@@ -154,6 +154,7 @@ import type {
   ListThreadMigrationSourceThreadsResponse,
   ListThreadMigrationSourcesResponse,
   RetryThreadMigrationRequest,
+  GetMessagingPlatformStatusesRequest,
   MessagingPairingEntry,
   MessagingPlatformStatus,
   MessagingPlatformStatusEvent,
@@ -909,7 +910,9 @@ export type DesktopApi = {
   onCodexEnvironmentSetupProgress?: (
     callback: (event: CodexEnvironmentSetupProgressEvent) => void,
   ) => () => void;
-  getMessagingPlatformStatuses?: () => Promise<MessagingPlatformStatus[]>;
+  getMessagingPlatformStatuses?: (
+    request?: GetMessagingPlatformStatusesRequest,
+  ) => Promise<MessagingPlatformStatus[]>;
   setMessagingEnabled?: (
     request: SetMessagingEnabledRequest,
   ) => Promise<SetMessagingEnabledResponse>;

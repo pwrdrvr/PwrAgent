@@ -417,6 +417,7 @@ export type SetThreadModelSettingsResponse = SetThreadModelSettingsRequest;
 
 export type SetThreadPrAutoDispatchRequest = {
   backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   enabled: boolean;
 };

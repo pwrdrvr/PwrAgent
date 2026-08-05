@@ -826,6 +826,17 @@ export function registerAgentIpcHandlers(): void {
       _event,
       request: SetThreadPrAutoDispatchRequest,
     ): Promise<SetThreadPrAutoDispatchResponse> => {
+      if (
+        request.federationTarget &&
+        isRemoteFederationTarget(request.federationTarget)
+      ) {
+        // Auto-fix preference and its dispatch coordinator live on the
+        // owning instance; a local write would flip a phantom row while
+        // the owner keeps dispatching (or not).
+        return await getDesktopFederationRuntime()
+          .remoteBackend(request.federationTarget)
+          .setThreadPrAutoDispatch(stripFederationTarget(request));
+      }
       return await registry.setThreadPrAutoDispatch(request);
     },
   );

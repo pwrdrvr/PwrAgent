@@ -366,6 +366,7 @@ const setThreadPullRequestStatusToolHandler = vi.fn();
 const setThreadPullRequestCanonicalizer = vi.fn();
 const setThreadPullRequestWatchToolHandler = vi.fn();
 const setThreadPrAutoDispatchHandler = vi.fn();
+const setThreadPullRequestDetachHandler = vi.fn();
 const setDirectoryGitStatusWriter = vi.fn();
 const setThreadPrAutoDispatchBatch = vi.fn(async () => undefined);
 const ensureDirectoryLaunchpad = vi.fn(async (request: {
@@ -729,6 +730,7 @@ vi.mock("../app-server/backend-registry", () => {
     setThreadPullRequestCanonicalizer,
     setThreadPullRequestWatchToolHandler,
     setThreadPrAutoDispatchHandler,
+    setThreadPullRequestDetachHandler,
     setDirectoryGitStatusWriter,
     setThreadPrAutoDispatchBatch,
     ensureDirectoryLaunchpad,
@@ -831,6 +833,7 @@ describe("app server ipc", () => {
     setThreadPullRequestCanonicalizer.mockClear();
     setThreadPullRequestWatchToolHandler.mockClear();
     setThreadPrAutoDispatchHandler.mockClear();
+    setThreadPullRequestDetachHandler.mockClear();
     setDirectoryGitStatusWriter.mockClear();
     setThreadPrAutoDispatchBatch.mockClear();
     ensureDirectoryLaunchpad.mockClear();

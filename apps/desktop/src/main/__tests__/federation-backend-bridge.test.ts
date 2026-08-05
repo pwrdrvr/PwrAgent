@@ -223,6 +223,112 @@ describe("federation backend bridge", () => {
     });
   });
 
+  it("routes PR detach over RPC with turn_control authorization", async () => {
+    const sent: FederationProtocolEnvelope[] = [];
+    const rpc = new FederationRpcEndpoint({
+      localInstanceId: "viewer_one",
+      remoteInstanceId: "owner_one",
+      sendEnvelope: (envelope) => sent.push(envelope),
+      now: () => 1_000,
+    });
+    const client = new FederationRemoteBackendClient(rpc);
+
+    const pending = client.detachThreadPullRequest({
+      backend: "codex",
+      threadId: "thread-1",
+      pr: { provider: "github.com", org: "pwrdrvr", repo: "PwrAgnt", number: 42 },
+    });
+    const request = sent.at(-1)!;
+    expect(request).toMatchObject({
+      kind: "request",
+      method: FEDERATION_BACKEND_METHODS.detachThreadPullRequest,
+      params: {
+        backend: "codex",
+        threadId: "thread-1",
+        pr: { provider: "github.com", org: "pwrdrvr", repo: "PwrAgnt", number: 42 },
+      },
+    });
+    expect(
+      FEDERATION_BACKEND_METHOD_CAPABILITIES[
+        FEDERATION_BACKEND_METHODS.detachThreadPullRequest
+      ],
+    ).toBe("turn_control");
+
+    rpc.receiveEnvelope({
+      id: "response-detach",
+      kind: "response",
+      requestId: request.id,
+      protocolVersion: 1,
+      sourceInstanceId: "owner_one",
+      targetInstanceId: "viewer_one",
+      createdAt: 1_100,
+      result: {
+        backend: "codex",
+        threadId: "thread-1",
+        detachedPrKeys: ["github.com:pwrdrvr/PwrAgnt#42"],
+        prs: [],
+      },
+    });
+    await expect(pending).resolves.toMatchObject({
+      backend: "codex",
+      threadId: "thread-1",
+      detachedPrKeys: ["github.com:pwrdrvr/PwrAgnt#42"],
+      prs: [],
+    });
+  });
+
+  it("routes PR auto-dispatch over RPC with turn_control authorization", async () => {
+    const sent: FederationProtocolEnvelope[] = [];
+    const rpc = new FederationRpcEndpoint({
+      localInstanceId: "viewer_one",
+      remoteInstanceId: "owner_one",
+      sendEnvelope: (envelope) => sent.push(envelope),
+      now: () => 1_000,
+    });
+    const client = new FederationRemoteBackendClient(rpc);
+
+    const pending = client.setThreadPrAutoDispatch({
+      backend: "codex",
+      threadId: "thread-1",
+      enabled: true,
+    });
+    const request = sent.at(-1)!;
+    expect(request).toMatchObject({
+      kind: "request",
+      method: FEDERATION_BACKEND_METHODS.setThreadPrAutoDispatch,
+      params: {
+        backend: "codex",
+        threadId: "thread-1",
+        enabled: true,
+      },
+    });
+    expect(
+      FEDERATION_BACKEND_METHOD_CAPABILITIES[
+        FEDERATION_BACKEND_METHODS.setThreadPrAutoDispatch
+      ],
+    ).toBe("turn_control");
+
+    rpc.receiveEnvelope({
+      id: "response-auto-dispatch",
+      kind: "response",
+      requestId: request.id,
+      protocolVersion: 1,
+      sourceInstanceId: "owner_one",
+      targetInstanceId: "viewer_one",
+      createdAt: 1_100,
+      result: {
+        backend: "codex",
+        threadId: "thread-1",
+        enabled: true,
+      },
+    });
+    await expect(pending).resolves.toMatchObject({
+      backend: "codex",
+      threadId: "thread-1",
+      enabled: true,
+    });
+  });
+
   it("serializes remote backend requests over RPC envelopes", async () => {
     const sent: FederationProtocolEnvelope[] = [];
     const rpc = new FederationRpcEndpoint({
@@ -702,6 +808,8 @@ describe("federation backend bridge", () => {
       markThreadSeen: vi.fn(),
       setThreadPin: vi.fn(),
       reorderThreadPins: vi.fn(),
+      detachThreadPullRequest: vi.fn(),
+      setThreadPrAutoDispatch: vi.fn(),
       archiveThread: vi.fn(),
       startThread: vi.fn(),
       forkThread: vi.fn(),
@@ -747,6 +855,7 @@ describe("federation backend bridge", () => {
       renameThread: vi.fn(),
       readApplications: vi.fn(),
       openApplication: vi.fn(),
+      readMessagingPlatformStatuses: vi.fn(),
       trustCodexProject: vi.fn(),
     };
     const replies: FederationProtocolEnvelope[] = [];
@@ -875,6 +984,8 @@ describe("federation backend bridge", () => {
         markThreadSeen: vi.fn(),
       setThreadPin: vi.fn(),
       reorderThreadPins: vi.fn(),
+        detachThreadPullRequest: vi.fn(),
+        setThreadPrAutoDispatch: vi.fn(),
         archiveThread: vi.fn(),
         startThread: vi.fn(),
         forkThread: vi.fn(),
@@ -904,6 +1015,7 @@ describe("federation backend bridge", () => {
         renameThread: vi.fn(),
         readApplications: vi.fn(),
         openApplication: vi.fn(),
+        readMessagingPlatformStatuses: vi.fn(),
         trustCodexProject: vi.fn(),
       } as FederationBackendOperations,
     });

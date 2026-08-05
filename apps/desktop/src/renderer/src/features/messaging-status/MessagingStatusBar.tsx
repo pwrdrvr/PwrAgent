@@ -67,15 +67,18 @@ export function MessagingStatusBar(props: {
   /** Opens Settings directly to the Messaging section. */
   onOpenSettings?: () => void;
 }) {
-  // Remote federation windows must not render LOCAL messaging state —
-  // there is no remote-messaging surface yet, and showing the local
-  // instance's platforms in a window branded as another machine reads
-  // as that machine's messaging. Render nothing there, and starve every
-  // effect of the api so no local status/settings polling runs either.
-  const isFederationWindow = Boolean(readRendererFederationTarget());
+  // Remote federation windows render the OWNING instance's messaging
+  // state, read over federation, in read-only form: status chips and the
+  // popover rows, but no toggles, no Settings link, and no Activity
+  // shortcut (those act on LOCAL runtime/config). Every local-state
+  // effect below is starved of the api so no local settings or activity
+  // polling runs in a remote window.
+  const federationTarget = useMemo(() => readRendererFederationTarget(), []);
+  const isFederationWindow = Boolean(federationTarget);
   const desktopApi = isFederationWindow ? undefined : props.desktopApi;
   const { statuses, activeAtByPlatform } = useMessagingPlatformStatuses(
-    desktopApi,
+    props.desktopApi,
+    federationTarget,
   );
   const [open, setOpen] = useState(false);
   const [pinned, setPinned] = useState(false);
@@ -295,7 +298,7 @@ export function MessagingStatusBar(props: {
     }
   };
 
-  if (isFederationWindow || displayStatuses.length === 0) {
+  if (displayStatuses.length === 0) {
     return null;
   }
 
@@ -366,7 +369,7 @@ export function MessagingStatusBar(props: {
                 </div>
               </div>
               <div className="messaging-status-popover__head-actions">
-                {props.onOpenSettings ? (
+                {!isFederationWindow && props.onOpenSettings ? (
                   <button
                     type="button"
                     className="messaging-status-popover__settings"
@@ -395,22 +398,24 @@ export function MessagingStatusBar(props: {
                     <SettingsIcon size={16} />
                   </button>
                 ) : null}
-                <button
-                  type="button"
-                  className={`settings-switch messaging-status-popover__switch${
-                    messagingOn ? " is-on" : ""
-                  }`}
-                  aria-pressed={messagingOn}
-                  disabled={togglePending}
-                  onClick={() => {
-                    void handleToggleMessaging();
-                  }}
-                >
-                  <span aria-hidden="true" className="settings-switch__track">
-                    <span className="settings-switch__thumb" />
-                  </span>
-                  <span>{togglePending ? "..." : messagingOn ? "On" : "Off"}</span>
-                </button>
+                {!isFederationWindow ? (
+                  <button
+                    type="button"
+                    className={`settings-switch messaging-status-popover__switch${
+                      messagingOn ? " is-on" : ""
+                    }`}
+                    aria-pressed={messagingOn}
+                    disabled={togglePending}
+                    onClick={() => {
+                      void handleToggleMessaging();
+                    }}
+                  >
+                    <span aria-hidden="true" className="settings-switch__track">
+                      <span className="settings-switch__thumb" />
+                    </span>
+                    <span>{togglePending ? "..." : messagingOn ? "On" : "Off"}</span>
+                  </button>
+                ) : null}
               </div>
             </div>
             <div className="messaging-status-popover__rows">
@@ -431,6 +436,7 @@ export function MessagingStatusBar(props: {
                       : false
                   }
                   platformToggleDisabled={!messagingOn}
+                  readOnly={isFederationWindow}
                   now={now}
                   onTogglePlatform={handleTogglePlatform}
                 />
@@ -441,7 +447,7 @@ export function MessagingStatusBar(props: {
                 {toggleError ?? platformToggleError}
               </p>
             ) : null}
-            {props.onOpenActivity ? (
+            {!isFederationWindow && props.onOpenActivity ? (
               <button
                 type="button"
                 className="messaging-status-popover__activity"
@@ -505,6 +511,8 @@ function PlatformStatusRow(props: {
   platformEnabled?: boolean;
   platformToggleDisabled: boolean;
   platformTogglePending: boolean;
+  /** Remote federation windows show the peer's state without controls. */
+  readOnly?: boolean;
   now: number;
   onTogglePlatform: (
     platform: ConfigurableMessagingPlatform,
@@ -512,9 +520,10 @@ function PlatformStatusRow(props: {
   ) => void | Promise<void>;
 }) {
   const { status, active, forcedOff, now } = props;
-  const configurable = configurablePlatform(status.platform)
-    ? status.platform
-    : undefined;
+  const configurable =
+    !props.readOnly && configurablePlatform(status.platform)
+      ? status.platform
+      : undefined;
   const platformEnabled = props.platformEnabled ?? status.health !== "suspended";
   const statusLabel = forcedOff || platformEnabled === false
     ? "Off"
