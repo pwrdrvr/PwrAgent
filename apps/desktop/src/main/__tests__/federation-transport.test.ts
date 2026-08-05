@@ -61,6 +61,7 @@ describe("federation transport", () => {
   it("authenticates a client and carries protocol envelopes", async () => {
     const clientKeyPair = generateFederationIdentityKeyPair();
     let closeCount = 0;
+    let lastCloseInfo: { code: number; reason: string } | undefined;
     let resolveClosed: (() => void) | undefined;
     const closed = new Promise<void>((resolve) => {
       resolveClosed = resolve;
@@ -111,8 +112,9 @@ describe("federation transport", () => {
         label: "Client",
         role: "client",
         onEnvelope: resolve,
-        onClose: () => {
+        onClose: (info) => {
           closeCount += 1;
+          lastCloseInfo = info;
           resolveClosed?.();
         },
       }).then((client) => {
@@ -156,6 +158,9 @@ describe("federation transport", () => {
     expect(server?.closePeer("client_one")).toBe(true);
     await closed;
     expect(closeCount).toBe(1);
+    // Revocation closes with its own application code so the client can
+    // report "re-pair needed" instead of a generic connection loss.
+    expect(lastCloseInfo).toMatchObject({ code: 4002, reason: "revoked" });
     expect(server?.closePeer("client_one")).toBe(false);
   });
 

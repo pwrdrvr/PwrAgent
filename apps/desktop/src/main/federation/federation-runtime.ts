@@ -154,6 +154,7 @@ import {
 import {
   connectFederationClient,
   FEDERATION_CLOSE_REPLACED_CODE,
+  FEDERATION_CLOSE_REVOKED_CODE,
   FederationGatewayWebSocketServer,
   type FederationClientWebSocketClient,
   type FederationGatewayConnection,
@@ -176,6 +177,7 @@ const PENDING_INVITE_TOKEN_META_KEY = "federation_pending_invite_token";
 const GATEWAY_ENROLLED_AT_META_KEY = "federation_gateway_enrolled_at";
 const FEDERATION_PEER_DIRECTORY_METHOD = "federation.peerDirectory";
 const FEDERATION_RECONNECT_MAX_DELAY_MS = 30_000;
+const DUPLICATE_IDENTITY_NOTE_TTL_MS = 5 * 60_000;
 /** A session must last this long before it counts as stable enough to reset backoff. */
 const FEDERATION_STABLE_SESSION_MS = 60_000;
 
@@ -252,6 +254,11 @@ export class DesktopFederationRuntime {
   private stopping = true;
   private lastConnectionError?: string;
   private lastConnectionFailureKind?: "auth" | "replaced" | "transport";
+  /** Peer ids the gateway recently flagged for duplicate-identity churn. */
+  private readonly duplicateIdentitySuspectedAt = new Map<
+    FederationInstanceId,
+    number
+  >();
   private gatewayListenerError?: string;
 
   setAgentEventPublisher(publisher: (event: AgentEvent) => void): void {
@@ -828,6 +835,11 @@ export class DesktopFederationRuntime {
         noiseStatic,
         onConnection: (connection) => this.registerGatewayConnection(connection),
         onDisconnect: (connection) => this.unregisterGatewayConnection(connection),
+        onPeerReplaced: (info) => {
+          if (info.duplicateInstanceIdSuspected) {
+            this.duplicateIdentitySuspectedAt.set(info.peerId, Date.now());
+          }
+        },
         onEnvelope: (envelope, connection) =>
           void this.receiveEnvelope(envelope, connection.peerId),
       });
@@ -1078,16 +1090,27 @@ export class DesktopFederationRuntime {
         // state.db. Say so instead of the generic transport message, or
         // the operator sees an unexplained 30s connect/drop loop.
         const replaced = info?.code === FEDERATION_CLOSE_REPLACED_CODE;
+        const revoked = info?.code === FEDERATION_CLOSE_REVOKED_CODE;
         this.lastConnectionError = replaced
           ? "Another instance connected with this federation identity "
             + "(a cloned profile state.db shares the instance id and key). "
             + "Reset federation on one of the profiles to stop the loop."
-          : info
-            ? `Federation gateway connection closed (${info.code}${
-                info.reason ? ` ${info.reason}` : ""
-              }).`
-            : "Federation gateway connection closed.";
-        this.lastConnectionFailureKind = replaced ? "replaced" : "transport";
+          : revoked
+            ? "This instance's enrollment was revoked by the gateway. "
+              + "Import a fresh invite to re-pair."
+            : info
+              ? `Federation gateway connection closed (${info.code}${
+                  info.reason ? ` ${info.reason}` : ""
+                }).`
+              : "Federation gateway connection closed.";
+        this.lastConnectionFailureKind = replaced
+          ? "replaced"
+          // Revocation is terminal until the operator re-pairs — the
+          // auth kind makes health read "rejected" instead of hiding it
+          // behind an endless "connecting".
+          : revoked
+            ? "auth"
+            : "transport";
         const sessionAgeMs = this.lastConnectedAt
           ? Date.now() - this.lastConnectedAt
           : undefined;
@@ -1556,16 +1579,38 @@ export class DesktopFederationRuntime {
       });
     }
 
-    return [...visible.values()].map((peer) =>
-      this.router?.getConnection(peer.id)
-        ? { ...peer, status: "connected" }
-        : this.remotePeerDirectory.has(peer.id)
-          ? peer
-        : {
-            ...peer,
-            status: peer.status === "connected" ? "disconnected" : peer.status,
-          },
-    );
+    return [...visible.values()]
+      .map((peer) =>
+        this.router?.getConnection(peer.id)
+          ? { ...peer, status: "connected" as const }
+          : this.remotePeerDirectory.has(peer.id)
+            ? peer
+          : {
+              ...peer,
+              status:
+                peer.status === "connected"
+                  ? ("disconnected" as const)
+                  : peer.status,
+            },
+      )
+      .map((peer) => {
+        // Surface a recent duplicate-identity eviction storm to everyone
+        // observing this peer (Settings rows here, and remote viewers via
+        // the peer directory) — the flapping peer itself only ever sees
+        // its own 4001 close.
+        const suspectedAt = this.duplicateIdentitySuspectedAt.get(peer.id);
+        return suspectedAt !== undefined
+          && Date.now() - suspectedAt < DUPLICATE_IDENTITY_NOTE_TTL_MS
+          && !peer.unavailableReason
+          ? {
+              ...peer,
+              unavailableReason:
+                "Multiple instances are presenting this federation identity "
+                + "(likely a cloned profile state.db); its connection is "
+                + "unstable until one is reset.",
+            }
+          : peer;
+      });
   }
 
   private defaultPeerLabel(peerId: FederationInstanceId): string {

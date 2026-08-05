@@ -50,6 +50,8 @@ const FEDERATION_NOISE_TRANSPORT = "noise_ik_25519_aesgcm_sha256";
  * kicking its sibling in a loop.
  */
 export const FEDERATION_CLOSE_REPLACED_CODE = 4001;
+/** Close code for a peer whose enrollment the gateway revoked. */
+export const FEDERATION_CLOSE_REVOKED_CODE = 4002;
 const REPLACEMENT_FLAP_WINDOW_MS = 5 * 60_000;
 const REPLACEMENT_FLAP_THRESHOLD = 3;
 
@@ -220,6 +222,16 @@ export type FederationGatewayWebSocketServerOptions = {
   authTimeoutMs?: number;
   onConnection?: (connection: FederationGatewayConnection) => void;
   onDisconnect?: (connection: FederationGatewayConnection) => void;
+  /**
+   * A new connection for a peer id evicted an existing one.
+   * `duplicateInstanceIdSuspected` flags repeated evictions inside the
+   * detection window — the cloned-profile signature — so the runtime can
+   * surface it to peers observing this instance in the peer directory.
+   */
+  onPeerReplaced?: (info: {
+    peerId: FederationInstanceId;
+    duplicateInstanceIdSuspected: boolean;
+  }) => void;
   onEnvelope?: (
     envelope: FederationProtocolEnvelope,
     connection: FederationGatewayConnection,
@@ -329,7 +341,9 @@ export class FederationGatewayWebSocketServer {
       closedAt: Date.now(),
       reason: "revoked",
     });
-    connection.close();
+    // Application close code so the revoked client can report "re-pair
+    // needed" instead of a generic connection loss.
+    connection.close(FEDERATION_CLOSE_REVOKED_CODE, "revoked");
     return true;
   }
 
@@ -542,6 +556,10 @@ export class FederationGatewayWebSocketServer {
           ? "replaced_by_new_session duplicate_instance_id_suspected"
           : "replaced_by_new_session",
       );
+      this.options.onPeerReplaced?.({
+        peerId: connection.peerId,
+        duplicateInstanceIdSuspected: duplicateSuspected,
+      });
     }
     this.connections.set(connection.peerId, connection);
     this.options.store.appendAudit({
@@ -937,21 +955,23 @@ async function establishFederationClient(
     socket.close();
     throw new Error("Invalid federation auth acceptance signature");
   }
+  // Carry the close code/reason to the runtime — dropping them made a
+  // deliberate "replaced_by_new_session" eviction indistinguishable
+  // from a network blip in every log and health surface. (An error is
+  // usually followed by a close; the ended flag keeps onClose single-
+  // fire, with the error path reporting no close info.)
   let transportEnded = false;
-  const notifyTransportEnded = (info?: { code: number; reason: string }) => {
+  const onSocketClose = (code: number, reason: Buffer) => {
+    notifyTransportEnded({ code, reason: reason.toString("utf8") });
+  };
+  const onSocketError = () => notifyTransportEnded();
+  function notifyTransportEnded(info?: { code: number; reason: string }): void {
     if (transportEnded) return;
     transportEnded = true;
     socket.off("close", onSocketClose);
     socket.off("error", onSocketError);
     params.onClose?.(info);
-  };
-  // Carry the close code/reason to the runtime — dropping them made a
-  // deliberate "replaced_by_new_session" eviction indistinguishable
-  // from a network blip in every log and health surface.
-  const onSocketClose = (code: number, reason: Buffer) => {
-    notifyTransportEnded({ code, reason: reason.toString("utf8") });
-  };
-  const onSocketError = () => notifyTransportEnded();
+  }
   socket.once("close", onSocketClose);
   socket.once("error", onSocketError);
 
