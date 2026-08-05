@@ -11,6 +11,7 @@ import {
   type ComposerQueuedTurnSnapshot,
 } from "../features/composer/useComposerDraftStore";
 import type { DesktopApi } from "./desktop-api";
+import { readRendererFederationTarget } from "./federation-window";
 
 type ModelOption = NonNullable<
   NonNullable<BackendSummary["launchpadOptions"]>["models"]
@@ -239,6 +240,10 @@ export function useQueuedTurnRelease(params: {
 
         const response = await readThread({
           backend: thread.source,
+          // Remote threads verify idleness on their owning instance;
+          // an unstamped read would hit the viewer's own registry.
+          federationTarget: thread.federation?.ref.target ??
+            readRendererFederationTarget(),
           threadId: thread.id,
           limit: 1,
         });
@@ -254,6 +259,11 @@ export function useQueuedTurnRelease(params: {
 
       if (
         releaseCandidate.releaseThread.gitBranch &&
+        // Branch drift is a LOCAL git check; for a remote thread the
+        // paths belong to the owning machine, so skip it here and let
+        // the owner's own guards apply at start time.
+        !releaseCandidate.releaseThread.federation &&
+        !readRendererFederationTarget() &&
         releaseCandidate.desktopApi?.checkThreadBranchDrift
       ) {
         const drift = await releaseCandidate.desktopApi.checkThreadBranchDrift({
@@ -317,6 +327,8 @@ export function useQueuedTurnRelease(params: {
         try {
           await startReview({
             backend: releaseThread.source,
+            federationTarget: releaseThread.federation?.ref.target ??
+              readRendererFederationTarget(),
             threadId: releaseThread.id,
             target: reviewCommand.target,
             delivery: "inline",
@@ -381,6 +393,11 @@ export function useQueuedTurnRelease(params: {
       try {
         await startTurn({
           backend: releaseThread.source,
+          // Route to the owning instance — an unstamped submit lands in
+          // the viewer's own registry, which has no such thread, and the
+          // failure loops silently on the 30s sweep.
+          federationTarget: releaseThread.federation?.ref.target ??
+            readRendererFederationTarget(),
           threadId: releaseThread.id,
           input,
           executionMode: releaseThread.executionMode,
