@@ -43,7 +43,7 @@ vi.mock("../app-server/desktop-overlay-store", () => ({
 describe("DesktopMessagingBackendBridge", () => {
   it("hydrates review working state before the messenger chooses a project", async () => {
     const pwrAgentWorktree = "/worktrees/PwrAgnt";
-    const thread: AppServerThreadSummary = {
+    const listedThread: AppServerThreadSummary = {
       id: "thread-1",
       title: "PwrAgent federation dogfood PR #735",
       titleSource: "explicit",
@@ -57,6 +57,12 @@ describe("DesktopMessagingBackendBridge", () => {
           path: "/repos/PwrAgnt",
           worktreePath: pwrAgentWorktree,
         },
+      ],
+    };
+    const reconciledThread: NavigationSnapshot["threads"][number] = {
+      ...listedThread,
+      linkedDirectories: [
+        ...listedThread.linkedDirectories,
         {
           id: "pwrsnap",
           kind: "local",
@@ -64,6 +70,7 @@ describe("DesktopMessagingBackendBridge", () => {
           path: "/repos/PwrSnap",
         },
       ],
+      inbox: { inInbox: false },
     };
     const gitWorkingState = {
       dirtyFiles: 0,
@@ -74,12 +81,26 @@ describe("DesktopMessagingBackendBridge", () => {
       baseBranch: "main",
       baseAheadCommitCount: 16,
     };
+    reconcileNavigationSnapshot.mockResolvedValueOnce({
+      backend: "codex",
+      fetchedAt: 1_000,
+      unchanged: false,
+      threads: [reconciledThread],
+      inboxThreadKeys: [],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+    });
     const registry = {
       getQueuedExecutionModesSnapshot: vi.fn(() => ({})),
-      hydrateThreadGitWorkingStates: vi.fn(async () => [
-        { ...thread, gitWorkingState },
-      ]),
-      listThreads: vi.fn(async () => [thread]),
+      hydrateThreadGitWorkingStates: vi.fn(async (
+        threads: NavigationSnapshot["threads"],
+      ) =>
+        threads.map((thread) => ({ ...thread, gitWorkingState }))
+      ),
+      listThreads: vi.fn(async () => [listedThread]),
       readDirectoryStatuses: vi.fn(async () => ({})),
       rememberCompleteNavigationSnapshot: vi.fn(),
     } as unknown as DesktopBackendRegistry;
@@ -88,7 +109,7 @@ describe("DesktopMessagingBackendBridge", () => {
     const snapshot = await bridge.getNavigationSnapshot({ backend: "codex" });
 
     expect(registry.hydrateThreadGitWorkingStates).toHaveBeenCalledWith(
-      [thread],
+      [reconciledThread],
       { probeMissing: true },
     );
     expect(findPreferredReviewWorkspaceCwd(snapshot.threads[0])).toBe(

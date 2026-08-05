@@ -7,7 +7,10 @@ import type {
   FederationProtocolEnvelope,
   NavigationSnapshot,
 } from "@pwragent/shared";
-import { FEDERATION_PROTOCOL_VERSION } from "@pwragent/shared";
+import {
+  FEDERATION_PROTOCOL_VERSION,
+  findPreferredReviewWorkspaceCwd,
+} from "@pwragent/shared";
 import {
   FEDERATION_BACKEND_EVENT_METHOD,
   FEDERATION_ENVIRONMENT_SETUP_PROGRESS_METHOD,
@@ -94,6 +97,16 @@ function createConnection(params: {
 
 describe("DesktopFederationRuntime", () => {
   it("preserves renderer-compatible thread keys in remote navigation lenses", async () => {
+    const pwrAgentWorktree = "/worktrees/PwrAgnt";
+    const gitWorkingState = {
+      dirtyFiles: 0,
+      dirtyAdditions: 0,
+      dirtyDeletions: 0,
+      untrackedFiles: 0,
+      unpushedCommits: 0,
+      baseBranch: "main",
+      baseAheadCommitCount: 16,
+    };
     const response: NavigationSnapshot = {
       backend: "all",
       fetchedAt: 1_000,
@@ -103,7 +116,23 @@ describe("DesktopFederationRuntime", () => {
           id: "thread-1",
           title: "Remote work",
           titleSource: "fallback",
-          linkedDirectories: [],
+          projectKey: pwrAgentWorktree,
+          linkedDirectories: [
+            {
+              id: "pwragent",
+              kind: "worktree",
+              label: "PwrAgnt",
+              path: "/repos/PwrAgnt",
+              worktreePath: pwrAgentWorktree,
+            },
+            {
+              id: "pwrsnap",
+              kind: "local",
+              label: "PwrSnap",
+              path: "/repos/PwrSnap",
+            },
+          ],
+          gitWorkingState,
           source: "codex",
           inbox: { inInbox: false },
         },
@@ -159,6 +188,10 @@ describe("DesktopFederationRuntime", () => {
     });
     expect(snapshot.inboxThreadKeys).toEqual([]);
     expect(snapshot.directories[0]?.threadKeys).toEqual(["codex:thread-1"]);
+    expect(snapshot.threads[0]?.gitWorkingState).toEqual(gitWorkingState);
+    expect(findPreferredReviewWorkspaceCwd(snapshot.threads[0])).toBe(
+      pwrAgentWorktree,
+    );
   });
 
   it("records gateway-advertised peers for client instance health and opening", () => {

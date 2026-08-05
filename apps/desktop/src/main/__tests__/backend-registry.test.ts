@@ -38,6 +38,7 @@ import type {
   NavigationLaunchpadDraft,
   PwrAgentThreadOrchestrationRequest,
   PwrAgentThreadOrchestrationResponse,
+  PrSummary,
   TaskMonitorRequest,
   TaskMonitorResponse,
   ThreadExecutionMode,
@@ -2454,12 +2455,194 @@ describe("DesktopBackendRegistry", () => {
           { probeMissing: true },
         ),
       ).resolves.toEqual([{ ...thread, gitWorkingState }]);
-      expect(readWorkingStateEntries).toHaveBeenCalledWith([worktreePath]);
+      expect(readWorkingStateEntries).toHaveBeenCalledWith(
+        [worktreePath],
+        {
+          acceptedPushedCommitShasByWorktreePath: {
+            [worktreePath]: [],
+          },
+        },
+      );
       expect(overlayStore.writeThreadGitWorkingStateCacheEntry)
         .toHaveBeenCalledWith(expect.objectContaining({
           worktreePath,
           gitWorkingState,
         }));
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("reprobes stale cached working state for a multi-project messaging review", async () => {
+    const worktreePath = "/worktrees/PwrAgnt";
+    const staleGitWorkingState = {
+      dirtyFiles: 0,
+      dirtyAdditions: 0,
+      dirtyDeletions: 0,
+      untrackedFiles: 0,
+      unpushedCommits: 0,
+      baseBranch: "main",
+      baseAheadCommitCount: 1,
+    };
+    const freshGitWorkingState = {
+      ...staleGitWorkingState,
+      baseAheadCommitCount: 16,
+    };
+    const readWorkingStateEntries = vi.fn(() =>
+      (async function* () {
+        yield { worktreePath, gitWorkingState: freshGitWorkingState };
+      })(),
+    );
+    const overlayStore = {
+      ...createOverlayStoreMock(),
+      readThreadGitWorkingStateCache: vi.fn(async () => ({
+        [worktreePath]: {
+          worktreePath,
+          fetchedAt: Date.now() - 31_000,
+          gitWorkingState: staleGitWorkingState,
+        },
+      })),
+      writeThreadGitWorkingStateCacheEntry: vi.fn(async () => undefined),
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      gitWorkingStateService: {
+        readWorkingStateEntries,
+      } as unknown as GitWorkingStateService,
+      overlayStore,
+    });
+    const thread: AppServerThreadSummary = {
+      id: "thread-1",
+      title: "PwrAgent federation dogfood PR #735",
+      titleSource: "explicit",
+      source: "codex",
+      projectKey: worktreePath,
+      linkedDirectories: [
+        {
+          id: "pwragent",
+          kind: "worktree",
+          label: "PwrAgnt",
+          path: "/repos/PwrAgnt",
+          worktreePath,
+        },
+        {
+          id: "pwrsnap",
+          kind: "local",
+          label: "PwrSnap",
+          path: "/repos/PwrSnap",
+        },
+      ],
+    };
+
+    try {
+      await expect(
+        registry.hydrateThreadGitWorkingStates(
+          [thread],
+          { probeMissing: true },
+        ),
+      ).resolves.toEqual([{ ...thread, gitWorkingState: freshGitWorkingState }]);
+      expect(readWorkingStateEntries).toHaveBeenCalledTimes(1);
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("preserves merged PR commit exclusions in review working-state probes", async () => {
+    const worktreePath = "/worktrees/PwrAgnt";
+    const attachedCommitSha = "a".repeat(40);
+    const detachedCommitSha = "b".repeat(40);
+    const mergedPr = (params: {
+      number: number;
+      commitShas: string[];
+    }): PrSummary => ({
+      provider: "github.com",
+      number: params.number,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      state: "merged",
+      lifecycleState: "merged",
+      commitShas: params.commitShas,
+      url: `https://github.com/pwrdrvr/PwrAgent/pull/${params.number}`,
+    });
+    const readWorkingStateEntries = vi.fn(() =>
+      (async function* () {
+        yield {
+          worktreePath,
+          gitWorkingState: {
+            dirtyFiles: 0,
+            dirtyAdditions: 0,
+            dirtyDeletions: 0,
+            untrackedFiles: 0,
+            unpushedCommits: 0,
+            baseBranch: "main",
+            baseAheadCommitCount: 16,
+          },
+        };
+      })(),
+    );
+    const overlayStore = {
+      ...createOverlayStoreMock({
+        overlays: {
+          "codex:thread-1": {
+            backend: "codex",
+            threadId: "thread-1",
+            extraLinkedDirectories: [],
+            detachedPrs: [mergedPr({
+              number: 734,
+              commitShas: [detachedCommitSha],
+            })],
+          },
+        },
+      }),
+      readThreadGitWorkingStateCache: vi.fn(async () => ({})),
+      writeThreadGitWorkingStateCacheEntry: vi.fn(async () => undefined),
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      gitWorkingStateService: {
+        readWorkingStateEntries,
+      } as unknown as GitWorkingStateService,
+      overlayStore,
+    });
+    const thread: AppServerThreadSummary & { prs: PrSummary[] } = {
+      id: "thread-1",
+      title: "PwrAgent federation dogfood PR #735",
+      titleSource: "explicit",
+      source: "codex",
+      projectKey: worktreePath,
+      linkedDirectories: [
+        {
+          id: "pwragent",
+          kind: "worktree",
+          label: "PwrAgnt",
+          path: "/repos/PwrAgnt",
+          worktreePath,
+        },
+        {
+          id: "pwrsnap",
+          kind: "local",
+          label: "PwrSnap",
+          path: "/repos/PwrSnap",
+        },
+      ],
+      prs: [mergedPr({ number: 735, commitShas: [attachedCommitSha] })],
+    };
+
+    try {
+      await registry.hydrateThreadGitWorkingStates(
+        [thread],
+        { probeMissing: true },
+      );
+      expect(readWorkingStateEntries).toHaveBeenCalledWith(
+        [worktreePath],
+        {
+          acceptedPushedCommitShasByWorktreePath: {
+            [worktreePath]: [attachedCommitSha, detachedCommitSha],
+          },
+        },
+      );
     } finally {
       await registry.close();
     }

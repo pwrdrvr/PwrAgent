@@ -747,6 +747,27 @@ function resolveThreadWorkingStatePath(
   return undefined;
 }
 
+// Per-worktree working state changes as the agent edits/commits, but each
+// such turn pushes a fresh probe, so the background freshness window only
+// needs to catch out-of-band changes (terminal/IDE edits) on the next
+// snapshot. Shorter than the per-repo directory status TTL.
+export const WORKTREE_WORKING_STATE_CACHE_MAX_AGE_MS = 30_000;
+
+function isFreshThreadGitWorkingStateCacheEntry(
+  entry: WorktreeGitWorkingStateCacheEntry,
+  now: number,
+): boolean {
+  return now - entry.fetchedAt < WORKTREE_WORKING_STATE_CACHE_MAX_AGE_MS;
+}
+
+function mergedPrCommitShas(prs: PrSummary[]): string[] {
+  return prs
+    .filter((pr) => pr.lifecycleState === "merged" || pr.state === "merged")
+    .flatMap((pr) => pr.commitShas ?? [])
+    .map((sha) => sha.trim().toLowerCase())
+    .filter((sha) => /^[0-9a-f]{40}$/.test(sha));
+}
+
 function linkedDirectoriesHaveSameWorkspaceIdentity(
   left: LinkedDirectorySummary,
   right: LinkedDirectorySummary,
@@ -9010,29 +9031,42 @@ export class DesktopBackendRegistry {
     }
 
     await this.loadThreadGitWorkingStateCache();
-    let hydrated = this.applyCachedThreadGitWorkingStates(threads);
+    const hydrated = this.applyCachedThreadGitWorkingStates(threads);
     if (!options.probeMissing) {
       return hydrated;
     }
 
-    const missingPaths = [
+    const now = Date.now();
+    const probePaths = [
       ...new Set(
-        hydrated.flatMap((thread) => {
-          if (thread.gitWorkingState || thread.linkedDirectories.length <= 1) {
+        candidates.flatMap((thread) => {
+          if (thread.linkedDirectories.length <= 1) {
             return [];
           }
           const worktreePath = resolveThreadWorkingStatePath(thread);
-          return worktreePath ? [worktreePath] : [];
+          if (!worktreePath) {
+            return [];
+          }
+          const cached = this.workingStateByWorktree.get(worktreePath);
+          return !cached || !isFreshThreadGitWorkingStateCacheEntry(cached, now)
+            ? [worktreePath]
+            : [];
         }),
       ),
     ];
-    if (missingPaths.length === 0) {
+    if (probePaths.length === 0) {
       return hydrated;
     }
 
     try {
+      const acceptedPushedCommitShasByWorktreePath =
+        await this.readAcceptedMergedPrCommitShasByWorktreePath(
+          threads,
+          probePaths,
+        );
       for await (const entry of this.gitWorkingStateService.readWorkingStateEntries(
-        missingPaths,
+        probePaths,
+        { acceptedPushedCommitShasByWorktreePath },
       )) {
         await this.rememberThreadGitWorkingStateCacheEntry({
           ...entry,
@@ -9042,13 +9076,51 @@ export class DesktopBackendRegistry {
     } catch (error) {
       backendRegistryLog.warn("review working-state probe failed", {
         error: error instanceof Error ? error.message : String(error),
-        worktreePaths: missingPaths,
+        worktreePaths: probePaths,
       });
-      return this.applyCachedThreadGitWorkingStates(hydrated);
+      return hydrated;
     }
 
-    hydrated = this.applyCachedThreadGitWorkingStates(hydrated);
-    return hydrated;
+    return this.applyCachedThreadGitWorkingStates(threads);
+  }
+
+  private async readAcceptedMergedPrCommitShasByWorktreePath<
+    Thread extends AppServerThreadSummary,
+  >(
+    threads: Thread[],
+    worktreePaths: string[],
+  ): Promise<Record<string, string[]>> {
+    const acceptedByWorktreePath = new Map(
+      worktreePaths.map((worktreePath) => [worktreePath, new Set<string>()]),
+    );
+    await Promise.all(threads.map(async (thread) => {
+      const worktreePath = resolveThreadWorkingStatePath(thread);
+      const accepted = worktreePath
+        ? acceptedByWorktreePath.get(worktreePath)
+        : undefined;
+      if (!accepted) {
+        return;
+      }
+      const overlay = await this.overlayStore.getThreadOverlayState({
+        backend: thread.source,
+        threadId: thread.id,
+      });
+      const visiblePrs = (thread as Thread & { prs?: PrSummary[] }).prs ?? [];
+      const prs = [
+        ...visiblePrs,
+        ...(overlay?.prs ?? []),
+        ...(overlay?.detachedPrs ?? []),
+      ];
+      for (const commitSha of mergedPrCommitShas(prs)) {
+        accepted.add(commitSha);
+      }
+    }));
+    return Object.fromEntries(
+      [...acceptedByWorktreePath].map(([worktreePath, commitShas]) => [
+        worktreePath,
+        [...commitShas].sort(),
+      ]),
+    );
   }
 
   private applyCachedThreadGitWorkingStates<Thread extends AppServerThreadSummary>(

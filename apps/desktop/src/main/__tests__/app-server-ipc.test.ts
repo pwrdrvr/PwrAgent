@@ -723,6 +723,7 @@ vi.mock("../app-server/backend-registry", () => {
   };
   backendRegistryLifecycle.get.mockImplementation(() => registry);
   return {
+    WORKTREE_WORKING_STATE_CACHE_MAX_AGE_MS: 30_000,
     disposeDesktopBackendRegistry: vi.fn(async () => undefined),
     getDesktopBackendRegistry: backendRegistryLifecycle.get,
     getExistingDesktopBackendRegistry: () =>
