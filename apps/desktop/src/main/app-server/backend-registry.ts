@@ -5619,6 +5619,7 @@ function buildCodexParentDynamicToolSpecs(
 }
 
 const PWRAGENT_PDF_MCP_SERVER_NAME = "pwragent_pdf";
+const PWRAGENT_CONNECTION_MCP_SERVER_PREFIX = "pwragent_";
 
 function buildCodexPdfMcpConfig(
   registration: AgentToolMcpRegistration,
@@ -5652,15 +5653,22 @@ function buildCodexConnectionMcpConfig(
   if (registrations.length === 0) return undefined;
   return {
     mcp_servers: Object.fromEntries(
-      registrations.map(({ server }) => [
-        server.name,
-        {
-          enabled: true,
-          command: server.command,
-          args: server.args,
-          env: server.env,
-          tool_timeout_sec: MCP_CONNECTION_TOOL_TIMEOUT_SECONDS,
-        },
+      registrations.flatMap(({ server }) => [
+        // Codex recursively merges thread config over the operator's global
+        // config. Disable a same-named global server, then give PwrAgent's
+        // stdio bridge a reserved key so an inherited HTTP `url` cannot turn
+        // the combined entry into an invalid mixed transport.
+        [server.name, { enabled: false }],
+        [
+          `${PWRAGENT_CONNECTION_MCP_SERVER_PREFIX}${server.name}`,
+          {
+            enabled: true,
+            command: server.command,
+            args: server.args,
+            env: server.env,
+            tool_timeout_sec: MCP_CONNECTION_TOOL_TIMEOUT_SECONDS,
+          },
+        ],
       ]),
     ),
   } as CodexThreadStartParams["config"];

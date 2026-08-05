@@ -7738,7 +7738,7 @@ script = "echo setup"
     expect(pdfMcp.close).toHaveBeenCalledTimes(1);
   });
 
-  it("injects a selected PwrSnap stdio bridge and persists the thread selection", async () => {
+  it("isolates a selected PwrSnap stdio bridge from global Codex MCP config", async () => {
     const codexClient = new MockBackendClient({ threads: [] });
     const overlayStore = createOverlayStoreMock();
     const bindThread = vi.fn();
@@ -7773,7 +7773,8 @@ script = "echo setup"
     expect(bindThread).toHaveBeenCalledWith("thread-1");
     expect(codexClient.lastStartThreadParams?.config).toEqual({
       mcp_servers: {
-        pwrsnap: {
+        pwrsnap: { enabled: false },
+        pwragent_pwrsnap: {
           enabled: true,
           command: "/Applications/PwrAgent.app/Contents/MacOS/PwrAgent",
           args: ["/app/mcp-connection-bridge.js"],
