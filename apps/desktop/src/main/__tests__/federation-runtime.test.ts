@@ -35,6 +35,18 @@ type RuntimeHarness = {
     sourcePeerId: FederationInstanceId,
   ) => boolean;
   remotePeerDirectory: Map<FederationInstanceId, unknown>;
+  recordClientConnection: (params: {
+    gatewayInstanceId: FederationInstanceId;
+    gatewayUrl: string;
+    client: {
+      sessionId: string;
+      capabilities: FederationCapability[];
+      sendEnvelope: (envelope: FederationProtocolEnvelope) => void;
+      close: () => void;
+    };
+    connectionMode: "enroll" | "reconnect";
+    connectedAt: number;
+  }) => void;
   disconnectAdvertisedPeers: (reason: string) => void;
   registerGatewayConnection: (connection: FederationGatewayConnection) => void;
   remoteBackend: (target?: {
@@ -61,6 +73,13 @@ type RuntimeHarness = {
     publisher: (event: CodexEnvironmentSetupProgressEvent) => void,
   ) => void;
   store: () => {
+    appendAudit?: (entry: {
+      peerId?: FederationInstanceId;
+      sessionId?: string;
+      kind: string;
+      createdAt: number;
+      detail?: string;
+    }) => void;
     getPeer: (peerId: FederationInstanceId) => {
       label: string;
       status: "connected";
@@ -227,9 +246,97 @@ describe("DesktopFederationRuntime", () => {
     ]);
   });
 
+  it("records a successful client session and preserves its timing", () => {
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    const audits: Array<{
+      peerId?: FederationInstanceId;
+      sessionId?: string;
+      kind: string;
+      createdAt: number;
+      detail?: string;
+    }> = [];
+    runtime.localInstanceId = "client_one";
+    runtime.remotePeerDirectory.set("gateway_one", {
+      id: "gateway_one",
+      label: "Mac Mini",
+      role: "gateway",
+      status: "connected",
+      capabilities: ["remote_window"],
+    });
+    runtime.store = () => ({
+      appendAudit: (entry) => audits.push(entry),
+      getPeer: () => undefined,
+      listPeers: () => [],
+    });
+
+    runtime.recordClientConnection({
+      gatewayInstanceId: "gateway_one",
+      gatewayUrl: "ws://192.168.6.163:47830",
+      client: {
+        sessionId: "session:gateway_one",
+        capabilities: ["remote_window", "thread_navigation"],
+        sendEnvelope: () => undefined,
+        close: () => undefined,
+      },
+      connectionMode: "reconnect",
+      connectedAt: 5_000,
+    });
+
+    expect([...runtime.remotePeerDirectory.values()]).toMatchObject([
+      {
+        id: "gateway_one",
+        label: "Mac Mini",
+        status: "connected",
+        endpoint: "ws://192.168.6.163:47830",
+        lastConnectedAt: 5_000,
+        lastActivityAt: 5_000,
+      },
+    ]);
+    expect(audits).toEqual([
+      {
+        peerId: "gateway_one",
+        sessionId: "session:gateway_one",
+        kind: "connected",
+        createdAt: 5_000,
+        detail: "reconnect",
+      },
+    ]);
+
+    runtime.applyPeerDirectory({
+      id: "peers-1",
+      kind: "notification",
+      method: "federation.peerDirectory",
+      params: {
+        peers: [
+          {
+            id: "gateway_one",
+            label: "Mac Mini",
+            role: "gateway",
+            status: "connected",
+            capabilities: ["remote_window", "thread_navigation"],
+          },
+        ],
+      },
+      protocolVersion: FEDERATION_PROTOCOL_VERSION,
+      sourceInstanceId: "gateway_one",
+      targetInstanceId: "client_one",
+      createdAt: 5_001,
+    });
+
+    expect([...runtime.remotePeerDirectory.values()]).toMatchObject([
+      {
+        id: "gateway_one",
+        lastConnectedAt: 5_000,
+        lastActivityAt: 5_000,
+      },
+    ]);
+  });
+
   it("marks gateway-advertised routes disconnected when the gateway closes", () => {
     const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    const publishedEvents: AgentEvent[] = [];
     runtime.localInstanceId = "client_one";
+    runtime.setAgentEventPublisher((event) => publishedEvents.push(event));
     runtime.store = () => ({
       getPeer: () => undefined,
       listPeers: () => [],
@@ -277,6 +384,49 @@ describe("DesktopFederationRuntime", () => {
       },
     ]);
     expect(runtime.connectedPeerTargets()).toEqual([]);
+    expect(
+      publishedEvents.map((event) => ({
+        target: event.federationTarget,
+        notification: event.notification,
+      })),
+    ).toMatchObject([
+      {
+        target: { scope: "remote", instanceId: "gateway_one" },
+        notification: {
+          method: "federation/peerStatus/changed",
+          params: { instanceId: "gateway_one", status: "connected" },
+        },
+      },
+      {
+        target: { scope: "remote", instanceId: "client_two" },
+        notification: {
+          method: "federation/peerStatus/changed",
+          params: { instanceId: "client_two", status: "connected" },
+        },
+      },
+      {
+        target: { scope: "remote", instanceId: "gateway_one" },
+        notification: {
+          method: "federation/peerStatus/changed",
+          params: {
+            instanceId: "gateway_one",
+            status: "disconnected",
+            unavailableReason: "Gateway transport closed.",
+          },
+        },
+      },
+      {
+        target: { scope: "remote", instanceId: "client_two" },
+        notification: {
+          method: "federation/peerStatus/changed",
+          params: {
+            instanceId: "client_two",
+            status: "disconnected",
+            unavailableReason: "Gateway transport closed.",
+          },
+        },
+      },
+    ]);
   });
 
   it("falls back to the gateway when a client targets a sibling peer", () => {

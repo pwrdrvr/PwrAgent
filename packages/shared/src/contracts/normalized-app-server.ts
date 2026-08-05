@@ -3,7 +3,10 @@ import type {
   MessagingChannelKind,
   MessagingConversationKind,
 } from "./messaging";
-import type { FederationTarget } from "./federation";
+import type {
+  FederationConnectionState,
+  FederationTarget,
+} from "./federation";
 import type {
   PrSummary,
   ThreadPrAutoDispatchEventKind,
@@ -1012,6 +1015,15 @@ export type AppServerToolRequestUserInputNotification = {
   };
 };
 
+export type FederationPeerStatusChangedNotification = {
+  method: "federation/peerStatus/changed";
+  params: {
+    instanceId: string;
+    status: FederationConnectionState;
+    unavailableReason?: string;
+  };
+};
+
 export type AppServerMcpElicitationAction = "accept" | "decline" | "cancel";
 
 export type AppServerMcpElicitationSchema = {
@@ -1619,4 +1631,5 @@ export type AppServerNotification =
         collapsed: boolean;
       };
     }
+  | FederationPeerStatusChangedNotification
   | AppServerPendingRequestNotification;

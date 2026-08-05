@@ -8,6 +8,8 @@ import type {
   AgentEvent,
   ArchiveThreadRequest,
   ArchiveThreadResponse,
+  CancelQueuedTurnRequest,
+  CancelQueuedTurnResponse,
   CancelThreadExecutionModeQueueRequest,
   CancelThreadExecutionModeQueueResponse,
   CompactThreadRequest,
@@ -77,6 +79,7 @@ export const FEDERATION_BACKEND_METHODS = {
   startThread: "backend.startThread",
   forkThread: "backend.forkThread",
   startTurn: "backend.startTurn",
+  cancelQueuedTurn: "backend.cancelQueuedTurn",
   startReview: "backend.startReview",
   compactThread: "backend.compactThread",
   interruptTurn: "backend.interruptTurn",
@@ -130,6 +133,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.startThread]: "turn_control",
   [FEDERATION_BACKEND_METHODS.forkThread]: "turn_control",
   [FEDERATION_BACKEND_METHODS.startTurn]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.cancelQueuedTurn]: "turn_control",
   [FEDERATION_BACKEND_METHODS.startReview]: "turn_control",
   [FEDERATION_BACKEND_METHODS.compactThread]: "turn_control",
   [FEDERATION_BACKEND_METHODS.interruptTurn]: "turn_control",
@@ -177,6 +181,9 @@ export type FederationBackendOperations = {
     >,
   ): Promise<ForkThreadResponse>;
   startTurn(request: StartTurnRequest): Promise<StartTurnResponse>;
+  cancelQueuedTurn(
+    request: CancelQueuedTurnRequest,
+  ): Promise<CancelQueuedTurnResponse>;
   startReview(request: StartReviewRequest): Promise<StartReviewResponse>;
   compactThread(request: CompactThreadRequest): Promise<CompactThreadResponse>;
   interruptTurn(request: InterruptTurnRequest): Promise<InterruptTurnResponse>;
@@ -312,6 +319,13 @@ export function registerFederationBackendHandlers(params: {
     async (envelope) =>
       await params.backend.startTurn(
         envelope.params as StartTurnRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.cancelQueuedTurn,
+    async (envelope) =>
+      await params.backend.cancelQueuedTurn(
+        envelope.params as CancelQueuedTurnRequest,
       ),
   );
   params.router.registerHandler(
@@ -551,6 +565,15 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   async startReview(request: StartReviewRequest): Promise<StartReviewResponse> {
     return await this.rpc.request<StartReviewResponse>({
       method: FEDERATION_BACKEND_METHODS.startReview,
+      params: request,
+    });
+  }
+
+  async cancelQueuedTurn(
+    request: CancelQueuedTurnRequest,
+  ): Promise<CancelQueuedTurnResponse> {
+    return await this.rpc.request<CancelQueuedTurnResponse>({
+      method: FEDERATION_BACKEND_METHODS.cancelQueuedTurn,
       params: request,
     });
   }

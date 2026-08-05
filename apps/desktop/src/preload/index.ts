@@ -222,6 +222,8 @@ import type {
   DesktopMessagingContactLookupRequest,
   DesktopMessagingContactLookupResponse,
   DesktopSettingsWriteResponse,
+  ConfigureFederationTailscaleRequest,
+  ConfigureFederationTailscaleResponse,
   GenerateFederationInviteRequest,
   GenerateFederationInviteResponse,
   ImportFederationInviteRequest,
@@ -248,6 +250,8 @@ import type {
   ReadFederationHealthResponse,
   ReadFederationDiagnosticsRequest,
   ReadFederationDiagnosticsResponse,
+  ReadFederationTailscaleStatusRequest,
+  ReadFederationTailscaleStatusResponse,
   RevokeFederationPeerRequest,
   RevokeFederationPeerResponse,
   ReadDesktopSettingsRequest,
@@ -417,6 +421,8 @@ import {
   FEDERATION_IMPORT_INVITE_CHANNEL,
   FEDERATION_OPEN_WINDOW_CHANNEL,
   FEDERATION_REVOKE_PEER_CHANNEL,
+  FEDERATION_TAILSCALE_CONFIGURE_CHANNEL,
+  FEDERATION_TAILSCALE_STATUS_CHANNEL,
   CODEX_ENVIRONMENT_SETUP_PROGRESS_CHANNEL,
   COMPOSER_DRAFT_CLEAR_CHANNEL,
   COMPOSER_DRAFT_LIST_CANDIDATES_CHANNEL,
@@ -808,6 +814,14 @@ const desktopApi = Object.freeze({
     request: RevokeFederationPeerRequest,
   ): Promise<RevokeFederationPeerResponse> =>
     await ipcRenderer.invoke(FEDERATION_REVOKE_PEER_CHANNEL, request),
+  readFederationTailscaleStatus: async (
+    request?: ReadFederationTailscaleStatusRequest,
+  ): Promise<ReadFederationTailscaleStatusResponse> =>
+    await ipcRenderer.invoke(FEDERATION_TAILSCALE_STATUS_CHANNEL, request),
+  configureFederationTailscale: async (
+    request: ConfigureFederationTailscaleRequest,
+  ): Promise<ConfigureFederationTailscaleResponse> =>
+    await ipcRenderer.invoke(FEDERATION_TAILSCALE_CONFIGURE_CHANNEL, request),
   ...(isDevelopment
     ? {
         getRuntimeIdentity: async (): Promise<RuntimeIdentity> =>

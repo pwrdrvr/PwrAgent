@@ -6,6 +6,8 @@ import type {
 } from "./normalized-app-server";
 
 export const FEDERATION_PROTOCOL_VERSION = 1;
+export const FEDERATION_INVITE_VERSION = 1;
+export const FEDERATION_TRANSPORT_VERSION = 1;
 
 export const FEDERATION_CAPABILITIES = [
   "remote_window",
@@ -99,6 +101,37 @@ export type ReadFederationHealthRequest = Record<string, never>;
 
 export type ReadFederationHealthResponse = {
   health: FederationHealthStatus;
+};
+
+export type FederationTailscaleMode = "serve" | "funnel";
+
+export type FederationTailscaleStatus = {
+  installed: boolean;
+  connected: boolean;
+  version?: string;
+  backendState?: string;
+  dnsName?: string;
+  tailnetName?: string;
+  serveConfigured: boolean;
+  funnelConfigured: boolean;
+  gatewayUrl?: string;
+  unavailableReason?: string;
+};
+
+export type ReadFederationTailscaleStatusRequest = Record<string, never>;
+
+export type ReadFederationTailscaleStatusResponse = {
+  status: FederationTailscaleStatus;
+};
+
+export type ConfigureFederationTailscaleRequest = {
+  mode: FederationTailscaleMode;
+  listenPort: number;
+};
+
+export type ConfigureFederationTailscaleResponse = {
+  status: FederationTailscaleStatus;
+  gatewayUrl: string;
 };
 
 export type FederationDiagnosticEventKind =

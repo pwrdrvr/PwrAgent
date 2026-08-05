@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { FEDERATION_INVITE_VERSION } from "@pwragent/shared";
 import {
   buildFederationProofMessage,
   completeFederationEnrollment,
@@ -33,27 +34,46 @@ afterEach(() => {
 });
 
 describe("federation enrollment", () => {
-  it("carries the pinned gateway public key in a one-time invite", () => {
+  it("carries the pinned gateway signing and Noise keys in a one-time invite", () => {
     const gatewayKeyPair = generateFederationIdentityKeyPair();
+    const gatewayNoisePublicKey = "gateway-noise-public-key";
     const invite = encodeFederationInvite({
-      version: 1,
+      version: FEDERATION_INVITE_VERSION,
       token: "invite-token-1234567890",
       gatewayInstanceId: "gateway_one",
       gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+      gatewayNoisePublicKey,
       gatewayUrl: "ws://127.0.0.1:47830",
       expiresAt: 2_000,
     });
 
     expect(decodeFederationInvite(invite, 1_000)).toEqual({
-      version: 1,
+      version: FEDERATION_INVITE_VERSION,
       token: "invite-token-1234567890",
       gatewayInstanceId: "gateway_one",
       gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+      gatewayNoisePublicKey,
       gatewayUrl: "ws://127.0.0.1:47830",
       expiresAt: 2_000,
     });
     expect(() => decodeFederationInvite(invite, 2_000)).toThrow(
       "Federation invite has expired.",
+    );
+  });
+
+  it("rejects unsupported invite versions before attempting enrollment", () => {
+    const unsupportedInvite = `pwragent-federation:${Buffer.from(JSON.stringify({
+      version: FEDERATION_INVITE_VERSION + 1,
+      token: "unsupported-token",
+      gatewayInstanceId: "gateway_one",
+      gatewayPublicKeyPem: "unsupported-key",
+      gatewayNoisePublicKey: "unsupported-noise-key",
+      gatewayUrl: "ws://127.0.0.1:47830",
+      expiresAt: 2_000,
+    }), "utf8").toString("base64url")}`;
+
+    expect(() => decodeFederationInvite(unsupportedInvite, 1_000)).toThrow(
+      `Unsupported federation invite version. Expected version ${FEDERATION_INVITE_VERSION}.`,
     );
   });
 

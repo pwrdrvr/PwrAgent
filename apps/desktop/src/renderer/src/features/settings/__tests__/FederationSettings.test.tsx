@@ -9,6 +9,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
+  DesktopSettingsConfigPatch,
   DesktopSettingsSnapshot,
   FederationHealthStatus,
   ReadFederationDiagnosticsResponse,
@@ -56,6 +57,11 @@ describe("FederationSettings", () => {
     );
 
     expect(await screen.findByText("Instance Federation")).toBeInTheDocument();
+    expect(screen.getByText("PwrAgent Encrypted Transport")).toBeInTheDocument();
+    expect(
+      screen.getByText("Noise IK · X25519 · AES-256-GCM · SHA-256"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Stored securely")).toBeInTheDocument();
     expect(screen.getByText("ws://127.0.0.1:8765")).toBeInTheDocument();
     expect(
       screen.getByText("wss://pwragent.example.com/federation"),
@@ -67,6 +73,72 @@ describe("FederationSettings", () => {
     await waitFor(() =>
       expect(desktopApi.readFederationHealth).toHaveBeenCalledWith({}),
     );
+  });
+
+  it("explains remote actions and shows current connection timing", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-04T21:07:05.000Z"));
+    const lastConnectedAt = Date.now() - 65_000;
+    const openFederationWindow = vi.fn();
+    const health: FederationHealthStatus = {
+      enabled: true,
+      role: "client",
+      status: "connected",
+      peers: [
+        {
+          id: "gateway_one",
+          label: "Mac Mini",
+          role: "gateway",
+          status: "connected",
+          capabilities: [
+            "remote_window",
+            "thread_navigation",
+            "turn_control",
+            "pending_request_control",
+          ],
+          protocolVersion: 1,
+          lastConnectedAt,
+          lastActivityAt: lastConnectedAt,
+        },
+      ],
+    };
+
+    render(
+      <FederationSettings
+        desktopApi={{
+          openFederationWindow,
+          readFederationDiagnostics: vi.fn(async () => ({
+            health,
+            events: [],
+          })),
+        }}
+        onClearSecret={vi.fn(async () => true)}
+        onReplaceSecret={vi.fn(async () => true)}
+        saving={false}
+        snapshot={settingsSnapshot()}
+        onSettingsChanged={vi.fn()}
+        onWriteConfig={vi.fn(async () => true)}
+      />,
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.getByText(
+      "Choose Browse remote threads to open a separate window for a connected instance. Threads, prompts, approvals, environments, and files stay on that machine.",
+    )).toBeInTheDocument();
+    expect(screen.getByText(/Current session 1m 5s/)).toBeInTheDocument();
+    expect(screen.getByText(
+      /Available: open a remote workspace · browse and create threads/,
+    )).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", {
+      name: "Browse remote threads",
+    }));
+    expect(openFederationWindow).toHaveBeenCalledWith({
+      target: { scope: "remote", instanceId: "gateway_one" },
+      label: "Mac Mini",
+    });
   });
 
   it("falls back to the settings snapshot when diagnostics are unavailable", () => {
@@ -148,7 +220,8 @@ describe("FederationSettings", () => {
 
     expect(await screen.findByText("bad_signature")).toBeInTheDocument();
     expect(screen.getByText("Transport closed.")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Open" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Browse remote threads" }))
+      .toBeDisabled();
 
     fireEvent.click(screen.getByRole("button", { name: "Revoke" }));
 
@@ -208,7 +281,8 @@ describe("FederationSettings", () => {
       await Promise.resolve();
     });
     expect(screen.getByText("Connected")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Open" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Browse remote threads" }))
+      .toBeEnabled();
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(2_000);
@@ -217,7 +291,8 @@ describe("FederationSettings", () => {
     expect(screen.getByText("Connecting")).toBeInTheDocument();
     expect(screen.getAllByText("Federation gateway connection closed."))
       .toHaveLength(2);
-    expect(screen.getByRole("button", { name: "Open" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Browse remote threads" }))
+      .toBeDisabled();
     view.unmount();
     vi.useRealTimers();
   });
@@ -266,6 +341,187 @@ describe("FederationSettings", () => {
       });
     });
   });
+
+  it("requires public exposure acknowledgement before setting up Tailscale Funnel", async () => {
+    const events: string[] = [];
+    const status = {
+      installed: true,
+      connected: true,
+      version: "1.98.10",
+      dnsName: "studio.example.ts.net",
+      tailnetName: "Example Tailnet",
+      serveConfigured: false,
+      funnelConfigured: false,
+      gatewayUrl: "wss://studio.example.ts.net/pwragent-federation",
+    };
+    const configureFederationTailscale = vi.fn(async () => {
+      events.push("publish");
+      return {
+        status: { ...status, funnelConfigured: true },
+        gatewayUrl: status.gatewayUrl,
+      };
+    });
+    const onWriteConfig = vi.fn(async (patch: DesktopSettingsConfigPatch) => {
+      events.push(patch.federation?.publicUrl ? "save-url" : "bind-listener");
+      return true;
+    });
+    render(
+      <FederationSettings
+        desktopApi={{
+          configureFederationTailscale,
+          readFederationHealth: vi.fn(async () => ({
+            health: {
+              enabled: true,
+              role: "gateway" as const,
+              status: "listening" as const,
+              listenUrl: "ws://127.0.0.1:8765",
+              peers: [],
+            },
+          })),
+          readFederationTailscaleStatus: vi.fn(async () => ({ status })),
+        }}
+        onClearSecret={vi.fn(async () => true)}
+        onReplaceSecret={vi.fn(async () => true)}
+        saving={false}
+        snapshot={settingsSnapshot()}
+        onSettingsChanged={vi.fn()}
+        onWriteConfig={onWriteConfig}
+      />,
+    );
+
+    expect(await screen.findByText("Example Tailnet")).toBeInTheDocument();
+    const funnelButton = screen.getByRole("button", {
+      name: "Set up Tailscale Funnel",
+    });
+    expect(funnelButton).toBeDisabled();
+
+    fireEvent.click(screen.getByRole("checkbox", {
+      name: "Acknowledge public Funnel exposure",
+    }));
+    expect(funnelButton).toBeEnabled();
+    fireEvent.click(funnelButton);
+
+    await waitFor(() =>
+      expect(onWriteConfig).toHaveBeenNthCalledWith(1, {
+        federation: {
+          mode: "gateway",
+          listenHost: "127.0.0.1",
+          listenPort: 8765,
+        },
+      }),
+    );
+    await waitFor(() =>
+      expect(configureFederationTailscale).toHaveBeenCalledWith({
+        mode: "funnel",
+        listenPort: 8765,
+      }),
+    );
+    await waitFor(() =>
+      expect(onWriteConfig).toHaveBeenNthCalledWith(2, {
+        federation: {
+          publicUrl: "wss://studio.example.ts.net/pwragent-federation",
+        },
+      }),
+    );
+    expect(events).toEqual(["bind-listener", "publish", "save-url"]);
+  });
+
+  it.each(["", "not-a-port", "0", "65536", "47830.5"])(
+    "rejects invalid Tailscale listen port %j before saving settings",
+    async (listenPort) => {
+      const status = {
+        installed: true,
+        connected: true,
+        serveConfigured: false,
+        funnelConfigured: false,
+        gatewayUrl: "wss://studio.example.ts.net/pwragent-federation",
+      };
+      const configureFederationTailscale = vi.fn();
+      const onWriteConfig = vi.fn(async () => true);
+      render(
+        <FederationSettings
+          desktopApi={{
+            configureFederationTailscale,
+            readFederationHealth: vi.fn(async () => ({
+              health: {
+                enabled: true,
+                role: "gateway" as const,
+                status: "listening" as const,
+                listenUrl: "ws://127.0.0.1:8765",
+                peers: [],
+              },
+            })),
+            readFederationTailscaleStatus: vi.fn(async () => ({ status })),
+          }}
+          onClearSecret={vi.fn(async () => true)}
+          onReplaceSecret={vi.fn(async () => true)}
+          saving={false}
+          snapshot={settingsSnapshot()}
+          onSettingsChanged={vi.fn()}
+          onWriteConfig={onWriteConfig}
+        />,
+      );
+
+      fireEvent.change(screen.getByDisplayValue("8765"), {
+        target: { value: listenPort },
+      });
+      const serveButton = await screen.findByRole("button", {
+        name: "Set up Tailscale Serve",
+      });
+      fireEvent.click(serveButton);
+
+      expect(await screen.findByText(
+        "Listen port must be an integer between 1 and 65535.",
+      )).toBeInTheDocument();
+      expect(onWriteConfig).not.toHaveBeenCalled();
+      expect(configureFederationTailscale).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not publish a Tailscale route when the listener cannot bind", async () => {
+    const status = {
+      installed: true,
+      connected: true,
+      serveConfigured: false,
+      funnelConfigured: false,
+      gatewayUrl: "wss://studio.example.ts.net/pwragent-federation",
+    };
+    const configureFederationTailscale = vi.fn();
+    render(
+      <FederationSettings
+        desktopApi={{
+          configureFederationTailscale,
+          readFederationHealth: vi.fn(async () => ({
+            health: {
+              enabled: true,
+              role: "gateway" as const,
+              status: "degraded" as const,
+              unavailableReason: "listen EADDRINUSE: address already in use",
+              peers: [],
+            },
+          })),
+          readFederationTailscaleStatus: vi.fn(async () => ({ status })),
+        }}
+        onClearSecret={vi.fn(async () => true)}
+        onReplaceSecret={vi.fn(async () => true)}
+        saving={false}
+        snapshot={settingsSnapshot()}
+        onSettingsChanged={vi.fn()}
+        onWriteConfig={vi.fn(async () => true)}
+      />,
+    );
+
+    const serveButton = await screen.findByRole("button", {
+      name: "Set up Tailscale Serve",
+    });
+    await waitFor(() => expect(serveButton).toBeEnabled());
+    fireEvent.click(serveButton);
+
+    expect(await screen.findByText(
+      "PwrAgent did not bind the selected loopback port. Tailscale was not changed.",
+    )).toBeInTheDocument();
+    expect(configureFederationTailscale).not.toHaveBeenCalled();
+  });
 });
 
 function settingsSnapshot(): DesktopSettingsSnapshot {
@@ -284,6 +540,11 @@ function settingsSnapshot(): DesktopSettingsSnapshot {
       },
       cloudflareMtlsEnabled: { value: true, source: "config" },
       cloudflareAccessServiceAuthEnabled: { value: false, source: "config" },
+      noiseStaticPrivateKey: {
+        configured: true,
+        source: "keychain",
+        writable: true,
+      },
       cloudflareClientCertificate: {
         configured: false,
         source: "unset",

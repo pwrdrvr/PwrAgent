@@ -5,6 +5,7 @@ import type {
   FederationPeerSummary,
 } from "@pwragent/shared";
 import {
+  FEDERATION_INVITE_VERSION,
   FEDERATION_PROTOCOL_VERSION,
   isFederationInstanceId,
 } from "@pwragent/shared";
@@ -26,10 +27,11 @@ export type FederationEnrollmentInvite = FederationEnrollmentEntry & {
 };
 
 export type FederationInvitePayload = {
-  version: 1;
+  version: typeof FEDERATION_INVITE_VERSION;
   token: string;
   gatewayInstanceId: FederationInstanceId;
   gatewayPublicKeyPem: string;
+  gatewayNoisePublicKey: string;
   gatewayUrl: string;
   expiresAt: number;
 };
@@ -82,11 +84,16 @@ export function decodeFederationInvite(
   const parsed = JSON.parse(
     Buffer.from(encoded, "base64url").toString("utf8"),
   ) as Partial<FederationInvitePayload>;
+  if (parsed.version !== FEDERATION_INVITE_VERSION) {
+    throw new Error(
+      `Unsupported federation invite version. Expected version ${FEDERATION_INVITE_VERSION}.`,
+    );
+  }
   if (
-    parsed.version !== 1 ||
     typeof parsed.token !== "string" ||
     typeof parsed.gatewayInstanceId !== "string" ||
     typeof parsed.gatewayPublicKeyPem !== "string" ||
+    typeof parsed.gatewayNoisePublicKey !== "string" ||
     typeof parsed.gatewayUrl !== "string" ||
     typeof parsed.expiresAt !== "number"
   ) {
@@ -103,6 +110,8 @@ export function completeFederationEnrollment(params: {
   gatewayInstanceId: FederationInstanceId;
   inviteToken: string;
   now: number;
+  /** Base64 Noise handshake hash to bind the identity proof to the channel. */
+  channelBinding?: string;
   peer: {
     instanceId: FederationInstanceId;
     label: string;
@@ -157,6 +166,7 @@ export function completeFederationEnrollment(params: {
     protocolVersion: params.peer.protocolVersion,
     nonce: params.peer.nonce,
     capabilities: params.peer.capabilities,
+    channelBinding: params.channelBinding,
   });
   const signatureValid = verifyFederationMessageSignature({
     publicKeyPem: params.peer.publicKeyPem,
@@ -206,6 +216,8 @@ export function authenticateFederationReconnect(params: {
   requestedCapabilities: readonly FederationCapability[];
   signatureBase64: string;
   now: number;
+  /** Base64 Noise handshake hash to bind the identity proof to the channel. */
+  channelBinding?: string;
 }): FederationAuthDecision {
   if (!isFederationInstanceId(params.peerInstanceId)) {
     return {
@@ -243,6 +255,7 @@ export function authenticateFederationReconnect(params: {
     protocolVersion: params.protocolVersion,
     nonce: params.nonce,
     capabilities: params.requestedCapabilities,
+    channelBinding: params.channelBinding,
   });
   const signatureValid = verifyFederationMessageSignature({
     publicKeyPem: peer.pinnedPublicKeyPem,
@@ -279,9 +292,17 @@ export function buildFederationProofMessage(params: {
   protocolVersion: number;
   nonce: string;
   capabilities: readonly FederationCapability[];
+  /**
+   * Base64 Noise handshake hash binding this identity proof to the specific
+   * encrypted channel. Empty in tunnel mode. If a MITM splices a different
+   * channel, the client and gateway derive different hashes, the reconstructed
+   * proof message differs, and the Ed25519 signature fails to verify.
+   */
+  channelBinding?: string;
 }): string {
   return JSON.stringify({
     capabilities: params.capabilities.slice().sort(),
+    channelBinding: params.channelBinding ?? "",
     gatewayInstanceId: params.gatewayInstanceId,
     nonce: params.nonce,
     peerInstanceId: params.peerInstanceId,

@@ -8,8 +8,10 @@ import type {
   FederationProtocolEnvelope,
   FederationSessionId,
 } from "@pwragent/shared";
+import { getMainLogger } from "../log";
 import {
   FEDERATION_PROTOCOL_VERSION,
+  FEDERATION_TRANSPORT_VERSION,
   isFederationCapability,
   isFederationInstanceId,
 } from "@pwragent/shared";
@@ -25,11 +27,26 @@ import {
   verifyFederationMessageSignature,
 } from "./federation-identity";
 import {
+  NoiseIKHandshake,
+  type NoiseKeyPair,
+  type NoiseTransport,
+} from "./federation-noise";
+import {
   federationFailure,
   type FederationRedactedFailure,
 } from "./federation-redaction";
 import { FederationSessionRegistry } from "./federation-session-state";
 import type { FederationStore } from "./federation-store";
+
+const log = getMainLogger("pwragent:federation-transport");
+const FEDERATION_NOISE_TRANSPORT = "noise_ik_25519_aesgcm_sha256";
+
+type FederationSocketTransportHelloMessage = {
+  kind: "transport.hello";
+  transportVersion: number;
+  protocolVersion: number;
+  encryption: typeof FEDERATION_NOISE_TRANSPORT;
+};
 
 type FederationSocketAuthMessage = {
   kind: "auth";
@@ -78,6 +95,7 @@ type FederationSocketEnvelopeMessage = {
 };
 
 type FederationSocketMessage =
+  | FederationSocketTransportHelloMessage
   | FederationSocketAuthMessage
   | FederationSocketChallengeMessage
   | FederationSocketAcceptedMessage
@@ -100,6 +118,13 @@ export type FederationGatewayWebSocketServerOptions = {
   port: number;
   store: FederationStore;
   sessions?: FederationSessionRegistry;
+  /**
+   * Gateway's Noise static keypair. When set, every connection runs a Noise_IK
+   * handshake (responder role) before auth, and all frames are encrypted. When
+   * unset, the transport runs in plaintext "tunnel" mode (confidentiality is
+   * expected from an outer TLS tunnel, e.g. Cloudflare).
+   */
+  noiseStatic?: NoiseKeyPair;
   onConnection?: (connection: FederationGatewayConnection) => void;
   onDisconnect?: (connection: FederationGatewayConnection) => void;
   onEnvelope?: (
@@ -131,7 +156,7 @@ export class FederationGatewayWebSocketServer {
     this.stopping = false;
     this.httpServer = http.createServer();
     this.wsServer = new WebSocketServer({ server: this.httpServer });
-    this.wsServer.on("connection", (socket) => this.handleSocket(socket));
+    this.wsServer.on("connection", (socket) => void this.handleSocket(socket));
 
     await new Promise<void>((resolve, reject) => {
       const server = this.httpServer;
@@ -180,8 +205,36 @@ export class FederationGatewayWebSocketServer {
     return true;
   }
 
-  private handleSocket(socket: WebSocket): void {
-    let connection: FederationGatewayConnection | undefined;
+  private async handleSocket(socket: WebSocket): Promise<void> {
+    const reader = new FederationFrameReader(socket);
+
+    // Phase 1: Noise_IK handshake (responder). Skipped in tunnel mode.
+    let transport: NoiseTransport | undefined;
+    let channelBinding = "";
+    if (this.options.noiseStatic) {
+      sendFrame(socket, {
+        kind: "transport.hello",
+        transportVersion: FEDERATION_TRANSPORT_VERSION,
+        protocolVersion: FEDERATION_PROTOCOL_VERSION,
+        encryption: FEDERATION_NOISE_TRANSPORT,
+      });
+      try {
+        const handshake = new NoiseIKHandshake({
+          role: "responder",
+          localStatic: this.options.noiseStatic,
+        });
+        handshake.readMessage1(await reader.next());
+        socket.send(handshake.writeMessage2());
+        transport = handshake.split();
+        channelBinding = transport.handshakeHash.toString("base64");
+      } catch {
+        log.warn("federation Noise handshake rejected");
+        socket.close();
+        return;
+      }
+    }
+
+    // Phase 2: signed identity auth, carried inside the encrypted channel.
     const challengeNonce = `challenge:${randomUUID()}`;
     const challengeMessage = buildFederationGatewayChallengeMessage({
       gatewayInstanceId: this.options.gatewayInstanceId,
@@ -189,103 +242,130 @@ export class FederationGatewayWebSocketServer {
       protocolVersion: FEDERATION_PROTOCOL_VERSION,
       nonce: challengeNonce,
     });
-    sendSocketMessage(socket, {
-      kind: "auth.challenge",
-      gatewayInstanceId: this.options.gatewayInstanceId,
-      gatewayPublicKeyPem: this.options.gatewayPublicKeyPem,
-      protocolVersion: FEDERATION_PROTOCOL_VERSION,
-      nonce: challengeNonce,
-      signatureBase64: signFederationMessage({
-        privateKeyPem: this.options.gatewayPrivateKeyPem,
-        message: challengeMessage,
-      }),
-    });
-    socket.once("message", (raw) => {
-      const message = parseSocketMessage(raw);
-      if (!message || message.kind !== "auth") {
-        this.options.store.appendAudit({
-          kind: "rejected",
-          createdAt: Date.now(),
-          detail: "policy_denied",
-        });
-        sendSocketMessage(socket, {
+    sendFrame(
+      socket,
+      {
+        kind: "auth.challenge",
+        gatewayInstanceId: this.options.gatewayInstanceId,
+        gatewayPublicKeyPem: this.options.gatewayPublicKeyPem,
+        protocolVersion: FEDERATION_PROTOCOL_VERSION,
+        nonce: challengeNonce,
+        signatureBase64: signFederationMessage({
+          privateKeyPem: this.options.gatewayPrivateKeyPem,
+          message: challengeMessage,
+        }),
+      },
+      transport,
+    );
+
+    let authFrame: Buffer;
+    try {
+      authFrame = await reader.next();
+    } catch {
+      return;
+    }
+    let message: FederationSocketMessage | undefined;
+    try {
+      message = decodeFrame(authFrame, transport);
+    } catch {
+      closeAfterFrameAuthenticationFailure(socket);
+      return;
+    }
+    if (!message || message.kind !== "auth") {
+      this.options.store.appendAudit({
+        kind: "rejected",
+        createdAt: Date.now(),
+        detail: "policy_denied",
+      });
+      sendFrame(
+        socket,
+        {
           kind: "auth.rejected",
           failure: federationFailure("policy_denied"),
-        });
-        socket.close();
-        return;
-      }
+        },
+        transport,
+      );
+      socket.close();
+      return;
+    }
+    this.options.store.appendAudit({
+      peerId: isFederationInstanceId(message.peerInstanceId)
+        ? message.peerInstanceId
+        : undefined,
+      kind: "connect_attempt",
+      createdAt: Date.now(),
+      detail: message.mode,
+    });
+    if (message.nonce !== challengeNonce) {
       this.options.store.appendAudit({
         peerId: isFederationInstanceId(message.peerInstanceId)
           ? message.peerInstanceId
           : undefined,
-        kind: "connect_attempt",
+        kind: "rejected",
         createdAt: Date.now(),
-        detail: message.mode,
+        detail: "policy_denied",
       });
-      if (message.nonce !== challengeNonce) {
-        this.options.store.appendAudit({
-          peerId: isFederationInstanceId(message.peerInstanceId)
-            ? message.peerInstanceId
-            : undefined,
-          kind: "rejected",
-          createdAt: Date.now(),
-          detail: "policy_denied",
-        });
-        sendSocketMessage(socket, {
+      sendFrame(
+        socket,
+        {
           kind: "auth.rejected",
           failure: federationFailure("policy_denied"),
-        });
-        socket.close();
-        return;
-      }
-      const decision = this.authenticate(message);
-      if (!decision.accepted) {
-        this.options.store.appendAudit({
-          peerId: isFederationInstanceId(message.peerInstanceId)
-            ? message.peerInstanceId
-            : undefined,
-          kind: "rejected",
-          createdAt: Date.now(),
-          detail: decision.failure.code,
-        });
-        sendSocketMessage(socket, {
-          kind: "auth.rejected",
-          failure: decision.failure,
-        });
-        socket.close();
-        return;
-      }
-
-      const sessionId = `federation-session:${randomUUID()}`;
-      this.sessions.openSession({
-        sessionId,
-        peerId: decision.peer.id,
-        connectedAt: Date.now(),
-        capabilities: decision.capabilities,
-      });
-      connection = {
-        peerId: decision.peer.id,
-        sessionId,
-        capabilities: decision.capabilities,
-        sendEnvelope: (envelope) => {
-          sendSocketMessage(socket, { kind: "envelope", envelope });
         },
-        close: () => socket.close(),
-      };
-      const previous = this.connections.get(connection.peerId);
-      if (previous && previous.sessionId !== connection.sessionId) {
-        previous.close();
-      }
-      this.connections.set(connection.peerId, connection);
+        transport,
+      );
+      socket.close();
+      return;
+    }
+    const decision = this.authenticate(message, channelBinding);
+    if (!decision.accepted) {
       this.options.store.appendAudit({
-        peerId: connection.peerId,
-        sessionId,
-        kind: "connected",
+        peerId: isFederationInstanceId(message.peerInstanceId)
+          ? message.peerInstanceId
+          : undefined,
+        kind: "rejected",
         createdAt: Date.now(),
-        detail: message.mode,
+        detail: decision.failure.code,
       });
-      sendSocketMessage(socket, {
+      sendFrame(
+        socket,
+        { kind: "auth.rejected", failure: decision.failure },
+        transport,
+      );
+      socket.close();
+      return;
+    }
+
+    const sessionId = `federation-session:${randomUUID()}`;
+    this.sessions.openSession({
+      sessionId,
+      peerId: decision.peer.id,
+      connectedAt: Date.now(),
+      capabilities: decision.capabilities,
+    });
+    const connection: FederationGatewayConnection = {
+      peerId: decision.peer.id,
+      sessionId,
+      capabilities: decision.capabilities,
+      sendEnvelope: (envelope) => {
+        sendFrame(socket, { kind: "envelope", envelope }, transport);
+      },
+      close: () => socket.close(),
+    };
+    const previous = this.connections.get(connection.peerId);
+    if (previous && previous.sessionId !== connection.sessionId) {
+      previous.close();
+    }
+    this.connections.set(connection.peerId, connection);
+    this.options.store.appendAudit({
+      peerId: connection.peerId,
+      sessionId,
+      kind: "connected",
+      createdAt: Date.now(),
+      detail: message.mode,
+    });
+    sendFrame(
+      socket,
+      {
         kind: "auth.accepted",
         gatewayInstanceId: this.options.gatewayInstanceId,
         sessionId,
@@ -303,41 +383,53 @@ export class FederationGatewayWebSocketServer {
             capabilities: decision.capabilities,
           }),
         }),
+      },
+      transport,
+    );
+    this.options.onConnection?.(connection);
+    socket.once("close", () => {
+      this.sessions.closeSession({
+        sessionId,
+        closedAt: Date.now(),
+        reason: "transport_closed",
       });
-      this.options.onConnection?.(connection);
-
-      socket.on("message", (nextRaw) => {
-        const next = parseSocketMessage(nextRaw);
-        if (!next || next.kind !== "envelope" || !connection) return;
-        this.sessions.heartbeat(sessionId, Date.now());
-        this.options.onEnvelope?.(next.envelope, connection);
-      });
-      socket.once("close", () => {
-        this.sessions.closeSession({
+      if (this.connections.get(connection.peerId)?.sessionId === sessionId) {
+        this.connections.delete(connection.peerId);
+      }
+      if (!this.stopping) {
+        this.options.store.appendAudit({
+          peerId: connection.peerId,
           sessionId,
-          closedAt: Date.now(),
-          reason: "transport_closed",
+          kind: "disconnected",
+          createdAt: Date.now(),
+          detail: "transport_closed",
         });
-        if (connection) {
-          if (this.connections.get(connection.peerId)?.sessionId === sessionId) {
-            this.connections.delete(connection.peerId);
-          }
-          if (!this.stopping) {
-            this.options.store.appendAudit({
-              peerId: connection.peerId,
-              sessionId,
-              kind: "disconnected",
-              createdAt: Date.now(),
-              detail: "transport_closed",
-            });
-          }
-          this.options.onDisconnect?.(connection);
-        }
-      });
+      }
+      this.options.onDisconnect?.(connection);
     });
+
+    // Phase 3: stream envelopes.
+    for (;;) {
+      let frame: Buffer;
+      try {
+        frame = await reader.next();
+      } catch {
+        return;
+      }
+      let next: FederationSocketMessage | undefined;
+      try {
+        next = decodeFrame(frame, transport);
+      } catch {
+        closeAfterFrameAuthenticationFailure(socket);
+        return;
+      }
+      if (!next || next.kind !== "envelope") continue;
+      this.sessions.heartbeat(sessionId, Date.now());
+      this.options.onEnvelope?.(next.envelope, connection);
+    }
   }
 
-  private authenticate(message: FederationSocketAuthMessage) {
+  private authenticate(message: FederationSocketAuthMessage, channelBinding: string) {
     if (message.gatewayInstanceId !== this.options.gatewayInstanceId) {
       return {
         accepted: false as const,
@@ -356,6 +448,7 @@ export class FederationGatewayWebSocketServer {
         gatewayInstanceId: this.options.gatewayInstanceId,
         inviteToken: message.inviteToken,
         now: Date.now(),
+        channelBinding,
         peer: {
           instanceId: message.peerInstanceId,
           label: message.label ?? message.peerInstanceId,
@@ -378,6 +471,7 @@ export class FederationGatewayWebSocketServer {
       nonce: message.nonce,
       requestedCapabilities: message.capabilities,
       signatureBase64: message.signatureBase64,
+      channelBinding,
       now: Date.now(),
     });
   }
@@ -407,6 +501,10 @@ export async function connectFederationClient(params: {
   headers?: Record<string, string>;
   clientCertificate?: string;
   clientPrivateKey?: string;
+  /** Client's Noise static keypair. Enables encryption (initiator role). */
+  noiseStatic?: NoiseKeyPair;
+  /** Pinned gateway Noise static public key (raw 32 bytes), from the invite. */
+  gatewayNoisePublicKey?: Buffer;
   onEnvelope?: (envelope: FederationProtocolEnvelope) => void;
   onClose?: () => void;
 }): Promise<FederationClientWebSocketClient> {
@@ -415,11 +513,62 @@ export async function connectFederationClient(params: {
     cert: params.clientCertificate,
     key: params.clientPrivateKey,
   });
-  const [challenge] = await Promise.all([
-    waitForAuthChallenge(socket),
-    waitForOpen(socket),
-  ]);
+  // Attach the reader before "open" so no inbound frame can be missed.
+  const reader = new FederationFrameReader(socket);
+  await waitForOpen(socket);
+
+  // Phase 1: Noise_IK handshake (initiator). Skipped in tunnel mode.
+  let transport: NoiseTransport | undefined;
+  let channelBinding = "";
+  if (params.noiseStatic) {
+    if (!params.gatewayNoisePublicKey) {
+      socket.close();
+      throw new Error("Missing pinned gateway Noise key for encrypted federation");
+    }
+    const hello = decodeFrame(await reader.next());
+    if (
+      !hello
+      || hello.kind !== "transport.hello"
+      || hello.transportVersion !== FEDERATION_TRANSPORT_VERSION
+      || hello.protocolVersion !== FEDERATION_PROTOCOL_VERSION
+      || hello.encryption !== FEDERATION_NOISE_TRANSPORT
+    ) {
+      socket.close(1002, "Unsupported federation transport");
+      throw new Error(
+        `Federation gateway does not support required Noise transport version ${FEDERATION_TRANSPORT_VERSION}.`,
+      );
+    }
+    try {
+      const handshake = new NoiseIKHandshake({
+        role: "initiator",
+        localStatic: params.noiseStatic,
+        remoteStaticPublicKey: params.gatewayNoisePublicKey,
+      });
+      socket.send(handshake.writeMessage1());
+      handshake.readMessage2(await reader.next());
+      transport = handshake.split();
+      channelBinding = transport.handshakeHash.toString("base64");
+    } catch (error) {
+      socket.close();
+      throw error instanceof Error ? error : new Error(String(error));
+    }
+  }
+
+  // Phase 2: identity auth.
+  let challenge: FederationSocketMessage | undefined;
+  try {
+    challenge = decodeFrame(await reader.next(), transport);
+  } catch (error) {
+    closeAfterFrameAuthenticationFailure(socket);
+    throw error;
+  }
+  if (challenge?.kind === "auth.rejected") {
+    socket.close();
+    throw new Error(challenge.failure.code);
+  }
   if (
+    !challenge ||
+    challenge.kind !== "auth.challenge" ||
     challenge.gatewayInstanceId !== params.gatewayInstanceId ||
     challenge.gatewayPublicKeyPem !== params.gatewayPublicKeyPem ||
     challenge.protocolVersion !== FEDERATION_PROTOCOL_VERSION
@@ -449,6 +598,7 @@ export async function connectFederationClient(params: {
     protocolVersion: FEDERATION_PROTOCOL_VERSION,
     nonce: challenge.nonce,
     capabilities: params.capabilities,
+    channelBinding,
   });
   const authMessage: FederationSocketAuthMessage = {
     kind: "auth",
@@ -469,9 +619,23 @@ export async function connectFederationClient(params: {
     endpoint: params.endpoint,
     profileName: params.profileName,
   };
+  sendFrame(socket, authMessage, transport);
 
-  sendSocketMessage(socket, authMessage);
-  const accepted = await waitForAuthResult(socket);
+  let accepted: FederationSocketMessage | undefined;
+  try {
+    accepted = decodeFrame(await reader.next(), transport);
+  } catch (error) {
+    closeAfterFrameAuthenticationFailure(socket);
+    throw error;
+  }
+  if (accepted?.kind === "auth.rejected") {
+    socket.close();
+    throw new Error(accepted.failure.code);
+  }
+  if (!accepted || accepted.kind !== "auth.accepted") {
+    socket.close();
+    throw new Error("Unexpected federation auth response");
+  }
   const acceptedSignatureValid =
     accepted.gatewayInstanceId === params.gatewayInstanceId &&
     accepted.nonce === challenge.nonce &&
@@ -502,24 +666,97 @@ export async function connectFederationClient(params: {
   };
   socket.once("close", notifyTransportEnded);
   socket.once("error", notifyTransportEnded);
-  socket.on("message", (raw) => {
-    const message = parseSocketMessage(raw);
-    if (message?.kind === "envelope") {
-      params.onEnvelope?.(message.envelope);
+
+  // Phase 3: stream envelopes.
+  void (async () => {
+    for (;;) {
+      let frame: Buffer;
+      try {
+        frame = await reader.next();
+      } catch {
+        return;
+      }
+      let message: FederationSocketMessage | undefined;
+      try {
+        message = decodeFrame(frame, transport);
+      } catch {
+        closeAfterFrameAuthenticationFailure(socket);
+        return;
+      }
+      if (message?.kind === "envelope") {
+        params.onEnvelope?.(message.envelope);
+      }
     }
-  });
+  })();
+
   return {
     sessionId: accepted.sessionId,
     capabilities: accepted.capabilities,
     sendEnvelope: (envelope) => {
-      sendSocketMessage(socket, { kind: "envelope", envelope });
+      sendFrame(socket, { kind: "envelope", envelope }, transport);
     },
     close: () => socket.close(),
   };
 }
 
+// A race-free, ordered reader over a WebSocket's discrete messages. Attaching
+// it before any await guarantees no frame is dropped between socket events and
+// the next read — important because the Noise handshake and auth exchange must
+// consume frames in a strict order.
+class FederationFrameReader {
+  private readonly queue: Buffer[] = [];
+  private pending?: { resolve: (frame: Buffer) => void; reject: (error: Error) => void };
+  private failure?: Error;
+
+  constructor(socket: WebSocket) {
+    socket.on("message", (raw) => this.push(rawDataToBuffer(raw)));
+    socket.once("close", () => this.fail(new Error("Federation socket closed")));
+    socket.once("error", (error) =>
+      this.fail(error instanceof Error ? error : new Error(String(error))),
+    );
+  }
+
+  private push(frame: Buffer): void {
+    if (this.pending) {
+      const { resolve } = this.pending;
+      this.pending = undefined;
+      resolve(frame);
+      return;
+    }
+    this.queue.push(frame);
+  }
+
+  private fail(error: Error): void {
+    this.failure ??= error;
+    if (this.pending) {
+      const { reject } = this.pending;
+      this.pending = undefined;
+      reject(error);
+    }
+  }
+
+  next(): Promise<Buffer> {
+    const queued = this.queue.shift();
+    if (queued) return Promise.resolve(queued);
+    if (this.failure) return Promise.reject(this.failure);
+    return new Promise((resolve, reject) => {
+      this.pending = { resolve, reject };
+    });
+  }
+}
+
+function rawDataToBuffer(raw: WebSocket.RawData): Buffer {
+  if (Buffer.isBuffer(raw)) return raw;
+  if (Array.isArray(raw)) return Buffer.concat(raw);
+  return Buffer.from(raw as ArrayBuffer);
+}
+
 function waitForOpen(socket: WebSocket): Promise<void> {
   return new Promise((resolve, reject) => {
+    if (socket.readyState === WebSocket.OPEN) {
+      resolve();
+      return;
+    }
     const cleanup = () => {
       socket.off("open", onOpen);
       socket.off("error", onError);
@@ -537,70 +774,41 @@ function waitForOpen(socket: WebSocket): Promise<void> {
   });
 }
 
-function waitForAuthChallenge(socket: WebSocket): Promise<FederationSocketChallengeMessage> {
-  return new Promise((resolve, reject) => {
-    const cleanup = () => {
-      socket.off("message", onMessage);
-      socket.off("error", onError);
-    };
-    const onMessage = (raw: WebSocket.RawData) => {
-      cleanup();
-      const message = parseSocketMessage(raw);
-      if (message?.kind === "auth.challenge") {
-        resolve(message);
-        return;
-      }
-      if (message?.kind === "auth.rejected") {
-        reject(new Error(message.failure.code));
-        return;
-      }
-      reject(new Error("Unexpected federation auth challenge"));
-    };
-    const onError = (error: Error) => {
-      cleanup();
-      reject(error);
-    };
-    socket.once("message", onMessage);
-    socket.once("error", onError);
-  });
-}
-
-function waitForAuthResult(socket: WebSocket): Promise<FederationSocketAcceptedMessage> {
-  return new Promise((resolve, reject) => {
-    const cleanup = () => {
-      socket.off("message", onMessage);
-      socket.off("error", onError);
-    };
-    const onMessage = (raw: WebSocket.RawData) => {
-      cleanup();
-      const message = parseSocketMessage(raw);
-      if (message?.kind === "auth.accepted") {
-        resolve(message);
-        return;
-      }
-      if (message?.kind === "auth.rejected") {
-        reject(new Error(message.failure.code));
-        return;
-      }
-      reject(new Error("Unexpected federation auth response"));
-    };
-    const onError = (error: Error) => {
-      cleanup();
-      reject(error);
-    };
-    socket.once("message", onMessage);
-    socket.once("error", onError);
-  });
-}
-
-function sendSocketMessage(socket: WebSocket, message: FederationSocketMessage): void {
+function sendFrame(
+  socket: WebSocket,
+  message: FederationSocketMessage,
+  transport?: NoiseTransport,
+): void {
   if (socket.readyState !== WebSocket.OPEN) return;
-  socket.send(JSON.stringify(message));
+  const json = Buffer.from(JSON.stringify(message), "utf8");
+  socket.send(transport ? transport.encrypt(json) : json);
 }
 
-function parseSocketMessage(raw: WebSocket.RawData): FederationSocketMessage | undefined {
+function closeAfterFrameAuthenticationFailure(socket: WebSocket): void {
+  log.warn("encrypted federation frame authentication failed; closing session");
+  socket.close(1008, "Encrypted federation frame authentication failed");
+}
+
+function decodeFrame(
+  frame: Buffer,
+  transport?: NoiseTransport,
+): FederationSocketMessage | undefined {
+  let json = frame;
+  if (transport) {
+    try {
+      json = transport.decrypt(frame);
+    } catch {
+      throw new FederationFrameAuthenticationError();
+    }
+  }
   try {
-    const parsed = JSON.parse(raw.toString()) as Partial<FederationSocketMessage>;
+    const parsed = JSON.parse(json.toString("utf8")) as Partial<FederationSocketMessage>;
+    if (
+      parsed.kind === "transport.hello"
+      && isTransportHelloMessage(parsed)
+    ) {
+      return parsed;
+    }
     if (parsed.kind === "auth" && isAuthMessage(parsed)) return parsed;
     if (parsed.kind === "auth.challenge" && isChallengeMessage(parsed)) return parsed;
     if (parsed.kind === "auth.accepted" && isAcceptedMessage(parsed)) return parsed;
@@ -614,6 +822,24 @@ function parseSocketMessage(raw: WebSocket.RawData): FederationSocketMessage | u
   } catch {
     return undefined;
   }
+}
+
+class FederationFrameAuthenticationError extends Error {
+  constructor() {
+    super("Encrypted federation frame authentication failed");
+    this.name = "FederationFrameAuthenticationError";
+  }
+}
+
+function isTransportHelloMessage(
+  value: Partial<FederationSocketTransportHelloMessage>,
+): value is FederationSocketTransportHelloMessage {
+  return (
+    value.kind === "transport.hello"
+    && typeof value.transportVersion === "number"
+    && typeof value.protocolVersion === "number"
+    && value.encryption === FEDERATION_NOISE_TRANSPORT
+  );
 }
 
 function isAuthMessage(value: Partial<FederationSocketAuthMessage>): value is FederationSocketAuthMessage {

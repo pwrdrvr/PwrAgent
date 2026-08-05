@@ -4814,6 +4814,83 @@ describe("Composer", () => {
     });
   });
 
+  it("cancels the owning peer's queued turn before remote steering", async () => {
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "remote-instance",
+    };
+    const cancelQueuedTurn = vi.fn(async ({ queueEntryId }: {
+      queueEntryId: string;
+    }) => ({ queueEntryId, cancelled: true }));
+    const steerTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    }));
+    render(
+      <Composer
+        activeTurnId="turn-1"
+        backends={[
+          {
+            ...backendSummary("codex"),
+            capabilities: {
+              ...backendSummary("codex").capabilities,
+              steerTurn: true,
+            },
+          },
+        ]}
+        desktopApi={{
+          cancelQueuedTurn,
+          onAgentEvent: () => () => undefined,
+          startTurn: vi.fn(async () => ({
+            backend: "codex" as const,
+            threadId: "thread-1",
+            turnId: "queue-entry-1",
+            queueStatus: "queued" as const,
+            queueEntryId: "queue-entry-1",
+          })),
+          steerTurn,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Remote active turn",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          federation: {
+            ref: {
+              backend: "codex",
+              target: federationTarget,
+              threadId: "thread-1",
+            },
+            instanceLabel: "Remote",
+            peerStatus: "connected",
+          },
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "Steer remotely" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+    await screen.findByLabelText("Queued message");
+    fireEvent.click(screen.getByRole("button", { name: "Steer" }));
+
+    await waitFor(() => {
+      expect(cancelQueuedTurn).toHaveBeenCalledWith({
+        federationTarget,
+        queueEntryId: "queue-entry-1",
+      });
+      expect(steerTurn).toHaveBeenCalledWith(
+        expect.objectContaining({ federationTarget }),
+      );
+    });
+  });
+
   it("removes concurrently cancelled queue entries by stable id", async () => {
     const cancellationOne = createDeferred<{
       queueEntryId: string;

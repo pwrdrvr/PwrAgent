@@ -217,6 +217,11 @@ describe("DesktopSettingsService", () => {
       cloudflareMtlsEnabled: { value: true, source: "config" },
       cloudflareAccessServiceAuthEnabled: { value: true, source: "config" },
       instancePrivateKey: { configured: false, source: "unset", writable: true },
+      noiseStaticPrivateKey: {
+        configured: false,
+        source: "unset",
+        writable: true,
+      },
       cloudflareClientCertificate: {
         configured: false,
         source: "unset",
@@ -342,6 +347,31 @@ describe("DesktopSettingsService", () => {
     });
   });
 
+  it("persists and reuses a federation Noise static keypair", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const secretStore = new MemoryDesktopSecretStore();
+    const service = new DesktopSettingsService({ configPath, env: {}, secretStore });
+
+    const first = await service.getOrCreateFederationNoiseStaticKeyPair();
+    expect(first.privateKeyBase64.length).toBeGreaterThan(0);
+    expect(Buffer.from(first.publicKeyBase64, "base64").length).toBe(32);
+
+    // A fresh service over the same secret store reuses the persisted key.
+    const reopened = new DesktopSettingsService({ configPath, env: {}, secretStore });
+    const second = await reopened.getOrCreateFederationNoiseStaticKeyPair();
+    expect(second.privateKeyBase64).toBe(first.privateKeyBase64);
+    expect(second.publicKeyBase64).toBe(first.publicKeyBase64);
+
+    // Stored under its own secret name, distinct from the Ed25519 identity.
+    expect(await secretStore.getSecret("federationNoiseStaticPrivateKey")).toBe(
+      first.privateKeyBase64,
+    );
+    expect(
+      await secretStore.getSecret("federationInstancePrivateKey"),
+    ).toBeUndefined();
+  });
+
   it("defaults federation settings and exposes stored federation secrets", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
@@ -365,6 +395,11 @@ describe("DesktopSettingsService", () => {
         source: "default",
       },
       instancePrivateKey: { configured: false, source: "unset", writable: true },
+      noiseStaticPrivateKey: {
+        configured: false,
+        source: "unset",
+        writable: true,
+      },
     });
 
     await service.writeConfigPatch({

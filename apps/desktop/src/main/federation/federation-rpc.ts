@@ -58,7 +58,18 @@ export class FederationRpcEndpoint {
         timer,
       });
     });
-    this.options.sendEnvelope(envelope);
+    try {
+      this.options.sendEnvelope(envelope);
+    } catch (error) {
+      const pending = this.pending.get(id);
+      if (pending) {
+        clearTimeout(pending.timer);
+        this.pending.delete(id);
+        pending.reject(
+          error instanceof Error ? error : new Error(String(error)),
+        );
+      }
+    }
     return promise;
   }
 

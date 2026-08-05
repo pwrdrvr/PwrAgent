@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AgentEvent,
+  CancelQueuedTurnRequest,
   CancelThreadExecutionModeQueueRequest,
   CompactThreadRequest,
   ForkThreadRequest,
@@ -118,6 +119,10 @@ const federationMock = vi.hoisted(() => {
       threadId: request.threadId,
       turnId: "remote-turn-1",
       queueStatus: "started" as const,
+    })),
+    cancelQueuedTurn: vi.fn(async (request: CancelQueuedTurnRequest) => ({
+      queueEntryId: request.queueEntryId,
+      cancelled: true,
     })),
     startReview: vi.fn(async (request: StartReviewRequest) => ({
       backend: request.backend,
@@ -305,6 +310,7 @@ describe("agent ipc", () => {
       "../ipc/agent-ipc"
     );
     const {
+      AGENT_CANCEL_QUEUED_TURN_CHANNEL,
       AGENT_CANCEL_THREAD_EXECUTION_MODE_QUEUE_CHANNEL,
       AGENT_COMPACT_THREAD_CHANNEL,
       AGENT_FORK_THREAD_CHANNEL,
@@ -351,6 +357,10 @@ describe("agent ipc", () => {
       federationTarget,
       threadId: "thread-1",
       input: [{ type: "text", text: "Ship it" }],
+    });
+    await handlers.get(AGENT_CANCEL_QUEUED_TURN_CHANNEL)?.({}, {
+      federationTarget,
+      queueEntryId: "queue-1",
     });
     await handlers.get(AGENT_START_REVIEW_CHANNEL)?.({}, {
       backend: "codex",
@@ -455,6 +465,10 @@ describe("agent ipc", () => {
       threadId: "thread-1",
       input: [{ type: "text", text: "Ship it" }],
     });
+    expect(federationMock.remoteBackend.cancelQueuedTurn).toHaveBeenCalledWith({
+      queueEntryId: "queue-1",
+    });
+    expect(registry.cancelQueuedTurn).not.toHaveBeenCalled();
     expect(federationMock.remoteBackend.startReview).toHaveBeenCalledWith({
       backend: "codex",
       threadId: "thread-1",
