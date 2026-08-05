@@ -106,7 +106,7 @@ pnpm dev
 - Launch or inspect with the project-local dev-profile skill. Its successful
   `status` / `restart` / `verify` output includes a `Computer Use target` line
   with the checkout-local Electron main PID, exact `Electron.app` path,
-  expected native window title (`PwrAgnt`), and renderer URL/port. For Computer
+  expected native window title (`PwrAgent`), and renderer URL/port. For Computer
   Use, target that exact app path, then confirm the returned window title and
   AX URL match before clicking anything. The title alone is not unique when
   another PwrAgent checkout is open; the port alone is not enough without the

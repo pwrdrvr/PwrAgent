@@ -10,6 +10,7 @@ const browserWindowState: {
   send?: ReturnType<typeof vi.fn>;
   webContentsOn?: ReturnType<typeof vi.fn>;
   webContentsOnce?: ReturnType<typeof vi.fn>;
+  setTitle?: ReturnType<typeof vi.fn>;
   setWindowOpenHandler?: ReturnType<typeof vi.fn>;
   show?: ReturnType<typeof vi.fn>;
 } = {};
@@ -114,14 +115,17 @@ const BrowserWindowMock = vi.fn(function BrowserWindow(
       webContentsOnceHandlers.set(event, handler);
     }
   );
+  browserWindowState.setTitle = vi.fn();
   browserWindowState.setWindowOpenHandler = vi.fn();
   browserWindowState.show = vi.fn(() => emitWindowEvent("show"));
 
   return {
+    isDestroyed: () => false,
     loadFile: browserWindowState.loadFile,
     loadURL: browserWindowState.loadURL,
     on: browserWindowState.on,
     once: browserWindowState.once,
+    setTitle: browserWindowState.setTitle,
     show: browserWindowState.show,
     webContents: {
       send: browserWindowState.send,
@@ -265,6 +269,39 @@ describe("createMainWindow", () => {
     );
     expect(browserWindowState.show).toHaveBeenCalledTimes(1);
     expect(browserWindowState.setWindowOpenHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it("titles the shell window and refuses the renderer's document title", async () => {
+    const { createMainWindow } = await import("../window");
+    createMainWindow();
+
+    expect(browserWindowState.options?.title).toBe("PwrAgent");
+    expect(browserWindowState.setTitle).toHaveBeenCalledWith("PwrAgent");
+
+    // Electron mirrors the loaded page's <title> onto the native window
+    // title. index.html shipped a stale "PwrAgnt" that won on load, so
+    // the lock has to survive the event, not just the constructor.
+    const preventDefault = vi.fn();
+    emitWindowEvent("page-title-updated", { preventDefault }, "PwrAgnt");
+
+    expect(preventDefault).toHaveBeenCalledTimes(1);
+    expect(browserWindowState.setTitle).toHaveBeenLastCalledWith("PwrAgent");
+    expect(browserWindowState.setTitle).not.toHaveBeenCalledWith("PwrAgnt");
+  });
+
+  it("titles a federated window with its peer label", async () => {
+    const { createMainWindow } = await import("../window");
+    createMainWindow({ federationLabel: "Harold-MBP-2018" });
+
+    expect(browserWindowState.options?.title).toBe(
+      "PwrAgent - Harold-MBP-2018"
+    );
+
+    emitWindowEvent("page-title-updated", { preventDefault: vi.fn() }, "PwrAgent");
+
+    expect(browserWindowState.setTitle).toHaveBeenLastCalledWith(
+      "PwrAgent - Harold-MBP-2018"
+    );
   });
 
   it("registers the main window for messaging push-event channels", async () => {

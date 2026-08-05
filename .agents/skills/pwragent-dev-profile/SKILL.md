@@ -46,7 +46,7 @@ Verify that a previously started instance is still up:
 1. Run `status` first when the user asks what is running or when closing processes may be surprising.
 2. Run `restart` when the user asks to start the dev profile; it closes the prior managed dev-profile instance, starts `PWRAGENT_PROFILE=dev PWRAGENT_INSTANCE_ROOT="$PWD" pnpm dev` detached from the checkout, and waits until the app writes a matching profile runtime record.
 3. For visual QA, use the emitted `Computer Use target` line. Target its exact
-   checkout-local `appPath`, then verify the native window title is `PwrAgnt`
+   checkout-local `appPath`, then verify the native window title is `PwrAgent`
    and the AX URL matches the emitted `rendererUrl`. Never target the generic
    `Electron` display name, shared `com.github.Electron` bundle id, or installed
    `com.pwrdrvr.pwragent` app: those can select a sibling project, another

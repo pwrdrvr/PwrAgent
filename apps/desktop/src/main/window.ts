@@ -22,6 +22,7 @@ import { MainProcessHeapMonitor } from "./diagnostics/main-process-heap-monitor"
 import { RendererHeapMonitor } from "./diagnostics/renderer-heap-monitor";
 import { RendererHotCpuProfiler } from "./diagnostics/renderer-hot-cpu-profiler";
 import { getMainLogger } from "./log";
+import { lockMainWindowTitle, mainWindowTitle } from "./main-window-title";
 import { recordStartupProfileEvent } from "./diagnostics/startup-profile-events";
 import { resolveActiveProfilePath } from "./profile";
 import { getDesktopSettingsService } from "./settings/desktop-settings-singleton";
@@ -367,6 +368,7 @@ export function createMainWindow(options?: {
   };
 }): BrowserWindow {
   const preloadPath = getPreloadPath();
+  const windowTitle = mainWindowTitle(options?.federationLabel);
   const appearance = readBootstrapAppearance();
   const navigationPreferences = readBootstrapNavigationPreferences();
   const windowChrome = isMac
@@ -396,9 +398,7 @@ export function createMainWindow(options?: {
     minWidth: 1200,
     minHeight: 760,
     show: false,
-    title: options?.federationLabel
-      ? `PwrAgent - ${options.federationLabel}`
-      : "PwrAgent",
+    title: windowTitle,
     ...windowChrome,
     // Pre-tinted so the OS window fill matches the renderer's first
     // paint and we don't flash dark before a light renderer mounts.
@@ -438,6 +438,14 @@ export function createMainWindow(options?: {
     }
   });
 
+  // The renderer's <title> (index.html) otherwise replaces the
+  // BrowserWindow title on load, which both collapses every window to
+  // the same entry in the macOS Window menu and lets a stale literal in
+  // the HTML outrank the product name. The main process owns the title
+  // for every shell window: "PwrAgent" locally, "PwrAgent - <machine>"
+  // for a remote peer.
+  lockMainWindowTitle(window, windowTitle);
+
   if (options?.federationTarget) {
     const webContentsId = window.webContents.id;
     federationWindowWebContentsIds.add(webContentsId);
@@ -448,15 +456,6 @@ export function createMainWindow(options?: {
     window.once("closed", () => {
       federationWindowWebContentsIds.delete(webContentsId);
       federationWindowTargetsByWebContentsId.delete(webContentsId);
-    });
-    // The renderer's static <title> (index.html) replaces the
-    // BrowserWindow title on load, which collapses every window to the
-    // same entry in the macOS Window menu. A remote window must keep
-    // its "PwrAgent - <machine>" title so windows stay tellable apart.
-    // (BrowserWindow event, not webContents — only the window-level
-    // preventDefault stops the title swap.)
-    window.on("page-title-updated", (event) => {
-      event.preventDefault();
     });
   }
 
