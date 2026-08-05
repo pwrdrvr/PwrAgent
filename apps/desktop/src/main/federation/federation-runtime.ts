@@ -104,6 +104,7 @@ import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
 import { spawnTerminalPty } from "../terminal/integrated-terminal-service";
 import {
   readTranscriptImageProtocolRequest,
+  rewriteFederatedTranscriptImageUrlsForRenderer,
   rewriteTranscriptImageUrlsForRenderer,
 } from "../transcript-image-protocol";
 import { getMainLogger } from "../log";
@@ -601,7 +602,13 @@ export class DesktopFederationRuntime {
   }
 
   remoteBackend(target: FederationRemoteTarget): FederationBackendOperations {
-    return new FederationRemoteBackendClient(this.rpcFor(target));
+    return new FederationRemoteBackendClient(
+      this.rpcFor(target),
+      (response) => rewriteFederatedTranscriptImageUrlsForRenderer(
+        response,
+        target.instanceId,
+      ),
+    );
   }
 
   /**

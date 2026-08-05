@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type {
+  AppServerReadThreadResponse,
   FederationProtocolEnvelope,
   TrustCodexProjectRequest,
 } from "@pwragent/shared";
@@ -459,9 +460,28 @@ describe("federation backend bridge", () => {
       sendEnvelope: (envelope) => sent.push(envelope),
       now: () => 1_000,
     });
-    const client = new FederationRemoteBackendClient(rpc);
     const ownerUrl =
       `pwragent-image://file/${encodeURIComponent("file:///Users/owner/.pwragent/profiles/default/state/image-inputs/image.png")}`;
+    const transformedUrl =
+      `pwragent-image://federation/owner_one/${encodeURIComponent(ownerUrl)}`;
+    const transformReadThreadResponse = vi.fn((
+      response: AppServerReadThreadResponse,
+    ): AppServerReadThreadResponse => ({
+      ...response,
+      replay: {
+        ...response.replay,
+        messages: response.replay.messages.map((message) => ({
+          ...message,
+          parts: message.parts?.map((part) =>
+            part.type === "image" ? { ...part, url: transformedUrl } : part,
+          ),
+        })),
+      },
+    }));
+    const client = new FederationRemoteBackendClient(
+      rpc,
+      transformReadThreadResponse,
+    );
     const readPending = client.readThread({
       backend: "codex",
       threadId: "thread-1",
@@ -500,11 +520,12 @@ describe("federation backend bridge", () => {
         messages: [{
           parts: [{
             type: "image",
-            url: `pwragent-image://federation/owner_one/${encodeURIComponent(ownerUrl)}`,
+            url: transformedUrl,
           }],
         }],
       },
     });
+    expect(transformReadThreadResponse).toHaveBeenCalledTimes(1);
 
     const imagePending = client.readTranscriptImage({ url: ownerUrl });
     const imageRequest = sent.at(-1)!;

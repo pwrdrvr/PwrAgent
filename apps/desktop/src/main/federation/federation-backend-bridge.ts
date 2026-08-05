@@ -83,13 +83,14 @@ import type {
 } from "@pwragent/shared";
 import type { FederationRouter } from "./federation-router";
 import type { FederationRpcEndpoint } from "./federation-rpc";
-import {
-  rewriteFederatedTranscriptImageUrlsForRenderer,
-  type FederatedTranscriptImageResponse,
-} from "../transcript-image-protocol";
 
 export type FederationReadTranscriptImageRequest = {
   url: string;
+};
+
+export type FederatedTranscriptImageResponse = {
+  dataBase64: string;
+  mimeType: string;
 };
 
 export const FEDERATION_BACKEND_METHODS = {
@@ -638,7 +639,12 @@ export function registerFederationBackendHandlers(params: {
 }
 
 export class FederationRemoteBackendClient implements FederationBackendOperations {
-  constructor(private readonly rpc: FederationRpcEndpoint) {}
+  constructor(
+    private readonly rpc: FederationRpcEndpoint,
+    private readonly transformReadThreadResponse: (
+      response: AppServerReadThreadResponse,
+    ) => AppServerReadThreadResponse = (response) => response,
+  ) {}
 
   async getNavigationSnapshot(
     request: GetNavigationSnapshotRequest = {},
@@ -665,10 +671,7 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
       method: FEDERATION_BACKEND_METHODS.readThread,
       params: request,
     });
-    return rewriteFederatedTranscriptImageUrlsForRenderer(
-      response,
-      this.rpc.remoteInstanceId,
-    );
+    return this.transformReadThreadResponse(response);
   }
 
   async readTranscriptImage(
