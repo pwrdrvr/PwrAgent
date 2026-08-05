@@ -86,6 +86,7 @@ import type {
   MessagingMonitorState,
   MessagingMonitorSubscriptionRecord,
   MessagingPendingIntentRecord,
+  MessagingPrivateConversationResolveResult,
   MessagingQuestionnaireAnswer,
   MessagingQuestionnaireIntent,
   MessagingReviewIntent,
@@ -769,6 +770,7 @@ export class MessagingController {
     string,
     ActiveAgentMessagingOrigin
   >();
+  private readonly terminalPrivateResponseTurnKeys = new Set<string>();
   private readonly queuedAgentMessagingOriginsByQueueKey = new Map<
     string,
     ActiveAgentMessagingOrigin
@@ -900,6 +902,8 @@ export class MessagingController {
           },
         };
       }
+      case "send_private_response":
+        return await this.sendPrivateResponseFromAgentMessagingOrigin(request);
       case "attach_thread_here":
         return await this.attachThreadHereFromAgentMessagingOrigin(request);
       case "inspect_messaging_pdfs":
@@ -1493,11 +1497,18 @@ export class MessagingController {
         }
       }
 
-      await this.deliverToolActivityForBackendEvent(
-        event,
-        binding,
-        activeTurn?.turnId,
+      const suppressSourceResponse = this.isTerminalPrivateResponseTurn(
+        event.backend,
+        binding.threadId,
+        eventTurnId ?? activeTurn?.turnId,
       );
+      if (!suppressSourceResponse) {
+        await this.deliverToolActivityForBackendEvent(
+          event,
+          binding,
+          activeTurn?.turnId,
+        );
+      }
       if (eventTurnId && isTaskMonitorCompletionEvent(event)) {
         // A monitor's terminal result wakes the parent agent, whose final
         // response is the one user-facing completion notification. Tombstone
@@ -1528,7 +1539,7 @@ export class MessagingController {
       }
 
       const assistantDelta = assistantDeltaForBackendEvent(event);
-      if (assistantDelta && !reviewTurnEvent) {
+      if (assistantDelta && !reviewTurnEvent && !suppressSourceResponse) {
         if (!automationTurnEvent) {
           await this.deliverAssistantStreamUpdate(assistantDelta, binding);
         }
@@ -1537,7 +1548,7 @@ export class MessagingController {
       const assistantText = standaloneReviewAssistantText ?? (
         isFinalReviewAssistant ? undefined : rawAssistantText
       );
-      if (assistantText) {
+      if (assistantText && !suppressSourceResponse) {
         if (
           !isNonFinalAssistantTextForBackendEvent(event)
           && !isTaskMonitorProgressEvent(event)
@@ -1600,6 +1611,7 @@ export class MessagingController {
         }
       } else {
         if (
+          !suppressSourceResponse &&
           isFinalAssistantImageResolutionEvent(event)
           && !reviewTurnEvent
           && !isTaskMonitorProgressEvent(event)
@@ -1612,6 +1624,7 @@ export class MessagingController {
           await this.deliverAssistantImages(assistantImages, event, binding);
         }
         if (
+          !suppressSourceResponse &&
           isTerminalTurnLifecycle(activeTurn)
           && !assistantDelta
           && !reviewTurnEvent
@@ -1630,14 +1643,18 @@ export class MessagingController {
 
       // Automation turns surface their own terminal output (incl. errors) via
       // handleAutomationTurnTerminal, so skip them here to avoid a double post.
-      if (!automationTurnEvent && activeTurn?.status === "failed") {
+      if (
+        !suppressSourceResponse
+        && !automationTurnEvent
+        && activeTurn?.status === "failed"
+      ) {
         const turnFailureText = errorTextForBackendEvent(event);
         if (turnFailureText) {
           await this.deliverTurnFailureMessage(turnFailureText, event, binding);
         }
       }
 
-      if (completedPlan && !automationTurnEvent) {
+      if (completedPlan && !automationTurnEvent && !suppressSourceResponse) {
         await this.deliverArtifactForBinding({
           artifact: artifactFromPlanEntry(completedPlan),
           binding,
@@ -1645,7 +1662,11 @@ export class MessagingController {
         });
       }
 
-      if (completedReviewArtifact && !automationTurnEvent) {
+      if (
+        completedReviewArtifact
+        && !automationTurnEvent
+        && !suppressSourceResponse
+      ) {
         await this.deliverArtifactForBinding({
           artifact: artifactFromReviewEntry(completedReviewArtifact),
           binding,
@@ -1653,7 +1674,11 @@ export class MessagingController {
         });
       }
 
-      if (markdownFileArtifactSelection && !automationTurnEvent) {
+      if (
+        markdownFileArtifactSelection
+        && !automationTurnEvent
+        && !suppressSourceResponse
+      ) {
         await this.deliverArtifactForBinding({
           artifact: artifactFromMarkdownFileSelection(markdownFileArtifactSelection),
           binding,
@@ -5439,6 +5464,21 @@ export class MessagingController {
     return `${binding.id}\0${streamKey}`;
   }
 
+  private discardAssistantStreamsForTurn(
+    binding: MessagingBindingRecord,
+    turnId: string,
+  ): void {
+    for (const [bufferKey, buffer] of this.assistantStreamBuffers) {
+      if (
+        bufferKey.startsWith(`${binding.id}\0`)
+        && buffer.turnId === turnId
+      ) {
+        this.assistantStreamBuffers.delete(bufferKey);
+        this.assistantStreamDeliveryQueues.delete(bufferKey);
+      }
+    }
+  }
+
   private async deliverAssistantMessage(
     text: string,
     event: AgentEvent,
@@ -5741,6 +5781,7 @@ export class MessagingController {
     this.toolUpdatePolicy.dispose();
     this.completedTaskMonitorTurns.clear();
     this.activeAgentMessagingOriginsByTurnKey.clear();
+    this.terminalPrivateResponseTurnKeys.clear();
     this.queuedAgentMessagingOriginsByQueueKey.clear();
   }
 
@@ -13429,10 +13470,22 @@ export class MessagingController {
     threadId: ThreadIdentifier,
     turnId: string,
   ): void {
-    this.activeAgentMessagingOriginsByTurnKey.delete(
-      agentMessagingTurnKey(backend, threadId, turnId),
-    );
+    const turnKey = agentMessagingTurnKey(backend, threadId, turnId);
+    this.activeAgentMessagingOriginsByTurnKey.delete(turnKey);
     this.pdfAttachmentStore.releaseTurn({ backend, threadId, turnId });
+  }
+
+  private isTerminalPrivateResponseTurn(
+    backend: AppServerBackendKind,
+    threadId: ThreadIdentifier,
+    turnId: string | undefined,
+  ): boolean {
+    return Boolean(
+      turnId
+      && this.terminalPrivateResponseTurnKeys.has(
+        agentMessagingTurnKey(backend, threadId, turnId),
+      ),
+    );
   }
 
   private rememberQueuedAgentMessagingOrigin(params: {
@@ -14674,6 +14727,153 @@ export class MessagingController {
           ? "created_and_attached"
           : "attached",
         placement: resolvedPlacement.placement,
+      },
+    };
+  }
+
+  private async sendPrivateResponseFromAgentMessagingOrigin(
+    request: Extract<
+      PwrAgentMessagingRequest,
+      { operation: "send_private_response" }
+    >,
+  ): Promise<PwrAgentMessagingResponse> {
+    const text = typeof request.args?.text === "string"
+      ? request.args.text
+      : "";
+    if (!text.trim() || text.length > 40_000) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message:
+            "send_private_response requires text between 1 and 40,000 characters.",
+        },
+      };
+    }
+    if (!request.context.turnId) {
+      return {
+        ok: false,
+        error: {
+          code: "not_found",
+          message:
+            "Private responses require the active messaging turn that identified the requesting user.",
+        },
+      };
+    }
+    const origin = await this.resolveAgentMessagingOrigin(request.context);
+    if (!origin.ok) {
+      return origin;
+    }
+    if (!this.options.adapter.resolvePrivateConversation) {
+      return {
+        ok: false,
+        error: {
+          code: "unsupported_operation",
+          message:
+            "This messaging provider cannot start a private response to the requesting user.",
+        },
+      };
+    }
+
+    let privateConversation: MessagingPrivateConversationResolveResult;
+    try {
+      privateConversation = await this.options.adapter.resolvePrivateConversation({
+        actor: origin.origin.event.actor,
+        source: origin.origin.event.channel,
+        routingState: origin.origin.event.routingState,
+      });
+    } catch (error) {
+      return {
+        ok: false,
+        error: {
+          code: "internal_error",
+          message:
+            error instanceof Error
+              ? `Could not resolve a private conversation: ${error.message}`
+              : "Could not resolve a private conversation.",
+        },
+      };
+    }
+    if (
+      privateConversation.outcome !== "resolved"
+      || !privateConversation.conversation
+      || privateConversation.channel !== origin.origin.event.channel.channel
+    ) {
+      return {
+        ok: false,
+        error: {
+          code: privateConversation.outcome === "unsupported"
+            ? "unsupported_operation"
+            : "internal_error",
+          message:
+            privateConversation.errorMessage
+            ?? "The messaging provider could not resolve a private conversation.",
+        },
+      };
+    }
+
+    const privateEvent: MessagingInboundEvent = {
+      ...origin.origin.event,
+      id: `${origin.origin.event.id}:private-response:${this.now()}`,
+      channel: {
+        channel: privateConversation.channel,
+        conversation: privateConversation.conversation,
+      },
+      receivedAt: this.now(),
+      routingState: privateConversation.routingState,
+    };
+    const sourceBinding = origin.origin.deliveryBinding ?? origin.origin.binding;
+    const result = await this.deliver(
+      {
+        id: this.newIntentId("private-response"),
+        kind: "message",
+        bindingId: sourceBinding?.id,
+        createdAt: this.now(),
+        role: "assistant",
+        parts: [{ type: "text", text, markdown: "markdown" }],
+      },
+      undefined,
+      privateEvent,
+    );
+    if (!isVisibleAssistantStreamDelivery(result)) {
+      return {
+        ok: false,
+        error: {
+          code: result.outcome === "unsupported"
+            ? "unsupported_operation"
+            : "internal_error",
+          message:
+            result.errorMessage
+            ?? "The private response was not delivered, so the source response was not suppressed.",
+        },
+      };
+    }
+
+    const turnKey = agentMessagingTurnKey(
+      request.context.backend,
+      request.context.threadId,
+      request.context.turnId,
+    );
+    rememberBoundedKey(this.terminalPrivateResponseTurnKeys, turnKey);
+    if (sourceBinding) {
+      this.toolUpdatePolicy.flush({
+        bindingId: sourceBinding.id,
+        clear: true,
+        turnId: request.context.turnId,
+      });
+      this.clearTurnProse(sourceBinding.id, request.context.turnId);
+      this.discardAssistantStreamsForTurn(
+        sourceBinding,
+        request.context.turnId,
+      );
+    }
+    return {
+      ok: true,
+      data: {
+        channel: result.channel,
+        deliveredAt: result.deliveredAt,
+        outcome: "delivered",
+        recipient: summarizeMessagingActor(origin.origin.event.actor),
       },
     };
   }
@@ -17209,7 +17409,7 @@ function summarizeMessagingConversation(
 
 function summarizeMessagingActor(
   actor: MessagingInboundEvent["actor"],
-): PwrAgentMessagingLocationSummary["actor"] {
+): NonNullable<PwrAgentMessagingLocationSummary["actor"]> {
   return {
     platformUserId: actor.platformUserId,
     displayName: actor.displayName,

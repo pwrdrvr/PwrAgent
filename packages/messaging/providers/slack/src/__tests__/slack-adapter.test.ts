@@ -423,6 +423,92 @@ describe("SlackAdapter", () => {
     ]);
   });
 
+  it("resolves and delivers a private response to an inbound Slack actor", async () => {
+    const posted: unknown[] = [];
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({ posted }),
+      socketClient: fakeSocket(),
+      now: () => 1_700_000_000_000,
+    });
+    const source = {
+      channel: "slack" as const,
+      conversation: {
+        id: "C012ABCDEF0",
+        kind: "channel" as const,
+        title: "signals-chat",
+        workspaceId: "T012ABCDEF0",
+      },
+    };
+
+    const resolved = await adapter.resolvePrivateConversation({
+      actor: {
+        platformUserId: "U012ABCDEF0",
+        displayName: "Alice",
+      },
+      source,
+      routingState: {
+        opaque: {
+          channelId: "C012ABCDEF0",
+          teamId: "T012ABCDEF0",
+        },
+      },
+    });
+
+    expect(resolved).toEqual({
+      channel: "slack",
+      conversation: {
+        id: "U012ABCDEF0",
+        kind: "dm",
+        title: "Alice",
+        workspaceId: "T012ABCDEF0",
+      },
+      outcome: "resolved",
+      routingState: {
+        opaque: {
+          channelId: "U012ABCDEF0",
+          teamId: "T012ABCDEF0",
+        },
+      },
+      updatedAt: 1_700_000_000_000,
+    });
+    if (resolved.outcome !== "resolved" || !resolved.conversation) {
+      throw new Error("Expected a resolved private Slack conversation");
+    }
+
+    await expect(adapter.deliver({
+      id: "private-response",
+      kind: "message",
+      createdAt: 1,
+      role: "assistant",
+      parts: [{ type: "text", text: "Private details", markdown: "markdown" }],
+      audit: {
+        actor: { platformUserId: "U012ABCDEF0" },
+        channel: {
+          channel: "slack",
+          conversation: resolved.conversation,
+        },
+        occurredAt: 1,
+      },
+      targetSurface: {
+        channel: "slack",
+        id: "private-response-target",
+        state: resolved.routingState,
+      },
+    })).resolves.toMatchObject({
+      channel: "slack",
+      outcome: "presented",
+    });
+
+    expect(posted).toEqual([
+      expect.objectContaining({
+        channel: "U012ABCDEF0",
+        text: "Private details",
+      }),
+    ]);
+  });
+
   it("signals Slack Assistant thread status for active typing activity", async () => {
     const assistantStatuses: Array<{ channelId: string; status: string; threadTs: string }> = [];
     const adapter = new SlackAdapter({

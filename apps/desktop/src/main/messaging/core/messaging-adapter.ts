@@ -71,6 +71,8 @@ import type {
   MessagingManagedConversationCreateResult,
   MessagingManagedConversationRightsRequest,
   MessagingManagedConversationRightsResult,
+  MessagingPrivateConversationResolveRequest,
+  MessagingPrivateConversationResolveResult,
   MessagingReconnectInfo,
   MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
@@ -125,6 +127,9 @@ export type MessagingAdapter = {
   createManagedConversation?(
     request: MessagingManagedConversationCreateRequest,
   ): Promise<MessagingManagedConversationCreateResult>;
+  resolvePrivateConversation?(
+    request: MessagingPrivateConversationResolveRequest,
+  ): Promise<MessagingPrivateConversationResolveResult>;
   closeManagedConversation?(
     request: MessagingManagedConversationActionRequest,
   ): Promise<MessagingManagedConversationActionResult>;

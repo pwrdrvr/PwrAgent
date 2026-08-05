@@ -131,6 +131,28 @@ thread-reply broadcast flag, such as Slack's `reply_broadcast`, should map
 providers may fall back to a normal fresh message or return a structured
 unsupported delivery result.
 
+## Private Terminal Responses
+
+An adapter may implement `resolvePrivateConversation` when the platform can
+start or recover a 1:1 conversation with the actor who initiated an inbound
+turn. The request carries only the normalized actor, source conversation, and
+opaque provider routing state. The result returns a normalized `dm`
+conversation plus opaque routing state for ordinary `deliver(intent)` handling;
+desktop orchestration must not parse provider user IDs or DM channel IDs.
+
+This resolver is used by the scoped Agent `send_private_response` tool. The
+tool can address only the actor recorded for its active messaging turn, and the
+controller suppresses the normal source-conversation final response only after
+the private delivery succeeds. Resolver and delivery failure leave source
+delivery unchanged. Adapters must revalidate the actor identifier at this
+boundary and reject bot actors or unsupported conversation types explicitly.
+
+Slack resolves the requesting user ID as the initial direct-message target;
+`chat.postMessage` opens the bot's 1:1 conversation when needed and returns the
+durable `D...` conversation ID in its delivery result. This uses the existing
+`chat:write` scope and does not require core workflow code to persist or inspect
+Slack-specific identifiers.
+
 ## Attachment Policy
 
 Providers expose metadata and transport:

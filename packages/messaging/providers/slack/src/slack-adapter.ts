@@ -29,6 +29,8 @@ import type {
   MessagingManagedConversationCreateResult,
   MessagingManagedConversationRightsRequest,
   MessagingManagedConversationRightsResult,
+  MessagingPrivateConversationResolveRequest,
+  MessagingPrivateConversationResolveResult,
   MessagingRateLimitInfo,
   MessagingRejectedInboundEvent,
   MessagingSurfaceAction,
@@ -214,6 +216,9 @@ export type SlackProviderAdapter = {
   createManagedConversation(
     request: MessagingManagedConversationCreateRequest,
   ): Promise<MessagingManagedConversationCreateResult>;
+  resolvePrivateConversation(
+    request: MessagingPrivateConversationResolveRequest,
+  ): Promise<MessagingPrivateConversationResolveResult>;
   onInboundRejected?(listener: MessagingInboundRejectedListener): () => void;
   setConversationTitle(
     request: MessagingConversationTitleUpdateRequest,
@@ -799,6 +804,57 @@ export class SlackAdapter implements SlackProviderAdapter {
           channelId: target.channelId,
           ...(target.teamId ? { teamId: target.teamId } : {}),
           threadTs: target.threadTs,
+        },
+      },
+      updatedAt: this.now(),
+    };
+  }
+
+  async resolvePrivateConversation(
+    request: MessagingPrivateConversationResolveRequest,
+  ): Promise<MessagingPrivateConversationResolveResult> {
+    const validation = validateSlackUserId(request.actor.platformUserId);
+    if (!validation.ok) {
+      logSlackInvalidIdentifier({
+        field: "user_id",
+        logger: this.logger,
+        reason: validation.reason,
+        value: request.actor.platformUserId,
+      });
+      return {
+        channel: this.channel,
+        errorMessage: "Slack private delivery requires a valid user ID.",
+        outcome: "failed",
+        updatedAt: this.now(),
+      };
+    }
+    if (request.actor.isBot) {
+      return {
+        channel: this.channel,
+        errorMessage: "Slack private delivery is not available for bot actors.",
+        outcome: "unsupported",
+        updatedAt: this.now(),
+      };
+    }
+    return {
+      channel: this.channel,
+      conversation: {
+        id: request.actor.platformUserId,
+        kind: "dm",
+        ...(request.source.conversation.workspaceId
+          ? { workspaceId: request.source.conversation.workspaceId }
+          : {}),
+        ...(request.actor.displayName || request.actor.username
+          ? { title: request.actor.displayName ?? request.actor.username }
+          : {}),
+      },
+      outcome: "resolved",
+      routingState: {
+        opaque: {
+          channelId: request.actor.platformUserId,
+          ...(request.source.conversation.workspaceId
+            ? { teamId: request.source.conversation.workspaceId }
+            : {}),
         },
       },
       updatedAt: this.now(),

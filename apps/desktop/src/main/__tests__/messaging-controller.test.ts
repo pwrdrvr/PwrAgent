@@ -1717,6 +1717,232 @@ describe("MessagingController", () => {
     expect(assistantReplies[0]?.bindingId).toMatch(/^default-agent-route:/);
   });
 
+  it("delivers a terminal private response to the requesting Slack user", async () => {
+    const channel = {
+      channel: "slack" as const,
+      conversation: {
+        id: "C012SIGNALS",
+        kind: "channel" as const,
+        title: "p-search-signals-project",
+        workspaceId: "T012WORKSPACE",
+      },
+    };
+    const resolvePrivateConversation = vi.fn(async () => ({
+      channel: "slack" as const,
+      conversation: {
+        id: "user-1",
+        kind: "dm" as const,
+        title: "Harold Hunt",
+        workspaceId: "T012WORKSPACE",
+      },
+      outcome: "resolved" as const,
+      routingState: {
+        opaque: {
+          channelId: "user-1",
+          teamId: "T012WORKSPACE",
+        },
+      },
+      updatedAt: 1000,
+    }));
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      agent: {
+        name: "Signals Agent",
+        instructionLineCount: 1,
+        instructionsTooLong: false,
+        updatedAt: 1000,
+      },
+    };
+    const harness = await createHarness({
+      channel: "slack",
+      navigation,
+      resolvePrivateConversation,
+    });
+    await harness.store.upsertBinding({
+      id: "binding-slack-signals",
+      authorizedActorIds: ["user-1"],
+      backend: "codex",
+      channel,
+      createdAt: 1000,
+      routingState: { opaque: { channelId: "C012SIGNALS" } },
+      targetKind: "agent_thread",
+      threadId: "thread-1",
+      updatedAt: 1000,
+    });
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("DM me the AWS SSO link and code", {
+        botMention: true,
+        channel,
+        routingState: { opaque: { channelId: "C012SIGNALS" } },
+      }),
+    );
+    harness.delivered.length = 0;
+
+    const response = await harness.controller.handlePwrAgentMessagingRequest({
+      operation: "send_private_response",
+      context: {
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-1",
+      },
+      args: {
+        text: "Open https://device.sso.us-east-1.amazonaws.com and enter `ABCD-EFGH`.",
+      },
+    });
+
+    expect(response).toMatchObject({
+      ok: true,
+      data: {
+        channel: "slack",
+        outcome: "delivered",
+        recipient: { platformUserId: "user-1" },
+      },
+    });
+    expect(resolvePrivateConversation).toHaveBeenCalledWith({
+      actor: expect.objectContaining({ platformUserId: "user-1" }),
+      source: channel,
+      routingState: { opaque: { channelId: "C012SIGNALS" } },
+    });
+    expect(harness.delivered).toEqual([
+      expect.objectContaining({
+        audit: expect.objectContaining({
+          actor: expect.objectContaining({ platformUserId: "user-1" }),
+          channel: expect.objectContaining({
+            channel: "slack",
+            conversation: expect.objectContaining({
+              id: "user-1",
+              kind: "dm",
+            }),
+          }),
+        }),
+        kind: "message",
+        parts: [
+          expect.objectContaining({
+            text: expect.stringContaining("ABCD-EFGH"),
+          }),
+        ],
+        targetSurface: expect.objectContaining({
+          state: { opaque: { channelId: "user-1", teamId: "T012WORKSPACE" } },
+        }),
+      }),
+    ]);
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "assistant-private-ack",
+            type: "agentMessage",
+            text: "Sent it privately.",
+          },
+        },
+      },
+    });
+
+    expect(harness.delivered).toHaveLength(1);
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [],
+          },
+        },
+      },
+    });
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "assistant-private-ack-late",
+            type: "agentMessage",
+            text: "Sent it privately.",
+          },
+        },
+      },
+    });
+
+    expect(
+      harness.delivered.filter((intent) => intent.kind === "message"),
+    ).toHaveLength(1);
+  });
+
+  it("keeps the source response when private delivery is unavailable", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      agent: {
+        name: "Private Reply Agent",
+        instructionLineCount: 1,
+        instructionsTooLong: false,
+        updatedAt: 1000,
+      },
+    };
+    const harness = await createHarness({ navigation });
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("send this privately"),
+    );
+    harness.delivered.length = 0;
+
+    await expect(
+      harness.controller.handlePwrAgentMessagingRequest({
+        operation: "send_private_response",
+        context: {
+          backend: "codex",
+          threadId: "thread-1",
+          turnId: "turn-1",
+        },
+        args: { text: "private text" },
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "unsupported_operation" },
+    });
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "assistant-private-failed",
+            type: "agentMessage",
+            text: "I could not send that privately.",
+          },
+        },
+      },
+    });
+
+    expect(harness.delivered).toContainEqual(
+      expect.objectContaining({
+        kind: "message",
+        parts: [
+          expect.objectContaining({
+            text: "I could not send that privately.",
+          }),
+        ],
+      }),
+    );
+  });
+
   it("lets a default Agent explicitly attach a thread to its unbound source", async () => {
     const navigation = buildNavigationSnapshot();
     navigation.threads[0] = {
@@ -19478,6 +19704,7 @@ async function createHarness(options?: {
   onFullAccessPolicyViolation?: MessagingControllerOptions["onFullAccessPolicyViolation"];
   onDeliveryBudgetEvent?: MessagingControllerOptions["onDeliveryBudgetEvent"];
   resolveDeliveryScope?: MessagingAdapter["resolveDeliveryScope"];
+  resolvePrivateConversation?: MessagingAdapter["resolvePrivateConversation"];
   responseModeForConversation?: MessagingControllerOptions["responseModeForConversation"];
   getManagedConversationRights?: MessagingAdapter["getManagedConversationRights"];
   createManagedConversation?: MessagingAdapter["createManagedConversation"];
@@ -19586,14 +19813,17 @@ async function createHarness(options?: {
       options?.deliver ??
         (async (intent) => {
           delivered.push(intent);
+          const channel = intent.audit?.channel.channel
+            ?? options?.channel
+            ?? "telegram";
           return {
-            channel: "telegram" as const,
+            channel,
             deliveredAt: 1000,
             outcome: intent.kind === "status" && intent.delivery?.pin
               ? "pinned" as const
               : "presented" as const,
             surface: {
-              channel: "telegram" as const,
+              channel,
               id: `surface:${intent.id}`,
             },
           };
@@ -19607,6 +19837,9 @@ async function createHarness(options?: {
       : {}),
     ...(options?.createManagedConversation
       ? { createManagedConversation: options.createManagedConversation }
+      : {}),
+    ...(options?.resolvePrivateConversation
+      ? { resolvePrivateConversation: options.resolvePrivateConversation }
       : {}),
     ...(options?.closeManagedConversation
       ? { closeManagedConversation: options.closeManagedConversation }

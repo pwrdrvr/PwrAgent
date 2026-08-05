@@ -139,6 +139,15 @@ stores the run artifact for the assigned Agent's dynamic inspection tools.
 deliver it relative to the source inbound event. The provider still owns final
 platform translation, including source-thread targeting and broadcast flags.
 
+Agent turns can also use the scoped `send_private_response` messaging tool for
+an explicitly private terminal reply. The controller resolves the active
+turn's inbound actor, asks only that provider's optional
+`resolvePrivateConversation` hook for a normalized `dm` target, and sends the
+message through the ordinary intent/delivery-budget path. Only a successful
+private delivery suppresses the source-conversation final response. Provider
+user IDs and DM routing remain validated and opaque inside the adapter; the
+Agent cannot select an arbitrary recipient.
+
 ## 1:1 controller:adapter mapping
 
 Each adapter gets its own controller. Backend events broadcast to all controllers in parallel; each one decides whether the event is relevant to any of its bindings and renders to its own adapter.

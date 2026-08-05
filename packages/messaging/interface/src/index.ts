@@ -440,6 +440,21 @@ export type MessagingManagedConversationCreateResult = {
   updatedAt: number;
 };
 
+export type MessagingPrivateConversationResolveRequest = {
+  actor: MessagingActorIdentity;
+  source: MessagingChannelRef;
+  routingState?: MessagingAdapterState;
+};
+
+export type MessagingPrivateConversationResolveResult = {
+  channel: MessagingChannelKind;
+  conversation?: MessagingConversationRef;
+  errorMessage?: string;
+  outcome: "resolved" | "unsupported" | "failed";
+  routingState?: MessagingAdapterState;
+  updatedAt: number;
+};
+
 export type MessagingManagedConversationActionRequest = {
   actor?: MessagingActorIdentity;
   channel: MessagingChannelRef;

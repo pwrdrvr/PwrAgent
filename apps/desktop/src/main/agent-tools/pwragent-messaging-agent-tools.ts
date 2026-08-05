@@ -118,6 +118,8 @@ function descriptionForOperation(operation: PwrAgentMessagingOperationName): str
       return "Deprecated alias for get_current_messaging_surface. Inspect the messaging platform, actor, conversation, binding, compact bound-thread identity, and native thread/topic creation capability for the surface that started this Agent turn.";
     case "get_current_messaging_surface":
       return "Inspect the messaging platform, actor, conversation, binding, compact bound-thread identity, and native thread/topic creation capability for the surface that started this Agent turn.";
+    case "send_private_response":
+      return "Send the terminal response privately to the user who initiated the current messaging turn. Use this only when the user explicitly asks for a private reply or the response contains secrets that should not be posted to the source conversation. On success, PwrAgent suppresses the normal final response on the source surface; end the turn without repeating the private content. This cannot target an arbitrary user or be called outside an active messaging turn.";
     case "attach_thread_here":
       return "Attach a known PwrAgent thread to the current messaging surface, creating a native child thread/topic when the provider supports it. This does not rename the PwrAgent thread.";
     case "inspect_messaging_pdfs":
@@ -139,6 +141,21 @@ function inputSchemaForOperation(
         type: "object",
         additionalProperties: false,
         properties: {},
+      };
+    case "send_private_response":
+      return {
+        type: "object",
+        additionalProperties: false,
+        required: ["text"],
+        properties: {
+          text: {
+            type: "string",
+            minLength: 1,
+            maxLength: 40_000,
+            description:
+              "Complete private response to deliver to the requesting user. Do not include an additional public copy in the final response.",
+          },
+        },
       };
     case "attach_thread_here":
       return {
