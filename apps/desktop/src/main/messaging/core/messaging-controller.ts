@@ -698,6 +698,12 @@ type PendingNewThreadPromptBundle = {
 
 type MessagingDeliveryGuard = {
   isCancelled: () => boolean;
+  onCancelledDelivery?: (result: MessagingDeliveryResult) => Promise<void>;
+  whenCancelled?: Promise<void>;
+};
+
+type MessagingCancellationSignal = MessagingDeliveryGuard & {
+  cancel: () => void;
 };
 
 export type MessagingControllerOptions = {
@@ -762,6 +768,11 @@ export class MessagingController {
   private readonly deliveredAssistantMessageKeys = new Set<string>();
   private readonly assistantStreamBuffers = new Map<string, AssistantStreamBuffer>();
   private readonly assistantStreamDeliveryQueues = new Map<string, Promise<void>>();
+  private readonly assistantStreamCancellationFailures = new Set<string>();
+  private readonly assistantStreamCancellationSignals = new Map<
+    string,
+    MessagingCancellationSignal
+  >();
   private readonly automationTurnsByTurnKey = new Map<
     string,
     AutomationTurnMessagingContext
@@ -5185,6 +5196,15 @@ export class MessagingController {
     delta: AssistantStreamDelta,
     binding: MessagingBindingRecord,
   ): Promise<void> {
+    if (
+      this.isTerminalPrivateResponseTurn(
+        binding.backend,
+        binding.threadId,
+        delta.turnId,
+      )
+    ) {
+      return;
+    }
     const bufferKey = this.assistantStreamBufferKey(delta.streamKey, binding);
     const now = this.now();
     const existing = this.assistantStreamBuffers.get(bufferKey);
@@ -5244,11 +5264,13 @@ export class MessagingController {
   ): Promise<boolean> {
     const streamingEnabled = this.isStreamingResponsesEnabledForBinding(binding);
     let deliveredFinalStream = false;
+    const completedTurnIds = new Set<string>();
     for (const bufferKey of this.assistantStreamBufferKeysForEvent(event, binding)) {
       const buffer = this.assistantStreamBuffers.get(bufferKey);
       if (!buffer) {
         continue;
       }
+      completedTurnIds.add(buffer.turnId);
       // Streaming off: drop the accumulator without emitting a final
       // `stream_update`. Returning `false` routes the caller to
       // `deliverAssistantMessage`, so the turn lands as a single message
@@ -5269,6 +5291,11 @@ export class MessagingController {
       this.assistantStreamBuffers.delete(bufferKey);
       this.assistantStreamDeliveryQueues.delete(bufferKey);
     }
+    for (const turnId of completedTurnIds) {
+      this.assistantStreamCancellationSignals.delete(
+        this.turnProseKey(binding.id, turnId),
+      );
+    }
     return deliveredFinalStream;
   }
 
@@ -5281,11 +5308,13 @@ export class MessagingController {
       identity: AssistantMessageDeliveryIdentity;
       text: string;
     }> = [];
+    const completedTurnIds = new Set<string>();
     for (const bufferKey of this.assistantStreamBufferKeysForEvent(event, binding)) {
       const buffer = this.assistantStreamBuffers.get(bufferKey);
       if (!buffer) {
         continue;
       }
+      completedTurnIds.add(buffer.turnId);
       const text = buffer.text.trim();
       if (!text) {
         this.assistantStreamBuffers.delete(bufferKey);
@@ -5327,6 +5356,12 @@ export class MessagingController {
       }
       this.assistantStreamBuffers.delete(bufferKey);
       this.assistantStreamDeliveryQueues.delete(bufferKey);
+    }
+
+    for (const turnId of completedTurnIds) {
+      this.assistantStreamCancellationSignals.delete(
+        this.turnProseKey(binding.id, turnId),
+      );
     }
 
     for (const fallback of fallbackMessages) {
@@ -5415,6 +5450,11 @@ export class MessagingController {
     binding: MessagingBindingRecord,
     isFinal: boolean,
   ): Promise<MessagingDeliveryResult> {
+    const cancellationKey = this.turnProseKey(binding.id, buffer.turnId);
+    const cancellation = this.ensureAssistantStreamCancellationSignal(
+      binding,
+      buffer.turnId,
+    );
     const now = this.now();
     const intent: MessagingStreamUpdateIntent = {
       id: this.newIntentId(isFinal ? "assistant-stream-final" : "assistant-stream"),
@@ -5443,7 +5483,31 @@ export class MessagingController {
         isFinal,
       },
     };
-    const result = await this.deliver(intent, binding);
+    const result = await this.deliver(intent, binding, undefined, {
+      isCancelled: cancellation.isCancelled,
+      whenCancelled: cancellation.whenCancelled,
+      onCancelledDelivery: async (cancelledResult) => {
+        if (
+          cancelledResult.surface
+          && isVisibleAssistantStreamDelivery(cancelledResult)
+          && !isSameMessagingSurface(cancelledResult.surface, buffer.surface)
+        ) {
+          const dismissed = await this.dismissAssistantStreamSurface(
+            binding,
+            buffer.turnId,
+            cancelledResult.surface,
+          );
+          if (!dismissed) {
+            this.assistantStreamCancellationFailures.add(cancellationKey);
+          }
+        }
+      },
+    });
+    if (cancellation.isCancelled()) {
+      const bufferKey = this.assistantStreamBufferKey(buffer.streamKey, binding);
+      this.assistantStreamBuffers.delete(bufferKey);
+      return result;
+    }
     const surface =
       result.surface && isVisibleAssistantStreamDelivery(result)
         ? result.surface
@@ -5464,18 +5528,146 @@ export class MessagingController {
     return `${binding.id}\0${streamKey}`;
   }
 
-  private discardAssistantStreamsForTurn(
+  private ensureAssistantStreamCancellationSignal(
     binding: MessagingBindingRecord,
     turnId: string,
-  ): void {
+  ): MessagingCancellationSignal {
+    const key = this.turnProseKey(binding.id, turnId);
+    const existing = this.assistantStreamCancellationSignals.get(key);
+    if (existing) {
+      return existing;
+    }
+    let cancelled = this.isTerminalPrivateResponseTurn(
+      binding.backend,
+      binding.threadId,
+      turnId,
+    );
+    let resolveCancellation!: () => void;
+    const whenCancelled = new Promise<void>((resolve) => {
+      resolveCancellation = resolve;
+    });
+    const cancellation: MessagingCancellationSignal = {
+      cancel: () => {
+        if (cancelled) {
+          return;
+        }
+        cancelled = true;
+        resolveCancellation();
+      },
+      isCancelled: () =>
+        cancelled
+        || this.isTerminalPrivateResponseTurn(
+          binding.backend,
+          binding.threadId,
+          turnId,
+        ),
+      whenCancelled,
+    };
+    if (cancelled) {
+      resolveCancellation();
+    }
+    this.assistantStreamCancellationSignals.set(key, cancellation);
+    return cancellation;
+  }
+
+  private async cancelAssistantStreamsForTurn(
+    binding: MessagingBindingRecord,
+    turnId: string,
+  ): Promise<boolean> {
+    const cancellationKey = this.turnProseKey(binding.id, turnId);
+    const deliveries = new Set<Promise<void>>();
+    const surfaces = new Map<string, MessagingSurfaceRef>();
+    this.assistantStreamCancellationFailures.delete(cancellationKey);
+    this.assistantStreamCancellationSignals.get(cancellationKey)?.cancel();
     for (const [bufferKey, buffer] of this.assistantStreamBuffers) {
       if (
         bufferKey.startsWith(`${binding.id}\0`)
         && buffer.turnId === turnId
       ) {
+        if (buffer.surface) {
+          surfaces.set(messagingSurfaceKey(buffer.surface), buffer.surface);
+        }
+        const delivery = this.assistantStreamDeliveryQueues.get(bufferKey);
+        if (delivery) {
+          deliveries.add(delivery);
+        }
+        this.assistantStreamBuffers.delete(bufferKey);
+      }
+    }
+    await Promise.allSettled(deliveries);
+
+    // A delivery already awaiting its adapter can finish after the buffers are
+    // cleared. The delivery guard retracts a newly-created surface; make one
+    // final sweep for an existing surface before reporting private success.
+    for (const [bufferKey, buffer] of this.assistantStreamBuffers) {
+      if (
+        bufferKey.startsWith(`${binding.id}\0`)
+        && buffer.turnId === turnId
+      ) {
+        if (buffer.surface) {
+          surfaces.set(messagingSurfaceKey(buffer.surface), buffer.surface);
+        }
         this.assistantStreamBuffers.delete(bufferKey);
         this.assistantStreamDeliveryQueues.delete(bufferKey);
       }
+    }
+    for (const surface of surfaces.values()) {
+      const dismissed = await this.dismissAssistantStreamSurface(
+        binding,
+        turnId,
+        surface,
+      );
+      if (!dismissed) {
+        this.assistantStreamCancellationFailures.add(cancellationKey);
+      }
+    }
+    const cancelledCleanly = !this.assistantStreamCancellationFailures.has(
+      cancellationKey,
+    );
+    this.assistantStreamCancellationFailures.delete(cancellationKey);
+    this.assistantStreamCancellationSignals.delete(cancellationKey);
+    return cancelledCleanly;
+  }
+
+  private async dismissAssistantStreamSurface(
+    binding: MessagingBindingRecord,
+    turnId: string,
+    surface: MessagingSurfaceRef,
+  ): Promise<boolean> {
+    try {
+      const result = await this.deliver(
+        {
+          id: this.newIntentId("assistant-stream-private-response-dismiss"),
+          kind: "dismiss",
+          bindingId: binding.id,
+          createdAt: this.now(),
+          delivery: { mode: "dismiss" },
+          reason: "terminal_private_response",
+          targetSurface: surface,
+        },
+        binding,
+      );
+      if (result.outcome === "dismissed") {
+        return true;
+      }
+      this.logger.warn?.("messaging private response stream dismissal failed", {
+        bindingId: binding.id,
+        errorMessage: result.errorMessage,
+        outcome: result.outcome,
+        surfaceId: surface.id,
+        threadId: binding.threadId,
+        turnId,
+      });
+      return false;
+    } catch (error) {
+      this.logger.warn?.("messaging private response stream dismissal failed", {
+        bindingId: binding.id,
+        error: error instanceof Error ? error.message : String(error),
+        surfaceId: surface.id,
+        threadId: binding.threadId,
+        turnId,
+      });
+      return false;
     }
   }
 
@@ -5782,6 +5974,11 @@ export class MessagingController {
     this.completedTaskMonitorTurns.clear();
     this.activeAgentMessagingOriginsByTurnKey.clear();
     this.terminalPrivateResponseTurnKeys.clear();
+    this.assistantStreamCancellationFailures.clear();
+    for (const cancellation of this.assistantStreamCancellationSignals.values()) {
+      cancellation.cancel();
+    }
+    this.assistantStreamCancellationSignals.clear();
     this.queuedAgentMessagingOriginsByQueueKey.clear();
   }
 
@@ -14151,7 +14348,15 @@ export class MessagingController {
             slowMode: admission.slowMode,
           });
           this.notifyDeliveryBudgetEvent(budgetEvent);
-          await (this.options.sleepUntil ?? sleepUntil)(admission.retryAt, this.now);
+          const delay = (this.options.sleepUntil ?? sleepUntil)(
+            admission.retryAt,
+            this.now,
+          );
+          if (guard?.whenCancelled) {
+            await Promise.race([delay, guard.whenCancelled]);
+          } else {
+            await delay;
+          }
           if (guard?.isCancelled()) {
             return cancelledResult();
           }
@@ -14199,6 +14404,10 @@ export class MessagingController {
         return cancelledResult();
       }
       const result = await this.options.adapter.deliver(routedIntent);
+      if (guard?.isCancelled()) {
+        await guard.onCancelledDelivery?.(result);
+        return cancelledResult();
+      }
       this.logDeliveryResult(routedIntent, binding, result);
       if (this.deliveryBudget && result.rateLimit) {
         scope = result.rateLimit.scope;
@@ -14855,6 +15064,7 @@ export class MessagingController {
       request.context.turnId,
     );
     rememberBoundedKey(this.terminalPrivateResponseTurnKeys, turnKey);
+    let sourceStreamsCancelled = true;
     if (sourceBinding) {
       this.toolUpdatePolicy.flush({
         bindingId: sourceBinding.id,
@@ -14862,10 +15072,20 @@ export class MessagingController {
         turnId: request.context.turnId,
       });
       this.clearTurnProse(sourceBinding.id, request.context.turnId);
-      this.discardAssistantStreamsForTurn(
+      sourceStreamsCancelled = await this.cancelAssistantStreamsForTurn(
         sourceBinding,
         request.context.turnId,
       );
+    }
+    if (!sourceStreamsCancelled) {
+      return {
+        ok: false,
+        error: {
+          code: "internal_error",
+          message:
+            "The private response was delivered, but an existing source stream could not be retracted. Further source output remains suppressed.",
+        },
+      };
     }
     return {
       ok: true,
@@ -18183,6 +18403,21 @@ function isVisibleAssistantStreamDelivery(result: MessagingDeliveryResult): bool
     result.outcome === "presented_new" ||
     result.outcome === "updated" ||
     result.outcome === "pinned"
+  );
+}
+
+function messagingSurfaceKey(surface: MessagingSurfaceRef): string {
+  return `${surface.channel}\0${surface.id}`;
+}
+
+function isSameMessagingSurface(
+  left: MessagingSurfaceRef,
+  right: MessagingSurfaceRef | undefined,
+): boolean {
+  return Boolean(
+    right
+    && left.channel === right.channel
+    && left.id === right.id,
   );
 }
 

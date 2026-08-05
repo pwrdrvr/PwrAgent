@@ -1717,7 +1717,14 @@ describe("MessagingController", () => {
     expect(assistantReplies[0]?.bindingId).toMatch(/^default-agent-route:/);
   });
 
-  it("delivers a terminal private response to the requesting Slack user", async () => {
+  async function createSlackPrivateResponseHarness(options?: {
+    deliveryBudget?: MessagingDeliveryBudget;
+    deliver?: (intent: MessagingSurfaceIntent) => Promise<MessagingDeliveryResult>;
+    now?: () => number;
+    resolveDeliveryScope?: MessagingAdapter["resolveDeliveryScope"];
+    sleepUntil?: MessagingControllerOptions["sleepUntil"];
+    streamingResponsesDefault?: boolean;
+  }) {
     const channel = {
       channel: "slack" as const,
       conversation: {
@@ -1756,8 +1763,20 @@ describe("MessagingController", () => {
     };
     const harness = await createHarness({
       channel: "slack",
+      ...(options?.deliveryBudget
+        ? { deliveryBudget: options.deliveryBudget }
+        : {}),
+      ...(options?.deliver ? { deliver: options.deliver } : {}),
       navigation,
+      ...(options?.now ? { now: options.now } : {}),
       resolvePrivateConversation,
+      ...(options?.resolveDeliveryScope
+        ? { resolveDeliveryScope: options.resolveDeliveryScope }
+        : {}),
+      ...(options?.sleepUntil ? { sleepUntil: options.sleepUntil } : {}),
+      ...(options?.streamingResponsesDefault === undefined
+        ? {}
+        : { streamingResponsesDefault: options.streamingResponsesDefault }),
     });
     await harness.store.upsertBinding({
       id: "binding-slack-signals",
@@ -1778,6 +1797,15 @@ describe("MessagingController", () => {
       }),
     );
     harness.delivered.length = 0;
+    return { channel, harness, resolvePrivateConversation };
+  }
+
+  it("delivers a terminal private response to the requesting Slack user", async () => {
+    const {
+      channel,
+      harness,
+      resolvePrivateConversation,
+    } = await createSlackPrivateResponseHarness();
 
     const response = await harness.controller.handlePwrAgentMessagingRequest({
       operation: "send_private_response",
@@ -1880,6 +1908,316 @@ describe("MessagingController", () => {
     expect(
       harness.delivered.filter((intent) => intent.kind === "message"),
     ).toHaveLength(1);
+  });
+
+  it("dismisses an existing source stream before private delivery succeeds", async () => {
+    let now = 1000;
+    const delivered: MessagingSurfaceIntent[] = [];
+    const { harness } = await createSlackPrivateResponseHarness({
+      now: () => now,
+      streamingResponsesDefault: true,
+      deliver: async (intent) => {
+        delivered.push(intent);
+        const surface = intent.kind === "dismiss"
+          ? intent.targetSurface
+          : intent.kind === "stream_update" && intent.targetSurface
+            ? intent.targetSurface
+            : { channel: "slack" as const, id: `surface:${intent.id}` };
+        return {
+          channel: "slack",
+          deliveredAt: now,
+          outcome: intent.kind === "dismiss"
+            ? "dismissed"
+            : intent.kind === "stream_update" && intent.delivery?.mode === "update"
+              ? "updated"
+              : "presented",
+          surface,
+        };
+      },
+    });
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "assistant-private-stream",
+          delta: "Open the AWS SSO link",
+        },
+      },
+    } satisfies AgentEvent);
+    now += 500;
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "assistant-private-stream",
+          delta: " and use the code.",
+        },
+      },
+    } satisfies AgentEvent);
+
+    const sourceStream = delivered.find((intent) => intent.kind === "stream_update");
+    expect(sourceStream).toBeDefined();
+    const response = await harness.controller.handlePwrAgentMessagingRequest({
+      operation: "send_private_response",
+      context: {
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-1",
+      },
+      args: { text: "Private AWS SSO instructions." },
+    });
+
+    expect(response).toMatchObject({ ok: true });
+    expect(delivered.at(-1)).toMatchObject({
+      kind: "dismiss",
+      reason: "terminal_private_response",
+      targetSurface: {
+        channel: "slack",
+        id: `surface:${sourceStream!.id}`,
+      },
+    });
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [{ type: "text", text: "Do not post this publicly." }],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+    expect(delivered.filter((intent) => intent.kind === "stream_update")).toHaveLength(1);
+    expect(
+      delivered.filter((intent) => intent.kind === "message" && intent.role === "assistant"),
+    ).toHaveLength(1);
+  });
+
+  it("retracts a source stream that finishes while private delivery is in flight", async () => {
+    let now = 1000;
+    let releaseSourceStream!: () => void;
+    let resolveSourceStreamStarted!: () => void;
+    const sourceStreamStarted = new Promise<void>((resolve) => {
+      resolveSourceStreamStarted = resolve;
+    });
+    const sourceStreamRelease = new Promise<void>((resolve) => {
+      releaseSourceStream = resolve;
+    });
+    const delivered: MessagingSurfaceIntent[] = [];
+    const { harness } = await createSlackPrivateResponseHarness({
+      now: () => now,
+      streamingResponsesDefault: true,
+      deliver: async (intent) => {
+        delivered.push(intent);
+        if (intent.kind === "stream_update") {
+          resolveSourceStreamStarted();
+          await sourceStreamRelease;
+          return {
+            channel: "slack",
+            deliveredAt: now,
+            outcome: "presented",
+            surface: { channel: "slack", id: "surface:late-source-stream" },
+          };
+        }
+        return {
+          channel: "slack",
+          deliveredAt: now,
+          outcome: intent.kind === "dismiss" ? "dismissed" : "presented",
+          surface: intent.kind === "dismiss"
+            ? intent.targetSurface
+            : { channel: "slack", id: `surface:${intent.id}` },
+        };
+      },
+    });
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "assistant-private-stream",
+          delta: "AWS SSO",
+        },
+      },
+    } satisfies AgentEvent);
+    now += 500;
+    const sourceDelivery = harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "assistant-private-stream",
+          delta: " secret",
+        },
+      },
+    } satisfies AgentEvent);
+    await sourceStreamStarted;
+
+    let privateRequestSettled = false;
+    const privateRequest = harness.controller.handlePwrAgentMessagingRequest({
+      operation: "send_private_response",
+      context: {
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-1",
+      },
+      args: { text: "Private AWS SSO instructions." },
+    }).finally(() => {
+      privateRequestSettled = true;
+    });
+    await vi.waitFor(() => {
+      expect(
+        delivered.some((intent) => intent.kind === "message"),
+      ).toBe(true);
+    });
+    expect(privateRequestSettled).toBe(false);
+
+    releaseSourceStream();
+    const [, response] = await Promise.all([sourceDelivery, privateRequest]);
+
+    expect(response).toMatchObject({ ok: true });
+    expect(delivered.at(-1)).toMatchObject({
+      kind: "dismiss",
+      reason: "terminal_private_response",
+      targetSurface: {
+        channel: "slack",
+        id: "surface:late-source-stream",
+      },
+    });
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [{ type: "text", text: "Do not recreate the source stream." }],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+    expect(delivered.filter((intent) => intent.kind === "stream_update")).toHaveLength(1);
+    expect(
+      delivered.filter((intent) => intent.kind === "message" && intent.role === "assistant"),
+    ).toHaveLength(1);
+  });
+
+  it("cancels a budget-deferred source stream without waiting for its retry", async () => {
+    let now = 1000;
+    let resolveBudgetDelayStarted!: () => void;
+    const budgetDelayStarted = new Promise<void>((resolve) => {
+      resolveBudgetDelayStarted = resolve;
+    });
+    const neverReleaseBudgetDelay = new Promise<void>(() => undefined);
+    const scope: MessagingDeliveryScope = {
+      platform: "slack",
+      id: "slack:channel:C012SIGNALS",
+      kind: "channel",
+      budget: { limit: 10, intervalMs: 60_000, reserved: 1 },
+    };
+    const deliveryBudget = {
+      admit: vi.fn(
+        (request: Parameters<MessagingDeliveryBudget["admit"]>[0]) =>
+          request.priority === "stream_partial"
+            ? {
+                outcome: "deferred" as const,
+                reason: "budget-exhausted" as const,
+                retryAt: 61_000,
+                slowMode: false,
+              }
+            : { outcome: "admitted" as const, slowMode: false },
+      ),
+      recordRateLimit: vi.fn(),
+    } as unknown as MessagingDeliveryBudget;
+    const delivered: MessagingSurfaceIntent[] = [];
+    const { harness } = await createSlackPrivateResponseHarness({
+      deliveryBudget,
+      now: () => now,
+      resolveDeliveryScope: () => scope,
+      sleepUntil: async () => {
+        resolveBudgetDelayStarted();
+        await neverReleaseBudgetDelay;
+      },
+      streamingResponsesDefault: true,
+      deliver: async (intent) => {
+        delivered.push(intent);
+        return {
+          channel: "slack",
+          deliveredAt: now,
+          outcome: "presented",
+          surface: { channel: "slack", id: `surface:${intent.id}` },
+        };
+      },
+    });
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "assistant-private-stream",
+          delta: "AWS SSO",
+        },
+      },
+    } satisfies AgentEvent);
+    now += 500;
+    const sourceDelivery = harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "assistant-private-stream",
+          delta: " secret",
+        },
+      },
+    } satisfies AgentEvent);
+    await budgetDelayStarted;
+
+    const response = await harness.controller.handlePwrAgentMessagingRequest({
+      operation: "send_private_response",
+      context: {
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-1",
+      },
+      args: { text: "Private AWS SSO instructions." },
+    });
+    await sourceDelivery;
+
+    expect(response).toMatchObject({ ok: true });
+    expect(delivered.filter((intent) => intent.kind === "stream_update")).toEqual([]);
+    expect(
+      delivered.filter((intent) => intent.kind === "message"),
+    ).toEqual([
+      expect.objectContaining({
+        kind: "message",
+        parts: [expect.objectContaining({ text: "Private AWS SSO instructions." })],
+      }),
+    ]);
   });
 
   it("keeps the source response when private delivery is unavailable", async () => {
