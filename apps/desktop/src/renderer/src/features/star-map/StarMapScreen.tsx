@@ -30,6 +30,7 @@ import {
 } from "./star-map-layout";
 import { StarMapInstanceCard } from "./StarMapInstanceCard";
 import { StarMapThreadCard } from "./StarMapThreadCard";
+import { useStarMapArrangement } from "./useStarMapArrangement";
 import { useStarMapThreads } from "./useStarMapThreads";
 
 const FILTERS_STORAGE_KEY = "pwragent.starMap.filters";
@@ -156,6 +157,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
     peers,
     enabled: true,
   });
+  const arrangement = useStarMapArrangement({ desktopApi: props.desktopApi });
 
   // The hub is the local instance unless this instance is a pure client -
   // then its enrolled gateway anchors the constellation and the local node
@@ -277,9 +279,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
         ) : null}
         {visible.map((thread, index) => {
           const slot = starMapCardSlot(index);
+          const threadKey = buildThreadIdentityKey(thread.source, thread.id);
           return (
             <StarMapThreadCard
-              key={buildThreadIdentityKey(thread.source, thread.id)}
+              key={threadKey}
               thread={thread}
               sessionKeys={
                 position.instanceId === localInstanceId
@@ -287,15 +290,21 @@ export function StarMapScreen(props: StarMapScreenProps) {
                   : undefined
               }
               riseDelayMs={index * 45}
-              // left/top positioning (not transform) so the rise/bubble
-              // keyframes own the transform channel without snapping the
-              // card back to its anchor origin mid-animation.
-              style={{
-                width: layout.cardWidth,
-                left: slot.dx,
-                top: slot.dy,
-                marginLeft: -layout.cardWidth / 2,
-              }}
+              baseSlot={slot}
+              offset={arrangement.offsetFor(position.instanceId, threadKey)}
+              width={layout.cardWidth}
+              onCommitOffset={
+                // Drags persist + sync only once the durable instance id is
+                // known; before that, cards stay in their default slots.
+                health?.instanceId
+                  ? (offset) =>
+                      arrangement.setCardPosition(
+                        position.instanceId,
+                        threadKey,
+                        offset,
+                      )
+                  : undefined
+              }
               onOpen={openThread}
             />
           );

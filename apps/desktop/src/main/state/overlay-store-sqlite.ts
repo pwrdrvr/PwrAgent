@@ -34,12 +34,16 @@ import type {
   ThreadPrAutoDispatchPending,
   ThreadPullRequestWatchSummary,
   RemoteThreadPin,
+  StarMapArrangementEntry,
   ThreadSubAgentSummary,
   ThreadTurnFailure,
   ThreadUsageLineRecord,
   WorktreeSnapshotSummary,
 } from "@pwragent/shared";
 import {
+  isStarMapArrangementEntry,
+  mergeStarMapArrangementEntries,
+  starMapArrangementEntryKey,
   DEFAULT_PULL_REQUEST_PROVIDER,
   AGENT_PERSONA_INSTRUCTIONS_LINE_GUIDANCE,
   MAX_MESSAGING_BINDING_TRANSITION_LOG_ENTRIES,
@@ -2344,6 +2348,52 @@ export class SqliteOverlayStore {
 
   async readAllDirectoryOverlays(): Promise<Record<string, DirectoryOverlayState>> {
     return this.readAllDirectoryOverlaysSync();
+  }
+
+  async readStarMapArrangement(): Promise<StarMapArrangementEntry[]> {
+    const rows = this.stateDb.raw
+      .prepare("SELECT payload FROM star_map_arrangement")
+      .all() as { payload: string }[];
+    return rows
+      .map((row) => JSON.parse(row.payload) as unknown)
+      .filter(isStarMapArrangementEntry);
+  }
+
+  /**
+   * LWW-merge arrangement entries into the table. Returns the accepted
+   * (newer-than-stored) entries so the federation layer re-broadcasts
+   * deltas only; an empty accepted list means the merge was a no-op.
+   */
+  async mergeStarMapArrangement(
+    incoming: StarMapArrangementEntry[],
+  ): Promise<{ accepted: StarMapArrangementEntry[] }> {
+    const accepted: StarMapArrangementEntry[] = [];
+    const write = this.stateDb.raw.transaction(() => {
+      const select = this.stateDb.raw.prepare(
+        "SELECT payload FROM star_map_arrangement WHERE entry_key = ?",
+      );
+      const upsert = this.stateDb.raw.prepare(
+        `INSERT OR REPLACE INTO star_map_arrangement(entry_key, payload)
+         VALUES (?, ?)`,
+      );
+      for (const entry of incoming) {
+        if (!isStarMapArrangementEntry(entry)) continue;
+        const key = starMapArrangementEntryKey(entry);
+        const row = select.get(key) as { payload: string } | undefined;
+        const existing = row
+          ? (JSON.parse(row.payload) as StarMapArrangementEntry)
+          : undefined;
+        const merged = mergeStarMapArrangementEntries(
+          existing ? [existing] : [],
+          [entry],
+        );
+        if (!merged.changed) continue;
+        upsert.run(key, JSON.stringify(entry));
+        accepted.push(entry);
+      }
+    });
+    write();
+    return { accepted };
   }
 
   async setThreadPullRequests(params: {

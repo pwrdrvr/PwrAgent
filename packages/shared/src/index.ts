@@ -13,6 +13,7 @@ export * from "./contracts/task-monitor-tools";
 export * from "./contracts/thread-orchestration-tools";
 export * from "./contracts/branch-drift";
 export * from "./contracts/celestial";
+export * from "./contracts/star-map";
 export * from "./contracts/composer-drafts";
 export * from "./contracts/diff-focus";
 export * from "./contracts/federation";

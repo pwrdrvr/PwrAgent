@@ -277,6 +277,8 @@ import type {
   RevokeFederationPeerResponse,
   SetCelestialIconRequest,
   SetCelestialIconResponse,
+  ReadStarMapArrangementResponse,
+  SetStarMapCardPositionRequest,
   ReadDesktopSettingsRequest,
   ReadDesktopSettingsResponse,
   RefreshDesktopCodexDiscoveryRequest,
@@ -455,6 +457,8 @@ import {
   FEDERATION_RESET_ENROLLMENT_CHANNEL,
   FEDERATION_REVOKE_PEER_CHANNEL,
   FEDERATION_SET_CELESTIAL_ICON_CHANNEL,
+  STAR_MAP_READ_ARRANGEMENT_CHANNEL,
+  STAR_MAP_SET_CARD_POSITION_CHANNEL,
   FEDERATION_TAILSCALE_CONFIGURE_CHANNEL,
   FEDERATION_TAILSCALE_STATUS_CHANNEL,
   CODEX_ENVIRONMENT_SETUP_PROGRESS_CHANNEL,
@@ -887,6 +891,12 @@ const desktopApi = Object.freeze({
     request: SetCelestialIconRequest,
   ): Promise<SetCelestialIconResponse> =>
     await ipcRenderer.invoke(FEDERATION_SET_CELESTIAL_ICON_CHANNEL, request),
+  readStarMapArrangement: async (): Promise<ReadStarMapArrangementResponse> =>
+    await ipcRenderer.invoke(STAR_MAP_READ_ARRANGEMENT_CHANNEL),
+  setStarMapCardPosition: async (
+    request: SetStarMapCardPositionRequest,
+  ): Promise<ReadStarMapArrangementResponse> =>
+    await ipcRenderer.invoke(STAR_MAP_SET_CARD_POSITION_CHANNEL, request),
   ...(isDevelopment
     ? {
         getRuntimeIdentity: async (): Promise<RuntimeIdentity> =>
