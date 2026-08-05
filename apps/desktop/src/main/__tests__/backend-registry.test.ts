@@ -13035,11 +13035,11 @@ script = "printf setup-output"
     ).resolves.toMatchObject({
       extraLinkedDirectories: [
         {
-          id: repoPath,
+          id: expectedDir(repoPath),
           kind: "worktree",
           label: "app",
-          path: repoPath,
-          worktreePath,
+          path: expectedDir(repoPath),
+          worktreePath: expectedDir(worktreePath),
         },
       ],
     });
