@@ -95,15 +95,44 @@ describe("federation enrollment", () => {
       gatewayUrl: "ws://127.0.0.1:47830",
       expiresAt: 2_000,
     };
-    for (const gatewayEndpoints of [[], ["ws://ok.example", 7], "not-a-list"]) {
+    for (const gatewayEndpoints of [
+      [],
+      ["ws://ok.example", 7],
+      "not-a-list",
+      // An invite is unsigned, attacker-authored input that never passes
+      // through the renderer, so the scheme allowlist is enforced on decode.
+      ["https://evil.example"],
+      ["ws://ok.example", "https://evil.example"],
+      ["ssh://user:secret@host"],
+      ["ssh://-oProxyCommand=touch%20pwned"],
+    ]) {
       const invite = `pwragent-federation:${Buffer.from(
         JSON.stringify({ ...base, gatewayEndpoints }),
         "utf8",
       ).toString("base64url")}`;
       expect(() => decodeFederationInvite(invite, 1_000)).toThrow(
-        "Invalid federation invite.",
+        /Invalid federation invite\.|must all be ws:\/\//,
       );
     }
+  });
+
+  it("rejects an invite whose gateway URL is not a supported endpoint", () => {
+    const invite = `pwragent-federation:${Buffer.from(
+      JSON.stringify({
+        version: FEDERATION_INVITE_VERSION,
+        token: "invite-token-bad-url",
+        gatewayInstanceId: "gateway_one",
+        gatewayPublicKeyPem: "gateway-key",
+        gatewayNoisePublicKey: "gateway-noise-key",
+        gatewayUrl: "https://evil.example",
+        expiresAt: 2_000,
+      }),
+      "utf8",
+    ).toString("base64url")}`;
+
+    expect(() => decodeFederationInvite(invite, 1_000)).toThrow(
+      /must be a ws:\/\/, wss:\/\/, or ssh:\/\/ endpoint/,
+    );
   });
 
   it("rejects unsupported invite versions before attempting enrollment", () => {

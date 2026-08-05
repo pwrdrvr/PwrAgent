@@ -118,7 +118,7 @@ describe("desktop config [federation] section", () => {
     ]);
   });
 
-  it("dual-writes the first gateway endpoint into the legacy gateway_url", () => {
+  it("writes only the canonical shape for a config without a legacy gateway_url", () => {
     const edits = desktopSettingsPatchToEdits({
       federation: {
         gatewayEndpoints: [
@@ -135,9 +135,51 @@ describe("desktop config [federation] section", () => {
       "wss://studio.example.ts.net/pwragent-federation",
       "wss://federation.example.com",
     ]);
+    // docs/config-file-evolution.md: a brand-new config gets the canonical
+    // shape only; the legacy scalar is not invented for it.
+    expect(config.federation?.gatewayUrl).toBeUndefined();
+  });
+
+  it("keeps an existing legacy gateway_url in sync and marks it", () => {
+    const existing = [
+      "[federation]",
+      'mode = "client"',
+      'gateway_url = "wss://old.example.com"',
+      "",
+    ].join("\n");
+    const edits = desktopSettingsPatchToEdits(
+      {
+        federation: {
+          gatewayEndpoints: [
+            "wss://studio.example.ts.net/pwragent-federation",
+            "wss://federation.example.com",
+          ],
+        },
+      },
+      parseTomlTables(existing, "test.toml"),
+    );
+    const written = applyTomlEdits(existing, edits);
+    const config = parseDesktopSettingsToml(written, "test.toml");
+
     expect(config.federation?.gatewayUrl).toBe(
       "wss://studio.example.ts.net/pwragent-federation",
     );
+    expect(written).toContain("pwragent-legacy-settings");
+    expect(written).toContain("key=gateway_url");
+  });
+
+  it("drops endpoints whose scheme the transport must never dial", () => {
+    const src = [
+      "[federation]",
+      'gateway_endpoints = ["https://evil.example", "ws://ok.example:47830", "ssh://user:secret@host", "ssh://-oProxyCommand=x"]',
+      "",
+    ].join("\n");
+
+    const config = parseDesktopSettingsToml(src, "test.toml");
+
+    expect(config.federation?.gatewayEndpoints).toEqual([
+      "ws://ok.example:47830",
+    ]);
   });
 
   it("lets an explicit gatewayUrl win over the endpoint dual-write", () => {
@@ -156,7 +198,7 @@ describe("desktop config [federation] section", () => {
     ]);
   });
 
-  it("clearing the endpoint list also clears the legacy gateway_url", () => {
+  it("clearing the endpoint list preserves the legacy gateway_url", () => {
     const existing = [
       "[federation]",
       'mode = "client"',
@@ -179,7 +221,9 @@ describe("desktop config [federation] section", () => {
 
     expect(config.federation?.gatewayEndpoints).toBeUndefined();
     expect(config.federation?.advertisedEndpoints).toBeUndefined();
-    expect(config.federation?.gatewayUrl).toBeUndefined();
+    // docs/config-file-evolution.md rule 7: never delete the preserved legacy
+    // scalar an older client still reads.
+    expect(config.federation?.gatewayUrl).toBe("wss://old.example.com");
   });
 
   it("ignores unknown federation modes", () => {

@@ -768,6 +768,9 @@ export class DesktopSettingsService {
         advertisedEndpoints: this.resolveFederationEndpointList(
           config.federation?.advertisedEndpoints,
         ),
+        cloudflareEndpoint: this.resolveConfigString(
+          config.federation?.cloudflareEndpoint,
+        ),
         cloudflareMtlsEnabled: this.resolveConfigBoolean(
           config.federation?.cloudflareMtlsEnabled,
           false,

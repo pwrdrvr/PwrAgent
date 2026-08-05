@@ -409,6 +409,40 @@ describe("federation transport", () => {
     });
   });
 
+  it("fails the connect when a peer upgrades and then goes silent", async () => {
+    // Without a deadline this parks forever: the upgrade succeeds, so neither
+    // "open" nor "close" nor "error" ever fires, and the reader waits on a
+    // frame that never arrives. That stalled the whole endpoint walk and the
+    // reconnect loop, and wedged Settings saves behind restart().
+    rawServer = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+    rawServer.on("connection", () => {
+      // Accept the upgrade and deliberately send nothing.
+    });
+    await new Promise<void>((resolve) => rawServer!.once("listening", resolve));
+    const address = rawServer.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+    const clientKeyPair = generateFederationIdentityKeyPair();
+    const clientNoise = generateNoiseStaticKeyPair();
+
+    const started = Date.now();
+    await expect(
+      connectFederationClient({
+        url: `ws://127.0.0.1:${port}`,
+        connectTimeoutMs: 250,
+        mode: "reconnect",
+        gatewayInstanceId: "gateway_one",
+        gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+        peerInstanceId: "client_one",
+        privateKeyPem: clientKeyPair.privateKeyPem,
+        publicKeyPem: clientKeyPair.publicKeyPem,
+        capabilities: ["remote_window"],
+        noiseStatic: clientNoise,
+        gatewayNoisePublicKey: generateNoiseStaticKeyPair().publicKeyRaw,
+      }),
+    ).rejects.toThrow();
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
   it("advertises the required Noise transport version before the handshake", async () => {
     const gatewayNoise = generateNoiseStaticKeyPair();
     server = new FederationGatewayWebSocketServer({

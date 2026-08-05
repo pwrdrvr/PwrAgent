@@ -471,6 +471,7 @@ describe("FederationSettings", () => {
       );
       expect(onWriteConfig).toHaveBeenCalledWith({
         federation: {
+          cloudflareEndpoint: "",
           cloudflareMtlsEnabled: true,
           cloudflareAccessServiceAuthEnabled: false,
         },
@@ -812,6 +813,7 @@ function settingsSnapshot(): DesktopSettingsSnapshot {
         source: "config",
       },
       advertisedEndpoints: { value: [], source: "default" },
+      cloudflareEndpoint: { value: "", source: "default" },
       cloudflareMtlsEnabled: { value: true, source: "config" },
       cloudflareAccessServiceAuthEnabled: { value: false, source: "config" },
       instancePrivateKey: {

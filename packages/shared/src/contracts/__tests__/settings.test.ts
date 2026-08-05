@@ -141,6 +141,7 @@ describe("desktop settings contracts", () => {
         gatewayUrl: { value: "", source: "default" },
         gatewayEndpoints: { value: [], source: "default" },
         advertisedEndpoints: { value: [], source: "default" },
+        cloudflareEndpoint: { value: "", source: "default" },
         cloudflareMtlsEnabled: { value: false, source: "default" },
         cloudflareAccessServiceAuthEnabled: { value: false, source: "default" },
         instancePrivateKey: {

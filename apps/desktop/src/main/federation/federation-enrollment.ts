@@ -8,6 +8,7 @@ import {
   FEDERATION_INVITE_VERSION,
   FEDERATION_PROTOCOL_VERSION,
   filterKnownFederationCapabilities,
+  isFederationGatewayEndpointUrl,
   isFederationInstanceId,
 } from "@pwragent/shared";
 import {
@@ -106,15 +107,28 @@ export function decodeFederationInvite(
   ) {
     throw new Error("Invalid federation invite.");
   }
+  // An invite is attacker-authored input: it is unsigned, and the operator may
+  // paste it from anywhere. Its endpoints are dialed by the main process, so
+  // enforce the scheme allowlist here rather than trusting the renderer (which
+  // this path never passes through).
+  if (!isFederationGatewayEndpointUrl(parsed.gatewayUrl)) {
+    throw new Error(
+      "Federation invite gateway URL must be a ws://, wss://, or ssh:// endpoint.",
+    );
+  }
   if (
     parsed.gatewayEndpoints !== undefined &&
     (!Array.isArray(parsed.gatewayEndpoints) ||
       parsed.gatewayEndpoints.length === 0 ||
       !parsed.gatewayEndpoints.every(
-        (endpoint) => typeof endpoint === "string" && endpoint.trim(),
+        (endpoint) =>
+          typeof endpoint === "string"
+          && isFederationGatewayEndpointUrl(endpoint),
       ))
   ) {
-    throw new Error("Invalid federation invite.");
+    throw new Error(
+      "Federation invite endpoints must all be ws://, wss://, or ssh:// URLs.",
+    );
   }
   if (parsed.expiresAt <= now) {
     throw new Error("Federation invite has expired.");

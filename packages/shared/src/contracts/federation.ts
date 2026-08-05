@@ -106,18 +106,95 @@ export type FederationClientEnrollment = {
  * endpoint carries the same mandatory Noise IK channel and pinned-identity
  * authentication; the scheme only selects the reachability path.
  */
-export const FEDERATION_ENDPOINT_SCHEMES = ["ws:", "wss:", "ssh:"] as const;
+export const FEDERATION_ENDPOINT_SCHEMES = ["ws", "wss", "ssh"] as const;
 
-export function isFederationGatewayEndpointUrl(value: string): boolean {
-  const match = /^(ws|wss|ssh):\/\/([^/?#]+)/i.exec(value.trim());
-  if (!match) return false;
+export type FederationEndpointScheme =
+  (typeof FEDERATION_ENDPOINT_SCHEMES)[number];
+
+export type ParsedFederationEndpoint = {
+  /** Lowercased scheme, without the trailing colon. */
+  scheme: FederationEndpointScheme;
+  /** Lowercased host, without userinfo or port. Brackets kept for IPv6. */
+  host: string;
+  /** Lowercased `host` or `host:port` — the credential-scoping identity. */
+  hostPort: string;
+  /** Userinfo before `@`, if any. Never contains a password. */
+  user?: string;
+  /** True only for schemes whose outer hop is TLS. */
+  isTls: boolean;
+};
+
+/**
+ * The single parser every federation endpoint decision goes through. Keeping
+ * validation, the TLS decision, and credential scoping on one parser is
+ * deliberate: a `startsWith("wss://")` check and a case-insensitive validator
+ * disagreeing is exactly how credentials get attached to the wrong endpoint.
+ *
+ * This is written without `URL` because @pwragent/shared compiles without DOM
+ * or Node lib types.
+ */
+export function parseFederationGatewayEndpoint(
+  value: string,
+): ParsedFederationEndpoint | undefined {
+  const match = /^([A-Za-z]+):\/\/([^/?#]*)/.exec(value.trim());
+  if (!match) return undefined;
+  const scheme = match[1].toLowerCase();
+  if (
+    !(FEDERATION_ENDPOINT_SCHEMES as readonly string[]).includes(scheme)
+  ) {
+    return undefined;
+  }
   const authority = match[2];
   const at = authority.lastIndexOf("@");
-  const userinfo = at >= 0 ? authority.slice(0, at) : "";
-  const hostPort = at >= 0 ? authority.slice(at + 1) : authority;
+  const user = at >= 0 ? authority.slice(0, at) : undefined;
+  const hostPort = (at >= 0 ? authority.slice(at + 1) : authority).toLowerCase();
   // Never accept credentials embedded in an endpoint URL.
-  if (userinfo.includes(":")) return false;
-  return hostPort.length > 0;
+  if (user !== undefined && user.includes(":")) return undefined;
+  if (hostPort.length === 0) return undefined;
+  // A leading "-" on the host or user would reach ssh(1) as an option rather
+  // than a destination. Reject it everywhere rather than relying on argv
+  // position to keep it harmless.
+  if (hostPort.startsWith("-") || user?.startsWith("-")) return undefined;
+  const host = hostPort.startsWith("[")
+    ? hostPort.slice(0, hostPort.indexOf("]") + 1)
+    : hostPort.split(":")[0];
+  if (host.length === 0) return undefined;
+  return {
+    scheme: scheme as FederationEndpointScheme,
+    host,
+    hostPort,
+    user,
+    isTls: scheme === "wss",
+  };
+}
+
+export function isFederationGatewayEndpointUrl(value: string): boolean {
+  return parseFederationGatewayEndpoint(value) !== undefined;
+}
+
+/**
+ * Whether an endpoint is the operator-designated Cloudflare-fronted endpoint,
+ * and may therefore be sent Cloudflare Access tokens / mTLS client keys.
+ *
+ * Those credentials travel in the WebSocket upgrade — before the Noise
+ * handshake pins anything — so they must be scoped to a specific host the
+ * operator named, never to "any wss:// URL". When no endpoint is designated,
+ * only a single-endpoint configuration qualifies, which preserves the
+ * pre-multi-path behavior without widening it to additional hosts.
+ */
+export function federationEndpointAcceptsCloudflareCredentials(params: {
+  endpoint: string;
+  cloudflareEndpoint?: string;
+  configuredEndpointCount: number;
+}): boolean {
+  const parsed = parseFederationGatewayEndpoint(params.endpoint);
+  if (!parsed?.isTls) return false;
+  const designated = params.cloudflareEndpoint?.trim();
+  if (designated) {
+    const target = parseFederationGatewayEndpoint(designated);
+    return target !== undefined && target.hostPort === parsed.hostPort;
+  }
+  return params.configuredEndpointCount <= 1;
 }
 
 export type FederationEndpointState =
@@ -243,6 +320,12 @@ export type ImportFederationInviteResponse = {
   accepted: boolean;
   gatewayInstanceId: FederationInstanceId;
   gatewayUrl: string;
+  /**
+   * Every endpoint the invite asked this client to dial. Surfaced so the
+   * operator can see what a pasted invite configured instead of discovering
+   * it only by reading config.toml.
+   */
+  gatewayEndpoints: string[];
 };
 
 export type ResetFederationEnrollmentRequest = Record<string, never>;

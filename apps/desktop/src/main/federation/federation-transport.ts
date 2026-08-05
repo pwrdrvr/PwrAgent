@@ -511,6 +511,13 @@ export async function connectFederationClient(params: {
    * channel-bound auth, envelopes — is unchanged.
    */
   createSocket?: () => Duplex;
+  /**
+   * Deadline for the whole pre-session exchange: TCP/TLS connect, WebSocket
+   * upgrade, transport hello, Noise handshake, and identity auth. Without it a
+   * peer that accepts the upgrade and then goes silent parks this promise
+   * forever, which stalls the caller's endpoint walk and reconnect loop.
+   */
+  connectTimeoutMs?: number;
   /** Client's Noise static keypair. Enables encryption (initiator role). */
   noiseStatic?: NoiseKeyPair;
   /** Pinned gateway Noise static public key (raw 32 bytes), from the invite. */
@@ -518,21 +525,66 @@ export async function connectFederationClient(params: {
   onEnvelope?: (envelope: FederationProtocolEnvelope) => void;
   onClose?: () => void;
 }): Promise<FederationClientWebSocketClient> {
+  const connectTimeoutMs =
+    params.connectTimeoutMs ?? FEDERATION_CONNECT_TIMEOUT_MS;
   const socket = new WebSocket(
     params.url,
     params.createSocket
       ? {
           headers: params.headers,
+          handshakeTimeout: connectTimeoutMs,
           agent: outerSocketAgent(params.createSocket),
         }
       : {
           headers: params.headers,
+          handshakeTimeout: connectTimeoutMs,
           cert: params.clientCertificate,
           key: params.clientPrivateKey,
         },
   );
   // Attach the reader before "open" so no inbound frame can be missed.
   const reader = new FederationFrameReader(socket);
+  // `handshakeTimeout` only covers the upgrade. This deadline also covers the
+  // frames after it, so a peer that upgrades and then stays silent still fails.
+  const connectDeadline = new FederationConnectDeadline(socket, connectTimeoutMs);
+  try {
+    return await establishFederationClient(params, socket, reader);
+  } finally {
+    connectDeadline.clear();
+  }
+}
+
+const FEDERATION_CONNECT_TIMEOUT_MS = 20_000;
+
+// Closes the socket if the pre-session exchange has not finished in time. The
+// close makes every pending `reader.next()` reject, so the caller's await
+// chain unwinds instead of parking forever.
+class FederationConnectDeadline {
+  private timer?: ReturnType<typeof setTimeout>;
+
+  constructor(socket: WebSocket, timeoutMs: number) {
+    this.timer = setTimeout(() => {
+      this.timer = undefined;
+      log.warn("federation connect deadline exceeded", { timeoutMs });
+      socket.close(1002, "Federation connect timeout");
+      socket.terminate();
+    }, timeoutMs);
+    this.timer.unref?.();
+  }
+
+  clear(): void {
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = undefined;
+    }
+  }
+}
+
+async function establishFederationClient(
+  params: Parameters<typeof connectFederationClient>[0],
+  socket: WebSocket,
+  reader: FederationFrameReader,
+): Promise<FederationClientWebSocketClient> {
   await waitForOpen(socket);
 
   // Phase 1: Noise_IK handshake (initiator). Skipped in tunnel mode.

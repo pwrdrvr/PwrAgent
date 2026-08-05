@@ -83,6 +83,12 @@ export function FederationSettings(props: FederationSettingsProps) {
   const [gatewayEndpointsText, setGatewayEndpointsText] = useState(
     props.snapshot.federation.gatewayEndpoints.value.join("\n"),
   );
+  const [advertisedEndpointsText, setAdvertisedEndpointsText] = useState(
+    props.snapshot.federation.advertisedEndpoints.value.join("\n"),
+  );
+  const [cloudflareEndpoint, setCloudflareEndpoint] = useState(
+    props.snapshot.federation.cloudflareEndpoint.value,
+  );
   const [cloudflareMtlsEnabled, setCloudflareMtlsEnabled] = useState(
     props.snapshot.federation.cloudflareMtlsEnabled.value,
   );
@@ -109,6 +115,10 @@ export function FederationSettings(props: FederationSettingsProps) {
     setGatewayEndpointsText(
       props.snapshot.federation.gatewayEndpoints.value.join("\n"),
     );
+    setAdvertisedEndpointsText(
+      props.snapshot.federation.advertisedEndpoints.value.join("\n"),
+    );
+    setCloudflareEndpoint(props.snapshot.federation.cloudflareEndpoint.value);
     setCloudflareMtlsEnabled(
       props.snapshot.federation.cloudflareMtlsEnabled.value,
     );
@@ -423,6 +433,21 @@ export function FederationSettings(props: FederationSettingsProps) {
               />
             }
           />
+          <SettingsField
+            label="Advertised endpoints"
+            sub="Gateway mode: endpoints written into new enrollment invites, one per line. Defaults to the Public URL when empty."
+            control={
+              <textarea
+                aria-label="Advertised endpoints"
+                rows={3}
+                value={advertisedEndpointsText}
+                disabled={props.saving}
+                onChange={(event) =>
+                  setAdvertisedEndpointsText(event.target.value)
+                }
+              />
+            }
+          />
           <div className="settings-button-row">
             <button
               className="button button--primary"
@@ -433,12 +458,16 @@ export function FederationSettings(props: FederationSettingsProps) {
                 const gatewayEndpoints = parseGatewayEndpoints(
                   gatewayEndpointsText,
                 );
-                const invalidEndpoint = gatewayEndpoints.find(
-                  (endpoint) => !isFederationGatewayEndpointUrl(endpoint),
+                const advertisedEndpoints = parseGatewayEndpoints(
+                  advertisedEndpointsText,
                 );
+                const invalidEndpoint = [
+                  ...gatewayEndpoints,
+                  ...advertisedEndpoints,
+                ].find((endpoint) => !isFederationGatewayEndpointUrl(endpoint));
                 if (invalidEndpoint) {
                   setActionError(
-                    `Gateway endpoint "${invalidEndpoint}" must be a ws://, wss://, or ssh:// URL without an embedded password.`,
+                    `Endpoint "${invalidEndpoint}" must be a ws://, wss://, or ssh:// URL without an embedded password.`,
                   );
                   return;
                 }
@@ -450,6 +479,7 @@ export function FederationSettings(props: FederationSettingsProps) {
                     listenPort: Number.parseInt(listenPort, 10) || 0,
                     publicUrl,
                     gatewayEndpoints,
+                    advertisedEndpoints,
                     cloudflareMtlsEnabled,
                     cloudflareAccessServiceAuthEnabled,
                   },
@@ -1074,6 +1104,19 @@ export function FederationSettings(props: FederationSettingsProps) {
       >
         <div className="settings-fields">
           <SettingsField
+            label="Cloudflare endpoint"
+            sub="The one endpoint fronted by Cloudflare. Access tokens and client certificates are sent only to this host, because they travel in the WebSocket upgrade before the gateway's pinned keys are verified."
+            control={
+              <input
+                aria-label="Cloudflare endpoint"
+                value={cloudflareEndpoint}
+                placeholder="wss://federation.example.com"
+                disabled={props.saving}
+                onChange={(event) => setCloudflareEndpoint(event.target.value)}
+              />
+            }
+          />
+          <SettingsField
             label="mTLS"
             sub="Cloudflare edge certificate gate."
             control={
@@ -1176,8 +1219,18 @@ export function FederationSettings(props: FederationSettingsProps) {
               disabled={props.saving}
               onClick={() => {
                 setActionError(undefined);
+                if (
+                  cloudflareEndpoint.trim()
+                  && !isFederationGatewayEndpointUrl(cloudflareEndpoint)
+                ) {
+                  setActionError(
+                    "Cloudflare endpoint must be a wss:// URL matching one of the gateway endpoints.",
+                  );
+                  return;
+                }
                 void saveCloudflareSettings({
                   config: {
+                    cloudflareEndpoint: cloudflareEndpoint.trim(),
                     cloudflareMtlsEnabled,
                     cloudflareAccessServiceAuthEnabled,
                   },
@@ -1245,6 +1298,7 @@ export function FederationSettings(props: FederationSettingsProps) {
                     }
                     const written = await props.onWriteConfig({
                       federation: {
+                        cloudflareEndpoint: "",
                         cloudflareMtlsEnabled: false,
                         cloudflareAccessServiceAuthEnabled: false,
                       },
@@ -1254,6 +1308,7 @@ export function FederationSettings(props: FederationSettingsProps) {
                         "Cloudflare edge policy could not be updated.",
                       );
                     }
+                    setCloudflareEndpoint("");
                     setCloudflareMtlsEnabled(false);
                     setCloudflareAccessServiceAuthEnabled(false);
                     await props.onSettingsChanged();
@@ -1277,6 +1332,7 @@ export function FederationSettings(props: FederationSettingsProps) {
 
 async function saveCloudflareSettings(params: {
   config: {
+    cloudflareEndpoint: string;
     cloudflareMtlsEnabled: boolean;
     cloudflareAccessServiceAuthEnabled: boolean;
   };

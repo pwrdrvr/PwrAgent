@@ -61,10 +61,14 @@ reachable again.
 - Importing an invite seeds both `gateway_endpoints` and `gateway_url`
   (first entry) in config, alongside the existing pinned-identity meta writes.
 - Cloudflare Access service-token headers and mTLS client credentials are
-  attached only to `wss://` endpoints. They are never sent on plain `ws://`
-  (where the upgrade request crosses the network unencrypted) or on `ssh://`
-  endpoints (where they serve no purpose). This narrows today's behavior,
-  which attached them to whatever single `gateway_url` was configured.
+  scoped to a single operator-designated host (`[federation]
+  cloudflare_endpoint`), compared by host and port. A scheme-only rule was
+  tried first and was wrong: these credentials ride the WebSocket upgrade and
+  the TLS handshake, both of which complete before the Noise handshake pins
+  anything, so "any `wss://` endpoint" would hand the Access bearer token and
+  the mTLS client key to every TLS host in the fallback list. With no endpoint
+  designated they apply only to a single-endpoint configuration, which
+  preserves pre-multi-path behavior without widening it.
 - Settings → Federation:
   - The Configuration section replaces the single "Gateway URL" input with a
     "Gateway endpoints" ordered editor (one endpoint per line, first line is
@@ -91,8 +95,9 @@ reachable again.
   `{ socket, close() }`; killing/closing either side tears down the other.
   stderr is captured (bounded) so auth/host-key failures produce a readable
   error. The spawn function is injectable for tests.
-- Command discovery mirrors `federation-tailscale.ts`: `ssh` on PATH plus the
-  Windows System32 OpenSSH fallback.
+- Invokes `ssh` from `PATH`. A Windows System32 OpenSSH fallback mirroring
+  `federation-tailscale.ts` was considered and deferred; it is noted as a
+  limitation in the connectivity reference rather than silently assumed.
 
 ### Transport (`federation-transport.ts`)
 
@@ -154,14 +159,20 @@ reachable again.
 ### Enrollment (`federation-enrollment.ts`)
 
 - `FederationInvitePayload.gatewayEndpoints?: string[]` — optional; decode
-  validates it as an array of strings when present and enforces the same
-  three-scheme rule.
+  enforces the same endpoint rules as every other entry point (scheme
+  allowlist, no embedded password, no leading-dash host/user), since an invite
+  is unsigned and bypasses the Settings UI. `importInvite` returns the list it
+  applied.
 
 ### Settings UI (`FederationSettings.tsx`)
 
-- Configuration: "Gateway endpoints" textarea, one per line, ordered; parsed
-  and validated (scheme allowlist) before save; save patches both
-  `gatewayEndpoints` and `gatewayUrl`.
+- Configuration: "Gateway endpoints" and "Advertised endpoints" textareas, one
+  per line, ordered; validated against the scheme allowlist before save.
+  Renderer validation is UX only — the main process re-validates, since the
+  config file is hand-editable and invites never pass through the UI.
+- Cloudflare: a "Cloudflare endpoint" field designating the single
+  Cloudflare-fronted host that may receive Access tokens and client
+  certificates.
 - Connection: per-endpoint rows showing URL, status label, active marker,
   last error, and last connected time; retains the existing single
   listener/public URL fields.
@@ -187,17 +198,33 @@ confidentiality are pinned per gateway, not per endpoint.**
   (`connectFederationClient` throws without it) and there is deliberately no
   setting to disable Noise. `ssh://` endpoints add SSH on the outside but
   change nothing inside.
-- The endpoint list is operator-controlled input only: config file, Settings
-  editor, or an explicitly imported invite (which already carries the pinned
-  keys themselves, so it is already fully trusted). No endpoint is ever
-  learned or updated from network traffic — the gateway cannot push endpoint
-  changes to enrolled clients, and `federation_gateway_last_endpoint` only
-  ever holds a value copied from the configured list after a fully
+- No endpoint is ever learned from network traffic: the gateway cannot push
+  endpoint changes to enrolled clients, and `federation_gateway_last_endpoint`
+  only ever holds a value copied from the configured list after a fully
   authenticated session was established on it.
-- Credential scoping improves: Cloudflare Access service tokens (bearer
-  credentials) and mTLS client keys are attached only to `wss://` endpoints,
-  so a plaintext `ws://` LAN fallback or SSH path can never leak the edge
-  bearer token in a cleartext upgrade request.
+- An imported invite is **not** trusted input just because it carries pinned
+  keys. It is unsigned, operator-pasteable, and never passes through the
+  Settings UI, so its endpoints are validated on decode against the same
+  scheme allowlist (and the no-password / no-leading-dash rules), and the
+  imported list is returned to the caller so the operator can see what a
+  pasted invite configured.
+- **Outer edge credentials are not covered by the pinned keys.** Cloudflare
+  Access service tokens and mTLS client certificates travel in the WebSocket
+  upgrade and the TLS handshake, both of which complete before the Noise
+  handshake verifies anything. They are therefore scoped to a single
+  operator-designated host (`cloudflare_endpoint`), matched on host and port;
+  with none designated they apply only to a single-endpoint configuration.
+  Anything looser — including a `wss://`-only rule — sends the bearer token
+  and client key to every TLS endpoint the fallback walks, which for an
+  invite-supplied endpoint is a credential-theft primitive.
+- `ssh://` endpoints may only forward to the gateway's loopback address, so an
+  endpoint cannot use the operator's SSH server to reach other hosts on its
+  network. Hosts and users beginning with `-` are rejected so nothing reaches
+  `ssh` in option position.
+- Availability is part of the security posture here: the whole pre-session
+  exchange is bounded by a deadline, because an endpoint that accepts the
+  upgrade and then goes silent would otherwise stall the endpoint walk, the
+  reconnect loop, and (through `restart()`) the Settings write IPC.
 - SSH host-key verification remains OpenSSH's job with its normal strictness;
   PwrAgent never sets `StrictHostKeyChecking=no`. Even a spoofed SSH host
   only reaches the Noise pin failure described above.
@@ -216,9 +243,23 @@ confidentiality are pinned per gateway, not per endpoint.**
   config, empty list.
 - [x] Runtime tests: fallback walks endpoints in order and connects on a later
   endpoint after earlier failures; per-endpoint statuses and last-good meta
-  update; Cloudflare credentials only attach to `wss://`.
-- [x] Config tests: `gateway_endpoints` read, `gateway_url` fallback,
-  dual-write of the first endpoint, `advertised_endpoints` round-trip.
+  update.
+- [x] Credential-scoping tests: the designated host receives Access headers and
+  the client certificate; a different `wss://` host in the same list does not;
+  a multi-endpoint config with no designation withholds from all; a
+  single-endpoint config still works; `ws://` and `ssh://` never receive them.
+- [x] Shared parser tests: scheme allowlist, embedded-password and
+  leading-dash rejection, case/port normalization, IPv6 hosts.
+- [x] Transport test: a peer that upgrades and then goes silent fails on the
+  connect deadline instead of hanging the endpoint walk.
+- [x] SSH transport test: the real `SshStdioSocket` under a real WebSocket
+  upgrade completes the Noise handshake, streams envelopes, and closes without
+  raising an uncaught error. (The unit and transport tests each covered one
+  half of this; the gap is what hid the child-exit defect.)
+- [x] Config tests: `gateway_endpoints` read, `gateway_url` fallback, canonical
+  shape only on fresh configs, legacy marker comment on an existing
+  `gateway_url`, preserved legacy scalar when the list is cleared, and
+  unsupported schemes dropped on read.
 - [x] Enrollment tests: invite encode/decode with and without
   `gatewayEndpoints`; import seeds config list.
 - [x] `FederationSettings` tests: endpoints editor renders/saves ordered list;

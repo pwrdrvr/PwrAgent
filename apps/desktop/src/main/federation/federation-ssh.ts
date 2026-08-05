@@ -49,6 +49,14 @@ export function parseFederationSshEndpoint(url: string): FederationSshEndpoint {
   if (!parsed.hostname) {
     throw new Error("SSH federation endpoints require a host.");
   }
+  // `ssh://-oProxyCommand=...` parses as a hostname. Passed through as argv it
+  // would reach ssh(1) as an option instead of a destination, so reject it
+  // here rather than relying on argv position to keep it inert.
+  if (parsed.hostname.startsWith("-") || parsed.username.startsWith("-")) {
+    throw new Error(
+      "SSH federation endpoints must not have a host or user starting with '-'.",
+    );
+  }
   if (parsed.pathname && parsed.pathname !== "/") {
     throw new Error(
       "SSH federation endpoints take the forward target as ?forward=host:port, not a path.",
@@ -95,6 +103,13 @@ export type FederationSshDialOptions = {
   command?: string;
   env?: NodeJS.ProcessEnv;
   spawnFn?: FederationSshSpawn;
+  /**
+   * Called with the real ssh failure (auth, host key, timeout). Node turns the
+   * resulting premature socket EOF into a generic "socket hang up" before the
+   * WebSocket upgrade resolves, so the caller needs this to report anything
+   * more useful than that.
+   */
+  onFailure?: (error: Error) => void;
 };
 
 /**
@@ -118,7 +133,7 @@ export function dialFederationSshEndpoint(
   const child = spawnFn(command, buildFederationSshArgs(endpoint), {
     env: buildPwrAgentChildProcessEnv(options.env ?? process.env),
   });
-  return new SshStdioSocket(child, endpoint);
+  return new SshStdioSocket(child, endpoint, options.onFailure);
 }
 
 // Wraps the ssh child's stdio as one duplex stream that quacks enough like a
@@ -131,6 +146,7 @@ class SshStdioSocket extends Duplex {
   constructor(
     private readonly child: ChildProcessWithoutNullStreams,
     endpoint: FederationSshEndpoint,
+    private readonly onFailure?: (error: Error) => void,
   ) {
     super();
     child.stdout.on("data", (chunk: Buffer) => {
@@ -146,24 +162,35 @@ class SshStdioSocket extends Duplex {
     });
     child.on("error", (error) => {
       this.exited = true;
-      this.destroy(
+      this.fail(
         error instanceof Error && "code" in error && error.code === "ENOENT"
           ? new Error(
               "The ssh command was not found. Install the OpenSSH client to use ssh:// federation endpoints.",
             )
-          : error,
+          : error instanceof Error
+            ? error
+            : new Error(String(error)),
       );
     });
-    child.on("exit", (code, signal) => {
+    // "close" rather than "exit": it fires after stdio has been drained and
+    // closed, so the stderr tail is complete and the readable side has already
+    // ended. "exit" can fire with output still buffered.
+    child.on("close", (code, signal) => {
       this.exited = true;
-      if (this.destroyed) return;
+      if (code === 0 && !signal) {
+        // Normal `ssh -W` teardown — the forwarded connection ended. Reporting
+        // an Error here would make every graceful disconnect look like a
+        // transport failure (and mark the endpoint failed in the UI).
+        if (!this.destroyed) this.destroy();
+        return;
+      }
       const detail = this.stderrTail.trim();
       log.warn("federation ssh tunnel exited", {
         host: endpoint.host,
         code,
         signal,
       });
-      this.destroy(
+      this.fail(
         new Error(
           detail
             ? `SSH federation tunnel closed: ${detail}`
@@ -171,6 +198,15 @@ class SshStdioSocket extends Duplex {
         ),
       );
     });
+  }
+
+  // Record before destroying: the consumer usually learns about the failure as
+  // a generic socket error, and needs the recorded reason to report the cause.
+  private fail(error: Error): void {
+    this.onFailure?.(error);
+    if (!this.destroyed) {
+      this.destroy(error);
+    }
   }
 
   _read(): void {
@@ -221,6 +257,17 @@ class SshStdioSocket extends Duplex {
   }
 }
 
+// Loopback only. The documented topology forwards to the gateway's own
+// loopback listener, and allowing an arbitrary target would turn the
+// operator's SSH server into a port-scanning proxy for anyone who can get an
+// endpoint into their config (e.g. via a pasted invite).
+const LOOPBACK_FORWARD_HOSTS = new Set([
+  "127.0.0.1",
+  "localhost",
+  "::1",
+  "[::1]",
+]);
+
 function parseForwardTarget(value: string): {
   forwardHost: string;
   forwardPort: number;
@@ -231,6 +278,11 @@ function parseForwardTarget(value: string): {
   }
   const forwardHost = value.slice(0, separator);
   const forwardPort = parsePort(value.slice(separator + 1), "forward port");
+  if (!LOOPBACK_FORWARD_HOSTS.has(forwardHost.toLowerCase())) {
+    throw new Error(
+      "SSH federation endpoints may only forward to the gateway's loopback address.",
+    );
+  }
   return { forwardHost, forwardPort };
 }
 

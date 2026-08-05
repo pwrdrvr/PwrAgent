@@ -69,6 +69,13 @@ describe("federation ssh endpoints", () => {
     ["ssh://gateway.lan/?forward=127.0.0.1:99999", /forward port/],
     ["ssh://gateway.lan:0", /SSH port/],
     ["wss://gateway.example.com", /ssh:\/\/ scheme/],
+    // Would reach ssh(1) as an option rather than a destination.
+    ["ssh://-oProxyCommand=touch%20pwned", /starting with '-'/],
+    ["ssh://-J%20evil.example", /starting with '-'/],
+    ["ssh://-ohost@gateway.lan", /starting with '-'/],
+    // Would turn the operator's SSH server into a port-scanning proxy.
+    ["ssh://gateway.lan/?forward=10.0.0.9:22", /loopback/],
+    ["ssh://gateway.lan/?forward=evil.example:443", /loopback/],
   ])("rejects %s", (url, message) => {
     expect(() => parseFederationSshEndpoint(url)).toThrow(message);
   });
@@ -114,21 +121,63 @@ describe("federation ssh endpoints", () => {
     expect(child.stdin.read()?.toString()).toBe("from-client");
   });
 
-  it("destroys the stream with the stderr tail when ssh exits", async () => {
+  it("destroys the stream with the stderr tail when ssh fails", async () => {
     const child = new FakeSshChild();
+    const failures: Error[] = [];
     const socket = dialFederationSshEndpoint(
       parseFederationSshEndpoint("ssh://gateway.lan"),
-      { spawnFn: fakeSpawn(child).spawnFn },
+      {
+        spawnFn: fakeSpawn(child).spawnFn,
+        onFailure: (error) => failures.push(error),
+      },
     );
     const closed = new Promise<Error>((resolve) => {
       socket.on("error", resolve);
     });
     child.stderr.write("Host key verification failed.\n");
-    child.emit("exit", 255, null);
+    child.emit("close", 255, null);
 
     const error = await closed;
     expect(error.message).toContain("SSH federation tunnel closed");
     expect(error.message).toContain("Host key verification failed.");
+    // The caller needs this: Node collapses the resulting socket EOF into a
+    // generic "socket hang up" before the WebSocket upgrade rejects.
+    expect(failures.map((entry) => entry.message)).toEqual([error.message]);
+  });
+
+  it("treats a clean ssh exit as a normal close, not a transport error", async () => {
+    const child = new FakeSshChild();
+    const failures: Error[] = [];
+    const socket = dialFederationSshEndpoint(
+      parseFederationSshEndpoint("ssh://gateway.lan"),
+      {
+        spawnFn: fakeSpawn(child).spawnFn,
+        onFailure: (error) => failures.push(error),
+      },
+    );
+    const errors: Error[] = [];
+    socket.on("error", (error: Error) => errors.push(error));
+
+    child.emit("close", 0, null);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(errors).toEqual([]);
+    expect(failures).toEqual([]);
+  });
+
+  it("does not emit an unhandled error on a clean exit with no error listener", async () => {
+    const child = new FakeSshChild();
+    dialFederationSshEndpoint(parseFederationSshEndpoint("ssh://gateway.lan"), {
+      spawnFn: fakeSpawn(child).spawnFn,
+    });
+    const uncaught: unknown[] = [];
+    const onUncaught = (error: unknown) => uncaught.push(error);
+    process.on("uncaughtException", onUncaught);
+    child.emit("close", 0, null);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    process.off("uncaughtException", onUncaught);
+
+    expect(uncaught).toEqual([]);
   });
 
   it("kills the ssh child when the stream is destroyed", async () => {

@@ -554,6 +554,12 @@ export type DesktopFederationSettingsSnapshot = {
   gatewayEndpoints: DesktopSettingsValue<string[]>;
   /** Ordered endpoints a gateway advertises in enrollment invites. */
   advertisedEndpoints: DesktopSettingsValue<string[]>;
+  /**
+   * The one endpoint that is Cloudflare-fronted. Access tokens and mTLS client
+   * keys are sent only to this host, because they travel in the WebSocket
+   * upgrade before any pinned key is verified.
+   */
+  cloudflareEndpoint: DesktopSettingsValue<string>;
   cloudflareMtlsEnabled: DesktopSettingsValue<boolean>;
   cloudflareAccessServiceAuthEnabled: DesktopSettingsValue<boolean>;
   instancePrivateKey: DesktopSettingsSecretState;
@@ -951,6 +957,7 @@ export type DesktopSettingsConfigPatch = {
     gatewayUrl?: string;
     gatewayEndpoints?: string[];
     advertisedEndpoints?: string[];
+    cloudflareEndpoint?: string;
     cloudflareMtlsEnabled?: boolean;
     cloudflareAccessServiceAuthEnabled?: boolean;
   };
