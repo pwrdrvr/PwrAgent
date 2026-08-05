@@ -34,7 +34,11 @@ export default defineConfig(({ command }) => {
             "@pwragent/messaging-provider-telegram",
             "@larksuiteoapi/node-sdk",
             "protobufjs",
-            "protobufjs/minimal"
+            "protobufjs/minimal",
+            // Slack's bundled CommonJS Socket Mode client expects
+            // require("ws").WebSocket. Externalizing ws rewrites that require
+            // to an ESM default import whose constructor has no .WebSocket.
+            "ws",
           ]
         })
       ],
