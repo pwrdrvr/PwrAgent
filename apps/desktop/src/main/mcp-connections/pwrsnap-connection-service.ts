@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { chmod, mkdtemp, rm } from "node:fs/promises";
 import { createServer as createHttpServer, type Server as HttpServer } from "node:http";
 import { homedir, tmpdir } from "node:os";
@@ -34,8 +34,13 @@ const PWRSNAP_DOWNLOAD_URL =
 const PWRSNAP_SCOPES = [
   "library.read",
   "capture.composite.read",
+  "capture.original.read",
   "capture.export",
   "capture.edit",
+  "trash.write",
+  "sizzle.compose",
+  "sizzle.preview.read",
+  "sizzle.full.read",
 ].join(" ");
 const OAUTH_CALLBACK_TIMEOUT_MS = 5 * 60_000;
 const MAX_RPC_LINE_BYTES = 1024 * 1024;
@@ -247,9 +252,106 @@ function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-function htmlResponse(title: string, detail: string): string {
+function htmlResponse(
+  title: string,
+  detail: string,
+  options: { liveStatus?: boolean } = {},
+): string {
   const safeTitle = escapeHtml(title);
-  return `<!doctype html><html><head><meta charset="utf-8"><title>${safeTitle}</title></head><body><h1>${safeTitle}</h1><p>${escapeHtml(detail)}</p><p>You can close this window.</p></body></html>`;
+  const liveStatus = options.liveStatus === true;
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>${safeTitle}</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    * { box-sizing: border-box; }
+    body { min-height: 100vh; margin: 0; display: grid; place-items: center; overflow: hidden; color: #f7f4ef; background: #090909; }
+    body::before { content: ""; position: fixed; inset: -25%; pointer-events: none; background: radial-gradient(circle at 28% 42%, rgba(235, 111, 32, .15), transparent 28%), radial-gradient(circle at 72% 42%, rgba(255, 153, 55, .11), transparent 30%); filter: blur(30px); }
+    main { position: relative; width: min(880px, calc(100vw - 40px)); padding: 70px 42px 52px; text-align: center; }
+    .eyebrow { margin: 0 0 18px; color: #f1883a; font-size: 12px; font-weight: 760; letter-spacing: .18em; text-transform: uppercase; }
+    h1 { margin: 0; font-size: clamp(34px, 5.5vw, 64px); line-height: 1.02; letter-spacing: -.045em; }
+    .detail { max-width: 610px; margin: 20px auto 0; color: #aaa49d; font-size: 17px; line-height: 1.55; }
+    .connection { display: grid; grid-template-columns: 138px minmax(140px, 1fr) 138px; align-items: center; gap: 22px; max-width: 650px; margin: 58px auto 50px; }
+    .app { display: grid; justify-items: center; gap: 13px; color: #d9d4cd; font-size: 13px; font-weight: 680; }
+    .app-icon { width: 104px; height: 104px; padding: 4px; border: 1px solid #2b2926; border-radius: 27px; object-fit: contain; background: #141312; box-shadow: 0 20px 55px rgba(0, 0, 0, .45); }
+    .line { position: relative; height: 38px; }
+    .line::before { content: ""; position: absolute; top: 18px; left: 0; right: 0; height: 2px; background: linear-gradient(90deg, #8a3c17, #ff8a1f 45%, #ffc174 55%, #8a3c17); box-shadow: 0 0 14px rgba(255, 138, 31, .7); }
+    .signal { position: absolute; top: 12px; left: -4px; width: 14px; height: 14px; border: 3px solid #090909; border-radius: 50%; background: #ff9c43; box-shadow: 0 0 0 3px rgba(255, 138, 31, .18), 0 0 18px #ff8a1f; animation: call 1.8s cubic-bezier(.45, 0, .25, 1) infinite; }
+    .status { display: inline-flex; align-items: center; gap: 9px; padding: 10px 15px; border: 1px solid #2d2a27; border-radius: 999px; color: #c6c0b9; background: rgba(22, 21, 20, .8); font-size: 13px; }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #ff8a1f; box-shadow: 0 0 12px rgba(255, 138, 31, .8); animation: pulse 1.4s ease-in-out infinite; }
+    body.is-connected .signal { left: calc(100% - 10px); animation: none; background: #75d89b; box-shadow: 0 0 0 3px rgba(117, 216, 155, .18), 0 0 18px #75d89b; }
+    body.is-connected .status-dot { background: #75d89b; box-shadow: 0 0 12px rgba(117, 216, 155, .8); animation: none; }
+    body.is-failed .status-dot { background: #ff6b6b; box-shadow: 0 0 12px rgba(255, 107, 107, .7); animation: none; }
+    .close { margin: 20px 0 0; color: #716c66; font-size: 12px; }
+    @keyframes call { 0% { left: -4px; opacity: 0; } 15% { opacity: 1; } 85% { opacity: 1; } 100% { left: calc(100% - 10px); opacity: 0; } }
+    @keyframes pulse { 50% { opacity: .45; transform: scale(.82); } }
+    @media (max-width: 640px) { main { padding-inline: 18px; } .connection { grid-template-columns: 92px minmax(70px, 1fr) 92px; gap: 10px; } .app-icon { width: 78px; height: 78px; border-radius: 21px; } }
+    @media (prefers-reduced-motion: reduce) { .signal, .status-dot { animation: none; } }
+  </style>
+</head>
+<body${liveStatus ? "" : " class=\"is-failed\""}>
+  <main>
+    <p class="eyebrow">PwrSuite connection</p>
+    <h1 id="title">${safeTitle}</h1>
+    <p class="detail" id="detail">${escapeHtml(detail)}</p>
+    <div class="connection" aria-label="PwrAgent connection to PwrSnap">
+      <div class="app"><img class="app-icon" src="/assets/pwragent.png" alt="PwrAgent"><span>PwrAgent</span></div>
+      <div class="line" aria-hidden="true"><span class="signal"></span></div>
+      <div class="app"><img class="app-icon" src="/assets/pwrsnap.png" alt="PwrSnap"><span>PwrSnap</span></div>
+    </div>
+    <div class="status"><span class="status-dot"></span><span id="status">${liveStatus ? "Finishing secure connection…" : "Connection stopped"}</span></div>
+    <p class="close">You can close this window at any time.</p>
+  </main>
+  ${liveStatus ? `<script>
+    const check = async () => {
+      try {
+        const response = await fetch("/oauth/status", { cache: "no-store" });
+        const result = await response.json();
+        if (result.state === "connected") {
+          document.body.className = "is-connected";
+          document.getElementById("title").textContent = "PwrAgent is connected to PwrSnap";
+          document.getElementById("detail").textContent = result.detail;
+          document.getElementById("status").textContent = "Secure connection ready";
+          return;
+        }
+        if (result.state === "failed") {
+          document.body.className = "is-failed";
+          document.getElementById("title").textContent = "Connection could not be completed";
+          document.getElementById("detail").textContent = result.detail;
+          document.getElementById("status").textContent = "Connection stopped";
+          return;
+        }
+      } catch {}
+      setTimeout(check, 250);
+    };
+    void check();
+  </script>` : ""}
+</body>
+</html>`;
+}
+
+function connectionAsset(name: "pwragent" | "pwrsnap"): Buffer | null {
+  const fileName = name === "pwragent" ? "pwragent-app-icon.png" : "pwrsnap-app-icon.png";
+  const sourceFile = name === "pwragent"
+    ? "build/icon.png"
+    : "src/renderer/src/assets/pwrsnap/pwrsnap-app-icon.png";
+  const candidates = [
+    join(process.resourcesPath, fileName),
+    join(__dirname, "../../", sourceFile),
+    join(__dirname, "../../../", sourceFile),
+  ];
+  for (const candidate of candidates) {
+    try {
+      return readFileSync(candidate);
+    } catch {
+      // Try the next development or packaged location.
+    }
+  }
+  return null;
 }
 
 function escapeHtml(value: string): string {
@@ -263,6 +365,16 @@ function escapeHtml(value: string): string {
       default: return character;
     }
   });
+}
+
+function callbackHtmlHeaders(): Record<string, string> {
+  return {
+    "cache-control": "no-store",
+    "content-security-policy": "default-src 'self'; img-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'",
+    "content-type": "text/html; charset=utf-8",
+    "referrer-policy": "no-referrer",
+    "x-content-type-options": "nosniff",
+  };
 }
 
 export class PwrSnapConnectionService {
@@ -490,7 +602,17 @@ export class PwrSnapConnectionService {
       }
       await this.persistCredential(provider.snapshot());
       await this.ensureUpstreamClient();
+      callback.complete(
+        "connected",
+        "PwrAgent can now offer PwrSnap to the agents and threads you choose.",
+      );
       return { outcome: "connected", status: await this.readStatus() };
+    } catch (cause) {
+      callback.complete(
+        "failed",
+        cause instanceof Error ? cause.message : "The secure connection could not be completed.",
+      );
+      throw cause;
     } finally {
       await callback.close();
     }
@@ -499,6 +621,7 @@ export class PwrSnapConnectionService {
   private async createOAuthCallback(expectedState: string): Promise<{
     url: URL;
     waitForCode: () => Promise<string>;
+    complete: (state: "connected" | "failed", detail: string) => void;
     close: () => Promise<void>;
   }> {
     let resolveRequest: ((url: URL) => void) | undefined;
@@ -507,11 +630,41 @@ export class PwrSnapConnectionService {
       resolveRequest = resolve;
       rejectRequest = reject;
     });
+    let callbackState: {
+      state: "connecting" | "connected" | "failed";
+      detail: string;
+    } = {
+      state: "connecting",
+      detail: "PwrAgent is exchanging the approved authorization for a secure local connection.",
+    };
     const server: HttpServer = createHttpServer((request, response) => {
       const requestUrl = new URL(
         request.url ?? "/",
         `http://${request.headers.host ?? "127.0.0.1"}`,
       );
+      if (requestUrl.pathname === "/oauth/status") {
+        response.writeHead(200, {
+          "cache-control": "no-store",
+          "content-type": "application/json; charset=utf-8",
+        });
+        response.end(JSON.stringify(callbackState));
+        return;
+      }
+      if (requestUrl.pathname === "/assets/pwragent.png" || requestUrl.pathname === "/assets/pwrsnap.png") {
+        const asset = connectionAsset(
+          requestUrl.pathname.endsWith("pwragent.png") ? "pwragent" : "pwrsnap",
+        );
+        if (asset === null) {
+          response.writeHead(404).end();
+          return;
+        }
+        response.writeHead(200, {
+          "cache-control": "public, max-age=3600",
+          "content-type": "image/png",
+        });
+        response.end(asset);
+        return;
+      }
       if (requestUrl.pathname !== "/oauth/callback") {
         response.writeHead(404).end();
         return;
@@ -520,13 +673,18 @@ export class PwrSnapConnectionService {
       if (error) {
         const detail =
           requestUrl.searchParams.get("error_description") ?? error;
-        response.writeHead(400, { "content-type": "text/html; charset=utf-8" });
+        callbackState = { state: "failed", detail };
+        response.writeHead(400, callbackHtmlHeaders());
         response.end(htmlResponse("PwrSnap connection declined", detail));
         rejectRequest?.(new Error(detail));
         return;
       }
       if (requestUrl.searchParams.get("state") !== expectedState) {
-        response.writeHead(400, { "content-type": "text/html; charset=utf-8" });
+        callbackState = {
+          state: "failed",
+          detail: "The authorization state did not match.",
+        };
+        response.writeHead(400, callbackHtmlHeaders());
         response.end(
           htmlResponse(
             "PwrSnap connection rejected",
@@ -536,11 +694,12 @@ export class PwrSnapConnectionService {
         rejectRequest?.(new Error("PwrSnap authorization state did not match."));
         return;
       }
-      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.writeHead(200, callbackHtmlHeaders());
       response.end(
         htmlResponse(
-          "PwrSnap connected",
-          "PwrAgent can now offer PwrSnap to the agents you choose.",
+          "Connecting PwrAgent to PwrSnap",
+          "PwrSnap approved the request. PwrAgent is finishing the secure local connection.",
+          { liveStatus: true },
         ),
       );
       resolveRequest?.(requestUrl);
@@ -572,8 +731,14 @@ export class PwrSnapConnectionService {
           clearTimeout(timeout);
         }
       },
-      close: async () =>
-        await new Promise<void>((resolve) => server.close(() => resolve())),
+      complete: (state, detail) => {
+        callbackState = { state, detail };
+      },
+      close: async () => {
+        server.unref();
+        const timer = setTimeout(() => server.close(), 30_000);
+        timer.unref();
+      },
     };
   }
 

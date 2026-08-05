@@ -69,6 +69,10 @@ extraResources:
     to: THIRD_PARTY_LICENSES
   - from: CHANGELOG.md
     to: CHANGELOG.md
+  - from: build/icon.png
+    to: pwragent-app-icon.png
+  - from: src/renderer/src/assets/pwrsnap/pwrsnap-app-icon.png
+    to: pwrsnap-app-icon.png
 
 # Electron fuses — ASAR integrity is NOT on by default in electron-builder.
 # Enable it explicitly so the runtime aborts if the .asar is tampered with.
