@@ -206,6 +206,7 @@ export function getPrStatusWatchOutcome(
   if (pr.lifecycleState === "merged") return "success";
   if (pr.lifecycleState === "closed") return "failure";
   if (pr.mergeState === "conflicting") return "failure";
+  if (pr.checksStillRunning) return undefined;
   const checkState = pr.checkState ?? pr.state;
   if (checkState === "failing") return "failure";
   if (checkState === "passing") return "success";
