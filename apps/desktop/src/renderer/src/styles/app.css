@@ -8742,6 +8742,418 @@ textarea,
   flex: 0 0 auto;
 }
 
+/* ==== Star Map mission-control surface ==== */
+
+/* Header chrome toggle, cloned from the terminal toggle beside it. */
+.thread-header__star-map-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.thread-header__star-map-toggle,
+.thread-header__star-map-toggle * {
+  -webkit-app-region: no-drag;
+}
+
+.thread-header__star-map-toggle:hover {
+  background: var(--bg-row-active);
+  color: var(--text-secondary);
+}
+
+.thread-header__star-map-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.thread-header__star-map-toggle.is-open {
+  color: var(--accent-bright);
+}
+
+/* Full-window layer over the app shell (same tier as Settings). The
+   star field is pure tokens: layered radial-gradient "stars" derived
+   from --text-muted so both themes read correctly. */
+.app-shell__star-map-layer {
+  display: flex;
+  position: absolute;
+  z-index: 120;
+  inset: 0;
+  min-width: 0;
+  min-height: 0;
+  background-color: var(--bg-app);
+  background-image:
+    radial-gradient(
+      1px 1px at 12% 24%,
+      color-mix(in srgb, var(--text-muted) 60%, transparent) 50%,
+      transparent 51%
+    ),
+    radial-gradient(
+      1px 1px at 34% 68%,
+      color-mix(in srgb, var(--text-muted) 45%, transparent) 50%,
+      transparent 51%
+    ),
+    radial-gradient(
+      1.5px 1.5px at 58% 15%,
+      color-mix(in srgb, var(--text-muted) 55%, transparent) 50%,
+      transparent 51%
+    ),
+    radial-gradient(
+      1px 1px at 72% 44%,
+      color-mix(in srgb, var(--text-muted) 40%, transparent) 50%,
+      transparent 51%
+    ),
+    radial-gradient(
+      1.5px 1.5px at 87% 76%,
+      color-mix(in srgb, var(--text-muted) 50%, transparent) 50%,
+      transparent 51%
+    ),
+    radial-gradient(
+      1px 1px at 45% 88%,
+      color-mix(in srgb, var(--text-muted) 35%, transparent) 50%,
+      transparent 51%
+    );
+  background-size:
+    280px 280px,
+    340px 340px,
+    420px 420px,
+    260px 260px,
+    380px 380px,
+    300px 300px;
+}
+
+.star-map {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  outline: none;
+  overflow: hidden;
+}
+
+.star-map__viewport {
+  position: absolute;
+  inset: 0;
+  transition: transform 240ms ease, opacity 240ms ease;
+}
+
+/* A floating thread shoves the map off to the left behind it. */
+.star-map--floating .star-map__viewport {
+  transform: translateX(-36%);
+  opacity: 0.85;
+}
+
+.star-map__links {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.star-map__link {
+  vector-effect: non-scaling-stroke;
+  stroke-width: 1.5px;
+  fill: none;
+}
+
+.star-map__link--healthy {
+  stroke: var(--accent-border);
+}
+
+.star-map__link--pending {
+  stroke: var(--text-subtle);
+}
+
+.star-map__link--dead {
+  stroke: var(--border-strong);
+  stroke-dasharray: 6 5;
+}
+
+/* Directional flow shimmer on healthy links. Static under reduced motion
+   (the solid base line already encodes "healthy"). */
+.star-map__link-flow {
+  vector-effect: non-scaling-stroke;
+  stroke: var(--accent);
+  stroke-width: 1.5px;
+  stroke-dasharray: 3 14;
+  fill: none;
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .star-map__link-flow {
+    opacity: 0.9;
+    animation: star-map-flow 1.6s linear infinite;
+  }
+}
+
+@keyframes star-map-flow {
+  to {
+    stroke-dashoffset: -17;
+  }
+}
+
+.star-map__anchor {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  z-index: 2;
+}
+
+.star-map-instance {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.star-map-instance__body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 18px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-panel-elevated) 82%, transparent);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.star-map-instance__body:hover {
+  border-color: var(--accent-border);
+  color: var(--text-primary);
+}
+
+.star-map-instance__body:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.star-map-instance--local .star-map-instance__body {
+  border-color: var(--accent-border);
+}
+
+.star-map-instance__label {
+  max-width: 160px;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.star-map-instance__icon-placeholder {
+  width: 48px;
+  height: 48px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 8px;
+}
+
+.star-map-instance__unreachable {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.star-map__cloud {
+  position: absolute;
+  z-index: 1;
+}
+
+.star-map__cloud-overflow {
+  position: absolute;
+  left: 0;
+  top: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.star-map-card {
+  display: flex;
+  position: absolute;
+  left: 0;
+  top: 0;
+  flex-direction: column;
+  gap: 6px;
+  width: 220px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.star-map-card:hover {
+  border-color: var(--accent-border);
+  background: var(--bg-panel-elevated);
+}
+
+.star-map-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.star-map-card__heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.star-map-card__title {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.star-map-card__chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+/* New-thread "bubble in" entrance (AI intake). Fade only under reduced
+   motion. */
+.star-map-card--entering {
+  animation: star-map-card-enter 480ms ease-out;
+}
+
+@keyframes star-map-card-enter {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes star-map-card-enter {
+    0% {
+      opacity: 0;
+      transform: scale(0.6);
+    }
+    70% {
+      opacity: 1;
+      transform: scale(1.05);
+    }
+    100% {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+}
+
+.star-map__filters {
+  display: flex;
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  gap: 6px;
+  transform: translateX(-50%);
+  z-index: 3;
+}
+
+.star-map__filter-chip {
+  padding: 4px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg-panel) 75%, transparent);
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.star-map__filter-chip.is-on {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
+.star-map__filter-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Floating thread over the map: the already-mounted main pane elevates
+   above the layer as a movable rounded card. */
+.app-main--star-map-float {
+  position: absolute;
+  z-index: 130;
+  inset: 24px 24px 24px 264px;
+  flex-direction: column;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-app);
+  box-shadow: var(--shadow-popover);
+  overflow: hidden;
+  transform: translate(
+    var(--star-map-float-dx, 0px),
+    var(--star-map-float-dy, 0px)
+  );
+}
+
+.star-map-float-handle {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
+  cursor: grab;
+  user-select: none;
+}
+
+.star-map-float-handle:active {
+  cursor: grabbing;
+}
+
+.star-map-float-handle__grip {
+  width: 28px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border-strong);
+}
+
+.star-map-float-handle__title {
+  flex: 1;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.star-map-float-handle__close {
+  padding: 3px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.star-map-float-handle__close:hover {
+  border-color: var(--accent-border);
+  color: var(--text-primary);
+}
+
 /* Celestial instance watermark: identity mark behind thread content.
    Opacity must stay low enough that transcript text keeps AA contrast on
    both themes — the a11y axe gate audits the composited result. */
