@@ -48,6 +48,7 @@ import type {
   SlackAuthorizedContact,
   SlackMessagingConfig,
 } from "./slack-config.ts";
+import { buildSlackHomeView, type SlackHomeView } from "./slack-home.ts";
 import {
   actionsForSlackIntent,
   buildSlackActionBlocks,
@@ -108,6 +109,10 @@ export type SlackApi = {
   downloadFile(params: { url: string; maxBytes: number }): Promise<Uint8Array>;
   filesInfo(params: { file: string }): Promise<SlackFileInfo | undefined>;
   postMessage(params: SlackPostBody): Promise<SlackMessageResult>;
+  publishHomeView?(params: {
+    userId: string;
+    view: SlackHomeView;
+  }): Promise<void>;
   updateMessage(params: SlackPostBody & { ts: string }): Promise<SlackMessageResult>;
   uploadFile?(params: {
     channel: string;
@@ -257,6 +262,12 @@ type SlackMessageEvent = {
   thread_ts?: string;
   ts?: string;
   type: "app_mention" | "message";
+  user?: string;
+};
+
+type SlackAppHomeOpenedEvent = {
+  tab?: "home" | "messages";
+  type: "app_home_opened";
   user?: string;
 };
 
@@ -415,6 +426,10 @@ export class SlackAdapter implements SlackProviderAdapter {
   }
 
   async updateAuthorization(update: MessagingAdapterAuthorizationUpdate): Promise<void> {
+    const homeUserIds = new Set([
+      ...this.authorizedActorIdsValue,
+      ...update.authorizedActorIds,
+    ]);
     this.authorizedActorIdsValue = [...update.authorizedActorIds];
     if (update.responseMode !== undefined) {
       this.config.responseMode = update.responseMode;
@@ -461,6 +476,9 @@ export class SlackAdapter implements SlackProviderAdapter {
       update.authorizedWorkspaceIds ?? [],
       this.config.authorizedTeamIds,
     );
+    if (this.started) {
+      await this.publishAppHomes([...homeUserIds]);
+    }
   }
 
   async updateRenderingPreferences(
@@ -511,6 +529,11 @@ export class SlackAdapter implements SlackProviderAdapter {
     this.socketClient.on("slash_commands", this.handleSlashCommand);
     await this.socketClient.start();
     this.started = true;
+    // Existing PwrAgent Slack apps may have the Home tab enabled without an
+    // `app_home_opened` subscription. Pre-publishing for configured users
+    // replaces Slack's indefinite loading state as soon as the adapter starts;
+    // the event handler below keeps the view fresh for apps that do subscribe.
+    await this.publishAppHomes(this.authorizedActorIdsValue);
   }
 
   async stop(): Promise<void> {
@@ -788,12 +811,57 @@ export class SlackAdapter implements SlackProviderAdapter {
     const body = envelope.body as SlackEventsApiBody | undefined;
     const event = (envelope.event ?? body?.event) as
       | SlackMessageEvent
+      | SlackAppHomeOpenedEvent
       | undefined;
+    if (event?.type === "app_home_opened") {
+      if (!event.tab || event.tab === "home") {
+        await this.publishAppHome(event.user);
+      }
+      return;
+    }
     if (!event || (event.type !== "message" && event.type !== "app_mention")) {
       return;
     }
     await this.handleMessageEvent(event, body?.team_id ?? event.team);
   };
+
+  private async publishAppHomes(userIds: readonly string[]): Promise<void> {
+    const homeUserIds = [...new Set(userIds)].filter(
+      (userId) => !validateSlackBotId(userId).ok,
+    );
+    await Promise.all(
+      homeUserIds.map(
+        async (userId) => await this.publishAppHome(userId),
+      ),
+    );
+  }
+
+  private async publishAppHome(userId: unknown): Promise<void> {
+    if (!this.api.publishHomeView) return;
+    const validation = validateSlackUserId(userId);
+    if (!validation.ok) {
+      logSlackInvalidIdentifier({
+        field: "user_id",
+        logger: this.logger,
+        reason: validation.reason,
+        value: userId,
+      });
+      return;
+    }
+    try {
+      await this.api.publishHomeView({
+        userId: userId as string,
+        view: buildSlackHomeView({
+          config: this.config,
+          userId: userId as string,
+        }),
+      });
+    } catch (error) {
+      this.logger.warn?.("slack App Home publish failed", {
+        reason: slackErrorReason(error),
+      });
+    }
+  }
 
   private readonly handleInteractive = async (payload: unknown): Promise<void> => {
     const envelope = payload as SlackSocketEnvelope;
@@ -2313,6 +2381,12 @@ export function createSlackApi(botToken: string): SlackApi {
       return (await client.chat.postMessage(
         params as unknown as Parameters<typeof client.chat.postMessage>[0],
       )) as SlackMessageResult;
+    },
+    async publishHomeView(params) {
+      await client.views.publish({
+        user_id: params.userId,
+        view: params.view as unknown as Parameters<typeof client.views.publish>[0]["view"],
+      });
     },
     async updateMessage(params) {
       return (await client.chat.update(

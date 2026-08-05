@@ -1,6 +1,7 @@
 export type { SlackMessagingConfig, SlackInboundMode } from "./slack-config.ts";
 export { validateCredentials } from "./validate-credentials.ts";
 export { resolveContact } from "./resolve-contact.ts";
+export { buildSlackHomeView, type SlackHomeView } from "./slack-home.ts";
 export type {
   SlackAdapterOptions,
   SlackApi,
