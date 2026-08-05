@@ -2,6 +2,7 @@ import { app, BrowserWindow, dialog, Menu, nativeImage, shell } from "electron";
 import { join } from "node:path";
 import { getDesktopBackendRegistry } from "./app-server/backend-registry";
 import { createPwrAgentAppManagementHandler } from "./agent-tools/pwragent-app-management-service";
+import { createFederationAgentToolsHandler } from "./federation/federation-agent-tools-service";
 import { disposeAgentIpcHandlers, registerAgentIpcHandlers } from "./ipc/agent-ipc";
 import {
   disposeScheduledActionIpcHandlers,
@@ -897,6 +898,11 @@ export function bootstrapApp(): void {
         startedAt: mainProcessStartedAt,
         version: () => app.getVersion(),
       }),
+    );
+    // Injected rather than owned by the registry: the federation runtime
+    // already imports the registry, so the reverse import would be a cycle.
+    getDesktopBackendRegistry().setPwrAgentFederationHandler(
+      createFederationAgentToolsHandler(),
     );
     // Windows: serve the painted title-bar menu bar from the live application
     // menu (idempotent; the renderer mounts the bar only on win32).

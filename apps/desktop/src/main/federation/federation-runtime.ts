@@ -663,6 +663,15 @@ export class DesktopFederationRuntime {
   }
 
   /**
+   * The same backend-operations surface {@link remoteBackend} exposes for a
+   * peer, served by this instance. Lets callers (the federation agent tools)
+   * treat local and remote targets uniformly.
+   */
+  localBackend(): FederationBackendOperations {
+    return localBackendOperations();
+  }
+
+  /**
    * Viewer-side control client for a peer's remote PTY sessions. Streamed
    * output/exit/error frames arrive via {@link onRemotePtyEvent}.
    */
@@ -2225,7 +2234,7 @@ export class DesktopFederationRuntime {
  * hostname (minus the mDNS suffix) beats both the profile name (almost
  * always "default") and the raw instance GUID for recognizing a peer.
  */
-function defaultInstanceLabel(): string {
+export function defaultInstanceLabel(): string {
   const host = hostname().trim().replace(/\.local$/i, "");
   return host || "PwrAgent";
 }

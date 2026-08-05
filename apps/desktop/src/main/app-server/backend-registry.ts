@@ -344,6 +344,13 @@ import {
   readPwrAgentThreadOrchestrationDynamicToolCall,
 } from "../agent-tools/pwragent-thread-orchestration-codex-tools";
 import type { PwrAgentThreadOrchestrationHandler } from "../agent-tools/pwragent-thread-orchestration-agent-tools";
+import {
+  buildPwrAgentFederationDynamicToolErrorResponse,
+  handlePwrAgentFederationDynamicToolCall,
+  isPwrAgentFederationDynamicToolCall,
+  readPwrAgentFederationDynamicToolCall,
+} from "../agent-tools/pwragent-federation-codex-tools";
+import type { PwrAgentFederationHandler } from "../agent-tools/pwragent-federation-agent-tools";
 import type { MessagingAgentToolService } from "../messaging/messaging-agent-tool-service";
 import { resolveAutomationInspectionMcpCommand } from "../automations/automation-inspection-cli";
 import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-registry";
@@ -6403,6 +6410,7 @@ export class DesktopBackendRegistry {
     async (request) => await this.handleThreadInspectionRequest(request);
   private readonly threadOrchestrationHandler: PwrAgentThreadOrchestrationHandler =
     async (request) => await this.handleThreadOrchestrationRequest(request);
+  private federationHandler: PwrAgentFederationHandler | undefined;
   private threadPullRequestStatusToolHandler:
     | ThreadPullRequestStatusToolHandler
     | undefined;
@@ -6776,6 +6784,7 @@ export class DesktopBackendRegistry {
               resolveAgentToolCatalogs({
                 appManagementHandler: this.appManagementHandler,
                 automationInspectionHandler: this.automationInspectionHandler,
+                federationHandler: this.federationHandler,
                 messagingHandler: this.messagingHandler,
                 taskMonitorHandler: async (request) =>
                   await this.handleAgentTaskMonitorRequest(request),
@@ -7107,6 +7116,12 @@ export class DesktopBackendRegistry {
     handler: PwrAgentAppManagementHandler | null | undefined,
   ): void {
     this.appManagementHandler = handler ?? undefined;
+  }
+
+  setPwrAgentFederationHandler(
+    handler: PwrAgentFederationHandler | null | undefined,
+  ): void {
+    this.federationHandler = handler ?? undefined;
   }
 
   setThreadPullRequestStatusToolHandler(
@@ -10002,6 +10017,7 @@ export class DesktopBackendRegistry {
     const agentToolCatalogs = resolveAgentToolCatalogs({
       appManagementHandler: this.appManagementHandler,
       automationInspectionHandler: this.automationInspectionHandler,
+      federationHandler: this.federationHandler,
       messagingHandler: this.messagingHandler,
       taskMonitorHandler: async (request) =>
         await this.handleAgentTaskMonitorRequest(request),
@@ -20776,6 +20792,41 @@ export class DesktopBackendRegistry {
         backend,
         call: threadOrchestrationToolCall,
         handler: this.threadOrchestrationHandler,
+      });
+    }
+
+    const federationToolCall = readPwrAgentFederationDynamicToolCall({
+      method: request.method,
+      params: request.params,
+    });
+    if (federationToolCall && isPwrAgentFederationDynamicToolCall(federationToolCall)) {
+      if (!this.isLiveDynamicToolCall(backend, federationToolCall)) {
+        backendRegistryLog.warn("rejecting federation dynamic tool call", {
+          backend,
+          callId: federationToolCall.callId,
+          namespace: federationToolCall.namespace,
+          threadId: federationToolCall.threadId,
+          tool: federationToolCall.tool,
+          turnId: federationToolCall.turnId,
+        });
+        return buildPwrAgentFederationDynamicToolErrorResponse({
+          code: "forbidden",
+          message:
+            "Federation tool calls must originate from an active turn on the same thread.",
+        });
+      }
+      backendRegistryLog.info("handling federation dynamic tool call", {
+        backend,
+        callId: federationToolCall.callId,
+        namespace: federationToolCall.namespace,
+        threadId: federationToolCall.threadId,
+        tool: federationToolCall.tool,
+        turnId: federationToolCall.turnId,
+      });
+      return await handlePwrAgentFederationDynamicToolCall({
+        backend,
+        call: federationToolCall,
+        handler: this.federationHandler,
       });
     }
 

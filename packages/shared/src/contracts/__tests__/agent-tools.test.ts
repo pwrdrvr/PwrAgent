@@ -19,12 +19,14 @@ describe("agent tool contracts", () => {
       "thread_inspection",
       "messaging_context",
       "thread_orchestration",
+      "federation",
     ]);
     expect(isAgentToolCatalogId("automation_inspection")).toBe(true);
     expect(isAgentToolCatalogId("app_management")).toBe(true);
     expect(isAgentToolCatalogId("thread_inspection")).toBe(true);
     expect(isAgentToolCatalogId("messaging_context")).toBe(true);
     expect(isAgentToolCatalogId("thread_orchestration")).toBe(true);
+    expect(isAgentToolCatalogId("federation")).toBe(true);
     expect(isAgentToolCatalogId("shell")).toBe(false);
   });
 
