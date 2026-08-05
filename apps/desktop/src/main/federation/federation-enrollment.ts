@@ -5,6 +5,7 @@ import type {
   FederationPeerSummary,
 } from "@pwragent/shared";
 import {
+  FEDERATION_INVITE_VERSION,
   FEDERATION_PROTOCOL_VERSION,
   isFederationInstanceId,
 } from "@pwragent/shared";
@@ -26,7 +27,7 @@ export type FederationEnrollmentInvite = FederationEnrollmentEntry & {
 };
 
 export type FederationInvitePayload = {
-  version: 1;
+  version: typeof FEDERATION_INVITE_VERSION;
   token: string;
   gatewayInstanceId: FederationInstanceId;
   gatewayPublicKeyPem: string;
@@ -83,8 +84,12 @@ export function decodeFederationInvite(
   const parsed = JSON.parse(
     Buffer.from(encoded, "base64url").toString("utf8"),
   ) as Partial<FederationInvitePayload>;
+  if (parsed.version !== FEDERATION_INVITE_VERSION) {
+    throw new Error(
+      `Unsupported federation invite version. Expected version ${FEDERATION_INVITE_VERSION}.`,
+    );
+  }
   if (
-    parsed.version !== 1 ||
     typeof parsed.token !== "string" ||
     typeof parsed.gatewayInstanceId !== "string" ||
     typeof parsed.gatewayPublicKeyPem !== "string" ||

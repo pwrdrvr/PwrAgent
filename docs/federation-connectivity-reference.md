@@ -115,6 +115,20 @@ pinned by the importing client. The private key is generated automatically and
 stored through the desktop credential store. There is deliberately no setting
 that disables Noise: encryption is part of the federation transport contract.
 
+Noise-capable federation uses invite version 2 and a version-2 transport
+preface before the Noise handshake. The preface contains only the protocol,
+transport version, and required cipher-suite name; it contains no identity or
+secret material. Its purpose is to make mixed old/new deployments reject
+immediately instead of having one side wait for plaintext JSON while the other
+waits for a Noise handshake. A profile enrolled by a pre-Noise build must
+import a newly generated invite before it can connect to a Noise-required
+gateway.
+
+An authenticated-encryption failure, including tampering or replay, is fatal to
+the current WebSocket session. PwrAgent closes the socket so pending operations
+fail and normal unavailable/reconnect handling can begin; it does not keep a
+session marked Connected after its receive nonce can no longer advance.
+
 This protects PwrAgent traffic, but it does not provide automatic LAN discovery,
 NAT traversal, a public hostname, or a firewall. Operators still choose how one
 machine routes to the other.

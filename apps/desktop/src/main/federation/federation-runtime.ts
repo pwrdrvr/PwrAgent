@@ -40,6 +40,7 @@ import type {
   TrustCodexProjectResponse,
 } from "@pwragent/shared";
 import {
+  FEDERATION_INVITE_VERSION,
   FEDERATION_PROTOCOL_VERSION,
   buildFederatedThreadRef,
   isRemoteFederationTarget,
@@ -346,7 +347,7 @@ export class DesktopFederationRuntime {
     });
     return {
       invite: encodeFederationInvite({
-        version: 1,
+        version: FEDERATION_INVITE_VERSION,
         token: entry.token,
         gatewayInstanceId: this.ensureLocalInstanceId(),
         gatewayPublicKeyPem: gatewayIdentity.publicKeyPem,

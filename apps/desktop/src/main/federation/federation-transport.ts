@@ -11,6 +11,7 @@ import type {
 import { getMainLogger } from "../log";
 import {
   FEDERATION_PROTOCOL_VERSION,
+  FEDERATION_TRANSPORT_VERSION,
   isFederationCapability,
   isFederationInstanceId,
 } from "@pwragent/shared";
@@ -38,6 +39,14 @@ import { FederationSessionRegistry } from "./federation-session-state";
 import type { FederationStore } from "./federation-store";
 
 const log = getMainLogger("pwragent:federation-transport");
+const FEDERATION_NOISE_TRANSPORT = "noise_ik_25519_aesgcm_sha256";
+
+type FederationSocketTransportHelloMessage = {
+  kind: "transport.hello";
+  transportVersion: number;
+  protocolVersion: number;
+  encryption: typeof FEDERATION_NOISE_TRANSPORT;
+};
 
 type FederationSocketAuthMessage = {
   kind: "auth";
@@ -86,6 +95,7 @@ type FederationSocketEnvelopeMessage = {
 };
 
 type FederationSocketMessage =
+  | FederationSocketTransportHelloMessage
   | FederationSocketAuthMessage
   | FederationSocketChallengeMessage
   | FederationSocketAcceptedMessage
@@ -202,6 +212,12 @@ export class FederationGatewayWebSocketServer {
     let transport: NoiseTransport | undefined;
     let channelBinding = "";
     if (this.options.noiseStatic) {
+      sendFrame(socket, {
+        kind: "transport.hello",
+        transportVersion: FEDERATION_TRANSPORT_VERSION,
+        protocolVersion: FEDERATION_PROTOCOL_VERSION,
+        encryption: FEDERATION_NOISE_TRANSPORT,
+      });
       try {
         const handshake = new NoiseIKHandshake({
           role: "responder",
@@ -248,7 +264,13 @@ export class FederationGatewayWebSocketServer {
     } catch {
       return;
     }
-    const message = decodeFrame(authFrame, transport);
+    let message: FederationSocketMessage | undefined;
+    try {
+      message = decodeFrame(authFrame, transport);
+    } catch {
+      closeAfterFrameAuthenticationFailure(socket);
+      return;
+    }
     if (!message || message.kind !== "auth") {
       this.options.store.appendAudit({
         kind: "rejected",
@@ -394,7 +416,13 @@ export class FederationGatewayWebSocketServer {
       } catch {
         return;
       }
-      const next = decodeFrame(frame, transport);
+      let next: FederationSocketMessage | undefined;
+      try {
+        next = decodeFrame(frame, transport);
+      } catch {
+        closeAfterFrameAuthenticationFailure(socket);
+        return;
+      }
       if (!next || next.kind !== "envelope") continue;
       this.sessions.heartbeat(sessionId, Date.now());
       this.options.onEnvelope?.(next.envelope, connection);
@@ -497,6 +525,19 @@ export async function connectFederationClient(params: {
       socket.close();
       throw new Error("Missing pinned gateway Noise key for encrypted federation");
     }
+    const hello = decodeFrame(await reader.next());
+    if (
+      !hello
+      || hello.kind !== "transport.hello"
+      || hello.transportVersion !== FEDERATION_TRANSPORT_VERSION
+      || hello.protocolVersion !== FEDERATION_PROTOCOL_VERSION
+      || hello.encryption !== FEDERATION_NOISE_TRANSPORT
+    ) {
+      socket.close(1002, "Unsupported federation transport");
+      throw new Error(
+        `Federation gateway does not support required Noise transport version ${FEDERATION_TRANSPORT_VERSION}.`,
+      );
+    }
     try {
       const handshake = new NoiseIKHandshake({
         role: "initiator",
@@ -514,7 +555,13 @@ export async function connectFederationClient(params: {
   }
 
   // Phase 2: identity auth.
-  const challenge = decodeFrame(await reader.next(), transport);
+  let challenge: FederationSocketMessage | undefined;
+  try {
+    challenge = decodeFrame(await reader.next(), transport);
+  } catch (error) {
+    closeAfterFrameAuthenticationFailure(socket);
+    throw error;
+  }
   if (challenge?.kind === "auth.rejected") {
     socket.close();
     throw new Error(challenge.failure.code);
@@ -574,7 +621,13 @@ export async function connectFederationClient(params: {
   };
   sendFrame(socket, authMessage, transport);
 
-  const accepted = decodeFrame(await reader.next(), transport);
+  let accepted: FederationSocketMessage | undefined;
+  try {
+    accepted = decodeFrame(await reader.next(), transport);
+  } catch (error) {
+    closeAfterFrameAuthenticationFailure(socket);
+    throw error;
+  }
   if (accepted?.kind === "auth.rejected") {
     socket.close();
     throw new Error(accepted.failure.code);
@@ -623,7 +676,13 @@ export async function connectFederationClient(params: {
       } catch {
         return;
       }
-      const message = decodeFrame(frame, transport);
+      let message: FederationSocketMessage | undefined;
+      try {
+        message = decodeFrame(frame, transport);
+      } catch {
+        closeAfterFrameAuthenticationFailure(socket);
+        return;
+      }
       if (message?.kind === "envelope") {
         params.onEnvelope?.(message.envelope);
       }
@@ -725,13 +784,31 @@ function sendFrame(
   socket.send(transport ? transport.encrypt(json) : json);
 }
 
+function closeAfterFrameAuthenticationFailure(socket: WebSocket): void {
+  log.warn("encrypted federation frame authentication failed; closing session");
+  socket.close(1008, "Encrypted federation frame authentication failed");
+}
+
 function decodeFrame(
   frame: Buffer,
   transport?: NoiseTransport,
 ): FederationSocketMessage | undefined {
+  let json = frame;
+  if (transport) {
+    try {
+      json = transport.decrypt(frame);
+    } catch {
+      throw new FederationFrameAuthenticationError();
+    }
+  }
   try {
-    const json = transport ? transport.decrypt(frame) : frame;
     const parsed = JSON.parse(json.toString("utf8")) as Partial<FederationSocketMessage>;
+    if (
+      parsed.kind === "transport.hello"
+      && isTransportHelloMessage(parsed)
+    ) {
+      return parsed;
+    }
     if (parsed.kind === "auth" && isAuthMessage(parsed)) return parsed;
     if (parsed.kind === "auth.challenge" && isChallengeMessage(parsed)) return parsed;
     if (parsed.kind === "auth.accepted" && isAcceptedMessage(parsed)) return parsed;
@@ -745,6 +822,24 @@ function decodeFrame(
   } catch {
     return undefined;
   }
+}
+
+class FederationFrameAuthenticationError extends Error {
+  constructor() {
+    super("Encrypted federation frame authentication failed");
+    this.name = "FederationFrameAuthenticationError";
+  }
+}
+
+function isTransportHelloMessage(
+  value: Partial<FederationSocketTransportHelloMessage>,
+): value is FederationSocketTransportHelloMessage {
+  return (
+    value.kind === "transport.hello"
+    && typeof value.transportVersion === "number"
+    && typeof value.protocolVersion === "number"
+    && value.encryption === FEDERATION_NOISE_TRANSPORT
+  );
 }
 
 function isAuthMessage(value: Partial<FederationSocketAuthMessage>): value is FederationSocketAuthMessage {

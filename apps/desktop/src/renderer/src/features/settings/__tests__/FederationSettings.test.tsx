@@ -426,6 +426,58 @@ describe("FederationSettings", () => {
     expect(events).toEqual(["bind-listener", "publish", "save-url"]);
   });
 
+  it.each(["", "not-a-port", "0", "65536", "47830.5"])(
+    "rejects invalid Tailscale listen port %j before saving settings",
+    async (listenPort) => {
+      const status = {
+        installed: true,
+        connected: true,
+        serveConfigured: false,
+        funnelConfigured: false,
+        gatewayUrl: "wss://studio.example.ts.net/pwragent-federation",
+      };
+      const configureFederationTailscale = vi.fn();
+      const onWriteConfig = vi.fn(async () => true);
+      render(
+        <FederationSettings
+          desktopApi={{
+            configureFederationTailscale,
+            readFederationHealth: vi.fn(async () => ({
+              health: {
+                enabled: true,
+                role: "gateway" as const,
+                status: "listening" as const,
+                listenUrl: "ws://127.0.0.1:8765",
+                peers: [],
+              },
+            })),
+            readFederationTailscaleStatus: vi.fn(async () => ({ status })),
+          }}
+          onClearSecret={vi.fn(async () => true)}
+          onReplaceSecret={vi.fn(async () => true)}
+          saving={false}
+          snapshot={settingsSnapshot()}
+          onSettingsChanged={vi.fn()}
+          onWriteConfig={onWriteConfig}
+        />,
+      );
+
+      fireEvent.change(screen.getByDisplayValue("8765"), {
+        target: { value: listenPort },
+      });
+      const serveButton = await screen.findByRole("button", {
+        name: "Set up Tailscale Serve",
+      });
+      fireEvent.click(serveButton);
+
+      expect(await screen.findByText(
+        "Listen port must be an integer between 1 and 65535.",
+      )).toBeInTheDocument();
+      expect(onWriteConfig).not.toHaveBeenCalled();
+      expect(configureFederationTailscale).not.toHaveBeenCalled();
+    },
+  );
+
   it("does not publish a Tailscale route when the listener cannot bind", async () => {
     const status = {
       installed: true,

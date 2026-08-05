@@ -3,7 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import WebSocket, { WebSocketServer } from "ws";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { FederationProtocolEnvelope } from "@pwragent/shared";
+import {
+  FEDERATION_PROTOCOL_VERSION,
+  FEDERATION_TRANSPORT_VERSION,
+  type FederationProtocolEnvelope,
+} from "@pwragent/shared";
 import {
   buildFederationGatewayAcceptedMessage,
   buildFederationGatewayChallengeMessage,
@@ -14,7 +18,10 @@ import {
   generateFederationIdentityKeyPair,
   signFederationMessage,
 } from "../federation/federation-identity";
-import { generateNoiseStaticKeyPair } from "../federation/federation-noise";
+import {
+  generateNoiseStaticKeyPair,
+  NoiseIKHandshake,
+} from "../federation/federation-noise";
 import { FederationStore } from "../federation/federation-store";
 import {
   connectFederationClient,
@@ -265,6 +272,160 @@ describe("federation transport", () => {
     });
   });
 
+  it("advertises the required Noise transport version before the handshake", async () => {
+    const gatewayNoise = generateNoiseStaticKeyPair();
+    server = new FederationGatewayWebSocketServer({
+      gatewayInstanceId: "gateway_one",
+      gatewayPrivateKeyPem: gatewayKeyPair.privateKeyPem,
+      gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+      host: "127.0.0.1",
+      port: 0,
+      store,
+      noiseStatic: gatewayNoise,
+    });
+    const { url } = await server.start();
+    const socket = new WebSocket(url);
+    const reader = new TestSocketReader(socket);
+    await waitForSocketOpen(socket);
+
+    expect(JSON.parse((await reader.next()).toString("utf8"))).toEqual({
+      kind: "transport.hello",
+      transportVersion: FEDERATION_TRANSPORT_VERSION,
+      protocolVersion: FEDERATION_PROTOCOL_VERSION,
+      encryption: "noise_ik_25519_aesgcm_sha256",
+    });
+    socket.close();
+  });
+
+  it("rejects a legacy gateway before starting the Noise handshake", async () => {
+    const gatewayNoise = generateNoiseStaticKeyPair();
+    const clientNoise = generateNoiseStaticKeyPair();
+    const clientKeyPair = generateFederationIdentityKeyPair();
+    rawServer = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    rawServer.on("connection", (socket) => {
+      socket.send(JSON.stringify({
+        kind: "auth.challenge",
+        gatewayInstanceId: "gateway_one",
+        gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+        protocolVersion: FEDERATION_PROTOCOL_VERSION,
+        nonce: "legacy-challenge",
+        signatureBase64: "legacy-signature",
+      }));
+    });
+    const url = await websocketServerUrl(rawServer);
+
+    await expect(connectFederationClient({
+      url,
+      mode: "reconnect",
+      gatewayInstanceId: "gateway_one",
+      gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+      peerInstanceId: "client_one",
+      privateKeyPem: clientKeyPair.privateKeyPem,
+      publicKeyPem: clientKeyPair.publicKeyPem,
+      capabilities: ["remote_window"],
+      noiseStatic: clientNoise,
+      gatewayNoisePublicKey: gatewayNoise.publicKeyRaw,
+    })).rejects.toThrow(
+      `Federation gateway does not support required Noise transport version ${FEDERATION_TRANSPORT_VERSION}.`,
+    );
+  });
+
+  it("closes an established session after encrypted frame authentication fails", async () => {
+    const gatewayNoise = generateNoiseStaticKeyPair();
+    const clientNoise = generateNoiseStaticKeyPair();
+    const clientKeyPair = generateFederationIdentityKeyPair();
+    const invite = createFederationEnrollmentInvite({
+      store,
+      token: "invite-token-tampered-frame",
+      gatewayInstanceId: "gateway_one",
+      generatedAt: Date.now() - 1_000,
+      expiresAt: Date.now() + 60_000,
+    });
+    let resolveConnected: (() => void) | undefined;
+    const connected = new Promise<void>((resolve) => {
+      resolveConnected = resolve;
+    });
+    let resolveDisconnected: (() => void) | undefined;
+    const disconnected = new Promise<void>((resolve) => {
+      resolveDisconnected = resolve;
+    });
+    server = new FederationGatewayWebSocketServer({
+      gatewayInstanceId: "gateway_one",
+      gatewayPrivateKeyPem: gatewayKeyPair.privateKeyPem,
+      gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+      host: "127.0.0.1",
+      port: 0,
+      store,
+      noiseStatic: gatewayNoise,
+      onConnection: () => resolveConnected?.(),
+      onDisconnect: () => resolveDisconnected?.(),
+    });
+    const { url } = await server.start();
+    const socket = new WebSocket(url);
+    const reader = new TestSocketReader(socket);
+    await waitForSocketOpen(socket);
+    await reader.next();
+
+    const handshake = new NoiseIKHandshake({
+      role: "initiator",
+      localStatic: clientNoise,
+      remoteStaticPublicKey: gatewayNoise.publicKeyRaw,
+    });
+    socket.send(handshake.writeMessage1());
+    handshake.readMessage2(await reader.next());
+    const transport = handshake.split();
+    const challenge = JSON.parse(
+      transport.decrypt(await reader.next()).toString("utf8"),
+    ) as {
+      nonce: string;
+    };
+    const capabilities = ["remote_window"] as const;
+    socket.send(transport.encrypt(Buffer.from(JSON.stringify({
+      kind: "auth",
+      mode: "enroll",
+      gatewayInstanceId: "gateway_one",
+      peerInstanceId: "client_one",
+      protocolVersion: FEDERATION_PROTOCOL_VERSION,
+      nonce: challenge.nonce,
+      capabilities,
+      signatureBase64: signFederationMessage({
+        privateKeyPem: clientKeyPair.privateKeyPem,
+        message: buildFederationProofMessage({
+          purpose: "enroll",
+          gatewayInstanceId: "gateway_one",
+          peerInstanceId: "client_one",
+          publicKeyPem: clientKeyPair.publicKeyPem,
+          protocolVersion: FEDERATION_PROTOCOL_VERSION,
+          nonce: challenge.nonce,
+          capabilities,
+          channelBinding: transport.handshakeHash.toString("base64"),
+        }),
+      }),
+      inviteToken: invite.token,
+      publicKeyPem: clientKeyPair.publicKeyPem,
+      label: "Client",
+      role: "client",
+    }), "utf8")));
+    const accepted = JSON.parse(
+      transport.decrypt(await reader.next()).toString("utf8"),
+    ) as { kind: string };
+    expect(accepted.kind).toBe("auth.accepted");
+    await connected;
+
+    const socketClosed = new Promise<void>((resolve) => {
+      socket.once("close", () => resolve());
+    });
+    socket.send(Buffer.alloc(32, 0xa5));
+
+    await socketClosed;
+    await disconnected;
+    expect(server.closePeer("client_one")).toBe(false);
+    expect(store.listAudit({ peerId: "client_one" })[0]).toMatchObject({
+      kind: "disconnected",
+      detail: "transport_closed",
+    });
+  });
+
   it("fails when the client pins the wrong gateway Noise key (wrong machine / MITM)", async () => {
     const gatewayNoise = generateNoiseStaticKeyPair();
     const attackerNoise = generateNoiseStaticKeyPair();
@@ -499,4 +660,55 @@ function nextSocketMessage(socket: WebSocket): Promise<unknown> {
     });
     socket.once("error", reject);
   });
+}
+
+class TestSocketReader {
+  private readonly queue: Buffer[] = [];
+  private pending?: {
+    resolve: (frame: Buffer) => void;
+    reject: (error: Error) => void;
+  };
+  private failure?: Error;
+
+  constructor(socket: WebSocket) {
+    socket.on("message", (raw) => this.push(rawDataToBuffer(raw)));
+    socket.once("close", () => this.fail(new Error("WebSocket closed")));
+    socket.once("error", (error) =>
+      this.fail(error instanceof Error ? error : new Error(String(error))),
+    );
+  }
+
+  next(): Promise<Buffer> {
+    const queued = this.queue.shift();
+    if (queued) return Promise.resolve(queued);
+    if (this.failure) return Promise.reject(this.failure);
+    return new Promise((resolve, reject) => {
+      this.pending = { resolve, reject };
+    });
+  }
+
+  private push(frame: Buffer): void {
+    if (this.pending) {
+      const { resolve } = this.pending;
+      this.pending = undefined;
+      resolve(frame);
+      return;
+    }
+    this.queue.push(frame);
+  }
+
+  private fail(error: Error): void {
+    this.failure ??= error;
+    if (this.pending) {
+      const { reject } = this.pending;
+      this.pending = undefined;
+      reject(error);
+    }
+  }
+}
+
+function rawDataToBuffer(raw: WebSocket.RawData): Buffer {
+  if (Buffer.isBuffer(raw)) return raw;
+  if (Array.isArray(raw)) return Buffer.concat(raw);
+  return Buffer.from(raw as ArrayBuffer);
 }

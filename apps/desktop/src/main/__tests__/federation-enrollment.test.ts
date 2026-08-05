@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { FEDERATION_INVITE_VERSION } from "@pwragent/shared";
 import {
   buildFederationProofMessage,
   completeFederationEnrollment,
@@ -37,7 +38,7 @@ describe("federation enrollment", () => {
     const gatewayKeyPair = generateFederationIdentityKeyPair();
     const gatewayNoisePublicKey = "gateway-noise-public-key";
     const invite = encodeFederationInvite({
-      version: 1,
+      version: FEDERATION_INVITE_VERSION,
       token: "invite-token-1234567890",
       gatewayInstanceId: "gateway_one",
       gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
@@ -47,7 +48,7 @@ describe("federation enrollment", () => {
     });
 
     expect(decodeFederationInvite(invite, 1_000)).toEqual({
-      version: 1,
+      version: FEDERATION_INVITE_VERSION,
       token: "invite-token-1234567890",
       gatewayInstanceId: "gateway_one",
       gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
@@ -57,6 +58,21 @@ describe("federation enrollment", () => {
     });
     expect(() => decodeFederationInvite(invite, 2_000)).toThrow(
       "Federation invite has expired.",
+    );
+  });
+
+  it("rejects legacy invites before attempting enrollment", () => {
+    const legacyInvite = `pwragent-federation:${Buffer.from(JSON.stringify({
+      version: 1,
+      token: "legacy-token",
+      gatewayInstanceId: "gateway_one",
+      gatewayPublicKeyPem: "legacy-key",
+      gatewayUrl: "ws://127.0.0.1:47830",
+      expiresAt: 2_000,
+    }), "utf8").toString("base64url")}`;
+
+    expect(() => decodeFederationInvite(legacyInvite, 1_000)).toThrow(
+      `Unsupported federation invite version. Expected version ${FEDERATION_INVITE_VERSION}.`,
     );
   });
 

@@ -154,7 +154,7 @@ export function FederationSettings(props: FederationSettingsProps) {
     setActionError(undefined);
     setTailscaleConfiguring(tailscaleMode);
     try {
-      const parsedListenPort = Number.parseInt(listenPort, 10);
+      const parsedListenPort = parseFederationListenPort(listenPort);
       const gatewayMode = mode === "dual" ? "dual" : "gateway";
       const listenerWritten = await props.onWriteConfig({
         federation: {
@@ -998,6 +998,20 @@ function diagnosticEventLabel(kind: FederationDiagnosticEvent["kind"]): string {
 
 function formatTimestamp(value: number): string {
   return new Date(value).toLocaleString();
+}
+
+function parseFederationListenPort(value: string): number {
+  const trimmed = value.trim();
+  const port = Number(trimmed);
+  if (
+    !/^\d+$/.test(trimmed)
+    || !Number.isInteger(port)
+    || port < 1
+    || port > 65_535
+  ) {
+    throw new Error("Listen port must be an integer between 1 and 65535.");
+  }
+  return port;
 }
 
 const FEDERATION_CAPABILITY_LABELS: Record<FederationCapability, string> = {
