@@ -168,12 +168,20 @@ describe("MessagingStatusBar", () => {
       setMessagingEnabled,
     };
 
-    render(<MessagingStatusBar desktopApi={desktopApi} />);
+    render(
+      <MessagingStatusBar
+        desktopApi={desktopApi}
+        onOpenActivity={vi.fn()}
+      />,
+    );
 
     fireEvent.click(await screen.findByRole("button", { name: /1 online/ }));
+    const popover = await screen.findByRole("dialog", {
+      name: "Messaging platforms",
+    });
     expect(
-      await screen.findByRole("dialog", { name: "Messaging platforms" }),
-    ).toBeInTheDocument();
+      popover.querySelector(".messaging-status-popover__rows"),
+    ).not.toHaveClass("messaging-status-popover__rows--without-footer");
 
     fireEvent.click(screen.getByRole("button", { name: "On" }));
 
@@ -558,6 +566,9 @@ describe("MessagingStatusBar", () => {
       expect(
         screen.queryByRole("button", { name: "Open Messaging Activity" }),
       ).not.toBeInTheDocument();
+      expect(
+        popover.querySelector(".messaging-status-popover__rows"),
+      ).toHaveClass("messaging-status-popover__rows--without-footer");
     } finally {
       delete federationWindow.__pwragentFederationTarget;
     }
