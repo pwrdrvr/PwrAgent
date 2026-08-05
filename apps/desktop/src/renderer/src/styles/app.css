@@ -9467,6 +9467,18 @@ textarea,
   padding: 16px 12px 24px 16px;
 }
 
+/* The scroller is tabIndex=0 only so keyboard users can scroll it (axe
+   scrollable-region-focusable). A click focuses it, and Chromium then
+   promotes the focus to :focus-visible on the next keystroke — drawing
+   the OS-accent UA ring around the ENTIRE transcript (repro in any
+   window: click transcript text, press an arrow key; reported from a
+   federation window). A viewport-sized ring is noise, not a usable
+   focus cue — suppress it, matching the resize-handle precedent. */
+.transcript-list__items:focus,
+.transcript-list__items:focus-visible {
+  outline: none;
+}
+
 .transcript-list__items:has(.transcript-list__pending:last-child) {
   padding-bottom: 4px;
 }
