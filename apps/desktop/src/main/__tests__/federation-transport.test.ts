@@ -23,6 +23,7 @@ import {
   generateNoiseStaticKeyPair,
   NoiseIKHandshake,
 } from "../federation/federation-noise";
+import { FederationSessionRegistry } from "../federation/federation-session-state";
 import { FederationStore } from "../federation/federation-store";
 import {
   connectFederationClient,
@@ -799,6 +800,331 @@ describe("federation transport", () => {
       publicKeyPem: clientKeyPair.publicKeyPem,
       capabilities: ["remote_window"],
     })).rejects.toThrow("Invalid federation auth acceptance signature");
+  });
+});
+
+describe("federation transport liveness", () => {
+  it("terminates an authenticated peer whose link stops answering keepalive probes", async () => {
+    const clientKeyPair = generateFederationIdentityKeyPair();
+    const invite = createFederationEnrollmentInvite({
+      store,
+      token: "invite-token-keepalive",
+      gatewayInstanceId: "gateway_one",
+      generatedAt: Date.now() - 1_000,
+      expiresAt: Date.now() + 60_000,
+    });
+    const registry = new FederationSessionRegistry();
+    server = new FederationGatewayWebSocketServer({
+      gatewayInstanceId: "gateway_one",
+      gatewayPrivateKeyPem: gatewayKeyPair.privateKeyPem,
+      gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+      host: "127.0.0.1",
+      port: 0,
+      store,
+      sessions: registry,
+      keepaliveIntervalMs: 50,
+      // Keep the auth deadline out of the way: this test is about the
+      // post-auth keepalive, not the pre-auth deadline.
+      authTimeoutMs: 60_000,
+    });
+    const { url } = await server.start();
+    const socket = new WebSocket(url);
+    const challengePromise = nextSocketMessage(socket);
+    await waitForSocketOpen(socket);
+    const challenge = (await challengePromise) as { nonce: string };
+    socket.send(
+      JSON.stringify({
+        kind: "auth",
+        mode: "enroll",
+        gatewayInstanceId: "gateway_one",
+        peerInstanceId: "client_one",
+        protocolVersion: 1,
+        nonce: challenge.nonce,
+        capabilities: ["remote_window"],
+        signatureBase64: signFederationMessage({
+          privateKeyPem: clientKeyPair.privateKeyPem,
+          message: buildFederationProofMessage({
+            purpose: "enroll",
+            gatewayInstanceId: "gateway_one",
+            peerInstanceId: "client_one",
+            publicKeyPem: clientKeyPair.publicKeyPem,
+            protocolVersion: 1,
+            nonce: challenge.nonce,
+            capabilities: ["remote_window"],
+          }),
+        }),
+        inviteToken: invite.token,
+        publicKeyPem: clientKeyPair.publicKeyPem,
+        label: "Client",
+        role: "client",
+      }),
+    );
+    await expect(nextSocketMessage(socket)).resolves.toMatchObject({
+      kind: "auth.accepted",
+    });
+    const session = registry.listActiveSessions()[0];
+    expect(session).toBeDefined();
+
+    // Simulate a silently dead link: stop reading, so the gateway's pings
+    // are never processed and no pong ever goes back. No FIN, no RST —
+    // exactly the failure mode keepalive exists for.
+    (socket as unknown as { _socket: net.Socket })._socket.pause();
+
+    await expect
+      .poll(() => registry.listActiveSessions().length, { timeout: 5_000 })
+      .toBe(0);
+    expect(registry.getSession(session.sessionId)).toMatchObject({
+      status: "closed",
+      closeReason: "transport_closed",
+    });
+    socket.terminate();
+  });
+
+  it("terminates a socket that upgrades but never completes auth", async () => {
+    server = new FederationGatewayWebSocketServer({
+      gatewayInstanceId: "gateway_one",
+      gatewayPrivateKeyPem: gatewayKeyPair.privateKeyPem,
+      gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+      host: "127.0.0.1",
+      port: 0,
+      store,
+      authTimeoutMs: 100,
+      // Keepalive alone cannot catch this: a live-but-stalled peer answers
+      // pings from the ws protocol layer forever. Park it out of the way so
+      // this test isolates the auth deadline.
+      keepaliveIntervalMs: 60_000,
+    });
+    const { url } = await server.start();
+    const socket = new WebSocket(url);
+    await waitForSocketOpen(socket);
+    // Upgrade succeeded, challenge received; now say nothing.
+    const closed = new Promise<boolean>((resolve) => {
+      socket.once("close", () => resolve(true));
+    });
+    await expect(closed).resolves.toBe(true);
+  });
+
+  it("keeps an idle authenticated peer connected and counts pongs as heartbeats", async () => {
+    const clientKeyPair = generateFederationIdentityKeyPair();
+    const invite = createFederationEnrollmentInvite({
+      store,
+      token: "invite-token-idle",
+      gatewayInstanceId: "gateway_one",
+      generatedAt: Date.now() - 1_000,
+      expiresAt: Date.now() + 60_000,
+    });
+    const registry = new FederationSessionRegistry();
+    server = new FederationGatewayWebSocketServer({
+      gatewayInstanceId: "gateway_one",
+      gatewayPrivateKeyPem: gatewayKeyPair.privateKeyPem,
+      gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+      host: "127.0.0.1",
+      port: 0,
+      store,
+      sessions: registry,
+      keepaliveIntervalMs: 40,
+    });
+    const { url } = await server.start();
+    let closeCount = 0;
+    const client = await connectFederationClient({
+      url,
+      mode: "enroll",
+      gatewayInstanceId: "gateway_one",
+      gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+      peerInstanceId: "client_one",
+      privateKeyPem: clientKeyPair.privateKeyPem,
+      publicKeyPem: clientKeyPair.publicKeyPem,
+      capabilities: ["remote_window"],
+      inviteToken: invite.token,
+      label: "Client",
+      role: "client",
+      keepaliveIntervalMs: 40,
+      onClose: () => {
+        closeCount += 1;
+      },
+    });
+    const session = registry.listActiveSessions()[0];
+    expect(session).toBeDefined();
+
+    // Several keepalive cycles with zero envelopes: the session must stay
+    // active and its heartbeat must advance on pongs alone, or the stale
+    // sweep would reap every idle-but-healthy peer.
+    await expect
+      .poll(
+        () =>
+          registry.getSession(session.sessionId)?.lastHeartbeatAt ??
+          session.connectedAt,
+        { timeout: 5_000 },
+      )
+      .toBeGreaterThan(session.connectedAt);
+    expect(registry.listActiveSessions()).toHaveLength(1);
+    expect(closeCount).toBe(0);
+    client.close();
+  });
+
+  it("closes the connection when a frame exceeds the payload ceiling", async () => {
+    const clientKeyPair = generateFederationIdentityKeyPair();
+    const invite = createFederationEnrollmentInvite({
+      store,
+      token: "invite-token-max-frame",
+      gatewayInstanceId: "gateway_one",
+      generatedAt: Date.now() - 1_000,
+      expiresAt: Date.now() + 60_000,
+    });
+    const received: FederationProtocolEnvelope[] = [];
+    server = new FederationGatewayWebSocketServer({
+      gatewayInstanceId: "gateway_one",
+      gatewayPrivateKeyPem: gatewayKeyPair.privateKeyPem,
+      gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+      host: "127.0.0.1",
+      port: 0,
+      store,
+      maxFrameBytes: 64 * 1024,
+      onEnvelope: (envelope) => {
+        received.push(envelope);
+      },
+    });
+    const { url } = await server.start();
+    let closeCount = 0;
+    const client = await connectFederationClient({
+      url,
+      mode: "enroll",
+      gatewayInstanceId: "gateway_one",
+      gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+      peerInstanceId: "client_one",
+      privateKeyPem: clientKeyPair.privateKeyPem,
+      publicKeyPem: clientKeyPair.publicKeyPem,
+      capabilities: ["remote_window"],
+      inviteToken: invite.token,
+      label: "Client",
+      role: "client",
+      onClose: () => {
+        closeCount += 1;
+      },
+    });
+    const envelope = (payload: unknown): FederationProtocolEnvelope => ({
+      id: "request-max-frame",
+      kind: "request",
+      method: "backend.listThreads",
+      params: payload,
+      protocolVersion: 1,
+      sourceInstanceId: "client_one",
+      targetInstanceId: "gateway_one",
+      createdAt: 1_000,
+    });
+
+    // Within the ceiling: delivered.
+    client.sendEnvelope(envelope({ note: "small" }));
+    await expect.poll(() => received.length, { timeout: 5_000 }).toBe(1);
+
+    // Over the ceiling: the gateway drops the connection instead of
+    // buffering a frame of the peer's choosing.
+    client.sendEnvelope(envelope({ blob: "x".repeat(128 * 1024) }));
+    await expect.poll(() => closeCount, { timeout: 5_000 }).toBe(1);
+    expect(received).toHaveLength(1);
+  });
+
+  it("terminates the client side when a gateway stops answering keepalive probes", async () => {
+    const clientKeyPair = generateFederationIdentityKeyPair();
+    const nonce = "challenge:keepalive";
+    // A protocol-correct but frozen gateway: it completes auth with real
+    // signatures, then never answers pings (autoPong off) and never speaks
+    // again — the client's own probes must detect the dead direction.
+    rawServer = new WebSocketServer({
+      host: "127.0.0.1",
+      port: 0,
+      autoPong: false,
+    });
+    rawServer.on("connection", (socket) => {
+      socket.send(JSON.stringify({
+        kind: "auth.challenge",
+        gatewayInstanceId: "gateway_one",
+        gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+        protocolVersion: 1,
+        nonce,
+        signatureBase64: signFederationMessage({
+          privateKeyPem: gatewayKeyPair.privateKeyPem,
+          message: buildFederationGatewayChallengeMessage({
+            gatewayInstanceId: "gateway_one",
+            gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+            protocolVersion: 1,
+            nonce,
+          }),
+        }),
+      }));
+      socket.once("message", () => {
+        const sessionId = "federation-session:frozen";
+        const capabilities = ["remote_window"] as const;
+        socket.send(JSON.stringify({
+          kind: "auth.accepted",
+          gatewayInstanceId: "gateway_one",
+          sessionId,
+          protocolVersion: 1,
+          nonce,
+          capabilities,
+          signatureBase64: signFederationMessage({
+            privateKeyPem: gatewayKeyPair.privateKeyPem,
+            message: buildFederationGatewayAcceptedMessage({
+              gatewayInstanceId: "gateway_one",
+              peerInstanceId: "client_one",
+              sessionId,
+              protocolVersion: 1,
+              nonce,
+              capabilities,
+            }),
+          }),
+        }));
+      });
+    });
+    const url = await websocketServerUrl(rawServer);
+
+    let closeCount = 0;
+    await connectFederationClient({
+      url,
+      mode: "reconnect",
+      gatewayInstanceId: "gateway_one",
+      gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+      peerInstanceId: "client_one",
+      privateKeyPem: clientKeyPair.privateKeyPem,
+      publicKeyPem: clientKeyPair.publicKeyPem,
+      capabilities: ["remote_window"],
+      keepaliveIntervalMs: 50,
+      onClose: () => {
+        closeCount += 1;
+      },
+    });
+    await expect.poll(() => closeCount, { timeout: 5_000 }).toBe(1);
+  });
+
+  it("expires only stale active sessions from the registry", () => {
+    const registry = new FederationSessionRegistry();
+    registry.openSession({
+      sessionId: "session-stale",
+      peerId: "peer_stale",
+      connectedAt: 1_000,
+      capabilities: [],
+    });
+    registry.openSession({
+      sessionId: "session-live",
+      peerId: "peer_live",
+      connectedAt: 1_000,
+      capabilities: [],
+    });
+    registry.heartbeat("session-live", 10_000);
+
+    const expired = registry.expireStaleSessions({
+      now: 10_500,
+      heartbeatTimeoutMs: 5_000,
+    });
+
+    expect(expired.map((session) => session.sessionId)).toEqual([
+      "session-stale",
+    ]);
+    expect(registry.getSession("session-stale")).toMatchObject({
+      status: "closed",
+      closeReason: "timeout",
+    });
+    expect(registry.getSession("session-live")?.status).toBe("active");
   });
 });
 
