@@ -54,13 +54,21 @@ function dedupeLinkedDirectories(
           (directory.kind !== "local" && directory.kind !== "worktree"),
       )
     : normalizedDirectories;
-  const byId = new Map<string, LinkedDirectorySummary>();
+  const byWorkspaceIdentity = new Map<string, LinkedDirectorySummary>();
 
   for (const directory of filteredDirectories) {
-    byId.set(directory.id, directory);
+    const worktreePath = directory.kind === "worktree"
+      ? directory.worktreePath?.trim()
+      : undefined;
+    const identity = worktreePath
+      ? `worktree:${worktreePath.replace(/\\/g, "/").replace(/\/+$/, "")}`
+      : `directory:${directory.id}`;
+    // Overlay directories are appended after provider directories. Prefer
+    // their persisted repository spelling when both describe one worktree.
+    byWorkspaceIdentity.set(identity, directory);
   }
 
-  return [...byId.values()];
+  return [...byWorkspaceIdentity.values()];
 }
 
 function normalizeLinkedDirectoryKind(

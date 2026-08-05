@@ -13032,38 +13032,71 @@ script = "printf setup-output"
         backend: "codex",
         threadId: "thread-1",
       }),
-    ).resolves.toMatchObject({ extraLinkedDirectories: [] });
+    ).resolves.toMatchObject({
+      extraLinkedDirectories: [
+        {
+          id: repoPath,
+          kind: "worktree",
+          label: "app",
+          path: repoPath,
+          worktreePath,
+        },
+      ],
+    });
 
     await registry.close();
   });
 
-  it("preserves an equivalent requested repository path as the worktree identity", async () => {
+  it("acknowledges and persists an equivalent requested repository identity", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-repo-alias-"));
     const repositoryPath = path.join(root, "repository");
     const requestedRepositoryPath = path.join(root, "requested-repository");
     const worktreePath = path.join(root, "worktree");
+    const movedWorktreePath = path.join(root, "moved-worktree");
     await mkdir(repositoryPath, { recursive: true });
+    await mkdir(worktreePath, { recursive: true });
+    await mkdir(movedWorktreePath, { recursive: true });
     await symlink(
       repositoryPath,
       requestedRepositoryPath,
       process.platform === "win32" ? "junction" : "dir",
     );
 
-    const registry = new DesktopBackendRegistry({
-      codexClient: new MockBackendClient({
-        initializeResult: { methods: ["thread/start"] },
-      }),
-      grokClient: new MockBackendClient({}),
-      overlayStore: createOverlayStoreMock(),
-      gitDirectoryService: {
-        prepareLaunchpadWorkspace: vi.fn(async () => ({
-          cwd: worktreePath,
-          repositoryPath,
-          workMode: "worktree" as const,
-        })),
-        recordCodexWorktreeOwnerThread: vi.fn(async () => {}),
-      } as never,
+    const providerThread = (providerWorktreePath: string): AppServerThreadSummary => ({
+      id: "thread-1",
+      source: "codex",
+      title: "Repository thread",
+      titleSource: "derived",
+      projectKey: providerWorktreePath,
+      linkedDirectories: [
+        {
+          id: expectedDir(repositoryPath),
+          kind: "worktree",
+          label: "repository",
+          path: expectedDir(repositoryPath),
+          worktreePath: expectedDir(providerWorktreePath),
+        },
+      ],
     });
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start"] },
+    });
+    const overlayStore = createOverlayStoreMock();
+    const gitDirectoryService = {
+      prepareLaunchpadWorkspace: vi.fn(async () => ({
+        cwd: worktreePath,
+        repositoryPath,
+        workMode: "worktree" as const,
+      })),
+      recordCodexWorktreeOwnerThread: vi.fn(async () => {}),
+    } as never;
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({}),
+      overlayStore,
+      gitDirectoryService,
+    });
+    let restartedRegistry: DesktopBackendRegistry | undefined;
 
     try {
       const response = await registry.materializeDirectoryLaunchpad({
@@ -13087,7 +13120,66 @@ script = "printf setup-output"
         path: expectedDir(requestedRepositoryPath),
         worktreePath: expectedDir(worktreePath),
       });
+
+      codexClient.setThreads([providerThread(worktreePath)]);
+      await registry.listThreads({
+        backend: "codex",
+        callerReason: "navigation-snapshot",
+        forceRefresh: true,
+      });
+      await expect(
+        overlayStore.getThreadOverlayState({
+          backend: "codex",
+          threadId: "thread-1",
+        }),
+      ).resolves.toMatchObject({
+        extraLinkedDirectories: [
+          expect.objectContaining({
+            path: expectedDir(requestedRepositoryPath),
+            worktreePath: expectedDir(worktreePath),
+          }),
+        ],
+      });
+
+      restartedRegistry = new DesktopBackendRegistry({
+        codexClient: new MockBackendClient({
+          initializeResult: { methods: ["thread/start"] },
+          threads: [providerThread(worktreePath)],
+        }),
+        grokClient: new MockBackendClient({}),
+        overlayStore,
+        gitDirectoryService,
+      });
+      await restartedRegistry.listThreads({
+        backend: "codex",
+        callerReason: "navigation-snapshot",
+        forceRefresh: true,
+      });
+      await expect(
+        overlayStore.getThreadOverlayState({
+          backend: "codex",
+          threadId: "thread-1",
+        }),
+      ).resolves.toMatchObject({
+        extraLinkedDirectories: [
+          expect.objectContaining({
+            path: expectedDir(requestedRepositoryPath),
+            worktreePath: expectedDir(worktreePath),
+          }),
+        ],
+      });
+
+      codexClient.setThreads([providerThread(movedWorktreePath)]);
+      const [movedThread] = await registry.listThreads({
+        backend: "codex",
+        callerReason: "navigation-snapshot",
+        forceRefresh: true,
+      });
+      expect(movedThread.linkedDirectories[0]?.worktreePath).toBe(
+        expectedDir(movedWorktreePath),
+      );
     } finally {
+      await restartedRegistry?.close();
       await registry.close();
       await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }

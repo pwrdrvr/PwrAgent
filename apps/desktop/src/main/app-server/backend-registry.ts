@@ -915,6 +915,29 @@ function normalizeLinkedDirectoryPathForMatch(
   return normalized ? toDirectoryId(path.resolve(normalized)) : undefined;
 }
 
+function linkedDirectoriesShareWorktreeWorkspace(
+  left: LinkedDirectorySummary,
+  right: LinkedDirectorySummary,
+): boolean {
+  const normalizedLeft = normalizeLinkedDirectoryKind(left);
+  const normalizedRight = normalizeLinkedDirectoryKind(right);
+  if (normalizedLeft.kind !== "worktree" || normalizedRight.kind !== "worktree") {
+    return false;
+  }
+
+  const leftWorktreePath = normalizeLinkedDirectoryPathForMatch(
+    normalizedLeft.worktreePath,
+  );
+  const rightWorktreePath = normalizeLinkedDirectoryPathForMatch(
+    normalizedRight.worktreePath,
+  );
+  return Boolean(
+    leftWorktreePath
+    && rightWorktreePath
+    && leftWorktreePath === rightWorktreePath,
+  );
+}
+
 function linkedDirectoryMatchesDetachArgs(
   directory: LinkedDirectorySummary,
   args: DetachThreadDirectoryToolArgs,
@@ -969,6 +992,9 @@ function hasEquivalentLinkedDirectory(
 ): boolean {
   return Boolean(
     overlay?.extraLinkedDirectories.some((candidate) => {
+      if (linkedDirectoriesShareWorktreeWorkspace(candidate, directory)) {
+        return true;
+      }
       if (candidate.id !== directory.id || candidate.kind !== directory.kind) {
         return false;
       }
@@ -1191,7 +1217,10 @@ function pendingStartedThreadWorkspaceMatches(
     pendingThread.linkedDirectories.map(linkedDirectoryIdentityKey),
   );
   return thread.linkedDirectories.some((directory) =>
-    pendingDirectoryKeys.has(linkedDirectoryIdentityKey(directory)),
+    pendingDirectoryKeys.has(linkedDirectoryIdentityKey(directory))
+    || pendingThread.linkedDirectories.some((pendingDirectory) =>
+      linkedDirectoriesShareWorktreeWorkspace(directory, pendingDirectory),
+    ),
   );
 }
 
@@ -14848,6 +14877,18 @@ export class DesktopBackendRegistry {
       directoryKey: launchpad.directoryKey,
       parentThreadId: request.parentThreadId,
     });
+    const linkedDirectory = linkedDirectories?.[0];
+    if (linkedDirectory) {
+      // Preserve the launchpad's requested repository identity durably. Codex
+      // can report the same repository through a physical path alias (for
+      // example macOS /private/var for a requested /var path), but the
+      // worktree path still proves these describe one prepared workspace.
+      await this.overlayStore.replaceWorkspaceLinkedDirectory({
+        backend: launchpad.backend,
+        threadId: startThreadResponse.threadId,
+        directory: linkedDirectory,
+      });
+    }
     pendingActionThreadId = startThreadResponse.threadId;
     // The auto-started environment action spawned before this thread existed;
     // give its detached-process record an owner now so the quit dialog can name
