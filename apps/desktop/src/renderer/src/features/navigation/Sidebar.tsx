@@ -135,6 +135,7 @@ type SidebarProps = {
   onOpenProfile?: (profile: string) => Promise<void>;
   onSelectThread: (thread: NavigationThreadSummary) => void;
   onMarkThreadsSeen?: (threads: NavigationThreadSummary[]) => Promise<void>;
+  onMarkThreadUnread?: (thread: NavigationThreadSummary) => Promise<void>;
   onArchiveThread?: (
     thread: NavigationThreadSummary,
     options?: ArchiveThreadOptions,
@@ -888,6 +889,11 @@ export function Sidebar(props: SidebarProps) {
     void props.onSetThreadPin?.(thread, !thread.pinnedRank);
   };
 
+  const markUnreadFromContextMenu = (thread: NavigationThreadSummary): void => {
+    setContextMenu(undefined);
+    void props.onMarkThreadUnread?.(thread);
+  };
+
   const openDirectoryContextMenu = (
     directory: NavigationDirectorySummary,
     position: ThreadContextMenuPosition,
@@ -1106,6 +1112,13 @@ export function Sidebar(props: SidebarProps) {
   const contextMenuCanArchive = contextMenu && !contextMenuIsBulk
     ? canArchiveThread(contextMenu.thread)
     : false;
+  const contextMenuCanMarkUnread = Boolean(
+    contextMenu &&
+      !contextMenuIsBulk &&
+      !contextMenu.thread.inbox.inInbox &&
+      contextMenu.thread.updatedAt !== undefined &&
+      props.onMarkThreadUnread,
+  );
   const contextMenuChildThreadCount = contextMenu && !contextMenuIsBulk
     ? props.threads.filter(
         (thread) =>
@@ -1189,6 +1202,7 @@ export function Sidebar(props: SidebarProps) {
     contextMenuCanUnlinkSubthread ||
     contextMenuShowMoveItems ||
     contextMenuCanRename ||
+    contextMenuCanMarkUnread ||
     contextMenuCanArchive;
   const contextMenuHasTopActions =
     contextMenuHasPinAction ||
@@ -1843,6 +1857,17 @@ export function Sidebar(props: SidebarProps) {
                       }
                     >
                       Rename Thread
+                    </button>
+                  ) : null}
+                  {contextMenuCanMarkUnread ? (
+                    <button
+                      role="menuitem"
+                      type="button"
+                      onClick={() =>
+                        markUnreadFromContextMenu(contextMenu.thread)
+                      }
+                    >
+                      Mark Unread
                     </button>
                   ) : null}
                   {contextMenuCanArchive && contextMenuHasChildThreads ? (

@@ -1314,6 +1314,65 @@ function markThreadSeenInSnapshot(
   return markThreadsSeenInSnapshot(snapshot, [params]);
 }
 
+function markThreadUnreadInSnapshot(
+  snapshot: NavigationSnapshot | undefined,
+  params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    seenUpdatedAt: number;
+  },
+): NavigationSnapshot | undefined {
+  if (!snapshot) {
+    return snapshot;
+  }
+
+  const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+  let changed = false;
+  const threads = snapshot.threads.map((thread) => {
+    if (buildThreadIdentityKey(thread.source, thread.id) !== threadKey) {
+      return thread;
+    }
+
+    changed = true;
+    return {
+      ...thread,
+      inbox: {
+        ...thread.inbox,
+        inInbox: true,
+        reason: "updated-since-seen" as const,
+        lastSeenUpdatedAt: params.seenUpdatedAt,
+      },
+    };
+  });
+
+  if (!changed) {
+    return snapshot;
+  }
+
+  const threadInboxByKey = new Map(
+    threads.map((thread) => [
+      buildThreadIdentityKey(thread.source, thread.id),
+      thread.inbox.inInbox,
+    ]),
+  );
+
+  return {
+    ...snapshot,
+    directories: snapshot.directories.map((directory) => ({
+      ...directory,
+      needsAttentionCount: directory.threadKeys.reduce(
+        (count, candidateKey) =>
+          count + (threadInboxByKey.get(candidateKey) ? 1 : 0),
+        0,
+      ),
+    })),
+    inboxThreadKeys: snapshot.inboxThreadKeys.includes(threadKey)
+      ? snapshot.inboxThreadKeys
+      : [threadKey, ...snapshot.inboxThreadKeys],
+    threads,
+  };
+}
+
 function removeThreadFromSnapshot(
   snapshot: NavigationSnapshot | undefined,
   params: {
@@ -2433,6 +2492,7 @@ export function useThreadNavigation(
   setBrowseMode: (browseMode: BrowseMode) => void;
   selectThread: (thread: NavigationThreadSummary) => void;
   markThreadsSeen: (threads: NavigationThreadSummary[]) => Promise<void>;
+  markThreadUnread: (thread: NavigationThreadSummary) => Promise<void>;
   showThread: (params: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -4103,6 +4163,45 @@ export function useThreadNavigation(
       setPendingSeenThreadKey((current) =>
         current && markedThreadKeys.has(current) ? undefined : current,
       );
+    },
+    [markThreadSeen],
+  );
+
+  const markThreadUnread = useCallback(
+    async (thread: NavigationThreadSummary): Promise<void> => {
+      if (!markThreadSeen || thread.updatedAt === undefined) {
+        return;
+      }
+
+      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+      const seenUpdatedAt = Math.max(0, thread.updatedAt - 1);
+      await markThreadSeen({
+        backend: thread.source,
+        threadId: thread.id,
+        seenUpdatedAt,
+      });
+      if (!mountedRef.current) {
+        return;
+      }
+
+      manuallySelectedThreadKeysRef.current.delete(threadKey);
+      submittedSeenUpdatedAtByThreadKeyRef.current.delete(threadKey);
+      setPendingSeenThreadKey((current) =>
+        current === threadKey ? undefined : current,
+      );
+      setRetainedUnreadThread((current) =>
+        current && buildThreadIdentityKey(current.source, current.id) === threadKey
+          ? undefined
+          : current,
+      );
+      setState((current) => ({
+        ...current,
+        response: markThreadUnreadInSnapshot(current.response, {
+          backend: thread.source,
+          threadId: thread.id,
+          seenUpdatedAt,
+        }),
+      }));
     },
     [markThreadSeen],
   );
@@ -6358,6 +6457,7 @@ export function useThreadNavigation(
     setBrowseMode: updateBrowseMode,
     selectThread,
     markThreadsSeen,
+    markThreadUnread,
     showThread,
     archiveThread,
     archiveWorktree,
