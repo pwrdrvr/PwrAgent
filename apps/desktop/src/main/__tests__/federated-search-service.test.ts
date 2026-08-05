@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AppServerThreadSummary } from "@pwragent/shared";
+import type {
+  AppServerListThreadsResponse,
+  AppServerThreadSummary,
+} from "@pwragent/shared";
 import { FederatedSearchService } from "../federation/federated-search-service";
 
 function thread(
@@ -149,7 +152,9 @@ describe("FederatedSearchService", () => {
           backend: {
             // Never resolves — simulates a peer that accepted the RPC
             // but will not answer within the interactive window.
-            listThreads: vi.fn(() => new Promise(() => {})),
+            listThreads: vi.fn(
+              () => new Promise<AppServerListThreadsResponse>(() => {}),
+            ),
           },
         },
       ],
