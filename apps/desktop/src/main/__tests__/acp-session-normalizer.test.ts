@@ -35,8 +35,23 @@ describe("AcpSessionReplayNormalizer", () => {
           id: "final-1",
           role: "assistant",
           phase: "final",
-          text: "First response",
+          text: "First response segment",
           createdAt: 1200,
+        },
+        {
+          type: "activity",
+          id: "tool-after-final-1",
+          summary: "Tool after assistant delivery",
+          details: [],
+          createdAt: 1300,
+        },
+        {
+          type: "message",
+          id: "final-1b",
+          role: "assistant",
+          phase: "final",
+          text: "Second response segment",
+          createdAt: 1400,
         },
         {
           type: "message",
@@ -80,25 +95,29 @@ describe("AcpSessionReplayNormalizer", () => {
       id: "inferred:user-1",
       status: "completed",
       startedAt: 1000,
-      completedAt: 1200,
-      durationMs: 200,
+      completedAt: 1400,
+      durationMs: 400,
     });
     expect(replay.entries[2]?.turn).toEqual(replay.entries[1]?.turn);
     expect(replay.entries[3]?.turn).toEqual(replay.entries[1]?.turn);
-    expect(replay.entries[4]?.turn).toEqual({
+    expect(replay.entries[4]?.turn).toEqual(replay.entries[1]?.turn);
+    expect(replay.entries[5]?.turn).toEqual(replay.entries[1]?.turn);
+    expect(replay.entries[6]?.turn).toEqual({
       id: "inferred:user-2",
       status: "interrupted",
       startedAt: 2000,
-      completedAt: 3000,
-      durationMs: 1000,
-    });
-    expect(replay.entries[5]?.turn).toEqual(replay.entries[4]?.turn);
-    expect(replay.entries[6]?.turn).toEqual({
-      id: "inferred:user-3",
-      status: "in_progress",
-      startedAt: 3000,
+      completedAt: 2100,
+      durationMs: 100,
     });
     expect(replay.entries[7]?.turn).toEqual(replay.entries[6]?.turn);
+    expect(replay.entries[8]?.turn).toEqual({
+      id: "inferred:user-3",
+      status: "interrupted",
+      startedAt: 3000,
+      completedAt: 3100,
+      durationMs: 100,
+    });
+    expect(replay.entries[9]?.turn).toEqual(replay.entries[8]?.turn);
   });
 
   it("streams assistant message chunks into one replay message", () => {

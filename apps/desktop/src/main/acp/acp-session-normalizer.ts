@@ -7,6 +7,7 @@ import type {
   AppServerThreadPlanEntry,
   AppServerThreadReplay,
   AppServerThreadStatus,
+  AppServerThreadTurnStatus,
   AppServerTranscriptPhase,
 } from "@pwragent/shared";
 import {
@@ -64,13 +65,16 @@ export function formatAcpTransientThoughtMessage(
 type InferredAcpTurn = {
   id: string;
   indexes: number[];
+  lastEntryAt?: number;
+  sawFinalResponse: boolean;
   startedAt?: number;
 };
 
 /**
  * ACP session/load history has ordered transcript phases but no turn IDs.
- * Fill only missing metadata: a user message opens a window, a final assistant
- * response completes it, and a later user message interrupts any open window.
+ * Fill only missing metadata: a user message opens a window, while lifecycle
+ * metadata, a later user message, or an idle replay boundary closes it.
+ * Assistant delivery alone is not a lifecycle boundary.
  */
 export function inferAcpReplayTurns(
   replay: AppServerThreadReplay,
@@ -81,7 +85,7 @@ export function inferAcpReplayTurns(
   let active: InferredAcpTurn | undefined;
 
   const applyActiveTurn = (
-    status: "completed" | "interrupted" | "in_progress",
+    status: AppServerThreadTurnStatus,
     completedAt?: number,
   ): void => {
     if (!active) {
@@ -109,11 +113,20 @@ export function inferAcpReplayTurns(
     }
   };
   const settleActive = (
-    status: "completed" | "interrupted",
+    status: Exclude<AppServerThreadTurnStatus, "in_progress">,
     completedAt?: number,
   ): void => {
     applyActiveTurn(status, completedAt);
     active = undefined;
+  };
+  const settleAtBoundary = (): void => {
+    if (!active) {
+      return;
+    }
+    settleActive(
+      active.sawFinalResponse ? "completed" : "interrupted",
+      active.lastEntryAt,
+    );
   };
 
   for (let index = 0; index < entries.length; index += 1) {
@@ -128,12 +141,15 @@ export function inferAcpReplayTurns(
         if (!entry.turn) {
           active.indexes.push(index);
         }
+        active.lastEntryAt = entry.createdAt ?? active.lastEntryAt;
         continue;
       }
-      settleActive("interrupted", entry.createdAt);
+      settleAtBoundary();
       active = {
         id: turnId,
         indexes: entry.turn ? [] : [index],
+        lastEntryAt: entry.createdAt,
+        sawFinalResponse: false,
         startedAt: entry.turn?.startedAt ?? entry.createdAt,
       };
       continue;
@@ -142,26 +158,44 @@ export function inferAcpReplayTurns(
       continue;
     }
     if (entry.turn && entry.turn.id !== active.id) {
-      settleActive("interrupted", entry.createdAt);
+      settleAtBoundary();
       continue;
     }
     if (!entry.turn) {
       active.indexes.push(index);
+    }
+    active.lastEntryAt = entry.createdAt ?? active.lastEntryAt;
+    if (isSettledTurnStatus(entry.turn?.status)) {
+      settleActive(
+        entry.turn.status,
+        entry.turn.completedAt ?? entry.createdAt,
+      );
+      continue;
     }
     if (
       entry.type === "message"
       && entry.role === "assistant"
       && entry.phase === "final"
     ) {
-      settleActive("completed", entry.createdAt);
+      active.sawFinalResponse = true;
     }
   }
 
-  applyActiveTurn("in_progress");
+  if (replay.threadStatus === "idle") {
+    settleAtBoundary();
+  } else {
+    applyActiveTurn("in_progress");
+  }
   return {
     ...replay,
     entries,
   };
+}
+
+function isSettledTurnStatus(
+  status: AppServerThreadTurnStatus | undefined,
+): status is Exclude<AppServerThreadTurnStatus, "in_progress"> {
+  return Boolean(status && status !== "in_progress");
 }
 
 export class AcpSessionReplayNormalizer {
