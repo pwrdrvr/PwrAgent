@@ -170,6 +170,7 @@ import {
   APP_SERVER_GET_PR_AUTO_DISPATCH_BUDGET_STATUS_CHANNEL,
   APP_SERVER_RESUME_PR_AUTO_DISPATCH_BUDGET_CHANNEL,
   PR_AUTO_DISPATCH_BUDGET_CHANGED_EVENT_CHANNEL,
+  GITHUB_PR_SAML_ENFORCEMENT_EVENT_CHANNEL,
   APP_SERVER_LIST_THREADS_CHANNEL,
   THREAD_SEARCH_CHANNEL,
   APP_SERVER_ARCHIVE_THREAD_CHANNEL,
@@ -222,6 +223,7 @@ import {
   NAVIGATION_UPDATE_SUBTHREAD_ORDER_CHANNEL,
   NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL,
 } from "../../shared/ipc";
+import { githubPrAccessTargetKey } from "../../shared/github-pr-access";
 import { subscribersForChannel } from "../window-channels";
 import { isFederationWindowWebContents } from "../window";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
@@ -241,6 +243,7 @@ import type { BranchRef } from "../pr-status/github-graphql-client";
 import {
   parseGitHubRemote,
   resolveGitHubRepoForDirectory,
+  resolveGitHubReposForDirectory,
 } from "../pr-status/git-remote";
 import { PrPollingScheduler } from "../pr-status/pr-polling-scheduler";
 import type { PrPollTarget } from "../pr-status/pr-polling-scheduler";
@@ -1079,6 +1082,7 @@ class DesktopAppServerService {
   private prLookupRegistryLoaded = false;
   private prLookupRegistryLoadPromise: Promise<void> | undefined;
   private prGraphqlClient: GithubGraphqlPrClient | undefined;
+  private readonly githubSamlBlockedRepositories = new Set<string>();
   private prPollingScheduler: PrPollingScheduler | undefined;
   private backgroundPrPollingEnabled = false;
   private prAutoDispatchAllowed = false;
@@ -3333,7 +3337,7 @@ class DesktopAppServerService {
       });
     }
     // Terminal-state short-circuit: once every cached PR for a lookup is
-    // merged or closed, we do not need to re-query gh for the same
+    // merged or closed, we do not need to re-query GitHub for the same
     // branch/directory lookup.
     // A different lookup can mean the thread moved to a new branch after
     // merging an older PR, so stale terminal chips must not block it.
@@ -4254,7 +4258,36 @@ class DesktopAppServerService {
 
   private getPrGraphqlClient(): GithubGraphqlPrClient {
     if (!this.prGraphqlClient) {
-      this.prGraphqlClient = new GithubGraphqlPrClient();
+      this.prGraphqlClient = new GithubGraphqlPrClient({
+        onRepositoryAccess: (event) => {
+          const target = {
+            kind: "github-repository" as const,
+            owner: event.owner,
+            repo: event.repo,
+          };
+          const key = githubPrAccessTargetKey(target);
+          if (event.status === "available") {
+            this.githubSamlBlockedRepositories.delete(key);
+            return;
+          }
+          if (this.githubSamlBlockedRepositories.has(key)) {
+            return;
+          }
+          this.githubSamlBlockedRepositories.add(key);
+          const notice = {
+            branch: event.branch,
+            occurredAt: Date.now(),
+            target,
+          };
+          for (const webContents of subscribersForChannel(
+            GITHUB_PR_SAML_ENFORCEMENT_EVENT_CHANNEL,
+          )) {
+            if (!webContents.isDestroyed()) {
+              webContents.send(GITHUB_PR_SAML_ENFORCEMENT_EVENT_CHANNEL, notice);
+            }
+          }
+        },
+      });
     }
     return this.prGraphqlClient;
   }
@@ -4563,8 +4596,8 @@ class DesktopAppServerService {
     }
 
     // Answer every due branch lookup in one batched in-process request, then
-    // let the normal refresh path consume those answers. Best-effort: anything
-    // not primed simply falls back to the `gh` subprocess.
+    // let the normal refresh path consume those answers. Anything not primed
+    // gets a fresh in-process request through the normal refresh path.
     void this.primeDiscoveryBranchLookups(dueContexts)
       .catch((error) => {
         appServerLog.debug("pr discovery prefetch failed", {
@@ -4580,14 +4613,17 @@ class DesktopAppServerService {
    * Resolve each due (directory, branch) to a GitHub repo and look them all up
    * in one batched GraphQL request, priming the fetcher with the results.
    *
-   * This is what keeps discovery from spawning one `gh pr list` per branch.
-   * Only branches GitHub actually answered for are primed — a missing answer
-   * falls through to `gh` rather than being recorded as "no PRs".
+   * This keeps discovery to one batched request instead of one request per
+   * branch. Only directory/branch pairs whose every configured GitHub repo
+   * answered are primed; a missing answer is not recorded as "no PRs".
    */
   private async primeDiscoveryBranchLookups(
     contexts: ThreadPrRefreshContext[],
   ): Promise<void> {
-    const wanted = new Map<string, { cwd: string; branch: string; ref: BranchRef }>();
+    const wanted = new Map<
+      string,
+      { cwd: string; branch: string; refs: BranchRef[] }
+    >();
     for (const context of contexts) {
       const branch = context.branch.trim();
       // "HEAD" contexts are not branch lookups, and the detection path skips
@@ -4600,14 +4636,18 @@ class DesktopAppServerService {
         if (wanted.has(dedupeKey)) {
           continue;
         }
-        const repo = await resolveGitHubRepoForDirectory(cwd);
-        if (!repo || repo.host !== DEFAULT_PULL_REQUEST_PROVIDER) {
+        const repos = await resolveGitHubReposForDirectory(cwd);
+        if (repos.length === 0) {
           continue;
         }
         wanted.set(dedupeKey, {
           cwd,
           branch,
-          ref: { owner: repo.owner, repo: repo.repo, branch },
+          refs: repos.map((repo) => ({
+            owner: repo.owner,
+            repo: repo.repo,
+            branch,
+          })),
         });
       }
     }
@@ -4617,15 +4657,21 @@ class DesktopAppServerService {
     }
 
     const entries = [...wanted.values()];
+    const refs = entries.flatMap((entry) => entry.refs);
     const byRefKey = await this.getPrGraphqlClient().fetchPullRequestsForBranches(
-      entries.map((entry) => entry.ref),
+      refs,
     );
     const primed = entries
-      .map((entry) => ({
-        cwd: entry.cwd,
-        branch: entry.branch,
-        prs: byRefKey.get(branchRefKey(entry.ref)),
-      }))
+      .map((entry) => {
+        const answers = entry.refs.map((ref) => byRefKey.get(branchRefKey(ref)));
+        return {
+          cwd: entry.cwd,
+          branch: entry.branch,
+          prs: answers.some((answer) => answer === undefined)
+            ? undefined
+            : dedupePrsByStatusKey(answers.flatMap((answer) => answer ?? [])),
+        };
+      })
       .filter(
         (entry): entry is { cwd: string; branch: string; prs: PrSummary[] } =>
           entry.prs !== undefined,
@@ -4635,7 +4681,7 @@ class DesktopAppServerService {
     }
     this.getPrFetcher().primeBranchLookup(primed);
     appServerLog.debug("pr discovery primed branch lookups", {
-      requested: entries.length,
+      requested: refs.length,
       primed: primed.length,
     });
   }
@@ -4988,6 +5034,7 @@ class DesktopAppServerService {
     const fetcher = this.getPrFetcher();
     if (request.recheck) {
       fetcher.invalidateGhCaches();
+      this.getPrGraphqlClient().invalidateToken();
     }
     // The fetcher logs once per fresh probe (cache + in-flight dedup
     // keep StrictMode mount duplicates silent). The IPC layer just
@@ -5739,6 +5786,7 @@ class DesktopAppServerService {
     this.prPollingSettingsUnsubscribe?.();
     this.prPollingSettingsUnsubscribe = undefined;
     this.prGraphqlClient = undefined;
+    this.githubSamlBlockedRepositories.clear();
     this.prPollingFocus.clear();
     this.prPollBackendByKey.clear();
     this.prStatusTransitionListeners.clear();
@@ -5783,7 +5831,9 @@ class DesktopAppServerService {
 
   private getPrFetcher(): GithubPrFetcher {
     if (!this.prFetcher) {
-      this.prFetcher = new GithubPrFetcher();
+      this.prFetcher = new GithubPrFetcher({
+        graphqlClient: this.getPrGraphqlClient(),
+      });
     }
     return this.prFetcher;
   }

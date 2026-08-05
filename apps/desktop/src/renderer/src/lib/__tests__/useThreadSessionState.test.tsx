@@ -70,12 +70,13 @@ function readThreadResponse(params: {
   previousCursor?: string;
   supportsPagination?: boolean;
   threadId?: string;
+  threadStatus?: AppServerReadThreadResponse["threadStatus"];
 }): AppServerReadThreadResponse {
   return {
     backend: "codex",
     fetchedAt: params.fetchedAt ?? Date.now(),
     threadId: params.threadId ?? "thread-1",
-    threadStatus: "idle",
+    threadStatus: params.threadStatus ?? "idle",
     replay: {
       entries: params.entries,
       messages: params.entries
@@ -543,6 +544,90 @@ describe("useThreadSessionState", () => {
     expect(result.current.activeTurnId).toBe("turn-2");
     expect(result.current.threadBusy).toBe(true);
     expect(result.current.pendingStatusText).toBe("Thinking");
+  });
+
+  it("adopts the in-progress turn from a mid-turn hydration snapshot", async () => {
+    // A viewer that opens a thread mid-turn (a fresh window, or a federation
+    // remote viewer) never saw turn/started. The hydrated snapshot is the only
+    // signal, and without adoption the transcript collapses live commentary.
+    const liveTurn = {
+      id: "turn-live",
+      status: "in_progress" as const,
+      startedAt: 5_000,
+    };
+    const response = readThreadResponse({
+      entries: [
+        {
+          type: "message",
+          id: "c1",
+          role: "assistant",
+          phase: "commentary",
+          text: "Working on it.",
+          turn: liveTurn,
+        },
+        {
+          type: "activity",
+          id: "tool-1",
+          summary: "Used 2 tools",
+          details: [],
+          turn: liveTurn,
+        },
+      ],
+      hasPreviousPage: false,
+      threadStatus: "active",
+    });
+    const desktopApi: DesktopApi = {
+      onAgentEvent: () => () => undefined,
+      readThread: vi.fn(async () => response),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitForThreadHydration(result);
+    expect(result.current.activeTurnId).toBe("turn-live");
+    expect(result.current.activeTurnStartedAt).toBe(5_000);
+  });
+
+  it("does not adopt a stale in-progress turn from an idle hydration snapshot", async () => {
+    const staleTurn = {
+      id: "turn-stale",
+      status: "in_progress" as const,
+      startedAt: 5_000,
+    };
+    const response = readThreadResponse({
+      entries: [
+        {
+          type: "message",
+          id: "c1",
+          role: "assistant",
+          phase: "commentary",
+          text: "Interrupted mid-flight.",
+          turn: staleTurn,
+        },
+      ],
+      hasPreviousPage: false,
+      threadStatus: "idle",
+    });
+    const desktopApi: DesktopApi = {
+      onAgentEvent: () => () => undefined,
+      readThread: vi.fn(async () => response),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitForThreadHydration(result);
+    expect(result.current.activeTurnId).toBeUndefined();
+    expect(result.current.activeTurnStartedAt).toBeUndefined();
   });
 
   it("keeps the optimistic user message ahead of the completed assistant reply", async () => {

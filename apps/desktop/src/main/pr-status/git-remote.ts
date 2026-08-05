@@ -4,17 +4,16 @@ import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 
 const execFileAsync = promisify(execFile);
 const GIT_REMOTE_TIMEOUT_MS = 2_000;
-/** Remotes effectively never change for a checkout; re-probing is wasted work. */
+/** Remotes change infrequently; re-probing on every PR refresh is wasted work. */
 const REMOTE_CACHE_TTL_MS = 5 * 60_000;
 
 /**
  * Resolving a working directory to its GitHub `owner/repo`.
  *
- * The `gh` CLI never needs this — it infers the repo from the cwd's remote
- * itself. The in-process GraphQL client does need it, because
- * `repository(owner:, name:)` is how you address a repo in the API. This is the
- * one capability the subprocess path got for free that the batched path has to
- * do explicitly.
+ * The `gh` CLI can infer the repo from the cwd's remotes, while the in-process
+ * GraphQL client needs an explicit owner/repo for `repository(owner:, name:)`.
+ * PwrAgent still reads the configured remotes before invoking `gh` so a local
+ * or non-GitHub checkout cannot accidentally start a GitHub lookup.
  */
 
 export type GitHubRepoRef = {
@@ -29,6 +28,7 @@ export type GitHubRepoRef = {
  *
  * Handles the shapes git actually produces:
  *   git@github.com:owner/repo.git
+ *   github-work:owner/repo.git
  *   ssh://git@github.com/owner/repo.git
  *   https://github.com/owner/repo(.git)
  *   git://github.com/owner/repo.git
@@ -40,8 +40,11 @@ export function parseGitHubRemote(remoteUrl: string): GitHubRepoRef | undefined 
     return undefined;
   }
 
-  // scp-like syntax (`git@host:owner/repo.git`) is not a URL, so handle it first.
-  const scpLike = url.match(/^[^@/]+@([^:]+):(.+)$/);
+  // scp-like syntax (`[user@]host:owner/repo.git`) is not a URL, so handle it
+  // first. The user is optional, especially when `host` is an SSH config alias.
+  const scpLike = url.includes("://")
+    ? undefined
+    : url.match(/^(?:[^@/:]+@)?([^/:]+):(.+\/.+)$/);
   const parsed = scpLike
     ? { host: scpLike[1]!, path: scpLike[2]! }
     : parseStandardUrl(url);
@@ -79,8 +82,17 @@ function parseStandardUrl(url: string): { host: string; path: string } | undefin
   }
 }
 
+export type GitRemote = {
+  name: string;
+  url: string;
+};
+
+type ParsedGitRemote = GitRemote & {
+  repo: GitHubRepoRef | undefined;
+};
+
 type RemoteCacheEntry = {
-  value: GitHubRepoRef | undefined;
+  value: ParsedGitRemote[];
   fetchedAt: number;
 };
 
@@ -91,56 +103,188 @@ export function clearGitHubRemoteCache(): void {
 }
 
 export type ResolveGitHubRepoOptions = {
-  /** Override the git runner — tests inject canned remote URLs. */
-  readRemoteUrl?: (cwd: string) => Promise<string | undefined>;
+  /** Override the git runner — tests inject canned configured remotes. */
+  readRemotes?: (cwd: string) => Promise<GitRemote[]>;
+  /** Override OpenSSH hostname expansion — tests inject SSH alias results. */
+  resolveSshHostname?: (host: string) => Promise<string | undefined>;
   now?: () => number;
 };
 
 /**
- * Resolve a working directory to its `origin` GitHub repo, cached.
+ * Resolve a working directory to its `origin` repo, cached.
  *
  * Returns `undefined` for a non-git directory, a missing `origin`, or a remote
- * that isn't parseable — every caller treats that as "fall back to the `gh`
- * subprocess path", so a failure here is a slow path, never a wrong answer.
- * Negative results are cached too, so a non-GitHub checkout doesn't re-shell
- * on every sweep.
+ * that isn't parseable. Callers that require GitHub must still check `host`.
+ * Negative results are cached too, so a local checkout doesn't re-shell on
+ * every sweep.
  */
 export async function resolveGitHubRepoForDirectory(
   cwd: string,
   options: ResolveGitHubRepoOptions = {},
 ): Promise<GitHubRepoRef | undefined> {
+  const remotes = await readParsedGitRemotes(cwd, options);
+  return remotes.find((remote) => remote.name === "origin")?.repo;
+}
+
+/**
+ * Return whether the checkout has any configured GitHub remote.
+ *
+ * PR discovery uses this as an eligibility gate before invoking `gh`. Looking
+ * at every fetch URL (rather than only `origin`) preserves repositories whose
+ * GitHub remote is named `upstream` or another custom name. SSH host aliases
+ * are expanded through the local OpenSSH configuration without connecting. A
+ * non-git path, a local repository with no remotes, and a repository whose
+ * remotes all point elsewhere are authoritative negative answers until the
+ * short cache expires.
+ */
+export async function hasGitHubRemoteForDirectory(
+  cwd: string,
+  options: ResolveGitHubRepoOptions = {},
+): Promise<boolean> {
+  return (await resolveGitHubReposForDirectory(cwd, options)).length > 0;
+}
+
+/**
+ * Resolve every distinct GitHub repository in the checkout's configured
+ * remotes. Branch PR lookup queries all of them because a fork checkout may
+ * have `origin` pointing at the fork while the PR belongs to `upstream`.
+ */
+export async function resolveGitHubReposForDirectory(
+  cwd: string,
+  options: ResolveGitHubRepoOptions = {},
+): Promise<GitHubRepoRef[]> {
+  const remotes = await readParsedGitRemotes(cwd, options);
+  const repos = new Map<string, GitHubRepoRef>();
+  for (const remote of remotes) {
+    if (remote.repo?.host !== "github.com") {
+      continue;
+    }
+    const key = `${remote.repo.owner.toLowerCase()}/${remote.repo.repo.toLowerCase()}`;
+    if (!repos.has(key)) {
+      repos.set(key, remote.repo);
+    }
+  }
+  return [...repos.values()];
+}
+
+async function readParsedGitRemotes(
+  cwd: string,
+  options: ResolveGitHubRepoOptions,
+): Promise<ParsedGitRemote[]> {
   const now = options.now ?? (() => Date.now());
   const cached = remoteCache.get(cwd);
   if (cached && now() - cached.fetchedAt < REMOTE_CACHE_TTL_MS) {
     return cached.value;
   }
 
-  const readRemoteUrl = options.readRemoteUrl ?? defaultReadRemoteUrl;
-  let value: GitHubRepoRef | undefined;
+  const readRemotes = options.readRemotes ?? defaultReadRemotes;
+  const resolveSshHostname =
+    options.resolveSshHostname ?? defaultResolveSshHostname;
+  let value: ParsedGitRemote[];
   try {
-    const remoteUrl = await readRemoteUrl(cwd);
-    value = remoteUrl ? parseGitHubRemote(remoteUrl) : undefined;
+    value = await Promise.all(
+      (await readRemotes(cwd)).map(async (remote) => {
+        const repo = parseGitHubRemote(remote.url);
+        const sshHost = readSshHost(remote.url);
+        const resolvedHost = sshHost
+          ? await resolveSshHostname(sshHost)
+          : undefined;
+        return {
+          ...remote,
+          repo: repo && resolvedHost
+            ? { ...repo, host: resolvedHost.toLowerCase() }
+            : repo,
+        };
+      }),
+    );
   } catch {
-    value = undefined;
+    value = [];
   }
 
   remoteCache.set(cwd, { value, fetchedAt: now() });
   return value;
 }
 
-async function defaultReadRemoteUrl(cwd: string): Promise<string | undefined> {
+async function defaultReadRemotes(cwd: string): Promise<GitRemote[]> {
+  const childEnv = buildPwrAgentChildProcessEnv(process.env);
+  const { stdout } = await execFileAsync("git", ["remote"], {
+    cwd,
+    env: childEnv,
+    maxBuffer: 64 * 1024,
+    timeout: GIT_REMOTE_TIMEOUT_MS,
+  });
+  const names = uniqueNonEmptyLines(stdout);
+  const entries = await Promise.all(
+    names.map(async (name): Promise<GitRemote[]> => {
+      try {
+        const result = await execFileAsync(
+          "git",
+          ["remote", "get-url", "--all", name],
+          {
+            cwd,
+            env: childEnv,
+            maxBuffer: 64 * 1024,
+            timeout: GIT_REMOTE_TIMEOUT_MS,
+          },
+        );
+        return uniqueNonEmptyLines(result.stdout).map((url) => ({ name, url }));
+      } catch {
+        return [];
+      }
+    }),
+  );
+  return entries.flat();
+}
+
+function uniqueNonEmptyLines(value: string): string[] {
+  return [
+    ...new Set(
+      value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean),
+    ),
+  ];
+}
+
+function readSshHost(remoteUrl: string): string | undefined {
+  const url = remoteUrl.trim();
+  if (!url) {
+    return undefined;
+  }
+  if (!url.includes("://")) {
+    return url.match(/^(?:[^@/:]+@)?([^/:]+):(.+\/.+)$/)?.[1];
+  }
   try {
+    const parsed = new URL(url);
+    return ["ssh:", "git+ssh:", "ssh+git:"].includes(parsed.protocol)
+      ? parsed.hostname || undefined
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function defaultResolveSshHostname(
+  host: string,
+): Promise<string | undefined> {
+  try {
+    // `ssh -G` evaluates and prints the effective OpenSSH configuration, then
+    // exits without connecting. Disabling hostname canonicalization prevents a
+    // DNS lookup while still expanding `Host alias` / `HostName github.com`.
     const { stdout } = await execFileAsync(
-      "git",
-      ["remote", "get-url", "origin"],
+      "ssh",
+      ["-G", "-o", "CanonicalizeHostname=no", host],
       {
-        cwd,
         env: buildPwrAgentChildProcessEnv(process.env),
-        maxBuffer: 64 * 1024,
+        maxBuffer: 256 * 1024,
         timeout: GIT_REMOTE_TIMEOUT_MS,
       },
     );
-    return stdout.trim() || undefined;
+    for (const line of stdout.split(/\r?\n/)) {
+      const match = line.match(/^hostname\s+(.+)$/i);
+      if (match?.[1]) {
+        return match[1].trim() || undefined;
+      }
+    }
+    return undefined;
   } catch {
     return undefined;
   }

@@ -23,6 +23,8 @@ export const APP_SERVER_RESUME_PR_AUTO_DISPATCH_BUDGET_CHANNEL =
   "app-server:resume-pr-auto-dispatch-budget";
 export const PR_AUTO_DISPATCH_BUDGET_CHANGED_EVENT_CHANNEL =
   "app-server:pr-auto-dispatch-budget-changed";
+export const GITHUB_PR_SAML_ENFORCEMENT_EVENT_CHANNEL =
+  "app-server:github-pr-saml-enforcement";
 export const APP_SERVER_ARCHIVE_THREAD_CHANNEL = "app-server:archive-thread";
 export const APP_SERVER_RESTORE_THREAD_CHANNEL = "app-server:restore-thread";
 export const APP_SERVER_ARCHIVE_WORKTREE_CHANNEL = "app-server:archive-worktree";

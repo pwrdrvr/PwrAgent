@@ -9,8 +9,12 @@ import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { getMainLogger } from "../log";
 import { discoverGhCommands } from "../settings/gh-discovery";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
-import { parseGhPrPayload } from "./pr-derivations";
-import type { GhPrPayload } from "./pr-derivations";
+import { resolveGitHubReposForDirectory } from "./git-remote";
+import {
+  branchRefKey,
+  GithubGraphqlPrClient,
+  parsePrRefFromUrl,
+} from "./github-graphql-client";
 
 // The PrSummary derivations are shared with the batched GraphQL poller and
 // live in `pr-derivations.ts`. Re-exported here because this module was
@@ -28,27 +32,6 @@ export type { GhCheckRunPayload, GhPrPayload } from "./pr-derivations";
 const execFileAsync = promisify(execFile);
 const fetcherLog = getMainLogger("pwragent:pr-fetcher");
 
-/** Fields requested from `gh pr list --json …`. Pinned by characterization
- *  against `gh 2.88.1` against pwrdrvr/PwrAgent on 2026-05-04. */
-const GH_FIELDS = [
-  "number",
-  "title",
-  "url",
-  "state",
-  "isDraft",
-  "mergeable",
-  "mergeStateStatus",
-  "mergedAt",
-  "commits",
-  "baseRefName",
-  "headRefName",
-  "headRepository",
-  "headRepositoryOwner",
-  "statusCheckRollup",
-].join(",");
-
-/** Default per-call subprocess timeout. */
-const DEFAULT_TIMEOUT_MS = 5_000;
 /** Default re-probe cadence for `gh --version`. */
 const DEFAULT_GH_AVAILABLE_CACHE_TTL_MS = 60_000;
 /**
@@ -85,12 +68,13 @@ function primedBranchLookupKey(cwd: string, branch: string): string {
 export type GhAuthStatus = GhStatus;
 
 export type GithubPrFetcherOptions = {
-  timeoutMs?: number;
-  /** Override the subprocess runner — used by tests to inject canned output. */
-  exec?: (
-    cwd: string,
-    args: string[],
-  ) => Promise<{ stdout: string; stderr: string }>;
+  /** Share the app's in-process GraphQL client; tests inject a stub. */
+  graphqlClient?: Pick<
+    GithubGraphqlPrClient,
+    "fetchPullRequests" | "fetchPullRequestsForBranches"
+  >;
+  /** Override configured-remote resolution — used by tests. */
+  resolveGitHubRepos?: typeof resolveGitHubReposForDirectory;
   /** Override `gh --version` probe — used by tests. */
   probeGhAvailable?: () => Promise<boolean>;
   /** Override gh discovery — used by tests. */
@@ -112,8 +96,12 @@ export type GithubPrFetcherOptions = {
 };
 
 export class GithubPrFetcher {
-  private readonly timeoutMs: number;
-  private readonly exec: NonNullable<GithubPrFetcherOptions["exec"]>;
+  private readonly graphqlClient: NonNullable<
+    GithubPrFetcherOptions["graphqlClient"]
+  >;
+  private readonly resolveGitHubRepos: NonNullable<
+    GithubPrFetcherOptions["resolveGitHubRepos"]
+  >;
   private readonly probeGhAvailable: NonNullable<
     GithubPrFetcherOptions["probeGhAvailable"]
   > | undefined;
@@ -146,7 +134,9 @@ export class GithubPrFetcher {
   >();
 
   constructor(options: GithubPrFetcherOptions = {}) {
-    this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.graphqlClient = options.graphqlClient ?? new GithubGraphqlPrClient();
+    this.resolveGitHubRepos =
+      options.resolveGitHubRepos ?? resolveGitHubReposForDirectory;
     this.probeGhAvailable = options.probeGhAvailable;
     this.discoverGhCommands =
       options.discoverGhCommands
@@ -158,7 +148,6 @@ export class GithubPrFetcher {
               getDesktopSettingsService().resolveGhCommandPreference(),
             env: process.env,
           }));
-    this.exec = options.exec ?? defaultExec(this.timeoutMs, () => this.resolveGhCommand());
     this.runGhAuthStatus =
       options.runGhAuthStatus
       ?? defaultRunGhAuthStatus(() => this.resolveGhCommand());
@@ -183,17 +172,16 @@ export class GithubPrFetcher {
   }
 
   /**
-   * Fetch all open PRs for the given branches in a single `gh pr list` call.
-   * Caller batches by cwd (each cwd is a separate repo from gh's POV).
+   * Fetch all open PRs for the given branches in one in-process GraphQL call.
+   * Caller batches by cwd; fork and upstream remotes share the same request.
    *
    * Why open-only: merged/closed PRs are terminal lifecycle states. Once we've
    * stored a terminal lifecycle on the overlay, we never re-fetch through this
    * open-only path — it only needs to surface non-terminal PRs we might want
    * to refresh.
    *
-   * Filter by headRefName client-side: gh's `--head` flag accepts only one
-   * branch, but `--state open --json …` over the whole repo returns at most
-   * a few dozen open PRs which we filter cheaply.
+   * GraphQL answers by branch, then this compatibility method filters terminal
+   * lifecycle states and deduplicates any repeated PR URLs.
    */
   async fetchOpenPullRequests(params: {
     cwd: string;
@@ -202,28 +190,31 @@ export class GithubPrFetcher {
     if (params.branches.length === 0) {
       return [];
     }
-    if (!(await this.isGhAvailable())) {
+    const repos = await this.resolveGitHubRepos(params.cwd);
+    if (repos.length === 0 || !(await this.isGhAvailable())) {
       return [];
     }
 
-    const wanted = new Set(params.branches);
     try {
-      const { stdout } = await this.exec(params.cwd, [
-        "pr",
-        "list",
-        "--state",
-        "open",
-        "--json",
-        GH_FIELDS,
-        "--limit",
-        "30",
-      ]);
-      const payload = JSON.parse(stdout) as GhPrPayload[];
-      return payload
-        .filter((row) => wanted.has(row.headRefName))
-        .map(parseGhPrPayload);
+      const refs = repos.flatMap((repo) =>
+        params.branches.map((branch) => ({
+          owner: repo.owner,
+          repo: repo.repo,
+          branch,
+        })),
+      );
+      const byBranch = await this.graphqlClient.fetchPullRequestsForBranches(refs);
+      const byUrl = new Map<string, PrSummary>();
+      for (const ref of refs) {
+        for (const pr of byBranch.get(branchRefKey(ref)) ?? []) {
+          if (pr.lifecycleState === "open") {
+            byUrl.set(pr.url, pr);
+          }
+        }
+      }
+      return [...byUrl.values()];
     } catch (error) {
-      fetcherLog.warn("gh pr list failed", {
+      fetcherLog.debug("in-process open PR lookup failed", {
         cwd: params.cwd,
         branchCount: params.branches.length,
         error: error instanceof Error ? error.message : String(error),
@@ -233,11 +224,9 @@ export class GithubPrFetcher {
   }
 
   /**
-   * Fetch the latest state for a single (possibly terminal) PR. Uses
-   * `gh pr list --state all --head <branch>` so we catch merged/closed
-   * states too — this is the one place the renderer asks "give me the
-   * authoritative state for this PR right now," typically on first
-   * selection of a thread.
+   * Fetch the latest state for a single branch, including merged/closed PRs.
+   * This is the renderer's authoritative on-selection/user-refresh path, now
+   * using the same in-process GraphQL transport as background discovery.
    */
   async fetchAllPullRequestsForBranch(params: {
     cwd: string;
@@ -258,26 +247,26 @@ export class GithubPrFetcher {
     if (params.allowPrimed !== false && primed) {
       return primed;
     }
-    if (!(await this.isGhAvailable())) {
+    const repos = await this.resolveGitHubRepos(params.cwd);
+    if (repos.length === 0 || !(await this.isGhAvailable())) {
       return [];
     }
     try {
-      const { stdout } = await this.exec(params.cwd, [
-        "pr",
-        "list",
-        "--state",
-        "all",
-        "--head",
-        params.branch,
-        "--json",
-        GH_FIELDS,
-        "--limit",
-        "5",
-      ]);
-      const payload = JSON.parse(stdout) as GhPrPayload[];
-      return payload.map(parseGhPrPayload);
+      const refs = repos.map((repo) => ({
+        owner: repo.owner,
+        repo: repo.repo,
+        branch: params.branch,
+      }));
+      const byBranch = await this.graphqlClient.fetchPullRequestsForBranches(refs);
+      const byUrl = new Map<string, PrSummary>();
+      for (const ref of refs) {
+        for (const pr of byBranch.get(branchRefKey(ref)) ?? []) {
+          byUrl.set(pr.url, pr);
+        }
+      }
+      return [...byUrl.values()];
     } catch (error) {
-      fetcherLog.warn("gh pr list (single-branch) failed", {
+      fetcherLog.debug("in-process branch PR lookup failed", {
         cwd: params.cwd,
         branch: params.branch,
         error: error instanceof Error ? error.message : String(error),
@@ -287,9 +276,9 @@ export class GithubPrFetcher {
   }
 
   /**
-   * Fetch the latest state for a retained PR chip by URL. This covers thread
-   * history chips whose original head branch no longer matches the thread's
-   * current branch lookup.
+   * Fetch the latest state for a retained PR chip by URL through the
+   * in-process by-number GraphQL query. The URL identifies the base repository,
+   * so this does not depend on the linked directory still existing.
    */
   async fetchPullRequestByUrl(params: {
     cwd: string;
@@ -298,19 +287,14 @@ export class GithubPrFetcher {
     if (!(await this.isGhAvailable())) {
       return undefined;
     }
+    const ref = parsePrRefFromUrl(params.url);
+    if (!ref) {
+      return undefined;
+    }
     try {
-      const { stdout } = await this.exec(params.cwd, [
-        "pr",
-        "view",
-        params.url,
-        "--json",
-        GH_FIELDS,
-      ]);
-      const payload = JSON.parse(stdout) as GhPrPayload;
-      return parseGhPrPayload(payload);
+      return (await this.graphqlClient.fetchPullRequests([ref]))[0];
     } catch (error) {
-      fetcherLog.warn("gh pr view failed", {
-        cwd: params.cwd,
+      fetcherLog.debug("in-process retained PR lookup failed", {
         url: params.url,
         error: error instanceof Error ? error.message : String(error),
       });
@@ -398,9 +382,9 @@ export class GithubPrFetcher {
    *
    * Entries are **single-use** and short-lived on purpose: a primed value is
    * consumed by the one refresh it was fetched for, so a later user-triggered
-   * refresh always gets its own fresh read rather than silently reusing
-   * someone else's fetch. Only prime branches GitHub actually answered for —
-   * priming `[]` for a failed lookup would record a false "no PRs".
+   * refresh gets its own in-process read rather than silently reusing someone
+   * else's fetch. Only prime branches GitHub actually answered for — priming
+   * `[]` for a failed lookup would record a false "no PRs".
    */
   primeBranchLookup(
     entries: { cwd: string; branch: string; prs: PrSummary[] }[],
@@ -519,23 +503,6 @@ export function parseGhAuthStatus(input: {
         ? undefined
         : "Token is missing the `repo` scope. Run `gh auth refresh -s repo` to grant it."
       : "Run `gh auth login` to sign in to github.com.",
-  };
-}
-
-function defaultExec(
-  timeoutMs: number,
-  resolveGhCommand: () => Promise<string>,
-): NonNullable<GithubPrFetcherOptions["exec"]> {
-  return async (cwd, args) => {
-    const command = await resolveGhCommand();
-    const result = await execFileAsync(command, args, {
-      cwd,
-      env: buildPwrAgentChildProcessEnv(process.env),
-      timeout: timeoutMs,
-      maxBuffer: 1024 * 1024,
-      encoding: "utf8",
-    });
-    return { stdout: result.stdout, stderr: result.stderr };
   };
 }
 

@@ -195,6 +195,7 @@ describe("detectPullRequestsForThread", () => {
   it("does not use another local branch configured as the upstream", async () => {
     const branch = "fix/local-upstream";
     const repo = await createRepoWithBranch(branch);
+    await addGitHubRemote(repo);
     await git(repo, "branch", "feature/parent");
     await git(repo, "config", `branch.${branch}.remote`, ".");
     await git(
@@ -266,6 +267,7 @@ describe("detectPullRequestsForThread", () => {
   it("uses the local branch when it has no upstream", async () => {
     const branch = "fix/untracked-pr";
     const repo = await createRepoWithBranch(branch);
+    await addGitHubRemote(repo);
     await git(repo, "checkout", branch);
     const expectedPr = {
       number: 13270,
@@ -295,6 +297,7 @@ describe("detectPullRequestsForThread", () => {
   it("forwards authoritative lookup intent so user refreshes bypass discovery primes", async () => {
     const branch = "fix/authoritative-pr-refresh";
     const repo = await createRepoWithBranch(branch);
+    await addGitHubRemote(repo);
     const fetcher = {
       fetchAllPullRequestsForBranch: vi.fn(async () => []),
     } as unknown as GithubPrFetcher;
@@ -313,7 +316,7 @@ describe("detectPullRequestsForThread", () => {
     });
   });
 
-  it("lets named-branch lookups degrade through the fetcher for invalid directories", async () => {
+  it("skips named-branch lookups for invalid directories", async () => {
     const staleDirectory = await createNonGitDirectory();
     const fetcher = {
       fetchAllPullRequestsForBranch: vi.fn(async () => {
@@ -328,10 +331,40 @@ describe("detectPullRequestsForThread", () => {
     });
 
     expect(prs).toEqual([]);
-    expect(fetcher.fetchAllPullRequestsForBranch).toHaveBeenCalledWith({
-      cwd: staleDirectory,
+    expect(fetcher.fetchAllPullRequestsForBranch).not.toHaveBeenCalled();
+  });
+
+  it("skips named-branch lookups for deleted worktree paths", async () => {
+    const staleDirectory = await createNonGitDirectory();
+    await rm(staleDirectory, { recursive: true, force: true });
+    const fetcher = {
+      fetchAllPullRequestsForBranch: vi.fn(async () => []),
+    } as unknown as GithubPrFetcher;
+
+    const prs = await detectPullRequestsForThread({
+      fetcher,
       branch: "fix/pr-chip",
+      directoryPaths: [staleDirectory],
     });
+
+    expect(prs).toEqual([]);
+    expect(fetcher.fetchAllPullRequestsForBranch).not.toHaveBeenCalled();
+  });
+
+  it("skips named-branch lookups for git repositories with no remotes", async () => {
+    const repo = await createRepoWithBranch("fix/local-only");
+    const fetcher = {
+      fetchAllPullRequestsForBranch: vi.fn(async () => []),
+    } as unknown as GithubPrFetcher;
+
+    const prs = await detectPullRequestsForThread({
+      fetcher,
+      branch: "fix/local-only",
+      directoryPaths: [repo],
+    });
+
+    expect(prs).toEqual([]);
+    expect(fetcher.fetchAllPullRequestsForBranch).not.toHaveBeenCalled();
   });
 
   it("does not reject detached HEAD lookups for invalid directories", async () => {
@@ -421,6 +454,7 @@ async function createRepoWithDefaultBranch(branch: string): Promise<string> {
     `refs/remotes/origin/${branch}`,
   );
   await git(repo, "branch", "--set-upstream-to", `origin/${branch}`, branch);
+  await git(repo, "remote", "set-url", "origin", githubRemoteUrl());
   return repo;
 }
 
@@ -456,6 +490,7 @@ async function createRepoWithRenamedTrackedBranch(params: {
     params.localBranch,
   );
   await git(repo, "checkout", params.localBranch);
+  await git(repo, "remote", "set-url", "origin", githubRemoteUrl());
   return repo;
 }
 
@@ -478,6 +513,14 @@ async function createNonGitDirectory(): Promise<string> {
   tempDirs.push(directory);
   await mkdir(path.join(directory, "nested"));
   return directory;
+}
+
+async function addGitHubRemote(cwd: string): Promise<void> {
+  await git(cwd, "remote", "add", "origin", githubRemoteUrl());
+}
+
+function githubRemoteUrl(): string {
+  return "git@github.com:Giphy/giphy-services.git";
 }
 
 async function git(cwd: string, ...args: string[]): Promise<string> {

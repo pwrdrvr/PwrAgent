@@ -505,7 +505,7 @@ The existing pattern rules use `^packages/messaging/providers/`, so they cover y
 ### 8.4 — `electron.vite.config.ts` (mandatory — easy to miss)
 
 The desktop main process is bundled by `electron-vite`. Workspace packages
-have to be listed in the `externalizeDepsPlugin.exclude` array to be
+have to be listed in the `build.externalizeDeps.exclude` array to be
 **bundled into** the main process rather than treated as external ESM
 imports at runtime. **If you skip this step, the dynamic
 `import("@pwragent/messaging-provider-<channel>")` from the provider
@@ -522,16 +522,18 @@ in your provider's bundling. Edit
 `apps/desktop/electron.vite.config.ts`:
 
 ```diff
- externalizeDepsPlugin({
-   exclude: [
-     "@pwragent/shared",
-     "@pwrdrvr/codex-app-server-protocol",
-     "@pwragent/messaging-interface",
-     "@pwragent/messaging-provider-discord",
-+    "@pwragent/messaging-provider-<channel>",
-     "@pwragent/messaging-provider-telegram"
-   ]
- })
+ build: {
+   externalizeDeps: {
+     exclude: [
+       "@pwragent/shared",
+       "@pwrdrvr/codex-app-server-protocol",
+       "@pwragent/messaging-interface",
+       "@pwragent/messaging-provider-discord",
++      "@pwragent/messaging-provider-<channel>",
+       "@pwragent/messaging-provider-telegram"
+     ]
+   }
+ }
 ```
 
 This list looks duplicative with the workspace dependency declaration in
@@ -694,7 +696,7 @@ If your platform's SDK is Node-first (Telegram's `grammy`, Discord's
 
 ### `electron-vite` workspace bundling list (silent runtime failure)
 The desktop main process bundles workspace packages explicitly via
-`apps/desktop/electron.vite.config.ts`'s `externalizeDepsPlugin.exclude`
+`apps/desktop/electron.vite.config.ts`'s `build.externalizeDeps.exclude`
 array. Forgetting to add your new provider there typecheks clean, lints
 clean, tests clean — but at runtime the dynamic provider import fails
 with `ERR_MODULE_NOT_FOUND` pointing at `@pwragent/shared`'s internals.
@@ -786,7 +788,7 @@ Captured at the end of Phase 10 of [plan 2026-05-06-001](plans/2026-05-06-001-fe
 
 **What was missing:**
 
-- **`electron.vite.config.ts` workspace bundling list (Step 8.4).** The original guide had a four-touch wiring step (provider-loader, messaging-config, package.json, test mocks) but omitted the *fifth* required edit: adding the new provider to the desktop's electron-vite `externalizeDepsPlugin.exclude` array. Without it, typecheck and tests pass but the runtime dynamic import fails with a `ERR_MODULE_NOT_FOUND` error that misleadingly points at `@pwragent/shared` internals rather than the missing bundling config. This was the single most consequential gap in the guide — it shipped silently into the first runtime test. Now spelled out as Step 8.4 with the exact diff and the misleading error message preserved as a search-anchor.
+- **`electron.vite.config.ts` workspace bundling list (Step 8.4).** The original guide had a four-touch wiring step (provider-loader, messaging-config, package.json, test mocks) but omitted the *fifth* required edit: adding the new provider to the desktop's electron-vite `build.externalizeDeps.exclude` array. Without it, typecheck and tests pass but the runtime dynamic import fails with a `ERR_MODULE_NOT_FOUND` error that misleadingly points at `@pwragent/shared` internals rather than the missing bundling config. This was the single most consequential gap in the guide — it shipped silently into the first runtime test. Now spelled out as Step 8.4 with the exact diff and the misleading error message preserved as a search-anchor.
 - **The capability profile workshop didn't acknowledge documentation gaps.** Mattermost's docs are explicitly silent on `actions.maxActions`, `actions.maxLabelLength`, and `actions.maxCallbackPayloadBytes` per attachment. The guide now suggests `// ASSUMED — docs silent` annotations; previously it implied every value comes from a citable doc page.
 - **Step 5 (rendering) and Step 3 (adapter shape) are not strictly sequential.** In practice you bounce: write the constructor + `start`/`stop` → call into the formatting module → discover an intent's shape needs a new helper → back-fill `deliver()` for the next intent kind. The guide should expect the bounce.
 - **Slash commands are out-of-scope for v1.** Mattermost supports them, but they require *another* HTTP endpoint (separate from the interactive callback URL). The guide implies adapters take all-or-nothing on commands; in practice text-mention parsing or a `/<cmd>` prefix detection on the `posted` text covers most needs in v1.

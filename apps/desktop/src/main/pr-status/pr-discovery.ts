@@ -3,9 +3,9 @@
  *
  * The fast GraphQL poller (`pr-polling-scheduler.ts`) keeps the status of PRs
  * we ALREADY track fresh. It cannot find a PR we don't know about yet — it
- * polls by number. Discovery closes that gap by re-running the branch-based
- * lookup (`gh pr list --head <branch>`) across EVERY open thread, not just the
- * selected one, on a slow rotation.
+ * polls by number. Discovery closes that gap by re-running the in-process
+ * branch-based lookup across EVERY open thread, not just the selected one, on
+ * a slow rotation.
  *
  * Why branch-lookup rather than a GitHub search/`since` crawl: PwrAgent attaches
  * PRs to a thread by matching the thread's branch. A raw "list PRs updated since
@@ -15,7 +15,7 @@
  * This is the periodic refresh across open repos that was lost.
  *
  * The selection below is a pure function so the rotation logic is testable
- * without timers or a live `gh`.
+ * without timers or a live GitHub request.
  */
 
 export type DiscoveryDueSelection = {

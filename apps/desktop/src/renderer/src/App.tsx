@@ -79,6 +79,8 @@ import { AppNoticeToast } from "./features/notifications/AppNoticeToast";
 import type { AppNoticeToastNotice } from "./features/notifications/AppNoticeToast";
 import { resolveBackendErrorNotice } from "./features/notifications/backend-error-notice";
 import { buildPrAutoDispatchBudgetNotice } from "./features/notifications/pr-auto-dispatch-budget-notice";
+import { MessagingErrorNotices } from "./features/notifications/MessagingErrorNotices";
+import { buildGithubPrSamlEnforcementNotice } from "./features/notifications/github-pr-saml-notice";
 import {
   buildHeapSnapshotHandoffMessage,
   describeHeapSnapshotResult,
@@ -88,6 +90,10 @@ import {
   buildHotCpuProfileHandoffMessage,
   formatHotCpuProfileTriggerSummary,
 } from "../../shared/hot-cpu-profile";
+import {
+  githubPrAccessTargetKey,
+  type GithubPrSamlEnforcementEvent,
+} from "../../shared/github-pr-access";
 import { AppUpdateBanner } from "./features/update/AppUpdateBanner";
 import { AutomationsScreen } from "./features/automations/AutomationsScreen";
 import {
@@ -290,6 +296,8 @@ function DesktopAppShell(props: {
     useState<AppNoticeToastNotice>();
   const [prAutoDispatchBudgetNotice, setPrAutoDispatchBudgetNotice] =
     useState<AppNoticeToastNotice>();
+  const [githubPrSamlEvents, setGithubPrSamlEvents] =
+    useState<GithubPrSamlEnforcementEvent[]>([]);
   // Latest thread list, mirrored into a ref so the backend-error toast
   // subscription can resolve a thread's title without re-subscribing on
   // every navigation change. Kept fresh by an effect below, once
@@ -333,6 +341,37 @@ function DesktopAppShell(props: {
     setSettingsInitialSection("messaging");
     setMainView("settings");
   }, []);
+  const dismissGithubPrSamlNotice = useCallback(() => {
+    setGithubPrSamlEvents((current) => current.slice(1));
+  }, []);
+  const openGitSettings = useCallback(() => {
+    dismissGithubPrSamlNotice();
+    setSettingsInitialSection("git");
+    setMainView("settings");
+  }, [dismissGithubPrSamlNotice]);
+  const githubPrSamlNotice = useMemo(() => {
+    const event = githubPrSamlEvents[0];
+    return event
+      ? buildGithubPrSamlEnforcementNotice({
+          event,
+          onDismiss: dismissGithubPrSamlNotice,
+          onOpenGitSettings: openGitSettings,
+        })
+      : undefined;
+  }, [dismissGithubPrSamlNotice, githubPrSamlEvents, openGitSettings]);
+
+  useEffect(() => {
+    return desktopApi?.onGithubPrSamlEnforcement?.((event) => {
+      setGithubPrSamlEvents((current) => {
+        const eventKey = githubPrAccessTargetKey(event.target);
+        return current.some(
+          (queued) => githubPrAccessTargetKey(queued.target) === eventKey,
+        )
+          ? current
+          : [...current, event];
+      });
+    });
+  }, [desktopApi]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1827,6 +1866,7 @@ function DesktopAppShell(props: {
             notice={backendErrorNotice}
             onDismiss={() => setBackendErrorNotice(undefined)}
           />
+          <MessagingErrorNotices desktopApi={desktopApi} />
           <AppNoticeToast
             desktopApi={desktopApi}
             notice={automationLoadNotice}
@@ -1836,6 +1876,11 @@ function DesktopAppShell(props: {
             desktopApi={desktopApi}
             notice={prAutoDispatchBudgetNotice}
             onDismiss={() => setPrAutoDispatchBudgetNotice(undefined)}
+          />
+          <AppNoticeToast
+            desktopApi={desktopApi}
+            notice={githubPrSamlNotice}
+            onDismiss={dismissGithubPrSamlNotice}
           />
           <AppUpdateBanner desktopApi={desktopApi} />
         </div>

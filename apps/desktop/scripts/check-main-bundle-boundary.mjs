@@ -26,6 +26,15 @@ const forbidden = [
     label: "xAI runtime endpoint",
     pattern: /api\.x\.ai\/v1\/responses/,
   },
+  {
+    label: "externalized ws runtime import",
+    pattern: /\b(?:from\s+|import\(|require\()["']ws["']/,
+  },
+  {
+    label: "externalized workspace bundled-dependency import",
+    pattern:
+      /\b(?:from\s+|import\(|require\()["']@pwragent\/(?:shared|messaging-interface|messaging-provider-[^/"']+)["']/,
+  },
 ];
 const violations = [];
 
@@ -42,7 +51,7 @@ for (const filePath of javascriptFiles) {
 }
 
 if (violations.length > 0) {
-  console.error("Electron main bundle contains forbidden Grok runtime code:");
+  console.error("Electron main bundle verification failed:");
   for (const violation of violations) {
     console.error(`  ${violation.file}: ${violation.label}`);
   }
@@ -50,5 +59,5 @@ if (violations.length > 0) {
 }
 
 console.log(
-  `main bundle boundary: OK (${javascriptFiles.length} files, no AI SDK/xAI runtime)`,
+  `main bundle boundary: OK (${javascriptFiles.length} files, no AI SDK/xAI runtime or external bundled-dependency imports)`,
 );
