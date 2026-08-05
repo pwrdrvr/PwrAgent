@@ -4733,6 +4733,16 @@ describe("ThreadView", () => {
           source: "codex",
           gitBranch: "feature/old",
           observedGitBranch: "main",
+          federation: {
+            ref: {
+              backend: "codex",
+              target: { scope: "remote", instanceId: "owner-one" },
+              threadId: "thread-branch",
+            },
+            instanceLabel: "Owner Mac",
+            peerStatus: "connected",
+            capabilities: ["thread_navigation", "turn_control"],
+          },
           updatedAt: Date.now(),
           linkedDirectories: [],
           inbox: {
@@ -4770,6 +4780,7 @@ describe("ThreadView", () => {
     await waitFor(() => {
       expect(updateThreadExpectedBranch).toHaveBeenCalledWith({
         backend: "codex",
+        federationTarget: { scope: "remote", instanceId: "owner-one" },
         threadId: "thread-branch",
         branch: "main",
       });
@@ -4841,6 +4852,71 @@ describe("ThreadView", () => {
     );
   });
 
+  it("retains branch drift on the remote thread owner", async () => {
+    const retainThreadBranchDrift = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-branch",
+      expectedBranch: "feature/old",
+      observedBranch: "main",
+      retainedAt: Date.now(),
+    }));
+
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[]}
+        composerDisabled={false}
+        desktopApi={{ retainThreadBranchDrift }}
+        loading={false}
+        loadingMore={false}
+        messageCount={1}
+        selectedThread={{
+          id: "thread-branch",
+          title: "Branch drift",
+          titleSource: "explicit",
+          source: "codex",
+          gitBranch: "feature/old",
+          observedGitBranch: "main",
+          federation: {
+            ref: {
+              backend: "codex",
+              target: { scope: "remote", instanceId: "owner-one" },
+              threadId: "thread-branch",
+            },
+            instanceLabel: "Owner Mac",
+            peerStatus: "connected",
+            capabilities: ["thread_navigation", "turn_control"],
+          },
+          updatedAt: Date.now(),
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+        skills={[]}
+        transcriptEntries={[]}
+        clearPendingRequest={() => undefined}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+      />,
+    );
+
+    const dialog = await screen.findByRole("dialog", {
+      name: "Thread branch changed",
+    });
+    fireEvent.click(within(dialog).getByRole("button", {
+      name: "Keep warning. I'll switch back to feature/old",
+    }));
+
+    await waitFor(() => {
+      expect(retainThreadBranchDrift).toHaveBeenCalledWith({
+        backend: "codex",
+        expectedBranch: "feature/old",
+        federationTarget: { scope: "remote", instanceId: "owner-one" },
+        observedBranch: "main",
+        threadId: "thread-branch",
+      });
+    });
+  });
+
   it("checks branch drift on selection and focus without background polling", async () => {
     const setIntervalSpy = vi.spyOn(window, "setInterval");
     const checkThreadBranchDrift = vi.fn(async () => ({
@@ -4878,6 +4954,16 @@ describe("ThreadView", () => {
             source: "codex",
             gitBranch: "feature/old",
             observedGitBranch: "feature/old",
+            federation: {
+              ref: {
+                backend: "codex",
+                target: { scope: "remote", instanceId: "owner-one" },
+                threadId: "thread-branch",
+              },
+              instanceLabel: "Owner Mac",
+              peerStatus: "connected",
+              capabilities: ["thread_navigation", "turn_control"],
+            },
             updatedAt: Date.now(),
             linkedDirectories: [],
             inbox: {
@@ -4898,6 +4984,7 @@ describe("ThreadView", () => {
       expect(checkThreadBranchDrift).toHaveBeenLastCalledWith({
         backend: "codex",
         expectedBranch: "feature/old",
+        federationTarget: { scope: "remote", instanceId: "owner-one" },
         threadId: "thread-branch",
       });
       expect(setIntervalSpy).not.toHaveBeenCalledWith(expect.any(Function), 30_000);
@@ -4912,11 +4999,81 @@ describe("ThreadView", () => {
       expect(checkThreadBranchDrift).toHaveBeenLastCalledWith({
         backend: "codex",
         expectedBranch: "feature/old",
+        federationTarget: { scope: "remote", instanceId: "owner-one" },
         threadId: "thread-branch",
       });
     } finally {
       setIntervalSpy.mockRestore();
     }
+  });
+
+  it("allows a remote send when an older owner lacks branch drift RPC", async () => {
+    const checkThreadBranchDrift = vi.fn(async () => {
+      throw Object.assign(new Error(
+        "method_not_found: No federation handler registered for backend.checkThreadBranchDrift",
+      ), { code: "method_not_found" });
+    });
+    const startTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-branch",
+      turnId: "turn-1",
+    }));
+
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[]}
+        composerDisabled={false}
+        desktopApi={{ checkThreadBranchDrift, startTurn }}
+        loading={false}
+        loadingMore={false}
+        messageCount={1}
+        selectedThread={{
+          id: "thread-branch",
+          title: "Remote branch",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          gitBranch: "feature/current",
+          observedGitBranch: "feature/current",
+          federation: {
+            ref: {
+              backend: "codex",
+              target: { scope: "remote", instanceId: "owner-one" },
+              threadId: "thread-branch",
+            },
+            instanceLabel: "Owner Mac",
+            peerStatus: "connected",
+            capabilities: ["thread_navigation", "turn_control"],
+          },
+          updatedAt: Date.now(),
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+        skills={[]}
+        transcriptEntries={[]}
+        clearPendingRequest={() => undefined}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "Send despite the older peer" },
+    });
+    fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter" });
+
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledWith(expect.objectContaining({
+        backend: "codex",
+        federationTarget: { scope: "remote", instanceId: "owner-one" },
+        threadId: "thread-branch",
+        input: [{ type: "text", text: "Send despite the older peer" }],
+      }));
+    });
+    expect(
+      screen.queryByRole("dialog", { name: "Thread branch changed" }),
+    ).not.toBeInTheDocument();
   });
 
   it("suppresses the branch drift dialog while a turn is active", async () => {

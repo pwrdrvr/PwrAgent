@@ -8,6 +8,7 @@ import type {
   AppServerReadThreadResponse,
   CancelQueuedTurnResponse,
   CancelThreadExecutionModeQueueResponse,
+  CheckThreadBranchDriftResponse,
   CompactThreadResponse,
   CreateScheduledThreadActionRequest,
   CodexEnvironmentSetupProgressEvent,
@@ -34,6 +35,7 @@ import type {
   OpenDesktopApplicationResponse,
   QueueThreadExecutionModeResponse,
   RefreshDirectoryGitStatusesResponse,
+  RetainThreadBranchDriftResponse,
   RenameThreadResponse,
   RunCodexEnvironmentActionResponse,
   ScheduledThreadActionIdRequest,
@@ -48,6 +50,7 @@ import type {
   StopCodexEnvironmentActionResponse,
   SubmitServerRequestResponse,
   TrustCodexProjectResponse,
+  UpdateThreadExpectedBranchResponse,
   UpdateScheduledThreadActionRequest,
 } from "@pwragent/shared";
 import {
@@ -65,6 +68,7 @@ import {
   type ApplyThreadModelMigrationRequest,
   type CancelQueuedTurnRequest,
   type CancelThreadExecutionModeQueueRequest,
+  type CheckThreadBranchDriftRequest,
   type CompactThreadRequest,
   type ForkThreadRequest,
   type FederationRemoteTarget,
@@ -86,6 +90,7 @@ import {
   type OpenDesktopApplicationRequest,
   type QueueThreadExecutionModeRequest,
   type RefreshDirectoryGitStatusesRequest,
+  type RetainThreadBranchDriftRequest,
   type RenameThreadRequest,
   type RunCodexEnvironmentActionRequest,
   type SetAcpSessionRuntimeOptionRequest,
@@ -100,6 +105,7 @@ import {
   type SubmitServerRequestRequest,
   type StopCodexEnvironmentActionRequest,
   type TrustCodexProjectRequest,
+  type UpdateThreadExpectedBranchRequest,
 } from "@pwragent/shared";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
@@ -2177,6 +2183,21 @@ function localBackendOperations(): FederationBackendOperations {
       request: ApplyThreadModelMigrationRequest,
     ): Promise<ApplyThreadModelMigrationResponse> {
       return await getDesktopBackendRegistry().applyThreadModelMigration(request);
+    },
+    async checkThreadBranchDrift(
+      request: CheckThreadBranchDriftRequest,
+    ): Promise<CheckThreadBranchDriftResponse> {
+      return await getDesktopBackendRegistry().checkThreadBranchDrift(request);
+    },
+    async updateThreadExpectedBranch(
+      request: UpdateThreadExpectedBranchRequest,
+    ): Promise<UpdateThreadExpectedBranchResponse> {
+      return await getDesktopBackendRegistry().updateThreadExpectedBranch(request);
+    },
+    async retainThreadBranchDrift(
+      request: RetainThreadBranchDriftRequest,
+    ): Promise<RetainThreadBranchDriftResponse> {
+      return await getDesktopBackendRegistry().retainThreadBranchDrift(request);
     },
     async submitServerRequest(
       request: SubmitServerRequestRequest,

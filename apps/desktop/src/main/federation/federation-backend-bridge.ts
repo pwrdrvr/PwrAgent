@@ -14,6 +14,8 @@ import type {
   CancelQueuedTurnResponse,
   CancelThreadExecutionModeQueueRequest,
   CancelThreadExecutionModeQueueResponse,
+  CheckThreadBranchDriftRequest,
+  CheckThreadBranchDriftResponse,
   CompactThreadRequest,
   CompactThreadResponse,
   CreateScheduledThreadActionRequest,
@@ -53,6 +55,8 @@ import type {
   QueueThreadExecutionModeResponse,
   RefreshDirectoryGitStatusesRequest,
   RefreshDirectoryGitStatusesResponse,
+  RetainThreadBranchDriftRequest,
+  RetainThreadBranchDriftResponse,
   RenameThreadRequest,
   RenameThreadResponse,
   RunCodexEnvironmentActionRequest,
@@ -82,6 +86,8 @@ import type {
   TrustCodexProjectRequest,
   TrustCodexProjectResponse,
   UpdateScheduledThreadActionRequest,
+  UpdateThreadExpectedBranchRequest,
+  UpdateThreadExpectedBranchResponse,
 } from "@pwragent/shared";
 import type { FederationRouter } from "./federation-router";
 import type { FederationRpcEndpoint } from "./federation-rpc";
@@ -117,6 +123,9 @@ export const FEDERATION_BACKEND_METHODS = {
   setAcpSessionRuntimeOption: "backend.setAcpSessionRuntimeOption",
   setThreadModelSettings: "backend.setThreadModelSettings",
   applyThreadModelMigration: "backend.applyThreadModelMigration",
+  checkThreadBranchDrift: "backend.checkThreadBranchDrift",
+  updateThreadExpectedBranch: "backend.updateThreadExpectedBranch",
+  retainThreadBranchDrift: "backend.retainThreadBranchDrift",
   submitServerRequest: "backend.submitServerRequest",
   runCodexEnvironmentAction: "backend.runCodexEnvironmentAction",
   stopCodexEnvironmentAction: "backend.stopCodexEnvironmentAction",
@@ -185,6 +194,9 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.setAcpSessionRuntimeOption]: "turn_control",
   [FEDERATION_BACKEND_METHODS.setThreadModelSettings]: "turn_control",
   [FEDERATION_BACKEND_METHODS.applyThreadModelMigration]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.checkThreadBranchDrift]: "thread_navigation",
+  [FEDERATION_BACKEND_METHODS.updateThreadExpectedBranch]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.retainThreadBranchDrift]: "turn_control",
   [FEDERATION_BACKEND_METHODS.submitServerRequest]: "pending_request_control",
   [FEDERATION_BACKEND_METHODS.runCodexEnvironmentAction]: "environment_actions",
   [FEDERATION_BACKEND_METHODS.stopCodexEnvironmentAction]: "environment_actions",
@@ -284,6 +296,15 @@ export type FederationBackendOperations = {
   applyThreadModelMigration(
     request: ApplyThreadModelMigrationRequest,
   ): Promise<ApplyThreadModelMigrationResponse>;
+  checkThreadBranchDrift(
+    request: CheckThreadBranchDriftRequest,
+  ): Promise<CheckThreadBranchDriftResponse>;
+  updateThreadExpectedBranch(
+    request: UpdateThreadExpectedBranchRequest,
+  ): Promise<UpdateThreadExpectedBranchResponse>;
+  retainThreadBranchDrift(
+    request: RetainThreadBranchDriftRequest,
+  ): Promise<RetainThreadBranchDriftResponse>;
   submitServerRequest(
     request: SubmitServerRequestRequest,
   ): Promise<SubmitServerRequestResponse>;
@@ -541,6 +562,27 @@ export function registerFederationBackendHandlers(params: {
     async (envelope) =>
       await params.backend.applyThreadModelMigration(
         envelope.params as ApplyThreadModelMigrationRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.checkThreadBranchDrift,
+    async (envelope) =>
+      await params.backend.checkThreadBranchDrift(
+        envelope.params as CheckThreadBranchDriftRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.updateThreadExpectedBranch,
+    async (envelope) =>
+      await params.backend.updateThreadExpectedBranch(
+        envelope.params as UpdateThreadExpectedBranchRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.retainThreadBranchDrift,
+    async (envelope) =>
+      await params.backend.retainThreadBranchDrift(
+        envelope.params as RetainThreadBranchDriftRequest,
       ),
   );
   params.router.registerHandler(
@@ -890,6 +932,33 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   ): Promise<ApplyThreadModelMigrationResponse> {
     return await this.rpc.request<ApplyThreadModelMigrationResponse>({
       method: FEDERATION_BACKEND_METHODS.applyThreadModelMigration,
+      params: request,
+    });
+  }
+
+  async checkThreadBranchDrift(
+    request: CheckThreadBranchDriftRequest,
+  ): Promise<CheckThreadBranchDriftResponse> {
+    return await this.rpc.request<CheckThreadBranchDriftResponse>({
+      method: FEDERATION_BACKEND_METHODS.checkThreadBranchDrift,
+      params: request,
+    });
+  }
+
+  async updateThreadExpectedBranch(
+    request: UpdateThreadExpectedBranchRequest,
+  ): Promise<UpdateThreadExpectedBranchResponse> {
+    return await this.rpc.request<UpdateThreadExpectedBranchResponse>({
+      method: FEDERATION_BACKEND_METHODS.updateThreadExpectedBranch,
+      params: request,
+    });
+  }
+
+  async retainThreadBranchDrift(
+    request: RetainThreadBranchDriftRequest,
+  ): Promise<RetainThreadBranchDriftResponse> {
+    return await this.rpc.request<RetainThreadBranchDriftResponse>({
+      method: FEDERATION_BACKEND_METHODS.retainThreadBranchDrift,
       params: request,
     });
   }

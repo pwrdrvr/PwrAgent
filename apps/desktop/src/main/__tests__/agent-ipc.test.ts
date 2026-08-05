@@ -4,6 +4,7 @@ import type {
   ApplyThreadModelMigrationRequest,
   CancelQueuedTurnRequest,
   CancelThreadExecutionModeQueueRequest,
+  CheckThreadBranchDriftRequest,
   CompactThreadRequest,
   ForkThreadRequest,
   InterruptTurnRequest,
@@ -11,6 +12,7 @@ import type {
   MaterializeDirectoryLaunchpadRequest,
   QueueThreadExecutionModeRequest,
   RunCodexEnvironmentActionRequest,
+  RetainThreadBranchDriftRequest,
   StopCodexEnvironmentActionRequest,
   SetAcpSessionRuntimeOptionRequest,
   SetCodexThreadEnvironmentRequest,
@@ -23,6 +25,7 @@ import type {
   SteerTurnRequest,
   SubmitServerRequestRequest,
   TrustCodexProjectRequest,
+  UpdateThreadExpectedBranchRequest,
 } from "@pwragent/shared";
 
 const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
@@ -183,6 +186,26 @@ const federationMock = vi.hoisted(() => {
         status: "acknowledged-new-thread" as const,
       }),
     ),
+    checkThreadBranchDrift: vi.fn(
+      async (request: CheckThreadBranchDriftRequest) => ({
+        ...request,
+        checkedAt: 1_000,
+        drifted: true,
+        observedBranch: "main",
+      }),
+    ),
+    updateThreadExpectedBranch: vi.fn(
+      async (request: UpdateThreadExpectedBranchRequest) => ({
+        ...request,
+        updatedAt: 1_000,
+      }),
+    ),
+    retainThreadBranchDrift: vi.fn(
+      async (request: RetainThreadBranchDriftRequest) => ({
+        ...request,
+        retainedAt: 1_000,
+      }),
+    ),
     runCodexEnvironmentAction: vi.fn(
       async (request: RunCodexEnvironmentActionRequest) => ({
         backend: request.backend,
@@ -324,12 +347,14 @@ describe("agent ipc", () => {
       AGENT_CANCEL_QUEUED_TURN_CHANNEL,
       AGENT_CANCEL_THREAD_EXECUTION_MODE_QUEUE_CHANNEL,
       AGENT_APPLY_THREAD_MODEL_MIGRATION_CHANNEL,
+      AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL,
       AGENT_COMPACT_THREAD_CHANNEL,
       AGENT_FORK_THREAD_CHANNEL,
       AGENT_INTERRUPT_TURN_CHANNEL,
       AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
       AGENT_QUEUE_THREAD_EXECUTION_MODE_CHANNEL,
       AGENT_RUN_CODEX_ENVIRONMENT_ACTION_CHANNEL,
+      AGENT_RETAIN_THREAD_BRANCH_DRIFT_CHANNEL,
       AGENT_STOP_CODEX_ENVIRONMENT_ACTION_CHANNEL,
       AGENT_SET_ACP_SESSION_RUNTIME_OPTION_CHANNEL,
       AGENT_SET_CODEX_THREAD_ENVIRONMENT_CHANNEL,
@@ -341,6 +366,7 @@ describe("agent ipc", () => {
       AGENT_STEER_TURN_CHANNEL,
       AGENT_SUBMIT_SERVER_REQUEST_CHANNEL,
       AGENT_TRUST_CODEX_PROJECT_CHANNEL,
+      AGENT_UPDATE_THREAD_EXPECTED_BRANCH_CHANNEL,
     } = await import("../../shared/ipc");
     const federationTarget = {
       scope: "remote" as const,
@@ -435,6 +461,25 @@ describe("agent ipc", () => {
       threadId: "thread-1",
       threadCreatedAt: 1_000,
       threadModel: "gpt-5-codex",
+    });
+    await handlers.get(AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL)?.({}, {
+      backend: "codex",
+      expectedBranch: "feature/expected",
+      federationTarget,
+      threadId: "thread-1",
+    });
+    await handlers.get(AGENT_UPDATE_THREAD_EXPECTED_BRANCH_CHANNEL)?.({}, {
+      backend: "codex",
+      branch: "main",
+      federationTarget,
+      threadId: "thread-1",
+    });
+    await handlers.get(AGENT_RETAIN_THREAD_BRANCH_DRIFT_CHANNEL)?.({}, {
+      backend: "codex",
+      expectedBranch: "feature/expected",
+      federationTarget,
+      observedBranch: "main",
+      threadId: "thread-1",
     });
     await handlers.get(AGENT_RUN_CODEX_ENVIRONMENT_ACTION_CHANNEL)?.({}, {
       backend: "codex",
@@ -543,6 +588,22 @@ describe("agent ipc", () => {
       threadId: "thread-1",
       threadCreatedAt: 1_000,
       threadModel: "gpt-5-codex",
+    });
+    expect(federationMock.remoteBackend.checkThreadBranchDrift).toHaveBeenCalledWith({
+      backend: "codex",
+      expectedBranch: "feature/expected",
+      threadId: "thread-1",
+    });
+    expect(federationMock.remoteBackend.updateThreadExpectedBranch).toHaveBeenCalledWith({
+      backend: "codex",
+      branch: "main",
+      threadId: "thread-1",
+    });
+    expect(federationMock.remoteBackend.retainThreadBranchDrift).toHaveBeenCalledWith({
+      backend: "codex",
+      expectedBranch: "feature/expected",
+      observedBranch: "main",
+      threadId: "thread-1",
     });
     expect(federationMock.remoteBackend.runCodexEnvironmentAction).toHaveBeenCalledWith({
       backend: "codex",
