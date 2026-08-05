@@ -547,6 +547,19 @@ export type DesktopFederationSettingsSnapshot = {
   listenPort: DesktopSettingsValue<number>;
   publicUrl: DesktopSettingsValue<string>;
   gatewayUrl: DesktopSettingsValue<string>;
+  /**
+   * Ordered client-mode gateway endpoints for one pinned gateway identity.
+   * Resolved from `gateway_endpoints`, falling back to `[gateway_url]`.
+   */
+  gatewayEndpoints: DesktopSettingsValue<string[]>;
+  /** Ordered endpoints a gateway advertises in enrollment invites. */
+  advertisedEndpoints: DesktopSettingsValue<string[]>;
+  /**
+   * The one endpoint that is Cloudflare-fronted. Access tokens and mTLS client
+   * keys are sent only to this host, because they travel in the WebSocket
+   * upgrade before any pinned key is verified.
+   */
+  cloudflareEndpoint: DesktopSettingsValue<string>;
   cloudflareMtlsEnabled: DesktopSettingsValue<boolean>;
   cloudflareAccessServiceAuthEnabled: DesktopSettingsValue<boolean>;
   instancePrivateKey: DesktopSettingsSecretState;
@@ -942,6 +955,9 @@ export type DesktopSettingsConfigPatch = {
     listenPort?: number;
     publicUrl?: string;
     gatewayUrl?: string;
+    gatewayEndpoints?: string[];
+    advertisedEndpoints?: string[];
+    cloudflareEndpoint?: string;
     cloudflareMtlsEnabled?: boolean;
     cloudflareAccessServiceAuthEnabled?: boolean;
   };

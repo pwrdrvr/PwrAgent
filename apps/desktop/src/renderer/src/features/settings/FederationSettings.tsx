@@ -7,12 +7,16 @@ import type {
   FederationConnectionState,
   FederationCapability,
   FederationDiagnosticEvent,
+  FederationEndpointStatus,
   FederationHealthStatus,
   FederationInstanceRole,
   FederationTailscaleMode,
   FederationTailscaleStatus,
 } from "@pwragent/shared";
-import { DESKTOP_FEDERATION_MODES } from "@pwragent/shared";
+import {
+  DESKTOP_FEDERATION_MODES,
+  isFederationGatewayEndpointUrl,
+} from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { copyText } from "../../lib/copy-text";
 import { formatRunningDurationMs } from "../../lib/format-duration";
@@ -76,8 +80,14 @@ export function FederationSettings(props: FederationSettingsProps) {
   const [publicUrl, setPublicUrl] = useState(
     props.snapshot.federation.publicUrl.value,
   );
-  const [gatewayUrl, setGatewayUrl] = useState(
-    props.snapshot.federation.gatewayUrl.value,
+  const [gatewayEndpointsText, setGatewayEndpointsText] = useState(
+    props.snapshot.federation.gatewayEndpoints.value.join("\n"),
+  );
+  const [advertisedEndpointsText, setAdvertisedEndpointsText] = useState(
+    props.snapshot.federation.advertisedEndpoints.value.join("\n"),
+  );
+  const [cloudflareEndpoint, setCloudflareEndpoint] = useState(
+    props.snapshot.federation.cloudflareEndpoint.value,
   );
   const [cloudflareMtlsEnabled, setCloudflareMtlsEnabled] = useState(
     props.snapshot.federation.cloudflareMtlsEnabled.value,
@@ -102,7 +112,13 @@ export function FederationSettings(props: FederationSettingsProps) {
     setListenHost(props.snapshot.federation.listenHost.value);
     setListenPort(String(props.snapshot.federation.listenPort.value));
     setPublicUrl(props.snapshot.federation.publicUrl.value);
-    setGatewayUrl(props.snapshot.federation.gatewayUrl.value);
+    setGatewayEndpointsText(
+      props.snapshot.federation.gatewayEndpoints.value.join("\n"),
+    );
+    setAdvertisedEndpointsText(
+      props.snapshot.federation.advertisedEndpoints.value.join("\n"),
+    );
+    setCloudflareEndpoint(props.snapshot.federation.cloudflareEndpoint.value);
     setCloudflareMtlsEnabled(
       props.snapshot.federation.cloudflareMtlsEnabled.value,
     );
@@ -248,13 +264,13 @@ export function FederationSettings(props: FederationSettingsProps) {
   };
 
   // Gateway-side fields only matter when this instance listens; the
-  // gateway URL only matters when it dials out. Disable (never hide)
+  // gateway endpoints only matter when it dials out. Disable (never hide)
   // the irrelevant ones so the form teaches the mode split instead of
   // accepting values that silently do nothing.
   const listensForPeers = mode === "gateway" || mode === "dual";
   const dialsGateway = mode === "client" || mode === "dual";
 
-  const effectiveHealth =
+  const effectiveHealth: FederationHealthStatus =
     health ??
     ({
       enabled: props.snapshot.federation.mode.value !== "disabled",
@@ -268,8 +284,17 @@ export function FederationSettings(props: FederationSettingsProps) {
           ? undefined
           : `ws://${props.snapshot.federation.listenHost.value}:${props.snapshot.federation.listenPort.value}`,
       publicUrl: trimmedOrUndefined(props.snapshot.federation.publicUrl.value),
+      gatewayEndpoints:
+        props.snapshot.federation.mode.value === "client" ||
+        props.snapshot.federation.mode.value === "dual"
+          ? props.snapshot.federation.gatewayEndpoints.value.map((url) => ({
+              url,
+              state: "idle" as const,
+            }))
+          : undefined,
       peers: [],
     } satisfies FederationHealthStatus);
+  const gatewayEndpointStatuses = effectiveHealth.gatewayEndpoints ?? [];
   const now = Date.now();
   const connectionRemediation = effectiveHealth.unavailableReason
     ? remediationForConnectionFailure(effectiveHealth.unavailableReason)
@@ -392,18 +417,34 @@ export function FederationSettings(props: FederationSettingsProps) {
             }
           />
           <SettingsField
-            label="Gateway URL"
+            label="Gateway endpoints"
             sub={
               dialsGateway
-                ? "Client-mode gateway WebSocket URL."
+                ? "Endpoints for one pinned gateway, one per line in fallback order. ws://, wss://, and ssh:// (user@host, optional ?forward=host:port) are supported."
                 : "Only used when Mode is client or dual."
             }
             control={
-              <input
-                aria-label="Gateway URL"
-                value={gatewayUrl}
+              <textarea
+                aria-label="Gateway endpoints"
+                rows={3}
+                value={gatewayEndpointsText}
                 disabled={props.saving || !dialsGateway}
-                onChange={(event) => setGatewayUrl(event.target.value)}
+                onChange={(event) => setGatewayEndpointsText(event.target.value)}
+              />
+            }
+          />
+          <SettingsField
+            label="Advertised endpoints"
+            sub="Gateway mode: endpoints written into new enrollment invites, one per line. Defaults to the Public URL when empty."
+            control={
+              <textarea
+                aria-label="Advertised endpoints"
+                rows={3}
+                value={advertisedEndpointsText}
+                disabled={props.saving}
+                onChange={(event) =>
+                  setAdvertisedEndpointsText(event.target.value)
+                }
               />
             }
           />
@@ -414,6 +455,22 @@ export function FederationSettings(props: FederationSettingsProps) {
               disabled={props.saving}
               onClick={() => {
                 setActionError(undefined);
+                const gatewayEndpoints = parseGatewayEndpoints(
+                  gatewayEndpointsText,
+                );
+                const advertisedEndpoints = parseGatewayEndpoints(
+                  advertisedEndpointsText,
+                );
+                const invalidEndpoint = [
+                  ...gatewayEndpoints,
+                  ...advertisedEndpoints,
+                ].find((endpoint) => !isFederationGatewayEndpointUrl(endpoint));
+                if (invalidEndpoint) {
+                  setActionError(
+                    `Endpoint "${invalidEndpoint}" must be a ws://, wss://, or ssh:// URL without an embedded password.`,
+                  );
+                  return;
+                }
                 void props.onWriteConfig({
                   federation: {
                     mode,
@@ -421,7 +478,8 @@ export function FederationSettings(props: FederationSettingsProps) {
                     listenHost,
                     listenPort: Number.parseInt(listenPort, 10) || 0,
                     publicUrl,
-                    gatewayUrl,
+                    gatewayEndpoints,
+                    advertisedEndpoints,
                     cloudflareMtlsEnabled,
                     cloudflareAccessServiceAuthEnabled,
                   },
@@ -616,8 +674,12 @@ export function FederationSettings(props: FederationSettingsProps) {
                   }
                 />
                 <SettingsField
-                  label="Gateway URL"
-                  sub="Where this instance dials out."
+                  label="Gateway endpoint"
+                  sub={
+                    gatewayEndpointStatuses.length > 1
+                      ? `First of ${gatewayEndpointStatuses.length} endpoints tried for this pairing.`
+                      : "Where this instance dials out."
+                  }
                   control={
                     <code>
                       {effectiveHealth.clientEnrollment.gatewayUrl ??
@@ -736,13 +798,32 @@ export function FederationSettings(props: FederationSettingsProps) {
             control={<code>{effectiveHealth.publicUrl ?? "Not configured"}</code>}
           />
           <SettingsField
-            label="Gateway URL"
-            sub="Outbound target used by client mode."
+            label="Gateway endpoints"
+            sub="Outbound candidates used by client mode, tried in order. The active endpoint carries the current session."
             control={
-              <code>
-                {trimmedOrUndefined(props.snapshot.federation.gatewayUrl.value) ??
-                  "Not configured"}
-              </code>
+              gatewayEndpointStatuses.length === 0 ? (
+                <span>Not configured</span>
+              ) : (
+                <div className="federation-peer-summary">
+                  {gatewayEndpointStatuses.map((endpoint) => (
+                    <span
+                      key={endpoint.url}
+                      className="federation-peer-summary"
+                    >
+                      <code>{endpoint.url}</code>
+                      <span>
+                        {endpointStateLabel(endpoint.state)}
+                        {endpoint.lastConnectedAt
+                          ? ` · Connected ${formatTimestamp(endpoint.lastConnectedAt)}`
+                          : ""}
+                      </span>
+                      {endpoint.lastError ? (
+                        <span>{endpoint.lastError}</span>
+                      ) : null}
+                    </span>
+                  ))}
+                </div>
+              )
             }
           />
           {effectiveHealth.unavailableReason ? (
@@ -1027,6 +1108,19 @@ export function FederationSettings(props: FederationSettingsProps) {
       >
         <div className="settings-fields">
           <SettingsField
+            label="Cloudflare endpoint"
+            sub="The one endpoint fronted by Cloudflare. Access tokens and client certificates are sent only to this host, because they travel in the WebSocket upgrade before the gateway's pinned keys are verified."
+            control={
+              <input
+                aria-label="Cloudflare endpoint"
+                value={cloudflareEndpoint}
+                placeholder="wss://federation.example.com"
+                disabled={props.saving}
+                onChange={(event) => setCloudflareEndpoint(event.target.value)}
+              />
+            }
+          />
+          <SettingsField
             label="mTLS"
             sub="Cloudflare edge certificate gate."
             control={
@@ -1129,8 +1223,18 @@ export function FederationSettings(props: FederationSettingsProps) {
               disabled={props.saving}
               onClick={() => {
                 setActionError(undefined);
+                if (
+                  cloudflareEndpoint.trim()
+                  && !isFederationGatewayEndpointUrl(cloudflareEndpoint)
+                ) {
+                  setActionError(
+                    "Cloudflare endpoint must be a wss:// URL matching one of the gateway endpoints.",
+                  );
+                  return;
+                }
                 void saveCloudflareSettings({
                   config: {
+                    cloudflareEndpoint: cloudflareEndpoint.trim(),
                     cloudflareMtlsEnabled,
                     cloudflareAccessServiceAuthEnabled,
                   },
@@ -1198,6 +1302,7 @@ export function FederationSettings(props: FederationSettingsProps) {
                     }
                     const written = await props.onWriteConfig({
                       federation: {
+                        cloudflareEndpoint: "",
                         cloudflareMtlsEnabled: false,
                         cloudflareAccessServiceAuthEnabled: false,
                       },
@@ -1207,6 +1312,7 @@ export function FederationSettings(props: FederationSettingsProps) {
                         "Cloudflare edge policy could not be updated.",
                       );
                     }
+                    setCloudflareEndpoint("");
                     setCloudflareMtlsEnabled(false);
                     setCloudflareAccessServiceAuthEnabled(false);
                     await props.onSettingsChanged();
@@ -1230,6 +1336,7 @@ export function FederationSettings(props: FederationSettingsProps) {
 
 async function saveCloudflareSettings(params: {
   config: {
+    cloudflareEndpoint: string;
     cloudflareMtlsEnabled: boolean;
     cloudflareAccessServiceAuthEnabled: boolean;
   };
@@ -1378,6 +1485,31 @@ function peerDisplayName(
 function trimmedOrUndefined(value: string): string | undefined {
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function parseGatewayEndpoints(text: string): string[] {
+  const seen = new Set<string>();
+  const endpoints: string[] = [];
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    endpoints.push(trimmed);
+  }
+  return endpoints;
+}
+
+function endpointStateLabel(state: FederationEndpointStatus["state"]): string {
+  switch (state) {
+    case "active":
+      return "Active";
+    case "connecting":
+      return "Connecting";
+    case "failed":
+      return "Failed";
+    case "idle":
+      return "Idle";
+  }
 }
 
 function roleLabel(role: FederationInstanceRole): string {

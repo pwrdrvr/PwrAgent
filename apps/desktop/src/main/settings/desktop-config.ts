@@ -39,6 +39,7 @@ import {
   isDesktopAppearanceTheme,
   isDesktopCodexProfileModel,
   isDesktopFederationMode,
+  isFederationGatewayEndpointUrl,
   isDesktopHotCpuProfileStartDelayMs,
   isDesktopHotCpuProfileTriggerMode,
   isDesktopIntegratedTerminalWindowsShell,
@@ -145,6 +146,9 @@ export type DesktopSettingsConfig = {
     listenPort?: number;
     publicUrl?: string;
     gatewayUrl?: string;
+    gatewayEndpoints?: string[];
+    advertisedEndpoints?: string[];
+    cloudflareEndpoint?: string;
     cloudflareMtlsEnabled?: boolean;
     cloudflareAccessServiceAuthEnabled?: boolean;
   };
@@ -289,6 +293,7 @@ const LEGACY_AUTHORIZED_CONTACT_LAST_VERSION = "1.0.0-alpha.9";
 const LEGACY_SETTINGS_MARKER = "pwragent-legacy-settings";
 const LEGACY_CHAT_REPLY_COMPOSER_LAST_VERSION = "1.0.0-alpha.8";
 const LEGACY_BACKGROUND_PR_POLLING_LAST_VERSION = "1.0.0-beta.50";
+const LEGACY_FEDERATION_GATEWAY_URL_LAST_VERSION = "1.0.0-beta.50";
 
 export function defaultDesktopConfigDir(
   options?: DesktopConfigPathOptions,
@@ -950,6 +955,57 @@ export function desktopSettingsPatchToEdits(
       edits.push({ op: "delete", path: ["federation", "gateway_url"] });
     } else {
       set(["federation", "gateway_url"], patch.federation.gatewayUrl);
+    }
+  }
+  if (patch.federation?.gatewayEndpoints !== undefined) {
+    const gatewayEndpoints = sanitizeEndpointList(
+      patch.federation.gatewayEndpoints,
+    );
+    if (gatewayEndpoints.length === 0) {
+      edits.push({ op: "delete", path: ["federation", "gateway_endpoints"] });
+    } else {
+      set(["federation", "gateway_endpoints"], gatewayEndpoints);
+    }
+    // Keep the legacy scalar in sync ONLY when the profile already has one, so
+    // a downgraded build still finds a working path. Per
+    // docs/config-file-evolution.md a brand-new config gets the canonical shape
+    // only, and a preserved legacy scalar is never deleted out from under an
+    // older client. An explicit gatewayUrl in the same patch wins.
+    const hasLegacyGatewayUrl =
+      readString(currentTables?.["federation"]?.gateway_url) !== undefined;
+    if (patch.federation.gatewayUrl === undefined && hasLegacyGatewayUrl) {
+      if (gatewayEndpoints.length > 0) {
+        edits.push({
+          op: "ensureCommentBefore",
+          path: ["federation", "gateway_url"],
+          marker: LEGACY_SETTINGS_MARKER,
+          comment: legacyGatewayUrlComment(),
+        });
+        set(["federation", "gateway_url"], gatewayEndpoints[0]);
+      }
+    }
+  }
+  if (patch.federation?.advertisedEndpoints !== undefined) {
+    const advertisedEndpoints = sanitizeEndpointList(
+      patch.federation.advertisedEndpoints,
+    );
+    if (advertisedEndpoints.length === 0) {
+      edits.push({
+        op: "delete",
+        path: ["federation", "advertised_endpoints"],
+      });
+    } else {
+      set(["federation", "advertised_endpoints"], advertisedEndpoints);
+    }
+  }
+  if (patch.federation?.cloudflareEndpoint !== undefined) {
+    if (patch.federation.cloudflareEndpoint.trim() === "") {
+      edits.push({ op: "delete", path: ["federation", "cloudflare_endpoint"] });
+    } else {
+      set(
+        ["federation", "cloudflare_endpoint"],
+        patch.federation.cloudflareEndpoint.trim(),
+      );
     }
   }
   if (patch.federation?.cloudflareMtlsEnabled !== undefined) {
@@ -1622,6 +1678,9 @@ function normalizeDesktopConfig(
       listenPort: readNumber(federation?.listen_port),
       publicUrl: readString(federation?.public_url),
       gatewayUrl: readString(federation?.gateway_url),
+      gatewayEndpoints: readEndpointList(federation?.gateway_endpoints),
+      advertisedEndpoints: readEndpointList(federation?.advertised_endpoints),
+      cloudflareEndpoint: readString(federation?.cloudflare_endpoint),
       cloudflareMtlsEnabled: readBoolean(
         federation?.cloudflare_mtls_enabled,
       ),
@@ -2227,6 +2286,44 @@ function readHotCpuProfileTriggerMode(
   return typeof value === "string" && isDesktopHotCpuProfileTriggerMode(value)
     ? value
     : undefined;
+}
+
+// Endpoints are dialed by the main process, so the scheme allowlist is
+// enforced here rather than trusting the renderer (config.toml is
+// hand-editable, and invite-supplied endpoints never pass through the UI).
+function sanitizeEndpointList(endpoints: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const sanitized: string[] = [];
+  for (const endpoint of endpoints) {
+    const trimmed = endpoint.trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    if (!isFederationGatewayEndpointUrl(trimmed)) continue;
+    seen.add(trimmed);
+    sanitized.push(trimmed);
+  }
+  return sanitized;
+}
+
+// Drops entries a hand-edited config may contain that the transport must never
+// dial (wrong scheme, embedded password, option-like host).
+function readEndpointList(
+  value: TomlScalar | undefined,
+): string[] | undefined {
+  const raw = readStringArray(value);
+  if (raw === undefined) return undefined;
+  const sanitized = sanitizeEndpointList(raw);
+  return sanitized.length > 0 ? sanitized : undefined;
+}
+
+function legacyGatewayUrlComment(): string {
+  return [
+    "#",
+    LEGACY_SETTINGS_MARKER,
+    "key=gateway_url",
+    "shape=string",
+    `used_through=${LEGACY_FEDERATION_GATEWAY_URL_LAST_VERSION}`,
+    "kept_for_older_clients",
+  ].join(" ");
 }
 
 function readFederationMode(

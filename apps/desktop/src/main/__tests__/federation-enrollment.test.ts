@@ -61,6 +61,80 @@ describe("federation enrollment", () => {
     );
   });
 
+  it("round-trips an ordered multi-endpoint invite at the same version", () => {
+    const gatewayKeyPair = generateFederationIdentityKeyPair();
+    const gatewayEndpoints = [
+      "ws://192.168.1.20:47830",
+      "wss://studio.example.ts.net/pwragent-federation",
+      "wss://federation.example.com",
+    ];
+    const invite = encodeFederationInvite({
+      version: FEDERATION_INVITE_VERSION,
+      token: "invite-token-multipath",
+      gatewayInstanceId: "gateway_one",
+      gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+      gatewayNoisePublicKey: "gateway-noise-public-key",
+      gatewayUrl: gatewayEndpoints[0],
+      gatewayEndpoints,
+      expiresAt: 2_000,
+    });
+
+    const decoded = decodeFederationInvite(invite, 1_000);
+    expect(decoded.version).toBe(FEDERATION_INVITE_VERSION);
+    expect(decoded.gatewayUrl).toBe(gatewayEndpoints[0]);
+    expect(decoded.gatewayEndpoints).toEqual(gatewayEndpoints);
+  });
+
+  it("rejects invites with a malformed endpoint list", () => {
+    const base = {
+      version: FEDERATION_INVITE_VERSION,
+      token: "invite-token-bad-endpoints",
+      gatewayInstanceId: "gateway_one",
+      gatewayPublicKeyPem: "gateway-key",
+      gatewayNoisePublicKey: "gateway-noise-key",
+      gatewayUrl: "ws://127.0.0.1:47830",
+      expiresAt: 2_000,
+    };
+    for (const gatewayEndpoints of [
+      [],
+      ["ws://ok.example", 7],
+      "not-a-list",
+      // An invite is unsigned, attacker-authored input that never passes
+      // through the renderer, so the scheme allowlist is enforced on decode.
+      ["https://evil.example"],
+      ["ws://ok.example", "https://evil.example"],
+      ["ssh://user:secret@host"],
+      ["ssh://-oProxyCommand=touch%20pwned"],
+    ]) {
+      const invite = `pwragent-federation:${Buffer.from(
+        JSON.stringify({ ...base, gatewayEndpoints }),
+        "utf8",
+      ).toString("base64url")}`;
+      expect(() => decodeFederationInvite(invite, 1_000)).toThrow(
+        /Invalid federation invite\.|must all be ws:\/\//,
+      );
+    }
+  });
+
+  it("rejects an invite whose gateway URL is not a supported endpoint", () => {
+    const invite = `pwragent-federation:${Buffer.from(
+      JSON.stringify({
+        version: FEDERATION_INVITE_VERSION,
+        token: "invite-token-bad-url",
+        gatewayInstanceId: "gateway_one",
+        gatewayPublicKeyPem: "gateway-key",
+        gatewayNoisePublicKey: "gateway-noise-key",
+        gatewayUrl: "https://evil.example",
+        expiresAt: 2_000,
+      }),
+      "utf8",
+    ).toString("base64url")}`;
+
+    expect(() => decodeFederationInvite(invite, 1_000)).toThrow(
+      /must be a ws:\/\/, wss:\/\/, or ssh:\/\/ endpoint/,
+    );
+  });
+
   it("rejects unsupported invite versions before attempting enrollment", () => {
     const unsupportedInvite = `pwragent-federation:${Buffer.from(JSON.stringify({
       version: FEDERATION_INVITE_VERSION + 1,

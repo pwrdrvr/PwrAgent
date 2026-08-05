@@ -761,6 +761,16 @@ export class DesktopSettingsService {
         listenPort: this.resolveConfigNumber(config.federation?.listenPort, 47830),
         publicUrl: this.resolveConfigString(config.federation?.publicUrl),
         gatewayUrl: this.resolveConfigString(config.federation?.gatewayUrl),
+        gatewayEndpoints: this.resolveFederationEndpointList(
+          config.federation?.gatewayEndpoints,
+          config.federation?.gatewayUrl,
+        ),
+        advertisedEndpoints: this.resolveFederationEndpointList(
+          config.federation?.advertisedEndpoints,
+        ),
+        cloudflareEndpoint: this.resolveConfigString(
+          config.federation?.cloudflareEndpoint,
+        ),
         cloudflareMtlsEnabled: this.resolveConfigBoolean(
           config.federation?.cloudflareMtlsEnabled,
           false,
@@ -2011,6 +2021,23 @@ export class DesktopSettingsService {
       value: configValue ?? DESKTOP_FEDERATION_MODE_DEFAULT,
       source: configValue === undefined ? "default" : "config",
     };
+  }
+
+  private resolveFederationEndpointList(
+    configValue: string[] | undefined,
+    fallbackUrl?: string,
+  ): DesktopSettingsValue<string[]> {
+    const configured = configValue
+      ?.map((endpoint) => endpoint.trim())
+      .filter((endpoint) => endpoint.length > 0);
+    if (configured && configured.length > 0) {
+      return { value: configured, source: "config" };
+    }
+    const fallback = fallbackUrl?.trim();
+    if (fallback) {
+      return { value: [fallback], source: "config" };
+    }
+    return { value: [], source: "default" };
   }
 
   private resolveNumber(

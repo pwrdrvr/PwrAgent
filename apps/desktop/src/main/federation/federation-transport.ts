@@ -1,5 +1,6 @@
 import http from "node:http";
 import { randomUUID } from "node:crypto";
+import type { Duplex } from "node:stream";
 import WebSocket, { WebSocketServer } from "ws";
 import type {
   FederationCapability,
@@ -502,6 +503,21 @@ export async function connectFederationClient(params: {
   headers?: Record<string, string>;
   clientCertificate?: string;
   clientPrivateKey?: string;
+  /**
+   * Custom outer-transport socket factory (e.g. an SSH stdio forward). When
+   * set, the WebSocket upgrade runs over the returned stream instead of a
+   * direct TCP/TLS connection; `url` still names the inner listener so the
+   * upgrade Host header matches. Everything inside — Noise handshake,
+   * channel-bound auth, envelopes — is unchanged.
+   */
+  createSocket?: () => Duplex;
+  /**
+   * Deadline for the whole pre-session exchange: TCP/TLS connect, WebSocket
+   * upgrade, transport hello, Noise handshake, and identity auth. Without it a
+   * peer that accepts the upgrade and then goes silent parks this promise
+   * forever, which stalls the caller's endpoint walk and reconnect loop.
+   */
+  connectTimeoutMs?: number;
   /** Client's Noise static keypair. Enables encryption (initiator role). */
   noiseStatic?: NoiseKeyPair;
   /** Pinned gateway Noise static public key (raw 32 bytes), from the invite. */
@@ -509,13 +525,66 @@ export async function connectFederationClient(params: {
   onEnvelope?: (envelope: FederationProtocolEnvelope) => void;
   onClose?: () => void;
 }): Promise<FederationClientWebSocketClient> {
-  const socket = new WebSocket(params.url, {
-    headers: params.headers,
-    cert: params.clientCertificate,
-    key: params.clientPrivateKey,
-  });
+  const connectTimeoutMs =
+    params.connectTimeoutMs ?? FEDERATION_CONNECT_TIMEOUT_MS;
+  const socket = new WebSocket(
+    params.url,
+    params.createSocket
+      ? {
+          headers: params.headers,
+          handshakeTimeout: connectTimeoutMs,
+          agent: outerSocketAgent(params.createSocket),
+        }
+      : {
+          headers: params.headers,
+          handshakeTimeout: connectTimeoutMs,
+          cert: params.clientCertificate,
+          key: params.clientPrivateKey,
+        },
+  );
   // Attach the reader before "open" so no inbound frame can be missed.
   const reader = new FederationFrameReader(socket);
+  // `handshakeTimeout` only covers the upgrade. This deadline also covers the
+  // frames after it, so a peer that upgrades and then stays silent still fails.
+  const connectDeadline = new FederationConnectDeadline(socket, connectTimeoutMs);
+  try {
+    return await establishFederationClient(params, socket, reader);
+  } finally {
+    connectDeadline.clear();
+  }
+}
+
+const FEDERATION_CONNECT_TIMEOUT_MS = 20_000;
+
+// Closes the socket if the pre-session exchange has not finished in time. The
+// close makes every pending `reader.next()` reject, so the caller's await
+// chain unwinds instead of parking forever.
+class FederationConnectDeadline {
+  private timer?: ReturnType<typeof setTimeout>;
+
+  constructor(socket: WebSocket, timeoutMs: number) {
+    this.timer = setTimeout(() => {
+      this.timer = undefined;
+      log.warn("federation connect deadline exceeded", { timeoutMs });
+      socket.close(1002, "Federation connect timeout");
+      socket.terminate();
+    }, timeoutMs);
+    this.timer.unref?.();
+  }
+
+  clear(): void {
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = undefined;
+    }
+  }
+}
+
+async function establishFederationClient(
+  params: Parameters<typeof connectFederationClient>[0],
+  socket: WebSocket,
+  reader: FederationFrameReader,
+): Promise<FederationClientWebSocketClient> {
   await waitForOpen(socket);
 
   // Phase 1: Noise_IK handshake (initiator). Skipped in tunnel mode.
@@ -747,6 +816,16 @@ class FederationFrameReader {
       this.pending = { resolve, reject };
     });
   }
+}
+
+// One-shot http.Agent that hands the WebSocket upgrade an externally created
+// stream (e.g. an SSH stdio forward) instead of dialing TCP itself.
+function outerSocketAgent(createSocket: () => Duplex): http.Agent {
+  const agent = new http.Agent({ keepAlive: false });
+  (
+    agent as http.Agent & { createConnection: () => Duplex }
+  ).createConnection = () => createSocket();
+  return agent;
 }
 
 function rawDataToBuffer(raw: WebSocket.RawData): Buffer {

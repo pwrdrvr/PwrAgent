@@ -30,7 +30,8 @@ confidential.
 |---|---|---|---|---|---|
 | Loopback `ws://` | Same machine only | Not needed across a network | Operating-system loopback | Required | Two isolated profiles on one machine |
 | Direct LAN `ws://` | LAN interface | None | Host firewall only | Required | Avoid unless an encrypted overlay is protecting the path |
-| SSH reverse tunnel | SSH endpoint | SSH | SSH key and server access | Required | Development, temporary administration, and VM labs |
+| PwrAgent-managed `ssh://` endpoint | SSH endpoint | SSH plus PwrAgent secure channel | SSH key and server access | Required and channel-bound | LAN or VPN paths where sshd already runs on the gateway machine |
+| SSH reverse tunnel (manual) | SSH endpoint | SSH | SSH key and server access | Required | Development, temporary administration, and VM labs |
 | PwrAgent encrypted transport | Configured listener | PwrAgent secure channel | PwrAgent enrollment | Required and channel-bound | Direct LAN or other private routed networks |
 | Tailscale Serve | Tailnet only | Tailscale/WireGuard plus HTTPS | Tailnet identity and grants | Required | Private access among the operator's enrolled devices |
 | Tailscale Funnel | Public hostname | HTTPS plus encrypted Tailscale relay | Public by default | Required | Public reachability when Cloudflare is not desired |
@@ -131,11 +132,54 @@ This protects PwrAgent traffic, but it does not provide automatic LAN discovery,
 NAT traversal, a public hostname, or a firewall. Operators still choose how one
 machine routes to the other.
 
-## SSH Reverse Tunnel
+## SSH
 
-SSH is an external transport option, not a PwrAgent-managed feature. A reverse
-tunnel is useful when a development VM can accept SSH connections but should
-not expose a PwrAgent listener to the LAN.
+### PwrAgent-managed `ssh://` endpoint
+
+A federation client can dial the gateway through SSH directly by configuring a
+gateway endpoint of the form:
+
+```text
+ssh://[user@]host[:sshPort]/?forward=127.0.0.1:47830
+```
+
+The `forward` query names the loopback listener on the gateway machine and
+defaults to `127.0.0.1:47830`. PwrAgent spawns the operator's system OpenSSH
+client with stdio forwarding (`ssh -W`) and runs the ordinary federation
+WebSocket over that stream, so `~/.ssh/config`, key agents, and `known_hosts`
+all apply unchanged. PwrAgent never stores SSH credentials, never relaxes
+host-key checking, and runs `BatchMode=yes` so a missing key or unknown host
+fails closed with a readable error instead of hanging on a prompt. Passwords
+embedded in the endpoint URL are rejected, as are hosts or users beginning
+with `-` (which `ssh` would read as an option rather than a destination).
+
+The `forward` target must be a loopback address on the gateway machine. That
+matches the documented topology and keeps a supplied endpoint from using the
+operator's SSH server to reach other hosts on its network.
+
+PwrAgent invokes whatever `ssh` is on `PATH`; it does not yet locate the
+Windows OpenSSH client at its System32 path, so Windows operators need `ssh`
+on `PATH` to use `ssh://` endpoints.
+
+SSH replaces only the outer reachability hop. The mandatory Noise IK channel,
+the pinned gateway Noise key, and the signed, channel-bound peer
+authentication run identically inside the SSH stream — a compromised or
+spoofed SSH host can fail the connection but cannot impersonate the pinned
+gateway. The gateway side needs no PwrAgent change: sshd terminates SSH and
+forwards a plain TCP connection to the loopback WebSocket listener.
+
+```text
+PwrAgent client
+  -> system OpenSSH (ssh -W, BatchMode)
+  -> sshd on gateway machine
+  -> gateway 127.0.0.1:47830
+  -> Noise IK handshake + PwrAgent peer authentication
+```
+
+### Manual SSH reverse tunnel
+
+A manually managed reverse tunnel remains useful when a development VM can
+accept SSH connections but should not expose a PwrAgent listener to the LAN.
 
 Example topology:
 
@@ -149,8 +193,57 @@ PwrAgent client in VM
 
 SSH encrypts the cross-machine segment and controls who may create the tunnel.
 PwrAgent still performs enrollment and signed peer authentication inside it.
-The SSH process lifecycle, host-key verification, keys, and reconnect behavior
+For a manual tunnel, the SSH process lifecycle, keys, and reconnect behavior
 remain the operator's responsibility.
+
+## Multi-Path Gateway Endpoints and Ordered Fallback
+
+A client keeps exactly one pinned gateway identity (signing key and Noise
+channel key) but may configure several candidate endpoints for reaching it in
+`[federation] gateway_endpoints` — for example a LAN `ws://` or `ssh://` path
+first, then a Tailscale Serve URL, then a Cloudflare Tunnel hostname. The
+reconnect loop tries the endpoints in order, starts each cycle with the last
+endpoint that carried a fully authenticated session, and applies reconnect
+backoff per full cycle through the list. Settings → Federation shows each
+endpoint's live status and lets the operator edit the ordered list; gateways
+can advertise multiple endpoints in enrollment invites via
+`[federation] advertised_endpoints`.
+
+Endpoint fallback cannot redirect a client to a different gateway identity:
+
+- Every endpoint, on every attempt, runs the same Noise IK handshake against
+  the pinned gateway Noise key and the same signed identity verification
+  against the pinned gateway signing key. An attacker-controlled endpoint
+  cannot complete the handshake and therefore can only make that endpoint
+  fail, which the attacker on that path could already do.
+- Every endpoint must use `ws://`, `wss://`, or `ssh://`, must not embed a
+  password, and must not have a host or user beginning with `-`. This is
+  enforced where endpoints enter the app — including on invite decode, since
+  an invite is unsigned and never passes through the Settings UI — and again
+  before anything is dialed.
+- The last-good endpoint memory only ever holds a configured endpoint that
+  completed full authentication, so it cannot be steered by a hostile peer.
+- `ssh://` endpoints may only forward to the gateway's loopback address, so a
+  supplied endpoint cannot turn the operator's SSH server into a proxy for
+  reaching other hosts on its network.
+
+Outer edge credentials need separate care, because they are **not** protected
+by the pinned keys. Cloudflare Access service tokens and mTLS client
+certificates travel in the WebSocket upgrade and the TLS handshake — both of
+which complete before the Noise handshake verifies anything. A scheme check
+alone is therefore not sufficient scoping: it would send the credential to
+every TLS endpoint in the fallback list.
+
+PwrAgent scopes those credentials to a single host:
+
+- Settings -> Federation -> Cloudflare has a **Cloudflare endpoint** field
+  naming the one endpoint that is Cloudflare-fronted. Access tokens and client
+  certificates are sent only to that host, compared by host and port,
+  case-insensitively and ignoring the path.
+- When no endpoint is designated, the credentials are used only if a single
+  gateway endpoint is configured. A multi-endpoint configuration with no
+  designated host sends them to nothing and logs that they were withheld.
+- They are never attached to `ws://` or `ssh://` endpoints.
 
 ## Tailscale
 

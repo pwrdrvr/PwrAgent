@@ -13,6 +13,7 @@ import type {
   FederationCapability,
   FederationConnectionState,
   FederationDiagnosticEvent,
+  FederationEndpointStatus,
   FederatedSearchRequest,
   FederatedSearchResponse,
   FederationHealthStatus,
@@ -51,6 +52,8 @@ import {
   FEDERATION_INVITE_VERSION,
   FEDERATION_PROTOCOL_VERSION,
   buildFederatedThreadRef,
+  federationEndpointAcceptsCloudflareCredentials,
+  isFederationGatewayEndpointUrl,
   isRemoteFederationTarget,
   type AppServerListSkillsRequest,
   type AppServerListThreadsRequest,
@@ -134,6 +137,12 @@ import {
   type FederationClientWebSocketClient,
   type FederationGatewayConnection,
 } from "./federation-transport";
+import { orderFederationEndpointAttempts } from "./federation-endpoints";
+import {
+  dialFederationSshEndpoint,
+  isFederationSshEndpointUrl,
+  parseFederationSshEndpoint,
+} from "./federation-ssh";
 import { noiseKeyPairFromRawPrivate } from "./federation-noise";
 
 const log = getMainLogger("pwragent:federation-runtime");
@@ -141,10 +150,13 @@ const INSTANCE_ID_META_KEY = "federation_instance_id";
 const GATEWAY_INSTANCE_ID_META_KEY = "federation_gateway_instance_id";
 const GATEWAY_PUBLIC_KEY_META_KEY = "federation_gateway_public_key_pem";
 const GATEWAY_NOISE_PUBLIC_KEY_META_KEY = "federation_gateway_noise_public_key";
+const GATEWAY_LAST_ENDPOINT_META_KEY = "federation_gateway_last_endpoint";
 const PENDING_INVITE_TOKEN_META_KEY = "federation_pending_invite_token";
 const GATEWAY_ENROLLED_AT_META_KEY = "federation_gateway_enrolled_at";
 const FEDERATION_PEER_DIRECTORY_METHOD = "federation.peerDirectory";
 const FEDERATION_RECONNECT_MAX_DELAY_MS = 30_000;
+/** A session must last this long before it counts as stable enough to reset backoff. */
+const FEDERATION_STABLE_SESSION_MS = 60_000;
 
 const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "remote_window",
@@ -175,6 +187,11 @@ export class DesktopFederationRuntime {
   private listenUrl?: string;
   private gatewayUrl?: string;
   private gatewayInstanceId?: FederationInstanceId;
+  private configuredEndpoints: string[] = [];
+  private readonly endpointStatuses = new Map<
+    string,
+    Omit<FederationEndpointStatus, "url">
+  >();
   private readonly rpcByPeer = new Map<FederationInstanceId, FederationRpcEndpoint>();
   private readonly remotePeerDirectory = new Map<
     FederationInstanceId,
@@ -200,6 +217,9 @@ export class DesktopFederationRuntime {
   private reconnectTimer?: ReturnType<typeof setTimeout>;
   private reconnectAttempt = 0;
   private connectionGeneration = 0;
+  /** Bumped only by stop(), so an in-flight endpoint walk can detect teardown. */
+  private walkEpoch = 0;
+  private lastConnectedAt?: number;
   private stopping = true;
   private lastConnectionError?: string;
   private lastConnectionFailureKind?: "auth" | "transport";
@@ -259,6 +279,7 @@ export class DesktopFederationRuntime {
   async stop(): Promise<void> {
     this.stopping = true;
     this.connectionGeneration += 1;
+    this.walkEpoch += 1;
     if (isAppStateInitialized()) {
       for (const peer of this.visiblePeers()) {
         if (peer.status === "connected") {
@@ -284,6 +305,8 @@ export class DesktopFederationRuntime {
     this.listenUrl = undefined;
     this.gatewayUrl = undefined;
     this.gatewayInstanceId = undefined;
+    this.configuredEndpoints = [];
+    this.endpointStatuses.clear();
     this.rpcByPeer.clear();
     this.remotePeerDirectory.clear();
     this.publishedPeerStatuses.clear();
@@ -317,13 +340,26 @@ export class DesktopFederationRuntime {
             ? "connecting"
             : "disconnected";
       health.unavailableReason = this.lastConnectionError;
+      const endpoints =
+        this.configuredEndpoints.length > 0
+          ? this.configuredEndpoints
+          : settings.federation.gatewayEndpoints.value;
+      health.gatewayEndpoints = endpoints.map((url) => ({
+        url,
+        state: "idle",
+        ...this.endpointStatuses.get(url),
+      }));
     }
     if (this.gatewayListenerError) {
       health.status = "degraded";
       health.unavailableReason = this.gatewayListenerError;
     }
+    // Prefer the configured endpoint list: a profile that only ever used
+    // multi-path endpoints has no legacy `gateway_url`, and the enrollment
+    // card would otherwise show a paired gateway with no address.
     health.clientEnrollment = this.readClientEnrollment(
-      settings.federation.gatewayUrl.value.trim(),
+      settings.federation.gatewayEndpoints.value[0]?.trim()
+        || settings.federation.gatewayUrl.value.trim(),
     );
     return health;
   }
@@ -359,6 +395,10 @@ export class DesktopFederationRuntime {
     stateDb.setMeta(GATEWAY_NOISE_PUBLIC_KEY_META_KEY, "");
     stateDb.setMeta(PENDING_INVITE_TOKEN_META_KEY, "");
     stateDb.setMeta(GATEWAY_ENROLLED_AT_META_KEY, "");
+    // The endpoint list and its last-good memory belong to the pairing being
+    // forgotten. Leaving them behind would keep a dual-mode instance dialing
+    // the forgotten gateway with no pins left to satisfy it.
+    stateDb.setMeta(GATEWAY_LAST_ENDPOINT_META_KEY, "");
     const settingsService = getDesktopSettingsService();
     const settings = await settingsService.readSettings();
     const mode = settings.federation.mode.value;
@@ -375,6 +415,7 @@ export class DesktopFederationRuntime {
     await settingsService.writeConfigPatch({
       federation: {
         gatewayUrl: "",
+        gatewayEndpoints: [],
         ...(mode === "client" ? { mode: "disabled" as const } : {}),
       },
     });
@@ -431,7 +472,18 @@ export class DesktopFederationRuntime {
         "Invites are issued by the gateway. Switch Mode to gateway or dual first.",
       );
     }
-    const gatewayUrl = settings.federation.publicUrl.value.trim() || this.listenUrl;
+    const advertisedEndpoints = settings.federation.advertisedEndpoints.value
+      .map((endpoint) => endpoint.trim())
+      .filter((endpoint) => endpoint.length > 0);
+    const fallbackUrl =
+      settings.federation.publicUrl.value.trim() || this.listenUrl;
+    const gatewayEndpoints =
+      advertisedEndpoints.length > 0
+        ? advertisedEndpoints
+        : fallbackUrl
+          ? [fallbackUrl]
+          : [];
+    const gatewayUrl = gatewayEndpoints[0];
     if (!gatewayUrl) {
       throw new Error("Federation gateway URL is not configured.");
     }
@@ -458,6 +510,7 @@ export class DesktopFederationRuntime {
         gatewayInstanceId: this.ensureLocalInstanceId(),
         gatewayPublicKeyPem: gatewayIdentity.publicKeyPem,
         gatewayUrl,
+        gatewayEndpoints,
         gatewayNoisePublicKey: noise.publicKeyBase64,
         expiresAt,
       }),
@@ -469,6 +522,7 @@ export class DesktopFederationRuntime {
     accepted: boolean;
     gatewayInstanceId: FederationInstanceId;
     gatewayUrl: string;
+    gatewayEndpoints: string[];
   }> {
     const payload = decodeFederationInvite(invite);
     const stateDb = getAppStateDb();
@@ -478,12 +532,15 @@ export class DesktopFederationRuntime {
       GATEWAY_NOISE_PUBLIC_KEY_META_KEY,
       payload.gatewayNoisePublicKey,
     );
+    // A new gateway identity invalidates any endpoint memory from before.
+    stateDb.setMeta(GATEWAY_LAST_ENDPOINT_META_KEY, "");
     stateDb.setMeta(PENDING_INVITE_TOKEN_META_KEY, payload.token);
     stateDb.setMeta(GATEWAY_ENROLLED_AT_META_KEY, String(Date.now()));
     // Importing on a listening instance must not silently kill its
     // listener: gateway/dual become dual, everything else becomes client.
     const currentMode = (await getDesktopSettingsService().readSettings())
       .federation.mode.value;
+    const gatewayEndpoints = payload.gatewayEndpoints ?? [payload.gatewayUrl];
     await getDesktopSettingsService().writeConfigPatch({
       federation: {
         mode:
@@ -491,6 +548,7 @@ export class DesktopFederationRuntime {
             ? "dual"
             : "client",
         gatewayUrl: payload.gatewayUrl,
+        gatewayEndpoints,
       },
     });
     await this.restart();
@@ -498,6 +556,7 @@ export class DesktopFederationRuntime {
       accepted: true,
       gatewayInstanceId: payload.gatewayInstanceId,
       gatewayUrl: payload.gatewayUrl,
+      gatewayEndpoints,
     };
   }
 
@@ -645,19 +704,89 @@ export class DesktopFederationRuntime {
     }
 
     if (mode === "client" || mode === "dual") {
-      const gatewayUrl = settings.federation.gatewayUrl.value.trim();
-      if (!gatewayUrl) {
-        this.lastConnectionError = "Federation gateway URL is not configured.";
+      const configured = settings.federation.gatewayEndpoints.value
+        .map((endpoint) => endpoint.trim())
+        .filter((endpoint) => endpoint.length > 0);
+      // Last line of defense before anything is dialed: the config file is
+      // hand-editable and may predate the scheme allowlist.
+      const endpoints = configured.filter(isFederationGatewayEndpointUrl);
+      if (endpoints.length !== configured.length) {
+        log.warn("ignoring federation endpoints with an unsupported scheme", {
+          ignored: configured.length - endpoints.length,
+        });
+      }
+      this.configuredEndpoints = endpoints;
+      if (endpoints.length === 0) {
+        this.lastConnectionError =
+          configured.length > 0
+            ? "No federation gateway endpoint uses a supported ws://, wss://, or ssh:// scheme."
+            : "Federation gateway URL is not configured.";
       } else {
-        await this.connectClient(gatewayUrl).catch((error) => {
-          this.handleClientConnectionFailure(gatewayUrl, error);
+        await this.connectToGateway().catch((error) => {
+          this.handleClientConnectionFailure(error);
         });
       }
     }
   }
 
+  // One reconnect cycle: walk the configured endpoints (last-good first) and
+  // stop at the first fully authenticated connection. Every endpoint runs the
+  // identical pinned-identity + Noise handshake, so fallback can only change
+  // reachability, never which gateway the client will trust.
+  private async connectToGateway(): Promise<void> {
+    const endpoints = this.configuredEndpoints;
+    if (endpoints.length === 0) return;
+    const lastGoodEndpoint =
+      getAppStateDb().getMeta(GATEWAY_LAST_ENDPOINT_META_KEY) || undefined;
+    const attempts = orderFederationEndpointAttempts(
+      endpoints,
+      lastGoodEndpoint,
+    );
+    // A restart during the walk flips `stopping` back to false, so `stopping`
+    // alone would let a superseded walk keep dialing a stale endpoint list and
+    // race the new one into `this.client`. `connectionGeneration` can't serve
+    // here because connectClient bumps it per attempt; this epoch changes only
+    // when the runtime is torn down.
+    const walkEpoch = this.walkEpoch;
+    let lastError: unknown;
+    for (const endpoint of attempts) {
+      if (this.stopping || this.walkEpoch !== walkEpoch) return;
+      try {
+        await this.connectClient(endpoint);
+        return;
+      } catch (error) {
+        lastError = error;
+        const rawMessage =
+          error instanceof Error ? error.message : String(error);
+        this.endpointStatuses.set(endpoint, {
+          ...this.endpointStatuses.get(endpoint),
+          state: "failed",
+          lastError: redactFederationDiagnostic(rawMessage),
+        });
+        // Every endpoint authenticates against the SAME pinned gateway
+        // identity, so an auth-class failure is a property of the pairing,
+        // not of this path. Walking on would waste attempts and, worse, let
+        // a later endpoint's network error mask a broken pin behind an
+        // endless "connecting" retry instead of surfacing as "rejected".
+        if (classifyFederationClientFailure(rawMessage) === "auth") {
+          throw error;
+        }
+      }
+    }
+    throw lastError instanceof Error
+      ? lastError
+      : new Error(
+          "Federation gateway is unreachable on every configured endpoint.",
+        );
+  }
+
   private async connectClient(gatewayUrl: string): Promise<void> {
     if (!gatewayUrl) return;
+    this.endpointStatuses.set(gatewayUrl, {
+      ...this.endpointStatuses.get(gatewayUrl),
+      state: "connecting",
+      lastAttemptAt: Date.now(),
+    });
     const gatewayInstanceId = getAppStateDb().getMeta(GATEWAY_INSTANCE_ID_META_KEY);
     if (!gatewayInstanceId) {
       throw new Error("Federation client mode is missing its gateway identity.");
@@ -683,10 +812,35 @@ export class DesktopFederationRuntime {
     const settings = await settingsService.readSettings();
     const cloudflareCredentials =
       await settingsService.resolveFederationCloudflareCredentials();
+    const sshEndpoint = isFederationSshEndpointUrl(gatewayUrl)
+      ? parseFederationSshEndpoint(gatewayUrl)
+      : undefined;
+    // Cloudflare edge credentials ride the WebSocket upgrade, which happens
+    // BEFORE the Noise handshake pins anything. So they must be scoped to the
+    // one host the operator designated as Cloudflare-fronted — not to "any
+    // wss:// URL", which would hand the Access bearer token and the mTLS client
+    // key to every TLS endpoint in the fallback list.
+    const acceptsCloudflareCredentials =
+      federationEndpointAcceptsCloudflareCredentials({
+        endpoint: gatewayUrl,
+        cloudflareEndpoint: settings.federation.cloudflareEndpoint.value,
+        configuredEndpointCount: this.configuredEndpoints.length,
+      });
     const cloudflareMtlsEnabled =
-      settings.federation.cloudflareMtlsEnabled.value;
+      acceptsCloudflareCredentials
+      && settings.federation.cloudflareMtlsEnabled.value;
     const cloudflareAccessEnabled =
-      settings.federation.cloudflareAccessServiceAuthEnabled.value;
+      acceptsCloudflareCredentials
+      && settings.federation.cloudflareAccessServiceAuthEnabled.value;
+    if (
+      !acceptsCloudflareCredentials
+      && (settings.federation.cloudflareMtlsEnabled.value
+        || settings.federation.cloudflareAccessServiceAuthEnabled.value)
+    ) {
+      log.info("federation endpoint is not the designated Cloudflare endpoint", {
+        withheldCredentials: true,
+      });
+    }
     if (
       cloudflareMtlsEnabled &&
       (!cloudflareCredentials.clientCertificate ||
@@ -716,8 +870,21 @@ export class DesktopFederationRuntime {
       detail: connectionMode,
     });
     const clientSession: { id?: FederationSessionId } = {};
+    // Node reports a failed ssh dial as a generic "socket hang up", so keep the
+    // real cause (auth, host key, timeout) and report that instead.
+    const sshFailure: { error?: Error } = {};
     const client = await connectFederationClient({
-      url: gatewayUrl,
+      url: sshEndpoint
+        ? `ws://${sshEndpoint.forwardHost}:${sshEndpoint.forwardPort}`
+        : gatewayUrl,
+      createSocket: sshEndpoint
+        ? () =>
+            dialFederationSshEndpoint(sshEndpoint, {
+              onFailure: (error) => {
+                sshFailure.error ??= error;
+              },
+            })
+        : undefined,
       mode: connectionMode,
       gatewayInstanceId,
       gatewayPublicKeyPem,
@@ -775,10 +942,19 @@ export class DesktopFederationRuntime {
           this.lastConnectionError,
         );
         this.disconnectAdvertisedPeers(this.lastConnectionError);
-        this.scheduleReconnect(gatewayUrl);
+        this.endpointStatuses.set(gatewayUrl, {
+          ...this.endpointStatuses.get(gatewayUrl),
+          state: "idle",
+        });
+        this.scheduleReconnect();
       },
       onEnvelope: (envelope) =>
         void this.receiveEnvelope(envelope, gatewayInstanceId),
+    }).catch((error: unknown) => {
+      throw (
+        sshFailure.error
+        ?? (error instanceof Error ? error : new Error(String(error)))
+      );
     });
     clientSession.id = client.sessionId;
     if (
@@ -805,10 +981,27 @@ export class DesktopFederationRuntime {
     if (pendingInviteToken) {
       getAppStateDb().setMeta(PENDING_INVITE_TOKEN_META_KEY, "");
     }
-    this.reconnectAttempt = 0;
+    this.markEndpointConnected(gatewayUrl);
+    // Backoff is reset by session *durability*, not by the mere fact that a
+    // handshake succeeded — otherwise a gateway that accepts and immediately
+    // drops (restart loop, eviction) pins reconnects at 1 Hz forever, spawning
+    // a fresh ssh process every second for ssh:// endpoints.
+    this.lastConnectedAt = Date.now();
     this.lastConnectionError = undefined;
     this.lastConnectionFailureKind = undefined;
     log.info("federation client connected", { gatewayUrl });
+  }
+
+  // Only a fully authenticated session ever updates the last-good endpoint
+  // memory, so a hostile endpoint can never steer future attempt ordering.
+  private markEndpointConnected(gatewayUrl: string): void {
+    this.endpointStatuses.set(gatewayUrl, {
+      ...this.endpointStatuses.get(gatewayUrl),
+      state: "active",
+      lastConnectedAt: Date.now(),
+      lastError: undefined,
+    });
+    getAppStateDb().setMeta(GATEWAY_LAST_ENDPOINT_META_KEY, gatewayUrl);
   }
 
   private recordClientConnection(params: {
@@ -842,10 +1035,7 @@ export class DesktopFederationRuntime {
     });
   }
 
-  private handleClientConnectionFailure(
-    gatewayUrl: string,
-    error: unknown,
-  ): void {
+  private handleClientConnectionFailure(error: unknown): void {
     if (this.stopping) return;
     this.client = undefined;
     const rawMessage = error instanceof Error ? error.message : String(error);
@@ -866,14 +1056,23 @@ export class DesktopFederationRuntime {
       detail: this.lastConnectionError,
     });
     log.warn("federation client connection failed", {
-      gatewayUrl,
+      endpoints: this.configuredEndpoints.length,
       error: this.lastConnectionError,
     });
-    this.scheduleReconnect(gatewayUrl);
+    this.scheduleReconnect();
   }
 
-  private scheduleReconnect(gatewayUrl: string): void {
+  // Backoff applies per full cycle through the endpoint list; every cycle
+  // re-walks the endpoints last-good-first via connectToGateway.
+  private scheduleReconnect(): void {
     if (this.stopping || this.reconnectTimer) return;
+    if (
+      this.lastConnectedAt !== undefined
+      && Date.now() - this.lastConnectedAt >= FEDERATION_STABLE_SESSION_MS
+    ) {
+      this.reconnectAttempt = 0;
+    }
+    this.lastConnectedAt = undefined;
     const delayMs = Math.min(
       1_000 * 2 ** this.reconnectAttempt,
       FEDERATION_RECONNECT_MAX_DELAY_MS,
@@ -882,8 +1081,8 @@ export class DesktopFederationRuntime {
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = undefined;
       if (this.stopping) return;
-      void this.connectClient(gatewayUrl).catch((error) => {
-        this.handleClientConnectionFailure(gatewayUrl, error);
+      void this.connectToGateway().catch((error) => {
+        this.handleClientConnectionFailure(error);
       });
     }, delayMs);
   }

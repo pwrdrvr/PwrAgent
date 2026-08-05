@@ -139,6 +139,9 @@ describe("desktop settings contracts", () => {
         listenPort: { value: 8765, source: "default" },
         publicUrl: { value: "", source: "default" },
         gatewayUrl: { value: "", source: "default" },
+        gatewayEndpoints: { value: [], source: "default" },
+        advertisedEndpoints: { value: [], source: "default" },
+        cloudflareEndpoint: { value: "", source: "default" },
         cloudflareMtlsEnabled: { value: false, source: "default" },
         cloudflareAccessServiceAuthEnabled: { value: false, source: "default" },
         instancePrivateKey: {
