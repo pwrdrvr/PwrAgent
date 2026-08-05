@@ -13600,6 +13600,39 @@ command = "pnpm dev"
     });
     await expectForkWorkspace();
 
+    codexClient.setThreads([
+      {
+        ...staleForkThread,
+        projectKey: forkWorktreePath,
+        linkedDirectories: [
+          {
+            id: forkWorktreePath,
+            label: "app",
+            path: forkWorktreePath,
+            kind: "local",
+          },
+        ],
+        gitBranch: "HEAD",
+      },
+    ]);
+    const [cwdOnlyThread] = await registry.listThreads({
+      backend: "codex",
+      callerReason: "navigation-snapshot",
+      forceRefresh: true,
+    });
+    expect(cwdOnlyThread).toMatchObject({
+      id: "thread-fork",
+      projectKey: forkWorktreePath,
+      linkedDirectories: [
+        expect.objectContaining({
+          path: expectedDir(repoPath),
+          worktreePath: expectedDir(forkWorktreePath),
+          kind: "worktree",
+        }),
+      ],
+    });
+    await expectForkWorkspace();
+
     await registry.close();
   });
 

@@ -1156,7 +1156,19 @@ function pendingStartedThreadWorkspaceMatches(
   if (!workspaceCwd) {
     return false;
   }
-  return path.resolve(workspaceCwd) === path.resolve(pendingWorkspaceCwd);
+  if (path.resolve(workspaceCwd) !== path.resolve(pendingWorkspaceCwd)) {
+    return false;
+  }
+
+  if (pendingThread.linkedDirectories.length === 0) {
+    return true;
+  }
+  const pendingDirectoryKeys = new Set(
+    pendingThread.linkedDirectories.map(linkedDirectoryIdentityKey),
+  );
+  return thread.linkedDirectories.some((directory) =>
+    pendingDirectoryKeys.has(linkedDirectoryIdentityKey(directory)),
+  );
 }
 
 function retainPendingStartedThreadWorkspace(
@@ -16874,7 +16886,8 @@ export class DesktopBackendRegistry {
       }
       // Codex can briefly surface a fork with the copied parent cwd. Keep the
       // workspace PwrAgent just prepared until thread/list reports that same
-      // cwd, while still accepting fresh provider title and status metadata.
+      // repository/worktree relationship, while still accepting fresh
+      // provider title and status metadata.
       return retainPendingStartedThreadWorkspace(thread, pendingThread);
     });
     const threadIds = new Set(resolvedThreads.map((thread) => thread.id));
