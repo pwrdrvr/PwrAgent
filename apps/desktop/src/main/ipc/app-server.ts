@@ -155,6 +155,7 @@ import {
   disposeDesktopBackendRegistry,
   getExistingDesktopBackendRegistry,
   getDesktopBackendRegistry,
+  WORKTREE_WORKING_STATE_CACHE_MAX_AGE_MS,
 } from "../app-server/backend-registry";
 import { materializeTranscriptImageUrlsForRenderer } from "../transcript-image-protocol";
 import { hydrateLaunchpadCodexEnvironmentOptions } from "../app-server/codex-environment-config";
@@ -298,12 +299,6 @@ const STARTUP_WORKTREE_WORKING_STATE_REFRESH_LIMIT = 8;
 const PR_DISCOVERY_TICK_INTERVAL_MS = 60_000;
 const PR_DISCOVERY_CADENCE_MS = 5 * 60_000;
 const PR_DISCOVERY_MAX_PER_TICK = 3;
-// Per-worktree working state changes as the agent edits/commits, but each
-// such turn pushes a fresh probe, so the background freshness window only
-// needs to catch out-of-band changes (terminal/IDE edits) on the next
-// snapshot. Shorter than the per-repo directory status TTL.
-const WORKTREE_WORKING_STATE_CACHE_MAX_AGE_MS = 30_000;
-
 type AppServerOverlayStoreLike = OverlayStoreLike &
   Pick<
     SqliteOverlayStore,
@@ -1743,9 +1738,11 @@ class DesktopAppServerService {
       canonicalSnapshot.threads,
       detachedPrsByThreadKey,
     );
-    const threadsWithWorkingState =
-      threadsWithPrimaryGitRepositories.map((thread) =>
-        this.applyCachedWorktreeWorkingState(thread),
+    const threadsWithWorkingState = await getDesktopBackendRegistry()
+      .hydrateThreadGitWorkingStates(
+        threadsWithPrimaryGitRepositories.map((thread) =>
+          this.applyCachedWorktreeWorkingState(thread),
+        ),
       );
     this.startWorktreeWorkingStateRefresh({
       automatic: true,
@@ -2628,7 +2625,8 @@ class DesktopAppServerService {
       ...(params.gitWorkingState ? { gitWorkingState: params.gitWorkingState } : {}),
     };
     this.workingStateByWorktree.set(params.worktreePath, cacheEntry);
-    await this.getOverlayStore().writeThreadGitWorkingStateCacheEntry(cacheEntry);
+    await getDesktopBackendRegistry()
+      .rememberThreadGitWorkingStateCacheEntry(cacheEntry);
 
     // Skip the push when the probed value is identical to what clients
     // already hold — avoids a snapshot patch + re-render on every idle

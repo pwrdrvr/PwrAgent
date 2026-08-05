@@ -100,7 +100,7 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
       );
     }
     const backend = request.backend ?? "all";
-    const threads = await this.registry.listThreads({
+    const listedThreads = await this.registry.listThreads({
       backend: backend === "all" ? undefined : backend,
       callerReason: "messaging-navigation-snapshot",
       filter: request.filter,
@@ -109,7 +109,9 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
       maxPages: request.refreshMode === "active-recent" ? 1 : undefined,
       skipArchivedMetadataRefresh: request.refreshMode === "active-recent",
     });
-    const messagingBindingsByThreadKey = await buildMessagingBindingsByThreadKey(threads);
+    const messagingBindingsByThreadKey = await buildMessagingBindingsByThreadKey(
+      listedThreads,
+    );
     const queuedExecutionModesByThreadKey =
       this.registry.getQueuedExecutionModesSnapshot();
     const snapshot = await getDesktopOverlayStore().reconcileNavigationSnapshot({
@@ -117,23 +119,31 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
       fetchedAt: Date.now(),
       messagingBindingsByThreadKey,
       queuedExecutionModesByThreadKey,
-      threads,
+      threads: listedThreads,
       workspaceRoots: resolveScratchProjectsRoots(),
     });
+    const threads = await this.registry.hydrateThreadGitWorkingStates(
+      snapshot.threads,
+      { probeMissing: true },
+    );
+    const hydratedSnapshot = {
+      ...snapshot,
+      threads,
+    };
     if (
       backend === "all"
       && !request.filter?.trim()
       && request.refreshMode !== "active-recent"
     ) {
-      this.registry.rememberCompleteNavigationSnapshot(snapshot);
+      this.registry.rememberCompleteNavigationSnapshot(hydratedSnapshot);
     }
     const directoryStatuses = await this.registry.readDirectoryStatuses(
-      snapshot.directories,
+      hydratedSnapshot.directories,
     );
 
     const localSnapshot: NavigationSnapshot = {
-      ...snapshot,
-      directories: snapshot.directories.map((directory) => ({
+      ...hydratedSnapshot,
+      directories: hydratedSnapshot.directories.map((directory) => ({
         ...directory,
         gitStatus: directoryStatuses[directory.key],
       })),
