@@ -13,11 +13,17 @@ type MessagingErrorNotice = {
   platform: MessagingChannelKind;
 };
 
+type MessagingPlatformNoticeState = {
+  changedAt: number;
+  notice?: AppNoticeToastNotice;
+  source: "event" | "snapshot";
+};
+
 export function MessagingErrorNotices(props: {
   desktopApi?: DesktopApi;
 }) {
-  const [noticesByPlatform, setNoticesByPlatform] = useState(
-    () => new Map<MessagingChannelKind, AppNoticeToastNotice>(),
+  const [statusByPlatform, setStatusByPlatform] = useState(
+    () => new Map<MessagingChannelKind, MessagingPlatformNoticeState>(),
   );
 
   useEffect(() => {
@@ -34,7 +40,7 @@ export function MessagingErrorNotices(props: {
         if (event.kind !== "health-changed") {
           return;
         }
-        setNoticesByPlatform((current) => applyStatusEvent(current, event));
+        setStatusByPlatform((current) => applyStatusEvent(current, event));
       },
     );
 
@@ -43,7 +49,7 @@ export function MessagingErrorNotices(props: {
         if (cancelled) {
           return;
         }
-        setNoticesByPlatform((current) => applyStatusSnapshot(current, statuses));
+        setStatusByPlatform((current) => applyStatusSnapshot(current, statuses));
       })
       .catch(() => {
         // Logged in main; a later pushed health event can still surface an error.
@@ -56,20 +62,23 @@ export function MessagingErrorNotices(props: {
   }, [props.desktopApi]);
 
   const dismiss = useCallback((platform: MessagingChannelKind) => {
-    setNoticesByPlatform((current) => {
-      if (!current.has(platform)) {
+    setStatusByPlatform((current) => {
+      const currentState = current.get(platform);
+      if (!currentState?.notice) {
         return current;
       }
       const next = new Map(current);
-      next.delete(platform);
+      next.set(platform, { ...currentState, notice: undefined });
       return next;
     });
   }, []);
 
-  const notices: MessagingErrorNotice[] = Array.from(
-    noticesByPlatform,
-    ([platform, notice]) => ({ notice, platform }),
-  );
+  const notices: MessagingErrorNotice[] = [];
+  for (const [platform, state] of statusByPlatform) {
+    if (state.notice) {
+      notices.push({ notice: state.notice, platform });
+    }
+  }
 
   return notices.map(({ notice, platform }) => (
     <AppNoticeToast
@@ -82,50 +91,67 @@ export function MessagingErrorNotices(props: {
 }
 
 function applyStatusSnapshot(
-  current: Map<MessagingChannelKind, AppNoticeToastNotice>,
+  current: Map<MessagingChannelKind, MessagingPlatformNoticeState>,
   statuses: MessagingPlatformStatus[],
-): Map<MessagingChannelKind, AppNoticeToastNotice> {
+): Map<MessagingChannelKind, MessagingPlatformNoticeState> {
   let next = current;
   for (const status of statuses) {
-    next = applyPlatformHealth(next, status);
+    next = applyPlatformHealth(next, status, "snapshot");
   }
   return next;
 }
 
 function applyStatusEvent(
-  current: Map<MessagingChannelKind, AppNoticeToastNotice>,
+  current: Map<MessagingChannelKind, MessagingPlatformNoticeState>,
   event: Extract<MessagingPlatformStatusEvent, { kind: "health-changed" }>,
-): Map<MessagingChannelKind, AppNoticeToastNotice> {
+): Map<MessagingChannelKind, MessagingPlatformNoticeState> {
   return applyPlatformHealth(current, {
     platform: event.platform,
     health: event.health,
     changedAt: event.at,
     reason: event.reason,
-  });
+  }, "event");
 }
 
 function applyPlatformHealth(
-  current: Map<MessagingChannelKind, AppNoticeToastNotice>,
+  current: Map<MessagingChannelKind, MessagingPlatformNoticeState>,
   status: Pick<
     MessagingPlatformStatus,
     "changedAt" | "health" | "platform" | "reason"
   >,
-): Map<MessagingChannelKind, AppNoticeToastNotice> {
-  if (status.health !== "errored") {
-    if (!current.has(status.platform)) {
-      return current;
-    }
-    const next = new Map(current);
-    next.delete(status.platform);
-    return next;
+  source: MessagingPlatformNoticeState["source"],
+): Map<MessagingChannelKind, MessagingPlatformNoticeState> {
+  const previous = current.get(status.platform);
+  if (
+    previous
+    && (
+      status.changedAt < previous.changedAt
+      || (
+        status.changedAt === previous.changedAt
+        && previous.source === "event"
+        && source === "snapshot"
+      )
+    )
+  ) {
+    return current;
   }
 
-  const nextNotice = buildMessagingErrorNotice(status);
-  if (current.get(status.platform)?.id === nextNotice.id) {
+  const notice = status.health === "errored"
+    ? buildMessagingErrorNotice(status)
+    : undefined;
+  if (
+    previous?.changedAt === status.changedAt
+    && previous.notice?.id === notice?.id
+    && previous.source === source
+  ) {
     return current;
   }
   const next = new Map(current);
-  next.set(status.platform, nextNotice);
+  next.set(status.platform, {
+    changedAt: status.changedAt,
+    notice,
+    source,
+  });
   return next;
 }
 
@@ -141,8 +167,8 @@ export function buildMessagingErrorNotice(
     detail: status.reason?.trim() || undefined,
     id: `messaging-platform-error:${status.platform}:${status.changedAt}`,
     message:
-      `${platformName} isn't listening for messages and won't retry automatically. `
-      + `Fix the problem, then restart PwrAgent or turn ${platformName} off and back on.`,
+      `${platformName} reported an adapter error. Messages may be unavailable `
+      + "until it recovers or is restarted.",
     title: `${platformName} messaging failed`,
     tone: "error",
   };

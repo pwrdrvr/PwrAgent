@@ -32,7 +32,7 @@ describe("MessagingErrorNotices", () => {
     );
 
     expect(await screen.findByText("Slack messaging failed")).toBeInTheDocument();
-    expect(screen.getByText(/isn't listening for messages/)).toBeInTheDocument();
+    expect(screen.getByText(/Messages may be unavailable/)).toBeInTheDocument();
     expect(screen.getByText("u.WebSocket is not a constructor")).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveAttribute("data-tone", "error");
     expect(container.querySelector(".app-notice-toast__timer")).toBeNull();
@@ -100,5 +100,86 @@ describe("MessagingErrorNotices", () => {
     expect(await screen.findByText("Telegram messaging failed")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Dismiss notice" }));
     expect(screen.queryByText("Telegram messaging failed")).not.toBeInTheDocument();
+  });
+
+  it("does not let an older healthy snapshot hide a newer live failure", async () => {
+    let emitStatus: ((event: MessagingPlatformStatusEvent) => void) | undefined;
+    let resolveSnapshot!: (statuses: MessagingPlatformStatus[]) => void;
+    const snapshot = new Promise<MessagingPlatformStatus[]>((resolve) => {
+      resolveSnapshot = resolve;
+    });
+
+    render(
+      <MessagingErrorNotices
+        desktopApi={{
+          getMessagingPlatformStatuses: () => snapshot,
+          onMessagingPlatformStatusEvent: (listener) => {
+            emitStatus = listener;
+            return () => undefined;
+          },
+        }}
+      />,
+    );
+
+    act(() => {
+      emitStatus?.({
+        kind: "health-changed",
+        platform: "slack",
+        health: "errored",
+        at: 200,
+        reason: "socket failed",
+      });
+    });
+    expect(screen.getByText("Slack messaging failed")).toBeInTheDocument();
+
+    await act(async () => {
+      resolveSnapshot([{
+        platform: "slack",
+        health: "enabled",
+        changedAt: 100,
+      }]);
+      await snapshot;
+    });
+    expect(screen.getByText("Slack messaging failed")).toBeInTheDocument();
+  });
+
+  it("does not let a stale errored snapshot resurrect a recovered notice", async () => {
+    let emitStatus: ((event: MessagingPlatformStatusEvent) => void) | undefined;
+    let resolveSnapshot!: (statuses: MessagingPlatformStatus[]) => void;
+    const snapshot = new Promise<MessagingPlatformStatus[]>((resolve) => {
+      resolveSnapshot = resolve;
+    });
+
+    render(
+      <MessagingErrorNotices
+        desktopApi={{
+          getMessagingPlatformStatuses: () => snapshot,
+          onMessagingPlatformStatusEvent: (listener) => {
+            emitStatus = listener;
+            return () => undefined;
+          },
+        }}
+      />,
+    );
+
+    act(() => {
+      emitStatus?.({
+        kind: "health-changed",
+        platform: "mattermost",
+        health: "enabled",
+        at: 200,
+      });
+    });
+
+    await act(async () => {
+      resolveSnapshot([{
+        platform: "mattermost",
+        health: "errored",
+        changedAt: 200,
+        reason: "websocket disconnected",
+      }]);
+      await snapshot;
+    });
+    expect(screen.queryByText("Mattermost messaging failed")).not.toBeInTheDocument();
   });
 });
