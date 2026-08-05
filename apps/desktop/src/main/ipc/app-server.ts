@@ -170,6 +170,7 @@ import {
   APP_SERVER_GET_PR_AUTO_DISPATCH_BUDGET_STATUS_CHANNEL,
   APP_SERVER_RESUME_PR_AUTO_DISPATCH_BUDGET_CHANNEL,
   PR_AUTO_DISPATCH_BUDGET_CHANGED_EVENT_CHANNEL,
+  GITHUB_PR_SAML_ENFORCEMENT_EVENT_CHANNEL,
   APP_SERVER_LIST_THREADS_CHANNEL,
   THREAD_SEARCH_CHANNEL,
   APP_SERVER_ARCHIVE_THREAD_CHANNEL,
@@ -222,6 +223,7 @@ import {
   NAVIGATION_UPDATE_SUBTHREAD_ORDER_CHANNEL,
   NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL,
 } from "../../shared/ipc";
+import { githubPrAccessTargetKey } from "../../shared/github-pr-access";
 import { subscribersForChannel } from "../window-channels";
 import { isFederationWindowWebContents } from "../window";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
@@ -1079,6 +1081,7 @@ class DesktopAppServerService {
   private prLookupRegistryLoaded = false;
   private prLookupRegistryLoadPromise: Promise<void> | undefined;
   private prGraphqlClient: GithubGraphqlPrClient | undefined;
+  private readonly githubSamlBlockedRepositories = new Set<string>();
   private prPollingScheduler: PrPollingScheduler | undefined;
   private backgroundPrPollingEnabled = false;
   private prAutoDispatchAllowed = false;
@@ -4232,7 +4235,36 @@ class DesktopAppServerService {
 
   private getPrGraphqlClient(): GithubGraphqlPrClient {
     if (!this.prGraphqlClient) {
-      this.prGraphqlClient = new GithubGraphqlPrClient();
+      this.prGraphqlClient = new GithubGraphqlPrClient({
+        onRepositoryAccess: (event) => {
+          const target = {
+            kind: "github-repository" as const,
+            owner: event.owner,
+            repo: event.repo,
+          };
+          const key = githubPrAccessTargetKey(target);
+          if (event.status === "available") {
+            this.githubSamlBlockedRepositories.delete(key);
+            return;
+          }
+          if (this.githubSamlBlockedRepositories.has(key)) {
+            return;
+          }
+          this.githubSamlBlockedRepositories.add(key);
+          const notice = {
+            branch: event.branch,
+            occurredAt: Date.now(),
+            target,
+          };
+          for (const webContents of subscribersForChannel(
+            GITHUB_PR_SAML_ENFORCEMENT_EVENT_CHANNEL,
+          )) {
+            if (!webContents.isDestroyed()) {
+              webContents.send(GITHUB_PR_SAML_ENFORCEMENT_EVENT_CHANNEL, notice);
+            }
+          }
+        },
+      });
     }
     return this.prGraphqlClient;
   }
@@ -5731,6 +5763,7 @@ class DesktopAppServerService {
     this.prPollingSettingsUnsubscribe?.();
     this.prPollingSettingsUnsubscribe = undefined;
     this.prGraphqlClient = undefined;
+    this.githubSamlBlockedRepositories.clear();
     this.prPollingFocusThreadKeys = new Set();
     this.prPollBackendByKey.clear();
     this.prStatusTransitionListeners.clear();

@@ -475,6 +475,51 @@ function readErrorHeaders(error: unknown): Record<string, string> {
   return normalized;
 }
 
+function githubSamlEnforcementAliasIndexes(
+  error: unknown,
+  refCount: number,
+  partial?: Record<string, unknown>,
+): number[] {
+  const entries = (
+    error as { errors?: Array<{ message?: unknown; path?: unknown[] }> } | null
+  )?.errors ?? [];
+  const matching = entries.filter(
+    (entry) =>
+      typeof entry.message === "string"
+      && isGithubOrganizationSamlEnforcementMessage(entry.message),
+  );
+  const indexes = new Set<number>();
+  for (const entry of matching) {
+    const alias = entry.path?.[0];
+    const match = typeof alias === "string" ? alias.match(/^r(\d+)$/) : null;
+    if (match) {
+      const index = Number.parseInt(match[1]!, 10);
+      if (index >= 0 && index < refCount) {
+        indexes.add(index);
+      }
+    }
+  }
+  if (indexes.size > 0) {
+    return [...indexes];
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  if (
+    matching.length === 0
+    && !isGithubOrganizationSamlEnforcementMessage(message)
+  ) {
+    return [];
+  }
+  return Array.from({ length: refCount }, (_, index) => index).filter(
+    (index) => !partial || !partial[`r${index}`],
+  );
+}
+
+export function isGithubOrganizationSamlEnforcementMessage(
+  message: string,
+): boolean {
+  return /resource protected by organization saml enforcement/i.test(message);
+}
+
 export type GithubGraphqlPrClientOptions = {
   /** Override the GraphQL transport — tests inject canned responses. */
   request?: (
@@ -486,6 +531,14 @@ export type GithubGraphqlPrClientOptions = {
   /** Override the retry sleep — tests make backoff instant. */
   sleep?: (ms: number) => Promise<void>;
   batchSize?: number;
+  onRepositoryAccess?: (event: GithubRepositoryAccessEvent) => void;
+};
+
+export type GithubRepositoryAccessEvent = {
+  branch?: string;
+  owner: string;
+  repo: string;
+  status: "available" | "saml-enforced";
 };
 
 export class GithubGraphqlPrClient {
@@ -493,6 +546,9 @@ export class GithubGraphqlPrClient {
   private readonly getTokenOverride: GithubGraphqlPrClientOptions["getToken"];
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly batchSize: number;
+  private readonly onRepositoryAccess:
+    | NonNullable<GithubGraphqlPrClientOptions["onRepositoryAccess"]>
+    | undefined;
   private tokenCache: { token: string; fetchedAt: number } | undefined;
 
   constructor(options: GithubGraphqlPrClientOptions = {}) {
@@ -502,6 +558,7 @@ export class GithubGraphqlPrClient {
       options.sleep
       ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.batchSize = Math.max(1, options.batchSize ?? DEFAULT_BATCH_SIZE);
+    this.onRepositoryAccess = options.onRepositoryAccess;
   }
 
   /** Force the next request to re-mint a token (e.g. after `gh auth login`). */
@@ -564,6 +621,7 @@ export class GithubGraphqlPrClient {
         buildBranchPrQuery(batch),
         token,
         batch.length,
+        batch,
       );
       if (!data) {
         continue;
@@ -580,6 +638,11 @@ export class GithubGraphqlPrClient {
             (node): node is GraphqlPrNode => Boolean(node),
           ),
         };
+      });
+      answers.forEach(({ ref, repository }) => {
+        if (repository) {
+          this.notifyRepositoryAccess(ref, "available");
+        }
       });
       const checksStillRunning = await this.resolveChecksStillRunning(
         answers.flatMap((answer) => answer.nodes),
@@ -720,6 +783,7 @@ export class GithubGraphqlPrClient {
     built: { query: string; variables: Record<string, string | number> },
     token: string,
     refCount: number,
+    repositoryRefs?: Array<Pick<BranchRef, "owner" | "repo" | "branch">>,
   ): Promise<Record<string, unknown> | undefined> {
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt += 1) {
       try {
@@ -729,6 +793,7 @@ export class GithubGraphqlPrClient {
         >;
       } catch (error) {
         const partial = (error as { data?: Record<string, unknown> } | null)?.data;
+        this.notifySamlEnforcement(error, repositoryRefs, partial);
         if (partial) {
           graphqlLog.debug("PR batch returned partial data", {
             refCount,
@@ -765,6 +830,7 @@ export class GithubGraphqlPrClient {
         // A GraphQL-level error still carries whatever aliases DID resolve.
         // One missing repo must not blank out the other 39 PRs in the batch.
         const partial = (error as { data?: BatchedPrResponse } | null)?.data;
+        this.notifySamlEnforcement(error, refs, partial);
         if (partial) {
           graphqlLog.debug("PR poll batch returned partial data", {
             refCount: refs.length,
@@ -795,6 +861,11 @@ export class GithubGraphqlPrClient {
     const nodes = refs
       .map((_, index) => data![`r${index}`]?.pullRequest)
       .filter((node): node is GraphqlPrNode => Boolean(node));
+    refs.forEach((ref, index) => {
+      if (data[`r${index}`]) {
+        this.notifyRepositoryAccess(ref, "available");
+      }
+    });
     const checksStillRunning = await this.resolveChecksStillRunning(nodes, token);
     const prs: PrSummary[] = [];
     let dropped = 0;
@@ -822,6 +893,48 @@ export class GithubGraphqlPrClient {
       });
     }
     return prs;
+  }
+
+  private notifySamlEnforcement(
+    error: unknown,
+    refs:
+      | Array<Pick<BranchRef, "owner" | "repo"> & { branch?: string }>
+      | undefined,
+    partial?: Record<string, unknown>,
+  ): void {
+    if (!refs || refs.length === 0) {
+      return;
+    }
+    for (const index of githubSamlEnforcementAliasIndexes(
+      error,
+      refs.length,
+      partial,
+    )) {
+      const ref = refs[index];
+      if (ref) {
+        this.notifyRepositoryAccess(ref, "saml-enforced");
+      }
+    }
+  }
+
+  private notifyRepositoryAccess(
+    ref: Pick<BranchRef, "owner" | "repo"> & { branch?: string },
+    status: GithubRepositoryAccessEvent["status"],
+  ): void {
+    try {
+      this.onRepositoryAccess?.({
+        branch: ref.branch,
+        owner: ref.owner,
+        repo: ref.repo,
+        status,
+      });
+    } catch (error) {
+      graphqlLog.warn("failed to surface GitHub repository access", {
+        owner: ref.owner,
+        repo: ref.repo,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   private async runRequest(

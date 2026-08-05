@@ -10,7 +10,11 @@ import {
   readGithubDotComAuthToken,
   retryDelayMs,
 } from "../pr-status/github-graphql-client";
-import type { GraphqlPrNode, PrRef } from "../pr-status/github-graphql-client";
+import type {
+  GithubRepositoryAccessEvent,
+  GraphqlPrNode,
+  PrRef,
+} from "../pr-status/github-graphql-client";
 
 function node(overrides: Partial<GraphqlPrNode> = {}): GraphqlPrNode {
   return {
@@ -335,7 +339,10 @@ describe("GithubGraphqlPrClient", () => {
 
   function client(
     request: (query: string, variables: Record<string, string | number>) => Promise<unknown>,
-    options: { batchSize?: number } = {},
+    options: {
+      batchSize?: number;
+      onRepositoryAccess?: (event: GithubRepositoryAccessEvent) => void;
+    } = {},
   ): GithubGraphqlPrClient {
     return new GithubGraphqlPrClient({
       request,
@@ -564,6 +571,87 @@ describe("GithubGraphqlPrClient", () => {
 
     expect(result.has("pwrdrvr/pwragent#feat/a")).toBe(true);
     expect(result.has("gone/missing#fix/b")).toBe(false);
+  });
+
+  it("attributes a partial SAML failure to its repository alias", async () => {
+    const onRepositoryAccess = vi.fn();
+    const request = vi.fn(async () => {
+      throw Object.assign(
+        new Error("Resource protected by organization SAML enforcement"),
+        {
+          data: {
+            r0: { pullRequests: { nodes: [node({ number: 12 })] } },
+            r1: null,
+          },
+          errors: [{
+            message: "Resource protected by organization SAML enforcement",
+            path: ["r1"],
+          }],
+        },
+      );
+    });
+
+    await client(request, { onRepositoryAccess })
+      .fetchPullRequestsForBranches([
+        { owner: "pwrdrvr", repo: "PwrAgent", branch: "feat/a" },
+        { owner: "GIPHY", repo: "giphy-services", branch: "main" },
+      ]);
+
+    expect(onRepositoryAccess).toHaveBeenCalledWith({
+      branch: "main",
+      owner: "GIPHY",
+      repo: "giphy-services",
+      status: "saml-enforced",
+    });
+    expect(onRepositoryAccess).toHaveBeenCalledWith({
+      branch: "feat/a",
+      owner: "pwrdrvr",
+      repo: "PwrAgent",
+      status: "available",
+    });
+  });
+
+  it("reports repository recovery after a later successful response", async () => {
+    const onRepositoryAccess = vi.fn();
+    const request = vi.fn()
+      .mockRejectedValueOnce(Object.assign(
+        new Error("Resource protected by organization SAML enforcement"),
+        { status: 403 },
+      ))
+      .mockResolvedValueOnce({ r0: { pullRequests: { nodes: [] } } });
+    const graphqlClient = client(request, { onRepositoryAccess });
+    const branchRefs = [
+      { owner: "GIPHY", repo: "giphy-services", branch: "main" },
+    ];
+
+    await graphqlClient.fetchPullRequestsForBranches(branchRefs);
+    await graphqlClient.fetchPullRequestsForBranches(branchRefs);
+
+    expect(onRepositoryAccess.mock.calls.map(([event]) => event.status)).toEqual([
+      "saml-enforced",
+      "available",
+    ]);
+  });
+
+  it("attributes retained-PR SAML failures to the URL repository ref", async () => {
+    const onRepositoryAccess = vi.fn();
+    const request = vi.fn(async () => {
+      throw Object.assign(
+        new Error("Resource protected by organization SAML enforcement"),
+        { status: 403 },
+      );
+    });
+
+    await client(request, { onRepositoryAccess }).fetchPullRequests([
+      { owner: "historical", repo: "retained-repo", number: 42 },
+    ]);
+
+    expect(onRepositoryAccess).toHaveBeenCalledWith({
+      branch: undefined,
+      owner: "historical",
+      repo: "retained-repo",
+      status: "saml-enforced",
+    });
   });
 
   it("does not call GitHub at all when gh has no token", async () => {
