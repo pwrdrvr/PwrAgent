@@ -6,9 +6,10 @@ import {
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import type {
-  MessagingActivityEntry,
-  MessagingActivityKind,
+import {
+  sanitizeMessagingContactHandle,
+  type MessagingActivityEntry,
+  type MessagingActivityKind,
 } from "@pwragent/shared";
 import { copyText } from "../../lib/copy-text";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -249,6 +250,7 @@ function ActivitySection(props: {
 function ActivityRow(props: { entry: MessagingActivityEntry }) {
   const { entry } = props;
   const tone = KIND_TONE[entry.kind];
+  const actorUsername = activityActorUsername(entry);
   const [copiedKey, setCopiedKey] = useState<string | undefined>(undefined);
   const copyFields = copyFieldsForEntry(entry);
   const Icon = MESSAGING_PLATFORM_ICONS[entry.platform];
@@ -266,7 +268,10 @@ function ActivityRow(props: { entry: MessagingActivityEntry }) {
           <span className={`settings-pill settings-pill--${tone === "ok" ? "ok" : tone === "warning" ? "warn" : tone === "error" ? "bad" : "neutral"}`}>
             {KIND_LABEL[entry.kind]}
           </span>
-          <span className="messaging-activity-row__summary">{entry.summary}</span>
+          <span className="messaging-activity-row__summary">
+            {entry.summary}
+            {actorUsername ? ` (@${actorUsername})` : ""}
+          </span>
         </div>
         <div className="messaging-activity-row__meta">
           {entry.conversationTitle ?? entry.conversationId ?? "—"}
@@ -358,6 +363,14 @@ function copyFieldsForEntry(
       value: entry.actorId,
     });
   }
+  const actorUsername = activityActorUsername(entry);
+  if (actorUsername) {
+    fields.push({
+      key: "actor-username",
+      label: "Username",
+      value: `@${actorUsername}`,
+    });
+  }
   if (entry.kind === "diagnostic") {
     if (entry.bindingId) {
       fields.push({
@@ -398,6 +411,11 @@ function copyFieldsForEntry(
   }
 
   return fields;
+}
+
+function activityActorUsername(entry: MessagingActivityEntry): string | undefined {
+  const username = sanitizeMessagingContactHandle(entry.payload?.actorUsername);
+  return username || undefined;
 }
 
 function userIdLabel(platform: MessagingActivityEntry["platform"]): string {

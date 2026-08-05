@@ -402,7 +402,11 @@ describe("messaging status ipc", () => {
       status: "observed",
       generatedAt: 1_000,
       expiresAt: 2_000,
-      observedActor: { id: "U012ABCDEF0", displayName: "Harold" },
+      observedActor: {
+        id: "U012ABCDEF0",
+        displayName: "Harold",
+        username: "hhunt",
+      },
       observedChat: {
         id: "C012ABCDEF0",
         kind: "channel",
@@ -449,7 +453,7 @@ describe("messaging status ipc", () => {
       messaging: {
         slack: {
           authorizedUserIds: [
-            { id: "U012ABCDEF0", displayName: "Harold" },
+            { id: "U012ABCDEF0", displayName: "Harold", username: "hhunt" },
           ],
         },
       },

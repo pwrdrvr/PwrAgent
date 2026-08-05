@@ -1808,7 +1808,10 @@ export class SlackAdapter implements SlackProviderAdapter {
   ): Promise<MessagingActorIdentity> {
     const contact = this.config.authorizedActorIds.find((item) => item.id === userId);
     const profile = await this.lookupSlackUserProfile(userId);
-    const resolvedUsername = profile?.username || username?.trim().replace(/^@/, "");
+    const resolvedUsername =
+      profile?.username
+      || contact?.username
+      || username?.trim().replace(/^@/, "");
     const displayName =
       profile?.displayName
       || contact?.displayName

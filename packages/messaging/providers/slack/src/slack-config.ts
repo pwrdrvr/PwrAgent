@@ -9,6 +9,7 @@ import type {
 export type SlackAuthorizedContact = {
   id: string;
   displayName: string;
+  username?: string;
   responseMode?: MessagingResponseMode;
 };
 

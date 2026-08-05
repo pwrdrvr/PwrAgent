@@ -151,8 +151,20 @@ function buildPairingApprovalPatch(
   const merge = (
     current: DesktopAuthorizedContact[],
   ): { added: boolean; contacts: DesktopAuthorizedContact[] } => {
-    if (current.some((existing) => existing.id === contact.id)) {
-      return { added: false, contacts: current };
+    const existingIndex = current.findIndex((existing) => existing.id === contact.id);
+    if (existingIndex >= 0) {
+      return {
+        added: false,
+        contacts: current.map((existing, index) =>
+          index === existingIndex
+            ? {
+                ...existing,
+                displayName: existing.displayName || contact.displayName,
+                ...(contact.username ? { username: contact.username } : {}),
+              }
+            : existing,
+        ),
+      };
     }
     return { added: true, contacts: [...current, contact] };
   };
@@ -350,6 +362,9 @@ function contactForPairing(
     displayName:
       entry.observedActor.displayName
       ?? (entry.observedActor.username ? `@${entry.observedActor.username}` : ""),
+    ...(entry.observedActor.username
+      ? { username: entry.observedActor.username }
+      : {}),
   };
 }
 

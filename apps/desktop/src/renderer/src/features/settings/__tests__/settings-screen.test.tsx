@@ -3341,11 +3341,18 @@ describe("SettingsScreen", () => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         messaging: {
           slack: {
-            authorizedUserIds: [{ id: "U079K80HTGS", displayName: "Harold Hunt" }],
+            authorizedUserIds: [{
+              id: "U079K80HTGS",
+              displayName: "Harold Hunt",
+              username: "hhunt",
+            }],
           },
         },
       });
     });
+    const username = screen.getByLabelText("Authorized User IDs username 1");
+    expect(username).toHaveValue("@hhunt");
+    expect(username).toHaveAttribute("readonly");
   });
 
   it("places Slack channel pairing and defaults with channel authorization", async () => {
