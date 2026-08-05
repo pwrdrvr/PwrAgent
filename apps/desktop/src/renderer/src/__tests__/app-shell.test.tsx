@@ -207,6 +207,65 @@ describe("App", () => {
     expect(getNavigationSnapshot).not.toHaveBeenCalled();
   });
 
+  it("surfaces GitHub organization SAML enforcement as a sticky error toast", async () => {
+    let samlListener:
+      | ((event: {
+          branch?: string;
+          cwd: string;
+          occurredAt: number;
+        }) => void)
+      | undefined;
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: {
+        getNavigationSnapshot: async () => ({
+          backend: "all" as const,
+          fetchedAt: Date.now(),
+          unchanged: false,
+          inboxThreadKeys: [],
+          threads: [],
+          directories: [],
+          launchpadDefaults: {
+            backend: "codex" as const,
+            executionMode: "default" as const,
+          },
+        }),
+        listBackends: async () => ({ fetchedAt: Date.now(), backends: [] }),
+        onGithubPrSamlEnforcement: (listener: typeof samlListener) => {
+          samlListener = listener;
+          return () => {
+            samlListener = undefined;
+          };
+        },
+        readSettings: async () =>
+          await new Promise<never>(() => {
+            // Keep the shell mounted without needing a full settings fixture.
+          }),
+      },
+    });
+
+    render(<App />);
+    await waitFor(() => expect(samlListener).toBeDefined());
+    act(() => {
+      samlListener?.({
+        branch: "main",
+        cwd: "/work/giphy-services",
+        occurredAt: 123,
+      });
+    });
+
+    expect(screen.getByText("GitHub access blocked by SSO")).toBeInTheDocument();
+    expect(screen.getByText(/organization requires SAML SSO/)).toBeInTheDocument();
+    expect(
+      screen.getByText("Repository: /work/giphy-services · Branch: main"),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(
+      screen.queryByText("GitHub access blocked by SSO"),
+    ).not.toBeInTheDocument();
+  });
+
   it("surfaces Codex config warnings and can trust the indicated project", async () => {
     const agentEventListeners = new Set<(event: AgentEvent) => void>();
     const trustCodexProject = vi.fn(

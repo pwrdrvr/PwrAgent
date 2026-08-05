@@ -11,6 +11,7 @@ import type {
   CaptureHeapSnapshotResult,
 } from "../../../shared/heap-snapshot";
 import type { HotCpuProfileCapturedEvent } from "../../../shared/hot-cpu-profile";
+import type { GithubPrSamlEnforcementEvent } from "../../../shared/github-pr-access";
 import type {
   IntegratedTerminalCloseRequest,
   IntegratedTerminalCreateRequest,
@@ -884,6 +885,9 @@ export type DesktopApi = {
   onAgentEvent?: (callback: (event: AgentEvent) => void) => () => void;
   onPrAutoDispatchBudgetChanged?: (
     callback: (status: PrAutoDispatchBudgetStatus) => void,
+  ) => () => void;
+  onGithubPrSamlEnforcement?: (
+    callback: (event: GithubPrSamlEnforcementEvent) => void,
   ) => () => void;
   /**
    * Subscription for main → renderer appearance broadcasts. Fired

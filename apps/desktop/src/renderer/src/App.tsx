@@ -80,6 +80,7 @@ import type { AppNoticeToastNotice } from "./features/notifications/AppNoticeToa
 import { resolveBackendErrorNotice } from "./features/notifications/backend-error-notice";
 import { buildPrAutoDispatchBudgetNotice } from "./features/notifications/pr-auto-dispatch-budget-notice";
 import { MessagingErrorNotices } from "./features/notifications/MessagingErrorNotices";
+import { buildGithubPrSamlEnforcementNotice } from "./features/notifications/github-pr-saml-notice";
 import {
   buildHeapSnapshotHandoffMessage,
   describeHeapSnapshotResult,
@@ -291,6 +292,8 @@ function DesktopAppShell(props: {
     useState<AppNoticeToastNotice>();
   const [prAutoDispatchBudgetNotice, setPrAutoDispatchBudgetNotice] =
     useState<AppNoticeToastNotice>();
+  const [githubPrSamlNotice, setGithubPrSamlNotice] =
+    useState<AppNoticeToastNotice>();
   // Latest thread list, mirrored into a ref so the backend-error toast
   // subscription can resolve a thread's title without re-subscribing on
   // every navigation change. Kept fresh by an effect below, once
@@ -334,6 +337,23 @@ function DesktopAppShell(props: {
     setSettingsInitialSection("messaging");
     setMainView("settings");
   }, []);
+  const openApplicationsSettings = useCallback(() => {
+    setGithubPrSamlNotice(undefined);
+    setSettingsInitialSection("applications");
+    setMainView("settings");
+  }, []);
+
+  useEffect(() => {
+    return desktopApi?.onGithubPrSamlEnforcement?.((event) => {
+      setGithubPrSamlNotice(
+        buildGithubPrSamlEnforcementNotice({
+          event,
+          onDismiss: () => setGithubPrSamlNotice(undefined),
+          onOpenApplications: openApplicationsSettings,
+        }),
+      );
+    });
+  }, [desktopApi, openApplicationsSettings]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1837,6 +1857,11 @@ function DesktopAppShell(props: {
             desktopApi={desktopApi}
             notice={prAutoDispatchBudgetNotice}
             onDismiss={() => setPrAutoDispatchBudgetNotice(undefined)}
+          />
+          <AppNoticeToast
+            desktopApi={desktopApi}
+            notice={githubPrSamlNotice}
+            onDismiss={() => setGithubPrSamlNotice(undefined)}
           />
           <AppUpdateBanner desktopApi={desktopApi} />
         </div>
