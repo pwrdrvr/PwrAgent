@@ -1054,6 +1054,8 @@ export function buildLiveToolDetails(
           : itemType === "dynamictoolcall" && title
             ? buildLiveDynamicToolCommandDetail(item, toolName, elapsedMs)
         : undefined;
+  const commandUsesDedicatedRenderer =
+    itemType === "commandexecution" || isExecFunctionCall;
   const details: AppServerThreadActivityDetail[] = [
     {
       id: itemId,
@@ -1067,9 +1069,9 @@ export function buildLiveToolDetails(
             : "command",
       label: [
         buildLiveToolLabel(item, itemType, status, toolName),
-        elapsedMs ? ` (${formatElapsedMs(elapsedMs)})` : "",
+        elapsedMs && !commandUsesDedicatedRenderer ? ` (${formatElapsedMs(elapsedMs)})` : "",
         query ? `: ${query}` : "",
-        preview ? ` - ${preview}` : "",
+        preview && !commandUsesDedicatedRenderer ? ` - ${preview}` : "",
       ].join(""),
       ...(images.length > 0 ? { images } : {}),
       ...(commandDetail ? { command: commandDetail } : {}),
@@ -1140,6 +1142,13 @@ function commandSummaryName(label: string): string | undefined {
 
 export function summarizeLiveActivity(details: AppServerThreadActivityDetail[]): string {
   const primaryDetails = details.filter((detail) => !detail.id.includes("-source-"));
+  if (
+    details.length === 1
+    && primaryDetails.length === 1
+    && primaryDetails[0]?.command
+  ) {
+    return primaryDetails[0].label;
+  }
   const readCount = primaryDetails.filter((detail) => detail.kind === "read").length;
   const commandLabels = [
     ...new Set(

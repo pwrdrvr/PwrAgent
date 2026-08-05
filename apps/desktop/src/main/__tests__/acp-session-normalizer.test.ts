@@ -1276,6 +1276,54 @@ describe("AcpSessionReplayNormalizer", () => {
     ]);
   });
 
+  it("uses Grok command descriptions while preserving the full command", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+    const command = "python3 - <<'PY'\nprint('Grok 4.5')\nPY";
+    const description = "Inspect Grok 4.5 model cache entry";
+
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "run-terminal-1",
+        kind: "execute",
+        title: `Execute \`${command}\``,
+        status: "completed",
+        rawInput: {
+          variant: "Bash",
+          command,
+          description,
+        },
+        content: {
+          type: "text",
+          text: "Grok 4.5",
+        },
+      },
+    });
+
+    expect(replay.entries).toEqual([
+      expect.objectContaining({
+        type: "activity",
+        id: "run-terminal-1",
+        summary: description,
+        status: "completed",
+        details: [
+          expect.objectContaining({
+            kind: "command",
+            label: description,
+            command: {
+              displayCommand: command,
+              rawCommand: command,
+              output: "Grok 4.5",
+              exitCode: undefined,
+            },
+          }),
+        ],
+      }),
+    ]);
+  });
+
   it("ignores available command updates in transcripts", () => {
     const normalizer = new AcpSessionReplayNormalizer();
 

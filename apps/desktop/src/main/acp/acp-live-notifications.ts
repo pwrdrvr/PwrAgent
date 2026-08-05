@@ -4,6 +4,7 @@ import {
   isGenericShellToolTitle,
   readAcpToolCommand,
   readAcpToolContentCommand,
+  readAcpToolDescription,
   readAcpToolInvocation,
   readAcpWebFetchUrl,
   readAcpWebSearch,
@@ -125,7 +126,12 @@ function liveItemForAcpToolUpdate(
     readString(update, "id") ??
     readString(update, "itemId") ??
     readString(update, "item_id");
+  const rawCommand = readAcpToolCommand(update);
+  const description = rawCommand
+    ? readAcpToolDescription(update)
+    : undefined;
   const title =
+    description ??
     readString(update, "title") ??
     readString(update, "command") ??
     readString(update, "name") ??
@@ -153,12 +159,12 @@ function liveItemForAcpToolUpdate(
   }
 
   const webFetchUrl = readAcpWebFetchUrl(update);
-  const rawCommand = readAcpToolCommand(update);
   const invocation = readAcpToolInvocation(update);
   const command = rawCommand ?? invocation ?? title;
   const commandActions = acpCommandActions({
     kind: webFetchUrl ? "read" : toolKind,
     path,
+    semanticTitle: description,
     title: webFetchUrl
       ? `Fetched ${webFetchUrl}`
       : isGenericShellToolTitle(title)
@@ -181,6 +187,7 @@ function liveItemForAcpToolUpdate(
 function acpCommandActions(params: {
   kind: string;
   path: string | undefined;
+  semanticTitle?: string;
   title: string;
 }): Record<string, unknown>[] {
   if (params.kind === "read") {
@@ -210,7 +217,14 @@ function acpCommandActions(params: {
       },
     ];
   }
-  return [];
+  return params.semanticTitle
+    ? [
+        {
+          type: "unknown",
+          name: params.semanticTitle,
+        },
+      ]
+    : [];
 }
 
 function normalizeAcpToolStatus(status: string | undefined): string {

@@ -15,6 +15,7 @@ import {
   readAcpCodeSearch,
   readAcpToolCommand,
   readAcpToolContentCommand,
+  readAcpToolDescription,
   readAcpToolInvocation,
   readAcpWebFetchUrl,
   readAcpWebSearch,
@@ -1113,9 +1114,13 @@ function toolActivity(
     };
   }
   const rawCommand = readAcpToolCommand(update.update);
+  const description = rawCommand
+    ? readAcpToolDescription(update.update)
+    : undefined;
   const invocation = readAcpToolInvocation(update.update);
   const displayCommand = rawCommand ?? invocation;
   const labelCandidate =
+    description ??
     readString(update.update, "title") ??
     readString(update.update, "name") ??
     readString(update.update, "kind") ??

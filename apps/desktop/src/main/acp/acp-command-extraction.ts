@@ -8,6 +8,20 @@ export function readAcpToolCommand(
   );
 }
 
+export function readAcpToolDescription(
+  record: Record<string, unknown>,
+): string | undefined {
+  const rawInput = asRecord(record.rawInput);
+  const rawOutput = asRecord(record.rawOutput);
+  const metadataInput = asRecord(readAcpToolMetadata(record)?.input);
+  return (
+    readString(rawInput ?? {}, "description") ??
+    readString(rawOutput ?? {}, "description") ??
+    readString(metadataInput ?? {}, "description") ??
+    readString(record, "description")
+  );
+}
+
 export function readAcpToolInvocation(
   record: Record<string, unknown>,
 ): string | undefined {

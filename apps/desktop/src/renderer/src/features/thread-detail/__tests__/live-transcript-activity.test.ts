@@ -85,6 +85,42 @@ describe("buildLiveToolDetails", () => {
         }),
       },
     ]);
+    expect(summarizeLiveActivity(details)).toBe('Searched "grok"');
+  });
+
+  it("keeps a described command on one direct activity row", () => {
+    const description = "Inspect Grok 4.5 model cache entry";
+    const command = "python3 - <<'PY'\nprint('Grok 4.5')\nPY";
+    const details = buildLiveToolDetails({
+      type: "commandExecution",
+      id: "run-terminal-1",
+      status: "completed",
+      command,
+      commandActions: [
+        {
+          type: "unknown",
+          name: description,
+        },
+      ],
+      data: {
+        output: "Grok 4.5",
+      },
+    });
+
+    expect(details).toEqual([
+      {
+        id: "run-terminal-1",
+        kind: "command",
+        label: description,
+        status: "completed",
+        command: expect.objectContaining({
+          displayCommand: "python3 - <<'PY' print('Grok 4.5') PY",
+          rawCommand: command,
+          output: "Grok 4.5",
+        }),
+      },
+    ]);
+    expect(summarizeLiveActivity(details)).toBe(description);
   });
 
   it("keeps completion status on the web search rather than its result links", () => {
