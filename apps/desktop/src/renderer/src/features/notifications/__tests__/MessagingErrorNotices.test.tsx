@@ -12,6 +12,69 @@ afterEach(() => {
 });
 
 describe("MessagingErrorNotices", () => {
+  it("publishes notice changes to a shared stack without rendering duplicates", async () => {
+    let emitStatus: ((event: MessagingPlatformStatusEvent) => void) | undefined;
+    const onNoticeChanged = vi.fn();
+    render(
+      <MessagingErrorNotices
+        desktopApi={{
+          getMessagingPlatformStatuses: async () => [{
+            platform: "discord",
+            health: "errored",
+            changedAt: 1_785_926_400_000,
+            reason: "gateway disconnected",
+          }],
+          onMessagingPlatformStatusEvent: (listener) => {
+            emitStatus = listener;
+            return () => undefined;
+          },
+        }}
+        onNoticeChanged={onNoticeChanged}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(onNoticeChanged).toHaveBeenCalledWith(
+        "discord",
+        expect.objectContaining({ title: "Discord messaging failed" }),
+      );
+    });
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+
+    const discordPublicationCount = () => onNoticeChanged.mock.calls.filter(
+      ([platform]) => platform === "discord",
+    ).length;
+    expect(discordPublicationCount()).toBe(1);
+    act(() => {
+      emitStatus?.({
+        kind: "health-changed",
+        platform: "slack",
+        health: "errored",
+        at: 1_785_926_400_001,
+        reason: "socket disconnected",
+      });
+    });
+    await waitFor(() => {
+      expect(onNoticeChanged).toHaveBeenCalledWith(
+        "slack",
+        expect.objectContaining({ title: "Slack messaging failed" }),
+      );
+    });
+    expect(discordPublicationCount()).toBe(1);
+
+    act(() => {
+      emitStatus?.({
+        kind: "health-changed",
+        platform: "discord",
+        health: "enabled",
+        at: 1_785_926_400_002,
+      });
+    });
+    await waitFor(() => {
+      expect(onNoticeChanged).toHaveBeenLastCalledWith("discord", undefined);
+    });
+  });
+
   it("surfaces an adapter error that happened before the renderer mounted", async () => {
     const getMessagingPlatformStatuses = vi.fn(async () => [
       {

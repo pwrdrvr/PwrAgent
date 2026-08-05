@@ -1,5 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { CloseIcon, CopyIcon } from "../../icons";
+import {
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  CloseIcon,
+  CopyIcon,
+} from "../../icons";
 import { copyText } from "../../lib/copy-text";
 import type { DesktopApi } from "../../lib/desktop-api";
 
@@ -26,6 +31,12 @@ export type AppNoticeToastNotice = {
 
 export function AppNoticeToast(props: {
   desktopApi?: Pick<DesktopApi, "copyText">;
+  navigation?: {
+    current: number;
+    total: number;
+    onPrevious?: () => void;
+    onNext?: () => void;
+  };
   notice?: AppNoticeToastNotice;
   onDismiss: () => void;
 }) {
@@ -147,6 +158,34 @@ export function AppNoticeToast(props: {
               </button>
             </>}
       </div>
+      {props.navigation ? (
+        <nav
+          className="app-notice-toast__navigation"
+          aria-label="Durable notices"
+        >
+          <span className="app-notice-toast__position">
+            {props.navigation.current} of {props.navigation.total}
+          </span>
+          <button
+            className="app-notice-toast__icon-button"
+            type="button"
+            aria-label="Previous notice"
+            disabled={!props.navigation.onPrevious}
+            onClick={props.navigation.onPrevious}
+          >
+            <ChevronLeftIcon size={14} aria-hidden="true" />
+          </button>
+          <button
+            className="app-notice-toast__icon-button"
+            type="button"
+            aria-label="Next notice"
+            disabled={!props.navigation.onNext}
+            onClick={props.navigation.onNext}
+          >
+            <ChevronRightIcon size={14} aria-hidden="true" />
+          </button>
+        </nav>
+      ) : null}
       {autoDismiss ? (
         <span
           className="app-notice-toast__timer"

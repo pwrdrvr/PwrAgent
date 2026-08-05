@@ -4,6 +4,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useReducer,
   useRef,
   useState,
   type ComponentType,
@@ -20,6 +21,7 @@ import {
   type DesktopBootInfo,
   type DesktopCodexProfileModel,
   type DesktopPwrAgentProfileSummary,
+  type MessagingChannelKind,
   type NavigationThreadSummary,
   type PrAutoDispatchBudgetStatus,
 } from "@pwragent/shared";
@@ -75,9 +77,12 @@ import { useQueuedTurnRelease } from "./lib/useQueuedTurnRelease";
 import { useScheduledThreadActionProjection } from "./lib/useScheduledThreadActionProjection";
 import { useThreadQueuedMessageIndicators } from "./lib/useThreadQueuedMessageIndicators";
 import { CodexConfigWarningBanner } from "./features/codex-config/CodexConfigWarningBanner";
-import { AppNoticeToast } from "./features/notifications/AppNoticeToast";
 import type { AppNoticeToastNotice } from "./features/notifications/AppNoticeToast";
-import { resolveBackendErrorNotice } from "./features/notifications/backend-error-notice";
+import { AppNoticeStack } from "./features/notifications/AppNoticeStack";
+import {
+  appNoticeReducer,
+  INITIAL_APP_NOTICE_STATE,
+} from "./features/notifications/app-notice-state";
 import { buildPrAutoDispatchBudgetNotice } from "./features/notifications/pr-auto-dispatch-budget-notice";
 import { MessagingErrorNotices } from "./features/notifications/MessagingErrorNotices";
 import { buildGithubPrSamlEnforcementNotice } from "./features/notifications/github-pr-saml-notice";
@@ -272,30 +277,20 @@ function DesktopAppShell(props: {
   // triggers the slim "set up `foo`?" confirmation step; everything
   // else uses the standard first-run / replay flow.
   const [bootInfo, setBootInfo] = useState<DesktopBootInfo | null>(null);
-  // Transient composer-originated notices (image attachment limit reached,
-  // pasted image rejected on a non-vision model). Rendered through the shared
-  // AppNoticeToast in the toast stack below, separate from the navigation
-  // archive notice so the two never clobber each other.
-  const [composerNotice, setComposerNotice] = useState<AppNoticeToastNotice>();
-  const [hotCpuProfileNotice, setHotCpuProfileNotice] =
-    useState<AppNoticeToastNotice>();
-  const [heapSnapshotNotice, setHeapSnapshotNotice] =
-    useState<AppNoticeToastNotice>();
-  // Sticky (manual-dismiss) notice for backend turn failures and system
-  // errors. These used to vanish silently — the turn just stopped thinking
-  // with nothing to show for it. The toast stays until dismissed so a
-  // mid-outage failure can't slip past unnoticed.
-  const [backendErrorNotice, setBackendErrorNotice] =
-    useState<AppNoticeToastNotice>();
-  // One-shot warning surfaced when the main process skipped automations it
-  // couldn't load (corrupt data, or a schedule/trigger shape written by a
-  // newer build). The skipped automations are left untouched in storage — this
-  // is the only signal the user gets that they were quietly not run, so it
-  // stays until dismissed.
-  const [automationLoadNotice, setAutomationLoadNotice] =
-    useState<AppNoticeToastNotice>();
-  const [prAutoDispatchBudgetNotice, setPrAutoDispatchBudgetNotice] =
-    useState<AppNoticeToastNotice>();
+  // Durable notices are retained in arrival order and shown one at a time.
+  // This is intentionally a queue rather than one slot per producer: backend
+  // failures can arrive while another safety notice is already visible, and
+  // every failure must remain individually reviewable and dismissible.
+  const [appNotices, dispatchAppNotice] = useReducer(
+    appNoticeReducer,
+    INITIAL_APP_NOTICE_STATE,
+  );
+  const showAppNotice = useCallback((notice: AppNoticeToastNotice): void => {
+    dispatchAppNotice({ type: "show", notice });
+  }, []);
+  const dismissAppNotice = useCallback((id: string): void => {
+    dispatchAppNotice({ type: "dismiss", id });
+  }, []);
   const [githubPrSamlEvents, setGithubPrSamlEvents] =
     useState<GithubPrSamlEnforcementEvent[]>([]);
   // Latest thread list, mirrored into a ref so the backend-error toast
@@ -310,7 +305,10 @@ function DesktopAppShell(props: {
     void desktopApi?.resumePrAutoDispatchBudget?.()
       .then((status) => {
         if (!status.paused) {
-          setPrAutoDispatchBudgetNotice(undefined);
+          dispatchAppNotice({
+            type: "dismiss-prefix",
+            prefix: "pr-auto-dispatch-budget-paused:",
+          });
         }
       })
       .catch(() => {
@@ -320,15 +318,26 @@ function DesktopAppShell(props: {
   }, [desktopApi]);
   const showPrAutoDispatchBudgetNotice = useCallback(
     (status: PrAutoDispatchBudgetStatus) => {
-      setPrAutoDispatchBudgetNotice(
-        buildPrAutoDispatchBudgetNotice({
-          onLeaveDisabled: () => setPrAutoDispatchBudgetNotice(undefined),
-          onResume: resumePrAutoDispatchBudget,
-          status,
-        }),
-      );
+      const notice = buildPrAutoDispatchBudgetNotice({
+        onLeaveDisabled: () => {
+          dispatchAppNotice({
+            type: "dismiss-prefix",
+            prefix: "pr-auto-dispatch-budget-paused:",
+          });
+        },
+        onResume: resumePrAutoDispatchBudget,
+        status,
+      });
+      if (notice) {
+        showAppNotice(notice);
+      } else {
+        dispatchAppNotice({
+          type: "dismiss-prefix",
+          prefix: "pr-auto-dispatch-budget-paused:",
+        });
+      }
     },
-    [resumePrAutoDispatchBudget],
+    [resumePrAutoDispatchBudget, showAppNotice],
   );
   // Spawning / focusing the Messaging Activity window is fire-and-forget
   // — see `apps/desktop/src/main/messaging-activity-window.ts`. The
@@ -342,6 +351,7 @@ function DesktopAppShell(props: {
     setMainView("settings");
   }, []);
   const dismissGithubPrSamlNotice = useCallback(() => {
+    dispatchAppNotice({ type: "dismiss-prefix", prefix: "github-pr-saml:" });
     setGithubPrSamlEvents((current) => current.slice(1));
   }, []);
   const openGitSettings = useCallback(() => {
@@ -359,6 +369,24 @@ function DesktopAppShell(props: {
         })
       : undefined;
   }, [dismissGithubPrSamlNotice, githubPrSamlEvents, openGitSettings]);
+
+  useEffect(() => {
+    if (githubPrSamlNotice) showAppNotice(githubPrSamlNotice);
+  }, [githubPrSamlNotice, showAppNotice]);
+
+  const syncMessagingErrorNotice = useCallback((
+    platform: MessagingChannelKind,
+    notice: AppNoticeToastNotice | undefined,
+  ): void => {
+    if (notice) {
+      showAppNotice(notice);
+      return;
+    }
+    dispatchAppNotice({
+      type: "dismiss-prefix",
+      prefix: `messaging-platform-error:${platform}:`,
+    });
+  }, [showAppNotice]);
 
   useEffect(() => {
     return desktopApi?.onGithubPrSamlEnforcement?.((event) => {
@@ -398,7 +426,7 @@ function DesktopAppShell(props: {
         heapSnapshotCount > 0
           ? ` ${heapSnapshotCount} heap snapshots captured.`
           : "";
-      setHotCpuProfileNotice({
+      showAppNotice({
         autoDismiss: false,
         copyText: buildHotCpuProfileHandoffMessage(event),
         detail: `Session: ${event.sessionDirectoryName}`,
@@ -411,7 +439,7 @@ function DesktopAppShell(props: {
         ].join(""),
       });
     });
-  }, [desktopApi]);
+  }, [desktopApi, showAppNotice]);
 
   // On-demand heap snapshots. The capture (and its countdown) run in main, so
   // the result can land here even if Settings was closed to stage the scenario.
@@ -434,7 +462,7 @@ function DesktopAppShell(props: {
             partial ? ` Not captured: ${result.errors.join("; ")}.` : "",
             ` ${HEAP_SNAPSHOT_SECRET_WARNING}`,
           ].join("");
-      setHeapSnapshotNotice({
+      showAppNotice({
         autoDismiss: false,
         copyText: buildHeapSnapshotHandoffMessage(result),
         detail: failed ? undefined : `Session: ${result.sessionDirectoryName}`,
@@ -443,7 +471,7 @@ function DesktopAppShell(props: {
         message,
       });
     });
-  }, [desktopApi]);
+  }, [desktopApi, showAppNotice]);
 
   // On startup, ask the main process whether it skipped any automations it
   // couldn't load. Startup reconciliation runs before this window exists, so a
@@ -463,7 +491,7 @@ function DesktopAppShell(props: {
         const names = issues.map((issue) => issue.name).filter(Boolean);
         const namesSummary =
           names.length > 0 ? names.slice(0, 5).join(", ") : undefined;
-        setAutomationLoadNotice({
+        showAppNotice({
           autoDismiss: false,
           id: `automation-load-issues:${issues.map((issue) => issue.id).join(",")}`,
           title:
@@ -481,14 +509,14 @@ function DesktopAppShell(props: {
     return () => {
       cancelled = true;
     };
-  }, [desktopApi]);
+  }, [desktopApi, showAppNotice]);
 
   // Surface backend turn failures + system errors as a durable toast. The
   // matching transcript entry (rendered from the thread overlay's
   // turnFailureLog) is the in-context record; this toast is the global
   // "something just broke" signal that has to be acknowledged. Notices are
-  // keyed by thread so a failure on one thread can't suppress a signal from
-  // another (see resolveBackendErrorNotice).
+  // keyed by thread and queued so a failure on one thread can't suppress a
+  // signal from another.
   useEffect(() => {
     const labelForThread = (backend: string, threadId?: string): string => {
       const match = threadId
@@ -520,19 +548,17 @@ function DesktopAppShell(props: {
           typeof rawMessage === "string" && rawMessage.trim()
             ? rawMessage
             : "The agent turn failed.";
-        setBackendErrorNotice((current) =>
-          resolveBackendErrorNotice(
-            {
-              kind: "turn-failed",
-              backend: event.backend,
-              threadId: params.threadId ?? "unknown",
-              turnId: params.turnId ?? "unknown",
-              errorMessage,
-              threadLabel: labelForThread(event.backend, params.threadId),
-            },
-            current,
-          ),
-        );
+        dispatchAppNotice({
+          type: "backend-error",
+          signal: {
+            kind: "turn-failed",
+            backend: event.backend,
+            threadId: params.threadId ?? "unknown",
+            turnId: params.turnId ?? "unknown",
+            errorMessage,
+            threadLabel: labelForThread(event.backend, params.threadId),
+          },
+        });
         return;
       }
       if (
@@ -546,20 +572,18 @@ function DesktopAppShell(props: {
           failureMessage: string;
           recoveryError?: string;
         };
-        setBackendErrorNotice((current) =>
-          resolveBackendErrorNotice(
-            {
-              kind: "codex-invalid-id-recovery",
-              failureMessage: params.failureMessage,
-              recoveryError: params.recoveryError,
-              status: params.status,
-              threadId: params.threadId,
-              threadLabel: labelForThread("codex", params.threadId),
-              turnId: params.turnId ?? "unknown",
-            },
-            current,
-          ),
-        );
+        dispatchAppNotice({
+          type: "backend-error",
+          signal: {
+            kind: "codex-invalid-id-recovery",
+            failureMessage: params.failureMessage,
+            recoveryError: params.recoveryError,
+            status: params.status,
+            threadId: params.threadId,
+            threadLabel: labelForThread("codex", params.threadId),
+            turnId: params.turnId ?? "unknown",
+          },
+        });
         return;
       }
       if (event.notification.method === "thread/status/changed") {
@@ -570,17 +594,15 @@ function DesktopAppShell(props: {
         if (params.status?.type !== "systemError") {
           return;
         }
-        setBackendErrorNotice((current) =>
-          resolveBackendErrorNotice(
-            {
-              kind: "system-error",
-              backend: event.backend,
-              threadId: params.threadId ?? "unknown",
-              threadLabel: labelForThread(event.backend, params.threadId),
-            },
-            current,
-          ),
-        );
+        dispatchAppNotice({
+          type: "backend-error",
+          signal: {
+            kind: "system-error",
+            backend: event.backend,
+            threadId: params.threadId ?? "unknown",
+            threadLabel: labelForThread(event.backend, params.threadId),
+          },
+        });
         return;
       }
     });
@@ -1173,7 +1195,7 @@ function DesktopAppShell(props: {
     desktopApi: threadDesktopApi,
     launchpadError: navigation.launchpadError,
     onProviderSelected: refreshSelectedAcpProvider,
-    onShowNotice: setComposerNotice,
+    onShowNotice: showAppNotice,
     loading: session.loading,
     loadingMore: session.loadingMore,
     messageCount: session.messages.length,
@@ -1861,50 +1883,27 @@ function DesktopAppShell(props: {
         ) : null}
 
         <CodexConfigWarningBanner desktopApi={desktopApi} />
-        <div className="app-toast-stack" aria-live="polite">
-          <AppNoticeToast
-            desktopApi={desktopApi}
-            notice={navigation.archiveThreadNotice}
-            onDismiss={navigation.dismissArchiveThreadNotice}
-          />
-          <AppNoticeToast
-            desktopApi={desktopApi}
-            notice={composerNotice}
-            onDismiss={() => setComposerNotice(undefined)}
-          />
-          <AppNoticeToast
-            desktopApi={desktopApi}
-            notice={hotCpuProfileNotice}
-            onDismiss={() => setHotCpuProfileNotice(undefined)}
-          />
-          <AppNoticeToast
-            desktopApi={desktopApi}
-            notice={heapSnapshotNotice}
-            onDismiss={() => setHeapSnapshotNotice(undefined)}
-          />
-          <AppNoticeToast
-            desktopApi={desktopApi}
-            notice={backendErrorNotice}
-            onDismiss={() => setBackendErrorNotice(undefined)}
-          />
-          <MessagingErrorNotices desktopApi={desktopApi} />
-          <AppNoticeToast
-            desktopApi={desktopApi}
-            notice={automationLoadNotice}
-            onDismiss={() => setAutomationLoadNotice(undefined)}
-          />
-          <AppNoticeToast
-            desktopApi={desktopApi}
-            notice={prAutoDispatchBudgetNotice}
-            onDismiss={() => setPrAutoDispatchBudgetNotice(undefined)}
-          />
-          <AppNoticeToast
-            desktopApi={desktopApi}
-            notice={githubPrSamlNotice}
-            onDismiss={dismissGithubPrSamlNotice}
-          />
+        <MessagingErrorNotices
+          desktopApi={desktopApi}
+          onNoticeChanged={syncMessagingErrorNotice}
+        />
+        <AppNoticeStack
+          desktopApi={desktopApi}
+          durableNotices={appNotices.durable}
+          onDismissDurable={dismissAppNotice}
+          transientNotices={[
+            {
+              notice: navigation.archiveThreadNotice,
+              onDismiss: navigation.dismissArchiveThreadNotice,
+            },
+            ...appNotices.transient.map((notice) => ({
+              notice,
+              onDismiss: () => dismissAppNotice(notice.id),
+            })),
+          ]}
+        >
           <AppUpdateBanner desktopApi={desktopApi} />
-        </div>
+        </AppNoticeStack>
       </div>
     </TranscriptLinkProvider>
   );
