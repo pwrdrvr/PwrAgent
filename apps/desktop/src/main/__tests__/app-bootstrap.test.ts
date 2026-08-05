@@ -120,6 +120,7 @@ const BrowserWindowMock = vi.fn(function BrowserWindow(
   browserWindowState.show = vi.fn(() => emitWindowEvent("show"));
 
   return {
+    isDestroyed: () => false,
     loadFile: browserWindowState.loadFile,
     loadURL: browserWindowState.loadURL,
     on: browserWindowState.on,

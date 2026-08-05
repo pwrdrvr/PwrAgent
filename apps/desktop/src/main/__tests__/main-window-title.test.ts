@@ -10,9 +10,11 @@ import {
 type TestBrowserWindow = BrowserWindow & {
   emitPageTitleUpdated: (title: string) => { defaultPrevented: boolean };
   setTitleMock: ReturnType<typeof vi.fn>;
+  destroy: () => void;
 };
 
 function createWindow(): TestBrowserWindow {
+  let destroyed = false;
   const windowListeners = new Map<
     string,
     Array<(event: { preventDefault: () => void }, title: string) => void>
@@ -34,6 +36,10 @@ function createWindow(): TestBrowserWindow {
       return { defaultPrevented };
     },
     setTitleMock,
+    destroy: () => {
+      destroyed = true;
+    },
+    isDestroyed: vi.fn(() => destroyed),
     on: vi.fn(
       (
         event: string,
@@ -108,6 +114,18 @@ describe("lockMainWindowTitle", () => {
     expect(defaultPrevented).toBe(true);
     expect(window.setTitleMock).toHaveBeenLastCalledWith("PwrAgent");
     expect(window.setTitleMock).not.toHaveBeenCalledWith("PwrAgnt");
+  });
+
+  it("does not re-title a window that is already torn down", () => {
+    // preventDefault is safe on a destroyed window; setTitle throws.
+    const window = createWindow();
+
+    lockMainWindowTitle(window, "PwrAgent");
+    window.setTitleMock.mockClear();
+    window.destroy();
+
+    expect(() => window.emitPageTitleUpdated("PwrAgnt")).not.toThrow();
+    expect(window.setTitleMock).not.toHaveBeenCalled();
   });
 
   it("keeps a remote window's peer label", () => {

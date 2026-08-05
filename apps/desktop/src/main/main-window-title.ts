@@ -41,7 +41,9 @@ export function mainWindowTitle(federationLabel?: string): string {
  *
  * This is the BrowserWindow event, not the webContents one — only the
  * window-level `preventDefault()` stops the title swap. The `setTitle`
- * re-assert is belt-and-suspenders for any path that slips past it.
+ * re-assert is belt-and-suspenders for any path that slips past it,
+ * which is also why it needs the `isDestroyed` guard: `preventDefault`
+ * is safe on a torn-down window, but `setTitle` throws.
  *
  * Auxiliary windows (Logs, Changelog, License, Activity, ...) share this
  * renderer entry point but set their own document titles on purpose;
@@ -54,6 +56,10 @@ export function lockMainWindowTitle(
   window.setTitle(title);
   window.on("page-title-updated", (event) => {
     event.preventDefault();
+    if (window.isDestroyed()) {
+      return;
+    }
+
     window.setTitle(title);
   });
 }

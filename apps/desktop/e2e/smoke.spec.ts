@@ -33,18 +33,40 @@ test("loads the desktop shell without eager skill or manual refresh requests", a
         name: "Thread info"
       })
     ).toBeVisible();
+  } finally {
+    await app.close();
+  }
+});
 
-    // The OS-level window title is owned by the main process, not the
-    // renderer document. The renderer's <title> used to clobber it on
-    // load, leaving every local window named "PwrAgnt" — the pre-rename
-    // spelling baked into index.html.
-    await expect
-      .poll(async () =>
-        await app.electronApp.evaluate(({ BrowserWindow }) =>
-          BrowserWindow.getAllWindows().map((win) => win.getTitle())
-        )
-      )
-      .toEqual(["PwrAgent"]);
+test("titles the shell window from the main process, not the renderer document", async () => {
+  const app = await launchElectronApp({
+    fixturePath: path.resolve(
+      smokeSpecDir,
+      "fixtures/smoke/replay.fixture.json"
+    )
+  });
+
+  try {
+    // Gate on a mounted renderer. The clobber this guards against
+    // happened when the page finished loading and Electron mirrored
+    // index.html's stale <title>PwrAgnt</title> onto the window, so
+    // sampling the title before the renderer mounts would pass for the
+    // wrong reason.
+    await expect(
+      app.window.getByRole("button", { name: /Replay smoke thread/i }).first()
+    ).toBeVisible();
+
+    const titles = await app.electronApp.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows().map((win) => win.getTitle())
+    );
+
+    // Asserted by membership, not by the whole list: opening another
+    // window during boot is someone else's feature, not this
+    // regression. A single read, not a poll — the title must be right
+    // once the renderer has loaded, and a retry loop would happily
+    // pass on a sample taken before a later clobber.
+    expect(titles).toContain("PwrAgent");
+    expect(titles).not.toContain("PwrAgnt");
   } finally {
     await app.close();
   }
