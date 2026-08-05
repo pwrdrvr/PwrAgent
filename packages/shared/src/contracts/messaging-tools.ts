@@ -127,6 +127,8 @@ export type PwrAgentMessagingLocationSummary = {
 export type GetCurrentMessagingSurfaceToolArgs = Record<string, never>;
 
 export type SendPrivateResponseToolArgs = {
+  awaitReply?: boolean;
+  replyInstructions?: string;
   text: string;
 };
 
@@ -168,6 +170,7 @@ export type AttachThreadHereResult = {
 };
 
 export type SendPrivateResponseResult = {
+  awaitingReply?: boolean;
   channel: MessagingChannelKind;
   deliveredAt: number;
   outcome: "delivered";

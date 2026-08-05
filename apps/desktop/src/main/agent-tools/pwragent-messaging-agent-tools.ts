@@ -119,7 +119,7 @@ function descriptionForOperation(operation: PwrAgentMessagingOperationName): str
     case "get_current_messaging_surface":
       return "Inspect the messaging platform, actor, conversation, binding, compact bound-thread identity, and native thread/topic creation capability for the surface that started this Agent turn.";
     case "send_private_response":
-      return "Send the terminal response privately to the user who initiated the current messaging turn. Use this only when the user explicitly asks for a private reply or the response contains secrets that should not be posted to the source conversation. On success, PwrAgent suppresses the normal final response on the source surface; end the turn without repeating the private content. This cannot target an arbitrary user or be called outside an active messaging turn.";
+      return "Send the terminal response privately to the user who initiated the current messaging turn. Use this only when the user explicitly asks for a private reply or the response contains secrets that should not be posted to the source conversation. On success, PwrAgent suppresses the normal final response on the source surface; end the turn without repeating the private content. Set awaitReply=true with replyInstructions when the private message asks the user for a response: their first reply starts a one-shot continuation turn whose final answer is delivered back to the originating surface, and PwrAgent then removes the temporary private-thread route. This cannot target an arbitrary user or be called outside an active messaging turn.";
     case "attach_thread_here":
       return "Attach a known PwrAgent thread to the current messaging surface, creating a native child thread/topic when the provider supports it. This does not rename the PwrAgent thread.";
     case "inspect_messaging_pdfs":
@@ -148,6 +148,18 @@ function inputSchemaForOperation(
         additionalProperties: false,
         required: ["text"],
         properties: {
+          awaitReply: {
+            type: "boolean",
+            description:
+              "Whether the first reply in the private message thread should start a one-shot continuation whose final response returns to the originating surface. Requires replyInstructions.",
+          },
+          replyInstructions: {
+            type: "string",
+            minLength: 1,
+            maxLength: 4_000,
+            description:
+              "Instructions for turning the user's private reply into the final response returned to the originating surface, including what must not be repeated there. Used only when awaitReply is true.",
+          },
           text: {
             type: "string",
             minLength: 1,

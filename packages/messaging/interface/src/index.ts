@@ -1486,6 +1486,27 @@ export type MessagingPendingSkillSelection = {
   shortDescription?: string;
 };
 
+export type MessagingPrivateReplySource = {
+  authorizedActorIds: string[];
+  backend: AppServerBackendKind;
+  channel: MessagingChannelRef;
+  createdAt: number;
+  displayName?: string;
+  federatedThread?: FederatedThreadRef;
+  id: string;
+  routingState?: MessagingAdapterState;
+  targetKind?: MessagingBindingTargetKind;
+  threadId: ThreadIdentifier;
+  updatedAt: number;
+};
+
+export type MessagingPrivateReplyContinuation = {
+  createdAt: number;
+  expiresAt: number;
+  instructions: string;
+  source: MessagingPrivateReplySource;
+};
+
 export type MessagingBindingRecord = {
   id: string;
   channel: MessagingChannelRef;
@@ -1508,6 +1529,12 @@ export type MessagingBindingRecord = {
   monitorSurface?: MessagingSurfaceRef;
   pinnedStatusSurface?: MessagingSurfaceRef;
   pendingSkillSelection?: MessagingPendingSkillSelection;
+  /**
+   * Restart-safe, one-shot route created when an Agent asks for a private
+   * reply. The private response is supplied to the Agent, while its final
+   * completion is delivered through `source`; the binding is then revoked.
+   */
+  privateReplyContinuation?: MessagingPrivateReplyContinuation;
   preferences?: MessagingBindingPreferences;
   /**
    * `on_demand` keeps implicitly-created bindings quiet until the user asks

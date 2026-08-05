@@ -87,6 +87,7 @@ import type {
   MessagingMonitorSubscriptionRecord,
   MessagingPendingIntentRecord,
   MessagingPrivateConversationResolveResult,
+  MessagingPrivateReplySource,
   MessagingQuestionnaireAnswer,
   MessagingQuestionnaireIntent,
   MessagingReviewIntent,
@@ -300,6 +301,14 @@ const PRIVATE_RESPONSE_FALLBACK_INSTRUCTION =
   + "Use send_private_response if it is available. If that tool is unavailable, "
   + "put the intended private content only in your final answer; PwrAgent will "
   + "deliver that final privately and suppress it on the source surface.";
+const PRIVATE_REPLY_CONTINUATION_TTL_MS = 24 * 60 * 60 * 1_000;
+const PRIVATE_REPLY_COMPLETION_INSTRUCTION =
+  "PwrAgent is completing a one-shot private reply requested by this Agent. "
+  + "Treat the user's following message as the private response to your earlier request. "
+  + "Your final answer will be delivered to the originating messaging surface, not this private thread. "
+  + "Do not quote or expose private reply content there unless the initiating instructions explicitly require it. "
+  + "Do not emit commentary, working updates, or partial answers containing the private reply. "
+  + "If the private exchange is not complete, call send_private_response again with awaitReply and new replyInstructions; otherwise answer finally to complete the callback on the originating surface.";
 const EXPLICIT_PRIVATE_RESPONSE_REQUEST_PATTERN = new RegExp(
   [
     "\\b(?:dm|direct[\\s-]+message|private[\\s-]+message)\\s+me\\b",
@@ -378,6 +387,7 @@ type ActiveAgentMessagingOrigin = {
   binding?: MessagingBindingRecord;
   deliveryBinding?: MessagingBindingRecord;
   event: MessagingInboundEvent;
+  privateReplyContinuationBindingId?: string;
 };
 
 type AgentMessagingOriginResolution =
@@ -806,6 +816,11 @@ export class MessagingController {
     string,
     ActiveAgentMessagingOrigin
   >();
+  private readonly startingAgentMessagingOriginsByThreadKey = new Map<
+    string,
+    ActiveAgentMessagingOrigin
+  >();
+  private readonly privateReplyCompletionTurnKeys = new Set<string>();
   private readonly terminalPrivateResponseTurnKeys = new Set<string>();
   private readonly privateResponseFallbackTurnKeys = new Set<string>();
   private readonly attemptedPrivateResponseFallbackTurnKeys = new Set<string>();
@@ -954,6 +969,7 @@ export class MessagingController {
   }
 
   async startMonitoringForEnabledBindings(): Promise<void> {
+    await this.cleanupExpiredPrivateReplyContinuations();
     if (this.options.channel) {
       const subscriptions =
         await this.options.store.findActiveMonitorSubscriptionsForChannelKind({
@@ -1545,9 +1561,14 @@ export class MessagingController {
         binding.threadId,
         eventTurnId ?? activeTurn?.turnId,
       );
+      const privateReplyCompletion = this.isPrivateReplyCompletionTurn(
+        event.backend,
+        binding.threadId,
+        eventTurnId ?? activeTurn?.turnId,
+      );
       const suppressSourceResponse =
         terminalPrivateResponse || privateResponseFallback;
-      if (!suppressSourceResponse) {
+      if (!suppressSourceResponse && !privateReplyCompletion) {
         await this.deliverToolActivityForBackendEvent(
           event,
           binding,
@@ -1602,7 +1623,12 @@ export class MessagingController {
       }
 
       const assistantDelta = assistantDeltaForBackendEvent(event);
-      if (assistantDelta && !reviewTurnEvent && !suppressSourceResponse) {
+      if (
+        assistantDelta
+        && !reviewTurnEvent
+        && !suppressSourceResponse
+        && !privateReplyCompletion
+      ) {
         if (!automationTurnEvent) {
           await this.deliverAssistantStreamUpdate(assistantDelta, binding);
         }
@@ -1626,7 +1652,14 @@ export class MessagingController {
             turnId: fallbackTurnId,
           });
         }
-      } else if (assistantText && !suppressSourceResponse) {
+      } else if (
+        assistantText
+        && !suppressSourceResponse
+        && (
+          !privateReplyCompletion
+          || !isNonFinalAssistantTextForBackendEvent(event)
+        )
+      ) {
         if (
           !isNonFinalAssistantTextForBackendEvent(event)
           && !isTaskMonitorProgressEvent(event)
@@ -1824,6 +1857,18 @@ export class MessagingController {
       }
     }
     if (lifecycle && isTerminalTurnLifecycle(lifecycle)) {
+      const turnKey = agentMessagingTurnKey(
+        event.backend,
+        threadId,
+        lifecycle.turnId,
+      );
+      const origin = this.activeAgentMessagingOriginsByTurnKey.get(turnKey);
+      if (origin?.privateReplyContinuationBindingId) {
+        await this.completePrivateReplyContinuation(
+          origin.privateReplyContinuationBindingId,
+        );
+      }
+      this.privateReplyCompletionTurnKeys.delete(turnKey);
       this.forgetAutomationTurn(event.backend, threadId, lifecycle.turnId);
       this.forgetAgentMessagingOrigin(event.backend, threadId, lifecycle.turnId);
       this.planArtifactsByTurnKey.delete(artifactTurnKey(event.backend, threadId, lifecycle.turnId));
@@ -2967,7 +3012,8 @@ export class MessagingController {
       return;
     }
 
-    const binding = await this.options.store.findActiveBindingForChannel(event.channel);
+    let binding = await this.options.store.findActiveBindingForChannel(event.channel);
+    binding = await this.revokeExpiredPrivateReplyContinuation(binding);
     if (!binding) {
       if (!await this.shouldHandleAmbientSharedMessage(event)) {
         return;
@@ -3125,7 +3171,8 @@ export class MessagingController {
       return;
     }
 
-    const binding = await this.options.store.findActiveBindingForChannel(event.channel);
+    let binding = await this.options.store.findActiveBindingForChannel(event.channel);
+    binding = await this.revokeExpiredPrivateReplyContinuation(binding);
     if (!binding) {
       if (!await this.shouldHandleAmbientSharedMessage(event)) {
         return;
@@ -3419,6 +3466,21 @@ export class MessagingController {
     const previewParts: string[] = [];
     const rejections: MessagingAttachmentRejection[] = [];
     const pdfHandling = await this.resolveMessagingPdfHandling(binding);
+    const privateReplyContinuation = binding?.privateReplyContinuation;
+    if (
+      privateReplyContinuation
+      && privateReplyContinuation.expiresAt > this.now()
+    ) {
+      input.push({
+        type: "text",
+        text: [
+          PRIVATE_REPLY_COMPLETION_INSTRUCTION,
+          "",
+          "Initiating Agent instructions:",
+          privateReplyContinuation.instructions,
+        ].join("\n"),
+      });
+    }
     const privateResponseRequested = events.some(
       (turnEvent) => requestsExplicitPrivateResponse(turnEvent),
     );
@@ -3501,6 +3563,43 @@ export class MessagingController {
     };
   }
 
+  private async revokeExpiredPrivateReplyContinuation(
+    binding: MessagingBindingRecord | undefined,
+  ): Promise<MessagingBindingRecord | undefined> {
+    if (
+      !binding?.privateReplyContinuation
+      || binding.privateReplyContinuation.expiresAt > this.now()
+    ) {
+      return binding;
+    }
+    await this.options.store.revokeBinding({
+      bindingId: binding.id,
+      revokedAt: this.now(),
+    });
+    this.notifyBindingChanged("private-reply-expired");
+    return undefined;
+  }
+
+  private async cleanupExpiredPrivateReplyContinuations(): Promise<void> {
+    const now = this.now();
+    const expired = this.filterBindingsForChannel(
+      await this.options.store.findActiveBindings(),
+    ).filter(
+      (binding) =>
+        binding.privateReplyContinuation
+        && binding.privateReplyContinuation.expiresAt <= now,
+    );
+    for (const binding of expired) {
+      await this.options.store.revokeBinding({
+        bindingId: binding.id,
+        revokedAt: now,
+      });
+    }
+    if (expired.length > 0) {
+      this.notifyBindingChanged("private-reply-expired");
+    }
+  }
+
   private async resolveMessagingPdfHandling(
     binding: MessagingBindingRecord | undefined,
   ): Promise<"model_directed" | "render_initial_pages" | "pass_through"> {
@@ -3550,11 +3649,27 @@ export class MessagingController {
   }): Promise<PreparedInputStartResult> {
     this.turnAdmission.markStarting(params.threadKey);
     let turnStarted = false;
+    let startingOrigin: ActiveAgentMessagingOrigin | undefined;
+    const startingThreadKey = agentMessagingThreadKey(
+      params.binding.backend,
+      params.binding.threadId,
+    );
 
     try {
       const navigation = params.navigation ?? await this.options.backend.getNavigationSnapshot({
         backend: "all",
       });
+      startingOrigin = await this.buildAgentMessagingOrigin({
+        binding: params.binding,
+        event: params.event,
+        navigation,
+      });
+      if (startingOrigin) {
+        this.startingAgentMessagingOriginsByThreadKey.set(
+          startingThreadKey,
+          startingOrigin,
+        );
+      }
       const turnSettings = turnSettingsForBinding(params.binding, navigation);
       const executionResolution = resolveExecutionModeForBinding(
         params.binding,
@@ -3605,6 +3720,7 @@ export class MessagingController {
           binding: params.binding,
           event: params.event,
           navigation,
+          origin: startingOrigin,
           queueEntryId: started.queueEntryId ?? started.turnId,
         });
         this.logger.info?.("messaging turn queued in shared thread FIFO", {
@@ -3628,7 +3744,6 @@ export class MessagingController {
         startedAt: this.now(),
         updatedAt: this.now(),
       };
-      this.setActiveTurn(params.binding, activeTurn);
       this.pdfAttachmentStore.bindTurn(
         {
           backend: params.binding.backend,
@@ -3641,13 +3756,18 @@ export class MessagingController {
         binding: params.binding,
         event: params.event,
         navigation,
+        origin: startingOrigin,
         turnId: started.turnId,
       });
-      await this.signalTurnActivity(params.binding, activeTurn, {
+      const deliveryBinding = startingOrigin?.deliveryBinding
+        ?? startingOrigin?.binding
+        ?? params.binding;
+      this.setActiveTurn(deliveryBinding, activeTurn);
+      await this.signalTurnActivity(deliveryBinding, activeTurn, {
         force: true,
       });
       await this.renderAutomaticBindingStatus(
-        params.binding,
+        deliveryBinding,
         undefined,
         navigation,
       );
@@ -3688,6 +3808,13 @@ export class MessagingController {
       return "failed";
     } finally {
       this.turnAdmission.clearStarting(params.threadKey);
+      if (
+        startingOrigin
+        && this.startingAgentMessagingOriginsByThreadKey.get(startingThreadKey)
+          === startingOrigin
+      ) {
+        this.startingAgentMessagingOriginsByThreadKey.delete(startingThreadKey);
+      }
     }
   }
 
@@ -6147,6 +6274,8 @@ export class MessagingController {
     this.toolUpdatePolicy.dispose();
     this.completedTaskMonitorTurns.clear();
     this.activeAgentMessagingOriginsByTurnKey.clear();
+    this.startingAgentMessagingOriginsByThreadKey.clear();
+    this.privateReplyCompletionTurnKeys.clear();
     this.terminalPrivateResponseTurnKeys.clear();
     this.privateResponseFallbackTurnKeys.clear();
     this.attemptedPrivateResponseFallbackTurnKeys.clear();
@@ -13834,12 +13963,24 @@ export class MessagingController {
     binding: MessagingBindingRecord;
     event?: MessagingInboundEvent;
     navigation: NavigationSnapshot;
+    origin?: ActiveAgentMessagingOrigin;
     turnId: string;
   }): void {
-    if (
-      !params.event ||
-      !isLiveMessagingToolOriginBinding(params.binding, params.navigation)
-    ) {
+    const origin = params.origin ?? (
+      params.event
+      && isLiveMessagingToolOriginBinding(params.binding, params.navigation)
+        ? {
+            binding: isDefaultAgentRouteBinding(params.binding)
+              ? undefined
+              : params.binding,
+            deliveryBinding: isDefaultAgentRouteBinding(params.binding)
+              ? params.binding
+              : undefined,
+            event: params.event,
+          }
+        : undefined
+    );
+    if (!origin) {
       return;
     }
     const turnKey = agentMessagingTurnKey(
@@ -13849,19 +13990,69 @@ export class MessagingController {
     );
     this.activeAgentMessagingOriginsByTurnKey.set(
       turnKey,
-      {
-        binding: isDefaultAgentRouteBinding(params.binding)
-          ? undefined
-          : params.binding,
-        deliveryBinding: isDefaultAgentRouteBinding(params.binding)
-          ? params.binding
-          : undefined,
-        event: params.event,
-      },
+      origin,
     );
-    if (requestsExplicitPrivateResponse(params.event)) {
+    if (origin.privateReplyContinuationBindingId) {
+      rememberBoundedKey(this.privateReplyCompletionTurnKeys, turnKey);
+    }
+    if (requestsExplicitPrivateResponse(origin.event)) {
       rememberBoundedKey(this.privateResponseFallbackTurnKeys, turnKey);
     }
+  }
+
+  private async buildAgentMessagingOrigin(params: {
+    binding: MessagingBindingRecord;
+    event?: MessagingInboundEvent;
+    navigation: NavigationSnapshot;
+  }): Promise<ActiveAgentMessagingOrigin | undefined> {
+    if (
+      !params.event
+      || !isLiveMessagingToolOriginBinding(params.binding, params.navigation)
+    ) {
+      return undefined;
+    }
+    const continuation = params.binding.privateReplyContinuation;
+    if (continuation && continuation.expiresAt > this.now()) {
+      return {
+        binding: params.binding,
+        deliveryBinding: await this.resolvePrivateReplySourceBinding(
+          continuation.source,
+        ),
+        event: params.event,
+        privateReplyContinuationBindingId: params.binding.id,
+      };
+    }
+    return {
+      binding: isDefaultAgentRouteBinding(params.binding)
+        ? undefined
+        : params.binding,
+      deliveryBinding: isDefaultAgentRouteBinding(params.binding)
+        ? params.binding
+        : undefined,
+      event: params.event,
+    };
+  }
+
+  private async resolvePrivateReplySourceBinding(
+    source: MessagingPrivateReplySource,
+  ): Promise<MessagingBindingRecord> {
+    const stored = await this.options.store.getBinding(source.id);
+    if (
+      stored
+      && !stored.revokedAt
+      && stored.backend === source.backend
+      && stored.threadId === source.threadId
+    ) {
+      return stored;
+    }
+    return {
+      ...source,
+      channel: structuredClone(source.channel),
+      routingState: source.routingState
+        ? structuredClone(source.routingState)
+        : undefined,
+      statusPresentation: "on_demand",
+    };
   }
 
   private forgetAgentMessagingOrigin(
@@ -13900,16 +14091,64 @@ export class MessagingController {
     );
   }
 
+  private isPrivateReplyCompletionTurn(
+    backend: AppServerBackendKind,
+    threadId: ThreadIdentifier,
+    turnId: string | undefined,
+  ): boolean {
+    if (!turnId) {
+      return false;
+    }
+    if (
+      this.privateReplyCompletionTurnKeys.has(
+        agentMessagingTurnKey(backend, threadId, turnId),
+      )
+    ) {
+      return true;
+    }
+    return Boolean(
+      this.startingAgentMessagingOriginsByThreadKey.get(
+        agentMessagingThreadKey(backend, threadId),
+      )?.privateReplyContinuationBindingId,
+    );
+  }
+
+  private async completePrivateReplyContinuation(
+    bindingId: string,
+  ): Promise<void> {
+    const binding = await this.options.store.getBinding(bindingId);
+    if (!binding || binding.revokedAt || !binding.privateReplyContinuation) {
+      return;
+    }
+    await this.options.store.revokeBinding({
+      bindingId,
+      revokedAt: this.now(),
+    });
+    this.notifyBindingChanged("private-reply-completed");
+  }
+
   private rememberQueuedAgentMessagingOrigin(params: {
     binding: MessagingBindingRecord;
     event?: MessagingInboundEvent;
     navigation: NavigationSnapshot;
+    origin?: ActiveAgentMessagingOrigin;
     queueEntryId: string;
   }): void {
-    if (
-      !params.event
-      || !isLiveMessagingToolOriginBinding(params.binding, params.navigation)
-    ) {
+    const origin = params.origin ?? (
+      params.event
+      && isLiveMessagingToolOriginBinding(params.binding, params.navigation)
+        ? {
+            binding: isDefaultAgentRouteBinding(params.binding)
+              ? undefined
+              : params.binding,
+            deliveryBinding: isDefaultAgentRouteBinding(params.binding)
+              ? params.binding
+              : undefined,
+            event: params.event,
+          }
+        : undefined
+    );
+    if (!origin) {
       return;
     }
     const queueKey = agentMessagingQueueKey(
@@ -13919,15 +14158,7 @@ export class MessagingController {
     );
     this.queuedAgentMessagingOriginsByQueueKey.set(
       queueKey,
-      {
-        binding: isDefaultAgentRouteBinding(params.binding)
-          ? undefined
-          : params.binding,
-        deliveryBinding: isDefaultAgentRouteBinding(params.binding)
-          ? params.binding
-          : undefined,
-        event: params.event,
-      },
+      origin,
     );
   }
 
@@ -13959,6 +14190,9 @@ export class MessagingController {
         turnKey,
         origin,
       );
+      if (origin.privateReplyContinuationBindingId) {
+        rememberBoundedKey(this.privateReplyCompletionTurnKeys, turnKey);
+      }
       if (requestsExplicitPrivateResponse(origin.event)) {
         rememberBoundedKey(this.privateResponseFallbackTurnKeys, turnKey);
       }
@@ -14013,10 +14247,26 @@ export class MessagingController {
     persistentBindings: MessagingBindingRecord[],
   ): MessagingBindingRecord[] {
     if (!turnId) {
+      const startingOrigin = this.startingAgentMessagingOriginsByThreadKey.get(
+        agentMessagingThreadKey(backend, threadId),
+      );
+      const startingDeliveryBinding = startingOrigin?.deliveryBinding
+        ?? startingOrigin?.binding;
+      if (
+        startingDeliveryBinding
+        && this.isChannelInScope(startingDeliveryBinding.channel)
+      ) {
+        const persistedOrigin = persistentBindings.find(
+          (binding) => binding.id === startingDeliveryBinding.id,
+        );
+        return [persistedOrigin ?? startingDeliveryBinding];
+      }
       return persistentBindings;
     }
     const origin = this.activeAgentMessagingOriginsByTurnKey.get(
       agentMessagingTurnKey(backend, threadId, turnId),
+    ) ?? this.startingAgentMessagingOriginsByThreadKey.get(
+      agentMessagingThreadKey(backend, threadId),
     );
     const deliveryBinding = origin?.deliveryBinding ?? origin?.binding;
     if (!origin || !deliveryBinding || !this.isChannelInScope(deliveryBinding.channel)) {
@@ -15301,6 +15551,10 @@ export class MessagingController {
     const text = typeof request.args?.text === "string"
       ? request.args.text
       : "";
+    const awaitReply = request.args?.awaitReply === true;
+    const replyInstructions = typeof request.args?.replyInstructions === "string"
+      ? request.args.replyInstructions.trim()
+      : "";
     if (!text.trim() || text.length > 40_000) {
       return {
         ok: false,
@@ -15308,6 +15562,19 @@ export class MessagingController {
           code: "invalid_arguments",
           message:
             "send_private_response requires text between 1 and 40,000 characters.",
+        },
+      };
+    }
+    if (
+      awaitReply
+      && (!replyInstructions || replyInstructions.length > 4_000)
+    ) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message:
+            "send_private_response requires replyInstructions between 1 and 4,000 characters when awaitReply is true.",
         },
       };
     }
@@ -15406,7 +15673,9 @@ export class MessagingController {
         role: "assistant",
         attribution: {
           label: `${attributionLabel} · Private response`,
-          hint: "Reply in this message's thread to continue with this agent.",
+          hint: awaitReply
+            ? "Reply in this message's thread; this agent will return the completion to the original conversation."
+            : "Reply in this message's thread to continue with this agent.",
         },
         parts: [{ type: "text", text, markdown: "markdown" }],
       },
@@ -15464,9 +15733,19 @@ export class MessagingController {
         request.context.turnId,
       );
     }
+    if (awaitReply && (!sourceBinding || !result.continuation)) {
+      return {
+        ok: false,
+        error: {
+          code: "unsupported_operation",
+          message:
+            "The private response was delivered, but this provider did not return a reply thread for the requested continuation. Further source output remains suppressed.",
+        },
+      };
+    }
     if (sourceBinding && result.continuation) {
       try {
-        const continuationBinding = await this.bindChannelToThread(
+        let continuationBinding = await this.bindChannelToThread(
           {
             ...privateEvent,
             id: `${privateEvent.id}:continuation`,
@@ -15481,6 +15760,19 @@ export class MessagingController {
             targetKind: sourceBinding.targetKind ?? "agent_thread",
           },
         );
+        if (awaitReply) {
+          continuationBinding = await this.options.store.upsertBinding({
+            ...continuationBinding,
+            privateReplyContinuation: {
+              createdAt: this.now(),
+              expiresAt: this.now() + PRIVATE_REPLY_CONTINUATION_TTL_MS,
+              instructions: replyInstructions,
+              source: privateReplySourceFromBinding(sourceBinding),
+            },
+            updatedAt: this.now(),
+          });
+          this.notifyBindingChanged("private-reply-awaiting");
+        }
         await this.clearTerminalPrivateResponseActivity(
           continuationBinding,
           request.context.turnId,
@@ -15504,6 +15796,7 @@ export class MessagingController {
     return {
       ok: true,
       data: {
+        awaitingReply: awaitReply,
         channel: result.channel,
         deliveredAt: result.deliveredAt,
         outcome: "delivered",
@@ -18016,6 +18309,13 @@ function agentMessagingTurnKey(
   return `${backend}:${threadId}:${turnId}`;
 }
 
+function agentMessagingThreadKey(
+  backend: AppServerBackendKind,
+  threadId: ThreadIdentifier,
+): string {
+  return `${backend}:${threadId}`;
+}
+
 function agentMessagingQueueKey(
   backend: AppServerBackendKind,
   threadId: ThreadIdentifier,
@@ -18026,6 +18326,26 @@ function agentMessagingQueueKey(
 
 function isDefaultAgentRouteBinding(binding: MessagingBindingRecord): boolean {
   return binding.id.startsWith("default-agent-route:");
+}
+
+function privateReplySourceFromBinding(
+  binding: MessagingBindingRecord,
+): MessagingPrivateReplySource {
+  return {
+    authorizedActorIds: [...binding.authorizedActorIds],
+    backend: binding.backend,
+    channel: structuredClone(binding.channel),
+    createdAt: binding.createdAt,
+    displayName: binding.displayName,
+    federatedThread: binding.federatedThread,
+    id: binding.id,
+    routingState: binding.routingState
+      ? structuredClone(binding.routingState)
+      : undefined,
+    targetKind: binding.targetKind,
+    threadId: binding.threadId,
+    updatedAt: binding.updatedAt,
+  };
 }
 
 function summarizeMessagingConversation(

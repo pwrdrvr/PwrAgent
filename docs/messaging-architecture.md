@@ -167,6 +167,11 @@ user-facing bound/unbound transcript transition, and its status presentation is
 on demand so the first reply does not insert a full binding card. Its normalized
 conversation retains whether it lives inside a 1:1 DM so replies bypass
 shared-channel authorization and mention-only response policy.
+If the Agent sets `awaitReply`, that binding becomes a 24-hour one-shot callback
+route. Its stored completion instructions are prepended to the private reply,
+working and streaming output are withheld, and the final answer is delivered
+back to the original source binding. Terminal turn handling revokes the
+callback binding so it disappears from the Agent's attached surfaces.
 Terminal private delivery also clears provider activity on both the source and
 continuation surfaces and
 suppresses later work events from re-arming that activity. Before it reports

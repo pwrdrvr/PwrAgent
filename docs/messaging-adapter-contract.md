@@ -182,6 +182,14 @@ from its replies must not insert the full binding status card into the private
 conversation. An explicit status command may create the card, after which
 ordinary refreshes may update it.
 
+When `send_private_response` requests a reply, the continuation additionally
+stores a bounded, expiring one-shot return route and Agent-authored completion
+instructions. The first private-thread reply starts the originating Agent with
+those instructions, suppresses non-final source updates, delivers the final
+answer through the original source binding, and revokes the continuation after
+the turn terminates. Providers do not implement this workflow and still see
+only normalized continuation and delivery requests.
+
 Providers set `conversation.isDirectMessage` on both a 1:1 DM and any native
 thread nested inside it. This preserves DM authorization and ambient-reply
 semantics after normalization changes the child conversation's `kind` to
