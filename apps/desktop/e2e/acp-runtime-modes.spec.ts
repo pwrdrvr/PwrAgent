@@ -712,9 +712,12 @@ test("shows ACP tool progress while a turn is still running", async () => {
     const readSummary = app.window.getByRole("button", { name: "Read README.md" });
     await expect(readSummary).toBeVisible();
     await readSummary.click();
-    await expect(app.window.getByText(/README\.md/)).toBeVisible();
+    const readActivity = app.window.locator("aside", { has: readSummary });
+    await expect(readActivity.getByText("README.md", { exact: true })).toBeVisible();
     await expect(
-      app.window.getByText(/Read lines 1-80 of 200 from README\.md/),
+      readActivity.getByText("Read lines 1-80 of 200 from README.md", {
+        exact: true,
+      }),
     ).toBeVisible();
   } finally {
     await app.close();
