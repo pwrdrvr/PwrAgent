@@ -226,7 +226,11 @@ export function completeFederationEnrollment(params: {
     lastActivityAt: params.now,
     pinnedPublicKeyPem: params.peer.publicKeyPem,
   };
-  params.store.upsertPeer({ peer, updatedAt: params.now });
+  params.store.upsertPeer({
+    peer,
+    updatedAt: params.now,
+    clearRevocation: true,
+  });
   params.store.markEnrollmentUsed({
     enrollmentId: enrollment.id,
     peerId: params.peer.instanceId,

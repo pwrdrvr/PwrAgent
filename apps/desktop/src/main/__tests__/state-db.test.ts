@@ -61,6 +61,80 @@ describe("StateDb", () => {
     );
   });
 
+  it("repairs revocation state after a later verified federation enrollment", () => {
+    const dbPath = path.join(tempDir, "state.db");
+    const insertPeer = stateDb.raw.prepare(
+      `INSERT INTO federation_peers(
+         peer_id, label, role, status, created_at, updated_at, last_seen_at,
+         revoked_at, payload
+       ) VALUES (?, ?, 'client', ?, 1000, 3000, 3000, 2000, '{}')`,
+    );
+    insertPeer.run("reenrolled_peer", "Re-enrolled", "connected");
+    insertPeer.run("still_revoked_peer", "Still revoked", "revoked");
+    insertPeer.run("unproven_peer", "Unproven", "connected");
+
+    const insertEnrollment = stateDb.raw.prepare(
+      `INSERT INTO federation_enrollment_tokens(
+         enrollment_id, token_hmac, status, generated_at, expires_at, used_at,
+         peer_id, payload
+       ) VALUES (?, ?, 'used', 1000, 4000, ?, ?, '{}')`,
+    );
+    insertEnrollment.run(
+      "federation-enrollment:reenrolled",
+      "reenrolled-token-hmac",
+      3_000,
+      "reenrolled_peer",
+    );
+    insertEnrollment.run(
+      "federation-enrollment:still-revoked",
+      "still-revoked-token-hmac",
+      3_000,
+      "still_revoked_peer",
+    );
+    insertEnrollment.run(
+      "federation-enrollment:unproven",
+      "unproven-token-hmac",
+      1_500,
+      "unproven_peer",
+    );
+
+    stateDb.raw.pragma("user_version = 41");
+    stateDb.close();
+    stateDb = StateDb.open(dbPath);
+
+    const peers = stateDb.raw
+      .prepare(
+        `SELECT peer_id, status, revoked_at
+         FROM federation_peers
+         ORDER BY peer_id`,
+      )
+      .all() as Array<{
+        peer_id: string;
+        status: string;
+        revoked_at: number | null;
+      }>;
+    expect(peers).toEqual([
+      {
+        peer_id: "reenrolled_peer",
+        status: "connected",
+        revoked_at: null,
+      },
+      {
+        peer_id: "still_revoked_peer",
+        status: "revoked",
+        revoked_at: 2_000,
+      },
+      {
+        peer_id: "unproven_peer",
+        status: "connected",
+        revoked_at: 2_000,
+      },
+    ]);
+    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(
+      CURRENT_STATE_DB_USER_VERSION,
+    );
+  });
+
   it("creates provider-aware pull request cache columns", () => {
     const prStatusColumns = stateDb.raw
       .prepare("PRAGMA table_info(pr_status_cache)")
