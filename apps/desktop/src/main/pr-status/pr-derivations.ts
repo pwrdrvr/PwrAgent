@@ -106,12 +106,11 @@ export function normalizeCommitShas(
 /**
  * Union two commit-SHA sets.
  *
- * The batched poller only fetches the PR's HEAD commit (`commits(last: 1)`) —
- * that is all `statusCheckRollup` needs, and widening it to the full commit
- * list would multiply the GraphQL node cost of every batch. But `commitShas`
- * is load-bearing for merged-PR "pushed" detection, and the `gh` path DOES
- * populate the full list. So the poller unions its head SHA into whatever is
- * already known rather than replacing (and shrinking) the set.
+ * The in-process GraphQL client fetches the PR's HEAD commit
+ * (`commits(last: 1)`) — that is all `statusCheckRollup` needs, and widening it
+ * to the full commit list would multiply the node cost of every batch. The Git
+ * working-state probe treats a merged head and its ancestors as pushed, while
+ * this union preserves any richer commit set retained from an older snapshot.
  */
 export function mergeCommitShas(
   previous: string[] | undefined,

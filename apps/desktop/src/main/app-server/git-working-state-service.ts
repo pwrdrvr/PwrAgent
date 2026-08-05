@@ -32,6 +32,7 @@ type GitCommandRunner = (
   cwd: string,
   args: string[],
   env?: NodeJS.ProcessEnv,
+  input?: string,
 ) => Promise<string>;
 type UntrackedPathFilter = (repoPath: string) => boolean;
 
@@ -84,12 +85,50 @@ function buildWorkingStateCacheKey(
   return accepted ? `${worktreePath}\0${accepted}` : worktreePath;
 }
 
+function buildRevisionExclusionInput(
+  commitShas: Iterable<string>,
+): string | undefined {
+  const exclusions = [...commitShas].sort().map((sha) => `^${sha}`);
+  return exclusions.length > 0 ? `${exclusions.join("\n")}\n` : undefined;
+}
+
 async function defaultRunGit(
   cwd: string,
   args: string[],
   env?: NodeJS.ProcessEnv,
+  input?: string,
 ): Promise<string> {
-  return (await runGitCommand(cwd, args, { env })).stdout;
+  if (input === undefined) {
+    return (await runGitCommand(cwd, args, { env })).stdout;
+  }
+
+  const childEnv = buildPwrAgentChildProcessEnv(env ?? process.env);
+  const git = await resolveGitExecutable(childEnv);
+  return await new Promise<string>((resolve, reject) => {
+    const child = spawn(git, ["-C", cwd, ...args], { env: childEnv });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) {
+        resolve(stdout.trim());
+      } else {
+        reject(
+          new Error(stderr.trim() || `git exited with code ${code ?? "unknown"}`),
+        );
+      }
+    });
+    child.stdin.on("error", () => undefined);
+    child.stdin.end(input);
+  });
 }
 
 function parseNumstat(output: string): {
@@ -823,8 +862,8 @@ export async function probeWorktreeWorkingState(
 ): Promise<ThreadGitWorkingState | undefined> {
   const runGit = options.runGit ?? defaultRunGit;
   const gitEnv = options.gitEnv;
-  const runGitNoLocks = (args: string[]): Promise<string> =>
-    runGit(worktreePath, ["--no-optional-locks", ...args], gitEnv);
+  const runGitNoLocks = (args: string[], input?: string): Promise<string> =>
+    runGit(worktreePath, ["--no-optional-locks", ...args], gitEnv, input);
 
   const [numstatOutput, statusOutput, remotesOutput, baseState] = await Promise.all([
     // Staged + unstaged line counts vs HEAD. Fails on an unborn HEAD
@@ -851,38 +890,36 @@ export async function probeWorktreeWorkingState(
     gitEnv,
   );
 
-  // "Unpushed" means reachable from HEAD but on no remote ref. With no
-  // remotes configured, every commit would count — meaningless for a
-  // local-only repo, so report 0 instead.
+  // "Unpushed" means reachable from HEAD but on no remote ref or accepted
+  // merged-PR head. Excluding an accepted head also excludes its ancestors,
+  // which is load-bearing after squash merge: the in-process GitHub lookup
+  // retains the PR head SHA, while the deleted source branch's earlier commits
+  // are no longer reachable from a remote ref. Commits added after that head
+  // remain countable. With no remotes configured, every commit would count —
+  // meaningless for a local-only repo, so report 0 instead.
   let unpushedCommits = 0;
   if (remotesOutput?.trim()) {
-    const acceptedPushedCommitShas = buildAcceptedPushedCommitSet(
-      options.acceptedPushedCommitShas,
+    const acceptedPushedCommitInput = buildRevisionExclusionInput(
+      buildAcceptedPushedCommitSet(options.acceptedPushedCommitShas),
     );
-    if (acceptedPushedCommitShas.size > 0) {
-      const output = await runGitNoLocks([
-        "rev-list",
-        "HEAD",
-        "--not",
-        "--remotes",
-      ]).catch(() => undefined);
-      unpushedCommits = output === undefined
-        ? 0
-        : output
-          .split("\n")
-          .map((sha) => sha.trim().toLowerCase())
-          .filter((sha) => sha && !acceptedPushedCommitShas.has(sha))
-          .length;
-    } else {
-      const count = await runGitNoLocks([
-        "rev-list",
-        "--count",
-        "HEAD",
-        "--not",
-        "--remotes",
-      ]).catch(() => undefined);
-      unpushedCommits = count !== undefined ? Number(count) || 0 : 0;
+    const countArgs = [
+      "rev-list",
+      "--ignore-missing",
+      "--count",
+      "HEAD",
+      "--not",
+      "--remotes",
+    ];
+    let count = await runGitNoLocks(
+      acceptedPushedCommitInput ? [...countArgs, "--stdin"] : countArgs,
+      acceptedPushedCommitInput,
+    ).catch(() => undefined);
+    if (count === undefined && acceptedPushedCommitInput) {
+      // If the ancestry-aware probe fails, retry without PR exclusions. A
+      // false-positive badge is safer than hiding genuinely local work.
+      count = await runGitNoLocks(countArgs).catch(() => undefined);
     }
+    unpushedCommits = count !== undefined ? Number(count) || 0 : 1;
   }
 
   return {
@@ -1289,10 +1326,13 @@ export class GitWorkingStateService {
     }
 
     const gitEnv = this.gitEnv;
-    const noLocks = (args: string[]): Promise<string> =>
-      this.runGit(cwd, ["--no-optional-locks", ...args], gitEnv);
+    const noLocks = (args: string[], input?: string): Promise<string> =>
+      this.runGit(cwd, ["--no-optional-locks", ...args], gitEnv, input);
     const acceptedPushedCommitShas = buildAcceptedPushedCommitSet(
       options.acceptedPushedCommitShas,
+    );
+    const acceptedPushedCommitInput = buildRevisionExclusionInput(
+      acceptedPushedCommitShas,
     );
 
     // The set of files that still have working-tree changes (tracked diffs vs
@@ -1348,17 +1388,39 @@ export class GitWorkingStateService {
       if (existing) {
         return existing;
       }
-      if (acceptedPushedCommitShas.has(sha.trim().toLowerCase())) {
-        const promise = Promise.resolve(true);
-        pushedBySha.set(sha, promise);
-        return promise;
-      }
       // `rev-list -1 <sha> --not --remotes` lists sha only when it (or its
-      // tip) isn't reachable from any remote ref. Empty ⇒ pushed. With no
-      // remotes configured, nothing is excluded ⇒ non-empty ⇒ local-only.
-      const promise = noLocks(["rev-list", "-1", sha, "--not", "--remotes"])
-        .then((output) => output.trim() === "")
-        .catch(() => true);
+      // tip) isn't reachable from any remote ref or accepted merged-PR head.
+      // Accepted heads intentionally act as revision exclusions rather than
+      // exact-SHA matches so earlier commits from a squash-merged branch also
+      // read as pushed. Empty ⇒ pushed. With no remotes or accepted heads,
+      // nothing is excluded ⇒ non-empty ⇒ local-only.
+      const baseArgs = [
+        "rev-list",
+        "--ignore-missing",
+        "-1",
+        sha,
+        "--not",
+        "--remotes",
+      ];
+      const promise = (async () => {
+        if (acceptedPushedCommitInput) {
+          try {
+            const output = await noLocks(
+              [...baseArgs, "--stdin"],
+              acceptedPushedCommitInput,
+            );
+            return output.trim() === "";
+          } catch {
+            // Retry without PR exclusions so an input/protocol failure cannot
+            // silently classify local work as pushed.
+          }
+        }
+        try {
+          return (await noLocks(baseArgs)).trim() === "";
+        } catch {
+          return false;
+        }
+      })();
       pushedBySha.set(sha, promise);
       return promise;
     };
