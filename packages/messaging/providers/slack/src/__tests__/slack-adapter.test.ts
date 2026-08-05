@@ -186,6 +186,35 @@ describe("SlackAdapter", () => {
     );
   });
 
+  it("skips authorized bot actors when publishing App Homes", async () => {
+    const publishedHomes: Array<{ userId: string; view: SlackHomeView }> = [];
+    const warnings: Array<{ message: string; data?: Record<string, unknown> }> = [];
+    const adapter = new SlackAdapter({
+      config: {
+        ...baseConfig,
+        authorizedActorIds: [
+          ...baseConfig.authorizedActorIds,
+          { id: "B012DATADOG", displayName: "Datadog" },
+        ],
+      },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({ publishedHomes }),
+      logger: {
+        warn: (message, data) => {
+          warnings.push({ message, data });
+        },
+      },
+      socketClient: fakeSocket(),
+    });
+
+    await adapter.start(async () => undefined);
+
+    expect(publishedHomes.map((home) => home.userId)).toEqual([
+      "U012ABCDEF0",
+    ]);
+    expect(warnings).toEqual([]);
+  });
+
   it("acknowledges App Home opens and refreshes the user's Home tab", async () => {
     const publishedHomes: Array<{ userId: string; view: SlackHomeView }> = [];
     const socket = fakeSocket();

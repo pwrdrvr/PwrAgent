@@ -53,6 +53,8 @@ export function buildSlackHomeView(params: {
   userId: string;
 }): SlackHomeView {
   const config = params.config;
+  const slashCommand = (command: string) =>
+    `/${config.slashCommandPrefix?.trim() ?? ""}${command}`;
   return {
     type: "home",
     blocks: [
@@ -95,7 +97,7 @@ export function buildSlackHomeView(params: {
         fields: [
           homeField(
             ":rocket: Start or resume",
-            "Use `/new` for fresh work or `/resume` to pick up an existing thread.",
+            `Use \`${slashCommand("new")}\` for fresh work or \`${slashCommand("resume")}\` to pick up an existing thread.`,
           ),
           homeField(
             ":control_knobs: Steer from Slack",
@@ -115,7 +117,7 @@ export function buildSlackHomeView(params: {
           ),
           homeField(
             ":information_source: See every command",
-            "Send `/help` or mention the bot with `help` for the live command menu.",
+            `Send \`${slashCommand("help")}\` or mention the bot with \`help\` for the live command menu.`,
           ),
         ],
       },
@@ -137,7 +139,7 @@ export function buildSlackHomeView(params: {
             "",
             "*Execution access is separate and per thread.* Default Access asks before protected actions. Full Access can be disabled for messaging entirely and, when enabled, is an explicit operator-controlled escalation.",
             "",
-            "Use `/status` in a bound conversation to inspect and control that thread's model, reasoning, speed, and access mode.",
+            `Use \`${slashCommand("status")}\` in a bound conversation to inspect and control that thread's model, reasoning, speed, and access mode.`,
           ].join("\n"),
         },
       },

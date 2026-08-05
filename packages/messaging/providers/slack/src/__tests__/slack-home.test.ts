@@ -17,6 +17,7 @@ const lockedDownConfig: SlackMessagingConfig = {
     { id: "C012ABCDEF0", displayName: "engineering" },
     { id: "C012ABCDEF1", displayName: "product" },
   ],
+  slashCommandPrefix: "pwragent_",
 };
 
 describe("buildSlackHomeView", () => {
@@ -35,6 +36,11 @@ describe("buildSlackHomeView", () => {
     expect(payload).toContain("1 approved workspace");
     expect(payload).toContain("2 approved conversations");
     expect(payload).toContain("2 configured users");
+    expect(payload).toContain("/pwragent_new");
+    expect(payload).toContain("/pwragent_resume");
+    expect(payload).toContain("/pwragent_help");
+    expect(payload).toContain("/pwragent_status");
+    expect(payload).not.toContain("Use `/new`");
     expect(payload).not.toContain("T012ABCDEF0");
     expect(payload).not.toContain("C012ABCDEF0");
     expect(payload).not.toContain("engineering");

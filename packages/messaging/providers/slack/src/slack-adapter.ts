@@ -826,8 +826,11 @@ export class SlackAdapter implements SlackProviderAdapter {
   };
 
   private async publishAppHomes(userIds: readonly string[]): Promise<void> {
+    const homeUserIds = [...new Set(userIds)].filter(
+      (userId) => !validateSlackBotId(userId).ok,
+    );
     await Promise.all(
-      [...new Set(userIds)].map(
+      homeUserIds.map(
         async (userId) => await this.publishAppHome(userId),
       ),
     );
