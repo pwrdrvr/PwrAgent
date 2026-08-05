@@ -43,6 +43,17 @@ const log = getMainLogger("pwragent:federation-transport");
 const FEDERATION_NOISE_TRANSPORT = "noise_ik_25519_aesgcm_sha256";
 
 /**
+ * Application close code sent to a connection evicted because the same
+ * peer instance id authenticated again. Clients use it to distinguish
+ * "another process is using my identity" from a network drop — the
+ * signature of a cloned profile state.db (duplicate instance id + key)
+ * kicking its sibling in a loop.
+ */
+export const FEDERATION_CLOSE_REPLACED_CODE = 4001;
+const REPLACEMENT_FLAP_WINDOW_MS = 5 * 60_000;
+const REPLACEMENT_FLAP_THRESHOLD = 3;
+
+/**
  * Liveness probe cadence (ssh ClientAliveInterval / ServerAliveInterval
  * analogue, both directions). A peer that misses one full interval's pong is
  * terminated, so a silently dropped link (sleep, NAT timeout, power loss) is
@@ -180,7 +191,7 @@ export type FederationGatewayConnection = {
   sessionId: FederationSessionId;
   capabilities: FederationCapability[];
   sendEnvelope: (envelope: FederationProtocolEnvelope) => void;
-  close: () => void;
+  close: (code?: number, reason?: string) => void;
   /** Hard socket teardown for peers already presumed dead (stale sweep):
    *  a graceful close queues a frame a wedged socket may never deliver. */
   terminate?: () => void;
@@ -225,6 +236,9 @@ export class FederationGatewayWebSocketServer {
     FederationInstanceId,
     FederationGatewayConnection
   >();
+
+  /** Recent eviction timestamps per peer id, for duplicate-id detection. */
+  private readonly replacementsByPeerId = new Map<FederationInstanceId, number[]>();
 
   constructor(private readonly options: FederationGatewayWebSocketServerOptions) {
     this.sessions = options.sessions ?? new FederationSessionRegistry();
@@ -485,12 +499,49 @@ export class FederationGatewayWebSocketServer {
       sendEnvelope: (envelope) => {
         sendFrame(socket, { kind: "envelope", envelope }, transport);
       },
-      close: () => socket.close(),
+      close: (code?: number, reason?: string) => socket.close(code, reason),
       terminate: () => socket.terminate(),
     };
     const previous = this.connections.get(connection.peerId);
     if (previous && previous.sessionId !== connection.sessionId) {
-      previous.close();
+      // Evictions were previously silent (bare close, no log, no audit),
+      // which made a duplicate-identity kick loop invisible. Audit the
+      // eviction BEFORE the new session's "connected" row so the trail
+      // reads in causal order, and close with an application code the
+      // client can distinguish from a network drop. Repeated evictions
+      // inside the window are the cloned-profile signature — flag them.
+      const now = Date.now();
+      const replacements = [
+        ...(this.replacementsByPeerId.get(connection.peerId) ?? []).filter(
+          (at) => now - at < REPLACEMENT_FLAP_WINDOW_MS,
+        ),
+        now,
+      ];
+      this.replacementsByPeerId.set(connection.peerId, replacements);
+      const duplicateSuspected =
+        replacements.length >= REPLACEMENT_FLAP_THRESHOLD;
+      this.options.store.appendAudit({
+        peerId: connection.peerId,
+        sessionId: previous.sessionId,
+        kind: "disconnected",
+        createdAt: now,
+        detail: duplicateSuspected
+          ? "replaced:duplicate_instance_id_suspected"
+          : "replaced",
+      });
+      log.warn("federation peer session replaced", {
+        peerId: connection.peerId,
+        previousSessionId: previous.sessionId,
+        sessionId,
+        replacementsInWindow: replacements.length,
+        duplicateInstanceIdSuspected: duplicateSuspected,
+      });
+      previous.close(
+        FEDERATION_CLOSE_REPLACED_CODE,
+        duplicateSuspected
+          ? "replaced_by_new_session duplicate_instance_id_suspected"
+          : "replaced_by_new_session",
+      );
     }
     this.connections.set(connection.peerId, connection);
     this.options.store.appendAudit({
@@ -536,10 +587,15 @@ export class FederationGatewayWebSocketServer {
         closedAt: Date.now(),
         reason: "transport_closed",
       });
-      if (this.connections.get(connection.peerId)?.sessionId === sessionId) {
+      // A replaced session no longer owns the peer entry; its eviction
+      // was already audited on the replace path — don't add a second,
+      // later "disconnected" row for the same session.
+      const stillOwner =
+        this.connections.get(connection.peerId)?.sessionId === sessionId;
+      if (stillOwner) {
         this.connections.delete(connection.peerId);
       }
-      if (!this.stopping) {
+      if (!this.stopping && stillOwner) {
         this.options.store.appendAudit({
           peerId: connection.peerId,
           sessionId,
@@ -670,7 +726,12 @@ export async function connectFederationClient(params: {
   /** Pinned gateway Noise static public key (raw 32 bytes), from the invite. */
   gatewayNoisePublicKey?: Buffer;
   onEnvelope?: (envelope: FederationProtocolEnvelope) => void;
-  onClose?: () => void;
+  /**
+   * Called once when the transport ends. `info` carries the WebSocket
+   * close code/reason when the peer closed cleanly (e.g. 4001
+   * "replaced_by_new_session"); undefined for socket errors.
+   */
+  onClose?: (info?: { code: number; reason: string }) => void;
 }): Promise<FederationClientWebSocketClient> {
   const connectTimeoutMs =
     params.connectTimeoutMs ?? FEDERATION_CONNECT_TIMEOUT_MS;
@@ -877,15 +938,22 @@ async function establishFederationClient(
     throw new Error("Invalid federation auth acceptance signature");
   }
   let transportEnded = false;
-  const notifyTransportEnded = () => {
+  const notifyTransportEnded = (info?: { code: number; reason: string }) => {
     if (transportEnded) return;
     transportEnded = true;
-    socket.off("close", notifyTransportEnded);
-    socket.off("error", notifyTransportEnded);
-    params.onClose?.();
+    socket.off("close", onSocketClose);
+    socket.off("error", onSocketError);
+    params.onClose?.(info);
   };
-  socket.once("close", notifyTransportEnded);
-  socket.once("error", notifyTransportEnded);
+  // Carry the close code/reason to the runtime — dropping them made a
+  // deliberate "replaced_by_new_session" eviction indistinguishable
+  // from a network blip in every log and health surface.
+  const onSocketClose = (code: number, reason: Buffer) => {
+    notifyTransportEnded({ code, reason: reason.toString("utf8") });
+  };
+  const onSocketError = () => notifyTransportEnded();
+  socket.once("close", onSocketClose);
+  socket.once("error", onSocketError);
 
   // Client-side liveness probes (the ssh ServerAliveInterval direction):
   // a gateway whose link died silently is terminated, which fires onClose

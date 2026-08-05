@@ -159,6 +159,83 @@ describe("federation transport", () => {
     expect(server?.closePeer("client_one")).toBe(false);
   });
 
+  it("evicts a duplicated peer id with close code 4001 and audits the replacement", async () => {
+    const clientKeyPair = generateFederationIdentityKeyPair();
+    let firstClose: { code: number; reason: string } | undefined;
+    let resolveFirstClosed: (() => void) | undefined;
+    const firstClosed = new Promise<void>((resolve) => {
+      resolveFirstClosed = resolve;
+    });
+    const invite = createFederationEnrollmentInvite({
+      store,
+      token: "invite-token-replace",
+      gatewayInstanceId: "gateway_one",
+      generatedAt: Date.now() - 1_000,
+      expiresAt: Date.now() + 60_000,
+    });
+    server = new FederationGatewayWebSocketServer({
+      gatewayInstanceId: "gateway_one",
+      gatewayPrivateKeyPem: gatewayKeyPair.privateKeyPem,
+      gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+      host: "127.0.0.1",
+      port: 0,
+      store,
+    });
+    const { url } = await server.start();
+
+    await connectFederationClient({
+      url,
+      mode: "enroll",
+      gatewayInstanceId: "gateway_one",
+      gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+      peerInstanceId: "client_one",
+      privateKeyPem: clientKeyPair.privateKeyPem,
+      publicKeyPem: clientKeyPair.publicKeyPem,
+      capabilities: ["remote_window"],
+      inviteToken: invite.token,
+      label: "Clone A",
+      role: "client",
+      onClose: (info) => {
+        firstClose = info;
+        resolveFirstClosed?.();
+      },
+    });
+
+    // A second process presenting the same instance id + pinned key (a
+    // cloned profile state.db) authenticates and evicts the first.
+    const second = await connectFederationClient({
+      url,
+      mode: "reconnect",
+      gatewayInstanceId: "gateway_one",
+      gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+      peerInstanceId: "client_one",
+      privateKeyPem: clientKeyPair.privateKeyPem,
+      publicKeyPem: clientKeyPair.publicKeyPem,
+      capabilities: ["remote_window"],
+      label: "Clone B",
+      role: "client",
+    });
+
+    await firstClosed;
+    // The evicted side can tell this apart from a network drop.
+    expect(firstClose).toMatchObject({
+      code: 4001,
+      reason: "replaced_by_new_session",
+    });
+
+    // Newest-first audit trail: the old session's "replaced" eviction is
+    // recorded before (i.e. listed after) the new session's "connected",
+    // and the evicted socket's close adds no duplicate disconnected row.
+    expect(store.listAudit({ peerId: "client_one" })).toMatchObject([
+      { kind: "connected", detail: "reconnect" },
+      { kind: "disconnected", detail: "replaced" },
+      { kind: "connect_attempt", detail: "reconnect" },
+      { kind: "connected", detail: "enroll" },
+      { kind: "connect_attempt", detail: "enroll" },
+    ]);
+    second.close();
+  });
+
   it("ignores capability names from newer builds instead of failing the handshake", async () => {
     const clientKeyPair = generateFederationIdentityKeyPair();
     const invite = createFederationEnrollmentInvite({

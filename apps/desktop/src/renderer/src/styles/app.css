@@ -9045,6 +9045,33 @@ textarea,
   max-width: min(26ch, 28%);
 }
 
+/* Window-level notice for a remote federation window whose peer is
+   unreachable: the composer disables and remote polling suspends, so
+   the banner is the one place that says why. Warning tones (not danger)
+   — the runtime is auto-reconnecting and the state is expected to heal. */
+.federation-disconnected-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 16px 0;
+  padding: 8px 12px;
+  border: 1px solid var(--accent-border);
+  border-radius: 8px;
+  background: var(--warning-surface);
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.federation-disconnected-banner__dot {
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--status-warning);
+}
+
 .thread-header__warning {
   max-width: min(72vw, 760px);
   margin: 10px 0 0;

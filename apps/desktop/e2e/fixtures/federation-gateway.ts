@@ -56,6 +56,12 @@ export type InProcessFederationGateway = {
   pinnedRankByThreadId: Map<string, string | undefined>;
   /** Resolves when a client connection has completed enrollment/auth. */
   waitForConnection: (timeoutMs?: number) => Promise<void>;
+  /** Resolves when a connection completes AFTER this call (reconnects). */
+  waitForNextConnection: (timeoutMs?: number) => Promise<void>;
+  /** Stop listening and drop live connections (simulates the peer dying). */
+  stop: () => Promise<void>;
+  /** Come back up on the SAME port + identity so clients can reconnect. */
+  restart: () => Promise<void>;
   close: () => Promise<void>;
 };
 
@@ -254,38 +260,63 @@ export async function startInProcessFederationGateway(params: {
 
   let connectionCount = 0;
   const connectionWaiters: (() => void)[] = [];
-  const server = new FederationGatewayWebSocketServer({
-    gatewayInstanceId,
-    gatewayPrivateKeyPem: identity.privateKeyPem,
-    gatewayPublicKeyPem: identity.publicKeyPem,
-    host: "127.0.0.1",
-    port: 0,
-    store,
-    noiseStatic,
-    onConnection: (connection) => {
-      router.registerConnection({
-        peerId: connection.peerId,
-        capabilities: connection.capabilities,
-        sendEnvelope: connection.sendEnvelope,
-      });
-      ptyService?.notifyPeerConnected(connection.peerId);
-      connectionCount += 1;
-      for (const resolve of connectionWaiters.splice(0)) {
-        resolve();
-      }
-    },
-    onDisconnect: (connection) => {
-      router.unregisterConnection(connection.peerId);
-      ptyService?.notifyPeerDisconnected(connection.peerId);
-    },
-    onEnvelope: (envelope, connection) => {
-      void router.routeEnvelope({
-        envelope,
-        sourcePeerId: connection.peerId,
-      });
-    },
-  });
-  const { url } = await server.start();
+  const buildServer = (port: number) =>
+    new FederationGatewayWebSocketServer({
+      gatewayInstanceId,
+      gatewayPrivateKeyPem: identity.privateKeyPem,
+      gatewayPublicKeyPem: identity.publicKeyPem,
+      host: "127.0.0.1",
+      port,
+      store,
+      noiseStatic,
+      onConnection: (connection) => {
+        router.registerConnection({
+          peerId: connection.peerId,
+          capabilities: connection.capabilities,
+          sendEnvelope: connection.sendEnvelope,
+        });
+        ptyService?.notifyPeerConnected(connection.peerId);
+        connectionCount += 1;
+        for (const resolve of connectionWaiters.splice(0)) {
+          resolve();
+        }
+      },
+      onDisconnect: (connection) => {
+        router.unregisterConnection(connection.peerId);
+        ptyService?.notifyPeerDisconnected(connection.peerId);
+      },
+      onEnvelope: (envelope, connection) => {
+        void router.routeEnvelope({
+          envelope,
+          sourcePeerId: connection.peerId,
+        });
+      },
+    });
+  let server = buildServer(0);
+  const { url, port } = await server.start();
+
+  const waitForConnectionCount = async (
+    minimumCount: number,
+    timeoutMs: number,
+  ): Promise<void> => {
+    if (connectionCount >= minimumCount) return;
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(
+          new Error("Timed out waiting for a federation client connection"),
+        );
+      }, timeoutMs);
+      const waiter = () => {
+        if (connectionCount >= minimumCount) {
+          clearTimeout(timer);
+          resolve();
+          return;
+        }
+        connectionWaiters.push(waiter);
+      };
+      connectionWaiters.push(waiter);
+    });
+  };
 
   const token = randomBytes(24).toString("base64url");
   const now = Date.now();
@@ -317,16 +348,19 @@ export async function startInProcessFederationGateway(params: {
     calls,
     pinnedRankByThreadId,
     waitForConnection: async (timeoutMs = 15_000) => {
-      if (connectionCount > 0) return;
-      await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(() => {
-          reject(new Error("Timed out waiting for a federation client connection"));
-        }, timeoutMs);
-        connectionWaiters.push(() => {
-          clearTimeout(timer);
-          resolve();
-        });
-      });
+      await waitForConnectionCount(1, timeoutMs);
+    },
+    waitForNextConnection: async (timeoutMs = 60_000) => {
+      await waitForConnectionCount(connectionCount + 1, timeoutMs);
+    },
+    stop: async () => {
+      await server.stop();
+    },
+    restart: async () => {
+      // Same port, identity, and sqlite store: the returning "machine"
+      // is the one the client pinned, so reconnect auth must succeed.
+      server = buildServer(port);
+      await server.start();
     },
     close: async () => {
       ptyService?.disposeAll();

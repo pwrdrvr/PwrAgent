@@ -153,6 +153,7 @@ import {
 } from "./federation-redaction";
 import {
   connectFederationClient,
+  FEDERATION_CLOSE_REPLACED_CODE,
   FederationGatewayWebSocketServer,
   type FederationClientWebSocketClient,
   type FederationGatewayConnection,
@@ -250,7 +251,7 @@ export class DesktopFederationRuntime {
   private lastConnectedAt?: number;
   private stopping = true;
   private lastConnectionError?: string;
-  private lastConnectionFailureKind?: "auth" | "transport";
+  private lastConnectionFailureKind?: "auth" | "replaced" | "transport";
   private gatewayListenerError?: string;
 
   setAgentEventPublisher(publisher: (event: AgentEvent) => void): void {
@@ -373,9 +374,14 @@ export class DesktopFederationRuntime {
         ? "connected"
         : this.lastConnectionFailureKind === "auth"
           ? "rejected"
-          : this.reconnectTimer
-            ? "connecting"
-            : "disconnected";
+          // A "replaced" eviction will reconnect (and evict the sibling
+          // back) — degraded, not a clean connecting/disconnected, so
+          // the panel surfaces the duplicate-identity explanation.
+          : this.lastConnectionFailureKind === "replaced"
+            ? "degraded"
+            : this.reconnectTimer
+              ? "connecting"
+              : "disconnected";
       health.unavailableReason = this.lastConnectionError;
       const endpoints =
         this.configuredEndpoints.length > 0
@@ -1059,7 +1065,7 @@ export class DesktopFederationRuntime {
         gatewayNoisePublicKeyBase64,
         "base64",
       ),
-      onClose: () => {
+      onClose: (info) => {
         if (
           this.stopping ||
           connectionGeneration !== this.connectionGeneration
@@ -1067,14 +1073,43 @@ export class DesktopFederationRuntime {
           return;
         }
         this.client = undefined;
-        this.lastConnectionError = "Federation gateway connection closed.";
-        this.lastConnectionFailureKind = "transport";
+        // 4001 is the gateway's "another connection authenticated with
+        // your instance id" eviction — the signature of a cloned profile
+        // state.db. Say so instead of the generic transport message, or
+        // the operator sees an unexplained 30s connect/drop loop.
+        const replaced = info?.code === FEDERATION_CLOSE_REPLACED_CODE;
+        this.lastConnectionError = replaced
+          ? "Another instance connected with this federation identity "
+            + "(a cloned profile state.db shares the instance id and key). "
+            + "Reset federation on one of the profiles to stop the loop."
+          : info
+            ? `Federation gateway connection closed (${info.code}${
+                info.reason ? ` ${info.reason}` : ""
+              }).`
+            : "Federation gateway connection closed.";
+        this.lastConnectionFailureKind = replaced ? "replaced" : "transport";
+        const sessionAgeMs = this.lastConnectedAt
+          ? Date.now() - this.lastConnectedAt
+          : undefined;
+        // Post-auth drops previously logged nothing at all; a repeating
+        // short session age makes a kick loop obvious at a glance.
+        log.warn("federation client session closed", {
+          gatewayInstanceId,
+          code: info?.code,
+          reason: info?.reason,
+          replaced,
+          sessionAgeMs,
+        });
         this.store().appendAudit({
           peerId: gatewayInstanceId,
           sessionId: clientSession.id,
           kind: "disconnected",
           createdAt: Date.now(),
-          detail: "transport_closed",
+          detail: replaced
+            ? "replaced_by_new_session"
+            : info
+              ? `transport_closed:${info.code}`
+              : "transport_closed",
         });
         this.unregisterPeer(gatewayInstanceId);
         this.publishPeerStatus(
@@ -1271,6 +1306,12 @@ export class DesktopFederationRuntime {
 
   private disconnectAdvertisedPeers(reason: string): void {
     for (const [peerId, peer] of this.remotePeerDirectory) {
+      // Dual mode: a peer directly connected to THIS instance's own
+      // gateway is still reachable when the upstream client link drops —
+      // publishing "disconnected" for it would be false.
+      if (this.router?.getConnection(peerId)) {
+        continue;
+      }
       this.remotePeerDirectory.set(peerId, {
         ...peer,
         status: peer.status === "revoked" ? "revoked" : "disconnected",
