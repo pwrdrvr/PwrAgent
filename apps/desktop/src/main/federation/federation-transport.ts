@@ -42,6 +42,74 @@ import type { FederationStore } from "./federation-store";
 const log = getMainLogger("pwragent:federation-transport");
 const FEDERATION_NOISE_TRANSPORT = "noise_ik_25519_aesgcm_sha256";
 
+/**
+ * Liveness probe cadence (ssh ClientAliveInterval / ServerAliveInterval
+ * analogue, both directions). A peer that misses one full interval's pong is
+ * terminated, so a silently dropped link (sleep, NAT timeout, power loss) is
+ * detected within one to two intervals instead of never — the close then
+ * drives every existing onDisconnect/onClose consumer (peer status, remote
+ * PTY reaping, reconnect backoff).
+ */
+export const FEDERATION_KEEPALIVE_INTERVAL_MS = 15_000;
+
+/**
+ * Hard ceiling on a single WebSocket frame, both directions. Legitimate
+ * frames are JSON envelopes (RPC payloads, ≤ ~43 KiB base64 PTY chunks);
+ * transcript-bearing responses can reach megabytes, so the ceiling is
+ * generous — but without one, ws defaults to 100 MiB and a hostile enrolled
+ * peer can force that allocation per frame.
+ */
+export const FEDERATION_MAX_FRAME_BYTES = 16 * 1024 * 1024;
+
+/**
+ * WebSocket-level ping/pong watchdog. The counterpart answers pongs from the
+ * protocol layer (ws auto-pong), so this needs no cooperation from the remote
+ * application code — only a live link and an unwedged event loop.
+ */
+class FederationSocketKeepalive {
+  private alive = true;
+  private timer?: ReturnType<typeof setInterval>;
+
+  constructor(
+    socket: WebSocket,
+    options: {
+      intervalMs: number;
+      /** Fired on every pong — the liveness signal for session heartbeats. */
+      onLive?: () => void;
+      onDead: () => void;
+    },
+  ) {
+    socket.on("pong", () => {
+      this.alive = true;
+      options.onLive?.();
+    });
+    this.timer = setInterval(() => {
+      if (socket.readyState !== WebSocket.OPEN) return;
+      if (!this.alive) {
+        this.dispose();
+        options.onDead();
+        return;
+      }
+      this.alive = false;
+      try {
+        socket.ping();
+      } catch {
+        // The socket died between the readyState check and the ping; the
+        // close event owns cleanup.
+      }
+    }, options.intervalMs);
+    this.timer.unref?.();
+    socket.once("close", () => this.dispose());
+  }
+
+  dispose(): void {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = undefined;
+    }
+  }
+}
+
 type FederationSocketTransportHelloMessage = {
   kind: "transport.hello";
   transportVersion: number;
@@ -126,6 +194,12 @@ export type FederationGatewayWebSocketServerOptions = {
    * expected from an outer TLS tunnel, e.g. Cloudflare).
    */
   noiseStatic?: NoiseKeyPair;
+  /** Ping cadence; a peer missing one interval's pong is terminated. */
+  keepaliveIntervalMs?: number;
+  /** Per-frame receive ceiling (ws maxPayload). */
+  maxFrameBytes?: number;
+  /** Deadline for a connected socket to finish Noise + identity auth. */
+  authTimeoutMs?: number;
   onConnection?: (connection: FederationGatewayConnection) => void;
   onDisconnect?: (connection: FederationGatewayConnection) => void;
   onEnvelope?: (
@@ -137,6 +211,7 @@ export type FederationGatewayWebSocketServerOptions = {
 export class FederationGatewayWebSocketServer {
   private httpServer?: http.Server;
   private wsServer?: WebSocketServer;
+  private sweepTimer?: ReturnType<typeof setInterval>;
   private readonly sessions: FederationSessionRegistry;
   private stopping = false;
   private readonly connections = new Map<
@@ -156,8 +231,33 @@ export class FederationGatewayWebSocketServer {
     }
     this.stopping = false;
     this.httpServer = http.createServer();
-    this.wsServer = new WebSocketServer({ server: this.httpServer });
+    this.wsServer = new WebSocketServer({
+      server: this.httpServer,
+      maxPayload: this.options.maxFrameBytes ?? FEDERATION_MAX_FRAME_BYTES,
+    });
     this.wsServer.on("connection", (socket) => void this.handleSocket(socket));
+    // Belt-and-suspenders behind the per-socket keepalive: sweep sessions
+    // whose heartbeat (envelopes or pongs) stopped without the socket's
+    // close event ever firing, so the registry can never wedge "active".
+    const keepaliveIntervalMs =
+      this.options.keepaliveIntervalMs ?? FEDERATION_KEEPALIVE_INTERVAL_MS;
+    this.sweepTimer = setInterval(() => {
+      const expired = this.sessions.expireStaleSessions({
+        now: Date.now(),
+        heartbeatTimeoutMs: keepaliveIntervalMs * 4,
+      });
+      for (const session of expired) {
+        log.warn("federation session expired without heartbeat", {
+          peerId: session.peerId,
+          sessionId: session.sessionId,
+        });
+        const connection = [...this.connections.values()].find(
+          (candidate) => candidate.sessionId === session.sessionId,
+        );
+        connection?.close();
+      }
+    }, keepaliveIntervalMs);
+    this.sweepTimer.unref?.();
 
     await new Promise<void>((resolve, reject) => {
       const server = this.httpServer;
@@ -181,6 +281,10 @@ export class FederationGatewayWebSocketServer {
 
   async stop(): Promise<void> {
     this.stopping = true;
+    if (this.sweepTimer) {
+      clearInterval(this.sweepTimer);
+      this.sweepTimer = undefined;
+    }
     const wsServer = this.wsServer;
     const httpServer = this.httpServer;
     this.wsServer = undefined;
@@ -208,6 +312,28 @@ export class FederationGatewayWebSocketServer {
 
   private async handleSocket(socket: WebSocket): Promise<void> {
     const reader = new FederationFrameReader(socket);
+
+    // Armed for the socket's whole life, pre-auth included: a link that dies
+    // silently is terminated after one missed pong instead of parking a
+    // half-open connection forever.
+    new FederationSocketKeepalive(socket, {
+      intervalMs:
+        this.options.keepaliveIntervalMs ?? FEDERATION_KEEPALIVE_INTERVAL_MS,
+      onDead: () => {
+        log.warn("federation peer failed keepalive; terminating socket");
+        socket.terminate();
+      },
+    });
+    // A live socket that upgrades and then never finishes auth would pass
+    // keepalive forever (ws auto-pong needs no cooperation), so the auth
+    // exchange gets its own deadline — the gateway-side mirror of the
+    // client's FederationConnectDeadline.
+    const authDeadline = setTimeout(() => {
+      log.warn("federation auth deadline exceeded; terminating socket");
+      socket.terminate();
+    }, this.options.authTimeoutMs ?? FEDERATION_CONNECT_TIMEOUT_MS);
+    authDeadline.unref?.();
+    socket.once("close", () => clearTimeout(authDeadline));
 
     // Phase 1: Noise_IK handshake (responder). Skipped in tunnel mode.
     let transport: NoiseTransport | undefined;
@@ -387,6 +513,12 @@ export class FederationGatewayWebSocketServer {
       },
       transport,
     );
+    clearTimeout(authDeadline);
+    // Pongs count as session liveness alongside envelopes, so an idle but
+    // healthy peer never trips the stale-session sweep.
+    socket.on("pong", () => {
+      this.sessions.heartbeat(sessionId, Date.now());
+    });
     this.options.onConnection?.(connection);
     socket.once("close", () => {
       this.sessions.closeSession({
@@ -519,6 +651,10 @@ export async function connectFederationClient(params: {
    * forever, which stalls the caller's endpoint walk and reconnect loop.
    */
   connectTimeoutMs?: number;
+  /** Ping cadence; a gateway missing one interval's pong is terminated. */
+  keepaliveIntervalMs?: number;
+  /** Per-frame receive ceiling (ws maxPayload). */
+  maxFrameBytes?: number;
   /** Client's Noise static keypair. Enables encryption (initiator role). */
   noiseStatic?: NoiseKeyPair;
   /** Pinned gateway Noise static public key (raw 32 bytes), from the invite. */
@@ -528,17 +664,20 @@ export async function connectFederationClient(params: {
 }): Promise<FederationClientWebSocketClient> {
   const connectTimeoutMs =
     params.connectTimeoutMs ?? FEDERATION_CONNECT_TIMEOUT_MS;
+  const maxPayload = params.maxFrameBytes ?? FEDERATION_MAX_FRAME_BYTES;
   const socket = new WebSocket(
     params.url,
     params.createSocket
       ? {
           headers: params.headers,
           handshakeTimeout: connectTimeoutMs,
+          maxPayload,
           agent: outerSocketAgent(params.createSocket),
         }
       : {
           headers: params.headers,
           handshakeTimeout: connectTimeoutMs,
+          maxPayload,
           cert: params.clientCertificate,
           key: params.clientPrivateKey,
         },
@@ -737,6 +876,17 @@ async function establishFederationClient(
   };
   socket.once("close", notifyTransportEnded);
   socket.once("error", notifyTransportEnded);
+
+  // Client-side liveness probes (the ssh ServerAliveInterval direction):
+  // a gateway whose link died silently is terminated, which fires onClose
+  // and hands control to the caller's reconnect loop.
+  new FederationSocketKeepalive(socket, {
+    intervalMs: params.keepaliveIntervalMs ?? FEDERATION_KEEPALIVE_INTERVAL_MS,
+    onDead: () => {
+      log.warn("federation gateway failed keepalive; terminating socket");
+      socket.terminate();
+    },
+  });
 
   // Phase 3: stream envelopes.
   void (async () => {
