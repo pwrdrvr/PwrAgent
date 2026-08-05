@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import type { BrowserWindow } from "electron";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -68,6 +69,20 @@ describe("mainWindowTitle", () => {
   it("falls back to the bare product name for a blank label", () => {
     expect(mainWindowTitle("")).toBe("PwrAgent");
     expect(mainWindowTitle("   ")).toBe("PwrAgent");
+  });
+
+  it("matches the renderer's fallback <title>", () => {
+    // The original bug was two copies of the product name drifting apart:
+    // index.html sat at the pre-rename "PwrAgnt" long after main was
+    // corrected. `lockMainWindowTitle` means drift can no longer reach
+    // the OS window, but it would still show in the dev-server browser
+    // tab — and the duplicate deserves a guard, not just a comment.
+    const html = readFileSync(
+      new URL("../../renderer/index.html", import.meta.url),
+      "utf8",
+    );
+
+    expect(html).toContain(`<title>${APP_WINDOW_TITLE}</title>`);
   });
 });
 
