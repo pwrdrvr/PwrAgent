@@ -106,6 +106,8 @@ import {
   type SetCelestialIconRequest,
   type SetCelestialIconResponse,
   type StarMapArrangementEntry,
+  type StarMapIntakeRequest,
+  type StarMapIntakeResponse,
   type SetCodexThreadEnvironmentRequest,
   type SetThreadExecutionModeRequest,
   type SetThreadModelSettingsRequest,
@@ -121,6 +123,7 @@ import {
 } from "@pwragent/shared";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
+import { dispatchStarMapIntake } from "../app-server/star-map-intake";
 import { spawnTerminalPty } from "../terminal/integrated-terminal-service";
 import {
   readTranscriptImageProtocolRequest,
@@ -2849,6 +2852,11 @@ function localBackendOperations(): FederationBackendOperations {
       request: SetCelestialIconRequest,
     ): Promise<SetCelestialIconResponse> {
       return await getDesktopFederationRuntime().setCelestialIcon(request);
+    },
+    async starMapIntake(
+      request: StarMapIntakeRequest,
+    ): Promise<StarMapIntakeResponse> {
+      return await dispatchStarMapIntake(request);
     },
   };
 }

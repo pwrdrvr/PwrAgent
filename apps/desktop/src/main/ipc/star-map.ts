@@ -1,20 +1,46 @@
 import { ipcMain } from "electron";
 import type {
+  FederationTarget,
   ReadStarMapArrangementResponse,
   SetStarMapCardPositionRequest,
   StarMapArrangementEntry,
+  StarMapIntakeRequest,
+  StarMapIntakeResponse,
 } from "@pwragent/shared";
-import { isStarMapArrangementEntry } from "@pwragent/shared";
 import {
+  isRemoteFederationTarget,
+  isStarMapArrangementEntry,
+} from "@pwragent/shared";
+import {
+  STAR_MAP_INTAKE_CHANNEL,
   STAR_MAP_READ_ARRANGEMENT_CHANNEL,
   STAR_MAP_SET_CARD_POSITION_CHANNEL,
 } from "../../shared/ipc";
 import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
+import { dispatchStarMapIntake } from "../app-server/star-map-intake";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 
 export function registerStarMapIpcHandlers(): void {
   ipcMain.removeHandler(STAR_MAP_READ_ARRANGEMENT_CHANNEL);
   ipcMain.removeHandler(STAR_MAP_SET_CARD_POSITION_CHANNEL);
+  ipcMain.removeHandler(STAR_MAP_INTAKE_CHANNEL);
+  ipcMain.handle(
+    STAR_MAP_INTAKE_CHANNEL,
+    async (
+      _event,
+      request: StarMapIntakeRequest & { federationTarget?: FederationTarget },
+    ): Promise<StarMapIntakeResponse> => {
+      const { federationTarget, ...intake } = request;
+      if (federationTarget && isRemoteFederationTarget(federationTarget)) {
+        // Execute on the owning instance: its directory registry, defaults,
+        // and AGENTS.md preferences are the ones the intake must consult.
+        return await getDesktopFederationRuntime()
+          .remoteBackend(federationTarget)
+          .starMapIntake(intake);
+      }
+      return await dispatchStarMapIntake(intake);
+    },
+  );
   ipcMain.handle(
     STAR_MAP_READ_ARRANGEMENT_CHANNEL,
     async (): Promise<ReadStarMapArrangementResponse> => ({
@@ -57,4 +83,5 @@ export function registerStarMapIpcHandlers(): void {
 export function disposeStarMapIpcHandlers(): void {
   ipcMain.removeHandler(STAR_MAP_READ_ARRANGEMENT_CHANNEL);
   ipcMain.removeHandler(STAR_MAP_SET_CARD_POSITION_CHANNEL);
+  ipcMain.removeHandler(STAR_MAP_INTAKE_CHANNEL);
 }

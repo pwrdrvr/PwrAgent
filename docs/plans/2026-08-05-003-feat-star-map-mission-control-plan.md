@@ -486,8 +486,18 @@ route; a `list_projects` orchestration tool is deliberately **not** added now
     (remote threads in the local snapshot), which this surface will adopt
     for free; (c) the [+] intake button ships with Unit 4 rather than as a
     disabled placeholder (no scaffold controls in shipped UI).
-- [ ] Unit 3: arrangement sync
-- [ ] Unit 4: AI intake
+- [x] Unit 3: arrangement sync
+  - Tombstone GC (30-day sweep) deferred: tombstones are one small row per
+    reset card and the table is bounded by cards ever dragged; a sweep can
+    ride a later cleanup pass if it ever matters.
+- [x] Unit 4: AI intake
+  - Implemented as designed (two-stage resolve → materialize, not a
+    headless tool-agent). Additional decisions: disambiguation reuses the
+    same requestId so the status stream stays continuous; a no-match
+    result offers ALL registered directories as candidates rather than a
+    directory-less thread (that flow arrives with launchpad-defaults
+    support later); the intake RPC gets a 120s timeout because worktree
+    preparation can exceed the 30s default.
 
 ## Open questions resolved during planning
 

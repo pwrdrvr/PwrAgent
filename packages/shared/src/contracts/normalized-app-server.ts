@@ -5,7 +5,7 @@ import type {
   MessagingConversationKind,
 } from "./messaging";
 import type { CelestialIconAssignment } from "./celestial";
-import type { StarMapArrangementEntry } from "./star-map";
+import type { StarMapArrangementEntry, StarMapIntakePhase } from "./star-map";
 import type {
   FederationConnectionState,
   FederationTarget,
@@ -1053,6 +1053,17 @@ export type StarMapArrangementChangedNotification = {
   };
 };
 
+export type StarMapIntakeStatusNotification = {
+  method: "starMap/intake/status";
+  params: {
+    requestId: string;
+    phase: StarMapIntakePhase;
+    message?: string;
+    backend?: string;
+    threadId?: string;
+  };
+};
+
 export type AppServerMcpElicitationAction = "accept" | "decline" | "cancel";
 
 export type AppServerMcpElicitationSchema = {
@@ -1696,4 +1707,5 @@ export type AppServerNotification =
   | FederationPeerStatusChangedNotification
   | FederationCelestialIconsChangedNotification
   | StarMapArrangementChangedNotification
+  | StarMapIntakeStatusNotification
   | AppServerPendingRequestNotification;

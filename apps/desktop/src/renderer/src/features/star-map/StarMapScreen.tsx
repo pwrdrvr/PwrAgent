@@ -28,6 +28,7 @@ import {
   starMapCardSlot,
   type StarMapInstancePosition,
 } from "./star-map-layout";
+import { IntakeDialog, type IntakeDialogTarget } from "./IntakeDialog";
 import { StarMapInstanceCard } from "./StarMapInstanceCard";
 import { StarMapThreadCard } from "./StarMapThreadCard";
 import { useStarMapArrangement } from "./useStarMapArrangement";
@@ -71,6 +72,8 @@ type StarMapScreenProps = {
   onOpenLocalThread: (thread: NavigationThreadSummary) => void;
   /** The local instance card's open action: back to the thread shell. */
   onFocusLocalInstance: () => void;
+  /** Refresh the App's navigation snapshot (after intake creates locally). */
+  onRefreshLocalThreads?: () => void;
 };
 
 /**
@@ -93,6 +96,13 @@ export function StarMapScreen(props: StarMapScreenProps) {
     height: number;
   }>({ width: 1280, height: 800 });
   const stars = useMemo(() => generateStarField(STAR_COUNT), []);
+  const [intakeTarget, setIntakeTarget] = useState<IntakeDialogTarget>();
+  // Thread keys that just bubbled in via intake — they wear the entrance
+  // animation until the timer clears them.
+  const [enteringThreadKeys, setEnteringThreadKeys] = useState<Set<string>>(
+    new Set(),
+  );
+  const [remoteRefreshNonce, setRemoteRefreshNonce] = useState(0);
 
   // Focus the layer on open AND whenever the floating thread closes -
   // "Back to map" leaves focus inside <main>, and without a refocus the
@@ -156,6 +166,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
     desktopApi: props.desktopApi,
     peers,
     enabled: true,
+    refreshNonce: remoteRefreshNonce,
   });
   const arrangement = useStarMapArrangement({ desktopApi: props.desktopApi });
 
@@ -290,6 +301,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
                   : undefined
               }
               riseDelayMs={index * 45}
+              entering={enteringThreadKeys.has(threadKey)}
               baseSlot={slot}
               offset={arrangement.offsetFor(position.instanceId, threadKey)}
               width={layout.cardWidth}
@@ -432,12 +444,61 @@ export function StarMapScreen(props: StarMapScreenProps) {
                   position.instanceId,
                 )}
                 onOpen={() => openInstance(position.instanceId)}
+                onIntake={
+                  props.desktopApi?.dispatchStarMapIntake
+                  && (position.instanceId === localInstanceId
+                    || entry.peer?.status === "connected")
+                    ? () =>
+                        setIntakeTarget({
+                          instanceId: position.instanceId,
+                          label: entry.label,
+                          icon: celestialIcons.iconFor(
+                            position.instanceId === localInstanceId
+                              ? undefined
+                              : position.instanceId,
+                          ),
+                          federationTarget:
+                            position.instanceId === localInstanceId
+                              ? undefined
+                              : {
+                                  scope: "remote",
+                                  instanceId: position.instanceId,
+                                },
+                        })
+                    : undefined
+                }
               />
             </div>
           );
         })}
         {layout.positions.map((position) => renderCloud(position))}
       </div>
+      {intakeTarget ? (
+        <IntakeDialog
+          desktopApi={props.desktopApi}
+          target={intakeTarget}
+          onClose={() => setIntakeTarget(undefined)}
+          onCreated={(created) => {
+            const threadKey = buildThreadIdentityKey(
+              created.backend as NavigationThreadSummary["source"],
+              created.threadId,
+            );
+            setEnteringThreadKeys((current) => new Set(current).add(threadKey));
+            window.setTimeout(() => {
+              setEnteringThreadKeys((current) => {
+                const next = new Set(current);
+                next.delete(threadKey);
+                return next;
+              });
+            }, 2_000);
+            if (created.instanceId === localInstanceId) {
+              props.onRefreshLocalThreads?.();
+            } else {
+              setRemoteRefreshNonce((nonce) => nonce + 1);
+            }
+          }}
+        />
+      ) : null}
       <div className="star-map__filters" role="group" aria-label="Attention filters">
         {STAR_MAP_ATTENTION_CATEGORIES.map((category) => (
           <button

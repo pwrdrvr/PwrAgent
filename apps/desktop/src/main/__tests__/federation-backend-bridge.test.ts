@@ -1458,6 +1458,7 @@ describe("federation backend bridge", () => {
       readPwrSnapConnectionStatus: vi.fn(),
       trustCodexProject: vi.fn(),
       setCelestialIcon: vi.fn(),
+      starMapIntake: vi.fn(),
     };
     const replies: FederationProtocolEnvelope[] = [];
     const router = new FederationRouter({
@@ -1654,6 +1655,7 @@ describe("federation backend bridge", () => {
         readPwrSnapConnectionStatus: vi.fn(),
         trustCodexProject: vi.fn(),
         setCelestialIcon: vi.fn(),
+        starMapIntake: vi.fn(),
       } as FederationBackendOperations,
     });
 
