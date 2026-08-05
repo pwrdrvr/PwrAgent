@@ -118,15 +118,23 @@ export class FederationSocketKeepalive {
     this.timer = setInterval(() => {
       if (socket.readyState !== WebSocket.OPEN) return;
       if (!this.alive) {
-        // A missed pong with a non-empty, SHRINKING outbound queue is
+        // A missed pong while the outbound queue SHRANK this interval is
         // congestion, not death: ws sends control frames in FIFO order, so
         // our own probe is parked behind data frames — a remote-PTY output
         // burst queues up to 1 MiB per session ahead of it, which on a slow
         // link takes longer than the probe interval to flush. Forgive only
         // while bytes are demonstrably moving; a genuinely dead link stops
         // draining once the kernel buffer fills, and the next tick counts.
+        //
+        // Strictly "shrank", not "non-empty": when a burst ends, the probe
+        // is the LAST frame out, delivered the instant the queue hits zero
+        // with its pong one RTT behind — so the drain-to-zero tick is
+        // forgiven too, granting a full interval for that pong. An idle
+        // dead link (0 → 0, no progress claim) still dies on schedule.
+        // No re-ping while forgiven: the original probe is still queued or
+        // just delivered, and a second one would sit behind the same data.
         const buffered = socket.bufferedAmount;
-        const draining = buffered > 0 && buffered < this.lastBufferedAmount;
+        const draining = buffered < this.lastBufferedAmount;
         this.lastBufferedAmount = buffered;
         if (draining) return;
         this.dispose();

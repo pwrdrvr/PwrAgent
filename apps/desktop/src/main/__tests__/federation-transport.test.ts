@@ -1312,7 +1312,7 @@ describe("federation keepalive congestion forgiveness", () => {
     expect(isDead()).toBe(true);
   });
 
-  it("declares death when the queue drains fully but no pong arrives", () => {
+  it("grants one interval for the pong after the queue fully drains, then declares death", () => {
     const { socket, isDead } = createHarness();
     socket.bufferedAmount = 500_000;
     vi.advanceTimersByTime(1_000);
@@ -1320,10 +1320,32 @@ describe("federation keepalive congestion forgiveness", () => {
     socket.bufferedAmount = 100_000;
     vi.advanceTimersByTime(1_000);
     expect(isDead()).toBe(false);
-    // Fully drained, probe delivered, still silent: dead.
+    // The burst ended, so the probe was the LAST frame out — delivered the
+    // instant the queue hit zero, pong one RTT behind. The drain-to-zero
+    // tick showed maximal progress and must be forgiven, or a slow link
+    // gets killed at the finish line of every burst-then-quiet command.
     socket.bufferedAmount = 0;
     vi.advanceTimersByTime(1_000);
+    expect(isDead()).toBe(false);
+    // A further full interval of silence with an empty queue: dead.
+    vi.advanceTimersByTime(1_000);
     expect(isDead()).toBe(true);
+  });
+
+  it("recovers when the pong lands inside the post-drain interval", () => {
+    const { socket, keepalive, isDead } = createHarness();
+    socket.bufferedAmount = 500_000;
+    vi.advanceTimersByTime(1_000);
+    socket.bufferedAmount = 0;
+    vi.advanceTimersByTime(1_000);
+    expect(isDead()).toBe(false);
+    // The RTT-delayed pong arrives before the next tick: alive, probing
+    // resumes normally.
+    socket.emitPong();
+    vi.advanceTimersByTime(1_000);
+    expect(isDead()).toBe(false);
+    expect(socket.pings).toBeGreaterThanOrEqual(2);
+    keepalive.dispose();
   });
 });
 
