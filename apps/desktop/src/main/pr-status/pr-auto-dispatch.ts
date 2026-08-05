@@ -691,7 +691,9 @@ export function getPrAutoDispatchEventKinds(
 ): ThreadPrAutoDispatchEventKind[] {
   if (isTerminalPullRequest(pr)) return [];
   const eventKinds: ThreadPrAutoDispatchEventKind[] = [];
-  if (pr.checkState === "failing") eventKinds.push("ci-failure");
+  if (pr.checkState === "failing" && !pr.checksStillRunning) {
+    eventKinds.push("ci-failure");
+  }
   if (pr.mergeState === "conflicting") eventKinds.push("merge-conflict");
   return eventKinds;
 }
