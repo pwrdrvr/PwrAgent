@@ -64,6 +64,7 @@ import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
 import { resolveScratchProjectsRoots } from "../app-server/scratch-projects";
 import { buildMessagingBindingsByThreadKey } from "./messaging-bindings-snapshot";
+import { hydrateLaunchpadCodexEnvironmentOptions } from "../app-server/codex-environment-config";
 import { materializeTranscriptMessageImagesForMessaging } from "../transcript-image-protocol";
 import type { FederationBackendOperations } from "../federation/federation-backend-bridge";
 import { getScheduledThreadActionService } from "../scheduled-actions/scheduled-thread-action-service";
@@ -150,12 +151,39 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
       hydratedSnapshot.directories,
     );
 
+    // The renderer's local snapshot path (ipc/app-server.ts) hydrates
+    // each directory launchpad's Codex environment options. This bridge
+    // is the serving path for federation remote viewers (and messaging
+    // browse) — without the same hydration, a remote window's launchpad
+    // renders with no Environment picker even though thread creation and
+    // post-birth environment control are fully federation-routed.
+    const directoriesWithLaunchpads = await Promise.all(
+      hydratedSnapshot.directories.map(async (directory) => {
+        const withStatus = {
+          ...directory,
+          gitStatus: directoryStatuses[directory.key],
+        };
+        if (!withStatus.launchpad) {
+          return withStatus;
+        }
+        try {
+          return {
+            ...withStatus,
+            launchpad: await hydrateLaunchpadCodexEnvironmentOptions(
+              withStatus.launchpad,
+            ),
+          };
+        } catch {
+          // Options are an enhancement; a hydration failure must not
+          // block the snapshot.
+          return withStatus;
+        }
+      }),
+    );
+
     const localSnapshot: NavigationSnapshot = {
       ...hydratedSnapshot,
-      directories: hydratedSnapshot.directories.map((directory) => ({
-        ...directory,
-        gitStatus: directoryStatuses[directory.key],
-      })),
+      directories: directoriesWithLaunchpads,
     };
     if (!this.federation) {
       return localSnapshot;
