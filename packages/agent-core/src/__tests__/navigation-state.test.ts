@@ -115,6 +115,55 @@ describe("navigation execution mode authority", () => {
   });
 });
 
+describe("navigation worktree identity", () => {
+  it("prefers a persisted repository alias for the same provider worktree", () => {
+    const worktreePath = "/tmp/worktrees/thread-1/repository";
+    const [thread] = materializeNavigationThreads({
+      firstSnapshot: false,
+      overlayByThreadKey: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "default",
+          extraLinkedDirectories: [
+            {
+              id: "/var/folders/repository",
+              kind: "worktree",
+              label: "repository",
+              path: "/var/folders/repository",
+              worktreePath,
+            },
+          ],
+        },
+      },
+      previousKnownThreadKeys: ["codex:thread-1"],
+      threads: [
+        buildThread({
+          linkedDirectories: [
+            {
+              id: "/private/var/folders/repository",
+              kind: "worktree",
+              label: "repository",
+              path: "/private/var/folders/repository",
+              worktreePath,
+            },
+          ],
+        }),
+      ],
+    });
+
+    expect(thread?.linkedDirectories).toEqual([
+      {
+        id: "/var/folders/repository",
+        kind: "worktree",
+        label: "repository",
+        path: "/var/folders/repository",
+        worktreePath,
+      },
+    ]);
+  });
+});
+
 describe("navigation primary repository", () => {
   it("includes the primary workspace repository in the snapshot hash", () => {
     const threadWithoutPrimaryRepository: NavigationThreadSummary = {

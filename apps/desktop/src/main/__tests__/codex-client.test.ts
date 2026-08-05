@@ -6463,6 +6463,7 @@ describe("CodexAppServerClient", () => {
     expect(request?.params).toMatchObject({
       threadId: "thread-2",
       cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+      runtimeWorkspaceRoots: ["/Users/huntharo/pwrdrvr/PwrAgent"],
       model: "gpt-5.5",
       approvalPolicy: "on-request",
       sandbox: "workspace-write",

@@ -898,11 +898,58 @@ function buildWorktreeLinkedDirectory(params: {
   ];
 }
 
+async function resolvePreparedRepositoryIdentityPath(params: {
+  preparedPath?: string;
+  requestedPath?: string;
+}): Promise<string | undefined> {
+  const preparedPath = params.preparedPath?.trim();
+  const requestedPath = params.requestedPath?.trim();
+  if (!preparedPath || !requestedPath) {
+    return preparedPath || requestedPath || undefined;
+  }
+
+  const [preparedRealPath, requestedRealPath] = await Promise.all([
+    realpath(preparedPath).catch(() => undefined),
+    realpath(requestedPath).catch(() => undefined),
+  ]);
+  if (
+    preparedRealPath
+    && requestedRealPath
+    && path.resolve(preparedRealPath) === path.resolve(requestedRealPath)
+  ) {
+    return requestedPath;
+  }
+  return preparedPath;
+}
+
 function normalizeLinkedDirectoryPathForMatch(
   value: string | undefined,
 ): string | undefined {
   const normalized = value?.trim();
   return normalized ? toDirectoryId(path.resolve(normalized)) : undefined;
+}
+
+function linkedDirectoriesShareWorktreeWorkspace(
+  left: LinkedDirectorySummary,
+  right: LinkedDirectorySummary,
+): boolean {
+  const normalizedLeft = normalizeLinkedDirectoryKind(left);
+  const normalizedRight = normalizeLinkedDirectoryKind(right);
+  if (normalizedLeft.kind !== "worktree" || normalizedRight.kind !== "worktree") {
+    return false;
+  }
+
+  const leftWorktreePath = normalizeLinkedDirectoryPathForMatch(
+    normalizedLeft.worktreePath,
+  );
+  const rightWorktreePath = normalizeLinkedDirectoryPathForMatch(
+    normalizedRight.worktreePath,
+  );
+  return Boolean(
+    leftWorktreePath
+    && rightWorktreePath
+    && leftWorktreePath === rightWorktreePath,
+  );
 }
 
 function linkedDirectoryMatchesDetachArgs(
@@ -959,6 +1006,9 @@ function hasEquivalentLinkedDirectory(
 ): boolean {
   return Boolean(
     overlay?.extraLinkedDirectories.some((candidate) => {
+      if (linkedDirectoriesShareWorktreeWorkspace(candidate, directory)) {
+        return true;
+      }
       if (candidate.id !== directory.id || candidate.kind !== directory.kind) {
         return false;
       }
@@ -1156,6 +1206,50 @@ function pendingStartedThreadMatchesFilter(
   ]
     .filter(Boolean)
     .some((value) => value!.toLowerCase().includes(normalized));
+}
+
+function pendingStartedThreadWorkspaceMatches(
+  thread: AppServerThreadSummary,
+  pendingThread: AppServerThreadSummary,
+): boolean {
+  const workspaceCwd = resolveThreadWorkspaceCwd(thread)?.trim();
+  const pendingWorkspaceCwd = resolveThreadWorkspaceCwd(pendingThread)?.trim();
+  if (!pendingWorkspaceCwd) {
+    return true;
+  }
+  if (!workspaceCwd) {
+    return false;
+  }
+  if (path.resolve(workspaceCwd) !== path.resolve(pendingWorkspaceCwd)) {
+    return false;
+  }
+
+  if (pendingThread.linkedDirectories.length === 0) {
+    return true;
+  }
+  const pendingDirectoryKeys = new Set(
+    pendingThread.linkedDirectories.map(linkedDirectoryIdentityKey),
+  );
+  return thread.linkedDirectories.some((directory) =>
+    pendingDirectoryKeys.has(linkedDirectoryIdentityKey(directory))
+    || pendingThread.linkedDirectories.some((pendingDirectory) =>
+      linkedDirectoriesShareWorktreeWorkspace(directory, pendingDirectory),
+    ),
+  );
+}
+
+function retainPendingStartedThreadWorkspace(
+  thread: AppServerThreadSummary,
+  pendingThread: AppServerThreadSummary,
+): AppServerThreadSummary {
+  return {
+    ...thread,
+    projectKey: pendingThread.projectKey,
+    linkedDirectories: pendingThread.linkedDirectories,
+    gitBranch: pendingThread.gitBranch,
+    codexEnvironmentRuntime:
+      pendingThread.codexEnvironmentRuntime ?? thread.codexEnvironmentRuntime,
+  };
 }
 
 function resolveExpectedThreadBranch(params: {
@@ -10345,6 +10439,20 @@ export class DesktopBackendRegistry {
         });
       }
 
+      const linkedDirectory = linkedDirectories[0];
+      if (linkedDirectory) {
+        // The fork response can become visible through thread/list before Codex
+        // has replaced the copied parent cwd. Persist the prepared workspace now
+        // so that transient provider metadata cannot become the child's source
+        // of truth.
+        await this.overlayStore.replaceWorkspaceLinkedDirectory({
+          backend,
+          threadId: result.threadId,
+          directory: linkedDirectory,
+          gitBranch,
+        });
+      }
+
       await this.overlayStore.setThreadExecutionMode({
         backend,
         threadId: result.threadId,
@@ -14912,11 +15020,15 @@ export class DesktopBackendRegistry {
             cwd: await this.createScratchProjectDirectory(),
           }
         : preparedWorkspace;
+    const repositoryPath = await resolvePreparedRepositoryIdentityPath({
+      preparedPath: workspace.repositoryPath,
+      requestedPath: launchpad.directoryPath,
+    });
     const linkedDirectories =
       workspace.workMode === "worktree"
         ? buildWorktreeLinkedDirectory({
             label: launchpad.directoryLabel,
-            repositoryPath: workspace.repositoryPath ?? launchpad.directoryPath,
+            repositoryPath,
             worktreePath: workspace.cwd,
           })
         : undefined;
@@ -15023,6 +15135,18 @@ export class DesktopBackendRegistry {
       directoryKey: launchpad.directoryKey,
       parentThreadId: request.parentThreadId,
     });
+    const linkedDirectory = linkedDirectories?.[0];
+    if (linkedDirectory) {
+      // Preserve the launchpad's requested repository identity durably. Codex
+      // can report the same repository through a physical path alias (for
+      // example macOS /private/var for a requested /var path), but the
+      // worktree path still proves these describe one prepared workspace.
+      await this.overlayStore.replaceWorkspaceLinkedDirectory({
+        backend: launchpad.backend,
+        threadId: startThreadResponse.threadId,
+        directory: linkedDirectory,
+      });
+    }
     pendingActionThreadId = startThreadResponse.threadId;
     // The auto-started environment action spawned before this thread existed;
     // give its detached-process record an owner now so the quit dialog can name
@@ -16358,6 +16482,15 @@ export class DesktopBackendRegistry {
     if (!this.codexClient.enrichThreadDirectories) {
       return;
     }
+    // Pending threads already carry the workspace PwrAgent just prepared.
+    // Repairing them can persist a second identity for that same worktree.
+    if (
+      this.pendingStartedThreads.has(
+        buildThreadIdentityKey("codex", params.threadId),
+      )
+    ) {
+      return;
+    }
 
     try {
       const cheapThread = await this.readCheapCodexThreadForRepair(params.threadId);
@@ -16945,6 +17078,15 @@ export class DesktopBackendRegistry {
     > = {};
 
     for (const thread of params.threads) {
+      // Wait for the provider to acknowledge the prepared workspace before
+      // deriving a persisted directory identity from its thread summary.
+      if (
+        this.pendingStartedThreads.has(
+          buildThreadIdentityKey("codex", thread.id),
+        )
+      ) {
+        continue;
+      }
       const directory = buildCachedDirectoryRelationship(thread);
       if (!directory) {
         continue;
@@ -16987,6 +17129,14 @@ export class DesktopBackendRegistry {
     }
 
     const candidates = params.threads.filter((thread) => {
+      // The pending summary is already enriched from workspace preparation.
+      if (
+        this.pendingStartedThreads.has(
+          buildThreadIdentityKey("codex", thread.id),
+        )
+      ) {
+        return false;
+      }
       if (overlayHasHandoffWorkspace(params.overlaysByThreadId[thread.id])) {
         return false;
       }
@@ -17070,12 +17220,25 @@ export class DesktopBackendRegistry {
     threads: AppServerThreadSummary[],
     params: { archived?: boolean; filter?: string } = {},
   ): AppServerThreadSummary[] {
-    const threadIds = new Set(threads.map((thread) => thread.id));
-    for (const threadId of threadIds) {
-      this.pendingStartedThreads.delete(buildThreadIdentityKey(backend, threadId));
-    }
+    const resolvedThreads = threads.map((thread) => {
+      const pendingThreadKey = buildThreadIdentityKey(backend, thread.id);
+      const pendingThread = this.pendingStartedThreads.get(pendingThreadKey);
+      if (!pendingThread) {
+        return thread;
+      }
+      if (pendingStartedThreadWorkspaceMatches(thread, pendingThread)) {
+        this.pendingStartedThreads.delete(pendingThreadKey);
+        return thread;
+      }
+      // Codex can briefly surface a fork with the copied parent cwd. Keep the
+      // workspace PwrAgent just prepared until thread/list reports that same
+      // repository/worktree relationship, while still accepting fresh
+      // provider title and status metadata.
+      return retainPendingStartedThreadWorkspace(thread, pendingThread);
+    });
+    const threadIds = new Set(resolvedThreads.map((thread) => thread.id));
     if (params.archived === true) {
-      return threads;
+      return resolvedThreads;
     }
 
     const pendingThreads = [...this.pendingStartedThreads.values()].filter(
@@ -17085,10 +17248,10 @@ export class DesktopBackendRegistry {
         pendingStartedThreadMatchesFilter(thread, params.filter),
     );
     if (pendingThreads.length === 0) {
-      return threads;
+      return resolvedThreads;
     }
 
-    return [...pendingThreads, ...threads].sort(
+    return [...pendingThreads, ...resolvedThreads].sort(
       (left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0),
     );
   }
