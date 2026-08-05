@@ -22,6 +22,14 @@ const ELECTRON_FORCE_EXIT_TIMEOUT_MS = 1_000;
 
 type ElectronChildProcess = ReturnType<ElectronApplication["process"]>;
 type CloseResult = "closed" | "rejected" | "timeout";
+type RendererViewport = {
+  innerHeight: number;
+  innerWidth: number;
+};
+type NativeContentSize = {
+  height: number;
+  width: number;
+};
 
 type LaunchResult = {
   electronApp: ElectronApplication;
@@ -238,7 +246,8 @@ export async function launchElectronApp(params: {
   }
 
   if (params.windowSize) {
-    await electronApp.evaluate(
+    const targetSize = params.windowSize;
+    const windowId = await electronApp.evaluate(
       ({ BrowserWindow }, size) => {
         const window = BrowserWindow.getAllWindows()[0];
         if (!window) {
@@ -247,20 +256,56 @@ export async function launchElectronApp(params: {
 
         window.setMinimumSize(0, 0);
         window.setContentSize(size.width, size.height);
+        return window.id;
       },
-      params.windowSize
+      targetSize
     );
 
+    let attempt = 0;
+    let previousRequest: NativeContentSize | null = null;
     await expect
-      .poll(async () =>
-        await window.evaluate(() => ({
+      .poll(async () => {
+        const observed = await window.evaluate(() => ({
           innerHeight: globalThis.innerHeight,
           innerWidth: globalThis.innerWidth,
-        }))
-      )
+        }));
+        if (
+          observed.innerHeight === targetSize.height
+          && observed.innerWidth === targetSize.width
+        ) {
+          return observed;
+        }
+
+        const request = nextRendererViewportRequest({
+          attempt,
+          observed,
+          previousRequest,
+          target: targetSize,
+        });
+        previousRequest = request;
+        attempt += 1;
+
+        await electronApp.evaluate(
+          ({ BrowserWindow }, resize) => {
+            const window = BrowserWindow.fromId(resize.windowId);
+            if (!window || window.isDestroyed()) {
+              throw new Error(
+                "Expected the replay E2E BrowserWindow to remain live while resizing",
+              );
+            }
+            window.setContentSize(resize.request.width, resize.request.height);
+          },
+          { request, windowId },
+        );
+
+        return await window.evaluate(() => ({
+          innerHeight: globalThis.innerHeight,
+          innerWidth: globalThis.innerWidth,
+        }));
+      })
       .toMatchObject({
-        innerHeight: params.windowSize.height,
-        innerWidth: params.windowSize.width,
+        innerHeight: targetSize.height,
+        innerWidth: targetSize.width,
       });
   }
 
@@ -327,6 +372,43 @@ export async function launchElectronApp(params: {
       await rm(homeRoot, { recursive: true, force: true });
     },
   };
+}
+
+/**
+ * Keep exact renderer layout contracts while compensating the native content
+ * request that produces them. Under platform scaling, Electron can turn a
+ * 1440x900 setContentSize request into a 1439x901 Chromium viewport. Feeding a
+ * small observed error back into the next native request reaches the exact
+ * renderer dimensions without weakening layout assertions. Far-from-target
+ * observations get only a 1px height nudge so a stale/coalesced native resize
+ * cannot cause an unbounded correction.
+ */
+export function nextRendererViewportRequest(params: {
+  attempt: number;
+  observed: RendererViewport;
+  previousRequest: NativeContentSize | null;
+  target: NativeContentSize;
+}): NativeContentSize {
+  const widthError = params.target.width - params.observed.innerWidth;
+  const heightError = params.target.height - params.observed.innerHeight;
+  const nearTarget = (error: number): boolean => Math.abs(error) <= 2;
+  const request = {
+    width:
+      params.target.width
+      + (nearTarget(widthError) ? widthError : 0),
+    height:
+      params.target.height
+      + (nearTarget(heightError) ? heightError : params.attempt % 2),
+  };
+
+  if (
+    params.previousRequest !== null
+    && request.width === params.previousRequest.width
+    && request.height === params.previousRequest.height
+  ) {
+    request.height += params.attempt % 2 === 0 ? 1 : -1;
+  }
+  return request;
 }
 
 export function configureElectronE2eSecretStorageEnv(
