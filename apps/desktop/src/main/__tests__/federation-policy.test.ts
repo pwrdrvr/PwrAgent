@@ -89,6 +89,33 @@ describe("federation policy", () => {
     });
   });
 
+  it("grants the requested/stored intersection so new default capabilities never break old pairings", () => {
+    // Upgrade scenario: a peer enrolled before `messaging_route` entered
+    // DEFAULT_CAPABILITIES reconnects with a newer build that requests
+    // it. The session must proceed with the stored grant intersected —
+    // NOT hard-fail with capability_denied.
+    expect(
+      evaluateFederationSessionPolicy({
+        peer: {
+          id: "client_one",
+          label: "Client",
+          role: "client",
+          status: "connected",
+          capabilities: ["remote_window", "thread_navigation"],
+        },
+        protocolVersion: 1,
+        requestedCapabilities: [
+          "remote_window",
+          "thread_navigation",
+          "messaging_route",
+        ],
+      }),
+    ).toMatchObject({
+      accepted: true,
+      capabilities: ["remote_window", "thread_navigation"],
+    });
+  });
+
   it("redacts PEM blocks and token-like diagnostics", () => {
     expect(
       redactFederationDiagnostic(

@@ -42,11 +42,19 @@ export function evaluateFederationSessionPolicy(params: {
     };
   }
 
+  // Negotiate rather than reject: grant the intersection of what the
+  // peer requests and what its enrollment authorized. All-or-nothing
+  // rejection would hard-fail every existing pairing whenever a newer
+  // build adds a capability to its default request set — the stored
+  // allowlist predates the new capability by definition. The peer never
+  // receives anything beyond its stored grant; zero overlap still
+  // rejects (a peer with no usable capabilities has no business with a
+  // session).
   const allowed = new Set(params.peer.capabilities);
-  const denied = params.requestedCapabilities.some(
-    (capability) => !allowed.has(capability),
+  const granted = params.requestedCapabilities.filter((capability) =>
+    allowed.has(capability),
   );
-  if (denied) {
+  if (granted.length === 0) {
     return {
       accepted: false,
       failure: federationFailure("capability_denied"),
@@ -55,6 +63,6 @@ export function evaluateFederationSessionPolicy(params: {
 
   return {
     accepted: true,
-    capabilities: params.requestedCapabilities.slice(),
+    capabilities: granted,
   };
 }
