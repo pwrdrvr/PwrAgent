@@ -1144,6 +1144,35 @@ function pendingStartedThreadMatchesFilter(
     .some((value) => value!.toLowerCase().includes(normalized));
 }
 
+function pendingStartedThreadWorkspaceMatches(
+  thread: AppServerThreadSummary,
+  pendingThread: AppServerThreadSummary,
+): boolean {
+  const workspaceCwd = resolveThreadWorkspaceCwd(thread)?.trim();
+  const pendingWorkspaceCwd = resolveThreadWorkspaceCwd(pendingThread)?.trim();
+  if (!pendingWorkspaceCwd) {
+    return true;
+  }
+  if (!workspaceCwd) {
+    return false;
+  }
+  return path.resolve(workspaceCwd) === path.resolve(pendingWorkspaceCwd);
+}
+
+function retainPendingStartedThreadWorkspace(
+  thread: AppServerThreadSummary,
+  pendingThread: AppServerThreadSummary,
+): AppServerThreadSummary {
+  return {
+    ...thread,
+    projectKey: pendingThread.projectKey,
+    linkedDirectories: pendingThread.linkedDirectories,
+    gitBranch: pendingThread.gitBranch,
+    codexEnvironmentRuntime:
+      pendingThread.codexEnvironmentRuntime ?? thread.codexEnvironmentRuntime,
+  };
+}
+
 function resolveExpectedThreadBranch(params: {
   overlay?: ThreadOverlayState;
   thread?: Pick<AppServerThreadSummary, "gitBranch">;
@@ -10146,6 +10175,20 @@ export class DesktopBackendRegistry {
         });
       }
 
+      const linkedDirectory = linkedDirectories[0];
+      if (linkedDirectory) {
+        // The fork response can become visible through thread/list before Codex
+        // has replaced the copied parent cwd. Persist the prepared workspace now
+        // so that transient provider metadata cannot become the child's source
+        // of truth.
+        await this.overlayStore.replaceWorkspaceLinkedDirectory({
+          backend,
+          threadId: result.threadId,
+          directory: linkedDirectory,
+          gitBranch,
+        });
+      }
+
       await this.overlayStore.setThreadExecutionMode({
         backend,
         threadId: result.threadId,
@@ -16074,6 +16117,13 @@ export class DesktopBackendRegistry {
   private async readCheapCodexThreadForRepair(
     threadId: string,
   ): Promise<AppServerThreadSummary | undefined> {
+    const pending = this.pendingStartedThreads.get(
+      buildThreadIdentityKey("codex", threadId),
+    );
+    if (pending) {
+      return pending;
+    }
+
     const cached = this.findCachedCodexThread(threadId);
     if (cached) {
       return cached;
@@ -16812,12 +16862,24 @@ export class DesktopBackendRegistry {
     threads: AppServerThreadSummary[],
     params: { archived?: boolean; filter?: string } = {},
   ): AppServerThreadSummary[] {
-    const threadIds = new Set(threads.map((thread) => thread.id));
-    for (const threadId of threadIds) {
-      this.pendingStartedThreads.delete(buildThreadIdentityKey(backend, threadId));
-    }
+    const resolvedThreads = threads.map((thread) => {
+      const pendingThreadKey = buildThreadIdentityKey(backend, thread.id);
+      const pendingThread = this.pendingStartedThreads.get(pendingThreadKey);
+      if (!pendingThread) {
+        return thread;
+      }
+      if (pendingStartedThreadWorkspaceMatches(thread, pendingThread)) {
+        this.pendingStartedThreads.delete(pendingThreadKey);
+        return thread;
+      }
+      // Codex can briefly surface a fork with the copied parent cwd. Keep the
+      // workspace PwrAgent just prepared until thread/list reports that same
+      // cwd, while still accepting fresh provider title and status metadata.
+      return retainPendingStartedThreadWorkspace(thread, pendingThread);
+    });
+    const threadIds = new Set(resolvedThreads.map((thread) => thread.id));
     if (params.archived === true) {
-      return threads;
+      return resolvedThreads;
     }
 
     const pendingThreads = [...this.pendingStartedThreads.values()].filter(
@@ -16827,10 +16889,10 @@ export class DesktopBackendRegistry {
         pendingStartedThreadMatchesFilter(thread, params.filter),
     );
     if (pendingThreads.length === 0) {
-      return threads;
+      return resolvedThreads;
     }
 
-    return [...pendingThreads, ...threads].sort(
+    return [...pendingThreads, ...resolvedThreads].sort(
       (left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0),
     );
   }

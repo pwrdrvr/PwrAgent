@@ -13502,6 +13502,107 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("keeps the prepared fork worktree authoritative while Codex metadata catches up", async () => {
+    const repoPath = "/repo/app";
+    const parentWorktreePath = "/repo/app/.worktrees/thread-parent/app";
+    const forkWorktreePath = "/repo/app/.worktrees/thread-fork/app";
+    const staleForkThread: AppServerThreadSummary = {
+      id: "thread-fork",
+      title: "Forked thread",
+      titleSource: "explicit",
+      source: "codex",
+      projectKey: parentWorktreePath,
+      createdAt: 1_000,
+      updatedAt: 2_000,
+      linkedDirectories: [
+        {
+          id: repoPath,
+          label: "app",
+          path: repoPath,
+          worktreePath: parentWorktreePath,
+          kind: "worktree",
+        },
+      ],
+      gitBranch: "feature/parent",
+    };
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/fork"] },
+      threads: [staleForkThread],
+    });
+    Object.assign(codexClient, {
+      enrichThreadDirectories: vi.fn(
+        async (threads: AppServerThreadSummary[]) => threads,
+      ),
+    });
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({}),
+      overlayStore,
+      gitDirectoryService: {
+        prepareLaunchpadWorkspace: vi.fn(async () => ({
+          cwd: forkWorktreePath,
+          repositoryPath: repoPath,
+          workMode: "worktree" as const,
+        })),
+        recordCodexWorktreeOwnerThread: vi.fn(async () => {}),
+      } as never,
+    });
+
+    await registry.forkThread({
+      backend: "codex",
+      sourceThreadId: "thread-parent",
+      parentThreadId: "thread-parent",
+      executionMode: "default",
+      directoryKind: "directory",
+      directoryLabel: "app",
+      directoryPath: repoPath,
+      workMode: "worktree",
+    });
+
+    const expectForkWorkspace = async () => {
+      await expect(
+        overlayStore.getThreadOverlayState({
+          backend: "codex",
+          threadId: "thread-fork",
+        }),
+      ).resolves.toMatchObject({
+        extraLinkedDirectories: [
+          {
+            label: "app",
+            path: expectedDir(repoPath),
+            worktreePath: expectedDir(forkWorktreePath),
+            kind: "worktree",
+          },
+        ],
+      });
+    };
+
+    await expectForkWorkspace();
+    await registry.readThread({ backend: "codex", threadId: "thread-fork" });
+    await expectForkWorkspace();
+
+    const [listedThread] = await registry.listThreads({
+      backend: "codex",
+      callerReason: "navigation-snapshot",
+      forceRefresh: true,
+    });
+    expect(listedThread).toMatchObject({
+      id: "thread-fork",
+      projectKey: forkWorktreePath,
+      linkedDirectories: [
+        expect.objectContaining({
+          path: expectedDir(repoPath),
+          worktreePath: expectedDir(forkWorktreePath),
+          kind: "worktree",
+        }),
+      ],
+    });
+    await expectForkWorkspace();
+
+    await registry.close();
+  });
+
   it("reports detached HEAD as the expected branch for new worktree forks", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-fork-branch-"));
     const repoPath = path.join(root, "repo");
