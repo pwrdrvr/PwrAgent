@@ -5350,11 +5350,12 @@ export function useThreadNavigation(
         parentThreadId ??
         launchpad.parentThreadId ??
         getParentThreadIdFromSubthreadLaunchpadKey(directoryKey);
+      const federationTarget = readRendererFederationTarget();
       let response: Awaited<ReturnType<NonNullable<DesktopApi["materializeDirectoryLaunchpad"]>>>;
       try {
         response = await desktopApi.materializeDirectoryLaunchpad({
           directoryKey,
-          federationTarget: readRendererFederationTarget(),
+          federationTarget,
           launchpad,
           input,
           collaborationMode,
@@ -5366,6 +5367,20 @@ export function useThreadNavigation(
       } catch (error) {
         setLaunchpadError(error instanceof Error ? error.message : String(error));
         throw error;
+      }
+      let localDraftResetFailure: string | undefined;
+      if (federationTarget && desktopApi.resetDirectoryLaunchpad) {
+        try {
+          // Remote launchpads are composed and persisted on the viewer, then
+          // sent in full to the owning instance for materialization. The owner
+          // clears its overlay row as part of that operation, but it cannot
+          // clear the viewer's local copy. Remove that copy after success so
+          // reopening the launchpad cannot resurrect the submitted message.
+          await desktopApi.resetDirectoryLaunchpad({ directoryKey });
+        } catch (error) {
+          localDraftResetFailure =
+            error instanceof Error ? error.message : String(error);
+        }
       }
       const optimisticMaterializedThread = buildOptimisticThreadFromLaunchpad({
         directory,
@@ -5433,6 +5448,10 @@ export function useThreadNavigation(
         setLaunchpadError(response.turnStartFailure.message);
       } else if (response.autoPinFailure) {
         setLaunchpadError(response.autoPinFailure.message);
+      } else if (localDraftResetFailure) {
+        setLaunchpadError(
+          `Thread started, but the saved launchpad draft could not be cleared: ${localDraftResetFailure}`,
+        );
       }
       // Link composer `@`-referenced directories to the just-created
       // thread before the refresh below so the snapshot comes back with
