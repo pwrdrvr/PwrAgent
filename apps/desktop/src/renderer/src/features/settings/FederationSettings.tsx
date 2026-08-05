@@ -544,6 +544,7 @@ export function FederationSettings(props: FederationSettingsProps) {
             control={
               <textarea
                 rows={4}
+                aria-label="Import invite"
                 value={inviteToImport}
                 disabled={!props.desktopApi?.importFederationInvite}
                 onChange={(event) => setInviteToImport(event.target.value)}
