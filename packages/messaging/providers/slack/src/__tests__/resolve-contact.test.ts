@@ -38,8 +38,8 @@ describe("Slack resolveContact", () => {
         id: "U079K80HTGS",
         name: "hhunt",
         profile: {
-          display_name: "Harold Hunt",
-          real_name: "Harold",
+          display_name: "Harold",
+          real_name: "Harold Hunt",
         },
       },
     });

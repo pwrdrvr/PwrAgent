@@ -79,9 +79,9 @@ export async function resolveContact(
       status: "ok",
       id: request.id,
       displayName:
-        sanitizeOptionalContactLabel(user.profile?.display_name)
-        ?? sanitizeOptionalContactLabel(user.profile?.real_name)
+        sanitizeOptionalContactLabel(user.profile?.real_name)
         ?? sanitizeOptionalContactLabel(user.real_name)
+        ?? sanitizeOptionalContactLabel(user.profile?.display_name)
         ?? sanitizeOptionalContactLabel(user.name)
         ?? request.id,
       handle,

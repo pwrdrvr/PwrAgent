@@ -721,6 +721,9 @@ function formatBindingLabel(binding: MessagingThreadBindingSummary): string {
         // (super)group name — that's the breadcrumb itself.
         return title ? elide(title, 28) : "Group";
       }
+      if (platform === "slack") {
+        return title ? `#${elide(title, 28)}` : "Channel";
+      }
       // Discord. Thread messages are still kind="channel" (kind drives
       // binding lookup, can't change), so we distinguish by data
       // shape: ancestorTitle populated → it's a thread (3-level).

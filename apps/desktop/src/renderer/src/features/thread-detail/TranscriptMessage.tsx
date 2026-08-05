@@ -791,12 +791,18 @@ function MessagingOriginChip(props: {
   const surfaceParts = messagingOriginSurfaceParts(props.origin);
   const surface = surfaceParts.join(" / ");
   const actor = formatMessagingOriginActor(props.origin.actor);
-  const description = `${platform}: ${surface} · ${actor.detail}`;
+  const directMessage = props.origin.surface.kind === "dm";
+  const surfaceDetail = directMessage ? `DM with ${surface}` : surface;
+  const actorDetail = directMessage ? `From ${actor.detail}` : actor.detail;
+  const actorLabel = directMessage && actor.usernameLabel
+    ? actor.usernameLabel
+    : actor.label;
+  const description = `${platform}: ${surfaceDetail} · ${actorDetail}`;
   const sourceUrl = safeMessagingSourceUrl(props.origin.sourceUrl);
   const tooltipText = [
     platform,
-    surface,
-    actor.detail,
+    surfaceDetail,
+    actorDetail,
     sourceUrl ? `Open in ${platform}` : undefined,
   ].filter(Boolean).join("\n");
   const content = (
@@ -839,7 +845,7 @@ function MessagingOriginChip(props: {
       >
         ·
       </span>
-      <span className="transcript-message__messaging-actor">{actor.label}</span>
+      <span className="transcript-message__messaging-actor">{actorLabel}</span>
     </>
   );
   const sharedProps = {
@@ -932,7 +938,7 @@ function messagingSurfaceParts(
 
 function formatMessagingOriginActor(
   actor: NonNullable<AppServerThreadMessageOrigin["messaging"]>["actor"],
-): { detail: string; label: string } {
+): { detail: string; label: string; usernameLabel?: string } {
   const displayName = actor.displayName?.trim();
   const username = actor.username?.trim().replace(/^@/, "");
   const usernameLabel = username ? `@${username}` : undefined;
@@ -943,6 +949,7 @@ function formatMessagingOriginActor(
     || actor.platformUserId;
   return {
     label,
+    usernameLabel,
     detail: displayName && usernameLabel
       ? `${displayName} (${usernameLabel})`
       : label,

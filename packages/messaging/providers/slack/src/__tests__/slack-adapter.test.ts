@@ -1592,17 +1592,21 @@ describe("SlackAdapter", () => {
     ]);
   });
 
-  it("uses users.info display names for DM labels when users:read is granted", async () => {
+  it("uses users.info full names and handles for DM origins", async () => {
     const socket = fakeSocket();
     const adapter = new SlackAdapter({
       config: {
         ...baseConfig,
-        authorizedActorIds: [{ id: "U012ABCDEF0", displayName: "" }],
+        authorizedActorIds: [{ id: "U012ABCDEF0", displayName: "Harold" }],
       },
       callbackHandleStore: fakeStore(),
       api: fakeApi({
         users: {
-          U012ABCDEF0: { displayName: "Harold Hunt", username: "hhunt" },
+          U012ABCDEF0: {
+            displayName: "Harold",
+            realName: "Harold Hunt",
+            username: "hhunt",
+          },
         },
       }),
       socketClient: socket,
@@ -1631,6 +1635,7 @@ describe("SlackAdapter", () => {
         actor: expect.objectContaining({
           displayName: "Harold Hunt",
           platformUserId: "U012ABCDEF0",
+          username: "hhunt",
         }),
         channel: expect.objectContaining({
           conversation: expect.objectContaining({
