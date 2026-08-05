@@ -649,6 +649,7 @@ describe("App", () => {
       federation: {
         mode: { value: "disabled", source: "default" },
         instanceLabel: { value: "", source: "default" },
+        instanceNotes: { value: "", source: "default" },
         listenHost: { value: "127.0.0.1", source: "default" },
         listenPort: { value: 47830, source: "default" },
         publicUrl: { value: "", source: "default" },
