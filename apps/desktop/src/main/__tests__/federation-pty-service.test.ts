@@ -371,6 +371,65 @@ describe("FederationPtyService reaping", () => {
     service.disposeAll();
     expect(pty.killed).toBe(true);
   });
+
+  it("reaps a paused session when no ack arrives within the timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const { audits, pty, sent, service } = createHarness();
+      const { sessionId } = await service.open("peer-a", OPEN_REQUEST);
+      // Park the session at the high-water mark, then go silent: the ssh
+      // ClientAlive analogue for a link that died without a disconnect.
+      pty.emitData("x".repeat(FEDERATION_PTY_HIGH_WATER_BYTES + 1));
+      expect(pty.paused).toBe(true);
+
+      vi.advanceTimersByTime(59_999);
+      expect(pty.killed).toBe(false);
+      vi.advanceTimersByTime(1);
+      expect(pty.killed).toBe(true);
+      expect(audits.at(-1)).toMatchObject({
+        kind: "remote_pty_close",
+        detail: "ack_timeout",
+      });
+      // A still-connected viewer is told the session ended.
+      expect(
+        sent.filter(
+          (entry) =>
+            entry.method === "pty.exit" &&
+            (entry.params as { sessionId: string }).sessionId === sessionId,
+        ),
+      ).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a slowly draining session alive while acks continue", async () => {
+    vi.useFakeTimers();
+    try {
+      const { pty, service } = createHarness();
+      const { sessionId } = await service.open("peer-a", OPEN_REQUEST);
+      const burst = FEDERATION_PTY_HIGH_WATER_BYTES + 1;
+      pty.emitData("x".repeat(burst));
+      expect(pty.paused).toBe(true);
+
+      // Trickling acks re-arm the watchdog each time — slow is not dead.
+      vi.advanceTimersByTime(45_000);
+      service.ack("peer-a", { sessionId, bytes: 1 });
+      vi.advanceTimersByTime(45_000);
+      service.ack("peer-a", { sessionId, bytes: 1 });
+      vi.advanceTimersByTime(45_000);
+      expect(pty.killed).toBe(false);
+
+      // Draining below the low-water mark resumes and stands the watchdog
+      // down entirely.
+      service.ack("peer-a", { sessionId, bytes: burst });
+      expect(pty.paused).toBe(false);
+      vi.advanceTimersByTime(600_000);
+      expect(pty.killed).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("federation pty router integration", () => {

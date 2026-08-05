@@ -64,6 +64,16 @@ export const FEDERATION_PTY_REAP_GRACE_MS = 10_000;
 /** Ceiling on live + spawning sessions per peer. Well above anything the one
  *  pane-per-thread UI can produce; purely a runaway/abuse backstop. */
 export const FEDERATION_PTY_MAX_SESSIONS_PER_PEER = 16;
+/**
+ * How long a session may sit paused at the high-water mark with no ack
+ * before the peer is presumed dead and the session reaps. This is the
+ * ssh ClientAlive analogue for the one link-failure mode the transport
+ * cannot observe: a silently dropped connection (sleep, NAT timeout,
+ * power loss) never fires a disconnect, so without this the shell would
+ * park paused forever. A live viewer acks within a round trip; one that
+ * takes a minute to drain 768 KiB is gone.
+ */
+export const FEDERATION_PTY_PAUSED_ACK_TIMEOUT_MS = 60_000;
 
 export type FederationPtyOpenRequest = {
   backend: AppServerBackendKind;
@@ -178,6 +188,7 @@ type FederationPtyServiceOptions = {
     warn: (message: string, meta?: Record<string, unknown>) => void;
   };
   graceMs?: number;
+  pausedAckTimeoutMs?: number;
   now?: () => number;
 };
 
@@ -195,6 +206,8 @@ type FederationPtySession = {
   disposables: { dispose(): void }[];
   reapTimer?: ReturnType<typeof setTimeout>;
   reapReason?: "close" | "disconnect";
+  /** Armed while paused at the high-water mark; an ack re-arms or clears it. */
+  ackWatchdog?: ReturnType<typeof setTimeout>;
 };
 
 const MIN_DIMENSION = 2;
@@ -338,6 +351,12 @@ export class FederationPtyService {
       session.paused = false;
       session.pty.resume();
     }
+    // Any ack proves the peer is alive and draining: clear the dead-peer
+    // watchdog, re-arming it only if the session is still parked.
+    this.clearAckWatchdog(session);
+    if (session.paused) {
+      this.armAckWatchdog(session);
+    }
   }
 
   close(peerId: FederationInstanceId, request: FederationPtyCloseRequest): void {
@@ -454,6 +473,28 @@ export class FederationPtyService {
     ) {
       session.paused = true;
       session.pty.pause();
+      this.armAckWatchdog(session);
+    }
+  }
+
+  private armAckWatchdog(session: FederationPtySession): void {
+    if (session.ackWatchdog) return;
+    const timer = setTimeout(() => {
+      session.ackWatchdog = undefined;
+      // Still paused with a full window and not one ack in the whole
+      // timeout: the peer's link died without a disconnect event. Reap so
+      // the shell cannot sit orphaned forever (the transport never observes
+      // this failure mode — this is the ssh ClientAlive analogue).
+      this.killSession(session, "ack_timeout");
+    }, this.options.pausedAckTimeoutMs ?? FEDERATION_PTY_PAUSED_ACK_TIMEOUT_MS);
+    if (timer.unref) timer.unref();
+    session.ackWatchdog = timer;
+  }
+
+  private clearAckWatchdog(session: FederationPtySession): void {
+    if (session.ackWatchdog) {
+      clearTimeout(session.ackWatchdog);
+      session.ackWatchdog = undefined;
     }
   }
 
@@ -473,6 +514,15 @@ export class FederationPtyService {
 
   private killSession(session: FederationPtySession, reason: string): void {
     if (this.sessionsById.get(session.sessionId) !== session) return;
+    // Best-effort exit frame first: a still-connected viewer (reconnected
+    // inside the grace, or an ack-timeout on a wedged-but-live link) should
+    // see its pane end rather than a stale prompt. Returns false harmlessly
+    // when the peer is truly gone.
+    this.options.sendNotification(session.peerId, FEDERATION_PTY_EXIT_METHOD, {
+      sessionId: session.sessionId,
+      exitCode: null,
+      signal: null,
+    } satisfies FederationPtyExitParams);
     // Drop the session first so the kill's own exit event can't re-notify.
     this.deleteSession(session, reason);
     try {
@@ -494,6 +544,7 @@ export class FederationPtyService {
       clearTimeout(session.reapTimer);
       session.reapTimer = undefined;
     }
+    this.clearAckWatchdog(session);
     for (const disposable of session.disposables.splice(0)) {
       try {
         disposable.dispose();
