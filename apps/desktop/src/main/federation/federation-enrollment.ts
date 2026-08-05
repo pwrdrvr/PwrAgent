@@ -34,6 +34,12 @@ export type FederationInvitePayload = {
   gatewayPublicKeyPem: string;
   gatewayNoisePublicKey: string;
   gatewayUrl: string;
+  /**
+   * Ordered candidate endpoints for the same pinned gateway identity.
+   * Optional so version-1 importers that predate multi-path endpoints keep
+   * working from `gatewayUrl`; new importers treat absence as `[gatewayUrl]`.
+   */
+  gatewayEndpoints?: string[];
   expiresAt: number;
 };
 
@@ -97,6 +103,16 @@ export function decodeFederationInvite(
     typeof parsed.gatewayNoisePublicKey !== "string" ||
     typeof parsed.gatewayUrl !== "string" ||
     typeof parsed.expiresAt !== "number"
+  ) {
+    throw new Error("Invalid federation invite.");
+  }
+  if (
+    parsed.gatewayEndpoints !== undefined &&
+    (!Array.isArray(parsed.gatewayEndpoints) ||
+      parsed.gatewayEndpoints.length === 0 ||
+      !parsed.gatewayEndpoints.every(
+        (endpoint) => typeof endpoint === "string" && endpoint.trim(),
+      ))
   ) {
     throw new Error("Invalid federation invite.");
   }

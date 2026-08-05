@@ -145,6 +145,8 @@ export type DesktopSettingsConfig = {
     listenPort?: number;
     publicUrl?: string;
     gatewayUrl?: string;
+    gatewayEndpoints?: string[];
+    advertisedEndpoints?: string[];
     cloudflareMtlsEnabled?: boolean;
     cloudflareAccessServiceAuthEnabled?: boolean;
   };
@@ -952,6 +954,39 @@ export function desktopSettingsPatchToEdits(
       set(["federation", "gateway_url"], patch.federation.gatewayUrl);
     }
   }
+  if (patch.federation?.gatewayEndpoints !== undefined) {
+    const gatewayEndpoints = sanitizeEndpointList(
+      patch.federation.gatewayEndpoints,
+    );
+    if (gatewayEndpoints.length === 0) {
+      edits.push({ op: "delete", path: ["federation", "gateway_endpoints"] });
+    } else {
+      set(["federation", "gateway_endpoints"], gatewayEndpoints);
+    }
+    // Dual-write the first endpoint into the legacy scalar so an older build
+    // opened against this profile after a downgrade keeps a working path. An
+    // explicit gatewayUrl in the same patch wins over the dual-write.
+    if (patch.federation.gatewayUrl === undefined) {
+      if (gatewayEndpoints.length === 0) {
+        edits.push({ op: "delete", path: ["federation", "gateway_url"] });
+      } else {
+        set(["federation", "gateway_url"], gatewayEndpoints[0]);
+      }
+    }
+  }
+  if (patch.federation?.advertisedEndpoints !== undefined) {
+    const advertisedEndpoints = sanitizeEndpointList(
+      patch.federation.advertisedEndpoints,
+    );
+    if (advertisedEndpoints.length === 0) {
+      edits.push({
+        op: "delete",
+        path: ["federation", "advertised_endpoints"],
+      });
+    } else {
+      set(["federation", "advertised_endpoints"], advertisedEndpoints);
+    }
+  }
   if (patch.federation?.cloudflareMtlsEnabled !== undefined) {
     if (patch.federation.cloudflareMtlsEnabled) {
       set(["federation", "cloudflare_mtls_enabled"], true);
@@ -1622,6 +1657,8 @@ function normalizeDesktopConfig(
       listenPort: readNumber(federation?.listen_port),
       publicUrl: readString(federation?.public_url),
       gatewayUrl: readString(federation?.gateway_url),
+      gatewayEndpoints: readStringArray(federation?.gateway_endpoints),
+      advertisedEndpoints: readStringArray(federation?.advertised_endpoints),
       cloudflareMtlsEnabled: readBoolean(
         federation?.cloudflare_mtls_enabled,
       ),
@@ -2227,6 +2264,18 @@ function readHotCpuProfileTriggerMode(
   return typeof value === "string" && isDesktopHotCpuProfileTriggerMode(value)
     ? value
     : undefined;
+}
+
+function sanitizeEndpointList(endpoints: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const sanitized: string[] = [];
+  for (const endpoint of endpoints) {
+    const trimmed = endpoint.trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    sanitized.push(trimmed);
+  }
+  return sanitized;
 }
 
 function readFederationMode(

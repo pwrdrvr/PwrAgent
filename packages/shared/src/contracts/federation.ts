@@ -101,6 +101,39 @@ export type FederationClientEnrollment = {
   pendingInvite: boolean;
 };
 
+/**
+ * Outer-transport schemes a federation gateway endpoint may use. Every
+ * endpoint carries the same mandatory Noise IK channel and pinned-identity
+ * authentication; the scheme only selects the reachability path.
+ */
+export const FEDERATION_ENDPOINT_SCHEMES = ["ws:", "wss:", "ssh:"] as const;
+
+export function isFederationGatewayEndpointUrl(value: string): boolean {
+  const match = /^(ws|wss|ssh):\/\/([^/?#]+)/i.exec(value.trim());
+  if (!match) return false;
+  const authority = match[2];
+  const at = authority.lastIndexOf("@");
+  const userinfo = at >= 0 ? authority.slice(0, at) : "";
+  const hostPort = at >= 0 ? authority.slice(at + 1) : authority;
+  // Never accept credentials embedded in an endpoint URL.
+  if (userinfo.includes(":")) return false;
+  return hostPort.length > 0;
+}
+
+export type FederationEndpointState =
+  | "active"
+  | "connecting"
+  | "failed"
+  | "idle";
+
+export type FederationEndpointStatus = {
+  url: string;
+  state: FederationEndpointState;
+  lastAttemptAt?: number;
+  lastConnectedAt?: number;
+  lastError?: string;
+};
+
 export type FederationHealthStatus = {
   enabled: boolean;
   role: FederationInstanceRole;
@@ -109,6 +142,8 @@ export type FederationHealthStatus = {
   listenUrl?: string;
   publicUrl?: string;
   unavailableReason?: string;
+  /** Client-mode gateway endpoints in configured order with live status. */
+  gatewayEndpoints?: FederationEndpointStatus[];
   peers: FederationPeerSummary[];
   clientEnrollment?: FederationClientEnrollment;
 };

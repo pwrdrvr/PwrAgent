@@ -1,4 +1,5 @@
 import { mkdtempSync, rmSync } from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import WebSocket, { WebSocketServer } from "ws";
@@ -315,6 +316,93 @@ describe("federation transport", () => {
       requestId: "request-1",
       result: { ok: true },
     });
+    expect(store.getPeer("client_one")).toMatchObject({
+      status: "connected",
+      pinnedPublicKeyPem: clientKeyPair.publicKeyPem,
+    });
+  });
+
+  it("carries the encrypted channel over an externally created outer socket", async () => {
+    const gatewayNoise = generateNoiseStaticKeyPair();
+    const clientNoise = generateNoiseStaticKeyPair();
+    const clientKeyPair = generateFederationIdentityKeyPair();
+    const invite = createFederationEnrollmentInvite({
+      store,
+      token: "invite-token-outer-socket",
+      gatewayInstanceId: "gateway_one",
+      generatedAt: Date.now() - 1_000,
+      expiresAt: Date.now() + 60_000,
+    });
+    const received = new Promise<FederationProtocolEnvelope>((resolve) => {
+      server = new FederationGatewayWebSocketServer({
+        gatewayInstanceId: "gateway_one",
+        gatewayPrivateKeyPem: gatewayKeyPair.privateKeyPem,
+        gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+        host: "127.0.0.1",
+        port: 0,
+        store,
+        noiseStatic: gatewayNoise,
+        onEnvelope: (envelope, connection) => {
+          connection.sendEnvelope({
+            id: "response-1",
+            kind: "response",
+            requestId: envelope.id,
+            protocolVersion: 1,
+            sourceInstanceId: "gateway_one",
+            targetInstanceId: connection.peerId,
+            createdAt: 2_000,
+            result: { ok: true },
+          });
+          resolve(envelope);
+        },
+      });
+    });
+    const { port } = await server!.start();
+
+    // Stands in for an SSH stdio forward: the client never dials TCP itself;
+    // the upgrade and every Noise frame ride the supplied stream.
+    let outerSockets = 0;
+    const reply = new Promise<FederationProtocolEnvelope>((resolve) => {
+      void connectFederationClient({
+        url: `ws://127.0.0.1:${port}`,
+        createSocket: () => {
+          outerSockets += 1;
+          return net.connect(port, "127.0.0.1");
+        },
+        mode: "enroll",
+        gatewayInstanceId: "gateway_one",
+        gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+        peerInstanceId: "client_one",
+        privateKeyPem: clientKeyPair.privateKeyPem,
+        publicKeyPem: clientKeyPair.publicKeyPem,
+        capabilities: ["remote_window"],
+        inviteToken: invite.token,
+        label: "Client",
+        role: "client",
+        noiseStatic: clientNoise,
+        gatewayNoisePublicKey: gatewayNoise.publicKeyRaw,
+        onEnvelope: resolve,
+      }).then((client) => {
+        client.sendEnvelope({
+          id: "request-1",
+          kind: "request",
+          method: "thread.list",
+          params: {},
+          protocolVersion: 1,
+          sourceInstanceId: "client_one",
+          targetInstanceId: "gateway_one",
+          createdAt: 1_000,
+        });
+      });
+    });
+
+    await expect(received).resolves.toMatchObject({ id: "request-1", kind: "request" });
+    await expect(reply).resolves.toMatchObject({
+      kind: "response",
+      requestId: "request-1",
+      result: { ok: true },
+    });
+    expect(outerSockets).toBe(1);
     expect(store.getPeer("client_one")).toMatchObject({
       status: "connected",
       pinnedPublicKeyPem: clientKeyPair.publicKeyPem,

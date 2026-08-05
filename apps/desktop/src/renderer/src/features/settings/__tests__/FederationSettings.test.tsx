@@ -143,6 +143,140 @@ describe("FederationSettings", () => {
     });
   });
 
+  it("saves the ordered gateway endpoint list", async () => {
+    const onWriteConfig = vi.fn(async (_patch: DesktopSettingsConfigPatch) => true);
+    render(
+      <FederationSettings
+        desktopApi={{
+          readFederationHealth: vi.fn(async () => ({
+            health: {
+              enabled: true,
+              role: "client",
+              status: "disconnected",
+              peers: [],
+            } satisfies FederationHealthStatus,
+          })),
+        }}
+        onClearSecret={vi.fn(async () => true)}
+        onReplaceSecret={vi.fn(async () => true)}
+        saving={false}
+        snapshot={settingsSnapshot()}
+        onSettingsChanged={vi.fn()}
+        onWriteConfig={onWriteConfig}
+      />,
+    );
+
+    const editor = screen.getByLabelText("Gateway endpoints");
+    fireEvent.change(editor, {
+      target: {
+        value: [
+          "ws://192.168.1.20:47830",
+          "wss://studio.example.ts.net/pwragent-federation",
+          "ssh://ops@gateway.lan:2222/?forward=127.0.0.1:47830",
+        ].join("\n"),
+      },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Save federation settings" }),
+    );
+
+    await waitFor(() => expect(onWriteConfig).toHaveBeenCalled());
+    expect(onWriteConfig.mock.calls[0][0].federation?.gatewayEndpoints).toEqual([
+      "ws://192.168.1.20:47830",
+      "wss://studio.example.ts.net/pwragent-federation",
+      "ssh://ops@gateway.lan:2222/?forward=127.0.0.1:47830",
+    ]);
+  });
+
+  it("rejects an invalid gateway endpoint before saving", async () => {
+    const onWriteConfig = vi.fn(async () => true);
+    render(
+      <FederationSettings
+        desktopApi={{
+          readFederationHealth: vi.fn(async () => ({
+            health: {
+              enabled: true,
+              role: "client",
+              status: "disconnected",
+              peers: [],
+            } satisfies FederationHealthStatus,
+          })),
+        }}
+        onClearSecret={vi.fn(async () => true)}
+        onReplaceSecret={vi.fn(async () => true)}
+        saving={false}
+        snapshot={settingsSnapshot()}
+        onSettingsChanged={vi.fn()}
+        onWriteConfig={onWriteConfig}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Gateway endpoints"), {
+      target: { value: "https://not-a-federation-endpoint.example" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Save federation settings" }),
+    );
+
+    expect(await screen.findByText(
+      /must be a ws:\/\/, wss:\/\/, or ssh:\/\/ URL/,
+    )).toBeInTheDocument();
+    expect(onWriteConfig).not.toHaveBeenCalled();
+  });
+
+  it("shows per-endpoint connection status for client mode", async () => {
+    const health: FederationHealthStatus = {
+      enabled: true,
+      role: "client",
+      status: "connected",
+      gatewayEndpoints: [
+        {
+          url: "ws://192.168.1.20:47830",
+          state: "failed",
+          lastError: "connect_failed",
+        },
+        {
+          url: "wss://studio.example.ts.net/pwragent-federation",
+          state: "active",
+          lastConnectedAt: Date.now(),
+        },
+        {
+          url: "wss://federation.example.com",
+          state: "idle",
+        },
+      ],
+      peers: [],
+    };
+    render(
+      <FederationSettings
+        desktopApi={{
+          readFederationDiagnostics: vi.fn(async () => ({
+            health,
+            events: [],
+          })),
+        }}
+        onClearSecret={vi.fn(async () => true)}
+        onReplaceSecret={vi.fn(async () => true)}
+        saving={false}
+        snapshot={settingsSnapshot()}
+        onSettingsChanged={vi.fn()}
+        onWriteConfig={vi.fn(async () => true)}
+      />,
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.getByText("ws://192.168.1.20:47830")).toBeInTheDocument();
+    expect(screen.getByText(/^Failed/)).toBeInTheDocument();
+    expect(screen.getByText("connect_failed")).toBeInTheDocument();
+    expect(screen.getByText(/^Active · Connected/)).toBeInTheDocument();
+    expect(
+      screen.getByText("wss://federation.example.com"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Idle")).toBeInTheDocument();
+  });
+
   it("falls back to the settings snapshot when diagnostics are unavailable", () => {
     render(
       <FederationSettings
@@ -673,8 +807,18 @@ function settingsSnapshot(): DesktopSettingsSnapshot {
         value: "wss://client.example.com/federation",
         source: "config",
       },
+      gatewayEndpoints: {
+        value: ["wss://client.example.com/federation"],
+        source: "config",
+      },
+      advertisedEndpoints: { value: [], source: "default" },
       cloudflareMtlsEnabled: { value: true, source: "config" },
       cloudflareAccessServiceAuthEnabled: { value: false, source: "config" },
+      instancePrivateKey: {
+        configured: true,
+        source: "keychain",
+        writable: true,
+      },
       noiseStaticPrivateKey: {
         configured: true,
         source: "keychain",
@@ -701,5 +845,5 @@ function settingsSnapshot(): DesktopSettingsSnapshot {
         writable: true,
       },
     },
-  } as DesktopSettingsSnapshot;
+  } as unknown as DesktopSettingsSnapshot;
 }

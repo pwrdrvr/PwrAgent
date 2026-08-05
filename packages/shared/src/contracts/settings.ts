@@ -547,6 +547,13 @@ export type DesktopFederationSettingsSnapshot = {
   listenPort: DesktopSettingsValue<number>;
   publicUrl: DesktopSettingsValue<string>;
   gatewayUrl: DesktopSettingsValue<string>;
+  /**
+   * Ordered client-mode gateway endpoints for one pinned gateway identity.
+   * Resolved from `gateway_endpoints`, falling back to `[gateway_url]`.
+   */
+  gatewayEndpoints: DesktopSettingsValue<string[]>;
+  /** Ordered endpoints a gateway advertises in enrollment invites. */
+  advertisedEndpoints: DesktopSettingsValue<string[]>;
   cloudflareMtlsEnabled: DesktopSettingsValue<boolean>;
   cloudflareAccessServiceAuthEnabled: DesktopSettingsValue<boolean>;
   instancePrivateKey: DesktopSettingsSecretState;
@@ -942,6 +949,8 @@ export type DesktopSettingsConfigPatch = {
     listenPort?: number;
     publicUrl?: string;
     gatewayUrl?: string;
+    gatewayEndpoints?: string[];
+    advertisedEndpoints?: string[];
     cloudflareMtlsEnabled?: boolean;
     cloudflareAccessServiceAuthEnabled?: boolean;
   };

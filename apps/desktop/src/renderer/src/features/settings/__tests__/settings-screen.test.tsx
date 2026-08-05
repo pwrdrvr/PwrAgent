@@ -204,6 +204,8 @@ function createSnapshot(
       listenPort: { value: 47830, source: "default" },
       publicUrl: { value: "", source: "default" },
       gatewayUrl: { value: "", source: "default" },
+      gatewayEndpoints: { value: [], source: "default" },
+      advertisedEndpoints: { value: [], source: "default" },
       cloudflareMtlsEnabled: { value: false, source: "default" },
       cloudflareAccessServiceAuthEnabled: {
         value: false,

@@ -61,6 +61,51 @@ describe("federation enrollment", () => {
     );
   });
 
+  it("round-trips an ordered multi-endpoint invite at the same version", () => {
+    const gatewayKeyPair = generateFederationIdentityKeyPair();
+    const gatewayEndpoints = [
+      "ws://192.168.1.20:47830",
+      "wss://studio.example.ts.net/pwragent-federation",
+      "wss://federation.example.com",
+    ];
+    const invite = encodeFederationInvite({
+      version: FEDERATION_INVITE_VERSION,
+      token: "invite-token-multipath",
+      gatewayInstanceId: "gateway_one",
+      gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+      gatewayNoisePublicKey: "gateway-noise-public-key",
+      gatewayUrl: gatewayEndpoints[0],
+      gatewayEndpoints,
+      expiresAt: 2_000,
+    });
+
+    const decoded = decodeFederationInvite(invite, 1_000);
+    expect(decoded.version).toBe(FEDERATION_INVITE_VERSION);
+    expect(decoded.gatewayUrl).toBe(gatewayEndpoints[0]);
+    expect(decoded.gatewayEndpoints).toEqual(gatewayEndpoints);
+  });
+
+  it("rejects invites with a malformed endpoint list", () => {
+    const base = {
+      version: FEDERATION_INVITE_VERSION,
+      token: "invite-token-bad-endpoints",
+      gatewayInstanceId: "gateway_one",
+      gatewayPublicKeyPem: "gateway-key",
+      gatewayNoisePublicKey: "gateway-noise-key",
+      gatewayUrl: "ws://127.0.0.1:47830",
+      expiresAt: 2_000,
+    };
+    for (const gatewayEndpoints of [[], ["ws://ok.example", 7], "not-a-list"]) {
+      const invite = `pwragent-federation:${Buffer.from(
+        JSON.stringify({ ...base, gatewayEndpoints }),
+        "utf8",
+      ).toString("base64url")}`;
+      expect(() => decodeFederationInvite(invite, 1_000)).toThrow(
+        "Invalid federation invite.",
+      );
+    }
+  });
+
   it("rejects unsupported invite versions before attempting enrollment", () => {
     const unsupportedInvite = `pwragent-federation:${Buffer.from(JSON.stringify({
       version: FEDERATION_INVITE_VERSION + 1,

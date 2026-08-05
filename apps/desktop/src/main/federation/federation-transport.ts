@@ -1,5 +1,6 @@
 import http from "node:http";
 import { randomUUID } from "node:crypto";
+import type { Duplex } from "node:stream";
 import WebSocket, { WebSocketServer } from "ws";
 import type {
   FederationCapability,
@@ -502,6 +503,14 @@ export async function connectFederationClient(params: {
   headers?: Record<string, string>;
   clientCertificate?: string;
   clientPrivateKey?: string;
+  /**
+   * Custom outer-transport socket factory (e.g. an SSH stdio forward). When
+   * set, the WebSocket upgrade runs over the returned stream instead of a
+   * direct TCP/TLS connection; `url` still names the inner listener so the
+   * upgrade Host header matches. Everything inside — Noise handshake,
+   * channel-bound auth, envelopes — is unchanged.
+   */
+  createSocket?: () => Duplex;
   /** Client's Noise static keypair. Enables encryption (initiator role). */
   noiseStatic?: NoiseKeyPair;
   /** Pinned gateway Noise static public key (raw 32 bytes), from the invite. */
@@ -509,11 +518,19 @@ export async function connectFederationClient(params: {
   onEnvelope?: (envelope: FederationProtocolEnvelope) => void;
   onClose?: () => void;
 }): Promise<FederationClientWebSocketClient> {
-  const socket = new WebSocket(params.url, {
-    headers: params.headers,
-    cert: params.clientCertificate,
-    key: params.clientPrivateKey,
-  });
+  const socket = new WebSocket(
+    params.url,
+    params.createSocket
+      ? {
+          headers: params.headers,
+          agent: outerSocketAgent(params.createSocket),
+        }
+      : {
+          headers: params.headers,
+          cert: params.clientCertificate,
+          key: params.clientPrivateKey,
+        },
+  );
   // Attach the reader before "open" so no inbound frame can be missed.
   const reader = new FederationFrameReader(socket);
   await waitForOpen(socket);
@@ -747,6 +764,16 @@ class FederationFrameReader {
       this.pending = { resolve, reject };
     });
   }
+}
+
+// One-shot http.Agent that hands the WebSocket upgrade an externally created
+// stream (e.g. an SSH stdio forward) instead of dialing TCP itself.
+function outerSocketAgent(createSocket: () => Duplex): http.Agent {
+  const agent = new http.Agent({ keepAlive: false });
+  (
+    agent as http.Agent & { createConnection: () => Duplex }
+  ).createConnection = () => createSocket();
+  return agent;
 }
 
 function rawDataToBuffer(raw: WebSocket.RawData): Buffer {
