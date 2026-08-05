@@ -6209,7 +6209,9 @@ function buildThreadForkPayload(params: {
     base.path = params.path.trim();
   }
   if (params.cwd?.trim()) {
-    base.cwd = params.cwd.trim();
+    const cwd = params.cwd.trim();
+    base.cwd = cwd;
+    base.runtimeWorkspaceRoots = [cwd];
   }
   if (params.model?.trim()) {
     base.model = params.model.trim();
