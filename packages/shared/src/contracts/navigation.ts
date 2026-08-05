@@ -125,6 +125,15 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
   /** Wall-clock ms when the queue entry was created. */
   queuedExecutionModeAt?: number;
   /**
+   * Turns waiting in the owning instance's main-process FIFO (registry
+   * ThreadTurnQueue), in dispatch order. Merged into every navigation
+   * snapshot so ALL windows — including federated viewers and windows
+   * that did not submit the entry — can render and rehydrate queued
+   * messages. Like queuedExecutionMode, the queue itself is registry
+   * memory; this is its read projection.
+   */
+  queuedTurns?: ThreadQueuedTurnSummary[];
+  /**
    * Per-thread permission-mode transition log (audit trail). Persisted
    * via the overlay store, capped at
    * `MAX_PERMISSION_TRANSITION_LOG_ENTRIES` with oldest-first eviction.
@@ -181,6 +190,17 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
   subAgents?: ThreadSubAgentSummary[];
   /** Durable origin metadata for threads created by an Agent handoff tool. */
   handoffOrigin?: ThreadHandoffOrigin;
+};
+
+export type ThreadQueuedTurnSummary = {
+  /** Registry queue entry id — matches thread/turnQueue/updated events. */
+  queueEntryId: string;
+  origin: "manual" | "automation" | "messaging" | "scheduled";
+  /** First text item of the queued input, truncated for display. */
+  displayText: string;
+  createdAt: number;
+  /** 0-based dispatch position within the thread's queue. */
+  position: number;
 };
 
 export type ThreadSubAgentStatus =

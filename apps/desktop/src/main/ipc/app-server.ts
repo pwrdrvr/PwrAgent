@@ -1691,12 +1691,15 @@ class DesktopAppServerService {
     const automationsByThreadKey = buildAutomationSummariesByThreadKey();
     const queuedExecutionModesByThreadKey = getDesktopBackendRegistry()
       .getQueuedExecutionModesSnapshot();
+    const queuedTurnsByThreadKey = getDesktopBackendRegistry()
+      .getQueuedTurnsSnapshot();
     const snapshot = await this.getOverlayStore().reconcileNavigationSnapshot({
       backend,
       automationsByThreadKey,
       fetchedAt: Date.now(),
       messagingBindingsByThreadKey,
       queuedExecutionModesByThreadKey,
+      queuedTurnsByThreadKey,
       threads,
       workspaceRoots: resolveScratchProjectsRoots(),
     });

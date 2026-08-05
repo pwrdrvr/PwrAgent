@@ -10,6 +10,7 @@ import type {
   MarkThreadSeenResponse,
   MessagingThreadBindingSummary,
   NavigationBrowseMode,
+  ThreadQueuedTurnSummary,
   NavigationDirectoryGitStatus,
   NavigationLaunchpadDefaults,
   NavigationSnapshot,
@@ -492,6 +493,12 @@ export class SqliteOverlayStore {
       string,
       { mode: ThreadExecutionMode; queuedAt: number } | undefined
     >;
+    /**
+     * Read projection of the registry's in-memory turn FIFO. Attached to
+     * outgoing thread summaries (and hashed) so every window and viewer
+     * sees queued messages, mirroring queuedExecutionModesByThreadKey.
+     */
+    queuedTurnsByThreadKey?: Record<string, ThreadQueuedTurnSummary[]>;
     threads: AppServerThreadSummary[];
     workspaceRoots?: string[];
   }): Promise<NavigationSnapshot> {
@@ -645,6 +652,17 @@ export class SqliteOverlayStore {
       unchanged: false,
       workspaceRoots: params.workspaceRoots,
     });
+
+    if (params.queuedTurnsByThreadKey) {
+      // Attach BEFORE hashing so queue changes invalidate the
+      // unchanged-snapshot cache like any other thread-state change.
+      snapshot.threads = snapshot.threads.map((thread) => {
+        const queuedTurns = params.queuedTurnsByThreadKey?.[
+          buildThreadIdentityKey(thread.source, thread.id)
+        ];
+        return queuedTurns?.length ? { ...thread, queuedTurns } : thread;
+      });
+    }
 
     const nextHash = buildNavigationSnapshotHash({
       backend: params.backend,

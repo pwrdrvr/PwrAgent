@@ -735,6 +735,7 @@ vi.mock("../app-server/backend-registry", () => {
     setThreadPrAutoDispatchBatch,
     ensureDirectoryLaunchpad,
     getQueuedExecutionModesSnapshot: () => ({}),
+    getQueuedTurnsSnapshot: () => ({}),
     rememberCompleteNavigationSnapshot,
   };
   backendRegistryLifecycle.get.mockImplementation(() => registry);
@@ -1597,6 +1598,7 @@ describe("app server ipc", () => {
       fetchedAt: expect.any(Number),
       messagingBindingsByThreadKey: undefined,
       queuedExecutionModesByThreadKey: {},
+      queuedTurnsByThreadKey: {},
       threads: [
         expect.objectContaining({ source: "codex", id: "thread-1" }),
         expect.objectContaining({ source: "grok", id: "thread-1" }),
