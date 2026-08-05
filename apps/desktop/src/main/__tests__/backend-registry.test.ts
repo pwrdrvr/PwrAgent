@@ -7771,21 +7771,28 @@ script = "echo setup"
 
     expect(registerBridge).toHaveBeenCalledWith("pwrsnap", undefined);
     expect(bindThread).toHaveBeenCalledWith("thread-1");
-    expect(codexClient.lastStartThreadParams?.config).toEqual({
-      mcp_servers: {
-        pwrsnap: { enabled: false },
-        pwragent_pwrsnap: {
-          enabled: true,
-          command: "/Applications/PwrAgent.app/Contents/MacOS/PwrAgent",
-          args: ["/app/mcp-connection-bridge.js"],
-          env: {
-            ELECTRON_RUN_AS_NODE: "1",
-            PWRAGENT_MCP_CONNECTION_SOCKET: "/tmp/pwragent.sock",
-            PWRAGENT_MCP_CONNECTION_TOKEN: "local-grant",
-          },
-          tool_timeout_sec: 720,
-        },
+    const mcpServers = (
+      codexClient.lastStartThreadParams?.config as {
+        mcp_servers?: Record<string, unknown>;
+      }
+    )?.mcp_servers;
+    expect(mcpServers?.pwrsnap).toEqual({ enabled: false });
+    expect(mcpServers?.pwragent_pwrsnap).toEqual({ enabled: false });
+    const bridgeNames = Object.keys(mcpServers ?? {}).filter((name) =>
+      name.startsWith("pwragent_pwrsnap_"),
+    );
+    expect(bridgeNames).toHaveLength(1);
+    expect(bridgeNames[0]).toMatch(/^pwragent_pwrsnap_[0-9a-f]{32}$/);
+    expect(mcpServers?.[bridgeNames[0]!]).toEqual({
+      enabled: true,
+      command: "/Applications/PwrAgent.app/Contents/MacOS/PwrAgent",
+      args: ["/app/mcp-connection-bridge.js"],
+      env: {
+        ELECTRON_RUN_AS_NODE: "1",
+        PWRAGENT_MCP_CONNECTION_SOCKET: "/tmp/pwragent.sock",
+        PWRAGENT_MCP_CONNECTION_TOKEN: "local-grant",
       },
+      tool_timeout_sec: 720,
     });
     await expect(overlayStore.getThreadOverlayState({
       backend: "codex",
