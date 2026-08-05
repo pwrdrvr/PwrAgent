@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   readRendererFederationLabel,
   readRendererFederationTarget,
@@ -25,6 +25,13 @@ export function FederationRemoteBadge(props: {
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
   );
+  useEffect(() => {
+    return () => {
+      if (copiedTimerRef.current) {
+        clearTimeout(copiedTimerRef.current);
+      }
+    };
+  }, []);
   if (!label && !target) {
     return null;
   }

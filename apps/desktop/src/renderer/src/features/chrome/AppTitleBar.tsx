@@ -55,9 +55,11 @@ export function AppTitleBar(props: {
         <p className="app-titlebar__brand">
           Pwr<span className="app-titlebar__brand-accent">Agent</span>
         </p>
-        {/* On Windows the title bar is the masthead's only home, so the
-            remote-instance marker lives here regardless of sidebar state. */}
-        <FederationRemoteBadge />
+        {/* While the sidebar is open its identity pill is the remote
+            marker; once it's hidden this strip is the only home left.
+            (Absent layout — fatal/startup states — keep the badge so the
+            window is never unmarked.) */}
+        {props.layout?.sidebarOpen ? null : <FederationRemoteBadge />}
         <AppMenuBar />
         {actions ? (
           <div className="app-titlebar__actions">

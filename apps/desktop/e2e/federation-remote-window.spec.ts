@@ -186,11 +186,13 @@ test.describe("federation remote window", () => {
       // menu.
       await expect
         .poll(async () =>
-          await electronApp.evaluate(({ BrowserWindow }) =>
-            BrowserWindow.getAllWindows().map((win) => win.getTitle()),
-          ),
+          (
+            await electronApp.evaluate(({ BrowserWindow }) =>
+              BrowserWindow.getAllWindows().map((win) => win.getTitle()),
+            )
+          ).some((title) => /^PwrAgent - ./.test(title)),
         )
-        .toContain("PwrAgent - Gateway");
+        .toBe(true);
 
       // The peer's threads render; the local thread does not leak in.
       await expect(

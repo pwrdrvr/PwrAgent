@@ -2605,8 +2605,11 @@ textarea,
 /* Stable marker for the remote-instance label text wherever the
    FederationRemoteBadge renders it (sidebar identity pill or title-bar
    badge); layout comes from the hosting pill, this only rounds off the
-   truncation. E2E asserts on this class — keep it on the label span. */
-.sidebar__federation-label {
+   truncation. E2E asserts on this class — keep it on the label span.
+   The compound selector outranks `.runtime-identity__text`'s later
+   `text-overflow: clip` so the pill truncates with an ellipsis too. */
+.sidebar__federation-label,
+.runtime-identity__text.sidebar__federation-label {
   text-overflow: ellipsis;
 }
 
