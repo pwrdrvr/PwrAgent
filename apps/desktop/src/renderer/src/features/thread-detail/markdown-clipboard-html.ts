@@ -3,8 +3,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 import ReactMarkdown from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
-import { repairNestedLanguageFences } from "../../lib/markdown-fences";
-import { protectComposerHyphenListItems } from "./ThreadMarkdown";
+import {
+  protectComposerHyphenListItems,
+  repairNestedLanguageFences,
+} from "../../lib/markdown-fences";
 
 // Renders transcript markdown to standalone semantic HTML for the clipboard's
 // text/html flavor, so rich-text targets (Google Docs, Gmail, Word) paste

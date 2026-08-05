@@ -10,10 +10,12 @@ const copyText = vi.hoisted(() => vi.fn(async (
 ) => {
   await desktopApi?.copyText?.(text);
 }));
-vi.mock("../../../lib/copy-text", () => ({ copyText }));
+const copyTextWithHtml = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock("../../../lib/copy-text", () => ({ copyText, copyTextWithHtml }));
 
 afterEach(() => {
   copyText.mockClear();
+  copyTextWithHtml.mockClear();
 });
 
 const sanitizedReviewFindingsTable = `| # | Sev | File | Issue | Fix |
@@ -936,6 +938,26 @@ describe("ThreadMarkdown", () => {
     await waitFor(() => {
       expect(copyText).toHaveBeenCalledWith("const answer = 42;\n");
     });
+  });
+
+  it("keeps code-block copies plain text even when the rich clipboard bridge exists", async () => {
+    const bridgeCopyText = vi.fn(async () => undefined);
+    const bridgeCopyRichText = vi.fn(async () => undefined);
+
+    render(
+      <ThreadMarkdown
+        desktopApi={{ copyText: bridgeCopyText, copyRichText: bridgeCopyRichText }}
+        text={"```ts\nconst answer = 42;\n```"}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
+
+    await waitFor(() => {
+      expect(bridgeCopyText).toHaveBeenCalledWith("const answer = 42;\n");
+    });
+    expect(copyTextWithHtml).not.toHaveBeenCalled();
+    expect(bridgeCopyRichText).not.toHaveBeenCalled();
   });
 
   it("copies inline code without its markdown delimiters", async () => {
