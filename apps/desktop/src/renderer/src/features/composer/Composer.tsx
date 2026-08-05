@@ -6443,14 +6443,19 @@ export function Composer(props: ComposerProps) {
       if (steeringRequestIdRef.current === pending.id) {
         steeringRequestIdRef.current = undefined;
       }
-      // The steer RPC never reached the owner (transport failure, peer
-      // drop) — a renderer-parked "pending" chip would be lost if this
-      // window closes. Rescue the intent into the owner's durable
-      // scheduled-action store with the same payload the fallback
-      // carries; admitSteerTurn's requestId-derived id semantics make a
-      // duplicate harmless if the original RPC actually landed.
+      // Rescue ONLY failures that prove the steer never left this
+      // machine (the synchronous "peer is not connected" pre-send
+      // throw). A timeout is ambiguous — the steer may have been
+      // delivered and applied, and scheduling a rescue then would send
+      // the message twice; those stay renderer-parked with retry.
+      const provenUndelivered =
+        error instanceof Error && error.message.includes("is not connected");
       const rescued = await (async () => {
-        if (!props.thread || !props.desktopApi?.createScheduledThreadAction) {
+        if (
+          !provenUndelivered
+          || !props.thread
+          || !props.desktopApi?.createScheduledThreadAction
+        ) {
           return false;
         }
         try {
