@@ -56,7 +56,11 @@ import { useAppearance, type AppearanceController } from "./lib/useAppearance";
 import { useBackendSummaries } from "./lib/useBackendSummaries";
 import { useDesktopApi, type DesktopApi } from "./lib/desktop-api";
 import { useDesktopApplications } from "./lib/useDesktopApplications";
-import { readRendererFederationTarget } from "./lib/federation-window";
+import {
+  readRendererFederationLabel,
+  readRendererFederationTarget,
+} from "./lib/federation-window";
+import { useFederationPeerConnectivity } from "./lib/useFederationPeerConnectivity";
 import { scopeDesktopApiToFederationTarget } from "./lib/federation-desktop-api";
 import { useRuntimeIdentity } from "./lib/runtime-identity";
 import {
@@ -747,6 +751,10 @@ function DesktopAppShell(props: {
     () => scopeDesktopApiToFederationTarget(desktopApi, activeFederationTarget),
     [activeFederationTarget, desktopApi],
   );
+  const peerConnectivity = useFederationPeerConnectivity({
+    desktopApi,
+    target: activeFederationTarget,
+  });
   const applications = useDesktopApplications({
     desktopApi,
     localApplications: settings.snapshot?.applications,
@@ -939,6 +947,9 @@ function DesktopAppShell(props: {
     composerDraftStore,
     desktopApi,
     federationTarget: activeFederationTarget,
+    // A disconnected peer fails every reconciliation tick — stop polling
+    // until the runtime reports the peer connected again.
+    suspended: !peerConnectivity.connected,
   });
   const replayCodexProfileSetup = settings.snapshot
     ? inferReplayCodexProfileSetup(
@@ -1185,6 +1196,9 @@ function DesktopAppShell(props: {
     clearPendingRequest: session.clearPendingRequest,
     composerDisabled:
       !navigation.selectedThread ||
+      // A remote thread cannot accept input while its owning instance is
+      // unreachable — typing would only queue into a dead RPC.
+      !peerConnectivity.connected ||
       !backendSummaries.backends.some(
         (backend) =>
           backend.kind === navigation.selectedThread?.source &&
@@ -1674,6 +1688,16 @@ function DesktopAppShell(props: {
             threadDetailPending ? " app-main--thread-detail-pending" : ""
           }`}
         >
+          {!peerConnectivity.connected ? (
+            // The runtime keeps reconnecting on its own; this banner
+            // explains why the window went read-only (composer disabled,
+            // remote polling suspended) instead of leaving a half-dead
+            // surface that fails silently.
+            <div className="federation-disconnected-banner" role="alert">
+              <span className="federation-disconnected-banner__dot" aria-hidden="true" />
+              {`${readRendererFederationLabel() ?? "Remote instance"} is unreachable — reconnecting. Threads shown may be stale.`}
+            </div>
+          ) : null}
           {mainView === "search" ? (
             <ThreadSearchPanel
               desktopApi={desktopApi}

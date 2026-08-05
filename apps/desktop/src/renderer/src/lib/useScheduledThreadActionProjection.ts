@@ -10,16 +10,26 @@ export function useScheduledThreadActionProjection(params: {
   composerDraftStore: ComposerDraftStore;
   desktopApi?: DesktopApi;
   federationTarget?: FederationTarget;
+  /**
+   * True while the federation peer behind `federationTarget` is
+   * unreachable. Suspends the reconciliation poll so a disconnected
+   * remote window doesn't hammer the dead peer with a failing RPC (and
+   * a console warning) every five seconds; resuming re-runs the effect
+   * and refreshes immediately.
+   */
+  suspended?: boolean;
 }): void {
   const refreshSequenceRef = useRef(0);
   const projectedScopeKeysRef = useRef<Set<string>>(new Set());
   const projectedFailuresRef = useRef<Map<string, ScheduledThreadAction>>(new Map());
   const dismissedFailuresRef = useRef<Set<string>>(new Set());
   const terminalUpdatedAfterRef = useRef<number | undefined>(undefined);
+  const lastWarnedFailureRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {
     const desktopApi = params.desktopApi;
     if (!desktopApi?.listScheduledThreadActions) return;
+    if (params.suspended) return;
     let cancelled = false;
 
     const refresh = async (): Promise<void> => {
@@ -61,8 +71,16 @@ export function useScheduledThreadActionProjection(params: {
           visibleActions,
           projectedScopeKeysRef.current,
         );
+        lastWarnedFailureRef.current = undefined;
       } catch (error) {
-        console.warn("Failed to load scheduled thread actions", error);
+        // A persistent failure (peer offline, backend down) repeats on
+        // every 5s reconciliation tick — warn once per distinct failure
+        // instead of spamming the console/log for the same condition.
+        const message = error instanceof Error ? error.message : String(error);
+        if (lastWarnedFailureRef.current !== message) {
+          lastWarnedFailureRef.current = message;
+          console.warn("Failed to load scheduled thread actions", error);
+        }
       }
     };
 

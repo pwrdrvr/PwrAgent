@@ -100,7 +100,7 @@ async function createLocalControlFixture(): Promise<{
 
 test.describe("federation remote window", () => {
   test("enrolls, browses remote threads, pins on the owner, and hides local-only chrome", async () => {
-    test.setTimeout(180_000);
+    test.setTimeout(300_000);
 
     let gateway: InProcessFederationGateway | undefined;
     const fixture = await createLocalControlFixture();
@@ -347,6 +347,31 @@ test.describe("federation remote window", () => {
       expect(
         gateway.calls.map((call) => call.method),
       ).not.toContain("refreshThreadPullRequests");
+
+      // Peer death: the window flips to an explicit read-only state —
+      // disconnected banner, composer disabled — instead of a half-dead
+      // surface hammering the peer with failing RPCs.
+      await gateway.stop();
+      await expect(
+        remote.locator(".federation-disconnected-banner"),
+      ).toBeVisible({ timeout: 30_000 });
+      await expect(
+        remote.locator(".composer-tiptap-input__editor"),
+      ).toHaveAttribute("contenteditable", "false", { timeout: 15_000 });
+
+      // Recovery: the same identity returns on the same port; the client
+      // reconnects on its own backoff and the window heals without a
+      // reload — banner gone, remote threads back.
+      await gateway.restart();
+      await gateway.waitForNextConnection(90_000);
+      await expect(
+        remote.locator(".federation-disconnected-banner"),
+      ).toHaveCount(0, { timeout: 60_000 });
+      await expect(
+        remote.locator(".thread-row__title", {
+          hasText: "Remote gateway thread one",
+        }),
+      ).toBeVisible({ timeout: 30_000 });
     } finally {
       await app?.close();
       await gateway?.close();
