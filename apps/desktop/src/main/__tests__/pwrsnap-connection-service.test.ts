@@ -98,4 +98,37 @@ describe("PwrSnapConnectionService", () => {
     expect(first.server.env.PWRAGENT_MCP_CONNECTION_TOKEN).toBeTruthy();
     expect(first.server.env.PWRAGENT_MCP_CONNECTION_SOCKET).toBeTruthy();
   });
+
+  it("keeps blocking upstream tool calls alive beyond the SDK default", async () => {
+    const callTool = vi.fn(async () => ({ content: [] }));
+    const service = new PwrSnapConnectionService({
+      settings: createSettings(JSON.stringify({
+        tokens: { access_token: "secret", token_type: "bearer" },
+      })),
+    });
+    services.push(service);
+    Object.assign(service, {
+      upstreamClient: { callTool, close: vi.fn(async () => undefined) },
+    });
+
+    const bridge = service as unknown as {
+      dispatchBridgeOperation: (
+        operation: unknown,
+        params: unknown,
+      ) => Promise<unknown>;
+    };
+    await bridge.dispatchBridgeOperation("tools/call", {
+      name: "pwrsnap_image_edit_send",
+      arguments: { captureId: "cap-1", instruction: "Add an arrow" },
+    });
+
+    expect(callTool).toHaveBeenCalledWith(
+      {
+        name: "pwrsnap_image_edit_send",
+        arguments: { captureId: "cap-1", instruction: "Add an arrow" },
+      },
+      undefined,
+      { timeout: 720_000 },
+    );
+  });
 });

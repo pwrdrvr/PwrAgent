@@ -26,6 +26,7 @@ import {
 } from "@pwragent/shared";
 import { getMainLogger } from "../log";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
+import { MCP_CONNECTION_TOOL_TIMEOUT_MS } from "./mcp-connection-timeouts";
 
 const connectionLog = getMainLogger("pwragent:mcp-connections");
 const PWRSNAP_MCP_URL = new URL("http://127.0.0.1:51729/mcp");
@@ -856,7 +857,7 @@ export class PwrSnapConnectionService {
 
   private handleBridgeSocket(socket: Socket): void {
     socket.setEncoding("utf8");
-    socket.setTimeout(30_000, () => socket.destroy());
+    socket.setTimeout(MCP_CONNECTION_TOOL_TIMEOUT_MS, () => socket.destroy());
     let buffer = "";
     socket.on("data", (chunk: string) => {
       buffer += chunk;
@@ -919,7 +920,11 @@ export class PwrSnapConnectionService {
       case "tools/list":
         return await client.listTools(values);
       case "tools/call":
-        return await client.callTool(values as Parameters<Client["callTool"]>[0]);
+        return await client.callTool(
+          values as Parameters<Client["callTool"]>[0],
+          undefined,
+          { timeout: MCP_CONNECTION_TOOL_TIMEOUT_MS },
+        );
       case "resources/list":
         return await client.listResources(values);
       case "resources/templates/list":

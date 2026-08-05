@@ -11,8 +11,8 @@ import {
   ReadResourceRequestSchema,
   type ServerCapabilities,
 } from "@modelcontextprotocol/sdk/types.js";
+import { MCP_CONNECTION_TOOL_TIMEOUT_MS } from "./mcp-connection-timeouts.js";
 
-const REQUEST_TIMEOUT_MS = 60_000;
 // Resource reads can carry a full-resolution screenshot as base64. Keep the
 // local framing bound finite without rejecting ordinary high-DPI captures.
 const MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
@@ -53,7 +53,7 @@ class ConnectionRpcClient {
       };
       const timeout = setTimeout(
         () => finish(new Error("PwrAgent MCP bridge timed out.")),
-        REQUEST_TIMEOUT_MS,
+        MCP_CONNECTION_TOOL_TIMEOUT_MS,
       );
       socket.setEncoding("utf8");
       socket.on("connect", () => {
