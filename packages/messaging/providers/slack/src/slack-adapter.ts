@@ -1341,7 +1341,7 @@ export class SlackAdapter implements SlackProviderAdapter {
     } catch (error) {
       const rateLimit = this.emitRateLimitFromError(
         error,
-        { channelId: params.target.channelId },
+        params.target,
         { retryable: !deliveredAny },
       );
       return {
@@ -1550,8 +1550,15 @@ export class SlackAdapter implements SlackProviderAdapter {
     };
   }
 
-  private rateLimitScopeForTarget(target: { channelId: string }): MessagingDeliveryScope {
-    const isDm = target.channelId.startsWith("D");
+  private rateLimitScopeForTarget(target: {
+    channelId: string;
+    channelRef?: MessagingChannelRef;
+  }): MessagingDeliveryScope {
+    const conversation = target.channelRef?.conversation;
+    const isDm =
+      conversation?.kind === "dm"
+      || conversation?.isDirectMessage === true
+      || target.channelId.startsWith("D");
     return {
       platform: this.channel,
       id: `slack:channel:${target.channelId}`,
@@ -1571,7 +1578,7 @@ export class SlackAdapter implements SlackProviderAdapter {
 
   private emitRateLimitFromError(
     error: unknown,
-    target: { channelId: string },
+    target: { channelId: string; channelRef?: MessagingChannelRef },
     options?: { retryable?: boolean },
   ): MessagingRateLimitInfo | undefined {
     const retryAfterMs = retryAfterMsFromError(error);

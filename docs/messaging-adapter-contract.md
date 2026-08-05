@@ -147,6 +147,20 @@ the private delivery succeeds. Resolver and delivery failure leave source
 delivery unchanged. Adapters must revalidate the actor identifier at this
 boundary and reject bot actors or unsupported conversation types explicitly.
 
+Codex dynamic tool catalogs are fixed when a thread starts. For older threads
+whose catalog predates `send_private_response`, an explicit natural-language
+private-response request (for example, "DM me") activates a controller-owned
+compatibility path: source prose and working updates are suppressed, and the
+turn's final answer is delivered to the recorded actor through the same private
+resolver. If that fallback delivery fails, the private content remains withheld
+and the source receives only a generic delivery error.
+
+Before reporting private-delivery success, the controller cancels queued and
+in-flight source streams, prose, and tool updates. Adapters may still complete a
+delivery after cancellation, so any late surface returned by `deliver` must be
+retracted through `dismissSurface`; private success is withheld when an existing
+source surface cannot be dismissed.
+
 Slack resolves the requesting user ID as the initial direct-message target;
 `chat.postMessage` opens the bot's 1:1 conversation when needed and returns the
 durable `D...` conversation ID in its delivery result. This uses the existing

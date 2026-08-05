@@ -294,6 +294,21 @@ type MessagingTurnProseState = {
 const DEFAULT_MESSAGING_AGENT_NAME = "Messaging Agent";
 const DEFAULT_MESSAGING_AGENT_INSTRUCTIONS =
   "You are an Agent thread created from messaging. Keep shared context for the attached messaging surfaces and use available Agent tools when they are relevant.";
+const PRIVATE_RESPONSE_FALLBACK_INSTRUCTION =
+  "PwrAgent detected an explicit request for a private terminal response. "
+  + "Do not include sensitive response content in commentary or working updates. "
+  + "Use send_private_response if it is available. If that tool is unavailable, "
+  + "put the intended private content only in your final answer; PwrAgent will "
+  + "deliver that final privately and suppress it on the source surface.";
+const EXPLICIT_PRIVATE_RESPONSE_REQUEST_PATTERN = new RegExp(
+  [
+    "\\b(?:dm|direct[\\s-]+message|private[\\s-]+message)\\s+me\\b",
+    "\\bsend\\s+me(?:\\s+\\S+){0,3}\\s+(?:dm|direct[\\s-]+message|private[\\s-]+message)\\b",
+    "\\b(?:send|reply|respond)(?:\\s+\\S+){0,6}\\s+privately\\b",
+    "\\bsend(?:\\s+\\S+){0,6}\\s+(?:only|just)\\s+to\\s+me\\b",
+  ].join("|"),
+  "i",
+);
 const ACTIVE_TURN_HANDOFF_ERROR =
   "Worktree/local migration is not available while a turn is in progress. Resubmit when the turn completes.";
 
@@ -773,6 +788,16 @@ export class MessagingController {
     string,
     MessagingCancellationSignal
   >();
+  private readonly workingUpdateCancellationSignals = new Map<
+    string,
+    MessagingCancellationSignal
+  >();
+  private readonly workingUpdateDeliveries = new Map<string, Set<Promise<void>>>();
+  private readonly workingUpdateSurfaces = new Map<
+    string,
+    Map<string, MessagingSurfaceRef>
+  >();
+  private readonly workingUpdateCancellationFailures = new Set<string>();
   private readonly automationTurnsByTurnKey = new Map<
     string,
     AutomationTurnMessagingContext
@@ -782,6 +807,8 @@ export class MessagingController {
     ActiveAgentMessagingOrigin
   >();
   private readonly terminalPrivateResponseTurnKeys = new Set<string>();
+  private readonly privateResponseFallbackTurnKeys = new Set<string>();
+  private readonly attemptedPrivateResponseFallbackTurnKeys = new Set<string>();
   private readonly queuedAgentMessagingOriginsByQueueKey = new Map<
     string,
     ActiveAgentMessagingOrigin
@@ -1508,11 +1535,18 @@ export class MessagingController {
         }
       }
 
-      const suppressSourceResponse = this.isTerminalPrivateResponseTurn(
+      const terminalPrivateResponse = this.isTerminalPrivateResponseTurn(
         event.backend,
         binding.threadId,
         eventTurnId ?? activeTurn?.turnId,
       );
+      const privateResponseFallback = this.isPrivateResponseFallbackTurn(
+        event.backend,
+        binding.threadId,
+        eventTurnId ?? activeTurn?.turnId,
+      );
+      const suppressSourceResponse =
+        terminalPrivateResponse || privateResponseFallback;
       if (!suppressSourceResponse) {
         await this.deliverToolActivityForBackendEvent(
           event,
@@ -1540,12 +1574,30 @@ export class MessagingController {
           (isThreadStatusIdleEvent(event) && activeTurn))
       ) {
         const terminalTurnId = turnIdForBackendEvent(event) ?? activeTurn?.turnId;
-        await this.flushToolUpdatesForBinding(binding, {
-          clear: true,
-          turnId: terminalTurnId,
-        });
+        if (suppressSourceResponse && terminalTurnId) {
+          this.toolUpdatePolicy.flush({
+            bindingId: binding.id,
+            clear: true,
+            turnId: terminalTurnId,
+          });
+        } else {
+          await this.flushToolUpdatesForBinding(binding, {
+            clear: true,
+            turnId: terminalTurnId,
+          });
+        }
         if (terminalTurnId) {
           this.clearTurnProse(binding.id, terminalTurnId);
+          if (!privateResponseFallback) {
+            const workingUpdateKey = this.turnProseKey(
+              binding.id,
+              terminalTurnId,
+            );
+            this.workingUpdateCancellationSignals.delete(workingUpdateKey);
+            this.workingUpdateDeliveries.delete(workingUpdateKey);
+            this.workingUpdateSurfaces.delete(workingUpdateKey);
+            this.workingUpdateCancellationFailures.delete(workingUpdateKey);
+          }
         }
       }
 
@@ -1559,7 +1611,22 @@ export class MessagingController {
       const assistantText = standaloneReviewAssistantText ?? (
         isFinalReviewAssistant ? undefined : rawAssistantText
       );
-      if (assistantText && !suppressSourceResponse) {
+      if (
+        assistantText
+        && privateResponseFallback
+        && !terminalPrivateResponse
+        && !isNonFinalAssistantTextForBackendEvent(event)
+      ) {
+        const fallbackTurnId = eventTurnId ?? activeTurn?.turnId;
+        if (fallbackTurnId) {
+          await this.deliverPrivateResponseFallback({
+            binding,
+            event,
+            text: assistantText,
+            turnId: fallbackTurnId,
+          });
+        }
+      } else if (assistantText && !suppressSourceResponse) {
         if (
           !isNonFinalAssistantTextForBackendEvent(event)
           && !isTaskMonitorProgressEvent(event)
@@ -3352,6 +3419,16 @@ export class MessagingController {
     const previewParts: string[] = [];
     const rejections: MessagingAttachmentRejection[] = [];
     const pdfHandling = await this.resolveMessagingPdfHandling(binding);
+    const privateResponseRequested = events.some(
+      (turnEvent) => requestsExplicitPrivateResponse(turnEvent),
+    );
+
+    if (privateResponseRequested) {
+      input.push({
+        type: "text",
+        text: PRIVATE_RESPONSE_FALLBACK_INSTRUCTION,
+      });
+    }
 
     for (const turnEvent of events) {
       if (turnEvent.kind === "text") {
@@ -5504,7 +5581,7 @@ export class MessagingController {
           && isVisibleAssistantStreamDelivery(cancelledResult)
           && !isSameMessagingSurface(cancelledResult.surface, buffer.surface)
         ) {
-          const dismissed = await this.dismissAssistantStreamSurface(
+          const dismissed = await this.dismissTerminalPrivateResponseSurface(
             binding,
             buffer.turnId,
             cancelledResult.surface,
@@ -5624,7 +5701,7 @@ export class MessagingController {
       }
     }
     for (const surface of surfaces.values()) {
-      const dismissed = await this.dismissAssistantStreamSurface(
+      const dismissed = await this.dismissTerminalPrivateResponseSurface(
         binding,
         turnId,
         surface,
@@ -5641,7 +5718,80 @@ export class MessagingController {
     return cancelledCleanly;
   }
 
-  private async dismissAssistantStreamSurface(
+  private ensureWorkingUpdateCancellationSignal(
+    binding: MessagingBindingRecord,
+    turnId: string,
+  ): MessagingCancellationSignal {
+    const key = this.turnProseKey(binding.id, turnId);
+    const existing = this.workingUpdateCancellationSignals.get(key);
+    if (existing) {
+      return existing;
+    }
+    let cancelled = this.isTerminalPrivateResponseTurn(
+      binding.backend,
+      binding.threadId,
+      turnId,
+    );
+    let resolveCancellation!: () => void;
+    const whenCancelled = new Promise<void>((resolve) => {
+      resolveCancellation = resolve;
+    });
+    const cancellation: MessagingCancellationSignal = {
+      cancel: () => {
+        if (cancelled) {
+          return;
+        }
+        cancelled = true;
+        resolveCancellation();
+      },
+      isCancelled: () =>
+        cancelled
+        || this.isTerminalPrivateResponseTurn(
+          binding.backend,
+          binding.threadId,
+          turnId,
+        ),
+      whenCancelled,
+    };
+    if (cancelled) {
+      resolveCancellation();
+    }
+    this.workingUpdateCancellationSignals.set(key, cancellation);
+    return cancellation;
+  }
+
+  private async cancelWorkingUpdatesForTurn(
+    binding: MessagingBindingRecord,
+    turnId: string,
+  ): Promise<boolean> {
+    const key = this.turnProseKey(binding.id, turnId);
+    this.workingUpdateCancellationFailures.delete(key);
+    this.workingUpdateCancellationSignals.get(key)?.cancel();
+    await Promise.allSettled(this.workingUpdateDeliveries.get(key) ?? []);
+
+    const surfaces = this.workingUpdateSurfaces.get(key);
+    if (surfaces) {
+      for (const surface of surfaces.values()) {
+        const dismissed = await this.dismissTerminalPrivateResponseSurface(
+          binding,
+          turnId,
+          surface,
+        );
+        if (!dismissed) {
+          this.workingUpdateCancellationFailures.add(key);
+        }
+      }
+    }
+
+    const cancelledCleanly = !this.workingUpdateCancellationFailures.has(key);
+    this.workingUpdateCancellationFailures.delete(key);
+    this.workingUpdateCancellationSignals.delete(key);
+    this.workingUpdateDeliveries.delete(key);
+    this.workingUpdateSurfaces.delete(key);
+    return cancelledCleanly;
+  }
+
+  private async dismissTerminalPrivateResponseSurface(
     binding: MessagingBindingRecord,
     turnId: string,
     surface: MessagingSurfaceRef,
@@ -5649,7 +5799,7 @@ export class MessagingController {
     try {
       const result = await this.deliver(
         {
-          id: this.newIntentId("assistant-stream-private-response-dismiss"),
+          id: this.newIntentId("private-response-source-dismiss"),
           kind: "dismiss",
           bindingId: binding.id,
           createdAt: this.now(),
@@ -5662,7 +5812,7 @@ export class MessagingController {
       if (result.outcome === "dismissed") {
         return true;
       }
-      this.logger.warn?.("messaging private response stream dismissal failed", {
+      this.logger.warn?.("messaging private response source dismissal failed", {
         bindingId: binding.id,
         errorMessage: result.errorMessage,
         outcome: result.outcome,
@@ -5672,7 +5822,7 @@ export class MessagingController {
       });
       return false;
     } catch (error) {
-      this.logger.warn?.("messaging private response stream dismissal failed", {
+      this.logger.warn?.("messaging private response source dismissal failed", {
         bindingId: binding.id,
         error: error instanceof Error ? error.message : String(error),
         surfaceId: surface.id,
@@ -5986,11 +6136,20 @@ export class MessagingController {
     this.completedTaskMonitorTurns.clear();
     this.activeAgentMessagingOriginsByTurnKey.clear();
     this.terminalPrivateResponseTurnKeys.clear();
+    this.privateResponseFallbackTurnKeys.clear();
+    this.attemptedPrivateResponseFallbackTurnKeys.clear();
     this.assistantStreamCancellationFailures.clear();
     for (const cancellation of this.assistantStreamCancellationSignals.values()) {
       cancellation.cancel();
     }
     this.assistantStreamCancellationSignals.clear();
+    this.workingUpdateCancellationFailures.clear();
+    for (const cancellation of this.workingUpdateCancellationSignals.values()) {
+      cancellation.cancel();
+    }
+    this.workingUpdateCancellationSignals.clear();
+    this.workingUpdateDeliveries.clear();
+    this.workingUpdateSurfaces.clear();
     this.queuedAgentMessagingOriginsByQueueKey.clear();
   }
 
@@ -13656,12 +13815,13 @@ export class MessagingController {
     ) {
       return;
     }
+    const turnKey = agentMessagingTurnKey(
+      params.binding.backend,
+      params.binding.threadId,
+      params.turnId,
+    );
     this.activeAgentMessagingOriginsByTurnKey.set(
-      agentMessagingTurnKey(
-        params.binding.backend,
-        params.binding.threadId,
-        params.turnId,
-      ),
+      turnKey,
       {
         binding: isDefaultAgentRouteBinding(params.binding)
           ? undefined
@@ -13672,6 +13832,9 @@ export class MessagingController {
         event: params.event,
       },
     );
+    if (requestsExplicitPrivateResponse(params.event)) {
+      rememberBoundedKey(this.privateResponseFallbackTurnKeys, turnKey);
+    }
   }
 
   private forgetAgentMessagingOrigin(
@@ -13697,6 +13860,19 @@ export class MessagingController {
     );
   }
 
+  private isPrivateResponseFallbackTurn(
+    backend: AppServerBackendKind,
+    threadId: ThreadIdentifier,
+    turnId: string | undefined,
+  ): boolean {
+    return Boolean(
+      turnId
+      && this.privateResponseFallbackTurnKeys.has(
+        agentMessagingTurnKey(backend, threadId, turnId),
+      ),
+    );
+  }
+
   private rememberQueuedAgentMessagingOrigin(params: {
     binding: MessagingBindingRecord;
     event?: MessagingInboundEvent;
@@ -13709,12 +13885,13 @@ export class MessagingController {
     ) {
       return;
     }
+    const queueKey = agentMessagingQueueKey(
+      params.binding.backend,
+      params.binding.threadId,
+      params.queueEntryId,
+    );
     this.queuedAgentMessagingOriginsByQueueKey.set(
-      agentMessagingQueueKey(
-        params.binding.backend,
-        params.binding.threadId,
-        params.queueEntryId,
-      ),
+      queueKey,
       {
         binding: isDefaultAgentRouteBinding(params.binding)
           ? undefined
@@ -13746,14 +13923,18 @@ export class MessagingController {
     }
     if (params.update.status === "started" && params.update.turnId) {
       this.queuedAgentMessagingOriginsByQueueKey.delete(queueKey);
+      const turnKey = agentMessagingTurnKey(
+        params.backend,
+        params.threadId,
+        params.update.turnId,
+      );
       this.activeAgentMessagingOriginsByTurnKey.set(
-        agentMessagingTurnKey(
-          params.backend,
-          params.threadId,
-          params.update.turnId,
-        ),
+        turnKey,
         origin,
       );
+      if (requestsExplicitPrivateResponse(origin.event)) {
+        rememberBoundedKey(this.privateResponseFallbackTurnKeys, turnKey);
+      }
       const activeTurn: MessagingActiveTurnSummary = {
         turnId: params.update.turnId,
         status: "working",
@@ -14748,9 +14929,13 @@ export class MessagingController {
     delivery: MessagingToolUpdatePolicyDelivery,
     knownBinding?: MessagingBindingRecord,
   ): Promise<void> {
-    const isCancelled = () =>
+    const cancellationKey = this.turnProseKey(
+      delivery.bindingId,
+      delivery.turnId,
+    );
+    const isTaskMonitorCancelled = () =>
       this.isTaskMonitorTurnComplete(delivery.bindingId, delivery.turnId);
-    if (isCancelled()) {
+    if (isTaskMonitorCancelled()) {
       return;
     }
     const binding =
@@ -14783,7 +14968,59 @@ export class MessagingController {
             id: this.newIntentId("tool-update-batch"),
           });
     this.markProseActivitiesDelivered({ ...delivery, activities });
-    await this.deliver(intent, binding, undefined, { isCancelled });
+    const cancellation = this.ensureWorkingUpdateCancellationSignal(
+      binding,
+      delivery.turnId,
+    );
+    const guardedIsCancelled = () =>
+      isTaskMonitorCancelled() || cancellation.isCancelled();
+    const deliveryPromise = (async () => {
+      const result = await this.deliver(intent, binding, undefined, {
+        isCancelled: guardedIsCancelled,
+        whenCancelled: cancellation.whenCancelled,
+        onCancelledDelivery: async (cancelledResult) => {
+          if (
+            cancelledResult.surface
+            && isVisibleAssistantStreamDelivery(cancelledResult)
+          ) {
+            const dismissed = await this.dismissTerminalPrivateResponseSurface(
+              binding,
+              delivery.turnId,
+              cancelledResult.surface,
+            );
+            if (!dismissed) {
+              this.workingUpdateCancellationFailures.add(cancellationKey);
+            }
+          }
+        },
+      });
+      if (
+        !guardedIsCancelled()
+        && result.surface
+        && isVisibleAssistantStreamDelivery(result)
+      ) {
+        let surfaces = this.workingUpdateSurfaces.get(cancellationKey);
+        if (!surfaces) {
+          surfaces = new Map();
+          this.workingUpdateSurfaces.set(cancellationKey, surfaces);
+        }
+        surfaces.set(messagingSurfaceKey(result.surface), result.surface);
+      }
+    })();
+    let deliveries = this.workingUpdateDeliveries.get(cancellationKey);
+    if (!deliveries) {
+      deliveries = new Set();
+      this.workingUpdateDeliveries.set(cancellationKey, deliveries);
+    }
+    deliveries.add(deliveryPromise);
+    try {
+      await deliveryPromise;
+    } finally {
+      deliveries.delete(deliveryPromise);
+      if (deliveries.size === 0) {
+        this.workingUpdateDeliveries.delete(cancellationKey);
+      }
+    }
   }
 
   private filterUndeliveredProseActivities(
@@ -14840,6 +15077,49 @@ export class MessagingController {
     if (!result.surface) {
       state.deliveredIds.delete(latest.activityId);
     }
+  }
+
+  private async deliverPrivateResponseFallback(params: {
+    binding: MessagingBindingRecord;
+    event: AgentEvent;
+    text: string;
+    turnId: string;
+  }): Promise<void> {
+    const turnKey = agentMessagingTurnKey(
+      params.event.backend,
+      params.binding.threadId,
+      params.turnId,
+    );
+    if (this.attemptedPrivateResponseFallbackTurnKeys.has(turnKey)) {
+      return;
+    }
+    rememberBoundedKey(this.attemptedPrivateResponseFallbackTurnKeys, turnKey);
+
+    const response = await this.sendPrivateResponseFromAgentMessagingOrigin({
+      operation: "send_private_response",
+      context: {
+        backend: params.event.backend,
+        threadId: params.binding.threadId,
+        turnId: params.turnId,
+      },
+      args: { text: params.text },
+    });
+    if (response.ok) {
+      return;
+    }
+    rememberBoundedKey(this.privateResponseFallbackTurnKeys, turnKey);
+
+    await this.deliver(
+      buildErrorIntent({
+        id: this.newIntentId("private-response-fallback-failed"),
+        createdAt: this.now(),
+        title: "Private response not delivered",
+        body:
+          "PwrAgent withheld the response from this conversation because it could not confirm private delivery. Try the request again or DM the bot directly.",
+        recoverable: true,
+      }),
+      params.binding,
+    );
   }
 
   private async attachThreadHereFromAgentMessagingOrigin(
@@ -15012,6 +15292,13 @@ export class MessagingController {
         },
       };
     }
+    const turnKey = agentMessagingTurnKey(
+      request.context.backend,
+      request.context.threadId,
+      request.context.turnId,
+    );
+    this.privateResponseFallbackTurnKeys.delete(turnKey);
+    rememberBoundedKey(this.attemptedPrivateResponseFallbackTurnKeys, turnKey);
     const origin = await this.resolveAgentMessagingOrigin(request.context);
     if (!origin.ok) {
       return origin;
@@ -15111,13 +15398,9 @@ export class MessagingController {
       };
     }
 
-    const turnKey = agentMessagingTurnKey(
-      request.context.backend,
-      request.context.threadId,
-      request.context.turnId,
-    );
     rememberBoundedKey(this.terminalPrivateResponseTurnKeys, turnKey);
     let sourceStreamsCancelled = true;
+    let sourceWorkingUpdatesCancelled = true;
     if (sourceBinding) {
       this.toolUpdatePolicy.flush({
         bindingId: sourceBinding.id,
@@ -15125,18 +15408,24 @@ export class MessagingController {
         turnId: request.context.turnId,
       });
       this.clearTurnProse(sourceBinding.id, request.context.turnId);
-      sourceStreamsCancelled = await this.cancelAssistantStreamsForTurn(
-        sourceBinding,
-        request.context.turnId,
-      );
+      [sourceStreamsCancelled, sourceWorkingUpdatesCancelled] = await Promise.all([
+        this.cancelAssistantStreamsForTurn(
+          sourceBinding,
+          request.context.turnId,
+        ),
+        this.cancelWorkingUpdatesForTurn(
+          sourceBinding,
+          request.context.turnId,
+        ),
+      ]);
     }
-    if (!sourceStreamsCancelled) {
+    if (!sourceStreamsCancelled || !sourceWorkingUpdatesCancelled) {
       return {
         ok: false,
         error: {
           code: "internal_error",
           message:
-            "The private response was delivered, but an existing source stream could not be retracted. Further source output remains suppressed.",
+            "The private response was delivered, but existing source output could not be fully retracted. Further source output remains suppressed.",
         },
       };
     }
@@ -19223,6 +19512,24 @@ function messageOriginForInboundEvent(
       },
     },
   };
+}
+
+function requestsExplicitPrivateResponse(
+  event: MessagingInboundEvent | MessagingTurnInputEvent,
+): boolean {
+  if (!("text" in event) || typeof event.text !== "string") {
+    return false;
+  }
+  const text = event.text.trim();
+  if (!text) {
+    return false;
+  }
+  const request = EXPLICIT_PRIVATE_RESPONSE_REQUEST_PATTERN.exec(text);
+  if (!request) {
+    return false;
+  }
+  const prefix = text.slice(Math.max(0, request.index - 18), request.index);
+  return !/\b(?:do\s+not|don't|never|not)\s*$/i.test(prefix);
 }
 
 function describeConversation(

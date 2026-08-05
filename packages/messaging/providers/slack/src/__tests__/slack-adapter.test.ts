@@ -482,7 +482,7 @@ describe("SlackAdapter", () => {
       throw new Error("Expected a resolved private Slack conversation");
     }
 
-    await expect(adapter.deliver({
+    const privateIntent = {
       id: "private-response",
       kind: "message",
       createdAt: 1,
@@ -505,7 +505,14 @@ describe("SlackAdapter", () => {
         id: "private-response-target",
         state: resolved.routingState,
       },
-    })).resolves.toMatchObject({
+    } satisfies MessagingSurfaceIntent;
+    expect(adapter.resolveDeliveryScope(privateIntent)).toMatchObject({
+      budget: { limit: 60, reserved: 0 },
+      kind: "dm",
+      label: "Slack DM",
+    });
+
+    await expect(adapter.deliver(privateIntent)).resolves.toMatchObject({
       channel: "slack",
       continuation: {
         channel: {

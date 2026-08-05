@@ -148,6 +148,13 @@ private delivery suppresses the source-conversation final response. Provider
 user IDs and DM routing remain validated and opaque inside the adapter; the
 Agent cannot select an arbitrary recipient.
 
+Because Codex fixes a thread's dynamic-tool catalog at thread creation, the
+controller also recognizes explicit private-response requests as a compatibility
+path for older threads. It suppresses source output from the start of the turn
+and privately delivers the final answer to the recorded actor. A failed fallback
+withholds that answer and emits only a generic source error; an explicit tool
+attempt keeps the tool's normal success/failure semantics.
+
 Private messages carry controller-generated Agent attribution rather than a
 provider-specific sender-name override. When delivery returns a normalized
 reply continuation, the controller persists that exact native thread as a
@@ -160,7 +167,9 @@ user-facing bound/unbound transcript transition. Its normalized conversation
 retains whether it lives inside a 1:1 DM so replies bypass shared-channel
 authorization and mention-only response policy. Terminal private delivery also
 clears provider activity on both the source and continuation surfaces and
-suppresses later work events from re-arming that activity.
+suppresses later work events from re-arming that activity. Before it reports
+success, the controller cancels queued and in-flight source streams, prose, and
+tool updates and retracts any surface returned after cancellation.
 
 ## 1:1 controller:adapter mapping
 

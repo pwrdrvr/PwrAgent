@@ -1720,11 +1720,15 @@ describe("MessagingController", () => {
   async function createSlackPrivateResponseHarness(options?: {
     deliveryBudget?: MessagingDeliveryBudget;
     deliver?: (intent: MessagingSurfaceIntent) => Promise<MessagingDeliveryResult>;
+    inboundText?: string;
     now?: () => number;
     resolveDeliveryScope?: MessagingAdapter["resolveDeliveryScope"];
     responseModeForConversation?: MessagingControllerOptions["responseModeForConversation"];
     sleepUntil?: MessagingControllerOptions["sleepUntil"];
     streamingResponsesDefault?: boolean;
+    toolUpdateDefaultMode?:
+      | MessagingToolUpdateMode
+      | ((targetKind: "thread" | "agent_thread") => MessagingToolUpdateMode);
   }) {
     const channel = {
       channel: "slack" as const,
@@ -1821,6 +1825,9 @@ describe("MessagingController", () => {
       ...(options?.streamingResponsesDefault === undefined
         ? {}
         : { streamingResponsesDefault: options.streamingResponsesDefault }),
+      ...(options?.toolUpdateDefaultMode
+        ? { toolUpdateDefaultMode: options.toolUpdateDefaultMode }
+        : {}),
     });
     harnessDelivered = harness.delivered;
     await harness.store.upsertBinding({
@@ -1835,7 +1842,7 @@ describe("MessagingController", () => {
       updatedAt: 1000,
     });
     await harness.controller.handleInboundEvent(
-      buildTextEvent("DM me the AWS SSO link and code", {
+      buildTextEvent(options?.inboundText ?? "DM me the AWS SSO link and code", {
         botMention: true,
         channel,
         routingState: { opaque: { channelId: "C012SIGNALS" } },
@@ -2017,10 +2024,66 @@ describe("MessagingController", () => {
     );
   });
 
+  it("privately delivers an explicit DM request when the thread lacks the tool", async () => {
+    const { harness } = await createSlackPrivateResponseHarness();
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: expect.arrayContaining([
+          expect.objectContaining({
+            text: expect.stringContaining(
+              "If that tool is unavailable",
+            ),
+            type: "text",
+          }),
+        ]),
+      }),
+    );
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [{
+              type: "text",
+              text: "Open the AWS SSO URL and enter `PRIVATE-CODE`.",
+            }],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(
+      harness.delivered.filter((intent) => intent.kind === "message"),
+    ).toEqual([
+      expect.objectContaining({
+        attribution: expect.objectContaining({
+          label: "Signals Agent · Private response",
+        }),
+        parts: [expect.objectContaining({
+          text: expect.stringContaining("PRIVATE-CODE"),
+        })],
+      }),
+    ]);
+    expect(
+      harness.delivered.filter(
+        (intent) =>
+          intent.kind === "message"
+          && intent.audit?.channel.conversation.id === "C012SIGNALS",
+      ),
+    ).toEqual([]);
+  });
+
   it("dismisses an existing source stream before private delivery succeeds", async () => {
     let now = 1000;
     const delivered: MessagingSurfaceIntent[] = [];
     const { harness } = await createSlackPrivateResponseHarness({
+      inboundText: "Help me with the AWS SSO link and code",
       now: () => now,
       streamingResponsesDefault: true,
       deliver: async (intent) => {
@@ -2124,6 +2187,7 @@ describe("MessagingController", () => {
     });
     const delivered: MessagingSurfaceIntent[] = [];
     const { harness } = await createSlackPrivateResponseHarness({
+      inboundText: "Help me with the AWS SSO link and code",
       now: () => now,
       streamingResponsesDefault: true,
       deliver: async (intent) => {
@@ -2259,6 +2323,7 @@ describe("MessagingController", () => {
     const delivered: MessagingSurfaceIntent[] = [];
     const { harness } = await createSlackPrivateResponseHarness({
       deliveryBudget,
+      inboundText: "Help me with the AWS SSO link and code",
       now: () => now,
       resolveDeliveryScope: () => scope,
       sleepUntil: async () => {
@@ -2325,6 +2390,133 @@ describe("MessagingController", () => {
         parts: [expect.objectContaining({ text: "Private AWS SSO instructions." })],
       }),
     ]);
+  });
+
+  it("retracts an in-flight working update before private success", async () => {
+    let releaseWorkingUpdate!: () => void;
+    let resolveWorkingUpdateStarted!: () => void;
+    const workingUpdateStarted = new Promise<void>((resolve) => {
+      resolveWorkingUpdateStarted = resolve;
+    });
+    const workingUpdateRelease = new Promise<void>((resolve) => {
+      releaseWorkingUpdate = resolve;
+    });
+    const delivered: MessagingSurfaceIntent[] = [];
+    const { harness } = await createSlackPrivateResponseHarness({
+      inboundText: "Help me with the AWS SSO link and code",
+      toolUpdateDefaultMode: "show_all",
+      deliver: async (intent) => {
+        delivered.push(intent);
+        if (intent.id.startsWith("tool-update")) {
+          resolveWorkingUpdateStarted();
+          await workingUpdateRelease;
+          return {
+            channel: "slack",
+            deliveredAt: 1000,
+            outcome: "presented",
+            surface: {
+              channel: "slack",
+              id: "late-working-update",
+              state: {
+                opaque: {
+                  channelId: "C012SIGNALS",
+                  ts: "late-working-update",
+                },
+              },
+            },
+          };
+        }
+        if (intent.kind === "dismiss") {
+          return {
+            channel: "slack",
+            deliveredAt: 1000,
+            outcome: "dismissed",
+          };
+        }
+        const surface = {
+          channel: "slack" as const,
+          id: `surface:${intent.id}`,
+        };
+        return {
+          channel: "slack",
+          continuation: {
+            channel: {
+              channel: "slack",
+              conversation: {
+                id: "D012HAROLD",
+                isDirectMessage: true,
+                kind: "thread" as const,
+                parentConversationId: "D012HAROLD",
+                parentId: surface.id,
+                workspaceId: "T012WORKSPACE",
+              },
+            },
+            routingState: {
+              opaque: {
+                channelId: "D012HAROLD",
+                teamId: "T012WORKSPACE",
+                threadTs: surface.id,
+              },
+            },
+          },
+          deliveredAt: 1000,
+          outcome: "presented" as const,
+          surface,
+        };
+      },
+    });
+
+    const workingUpdate = harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "assistant-setup",
+            type: "agentMessage",
+            phase: "commentary",
+            text: "Preparing the private AWS response.",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+    await workingUpdateStarted;
+
+    const privateRequest = harness.controller.handlePwrAgentMessagingRequest({
+      operation: "send_private_response",
+      context: {
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-1",
+      },
+      args: { text: "Private AWS SSO instructions." },
+    });
+    await vi.waitFor(() => {
+      expect(
+        delivered.some(
+          (intent) =>
+            intent.kind === "message"
+            && intent.parts.some(
+              (part) => part.type === "text" && part.text.includes("Private AWS"),
+            ),
+        ),
+      ).toBe(true);
+    });
+    releaseWorkingUpdate();
+    const [, response] = await Promise.all([workingUpdate, privateRequest]);
+
+    expect(response).toMatchObject({ ok: true });
+    expect(delivered).toContainEqual(
+      expect.objectContaining({
+        kind: "dismiss",
+        reason: "terminal_private_response",
+        targetSurface: expect.objectContaining({
+          id: "late-working-update",
+        }),
+      }),
+    );
   });
 
   it("keeps the source response when private delivery is unavailable", async () => {
