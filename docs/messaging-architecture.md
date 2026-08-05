@@ -1,5 +1,10 @@
 # Messaging Architecture
 
+Scheduled messages use the shared main-process ownership model documented in
+[Scheduled thread actions](scheduled-thread-actions.md). Messaging surfaces
+create and manage the same durable records as the desktop composer; adapters do
+not keep their own timers or queues for scheduled sends.
+
 How the messaging system is layered, where types live, how messages flow, and how the capability-profile system lets providers declare their constraints without producers ever branching on platform names.
 
 For setup and operator-facing commands see [`docs/messaging-platform-integration.md`](messaging-platform-integration.md). For the adapter contract that platform implementers must satisfy see [`docs/messaging-adapter-contract.md`](messaging-adapter-contract.md). For package boundary enforcement see [`packages/messaging/AGENTS.md`](../packages/messaging/AGENTS.md).

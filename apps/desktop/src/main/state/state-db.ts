@@ -9,7 +9,7 @@ import {
 } from "@pwragent/shared";
 import { getNativeBinding } from "./native-binding.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 38;
+export const CURRENT_STATE_DB_USER_VERSION = 40;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -408,6 +408,33 @@ CREATE TABLE IF NOT EXISTS automation_run_artifacts (
 );
 CREATE INDEX IF NOT EXISTS idx_automation_run_artifacts_automation_updated
   ON automation_run_artifacts(automation_id, updated_at DESC);
+`;
+
+const SCHEDULED_THREAD_ACTION_SCHEMA = `
+CREATE TABLE IF NOT EXISTS scheduled_thread_actions (
+  action_id       TEXT PRIMARY KEY,
+  backend         TEXT NOT NULL,
+  thread_id       TEXT NOT NULL,
+  kind            TEXT NOT NULL,
+  origin          TEXT NOT NULL,
+  status          TEXT NOT NULL,
+  scheduled_for   INTEGER NOT NULL,
+  queue_entry_id  TEXT,
+  turn_id         TEXT,
+  error_message   TEXT,
+  payload_ref     TEXT NOT NULL,
+  claim_owner     TEXT,
+  claim_expires_at INTEGER,
+  created_at      INTEGER NOT NULL,
+  updated_at      INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_scheduled_thread_actions_due
+  ON scheduled_thread_actions(status, scheduled_for, created_at);
+CREATE INDEX IF NOT EXISTS idx_scheduled_thread_actions_thread
+  ON scheduled_thread_actions(backend, thread_id, status, scheduled_for);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_scheduled_thread_actions_queue
+  ON scheduled_thread_actions(queue_entry_id)
+  WHERE queue_entry_id IS NOT NULL;
 `;
 
 const MESSAGING_ACTIVITY_SUMMARY_SCHEMA = `
@@ -1188,6 +1215,18 @@ export class StateDb {
     if ((db.pragma("user_version", { simple: true }) as number) < 38) {
       db.transaction(() => {
         db.exec(FEDERATION_SCHEMA);
+        db.pragma("user_version = 38");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 39) {
+      db.transaction(() => {
+        db.exec(SCHEDULED_THREAD_ACTION_SCHEMA);
+        db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 40) {
+      db.transaction(() => {
+        ensureScheduledThreadActionMetadataColumns(db);
         db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
       })();
     }
@@ -1345,6 +1384,8 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     db.exec(ACP_AGENT_SCHEMA);
     db.exec(ACP_SESSION_SCHEMA);
     db.exec(AUTOMATION_SCHEMA);
+    db.exec(SCHEDULED_THREAD_ACTION_SCHEMA);
+    ensureScheduledThreadActionMetadataColumns(db);
     db.exec(MESSAGING_ACTIVITY_SUMMARY_SCHEMA);
     db.exec(MESSAGING_DEFAULT_AGENT_ASSIGNMENT_SCHEMA);
     db.exec(MESSAGING_OBSERVED_SURFACE_SCHEMA);
@@ -1374,6 +1415,33 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
 CREATE INDEX IF NOT EXISTS idx_app_runtime_instances_profile_cwd_hash
   ON app_runtime_instances(profile_name, cwd_hash, heartbeat_at DESC);
 `);
+}
+
+function ensureScheduledThreadActionMetadataColumns(
+  db: BetterSqlite3.Database,
+): void {
+  const columns = new Set(
+    (db.prepare("PRAGMA table_info(scheduled_thread_actions)").all() as Array<{
+      name: string;
+    }>).map((column) => column.name),
+  );
+  if (!columns.has("turn_id")) {
+    db.exec("ALTER TABLE scheduled_thread_actions ADD COLUMN turn_id TEXT");
+  }
+  if (!columns.has("error_message")) {
+    db.exec("ALTER TABLE scheduled_thread_actions ADD COLUMN error_message TEXT");
+  }
+  if (!columns.has("payload_ref")) {
+    db.exec("ALTER TABLE scheduled_thread_actions ADD COLUMN payload_ref TEXT");
+  }
+  if (!columns.has("claim_owner")) {
+    db.exec("ALTER TABLE scheduled_thread_actions ADD COLUMN claim_owner TEXT");
+  }
+  if (!columns.has("claim_expires_at")) {
+    db.exec(
+      "ALTER TABLE scheduled_thread_actions ADD COLUMN claim_expires_at INTEGER",
+    );
+  }
 }
 
 function ensureThreadUsagePricingProviderScope(db: BetterSqlite3.Database): void {

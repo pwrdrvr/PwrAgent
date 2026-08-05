@@ -54,6 +54,7 @@ describe("federation contracts", () => {
     expect(isFederationInstanceId("x".repeat(121))).toBe(false);
 
     expect(isFederationCapability("remote_window")).toBe(true);
+    expect(isFederationCapability("scheduled_actions")).toBe(true);
     expect(isFederationCapability("unknown")).toBe(false);
   });
 

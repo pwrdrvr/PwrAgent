@@ -9,6 +9,7 @@ import type {
   CancelThreadExecutionModeQueueResponse,
   CompactThreadRequest,
   CompactThreadResponse,
+  CreateScheduledThreadActionRequest,
   EnsureDirectoryLaunchpadRequest,
   EnsureDirectoryLaunchpadResponse,
   HandoffThreadWorkspaceRequest,
@@ -19,6 +20,8 @@ import type {
   FederationTarget,
   ListBackendsRequest,
   ListBackendsResponse,
+  ListScheduledThreadActionsRequest,
+  ListScheduledThreadActionsResponse,
   MaterializeDirectoryLaunchpadOptions,
   MaterializeDirectoryLaunchpadRequest,
   MaterializeDirectoryLaunchpadResponse,
@@ -35,11 +38,14 @@ import type {
   StartReviewResponse,
   StartTurnRequest,
   StartTurnResponse,
+  ScheduledThreadActionIdRequest,
+  ScheduledThreadActionMutationResponse,
   SteerTurnRequest,
   SteerTurnResponse,
   SubmitServerRequestRequest,
   SubmitServerRequestResponse,
   ThreadMessagingBindingTransition,
+  UpdateScheduledThreadActionRequest,
   UpdateDirectoryLaunchpadRequest,
   UpdateDirectoryLaunchpadResponse,
 } from "@pwragent/shared";
@@ -189,6 +195,21 @@ export type MessagingBackendBridge = {
   startTurn(
     request: StartTurnRequest & { messageOrigin?: AppServerThreadMessageOrigin },
   ): Promise<StartTurnResponse>;
+  listScheduledThreadActions?(
+    request?: ListScheduledThreadActionsRequest,
+  ): Promise<ListScheduledThreadActionsResponse>;
+  createScheduledThreadAction?(
+    request: CreateScheduledThreadActionRequest,
+  ): Promise<ScheduledThreadActionMutationResponse>;
+  updateScheduledThreadAction?(
+    request: UpdateScheduledThreadActionRequest,
+  ): Promise<ScheduledThreadActionMutationResponse>;
+  cancelScheduledThreadAction?(
+    request: ScheduledThreadActionIdRequest,
+  ): Promise<ScheduledThreadActionMutationResponse>;
+  sendScheduledThreadActionNow?(
+    request: ScheduledThreadActionIdRequest,
+  ): Promise<ScheduledThreadActionMutationResponse>;
   supportsMessagingPdfTools?(request: {
     backend: AppServerBackendKind;
     threadId: string;

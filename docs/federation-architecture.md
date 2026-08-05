@@ -53,12 +53,18 @@ instance.
 The RPC surface maps navigation and thread reads plus the remote operation
 surface used by desktop windows and messaging. It includes thread creation,
 fork/review, turn start/steer/interrupt/compact, pending-request submission,
-model and execution settings, environment actions, environment setup progress,
-workspace handoff, and explicit directory Git-status refreshes. Directory
-refresh requests carry owner-known directory keys rather than viewer-resolved
-paths; the target instance resolves those keys and runs Git locally. Capability
-checks remain attached to every method, so an older or restricted peer fails
-closed instead of silently executing locally.
+scheduled-action list/create/update/cancel/send-now, model and execution
+settings, environment actions, environment setup progress, workspace handoff,
+and explicit directory Git-status refreshes. Directory refresh requests carry
+owner-known directory keys rather than viewer-resolved paths; the target
+instance resolves those keys and runs Git locally. Scheduled operations require
+the dedicated `scheduled_actions` capability rather than inheriting broad turn
+control. Capability checks remain attached to every method, so an older or
+restricted peer fails closed instead of silently executing locally.
+
+The scheduled-action RPC surface is part of federation protocol v1 while the
+protocol remains under development. Peers must authorize `scheduled_actions`
+explicitly; `turn_control` does not imply scheduler access.
 
 ## Diagnostics
 

@@ -35,6 +35,7 @@ import type {
   ArchiveThreadResponse,
   CancelQueuedTurnRequest,
   CancelQueuedTurnResponse,
+  CreateScheduledThreadActionRequest,
   AppServerListSkillsRequest,
   AppServerListSkillsResponse,
   CheckThreadBranchDriftRequest,
@@ -230,6 +231,8 @@ import type {
   StartThreadMigrationResponse,
   StartTurnRequest,
   StartTurnResponse,
+  ScheduledThreadActionIdRequest,
+  ScheduledThreadActionMutationResponse,
   SubmitServerRequestRequest,
   SubmitServerRequestResponse,
   TrustCodexProjectRequest,
@@ -237,6 +240,7 @@ import type {
   CheckDesktopCodexAuthProfileStatusRequest,
   CheckDesktopCodexAuthProfileStatusResponse,
   UpdateAutomationRequest,
+  UpdateScheduledThreadActionRequest,
   ClearDesktopSettingsSecretRequest,
   CompleteOnboardingCodexBootstrapRequest,
   CompleteOnboardingCodexBootstrapResponse,
@@ -245,6 +249,8 @@ import type {
   ListComposerDraftLatestResponse,
   ListComposerDraftRecoveryCandidatesRequest,
   ListComposerDraftRecoveryCandidatesResponse,
+  ListScheduledThreadActionsRequest,
+  ListScheduledThreadActionsResponse,
   CodexEnvironmentSetupProgressEvent,
   CreateDesktopCodexAuthProfileRequest,
   CreateDesktopCodexAuthProfileResponse,
@@ -518,6 +524,21 @@ export type DesktopApi = {
   cancelQueuedTurn?: (
     request: CancelQueuedTurnRequest,
   ) => Promise<CancelQueuedTurnResponse>;
+  listScheduledThreadActions?: (
+    request?: ListScheduledThreadActionsRequest,
+  ) => Promise<ListScheduledThreadActionsResponse>;
+  createScheduledThreadAction?: (
+    request: CreateScheduledThreadActionRequest,
+  ) => Promise<ScheduledThreadActionMutationResponse>;
+  updateScheduledThreadAction?: (
+    request: UpdateScheduledThreadActionRequest,
+  ) => Promise<ScheduledThreadActionMutationResponse>;
+  cancelScheduledThreadAction?: (
+    request: ScheduledThreadActionIdRequest,
+  ) => Promise<ScheduledThreadActionMutationResponse>;
+  sendScheduledThreadActionNow?: (
+    request: ScheduledThreadActionIdRequest,
+  ) => Promise<ScheduledThreadActionMutationResponse>;
   interruptTurn?: (
     request: InterruptTurnRequest
   ) => Promise<InterruptTurnResponse>;

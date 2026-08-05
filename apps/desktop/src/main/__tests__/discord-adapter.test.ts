@@ -94,6 +94,34 @@ describe("DiscordAdapter", () => {
           description: "Monitor recent PwrAgent threads once per minute.",
           name: "monitor",
         }),
+        createApplicationCommand("cmd-schedule", {
+          description: "Schedule a message for the bound PwrAgent thread.",
+          name: "schedule",
+          options: [
+            {
+              description: "Time and message, such as: 2h Follow up",
+              name: "args",
+              required: true,
+              type: 3,
+            },
+          ],
+        }),
+        createApplicationCommand("cmd-scheduled", {
+          description: "List or manage scheduled PwrAgent messages.",
+          name: "scheduled",
+          options: [
+            {
+              description: "Optional action, such as: cancel abcdef12",
+              name: "args",
+              required: false,
+              type: 3,
+            },
+          ],
+        }),
+        createApplicationCommand("cmd-help", {
+          description: "Show available PwrAgent commands and how to invoke them.",
+          name: "help",
+        }),
       ],
     });
     const adapter = new DiscordAdapter({
@@ -155,7 +183,7 @@ describe("DiscordAdapter", () => {
         name: "resume",
       }),
     );
-    expect(api.createApplicationCommand).toHaveBeenCalledTimes(4);
+    expect(api.createApplicationCommand).toHaveBeenCalledTimes(7);
     expect(api.createApplicationCommand).toHaveBeenCalledWith(
       DISCORD_APP_ID,
       expect.objectContaining({
@@ -199,7 +227,7 @@ describe("DiscordAdapter", () => {
     await adapter.start(async () => {});
 
     expect(api.listApplicationCommands).toHaveBeenCalledWith(DISCORD_APP_ID);
-    expect(api.createApplicationCommand).toHaveBeenCalledTimes(6);
+    expect(api.createApplicationCommand).toHaveBeenCalledTimes(9);
     expect(api.createApplicationCommand).toHaveBeenCalledWith(
       DISCORD_APP_ID,
       expect.objectContaining({

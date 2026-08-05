@@ -146,9 +146,10 @@ requires both.
 A remote window routes its navigation, thread reads, prompt submission,
 steering, interruption, compaction, approvals, model and execution settings,
 environment selection/actions, environment action stop, reviews, forks,
-launchpad materialization, and workspace handoff to the selected instance.
-Backend events and environment setup output stream back with the source
-instance identity.
+scheduled-action list/create/update/cancel/send-now, launchpad materialization,
+and workspace handoff to the selected instance. The owning instance persists,
+times, and dispatches scheduled work. Backend events and environment setup
+output stream back with the source instance identity.
 
 Global thread search fans out metadata queries to connected peers. Remote
 results carry their instance label and open directly in a window scoped to that
@@ -157,9 +158,11 @@ instance.
 Messaging thread browse includes connected remote threads with an instance
 label. Selecting one persists its full federated identity, so prompts, steering,
 interrupts, compaction, settings changes, approvals, status reads, and streamed
-events continue to route to the owning instance. A disconnected remote binding
-remains stored and reports unavailable thread state rather than rebinding to a
-same-named local thread.
+events continue to route to the owning instance. Messaging schedule creation
+and management use the same federated identity and require the peer's
+`scheduled_actions` capability. A disconnected remote binding remains stored
+and reports unavailable thread state rather than rebinding to a same-named
+local thread.
 
 Disconnected or revoked peers remain visible for diagnosis, but Open is
 disabled. PwrAgent does not fall back to local execution when a remote target

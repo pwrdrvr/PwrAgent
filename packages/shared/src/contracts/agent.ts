@@ -20,11 +20,17 @@ import type {
   DirectorySummaryKind,
   LaunchpadWorkMode,
   NavigationDirectoryGitStatus,
+  NavigationLaunchpadFileAttachment,
   NavigationLaunchpadAgent,
   NavigationLaunchpadDraft,
   NavigationLaunchpadDefaults,
+  NavigationLaunchpadImageAttachment,
 } from "./navigation";
 import type { FederationTarget } from "./federation";
+import type {
+  ScheduledThreadAction,
+  ScheduledThreadTurnPayload,
+} from "./scheduled-thread-actions";
 
 export type StartThreadRequest = {
   backend: AppServerBackendKind;
@@ -329,12 +335,24 @@ export type SteerTurnRequest = {
   input: AppServerTurnInputItem[];
   expectedTurnId: string;
   requestId: string;
+  /**
+   * Durable fallback accepted by main together with the steer request. Main
+   * schedules it when the expected target is already stale.
+   */
+  fallback?: {
+    displayText: string;
+    imageAttachments?: NavigationLaunchpadImageAttachment[];
+    fileAttachments?: NavigationLaunchpadFileAttachment[];
+    turn: ScheduledThreadTurnPayload;
+  };
 };
 
 export type SteerTurnResponse = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   turnId: string;
+  disposition?: "steered" | "scheduled";
+  scheduledAction?: ScheduledThreadAction;
 };
 
 export type SetThreadExecutionModeRequest = {

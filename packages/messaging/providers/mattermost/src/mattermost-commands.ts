@@ -15,6 +15,11 @@
  * + cache on every `start()` is enough.
  */
 
+import {
+  MESSAGING_COMMAND_CATALOG,
+  type MessagingCommandVerb,
+} from "@pwragent/messaging-interface";
+
 export type MattermostCommandSpec = {
   /**
    * The full trigger as registered with Mattermost (no leading `/`).
@@ -68,7 +73,7 @@ export function sanitizeMattermostCommandPrefix(
 }
 
 type CanonicalCommandBase = {
-  base: string;
+  base: MessagingCommandVerb;
   displayNameSuffix: string;
   description: string;
   autoCompleteDesc: string;
@@ -76,10 +81,9 @@ type CanonicalCommandBase = {
 };
 
 /**
- * Canonical command set as base verbs. Match Discord's surface
- * (`resume`, `agent`, `new`, `status`, `detach`, `monitor`, `help`) so users on different platforms see
- * the same primitives. Add new entries here; the reconciler picks
- * them up automatically once the per-prefix trigger is computed.
+ * Mattermost-specific metadata for the channel-neutral command catalog.
+ * The reconciler iterates the shared catalog, so a missing definition fails
+ * at startup instead of silently omitting a command on this provider.
  */
 const CANONICAL_COMMAND_BASES: readonly CanonicalCommandBase[] = [
   {
@@ -122,6 +126,20 @@ const CANONICAL_COMMAND_BASES: readonly CanonicalCommandBase[] = [
     autoCompleteDesc: "Monitor recent PwrAgent threads once per minute.",
   },
   {
+    base: "schedule",
+    displayNameSuffix: "Schedule",
+    description: "Schedule a message for the bound PwrAgent thread.",
+    autoCompleteDesc: "Schedule a message for the bound PwrAgent thread.",
+    autoCompleteHint: "<10m | 2h | 1d | ISO time> <message>",
+  },
+  {
+    base: "scheduled",
+    displayNameSuffix: "Scheduled",
+    description: "List or manage scheduled PwrAgent messages.",
+    autoCompleteDesc: "List or manage scheduled PwrAgent messages.",
+    autoCompleteHint: "[send | cancel | edit] [id] [time] [message]",
+  },
+  {
     base: "help",
     displayNameSuffix: "Help",
     description: "Show available PwrAgent commands and how to invoke them.",
@@ -140,7 +158,11 @@ export function desiredMattermostCommands(
   prefix: string = DEFAULT_MATTERMOST_COMMAND_PREFIX,
 ): readonly MattermostCommandSpec[] {
   const specs: MattermostCommandSpec[] = [];
-  for (const base of CANONICAL_COMMAND_BASES) {
+  for (const { verb } of MESSAGING_COMMAND_CATALOG) {
+    const base = CANONICAL_COMMAND_BASES.find((entry) => entry.base === verb);
+    if (!base) {
+      throw new Error(`Mattermost command metadata is missing for ${verb}.`);
+    }
     const trigger = `${prefix}${base.base}`;
     if (
       trigger.length < 1
@@ -181,7 +203,9 @@ export function baseTriggerForPrefixed(
   const withoutPrefix = stripped.startsWith(prefixLower)
     ? stripped.slice(prefixLower.length)
     : stripped;
-  return CANONICAL_COMMAND_BASES.find((b) => b.base === withoutPrefix)?.base;
+  return MESSAGING_COMMAND_CATALOG.find(
+    (command) => command.verb === withoutPrefix,
+  )?.verb;
 }
 
 /**

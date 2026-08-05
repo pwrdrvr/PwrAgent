@@ -73,6 +73,58 @@ describe("StateDb", () => {
     expect(prLookupColumns.map((column) => column.name)).toContain("provider");
   });
 
+  it("creates durable scheduled thread action storage", () => {
+    const table = stateDb.raw
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+      )
+      .get("scheduled_thread_actions") as { name: string } | undefined;
+    expect(table?.name).toBe("scheduled_thread_actions");
+
+    const columns = stateDb.raw
+      .prepare("PRAGMA table_info(scheduled_thread_actions)")
+      .all() as Array<{ name: string }>;
+    expect(columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining([
+        "action_id",
+        "backend",
+        "thread_id",
+        "kind",
+        "origin",
+        "status",
+        "scheduled_for",
+        "queue_entry_id",
+        "turn_id",
+        "error_message",
+        "payload_ref",
+        "claim_owner",
+        "claim_expires_at",
+      ]),
+    );
+    expect(columns.map((column) => column.name)).not.toContain("payload");
+  });
+
+  it("adds scheduled actions to federation-era version 38 databases", () => {
+    const dbPath = path.join(tempDir, "state.db");
+    stateDb.raw.exec(`
+      DROP TABLE scheduled_thread_actions;
+      PRAGMA user_version = 38;
+    `);
+    stateDb.close();
+
+    stateDb = StateDb.open(dbPath);
+
+    const table = stateDb.raw
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+      )
+      .get("scheduled_thread_actions") as { name: string } | undefined;
+    expect(table?.name).toBe("scheduled_thread_actions");
+    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(
+      CURRENT_STATE_DB_USER_VERSION,
+    );
+  });
+
   it("creates durable pull request status watch storage", () => {
     const table = stateDb.raw
       .prepare(

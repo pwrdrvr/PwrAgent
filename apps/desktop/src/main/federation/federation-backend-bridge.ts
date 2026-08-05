@@ -14,8 +14,10 @@ import type {
   CancelThreadExecutionModeQueueResponse,
   CompactThreadRequest,
   CompactThreadResponse,
+  CreateScheduledThreadActionRequest,
   CodexEnvironmentSetupProgressEvent,
   FederationCapability,
+  FederationRequestEnvelope,
   ForkThreadRequest,
   ForkThreadResponse,
   GetNavigationSnapshotRequest,
@@ -25,6 +27,8 @@ import type {
   InterruptTurnResponse,
   ListBackendsRequest,
   ListBackendsResponse,
+  ListScheduledThreadActionsRequest,
+  ListScheduledThreadActionsResponse,
   MaterializeDirectoryLaunchpadOptions,
   MaterializeDirectoryLaunchpadRequest,
   MaterializeDirectoryLaunchpadResponse,
@@ -42,6 +46,8 @@ import type {
   RenameThreadResponse,
   RunCodexEnvironmentActionRequest,
   RunCodexEnvironmentActionResponse,
+  ScheduledThreadActionIdRequest,
+  ScheduledThreadActionMutationResponse,
   SetAcpSessionRuntimeOptionRequest,
   SetAcpSessionRuntimeOptionResponse,
   SetCodexThreadEnvironmentRequest,
@@ -64,6 +70,7 @@ import type {
   SubmitServerRequestResponse,
   TrustCodexProjectRequest,
   TrustCodexProjectResponse,
+  UpdateScheduledThreadActionRequest,
 } from "@pwragent/shared";
 import type { FederationRouter } from "./federation-router";
 import type { FederationRpcEndpoint } from "./federation-rpc";
@@ -81,6 +88,11 @@ export const FEDERATION_BACKEND_METHODS = {
   startTurn: "backend.startTurn",
   cancelQueuedTurn: "backend.cancelQueuedTurn",
   startReview: "backend.startReview",
+  listScheduledThreadActions: "backend.listScheduledThreadActions",
+  createScheduledThreadAction: "backend.createScheduledThreadAction",
+  updateScheduledThreadAction: "backend.updateScheduledThreadAction",
+  cancelScheduledThreadAction: "backend.cancelScheduledThreadAction",
+  sendScheduledThreadActionNow: "backend.sendScheduledThreadActionNow",
   compactThread: "backend.compactThread",
   interruptTurn: "backend.interruptTurn",
   steerTurn: "backend.steerTurn",
@@ -135,6 +147,11 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.startTurn]: "turn_control",
   [FEDERATION_BACKEND_METHODS.cancelQueuedTurn]: "turn_control",
   [FEDERATION_BACKEND_METHODS.startReview]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.listScheduledThreadActions]: "scheduled_actions",
+  [FEDERATION_BACKEND_METHODS.createScheduledThreadAction]: "scheduled_actions",
+  [FEDERATION_BACKEND_METHODS.updateScheduledThreadAction]: "scheduled_actions",
+  [FEDERATION_BACKEND_METHODS.cancelScheduledThreadAction]: "scheduled_actions",
+  [FEDERATION_BACKEND_METHODS.sendScheduledThreadActionNow]: "scheduled_actions",
   [FEDERATION_BACKEND_METHODS.compactThread]: "turn_control",
   [FEDERATION_BACKEND_METHODS.interruptTurn]: "turn_control",
   [FEDERATION_BACKEND_METHODS.steerTurn]: "turn_control",
@@ -155,6 +172,14 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.openApplication]: "remote_window",
   [FEDERATION_BACKEND_METHODS.trustCodexProject]: "environment_actions",
 };
+
+export function additionalFederationBackendCapabilities(
+  envelope: FederationRequestEnvelope,
+): readonly FederationCapability[] {
+  if (envelope.method !== FEDERATION_BACKEND_METHODS.steerTurn) return [];
+  const request = envelope.params as Partial<SteerTurnRequest> | undefined;
+  return request?.fallback ? ["scheduled_actions"] : [];
+}
 
 export type FederationBackendOperations = {
   getNavigationSnapshot(
@@ -185,6 +210,21 @@ export type FederationBackendOperations = {
     request: CancelQueuedTurnRequest,
   ): Promise<CancelQueuedTurnResponse>;
   startReview(request: StartReviewRequest): Promise<StartReviewResponse>;
+  listScheduledThreadActions(
+    request?: ListScheduledThreadActionsRequest,
+  ): Promise<ListScheduledThreadActionsResponse>;
+  createScheduledThreadAction(
+    request: CreateScheduledThreadActionRequest,
+  ): Promise<ScheduledThreadActionMutationResponse>;
+  updateScheduledThreadAction(
+    request: UpdateScheduledThreadActionRequest,
+  ): Promise<ScheduledThreadActionMutationResponse>;
+  cancelScheduledThreadAction(
+    request: ScheduledThreadActionIdRequest,
+  ): Promise<ScheduledThreadActionMutationResponse>;
+  sendScheduledThreadActionNow(
+    request: ScheduledThreadActionIdRequest,
+  ): Promise<ScheduledThreadActionMutationResponse>;
   compactThread(request: CompactThreadRequest): Promise<CompactThreadResponse>;
   interruptTurn(request: InterruptTurnRequest): Promise<InterruptTurnResponse>;
   steerTurn(request: SteerTurnRequest): Promise<SteerTurnResponse>;
@@ -333,6 +373,41 @@ export function registerFederationBackendHandlers(params: {
     async (envelope) =>
       await params.backend.startReview(
         envelope.params as StartReviewRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.listScheduledThreadActions,
+    async (envelope) =>
+      await params.backend.listScheduledThreadActions(
+        (envelope.params ?? {}) as ListScheduledThreadActionsRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.createScheduledThreadAction,
+    async (envelope) =>
+      await params.backend.createScheduledThreadAction(
+        envelope.params as CreateScheduledThreadActionRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.updateScheduledThreadAction,
+    async (envelope) =>
+      await params.backend.updateScheduledThreadAction(
+        envelope.params as UpdateScheduledThreadActionRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.cancelScheduledThreadAction,
+    async (envelope) =>
+      await params.backend.cancelScheduledThreadAction(
+        envelope.params as ScheduledThreadActionIdRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.sendScheduledThreadActionNow,
+    async (envelope) =>
+      await params.backend.sendScheduledThreadActionNow(
+        envelope.params as ScheduledThreadActionIdRequest,
       ),
   );
   params.router.registerHandler(
@@ -574,6 +649,51 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   ): Promise<CancelQueuedTurnResponse> {
     return await this.rpc.request<CancelQueuedTurnResponse>({
       method: FEDERATION_BACKEND_METHODS.cancelQueuedTurn,
+      params: request,
+    });
+  }
+
+  async listScheduledThreadActions(
+    request: ListScheduledThreadActionsRequest = {},
+  ): Promise<ListScheduledThreadActionsResponse> {
+    return await this.rpc.request<ListScheduledThreadActionsResponse>({
+      method: FEDERATION_BACKEND_METHODS.listScheduledThreadActions,
+      params: request,
+    });
+  }
+
+  async createScheduledThreadAction(
+    request: CreateScheduledThreadActionRequest,
+  ): Promise<ScheduledThreadActionMutationResponse> {
+    return await this.rpc.request<ScheduledThreadActionMutationResponse>({
+      method: FEDERATION_BACKEND_METHODS.createScheduledThreadAction,
+      params: request,
+    });
+  }
+
+  async updateScheduledThreadAction(
+    request: UpdateScheduledThreadActionRequest,
+  ): Promise<ScheduledThreadActionMutationResponse> {
+    return await this.rpc.request<ScheduledThreadActionMutationResponse>({
+      method: FEDERATION_BACKEND_METHODS.updateScheduledThreadAction,
+      params: request,
+    });
+  }
+
+  async cancelScheduledThreadAction(
+    request: ScheduledThreadActionIdRequest,
+  ): Promise<ScheduledThreadActionMutationResponse> {
+    return await this.rpc.request<ScheduledThreadActionMutationResponse>({
+      method: FEDERATION_BACKEND_METHODS.cancelScheduledThreadAction,
+      params: request,
+    });
+  }
+
+  async sendScheduledThreadActionNow(
+    request: ScheduledThreadActionIdRequest,
+  ): Promise<ScheduledThreadActionMutationResponse> {
+    return await this.rpc.request<ScheduledThreadActionMutationResponse>({
+      method: FEDERATION_BACKEND_METHODS.sendScheduledThreadActionNow,
       params: request,
     });
   }

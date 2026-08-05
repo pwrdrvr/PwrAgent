@@ -23,6 +23,7 @@ import type {
   MessagingManagedConversationCreateResult,
   MessagingManagedConversationRightsRequest,
   MessagingManagedConversationRightsResult,
+  MessagingCommandVerb,
   MessagingRateLimitInfo,
   MessagingRejectedInboundEvent,
   MessagingResponseMode,
@@ -34,6 +35,7 @@ import {
   looksLikePairingAttempt,
   layoutMessagingActionRows,
   MESSAGING_CALLBACK_HANDLE_TTL_MS,
+  MESSAGING_COMMAND_CATALOG,
 } from "@pwragent/messaging-interface";
 import type { TelegramMessagingConfig } from "./telegram-config.ts";
 import {
@@ -67,6 +69,18 @@ const TELEGRAM_STREAM_GROUP_MEDIUM_INTERVAL_MS = 2_000;
 const TELEGRAM_STREAM_GROUP_SLOW_INTERVAL_MS = 3_100;
 const TELEGRAM_STREAM_RETRY_AFTER_BUFFER_MS = 100;
 const TELEGRAM_GENERAL_TOPIC_THREAD_ID = 1;
+
+const TELEGRAM_COMMAND_DESCRIPTIONS: Record<MessagingCommandVerb, string> = {
+  resume: "Resume or start a PwrAgent thread",
+  agent: "Choose or create a PwrAgent Agent",
+  new: "Start a new PwrAgent thread",
+  status: "Show the current PwrAgent binding",
+  detach: "Detach this chat from PwrAgent",
+  monitor: "Monitor recent PwrAgent threads",
+  schedule: "Schedule a message for this thread",
+  scheduled: "List or manage scheduled messages",
+  help: "Show available PwrAgent commands",
+};
 
 type TelegramDeliveryTarget = {
   chatId: number | string;
@@ -668,32 +682,10 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       drop_pending_updates: false,
     });
     await this.bot.api.setMyCommands({
-      commands: [
-        {
-          command: "resume",
-          description: "Resume or start a PwrAgent thread",
-        },
-        {
-          command: "agent",
-          description: "Choose or create a PwrAgent Agent",
-        },
-        {
-          command: "new",
-          description: "Start a new PwrAgent thread",
-        },
-        {
-          command: "status",
-          description: "Show the current PwrAgent binding",
-        },
-        {
-          command: "detach",
-          description: "Detach this chat from PwrAgent",
-        },
-        {
-          command: "monitor",
-          description: "Monitor recent PwrAgent threads",
-        },
-      ],
+      commands: MESSAGING_COMMAND_CATALOG.map(({ verb }) => ({
+        command: verb,
+        description: TELEGRAM_COMMAND_DESCRIPTIONS[verb],
+      })),
     });
 
     if (this.options.pollOnStart !== false) {

@@ -312,4 +312,52 @@ describe("federation enrollment", () => {
       failure: { code: "capability_denied" },
     });
   });
+
+  it("preserves capabilities omitted from a reconnect session request", () => {
+    const keyPair = generateFederationIdentityKeyPair();
+    store.upsertPeer({
+      updatedAt: 1_000,
+      peer: {
+        id: "client_one",
+        label: "Client",
+        role: "client",
+        status: "disconnected",
+        capabilities: ["remote_window", "federated_search"],
+        protocolVersion: 1,
+        pinnedPublicKeyPem: keyPair.publicKeyPem,
+      },
+    });
+    const message = buildFederationProofMessage({
+      purpose: "reconnect",
+      gatewayInstanceId: "gateway_one",
+      peerInstanceId: "client_one",
+      publicKeyPem: keyPair.publicKeyPem,
+      protocolVersion: 1,
+      nonce: "nonce-subset",
+      capabilities: ["remote_window"],
+    });
+
+    const result = authenticateFederationReconnect({
+      store,
+      gatewayInstanceId: "gateway_one",
+      peerInstanceId: "client_one",
+      protocolVersion: 1,
+      nonce: "nonce-subset",
+      requestedCapabilities: ["remote_window"],
+      signatureBase64: signFederationMessage({
+        privateKeyPem: keyPair.privateKeyPem,
+        message,
+      }),
+      now: 2_000,
+    });
+
+    expect(result).toMatchObject({
+      accepted: true,
+      capabilities: ["remote_window"],
+    });
+    expect(store.getPeer("client_one")?.capabilities).toEqual([
+      "remote_window",
+      "federated_search",
+    ]);
+  });
 });

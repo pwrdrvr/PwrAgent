@@ -10,6 +10,7 @@ import {
 } from "@testing-library/react";
 import type {
   AgentEvent,
+  CreateScheduledThreadActionRequest,
   DesktopPwrAgentProfileSummary,
   DesktopSettingsSnapshot,
   StartTurnRequest,
@@ -1771,7 +1772,7 @@ describe("App", () => {
     expect(await screen.findByRole("textbox", { name: "New thread" })).toBeInTheDocument();
   });
 
-  it("releases a queued review for a thread after navigating away", async () => {
+  it("registers a queued review with the backend before navigating away", async () => {
     const agentEventListeners = new Set<
       (event: {
         backend: "codex";
@@ -1793,6 +1794,19 @@ describe("App", () => {
       threadId: "thread-a",
       reviewThreadId: "thread-a",
       turnId: "turn-review",
+    }));
+    const createScheduledThreadAction = vi.fn(async (
+      request: CreateScheduledThreadActionRequest,
+    ) => ({
+      action: {
+        ...request,
+        id: "scheduled-review-1",
+        origin: request.origin ?? "desktop",
+        status: "queued" as const,
+        queueEntryId: "review-1",
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
     }));
     const readThread = vi.fn(
       async ({
@@ -1926,6 +1940,7 @@ describe("App", () => {
           };
         },
         onWindowFocus: () => () => undefined,
+        createScheduledThreadAction,
         readThread,
         startReview,
         startTurn,
@@ -1967,6 +1982,27 @@ describe("App", () => {
     expect(await screen.findByLabelText("Queued message")).toHaveTextContent(
       "Review changes against main"
     );
+    expect(createScheduledThreadAction).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-a",
+      kind: "review",
+      origin: "desktop",
+      scheduledFor: expect.any(Number),
+      displayText: "Review changes against main",
+      review: {
+        target: {
+          type: "baseBranch",
+          branch: "main",
+        },
+        draftText: "/review main",
+        delivery: "inline",
+        cwd: undefined,
+        model: undefined,
+        reasoningEffort: undefined,
+        serviceTier: undefined,
+        fastMode: undefined,
+      },
+    });
 
     fireEvent.click(screen.getByRole("button", { name: /Focused thread/i }));
     await screen.findByRole("heading", {
@@ -1994,17 +2030,8 @@ describe("App", () => {
       }
     });
 
-    await waitFor(() => {
-      expect(startReview).toHaveBeenCalledWith({
-        backend: "codex",
-        threadId: "thread-a",
-        target: {
-          type: "baseBranch",
-          branch: "main",
-        },
-        delivery: "inline",
-      });
-    });
+    await flushReactUpdates();
+    expect(startReview).not.toHaveBeenCalled();
     expect(startTurn).toHaveBeenCalledTimes(1);
   });
 

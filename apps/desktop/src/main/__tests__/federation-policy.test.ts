@@ -69,6 +69,26 @@ describe("federation policy", () => {
     });
   });
 
+  it("requires scheduler authorization independently from turn control", () => {
+    expect(
+      evaluateFederationSessionPolicy({
+        peer: {
+          id: "client_one",
+          label: "Client",
+          role: "client",
+          status: "connected",
+          capabilities: ["turn_control"],
+          protocolVersion: 1,
+        },
+        protocolVersion: 1,
+        requestedCapabilities: ["scheduled_actions"],
+      }),
+    ).toMatchObject({
+      accepted: false,
+      failure: { code: "capability_denied" },
+    });
+  });
+
   it("redacts PEM blocks and token-like diagnostics", () => {
     expect(
       redactFederationDiagnostic(

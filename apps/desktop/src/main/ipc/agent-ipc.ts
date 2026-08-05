@@ -700,7 +700,17 @@ export function registerAgentIpcHandlers(): void {
             .remoteBackend(request.federationTarget)
             .steerTurn(stripFederationTarget(request));
         }
-        return await registry.steerTurn(request);
+        const { admitSteerTurn } = await import(
+          "../scheduled-actions/steer-turn-admission.js"
+        );
+        const { getScheduledThreadActionService } = await import(
+          "../scheduled-actions/scheduled-thread-action-service.js"
+        );
+        return await admitSteerTurn(
+          registry,
+          getScheduledThreadActionService(registry),
+          request,
+        );
       } catch (error) {
         appServerLog.error("steerTurn failed", {
           backend: request.backend,

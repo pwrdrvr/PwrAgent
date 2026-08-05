@@ -30,6 +30,16 @@ describe("federation backend bridge", () => {
         archivedAt: 2_000,
         cleanup: [],
       })),
+      createScheduledThreadAction: vi.fn(async (request) => ({
+        action: {
+          ...request,
+          id: "scheduled-1",
+          origin: request.origin ?? "desktop",
+          status: "scheduled" as const,
+          createdAt: 2_000,
+          updatedAt: 2_000,
+        },
+      })),
       startTurn: vi.fn(),
       cancelQueuedTurn: vi.fn(async ({ queueEntryId }) => ({
         queueEntryId,
@@ -44,7 +54,11 @@ describe("federation backend bridge", () => {
     });
     router.registerConnection({
       peerId: "client_one",
-      capabilities: ["thread_navigation", "turn_control"],
+      capabilities: [
+        "thread_navigation",
+        "turn_control",
+        "scheduled_actions",
+      ],
       sendEnvelope: (envelope) => replies.push(envelope),
     });
     registerFederationBackendHandlers({ router, backend });
@@ -60,6 +74,26 @@ describe("federation backend bridge", () => {
         sourceInstanceId: "client_one",
         targetInstanceId: "gateway_one",
         createdAt: 1_000,
+      },
+    });
+    await router.routeEnvelope({
+      sourcePeerId: "client_one",
+      envelope: {
+        id: "request-3",
+        kind: "request",
+        method: FEDERATION_BACKEND_METHODS.createScheduledThreadAction,
+        params: {
+          backend: "codex",
+          threadId: "thread-1",
+          kind: "turn",
+          scheduledFor: 3_000,
+          displayText: "Follow up",
+          turn: { input: [{ type: "text", text: "Follow up" }] },
+        },
+        protocolVersion: 1,
+        sourceInstanceId: "client_one",
+        targetInstanceId: "gateway_one",
+        createdAt: 1_200,
       },
     });
     await router.routeEnvelope({
@@ -97,6 +131,12 @@ describe("federation backend bridge", () => {
     expect(backend.cancelQueuedTurn).toHaveBeenCalledWith({
       queueEntryId: "queue-1",
     });
+    expect(backend.createScheduledThreadAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        threadId: "thread-1",
+      }),
+    );
     expect(replies).toMatchObject([
       {
         kind: "response",
@@ -104,6 +144,16 @@ describe("federation backend bridge", () => {
         result: {
           backend: "codex",
           threads: [],
+        },
+      },
+      {
+        kind: "response",
+        requestId: "request-3",
+        result: {
+          action: {
+            id: "scheduled-1",
+            status: "scheduled",
+          },
         },
       },
       {
@@ -392,6 +442,106 @@ describe("federation backend bridge", () => {
     });
   });
 
+  it("serializes scheduled action admission over the federation RPC", async () => {
+    const sent: FederationProtocolEnvelope[] = [];
+    const rpc = new FederationRpcEndpoint({
+      localInstanceId: "gateway_one",
+      remoteInstanceId: "client_one",
+      sendEnvelope: (envelope) => sent.push(envelope),
+      now: () => 1_000,
+    });
+    const client = new FederationRemoteBackendClient(rpc);
+    const request = {
+      backend: "codex" as const,
+      threadId: "thread-1",
+      kind: "turn" as const,
+      scheduledFor: 2_000,
+      displayText: "Follow up",
+      turn: { input: [{ type: "text" as const, text: "Follow up" }] },
+    };
+
+    const pending = client.createScheduledThreadAction(request);
+    const envelope = sent.at(-1)!;
+    expect(envelope).toMatchObject({
+      kind: "request",
+      method: FEDERATION_BACKEND_METHODS.createScheduledThreadAction,
+      params: request,
+      sourceInstanceId: "gateway_one",
+      targetInstanceId: "client_one",
+    });
+
+    rpc.receiveEnvelope({
+      id: "response-scheduled-1",
+      kind: "response",
+      requestId: envelope.id,
+      protocolVersion: 1,
+      sourceInstanceId: "client_one",
+      targetInstanceId: "gateway_one",
+      createdAt: 1_100,
+      result: {
+        action: {
+          ...request,
+          id: "scheduled-1",
+          origin: "desktop",
+          status: "scheduled",
+          createdAt: 1_000,
+          updatedAt: 1_000,
+        },
+      },
+    });
+
+    await expect(pending).resolves.toMatchObject({
+      action: { id: "scheduled-1", status: "scheduled" },
+    });
+  });
+
+  it("requires scheduled_actions independently from turn_control", async () => {
+    const backend = {
+      createScheduledThreadAction: vi.fn(),
+    } as unknown as FederationBackendOperations;
+    const replies: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({
+      localInstanceId: "gateway_one",
+      methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+    });
+    router.registerConnection({
+      peerId: "client_one",
+      capabilities: ["turn_control"],
+      sendEnvelope: (envelope) => replies.push(envelope),
+    });
+    registerFederationBackendHandlers({ router, backend });
+
+    await router.routeEnvelope({
+      sourcePeerId: "client_one",
+      envelope: {
+        id: "request-scheduled-denied",
+        kind: "request",
+        method: FEDERATION_BACKEND_METHODS.createScheduledThreadAction,
+        params: {
+          backend: "codex",
+          threadId: "thread-1",
+          kind: "turn",
+          scheduledFor: 3_000,
+          displayText: "Follow up",
+          turn: { input: [{ type: "text", text: "Follow up" }] },
+        },
+        protocolVersion: 1,
+        sourceInstanceId: "client_one",
+        targetInstanceId: "gateway_one",
+        createdAt: 1_000,
+      },
+    });
+
+    expect(backend.createScheduledThreadAction).not.toHaveBeenCalled();
+    expect(replies).toMatchObject([
+      {
+        kind: "error",
+        requestId: "request-scheduled-denied",
+        error: { code: "capability_denied" },
+      },
+    ]);
+  });
+
   it("requires thread-detail capability for remote thread reads", async () => {
     const replies: FederationProtocolEnvelope[] = [];
     const router = new FederationRouter({
@@ -508,6 +658,11 @@ describe("federation backend bridge", () => {
       startTurn: vi.fn(),
       cancelQueuedTurn: vi.fn(),
       startReview: vi.fn(),
+      listScheduledThreadActions: vi.fn(),
+      createScheduledThreadAction: vi.fn(),
+      updateScheduledThreadAction: vi.fn(),
+      cancelScheduledThreadAction: vi.fn(),
+      sendScheduledThreadActionNow: vi.fn(),
       compactThread: vi.fn(async () => ({
         backend: "codex" as const,
         threadId: "thread-1",
@@ -674,6 +829,11 @@ describe("federation backend bridge", () => {
         startTurn: vi.fn(),
         cancelQueuedTurn: vi.fn(),
         startReview: vi.fn(),
+        listScheduledThreadActions: vi.fn(),
+        createScheduledThreadAction: vi.fn(),
+        updateScheduledThreadAction: vi.fn(),
+        cancelScheduledThreadAction: vi.fn(),
+        sendScheduledThreadActionNow: vi.fn(),
         compactThread: vi.fn(),
         interruptTurn: vi.fn(),
         steerTurn: vi.fn(),

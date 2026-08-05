@@ -7,6 +7,7 @@ import type {
   CancelQueuedTurnResponse,
   CancelThreadExecutionModeQueueResponse,
   CompactThreadResponse,
+  CreateScheduledThreadActionRequest,
   CodexEnvironmentSetupProgressEvent,
   FederationCapability,
   FederationConnectionState,
@@ -22,6 +23,8 @@ import type {
   ForkThreadResponse,
   HandoffThreadWorkspaceResponse,
   InterruptTurnResponse,
+  ListScheduledThreadActionsRequest,
+  ListScheduledThreadActionsResponse,
   MaterializeDirectoryLaunchpadResponse,
   MarkThreadSeenResponse,
   OpenDesktopApplicationResponse,
@@ -29,6 +32,8 @@ import type {
   RefreshDirectoryGitStatusesResponse,
   RenameThreadResponse,
   RunCodexEnvironmentActionResponse,
+  ScheduledThreadActionIdRequest,
+  ScheduledThreadActionMutationResponse,
   SetAcpSessionRuntimeOptionResponse,
   SetCodexThreadEnvironmentResponse,
   SetThreadExecutionModeResponse,
@@ -39,6 +44,7 @@ import type {
   StopCodexEnvironmentActionResponse,
   SubmitServerRequestResponse,
   TrustCodexProjectResponse,
+  UpdateScheduledThreadActionRequest,
 } from "@pwragent/shared";
 import {
   FEDERATION_INVITE_VERSION,
@@ -99,6 +105,7 @@ import {
   FEDERATION_BACKEND_EVENT_METHOD,
   FEDERATION_BACKEND_METHOD_CAPABILITIES,
   FEDERATION_ENVIRONMENT_SETUP_PROGRESS_METHOD,
+  additionalFederationBackendCapabilities,
   FederationRemoteBackendClient,
   registerFederationBackendHandlers,
   type FederationBackendEventNotification,
@@ -135,6 +142,7 @@ const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "thread_navigation",
   "thread_detail",
   "turn_control",
+  "scheduled_actions",
   "pending_request_control",
   "environment_actions",
   "federated_search",
@@ -481,6 +489,7 @@ export class DesktopFederationRuntime {
     const router = new FederationRouter({
       localInstanceId,
       methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+      additionalRequiredCapabilities: additionalFederationBackendCapabilities,
     });
     registerFederationBackendHandlers({
       router,
@@ -673,7 +682,7 @@ export class DesktopFederationRuntime {
     this.client = client;
     this.router?.registerConnection({
       peerId: gatewayInstanceId,
-      capabilities: DEFAULT_CAPABILITIES,
+      capabilities: client.capabilities,
       sendEnvelope: (envelope) => this.client?.sendEnvelope(envelope),
     });
     this.recordClientConnection({
@@ -1115,9 +1124,13 @@ export class DesktopFederationRuntime {
     if (!router) return;
 
     for (const connection of router.listConnections()) {
+      const scheduledActionEvent =
+        event.notification.method === "thread/scheduledAction/updated";
       if (
-        !connection.capabilities.includes("remote_window") &&
-        !connection.capabilities.includes("thread_detail")
+        scheduledActionEvent
+          ? !connection.capabilities.includes("scheduled_actions")
+          : !connection.capabilities.includes("remote_window")
+            && !connection.capabilities.includes("thread_detail")
       ) {
         continue;
       }
@@ -1184,11 +1197,17 @@ export class DesktopFederationRuntime {
       return;
     }
 
+    const notification = envelope as FederationBackendEventNotification & typeof envelope;
     for (const connection of router.listConnections()) {
       if (connection.peerId === sourcePeerId) continue;
+      const scheduledActionEvent =
+        notification.params.notification.method
+          === "thread/scheduledAction/updated";
       if (
-        !connection.capabilities.includes("remote_window") &&
-        !connection.capabilities.includes("thread_detail")
+        scheduledActionEvent
+          ? !connection.capabilities.includes("scheduled_actions")
+          : !connection.capabilities.includes("remote_window")
+            && !connection.capabilities.includes("thread_detail")
       ) {
         continue;
       }
@@ -1320,6 +1339,46 @@ function localBackendOperations(): FederationBackendOperations {
         ),
       };
     },
+    async listScheduledThreadActions(
+      request: ListScheduledThreadActionsRequest = {},
+    ): Promise<ListScheduledThreadActionsResponse> {
+      const { getScheduledThreadActionService } = await import(
+        "../scheduled-actions/scheduled-thread-action-service.js"
+      );
+      return getScheduledThreadActionService().list(request);
+    },
+    async createScheduledThreadAction(
+      request: CreateScheduledThreadActionRequest,
+    ): Promise<ScheduledThreadActionMutationResponse> {
+      const { getScheduledThreadActionService } = await import(
+        "../scheduled-actions/scheduled-thread-action-service.js"
+      );
+      return await getScheduledThreadActionService().create(request);
+    },
+    async updateScheduledThreadAction(
+      request: UpdateScheduledThreadActionRequest,
+    ): Promise<ScheduledThreadActionMutationResponse> {
+      const { getScheduledThreadActionService } = await import(
+        "../scheduled-actions/scheduled-thread-action-service.js"
+      );
+      return await getScheduledThreadActionService().update(request);
+    },
+    async cancelScheduledThreadAction(
+      request: ScheduledThreadActionIdRequest,
+    ): Promise<ScheduledThreadActionMutationResponse> {
+      const { getScheduledThreadActionService } = await import(
+        "../scheduled-actions/scheduled-thread-action-service.js"
+      );
+      return await getScheduledThreadActionService().cancel(request);
+    },
+    async sendScheduledThreadActionNow(
+      request: ScheduledThreadActionIdRequest,
+    ): Promise<ScheduledThreadActionMutationResponse> {
+      const { getScheduledThreadActionService } = await import(
+        "../scheduled-actions/scheduled-thread-action-service.js"
+      );
+      return await getScheduledThreadActionService().sendNow(request);
+    },
     async compactThread(
       request: CompactThreadRequest,
     ): Promise<CompactThreadResponse> {
@@ -1331,7 +1390,18 @@ function localBackendOperations(): FederationBackendOperations {
       return await getDesktopBackendRegistry().interruptTurn(request);
     },
     async steerTurn(request: SteerTurnRequest): Promise<SteerTurnResponse> {
-      return await getDesktopBackendRegistry().steerTurn(request);
+      const registry = getDesktopBackendRegistry();
+      const { admitSteerTurn } = await import(
+        "../scheduled-actions/steer-turn-admission.js"
+      );
+      const { getScheduledThreadActionService } = await import(
+        "../scheduled-actions/scheduled-thread-action-service.js"
+      );
+      return await admitSteerTurn(
+        registry,
+        getScheduledThreadActionService(registry),
+        request,
+      );
     },
     async setThreadExecutionMode(
       request: SetThreadExecutionModeRequest,

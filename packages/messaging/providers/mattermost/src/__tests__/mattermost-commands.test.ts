@@ -121,6 +121,8 @@ describe("desiredMattermostCommands", () => {
       "pwragent_status",
       "pwragent_detach",
       "pwragent_monitor",
+      "pwragent_schedule",
+      "pwragent_scheduled",
       "pwragent_help",
     ]);
   });
@@ -134,6 +136,8 @@ describe("desiredMattermostCommands", () => {
       "status",
       "detach",
       "monitor",
+      "schedule",
+      "scheduled",
       "help",
     ]);
   });
@@ -147,6 +151,8 @@ describe("desiredMattermostCommands", () => {
       "agent.status",
       "agent.detach",
       "agent.monitor",
+      "agent.schedule",
+      "agent.scheduled",
       "agent.help",
     ]);
   });

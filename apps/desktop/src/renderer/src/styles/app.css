@@ -15603,6 +15603,15 @@ a.transcript-message__messaging-origin:focus-visible {
   color: var(--accent-bright);
 }
 
+.composer__queued--failed {
+  border-color: color-mix(in srgb, var(--status-error) 60%, var(--border-subtle));
+}
+
+.composer__queued--failed .composer__queued-label,
+.composer__queued-error {
+  color: var(--status-error);
+}
+
 .composer__queued-copy {
   display: flex;
   min-width: 0;
@@ -15621,6 +15630,14 @@ a.transcript-message__messaging-origin:focus-visible {
   overflow: hidden;
   color: var(--text-primary);
   font-size: 13px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer__queued-error {
+  overflow: hidden;
+  font-size: 12px;
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;

@@ -24,6 +24,14 @@ export {
   type MessageTextMeasure,
 } from "./text-splitting";
 export { evictStaleStreamAnchors } from "./stream-anchors";
+export {
+  MESSAGING_COMMAND_CATALOG,
+  MESSAGING_HELP_ACTION_COMMANDS,
+  matchMessagingCommandVerb,
+  type MessagingCommandCatalogEntry,
+  type MessagingCommandSpec,
+  type MessagingCommandVerb,
+} from "./command-catalog";
 // Re-export shared messaging primitives so consumers can pick either
 // import path without seeing two parallel declarations.
 export {

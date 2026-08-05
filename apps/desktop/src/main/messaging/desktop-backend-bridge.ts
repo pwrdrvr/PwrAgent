@@ -12,6 +12,7 @@ import type {
   CancelThreadExecutionModeQueueResponse,
   CompactThreadRequest,
   CompactThreadResponse,
+  CreateScheduledThreadActionRequest,
   EnsureDirectoryLaunchpadRequest,
   EnsureDirectoryLaunchpadResponse,
   FederationRemoteTarget,
@@ -23,6 +24,8 @@ import type {
   InterruptTurnResponse,
   ListBackendsRequest,
   ListBackendsResponse,
+  ListScheduledThreadActionsRequest,
+  ListScheduledThreadActionsResponse,
   MaterializeDirectoryLaunchpadOptions,
   MaterializeDirectoryLaunchpadRequest,
   MaterializeDirectoryLaunchpadResponse,
@@ -35,6 +38,8 @@ import type {
   SetThreadModelSettingsResponse,
   StartTurnRequest,
   StartTurnResponse,
+  ScheduledThreadActionIdRequest,
+  ScheduledThreadActionMutationResponse,
   SteerTurnRequest,
   SteerTurnResponse,
   StartThreadRequest,
@@ -43,6 +48,7 @@ import type {
   SubmitServerRequestRequest,
   SubmitServerRequestResponse,
   ThreadMessagingBindingTransition,
+  UpdateScheduledThreadActionRequest,
   UpdateDirectoryLaunchpadRequest,
   UpdateDirectoryLaunchpadResponse,
 } from "@pwragent/shared";
@@ -59,6 +65,7 @@ import { resolveScratchProjectsRoots } from "../app-server/scratch-projects";
 import { buildMessagingBindingsByThreadKey } from "./messaging-bindings-snapshot";
 import { materializeTranscriptMessageImagesForMessaging } from "../transcript-image-protocol";
 import type { FederationBackendOperations } from "../federation/federation-backend-bridge";
+import { getScheduledThreadActionService } from "../scheduled-actions/scheduled-thread-action-service";
 
 export type DesktopMessagingFederationBridge = {
   connectedPeerTargets(): Array<{
@@ -410,6 +417,66 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
           queueStatus: "queued",
           queueEntryId: submitted.entry.id,
         };
+  }
+
+  async listScheduledThreadActions(
+    request: ListScheduledThreadActionsRequest = {},
+  ): Promise<ListScheduledThreadActionsResponse> {
+    const remote = this.remoteBackend(request.federationTarget);
+    if (remote) {
+      return await remote.listScheduledThreadActions(
+        stripFederationTarget(request),
+      );
+    }
+    return getScheduledThreadActionService().list(request);
+  }
+
+  async createScheduledThreadAction(
+    request: CreateScheduledThreadActionRequest,
+  ): Promise<ScheduledThreadActionMutationResponse> {
+    const remote = this.remoteBackend(request.federationTarget);
+    if (remote) {
+      return await remote.createScheduledThreadAction(
+        stripFederationTarget(request),
+      );
+    }
+    return await getScheduledThreadActionService().create(request);
+  }
+
+  async updateScheduledThreadAction(
+    request: UpdateScheduledThreadActionRequest,
+  ): Promise<ScheduledThreadActionMutationResponse> {
+    const remote = this.remoteBackend(request.federationTarget);
+    if (remote) {
+      return await remote.updateScheduledThreadAction(
+        stripFederationTarget(request),
+      );
+    }
+    return await getScheduledThreadActionService().update(request);
+  }
+
+  async cancelScheduledThreadAction(
+    request: ScheduledThreadActionIdRequest,
+  ): Promise<ScheduledThreadActionMutationResponse> {
+    const remote = this.remoteBackend(request.federationTarget);
+    if (remote) {
+      return await remote.cancelScheduledThreadAction(
+        stripFederationTarget(request),
+      );
+    }
+    return await getScheduledThreadActionService().cancel(request);
+  }
+
+  async sendScheduledThreadActionNow(
+    request: ScheduledThreadActionIdRequest,
+  ): Promise<ScheduledThreadActionMutationResponse> {
+    const remote = this.remoteBackend(request.federationTarget);
+    if (remote) {
+      return await remote.sendScheduledThreadActionNow(
+        stripFederationTarget(request),
+      );
+    }
+    return await getScheduledThreadActionService().sendNow(request);
   }
 
   async submitReview(request: StartReviewRequest): Promise<

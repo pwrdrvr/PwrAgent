@@ -23,6 +23,7 @@ import type {
   StartReviewRequest,
   StartThreadRequest,
   StartTurnRequest,
+  ScheduledThreadAction,
   SteerTurnRequest,
   SubmitServerRequestRequest,
   UpdateDirectoryLaunchpadRequest,
@@ -105,6 +106,212 @@ afterEach(async () => {
 });
 
 describe("MessagingController", () => {
+  it("creates, edits, sends, and cancels scheduled messages through the backend", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent({
+      ...buildCommandEvent(
+        "/schedule 2h Follow up",
+        { platformUserId: "user-1", username: "operator" },
+      ),
+      sourceUrl: "https://t.me/c/123/456",
+    });
+
+    expect(harness.createScheduledThreadAction).toHaveBeenCalledWith({
+      backend: "codex",
+      federationTarget: undefined,
+      threadId: "thread-1",
+      kind: "turn",
+      origin: "messaging",
+      scheduledFor: 7_201_000,
+      displayText: "Follow up",
+      turn: {
+        input: [{ type: "text", text: "Follow up" }],
+        messageOrigin: {
+          kind: "messaging",
+          messaging: {
+            platform: "telegram",
+            sourceUrl: "https://t.me/c/123/456",
+            surface: { id: "chat-1", kind: "dm" },
+            actor: {
+              platformUserId: "user-1",
+              username: "operator",
+            },
+          },
+        },
+      },
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "confirmation",
+      title: "Message scheduled",
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCommandEvent("/scheduled edit abcdef12 1d Updated follow up"),
+    );
+    expect(harness.updateScheduledThreadAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        federationTarget: undefined,
+        id: "scheduled-action:abcdef12-3456",
+        scheduledFor: 86_401_000,
+        displayText: "Updated follow up",
+        turn: expect.objectContaining({
+          messageOrigin: {
+            kind: "messaging",
+            messaging: {
+              platform: "telegram",
+              sourceUrl: "https://t.me/c/123/456",
+              surface: { id: "chat-1", kind: "dm" },
+              actor: {
+                platformUserId: "user-1",
+                username: "operator",
+              },
+            },
+          },
+        }),
+      }),
+    );
+
+    await harness.controller.handleInboundEvent(
+      buildCommandEvent("/scheduled send abcdef12"),
+    );
+    expect(harness.sendScheduledThreadActionNow).toHaveBeenCalledWith({
+      federationTarget: undefined,
+      id: "scheduled-action:abcdef12-3456",
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildCommandEvent("/scheduled cancel abcdef12"),
+    );
+    expect(harness.cancelScheduledThreadAction).toHaveBeenCalledWith({
+      federationTarget: undefined,
+      id: "scheduled-action:abcdef12-3456",
+    });
+  });
+
+  it("reports a failed send-now mutation instead of confirming it", async () => {
+    const harness = await createHarness({
+      sendScheduledThreadActionNow: async () => ({
+        action: {
+          id: "scheduled-action:abcdef12-3456",
+          backend: "codex",
+          threadId: "thread-1",
+          kind: "turn",
+          origin: "messaging",
+          status: "failed",
+          scheduledFor: 7_201_000,
+          displayText: "Follow up",
+          errorMessage: "backend offline",
+          createdAt: 1_000,
+          updatedAt: 2_000,
+        },
+      }),
+    });
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleInboundEvent(
+      buildCommandEvent("/scheduled send abcdef12"),
+    );
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "error",
+      title: "Scheduled message error",
+      body: "backend offline",
+    });
+  });
+
+  it("delivers delayed scheduled failures to their originating surface", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/scheduledAction/updated",
+        params: {
+          action: {
+            id: "scheduled-action:abcdef12-3456",
+            backend: "codex",
+            threadId: "thread-1",
+            kind: "turn",
+            origin: "messaging",
+            status: "failed",
+            scheduledFor: 7_201_000,
+            displayText: "Follow up",
+            errorMessage: "backend offline",
+            turn: {
+              input: [{ type: "text", text: "Follow up" }],
+              messageOrigin: {
+                kind: "messaging",
+                messaging: {
+                  platform: "telegram",
+                  surface: { id: "chat-1", kind: "dm" },
+                  actor: { platformUserId: "user-1" },
+                },
+              },
+            },
+            createdAt: 1_000,
+            updatedAt: 2_000,
+          },
+        },
+      },
+    });
+
+    expect(harness.delivered).toEqual([
+      expect.objectContaining({
+        kind: "error",
+        title: "Scheduled message could not be sent",
+        body: "Follow up\n\nbackend offline",
+      }),
+    ]);
+  });
+
+  it("routes scheduled message management to the bound federation peer", async () => {
+    const harness = await createHarness();
+    const event = buildCommandEvent("/schedule 2h Follow up");
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "client_one",
+    };
+    await harness.store.upsertBinding({
+      id: "binding:remote-client-one",
+      authorizedActorIds: ["user-1"],
+      backend: "codex",
+      channel: event.channel,
+      createdAt: 1_000,
+      federatedThread: {
+        backend: "codex",
+        target: federationTarget,
+        threadId: "thread-1",
+      },
+      targetKind: "thread",
+      threadId: "thread-1",
+      updatedAt: 1_000,
+    });
+
+    await harness.controller.handleInboundEvent(event);
+    await harness.controller.handleInboundEvent(
+      buildCommandEvent("/scheduled send abcdef12"),
+    );
+
+    expect(harness.createScheduledThreadAction).toHaveBeenCalledWith(
+      expect.objectContaining({ federationTarget }),
+    );
+    expect(harness.listScheduledThreadActions).toHaveBeenCalledWith({
+      backend: "codex",
+      federationTarget,
+      threadId: "thread-1",
+    });
+    expect(harness.sendScheduledThreadActionNow).toHaveBeenCalledWith({
+      federationTarget,
+      id: "scheduled-action:abcdef12-3456",
+    });
+  });
+
   it("opens the review picker for a mentioned /review command", async () => {
     const harness = await createHarness();
     await bindThread(harness);
@@ -7499,6 +7706,7 @@ describe("MessagingController", () => {
       "command:status",
       "command:detach",
       "command:monitor",
+      "command:scheduled",
       "command:help",
     ]);
     // Resume retains primary styling — matches the previous
@@ -19274,6 +19482,21 @@ async function createHarness(options?: {
   startThread?: NonNullable<MessagingBackendBridge["startThread"]>;
   startTurn?: NonNullable<MessagingBackendBridge["startTurn"]>;
   submitReview?: NonNullable<MessagingBackendBridge["submitReview"]>;
+  createScheduledThreadAction?: NonNullable<
+    MessagingBackendBridge["createScheduledThreadAction"]
+  >;
+  updateScheduledThreadAction?: NonNullable<
+    MessagingBackendBridge["updateScheduledThreadAction"]
+  >;
+  cancelScheduledThreadAction?: NonNullable<
+    MessagingBackendBridge["cancelScheduledThreadAction"]
+  >;
+  sendScheduledThreadActionNow?: NonNullable<
+    MessagingBackendBridge["sendScheduledThreadActionNow"]
+  >;
+  listScheduledThreadActions?: NonNullable<
+    MessagingBackendBridge["listScheduledThreadActions"]
+  >;
   toolUpdateDefaultMode?:
     | MessagingToolUpdateMode
     | ((targetKind: "thread" | "agent_thread") => MessagingToolUpdateMode);
@@ -19289,6 +19512,7 @@ async function createHarness(options?: {
   interruptTurn: ReturnType<typeof vi.fn>;
   listSkills: ReturnType<typeof vi.fn> | undefined;
   listBackends: ReturnType<typeof vi.fn>;
+  listScheduledThreadActions: ReturnType<typeof vi.fn>;
   materializeDirectoryLaunchpad: ReturnType<typeof vi.fn>;
   onBindingChanged: ReturnType<typeof vi.fn>;
   readThreadLastAssistantMessage: ReturnType<typeof vi.fn>;
@@ -19301,6 +19525,10 @@ async function createHarness(options?: {
   setThreadModelSettings: ReturnType<typeof vi.fn>;
   startThread: ReturnType<typeof vi.fn>;
   submitReview: ReturnType<typeof vi.fn>;
+  createScheduledThreadAction: ReturnType<typeof vi.fn>;
+  updateScheduledThreadAction: ReturnType<typeof vi.fn>;
+  cancelScheduledThreadAction: ReturnType<typeof vi.fn>;
+  sendScheduledThreadActionNow: ReturnType<typeof vi.fn>;
   startTurn: ReturnType<typeof vi.fn>;
   steerTurn: ReturnType<typeof vi.fn>;
   submitServerRequest: ReturnType<typeof vi.fn>;
@@ -19412,6 +19640,57 @@ async function createHarness(options?: {
           turnId: "review-turn-1",
         },
       })),
+  );
+  const scheduledAction: ScheduledThreadAction = {
+    id: "scheduled-action:abcdef12-3456",
+    backend: "codex",
+    threadId: "thread-1",
+    kind: "turn",
+    origin: "messaging",
+    status: "scheduled",
+    scheduledFor: 7_201_000,
+    displayText: "Follow up",
+    turn: {
+      input: [{ type: "text", text: "Follow up" }],
+      messageOrigin: {
+        kind: "messaging",
+        messaging: {
+          platform: "telegram",
+          sourceUrl: "https://t.me/c/123/456",
+          surface: { id: "chat-1", kind: "dm" },
+          actor: {
+            platformUserId: "user-1",
+            username: "operator",
+          },
+        },
+      },
+    },
+    createdAt: 1_000,
+    updatedAt: 1_000,
+  };
+  const createScheduledThreadAction = vi.fn(
+    options?.createScheduledThreadAction
+      ?? (async () => ({ action: scheduledAction })),
+  );
+  const updateScheduledThreadAction = vi.fn(
+    options?.updateScheduledThreadAction
+      ?? (async () => ({ action: scheduledAction })),
+  );
+  const cancelScheduledThreadAction = vi.fn(
+    options?.cancelScheduledThreadAction
+      ?? (async () => ({
+        action: { ...scheduledAction, status: "cancelled" as const },
+      })),
+  );
+  const sendScheduledThreadActionNow = vi.fn(
+    options?.sendScheduledThreadActionNow
+      ?? (async () => ({
+        action: { ...scheduledAction, status: "queued" as const },
+      })),
+  );
+  const listScheduledThreadActions = vi.fn(
+    options?.listScheduledThreadActions
+      ?? (async () => ({ actions: [scheduledAction] })),
   );
   const materializeDirectoryLaunchpad = vi.fn(
     options?.materializeDirectoryLaunchpad ??
@@ -19650,14 +19929,17 @@ async function createHarness(options?: {
     requestId: request.requestId,
   }));
   const backend: MessagingBackendBridge = {
+    cancelScheduledThreadAction,
     compactThread,
     cancelThreadExecutionModeQueue,
     ensureDirectoryLaunchpad,
     getNavigationSnapshot,
     ...(handoffThreadWorkspace ? { handoffThreadWorkspace } : {}),
     interruptTurn,
+    createScheduledThreadAction,
     ...(listSkills ? { listSkills } : {}),
     listBackends,
+    listScheduledThreadActions,
     materializeDirectoryLaunchpad,
     readActiveTurn,
     readThreadLastAssistantReply,
@@ -19670,6 +19952,7 @@ async function createHarness(options?: {
     setAcpSessionRuntimeOption,
     setThreadExecutionMode,
     setThreadModelSettings,
+    sendScheduledThreadActionNow,
     startThread,
     ...(options?.supportsMessagingPdfTools
       ? { supportsMessagingPdfTools: options.supportsMessagingPdfTools }
@@ -19679,6 +19962,7 @@ async function createHarness(options?: {
     steerTurn,
     submitServerRequest,
     updateDirectoryLaunchpad,
+    updateScheduledThreadAction,
   };
 
   const onBindingChanged = vi.fn();
@@ -19728,6 +20012,7 @@ async function createHarness(options?: {
     interruptTurn,
     listSkills,
     listBackends,
+    listScheduledThreadActions,
     materializeDirectoryLaunchpad,
     onBindingChanged,
     readActiveTurn,
@@ -19740,6 +20025,10 @@ async function createHarness(options?: {
     setThreadModelSettings,
     startThread,
     submitReview,
+    createScheduledThreadAction,
+    updateScheduledThreadAction,
+    cancelScheduledThreadAction,
+    sendScheduledThreadActionNow,
     startTurn,
     steerTurn,
     submitServerRequest,

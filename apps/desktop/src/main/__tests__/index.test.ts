@@ -11,6 +11,9 @@ const registerAppServerIpcHandlersMock = vi.fn();
 const disposeAppServerIpcHandlersMock = vi.fn();
 const registerAgentIpcHandlersMock = vi.fn();
 const disposeAgentIpcHandlersMock = vi.fn();
+const registerScheduledActionIpcHandlersMock = vi.fn();
+const disposeScheduledActionIpcHandlersMock = vi.fn();
+const disposeScheduledThreadActionServiceMock = vi.fn();
 const registerApplicationIpcHandlersMock = vi.fn();
 const disposeApplicationIpcHandlersMock = vi.fn();
 const registerAutomationIpcHandlersMock = vi.fn();
@@ -223,6 +226,15 @@ vi.mock("../ipc/app-server", () => ({
 vi.mock("../ipc/agent-ipc", () => ({
   registerAgentIpcHandlers: registerAgentIpcHandlersMock,
   disposeAgentIpcHandlers: disposeAgentIpcHandlersMock,
+}));
+
+vi.mock("../ipc/scheduled-actions-ipc", () => ({
+  registerScheduledActionIpcHandlers: registerScheduledActionIpcHandlersMock,
+  disposeScheduledActionIpcHandlers: disposeScheduledActionIpcHandlersMock,
+}));
+
+vi.mock("../scheduled-actions/scheduled-thread-action-service", () => ({
+  disposeScheduledThreadActionService: disposeScheduledThreadActionServiceMock,
 }));
 
 vi.mock("../ipc/applications", () => ({
@@ -454,6 +466,9 @@ describe("bootstrapApp", () => {
     disposeAppServerIpcHandlersMock.mockReset();
     registerAgentIpcHandlersMock.mockReset();
     disposeAgentIpcHandlersMock.mockReset();
+    registerScheduledActionIpcHandlersMock.mockReset();
+    disposeScheduledActionIpcHandlersMock.mockReset();
+    disposeScheduledThreadActionServiceMock.mockReset();
     registerApplicationIpcHandlersMock.mockReset();
     disposeApplicationIpcHandlersMock.mockReset();
     registerAppUpdateIpcHandlersMock.mockReset();
@@ -648,6 +663,7 @@ describe("bootstrapApp", () => {
     });
     expect(registerAppServerIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(registerAgentIpcHandlersMock).toHaveBeenCalledTimes(1);
+    expect(registerScheduledActionIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(registerApplicationIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(registerComposerDraftIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(registerFederationIpcHandlersMock).toHaveBeenCalledTimes(1);
@@ -1444,6 +1460,14 @@ describe("bootstrapApp", () => {
     expect(disposeWindowPointerIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeRuntimeIdentityIpcHandlersMock).not.toHaveBeenCalled();
     expect(disposeDesktopMessagingRuntimeMock).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() =>
+      expect(disposeScheduledThreadActionServiceMock).toHaveBeenCalledTimes(1)
+    );
+    expect(
+      disposeAppServerIpcHandlersMock.mock.invocationCallOrder[0],
+    ).toBeLessThan(
+      disposeScheduledThreadActionServiceMock.mock.invocationCallOrder[0]!,
+    );
   });
 
   it("does not create the messaging lease coordinator on early SIGTERM", async () => {

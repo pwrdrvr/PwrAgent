@@ -6,12 +6,16 @@ import {
   type BackendSummary,
   type CompactThreadRequest,
   type ComposerDraftRecoveryCandidate,
+  type CreateScheduledThreadActionRequest,
   type NavigationDirectorySummary,
   type NavigationThreadSummary,
   type NavigationLaunchpadDraft,
   type StartReviewRequest,
   type StartTurnRequest,
   type StartTurnResponse,
+  type ScheduledThreadAction,
+  type ScheduledThreadActionIdRequest,
+  type SteerTurnRequest,
 } from "@pwragent/shared";
 import type { JSONContent } from "@tiptap/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -476,6 +480,58 @@ function renderComposerWithRegressionSkills(
   );
 
   return { startTurn };
+}
+
+function createScheduledActionApi(options?: {
+  sendNowStatus?: "dispatching" | "queued" | "started";
+}) {
+  let sequence = 0;
+  const actions = new Map<string, ScheduledThreadAction>();
+  const createScheduledThreadAction = vi.fn(async (
+    request: CreateScheduledThreadActionRequest,
+  ) => {
+    sequence += 1;
+    const action: ScheduledThreadAction = {
+      ...request,
+      id: `scheduled-${sequence}`,
+      origin: request.origin ?? "desktop",
+      status: "scheduled",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    actions.set(action.id, action);
+    return { action };
+  });
+  const cancelScheduledThreadAction = vi.fn(async (
+    request: ScheduledThreadActionIdRequest,
+  ) => {
+    const action = actions.get(request.id);
+    if (!action) throw new Error("Scheduled action not found.");
+    const cancelled = { ...action, status: "cancelled" as const };
+    actions.set(action.id, cancelled);
+    return { action: cancelled };
+  });
+  const sendScheduledThreadActionNow = vi.fn(async (
+    request: ScheduledThreadActionIdRequest,
+  ) => {
+    const action = actions.get(request.id);
+    if (!action) throw new Error("Scheduled action not found.");
+    const status = options?.sendNowStatus ?? "started";
+    const sent: ScheduledThreadAction = {
+      ...action,
+      status,
+      ...(status === "queued"
+        ? { queueEntryId: `scheduled-turn:${action.id}` }
+        : {}),
+    };
+    actions.set(action.id, sent);
+    return { action: sent };
+  });
+  return {
+    cancelScheduledThreadAction,
+    createScheduledThreadAction,
+    sendScheduledThreadActionNow,
+  };
 }
 
 describe("Composer", () => {
@@ -3032,6 +3088,7 @@ describe("Composer", () => {
           }),
         ]}
         desktopApi={{
+          ...createScheduledActionApi(),
           onAgentEvent: () => () => undefined,
           startTurn,
         }}
@@ -3264,6 +3321,7 @@ describe("Composer", () => {
     render(
       <Composer
         desktopApi={{
+          ...createScheduledActionApi(),
           onAgentEvent: () => () => undefined,
           startTurn,
         }}
@@ -3284,7 +3342,9 @@ describe("Composer", () => {
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "Check this in a bit" } });
     fireEvent.click(screen.getByRole("button", { name: "Schedule message" }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Send in 15m" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: "Send in 15m" }));
+    });
 
     expect(startTurn).not.toHaveBeenCalled();
     expect(textarea).toHaveValue("");
@@ -3308,6 +3368,7 @@ describe("Composer", () => {
     render(
       <Composer
         desktopApi={{
+          ...createScheduledActionApi(),
           onAgentEvent: () => () => undefined,
           startTurn,
         }}
@@ -3328,9 +3389,13 @@ describe("Composer", () => {
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "Original scheduled text" } });
     fireEvent.click(screen.getByRole("button", { name: "Schedule message" }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Send in 1h" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: "Send in 1h" }));
+    });
 
-    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    });
     expect(textarea).toHaveValue("Original scheduled text");
     // The Send button is plain "Send"; the schedule surfaces as an armed
     // toggle beside it rather than a countdown label on Send itself.
@@ -3341,7 +3406,9 @@ describe("Composer", () => {
 
     fireEvent.change(textarea, { target: { value: "Edited scheduled text" } });
     // Toggle stays armed → Send keeps the schedule (re-queues at the same time).
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    });
 
     expect(startTurn).not.toHaveBeenCalled();
     expect(textarea).toHaveValue("");
@@ -3365,6 +3432,7 @@ describe("Composer", () => {
     render(
       <Composer
         desktopApi={{
+          ...createScheduledActionApi(),
           onAgentEvent: () => () => undefined,
           startTurn,
         }}
@@ -3385,9 +3453,13 @@ describe("Composer", () => {
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "Scheduled text" } });
     fireEvent.click(screen.getByRole("button", { name: "Schedule message" }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Send in 1h" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: "Send in 1h" }));
+    });
 
-    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    });
     // Uncheck the schedule so Send fires immediately instead of re-queuing.
     fireEvent.click(screen.getByRole("switch"));
     expect(screen.getByRole("switch")).not.toBeChecked();
@@ -3411,10 +3483,12 @@ describe("Composer", () => {
       threadId: request.threadId,
       turnId: "turn-scheduled",
     }));
+    const scheduledApi = createScheduledActionApi();
 
     render(
       <Composer
         desktopApi={{
+          ...scheduledApi,
           onAgentEvent: () => () => undefined,
           startTurn,
         }}
@@ -3435,7 +3509,9 @@ describe("Composer", () => {
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "Scheduled for later" } });
     fireEvent.click(screen.getByRole("button", { name: "Schedule message" }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Send in 1h" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: "Send in 1h" }));
+    });
 
     // No active turn → the queued entry offers "Send now", not a dead "Steer".
     expect(screen.queryByRole("button", { name: "Steer" })).not.toBeInTheDocument();
@@ -3445,11 +3521,59 @@ describe("Composer", () => {
       fireEvent.click(sendNow);
     });
 
-    expect(startTurn).toHaveBeenCalledTimes(1);
-    expect(startTurn.mock.calls[0]![0].input).toEqual([
-      { type: "text", text: "Scheduled for later" },
-    ]);
+    expect(startTurn).not.toHaveBeenCalled();
+    expect(scheduledApi.sendScheduledThreadActionNow).toHaveBeenCalledWith({
+      id: "scheduled-1",
+    });
     expect(screen.queryByLabelText("Queued message")).not.toBeInTheDocument();
+  });
+
+  it("keeps a scheduled message visible when Send now admits it to the backend queue", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-10T12:00:00Z"));
+    const scheduledApi = createScheduledActionApi({
+      sendNowStatus: "queued",
+    });
+
+    render(
+      <Composer
+        desktopApi={{
+          ...scheduledApi,
+          onAgentEvent: () => () => undefined,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Queue scheduled now",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "Wait behind the active backend turn" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Schedule message" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: "Send in 1h" }));
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Send now" }));
+    });
+
+    expect(screen.getByLabelText("Queued message")).toHaveTextContent(
+      "Queued next",
+    );
+    expect(screen.getByLabelText("Queued message")).toHaveTextContent(
+      "Wait behind the active backend turn",
+    );
+    expect(screen.queryByRole("button", { name: "Send now" })).not.toBeInTheDocument();
   });
 
   it("preserves schedule selection through bare review configuration", async () => {
@@ -3465,6 +3589,7 @@ describe("Composer", () => {
     render(
       <Composer
         desktopApi={{
+          ...createScheduledActionApi(),
           onAgentEvent: () => () => undefined,
           startReview,
         }}
@@ -3494,9 +3619,11 @@ describe("Composer", () => {
       within(reviewTarget).getByRole("button", { name: "Send in 30m" })
     ).toBeEnabled();
 
-    fireEvent.click(
-      within(reviewTarget).getByRole("button", { name: "Send in 30m" })
-    );
+    await act(async () => {
+      fireEvent.click(
+        within(reviewTarget).getByRole("button", { name: "Send in 30m" })
+      );
+    });
 
     expect(startReview).not.toHaveBeenCalled();
     expect(screen.queryByRole("group", { name: "Review target" })).not.toBeInTheDocument();
@@ -3574,6 +3701,7 @@ describe("Composer", () => {
           },
         ]}
         desktopApi={{
+          ...createScheduledActionApi(),
           onAgentEvent: () => () => undefined,
           startTurn,
         }}
@@ -3594,11 +3722,13 @@ describe("Composer", () => {
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "After the reset" } });
     fireEvent.click(screen.getByRole("button", { name: "Schedule message" }));
-    fireEvent.click(
-      screen.getByRole("menuitem", {
-        name: "Send in 2h 34m (5h context reset)",
-      })
-    );
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("menuitem", {
+          name: "Send in 2h 34m (5h context reset)",
+        })
+      );
+    });
 
     expect(startTurn).not.toHaveBeenCalled();
     expect(screen.getByLabelText("Queued message")).toHaveTextContent(
@@ -3667,10 +3797,12 @@ describe("Composer", () => {
             });
         })
     );
+    const scheduledApi = createScheduledActionApi();
 
     const baseProps = {
       backends: [backendSummary("codex")],
       desktopApi: {
+        ...scheduledApi,
         onAgentEvent: (callback: NonNullable<DesktopApi["onAgentEvent"]> extends (
           listener: infer Listener,
         ) => unknown
@@ -3705,9 +3837,11 @@ describe("Composer", () => {
 
     expect(startTurn).toHaveBeenCalledTimes(1);
     expect(startReview).not.toHaveBeenCalled();
-    expect(screen.getByLabelText("Queued message")).toHaveTextContent(
-      "Review changes against main"
-    );
+    await waitFor(() => {
+      expect(screen.getByLabelText("Queued message")).toHaveTextContent(
+        "Review changes against main"
+      );
+    });
 
     await act(async () => {
       resolveStartTurn?.({
@@ -3730,14 +3864,17 @@ describe("Composer", () => {
       });
     });
 
-    await waitFor(() => {
-      expect(startReview).toHaveBeenCalledWith({
+    expect(startReview).not.toHaveBeenCalled();
+    expect(scheduledApi.createScheduledThreadAction).toHaveBeenCalledWith(
+      expect.objectContaining({
         backend: "codex",
         threadId: "thread-1",
-        target: { type: "baseBranch", branch: "main" },
-        delivery: "inline",
-      });
-    });
+        kind: "review",
+        review: expect.objectContaining({
+          target: { type: "baseBranch", branch: "main" },
+        }),
+      }),
+    );
   });
 
   it("keeps the review target picker for bare reviews while a turn start is pending", async () => {
@@ -4238,9 +4375,11 @@ describe("Composer", () => {
       reviewThreadId: request.threadId,
       turnId: "turn-review-1",
     }));
+    const scheduledApi = createScheduledActionApi();
     const baseProps = {
       backends: [backendSummary("codex")],
       desktopApi: {
+        ...scheduledApi,
         onAgentEvent: (callback: NonNullable<DesktopApi["onAgentEvent"]> extends (
           listener: infer Listener,
         ) => unknown
@@ -4347,14 +4486,10 @@ describe("Composer", () => {
       });
     });
 
-    await waitFor(() => {
-      expect(startReview).toHaveBeenCalledWith({
-        backend: "codex",
-        threadId: "thread-1",
-        target: { type: "baseBranch", branch: "main" },
-        delivery: "inline",
-      });
-    });
+    expect(startReview).not.toHaveBeenCalled();
+    expect(scheduledApi.createScheduledThreadAction).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "review" }),
+    );
   });
 
   it("resets server queued turn state when switching composer scopes", async () => {
@@ -4465,9 +4600,11 @@ describe("Composer", () => {
       reviewThreadId: request.threadId,
       turnId: "turn-review-1",
     }));
+    const scheduledApi = createScheduledActionApi();
     const baseProps = {
       backends: [backendSummary("codex")],
       desktopApi: {
+        ...scheduledApi,
         onAgentEvent: () => () => undefined,
         startReview,
         startTurn,
@@ -4573,9 +4710,11 @@ describe("Composer", () => {
       reviewThreadId: request.threadId,
       turnId: "turn-review-1",
     }));
+    const scheduledApi = createScheduledActionApi();
     const baseProps = {
       backends: [backendSummary("codex")],
       desktopApi: {
+        ...scheduledApi,
         onAgentEvent: () => () => undefined,
         startReview,
         startTurn,
@@ -5395,17 +5534,16 @@ describe("Composer", () => {
     const draftStore = createComposerDraftStore();
     draftStore.setQueuedTurn("thread:codex:thread-1", {
       id: "queued-steer-1",
-      queueEntryId: "queue-entry-1",
+      scheduledActionId: "scheduled-action-1",
       text: "Steer the original turn",
       imageAttachments: [],
       fileAttachments: [],
       input: [{ type: "text", text: "Steer the original turn" }],
     });
     const cancellation = createDeferred<{
-      queueEntryId: string;
-      cancelled: boolean;
+      action: ScheduledThreadAction;
     }>();
-    const cancelQueuedTurn = vi.fn(() => cancellation.promise);
+    const cancelScheduledThreadAction = vi.fn(() => cancellation.promise);
     const steerTurn = vi.fn();
     const baseProps = {
       backends: [
@@ -5428,7 +5566,7 @@ describe("Composer", () => {
         },
       ],
       desktopApi: {
-        cancelQueuedTurn,
+        cancelScheduledThreadAction,
         onAgentEvent: () => () => undefined,
         steerTurn,
       },
@@ -5453,8 +5591,9 @@ describe("Composer", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Steer" }));
-    expect(cancelQueuedTurn).toHaveBeenCalledWith({
-      queueEntryId: "queue-entry-1",
+    expect(cancelScheduledThreadAction).toHaveBeenCalledWith({
+      federationTarget: undefined,
+      id: "scheduled-action-1",
     });
 
     rerender(
@@ -5465,8 +5604,21 @@ describe("Composer", () => {
     );
     await act(async () => {
       cancellation.resolve({
-        queueEntryId: "queue-entry-1",
-        cancelled: true,
+        action: {
+          id: "scheduled-action-1",
+          backend: "codex",
+          threadId: "thread-1",
+          kind: "turn",
+          origin: "desktop",
+          status: "cancelled",
+          scheduledFor: 1_000,
+          displayText: "Steer the original turn",
+          turn: {
+            input: [{ type: "text", text: "Steer the original turn" }],
+          },
+          createdAt: 1_000,
+          updatedAt: 2_000,
+        },
       });
       await cancellation.promise;
     });
@@ -5480,7 +5632,7 @@ describe("Composer", () => {
       text: "Steer the original turn",
     });
     expect(
-      draftStore.getQueuedTurn("thread:codex:thread-1")?.queueEntryId,
+      draftStore.getQueuedTurn("thread:codex:thread-1")?.scheduledActionId,
     ).toBeUndefined();
   });
 
@@ -5550,13 +5702,13 @@ describe("Composer", () => {
     fireEvent.keyDown(textarea, { key: "Enter", metaKey: true });
 
     await waitFor(() => {
-      expect(steerTurn).toHaveBeenCalledWith({
+      expect(steerTurn).toHaveBeenCalledWith(expect.objectContaining({
         backend: "codex",
         threadId: "thread-1",
         expectedTurnId: "turn-1",
         input: [{ type: "text", text: "Change direction" }],
         requestId: expect.any(String),
-      });
+      }));
     });
     expect(screen.getByText("Steering now")).toBeInTheDocument();
     expect(screen.getByText("Change direction")).toBeInTheDocument();
@@ -5683,7 +5835,7 @@ describe("Composer", () => {
     });
 
     await waitFor(() => {
-      expect(steerTurn).toHaveBeenCalledWith({
+      expect(steerTurn).toHaveBeenCalledWith(expect.objectContaining({
         backend: "codex",
         threadId: "thread-1",
         expectedTurnId: "turn-1",
@@ -5695,7 +5847,7 @@ describe("Composer", () => {
           },
         ],
         requestId: expect.any(String),
-      });
+      }));
     });
     expect(screen.getByText("Steering now")).toBeInTheDocument();
 
@@ -5844,13 +5996,13 @@ describe("Composer", () => {
     });
 
     await waitFor(() => {
-      expect(steerTurn).toHaveBeenCalledWith({
+      expect(steerTurn).toHaveBeenCalledWith(expect.objectContaining({
         backend: "codex",
         threadId: "thread-1",
         expectedTurnId: "turn-1",
         input: [{ type: "text", text: "Keep steering direction" }],
         requestId: expect.any(String),
-      });
+      }));
     });
     expect(steerTurn).toHaveBeenCalledTimes(1);
   });
@@ -6031,6 +6183,7 @@ describe("Composer", () => {
     const draftStore = createComposerDraftStore();
     draftStore.setPendingSteer("thread:codex:thread-1", {
       id: "pending-jeep",
+      expectedTurnId: "turn-1",
       input: [
         { type: "text", text: "Compare [@Jeep](~/Downloads/Jeep)" },
         {
@@ -6053,10 +6206,25 @@ describe("Composer", () => {
           };
         }) => void)
       | undefined;
-    const startTurn = vi.fn(async (request: StartTurnRequest) => ({
+    const scheduledApi = createScheduledActionApi();
+    const steerTurn = vi.fn(async (request: SteerTurnRequest) => ({
       backend: request.backend,
       threadId: request.threadId,
-      turnId: "turn-2",
+      turnId: request.expectedTurnId,
+      disposition: "scheduled" as const,
+      scheduledAction: {
+        id: "scheduled-steer-1",
+        backend: request.backend,
+        threadId: request.threadId,
+        kind: "turn" as const,
+        origin: "desktop" as const,
+        status: "scheduled" as const,
+        scheduledFor: Date.now(),
+        displayText: request.fallback?.displayText ?? "",
+        turn: request.fallback?.turn,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
     }));
 
     render(
@@ -6064,11 +6232,12 @@ describe("Composer", () => {
         activeTurnId="turn-1"
         backends={[backendSummary("codex")]}
         desktopApi={{
+          ...scheduledApi,
+          steerTurn,
           onAgentEvent: (callback) => {
             agentEventHandler = callback as typeof agentEventHandler;
             return () => undefined;
           },
-          startTurn,
         }}
         disabled={false}
         draftStore={draftStore}
@@ -6100,21 +6269,27 @@ describe("Composer", () => {
     });
 
     await waitFor(() => {
-      expect(startTurn).toHaveBeenCalledWith(
+      expect(steerTurn).toHaveBeenCalledWith(
         expect.objectContaining({
           backend: "codex",
           threadId: "thread-1",
-          input: [
-            { type: "text", text: "Compare [@Jeep](~/Downloads/Jeep)" },
-            {
-              type: "localFile",
-              name: "Jeep",
-              path: "/Users/huntharo/Downloads/Jeep",
-              pdfRenderProfile: "high",
-            },
-          ],
+          expectedTurnId: "turn-1",
+          fallback: expect.objectContaining({
+            turn: expect.objectContaining({
+            input: [
+              { type: "text", text: "Compare [@Jeep](~/Downloads/Jeep)" },
+              {
+                type: "localFile",
+                name: "Jeep",
+                path: "/Users/huntharo/Downloads/Jeep",
+                pdfRenderProfile: "high",
+              },
+            ],
+            }),
+          }),
         }),
       );
+      expect(scheduledApi.createScheduledThreadAction).not.toHaveBeenCalled();
     });
   });
 
@@ -6254,6 +6429,7 @@ describe("Composer", () => {
       });
       draftStore.setPendingSteer("thread:codex:thread-1", {
         id: "steer-jeep",
+        expectedTurnId: "turn-1",
         input: [{ type: "text", text: "Compare [@SteerJeep](~/Downloads/Jeep)" }],
         text: "Compare [@SteerJeep](~/Downloads/Jeep)",
         imageAttachments: [],
@@ -6546,7 +6722,7 @@ describe("Composer", () => {
     });
   });
 
-  it("sends a pending steer as the next turn when Codex reports no active turn", async () => {
+  it("projects the backend-owned fallback when a steer target is no longer active", async () => {
     let agentEventHandler:
       | ((event: {
           backend: "codex";
@@ -6556,9 +6732,26 @@ describe("Composer", () => {
           };
         }) => void)
       | undefined;
-    const steerTurn = vi.fn(async () => {
-      throw new Error("json-rpc error (-32600): no active turn to steer");
-    });
+    const steerTurn = vi.fn(async (request: SteerTurnRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: request.expectedTurnId,
+      disposition: "scheduled" as const,
+      scheduledAction: {
+        id: "scheduled-fallback-1",
+        backend: request.backend,
+        threadId: request.threadId,
+        kind: "turn" as const,
+        origin: "desktop" as const,
+        status: "queued" as const,
+        scheduledFor: Date.now(),
+        displayText: request.fallback?.displayText ?? "",
+        turn: request.fallback?.turn,
+        queueEntryId: "scheduled-turn:scheduled-fallback-1",
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+    }));
     const startTurn = vi.fn(async (request: StartTurnRequest) => ({
       backend: request.backend,
       threadId: request.threadId,
@@ -6634,20 +6827,22 @@ describe("Composer", () => {
 
     await waitFor(() => {
       expect(steerTurn).toHaveBeenCalledTimes(1);
-      expect(startTurn).toHaveBeenCalledWith(
-        expect.objectContaining({
-          backend: "codex",
-          threadId: "thread-1",
-          input: [{ type: "text", text: "Send after stale steer" }],
+      expect(steerTurn).toHaveBeenCalledWith(expect.objectContaining({
+        expectedTurnId: "turn-1",
+        fallback: expect.objectContaining({
+          displayText: "Send after stale steer",
+          turn: expect.objectContaining({
+            input: [{ type: "text", text: "Send after stale steer" }],
+          }),
         }),
-      );
+      }));
     });
-    expect(onActiveTurnIdChange).toHaveBeenCalledWith(undefined);
+    expect(startTurn).not.toHaveBeenCalled();
     expect(screen.queryByText("Pending steer")).not.toBeInTheDocument();
-    expect(screen.queryByText("no active turn to steer")).not.toBeInTheDocument();
+    expect(screen.getByText("Queued next")).toBeInTheDocument();
   });
 
-  it("queues a stale pending steer behind the active turn Codex reports", async () => {
+  it("does not reinterpret a backend-owned stale steer fallback in React", async () => {
     let agentEventHandler:
       | ((event: {
           backend: "codex";
@@ -6657,11 +6852,26 @@ describe("Composer", () => {
           };
         }) => void)
       | undefined;
-    const steerTurn = vi.fn(async () => {
-      throw new Error(
-        "json-rpc error (-32600): expected active turn id `turn-1` but found `turn-2`",
-      );
-    });
+    const steerTurn = vi.fn(async (request: SteerTurnRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: request.expectedTurnId,
+      disposition: "scheduled" as const,
+      scheduledAction: {
+        id: "scheduled-fallback-2",
+        backend: request.backend,
+        threadId: request.threadId,
+        kind: "turn" as const,
+        origin: "desktop" as const,
+        status: "queued" as const,
+        scheduledFor: Date.now(),
+        displayText: request.fallback?.displayText ?? "",
+        turn: request.fallback?.turn,
+        queueEntryId: "scheduled-turn:scheduled-fallback-2",
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+    }));
     const startTurn = vi.fn(async (request: StartTurnRequest) => ({
       backend: request.backend,
       threadId: request.threadId,
@@ -6737,7 +6947,6 @@ describe("Composer", () => {
 
     await waitFor(() => {
       expect(steerTurn).toHaveBeenCalledTimes(1);
-      expect(onActiveTurnIdChange).toHaveBeenCalledWith("turn-2");
     });
     expect(startTurn).not.toHaveBeenCalled();
     expect(screen.getByText("Queued next")).toBeInTheDocument();
@@ -6759,15 +6968,7 @@ describe("Composer", () => {
       });
     });
 
-    await waitFor(() => {
-      expect(startTurn).toHaveBeenCalledWith(
-        expect.objectContaining({
-          backend: "codex",
-          threadId: "thread-1",
-          input: [{ type: "text", text: "Queue after the real active turn" }],
-        }),
-      );
-    });
+    expect(startTurn).not.toHaveBeenCalled();
   });
 
   it("does not restore a handed-off steer when turn completion leaves a backend queue", async () => {
@@ -7832,11 +8033,13 @@ describe("Composer", () => {
       turnId: string;
     }>();
     const startReview = vi.fn(() => startReviewDeferred.promise);
+    const scheduledApi = createScheduledActionApi();
 
     render(
       <Composer
         addOptimisticReviewEntry={addOptimisticReviewEntry}
         desktopApi={{
+          ...scheduledApi,
           onAgentEvent: () => () => undefined,
           startReview,
           startTurn,
@@ -7876,6 +8079,7 @@ describe("Composer", () => {
     await clickButton("Queue");
 
     expect(startReview).toHaveBeenCalledTimes(1);
+    expect(scheduledApi.createScheduledThreadAction).toHaveBeenCalledTimes(1);
     expect(addOptimisticReviewEntry).toHaveBeenCalledTimes(1);
     expect(startTurn).not.toHaveBeenCalled();
     expect(screen.getByText("Queued next")).toBeInTheDocument();
@@ -8042,8 +8246,10 @@ describe("Composer", () => {
       reviewThreadId: request.threadId,
       turnId: "turn-review-1",
     }));
+    const scheduledApi = createScheduledActionApi();
     const baseProps = {
       desktopApi: {
+        ...scheduledApi,
         onAgentEvent: () => () => undefined,
         startReview,
       },
@@ -8095,21 +8301,20 @@ describe("Composer", () => {
     fireEvent.click(screen.getByRole("button", { name: "Start review" }));
 
     expect(startReview).not.toHaveBeenCalled();
-    expect(screen.getByText("Queued next")).toBeInTheDocument();
+    expect(await screen.findByText("Queued next")).toBeInTheDocument();
     expect(screen.getByText("Review changes against main")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Steer" })).not.toBeInTheDocument();
 
     rerender(<Composer {...baseProps} activeTurnId={undefined} />);
 
-    await waitFor(() => {
-      expect(startReview).toHaveBeenCalledWith({
+    expect(startReview).not.toHaveBeenCalled();
+    expect(scheduledApi.createScheduledThreadAction).toHaveBeenCalledWith(
+      expect.objectContaining({
         backend: "codex",
         threadId: "thread-1",
-        target: { type: "baseBranch", branch: "main" },
-        delivery: "inline",
-        model: "gpt-5.5",
-      });
-    });
+        kind: "review",
+      }),
+    );
   });
 
   it("keeps the review target picker for bare review commands during an active turn", async () => {
@@ -8156,8 +8361,10 @@ describe("Composer", () => {
     const imageFile = new File([new Uint8Array([1, 2, 3])], "next-draft.png", {
       type: "image/png",
     });
+    const scheduledApi = createScheduledActionApi();
     const baseProps = {
       desktopApi: {
+        ...scheduledApi,
         onAgentEvent: () => () => undefined,
         startReview,
       },
@@ -8200,14 +8407,10 @@ describe("Composer", () => {
 
     rerender(<Composer {...baseProps} activeTurnId={undefined} />);
 
-    await waitFor(() => {
-      expect(startReview).toHaveBeenCalledWith({
-        backend: "codex",
-        threadId: "thread-1",
-        target: { type: "baseBranch", branch: "main" },
-        delivery: "inline",
-      });
-    });
+    expect(startReview).not.toHaveBeenCalled();
+    expect(scheduledApi.createScheduledThreadAction).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "review" }),
+    );
     expect(
       screen.queryByText("/review does not accept image attachments.")
     ).not.toBeInTheDocument();

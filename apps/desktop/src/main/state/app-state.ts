@@ -10,6 +10,7 @@ import {
 } from "../profile";
 import { AppRuntimeInstanceStore } from "./app-runtime-instance-store.js";
 import { AutomationStore } from "../automations/automation-store.js";
+import { ScheduledThreadActionStore } from "../scheduled-actions/scheduled-thread-action-store.js";
 import { migrateIfNeeded } from "./migration.js";
 import { SqliteMessagingStore } from "./messaging-store-sqlite.js";
 import { SqliteOverlayStore } from "./overlay-store-sqlite.js";
@@ -21,6 +22,7 @@ let overlayStore: SqliteOverlayStore | null = null;
 let runtimeInstanceStore: AppRuntimeInstanceStore | null = null;
 let profileRuntimeHeartbeat: ProfileRuntimeHeartbeat | null = null;
 let automationStore: AutomationStore | null = null;
+let scheduledThreadActionStore: ScheduledThreadActionStore | null = null;
 let activeMode: AppStateMode | null = null;
 // The boot decision is set once at startup and stays put for the
 // process lifetime. Stored here (vs. recomputed lazily) because the
@@ -65,6 +67,7 @@ export function initializeAppState(
   runtimeInstanceStore: AppRuntimeInstanceStore;
   mode: AppStateMode;
   automationStore: AutomationStore;
+  scheduledThreadActionStore: ScheduledThreadActionStore;
 } {
   if (stateDb) {
     if (activeMode !== mode) {
@@ -83,6 +86,7 @@ export function initializeAppState(
       runtimeInstanceStore: runtimeInstanceStore!,
       mode,
       automationStore: automationStore!,
+      scheduledThreadActionStore: scheduledThreadActionStore!,
     };
   }
 
@@ -114,6 +118,7 @@ export function initializeAppState(
   overlayStore = new SqliteOverlayStore(stateDb);
   runtimeInstanceStore = new AppRuntimeInstanceStore(stateDb);
   automationStore = new AutomationStore(stateDb);
+  scheduledThreadActionStore = new ScheduledThreadActionStore(stateDb);
   activeMode = mode;
 
   return {
@@ -122,6 +127,7 @@ export function initializeAppState(
     overlayStore: overlayStore!,
     runtimeInstanceStore: runtimeInstanceStore!,
     automationStore: automationStore!,
+    scheduledThreadActionStore: scheduledThreadActionStore!,
     mode,
   };
 }
@@ -159,6 +165,13 @@ export function getAppAutomationStore(): AutomationStore {
   return automationStore;
 }
 
+export function getAppScheduledThreadActionStore(): ScheduledThreadActionStore {
+  if (!scheduledThreadActionStore) {
+    throw new Error("App state not initialized. Call initializeAppState() first.");
+  }
+  return scheduledThreadActionStore;
+}
+
 export function disposeAppState(): void {
   if (profileRuntimeHeartbeat) {
     profileRuntimeHeartbeat.stop();
@@ -171,6 +184,7 @@ export function disposeAppState(): void {
     overlayStore = null;
     runtimeInstanceStore = null;
     automationStore = null;
+    scheduledThreadActionStore = null;
   }
   activeMode = null;
 }

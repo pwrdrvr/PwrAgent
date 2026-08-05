@@ -422,6 +422,9 @@ type QueuedTurnDraft = {
   id: string;
   backendQueuePending?: boolean;
   queueEntryId?: string;
+  scheduledActionId?: string;
+  failedScheduledActionId?: string;
+  errorMessage?: string;
   input?: AppServerTurnInputItem[];
   imageAttachments: ComposerImageAttachment[];
   fileAttachments: ComposerFileAttachment[];
@@ -435,8 +438,19 @@ type QueuedTurnDraft = {
 };
 
 type PendingSteerDraft = QueuedTurnDraft & {
+  clearComposerDraftOnAdmission?: boolean;
+  expectedTurnId: string;
   status: "pending" | "steering";
 };
+
+function scheduledActionFailureMessage(action: {
+  errorMessage?: string;
+  status: string;
+}): string | undefined {
+  return action.status === "failed"
+    ? action.errorMessage ?? "The scheduled action could not be dispatched."
+    : undefined;
+}
 
 type ComposerTurnPayload = {
   displayText: string;
@@ -1223,29 +1237,6 @@ function notificationIncludesDraftContent(
 
   const notificationImageUrls = new Set(collectImageUrls(params));
   return attachmentUrls.every((url) => notificationImageUrls.has(url));
-}
-
-function parseStaleSteerError(
-  error: unknown
-): { activeTurnId?: string; active: boolean } | undefined {
-  const message = error instanceof Error ? error.message : String(error);
-  const normalized = message.toLowerCase();
-  if (normalized.includes("no active turn to steer")) {
-    return { active: false };
-  }
-
-  const activeTurnMatch = message.match(/found `([^`]+)`/);
-  if (
-    normalized.includes("expected active turn id") &&
-    activeTurnMatch?.[1]
-  ) {
-    return {
-      active: true,
-      activeTurnId: activeTurnMatch[1],
-    };
-  }
-
-  return undefined;
 }
 
 function parseStaleInterruptError(error: unknown): boolean {
@@ -2874,6 +2865,9 @@ export function Composer(props: ComposerProps) {
   // duplicate renderer calls; the registry request ID provides the durable
   // idempotency boundary shared with messaging.
   const steeringRequestIdRef = useRef<string | undefined>(undefined);
+  const pendingSteerAutoAdmissionAttemptIdRef = useRef<string | undefined>(
+    undefined,
+  );
   const [queuedTurns, setQueuedTurnsState] = useState<QueuedTurnDraft[]>(
     savedInitialQueuedTurns ?? []
   );
@@ -3926,13 +3920,6 @@ export function Composer(props: ComposerProps) {
 
     draftStore.setQueuedTurns(scopeKey, snapshots);
   };
-  const setQueuedTurns = (nextQueuedTurns: QueuedTurnDraft[]): void => {
-    saveQueuedTurnSnapshots(composerScopeKey, nextQueuedTurns);
-    setQueuedTurnsState(nextQueuedTurns);
-  };
-  const setQueuedTurn = (nextQueuedTurn?: QueuedTurnDraft): void => {
-    setQueuedTurns(nextQueuedTurn ? [nextQueuedTurn] : []);
-  };
   const enqueueQueuedTurn = (nextQueuedTurn: QueuedTurnDraft): void => {
     setQueuedTurnsState((current) => {
       const nextQueuedTurns = [...current, nextQueuedTurn];
@@ -3946,6 +3933,23 @@ export function Composer(props: ComposerProps) {
   ): void => {
     const current = draftStore.getQueuedTurns(scopeKey);
     const nextQueuedTurns = [...current, nextQueuedTurn];
+    saveQueuedTurnSnapshots(scopeKey, nextQueuedTurns);
+    if (activeComposerScopeKeyRef.current === scopeKey) {
+      setQueuedTurnsState(nextQueuedTurns);
+    }
+  };
+  const upsertScheduledProjectionInScope = (
+    scopeKey: string,
+    projection: QueuedTurnDraft,
+  ): void => {
+    const current = draftStore.getQueuedTurns(scopeKey);
+    const nextQueuedTurns = [
+      ...current.filter(
+        (candidate) =>
+          candidate.scheduledActionId !== projection.scheduledActionId,
+      ),
+      projection,
+    ];
     saveQueuedTurnSnapshots(scopeKey, nextQueuedTurns);
     if (activeComposerScopeKeyRef.current === scopeKey) {
       setQueuedTurnsState(nextQueuedTurns);
@@ -4008,6 +4012,7 @@ export function Composer(props: ComposerProps) {
       ...queued,
       backendQueuePending: false,
       queueEntryId: undefined,
+      scheduledActionId: undefined,
     };
     const nextQueuedTurns = current.some((candidate) => candidate.id === queued.id)
       ? current.map((candidate) =>
@@ -4028,6 +4033,23 @@ export function Composer(props: ComposerProps) {
         setSendError(message);
       }
     };
+    if (queued.scheduledActionId) {
+      if (!props.desktopApi?.cancelScheduledThreadAction) {
+        reportError("Scheduled action cancellation is unavailable.");
+        return false;
+      }
+      try {
+        await props.desktopApi.cancelScheduledThreadAction({
+          federationTarget: props.thread?.federation?.ref.target
+            ?? rendererFederationTarget,
+          id: queued.scheduledActionId,
+        });
+        return true;
+      } catch (error) {
+        reportError(error instanceof Error ? error.message : String(error));
+        return false;
+      }
+    }
     if (!queued.queueEntryId) {
       return true;
     }
@@ -4515,6 +4537,29 @@ export function Composer(props: ComposerProps) {
     reviewConfig?.branchSource,
     reviewConfig?.target,
   ]);
+
+  useEffect(() => {
+    let refreshQueuedTurnsPending = false;
+    let disposed = false;
+    const unsubscribe = draftStore.subscribeQueuedTurns(() => {
+      if (refreshQueuedTurnsPending) return;
+      refreshQueuedTurnsPending = true;
+      queueMicrotask(() => {
+        refreshQueuedTurnsPending = false;
+        if (
+          disposed
+          || activeComposerScopeKeyRef.current !== composerScopeKey
+        ) {
+          return;
+        }
+        setQueuedTurnsState(draftStore.getQueuedTurns(composerScopeKey));
+      });
+    });
+    return () => {
+      disposed = true;
+      unsubscribe();
+    };
+  }, [composerScopeKey, draftStore]);
 
   useEffect(() => {
     return () => {
@@ -5047,19 +5092,11 @@ export function Composer(props: ComposerProps) {
         setSteering(false);
         steeringRequestIdRef.current = undefined;
         if (pendingSteer?.status === "pending") {
-          if (queuedTurn) {
-            setComposerDraftFromCanonical(pendingSteer.text);
-            setImageAttachments(pendingSteer.imageAttachments);
-            setFileAttachments(pendingSteer.fileAttachments);
-          } else {
-            setQueuedTurn({
-              id: createQueuedTurnId(),
-              input: pendingSteer.input,
-              text: pendingSteer.text,
-              imageAttachments: pendingSteer.imageAttachments,
-              fileAttachments: pendingSteer.fileAttachments,
-            });
-          }
+          void submitPendingSteer(
+            pendingSteer,
+            pendingSteer.expectedTurnId,
+            composerScopeKey,
+          );
         }
         setPendingSteer(undefined);
         updateActiveTurnId(undefined);
@@ -5884,6 +5921,53 @@ export function Composer(props: ComposerProps) {
   // background releaser in useQueuedTurnRelease can't double-send the claimed
   // turn.
   const sendQueuedTurnNow = (queued: QueuedTurnDraft): void => {
+    if (queued.scheduledActionId) {
+      if (!props.desktopApi?.sendScheduledThreadActionNow) {
+        setSendError("Sending scheduled actions now is unavailable.");
+        return;
+      }
+      updateSending(true);
+      void props.desktopApi.sendScheduledThreadActionNow({
+        federationTarget: props.thread?.federation?.ref.target
+          ?? rendererFederationTarget,
+        id: queued.scheduledActionId,
+      }).then(
+        (response) => {
+          const failureMessage = scheduledActionFailureMessage(response.action);
+          if (failureMessage) {
+            updateSending(false);
+            setSendError(failureMessage);
+            return;
+          }
+          if (
+            response.action.status === "scheduled"
+            || response.action.status === "dispatching"
+            || response.action.status === "queued"
+          ) {
+            upsertScheduledProjectionInScope(composerScopeKey, {
+              ...queued,
+              backendQueuePending: response.action.status === "dispatching",
+              queueEntryId:
+                response.action.status === "queued"
+                  ? response.action.queueEntryId
+                  : undefined,
+              scheduledSendAt:
+                response.action.status === "scheduled"
+                  ? response.action.scheduledFor
+                  : undefined,
+            });
+          } else {
+            removeQueuedTurn(queued);
+          }
+          updateSending(false);
+        },
+        (error) => {
+          updateSending(false);
+          setSendError(error instanceof Error ? error.message : String(error));
+        },
+      );
+      return;
+    }
     if (
       props.disabled ||
       sending ||
@@ -5941,24 +6025,17 @@ export function Composer(props: ComposerProps) {
       pendingSteer.status !== "pending" ||
       activeTurnId ||
       props.launchpad
+      || pendingSteerAutoAdmissionAttemptIdRef.current === pendingSteer.id
     ) {
       return;
     }
 
-    if (queuedTurn) {
-      setComposerDraftFromCanonical(pendingSteer.text);
-      setImageAttachments(pendingSteer.imageAttachments);
-      setFileAttachments(pendingSteer.fileAttachments);
-    } else {
-      setQueuedTurn({
-        id: createQueuedTurnId(),
-        input: pendingSteer.input,
-        text: pendingSteer.text,
-        imageAttachments: pendingSteer.imageAttachments,
-        fileAttachments: pendingSteer.fileAttachments,
-      });
-    }
-    setPendingSteer(undefined);
+    pendingSteerAutoAdmissionAttemptIdRef.current = pendingSteer.id;
+    void submitPendingSteer(
+      pendingSteer,
+      pendingSteer.expectedTurnId,
+      composerScopeKey,
+    );
   }, [activeTurnId, pendingSteer, props.launchpad, queuedTurn]);
 
   const queueCurrentDraft = (
@@ -5976,22 +6053,77 @@ export function Composer(props: ComposerProps) {
     }
 
     queueCurrentDraftInFlightRef.current = true;
-    const complete = (payload: ComposerTurnPayload): void => {
+    const complete = async (payload: ComposerTurnPayload): Promise<void> => {
       try {
         if (payload.input.length === 0) {
           return;
         }
 
-        enqueueQueuedTurn({
-          id: createQueuedTurnId(),
-          input: payload.input,
-          text: canonicalDraft,
-          imageAttachments,
-          fileAttachments,
-          ...(options?.scheduledSendAt
-            ? { scheduledSendAt: options.scheduledSendAt }
-            : {}),
-        });
+        if (props.thread) {
+          if (!props.desktopApi?.createScheduledThreadAction) {
+            setSendError("Backend-owned queuing is unavailable.");
+            return;
+          }
+          const response = await props.desktopApi.createScheduledThreadAction({
+            backend: props.thread.source,
+            federationTarget: props.thread.federation?.ref.target
+              ?? rendererFederationTarget,
+            threadId: props.thread.id,
+            kind: "turn",
+            origin: "desktop",
+            scheduledFor: options?.scheduledSendAt ?? Date.now(),
+            displayText: payload.displayText,
+            imageAttachments,
+            fileAttachments,
+            turn: {
+              input: payload.input,
+              executionMode: props.thread.executionMode,
+              model: selectedModelOption?.id,
+              reasoningEffort: supportsReasoning
+                ? selectedReasoningEffort
+                : undefined,
+              serviceTier: selectedServiceTier,
+              fastMode:
+                props.thread.source === "codex" && supportsFast
+                  ? Boolean(currentSettings?.fastMode)
+                  : undefined,
+            },
+          });
+          const failureMessage = scheduledActionFailureMessage(response.action);
+          if (failureMessage) throw new Error(failureMessage);
+          if (
+            response.action.status === "scheduled"
+            || response.action.status === "dispatching"
+            || response.action.status === "queued"
+          ) {
+            upsertScheduledProjectionInScope(composerScopeKey, {
+              id: `scheduled-projection:${response.action.id}`,
+              scheduledActionId: response.action.id,
+              input: payload.input,
+              text: canonicalDraft,
+              imageAttachments,
+              fileAttachments,
+              ...(response.action.status === "scheduled"
+                ? { scheduledSendAt: response.action.scheduledFor }
+                : {}),
+              ...(response.action.status === "dispatching"
+                ? { backendQueuePending: true }
+                : {}),
+              ...(response.action.status === "queued"
+                && response.action.queueEntryId
+                ? { queueEntryId: response.action.queueEntryId }
+                : {}),
+            });
+          }
+        } else {
+          enqueueQueuedTurn({
+            id: createQueuedTurnId(),
+            input: payload.input,
+            text: canonicalDraft,
+            imageAttachments,
+            fileAttachments,
+          });
+        }
         recordComposerDraftHistory(
           composerScopeKey,
           latestDraftSnapshotRef.current.snapshot,
@@ -6005,6 +6137,8 @@ export function Composer(props: ComposerProps) {
         setScheduleArmed(true);
         setReviewConfig(undefined);
         setSendError(undefined);
+      } catch (error) {
+        setSendError(error instanceof Error ? error.message : String(error));
       } finally {
         queueCurrentDraftInFlightRef.current = false;
       }
@@ -6020,7 +6154,7 @@ export function Composer(props: ComposerProps) {
         queueCurrentDraftInFlightRef.current = false;
       });
     }
-    complete(payload);
+    return complete(payload);
   };
 
   const queueReviewCommand = (
@@ -6030,30 +6164,82 @@ export function Composer(props: ComposerProps) {
       target: AppServerReviewTarget;
     },
     options?: { scheduledSendAt?: number },
-  ): void => {
-    enqueueQueuedTurn({
-      id: createQueuedTurnId(),
-      text: reviewCommandToDraftText(reviewCommand),
-      imageAttachments: [],
-      fileAttachments: [],
-      ...(options?.scheduledSendAt
-        ? { scheduledSendAt: options.scheduledSendAt }
-        : {}),
-      reviewCommand,
-    });
-    recordComposerDraftHistory(
-      composerScopeKey,
-      latestDraftSnapshotRef.current.snapshot,
-      "unsent",
+  ): Promise<void> | undefined => {
+    const enqueue = async (): Promise<void> => {
+      const text = reviewCommandToDraftText(reviewCommand);
+      if (!props.thread || !props.desktopApi?.createScheduledThreadAction) {
+        throw new Error("Backend-owned review queuing is unavailable.");
+      }
+      const response = await props.desktopApi.createScheduledThreadAction({
+        backend: props.thread.source,
+        federationTarget: props.thread.federation?.ref.target
+          ?? rendererFederationTarget,
+        threadId: props.thread.id,
+        kind: "review",
+        origin: "desktop",
+        scheduledFor: options?.scheduledSendAt ?? Date.now(),
+        displayText: reviewCommand.displayText,
+        review: {
+          target: reviewCommand.target,
+          draftText: text,
+          delivery: "inline",
+          cwd: reviewCommand.cwd,
+          model: props.thread.model,
+          reasoningEffort: props.thread.reasoningEffort,
+          serviceTier: props.thread.serviceTier,
+          fastMode:
+            props.thread.source === "codex"
+              ? props.thread.fastMode
+              : undefined,
+        },
+      });
+      const failureMessage = scheduledActionFailureMessage(response.action);
+      if (failureMessage) throw new Error(failureMessage);
+      if (
+        response.action.status === "scheduled"
+        || response.action.status === "dispatching"
+        || response.action.status === "queued"
+      ) {
+        upsertScheduledProjectionInScope(composerScopeKey, {
+          id: `scheduled-projection:${response.action.id}`,
+          scheduledActionId: response.action.id,
+          text,
+          imageAttachments: [],
+          fileAttachments: [],
+          ...(response.action.status === "scheduled"
+            ? { scheduledSendAt: response.action.scheduledFor }
+            : {}),
+          ...(response.action.status === "dispatching"
+            ? { backendQueuePending: true }
+            : {}),
+          ...(response.action.status === "queued" && response.action.queueEntryId
+            ? { queueEntryId: response.action.queueEntryId }
+            : {}),
+          reviewCommand,
+        });
+      }
+    };
+    const queued = enqueue().then(
+      () => {
+        recordComposerDraftHistory(
+          composerScopeKey,
+          latestDraftSnapshotRef.current.snapshot,
+          "unsent",
+        );
+        clearComposerDraftSnapshot(composerScopeKey);
+        clearComposerDraft();
+        setImageAttachments([]);
+        setFileAttachments([]);
+        setScheduledDraftSendAt(undefined);
+        setScheduleArmed(true);
+        setReviewConfig(undefined);
+        setSendError(undefined);
+      },
+      (error) => {
+        setSendError(error instanceof Error ? error.message : String(error));
+      },
     );
-    clearComposerDraftSnapshot(composerScopeKey);
-    clearComposerDraft();
-    setImageAttachments([]);
-    setFileAttachments([]);
-    setScheduledDraftSendAt(undefined);
-    setScheduleArmed(true);
-    setReviewConfig(undefined);
-    setSendError(undefined);
+    return queued;
   };
 
   const shouldQueueThreadSubmit = (): boolean =>
@@ -6110,7 +6296,7 @@ export function Composer(props: ComposerProps) {
   };
 
   const submitPendingSteer = async (
-    pending: QueuedTurnDraft,
+    pending: PendingSteerDraft,
     expectedTurnId = activeTurnIdRef.current,
     expectedScopeKey = composerScopeKey,
   ): Promise<void> => {
@@ -6119,22 +6305,15 @@ export function Composer(props: ComposerProps) {
       setSendError("Steering is not available for this backend.");
       return;
     }
-    if (!supportsSteering) {
-      setSendError("Steering is not available for this model.");
-      return;
-    }
-
-    const payloadOrPromise = buildQueuedTurnPayload(pending);
+    const payloadOrPromise = pending.input
+      ? { input: pending.input }
+      : buildQueuedTurnPayload(pending);
     const payload = isPromiseLike(payloadOrPromise)
       ? await payloadOrPromise
       : payloadOrPromise;
     if (
-      activeTurnIdRef.current !== turnId
-      || activeComposerScopeKeyRef.current !== expectedScopeKey
+      activeComposerScopeKeyRef.current !== expectedScopeKey
     ) {
-      if (activeComposerScopeKeyRef.current === expectedScopeKey) {
-        setSendError("The target turn changed before steering could start.");
-      }
       return;
     }
     if (
@@ -6156,7 +6335,7 @@ export function Composer(props: ComposerProps) {
     );
     props.onPendingStatusChange?.("Steering");
     try {
-      await props.desktopApi.steerTurn({
+      const responsePromise = props.desktopApi.steerTurn({
         backend: props.thread.source,
         federationTarget: props.thread.federation?.ref.target ??
           readRendererFederationTarget(),
@@ -6164,33 +6343,68 @@ export function Composer(props: ComposerProps) {
         expectedTurnId: turnId,
         input: payload.input,
         requestId: pending.id,
+        fallback: {
+          displayText: pending.text,
+          imageAttachments: pending.imageAttachments,
+          fileAttachments: pending.fileAttachments,
+          turn: {
+            input: payload.input,
+            executionMode: props.thread.executionMode,
+            model: selectedModelOption?.id,
+            reasoningEffort: supportsReasoning
+              ? selectedReasoningEffort
+              : undefined,
+            serviceTier: selectedServiceTier,
+            fastMode:
+              props.thread.source === "codex" && supportsFast
+                ? Boolean(currentSettings?.fastMode)
+                : undefined,
+          },
+        },
       });
+      if (
+        pending.clearComposerDraftOnAdmission
+        && activeComposerScopeKeyRef.current === expectedScopeKey
+      ) {
+        recordComposerDraftHistory(
+          expectedScopeKey,
+          latestDraftSnapshotRef.current.snapshot,
+          "unsent",
+        );
+        clearComposerDraftSnapshot(expectedScopeKey);
+        clearComposerDraft();
+        setImageAttachments([]);
+        setFileAttachments([]);
+        setReviewConfig(undefined);
+      }
+      const response = await responsePromise;
+      if (response.disposition === "scheduled" && response.scheduledAction) {
+        const action = response.scheduledAction;
+        const failureMessage = scheduledActionFailureMessage(action);
+        if (failureMessage) throw new Error(failureMessage);
+        upsertScheduledProjectionInScope(expectedScopeKey, {
+          id: `scheduled-projection:${action.id}`,
+          scheduledActionId: action.id,
+          input: payload.input,
+          text: pending.text,
+          imageAttachments: pending.imageAttachments,
+          fileAttachments: pending.fileAttachments,
+          ...(action.status === "scheduled"
+            ? { scheduledSendAt: action.scheduledFor }
+            : {}),
+          ...(action.status === "dispatching"
+            ? { backendQueuePending: true }
+            : {}),
+          ...(action.status === "queued" && action.queueEntryId
+            ? { queueEntryId: action.queueEntryId }
+            : {}),
+        });
+        setPendingSteer(undefined);
+        setSendError(undefined);
+      }
     } catch (error) {
       if (steeringRequestIdRef.current === pending.id) {
         steeringRequestIdRef.current = undefined;
-      }
-      const staleSteer = parseStaleSteerError(error);
-      if (staleSteer) {
-        if (queuedTurn) {
-          setDraft(pending.text);
-          setImageAttachments(pending.imageAttachments);
-          setFileAttachments(pending.fileAttachments);
-        } else {
-          setQueuedTurn({
-            id: createQueuedTurnId(),
-            input: pending.input,
-            text: pending.text,
-            imageAttachments: pending.imageAttachments,
-            fileAttachments: pending.fileAttachments,
-          });
-        }
-        setPendingSteer(undefined);
-        setSendError(undefined);
-        const nextActiveTurnId = staleSteer.active ? staleSteer.activeTurnId : undefined;
-        updateActiveTurnId(nextActiveTurnId);
-        props.onActiveTurnIdChange?.(nextActiveTurnId);
-        props.onPendingStatusChange?.(staleSteer.active ? "Thinking" : undefined);
-        return;
       }
       updatePendingSteer((current) =>
         current?.text === pending.text &&
@@ -6209,10 +6423,14 @@ export function Composer(props: ComposerProps) {
     pending: QueuedTurnDraft,
     expectedTurnId = activeTurnIdRef.current,
     expectedScopeKey = composerScopeKey,
-  ): boolean | Promise<boolean> => {
+    clearComposerDraftOnAdmission = false,
+  ):
+    | PendingSteerDraft
+    | Promise<PendingSteerDraft | undefined>
+    | undefined => {
     const turnId = expectedTurnId;
     if (pendingSteerCreationInFlightRef.current) {
-      return false;
+      return undefined;
     }
     if (
       !props.thread
@@ -6223,12 +6441,14 @@ export function Composer(props: ComposerProps) {
       || !supportsSteering
     ) {
       setSendError("Steering is not available for this model.");
-      return false;
+      return undefined;
     }
 
     pendingSteerCreationInFlightRef.current = true;
     const inputOrPayload = buildQueuedTurnPayload(pending);
-    const complete = (input: AppServerTurnInputItem[]): boolean => {
+    const complete = (
+      input: AppServerTurnInputItem[],
+    ): PendingSteerDraft | undefined => {
       try {
         if (
           input.length === 0
@@ -6237,29 +6457,19 @@ export function Composer(props: ComposerProps) {
           || activeTurnIdRef.current !== turnId
           || activeComposerScopeKeyRef.current !== expectedScopeKey
         ) {
-          return false;
+          return undefined;
         }
 
-        setSendError(undefined);
-        setPendingSteer({
-          id: pending.id,
+        const accepted: PendingSteerDraft = {
+          ...pending,
+          clearComposerDraftOnAdmission,
+          expectedTurnId: turnId,
           input,
-          text: pending.text,
-          imageAttachments: pending.imageAttachments,
-          fileAttachments: pending.fileAttachments,
           status: "pending",
-        });
-        recordComposerDraftHistory(
-          composerScopeKey,
-          latestDraftSnapshotRef.current.snapshot,
-          "unsent",
-        );
-        clearComposerDraftSnapshot(composerScopeKey);
-        clearComposerDraft();
-        setImageAttachments([]);
-        setFileAttachments([]);
-        setReviewConfig(undefined);
-        return true;
+        };
+        setSendError(undefined);
+        setPendingSteer(accepted);
+        return accepted;
       } finally {
         pendingSteerCreationInFlightRef.current = false;
       }
@@ -6269,7 +6479,7 @@ export function Composer(props: ComposerProps) {
         (payload) => complete(payload.input),
         () => {
           pendingSteerCreationInFlightRef.current = false;
-          return false;
+          return undefined;
         },
       );
     }
@@ -6300,11 +6510,12 @@ export function Composer(props: ComposerProps) {
       pending,
       expectedTurnId,
       expectedScopeKey,
+      true,
     );
-    const continueSteering = (accepted: boolean): void => {
+    const continueSteering = (accepted?: PendingSteerDraft): void => {
       if (accepted) {
         void submitPendingSteer(
-          pending,
+          accepted,
           expectedTurnId,
           expectedScopeKey,
         );
@@ -6332,14 +6543,14 @@ export function Composer(props: ComposerProps) {
       preserveCancelledQueuedTurnInScope(expectedScopeKey, queued);
       return;
     }
-    const continueSteering = (created: boolean): void => {
-      if (!created) {
+    const continueSteering = (accepted?: PendingSteerDraft): void => {
+      if (!accepted) {
         preserveCancelledQueuedTurnInScope(expectedScopeKey, queued);
         return;
       }
       removeQueuedTurnInScope(expectedScopeKey, queued);
       void submitPendingSteer(
-        queued,
+        accepted,
         expectedTurnId,
         expectedScopeKey,
       );
@@ -9051,13 +9262,17 @@ export function Composer(props: ComposerProps) {
       {queuedTurns.map((queued, index) => {
         const queuedScopeKey = composerScopeKey;
         const backendOwned = Boolean(
-          queued.backendQueuePending || queued.queueEntryId,
+          queued.backendQueuePending
+          || queued.queueEntryId
+          || queued.scheduledActionId,
         );
         const scheduledSendAt = getFutureScheduledSendAt(
           queued.scheduledSendAt,
           scheduleNow,
         );
-        const queuedLabel = scheduledSendAt
+        const queuedLabel = queued.errorMessage
+          ? "Failed to send"
+          : scheduledSendAt
           ? `Sends in ${formatScheduledSendCountdown(scheduledSendAt, scheduleNow)}`
           : index === 0
             ? "Queued next"
@@ -9068,6 +9283,7 @@ export function Composer(props: ComposerProps) {
             className={[
               "composer__queued",
               scheduledSendAt ? "composer__queued--scheduled" : "",
+              queued.errorMessage ? "composer__queued--failed" : "",
             ]
               .filter(Boolean)
               .join(" ")}
@@ -9081,10 +9297,26 @@ export function Composer(props: ComposerProps) {
               <span className="composer__queued-text">
                 {formatDraftPreview(queued)}
               </span>
+              {queued.errorMessage ? (
+                <span className="composer__queued-error">
+                  {queued.errorMessage}
+                </span>
+              ) : null}
             </div>
             <QueuedImageAttachments attachments={queued.imageAttachments} />
             <div className="composer__queued-actions">
-              {activeTurnId ? (
+              {queued.scheduledActionId && scheduledSendAt ? (
+                <button
+                  className="composer__secondary-action"
+                  disabled={props.disabled || sending}
+                  type="button"
+                  onClick={() => {
+                    sendQueuedTurnNow(queued);
+                  }}
+                >
+                  Send now
+                </button>
+              ) : activeTurnId ? (
                 supportsSteering && !queued.reviewCommand ? (
                   <button
                     className="composer__secondary-action"
