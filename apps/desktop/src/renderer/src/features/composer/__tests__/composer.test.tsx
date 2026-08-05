@@ -4890,7 +4890,9 @@ describe("Composer", () => {
       await cancellationTwo.promise;
     });
 
-    expect(screen.queryByLabelText("Queued message")).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.queryByLabelText("Queued message")).not.toBeInTheDocument();
+    });
     expect(cancelQueuedTurn).toHaveBeenCalledTimes(2);
   });
 
