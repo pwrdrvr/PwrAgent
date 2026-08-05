@@ -180,6 +180,18 @@ test.describe("federation remote window", () => {
       expect(target?.scope).toBe("remote");
       expect(target?.instanceId).toBe(gateway.instanceId);
 
+      // The OS-level window title must keep the peer label — the
+      // renderer's static <title> used to clobber it back to the app
+      // name, collapsing every window to one entry in the macOS Window
+      // menu.
+      await expect
+        .poll(async () =>
+          await electronApp.evaluate(({ BrowserWindow }) =>
+            BrowserWindow.getAllWindows().map((win) => win.getTitle()),
+          ),
+        )
+        .toContain("PwrAgent - Gateway");
+
       // The peer's threads render; the local thread does not leak in.
       await expect(
         remote.locator(".thread-row__title", {

@@ -427,6 +427,15 @@ export function createMainWindow(options?: {
     window.once("closed", () => {
       federationWindowWebContentsIds.delete(webContentsId);
     });
+    // The renderer's static <title> (index.html) replaces the
+    // BrowserWindow title on load, which collapses every window to the
+    // same entry in the macOS Window menu. A remote window must keep
+    // its "PwrAgent - <machine>" title so windows stay tellable apart.
+    // (BrowserWindow event, not webContents — only the window-level
+    // preventDefault stops the title swap.)
+    window.on("page-title-updated", (event) => {
+      event.preventDefault();
+    });
   }
 
   // Register before renderer navigation can reach ready-to-show and call
