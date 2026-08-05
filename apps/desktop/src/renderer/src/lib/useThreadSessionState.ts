@@ -3976,15 +3976,32 @@ export function useThreadSessionState(params: {
       if (threadStatusSummarySeedRef.current[threadKey] !== summarySeed) {
         threadStatusSummarySeedRef.current[threadKey] = summarySeed;
         const backendReportedActive = thread.threadStatus === "active";
-        updateSession(threadKey, (current) =>
-          current.backendReportedActive === backendReportedActive
-            ? current
-            : {
-                ...current,
-                backendReportedActive,
-                lastTouchedAt: Date.now(),
-              }
-        );
+        updateSession(threadKey, (current) => {
+          const shouldRecheckStaleThinking =
+            !backendReportedActive && hasThinkingState(current);
+          if (
+            current.backendReportedActive === backendReportedActive
+            && !shouldRecheckStaleThinking
+          ) {
+            return current;
+          }
+
+          const now = Date.now();
+          return {
+            ...current,
+            backendReportedActive,
+            lastTouchedAt: now,
+            // Federation backend events are live-only. If a remote viewer
+            // misses the terminal notifications during a transport gap, its
+            // next navigation snapshot still carries the authoritative idle
+            // status. Re-read after the normal completion grace so that the
+            // transcript snapshot can clear the stale active turn without
+            // racing an idle-before-turn/completed notification pair.
+            staleThinkingRecheckAt: shouldRecheckStaleThinking
+              ? now + OWN_UPDATE_IDLE_GRACE_MS
+              : current.staleThinkingRecheckAt,
+          };
+        });
       }
     }
 
