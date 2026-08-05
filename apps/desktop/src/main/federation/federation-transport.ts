@@ -475,6 +475,7 @@ export class FederationGatewayWebSocketServer {
       channelBinding,
       now: Date.now(),
       label: message.label,
+      profileName: message.profileName,
     });
   }
 }

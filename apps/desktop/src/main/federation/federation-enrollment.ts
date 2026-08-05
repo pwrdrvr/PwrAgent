@@ -253,6 +253,12 @@ export function authenticateFederationReconnect(params: {
   channelBinding?: string;
   /** Display label advertised by the peer; refreshes the stored label. */
   label?: string;
+  /**
+   * Profile the peer runs under; refreshes the stored value like label,
+   * so peers enrolled before profiles were advertised pick theirs up on
+   * the next reconnect instead of needing a re-enrollment.
+   */
+  profileName?: string;
 }): FederationAuthDecision {
   if (!isFederationInstanceId(params.peerInstanceId)) {
     return {
@@ -313,6 +319,7 @@ export function authenticateFederationReconnect(params: {
   const connectedPeer: FederationPeerSummary & { pinnedPublicKeyPem?: string } = {
     ...peer,
     label: params.label?.trim() || peer.label,
+    profileName: params.profileName?.trim() || peer.profileName,
     // Stored capabilities are informational, not an allowlist: refresh
     // them to what the peer's current build advertises so peer cards and
     // capability-gated surfaces (messaging fan-out, event forwarding)
