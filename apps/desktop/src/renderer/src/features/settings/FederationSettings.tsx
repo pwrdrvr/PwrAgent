@@ -1019,6 +1019,7 @@ const FEDERATION_CAPABILITY_LABELS: Record<FederationCapability, string> = {
   thread_navigation: "browse and create threads",
   thread_detail: "read transcripts",
   turn_control: "prompt, steer, and interrupt",
+  scheduled_actions: "schedule and manage messages",
   pending_request_control: "handle approvals and questions",
   environment_actions: "run environments and scripts",
   federated_search: "search remote threads",

@@ -94,6 +94,7 @@ describe("FederationSettings", () => {
             "remote_window",
             "thread_navigation",
             "turn_control",
+            "scheduled_actions",
             "pending_request_control",
           ],
           protocolVersion: 1,
@@ -131,6 +132,7 @@ describe("FederationSettings", () => {
     expect(screen.getByText(
       /Available: open a remote workspace · browse and create threads/,
     )).toBeInTheDocument();
+    expect(screen.getByText(/schedule and manage messages/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", {
       name: "Browse remote threads",
