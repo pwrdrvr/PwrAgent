@@ -108,6 +108,7 @@ export type TranscriptImageFileResolution =
 type MaterializedTranscriptImage = {
   buffer: Buffer;
   extension: string;
+  mimeType: string;
   sha256: string;
 };
 
@@ -185,7 +186,7 @@ export function rewriteFederatedTranscriptImageUrlsForRenderer(
   instanceId: FederationInstanceId,
 ): AppServerReadThreadResponse {
   return rewriteTranscriptImageUrls(response, (url) =>
-    isLocalTranscriptImageUrl(url)
+    isFederationOwnerImageUrl(url)
       ? toFederatedTranscriptImageProtocolUrl(instanceId, url)
       : undefined,
   );
@@ -531,7 +532,7 @@ async function fetchLoopbackSignedImage(
 
 async function fetchLoopbackSignedImageOnce(
   url: string,
-  deps: TranscriptImageMaterializerDependencies,
+  deps: Pick<TranscriptImageMaterializerDependencies, "fetch">,
 ): Promise<MaterializedTranscriptImage | undefined> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), FETCHED_TRANSCRIPT_IMAGE_TIMEOUT_MS);
@@ -558,7 +559,7 @@ async function fetchLoopbackSignedImageOnce(
       ?.trim()
       .toLowerCase();
     const extension = mimeType ? DATA_IMAGE_EXTENSIONS.get(mimeType) : undefined;
-    if (!extension) {
+    if (!mimeType || !extension) {
       return undefined;
     }
 
@@ -570,6 +571,7 @@ async function fetchLoopbackSignedImageOnce(
     return {
       buffer,
       extension,
+      mimeType,
       sha256: createHash("sha256").update(buffer).digest("hex"),
     };
   } catch {
@@ -886,6 +888,7 @@ async function readMarkdownLinkedTranscriptImage(
   return {
     buffer,
     extension,
+    mimeType: resolution.mimeType,
     sha256: createHash("sha256").update(buffer).digest("hex"),
   };
 }
@@ -1062,6 +1065,10 @@ function isLocalTranscriptImageUrl(url: string): boolean {
   return url.startsWith(`${TRANSCRIPT_IMAGE_PROTOCOL_SCHEME}://file/`);
 }
 
+function isFederationOwnerImageUrl(url: string): boolean {
+  return isLocalTranscriptImageUrl(url) || isPwrSnapSignedMediaUrl(url);
+}
+
 function isFileImageUrl(url: string): boolean {
   return url.startsWith("file://");
 }
@@ -1166,7 +1173,7 @@ function decodeFederatedTranscriptImageProtocolRequest(
   try {
     const instanceId = decodeURIComponent(encodedInstanceId);
     const url = decodeURIComponent(encodedUrl);
-    if (!instanceId || !isLocalTranscriptImageUrl(url)) {
+    if (!instanceId || !isFederationOwnerImageUrl(url)) {
       return undefined;
     }
     return { instanceId, url };
@@ -1190,7 +1197,20 @@ export async function resolveTranscriptImageProtocolRequest(
 export async function readTranscriptImageProtocolRequest(
   requestUrl: string,
   options?: TranscriptImageProtocolOptions,
+  dependencies: Pick<TranscriptImageMaterializerDependencies, "fetch"> =
+    defaultMaterializerDependencies,
 ): Promise<FederatedTranscriptImageResponse> {
+  if (isPwrSnapSignedMediaUrl(requestUrl)) {
+    const image = await fetchLoopbackSignedImageOnce(requestUrl, dependencies);
+    if (!image) {
+      throw new Error("PwrSnap transcript image could not be fetched");
+    }
+    return {
+      dataBase64: image.buffer.toString("base64"),
+      mimeType: image.mimeType,
+    };
+  }
+
   const resolution = await resolveTranscriptImageProtocolRequest(
     requestUrl,
     options,
@@ -1338,7 +1358,7 @@ function mimeTypeForImagePath(filePath: string): string | undefined {
 
 function parseSupportedImageDataUrl(
   url: string,
-): { buffer: Buffer; extension: string; sha256: string } | undefined {
+): MaterializedTranscriptImage | undefined {
   const match = /^data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/]+={0,2})$/iu.exec(
     url,
   );
@@ -1349,7 +1369,7 @@ function parseSupportedImageDataUrl(
   const mimeType = match[1]?.toLowerCase();
   const extension = mimeType ? DATA_IMAGE_EXTENSIONS.get(mimeType) : undefined;
   const payload = match[2] ?? "";
-  if (!extension || payload.length % 4 === 1) {
+  if (!mimeType || !extension || payload.length % 4 === 1) {
     return undefined;
   }
 
@@ -1361,6 +1381,7 @@ function parseSupportedImageDataUrl(
   return {
     buffer,
     extension,
+    mimeType,
     sha256: createHash("sha256").update(buffer).digest("hex"),
   };
 }

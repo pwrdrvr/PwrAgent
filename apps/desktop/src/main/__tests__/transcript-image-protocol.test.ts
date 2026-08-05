@@ -148,6 +148,8 @@ describe("transcript image protocol", () => {
     const ownerUrl = toProtocolUrl(
       "/Users/owner/.pwragent/profiles/default/state/image-inputs/image.png",
     );
+    const signedPwrSnapUrl =
+      "http://127.0.0.1:51729/media?grant=read-once-grant&signature=valid-signature";
 
     const response = rewriteFederatedTranscriptImageUrlsForRenderer({
       backend: "codex",
@@ -160,7 +162,10 @@ describe("transcript image protocol", () => {
             id: "entry-1",
             role: "user",
             text: "what's in this?",
-            parts: [{ type: "image", url: ownerUrl }],
+            parts: [
+              { type: "image", url: ownerUrl },
+              { type: "image", url: signedPwrSnapUrl },
+            ],
           },
         ],
         messages: [
@@ -168,7 +173,10 @@ describe("transcript image protocol", () => {
             id: "message-1",
             role: "user",
             text: "what's in this?",
-            parts: [{ type: "image", url: ownerUrl }],
+            parts: [
+              { type: "image", url: ownerUrl },
+              { type: "image", url: signedPwrSnapUrl },
+            ],
           },
         ],
         pagination: {
@@ -182,11 +190,21 @@ describe("transcript image protocol", () => {
       "owner_one",
       ownerUrl,
     );
+    const expectedPwrSnapUrl = toFederatedTranscriptImageProtocolUrl(
+      "owner_one",
+      signedPwrSnapUrl,
+    );
     expect(response.replay.entries[0]).toMatchObject({
-      parts: [{ type: "image", url: expectedUrl }],
+      parts: [
+        { type: "image", url: expectedUrl },
+        { type: "image", url: expectedPwrSnapUrl },
+      ],
     });
     expect(response.replay.messages[0]).toMatchObject({
-      parts: [{ type: "image", url: expectedUrl }],
+      parts: [
+        { type: "image", url: expectedUrl },
+        { type: "image", url: expectedPwrSnapUrl },
+      ],
     });
   });
 
@@ -220,6 +238,20 @@ describe("transcript image protocol", () => {
     expect(new Uint8Array(await response.arrayBuffer())).toEqual(
       new Uint8Array([1, 2, 3]),
     );
+
+    const signedPwrSnapUrl =
+      "http://127.0.0.1:51729/media?grant=read-once-grant&signature=valid-signature";
+    resolveFederatedImage.mockClear();
+    await handler({
+      url: toFederatedTranscriptImageProtocolUrl(
+        "owner_one",
+        signedPwrSnapUrl,
+      ),
+    });
+    expect(resolveFederatedImage).toHaveBeenCalledWith({
+      instanceId: "owner_one",
+      url: signedPwrSnapUrl,
+    });
   });
 
   it("materializes data image URLs into thread-scoped files before renderer IPC", async () => {
@@ -377,6 +409,45 @@ describe("transcript image protocol", () => {
       entryPart?.type === "image" ? filePathFromProtocolUrl(entryPart.url) : "";
     expect(path.basename(materializedPath)).toMatch(/^[a-f0-9]{64}\.jpg$/);
     await expect(readFile(materializedPath)).resolves.toEqual(Buffer.from([4, 5, 6]));
+  });
+
+  it("reads signed PwrSnap loopback images for federation transport", async () => {
+    const { readTranscriptImageProtocolRequest } = await import(
+      "../transcript-image-protocol"
+    );
+    const signedUrl =
+      "http://127.0.0.1:51729/media?grant=read-once-grant&signature=valid-signature";
+    const bytes = new Uint8Array([7, 8, 9]);
+    const fetch = vi.fn(async () => ({
+      ok: true,
+      headers: {
+        get: (name: string) => {
+          if (name === "content-type") {
+            return "image/png";
+          }
+          if (name === "content-length") {
+            return String(bytes.byteLength);
+          }
+          return null;
+        },
+      },
+      arrayBuffer: async () => bytes.buffer,
+    }));
+
+    await expect(
+      readTranscriptImageProtocolRequest(
+        signedUrl,
+        undefined,
+        { fetch },
+      ),
+    ).resolves.toEqual({
+      dataBase64: Buffer.from(bytes).toString("base64"),
+      mimeType: "image/png",
+    });
+    expect(fetch).toHaveBeenCalledWith(
+      signedUrl,
+      expect.objectContaining({ redirect: "error" }),
+    );
   });
 
   it("does not fetch arbitrary HTTP image URLs", async () => {

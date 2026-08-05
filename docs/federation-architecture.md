@@ -66,7 +66,9 @@ Transcript images stay behind the renderer-safe `pwragent-image://` protocol.
 For a remote thread, the viewer rewrites owner-local image URLs to identify the
 owning instance and lazily fetches the validated bytes with
 `backend.readTranscriptImage`. That RPC requires `thread_detail`; the owner
-applies the same allowed-root and image-type checks as a local protocol fetch.
+applies the same allowed-root checks as a local file fetch, accepts only signed
+PwrSnap media from its fixed loopback origin, and enforces image type and size
+limits before returning bytes.
 
 The scheduled-action RPC surface is part of federation protocol v1 while the
 protocol remains under development. Peers must authorize `scheduled_actions`
