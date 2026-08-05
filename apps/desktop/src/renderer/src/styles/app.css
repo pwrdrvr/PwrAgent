@@ -4071,6 +4071,15 @@ textarea,
   line-height: normal;
 }
 
+/* A PR chip inside rendered markdown is part of the message's copyable prose.
+   Select it atomically so Chromium includes the full label in text/plain;
+   ThreadMarkdown upgrades the matching text/html fragment to a real link.
+   Chips in sidebar rows and context chrome remain non-selectable controls. */
+.thread-markdown .pr-chip {
+  -webkit-user-select: all;
+  user-select: all;
+}
+
 /* Draft affordance: a short, round-ended gray bar centered beneath the dot +
    number. Orthogonal to the dot color (which still shows check/merge status),
    it reads as an extra marker, not an underline — there's a deliberate gap

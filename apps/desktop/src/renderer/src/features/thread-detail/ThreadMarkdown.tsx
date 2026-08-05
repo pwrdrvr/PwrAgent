@@ -15,6 +15,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ClipboardEvent,
   type MouseEvent,
   type ReactNode,
 } from "react";
@@ -84,6 +85,41 @@ type EditorApplication = DesktopApplicationsSnapshot["editors"][number];
  */
 const CodeBlockContext = createContext(false);
 const MarkdownLinkContext = createContext(false);
+
+function copySelectedPullRequestLinks(
+  event: ClipboardEvent<HTMLDivElement>,
+): void {
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
+    return;
+  }
+
+  const fragment = selection.getRangeAt(0).cloneContents();
+  const pullRequestChips = fragment.querySelectorAll<HTMLElement>(
+    "[data-pr-chip][data-pr-url]",
+  );
+  if (pullRequestChips.length === 0) {
+    return;
+  }
+
+  pullRequestChips.forEach((chip) => {
+    const href = chip.dataset.prUrl;
+    if (!href) {
+      return;
+    }
+
+    const link = document.createElement("a");
+    link.href = href;
+    link.textContent = chip.dataset.prLabel || chip.textContent || href;
+    chip.replaceWith(link);
+  });
+
+  const html = document.createElement("div");
+  html.append(fragment);
+  event.clipboardData.setData("text/plain", selection.toString());
+  event.clipboardData.setData("text/html", html.innerHTML);
+  event.preventDefault();
+}
 
 function TranscriptCode(props: {
   children: ReactNode;
@@ -603,6 +639,7 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
       ]
         .filter(Boolean)
         .join(" ")}
+      onCopy={copySelectedPullRequestLinks}
     >
       <ReactMarkdown
         components={components}

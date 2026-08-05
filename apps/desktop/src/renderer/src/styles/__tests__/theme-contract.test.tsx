@@ -465,13 +465,16 @@ describe("Tangerine Terminal theme contract", () => {
     expect(pricingRunningTotalRule).toContain("user-select: text;");
   });
 
-  it("keeps transcript link chips atomic instead of text-selectable", () => {
+  it("keeps transcript link chips atomic during selection", () => {
     const prChipRule = extractRuleBody(css, ".pr-chip");
+    const transcriptPrChipRule = extractRuleBody(css, ".thread-markdown .pr-chip");
     const skillChipRule = extractRuleBody(css, ".skill-chip--transcript");
     const threadChipRule = extractRuleBody(css, ".thread-chip");
 
     expect(prChipRule).toContain("-webkit-user-select: none;");
     expect(prChipRule).toContain("user-select: none;");
+    expect(transcriptPrChipRule).toContain("-webkit-user-select: all;");
+    expect(transcriptPrChipRule).toContain("user-select: all;");
     expect(skillChipRule).toContain("-webkit-user-select: none;");
     expect(skillChipRule).toContain("user-select: none;");
     expect(threadChipRule).toContain("-webkit-user-select: none;");

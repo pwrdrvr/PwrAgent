@@ -99,6 +99,39 @@ describe("pull request links in transcript markdown", () => {
     expect(open).toHaveBeenCalledWith(PR_URL, "_blank", "noopener,noreferrer");
   });
 
+  it("preserves a selected PR chip as text and a link on the clipboard", () => {
+    const { container } = renderWithPullRequests(
+      `> Deploy merged PR [Giphy/giphy-services#13290](${PR_URL}) now.`,
+      [prSummary()],
+    );
+    const quote = container.querySelector("blockquote");
+    const markdown = container.querySelector(".thread-markdown");
+    expect(quote).not.toBeNull();
+    expect(markdown).not.toBeNull();
+
+    const range = document.createRange();
+    range.selectNodeContents(quote!);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+
+    const setData = vi.fn();
+    fireEvent.copy(markdown!, {
+      clipboardData: { setData },
+    });
+
+    expect(setData).toHaveBeenCalledWith(
+      "text/plain",
+      expect.stringContaining("Giphy/giphy-services#13290"),
+    );
+    expect(setData).toHaveBeenCalledWith(
+      "text/html",
+      expect.stringContaining(
+        `<a href="${PR_URL}">Giphy/giphy-services#13290</a>`,
+      ),
+    );
+  });
+
   it("hydrates the exact draft-PR link shape emitted by a completed thread", () => {
     renderWithPullRequests(
       `Draft PR: [#13290 — Document JDK 17 for EMR jobs](${PR_URL})`,
