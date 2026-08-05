@@ -265,9 +265,9 @@ independent but can adopt `search_federation_threads`.
 
 - [x] Brainstorm doc
 - [x] Plan doc
-- [ ] Unit A — `instance_notes` config + settings UI
-- [ ] Unit B — handshake/directory advertisement (notes + icon)
-- [ ] Unit C — shared contract + federation catalog + dual-variant tools
-- [ ] Unit D — handler service + BackendRegistry/index wiring
-- [ ] Unit E — operator preferences convention doc
+- [x] Unit A — `instance_notes` config + settings UI
+- [x] Unit B — handshake/directory advertisement (notes + icon)
+- [x] Unit C — shared contract + federation catalog + dual-variant tools
+- [x] Unit D — handler service + BackendRegistry/index wiring
+- [x] Unit E — operator preferences convention doc
 - [ ] Tests green (lint:eslint, typecheck, lint:boundaries, focused vitest)
