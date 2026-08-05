@@ -318,6 +318,13 @@ const EXPLICIT_PRIVATE_RESPONSE_REQUEST_PATTERN = new RegExp(
   ].join("|"),
   "i",
 );
+const NEGATED_PRIVATE_RESPONSE_PREFIX_PATTERN = new RegExp(
+  [
+    "\\b(?:(?:do\\s+not|don't|dont|never)(?:\\s+\\w+){0,8}(?:\\s+to)?",
+    "|not(?:\\s+(?:asking|requesting|telling|wanting|going|trying|supposed|allowed|permitted|send|reply|respond|dm)){1,8}(?:\\s+to)?)\\s*$",
+  ].join(""),
+  "i",
+);
 const ACTIVE_TURN_HANDOFF_ERROR =
   "Worktree/local migration is not available while a turn is in progress. Resubmit when the turn completes.";
 
@@ -388,6 +395,7 @@ type ActiveAgentMessagingOrigin = {
   deliveryBinding?: MessagingBindingRecord;
   event: MessagingInboundEvent;
   privateReplyContinuationBindingId?: string;
+  privateResponseRequested?: boolean;
 };
 
 type AgentMessagingOriginResolution =
@@ -1626,11 +1634,13 @@ export class MessagingController {
       if (
         assistantDelta
         && !reviewTurnEvent
-        && !suppressSourceResponse
+        && !terminalPrivateResponse
         && !privateReplyCompletion
       ) {
         if (!automationTurnEvent) {
-          await this.deliverAssistantStreamUpdate(assistantDelta, binding);
+          await this.deliverAssistantStreamUpdate(assistantDelta, binding, {
+            bufferOnly: privateResponseFallback,
+          });
         }
       }
 
@@ -1649,6 +1659,26 @@ export class MessagingController {
             binding,
             event,
             text: assistantText,
+            turnId: fallbackTurnId,
+          });
+        }
+      } else if (
+        privateResponseFallback
+        && !terminalPrivateResponse
+        && isTerminalTurnLifecycle(activeTurn)
+        && !assistantDelta
+      ) {
+        await this.waitForAssistantStreamDeliveriesForEvent(event, binding);
+        const bufferedText = this.takeBufferedAssistantTextForTerminalEvent(
+          event,
+          binding,
+        );
+        const fallbackTurnId = eventTurnId ?? activeTurn?.turnId;
+        if (bufferedText && fallbackTurnId) {
+          await this.deliverPrivateResponseFallback({
+            binding,
+            event,
+            text: bufferedText,
             turnId: fallbackTurnId,
           });
         }
@@ -3249,6 +3279,9 @@ export class MessagingController {
       prepared,
       currentBinding,
     );
+    if (currentBinding.privateReplyContinuation) {
+      await this.completePrivateReplyContinuation(currentBinding.id);
+    }
     const consumedSkillBinding = currentBinding.pendingSkillSelection
       ? bindingWithoutPendingSkillSelection(currentBinding)
       : currentBinding;
@@ -3262,6 +3295,7 @@ export class MessagingController {
         event: bundle.events[0],
         input: preparedWithSkill.input,
         pdfAttachments: preparedWithSkill.pdfAttachments,
+        privateResponseRequested: preparedWithSkill.privateResponseRequested,
         preview: preparedWithSkill.preview,
         threadKey: bundle.threadKey,
       });
@@ -3275,6 +3309,7 @@ export class MessagingController {
       binding: consumedSkillBinding,
       input: preparedWithSkill.input,
       pdfAttachments: preparedWithSkill.pdfAttachments,
+      privateResponseRequested: preparedWithSkill.privateResponseRequested,
       preview: preparedWithSkill.preview,
       threadKey: bundle.threadKey,
       event: bundle.events[0],
@@ -3289,12 +3324,14 @@ export class MessagingController {
     prepared: {
       input: AppServerTurnInputItem[];
       pdfAttachments: PendingPdfAttachment[];
+      privateResponseRequested: boolean;
       preview: string;
     },
     binding: MessagingBindingRecord,
   ): {
     input: AppServerTurnInputItem[];
     pdfAttachments: PendingPdfAttachment[];
+    privateResponseRequested: boolean;
     preview: string;
   } {
     const selection = binding.pendingSkillSelection;
@@ -3309,6 +3346,7 @@ export class MessagingController {
         ...prepared.input,
       ],
       pdfAttachments: prepared.pdfAttachments,
+      privateResponseRequested: prepared.privateResponseRequested,
       preview: `${prefix}\n${prepared.preview}`,
     };
   }
@@ -3457,6 +3495,7 @@ export class MessagingController {
     | {
         input: AppServerTurnInputItem[];
         pdfAttachments: PendingPdfAttachment[];
+        privateResponseRequested: boolean;
         preview: string;
       }
     | undefined
@@ -3559,6 +3598,7 @@ export class MessagingController {
     return {
       input,
       pdfAttachments,
+      privateResponseRequested,
       preview: buildQueuedInputPreview(previewParts),
     };
   }
@@ -3643,6 +3683,7 @@ export class MessagingController {
     input: AppServerTurnInputItem[];
     navigation?: NavigationSnapshot;
     pdfAttachments?: PendingPdfAttachment[];
+    privateResponseRequested?: boolean;
     preview: string;
     queueOnConcurrentStart?: boolean;
     threadKey: string;
@@ -3663,6 +3704,7 @@ export class MessagingController {
         binding: params.binding,
         event: params.event,
         navigation,
+        privateResponseRequested: params.privateResponseRequested,
       });
       if (startingOrigin) {
         this.startingAgentMessagingOriginsByThreadKey.set(
@@ -3787,6 +3829,7 @@ export class MessagingController {
             event: params.event,
             input: params.input,
             pdfAttachments: params.pdfAttachments,
+            privateResponseRequested: params.privateResponseRequested,
             preview: params.preview,
             threadKey: params.threadKey,
           });
@@ -3884,6 +3927,7 @@ export class MessagingController {
     event?: MessagingInboundEvent;
     input: AppServerTurnInputItem[];
     pdfAttachments?: PendingPdfAttachment[];
+    privateResponseRequested?: boolean;
     preview: string;
     threadKey: string;
   }): Promise<void> {
@@ -4081,6 +4125,7 @@ export class MessagingController {
       event: entry.event,
       input: entry.input,
       pdfAttachments: entry.pdfAttachments,
+      privateResponseRequested: entry.privateResponseRequested,
       preview: entry.preview,
       queueOnConcurrentStart: false,
       threadKey,
@@ -5423,6 +5468,7 @@ export class MessagingController {
   private async deliverAssistantStreamUpdate(
     delta: AssistantStreamDelta,
     binding: MessagingBindingRecord,
+    options?: { bufferOnly?: boolean },
   ): Promise<void> {
     if (
       this.isTerminalPrivateResponseTurn(
@@ -5457,6 +5503,10 @@ export class MessagingController {
     // flush re-creates an entry that no later terminal event clears. Cap it so
     // those orphans are reclaimed rather than accumulating for the process life.
     evictStaleStreamAnchors(this.assistantStreamBuffers);
+
+    if (options?.bufferOnly) {
+      return;
+    }
 
     // Streaming off: keep accumulating deltas (the terminal flush still needs
     // the buffered text — e.g. ACP turns whose only output arrives as deltas)
@@ -5601,6 +5651,34 @@ export class MessagingController {
         fallback.identity,
       );
     }
+  }
+
+  private takeBufferedAssistantTextForTerminalEvent(
+    event: AgentEvent,
+    binding: MessagingBindingRecord,
+  ): string | undefined {
+    const completedTurnIds = new Set<string>();
+    const messages: string[] = [];
+    for (const bufferKey of this.assistantStreamBufferKeysForEvent(event, binding)) {
+      const buffer = this.assistantStreamBuffers.get(bufferKey);
+      if (!buffer) {
+        continue;
+      }
+      completedTurnIds.add(buffer.turnId);
+      const text = buffer.text.trim();
+      if (text) {
+        messages.push(text);
+      }
+      this.assistantStreamBuffers.delete(bufferKey);
+      this.assistantStreamDeliveryQueues.delete(bufferKey);
+    }
+    for (const turnId of completedTurnIds) {
+      this.assistantStreamCancellationSignals.delete(
+        this.turnProseKey(binding.id, turnId),
+      );
+    }
+    const text = messages.join("\n\n").trim();
+    return text || undefined;
   }
 
   private async waitForAssistantStreamDeliveriesForEvent(
@@ -13995,7 +14073,10 @@ export class MessagingController {
     if (origin.privateReplyContinuationBindingId) {
       rememberBoundedKey(this.privateReplyCompletionTurnKeys, turnKey);
     }
-    if (requestsExplicitPrivateResponse(origin.event)) {
+    if (
+      origin.privateResponseRequested
+      || requestsExplicitPrivateResponse(origin.event)
+    ) {
       rememberBoundedKey(this.privateResponseFallbackTurnKeys, turnKey);
     }
   }
@@ -14004,6 +14085,7 @@ export class MessagingController {
     binding: MessagingBindingRecord;
     event?: MessagingInboundEvent;
     navigation: NavigationSnapshot;
+    privateResponseRequested?: boolean;
   }): Promise<ActiveAgentMessagingOrigin | undefined> {
     if (
       !params.event
@@ -14020,6 +14102,7 @@ export class MessagingController {
         ),
         event: params.event,
         privateReplyContinuationBindingId: params.binding.id,
+        privateResponseRequested: params.privateResponseRequested,
       };
     }
     return {
@@ -14030,6 +14113,7 @@ export class MessagingController {
         ? params.binding
         : undefined,
       event: params.event,
+      privateResponseRequested: params.privateResponseRequested,
     };
   }
 
@@ -14193,7 +14277,10 @@ export class MessagingController {
       if (origin.privateReplyContinuationBindingId) {
         rememberBoundedKey(this.privateReplyCompletionTurnKeys, turnKey);
       }
-      if (requestsExplicitPrivateResponse(origin.event)) {
+      if (
+        origin.privateResponseRequested
+        || requestsExplicitPrivateResponse(origin.event)
+      ) {
         rememberBoundedKey(this.privateResponseFallbackTurnKeys, turnKey);
       }
       const activeTurn: MessagingActiveTurnSummary = {
@@ -19878,8 +19965,18 @@ function requestsExplicitPrivateResponse(
   if (!request) {
     return false;
   }
-  const prefix = text.slice(Math.max(0, request.index - 18), request.index);
-  return !/\b(?:do\s+not|don't|never|not)\s*$/i.test(prefix);
+  const prefix = text.slice(0, request.index);
+  const clauseStart = Math.max(
+    prefix.lastIndexOf("."),
+    prefix.lastIndexOf("!"),
+    prefix.lastIndexOf("?"),
+    prefix.lastIndexOf(";"),
+    prefix.lastIndexOf(","),
+    prefix.lastIndexOf("\n"),
+  );
+  return !NEGATED_PRIVATE_RESPONSE_PREFIX_PATTERN.test(
+    prefix.slice(clauseStart + 1),
+  );
 }
 
 function describeConversation(

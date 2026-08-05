@@ -170,8 +170,9 @@ shared-channel authorization and mention-only response policy.
 If the Agent sets `awaitReply`, that binding becomes a 24-hour one-shot callback
 route. Its stored completion instructions are prepended to the private reply,
 working and streaming output are withheld, and the final answer is delivered
-back to the original source binding. Terminal turn handling revokes the
-callback binding so it disappears from the Agent's attached surfaces.
+back to the original source binding. Admitting the first reply revokes the
+callback binding before another reply can queue against it, while the admitted
+turn retains the captured return route until its final delivery completes.
 Terminal private delivery also clears provider activity on both the source and
 continuation surfaces and
 suppresses later work events from re-arming that activity. Before it reports

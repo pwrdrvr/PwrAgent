@@ -1721,6 +1721,7 @@ describe("MessagingController", () => {
     deliveryBudget?: MessagingDeliveryBudget;
     deliver?: (intent: MessagingSurfaceIntent) => Promise<MessagingDeliveryResult>;
     inboundText?: string;
+    inputDebounceMs?: number;
     now?: () => number;
     resolveDeliveryScope?: MessagingAdapter["resolveDeliveryScope"];
     responseModeForConversation?: MessagingControllerOptions["responseModeForConversation"];
@@ -1813,6 +1814,9 @@ describe("MessagingController", () => {
         ? { deliveryBudget: options.deliveryBudget }
         : {}),
       deliver,
+      ...(options?.inputDebounceMs === undefined
+        ? {}
+        : { inputDebounceMs: options.inputDebounceMs }),
       navigation,
       ...(options?.now ? { now: options.now } : {}),
       resolvePrivateConversation,
@@ -2135,6 +2139,10 @@ describe("MessagingController", () => {
       }),
     );
 
+    expect(await harness.store.getBinding(continuationBinding.id)).toMatchObject({
+      revokedAt: expect.any(Number),
+    });
+
     expect(harness.startTurn).toHaveBeenLastCalledWith(
       expect.objectContaining({
         input: [
@@ -2159,6 +2167,14 @@ describe("MessagingController", () => {
     expect(activeActivity).not.toContainEqual(
       expect.objectContaining({ bindingId: continuationBinding.id }),
     );
+
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("A second reply must not reuse the callback.", {
+        channel: continuationBinding.channel,
+        routingState: continuationBinding.routingState,
+      }),
+    );
+    expect(harness.startTurn).toHaveBeenCalledTimes(2);
 
     await harness.controller.handleBackendEvent({
       backend: "codex",
@@ -2235,6 +2251,68 @@ describe("MessagingController", () => {
     expect(harness.onBindingChanged).toHaveBeenCalled();
   });
 
+  it("keeps a private request from a later debounced message private", async () => {
+    vi.useFakeTimers();
+    const { channel, harness } = await createSlackPrivateResponseHarness({
+      inboundText: "Use the context in my next message.",
+      inputDebounceMs: 500,
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("DM me the AWS SSO link and code", {
+        botMention: true,
+        channel,
+        routingState: { opaque: { channelId: "C012SIGNALS" } },
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: expect.arrayContaining([
+          expect.objectContaining({
+            text: expect.stringContaining("If that tool is unavailable"),
+          }),
+        ]),
+      }),
+    );
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [{
+              type: "text",
+              text: "Open the private link and enter `BUNDLED-CODE`.",
+            }],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(
+      harness.delivered.filter(
+        (intent) =>
+          intent.kind === "message"
+          && intent.audit?.channel.conversation.id === "C012SIGNALS",
+      ),
+    ).toEqual([]);
+    expect(harness.delivered).toContainEqual(
+      expect.objectContaining({
+        kind: "message",
+        parts: [expect.objectContaining({
+          text: expect.stringContaining("BUNDLED-CODE"),
+        })],
+      }),
+    );
+  });
+
   it("privately delivers an explicit DM request when the thread lacks the tool", async () => {
     const { harness } = await createSlackPrivateResponseHarness();
     expect(harness.startTurn).toHaveBeenCalledWith(
@@ -2288,6 +2366,85 @@ describe("MessagingController", () => {
           && intent.audit?.channel.conversation.id === "C012SIGNALS",
       ),
     ).toEqual([]);
+  });
+
+  it("privately delivers delta-only fallback output", async () => {
+    const { harness } = await createSlackPrivateResponseHarness();
+
+    for (const delta of ["Open the AWS SSO URL and enter ", "`DELTA-CODE`."]) {
+      await harness.controller.handleBackendEvent({
+        backend: "codex",
+        notification: {
+          method: "item/agentMessage/delta",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "assistant-private-delta-only",
+            delta,
+          },
+        },
+      } satisfies AgentEvent);
+    }
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: { id: "turn-1", status: "completed", output: [] },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(
+      harness.delivered.filter(
+        (intent) =>
+          intent.kind === "message"
+          && intent.audit?.channel.conversation.id === "C012SIGNALS",
+      ),
+    ).toEqual([]);
+    expect(
+      harness.delivered.filter((intent) => intent.kind === "message"),
+    ).toEqual([
+      expect.objectContaining({
+        parts: [expect.objectContaining({
+          text: "Open the AWS SSO URL and enter `DELTA-CODE`.",
+        })],
+      }),
+    ]);
+  });
+
+  it("honors explicit negation when detecting private response requests", async () => {
+    const { harness } = await createSlackPrivateResponseHarness({
+      inboundText: "I don't want you to DM me; reply here publicly.",
+    });
+
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: expect.not.arrayContaining([
+          expect.objectContaining({
+            text: expect.stringContaining("If that tool is unavailable"),
+          }),
+        ]),
+      }),
+    );
+  });
+
+  it("detects a private request after a separate public-post negation", async () => {
+    const { harness } = await createSlackPrivateResponseHarness({
+      inboundText: "Do not post this publicly, DM me the result.",
+    });
+
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: expect.arrayContaining([
+          expect.objectContaining({
+            text: expect.stringContaining("If that tool is unavailable"),
+          }),
+        ]),
+      }),
+    );
   });
 
   it("dismisses an existing source stream before private delivery succeeds", async () => {
