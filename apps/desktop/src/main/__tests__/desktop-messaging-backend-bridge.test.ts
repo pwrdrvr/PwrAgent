@@ -41,6 +41,26 @@ vi.mock("../app-server/desktop-overlay-store", () => ({
   getDesktopOverlayStore: () => ({ reconcileNavigationSnapshot }),
 }));
 
+const { hydrateLaunchpadCodexEnvironmentOptions } = vi.hoisted(() => ({
+  hydrateLaunchpadCodexEnvironmentOptions: vi.fn(
+    async (launchpad: { directoryPath: string }) => ({
+      ...launchpad,
+      codexEnvironmentOptions: [
+        {
+          id: "env-default",
+          name: "Default",
+          sourcePath: "/repos/PwrAgnt/.codex/environments.toml",
+          actions: [],
+        },
+      ],
+    }),
+  ),
+}));
+
+vi.mock("../app-server/codex-environment-config", () => ({
+  hydrateLaunchpadCodexEnvironmentOptions,
+}));
+
 describe("DesktopMessagingBackendBridge", () => {
   it("hydrates review working state before the messenger chooses a project", async () => {
     const pwrAgentWorktree = "/worktrees/PwrAgnt";
@@ -116,6 +136,65 @@ describe("DesktopMessagingBackendBridge", () => {
     expect(findPreferredReviewWorkspaceCwd(snapshot.threads[0])).toBe(
       pwrAgentWorktree,
     );
+  });
+
+  it("hydrates launchpad Codex environment options for served snapshots", async () => {
+    // Federation remote viewers get their navigation snapshot through
+    // this bridge; without hydration here their launchpad has no
+    // Environment picker even though the local window's does.
+    reconcileNavigationSnapshot.mockResolvedValueOnce({
+      backend: "all",
+      fetchedAt: 1_000,
+      unchanged: false,
+      threads: [],
+      inboxThreadKeys: [],
+      directories: [
+        {
+          key: "directory:/repos/PwrAgnt",
+          kind: "directory",
+          label: "PwrAgnt",
+          path: "/repos/PwrAgnt",
+          threadKeys: [],
+          needsAttentionCount: 0,
+          launchpad: {
+            directoryPath: "/repos/PwrAgnt",
+            backend: "codex",
+          },
+        },
+        {
+          key: "directory:/repos/PwrSnap",
+          kind: "directory",
+          label: "PwrSnap",
+          path: "/repos/PwrSnap",
+          threadKeys: [],
+          needsAttentionCount: 0,
+        },
+      ],
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+    } as unknown as NavigationSnapshot);
+    const registry = {
+      getQueuedExecutionModesSnapshot: vi.fn(() => ({})),
+      hydrateThreadGitWorkingStates: vi.fn(
+        async (threads: NavigationSnapshot["threads"]) => threads,
+      ),
+      listThreads: vi.fn(async () => []),
+      readDirectoryStatuses: vi.fn(async () => ({})),
+      rememberCompleteNavigationSnapshot: vi.fn(),
+    } as unknown as DesktopBackendRegistry;
+    const bridge = new DesktopMessagingBackendBridge(registry);
+
+    const snapshot = await bridge.getNavigationSnapshot({});
+
+    expect(hydrateLaunchpadCodexEnvironmentOptions).toHaveBeenCalledTimes(1);
+    expect(snapshot.directories[0]?.launchpad).toMatchObject({
+      directoryPath: "/repos/PwrAgnt",
+      codexEnvironmentOptions: [{ id: "env-default", name: "Default" }],
+    });
+    // Directories without a launchpad pass through untouched.
+    expect(snapshot.directories[1]?.launchpad).toBeUndefined();
   });
 
   it("preserves enriched messaging provenance when starting a turn", async () => {
