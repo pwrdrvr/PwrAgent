@@ -2640,8 +2640,11 @@ export class SqliteOverlayStore {
         }) | undefined;
       if (duplicate) {
         if (
-          params.allowCancelledRearm
-          && ["cancelled", "resolved", "superseded"].includes(duplicate.status)
+          duplicate.status === "deferred"
+          || (
+            params.allowCancelledRearm
+            && ["cancelled", "resolved", "superseded"].includes(duplicate.status)
+          )
         ) {
           this.stateDb.raw
             .prepare(
@@ -3293,7 +3296,7 @@ export class SqliteOverlayStore {
     threadId: string;
     fingerprint: string;
     now?: number;
-    status?: "cancelled" | "resolved" | "superseded";
+    status?: "cancelled" | "deferred" | "resolved" | "superseded";
   }): Promise<boolean> {
     const result = this.stateDb.raw
       .prepare(

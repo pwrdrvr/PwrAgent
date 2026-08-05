@@ -143,7 +143,7 @@ describe("PrStatusWatchCoordinator", () => {
     });
   });
 
-  it("wakes on the first failing snapshot without waiting for other jobs", async () => {
+  it("waits for remaining checks before waking on a failed suite", async () => {
     await registerWatch();
     const harness = createHarness();
 
@@ -153,6 +153,15 @@ describe("PrStatusWatchCoordinator", () => {
     await expect(harness.coordinator.handleStatusSnapshot(pr({
       state: "failing",
       checkState: "failing",
+      checksStillRunning: true,
+    }), now)).resolves.toBe(0);
+    expect(harness.submitTurnIfIdle).not.toHaveBeenCalled();
+
+    now += 1;
+    await expect(harness.coordinator.handleStatusSnapshot(pr({
+      state: "failing",
+      checkState: "failing",
+      checksStillRunning: false,
     }), now)).resolves.toBe(1);
 
     expect(harness.submitTurnIfIdle).toHaveBeenCalledTimes(1);

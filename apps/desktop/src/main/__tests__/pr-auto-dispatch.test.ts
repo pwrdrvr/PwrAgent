@@ -938,7 +938,33 @@ describe("PrAutoDispatchCoordinator", () => {
     expect(submitTurnIfIdle).not.toHaveBeenCalled();
   });
 
-  it("drops a scheduled CI repair when checks are running again before send", async () => {
+  it("re-arms a deferred CI repair after restarted checks finish failing", async () => {
+    const harness = createHarness();
+    await observe(harness.coordinator);
+    const restarted = pr({ checksStillRunning: true });
+    harness.setCurrentPr(restarted);
+
+    expect((await observe(harness.coordinator, restarted))[0]?.status).toBe(
+      "deferred",
+    );
+    expect(await store.getThreadPrAutoDispatchPending({
+      backend: "codex",
+      threadId: "thread-1",
+    })).toBeUndefined();
+
+    await runCountdown();
+    expect(harness.submitTurnIfIdle).not.toHaveBeenCalled();
+
+    const completed = pr({ checksStillRunning: false });
+    harness.setCurrentPr(completed);
+    expect((await observe(harness.coordinator, completed))[0]?.status).toBe(
+      "scheduled",
+    );
+    await runCountdown();
+    expect(harness.submitTurnIfIdle).toHaveBeenCalledTimes(1);
+  });
+
+  it("defers a restarted-check race discovered at dispatch time", async () => {
     const harness = createHarness();
     await observe(harness.coordinator);
     harness.setCurrentPr(pr({ checksStillRunning: true }));
@@ -946,9 +972,10 @@ describe("PrAutoDispatchCoordinator", () => {
     await runCountdown();
 
     expect(harness.submitTurnIfIdle).not.toHaveBeenCalled();
-    expect(await store.getThreadPrAutoDispatchPending({
-      backend: "codex",
-      threadId: "thread-1",
-    })).toBeUndefined();
+    const completed = pr({ checksStillRunning: false });
+    harness.setCurrentPr(completed);
+    expect((await observe(harness.coordinator, completed))[0]?.status).toBe(
+      "scheduled",
+    );
   });
 });

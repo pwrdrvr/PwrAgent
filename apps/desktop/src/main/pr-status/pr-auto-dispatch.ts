@@ -39,6 +39,7 @@ export type PrAutoDispatchOutcome = {
     | "dispatched"
     | "gate-off"
     | "not-actionable"
+    | "deferred"
     | "missing-head"
     | "disabled"
     | "busy"
@@ -128,7 +129,7 @@ type PrAutoDispatchStore = {
     threadId: string;
     fingerprint: string;
     now?: number;
-    status?: "cancelled" | "resolved" | "superseded";
+    status?: "cancelled" | "deferred" | "resolved" | "superseded";
   }): Promise<boolean>;
   cancelPendingThreadPrAutoDispatchForPr(params: {
     backend: AppServerBackendKind;
@@ -249,19 +250,33 @@ export class PrAutoDispatchCoordinator {
       });
 
       if (!event) {
-        const cancelled = await this.options.store
-          .cancelPendingThreadPrAutoDispatchForPr({
-            ...identity,
-            prKey,
-            now: params.observedAt,
-          });
+        const record = await this.options.store
+          .getThreadPrAutoDispatchPending(identity);
+        const deferred = Boolean(
+          record
+          && shouldDeferPendingCiFailure(record.pending, params.pr),
+        );
+        const cancelled = deferred && record
+          ? await this.options.store.cancelThreadPrAutoDispatch({
+              ...identity,
+              fingerprint: record.pending.fingerprint,
+              now: params.observedAt,
+              status: "deferred",
+            })
+          : await this.options.store.cancelPendingThreadPrAutoDispatchForPr({
+              ...identity,
+              prKey,
+              now: params.observedAt,
+            });
         if (cancelled) {
           this.clearTimer(threadKey);
           await this.notifyPending(identity, null);
         }
         outcomes.push({
           threadKey,
-          status: eventKinds.length > 0 ? "missing-head" : "not-actionable",
+          status: deferred
+            ? "deferred"
+            : eventKinds.length > 0 ? "missing-head" : "not-actionable",
         });
         continue;
       }
@@ -425,6 +440,20 @@ export class PrAutoDispatchCoordinator {
       ...identity,
       prKey: record.pending.prKey,
     }) ?? true;
+    if (
+      attached
+      && currentPr
+      && shouldDeferPendingCiFailure(record.pending, currentPr)
+    ) {
+      await this.options.store.cancelThreadPrAutoDispatch({
+        ...identity,
+        fingerprint,
+        now: this.now(),
+        status: "deferred",
+      });
+      await this.notifyPending(identity, null);
+      return;
+    }
     if (
       !attached
       || !currentEvent
@@ -740,6 +769,19 @@ export function buildPrAutoDispatchEvent(
       .update(JSON.stringify(fingerprintPayload))
       .digest("hex"),
   };
+}
+
+function shouldDeferPendingCiFailure(
+  pending: ThreadPrAutoDispatchPending,
+  pr: PrSummary,
+): boolean {
+  return (
+    !isTerminalPullRequest(pr)
+    && pr.checksStillRunning === true
+    && pending.prKey === buildPullRequestStatusKey(pr)
+    && pending.headSha === pr.headSha
+    && pending.eventKinds.includes("ci-failure")
+  );
 }
 
 function getDefinitivelyResolvedEventKinds(
