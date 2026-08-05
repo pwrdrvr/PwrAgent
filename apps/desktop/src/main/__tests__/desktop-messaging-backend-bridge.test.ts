@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import { findPreferredReviewWorkspaceCwd } from "@pwragent/shared";
 import type {
   AgentEvent,
+  AppServerThreadSummary,
   AppServerReadThreadResponse,
   AppServerThreadReplay,
   NavigationSnapshot,
@@ -12,7 +14,88 @@ import {
   type DesktopMessagingFederationBridge,
 } from "../messaging/desktop-backend-bridge";
 
+const { reconcileNavigationSnapshot } = vi.hoisted(() => ({
+  reconcileNavigationSnapshot: vi.fn(async (params: {
+    backend: NavigationSnapshot["backend"];
+    fetchedAt: number;
+    threads: AppServerThreadSummary[];
+  }): Promise<NavigationSnapshot> => ({
+    backend: params.backend,
+    fetchedAt: params.fetchedAt,
+    unchanged: false,
+    threads: params.threads.map((thread) => ({
+      ...thread,
+      inbox: { inInbox: false },
+    })),
+    inboxThreadKeys: [],
+    directories: [],
+    launchpadDefaults: {
+      backend: "codex",
+      executionMode: "default",
+    },
+  })),
+}));
+
+vi.mock("../app-server/desktop-overlay-store", () => ({
+  getDesktopOverlayStore: () => ({ reconcileNavigationSnapshot }),
+}));
+
 describe("DesktopMessagingBackendBridge", () => {
+  it("hydrates review working state before the messenger chooses a project", async () => {
+    const pwrAgentWorktree = "/worktrees/PwrAgnt";
+    const thread: AppServerThreadSummary = {
+      id: "thread-1",
+      title: "PwrAgent federation dogfood PR #735",
+      titleSource: "explicit",
+      source: "codex",
+      projectKey: pwrAgentWorktree,
+      linkedDirectories: [
+        {
+          id: "pwragent",
+          kind: "worktree",
+          label: "PwrAgnt",
+          path: "/repos/PwrAgnt",
+          worktreePath: pwrAgentWorktree,
+        },
+        {
+          id: "pwrsnap",
+          kind: "local",
+          label: "PwrSnap",
+          path: "/repos/PwrSnap",
+        },
+      ],
+    };
+    const gitWorkingState = {
+      dirtyFiles: 0,
+      dirtyAdditions: 0,
+      dirtyDeletions: 0,
+      untrackedFiles: 0,
+      unpushedCommits: 0,
+      baseBranch: "main",
+      baseAheadCommitCount: 16,
+    };
+    const registry = {
+      getQueuedExecutionModesSnapshot: vi.fn(() => ({})),
+      hydrateThreadGitWorkingStates: vi.fn(async () => [
+        { ...thread, gitWorkingState },
+      ]),
+      listThreads: vi.fn(async () => [thread]),
+      readDirectoryStatuses: vi.fn(async () => ({})),
+      rememberCompleteNavigationSnapshot: vi.fn(),
+    } as unknown as DesktopBackendRegistry;
+    const bridge = new DesktopMessagingBackendBridge(registry);
+
+    const snapshot = await bridge.getNavigationSnapshot({ backend: "codex" });
+
+    expect(registry.hydrateThreadGitWorkingStates).toHaveBeenCalledWith(
+      [thread],
+      { probeMissing: true },
+    );
+    expect(findPreferredReviewWorkspaceCwd(snapshot.threads[0])).toBe(
+      pwrAgentWorktree,
+    );
+  });
+
   it("preserves enriched messaging provenance when starting a turn", async () => {
     const submitTurn = vi.fn(async (request) => ({
       status: "started" as const,

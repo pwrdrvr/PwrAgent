@@ -1743,9 +1743,11 @@ class DesktopAppServerService {
       canonicalSnapshot.threads,
       detachedPrsByThreadKey,
     );
-    const threadsWithWorkingState =
-      threadsWithPrimaryGitRepositories.map((thread) =>
-        this.applyCachedWorktreeWorkingState(thread),
+    const threadsWithWorkingState = await getDesktopBackendRegistry()
+      .hydrateThreadGitWorkingStates(
+        threadsWithPrimaryGitRepositories.map((thread) =>
+          this.applyCachedWorktreeWorkingState(thread),
+        ),
       );
     this.startWorktreeWorkingStateRefresh({
       automatic: true,
@@ -2628,7 +2630,8 @@ class DesktopAppServerService {
       ...(params.gitWorkingState ? { gitWorkingState: params.gitWorkingState } : {}),
     };
     this.workingStateByWorktree.set(params.worktreePath, cacheEntry);
-    await this.getOverlayStore().writeThreadGitWorkingStateCacheEntry(cacheEntry);
+    await getDesktopBackendRegistry()
+      .rememberThreadGitWorkingStateCacheEntry(cacheEntry);
 
     // Skip the push when the probed value is identical to what clients
     // already hold — avoids a snapshot patch + re-render on every idle

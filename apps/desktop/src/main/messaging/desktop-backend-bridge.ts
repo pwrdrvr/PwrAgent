@@ -100,7 +100,7 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
       );
     }
     const backend = request.backend ?? "all";
-    const threads = await this.registry.listThreads({
+    const listedThreads = await this.registry.listThreads({
       backend: backend === "all" ? undefined : backend,
       callerReason: "messaging-navigation-snapshot",
       filter: request.filter,
@@ -109,6 +109,10 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
       maxPages: request.refreshMode === "active-recent" ? 1 : undefined,
       skipArchivedMetadataRefresh: request.refreshMode === "active-recent",
     });
+    const threads = await this.registry.hydrateThreadGitWorkingStates(
+      listedThreads,
+      { probeMissing: true },
+    );
     const messagingBindingsByThreadKey = await buildMessagingBindingsByThreadKey(threads);
     const queuedExecutionModesByThreadKey =
       this.registry.getQueuedExecutionModesSnapshot();

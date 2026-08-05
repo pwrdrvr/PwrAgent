@@ -61,6 +61,7 @@ import {
   type CodexEnvironmentCommandRunner,
 } from "../app-server/codex-environment-runtime";
 import { GitDirectoryService } from "../app-server/git-directory-service";
+import type { GitWorkingStateService } from "../app-server/git-working-state-service";
 import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
 import type { WorktreeArchiveService } from "../app-server/worktree-archive-service";
 import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
@@ -2315,6 +2316,151 @@ describe("DesktopBackendRegistry", () => {
       expect(events).toEqual([]);
     } finally {
       unsubscribe();
+      await registry.close();
+    }
+  });
+
+  it("hydrates review working state from the shared navigation cache", async () => {
+    const worktreePath = "/worktrees/PwrAgnt";
+    const gitWorkingState = {
+      dirtyFiles: 0,
+      dirtyAdditions: 0,
+      dirtyDeletions: 0,
+      untrackedFiles: 0,
+      unpushedCommits: 0,
+      baseBranch: "main",
+      baseAheadCommitCount: 16,
+    };
+    const writeThreadGitWorkingStateCacheEntry = vi.fn(async () => undefined);
+    const overlayStore = {
+      ...createOverlayStoreMock(),
+      readThreadGitWorkingStateCache: vi.fn(async () => ({
+        [worktreePath]: {
+          worktreePath,
+          fetchedAt: 1_000,
+          gitWorkingState,
+        },
+      })),
+      writeThreadGitWorkingStateCacheEntry,
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore,
+    });
+    const thread: AppServerThreadSummary = {
+      id: "thread-1",
+      title: "PwrAgent federation dogfood PR #735",
+      titleSource: "explicit",
+      source: "codex",
+      projectKey: worktreePath,
+      linkedDirectories: [
+        {
+          id: "pwragent",
+          kind: "worktree",
+          label: "PwrAgnt",
+          path: "/repos/PwrAgnt",
+          worktreePath,
+        },
+        {
+          id: "pwrsnap",
+          kind: "local",
+          label: "PwrSnap",
+          path: "/repos/PwrSnap",
+        },
+      ],
+    };
+
+    try {
+      await expect(
+        registry.hydrateThreadGitWorkingStates([thread]),
+      ).resolves.toEqual([{ ...thread, gitWorkingState }]);
+
+      const updatedState = { ...gitWorkingState, baseAheadCommitCount: 17 };
+      await registry.rememberThreadGitWorkingStateCacheEntry({
+        worktreePath,
+        fetchedAt: 2_000,
+        gitWorkingState: updatedState,
+      });
+      await expect(
+        registry.hydrateThreadGitWorkingStates([thread]),
+      ).resolves.toEqual([{ ...thread, gitWorkingState: updatedState }]);
+      expect(writeThreadGitWorkingStateCacheEntry).toHaveBeenCalledWith({
+        worktreePath,
+        fetchedAt: 2_000,
+        gitWorkingState: updatedState,
+      });
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("probes missing working state for a multi-project messaging review", async () => {
+    const worktreePath = "/worktrees/PwrAgnt";
+    const gitWorkingState = {
+      dirtyFiles: 0,
+      dirtyAdditions: 0,
+      dirtyDeletions: 0,
+      untrackedFiles: 0,
+      unpushedCommits: 0,
+      baseBranch: "main",
+      baseAheadCommitCount: 16,
+    };
+    const readWorkingStateEntries = vi.fn(() =>
+      (async function* () {
+        yield { worktreePath, gitWorkingState };
+      })(),
+    );
+    const overlayStore = {
+      ...createOverlayStoreMock(),
+      readThreadGitWorkingStateCache: vi.fn(async () => ({})),
+      writeThreadGitWorkingStateCacheEntry: vi.fn(async () => undefined),
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      gitWorkingStateService: {
+        readWorkingStateEntries,
+      } as unknown as GitWorkingStateService,
+      overlayStore,
+    });
+    const thread: AppServerThreadSummary = {
+      id: "thread-1",
+      title: "PwrAgent federation dogfood PR #735",
+      titleSource: "explicit",
+      source: "codex",
+      projectKey: worktreePath,
+      linkedDirectories: [
+        {
+          id: "pwragent",
+          kind: "worktree",
+          label: "PwrAgnt",
+          path: "/repos/PwrAgnt",
+          worktreePath,
+        },
+        {
+          id: "pwrsnap",
+          kind: "local",
+          label: "PwrSnap",
+          path: "/repos/PwrSnap",
+        },
+      ],
+    };
+
+    try {
+      await expect(
+        registry.hydrateThreadGitWorkingStates(
+          [thread],
+          { probeMissing: true },
+        ),
+      ).resolves.toEqual([{ ...thread, gitWorkingState }]);
+      expect(readWorkingStateEntries).toHaveBeenCalledWith([worktreePath]);
+      expect(overlayStore.writeThreadGitWorkingStateCacheEntry)
+        .toHaveBeenCalledWith(expect.objectContaining({
+          worktreePath,
+          gitWorkingState,
+        }));
+    } finally {
       await registry.close();
     }
   });

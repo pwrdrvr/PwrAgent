@@ -17,7 +17,11 @@ import type {
 } from "@pwragent/messaging-interface";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { getAppStateDb, getAppStateMode } from "../state/app-state";
-import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
+import type {
+  OverlayStoreLike,
+  SqliteOverlayStore,
+  WorktreeGitWorkingStateCacheEntry,
+} from "../state/overlay-store-sqlite";
 import { requestShowThread } from "../window-show-thread";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import {
@@ -717,6 +721,30 @@ function resolveThreadWorkspaceCwd(
     resolveLinkedDirectoryWorkspaceCwd(overlayDirectories) ??
     thread.projectKey
   );
+}
+
+function resolveThreadWorkingStatePath(
+  thread: Pick<AppServerThreadSummary, "projectKey" | "linkedDirectories">,
+): string | undefined {
+  const projectKey = thread.projectKey?.trim();
+  if (projectKey) {
+    return projectKey;
+  }
+
+  for (const directory of thread.linkedDirectories) {
+    const worktreePath = directory.worktreePath?.trim();
+    if (worktreePath) {
+      return worktreePath;
+    }
+  }
+
+  for (const directory of thread.linkedDirectories) {
+    if (directory.kind === "local" && directory.path.trim()) {
+      return directory.path.trim();
+    }
+  }
+
+  return undefined;
 }
 
 function linkedDirectoriesHaveSameWorkspaceIdentity(
@@ -5889,6 +5917,14 @@ type CodexRetryableTurnStart = {
   turnId?: string;
 };
 
+type BackendRegistryOverlayStoreLike = OverlayStoreLike & Partial<
+  Pick<
+    SqliteOverlayStore,
+    | "readThreadGitWorkingStateCache"
+    | "writeThreadGitWorkingStateCacheEntry"
+  >
+>;
+
 type PendingCodexInvalidIdRecovery = CodexRetryableTurnStart & {
   audit: ThreadCodexInvalidIdRecovery;
   failureMessage: string;
@@ -5930,9 +5966,14 @@ function buildCodexInvalidIdRecoveryCooldownMessage(
 export class DesktopBackendRegistry {
   private readonly codexClient: BackendClient;
   private readonly grokClient: BackendClient;
-  private readonly overlayStore: OverlayStoreLike;
+  private readonly overlayStore: BackendRegistryOverlayStoreLike;
   private readonly gitDirectoryService: GitDirectoryService;
   private readonly gitWorkingStateService: GitWorkingStateService;
+  private readonly workingStateByWorktree = new Map<
+    string,
+    WorktreeGitWorkingStateCacheEntry
+  >();
+  private workingStateCacheLoad: Promise<void> | undefined;
   private readonly gitWorkspaceHandoffService: GitWorkspaceHandoffService;
   private readonly worktreeArchiveService: WorktreeArchiveService;
   private readonly acpBackend: AcpBackendAdapter;
@@ -6228,7 +6269,7 @@ export class DesktopBackendRegistry {
   constructor(options?: {
     codexClient?: BackendClient;
     grokClient?: BackendClient;
-    overlayStore?: OverlayStoreLike;
+    overlayStore?: BackendRegistryOverlayStoreLike;
     gitDirectoryService?: GitDirectoryService;
     gitWorkingStateService?: GitWorkingStateService;
     gitWorkspaceHandoffService?: GitWorkspaceHandoffService;
@@ -8948,6 +8989,107 @@ export class DesktopBackendRegistry {
     options?: GitWorkingStateEntryOptions,
   ): AsyncIterable<WorktreeWorkingStateEntry> {
     return this.gitWorkingStateService.readWorkingStateEntries(worktreePaths, options);
+  }
+
+  /**
+   * Hydrate the durable working-state view at the backend boundary so every
+   * navigation consumer (renderer IPC, messaging, and future transports) sees
+   * the same review-selection evidence. Normal navigation only reads the
+   * durable cache. An explicit messenger review may opt into probing unresolved
+   * multi-project threads so its picker cannot race the background refresh.
+   */
+  async hydrateThreadGitWorkingStates<Thread extends AppServerThreadSummary>(
+    threads: Thread[],
+    options: { probeMissing?: boolean } = {},
+  ): Promise<Thread[]> {
+    const candidates = threads.filter(
+      (thread) => !thread.gitWorkingState && resolveThreadWorkingStatePath(thread),
+    );
+    if (candidates.length === 0) {
+      return threads;
+    }
+
+    await this.loadThreadGitWorkingStateCache();
+    let hydrated = this.applyCachedThreadGitWorkingStates(threads);
+    if (!options.probeMissing) {
+      return hydrated;
+    }
+
+    const missingPaths = [
+      ...new Set(
+        hydrated.flatMap((thread) => {
+          if (thread.gitWorkingState || thread.linkedDirectories.length <= 1) {
+            return [];
+          }
+          const worktreePath = resolveThreadWorkingStatePath(thread);
+          return worktreePath ? [worktreePath] : [];
+        }),
+      ),
+    ];
+    if (missingPaths.length === 0) {
+      return hydrated;
+    }
+
+    try {
+      for await (const entry of this.gitWorkingStateService.readWorkingStateEntries(
+        missingPaths,
+      )) {
+        await this.rememberThreadGitWorkingStateCacheEntry({
+          ...entry,
+          fetchedAt: Date.now(),
+        });
+      }
+    } catch (error) {
+      backendRegistryLog.warn("review working-state probe failed", {
+        error: error instanceof Error ? error.message : String(error),
+        worktreePaths: missingPaths,
+      });
+      return this.applyCachedThreadGitWorkingStates(hydrated);
+    }
+
+    hydrated = this.applyCachedThreadGitWorkingStates(hydrated);
+    return hydrated;
+  }
+
+  private applyCachedThreadGitWorkingStates<Thread extends AppServerThreadSummary>(
+    threads: Thread[],
+  ): Thread[] {
+    return threads.map((thread) => {
+      if (thread.gitWorkingState) {
+        return thread;
+      }
+      const worktreePath = resolveThreadWorkingStatePath(thread);
+      const gitWorkingState = worktreePath
+        ? this.workingStateByWorktree.get(worktreePath)?.gitWorkingState
+        : undefined;
+      return gitWorkingState ? { ...thread, gitWorkingState } : thread;
+    });
+  }
+
+  async rememberThreadGitWorkingStateCacheEntry(
+    entry: WorktreeGitWorkingStateCacheEntry,
+  ): Promise<void> {
+    await this.loadThreadGitWorkingStateCache();
+    this.workingStateByWorktree.set(entry.worktreePath, entry);
+    await this.overlayStore.writeThreadGitWorkingStateCacheEntry?.(entry);
+  }
+
+  private async loadThreadGitWorkingStateCache(): Promise<void> {
+    if (!this.workingStateCacheLoad) {
+      this.workingStateCacheLoad = (async () => {
+        const entries =
+          await this.overlayStore.readThreadGitWorkingStateCache?.() ?? {};
+        for (const entry of Object.values(entries)) {
+          this.workingStateByWorktree.set(entry.worktreePath, entry);
+        }
+      })().catch((error) => {
+        this.workingStateCacheLoad = undefined;
+        backendRegistryLog.warn("thread working-state cache load failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
+    await this.workingStateCacheLoad;
   }
 
   invalidateWorktreeWorkingState(worktreePath?: string): void {
@@ -14625,6 +14767,8 @@ export class DesktopBackendRegistry {
   async close(): Promise<void> {
     this.closed = true;
     this.acceptedSteerRequests.clear();
+    this.workingStateByWorktree.clear();
+    this.workingStateCacheLoad = undefined;
     if (this.taskMonitorWatchdogTimer) {
       clearInterval(this.taskMonitorWatchdogTimer);
     }

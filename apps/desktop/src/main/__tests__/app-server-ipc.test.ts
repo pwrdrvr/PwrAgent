@@ -8,6 +8,7 @@ import type {
   ArchiveThreadRequest,
   AppServerListThreadsRequest,
   AppServerReadThreadResponse,
+  AppServerThreadSummary,
   GetNavigationSnapshotRequest,
   HandoffThreadWorkspaceRequest,
   MarkThreadSeenRequest,
@@ -16,6 +17,7 @@ import type {
   RenameThreadRequest,
   RestoreWorktreeRequest,
   RestoreThreadRequest,
+  ThreadGitWorkingState,
 } from "@pwragent/shared";
 
 const mockAppServerLog = vi.hoisted(() => ({
@@ -280,7 +282,21 @@ const readDirectoryGitStatusCache = vi.fn(async () => ({}));
 const writeDirectoryGitStatusCacheEntry = vi.fn(async () => undefined);
 const invalidateDirectoryStatus = vi.fn((_directoryPath?: string) => undefined);
 const readThreadGitWorkingStateCache = vi.fn(async () => ({}));
-const writeThreadGitWorkingStateCacheEntry = vi.fn(async () => undefined);
+const writeThreadGitWorkingStateCacheEntry = vi.fn(async (_entry?: {
+  worktreePath: string;
+  fetchedAt: number;
+  gitWorkingState?: ThreadGitWorkingState;
+}) => undefined);
+const hydrateThreadGitWorkingStates = vi.fn(
+  async (threads: AppServerThreadSummary[]) => threads,
+);
+const rememberThreadGitWorkingStateCacheEntry = vi.fn(async (entry: {
+  worktreePath: string;
+  fetchedAt: number;
+  gitWorkingState?: ThreadGitWorkingState;
+}) => {
+  await writeThreadGitWorkingStateCacheEntry(entry);
+});
 type WorkingStateEntry = {
   worktreePath: string;
   gitWorkingState?: {
@@ -689,6 +705,8 @@ vi.mock("../app-server/backend-registry", () => {
     readDirectoryStatusEntries,
     invalidateDirectoryStatus,
     readWorktreeWorkingStateEntries,
+    hydrateThreadGitWorkingStates,
+    rememberThreadGitWorkingStateCacheEntry,
     invalidateWorktreeWorkingState,
     resolveEditCommitStates,
     onEvent,
@@ -779,6 +797,11 @@ describe("app server ipc", () => {
     readThreadGitWorkingStateCache.mockClear();
     readThreadGitWorkingStateCache.mockResolvedValue({});
     writeThreadGitWorkingStateCacheEntry.mockClear();
+    hydrateThreadGitWorkingStates.mockClear();
+    hydrateThreadGitWorkingStates.mockImplementation(
+      async (threads: AppServerThreadSummary[]) => threads,
+    );
+    rememberThreadGitWorkingStateCacheEntry.mockClear();
     readWorktreeWorkingStateEntries.mockClear();
     resolveEditCommitStates.mockClear();
     releaseEditCommitResolve = undefined;
