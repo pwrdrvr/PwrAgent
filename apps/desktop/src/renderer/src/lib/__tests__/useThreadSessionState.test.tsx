@@ -10351,6 +10351,149 @@ describe("useThreadSessionState", () => {
     });
   });
 
+  it("rehydrates stale thinking when navigation reports a missed remote completion", async () => {
+    const activeTurn = {
+      id: "turn-1",
+      status: "in_progress" as const,
+      startedAt: 5_000,
+    };
+    const completedTurn = {
+      ...activeTurn,
+      status: "completed" as const,
+      completedAt: 6_000,
+    };
+    const readThread = vi
+      .fn()
+      .mockResolvedValueOnce(readThreadResponse({
+        entries: [
+          {
+            type: "message",
+            id: "commentary-1",
+            role: "assistant",
+            phase: "commentary",
+            text: "Working remotely.",
+            turn: activeTurn,
+          },
+        ],
+        hasPreviousPage: false,
+        threadStatus: "active",
+      }))
+      .mockResolvedValueOnce(readThreadResponse({
+        entries: [
+          {
+            type: "message",
+            id: "final-1",
+            role: "assistant",
+            phase: "final",
+            text: "Done.",
+            turn: completedTurn,
+          },
+        ],
+        hasPreviousPage: false,
+        threadStatus: "idle",
+      }));
+    const desktopApi: DesktopApi = {
+      onAgentEvent: () => () => undefined,
+      readThread,
+    };
+
+    const { result, rerender } = renderHook(
+      ({ threadStatus }: { threadStatus: "active" | "idle" }) =>
+        useThreadSessionState({
+          desktopApi,
+          thread: {
+            ...buildThread({ id: "thread-1", updatedAt: 1_000 }),
+            threadStatus,
+          },
+        }),
+      {
+        initialProps: {
+          threadStatus: "active" as "active" | "idle",
+        },
+      }
+    );
+
+    await waitForThreadHydration(result);
+    expect(result.current.activeTurnId).toBe("turn-1");
+    expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBe(true);
+
+    // Simulate a federation viewer that missed both terminal events. Its
+    // later navigation snapshot changes only the status; updatedAt is the
+    // same as the already-hydrated active snapshot.
+    rerender({ threadStatus: "idle" });
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(2);
+    }, { timeout: 3_000 });
+    await waitFor(() => {
+      expect(result.current.activeTurnId).toBeUndefined();
+      expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBeUndefined();
+      expect(result.current.threadBusy).toBe(false);
+    });
+  });
+
+  it("cancels missed-completion reconciliation when navigation becomes active again", async () => {
+    const activeTurn = {
+      id: "turn-1",
+      status: "in_progress" as const,
+      startedAt: 5_000,
+    };
+    const readThread = vi.fn(async () => readThreadResponse({
+      entries: [
+        {
+          type: "message",
+          id: "commentary-1",
+          role: "assistant",
+          phase: "commentary",
+          text: "Still working.",
+          turn: activeTurn,
+        },
+      ],
+      hasPreviousPage: false,
+      threadStatus: "active",
+    }));
+    const desktopApi: DesktopApi = {
+      onAgentEvent: () => () => undefined,
+      readThread,
+    };
+    const { result, rerender } = renderHook(
+      ({ threadStatus }: { threadStatus: "active" | "idle" }) =>
+        useThreadSessionState({
+          desktopApi,
+          thread: {
+            ...buildThread({ id: "thread-1", updatedAt: 1_000 }),
+            threadStatus,
+          },
+        }),
+      {
+        initialProps: {
+          threadStatus: "active" as "active" | "idle",
+        },
+      }
+    );
+
+    await waitForThreadHydration(result);
+    expect(result.current.activeTurnId).toBe("turn-1");
+    expect(readThread).toHaveBeenCalledTimes(1);
+
+    vi.useFakeTimers();
+    try {
+      rerender({ threadStatus: "idle" });
+      rerender({ threadStatus: "active" });
+
+      act(() => {
+        vi.advanceTimersByTime(2_000);
+      });
+
+      expect(readThread).toHaveBeenCalledTimes(1);
+      expect(result.current.activeTurnId).toBe("turn-1");
+      expect(result.current.thinkingThreadKeys["codex:thread-1"]).toBe(true);
+      expect(result.current.threadBusy).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("restores thinking from active backend status after renderer HMR", async () => {
     let agentEventHandler:
       | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
