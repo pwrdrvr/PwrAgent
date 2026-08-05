@@ -31,6 +31,7 @@ import {
 } from "../acp/acp-agent-capabilities";
 import {
   AcpAgentClient,
+  mergeMcpServerRegistrations,
   type AcpJsonRpcTransport,
   type AcpMcpServerRegistration,
   type AcpPromptContentBlock,
@@ -173,6 +174,10 @@ export type AcpBackendAdapterOptions = {
   discoverLocalAcpAgents?: LocalAcpDiscovery;
   resolveLocalAcpDiscoveryEnv?: () => Promise<NodeJS.ProcessEnv>;
   isAcpAgentEnabled?: (registryId: string) => boolean;
+  resolveMcpConnectionServers?: (context: {
+    backendId: AcpBackendId;
+    sessionId?: string;
+  }) => Promise<AcpMcpServerRegistration | undefined>;
   closeTimeoutMs?: number;
   emit: (event: AgentEvent) => Promise<void>;
   handleServerRequest: (
@@ -900,6 +905,7 @@ export class AcpBackendAdapter {
   private readonly createAcpTransport?: AcpTransportFactory;
   private readonly discoverLocalAcpAgents: LocalAcpDiscovery;
   private readonly isAcpAgentEnabled?: (registryId: string) => boolean;
+  private readonly resolveMcpConnectionServers?: AcpBackendAdapterOptions["resolveMcpConnectionServers"];
   private readonly emit: (event: AgentEvent) => Promise<void>;
   private readonly handleServerRequest: (
     backend: AcpBackendId,
@@ -923,6 +929,7 @@ export class AcpBackendAdapter {
     this.automationInspectionMcpCommand = options.automationInspectionMcpCommand;
     this.emit = options.emit;
     this.handleServerRequest = options.handleServerRequest;
+    this.resolveMcpConnectionServers = options.resolveMcpConnectionServers;
     this.closeTimeoutMs = options.closeTimeoutMs ?? ACP_CLOSE_TIMEOUT_MS;
     this.acpAgentStore =
       options.acpAgentStore === null
@@ -2048,6 +2055,7 @@ export class AcpBackendAdapter {
         AcpMcpServerRegistration
         | ReturnType<typeof buildAutomationInspectionAcpMcpServers>
       > => {
+        let baseRegistration: AcpMcpServerRegistration | undefined;
         if (
           this.agentToolMcpServer
           && acpRuntimeSupportsHttpMcp(runtimeCapabilities)
@@ -2057,7 +2065,7 @@ export class AcpBackendAdapter {
               backend: backendId,
               threadId: sessionId,
             });
-            return {
+            baseRegistration = {
               servers: [registration.server],
               bindThread: registration.bindThread,
             };
@@ -2069,12 +2077,21 @@ export class AcpBackendAdapter {
             });
           }
         }
-        return buildAutomationInspectionAcpMcpServers({
-          backend: backendId,
-          command: this.automationInspectionMcpCommand,
-          runtimeCapabilities,
-          threadId: sessionId,
-        });
+        const fallbackRegistration = buildAutomationInspectionAcpMcpServers({
+            backend: backendId,
+            command: this.automationInspectionMcpCommand,
+            runtimeCapabilities,
+            threadId: sessionId,
+          });
+        baseRegistration ??= Array.isArray(fallbackRegistration)
+          ? { servers: fallbackRegistration }
+          : fallbackRegistration;
+        const connectionRegistration =
+          await this.resolveMcpConnectionServers?.({ backendId, sessionId });
+        return mergeMcpServerRegistrations(
+          baseRegistration,
+          connectionRegistration,
+        );
       },
     });
   }

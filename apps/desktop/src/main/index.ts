@@ -74,6 +74,11 @@ import {
   registerMessagingStatusIpcHandlers,
 } from "./ipc/messaging-status";
 import {
+  disposeMcpConnectionIpcHandlers,
+  registerMcpConnectionIpcHandlers,
+} from "./ipc/mcp-connections";
+import { getPwrSnapConnectionService } from "./mcp-connections/pwrsnap-connection-service";
+import {
   disposePreloadLogIpcHandlers,
   registerPreloadLogIpcHandlers,
 } from "./ipc/preload-log";
@@ -175,6 +180,7 @@ const MAIN_PROCESS_SHUTDOWN_TIMEOUT_MS = 12_000;
 const MESSAGING_SHUTDOWN_TIMEOUT_MS = 4_000;
 const FEDERATION_SHUTDOWN_TIMEOUT_MS = 4_000;
 const APP_SERVER_SHUTDOWN_TIMEOUT_MS = 7_500;
+const MCP_CONNECTION_SHUTDOWN_TIMEOUT_MS = 2_000;
 
 // Tart's AppleParavirtGPU can reset under sustained Electron E2E load,
 // delaying WindowServer paints or rebooting the guest. This must run before
@@ -423,6 +429,7 @@ function disposeMainProcessResourcesSync(): void {
   disposeFederationIpcHandlers();
   disposeImageNormalizationIpcHandlers();
   disposeIntegratedTerminalIpcHandlers();
+  disposeMcpConnectionIpcHandlers();
   // Detached env-action trees (`pnpm dev` and friends) were previously just
   // abandoned here. They keep their stdio pipes, so they *usually* died of
   // SIGPIPE once we went away — but a quiet one could outlive the app and hold
@@ -468,6 +475,11 @@ const runMainProcessShutdownBarrier = createShutdownBarrier({
       name: "app-server",
       timeoutMs: APP_SERVER_SHUTDOWN_TIMEOUT_MS,
       run: disposeAppServerIpcHandlers,
+    },
+    {
+      name: "mcp-connections",
+      timeoutMs: MCP_CONNECTION_SHUTDOWN_TIMEOUT_MS,
+      run: async () => await getPwrSnapConnectionService().close(),
     },
   ],
 });
@@ -906,6 +918,7 @@ export function bootstrapApp(): void {
     registerFederationIpcHandlers();
     registerImageNormalizationIpcHandlers();
     registerIntegratedTerminalIpcHandlers();
+    registerMcpConnectionIpcHandlers();
     installTranscriptImageProtocol();
     registerPreloadLogIpcHandlers();
     registerProfilesIpcHandlers({ onProfilesChanged: installApplicationMenu });

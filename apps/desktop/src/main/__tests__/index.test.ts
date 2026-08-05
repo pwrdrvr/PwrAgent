@@ -97,6 +97,9 @@ const listThreadsMock = vi.fn<(request?: unknown) => Promise<unknown[]>>();
 const disposeDesktopMessagingRuntimeMock = vi.fn();
 const registerMessagingStatusIpcHandlersMock = vi.fn();
 const disposeMessagingStatusIpcHandlersMock = vi.fn();
+const registerMcpConnectionIpcHandlersMock = vi.fn();
+const disposeMcpConnectionIpcHandlersMock = vi.fn();
+const closePwrSnapConnectionServiceMock = vi.fn<() => Promise<void>>();
 const setApplicationMenuMock = vi.fn();
 const buildFromTemplateMock = vi.fn((template: unknown) => ({
   kind: "menu",
@@ -428,6 +431,17 @@ vi.mock("../ipc/messaging-status", () => ({
   disposeMessagingStatusIpcHandlers: disposeMessagingStatusIpcHandlersMock,
 }));
 
+vi.mock("../ipc/mcp-connections", () => ({
+  registerMcpConnectionIpcHandlers: registerMcpConnectionIpcHandlersMock,
+  disposeMcpConnectionIpcHandlers: disposeMcpConnectionIpcHandlersMock,
+}));
+
+vi.mock("../mcp-connections/pwrsnap-connection-service", () => ({
+  getPwrSnapConnectionService: vi.fn(() => ({
+    close: closePwrSnapConnectionServiceMock,
+  })),
+}));
+
 vi.mock("../diagnostics/startup-cpu-profiler", () => ({
   StartupCpuProfiler: StartupCpuProfilerMock,
 }));
@@ -589,6 +603,10 @@ describe("bootstrapApp", () => {
     disposeDesktopMessagingRuntimeMock.mockResolvedValue(undefined);
     registerMessagingStatusIpcHandlersMock.mockReset();
     disposeMessagingStatusIpcHandlersMock.mockReset();
+    registerMcpConnectionIpcHandlersMock.mockReset();
+    disposeMcpConnectionIpcHandlersMock.mockReset();
+    closePwrSnapConnectionServiceMock.mockReset();
+    closePwrSnapConnectionServiceMock.mockResolvedValue();
     setApplicationMenuMock.mockReset();
     shellOpenExternalMock.mockReset();
     shellOpenPathMock.mockReset();
@@ -678,6 +696,7 @@ describe("bootstrapApp", () => {
     expect(registerFederationIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(registerImageNormalizationIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(registerIntegratedTerminalIpcHandlersMock).toHaveBeenCalledTimes(1);
+    expect(registerMcpConnectionIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(registerPreloadLogIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(registerRendererErrorIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(registerSettingsIpcHandlersMock).toHaveBeenCalledTimes(1);
@@ -1257,6 +1276,7 @@ describe("bootstrapApp", () => {
     expect(disposeComposerDraftIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeIntegratedTerminalIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeFederationIpcHandlersMock).toHaveBeenCalledTimes(1);
+    expect(disposeMcpConnectionIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeSettingsIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeAppServerIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeAppServerIpcHandlersMock.mock.invocationCallOrder[0]).toBeLessThan(
@@ -1264,6 +1284,7 @@ describe("bootstrapApp", () => {
     );
     expect(disposeDesktopMessagingRuntimeMock).toHaveBeenCalledTimes(1);
     expect(disposeDesktopFederationRuntimeMock).toHaveBeenCalledTimes(1);
+    expect(closePwrSnapConnectionServiceMock).toHaveBeenCalledTimes(1);
     expect(disposeAppStateMock).toHaveBeenCalledTimes(1);
     expect(quitMock).toHaveBeenCalledTimes(1);
 
@@ -1272,6 +1293,7 @@ describe("bootstrapApp", () => {
     expect(disposeAppServerIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(disposeDesktopMessagingRuntimeMock).toHaveBeenCalledTimes(1);
     expect(disposeDesktopFederationRuntimeMock).toHaveBeenCalledTimes(1);
+    expect(closePwrSnapConnectionServiceMock).toHaveBeenCalledTimes(1);
   });
 
   it("reuses one quit barrier while messaging and app-server teardown settle", async () => {

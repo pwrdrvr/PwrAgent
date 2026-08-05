@@ -102,6 +102,23 @@ export type AcpMcpServerRegistration = {
   bindThread?: (threadId: string) => Promise<void> | void;
 };
 
+export function mergeMcpServerRegistrations(
+  ...registrations: Array<AcpMcpServerRegistration | undefined>
+): AcpMcpServerRegistration {
+  const present = registrations.filter(
+    (registration): registration is AcpMcpServerRegistration =>
+      registration !== undefined,
+  );
+  return {
+    servers: present.flatMap((registration) => registration.servers),
+    bindThread: async (threadId) => {
+      for (const registration of present) {
+        await registration.bindThread?.(threadId);
+      }
+    },
+  };
+}
+
 export type AcpPromptContentBlock =
   | { type: "text"; text: string }
   | { type: "image"; mimeType: string; data: string };
@@ -327,16 +344,21 @@ export class AcpAgentClient {
     acpRuntime?: BackendAcpSessionRuntimeState;
     hidden?: boolean;
     mcpServers?: "default" | "none";
+    additionalMcpRegistration?: AcpMcpServerRegistration;
     sessionMeta?: Record<string, unknown>;
   }): Promise<AcpSessionMetadata> {
     const cwd = params.cwd ?? process.cwd();
-    const mcpRegistration =
+    const defaultMcpRegistration =
       params.mcpServers === "none"
         ? { servers: [] }
         : await this.buildMcpServers({
             cwd,
             sessionId: params.sessionId,
           });
+    const mcpRegistration = mergeMcpServerRegistrations(
+      defaultMcpRegistration,
+      params.additionalMcpRegistration,
+    );
     const result = await this.options.transport.request("session/new", {
       cwd,
       mcpServers: mcpRegistration.servers,

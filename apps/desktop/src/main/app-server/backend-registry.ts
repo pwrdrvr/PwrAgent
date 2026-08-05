@@ -16,7 +16,11 @@ import type {
   MessagingBindingRecord,
 } from "@pwragent/messaging-interface";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
-import { getAppStateDb, getAppStateMode } from "../state/app-state";
+import {
+  getAppStateDb,
+  getAppStateMode,
+  isAppStateInitialized,
+} from "../state/app-state";
 import type {
   OverlayStoreLike,
   SqliteOverlayStore,
@@ -24,6 +28,13 @@ import type {
 } from "../state/overlay-store-sqlite";
 import { requestShowThread } from "../window-show-thread";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
+import type { AcpMcpServerRegistration } from "../acp/acp-client";
+import { MCP_CONNECTION_TOOL_TIMEOUT_SECONDS } from "../mcp-connections/mcp-connection-timeouts";
+import {
+  getPwrSnapConnectionService,
+  type McpConnectionBridgeRegistration,
+  type PwrSnapConnectionService,
+} from "../mcp-connections/pwrsnap-connection-service";
 import {
   buildManagedReviewPrompt,
   formatManagedReviewOutput,
@@ -227,6 +238,7 @@ import {
   isThreadSearchSemanticMode,
   type PendingRequestDecision,
   type PendingRequestApprovalContext,
+  PWRSNAP_MCP_CONNECTION_ID,
   readCodexEnvironmentActionRuns,
   DEFAULT_TASK_MONITOR_MODEL,
   DEFAULT_TASK_MONITOR_POLL_INTERVAL_SECONDS,
@@ -5634,6 +5646,57 @@ function buildCodexPdfMcpDisabledConfig(): CodexThreadStartParams["config"] {
   } as CodexThreadStartParams["config"];
 }
 
+function buildCodexConnectionMcpConfig(
+  registrations: McpConnectionBridgeRegistration[],
+): CodexThreadStartParams["config"] | undefined {
+  if (registrations.length === 0) return undefined;
+  return {
+    mcp_servers: Object.fromEntries(
+      registrations.map(({ server }) => [
+        server.name,
+        {
+          enabled: true,
+          command: server.command,
+          args: server.args,
+          env: server.env,
+          tool_timeout_sec: MCP_CONNECTION_TOOL_TIMEOUT_SECONDS,
+        },
+      ]),
+    ),
+  } as CodexThreadStartParams["config"];
+}
+
+function mergeCodexThreadConfigs(
+  ...configs: Array<CodexThreadStartParams["config"] | undefined>
+): CodexThreadStartParams["config"] | undefined {
+  const present = configs.filter(
+    (config): config is NonNullable<CodexThreadStartParams["config"]> =>
+      config !== undefined,
+  );
+  if (present.length === 0) return undefined;
+  const merged = present.reduce<Record<string, unknown>>(
+    (result, config) => {
+      const record = config as Record<string, unknown>;
+      const currentServers = result.mcp_servers;
+      const nextServers = record.mcp_servers;
+      return {
+        ...result,
+        ...record,
+        ...(currentServers && nextServers
+          ? {
+              mcp_servers: {
+                ...(currentServers as Record<string, unknown>),
+                ...(nextServers as Record<string, unknown>),
+              },
+            }
+          : {}),
+      };
+    },
+    {},
+  );
+  return merged as CodexThreadStartParams["config"];
+}
+
 function mergeCodexDynamicToolSpecs(
   specs: CodexDynamicToolSpec[],
 ): CodexDynamicToolSpec[] {
@@ -6284,6 +6347,10 @@ export class DesktopBackendRegistry {
   private readonly localFilePrivateStorageRoots: readonly string[];
   private readonly pdfAttachmentStore = new PdfAttachmentStore();
   private readonly pdfToolMcpServer?: AgentToolMcpServerLike;
+  private readonly mcpConnectionService?: Pick<
+    PwrSnapConnectionService,
+    "registerBridge"
+  >;
   /**
    * Reports whether the registry is running inside the throwaway
    * bootstrap profile (`.bootstrap/`). When `true`, `listThreads`
@@ -6312,6 +6379,10 @@ export class DesktopBackendRegistry {
     createAcpClient?: AcpClientFactory;
     agentToolMcpServer?: AgentToolMcpServerLike | null;
     pdfToolMcpServer?: AgentToolMcpServerLike | null;
+    mcpConnectionService?: Pick<
+      PwrSnapConnectionService,
+      "registerBridge"
+    > | null;
     messagingStore?: MessagingArchiveCleanupStore | null;
     messagingArchiveCleaner?: MessagingArchiveCleaner | null;
     automationInspectionMcpCommand?: string;
@@ -6341,6 +6412,11 @@ export class DesktopBackendRegistry {
       cwd: string,
     ) => Promise<LinkedDirectorySummary | undefined>;
   }) {
+    this.mcpConnectionService =
+      options?.mcpConnectionService === null
+        ? undefined
+        : options?.mcpConnectionService ??
+          (isAppStateInitialized() ? getPwrSnapConnectionService() : undefined);
     const replayClients = createReplayClientsFromEnv();
     const codexCapture = options?.codexClient
       || replayClients
@@ -6582,6 +6658,17 @@ export class DesktopBackendRegistry {
       emit: async (event) => await this.emit(event),
       handleServerRequest: async (backend, request) =>
         await this.handleServerRequest(backend, request),
+      resolveMcpConnectionServers: async ({ backendId, sessionId }) => {
+        if (!sessionId) return undefined;
+        const overlay = await this.overlayStore.getThreadOverlayState({
+          backend: backendId,
+          threadId: sessionId,
+        });
+        return await this.registerAcpMcpConnections(
+          overlay?.mcpConnectionIds,
+          sessionId,
+        );
+      },
       automationInspectionMcpCommand:
         options?.automationInspectionMcpCommand ??
         resolveAutomationInspectionMcpCommand(),
@@ -7794,6 +7881,7 @@ export class DesktopBackendRegistry {
     executionMode: ThreadExecutionMode;
     acpRuntime?: BackendAcpSessionRuntimeState;
     reasoningEffort?: string;
+    mcpRegistration?: AcpMcpServerRegistration;
   }): Promise<{ threadId: string }> {
     const client = await this.acpBackend.getClient(params.backend);
     const initialExecutionMode = this.usesSlashControlledAcpExecutionModes(
@@ -7805,6 +7893,7 @@ export class DesktopBackendRegistry {
       cwd: params.cwd,
       executionMode: initialExecutionMode,
       acpRuntime: params.acpRuntime,
+      additionalMcpRegistration: params.mcpRegistration,
     });
     if (
       this.usesSlashControlledAcpExecutionModes(params.backend) &&
@@ -9603,6 +9692,7 @@ export class DesktopBackendRegistry {
     serviceTier?: string;
     reasoningEffort?: string;
     fastMode?: boolean;
+    mcpConnectionIds?: string[];
     agent?: StartThreadRequest["agent"];
     acpRuntime?: BackendAcpSessionRuntimeState;
     workMode?: NavigationLaunchpadDraft["workMode"];
@@ -9624,6 +9714,7 @@ export class DesktopBackendRegistry {
       requiredWorkMode,
       parentThreadId,
       prAutoDispatchEnabled,
+      mcpConnectionIds,
       ...request
     } = params;
     const modelSettings = await this.resolveModelSettings(backend, request);
@@ -9763,6 +9854,27 @@ export class DesktopBackendRegistry {
     const pdfMcpConfig = pdfMcpRegistration
       ? buildCodexPdfMcpConfig(pdfMcpRegistration)
       : undefined;
+    const mcpConnectionRegistrations =
+      backend === "codex" || isAcpBackendId(backend)
+        ? await this.registerMcpConnections(mcpConnectionIds)
+        : [];
+    const connectionMcpConfig = buildCodexConnectionMcpConfig(
+      mcpConnectionRegistrations,
+    );
+    const codexMcpConfig = mergeCodexThreadConfigs(
+      pdfMcpConfig,
+      connectionMcpConfig,
+    );
+    const acpMcpRegistration = mcpConnectionRegistrations.length > 0
+      ? {
+          servers: mcpConnectionRegistrations.map(({ server }) => server),
+          bindThread: async (threadId: string) => {
+            for (const registration of mcpConnectionRegistrations) {
+              registration.bindThread(threadId);
+            }
+          },
+        }
+      : undefined;
     if (dynamicTools?.length) {
       backendRegistryLog.info("attaching agent tool catalogs", {
         backend,
@@ -9794,6 +9906,7 @@ export class DesktopBackendRegistry {
             executionMode: effectiveExecutionMode,
             acpRuntime,
             reasoningEffort: modelSettings.reasoningEffort,
+            mcpRegistration: acpMcpRegistration,
           })
         : await this.getClient(backend, effectiveExecutionMode).startThread({
             ...request,
@@ -9807,12 +9920,25 @@ export class DesktopBackendRegistry {
                   defaultModeRequestUserInput:
                     this.resolveCodexDefaultModeRequestUserInputFn(),
                   threadSource: "user" as CodexThreadSource,
-                  ...(pdfMcpConfig ? { config: pdfMcpConfig } : {}),
+                  ...(codexMcpConfig ? { config: codexMcpConfig } : {}),
                 }
               : {}),
             dynamicTools,
           });
     } catch (error) {
+      for (const registration of mcpConnectionRegistrations) {
+        try {
+          registration.revoke();
+        } catch (revokeError) {
+          backendRegistryLog.warn("startThread MCP connection revocation failed", {
+            backend,
+            error:
+              revokeError instanceof Error
+                ? revokeError.message
+                : String(revokeError),
+          });
+        }
+      }
       await preparedWorkspaceRollback?.().catch((rollbackError) => {
         backendRegistryLog.warn("startThread workspace rollback failed", {
           backend,
@@ -9825,6 +9951,9 @@ export class DesktopBackendRegistry {
       throw error;
     }
     pdfMcpRegistration?.bindThread(result.threadId);
+    for (const registration of mcpConnectionRegistrations) {
+      registration.bindThread(result.threadId);
+    }
     const startedAt = Date.now();
     const pendingThreadKey = buildThreadIdentityKey(backend, result.threadId);
     const agentName = request.agent?.name?.trim();
@@ -9890,6 +10019,13 @@ export class DesktopBackendRegistry {
       enabled:
         prAutoDispatchEnabled ?? this.resolveDefaultPrAutoDispatchEnabledFn(),
     });
+    if (mcpConnectionIds?.length) {
+      await this.overlayStore.setThreadMcpConnectionIds({
+        backend,
+        threadId: result.threadId,
+        connectionIds: mcpConnectionIds,
+      });
+    }
     if (request.agent) {
       await this.overlayStore.setThreadAgent({
         backend,
@@ -10519,6 +10655,54 @@ export class DesktopBackendRegistry {
     }
   }
 
+  private async registerMcpConnections(
+    connectionIds: string[] | undefined,
+    threadId?: string,
+  ): Promise<McpConnectionBridgeRegistration[]> {
+    const selected = [
+      ...new Set(
+        (connectionIds ?? []).map((connectionId) => connectionId.trim()),
+      ),
+    ].filter(Boolean);
+    if (selected.length === 0) return [];
+    if (!this.mcpConnectionService) {
+      throw new Error("MCP connections are unavailable in this PwrAgent runtime.");
+    }
+    const registrations: McpConnectionBridgeRegistration[] = [];
+    for (const connectionId of selected) {
+      if (connectionId !== PWRSNAP_MCP_CONNECTION_ID) {
+        backendRegistryLog.warn("ignoring unknown MCP connection", {
+          connectionId,
+          threadId: threadId ?? null,
+        });
+        continue;
+      }
+      registrations.push(
+        await this.mcpConnectionService.registerBridge(connectionId, threadId),
+      );
+    }
+    return registrations;
+  }
+
+  private async registerAcpMcpConnections(
+    connectionIds: string[] | undefined,
+    threadId?: string,
+  ): Promise<AcpMcpServerRegistration | undefined> {
+    const registrations = await this.registerMcpConnections(
+      connectionIds,
+      threadId,
+    );
+    if (registrations.length === 0) return undefined;
+    return {
+      servers: registrations.map(({ server }) => server),
+      bindThread: async (nextThreadId) => {
+        for (const registration of registrations) {
+          registration.bindThread(nextThreadId);
+        }
+      },
+    };
+  }
+
   async startTurn(params: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -10681,7 +10865,7 @@ export class DesktopBackendRegistry {
     let turnParams!: ModelSettings;
     let cwd: string | undefined;
     let activeTurnMode: ThreadExecutionMode | undefined;
-    let pdfMcpConfig: CodexThreadStartParams["config"] | undefined;
+    let codexMcpConfig: CodexThreadStartParams["config"] | undefined;
     let pdfMcpAvailable = false;
     try {
       if (params.backend === "codex") {
@@ -10698,9 +10882,19 @@ export class DesktopBackendRegistry {
           ? await this.registerPdfMcpClient({ threadId: params.threadId })
           : undefined;
         pdfMcpAvailable = registration !== undefined;
-        pdfMcpConfig = registration
+        codexMcpConfig = registration
           ? buildCodexPdfMcpConfig(registration)
           : buildCodexPdfMcpDisabledConfig();
+      }
+      if (params.backend === "codex" && overlay?.mcpConnectionIds?.length) {
+        const registrations = await this.registerMcpConnections(
+          overlay.mcpConnectionIds,
+          params.threadId,
+        );
+        codexMcpConfig = mergeCodexThreadConfigs(
+          codexMcpConfig,
+          buildCodexConnectionMcpConfig(registrations),
+        );
       }
       const preparedPdfInput = await preparePdfTurnInput({
         handling: this.resolvePdfTurnInputHandling({
@@ -10828,7 +11022,7 @@ export class DesktopBackendRegistry {
                 ...(overlay?.codexEnvironmentRuntime
                   ? { codexEnvironmentRuntime: overlay.codexEnvironmentRuntime }
                   : {}),
-                ...(pdfMcpConfig ? { config: pdfMcpConfig } : {}),
+                ...(codexMcpConfig ? { config: codexMcpConfig } : {}),
                 defaultModeRequestUserInput:
                   this.resolveCodexDefaultModeRequestUserInputFn(),
               });
@@ -14789,6 +14983,7 @@ export class DesktopBackendRegistry {
       reasoningEffort: launchpad.reasoningEffort,
       serviceTier: launchpad.serviceTier,
       fastMode: launchpad.backend === "codex" ? launchpad.fastMode : undefined,
+      mcpConnectionIds: launchpad.mcpConnectionIds,
       prAutoDispatchEnabled:
         launchpad.prAutoDispatchEnabled ?? this.resolveDefaultPrAutoDispatchEnabledFn(),
       acpRuntime: launchpad.acpRuntime,

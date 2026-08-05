@@ -17,6 +17,7 @@ export * from "./contracts/diff-focus";
 export * from "./contracts/federation";
 export * from "./contracts/messaging";
 export * from "./contracts/messaging-tools";
+export * from "./contracts/mcp-connections";
 export * from "./contracts/navigation";
 export * from "./contracts/settings";
 export * from "./contracts/scheduled-thread-actions";

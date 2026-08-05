@@ -10,6 +10,7 @@ import {
   buildNavigationSnapshot,
   buildThreadIdentityKey,
   PWRAGENT_MESSAGING_PDF_TOOL_CATALOG_VERSION,
+  PWRSNAP_MCP_CONNECTION_ID,
 } from "@pwragent/shared";
 import type {
   AcpBackendId,
@@ -583,6 +584,26 @@ function createOverlayStoreMock(params?: {
         backend,
         threadId,
         messagingPdfToolCatalogVersion: version,
+        extraLinkedDirectories: overlays.get(key)?.extraLinkedDirectories ?? [],
+      } as ThreadOverlayState;
+      overlays.set(key, next);
+      return next;
+    },
+    setThreadMcpConnectionIds: async ({
+      backend,
+      threadId,
+      connectionIds,
+    }: {
+      backend: ThreadOverlayState["backend"];
+      threadId: string;
+      connectionIds: string[];
+    }) => {
+      const key = `${backend}:${threadId}`;
+      const next = {
+        ...overlays.get(key),
+        backend,
+        threadId,
+        mcpConnectionIds: connectionIds,
         extraLinkedDirectories: overlays.get(key)?.extraLinkedDirectories ?? [],
       } as ThreadOverlayState;
       overlays.set(key, next);
@@ -7715,6 +7736,104 @@ script = "echo setup"
 
     await registry.close();
     expect(pdfMcp.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("injects a selected PwrSnap stdio bridge and persists the thread selection", async () => {
+    const codexClient = new MockBackendClient({ threads: [] });
+    const overlayStore = createOverlayStoreMock();
+    const bindThread = vi.fn();
+    const registerBridge = vi.fn(async () => ({
+      server: {
+        name: "pwrsnap",
+        command: "/Applications/PwrAgent.app/Contents/MacOS/PwrAgent",
+        args: ["/app/mcp-connection-bridge.js"],
+        env: {
+          ELECTRON_RUN_AS_NODE: "1",
+          PWRAGENT_MCP_CONNECTION_SOCKET: "/tmp/pwragent.sock",
+          PWRAGENT_MCP_CONNECTION_TOKEN: "local-grant",
+        },
+      },
+      bindThread,
+      revoke: vi.fn(),
+    }));
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore,
+      mcpConnectionService: { registerBridge },
+      createScratchProjectDirectory: async () => "/tmp/pwragent-scratch",
+    });
+
+    await registry.startThread({
+      backend: "codex",
+      mcpConnectionIds: [PWRSNAP_MCP_CONNECTION_ID],
+    });
+
+    expect(registerBridge).toHaveBeenCalledWith("pwrsnap", undefined);
+    expect(bindThread).toHaveBeenCalledWith("thread-1");
+    expect(codexClient.lastStartThreadParams?.config).toEqual({
+      mcp_servers: {
+        pwrsnap: {
+          enabled: true,
+          command: "/Applications/PwrAgent.app/Contents/MacOS/PwrAgent",
+          args: ["/app/mcp-connection-bridge.js"],
+          env: {
+            ELECTRON_RUN_AS_NODE: "1",
+            PWRAGENT_MCP_CONNECTION_SOCKET: "/tmp/pwragent.sock",
+            PWRAGENT_MCP_CONNECTION_TOKEN: "local-grant",
+          },
+          tool_timeout_sec: 720,
+        },
+      },
+    });
+    await expect(overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: "thread-1",
+    })).resolves.toMatchObject({
+      mcpConnectionIds: ["pwrsnap"],
+    });
+
+    await registry.close();
+  });
+
+  it("revokes a PwrSnap bridge when Codex thread creation fails", async () => {
+    const codexClient = new MockBackendClient({ threads: [] });
+    vi.spyOn(codexClient, "startThread").mockRejectedValueOnce(
+      new Error("Codex thread creation failed"),
+    );
+    const revoke = vi.fn();
+    const registerBridge = vi.fn(async () => ({
+      server: {
+        name: "pwrsnap",
+        command: "/Applications/PwrAgent.app/Contents/MacOS/PwrAgent",
+        args: ["/app/mcp-connection-bridge.js"],
+        env: {
+          ELECTRON_RUN_AS_NODE: "1",
+          PWRAGENT_MCP_CONNECTION_SOCKET: "/tmp/pwragent.sock",
+          PWRAGENT_MCP_CONNECTION_TOKEN: "local-grant",
+        },
+      },
+      bindThread: vi.fn(),
+      revoke,
+    }));
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      mcpConnectionService: { registerBridge },
+      createScratchProjectDirectory: async () => "/tmp/pwragent-scratch",
+    });
+
+    await expect(
+      registry.startThread({
+        backend: "codex",
+        mcpConnectionIds: [PWRSNAP_MCP_CONNECTION_ID],
+      }),
+    ).rejects.toThrow("Codex thread creation failed");
+
+    expect(registerBridge).toHaveBeenCalledWith("pwrsnap", undefined);
+    expect(revoke).toHaveBeenCalledTimes(1);
+    await registry.close();
   });
 
   it("uses the single-page PDF preparation fallback for an extensionless Composer reference", async () => {

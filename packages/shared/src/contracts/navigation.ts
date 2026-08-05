@@ -601,6 +601,8 @@ export type NavigationLaunchpadDraft = NavigationLaunchpadDefaults & {
    * default for each new draft.
    */
   agent?: NavigationLaunchpadAgent;
+  /** MCP connections selected for the thread created from this launchpad. */
+  mcpConnectionIds?: string[];
   prompt: string;
   registeredAt?: number;
   settingsTouchedAt?: number;
@@ -1339,6 +1341,8 @@ export type ThreadOverlayState = {
   modelSettingsManuallyUpdatedAt?: number;
   serviceTier?: string;
   fastMode?: boolean;
+  /** MCP connections supplied to this thread's harness. */
+  mcpConnectionIds?: string[];
   /** Saved operator preference; global PR polling and Auto-fix gates control its effect. */
   prAutoDispatchEnabled?: boolean;
   /** Joined from the durable dispatch table for navigation; never stored in overlay JSON. */

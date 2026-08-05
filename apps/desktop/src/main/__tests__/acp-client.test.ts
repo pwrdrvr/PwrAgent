@@ -669,6 +669,53 @@ describe("AcpAgentClient", () => {
     expect(bindThread).toHaveBeenCalledWith("session-1");
   });
 
+  it("composes a selected stdio connection with the default ACP MCP servers", async () => {
+    const transport = new FakeAcpAgentTransport();
+    const bindConnectionThread = vi.fn();
+    const client = new AcpAgentClient({
+      backendId: "acp:gemini",
+      store,
+      transport,
+      now: () => 1000,
+      mcpServers: () => [{ name: "pwragent", command: "pwragent-mcp" }],
+    });
+
+    await client.initialize();
+    await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+      additionalMcpRegistration: {
+        servers: [{
+          name: "pwrsnap",
+          command: process.execPath,
+          args: ["/app/mcp-connection-bridge.js"],
+          env: {
+            ELECTRON_RUN_AS_NODE: "1",
+            PWRAGENT_MCP_CONNECTION_TOKEN: "local-grant",
+          },
+        }],
+        bindThread: bindConnectionThread,
+      },
+    });
+
+    expect(transport.requests[1]?.params).toEqual({
+      cwd: "/repo",
+      mcpServers: [
+        { name: "pwragent", command: "pwragent-mcp" },
+        {
+          name: "pwrsnap",
+          command: process.execPath,
+          args: ["/app/mcp-connection-bridge.js"],
+          env: {
+            ELECTRON_RUN_AS_NODE: "1",
+            PWRAGENT_MCP_CONNECTION_TOKEN: "local-grant",
+          },
+        },
+      ],
+    });
+    expect(bindConnectionThread).toHaveBeenCalledWith("session-1");
+  });
+
   it("sends pasted images as ACP image content and keeps structured parts in live replay", async () => {
     const transport = new FakeAcpAgentTransport();
     const imageUrl = "data:image/png;base64,aGVsbG8=";
