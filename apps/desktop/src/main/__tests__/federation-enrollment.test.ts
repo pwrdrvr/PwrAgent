@@ -61,17 +61,18 @@ describe("federation enrollment", () => {
     );
   });
 
-  it("rejects legacy invites before attempting enrollment", () => {
-    const legacyInvite = `pwragent-federation:${Buffer.from(JSON.stringify({
-      version: 1,
-      token: "legacy-token",
+  it("rejects unsupported invite versions before attempting enrollment", () => {
+    const unsupportedInvite = `pwragent-federation:${Buffer.from(JSON.stringify({
+      version: FEDERATION_INVITE_VERSION + 1,
+      token: "unsupported-token",
       gatewayInstanceId: "gateway_one",
-      gatewayPublicKeyPem: "legacy-key",
+      gatewayPublicKeyPem: "unsupported-key",
+      gatewayNoisePublicKey: "unsupported-noise-key",
       gatewayUrl: "ws://127.0.0.1:47830",
       expiresAt: 2_000,
     }), "utf8").toString("base64url")}`;
 
-    expect(() => decodeFederationInvite(legacyInvite, 1_000)).toThrow(
+    expect(() => decodeFederationInvite(unsupportedInvite, 1_000)).toThrow(
       `Unsupported federation invite version. Expected version ${FEDERATION_INVITE_VERSION}.`,
     );
   });

@@ -6,8 +6,8 @@ import type {
 } from "./normalized-app-server";
 
 export const FEDERATION_PROTOCOL_VERSION = 1;
-export const FEDERATION_INVITE_VERSION = 2;
-export const FEDERATION_TRANSPORT_VERSION = 2;
+export const FEDERATION_INVITE_VERSION = 1;
+export const FEDERATION_TRANSPORT_VERSION = 1;
 
 export const FEDERATION_CAPABILITIES = [
   "remote_window",
