@@ -354,8 +354,12 @@ export class DesktopFederationRuntime {
       health.status = "degraded";
       health.unavailableReason = this.gatewayListenerError;
     }
+    // Prefer the configured endpoint list: a profile that only ever used
+    // multi-path endpoints has no legacy `gateway_url`, and the enrollment
+    // card would otherwise show a paired gateway with no address.
     health.clientEnrollment = this.readClientEnrollment(
-      settings.federation.gatewayUrl.value.trim(),
+      settings.federation.gatewayEndpoints.value[0]?.trim()
+        || settings.federation.gatewayUrl.value.trim(),
     );
     return health;
   }
@@ -391,6 +395,10 @@ export class DesktopFederationRuntime {
     stateDb.setMeta(GATEWAY_NOISE_PUBLIC_KEY_META_KEY, "");
     stateDb.setMeta(PENDING_INVITE_TOKEN_META_KEY, "");
     stateDb.setMeta(GATEWAY_ENROLLED_AT_META_KEY, "");
+    // The endpoint list and its last-good memory belong to the pairing being
+    // forgotten. Leaving them behind would keep a dual-mode instance dialing
+    // the forgotten gateway with no pins left to satisfy it.
+    stateDb.setMeta(GATEWAY_LAST_ENDPOINT_META_KEY, "");
     const settingsService = getDesktopSettingsService();
     const settings = await settingsService.readSettings();
     const mode = settings.federation.mode.value;
@@ -407,6 +415,7 @@ export class DesktopFederationRuntime {
     await settingsService.writeConfigPatch({
       federation: {
         gatewayUrl: "",
+        gatewayEndpoints: [],
         ...(mode === "client" ? { mode: "disabled" as const } : {}),
       },
     });
@@ -747,13 +756,21 @@ export class DesktopFederationRuntime {
         return;
       } catch (error) {
         lastError = error;
+        const rawMessage =
+          error instanceof Error ? error.message : String(error);
         this.endpointStatuses.set(endpoint, {
           ...this.endpointStatuses.get(endpoint),
           state: "failed",
-          lastError: redactFederationDiagnostic(
-            error instanceof Error ? error.message : String(error),
-          ),
+          lastError: redactFederationDiagnostic(rawMessage),
         });
+        // Every endpoint authenticates against the SAME pinned gateway
+        // identity, so an auth-class failure is a property of the pairing,
+        // not of this path. Walking on would waste attempts and, worse, let
+        // a later endpoint's network error mask a broken pin behind an
+        // endless "connecting" retry instead of surfacing as "rejected".
+        if (classifyFederationClientFailure(rawMessage) === "auth") {
+          throw error;
+        }
       }
     }
     throw lastError instanceof Error

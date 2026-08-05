@@ -687,7 +687,7 @@ describe("FederationSettings", () => {
     expect(await screen.findByLabelText("Listen host")).toBeEnabled();
     expect(screen.getByLabelText("Listen port")).toBeEnabled();
     expect(screen.getByLabelText("Public URL")).toBeEnabled();
-    expect(screen.getByLabelText("Gateway URL")).toBeDisabled();
+    expect(screen.getByLabelText("Gateway endpoints")).toBeDisabled();
     expect(
       screen.getByRole("button", { name: "Generate invite" }),
     ).toBeEnabled();
@@ -725,7 +725,7 @@ describe("FederationSettings", () => {
     expect(await screen.findByLabelText("Listen host")).toBeDisabled();
     expect(screen.getByLabelText("Listen port")).toBeDisabled();
     expect(screen.getByLabelText("Public URL")).toBeDisabled();
-    expect(screen.getByLabelText("Gateway URL")).toBeEnabled();
+    expect(screen.getByLabelText("Gateway endpoints")).toBeEnabled();
     // Only the listening side issues invites.
     expect(
       screen.getByRole("button", { name: "Generate invite" }),

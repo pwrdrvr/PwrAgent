@@ -674,8 +674,12 @@ export function FederationSettings(props: FederationSettingsProps) {
                   }
                 />
                 <SettingsField
-                  label="Gateway URL"
-                  sub="Where this instance dials out."
+                  label="Gateway endpoint"
+                  sub={
+                    gatewayEndpointStatuses.length > 1
+                      ? `First of ${gatewayEndpointStatuses.length} endpoints tried for this pairing.`
+                      : "Where this instance dials out."
+                  }
                   control={
                     <code>
                       {effectiveHealth.clientEnrollment.gatewayUrl ??

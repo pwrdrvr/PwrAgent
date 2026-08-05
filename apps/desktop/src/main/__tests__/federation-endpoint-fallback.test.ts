@@ -88,6 +88,36 @@ describe("federation endpoint fallback", () => {
     expect(attempts).toEqual([LAN]);
   });
 
+  // Every endpoint authenticates against the same pinned gateway identity, so
+  // an auth-class failure is a property of the pairing, not of one path.
+  // Continuing would let a later endpoint's network error mask a broken pin.
+  it("stops the walk on an auth-class failure instead of trying more endpoints", async () => {
+    const runtime = createHarness([LAN, TAILSCALE, CLOUDFLARE]);
+    const attempts: string[] = [];
+    runtime.connectClient = async (gatewayUrl) => {
+      attempts.push(gatewayUrl);
+      throw new Error("Invalid federation auth challenge signature");
+    };
+
+    await expect(runtime.connectToGateway()).rejects.toThrow(
+      "Invalid federation auth challenge signature",
+    );
+    expect(attempts).toEqual([LAN]);
+  });
+
+  it("keeps walking past a transport-class failure", async () => {
+    const runtime = createHarness([LAN, TAILSCALE]);
+    const attempts: string[] = [];
+    runtime.connectClient = async (gatewayUrl) => {
+      attempts.push(gatewayUrl);
+      if (gatewayUrl === LAN) throw new Error("connect ECONNREFUSED");
+    };
+
+    await runtime.connectToGateway();
+
+    expect(attempts).toEqual([LAN, TAILSCALE]);
+  });
+
   it("throws the final endpoint error after a fully failed cycle", async () => {
     const runtime = createHarness([LAN, TAILSCALE]);
     runtime.connectClient = async (gatewayUrl) => {
