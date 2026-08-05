@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { SlackAdapter, type SlackApi, type SlackSocketClient } from "../slack-adapter.ts";
+import type { SlackHomeView } from "../slack-home.ts";
 import type {
   MessagingChannelRef,
   MessagingCallbackHandleRecord,
@@ -61,6 +62,7 @@ function fakeApi(spies: {
   permalinks?: Record<string, string>;
   deleted?: Array<{ channel: string; ts: string }>;
   deleteErrors?: Error[];
+  publishedHomes?: Array<{ userId: string; view: SlackHomeView }>;
   posted?: unknown[];
   replies?: Record<string, string>;
   updated?: unknown[];
@@ -103,6 +105,9 @@ function fakeApi(spies: {
     postMessage: async (params) => {
       spies.posted?.push(params);
       return { channel: params.channel, ts: "1712023032.123456" };
+    },
+    publishHomeView: async (params) => {
+      spies.publishedHomes?.push(params);
     },
     updateMessage: async (params) => {
       spies.updated?.push(params);
@@ -158,6 +163,85 @@ describe("SlackAdapter", () => {
     expect(adapter.capabilityProfile.actions?.maxActions).toBe(25);
     expect(adapter.capabilityProfile.actions?.supportsLayoutHints).toBe(true);
     expect(adapter.capabilityProfile.text.markdownDialect).toBe("markdown");
+  });
+
+  it("publishes App Home for authorized users during startup", async () => {
+    const publishedHomes: Array<{ userId: string; view: SlackHomeView }> = [];
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({ publishedHomes }),
+      socketClient: fakeSocket(),
+    });
+
+    await adapter.start(async () => undefined);
+
+    expect(publishedHomes).toHaveLength(1);
+    expect(publishedHomes[0]).toMatchObject({
+      userId: "U012ABCDEF0",
+      view: { type: "home" },
+    });
+    expect(JSON.stringify(publishedHomes[0]?.view)).toContain(
+      "https://pwragent.ai/assets/logo.png",
+    );
+  });
+
+  it("acknowledges App Home opens and refreshes the user's Home tab", async () => {
+    const publishedHomes: Array<{ userId: string; view: SlackHomeView }> = [];
+    const socket = fakeSocket();
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({ publishedHomes }),
+      socketClient: socket,
+    });
+    const events: MessagingInboundEvent[] = [];
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+    publishedHomes.length = 0;
+    let acknowledged = false;
+
+    await socket.emitEvent("slack_event", {
+      ack: async () => {
+        acknowledged = true;
+      },
+      event: {
+        type: "app_home_opened",
+        tab: "home",
+        user: "U012ABCDEF0",
+      },
+    });
+
+    expect(acknowledged).toBe(true);
+    expect(events).toEqual([]);
+    expect(publishedHomes).toHaveLength(1);
+    expect(publishedHomes[0]?.userId).toBe("U012ABCDEF0");
+  });
+
+  it("keeps Slack messaging available when App Home publishing fails", async () => {
+    const warnings: Array<{ message: string; data?: Record<string, unknown> }> = [];
+    const api = fakeApi({});
+    api.publishHomeView = async () => {
+      throw new Error("not_enabled");
+    };
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api,
+      logger: {
+        warn: (message, data) => {
+          warnings.push({ message, data });
+        },
+      },
+      socketClient: fakeSocket(),
+    });
+
+    await expect(adapter.start(async () => undefined)).resolves.toBeUndefined();
+    expect(warnings).toContainEqual({
+      message: "slack App Home publish failed",
+      data: { reason: "not_enabled" },
+    });
   });
 
   it("posts assistant Markdown tables through Slack's native Markdown block", async () => {
