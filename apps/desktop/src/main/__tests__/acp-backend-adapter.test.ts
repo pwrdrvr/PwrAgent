@@ -717,6 +717,219 @@ describe("AcpBackendAdapter", () => {
     await adapter.close();
   });
 
+  it("emits Grok thoughts as transient messages instead of replayable text", async () => {
+    const backendId = "acp:grok" as AcpBackendId;
+    const transport = new FakeAcpAgentTransport();
+    const events: AgentEvent[] = [];
+    const sessions: AcpSessionMetadata[] = [];
+    const agent: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "grok",
+      name: "Grok CLI",
+      launchDescriptor: {
+        backendId,
+        registryId: "grok",
+        distributionKind: "local",
+        command: "grok",
+        args: ["agent", "stdio"],
+        env: {},
+      },
+    };
+    const adapter = new AcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => agent,
+        listInstalledAgents: () => [agent],
+        upsertInstalledAgent: vi.fn(),
+      },
+      acpSessionStore: {
+        listSessions: () => sessions,
+        getSession: (_backendId, sessionId) =>
+          sessions.find((session) => session.sessionId === sessionId),
+        upsertSession: (metadata) => {
+          const index = sessions.findIndex(
+            (session) => session.sessionId === metadata.sessionId,
+          );
+          if (index >= 0) {
+            sessions[index] = metadata;
+          } else {
+            sessions.push(metadata);
+          }
+        },
+      },
+      captureStores: [],
+      createAcpTransport: () => transport,
+      emit: async (event) => {
+        events.push(event);
+      },
+      handleServerRequest: async () => ({ decision: "accept" }),
+    });
+
+    const client = await adapter.getClient(backendId);
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    client.startPrompt({
+      sessionId: session.sessionId,
+      prompt: "Inspect this",
+      turnId: "turn-1",
+    });
+
+    const firstThoughtChunks = [
+      "The ",
+      "code ",
+      "seems ",
+      "to ",
+      "be ",
+      "over ",
+      "here",
+      ".",
+    ];
+    for (const [index, text] of firstThoughtChunks.entries()) {
+      transport.emitSessionUpdate(session.sessionId, {
+        session_update: "agent_thought_chunk",
+        content: { type: "text", text },
+      });
+      if (index === 0) {
+        transport.emitSessionUpdate(session.sessionId, {
+          session_update: "available_commands_update",
+          available_commands: [
+            {
+              name: "review",
+              description: "Review the current changes",
+            },
+          ],
+        });
+      }
+    }
+    const completedToolUpdate = {
+      session_update: "tool_call",
+      tool_call_id: "tool-1",
+      title: "cat package.json",
+      status: "completed",
+    };
+    transport.emitSessionUpdate(session.sessionId, completedToolUpdate);
+    for (const [index, text] of [
+      "So ",
+      "the ",
+      "key ",
+      "logic is:\n```",
+    ].entries()) {
+      transport.emitSessionUpdate(session.sessionId, {
+        session_update: "agent_thought_chunk",
+        content: { type: "text", text },
+      });
+      if (index === 0) {
+        transport.emitSessionUpdate(session.sessionId, completedToolUpdate);
+      }
+    }
+    transport.emitSessionUpdate(session.sessionId, {
+      session_update: "agent_message_chunk",
+      content: { type: "text", text: "The image flag is disabled." },
+    });
+
+    await vi.waitFor(() => {
+      expect(
+        events
+          .filter(
+            (event) =>
+              event.notification.method === "item/transientMessage/updated" ||
+              event.notification.method === "item/agentMessage/delta",
+          )
+          .map((event) => event.notification),
+      ).toEqual([
+        {
+          method: "item/transientMessage/updated",
+          params: {
+            threadId: session.sessionId,
+            turnId: "turn-1",
+            itemId: "transient-thought:turn-1",
+            role: "assistant",
+            text: "The",
+            phase: "commentary",
+          },
+        },
+        {
+          method: "item/transientMessage/updated",
+          params: {
+            threadId: session.sessionId,
+            turnId: "turn-1",
+            itemId: "transient-thought:turn-1",
+            role: "assistant",
+            text: "The code",
+            phase: "commentary",
+          },
+        },
+        {
+          method: "item/transientMessage/updated",
+          params: {
+            threadId: session.sessionId,
+            turnId: "turn-1",
+            itemId: "transient-thought:turn-1",
+            role: "assistant",
+            text: "The code seems",
+            phase: "commentary",
+          },
+        },
+        ...[
+          "The code seems to",
+          "The code seems to be",
+          "The code seems to be over",
+          "The code seems to be over here",
+          "The code seems to be over here.",
+          "So",
+          "So the",
+          "So the key",
+          "So the key logic is:",
+        ].map((text) => ({
+          method: "item/transientMessage/updated" as const,
+          params: {
+            threadId: session.sessionId,
+            turnId: "turn-1",
+            itemId: "transient-thought:turn-1",
+            role: "assistant" as const,
+            text,
+            phase: "commentary" as const,
+          },
+        })),
+        {
+          method: "item/agentMessage/delta",
+          params: {
+            threadId: session.sessionId,
+            turnId: "turn-1",
+            itemId: "assistant:turn-1:0",
+            delta: "The image flag is disabled.",
+            phase: "final",
+          },
+        },
+      ]);
+    });
+    expect(
+      events.filter(
+        (event) =>
+          event.notification.method === "thread/availableCommands/updated",
+      ),
+    ).toHaveLength(1);
+    expect(
+      events.filter(
+        (event) => event.notification.method === "item/completed",
+      ),
+    ).toHaveLength(1);
+    expect(client.readReplay(session.sessionId).messages).toEqual([
+      expect.objectContaining({
+        role: "user",
+        text: "Inspect this",
+      }),
+      expect.objectContaining({
+        role: "assistant",
+        text: "The image flag is disabled.",
+      }),
+    ]);
+
+    await adapter.close();
+  });
+
   it("does not emit replayed ACP assistant text without a live turn", async () => {
     const backendId = "acp:kimi" as AcpBackendId;
     const transport = new FakeAcpAgentTransport();
@@ -1986,13 +2199,27 @@ describe("AcpBackendAdapter", () => {
       entries: [
         {
           type: "message" as const,
+          id: "user:provider",
+          role: "user" as const,
+          text: "Timestamped provider prompt",
+          createdAt: 1001,
+        },
+        {
+          type: "message" as const,
           id: "assistant:provider",
           role: "assistant" as const,
+          phase: "final" as const,
           text: "Timestamped provider reply",
           createdAt: 1002,
         },
       ],
       messages: [
+        {
+          id: "user:provider",
+          role: "user" as const,
+          text: "Timestamped provider prompt",
+          createdAt: 1001,
+        },
         {
           id: "assistant:provider",
           role: "assistant" as const,
@@ -2000,6 +2227,7 @@ describe("AcpBackendAdapter", () => {
           createdAt: 1002,
         },
       ],
+      lastUserMessage: "Timestamped provider prompt",
       lastAssistantMessage: "Timestamped provider reply",
       pagination: {
         supportsPagination: false,
@@ -2046,9 +2274,26 @@ describe("AcpBackendAdapter", () => {
       handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
     });
 
-    await expect(adapter.readReplay(backendId, "session-1")).resolves.toMatchObject({
+    const replay = await adapter.readReplay(backendId, "session-1");
+    expect(replay).toMatchObject({
       lastAssistantMessage: "Timestamped provider reply",
     });
+    expect(replay.entries.map((entry) => entry.turn)).toEqual([
+      {
+        id: "inferred:user:provider",
+        status: "completed",
+        startedAt: 1001,
+        completedAt: 1002,
+        durationMs: 1,
+      },
+      {
+        id: "inferred:user:provider",
+        status: "completed",
+        startedAt: 1001,
+        completedAt: 1002,
+        durationMs: 1,
+      },
+    ]);
     expect(loadSession).toHaveBeenCalledOnce();
 
     await adapter.close();

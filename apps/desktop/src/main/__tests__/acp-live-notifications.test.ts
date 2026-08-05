@@ -227,6 +227,52 @@ describe("acpToolUpdateNotifications", () => {
     expect(item?.data).toBeUndefined();
   });
 
+  it("uses Grok command descriptions as live command labels", () => {
+    const command = "python3 - <<'PY'\nprint('Grok 4.5')\nPY";
+    const description = "Inspect Grok 4.5 model cache entry";
+    const notifications = acpToolUpdateNotifications({
+      threadId: "session-1",
+      turnId: "turn-1",
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "run-terminal-1",
+        kind: "execute",
+        title: `Execute \`${command}\``,
+        status: "completed",
+        rawInput: {
+          variant: "Bash",
+          command,
+          description,
+        },
+        content: {
+          type: "text",
+          text: "Grok 4.5",
+        },
+      },
+    });
+
+    expect(notifications).toEqual([
+      expect.objectContaining({
+        method: "item/completed",
+        params: expect.objectContaining({
+          item: expect.objectContaining({
+            id: "run-terminal-1",
+            command,
+            commandActions: [
+              {
+                type: "unknown",
+                name: description,
+              },
+            ],
+            data: {
+              output: "Grok 4.5",
+            },
+          }),
+        }),
+      }),
+    ]);
+  });
+
   it("surfaces Grok search arguments as a structured tool invocation", () => {
     const notifications = acpToolUpdateNotifications({
       threadId: "session-1",

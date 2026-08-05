@@ -85,6 +85,42 @@ describe("buildLiveToolDetails", () => {
         }),
       },
     ]);
+    expect(summarizeLiveActivity(details)).toBe('Searched "grok"');
+  });
+
+  it("keeps a described command on one direct activity row", () => {
+    const description = "Inspect Grok 4.5 model cache entry";
+    const command = "python3 - <<'PY'\nprint('Grok 4.5')\nPY";
+    const details = buildLiveToolDetails({
+      type: "commandExecution",
+      id: "run-terminal-1",
+      status: "completed",
+      command,
+      commandActions: [
+        {
+          type: "unknown",
+          name: description,
+        },
+      ],
+      data: {
+        output: "Grok 4.5",
+      },
+    });
+
+    expect(details).toEqual([
+      {
+        id: "run-terminal-1",
+        kind: "command",
+        label: description,
+        status: "completed",
+        command: expect.objectContaining({
+          displayCommand: "python3 - <<'PY' print('Grok 4.5') PY",
+          rawCommand: command,
+          output: "Grok 4.5",
+        }),
+      },
+    ]);
+    expect(summarizeLiveActivity(details)).toBe(description);
   });
 
   it("keeps completion status on the web search rather than its result links", () => {
@@ -403,6 +439,57 @@ describe("mergeCommandDetail", () => {
 });
 
 describe("mergeActivityDetails", () => {
+  it("keeps a read action label when an ACP completion omits its path", () => {
+    const started = buildLiveToolDetails({
+      id: "read-file-1",
+      type: "commandExecution",
+      toolName: "read",
+      status: "in_progress",
+      command: "README.md",
+      commandSource: "tool",
+      commandActions: [
+        {
+          type: "read",
+          path: "/repo/README.md",
+          name: "README.md",
+        },
+      ],
+    });
+    const completed = buildLiveToolDetails({
+      id: "read-file-1",
+      type: "commandExecution",
+      toolName: "read",
+      status: "completed",
+      command: "README.md",
+      commandSource: "tool",
+      commandActions: [
+        {
+          type: "read",
+          name: "README.md",
+        },
+      ],
+      data: {
+        output: "Read lines 1-80 of 200 from README.md",
+      },
+    });
+
+    const merged = mergeActivityDetails(started, completed);
+
+    expect(merged).toEqual([
+      expect.objectContaining({
+        id: "read-file-1",
+        kind: "read",
+        label: "Read README.md",
+        status: "completed",
+        command: expect.objectContaining({
+          displayCommand: "README.md",
+          output: "Read lines 1-80 of 200 from README.md",
+        }),
+      }),
+    ]);
+    expect(summarizeLiveActivity(merged)).toBe("Read README.md");
+  });
+
   it("keeps a web fetch label and read kind across a sparse completion", () => {
     expect(
       mergeActivityDetails(

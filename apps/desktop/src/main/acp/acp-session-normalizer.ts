@@ -7,12 +7,15 @@ import type {
   AppServerThreadPlanEntry,
   AppServerThreadReplay,
   AppServerThreadStatus,
+  AppServerThreadTurnStatus,
   AppServerTranscriptPhase,
 } from "@pwragent/shared";
 import {
   isGenericShellToolTitle,
+  readAcpCodeSearch,
   readAcpToolCommand,
   readAcpToolContentCommand,
+  readAcpToolDescription,
   readAcpToolInvocation,
   readAcpWebFetchUrl,
   readAcpWebSearch,
@@ -35,7 +38,13 @@ export type AcpSessionReplayNormalizerOptions = {
 };
 
 export function shouldSurfaceAcpThoughtsAsMessages(backendId: string): boolean {
-  return backendId !== "acp:qwen";
+  return backendId !== "acp:qwen" && backendId !== "acp:grok";
+}
+
+export function shouldSurfaceAcpThoughtsAsTransientMessages(
+  backendId: string,
+): boolean {
+  return backendId === "acp:grok";
 }
 
 export function isGrokTransientUpdateKind(kind: string | undefined): boolean {
@@ -44,6 +53,150 @@ export function isGrokTransientUpdateKind(kind: string | undefined): boolean {
     || kind === "pending_interaction"
     || kind === "interaction_resolved"
   );
+}
+
+export function formatAcpTransientThoughtMessage(
+  text: string,
+): string | undefined {
+  const beforeCodeFence = text.split("```", 1)[0] ?? "";
+  const compact = beforeCodeFence.replace(/\s+/gu, " ").trim();
+  return compact || undefined;
+}
+
+type InferredAcpTurn = {
+  id: string;
+  indexes: number[];
+  lastEntryAt?: number;
+  sawFinalResponse: boolean;
+  startedAt?: number;
+};
+
+/**
+ * ACP session/load history has ordered transcript phases but no turn IDs.
+ * Fill only missing metadata: a user message opens a window, while lifecycle
+ * metadata, a later user message, or an idle replay boundary closes it.
+ * Assistant delivery alone is not a lifecycle boundary.
+ */
+export function inferAcpReplayTurns(
+  replay: AppServerThreadReplay,
+): AppServerThreadReplay {
+  const entries: AppServerThreadEntry[] = replay.entries.map((entry) => ({
+    ...entry,
+  }));
+  let active: InferredAcpTurn | undefined;
+
+  const applyActiveTurn = (
+    status: AppServerThreadTurnStatus,
+    completedAt?: number,
+  ): void => {
+    if (!active) {
+      return;
+    }
+    for (const index of active.indexes) {
+      const entry = entries[index];
+      if (!entry || entry.turn) {
+        continue;
+      }
+      entries[index] = {
+        ...entry,
+        turn: {
+          id: active.id,
+          status,
+          ...(active.startedAt !== undefined
+            ? { startedAt: active.startedAt }
+            : {}),
+          ...(completedAt !== undefined ? { completedAt } : {}),
+          ...(active.startedAt !== undefined && completedAt !== undefined
+            ? { durationMs: Math.max(0, completedAt - active.startedAt) }
+            : {}),
+        },
+      };
+    }
+  };
+  const settleActive = (
+    status: Exclude<AppServerThreadTurnStatus, "in_progress">,
+    completedAt?: number,
+  ): void => {
+    applyActiveTurn(status, completedAt);
+    active = undefined;
+  };
+  const settleAtBoundary = (): void => {
+    if (!active) {
+      return;
+    }
+    settleActive(
+      active.sawFinalResponse ? "completed" : "interrupted",
+      active.lastEntryAt,
+    );
+  };
+
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index];
+    if (!entry) {
+      continue;
+    }
+    const isUserMessage = entry.type === "message" && entry.role === "user";
+    if (isUserMessage) {
+      const turnId = entry.turn?.id ?? `inferred:${entry.id}`;
+      if (active?.id === turnId) {
+        if (!entry.turn) {
+          active.indexes.push(index);
+        }
+        active.lastEntryAt = entry.createdAt ?? active.lastEntryAt;
+        continue;
+      }
+      settleAtBoundary();
+      active = {
+        id: turnId,
+        indexes: entry.turn ? [] : [index],
+        lastEntryAt: entry.createdAt,
+        sawFinalResponse: false,
+        startedAt: entry.turn?.startedAt ?? entry.createdAt,
+      };
+      continue;
+    }
+    if (!active) {
+      continue;
+    }
+    if (entry.turn && entry.turn.id !== active.id) {
+      settleAtBoundary();
+      continue;
+    }
+    if (!entry.turn) {
+      active.indexes.push(index);
+    }
+    active.lastEntryAt = entry.createdAt ?? active.lastEntryAt;
+    if (isSettledTurnStatus(entry.turn?.status)) {
+      settleActive(
+        entry.turn.status,
+        entry.turn.completedAt ?? entry.createdAt,
+      );
+      continue;
+    }
+    if (
+      entry.type === "message"
+      && entry.role === "assistant"
+      && entry.phase === "final"
+    ) {
+      active.sawFinalResponse = true;
+    }
+  }
+
+  if (replay.threadStatus === "idle") {
+    settleAtBoundary();
+  } else {
+    applyActiveTurn("in_progress");
+  }
+  return {
+    ...replay,
+    entries,
+  };
+}
+
+function isSettledTurnStatus(
+  status: AppServerThreadTurnStatus | undefined,
+): status is Exclude<AppServerThreadTurnStatus, "in_progress"> {
+  return Boolean(status && status !== "in_progress");
 }
 
 export class AcpSessionReplayNormalizer {
@@ -467,7 +620,10 @@ export class AcpSessionReplayNormalizer {
       (message) => message.id === params.id,
     );
     if (existingMessage) {
-      existingMessage.text = appendTranscriptChunk(existingMessage.text, params.text);
+      existingMessage.text = appendAcpTranscriptChunk(
+        existingMessage.text,
+        params.text,
+      );
     } else {
       this.messages.push({
         id: params.id,
@@ -482,7 +638,10 @@ export class AcpSessionReplayNormalizer {
         entry.type === "message" && entry.id === params.id,
     );
     if (existingEntry) {
-      existingEntry.text = appendTranscriptChunk(existingEntry.text, params.text);
+      existingEntry.text = appendAcpTranscriptChunk(
+        existingEntry.text,
+        params.text,
+      );
     } else {
       this.entries.push(this.withCurrentTurn({
         type: "message",
@@ -539,7 +698,10 @@ export class AcpSessionReplayNormalizer {
   }
 }
 
-function appendTranscriptChunk(existing: string, next: string): string {
+export function appendAcpTranscriptChunk(
+  existing: string,
+  next: string,
+): string {
   if (!existing || !next) {
     return `${existing}${next}`;
   }
@@ -918,10 +1080,47 @@ function toolActivity(
   }
 
   const webFetchUrl = readAcpWebFetchUrl(update.update);
+  const codeSearch = readAcpCodeSearch(update.update);
+  if (codeSearch) {
+    const status = normalizeToolActivityStatus(
+      readString(update.update, "status"),
+    );
+    const summary =
+      status === "in_progress" ? "Searching code" : "Searched code";
+    const detailLabel = codeSearch.query
+      ? `${summary}: ${codeSearch.query}`
+      : summary;
+    const output = readToolOutput(update.update);
+    const exitCode = readNumber(update.update, "exitCode");
+    return {
+      type: "activity",
+      id,
+      createdAt,
+      summary: detailLabel,
+      status,
+      details: [
+        {
+          id: `${id}:detail`,
+          kind: "read",
+          label: detailLabel,
+          command: {
+            displayCommand: codeSearch.invocation,
+            source: "tool",
+            output,
+            exitCode,
+          },
+        },
+      ],
+    };
+  }
   const rawCommand = readAcpToolCommand(update.update);
+  const description = rawCommand
+    ? readAcpToolDescription(update.update)
+    : undefined;
   const invocation = readAcpToolInvocation(update.update);
   const displayCommand = rawCommand ?? invocation;
   const labelCandidate =
+    description ??
     readString(update.update, "title") ??
     readString(update.update, "name") ??
     readString(update.update, "kind") ??
@@ -992,13 +1191,34 @@ function mergeActivity(
   existing: AppServerThreadActivityEntry,
   incoming: AppServerThreadActivityEntry,
 ): AppServerThreadActivityEntry {
+  const status = incoming.status ?? existing.status;
+  const details = mergeActivityEntryDetails(existing.details, incoming.details)
+    .map((detail) => ({
+      ...detail,
+      label: settledSearchLabel(detail.label, status),
+    }));
   return {
     ...existing,
     createdAt: existing.createdAt ?? incoming.createdAt,
-    summary: preferSpecificLabel(existing.summary, incoming.summary),
-    status: incoming.status ?? existing.status,
-    details: mergeActivityEntryDetails(existing.details, incoming.details),
+    summary: settledSearchLabel(
+      preferSpecificLabel(existing.summary, incoming.summary),
+      status,
+    ),
+    status,
+    details,
   };
+}
+
+function settledSearchLabel(
+  label: string,
+  status: AppServerThreadActivityEntry["status"],
+): string {
+  if (status === "in_progress" || status === undefined) {
+    return label;
+  }
+  return label
+    .replace(/^Searching code\b/u, "Searched code")
+    .replace(/^Searching Web\b/u, "Searched Web");
 }
 
 function mergeActivityEntryDetails(

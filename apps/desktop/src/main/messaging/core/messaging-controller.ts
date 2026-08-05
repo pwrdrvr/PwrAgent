@@ -1147,6 +1147,13 @@ export class MessagingController {
     if (!threadId) {
       return;
     }
+    if (event.notification.method === "item/transientMessage/updated") {
+      // Transient transcript text is a local, replaceable desktop surface.
+      // It is intentionally not translated into a messaging intent: remote
+      // delivery would give it durable-message queueing, retry, and budget
+      // semantics that it must never inherit.
+      return;
+    }
     const scheduledAction = scheduledActionForBackendEvent(event);
     if (
       scheduledAction?.origin === "messaging"

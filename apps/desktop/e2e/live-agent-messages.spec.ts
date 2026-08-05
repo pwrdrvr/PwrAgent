@@ -117,9 +117,10 @@ test("preserves live assistant commentary messages, exploration activity, and fi
     }).first();
     await expect(commandSummary).toBeVisible();
     await commandSummary.click();
-    await expect(transcript).toContainText(
-      'rg -n "Telegram|telegram|webhook" docs apps packages (1.1s)'
-    );
+    await expect(
+      transcript.getByText('$ rg -n "Telegram|telegram|webhook" docs apps packages')
+    ).toBeVisible();
+    await expect(transcript.getByText("Success · ran for 1.1s")).toBeVisible();
     await commandSummary.click();
 
     await app.advance({ stepId: "turn-completed-1" });

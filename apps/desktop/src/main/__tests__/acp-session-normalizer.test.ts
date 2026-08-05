@@ -1,10 +1,125 @@
 import { describe, expect, it } from "vitest";
 import {
   AcpSessionReplayNormalizer,
+  inferAcpReplayTurns,
   readAcpTopicTitle,
 } from "../acp/acp-session-normalizer";
 
 describe("AcpSessionReplayNormalizer", () => {
+  it("keeps inferred provider work inside user-message boundaries", () => {
+    const replay = inferAcpReplayTurns({
+      entries: [
+        {
+          type: "activity",
+          id: "before-user",
+          summary: "Provider setup",
+          details: [],
+          createdAt: 900,
+        },
+        {
+          type: "message",
+          id: "user-1",
+          role: "user",
+          text: "First request",
+          createdAt: 1000,
+        },
+        {
+          type: "activity",
+          id: "tool-1",
+          summary: "First tool",
+          details: [],
+          createdAt: 1100,
+        },
+        {
+          type: "message",
+          id: "final-1",
+          role: "assistant",
+          phase: "final",
+          text: "First response segment",
+          createdAt: 1200,
+        },
+        {
+          type: "activity",
+          id: "tool-after-final-1",
+          summary: "Tool after assistant delivery",
+          details: [],
+          createdAt: 1300,
+        },
+        {
+          type: "message",
+          id: "final-1b",
+          role: "assistant",
+          phase: "final",
+          text: "Second response segment",
+          createdAt: 1400,
+        },
+        {
+          type: "message",
+          id: "user-2",
+          role: "user",
+          text: "Second request",
+          createdAt: 2000,
+        },
+        {
+          type: "activity",
+          id: "tool-2",
+          summary: "Second tool",
+          details: [],
+          createdAt: 2100,
+        },
+        {
+          type: "message",
+          id: "user-3",
+          role: "user",
+          text: "Third request",
+          createdAt: 3000,
+        },
+        {
+          type: "activity",
+          id: "tool-3",
+          summary: "Third tool",
+          details: [],
+          createdAt: 3100,
+        },
+      ],
+      messages: [],
+      pagination: {
+        supportsPagination: false,
+        hasPreviousPage: false,
+      },
+      threadStatus: "idle",
+    });
+
+    expect(replay.entries[0]?.turn).toBeUndefined();
+    expect(replay.entries[1]?.turn).toEqual({
+      id: "inferred:user-1",
+      status: "completed",
+      startedAt: 1000,
+      completedAt: 1400,
+      durationMs: 400,
+    });
+    expect(replay.entries[2]?.turn).toEqual(replay.entries[1]?.turn);
+    expect(replay.entries[3]?.turn).toEqual(replay.entries[1]?.turn);
+    expect(replay.entries[4]?.turn).toEqual(replay.entries[1]?.turn);
+    expect(replay.entries[5]?.turn).toEqual(replay.entries[1]?.turn);
+    expect(replay.entries[6]?.turn).toEqual({
+      id: "inferred:user-2",
+      status: "interrupted",
+      startedAt: 2000,
+      completedAt: 2100,
+      durationMs: 100,
+    });
+    expect(replay.entries[7]?.turn).toEqual(replay.entries[6]?.turn);
+    expect(replay.entries[8]?.turn).toEqual({
+      id: "inferred:user-3",
+      status: "interrupted",
+      startedAt: 3000,
+      completedAt: 3100,
+      durationMs: 100,
+    });
+    expect(replay.entries[9]?.turn).toEqual(replay.entries[8]?.turn);
+  });
+
   it("streams assistant message chunks into one replay message", () => {
     const normalizer = new AcpSessionReplayNormalizer();
 
@@ -709,26 +824,36 @@ describe("AcpSessionReplayNormalizer", () => {
   it("preserves Grok search arguments across sparse completion updates", () => {
     const normalizer = new AcpSessionReplayNormalizer();
 
-    normalizer.apply({
+    const activeReplay = normalizer.apply({
       sessionId: "session-1",
       receivedAt: 1000,
       update: {
         sessionUpdate: "tool_call",
         toolCallId: "grep-1",
-        title: "grep",
+        title: "grok",
+        kind: "search",
         rawInput: {
+          variant: "Grep",
           pattern: "grok",
           glob: "*.{ts,tsx,md,json}",
           head_limit: 20,
         },
-        _meta: {
-          "x.ai/tool": {
-            name: "grep",
-            kind: "search",
-          },
-        },
       },
     });
+    expect(activeReplay.entries).toEqual([
+      expect.objectContaining({
+        type: "activity",
+        id: "grep-1",
+        summary: "Searching code: grok",
+        status: "in_progress",
+        details: [
+          expect.objectContaining({
+            kind: "read",
+            label: "Searching code: grok",
+          }),
+        ],
+      }),
+    ]);
     const replay = normalizer.apply({
       sessionId: "session-1",
       receivedAt: 1001,
@@ -752,11 +877,11 @@ describe("AcpSessionReplayNormalizer", () => {
       expect.objectContaining({
         type: "activity",
         id: "grep-1",
-        summary: "grep",
+        summary: "Searched code: grok",
         status: "completed",
         details: [
           expect.objectContaining({
-            label: "grep",
+            label: "Searched code: grok",
             command: {
               displayCommand:
                 'grep(pattern="grok", glob="*.{ts,tsx,md,json}", head_limit=20)',
@@ -1143,6 +1268,54 @@ describe("AcpSessionReplayNormalizer", () => {
               displayCommand: "npm view pnpm",
               rawCommand: "npm view pnpm",
               output: undefined,
+              exitCode: undefined,
+            },
+          }),
+        ],
+      }),
+    ]);
+  });
+
+  it("uses Grok command descriptions while preserving the full command", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+    const command = "python3 - <<'PY'\nprint('Grok 4.5')\nPY";
+    const description = "Inspect Grok 4.5 model cache entry";
+
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "run-terminal-1",
+        kind: "execute",
+        title: `Execute \`${command}\``,
+        status: "completed",
+        rawInput: {
+          variant: "Bash",
+          command,
+          description,
+        },
+        content: {
+          type: "text",
+          text: "Grok 4.5",
+        },
+      },
+    });
+
+    expect(replay.entries).toEqual([
+      expect.objectContaining({
+        type: "activity",
+        id: "run-terminal-1",
+        summary: description,
+        status: "completed",
+        details: [
+          expect.objectContaining({
+            kind: "command",
+            label: description,
+            command: {
+              displayCommand: command,
+              rawCommand: command,
+              output: "Grok 4.5",
               exitCode: undefined,
             },
           }),

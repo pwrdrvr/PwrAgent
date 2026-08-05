@@ -636,8 +636,15 @@ function readCommandActionLabel(item: Record<string, unknown>): string | undefin
     const actionPath = readString(record, "path");
     const actionQuery = readString(record, "query");
     const fallbackName = readString(record, "name");
-    if (actionType === "read" && actionPath) {
-      return `Read ${actionPath.split("/").filter(Boolean).pop() ?? actionPath}`;
+    if (actionType === "read") {
+      if (actionPath) {
+        return `Read ${actionPath.split("/").filter(Boolean).pop() ?? actionPath}`;
+      }
+      if (fallbackName) {
+        return /^(?:read|fetched)\b/i.test(fallbackName)
+          ? fallbackName
+          : `Read ${fallbackName}`;
+      }
     }
     if (actionType === "listFiles") {
       return "Listed files";
@@ -1054,6 +1061,8 @@ export function buildLiveToolDetails(
           : itemType === "dynamictoolcall" && title
             ? buildLiveDynamicToolCommandDetail(item, toolName, elapsedMs)
         : undefined;
+  const commandUsesDedicatedRenderer =
+    itemType === "commandexecution" || isExecFunctionCall;
   const details: AppServerThreadActivityDetail[] = [
     {
       id: itemId,
@@ -1067,9 +1076,9 @@ export function buildLiveToolDetails(
             : "command",
       label: [
         buildLiveToolLabel(item, itemType, status, toolName),
-        elapsedMs ? ` (${formatElapsedMs(elapsedMs)})` : "",
+        elapsedMs && !commandUsesDedicatedRenderer ? ` (${formatElapsedMs(elapsedMs)})` : "",
         query ? `: ${query}` : "",
-        preview ? ` - ${preview}` : "",
+        preview && !commandUsesDedicatedRenderer ? ` - ${preview}` : "",
       ].join(""),
       ...(images.length > 0 ? { images } : {}),
       ...(commandDetail ? { command: commandDetail } : {}),
@@ -1140,6 +1149,18 @@ function commandSummaryName(label: string): string | undefined {
 
 export function summarizeLiveActivity(details: AppServerThreadActivityDetail[]): string {
   const primaryDetails = details.filter((detail) => !detail.id.includes("-source-"));
+  const directDetail = primaryDetails.length === 1 ? primaryDetails[0] : undefined;
+  if (
+    details.length === 1
+    && directDetail?.command
+    && (
+      directDetail.kind === "read"
+      || directDetail.label.trim().toLowerCase()
+        !== formatCommandLabel(directDetail.command.displayCommand).toLowerCase()
+    )
+  ) {
+    return directDetail.label;
+  }
   const readCount = primaryDetails.filter((detail) => detail.kind === "read").length;
   const commandLabels = [
     ...new Set(

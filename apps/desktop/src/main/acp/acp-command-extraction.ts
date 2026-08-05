@@ -8,6 +8,20 @@ export function readAcpToolCommand(
   );
 }
 
+export function readAcpToolDescription(
+  record: Record<string, unknown>,
+): string | undefined {
+  const rawInput = asRecord(record.rawInput);
+  const rawOutput = asRecord(record.rawOutput);
+  const metadataInput = asRecord(readAcpToolMetadata(record)?.input);
+  return (
+    readString(rawInput ?? {}, "description") ??
+    readString(rawOutput ?? {}, "description") ??
+    readString(metadataInput ?? {}, "description") ??
+    readString(record, "description")
+  );
+}
+
 export function readAcpToolInvocation(
   record: Record<string, unknown>,
 ): string | undefined {
@@ -20,6 +34,21 @@ export function readAcpToolInvocation(
   const webFetchUrl = readAcpWebFetchUrl(record);
   if (webFetchUrl) {
     return `web_fetch(url=${formatInvocationValue(webFetchUrl)})`;
+  }
+
+  return readAcpCodeSearch(record)?.invocation;
+}
+
+export type AcpCodeSearch = {
+  invocation: string;
+  query?: string;
+};
+
+export function readAcpCodeSearch(
+  record: Record<string, unknown>,
+): AcpCodeSearch | undefined {
+  if (readAcpWebSearch(record)) {
+    return undefined;
   }
 
   const rawInput = asRecord(record.rawInput);
@@ -35,7 +64,14 @@ export function readAcpToolInvocation(
   const kind =
     readString(metadata ?? {}, "kind") ??
     readString(record, "kind");
-  if (!name || (kind !== "search" && name !== "grep" && variant !== "Grep")) {
+  if (
+    !name
+    || (
+      kind !== "search"
+      && name.toLowerCase() !== "grep"
+      && variant?.toLowerCase() !== "grep"
+    )
+  ) {
     return undefined;
   }
 
@@ -51,7 +87,13 @@ export function readAcpToolInvocation(
       return `${displayKey}=${formatInvocationValue(value)}`;
     })
     .join(", ");
-  return argumentsText ? `${name}(${argumentsText})` : name;
+  const query =
+    readString(rawInput, "pattern") ??
+    readString(rawInput, "query");
+  return {
+    invocation: argumentsText ? `${name}(${argumentsText})` : name,
+    ...(query ? { query } : {}),
+  };
 }
 
 export type AcpWebSearch = {

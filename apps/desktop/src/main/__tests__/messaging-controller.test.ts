@@ -5590,6 +5590,43 @@ describe("MessagingController", () => {
     });
   });
 
+  it("does not expose transient transcript messages to messaging surfaces", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    await harness.controller.handleBackendEvent({
+      backend: "grok",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "running",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "grok",
+      notification: {
+        method: "item/transientMessage/updated",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "transient-thought:turn-1",
+          role: "assistant",
+          text: "So the key logic is:",
+          phase: "commentary",
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(harness.delivered).toEqual([]);
+  });
+
   it("posts a readable error notice when a turn fails", async () => {
     const harness = await createHarness();
     await bindThread(harness);

@@ -1393,6 +1393,136 @@ describe("TranscriptList", () => {
     );
   });
 
+  it("replaces a transient assistant message in transcript order", () => {
+    const entries = [
+      {
+        type: "message" as const,
+        id: "message-1",
+        role: "user" as const,
+        text: "Inspect the image support logic",
+      },
+    ];
+    const { rerender } = render(
+      <TranscriptList
+        entries={entries}
+        loading={false}
+        loadingMore={false}
+        transientMessage={{
+          type: "transientMessage",
+          id: "transient-thought:turn-1",
+          role: "assistant",
+          phase: "commentary",
+          text: "So the key logic is:",
+        }}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(screen.getByText("So the key logic is:").closest("article")).toHaveClass(
+      "transcript-message--assistant"
+    );
+
+    rerender(
+      <TranscriptList
+        entries={entries}
+        loading={false}
+        loadingMore={false}
+        transientMessage={{
+          type: "transientMessage",
+          id: "transient-thought:turn-1",
+          role: "assistant",
+          phase: "commentary",
+          text: "Tracing the image support flags.",
+        }}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(screen.queryByText("So the key logic is:")).not.toBeInTheDocument();
+    expect(screen.getByText("Tracing the image support flags.")).toBeVisible();
+  });
+
+  it("keeps settled transient segments ordered between tool invocations", () => {
+    render(
+      <TranscriptList
+        entries={[
+          {
+            type: "activity",
+            id: "tool-1",
+            summary: "Read Composer.tsx",
+            details: [],
+            createdAt: 20,
+            turn: { id: "turn-1", status: "in_progress" },
+          },
+          {
+            type: "activity",
+            id: "tool-2",
+            summary: "Searched image support",
+            details: [],
+            createdAt: 40,
+            turn: { id: "turn-1", status: "in_progress" },
+          },
+        ]}
+        loading={false}
+        loadingMore={false}
+        transientMessages={[
+          {
+            type: "transientMessage",
+            id: "transient-thought:turn-1:settled:1",
+            role: "assistant",
+            phase: "commentary",
+            text: "I will inspect the composer first.",
+            createdAt: 10,
+            turn: { id: "turn-1", status: "in_progress" },
+          },
+          {
+            type: "transientMessage",
+            id: "transient-thought:turn-1:settled:3",
+            role: "assistant",
+            phase: "commentary",
+            text: "The image check is in the next branch.",
+            createdAt: 30,
+            turn: { id: "turn-1", status: "in_progress" },
+          },
+        ]}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    const firstThought = screen
+      .getByText("I will inspect the composer first.")
+      .closest("article");
+    const firstTool = screen
+      .getByText("Read Composer.tsx")
+      .closest(".transcript-activity");
+    const secondThought = screen
+      .getByText("The image check is in the next branch.")
+      .closest("article");
+    const secondTool = screen
+      .getByText("Searched image support")
+      .closest(".transcript-activity");
+
+    expect(firstThought).not.toBeNull();
+    expect(firstTool).not.toBeNull();
+    expect(secondThought).not.toBeNull();
+    expect(secondTool).not.toBeNull();
+    expect(
+      firstThought!.compareDocumentPosition(firstTool!)
+      & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(
+      firstTool!.compareDocumentPosition(secondThought!)
+      & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(
+      secondThought!.compareDocumentPosition(secondTool!)
+      & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+
   it("collapses completed assistant commentary before the final answer", () => {
     render(
       <TranscriptList
