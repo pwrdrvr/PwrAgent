@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type {
   DesktopFederationMode,
   DesktopSettingsSecretName,
@@ -14,6 +14,7 @@ import type {
 } from "@pwragent/shared";
 import { DESKTOP_FEDERATION_MODES } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { copyText } from "../../lib/copy-text";
 import { formatRunningDurationMs } from "../../lib/format-duration";
 import {
   SettingsField,
@@ -21,6 +22,8 @@ import {
   SettingsSection,
   SettingsSectionStack,
 } from "./SettingsLayout";
+
+const DIAGNOSTIC_EVENT_LIMIT = 50;
 
 type FederationSettingsProps = {
   desktopApi?: DesktopApi;
@@ -49,10 +52,20 @@ export function FederationSettings(props: FederationSettingsProps) {
     useState<FederationTailscaleMode>();
   const [funnelAcknowledged, setFunnelAcknowledged] = useState(false);
   const [generatedInvite, setGeneratedInvite] = useState("");
+  const [inviteCopied, setInviteCopied] = useState(false);
+  const inviteCopiedTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
   const [inviteToImport, setInviteToImport] = useState("");
+  const [importNotice, setImportNotice] = useState<string>();
   const [revokingPeerId, setRevokingPeerId] = useState<string>();
+  const [confirmingForget, setConfirmingForget] = useState(false);
+  const [forgetting, setForgetting] = useState(false);
   const [mode, setMode] = useState<DesktopFederationMode>(
     props.snapshot.federation.mode.value,
+  );
+  const [instanceLabel, setInstanceLabel] = useState(
+    props.snapshot.federation.instanceLabel.value,
   );
   const [listenHost, setListenHost] = useState(
     props.snapshot.federation.listenHost.value,
@@ -85,6 +98,7 @@ export function FederationSettings(props: FederationSettingsProps) {
 
   useEffect(() => {
     setMode(props.snapshot.federation.mode.value);
+    setInstanceLabel(props.snapshot.federation.instanceLabel.value);
     setListenHost(props.snapshot.federation.listenHost.value);
     setListenPort(String(props.snapshot.federation.listenPort.value));
     setPublicUrl(props.snapshot.federation.publicUrl.value);
@@ -108,7 +122,7 @@ export function FederationSettings(props: FederationSettingsProps) {
     setError(undefined);
     try {
       if (diagnosticsReader) {
-        const response = await diagnosticsReader({ limit: 50 });
+        const response = await diagnosticsReader({ limit: DIAGNOSTIC_EVENT_LIMIT });
         setHealth(response.health);
         setDiagnosticEvents(response.events);
       } else if (healthReader) {
@@ -145,6 +159,37 @@ export function FederationSettings(props: FederationSettingsProps) {
     return () => window.clearInterval(refreshInterval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.desktopApi]);
+
+  useEffect(() => {
+    return () => {
+      if (inviteCopiedTimerRef.current) {
+        clearTimeout(inviteCopiedTimerRef.current);
+      }
+    };
+  }, []);
+
+  const copyGeneratedInvite = async (
+    value?: string,
+    options?: { silent?: boolean },
+  ) => {
+    const invite = value ?? generatedInvite;
+    if (!invite) return;
+    try {
+      await copyText(invite, props.desktopApi);
+      setInviteCopied(true);
+      if (inviteCopiedTimerRef.current) {
+        clearTimeout(inviteCopiedTimerRef.current);
+      }
+      inviteCopiedTimerRef.current = setTimeout(
+        () => setInviteCopied(false),
+        1500,
+      );
+    } catch (err) {
+      if (!options?.silent) {
+        setActionError(err instanceof Error ? err.message : String(err));
+      }
+    }
+  };
 
   const configureTailscale = async (tailscaleMode: FederationTailscaleMode) => {
     if (
@@ -201,6 +246,13 @@ export function FederationSettings(props: FederationSettingsProps) {
       setTailscaleConfiguring(undefined);
     }
   };
+
+  // Gateway-side fields only matter when this instance listens; the
+  // gateway URL only matters when it dials out. Disable (never hide)
+  // the irrelevant ones so the form teaches the mode split instead of
+  // accepting values that silently do nothing.
+  const listensForPeers = mode === "gateway" || mode === "dual";
+  const dialsGateway = mode === "client" || mode === "dual";
 
   const effectiveHealth =
     health ??
@@ -275,46 +327,79 @@ export function FederationSettings(props: FederationSettingsProps) {
             }
           />
           <SettingsField
-            label="Listen host"
-            sub="Local address for gateway mode."
+            label="Instance name"
+            sub="Shown to peers instead of the raw instance id. Defaults to this machine's hostname."
             control={
               <input
-                value={listenHost}
+                aria-label="Instance name"
+                value={instanceLabel}
+                placeholder="This machine's hostname"
                 disabled={props.saving}
+                onChange={(event) => setInstanceLabel(event.target.value)}
+              />
+            }
+          />
+          <SettingsField
+            label="Listen host"
+            sub={
+              listensForPeers
+                ? "Local address for gateway mode."
+                : "Only used when Mode is gateway or dual."
+            }
+            control={
+              <input
+                aria-label="Listen host"
+                value={listenHost}
+                disabled={props.saving || !listensForPeers}
                 onChange={(event) => setListenHost(event.target.value)}
               />
             }
           />
           <SettingsField
             label="Listen port"
-            sub="Local port for gateway mode."
+            sub={
+              listensForPeers
+                ? "Local port for gateway mode."
+                : "Only used when Mode is gateway or dual."
+            }
             control={
               <input
+                aria-label="Listen port"
                 inputMode="numeric"
                 value={listenPort}
-                disabled={props.saving}
+                disabled={props.saving || !listensForPeers}
                 onChange={(event) => setListenPort(event.target.value)}
               />
             }
           />
           <SettingsField
             label="Public URL"
-            sub="Cloudflare Tunnel, Tailscale, or local WebSocket URL for peers."
+            sub={
+              listensForPeers
+                ? "Cloudflare Tunnel, Tailscale, or local WebSocket URL for peers."
+                : "Only used when Mode is gateway or dual."
+            }
             control={
               <input
+                aria-label="Public URL"
                 value={publicUrl}
-                disabled={props.saving}
+                disabled={props.saving || !listensForPeers}
                 onChange={(event) => setPublicUrl(event.target.value)}
               />
             }
           />
           <SettingsField
             label="Gateway URL"
-            sub="Client-mode gateway WebSocket URL."
+            sub={
+              dialsGateway
+                ? "Client-mode gateway WebSocket URL."
+                : "Only used when Mode is client or dual."
+            }
             control={
               <input
+                aria-label="Gateway URL"
                 value={gatewayUrl}
-                disabled={props.saving}
+                disabled={props.saving || !dialsGateway}
                 onChange={(event) => setGatewayUrl(event.target.value)}
               />
             }
@@ -328,6 +413,7 @@ export function FederationSettings(props: FederationSettingsProps) {
                 void props.onWriteConfig({
                   federation: {
                     mode,
+                    instanceLabel,
                     listenHost,
                     listenPort: Number.parseInt(listenPort, 10) || 0,
                     publicUrl,
@@ -389,38 +475,47 @@ export function FederationSettings(props: FederationSettingsProps) {
         <div className="settings-fields">
           <SettingsField
             label="Generate invite"
-            sub="Creates a one-time client enrollment payload."
+            sub="Creates a one-time client enrollment payload and copies it to the clipboard."
             control={
-              <button
-                className="button button--secondary"
-                type="button"
-                disabled={!props.desktopApi?.generateFederationInvite}
-                onClick={() => {
-                  setActionError(undefined);
-                  props.desktopApi?.generateFederationInvite?.({})
-                    .then((response) => setGeneratedInvite(response.invite))
-                    .catch((err: unknown) =>
-                      setActionError(err instanceof Error ? err.message : String(err)),
-                    );
-                }}
-              >
-                Generate invite
-              </button>
+              <div className="federation-invite">
+                <button
+                  className="button button--secondary"
+                  type="button"
+                  disabled={!props.desktopApi?.generateFederationInvite}
+                  onClick={() => {
+                    setActionError(undefined);
+                    props.desktopApi?.generateFederationInvite?.({})
+                      .then(async (response) => {
+                        setGeneratedInvite(response.invite);
+                        // Auto-copy so the operator can paste straight into
+                        // the client instance; best-effort with the Copy
+                        // button as the manual fallback.
+                        await copyGeneratedInvite(response.invite, {
+                          silent: true,
+                        });
+                      })
+                      .catch((err: unknown) =>
+                        setActionError(err instanceof Error ? err.message : String(err)),
+                      );
+                  }}
+                >
+                  Generate invite
+                </button>
+                {generatedInvite ? (
+                  <div className="federation-invite__message">
+                    <code>{generatedInvite}</code>
+                    <button
+                      className="button button--ghost"
+                      type="button"
+                      onClick={() => void copyGeneratedInvite()}
+                    >
+                      {inviteCopied ? "Copied" : "Copy"}
+                    </button>
+                  </div>
+                ) : null}
+              </div>
             }
           />
-          {generatedInvite ? (
-            <SettingsField
-              label="Invite payload"
-              sub="Paste this into the client instance."
-              control={
-                <textarea
-                  readOnly
-                  rows={4}
-                  value={generatedInvite}
-                />
-              }
-            />
-          ) : null}
           <SettingsField
             label="Import invite"
             sub="Paste a gateway invite on the client instance."
@@ -440,9 +535,13 @@ export function FederationSettings(props: FederationSettingsProps) {
               disabled={!props.desktopApi?.importFederationInvite || !inviteToImport.trim()}
               onClick={() => {
                 setActionError(undefined);
+                setImportNotice(undefined);
                 props.desktopApi?.importFederationInvite?.({ invite: inviteToImport })
-                  .then(async () => {
+                  .then(async (response) => {
                     setInviteToImport("");
+                    setImportNotice(
+                      `Invite imported. Connecting to ${response.gatewayInstanceId}...`,
+                    );
                     await props.onSettingsChanged();
                     await loadHealth();
                   })
@@ -454,8 +553,138 @@ export function FederationSettings(props: FederationSettingsProps) {
               Import invite
             </button>
           </div>
+          {importNotice ? (
+            <p className="federation-security-note">{importNotice}</p>
+          ) : null}
         </div>
       </SettingsSection>
+
+      {dialsGateway || effectiveHealth.clientEnrollment ? (
+        <SettingsSection
+          eyebrow="Pairing"
+          title="Gateway Enrollment"
+          chip={
+            effectiveHealth.clientEnrollment
+              ? effectiveHealth.clientEnrollment.pendingInvite
+                ? "Pending"
+                : "Paired"
+              : "Not paired"
+          }
+          chipKind={
+            effectiveHealth.clientEnrollment
+              ? effectiveHealth.clientEnrollment.pendingInvite
+                ? "warn"
+                : "ok"
+              : "muted"
+          }
+        >
+          <div className="settings-fields">
+            {effectiveHealth.clientEnrollment ? (
+              <>
+                <SettingsField
+                  label="Gateway"
+                  sub="Identity pinned by the imported invite."
+                  control={
+                    <code>
+                      {peerDisplayName(
+                        effectiveHealth.clientEnrollment.gatewayInstanceId,
+                        effectiveHealth.peers,
+                      )}
+                    </code>
+                  }
+                />
+                <SettingsField
+                  label="Gateway URL"
+                  sub="Where this instance dials out."
+                  control={
+                    <code>
+                      {effectiveHealth.clientEnrollment.gatewayUrl ??
+                        "Not configured"}
+                    </code>
+                  }
+                />
+                {effectiveHealth.clientEnrollment.enrolledAt ? (
+                  <SettingsField
+                    label="Invite imported"
+                    sub="When the current pairing was created."
+                    control={
+                      <span>
+                        {formatTimestamp(
+                          effectiveHealth.clientEnrollment.enrolledAt,
+                        )}
+                      </span>
+                    }
+                  />
+                ) : null}
+                {effectiveHealth.clientEnrollment.pendingInvite ? (
+                  <p className="federation-security-note">
+                    The invite has not been redeemed yet. Enrollment completes
+                    on the first successful connection to the gateway.
+                  </p>
+                ) : null}
+                <div className="settings-button-row">
+                  {confirmingForget ? (
+                    <>
+                      <button
+                        className="button button--primary"
+                        type="button"
+                        disabled={forgetting}
+                        onClick={() => {
+                          setActionError(undefined);
+                          setForgetting(true);
+                          props.desktopApi?.resetFederationEnrollment?.({})
+                            .then(async () => {
+                              setConfirmingForget(false);
+                              await props.onSettingsChanged();
+                              await loadHealth();
+                            })
+                            .catch((err: unknown) =>
+                              setActionError(
+                                err instanceof Error ? err.message : String(err),
+                              ),
+                            )
+                            .finally(() => setForgetting(false));
+                        }}
+                      >
+                        {forgetting ? "Forgetting..." : "Confirm forget"}
+                      </button>
+                      <button
+                        className="button button--ghost"
+                        type="button"
+                        disabled={forgetting}
+                        onClick={() => setConfirmingForget(false)}
+                      >
+                        Cancel
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      className="button button--ghost"
+                      type="button"
+                      disabled={!props.desktopApi?.resetFederationEnrollment}
+                      onClick={() => setConfirmingForget(true)}
+                    >
+                      Forget gateway
+                    </button>
+                  )}
+                </div>
+                {confirmingForget ? (
+                  <p className="federation-security-note">
+                    Forgetting removes the pinned gateway identity and keys
+                    from this instance. Reconnecting later requires a fresh
+                    invite from the gateway.
+                  </p>
+                ) : null}
+              </>
+            ) : (
+              <p className="settings-empty">
+                No gateway pairing saved. Import an invite to pair this
+                instance.
+              </p>
+            )}
+          </div>
+        </SettingsSection>
+      ) : null}
 
       <SettingsSection
         eyebrow="Runtime"
@@ -499,6 +728,17 @@ export function FederationSettings(props: FederationSettingsProps) {
               {effectiveHealth.unavailableReason}
             </p>
           ) : null}
+          {effectiveHealth.unavailableReason ? (
+            remediationForConnectionFailure(
+              effectiveHealth.unavailableReason,
+            ) ? (
+              <p className="federation-security-note">
+                {remediationForConnectionFailure(
+                  effectiveHealth.unavailableReason,
+                )}
+              </p>
+            ) : null
+          ) : null}
         </div>
       </SettingsSection>
 
@@ -521,11 +761,12 @@ export function FederationSettings(props: FederationSettingsProps) {
                 <dt>{peer.label}</dt>
                 <dd className="federation-peer-summary">
                   <span>
-                    {peer.id} · {roleLabel(peer.role)} · {statusLabel(peer.status)}
+                    {roleLabel(peer.role)} · {statusLabel(peer.status)}
                   </span>
                   <span>
                     Protocol {peer.protocolVersion ?? "unknown"} ·{" "}
-                    {peer.capabilities.length} capabilities
+                    {peer.capabilities.length} capabilities · Instance{" "}
+                    <code>{peer.id}</code>
                   </span>
                   {peer.lastConnectedAt ? (
                     <span>
@@ -552,6 +793,7 @@ export function FederationSettings(props: FederationSettingsProps) {
                     type="button"
                     disabled={
                       peer.status !== "connected" ||
+                      !peer.capabilities.includes("remote_window") ||
                       !props.desktopApi?.openFederationWindow
                     }
                     onClick={() => {
@@ -600,7 +842,11 @@ export function FederationSettings(props: FederationSettingsProps) {
       <SettingsSection
         eyebrow="Diagnostics"
         title="Recent Federation Activity"
-        chip={`${diagnosticEvents.length}`}
+        chip={
+          diagnosticEvents.length >= DIAGNOSTIC_EVENT_LIMIT
+            ? `${DIAGNOSTIC_EVENT_LIMIT}+`
+            : `${diagnosticEvents.length}`
+        }
       >
         {diagnosticEvents.length === 0 ? (
           <p className="settings-empty">No federation activity recorded.</p>
@@ -608,12 +854,23 @@ export function FederationSettings(props: FederationSettingsProps) {
           <dl className="settings-aboutkv">
             {diagnosticEvents.map((event) => (
               <div key={event.eventId}>
-                <dt>{diagnosticEventLabel(event.kind)}</dt>
+                <dt>
+                  {diagnosticEventLabel(event.kind)}
+                  {(event.repeatCount ?? 1) > 1 ? ` ×${event.repeatCount}` : ""}
+                </dt>
                 <dd className="federation-peer-summary">
                   <span>
                     {formatTimestamp(event.createdAt)}
-                    {event.peerId ? ` · ${event.peerId}` : ""}
+                    {event.peerId
+                      ? ` · ${peerDisplayName(event.peerId, effectiveHealth.peers)}`
+                      : ""}
                   </span>
+                  {(event.repeatCount ?? 1) > 1 && event.firstSeenAt ? (
+                    <span>
+                      Repeated {event.repeatCount} times since{" "}
+                      {formatTimestamp(event.firstSeenAt)}
+                    </span>
+                  ) : null}
                   {event.detail ? <span>{event.detail}</span> : null}
                 </dd>
               </div>
@@ -1034,6 +1291,66 @@ function formatFederationCapabilities(
   return capabilities
     .map((capability) => FEDERATION_CAPABILITY_LABELS[capability])
     .join(" · ");
+}
+
+/**
+ * Actionable next step for a client connection failure. Keyed off the
+ * redacted failure strings the main process reports; returns undefined
+ * for transport-level failures where "keep retrying" is already the
+ * right answer.
+ */
+function remediationForConnectionFailure(reason: string): string | undefined {
+  if (
+    reason.includes("unknown_peer") ||
+    reason.includes("missing_invite") ||
+    reason.includes("expired_invite") ||
+    reason.includes("reused_invite")
+  ) {
+    return "This instance is not enrolled with the gateway anymore. Generate a fresh invite on the gateway and import it here.";
+  }
+  if (reason.includes("revoked_peer")) {
+    return "The gateway revoked this instance. Generate a fresh invite on the gateway and import it here to re-enroll.";
+  }
+  if (reason.includes("wrong_gateway")) {
+    return "The imported invite belongs to a different gateway. Generate an invite on the gateway this instance should join and import that one.";
+  }
+  if (
+    reason.includes("bad_signature") ||
+    reason.includes("Invalid federation auth") ||
+    reason.includes("Encrypted federation frame authentication failed") ||
+    reason.includes("Missing pinned gateway Noise key")
+  ) {
+    return "The pinned gateway keys no longer match — the gateway was likely re-installed or re-keyed. Generate a fresh invite on the gateway and import it here.";
+  }
+  if (
+    reason.includes("does not support required Noise transport") ||
+    reason.includes("invalid_protocol_version") ||
+    reason.includes("Unexpected federation auth response")
+  ) {
+    return "The two instances are running incompatible PwrAgent versions. Update both instances to the same release and reconnect.";
+  }
+  if (
+    reason.includes("capability_denied") ||
+    reason.includes("policy_denied")
+  ) {
+    return "The gateway denied this session by policy. Review the gateway's federation settings.";
+  }
+  if (
+    reason.includes("missing its gateway identity") ||
+    reason.includes("missing its pinned gateway") ||
+    reason.includes("gateway URL is not configured")
+  ) {
+    return "This instance has no gateway pairing. Import a federation invite to pair it.";
+  }
+  return undefined;
+}
+
+function peerDisplayName(
+  peerId: string,
+  peers: FederationHealthStatus["peers"],
+): string {
+  const peer = peers.find((candidate) => candidate.id === peerId);
+  return peer && peer.label !== peerId ? peer.label : peerId;
 }
 
 function trimmedOrUndefined(value: string): string | undefined {

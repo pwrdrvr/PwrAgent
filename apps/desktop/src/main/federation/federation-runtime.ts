@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
+import { hostname } from "node:os";
 import type {
   AgentEvent,
   AppServerListSkillsResponse,
@@ -119,7 +120,10 @@ import {
 import { FederationRouter } from "./federation-router";
 import { FederationRpcEndpoint } from "./federation-rpc";
 import { FederationStore } from "./federation-store";
-import { redactFederationDiagnostic } from "./federation-redaction";
+import {
+  classifyFederationClientFailure,
+  redactFederationDiagnostic,
+} from "./federation-redaction";
 import {
   connectFederationClient,
   FederationGatewayWebSocketServer,
@@ -134,6 +138,7 @@ const GATEWAY_INSTANCE_ID_META_KEY = "federation_gateway_instance_id";
 const GATEWAY_PUBLIC_KEY_META_KEY = "federation_gateway_public_key_pem";
 const GATEWAY_NOISE_PUBLIC_KEY_META_KEY = "federation_gateway_noise_public_key";
 const PENDING_INVITE_TOKEN_META_KEY = "federation_pending_invite_token";
+const GATEWAY_ENROLLED_AT_META_KEY = "federation_gateway_enrolled_at";
 const FEDERATION_PEER_DIRECTORY_METHOD = "federation.peerDirectory";
 const FEDERATION_RECONNECT_MAX_DELAY_MS = 30_000;
 
@@ -146,6 +151,7 @@ const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "pending_request_control",
   "environment_actions",
   "federated_search",
+  "messaging_route",
   "gateway_relay",
 ];
 
@@ -161,6 +167,7 @@ export class DesktopFederationRuntime {
   private server?: FederationGatewayWebSocketServer;
   private client?: FederationClientWebSocketClient;
   private localInstanceId?: FederationInstanceId;
+  private instanceLabel?: string;
   private listenUrl?: string;
   private gatewayUrl?: string;
   private gatewayInstanceId?: FederationInstanceId;
@@ -183,6 +190,7 @@ export class DesktopFederationRuntime {
   private readonly remoteBackendEventListeners = new Set<
     (event: AgentEvent) => void | Promise<void>
   >();
+  private readonly peerStatusListeners = new Set<() => void>();
   private unsubscribeLocalBackendEvents?: () => void;
   private restartPromise: Promise<void> | undefined;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
@@ -190,6 +198,7 @@ export class DesktopFederationRuntime {
   private connectionGeneration = 0;
   private stopping = true;
   private lastConnectionError?: string;
+  private lastConnectionFailureKind?: "auth" | "transport";
   private gatewayListenerError?: string;
 
   setAgentEventPublisher(publisher: (event: AgentEvent) => void): void {
@@ -211,15 +220,28 @@ export class DesktopFederationRuntime {
     };
   }
 
+  /**
+   * Fires whenever any peer's connection status changes. Used by the
+   * application menu to keep its Remote Instances listing current.
+   */
+  onPeerStatusChanged(listener: () => void): () => void {
+    this.peerStatusListeners.add(listener);
+    return () => {
+      this.peerStatusListeners.delete(listener);
+    };
+  }
+
   connectedPeerTargets(): Array<{
     target: FederationRemoteTarget;
     label: string;
+    capabilities: FederationCapability[];
   }> {
     return this.visiblePeers()
       .filter((peer) => peer.status === "connected")
       .map((peer) => ({
         target: { scope: "remote", instanceId: peer.id },
         label: peer.label,
+        capabilities: [...peer.capabilities],
       }));
   }
 
@@ -263,6 +285,7 @@ export class DesktopFederationRuntime {
     this.publishedPeerStatuses.clear();
     this.reconnectAttempt = 0;
     this.lastConnectionError = undefined;
+    this.lastConnectionFailureKind = undefined;
     this.gatewayListenerError = undefined;
   }
 
@@ -279,18 +302,69 @@ export class DesktopFederationRuntime {
       settings.federation.mode.value === "client" ||
       settings.federation.mode.value === "dual"
     ) {
+      // An auth-class failure (bad pin, revoked enrollment, version
+      // skew) is terminal until the operator re-pairs — reporting it as
+      // "connecting" hides the problem behind an infinite retry loop.
       health.status = this.client
         ? "connected"
-        : this.reconnectTimer
-          ? "connecting"
-          : "disconnected";
+        : this.lastConnectionFailureKind === "auth"
+          ? "rejected"
+          : this.reconnectTimer
+            ? "connecting"
+            : "disconnected";
       health.unavailableReason = this.lastConnectionError;
     }
     if (this.gatewayListenerError) {
       health.status = "degraded";
       health.unavailableReason = this.gatewayListenerError;
     }
+    health.clientEnrollment = this.readClientEnrollment(
+      settings.federation.gatewayUrl.value.trim(),
+    );
     return health;
+  }
+
+  private readClientEnrollment(
+    configuredGatewayUrl: string,
+  ): FederationHealthStatus["clientEnrollment"] {
+    if (!isAppStateInitialized()) return undefined;
+    const stateDb = getAppStateDb();
+    const gatewayInstanceId = stateDb.getMeta(GATEWAY_INSTANCE_ID_META_KEY);
+    if (!gatewayInstanceId) return undefined;
+    const enrolledAtRaw = stateDb.getMeta(GATEWAY_ENROLLED_AT_META_KEY);
+    const enrolledAt = enrolledAtRaw ? Number(enrolledAtRaw) : Number.NaN;
+    return {
+      gatewayInstanceId,
+      gatewayUrl: configuredGatewayUrl || undefined,
+      enrolledAt: Number.isFinite(enrolledAt) ? enrolledAt : undefined,
+      pendingInvite: Boolean(stateDb.getMeta(PENDING_INVITE_TOKEN_META_KEY)),
+    };
+  }
+
+  /**
+   * Forget the client-side pairing: drop the pinned gateway identity,
+   * signing key, Noise key, and any pending invite token, then restart
+   * the runtime. A client-only instance falls back to disabled mode so
+   * it does not sit in a doomed reconnect loop against nothing.
+   */
+  async resetEnrollment(): Promise<{ cleared: boolean }> {
+    const stateDb = getAppStateDb();
+    const hadEnrollment = Boolean(stateDb.getMeta(GATEWAY_INSTANCE_ID_META_KEY));
+    stateDb.setMeta(GATEWAY_INSTANCE_ID_META_KEY, "");
+    stateDb.setMeta(GATEWAY_PUBLIC_KEY_META_KEY, "");
+    stateDb.setMeta(GATEWAY_NOISE_PUBLIC_KEY_META_KEY, "");
+    stateDb.setMeta(PENDING_INVITE_TOKEN_META_KEY, "");
+    stateDb.setMeta(GATEWAY_ENROLLED_AT_META_KEY, "");
+    const settings = await getDesktopSettingsService().readSettings();
+    const mode = settings.federation.mode.value;
+    await getDesktopSettingsService().writeConfigPatch({
+      federation: {
+        gatewayUrl: "",
+        ...(mode === "client" ? { mode: "disabled" as const } : {}),
+      },
+    });
+    await this.restart();
+    return { cleared: hadEnrollment };
   }
 
   async diagnostics(request: {
@@ -384,6 +458,7 @@ export class DesktopFederationRuntime {
       payload.gatewayNoisePublicKey,
     );
     stateDb.setMeta(PENDING_INVITE_TOKEN_META_KEY, payload.token);
+    stateDb.setMeta(GATEWAY_ENROLLED_AT_META_KEY, String(Date.now()));
     await getDesktopSettingsService().writeConfigPatch({
       federation: {
         mode: "client",
@@ -479,6 +554,8 @@ export class DesktopFederationRuntime {
   private async restartNow(): Promise<void> {
     await this.stop();
     const settings = await getDesktopSettingsService().readSettings();
+    this.instanceLabel =
+      settings.federation.instanceLabel.value.trim() || defaultInstanceLabel();
     const mode = settings.federation.mode.value;
     if (mode === "disabled") {
       return;
@@ -621,7 +698,10 @@ export class DesktopFederationRuntime {
       publicKeyPem: keyPair.publicKeyPem,
       capabilities: DEFAULT_CAPABILITIES,
       inviteToken: pendingInviteToken || undefined,
-      label: getAppStateDb().getMeta("profile_name") || this.ensureLocalInstanceId(),
+      label:
+        this.instanceLabel ||
+        settings.federation.instanceLabel.value.trim() ||
+        defaultInstanceLabel(),
       role: "client",
       headers: cloudflareAccessEnabled
         ? {
@@ -652,6 +732,7 @@ export class DesktopFederationRuntime {
         }
         this.client = undefined;
         this.lastConnectionError = "Federation gateway connection closed.";
+        this.lastConnectionFailureKind = "transport";
         this.store().appendAudit({
           peerId: gatewayInstanceId,
           sessionId: clientSession.id,
@@ -698,6 +779,7 @@ export class DesktopFederationRuntime {
     }
     this.reconnectAttempt = 0;
     this.lastConnectionError = undefined;
+    this.lastConnectionFailureKind = undefined;
     log.info("federation client connected", { gatewayUrl });
   }
 
@@ -738,9 +820,9 @@ export class DesktopFederationRuntime {
   ): void {
     if (this.stopping) return;
     this.client = undefined;
-    this.lastConnectionError = redactFederationDiagnostic(
-      error instanceof Error ? error.message : String(error),
-    );
+    const rawMessage = error instanceof Error ? error.message : String(error);
+    this.lastConnectionFailureKind = classifyFederationClientFailure(rawMessage);
+    this.lastConnectionError = redactFederationDiagnostic(rawMessage);
     if (this.gatewayInstanceId) {
       this.publishPeerStatus(
         this.gatewayInstanceId,
@@ -1009,7 +1091,7 @@ export class DesktopFederationRuntime {
     const peers: FederationPeerSummary[] = [
       {
         id: localInstanceId,
-        label: localProfileName || "Gateway",
+        label: this.instanceLabel || localProfileName || "Gateway",
         role: "gateway",
         status: "connected",
         capabilities: DEFAULT_CAPABILITIES,
@@ -1095,6 +1177,15 @@ export class DesktopFederationRuntime {
       return;
     }
     this.publishedPeerStatuses.set(instanceId, { status, unavailableReason });
+    for (const listener of this.peerStatusListeners) {
+      try {
+        listener();
+      } catch (error) {
+        log.warn("federation peer status listener failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
     this.publishAgentEvent?.({
       backend: "codex",
       federationTarget: {
@@ -1218,6 +1309,16 @@ export class DesktopFederationRuntime {
       });
     }
   }
+}
+
+/**
+ * Fallback display name when the operator has not set one: the machine
+ * hostname (minus the mDNS suffix) beats both the profile name (almost
+ * always "default") and the raw instance GUID for recognizing a peer.
+ */
+function defaultInstanceLabel(): string {
+  const host = hostname().trim().replace(/\.local$/i, "");
+  return host || "PwrAgent";
 }
 
 function localBackendOperations(): FederationBackendOperations {

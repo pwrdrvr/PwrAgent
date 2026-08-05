@@ -659,10 +659,25 @@ function installApplicationMenu(): void {
       id: window.id,
       title: getAuxiliaryWindowMenuTitle(window),
     }));
+  // Peer lookup touches the profile state db; during early boot (or a
+  // torn-down app state in tests) just render the menu without peers.
+  let federationPeers: Array<{ instanceId: string; label: string }> = [];
+  try {
+    federationPeers = getDesktopFederationRuntime()
+      .connectedPeerTargets()
+      .filter((peer) => peer.capabilities.includes("remote_window"))
+      .map((peer) => ({
+        instanceId: peer.target.instanceId,
+        label: peer.label,
+      }));
+  } catch {
+    federationPeers = [];
+  }
   const template = buildApplicationMenuTemplate({
     appName: APP_NAME,
     developerMode,
     isMac,
+    federationPeers,
     profiles,
     windows,
     actions: {
@@ -683,6 +698,15 @@ function installApplicationMenu(): void {
       },
       openDocumentation: async () => {
         await shell.openExternal(PWRAGENT_DOCUMENTATION_URL);
+      },
+      openFederationWindow: (peer) => {
+        createMainWindow({
+          federationLabel: peer.label,
+          federationTarget: {
+            scope: "remote",
+            instanceId: peer.instanceId,
+          },
+        });
       },
       openIssueReporter: async () => {
         await shell.openExternal(PWRAGENT_ISSUE_REPORTER_URL);
@@ -733,6 +757,10 @@ function installWindowMenuRefreshHandlers(): void {
     window.on("focus", refresh);
     window.on("closed", refresh);
     window.on("page-title-updated", refresh);
+  });
+  // Keep File → Remote Instances in sync with peer connectivity.
+  getDesktopFederationRuntime().onPeerStatusChanged(() => {
+    installApplicationMenu();
   });
 }
 

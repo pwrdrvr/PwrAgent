@@ -1,6 +1,7 @@
 import { BrowserWindow } from "electron";
 import { WINDOW_OPEN_NEW_THREAD_CHANNEL } from "../shared/ipc";
 import { subscribersForChannel } from "./window-channels";
+import { isFederationWindowWebContents } from "./window";
 
 /**
  * Main → renderer push: tell the main-window renderer to open the
@@ -10,7 +11,10 @@ import { subscribersForChannel } from "./window-channels";
  */
 export function requestOpenNewThread(): void {
   const focused = BrowserWindow.getFocusedWindow();
-  const subscribers = subscribersForChannel(WINDOW_OPEN_NEW_THREAD_CHANNEL);
+  // Skip remote federation windows — this push opens a LOCAL surface.
+  const subscribers = subscribersForChannel(
+    WINDOW_OPEN_NEW_THREAD_CHANNEL,
+  ).filter((subscriber) => !isFederationWindowWebContents(subscriber));
 
   if (focused && !focused.isDestroyed()) {
     const focusedSubscriber = subscribers.find(

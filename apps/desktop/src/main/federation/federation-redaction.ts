@@ -44,3 +44,36 @@ export function redactFederationDiagnostic(value: string): string {
     .replace(/-----BEGIN [^-]+-----[\s\S]*?-----END [^-]+-----/g, "[redacted-pem]")
     .replace(/[A-Za-z0-9+/=]{32,}/g, "[redacted-token]");
 }
+
+const AUTH_FAILURE_MESSAGE_PATTERNS = [
+  "Invalid federation auth challenge",
+  "Invalid federation auth challenge signature",
+  "Invalid federation auth acceptance signature",
+  "Unexpected federation auth response",
+  "Encrypted federation frame authentication failed",
+  "does not support required Noise transport",
+  "Missing pinned gateway Noise key",
+  "missing its gateway identity",
+  "missing its pinned gateway",
+];
+
+/**
+ * Split client connection failures into the two states the UI cares
+ * about: "auth" failures are terminal until the operator re-pairs
+ * (bad pins, revoked enrollment, version skew) and should surface as
+ * `rejected`; "transport" failures are network conditions that a
+ * retry can genuinely fix and stay `connecting`.
+ */
+export function classifyFederationClientFailure(
+  message: string,
+): "auth" | "transport" {
+  if ((FAILURE_MESSAGES as Record<string, string>)[message]) {
+    return "auth";
+  }
+  for (const pattern of AUTH_FAILURE_MESSAGE_PATTERNS) {
+    if (message.includes(pattern)) {
+      return "auth";
+    }
+  }
+  return "transport";
+}

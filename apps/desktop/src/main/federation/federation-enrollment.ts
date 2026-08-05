@@ -218,6 +218,8 @@ export function authenticateFederationReconnect(params: {
   now: number;
   /** Base64 Noise handshake hash to bind the identity proof to the channel. */
   channelBinding?: string;
+  /** Display label advertised by the peer; refreshes the stored label. */
+  label?: string;
 }): FederationAuthDecision {
   if (!isFederationInstanceId(params.peerInstanceId)) {
     return {
@@ -271,6 +273,7 @@ export function authenticateFederationReconnect(params: {
 
   const connectedPeer: FederationPeerSummary & { pinnedPublicKeyPem?: string } = {
     ...peer,
+    label: params.label?.trim() || peer.label,
     // Reconnect capabilities are the negotiated session subset, not a new
     // authorization allowlist. Preserve capabilities omitted by this session.
     capabilities: [...peer.capabilities],

@@ -13,6 +13,7 @@ import {
   MESSAGING_PLATFORM_ICONS,
 } from "../../lib/messaging-platform-branding";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
+import { readRendererFederationTarget } from "../../lib/federation-window";
 import { SettingsIcon } from "../../icons/SettingsIcon";
 import { useMessagingPlatformStatuses } from "./useMessagingPlatformStatuses";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -66,8 +67,13 @@ export function MessagingStatusBar(props: {
   /** Opens Settings directly to the Messaging section. */
   onOpenSettings?: () => void;
 }) {
+  // Remote federation windows must not render LOCAL messaging state —
+  // there is no remote-messaging surface yet, and showing the local
+  // instance's platforms in a window branded as another machine reads
+  // as that machine's messaging. Render nothing there.
+  const isFederationWindow = Boolean(readRendererFederationTarget());
   const { statuses, activeAtByPlatform } = useMessagingPlatformStatuses(
-    props.desktopApi,
+    isFederationWindow ? undefined : props.desktopApi,
   );
   const [open, setOpen] = useState(false);
   const [pinned, setPinned] = useState(false);
@@ -287,7 +293,7 @@ export function MessagingStatusBar(props: {
     }
   };
 
-  if (displayStatuses.length === 0) {
+  if (isFederationWindow || displayStatuses.length === 0) {
     return null;
   }
 

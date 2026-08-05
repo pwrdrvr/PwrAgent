@@ -101,6 +101,8 @@ import type {
   ReadFederationDiagnosticsResponse,
   ReadFederationTailscaleStatusRequest,
   ReadFederationTailscaleStatusResponse,
+  ResetFederationEnrollmentRequest,
+  ResetFederationEnrollmentResponse,
   RevokeFederationPeerRequest,
   RevokeFederationPeerResponse,
   ReorderDirectoryPinsRequest,
@@ -462,6 +464,9 @@ export type DesktopApi = {
   revokeFederationPeer?: (
     request: RevokeFederationPeerRequest,
   ) => Promise<RevokeFederationPeerResponse>;
+  resetFederationEnrollment?: (
+    request?: ResetFederationEnrollmentRequest,
+  ) => Promise<ResetFederationEnrollmentResponse>;
   readFederationTailscaleStatus?: (
     request?: ReadFederationTailscaleStatusRequest,
   ) => Promise<ReadFederationTailscaleStatusResponse>;

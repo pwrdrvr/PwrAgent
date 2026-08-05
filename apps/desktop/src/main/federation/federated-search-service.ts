@@ -21,6 +21,14 @@ export type FederatedSearchLocalBackend = Pick<
   "listThreads"
 >;
 
+/**
+ * Per-peer deadline for a search fan-out. Much tighter than the 30s RPC
+ * default: one hung peer must not stall the whole global-search surface,
+ * and a peer that cannot answer a metadata filter in this window is not
+ * going to produce useful interactive results anyway.
+ */
+const FEDERATED_SEARCH_PEER_TIMEOUT_MS = 10_000;
+
 export class FederatedSearchService {
   constructor(
     private readonly options: {
@@ -28,6 +36,7 @@ export class FederatedSearchService {
       peers: () => readonly FederatedSearchPeer[];
       includeLocal?: boolean;
       now?: () => number;
+      peerTimeoutMs?: number;
     },
   ) {}
 
@@ -36,13 +45,28 @@ export class FederatedSearchService {
     const limit = Math.max(1, Math.min(request.limit ?? 50, 200));
     const searchedAt = this.options.now?.() ?? Date.now();
     const failures: FederatedSearchResponse["failures"] = [];
+    const searchedInstances: NonNullable<
+      FederatedSearchResponse["searchedInstances"]
+    > = [];
+    const peerTimeoutMs =
+      this.options.peerTimeoutMs ?? FEDERATED_SEARCH_PEER_TIMEOUT_MS;
     const resultGroups = await Promise.all([
       ...(this.options.includeLocal === false
         ? []
         : [this.searchLocal(query, request.backend)]),
       ...this.options.peers().map(async (peer) => {
         try {
-          return await this.searchPeer(peer, query, request.backend);
+          const peerResults = await withTimeout(
+            this.searchPeer(peer, query, request.backend),
+            peerTimeoutMs,
+            `Federated search timed out after ${Math.round(peerTimeoutMs / 1000)}s.`,
+          );
+          searchedInstances.push({
+            instanceId: peer.instanceId,
+            instanceLabel: peer.label,
+            resultCount: peerResults.length,
+          });
+          return peerResults;
         } catch (error) {
           failures.push({
             instanceId: peer.instanceId,
@@ -66,6 +90,7 @@ export class FederatedSearchService {
       searchedAt,
       results,
       failures,
+      searchedInstances,
     };
   }
 
@@ -109,6 +134,27 @@ export class FederatedSearchService {
       score: scoreThread(thread, query),
     }));
   }
+}
+
+function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+    if (timer.unref) timer.unref();
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      },
+    );
+  });
 }
 
 function scoreThread(thread: AppServerThreadSummary, query: string): number {

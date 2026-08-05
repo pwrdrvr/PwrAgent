@@ -106,7 +106,16 @@ export class FederationRpcEndpoint {
     if (!pending) return false;
     clearTimeout(pending.timer);
     this.pending.delete(envelope.requestId);
-    pending.reject(new Error(envelope.error.code));
+    // Keep the remote's human-readable message; the bare code alone is
+    // what surfaces in settings and toasts otherwise. The code stays
+    // available on the error for programmatic callers.
+    const message =
+      envelope.error.message && envelope.error.message !== envelope.error.code
+        ? `${envelope.error.code}: ${envelope.error.message}`
+        : envelope.error.code;
+    const error = new Error(message) as Error & { code?: string };
+    error.code = envelope.error.code;
+    pending.reject(error);
     return true;
   }
 

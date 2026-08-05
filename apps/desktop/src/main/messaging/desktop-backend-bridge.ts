@@ -15,6 +15,7 @@ import type {
   CreateScheduledThreadActionRequest,
   EnsureDirectoryLaunchpadRequest,
   EnsureDirectoryLaunchpadResponse,
+  FederationCapability,
   FederationRemoteTarget,
   FederationTarget,
   GetNavigationSnapshotRequest,
@@ -71,6 +72,7 @@ export type DesktopMessagingFederationBridge = {
   connectedPeerTargets(): Array<{
     target: FederationRemoteTarget;
     label: string;
+    capabilities: FederationCapability[];
   }>;
   onRemoteBackendEvent(
     listener: (event: AgentEvent) => void | Promise<void>,
@@ -159,9 +161,14 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
       return localSnapshot;
     }
     const remoteSnapshots = await Promise.allSettled(
-      this.federation.connectedPeerTargets().map(({ target }) =>
-        this.federation!.remoteNavigationSnapshot(target, request)
-      ),
+      this.federation
+        .connectedPeerTargets()
+        // messaging_route is the peer's opt-in for messaging surfaces to
+        // browse and drive its threads — skip peers that don't grant it.
+        .filter(({ capabilities }) => capabilities.includes("messaging_route"))
+        .map(({ target }) =>
+          this.federation!.remoteNavigationSnapshot(target, request)
+        ),
     );
     const availableRemoteSnapshots = remoteSnapshots.flatMap((result) =>
       result.status === "fulfilled" ? [result.value] : []
@@ -635,11 +642,22 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
   private remoteBackend(
     target: FederationTarget | undefined,
   ): FederationBackendOperations | undefined {
-    return target &&
-      isRemoteFederationTarget(target) &&
-      this.federation
-      ? this.federation.remoteBackend(target)
-      : undefined;
+    if (!target || !isRemoteFederationTarget(target) || !this.federation) {
+      return undefined;
+    }
+    // messaging_route gates messaging-originated remote control (plan
+    // KTD3): a connected peer that doesn't advertise it must not be
+    // reachable from chat surfaces, even though remote windows may
+    // still drive it via turn_control.
+    const peer = this.federation
+      .connectedPeerTargets()
+      .find((candidate) => candidate.target.instanceId === target.instanceId);
+    if (peer && !peer.capabilities.includes("messaging_route")) {
+      throw new Error(
+        `Federation peer ${peer.label} does not allow messaging routing.`,
+      );
+    }
+    return this.federation.remoteBackend(target);
   }
 
   private async readThread(request: {

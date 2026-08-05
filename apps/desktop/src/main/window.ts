@@ -62,6 +62,20 @@ import {
 import { placementForCursorDisplay } from "./window-placement";
 import { federationWindowTargetAdditionalArguments } from "../shared/federation-window";
 
+/**
+ * WebContents of windows created with a federationTarget. Remote windows
+ * share the main-window channel registrations, but local-only pushes
+ * (open Settings, replay onboarding) must never land in them — a remote
+ * window rendering LOCAL settings reads as the peer's settings.
+ */
+const federationWindowWebContentsIds = new Set<number>();
+
+export function isFederationWindowWebContents(
+  webContents: Electron.WebContents,
+): boolean {
+  return federationWindowWebContentsIds.has(webContents.id);
+}
+
 const isDevelopment = process.env.NODE_ENV !== "production";
 const isMac = process.platform === "darwin";
 const isWindows = process.platform === "win32";
@@ -403,6 +417,14 @@ export function createMainWindow(options?: {
       ],
     }
   });
+
+  if (options?.federationTarget) {
+    const webContentsId = window.webContents.id;
+    federationWindowWebContentsIds.add(webContentsId);
+    window.once("closed", () => {
+      federationWindowWebContentsIds.delete(webContentsId);
+    });
+  }
 
   // Register before renderer navigation can reach ready-to-show and call
   // window.show(). The initial boot watchdog depends on this signal, and

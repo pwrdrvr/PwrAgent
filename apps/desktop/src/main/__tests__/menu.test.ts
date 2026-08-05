@@ -23,6 +23,7 @@ function buildTemplate(
     appName: "PwrAgent",
     developerMode,
     isMac: options?.isMac ?? true,
+    federationPeers: [],
     profiles: options?.profiles ?? [
       profile("work"),
       profile("default", { active: true, default: true }),
@@ -36,6 +37,7 @@ function buildTemplate(
       checkForUpdates: vi.fn(),
       focusWindow: vi.fn(),
       openDocumentation: vi.fn(),
+      openFederationWindow: vi.fn(),
       openIssueReporter: vi.fn(),
       openNewThread: options?.openNewThread ?? vi.fn(),
       openProfile: options?.openProfile ?? vi.fn(),
@@ -260,12 +262,14 @@ describe("buildApplicationMenuTemplate", () => {
         appName: "PwrAgent",
         developerMode: false,
         isMac: true,
+        federationPeers: [],
         profiles: [],
         windows: [],
         actions: {
           checkForUpdates: vi.fn(),
           focusWindow: vi.fn(),
           openDocumentation: vi.fn(),
+          openFederationWindow: vi.fn(),
           openIssueReporter: vi.fn(),
           openNewThread: vi.fn(),
           openProfile: vi.fn(),
@@ -345,6 +349,62 @@ describe("buildApplicationMenuTemplate", () => {
 
       expect(items.at(-1)?.label).toBe("No Open Windows");
       expect(items.at(-1)?.enabled).toBe(false);
+    });
+  });
+
+  describe("federation remote instances", () => {
+    it("hides the Remote Instances item when no peers are connected", () => {
+      const fileItems = submenuItems(buildTemplate(false), "File");
+      expect(
+        fileItems.some((item) => item.label === "Remote Instances"),
+      ).toBe(false);
+    });
+
+    it("lists connected peers and routes clicks to openFederationWindow", () => {
+      const openFederationWindow = vi.fn();
+      const template = buildApplicationMenuTemplate({
+        appName: "PwrAgent",
+        developerMode: false,
+        isMac: true,
+        federationPeers: [
+          { instanceId: "pwr_gateway", label: "Studio Mac" },
+        ],
+        profiles: [],
+        windows: [],
+        actions: {
+          checkForUpdates: vi.fn(),
+          focusWindow: vi.fn(),
+          openDocumentation: vi.fn(),
+          openFederationWindow,
+          openIssueReporter: vi.fn(),
+          openNewThread: vi.fn(),
+          openProfile: vi.fn(),
+          openProfilesSettings: vi.fn(),
+          openSettings: vi.fn(),
+          openWebsite: vi.fn(),
+          quit: vi.fn(),
+          replayOnboarding: vi.fn(),
+          showAboutPanel: vi.fn(),
+          showChangelogWindow: vi.fn(),
+          showLicenseWindow: vi.fn(),
+          showLogsWindow: vi.fn(),
+          showThirdPartyNoticesWindow: vi.fn(),
+        },
+      });
+
+      const remoteInstances = submenuItems(template, "File").find(
+        (item) => item.label === "Remote Instances",
+      );
+      expect(remoteInstances).toBeDefined();
+      const peerItems = Array.isArray(remoteInstances?.submenu)
+        ? remoteInstances.submenu
+        : [];
+      expect(peerItems.map((item) => item.label)).toEqual(["Studio Mac"]);
+      (peerItems[0]?.click as () => void | undefined)?.();
+      expect(openFederationWindow).toHaveBeenCalledWith({
+        instanceId: "pwr_gateway",
+        label: "Studio Mac",
+      });
     });
   });
 });

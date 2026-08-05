@@ -1,6 +1,7 @@
 import { BrowserWindow } from "electron";
 import { WINDOW_OPEN_SETTINGS_CHANNEL } from "../shared/ipc";
 import { subscribersForChannel } from "./window-channels";
+import { isFederationWindowWebContents } from "./window";
 
 /**
  * Main → renderer push: tell the main-window renderer to open the
@@ -20,7 +21,12 @@ import { subscribersForChannel } from "./window-channels";
  */
 export function requestOpenSettings(section?: string): void {
   const focused = BrowserWindow.getFocusedWindow();
-  const subscribers = subscribersForChannel(WINDOW_OPEN_SETTINGS_CHANNEL);
+  // Remote federation windows register the main-window channels but must
+  // never host the LOCAL Settings overlay — dispatch to a local window
+  // even when a federation window is the focused one.
+  const subscribers = subscribersForChannel(
+    WINDOW_OPEN_SETTINGS_CHANNEL,
+  ).filter((subscriber) => !isFederationWindowWebContents(subscriber));
 
   // Prefer the focused main-window subscriber. If the user invoked
   // the menu while a secondary window was focused, fall through to

@@ -1328,6 +1328,20 @@ class DesktopAppServerService {
           message: `${failure.instanceLabel}: ${failure.error}`,
         })),
       ],
+      remoteInstances: [
+        ...(federated.searchedInstances ?? []).map((instance) => ({
+          instanceId: instance.instanceId,
+          instanceLabel: instance.instanceLabel,
+          resultCount: instance.resultCount,
+        })),
+        ...federated.failures.map((failure) => ({
+          instanceId: failure.instanceId,
+          instanceLabel: failure.instanceLabel,
+          resultCount: 0,
+          failed: true,
+          error: failure.error,
+        })),
+      ],
       truncated: local.truncated ||
         local.results.length + remoteResults.length > results.length,
     };

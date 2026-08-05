@@ -473,6 +473,7 @@ export class FederationGatewayWebSocketServer {
       signatureBase64: message.signatureBase64,
       channelBinding,
       now: Date.now(),
+      label: message.label,
     });
   }
 }

@@ -11,6 +11,7 @@ import {
   type MessagingChannelKind,
   type NavigationThreadSummary,
   type ThreadSearchMatchReasonKind,
+  type ThreadSearchRemoteInstance,
   type ThreadSearchResponse,
   type ThreadSearchResult,
 } from "@pwragent/shared";
@@ -225,6 +226,22 @@ function ThreadSearchResultRow(props: {
   );
 }
 
+/**
+ * Discloses remote-search scope: which connected instances contributed
+ * and that remote matching is title-only (content search never crosses
+ * the federation link).
+ */
+function describeRemoteInstances(
+  instances: ThreadSearchRemoteInstance[],
+): string {
+  const parts = instances.map((instance) =>
+    instance.failed
+      ? `${instance.instanceLabel} unavailable`
+      : `${instance.instanceLabel} (${instance.resultCount})`,
+  );
+  return `Remote: ${parts.join(", ")} — title matches only`;
+}
+
 function ThreadSearchEmptyState(props: {
   title: string;
   hint: string;
@@ -361,6 +378,9 @@ export function ThreadSearchPanel(props: ThreadSearchPanelProps) {
               <strong>{resultCount}</strong> {resultCount === 1 ? "thread" : "threads"}
             </span>
             {response.truncated ? <span>Showing the top matches</span> : null}
+            {response.remoteInstances?.length ? (
+              <span>{describeRemoteInstances(response.remoteInstances)}</span>
+            ) : null}
           </p>
         ) : null}
 

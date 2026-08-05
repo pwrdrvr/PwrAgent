@@ -926,6 +926,14 @@ const PR_STATUS_WATCH_HISTORY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
  * needs deeper history.
  */
 const MESSAGING_ACTIVITY_LOG_PER_PLATFORM_CAP = 500;
+/**
+ * FIFO cap for the federation session audit log, mirroring the messaging
+ * activity cap: keep the newest N rows, evict the rest in the GC pass.
+ * appendAudit collapses identical repeats (reconnect loops) before rows
+ * ever land here, so the cap is depth of distinct history, not minutes
+ * of retry noise.
+ */
+const FEDERATION_SESSION_AUDIT_CAP = 500;
 
 export class StateDb {
   private db: BetterSqlite3.Database;
@@ -1315,6 +1323,16 @@ export class StateDb {
            )`,
         )
         .run(MESSAGING_ACTIVITY_LOG_PER_PLATFORM_CAP);
+      this.db
+        .prepare(
+          `DELETE FROM federation_session_audit
+           WHERE event_id IN (
+             SELECT event_id FROM federation_session_audit
+             ORDER BY created_at DESC, event_id DESC
+             LIMIT -1 OFFSET ?
+           )`,
+        )
+        .run(FEDERATION_SESSION_AUDIT_CAP);
       this.db
         .prepare("DELETE FROM composer_draft_journal WHERE updated_at < ?")
         .run(now - COMPOSER_DRAFT_JOURNAL_RETENTION_MS);

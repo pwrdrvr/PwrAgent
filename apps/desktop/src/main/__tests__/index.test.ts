@@ -372,6 +372,8 @@ vi.mock("../messaging/messaging-runtime", () => ({
 vi.mock("../federation/federation-runtime", () => ({
   getDesktopFederationRuntime: vi.fn(() => ({
     restart: federationRuntimeRestartMock,
+    connectedPeerTargets: vi.fn(() => []),
+    onPeerStatusChanged: vi.fn(() => () => {}),
   })),
   disposeDesktopFederationRuntime: disposeDesktopFederationRuntimeMock,
 }));
