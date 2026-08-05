@@ -652,6 +652,9 @@ const desktopApi = Object.freeze({
   copyText: async (text: string): Promise<void> => {
     clipboard.writeText(text);
   },
+  copyRichText: async (payload: { text: string; html: string }): Promise<void> => {
+    clipboard.write({ text: payload.text, html: payload.html });
+  },
   readAppMetadata: async (): Promise<AppMetadata> =>
     await ipcRenderer.invoke(APP_METADATA_READ_CHANNEL),
   readLicenseDocument: async (

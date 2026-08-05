@@ -864,7 +864,7 @@ function MarkdownDocumentModal(props: {
   );
 }
 
-function protectComposerHyphenListItems(markdown: string): string {
+export function protectComposerHyphenListItems(markdown: string): string {
   const lines = markdown.split("\n");
   let fence: { marker: "`" | "~"; length: number } | undefined;
 

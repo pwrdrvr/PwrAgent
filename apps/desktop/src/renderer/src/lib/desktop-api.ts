@@ -337,6 +337,7 @@ import type {
 
 export type DesktopApi = {
   copyText?: (text: string) => Promise<void>;
+  copyRichText?: (payload: { text: string; html: string }) => Promise<void>;
   getRuntimeIdentity?: () => Promise<RuntimeIdentity>;
   readAppMetadata?: () => Promise<AppMetadata>;
   readLicenseDocument?: (

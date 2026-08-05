@@ -42,6 +42,46 @@ export async function copyText(
   document.body.removeChild(textarea);
 }
 
+export async function copyTextWithHtml(
+  text: string,
+  html: string,
+  desktopApiOverride?: Pick<DesktopApi, "copyText" | "copyRichText">,
+): Promise<void> {
+  const desktopApi = desktopApiOverride ?? getDesktopApi();
+  if (desktopApi?.copyRichText) {
+    try {
+      await desktopApi.copyRichText({ text, html });
+      return;
+    } catch {
+      // Fall through to browser-side copy paths.
+    }
+  }
+
+  const clipboardApi =
+    typeof navigator !== "undefined" &&
+    "clipboard" in navigator &&
+    typeof navigator.clipboard?.write === "function" &&
+    typeof ClipboardItem !== "undefined"
+      ? navigator.clipboard
+      : undefined;
+
+  if (clipboardApi) {
+    try {
+      await clipboardApi.write([
+        new ClipboardItem({
+          "text/plain": new Blob([text], { type: "text/plain" }),
+          "text/html": new Blob([html], { type: "text/html" }),
+        }),
+      ]);
+      return;
+    } catch {
+      // Fall through to the plain-text copy path.
+    }
+  }
+
+  await copyText(text, desktopApi);
+}
+
 export function formatCopyTooltip(path: string, maxLength = 72): string {
   return `${elideMiddle(path, maxLength)}\nClick to copy to clipboard`;
 }
