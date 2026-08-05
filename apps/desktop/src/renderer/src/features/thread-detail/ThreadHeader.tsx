@@ -24,6 +24,12 @@ type ThreadHeaderLayoutControls = {
   terminalOpen: boolean;
   /** A PTY is alive for this thread even if the panel is collapsed. */
   terminalRunning?: boolean;
+  /**
+   * Why the terminal cannot open right now (remote thread whose peer lacks
+   * `remote_pty` or is disconnected). Renders the toggle disabled with this
+   * as its tooltip instead of hiding it.
+   */
+  terminalDisabledReason?: string;
   onToggleSidebar: () => void;
   onToggleRail: () => void;
   onToggleTerminal: () => void;
@@ -92,11 +98,14 @@ export function ThreadHeader(props: ThreadHeaderProps) {
   // a live dot and says so, otherwise the shell is invisible from here.
   const terminalCollapsedRunning =
     Boolean(props.layout?.terminalRunning) && !props.layout?.terminalOpen;
-  const terminalLabel = props.layout?.terminalOpen
-    ? "Hide integrated terminal"
-    : terminalCollapsedRunning
-      ? "Show running integrated terminal"
-      : "Open integrated terminal";
+  const terminalDisabledReason = props.layout?.terminalDisabledReason;
+  const terminalLabel =
+    terminalDisabledReason ??
+    (props.layout?.terminalOpen
+      ? "Hide integrated terminal"
+      : terminalCollapsedRunning
+        ? "Show running integrated terminal"
+        : "Open integrated terminal");
 
   return (
     <header className="thread-header">
@@ -173,20 +182,26 @@ export function ThreadHeader(props: ThreadHeaderProps) {
               onToggleRail={props.layout.onToggleRail}
             />
           ) : null}
-          {/* The integrated terminal is a LOCAL shell. For a remote
-              (federated) thread it would open a terminal on the viewer
-              machine while the window is branded as the peer — hide it
-              until a remote PTY exists in the protocol. */}
-          {props.layout && !props.thread.federation ? (
+          {/* For a remote (federated) thread this attaches to a PTY running
+              on the OWNING instance over the federation transport. When the
+              peer lacks the remote_pty grant or is disconnected, the toggle
+              renders disabled with the reason as its tooltip. */}
+          {props.layout ? (
             <button
               type="button"
               className={`thread-header__terminal-toggle${
                 props.layout.terminalOpen ? " is-open" : ""
-              }${terminalCollapsedRunning ? " is-running" : ""}`}
+              }${terminalCollapsedRunning ? " is-running" : ""}${
+                terminalDisabledReason ? " is-disabled" : ""
+              }`}
               aria-label={terminalLabel}
               aria-pressed={props.layout.terminalOpen}
+              // aria-disabled (not `disabled`) so the button still receives
+              // hover/focus and can explain WHY via the tooltip.
+              aria-disabled={terminalDisabledReason ? true : undefined}
               onClick={() => {
                 terminalTooltip.hide();
+                if (terminalDisabledReason) return;
                 props.layout?.onToggleTerminal();
               }}
               onMouseEnter={(event) =>

@@ -1411,6 +1411,7 @@ const FEDERATION_CAPABILITY_LABELS: Record<FederationCapability, string> = {
   federated_search: "search remote threads",
   messaging_route: "route messaging threads",
   gateway_relay: "reach sibling instances",
+  remote_pty: "open a remote terminal",
 };
 
 function formatFederationCapabilities(

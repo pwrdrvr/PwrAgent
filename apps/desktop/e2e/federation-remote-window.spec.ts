@@ -1,4 +1,5 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
@@ -103,10 +104,16 @@ test.describe("federation remote window", () => {
 
     let gateway: InProcessFederationGateway | undefined;
     const fixture = await createLocalControlFixture();
+    // The OWNER-side worktree: the remote shell's cwd lives in the test
+    // process, so a marker file appearing here proves where the PTY ran.
+    const ownerPtyCwd = await mkdtemp(
+      path.join(os.tmpdir(), "pwragent-federation-e2e-pty-"),
+    );
     let app: Awaited<ReturnType<typeof launchElectronApp>> | undefined;
     try {
       gateway = await startInProcessFederationGateway({
         instanceLabel: "E2E Gateway",
+        remotePty: { cwd: ownerPtyCwd },
         threads: [
           {
             id: "remote-thread-1",
@@ -235,8 +242,8 @@ test.describe("federation remote window", () => {
       ).toBeVisible();
       await remote.getByRole("button", { name: "Show sidebar" }).click();
 
-      // Opening a remote thread renders the peer transcript without the
-      // (local-shell) integrated terminal toggle.
+      // Opening a remote thread renders the peer transcript with the
+      // remote-PTY terminal toggle enabled (the gateway granted remote_pty).
       const remoteRowOne = remote.locator(".thread-row__title", {
         hasText: "Remote gateway thread one",
       });
@@ -244,8 +251,46 @@ test.describe("federation remote window", () => {
       await expect(
         remote.getByText(/Remote transcript for Remote gateway thread one/),
       ).toBeVisible({ timeout: 30_000 });
+      const terminalToggle = remote.locator(".thread-header__terminal-toggle");
+      await expect(terminalToggle).toBeVisible();
+      await expect(terminalToggle).not.toHaveClass(/is-disabled/);
+
+      // Open the remote terminal: the panel attaches to a PTY spawned inside
+      // the gateway's process, and the status line shows the OWNER-resolved
+      // cwd (the viewer never sent a path).
+      await terminalToggle.click();
       await expect(
-        remote.locator(".thread-header__terminal-toggle"),
+        remote.getByLabel("Integrated terminal", { exact: true }),
+      ).toBeVisible();
+      await expect(remote.locator(".integrated-terminal__status")).toHaveText(
+        ownerPtyCwd,
+        { timeout: 30_000 },
+      );
+
+      // Run a command through the remote shell. The marker lands in the
+      // gateway process's temp worktree — proof the process ran on the owner
+      // — and its output streams back into the viewer's xterm.
+      const markerToken = `pwragent-remote-pty-${Date.now().toString(36)}`;
+      await remote.locator(".integrated-terminal__viewport").click();
+      await remote.keyboard.type(`echo ${markerToken}>remote-pty-marker.txt`);
+      await remote.keyboard.press("Enter");
+      const markerPath = path.join(ownerPtyCwd, "remote-pty-marker.txt");
+      await expect
+        .poll(() => existsSync(markerPath), { timeout: 30_000 })
+        .toBe(true);
+      expect((await readFile(markerPath, "utf8")).trim()).toContain(markerToken);
+
+      await remote.keyboard.type(`echo viewer-sees-${markerToken}`);
+      await remote.keyboard.press("Enter");
+      await expect(
+        remote.locator(".integrated-terminal .xterm-rows"),
+      ).toContainText(`viewer-sees-${markerToken}`, { timeout: 30_000 });
+
+      // Closing the pane releases the remote session (the owner reaps it
+      // after its grace period).
+      await remote.getByRole("button", { name: "Close terminal" }).click();
+      await expect(
+        remote.getByLabel("Integrated terminal", { exact: true }),
       ).toHaveCount(0);
 
       // Security invariant ("no local fallback"): a remote window's PR
@@ -306,6 +351,7 @@ test.describe("federation remote window", () => {
       await app?.close();
       await gateway?.close();
       await fixture.cleanup();
+      await rm(ownerPtyCwd, { force: true, recursive: true });
     }
   });
 });

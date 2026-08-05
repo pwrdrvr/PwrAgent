@@ -20,9 +20,12 @@ import type {
 } from "../../shared/integrated-terminal";
 import { IntegratedTerminalService } from "../terminal/integrated-terminal-service";
 import type { IntegratedTerminalQuitSnapshot } from "../terminal/integrated-terminal-service";
+import { isFederationWindowWebContents } from "../window";
 import { subscribersForChannel } from "../window-channels";
+import { FederationTerminalBridge } from "./federation-terminal";
 
 let service: IntegratedTerminalService | undefined;
+let federationBridge: FederationTerminalBridge | undefined;
 
 function broadcastSessions(
   sessions: IntegratedTerminalSessionSummary[],
@@ -30,6 +33,10 @@ function broadcastSessions(
   for (const webContents of subscribersForChannel(
     INTEGRATED_TERMINAL_SESSIONS_CHANNEL,
   )) {
+    // A federation window mirrors REMOTE sessions (its bridge sends those
+    // directly); the local PTY list would let this machine's shells leak
+    // into a window branded as the peer.
+    if (isFederationWindowWebContents(webContents)) continue;
     webContents.send(INTEGRATED_TERMINAL_SESSIONS_CHANNEL, { sessions });
   }
 }
@@ -38,6 +45,7 @@ export function registerIntegratedTerminalIpcHandlers(): void {
   service ??= new IntegratedTerminalService({
     onSessionsChanged: broadcastSessions,
   });
+  federationBridge ??= new FederationTerminalBridge();
 
   ipcMain.removeHandler(INTEGRATED_TERMINAL_CREATE_CHANNEL);
   ipcMain.handle(
@@ -45,14 +53,25 @@ export function registerIntegratedTerminalIpcHandlers(): void {
     async (
       event,
       request: IntegratedTerminalCreateRequest,
-    ): Promise<IntegratedTerminalCreateResponse> =>
-      await service!.createOrAttach(request, event.sender),
+    ): Promise<IntegratedTerminalCreateResponse> => {
+      // A federation window NEVER falls through to a local spawn: the bridge
+      // routes to the owning instance and throws when the remote target or
+      // capability is missing.
+      if (isFederationWindowWebContents(event.sender)) {
+        return await federationBridge!.createOrAttach(request, event.sender);
+      }
+      return await service!.createOrAttach(request, event.sender);
+    },
   );
 
   ipcMain.removeHandler(INTEGRATED_TERMINAL_WRITE_CHANNEL);
   ipcMain.handle(
     INTEGRATED_TERMINAL_WRITE_CHANNEL,
-    (_event, request: IntegratedTerminalWriteRequest): void => {
+    (event, request: IntegratedTerminalWriteRequest): void => {
+      if (isFederationWindowWebContents(event.sender)) {
+        federationBridge?.write(request, event.sender);
+        return;
+      }
       service?.write(request);
     },
   );
@@ -60,7 +79,11 @@ export function registerIntegratedTerminalIpcHandlers(): void {
   ipcMain.removeHandler(INTEGRATED_TERMINAL_RESIZE_CHANNEL);
   ipcMain.handle(
     INTEGRATED_TERMINAL_RESIZE_CHANNEL,
-    (_event, request: IntegratedTerminalResizeRequest): void => {
+    (event, request: IntegratedTerminalResizeRequest): void => {
+      if (isFederationWindowWebContents(event.sender)) {
+        federationBridge?.resize(request, event.sender);
+        return;
+      }
       service?.resize(request);
     },
   );
@@ -68,7 +91,11 @@ export function registerIntegratedTerminalIpcHandlers(): void {
   ipcMain.removeHandler(INTEGRATED_TERMINAL_CLOSE_CHANNEL);
   ipcMain.handle(
     INTEGRATED_TERMINAL_CLOSE_CHANNEL,
-    (_event, request: IntegratedTerminalCloseRequest): void => {
+    (event, request: IntegratedTerminalCloseRequest): void => {
+      if (isFederationWindowWebContents(event.sender)) {
+        federationBridge?.close(request, event.sender);
+        return;
+      }
       service?.close(request);
     },
   );
@@ -76,13 +103,22 @@ export function registerIntegratedTerminalIpcHandlers(): void {
   ipcMain.removeHandler(INTEGRATED_TERMINAL_LIST_CHANNEL);
   ipcMain.handle(
     INTEGRATED_TERMINAL_LIST_CHANNEL,
-    (): IntegratedTerminalSessionSummary[] => service?.listSessions() ?? [],
+    (event): IntegratedTerminalSessionSummary[] => {
+      if (isFederationWindowWebContents(event.sender)) {
+        return federationBridge?.listSessions(event.sender) ?? [];
+      }
+      return service?.listSessions() ?? [];
+    },
   );
 
   ipcMain.removeHandler(INTEGRATED_TERMINAL_SET_PANEL_HIDDEN_CHANNEL);
   ipcMain.handle(
     INTEGRATED_TERMINAL_SET_PANEL_HIDDEN_CHANNEL,
-    (_event, request: IntegratedTerminalSetPanelHiddenRequest): void => {
+    (event, request: IntegratedTerminalSetPanelHiddenRequest): void => {
+      if (isFederationWindowWebContents(event.sender)) {
+        federationBridge?.setPanelHidden(request, event.sender);
+        return;
+      }
       service?.setPanelHidden(request);
     },
   );
@@ -97,6 +133,8 @@ export function disposeIntegratedTerminalIpcHandlers(): void {
   ipcMain.removeHandler(INTEGRATED_TERMINAL_SET_PANEL_HIDDEN_CHANNEL);
   service?.dispose();
   service = undefined;
+  federationBridge?.dispose();
+  federationBridge = undefined;
 }
 
 export function getIntegratedTerminalQuitSnapshot(): IntegratedTerminalQuitSnapshot {

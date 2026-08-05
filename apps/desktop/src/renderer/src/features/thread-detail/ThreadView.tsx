@@ -49,6 +49,7 @@ import {
   buildThreadIdentityKey,
   isBranchDrifted,
   readCodexEnvironmentActionRuns,
+  resolveThreadTerminalCwd,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { agentEventMatchesThread } from "../../lib/federated-thread-events";
@@ -1586,17 +1587,26 @@ export function ThreadView(props: ThreadViewProps) {
   const selectedThreadTerminalRunning = selectedThreadKey
     ? terminals.liveThreadKeys.has(selectedThreadKey)
     : false;
-  const selectedThreadTerminalCwd = selectedThread
-    ? resolveThreadTerminalCwd(selectedThread)
-    : undefined;
+  // A remote thread's terminal attaches to a PTY on the OWNING instance;
+  // the owner resolves shell + cwd from its own thread state, so the viewer
+  // sends no path at all.
+  const selectedThreadTerminalCwd =
+    selectedThread && !selectedThread.federation
+      ? resolveThreadTerminalCwd(selectedThread)
+      : undefined;
+  const selectedThreadTerminalDisabledReason = resolveRemoteTerminalDisabledReason(
+    selectedThread?.federation,
+  );
   const toggleSelectedThreadTerminal = useCallback(() => {
     if (!selectedThreadKey) return;
-    // No remote PTY exists in the federation protocol yet — opening the
-    // panel for a remote thread would run a shell on THIS machine while
-    // the window is branded as the peer instance.
-    if (selectedThread?.federation) return;
+    if (selectedThreadTerminalDisabledReason) return;
     terminals.togglePanel(selectedThreadKey, selectedThreadTerminalCwd);
-  }, [selectedThread, selectedThreadKey, selectedThreadTerminalCwd, terminals]);
+  }, [
+    selectedThreadKey,
+    selectedThreadTerminalCwd,
+    selectedThreadTerminalDisabledReason,
+    terminals,
+  ]);
   const suppressBranchDriftDialogRef = useRef(
     props.suppressBranchDriftDialog ?? false
   );
@@ -2990,6 +3000,7 @@ export function ThreadView(props: ThreadViewProps) {
           railOpen: contextRailPinned,
           terminalOpen: selectedThreadTerminalOpen,
           terminalRunning: selectedThreadTerminalRunning,
+          terminalDisabledReason: selectedThreadTerminalDisabledReason,
           onToggleSidebar,
           onToggleRail: () => onContextRailPinnedChange(!contextRailPinned),
           onToggleTerminal: toggleSelectedThreadTerminal,
@@ -3508,13 +3519,26 @@ function threadDirectoryPaths(thread: NavigationThreadSummary): string[] {
   return thread.projectKey ? [thread.projectKey, ...linkedDirectoryPaths] : linkedDirectoryPaths;
 }
 
-function resolveThreadTerminalCwd(
-  thread: NavigationThreadSummary,
+/**
+ * Why the remote terminal toggle is inert for a federated thread — or
+ * undefined when it can open (always undefined for local threads). Mirrors
+ * the owner-side gate: the peer must be connected DIRECTLY and must have
+ * granted `remote_pty`.
+ */
+function resolveRemoteTerminalDisabledReason(
+  federation: NavigationThreadSummary["federation"],
 ): string | undefined {
-  const directory =
-    thread.linkedDirectories.find((candidate) => candidate.kind === "worktree") ??
-    thread.linkedDirectories.find((candidate) => candidate.kind === "local") ??
-    thread.linkedDirectories[0];
-
-  return directory?.worktreePath ?? directory?.path ?? thread.projectKey;
+  if (!federation) {
+    return undefined;
+  }
+  if (
+    federation.peerStatus !== undefined &&
+    federation.peerStatus !== "connected"
+  ) {
+    return `Remote terminal unavailable: ${federation.instanceLabel} is disconnected.`;
+  }
+  if (!federation.capabilities?.includes("remote_pty")) {
+    return `Remote terminal not granted by ${federation.instanceLabel}.`;
+  }
+  return undefined;
 }

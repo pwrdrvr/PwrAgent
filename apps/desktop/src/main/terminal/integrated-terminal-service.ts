@@ -116,25 +116,16 @@ export class IntegratedTerminalService {
     let cwd: string;
     let shell: { file: string; args: string[] };
     try {
-      const settings = getDesktopSettingsService();
-      const env = await settings.resolveTerminalSpawnEnvAsync();
-      cwd = resolveTerminalCwd(request.cwd);
-      shell = resolveTerminalShell({
-        env,
+      const spawned = await spawnTerminalPty({
+        cwd: request.cwd,
+        cols: request.cols,
+        rows: request.rows,
         platform: this.platform,
-        windowsShell: settings.resolveIntegratedTerminalWindowsShell(),
+        loadNodePty: this.loadNodePty,
       });
-      const nodePty = await this.loadNodePty();
-      ptyProcess = nodePty.spawn(shell.file, shell.args, {
-        name: "xterm-256color",
-        cols: clampInteger(request.cols, DEFAULT_COLUMNS, 2, MAX_COLUMNS),
-        rows: clampInteger(request.rows, DEFAULT_ROWS, 2, MAX_ROWS),
-        cwd,
-        env: buildPwrAgentChildProcessEnv(env, {
-          TERM: "xterm-256color",
-          COLORTERM: "truecolor",
-        }),
-      });
+      ptyProcess = spawned.pty;
+      cwd = spawned.cwd;
+      shell = spawned.shell;
     } catch (error) {
       const message = terminalStartErrorMessage(error);
       this.logger.warn("start-failed", {
@@ -467,6 +458,57 @@ function normalizeTerminalProcessName(value: string): string {
 
 async function loadNodePty(): Promise<Pick<NodePtyModule, "spawn">> {
   return await import("node-pty");
+}
+
+export type SpawnedTerminalPty = {
+  pty: IPty;
+  cwd: string;
+  shell: { file: string; args: string[] };
+};
+
+/**
+ * The one PTY spawn core: settings-derived login environment, cwd validation
+ * with a home-directory fallback, per-platform shell resolution, and clamped
+ * dimensions. Shared by the local integrated-terminal service and the
+ * federation remote-PTY service so a remote viewer's shell is spawned with
+ * exactly the hardening and environment the local panel gets.
+ */
+export async function spawnTerminalPty(params: {
+  cwd?: string;
+  cols: number;
+  rows: number;
+  platform?: NodeJS.Platform;
+  loadNodePty?: () => Promise<Pick<NodePtyModule, "spawn">>;
+}): Promise<SpawnedTerminalPty> {
+  const platform = params.platform ?? process.platform;
+  const settings = getDesktopSettingsService();
+  const env = await settings.resolveTerminalSpawnEnvAsync();
+  const cwd = resolveTerminalCwd(params.cwd);
+  const shell = resolveTerminalShell({
+    env,
+    platform,
+    windowsShell: settings.resolveIntegratedTerminalWindowsShell(),
+  });
+  const nodePty = await (params.loadNodePty ?? loadNodePty)();
+  const pty = nodePty.spawn(shell.file, shell.args, {
+    name: "xterm-256color",
+    cols: clampTerminalColumns(params.cols),
+    rows: clampTerminalRows(params.rows),
+    cwd,
+    env: buildPwrAgentChildProcessEnv(env, {
+      TERM: "xterm-256color",
+      COLORTERM: "truecolor",
+    }),
+  });
+  return { pty, cwd, shell };
+}
+
+export function clampTerminalColumns(value: number): number {
+  return clampInteger(value, DEFAULT_COLUMNS, 2, MAX_COLUMNS);
+}
+
+export function clampTerminalRows(value: number): number {
+  return clampInteger(value, DEFAULT_ROWS, 2, MAX_ROWS);
 }
 
 function terminalStartErrorMessage(error: unknown): string {

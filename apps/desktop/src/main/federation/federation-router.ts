@@ -16,6 +16,13 @@ export type FederationRouterConnection = {
 
 export type FederationRequestHandler = (
   envelope: FederationRequestEnvelope,
+  /**
+   * The authenticated peer the envelope arrived from. For direct connections
+   * this matches `envelope.sourceInstanceId`; for gateway-relayed requests it
+   * is the relaying gateway. Handlers that must be point-to-point (remote
+   * PTY) compare the two — the envelope field alone is peer-asserted.
+   */
+  sourcePeerId?: FederationInstanceId,
 ) => Promise<unknown> | unknown;
 
 export type FederationRouteResult =
@@ -137,7 +144,7 @@ export class FederationRouter {
     }
 
     try {
-      const result = await handler(params.envelope);
+      const result = await handler(params.envelope, params.sourcePeerId);
       const response: FederationResponseEnvelope = {
         id: `${params.envelope.id}:response`,
         kind: "response",

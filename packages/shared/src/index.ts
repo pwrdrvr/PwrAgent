@@ -37,6 +37,7 @@ export * from "./renderer-payload-boundary";
 export * from "./review-branches";
 export * from "./subthreads";
 export * from "./thread-pins";
+export * from "./thread-terminal";
 export * from "./thread-titles";
 export * from "./token-usage-pricing";
 export * from "./worktree-paths";

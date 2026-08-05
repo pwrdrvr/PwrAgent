@@ -70,6 +70,10 @@ import { federationWindowTargetAdditionalArguments } from "../shared/federation-
  * window rendering LOCAL settings reads as the peer's settings.
  */
 const federationWindowWebContentsIds = new Set<number>();
+const federationWindowTargetsByWebContentsId = new Map<
+  number,
+  FederationRemoteTarget
+>();
 
 export function isFederationWindowWebContents(
   webContents: Electron.WebContents | undefined,
@@ -77,6 +81,19 @@ export function isFederationWindowWebContents(
   // Tolerate absent senders (unit-test harness events, destroyed frames):
   // an unidentifiable sender is treated as a normal local window.
   return webContents ? federationWindowWebContentsIds.has(webContents.id) : false;
+}
+
+/**
+ * The remote instance a federation window fronts. Main-process IPC branches
+ * (remote PTY routing) key off this instead of trusting anything the
+ * renderer sends — the target was fixed when the window was created.
+ */
+export function federationWindowTargetForWebContents(
+  webContents: Electron.WebContents | undefined,
+): FederationRemoteTarget | undefined {
+  return webContents
+    ? federationWindowTargetsByWebContentsId.get(webContents.id)
+    : undefined;
 }
 
 const isDevelopment = process.env.NODE_ENV !== "production";
@@ -424,8 +441,13 @@ export function createMainWindow(options?: {
   if (options?.federationTarget) {
     const webContentsId = window.webContents.id;
     federationWindowWebContentsIds.add(webContentsId);
+    federationWindowTargetsByWebContentsId.set(
+      webContentsId,
+      options.federationTarget,
+    );
     window.once("closed", () => {
       federationWindowWebContentsIds.delete(webContentsId);
+      federationWindowTargetsByWebContentsId.delete(webContentsId);
     });
     // The renderer's static <title> (index.html) replaces the
     // BrowserWindow title on load, which collapses every window to the

@@ -17,6 +17,7 @@ import type {
   NavigationLaunchpadDefaults,
   NavigationLaunchpadDraft,
   NavigationSnapshot,
+  FederationPeerSummary,
   NavigationThreadGitWorkingStateUpdatedNotification,
   NavigationThreadSummary,
   PrSummary,
@@ -32,6 +33,7 @@ import {
   buildThreadIdentityKey,
   compareThreadsByCreatedAtDesc,
   insertSubthreadIdAfter,
+  isRemoteFederationTarget,
   isSubthreadLaunchpadKey,
   shortenDerivedThreadTitle,
   sortSubthreadSummaries,
@@ -3208,6 +3210,28 @@ export function useThreadNavigation(
         }
         setState((current) => ({
           ...current,
+          // Patch the live peer status onto the affected rows so surfaces
+          // keyed off it (the remote terminal toggle) disable immediately
+          // instead of waiting for the next snapshot refresh.
+          response: current.response
+            ? {
+                ...current.response,
+                threads: current.response.threads.map((thread) =>
+                  thread.federation &&
+                  isRemoteFederationTarget(thread.federation.ref.target) &&
+                  thread.federation.ref.target.instanceId === params.instanceId
+                    ? {
+                        ...thread,
+                        federation: {
+                          ...thread.federation,
+                          peerStatus:
+                            params.status as FederationPeerSummary["status"],
+                        },
+                      }
+                    : thread,
+                ),
+              }
+            : current.response,
           loading: false,
           refreshing: false,
           error: params.unavailableReason ??
