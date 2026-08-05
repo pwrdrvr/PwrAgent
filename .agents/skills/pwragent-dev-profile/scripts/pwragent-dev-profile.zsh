@@ -171,6 +171,13 @@ state_db_path() {
   print -r -- "${pwragent_home:A}/profiles/$profile/state/state.db"
 }
 
+readonly_state_db_uri() {
+  local value="${state_db//\%/%25}"
+  value="${value//\?/%3F}"
+  value="${value//\#/%23}"
+  print -r -- "file:$value?mode=ro"
+}
+
 launch_job_label() {
   print -r -- "local.pwragent.dev-profile.$profile.$root_hash_value"
 }
@@ -198,12 +205,12 @@ cleanup_exited_launch_job() {
 
 runtime_tables_ready() {
   [[ -f "$state_db" ]] || return 1
-  sqlite3 -readonly "$state_db" "SELECT cwd_hash FROM app_runtime_instances LIMIT 0;" >/dev/null 2>&1
+  sqlite3 "$(readonly_state_db_uri)" "SELECT cwd_hash FROM app_runtime_instances LIMIT 0;" >/dev/null 2>&1
 }
 
 query_root_instances() {
   runtime_tables_ready || return 1
-  sqlite3 -readonly -separator $'\t' "$state_db" \
+  sqlite3 -separator $'\t' "$(readonly_state_db_uri)" \
     "SELECT instance_id, process_id, coalesce(cwd_hint, ''), heartbeat_at,
             desired_messaging_enabled, effective_messaging_enabled,
             coalesce(disabled_reason, '')
@@ -216,7 +223,7 @@ query_root_instances() {
 
 query_profile_instances() {
   runtime_tables_ready || return 1
-  sqlite3 -readonly -separator $'\t' "$state_db" \
+  sqlite3 -separator $'\t' "$(readonly_state_db_uri)" \
     "SELECT instance_id, process_id, coalesce(cwd_hint, ''), coalesce(cwd_hash, ''),
             heartbeat_at, desired_messaging_enabled, effective_messaging_enabled,
             coalesce(disabled_reason, ''), coalesce(exited_at, '')
@@ -228,7 +235,7 @@ query_profile_instances() {
 
 query_active_lease() {
   runtime_tables_ready || return 1
-  sqlite3 -readonly -separator $'\t' "$state_db" \
+  sqlite3 -separator $'\t' "$(readonly_state_db_uri)" \
     "SELECT l.owner_instance_id, l.heartbeat_at, l.expires_at,
             coalesce(i.process_id, ''), coalesce(i.cwd_hint, ''),
             coalesce(i.cwd_hash, ''), coalesce(i.effective_messaging_enabled, 0)
@@ -281,6 +288,45 @@ describe_matching_processes() {
   for pid in $(matching_dev_pids); do
     ps -p "$pid" -o pid=,ppid=,command= 2>/dev/null || true
   done
+}
+
+electron_app_path_from_command() {
+  local command="$1"
+  local app_path
+
+  [[ "$command" == *"/Electron.app/Contents/MacOS/Electron"* ]] || return 1
+  [[ "$command" != *" --type="* ]] || return 1
+  app_path="${command%%/Contents/MacOS/Electron*}"
+  [[ "$app_path" == *"/Electron.app" ]] || return 1
+  print -r -- "$app_path"
+}
+
+single_electron_window_target() {
+  (( $# == 1 )) || return 1
+  print -r -- "$1"
+}
+
+describe_dev_window_target() {
+  local pid command app_path renderer_url target
+  local -a candidates
+
+  renderer_url="$(sed -n 's/.*locationHref=\([^ ]*\).*/\1/p' "$log_path" 2>/dev/null | tail -n 1)"
+  for pid in $(matching_dev_pids); do
+    command="$(process_command "$pid")"
+    app_path="$(electron_app_path_from_command "$command" 2>/dev/null || true)"
+    [[ -n "$app_path" ]] || continue
+    candidates+=("$pid"$'\t'"$app_path")
+  done
+
+  target="$(single_electron_window_target "${candidates[@]}" 2>/dev/null || true)"
+  if [[ -z "$target" ]]; then
+    say "could not resolve an unambiguous checkout-local Electron window target (${#candidates[@]} main-process candidates)"
+    return 1
+  fi
+
+  pid="${target%%$'\t'*}"
+  app_path="${target#*$'\t'}"
+  say "Computer Use target pid=$pid appPath=$app_path expectedWindowTitle=PwrAgnt rendererUrl=${renderer_url:-unknown}"
 }
 
 describe_root_instances() {
@@ -339,6 +385,7 @@ write_status() {
   say "$profile profile app instances for $root:"
   describe_root_instances
   describe_active_lease || true
+  describe_dev_window_target || true
 
   processes="$(describe_matching_processes)"
   if [[ -n "$processes" ]]; then
@@ -438,6 +485,7 @@ verify_app() {
       say "log: $log_path"
       describe_root_instances
       describe_active_lease || true
+      describe_dev_window_target || true
       return 0
     fi
 
@@ -508,6 +556,13 @@ run_self_test() {
   assert_success "root env-style assignment" command_mentions_root "PWD=/Users/example/PwrAgnt"
   assert_failure "sibling checkout prefix" command_mentions_root "/Users/example/PwrAgnt-old/apps/desktop"
   assert_failure "sibling checkout suffix" command_mentions_root "/Users/example/PwrAgnt2/apps/desktop"
+  state_db="/Users/example/Pwr Agent/state#dev?.db"
+  [[ "$(readonly_state_db_uri)" == "file:/Users/example/Pwr Agent/state%23dev%3F.db?mode=ro" ]] || die "self-test failed: unexpected readonly state DB URI"
+  [[ "$(electron_app_path_from_command "/Users/example/Pwr Agent/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron .")" == "/Users/example/Pwr Agent/node_modules/electron/dist/Electron.app" ]] || die "self-test failed: unexpected Electron app path"
+  assert_failure "Electron helper is not a main app target" electron_app_path_from_command "/Users/example/Electron.app/Contents/MacOS/Electron --type=renderer"
+  [[ "$(single_electron_window_target $'101\t/Users/example/Electron.app')" == $'101\t/Users/example/Electron.app' ]] || die "self-test failed: unexpected single Electron target"
+  assert_failure "missing Electron main target is ambiguous" single_electron_window_target
+  assert_failure "multiple Electron main targets are ambiguous" single_electron_window_target $'101\t/Users/example/Electron.app' $'202\t/Users/example/Electron.app'
   [[ "$root_hash_value" == "c976f17804e892f9" ]] || die "self-test failed: unexpected root hash $root_hash_value"
 
   say "self-test passed"

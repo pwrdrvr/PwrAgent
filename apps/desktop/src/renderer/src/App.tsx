@@ -1106,12 +1106,26 @@ function DesktopAppShell(props: {
   // Window-level masthead actions (Automations / Settings / New Thread).
   // Shared by the sidebar masthead's home (AppTitleBar on Windows) and the
   // thread-header relocation when the sidebar is hidden on macOS/Linux.
+  const addProjectDirectory = async (): Promise<void> => {
+    setMainView("thread");
+    // The hidden-sidebar masthead is the only visible home for this action in
+    // that layout. Restore the sidebar before opening the picker so either the
+    // newly registered directory or a validation error has a visible result.
+    if (sidebarHidden) {
+      setSidebarHiddenPersisted(false);
+    }
+    await navigation.addProjectDirectory();
+  };
   const mastheadActions = {
+    addingProjectDirectory: navigation.pickingDirectory,
     automationsActive: mainView === "automations",
     settingsActive: mainView === "settings",
     threadSearchActive: mainView === "search",
     creatingThread: Boolean(navigation.creatingThread),
     newThreadDirectoryLabel: navigation.newThreadDirectoryLabel,
+    onAddProjectDirectory: readRendererFederationTarget()
+      ? undefined
+      : addProjectDirectory,
     onOpenAutomations: () => {
       setMainView("automations");
     },
@@ -1486,9 +1500,11 @@ function DesktopAppShell(props: {
         style={{ "--sidebar-width": `${sidebarWidthRef.current}px` } as CSSProperties}
       >
         <Sidebar
+          addingProjectDirectory={navigation.pickingDirectory}
           backends={backendSummaries.backends}
           browseMode={navigation.browseMode}
           createThreadError={navigation.createThreadError}
+          pickDirectoryError={navigation.pickDirectoryError}
           creatingThread={navigation.creatingThread}
           directories={navigation.directories}
           error={navigation.error}
@@ -1526,6 +1542,9 @@ function DesktopAppShell(props: {
               forceWorkspace: true,
             });
           }}
+          onAddProjectDirectory={readRendererFederationTarget()
+            ? undefined
+            : addProjectDirectory}
           onCreateSubthread={async (thread, mode) => {
             setMainView("thread");
             await navigation.createSubthread(thread, mode);

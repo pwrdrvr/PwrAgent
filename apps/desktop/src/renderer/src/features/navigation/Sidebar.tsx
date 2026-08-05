@@ -73,6 +73,7 @@ type SidebarProps = {
   backends: BackendSummary[];
   browseMode: BrowseMode;
   createThreadError?: string;
+  pickDirectoryError?: string;
   directories: NavigationDirectorySummary[];
   error?: string;
   inboxThreads?: NavigationThreadSummary[];
@@ -111,6 +112,8 @@ type SidebarProps = {
   onBrowseModeChange: (browseMode: BrowseMode) => void;
   onCreateThread: () => Promise<void>;
   onCreateThreadWithoutDirectory?: () => Promise<void>;
+  onAddProjectDirectory?: () => Promise<void>;
+  addingProjectDirectory?: boolean;
   /** Directory the default New Thread action resolves to (flyout label). */
   newThreadDirectoryLabel?: string;
   onCreateSubthread?: (
@@ -1396,8 +1399,10 @@ export function Sidebar(props: SidebarProps) {
           </MastheadActionButton>
           )}
           <NewThreadButton
+            addingProjectDirectory={props.addingProjectDirectory}
             creatingThread={Boolean(props.creatingThread)}
             directoryLabel={props.newThreadDirectoryLabel}
+            onAddProjectDirectory={props.onAddProjectDirectory}
             onCreateThread={() => props.onCreateThread()}
             onCreateThreadWithoutDirectory={props.onCreateThreadWithoutDirectory}
           />
@@ -1477,6 +1482,8 @@ export function Sidebar(props: SidebarProps) {
 
       {props.createThreadError ? (
         <p className="sidebar-error sidebar-error--masthead">{props.createThreadError}</p>
+      ) : props.pickDirectoryError ? (
+        <p className="sidebar-error sidebar-error--masthead">{props.pickDirectoryError}</p>
       ) : props.launchpadError ? (
         <p className="sidebar-error sidebar-error--masthead">{props.launchpadError}</p>
       ) : props.archiveThreadError ? (

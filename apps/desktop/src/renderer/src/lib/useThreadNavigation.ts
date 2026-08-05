@@ -2407,6 +2407,8 @@ export function useThreadNavigation(
   pickAndRegisterDirectory: (
     preferredBackend?: AppServerBackendKind,
   ) => Promise<void>;
+  /** Register a user-curated project, keep the current selection, and reveal the Directories lens. */
+  addProjectDirectory: () => Promise<void>;
   /** Existing-thread picker: OS dialog -> validate -> attach as an extra linked directory. */
   pickAndAttachDirectoryToSelectedThread: () => Promise<void>;
   /**
@@ -4930,6 +4932,13 @@ export function useThreadNavigation(
     }
   }, [desktopApi]);
 
+  const addProjectDirectory = useCallback(async (): Promise<void> => {
+    const picked = await pickDirectoryForReference();
+    if (picked) {
+      updateBrowseMode("directories");
+    }
+  }, [pickDirectoryForReference, updateBrowseMode]);
+
   const pickAndAttachDirectoryToSelectedThread = useCallback(async (): Promise<void> => {
     if (
       !desktopApi?.pickDirectoryFromDisk ||
@@ -6505,6 +6514,7 @@ export function useThreadNavigation(
     openDirectoryLaunchpad,
     openWorkspaceLaunchpad,
     pickAndRegisterDirectory,
+    addProjectDirectory,
     pickAndAttachDirectoryToSelectedThread,
     pickDirectoryForReference,
     attachDirectoryPathsToThread,

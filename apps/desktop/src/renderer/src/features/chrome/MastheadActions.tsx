@@ -10,12 +10,14 @@ import { NewThreadButton } from "./NewThreadButton";
  * styling so every placement reads identically.
  */
 export type MastheadActionsProps = {
+  addingProjectDirectory?: boolean;
   automationsActive?: boolean;
   settingsActive?: boolean;
   threadSearchActive?: boolean;
   creatingThread?: boolean;
   /** Directory the default New Thread action resolves to (flyout label). */
   newThreadDirectoryLabel?: string;
+  onAddProjectDirectory?: () => void | Promise<void>;
   onOpenAutomations?: () => void;
   onOpenSettings?: () => void;
   onToggleThreadSearch?: () => void;
@@ -56,8 +58,10 @@ export function MastheadActions(props: MastheadActionsProps): ReactElement {
         <SettingsIcon size={16} strokeWidth={1.5} aria-hidden="true" />
       </button>
       <NewThreadButton
+        addingProjectDirectory={props.addingProjectDirectory}
         creatingThread={props.creatingThread}
         directoryLabel={props.newThreadDirectoryLabel}
+        onAddProjectDirectory={props.onAddProjectDirectory}
         onCreateThread={() => props.onCreateThread?.()}
         onCreateThreadWithoutDirectory={props.onCreateThreadWithoutDirectory}
       />

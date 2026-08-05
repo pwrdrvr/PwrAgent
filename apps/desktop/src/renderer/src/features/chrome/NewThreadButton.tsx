@@ -13,27 +13,29 @@ import { useViewportTooltip } from "../../lib/useViewportTooltip";
  *
  * Clicking the button keeps its original behavior: start a new thread in the
  * directory the navigation context resolves to (`onCreateThread`). Hovering or
- * focusing the button reveals a flyout that makes the two outcomes explicit:
+ * focusing the button reveals a flyout that makes the available outcomes
+ * explicit:
  *
  *   1. New chat in <directory>     → `onCreateThread` (context default)
  *   2. New chat without a directory → `onCreateThreadWithoutDirectory`
+ *   3. Add a Project Directory…     → track a repo without starting a chat
  *
- * The flyout only renders when there's a directory to contrast against the
- * workspace choice (`directoryLabel` set) and a directory-less handler exists.
- * When the context already resolves to the directory-less workspace, the two
- * items would be identical, so the button falls back to a plain "New thread"
- * tooltip — matching the hover affordance of its masthead siblings.
+ * The flyout renders when there's either a meaningful directory choice or an
+ * explicit project-registration action. That keeps "Add a Project Directory…"
+ * reachable even when the current context is already directory-less.
  *
  * Shared by the sidebar masthead and the relocated thread-header / Windows
  * title-bar placements so every surface reads identically.
  */
 export type NewThreadButtonProps = {
+  addingProjectDirectory?: boolean;
   creatingThread?: boolean;
   /**
    * Label of the directory the default action resolves to, or undefined when
    * that's the directory-less workspace (no meaningful flyout to show).
    */
   directoryLabel?: string;
+  onAddProjectDirectory?: () => void | Promise<void>;
   onCreateThread: () => void | Promise<void>;
   onCreateThreadWithoutDirectory?: () => void | Promise<void>;
 };
@@ -45,9 +47,10 @@ export function NewThreadButton(props: NewThreadButtonProps): ReactElement {
   const menuId = useId();
   const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
 
-  const hasFlyout = Boolean(
+  const hasDirectoryChoice = Boolean(
     props.directoryLabel && props.onCreateThreadWithoutDirectory,
   );
+  const hasFlyout = hasDirectoryChoice || Boolean(props.onAddProjectDirectory);
   const menuOpen = open && hasFlyout && !props.creatingThread;
 
   // With no flyout to reveal, keep a plain "New thread" tooltip so the button
@@ -135,28 +138,63 @@ export function NewThreadButton(props: NewThreadButtonProps): ReactElement {
             role="menu"
             aria-label="New thread options"
           >
-            <button
-              type="button"
-              role="menuitem"
-              className="new-thread-menu__item"
-              onClick={() => {
-                setOpen(false);
-                void props.onCreateThread();
-              }}
-            >
-              New chat in {props.directoryLabel}
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              className="new-thread-menu__item"
-              onClick={() => {
-                setOpen(false);
-                void props.onCreateThreadWithoutDirectory?.();
-              }}
-            >
-              New chat without a directory
-            </button>
+            {hasDirectoryChoice ? (
+              <>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="new-thread-menu__item"
+                  onClick={() => {
+                    setOpen(false);
+                    void props.onCreateThread();
+                  }}
+                >
+                  New chat in {props.directoryLabel}
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="new-thread-menu__item"
+                  onClick={() => {
+                    setOpen(false);
+                    void props.onCreateThreadWithoutDirectory?.();
+                  }}
+                >
+                  New chat without a directory
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                role="menuitem"
+                className="new-thread-menu__item"
+                onClick={() => {
+                  setOpen(false);
+                  void props.onCreateThread();
+                }}
+              >
+                New chat without a directory
+              </button>
+            )}
+            {props.onAddProjectDirectory ? (
+              <>
+                <div className="new-thread-menu__separator" role="separator" />
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="new-thread-menu__item"
+                  disabled={props.addingProjectDirectory}
+                  onClick={() => {
+                    setOpen(false);
+                    void props.onAddProjectDirectory?.();
+                  }}
+                >
+                  {props.addingProjectDirectory
+                    ? "Adding Project Directory…"
+                    : "Add a Project Directory…"}
+                </button>
+              </>
+            ) : null}
           </div>
         </div>
       ) : null}

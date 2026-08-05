@@ -286,6 +286,96 @@ describe("App", () => {
     expect(gitSettingsButton).toHaveAttribute("aria-current", "page");
   });
 
+  it("reveals the sidebar when adding a project from the hidden-sidebar masthead", async () => {
+    const pickDirectoryFromDisk = vi.fn(async () => ({
+      canceled: false as const,
+      path: "/Users/me/repos/PwrAgent",
+    }));
+    const registerDirectoryFromDisk = vi.fn(async () => ({
+      ok: true as const,
+      directoryPath: "/Users/me/repos/PwrAgent",
+      directoryKey: "directory:/Users/me/repos/PwrAgent",
+      directoryLabel: "PwrAgent",
+      currentBranch: "main",
+      launchpad: {
+        directoryKey: "directory:/Users/me/repos/PwrAgent",
+        directoryKind: "directory" as const,
+        directoryLabel: "PwrAgent",
+        directoryPath: "/Users/me/repos/PwrAgent",
+        backend: "codex" as const,
+        executionMode: "default" as const,
+        prompt: "",
+        workMode: "local" as const,
+        createdAt: 1,
+        updatedAt: 1,
+        registeredAt: 1,
+      },
+      defaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: {
+        platform: "darwin",
+        listBackends: async () => ({
+          fetchedAt: Date.now(),
+          backends: [],
+        }),
+        getNavigationSnapshot: async () => ({
+          backend: "all" as const,
+          fetchedAt: Date.now(),
+          unchanged: false,
+          inboxThreadKeys: [],
+          threads: [],
+          directories: [],
+          launchpadDefaults: {
+            backend: "codex" as const,
+            executionMode: "default" as const,
+          },
+        }),
+        pickDirectoryFromDisk,
+        registerDirectoryFromDisk,
+        onAgentEvent: () => () => undefined,
+      },
+    });
+
+    const { container } = render(<App />);
+    await clickButton("Hide sidebar");
+
+    const shell = container.querySelector(".app-shell");
+    expect(shell).toHaveAttribute("data-sidebar-hidden", "true");
+
+    const relocatedMasthead = await waitFor(() => {
+      const masthead = container.querySelector<HTMLElement>(
+        ".thread-header__masthead",
+      );
+      expect(masthead).not.toBeNull();
+      return masthead!;
+    });
+    fireEvent.mouseEnter(
+      within(relocatedMasthead).getByRole("button", { name: "New thread" }),
+    );
+    fireEvent.click(
+      await within(relocatedMasthead).findByRole("menuitem", {
+        name: "Add a Project Directory…",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(pickDirectoryFromDisk).toHaveBeenCalledTimes(1);
+      expect(registerDirectoryFromDisk).toHaveBeenCalledTimes(1);
+      expect(shell).not.toHaveAttribute("data-sidebar-hidden");
+    });
+    expect(
+      within(screen.getByRole("complementary", { name: "Threads" })).getByText(
+        "PwrAgent",
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("surfaces Codex config warnings and can trust the indicated project", async () => {
     const agentEventListeners = new Set<(event: AgentEvent) => void>();
     const trustCodexProject = vi.fn(

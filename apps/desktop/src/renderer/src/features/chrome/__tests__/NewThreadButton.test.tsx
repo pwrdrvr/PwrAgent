@@ -56,6 +56,32 @@ describe("NewThreadButton", () => {
     expect(onCreateThread).not.toHaveBeenCalled();
   });
 
+  it("offers project registration without starting or selecting a chat", async () => {
+    const onAddProjectDirectory = vi.fn();
+    const onCreateThread = vi.fn();
+    render(
+      <NewThreadButton
+        onAddProjectDirectory={onAddProjectDirectory}
+        onCreateThread={onCreateThread}
+      />,
+    );
+
+    const button = screen.getByRole("button", { name: "New thread" });
+    fireEvent.mouseEnter(button.parentElement as HTMLElement);
+
+    expect(
+      await screen.findByRole("menuitem", {
+        name: "New chat without a directory",
+      }),
+    ).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Add a Project Directory…" }),
+    );
+
+    expect(onAddProjectDirectory).toHaveBeenCalledTimes(1);
+    expect(onCreateThread).not.toHaveBeenCalled();
+  });
+
   it("closes the flyout on Escape while a menu item is focused (regression)", async () => {
     render(
       <NewThreadButton

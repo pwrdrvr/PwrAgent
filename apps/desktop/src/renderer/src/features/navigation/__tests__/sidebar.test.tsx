@@ -796,6 +796,7 @@ describe("Sidebar", () => {
   });
 
   it("reveals the New Thread flyout on hover when a directory is in context", async () => {
+    const onAddProjectDirectory = vi.fn(async () => undefined);
     const onCreateThread = vi.fn(async () => undefined);
     const onCreateThreadWithoutDirectory = vi.fn(async () => undefined);
 
@@ -812,6 +813,7 @@ describe("Sidebar", () => {
         newThreadDirectoryLabel="PwrAgnt"
         selectedItemKey="codex:thread-1"
         threads={[sharedThread]}
+        onAddProjectDirectory={onAddProjectDirectory}
         onBrowseModeChange={() => undefined}
         onCreateThread={onCreateThread}
         onCreateThreadWithoutDirectory={onCreateThreadWithoutDirectory}
@@ -839,6 +841,14 @@ describe("Sidebar", () => {
       await screen.findByRole("menuitem", { name: "New chat in PwrAgnt" })
     );
     expect(onCreateThread).toHaveBeenCalledTimes(1);
+
+    fireEvent.mouseEnter(newThreadButton.parentElement as HTMLElement);
+    fireEvent.click(
+      await screen.findByRole("menuitem", {
+        name: "Add a Project Directory…",
+      }),
+    );
+    expect(onAddProjectDirectory).toHaveBeenCalledTimes(1);
   });
 
   it("groups sub-threads under their parent and persists collapse clicks", () => {

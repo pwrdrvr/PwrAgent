@@ -98,9 +98,22 @@ pnpm dev
 ### Targeting an Existing Electron App
 
 - Confirm the intended checkout/profile with the dev-profile skill before
-  driving a window. With Computer Use, select an entry that is already running
-  (use the exact id returned by app discovery when multiple Electron instances
-  exist); do not use app lookup as an implicit launcher.
+  driving a window. Dev builds run as the generic `Electron` process and share
+  the `com.github.Electron` bundle id with every other unsigned Electron app.
+  **Never target either generic identity.** Do not target the installed
+  `com.pwrdrvr.pwragent` bundle either: it is a packaged build and does not
+  contain the checkout's code.
+- Launch or inspect with the project-local dev-profile skill. Its successful
+  `status` / `restart` / `verify` output includes a `Computer Use target` line
+  with the checkout-local Electron main PID, exact `Electron.app` path,
+  expected native window title (`PwrAgnt`), and renderer URL/port. For Computer
+  Use, target that exact app path, then confirm the returned window title and
+  AX URL match before clicking anything. The title alone is not unique when
+  another PwrAgent checkout is open; the port alone is not enough without the
+  checkout-local executable and `--app-path` process evidence.
+- If the target cannot be resolved unambiguously, stop instead of guessing.
+  An ambiguous lookup can raise or operate a sibling Pwr app, another checkout,
+  or an unrelated project's broken default Electron window.
 - With a Codex browser/Electron controller, select and reuse the existing
   PwrAgent Electron target and its window/page binding. With persistent
   `node_repl` Playwright, reuse the existing `electronApp` and `appWindow`
