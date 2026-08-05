@@ -3242,6 +3242,71 @@ describe("Sidebar", () => {
     ]);
   });
 
+  it("marks a read thread unread from the thread context menu", async () => {
+    const readThread: NavigationThreadSummary = {
+      ...sharedThread,
+      inbox: {
+        inInbox: false,
+        lastSeenUpdatedAt: sharedThread.updatedAt,
+      },
+    };
+    const onMarkThreadUnread = vi.fn(async () => undefined);
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[readThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[readThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onMarkThreadUnread={onMarkThreadUnread}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Open thread actions" }));
+    await clickElement(screen.getByRole("menuitem", { name: "Mark Unread" }));
+
+    expect(onMarkThreadUnread).toHaveBeenCalledWith(readThread);
+    expect(screen.queryByRole("menuitem", { name: "Mark Unread" }))
+      .not.toBeInTheDocument();
+  });
+
+  it("omits Mark Unread for an already-unread thread", () => {
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        createThreadError={undefined}
+        directories={directories}
+        inboxThreads={[updatedSinceSeenThread]}
+        launchpadError={undefined}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-updated"
+        threads={[updatedSinceSeenThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onMarkThreadUnread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Open thread actions" }));
+
+    expect(screen.queryByRole("menuitem", { name: "Mark Unread" }))
+      .not.toBeInTheDocument();
+  });
+
   it("flips the thread actions menu above the overflow button near the viewport bottom", () => {
     Object.defineProperty(window, "innerHeight", {
       configurable: true,

@@ -555,6 +555,123 @@ describe("useThreadNavigation", () => {
     });
   });
 
+  it("marks a remote read thread unread until the user returns to it", async () => {
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "remote-instance",
+    };
+    const markThreadSeen = vi.fn(
+      async (
+        request: Parameters<NonNullable<DesktopApi["markThreadSeen"]>>[0],
+      ) => ({
+        backend: request.backend ?? "codex",
+        threadId: request.threadId,
+        seenAt: Date.now(),
+        seenUpdatedAt: request.seenUpdatedAt,
+      }),
+    );
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [
+        {
+          id: "thread-read",
+          title: "Read thread",
+          titleSource: "explicit" as const,
+          summary: "Read thread summary",
+          source: "codex" as const,
+          linkedDirectories: [],
+          federation: {
+            instanceLabel: "Remote Mac",
+            ref: {
+              backend: "codex" as const,
+              target: federationTarget,
+              threadId: "thread-read",
+            },
+          },
+          inbox: {
+            inInbox: false,
+            lastSeenUpdatedAt: 2_000,
+          },
+          updatedAt: 2_000,
+        },
+        {
+          id: "thread-other",
+          title: "Other thread",
+          titleSource: "explicit" as const,
+          summary: "Other thread summary",
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: {
+            inInbox: false,
+            lastSeenUpdatedAt: 1_500,
+          },
+          updatedAt: 1_500,
+        },
+      ],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      markThreadSeen,
+      onAgentEvent: () => () => undefined,
+    };
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.threads).toHaveLength(2);
+    });
+
+    await act(async () => {
+      await result.current.markThreadUnread(result.current.threads[0]!);
+    });
+
+    expect(markThreadSeen).toHaveBeenCalledWith({
+      backend: "codex",
+      federationTarget,
+      threadId: "thread-read",
+      seenUpdatedAt: 1_999,
+    });
+    expect(result.current.threads[0]?.inbox).toMatchObject({
+      inInbox: true,
+      reason: "updated-since-seen",
+      lastSeenUpdatedAt: 1_999,
+    });
+    expect(result.current.snapshot?.inboxThreadKeys).toEqual([
+      "codex:thread-read",
+    ]);
+
+    act(() => {
+      result.current.selectThread(result.current.threads[1]!);
+    });
+    await waitFor(() => {
+      expect(markThreadSeen).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-other",
+        seenUpdatedAt: 1_500,
+      });
+    });
+    expect(result.current.threads[0]?.inbox.inInbox).toBe(true);
+
+    act(() => {
+      result.current.selectThread(result.current.threads[0]!);
+    });
+    await waitFor(() => {
+      expect(markThreadSeen).toHaveBeenCalledWith({
+        backend: "codex",
+        federationTarget,
+        threadId: "thread-read",
+        seenUpdatedAt: 2_000,
+      });
+    });
+  });
+
   it("marks the selected thread seen again when a refresh advances it", async () => {
     const listeners = new Set<(event: any) => void>();
     const markThreadSeen = vi.fn(

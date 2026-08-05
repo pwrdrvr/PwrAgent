@@ -1536,6 +1536,9 @@ function DesktopAppShell(props: {
           onMarkThreadsSeen={
             desktopApi?.markThreadSeen ? navigation.markThreadsSeen : undefined
           }
+          onMarkThreadUnread={
+            desktopApi?.markThreadSeen ? navigation.markThreadUnread : undefined
+          }
           onRenameThread={navigation.renameThread}
           onSetThreadReaction={navigation.setThreadReaction}
           onSetThreadPin={navigation.setThreadPin}

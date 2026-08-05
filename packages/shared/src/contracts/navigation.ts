@@ -976,6 +976,7 @@ export type SetNavigationBrowseModeResponse = {
 
 export type MarkThreadSeenRequest = {
   backend?: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   seenAt?: number;
   seenUpdatedAt?: number;
