@@ -919,7 +919,12 @@ export function bootstrapApp(): void {
     registerImageNormalizationIpcHandlers();
     registerIntegratedTerminalIpcHandlers();
     registerMcpConnectionIpcHandlers();
-    installTranscriptImageProtocol();
+    installTranscriptImageProtocol({
+      resolveFederatedImage: async ({ instanceId, url }) =>
+        await getDesktopFederationRuntime()
+          .remoteBackend({ scope: "remote", instanceId })
+          .readTranscriptImage({ url }),
+    });
     registerPreloadLogIpcHandlers();
     registerProfilesIpcHandlers({ onProfilesChanged: installApplicationMenu });
     registerRendererErrorIpcHandlers();

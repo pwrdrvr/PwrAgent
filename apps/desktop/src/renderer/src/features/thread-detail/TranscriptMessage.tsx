@@ -676,12 +676,20 @@ function formatTranscriptImageSourceLabel(url: string): string {
 }
 
 function decodeTranscriptImageProtocolUrl(url: string): string | undefined {
-  if (!url.startsWith("pwragent-image://file/")) {
+  if (!url.startsWith("pwragent-image://")) {
     return undefined;
   }
 
   try {
-    return decodeURIComponent(new URL(url).pathname.replace(/^\//, ""));
+    const parsed = new URL(url);
+    const segments = parsed.pathname.replace(/^\//, "").split("/");
+    if (parsed.hostname === "file" && segments.length === 1) {
+      return decodeURIComponent(segments[0] ?? "");
+    }
+    if (parsed.hostname === "federation" && segments.length === 2) {
+      return decodeURIComponent(segments[1] ?? "");
+    }
+    return undefined;
   } catch {
     return undefined;
   }

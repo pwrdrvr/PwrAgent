@@ -140,6 +140,88 @@ describe("transcript image protocol", () => {
     });
   });
 
+  it("rewrites owner-local image URLs into lazy federation protocol URLs", async () => {
+    const {
+      rewriteFederatedTranscriptImageUrlsForRenderer,
+      toFederatedTranscriptImageProtocolUrl,
+    } = await import("../transcript-image-protocol");
+    const ownerUrl = toProtocolUrl(
+      "/Users/owner/.pwragent/profiles/default/state/image-inputs/image.png",
+    );
+
+    const response = rewriteFederatedTranscriptImageUrlsForRenderer({
+      backend: "codex",
+      fetchedAt: 1,
+      threadId: "thread-images",
+      replay: {
+        entries: [
+          {
+            type: "message",
+            id: "entry-1",
+            role: "user",
+            text: "what's in this?",
+            parts: [{ type: "image", url: ownerUrl }],
+          },
+        ],
+        messages: [
+          {
+            id: "message-1",
+            role: "user",
+            text: "what's in this?",
+            parts: [{ type: "image", url: ownerUrl }],
+          },
+        ],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+      },
+    }, "owner_one");
+
+    const expectedUrl = toFederatedTranscriptImageProtocolUrl(
+      "owner_one",
+      ownerUrl,
+    );
+    expect(response.replay.entries[0]).toMatchObject({
+      parts: [{ type: "image", url: expectedUrl }],
+    });
+    expect(response.replay.messages[0]).toMatchObject({
+      parts: [{ type: "image", url: expectedUrl }],
+    });
+  });
+
+  it("serves federation protocol URLs through the remote image resolver", async () => {
+    const {
+      installTranscriptImageProtocol,
+      toFederatedTranscriptImageProtocolUrl,
+    } = await import("../transcript-image-protocol");
+    const ownerUrl = toProtocolUrl(
+      "/Users/owner/.pwragent/profiles/default/state/image-inputs/image.png",
+    );
+    const resolveFederatedImage = vi.fn(async () => ({
+      dataBase64: Buffer.from([1, 2, 3]).toString("base64"),
+      mimeType: "image/png",
+    }));
+
+    installTranscriptImageProtocol({ resolveFederatedImage });
+    const handler = protocolHandleMock.mock.calls[0]?.[1] as (
+      request: { url: string },
+    ) => Promise<Response>;
+    const response = await handler({
+      url: toFederatedTranscriptImageProtocolUrl("owner_one", ownerUrl),
+    });
+
+    expect(resolveFederatedImage).toHaveBeenCalledWith({
+      instanceId: "owner_one",
+      url: ownerUrl,
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("image/png");
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(
+      new Uint8Array([1, 2, 3]),
+    );
+  });
+
   it("materializes data image URLs into thread-scoped files before renderer IPC", async () => {
     const { materializeTranscriptImageUrlsForRenderer } = await import(
       "../transcript-image-protocol"

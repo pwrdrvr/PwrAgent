@@ -102,7 +102,10 @@ import {
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
 import { spawnTerminalPty } from "../terminal/integrated-terminal-service";
-import { rewriteTranscriptImageUrlsForRenderer } from "../transcript-image-protocol";
+import {
+  readTranscriptImageProtocolRequest,
+  rewriteTranscriptImageUrlsForRenderer,
+} from "../transcript-image-protocol";
 import { getMainLogger } from "../log";
 import {
   discoverDesktopApplications,
@@ -1836,7 +1839,10 @@ function localBackendOperations(): FederationBackendOperations {
       });
       return rewriteTranscriptImageUrlsForRenderer(response);
     },
-  async listSkills(
+    async readTranscriptImage(request) {
+      return await readTranscriptImageProtocolRequest(request.url);
+    },
+    async listSkills(
       request: AppServerListSkillsRequest = {},
     ): Promise<AppServerListSkillsResponse> {
       const backend = request.backend ?? "codex";

@@ -451,6 +451,92 @@ describe("federation backend bridge", () => {
     });
   });
 
+  it("routes transcript images back to their owning instance", async () => {
+    const sent: FederationProtocolEnvelope[] = [];
+    const rpc = new FederationRpcEndpoint({
+      localInstanceId: "viewer_one",
+      remoteInstanceId: "owner_one",
+      sendEnvelope: (envelope) => sent.push(envelope),
+      now: () => 1_000,
+    });
+    const client = new FederationRemoteBackendClient(rpc);
+    const ownerUrl =
+      `pwragent-image://file/${encodeURIComponent("file:///Users/owner/.pwragent/profiles/default/state/image-inputs/image.png")}`;
+    const readPending = client.readThread({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    const readRequest = sent.at(-1)!;
+    rpc.receiveEnvelope({
+      id: "response-read-thread",
+      kind: "response",
+      requestId: readRequest.id,
+      protocolVersion: 1,
+      sourceInstanceId: "owner_one",
+      targetInstanceId: "viewer_one",
+      createdAt: 1_100,
+      result: {
+        backend: "codex",
+        fetchedAt: 1_100,
+        threadId: "thread-1",
+        replay: {
+          entries: [],
+          messages: [{
+            id: "message-1",
+            role: "user",
+            text: "image",
+            parts: [{ type: "image", url: ownerUrl }],
+          }],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      },
+    });
+
+    await expect(readPending).resolves.toMatchObject({
+      replay: {
+        messages: [{
+          parts: [{
+            type: "image",
+            url: `pwragent-image://federation/owner_one/${encodeURIComponent(ownerUrl)}`,
+          }],
+        }],
+      },
+    });
+
+    const imagePending = client.readTranscriptImage({ url: ownerUrl });
+    const imageRequest = sent.at(-1)!;
+    expect(imageRequest).toMatchObject({
+      kind: "request",
+      method: FEDERATION_BACKEND_METHODS.readTranscriptImage,
+      params: { url: ownerUrl },
+    });
+    expect(
+      FEDERATION_BACKEND_METHOD_CAPABILITIES[
+        FEDERATION_BACKEND_METHODS.readTranscriptImage
+      ],
+    ).toBe("thread_detail");
+    rpc.receiveEnvelope({
+      id: "response-image",
+      kind: "response",
+      requestId: imageRequest.id,
+      protocolVersion: 1,
+      sourceInstanceId: "owner_one",
+      targetInstanceId: "viewer_one",
+      createdAt: 1_200,
+      result: {
+        dataBase64: "AQID",
+        mimeType: "image/png",
+      },
+    });
+    await expect(imagePending).resolves.toEqual({
+      dataBase64: "AQID",
+      mimeType: "image/png",
+    });
+  });
+
   it("executes directory Git status refreshes on the target instance", async () => {
     const backend = {
       refreshDirectoryGitStatuses: vi.fn(async () => ({ scheduledCount: 1 })),
@@ -738,6 +824,53 @@ describe("federation backend bridge", () => {
     });
   });
 
+  it("serves transcript image bytes through a thread-detail handler", async () => {
+    const backend = {
+      readTranscriptImage: vi.fn(async () => ({
+        dataBase64: "AQID",
+        mimeType: "image/png",
+      })),
+    } as unknown as FederationBackendOperations;
+    const replies: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({
+      localInstanceId: "owner_one",
+      methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+      now: () => 2_000,
+    });
+    router.registerConnection({
+      peerId: "viewer_one",
+      capabilities: ["thread_detail"],
+      sendEnvelope: (envelope) => replies.push(envelope),
+    });
+    registerFederationBackendHandlers({ router, backend });
+    const url =
+      "pwragent-image://file/file%3A%2F%2F%2FUsers%2Fowner%2Fimage.png";
+
+    await router.routeEnvelope({
+      sourcePeerId: "viewer_one",
+      envelope: {
+        id: "request-image",
+        kind: "request",
+        method: FEDERATION_BACKEND_METHODS.readTranscriptImage,
+        params: { url },
+        protocolVersion: 1,
+        sourceInstanceId: "viewer_one",
+        targetInstanceId: "owner_one",
+        createdAt: 1_000,
+      },
+    });
+
+    expect(backend.readTranscriptImage).toHaveBeenCalledWith({ url });
+    expect(replies).toMatchObject([{
+      kind: "response",
+      requestId: "request-image",
+      result: {
+        dataBase64: "AQID",
+        mimeType: "image/png",
+      },
+    }]);
+  });
+
   it("maps remote turn submission to a turn-control guarded handler", async () => {
     const backend: FederationBackendOperations = {
       listThreads: vi.fn(),
@@ -803,6 +936,7 @@ describe("federation backend bridge", () => {
       getNavigationSnapshot: vi.fn(),
       listThreads: vi.fn(),
       readThread: vi.fn(),
+      readTranscriptImage: vi.fn(),
       listSkills: vi.fn(),
       listBackends: vi.fn(),
       markThreadSeen: vi.fn(),
@@ -979,6 +1113,7 @@ describe("federation backend bridge", () => {
         getNavigationSnapshot: vi.fn(),
         listThreads: vi.fn(),
         readThread: vi.fn(),
+        readTranscriptImage: vi.fn(),
         listSkills: vi.fn(),
         listBackends: vi.fn(),
         markThreadSeen: vi.fn(),

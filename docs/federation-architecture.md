@@ -62,6 +62,12 @@ the dedicated `scheduled_actions` capability rather than inheriting broad turn
 control. Capability checks remain attached to every method, so an older or
 restricted peer fails closed instead of silently executing locally.
 
+Transcript images stay behind the renderer-safe `pwragent-image://` protocol.
+For a remote thread, the viewer rewrites owner-local image URLs to identify the
+owning instance and lazily fetches the validated bytes with
+`backend.readTranscriptImage`. That RPC requires `thread_detail`; the owner
+applies the same allowed-root and image-type checks as a local protocol fetch.
+
 The scheduled-action RPC surface is part of federation protocol v1 while the
 protocol remains under development. Peers must authorize `scheduled_actions`
 explicitly; `turn_control` does not imply scheduler access.

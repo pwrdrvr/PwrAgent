@@ -83,11 +83,20 @@ import type {
 } from "@pwragent/shared";
 import type { FederationRouter } from "./federation-router";
 import type { FederationRpcEndpoint } from "./federation-rpc";
+import {
+  rewriteFederatedTranscriptImageUrlsForRenderer,
+  type FederatedTranscriptImageResponse,
+} from "../transcript-image-protocol";
+
+export type FederationReadTranscriptImageRequest = {
+  url: string;
+};
 
 export const FEDERATION_BACKEND_METHODS = {
   getNavigationSnapshot: "backend.getNavigationSnapshot",
   listThreads: "backend.listThreads",
   readThread: "backend.readThread",
+  readTranscriptImage: "backend.readTranscriptImage",
   listSkills: "backend.listSkills",
   listBackends: "backend.listBackends",
   markThreadSeen: "backend.markThreadSeen",
@@ -152,6 +161,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.getNavigationSnapshot]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.listThreads]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.readThread]: "thread_detail",
+  [FEDERATION_BACKEND_METHODS.readTranscriptImage]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.listSkills]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.listBackends]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.markThreadSeen]: "thread_navigation",
@@ -215,6 +225,9 @@ export type FederationBackendOperations = {
   readThread(
     request: AppServerReadThreadRequest,
   ): Promise<AppServerReadThreadResponse>;
+  readTranscriptImage(
+    request: FederationReadTranscriptImageRequest,
+  ): Promise<FederatedTranscriptImageResponse>;
   listSkills(
     request?: AppServerListSkillsRequest,
   ): Promise<AppServerListSkillsResponse>;
@@ -337,6 +350,13 @@ export function registerFederationBackendHandlers(params: {
     async (envelope) =>
       await params.backend.readThread(
         envelope.params as AppServerReadThreadRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.readTranscriptImage,
+    async (envelope) =>
+      await params.backend.readTranscriptImage(
+        envelope.params as FederationReadTranscriptImageRequest,
       ),
   );
   params.router.registerHandler(
@@ -641,8 +661,21 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   async readThread(
     request: AppServerReadThreadRequest,
   ): Promise<AppServerReadThreadResponse> {
-    return await this.rpc.request<AppServerReadThreadResponse>({
+    const response = await this.rpc.request<AppServerReadThreadResponse>({
       method: FEDERATION_BACKEND_METHODS.readThread,
+      params: request,
+    });
+    return rewriteFederatedTranscriptImageUrlsForRenderer(
+      response,
+      this.rpc.remoteInstanceId,
+    );
+  }
+
+  async readTranscriptImage(
+    request: FederationReadTranscriptImageRequest,
+  ): Promise<FederatedTranscriptImageResponse> {
+    return await this.rpc.request<FederatedTranscriptImageResponse>({
+      method: FEDERATION_BACKEND_METHODS.readTranscriptImage,
       params: request,
     });
   }

@@ -27,6 +27,10 @@ export class FederationRpcEndpoint {
     },
   ) {}
 
+  get remoteInstanceId(): FederationInstanceId {
+    return this.options.remoteInstanceId;
+  }
+
   request<Result = unknown>(params: {
     method: string;
     params: unknown;
