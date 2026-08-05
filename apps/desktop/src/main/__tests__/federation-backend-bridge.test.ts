@@ -220,6 +220,141 @@ describe("federation backend bridge", () => {
     ]);
   });
 
+  it("pages unbounded thread history before sending it over federation", async () => {
+    const response: AppServerReadThreadResponse = {
+      backend: "codex",
+      fetchedAt: 1_000,
+      threadId: "thread-1",
+      replay: {
+        entries: [
+          {
+            type: "message",
+            id: "entry-1",
+            role: "user",
+            text: "First",
+          },
+          {
+            type: "activity",
+            id: "entry-2",
+            summary: "Worked",
+            status: "completed",
+            details: [],
+          },
+          {
+            type: "message",
+            id: "entry-3",
+            role: "assistant",
+            text: "Third",
+          },
+          {
+            type: "message",
+            id: "entry-4",
+            role: "user",
+            text: "Fourth",
+          },
+        ],
+        messages: [
+          { id: "entry-1", role: "user", text: "First" },
+          { id: "entry-3", role: "assistant", text: "Third" },
+          { id: "entry-4", role: "user", text: "Fourth" },
+        ],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+      },
+    };
+    const backend = {
+      readThread: vi.fn(async () => response),
+    } as unknown as FederationBackendOperations;
+    const replies: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({
+      localInstanceId: "owner_one",
+      methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+    });
+    router.registerConnection({
+      peerId: "viewer_one",
+      capabilities: ["thread_detail"],
+      sendEnvelope: (envelope) => replies.push(envelope),
+    });
+    registerFederationBackendHandlers({ router, backend });
+
+    await router.routeEnvelope({
+      sourcePeerId: "viewer_one",
+      envelope: {
+        id: "latest-request",
+        kind: "request",
+        method: FEDERATION_BACKEND_METHODS.readThread,
+        params: { backend: "codex", threadId: "thread-1", limit: 2 },
+        protocolVersion: 1,
+        sourceInstanceId: "viewer_one",
+        targetInstanceId: "owner_one",
+        createdAt: 1_000,
+      },
+    });
+    await router.routeEnvelope({
+      sourcePeerId: "viewer_one",
+      envelope: {
+        id: "older-request",
+        kind: "request",
+        method: FEDERATION_BACKEND_METHODS.readThread,
+        params: {
+          backend: "codex",
+          threadId: "thread-1",
+          before: "entry-3",
+          limit: 2,
+        },
+        protocolVersion: 1,
+        sourceInstanceId: "viewer_one",
+        targetInstanceId: "owner_one",
+        createdAt: 1_100,
+      },
+    });
+
+    expect(replies).toMatchObject([
+      {
+        kind: "response",
+        requestId: "latest-request",
+        result: {
+          replay: {
+            entries: [{ id: "entry-3" }, { id: "entry-4" }],
+            messages: [{ id: "entry-3" }, { id: "entry-4" }],
+            pagination: {
+              supportsPagination: true,
+              hasPreviousPage: true,
+              previousCursor: "entry-3",
+            },
+          },
+        },
+      },
+      {
+        kind: "response",
+        requestId: "older-request",
+        result: {
+          replay: {
+            entries: [{ id: "entry-1" }, { id: "entry-2" }],
+            messages: [{ id: "entry-1" }],
+            pagination: {
+              supportsPagination: true,
+              hasPreviousPage: false,
+            },
+          },
+        },
+      },
+    ]);
+    expect(backend.readThread).toHaveBeenNthCalledWith(1, {
+      backend: "codex",
+      threadId: "thread-1",
+      limit: 2,
+    });
+    expect(backend.readThread).toHaveBeenNthCalledWith(2, {
+      backend: "codex",
+      threadId: "thread-1",
+      before: "entry-3",
+      limit: 2,
+    });
+  });
+
   it("routes branch drift reads and mutations to the owning peer", async () => {
     const backend = {
       checkThreadBranchDrift: vi.fn(async (request) => ({

@@ -92,6 +92,7 @@ import type {
 } from "@pwragent/shared";
 import type { FederationRouter } from "./federation-router";
 import type { FederationRpcEndpoint } from "./federation-rpc";
+import { pageNormalizedReplay } from "../app-server/thread-replay-pagination";
 
 export type FederationReadTranscriptImageRequest = {
   url: string;
@@ -380,10 +381,19 @@ export function registerFederationBackendHandlers(params: {
   );
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.readThread,
-    async (envelope) =>
-      await params.backend.readThread(
-        envelope.params as AppServerReadThreadRequest,
-      ),
+    async (envelope) => {
+      const request = envelope.params as AppServerReadThreadRequest;
+      const response = await params.backend.readThread(request);
+      // Codex currently accepts before/limit but can still return the complete
+      // transcript without pagination metadata. Bound that response before it
+      // reaches the federation transport's per-frame receive ceiling.
+      return response.replay.pagination.supportsPagination
+        ? response
+        : {
+            ...response,
+            replay: pageNormalizedReplay(response.replay, request),
+          };
+    },
   );
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.readTranscriptImage,
