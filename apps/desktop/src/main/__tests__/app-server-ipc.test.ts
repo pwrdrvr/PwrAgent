@@ -539,6 +539,7 @@ const supersedeThreadPrStatusWatches = vi.fn(async () => 0);
 const listActiveThreadPrStatusWatches = vi.fn(async () => []);
 const cancelThreadPrStatusWatchesForPr = vi.fn(async () => 0);
 const isGhAvailable = vi.fn(async () => true);
+const invalidateGhCaches = vi.fn();
 const getAuthStatus = vi.fn(async () => ({
   installed: true,
   loggedIn: true,
@@ -752,6 +753,7 @@ vi.mock("../pr-status/github-pr-fetcher", () => ({
   GithubPrFetcher: vi.fn(function GithubPrFetcher() {
     return {
       isGhAvailable,
+      invalidateGhCaches,
       getAuthStatus,
       fetchPullRequestByUrl,
     };
@@ -872,6 +874,7 @@ describe("app server ipc", () => {
     cancelThreadPrStatusWatchesForPr.mockClear();
     isGhAvailable.mockClear();
     isGhAvailable.mockResolvedValue(true);
+    invalidateGhCaches.mockClear();
     getAuthStatus.mockClear();
     fetchPullRequestByUrl.mockReset();
     fetchPullRequestByUrl.mockResolvedValue(undefined);
@@ -900,6 +903,31 @@ describe("app server ipc", () => {
     await disposeAppServerIpcHandlers();
 
     expect(backendRegistryLifecycle.get).not.toHaveBeenCalled();
+  });
+
+  it("invalidates the GraphQL token during an auth recheck", async () => {
+    const { GithubGraphqlPrClient } = await import(
+      "../pr-status/github-graphql-client"
+    );
+    const invalidateToken = vi.spyOn(
+      GithubGraphqlPrClient.prototype,
+      "invalidateToken",
+    );
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_GET_GH_STATUS_CHANNEL } = await import("../../shared/ipc");
+    registerAppServerIpcHandlers();
+
+    try {
+      await handlers.get(NAVIGATION_GET_GH_STATUS_CHANNEL)?.({}, {
+        recheck: true,
+      });
+
+      expect(invalidateGhCaches).toHaveBeenCalledTimes(1);
+      expect(invalidateToken).toHaveBeenCalledTimes(1);
+      expect(getAuthStatus).toHaveBeenCalledTimes(1);
+    } finally {
+      invalidateToken.mockRestore();
+    }
   });
 
   it("identifies explicitly selected extensionless PDFs by their magic bytes", async () => {

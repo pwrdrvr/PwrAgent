@@ -44,6 +44,30 @@ const MAX_BACKOFF_MS = 60_000;
 /** How long a minted `gh auth token` stays fresh in memory. */
 const TOKEN_TTL_MS = 5 * 60_000;
 
+type GhAuthTokenRunner = (
+  command: string,
+  args: string[],
+) => Promise<{ stdout: string }>;
+
+/** Export the credential for the same host this client queries. */
+export async function readGithubDotComAuthToken(
+  command: string,
+  run: GhAuthTokenRunner = async (executable, args) =>
+    await execFileAsync(executable, args, {
+      env: buildPwrAgentChildProcessEnv(process.env),
+      timeout: 10_000,
+      encoding: "utf8",
+    }),
+): Promise<string | null> {
+  const { stdout } = await run(command, [
+    "auth",
+    "token",
+    "--hostname",
+    "github.com",
+  ]);
+  return stdout.trim() || null;
+}
+
 /**
  * The repo + number that identify a PR *for querying*. This is the PR's BASE
  * repo — a PR number belongs to the repo it was opened against, which for a
@@ -849,12 +873,7 @@ export class GithubGraphqlPrClient {
       if (!command) {
         return null;
       }
-      const { stdout } = await execFileAsync(command, ["auth", "token"], {
-        env: buildPwrAgentChildProcessEnv(process.env),
-        timeout: 10_000,
-        encoding: "utf8",
-      });
-      const token = stdout.trim();
+      const token = await readGithubDotComAuthToken(command);
       if (!token) {
         return null;
       }

@@ -4964,6 +4964,7 @@ class DesktopAppServerService {
     const fetcher = this.getPrFetcher();
     if (request.recheck) {
       fetcher.invalidateGhCaches();
+      this.getPrGraphqlClient().invalidateToken();
     }
     // The fetcher logs once per fresh probe (cache + in-flight dedup
     // keep StrictMode mount duplicates silent). The IPC layer just
