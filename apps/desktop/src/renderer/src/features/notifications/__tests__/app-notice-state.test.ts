@@ -91,6 +91,40 @@ describe("appNoticeReducer", () => {
     });
   });
 
+  it("replaces transient notices from the same producer slot", () => {
+    let state = appNoticeReducer(INITIAL_APP_NOTICE_STATE, {
+      type: "show",
+      notice: {
+        id: "composer-notice-1",
+        title: "First warning",
+        message: "First",
+        transientSlot: "composer",
+      },
+    });
+    state = appNoticeReducer(state, {
+      type: "show",
+      notice: {
+        id: "repair-succeeded",
+        title: "Repair complete",
+        message: "Repaired",
+      },
+    });
+    state = appNoticeReducer(state, {
+      type: "show",
+      notice: {
+        id: "composer-notice-2",
+        title: "Second warning",
+        message: "Second",
+        transientSlot: "composer",
+      },
+    });
+
+    expect(state.transient.map((notice) => notice.id)).toEqual([
+      "composer-notice-2",
+      "repair-succeeded",
+    ]);
+  });
+
   it("dismisses one durable notice without disturbing the rest", () => {
     let state: AppNoticeState = {
       durable: [

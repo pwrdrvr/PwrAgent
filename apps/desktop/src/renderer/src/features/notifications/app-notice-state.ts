@@ -64,7 +64,7 @@ function showNotice(
   if (notice.autoDismiss !== false) {
     return {
       durable: state.durable.filter((entry) => entry.id !== notice.id),
-      transient: upsertNotice(state.transient, notice),
+      transient: upsertTransientNotice(state.transient, notice),
     };
   }
 
@@ -72,6 +72,25 @@ function showNotice(
     durable: upsertNotice(state.durable, notice),
     transient: state.transient.filter((entry) => entry.id !== notice.id),
   };
+}
+
+function upsertTransientNotice(
+  notices: readonly AppNoticeToastNotice[],
+  notice: AppNoticeToastNotice,
+): AppNoticeToastNotice[] {
+  const index = notices.findIndex(
+    (entry) =>
+      entry.id === notice.id
+      || (
+        notice.transientSlot !== undefined
+        && entry.transientSlot === notice.transientSlot
+      ),
+  );
+  return index >= 0
+    ? notices.map((entry, entryIndex) =>
+        entryIndex === index ? notice : entry
+      )
+    : [...notices, notice];
 }
 
 function upsertNotice(

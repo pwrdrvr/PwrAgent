@@ -27,6 +27,8 @@ export type AppNoticeToastNotice = {
     label: string;
     state: "progress" | "success" | "error";
   };
+  /** At most one auto-dismissing notice is retained for a producer slot. */
+  transientSlot?: string;
 };
 
 export function AppNoticeToast(props: {
