@@ -464,7 +464,17 @@ route; a `list_projects` orchestration tool is deliberately **not** added now
 
 ## Progress
 
-- [ ] Unit 1: celestial icons + assignment protocol
+- [x] Unit 1: celestial icons + assignment protocol
+  - Implementation deviation: assignments persist as one JSON blob under
+    state.db meta key `federation_celestial_icon_assignments` instead of a
+    dedicated table — the map is tiny (one row per instance), always
+    read/written as a unit, and the meta path avoids a schema-ladder bump
+    that would conflict with concurrent branches. The arrangement sync
+    (Unit 3) still gets its own table as planned.
+  - The gateway also resolves icon collisions produced by LWW merges
+    (offline self-assigns): overrides and older assignments keep their
+    icon; newer auto entries are reassigned with a fresh updatedAt so the
+    fix wins everywhere.
 - [ ] Unit 2: star map surface
 - [ ] Unit 3: arrangement sync
 - [ ] Unit 4: AI intake

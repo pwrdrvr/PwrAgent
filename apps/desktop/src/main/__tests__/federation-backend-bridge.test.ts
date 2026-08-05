@@ -1173,6 +1173,7 @@ describe("federation backend bridge", () => {
       openApplication: vi.fn(),
       readMessagingPlatformStatuses: vi.fn(),
       trustCodexProject: vi.fn(),
+      setCelestialIcon: vi.fn(),
     };
     const replies: FederationProtocolEnvelope[] = [];
     const router = new FederationRouter({
@@ -1367,6 +1368,7 @@ describe("federation backend bridge", () => {
         openApplication: vi.fn(),
         readMessagingPlatformStatuses: vi.fn(),
         trustCodexProject: vi.fn(),
+        setCelestialIcon: vi.fn(),
       } as FederationBackendOperations,
     });
 

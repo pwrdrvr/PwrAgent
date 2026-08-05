@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type {
+  CelestialIconId,
   DesktopFederationMode,
   DesktopSettingsSecretName,
   DesktopSettingsConfigPatch,
@@ -14,10 +15,13 @@ import type {
   FederationTailscaleStatus,
 } from "@pwragent/shared";
 import {
+  CELESTIAL_ICON_IDS,
   DESKTOP_FEDERATION_MODES,
   formatFederationPeerDisplayLabel,
+  isCelestialIconId,
   isFederationGatewayEndpointUrl,
 } from "@pwragent/shared";
+import { CelestialIcon } from "../../icons";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { copyText } from "../../lib/copy-text";
 import { formatRunningDurationMs } from "../../lib/format-duration";
@@ -64,6 +68,7 @@ export function FederationSettings(props: FederationSettingsProps) {
   const [inviteToImport, setInviteToImport] = useState("");
   const [importNotice, setImportNotice] = useState<string>();
   const [revokingPeerId, setRevokingPeerId] = useState<string>();
+  const [settingIconFor, setSettingIconFor] = useState<string>();
   const [confirmingForget, setConfirmingForget] = useState(false);
   const [forgetting, setForgetting] = useState(false);
   const [mode, setMode] = useState<DesktopFederationMode>(
@@ -297,6 +302,21 @@ export function FederationSettings(props: FederationSettingsProps) {
     } satisfies FederationHealthStatus);
   const gatewayEndpointStatuses = effectiveHealth.gatewayEndpoints ?? [];
   const now = Date.now();
+
+  const changeCelestialIcon = (instanceId: string, value: string) => {
+    if (!isCelestialIconId(value) || !props.desktopApi?.setCelestialIcon) {
+      return;
+    }
+    setActionError(undefined);
+    setSettingIconFor(instanceId);
+    props.desktopApi
+      .setCelestialIcon({ instanceId, icon: value })
+      .then(() => loadHealth())
+      .catch((err: unknown) =>
+        setActionError(err instanceof Error ? err.message : String(err)),
+      )
+      .finally(() => setSettingIconFor(undefined));
+  };
   const connectionRemediation = effectiveHealth.unavailableReason
     ? remediationForConnectionFailure(effectiveHealth.unavailableReason)
     : undefined;
@@ -366,6 +386,45 @@ export function FederationSettings(props: FederationSettingsProps) {
                 disabled={props.saving}
                 onChange={(event) => setInstanceLabel(event.target.value)}
               />
+            }
+          />
+          <SettingsField
+            label="Instance icon"
+            sub="This machine's celestial mark on the Star Map and thread viewers. Applies immediately and syncs across the federation."
+            control={
+              <span className="federation-celestial-picker">
+                {effectiveHealth.localCelestialIcon ? (
+                  <CelestialIcon
+                    icon={effectiveHealth.localCelestialIcon}
+                    size={16}
+                  />
+                ) : null}
+                <select
+                  aria-label="Instance icon"
+                  value={effectiveHealth.localCelestialIcon ?? ""}
+                  disabled={
+                    !effectiveHealth.instanceId
+                    || !props.desktopApi?.setCelestialIcon
+                    || settingIconFor === effectiveHealth.instanceId
+                  }
+                  onChange={(event) => {
+                    if (!effectiveHealth.instanceId) return;
+                    changeCelestialIcon(
+                      effectiveHealth.instanceId,
+                      event.target.value,
+                    );
+                  }}
+                >
+                  <option value="" disabled>
+                    Auto
+                  </option>
+                  {CELESTIAL_ICON_IDS.map((icon) => (
+                    <option key={icon} value={icon}>
+                      {celestialIconLabel(icon)}
+                    </option>
+                  ))}
+                </select>
+              </span>
             }
           />
           <SettingsField
@@ -892,6 +951,31 @@ export function FederationSettings(props: FederationSettingsProps) {
                   {peer.unavailableReason ? (
                     <span>{peer.unavailableReason}</span>
                   ) : null}
+                  <span className="federation-celestial-picker">
+                    {peer.celestialIcon ? (
+                      <CelestialIcon icon={peer.celestialIcon} size={16} />
+                    ) : null}
+                    <select
+                      aria-label={`Celestial icon for ${peer.label}`}
+                      value={peer.celestialIcon ?? ""}
+                      disabled={
+                        !props.desktopApi?.setCelestialIcon
+                        || settingIconFor === peer.id
+                      }
+                      onChange={(event) =>
+                        changeCelestialIcon(peer.id, event.target.value)
+                      }
+                    >
+                      <option value="" disabled>
+                        Auto
+                      </option>
+                      {CELESTIAL_ICON_IDS.map((icon) => (
+                        <option key={icon} value={icon}>
+                          {celestialIconLabel(icon)}
+                        </option>
+                      ))}
+                    </select>
+                  </span>
                   <button
                     className="button button--secondary"
                     type="button"
@@ -1518,6 +1602,21 @@ function endpointStateLabel(state: FederationEndpointStatus["state"]): string {
       return "Failed";
     case "idle":
       return "Idle";
+  }
+}
+
+function celestialIconLabel(icon: CelestialIconId): string {
+  switch (icon) {
+    case "sun":
+      return "Sun";
+    case "moon":
+      return "Moon";
+    case "ringed-planet":
+      return "Ringed planet";
+    case "tilted-ringed-planet":
+      return "Steep-ring planet";
+    case "black-hole":
+      return "Black hole";
   }
 }
 

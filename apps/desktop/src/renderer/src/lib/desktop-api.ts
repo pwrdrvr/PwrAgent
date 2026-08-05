@@ -106,6 +106,8 @@ import type {
   ResetFederationEnrollmentResponse,
   RevokeFederationPeerRequest,
   RevokeFederationPeerResponse,
+  SetCelestialIconRequest,
+  SetCelestialIconResponse,
   ReorderDirectoryPinsRequest,
   ReorderDirectoryPinsResponse,
   ReorderThreadPinsRequest,
@@ -483,6 +485,9 @@ export type DesktopApi = {
   configureFederationTailscale?: (
     request: ConfigureFederationTailscaleRequest,
   ) => Promise<ConfigureFederationTailscaleResponse>;
+  setCelestialIcon?: (
+    request: SetCelestialIconRequest,
+  ) => Promise<SetCelestialIconResponse>;
   ping?: () => string;
   listSkills?: (
     request?: AppServerListSkillsRequest

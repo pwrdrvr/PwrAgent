@@ -266,6 +266,8 @@ import type {
   ResetFederationEnrollmentResponse,
   RevokeFederationPeerRequest,
   RevokeFederationPeerResponse,
+  SetCelestialIconRequest,
+  SetCelestialIconResponse,
   ReadDesktopSettingsRequest,
   ReadDesktopSettingsResponse,
   RefreshDesktopCodexDiscoveryRequest,
@@ -443,6 +445,7 @@ import {
   FEDERATION_OPEN_WINDOW_CHANNEL,
   FEDERATION_RESET_ENROLLMENT_CHANNEL,
   FEDERATION_REVOKE_PEER_CHANNEL,
+  FEDERATION_SET_CELESTIAL_ICON_CHANNEL,
   FEDERATION_TAILSCALE_CONFIGURE_CHANNEL,
   FEDERATION_TAILSCALE_STATUS_CHANNEL,
   CODEX_ENVIRONMENT_SETUP_PROGRESS_CHANNEL,
@@ -865,6 +868,10 @@ const desktopApi = Object.freeze({
     request: ConfigureFederationTailscaleRequest,
   ): Promise<ConfigureFederationTailscaleResponse> =>
     await ipcRenderer.invoke(FEDERATION_TAILSCALE_CONFIGURE_CHANNEL, request),
+  setCelestialIcon: async (
+    request: SetCelestialIconRequest,
+  ): Promise<SetCelestialIconResponse> =>
+    await ipcRenderer.invoke(FEDERATION_SET_CELESTIAL_ICON_CHANNEL, request),
   ...(isDevelopment
     ? {
         getRuntimeIdentity: async (): Promise<RuntimeIdentity> =>

@@ -43,6 +43,7 @@ export function publicPeerSummary(peer: FederationPeerSummary): FederationPeerSu
     protocolVersion: peer.protocolVersion,
     endpoint: peer.endpoint,
     profileName: peer.profileName,
+    celestialIcon: peer.celestialIcon,
     lastConnectedAt: peer.lastConnectedAt,
     lastActivityAt: peer.lastActivityAt,
     revokedAt: peer.revokedAt,

@@ -48,3 +48,28 @@ export function resolveIconSvgProps({
     ...rest,
   };
 }
+
+/**
+ * Build the `<svg>` props for filled icons (the celestial set). Same
+ * sizing and accessibility contract as `resolveIconSvgProps`, but no
+ * root `fill="none"` / stroke defaults — filled icons paint each
+ * element with `fill="currentColor"` plus numeric opacity layering
+ * themselves, so a root-level stroke setup would fight the artwork.
+ */
+export function resolveFilledIconSvgProps({
+  size = DEFAULT_ICON_SIZE,
+  "aria-label": ariaLabel,
+  "aria-hidden": ariaHidden,
+  role,
+  ...rest
+}: IconProps): SVGAttributes<SVGSVGElement> {
+  return {
+    width: size,
+    height: size,
+    viewBox: "0 0 24 24",
+    "aria-hidden": ariaHidden ?? !ariaLabel,
+    "aria-label": ariaLabel,
+    role: ariaLabel ? role ?? "img" : role,
+    ...rest,
+  };
+}
