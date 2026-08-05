@@ -336,7 +336,6 @@ export type ResetFederationEnrollmentResponse = {
 
 export type OpenFederationWindowRequest = {
   target: FederationRemoteTarget;
-  label?: string;
   initialThread?: FederatedThreadRef;
 };
 
@@ -482,6 +481,37 @@ export function isRemoteFederationTarget(
   target: FederationTarget,
 ): target is FederationRemoteTarget {
   return target.scope === "remote";
+}
+
+/**
+ * Display label for a federation peer: the machine label, with the
+ * remote profile appended as "<label> / <profile>" when it matters.
+ * The profile shows when it isn't "default", or when more than one
+ * visible peer shares the machine label (several profiles of one
+ * machine enrolled at once) — in that case even "default" shows so the
+ * entries stay tellable apart. A lone default-profile peer keeps the
+ * bare machine name. Peers that never advertised a profile (older
+ * builds) always keep the bare label, and revoked peers are dead
+ * entries that must not force the suffix onto their live sibling.
+ */
+export function formatFederationPeerDisplayLabel(
+  peer: { label: string; profileName?: string },
+  visiblePeers: readonly {
+    label: string;
+    profileName?: string;
+    revokedAt?: number;
+  }[],
+): string {
+  if (!peer.profileName) {
+    return peer.label;
+  }
+  const sameMachinePeers = visiblePeers.filter(
+    (candidate) => !candidate.revokedAt && candidate.label === peer.label,
+  );
+  if (peer.profileName === "default" && sameMachinePeers.length <= 1) {
+    return peer.label;
+  }
+  return `${peer.label} / ${peer.profileName}`;
 }
 
 export function federationTargetKey(target: FederationTarget): string {

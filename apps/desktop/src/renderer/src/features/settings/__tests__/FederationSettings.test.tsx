@@ -137,9 +137,10 @@ describe("FederationSettings", () => {
     fireEvent.click(screen.getByRole("button", {
       name: "Browse remote threads",
     }));
+    // The display label is composed main-side from the peer record; the
+    // request carries only the target.
     expect(openFederationWindow).toHaveBeenCalledWith({
       target: { scope: "remote", instanceId: "gateway_one" },
-      label: "Mac Mini",
     });
   });
 

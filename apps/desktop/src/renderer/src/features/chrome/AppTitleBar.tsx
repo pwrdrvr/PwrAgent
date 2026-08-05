@@ -1,6 +1,7 @@
 import type { ReactElement } from "react";
 import { getDesktopApi, type DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
+import { FederationRemoteBadge } from "./FederationRemoteBadge";
 import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import { AppMenuBar } from "./AppMenuBar";
 import { NewThreadButton } from "./NewThreadButton";
@@ -59,6 +60,11 @@ export function AppTitleBar(props: {
         <p className="app-titlebar__brand">
           Pwr<span className="app-titlebar__brand-accent">Agent</span>
         </p>
+        {/* While the sidebar is open its identity pill is the remote
+            marker; once it's hidden this strip is the only home left.
+            (Absent layout — fatal/startup states — keep the badge so the
+            window is never unmarked.) */}
+        {props.layout?.sidebarOpen ? null : <FederationRemoteBadge />}
         <AppMenuBar />
         {actions ? (
           <div className="app-titlebar__actions">

@@ -180,6 +180,20 @@ test.describe("federation remote window", () => {
       expect(target?.scope).toBe("remote");
       expect(target?.instanceId).toBe(gateway.instanceId);
 
+      // The OS-level window title must keep the peer label — the
+      // renderer's static <title> used to clobber it back to the app
+      // name, collapsing every window to one entry in the macOS Window
+      // menu.
+      await expect
+        .poll(async () =>
+          (
+            await electronApp.evaluate(({ BrowserWindow }) =>
+              BrowserWindow.getAllWindows().map((win) => win.getTitle()),
+            )
+          ).some((title) => /^PwrAgent - ./.test(title)),
+        )
+        .toBe(true);
+
       // The peer's threads render; the local thread does not leak in.
       await expect(
         remote.locator(".thread-row__title", {
@@ -201,6 +215,25 @@ test.describe("federation remote window", () => {
         remote.getByRole("button", { name: "Open automations" }),
       ).toHaveCount(0);
       await expect(remote.locator(".messaging-status-bar")).toHaveCount(0);
+
+      // Hiding the sidebar relocates the masthead into the title bar.
+      // The relocated copy must ALSO hide Settings/Automations, and the
+      // remote-instance badge takes over as the window's remote marker
+      // (the sidebar identity pill left with the sidebar).
+      await remote.getByRole("button", { name: "Hide sidebar" }).click();
+      await expect(
+        remote.getByRole("button", { name: "Search threads" }),
+      ).toBeVisible();
+      await expect(
+        remote.getByRole("button", { name: "Open settings" }),
+      ).toHaveCount(0);
+      await expect(
+        remote.getByRole("button", { name: "Open automations" }),
+      ).toHaveCount(0);
+      await expect(
+        remote.getByRole("button", { name: /^Remote instance: / }),
+      ).toBeVisible();
+      await remote.getByRole("button", { name: "Show sidebar" }).click();
 
       // Opening a remote thread renders the peer transcript without the
       // (local-shell) integrated terminal toggle.

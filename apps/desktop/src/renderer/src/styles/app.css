@@ -2613,17 +2613,56 @@ textarea,
   color: var(--accent);
 }
 
-.sidebar__federation-label {
-  display: inline-block;
-  max-width: 140px;
+/* Stable marker for the remote-instance label text wherever the
+   FederationRemoteBadge renders it (sidebar identity pill or title-bar
+   badge); layout comes from the hosting pill, this only rounds off the
+   truncation. E2E asserts on this class — keep it on the label span.
+   The compound selector outranks `.runtime-identity__text`'s later
+   `text-overflow: clip` so the pill truncates with an ellipsis too. */
+.sidebar__federation-label,
+.runtime-identity__text.sidebar__federation-label {
+  text-overflow: ellipsis;
+}
+
+/* Compact title-bar form of the remote-instance marker, shown when the
+   sidebar (and its identity pill) is hidden. Mirrors the identity pill
+   treatment at masthead scale. */
+.federation-remote-badge {
+  display: inline-flex;
+  max-width: 220px;
+  min-width: 0;
+  height: 20px;
+  align-items: center;
+  appearance: none;
+  cursor: pointer;
   margin-left: 8px;
-  overflow: hidden;
+  padding: 0 7px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel);
   color: var(--text-muted);
   font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0;
+  line-height: 1;
+  -webkit-app-region: no-drag;
+}
+
+.federation-remote-badge:hover,
+.federation-remote-badge:focus-visible {
+  border-color: var(--accent-border);
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.federation-remote-badge:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.federation-remote-badge__text {
+  min-width: 0;
+  overflow: hidden;
   text-overflow: ellipsis;
-  vertical-align: bottom;
   white-space: nowrap;
 }
 

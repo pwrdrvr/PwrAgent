@@ -1,5 +1,6 @@
 import type { ReactElement } from "react";
 import { AutomationsIcon, SearchIcon, SettingsIcon } from "../../icons";
+import { readRendererFederationTarget } from "../../lib/federation-window";
 import { NewThreadButton } from "./NewThreadButton";
 
 /**
@@ -26,6 +27,12 @@ export type MastheadActionsProps = {
 };
 
 export function MastheadActions(props: MastheadActionsProps): ReactElement {
+  // Automations and Settings open LOCAL surfaces. The sidebar masthead
+  // already hides them in a remote federation window; this relocated
+  // copy (shown when the sidebar is hidden) must hide them too, or
+  // collapsing the sidebar resurfaces local Settings in a window
+  // branded as another instance.
+  const isFederationWindow = Boolean(readRendererFederationTarget());
   return (
     <div className="masthead-actions">
       {props.onToggleThreadSearch ? (
@@ -39,24 +46,28 @@ export function MastheadActions(props: MastheadActionsProps): ReactElement {
           <SearchIcon size={16} strokeWidth={1.5} aria-hidden="true" />
         </button>
       ) : null}
-      <button
-        type="button"
-        aria-label="Open automations"
-        aria-pressed={props.automationsActive}
-        className={`sidebar__icon-button${props.automationsActive ? " is-active" : ""}`}
-        onClick={props.onOpenAutomations}
-      >
-        <AutomationsIcon size={16} strokeWidth={1.5} aria-hidden="true" />
-      </button>
-      <button
-        type="button"
-        aria-label="Open settings"
-        aria-pressed={props.settingsActive}
-        className={`sidebar__icon-button${props.settingsActive ? " is-active" : ""}`}
-        onClick={props.onOpenSettings}
-      >
-        <SettingsIcon size={16} strokeWidth={1.5} aria-hidden="true" />
-      </button>
+      {isFederationWindow ? null : (
+        <button
+          type="button"
+          aria-label="Open automations"
+          aria-pressed={props.automationsActive}
+          className={`sidebar__icon-button${props.automationsActive ? " is-active" : ""}`}
+          onClick={props.onOpenAutomations}
+        >
+          <AutomationsIcon size={16} strokeWidth={1.5} aria-hidden="true" />
+        </button>
+      )}
+      {isFederationWindow ? null : (
+        <button
+          type="button"
+          aria-label="Open settings"
+          aria-pressed={props.settingsActive}
+          className={`sidebar__icon-button${props.settingsActive ? " is-active" : ""}`}
+          onClick={props.onOpenSettings}
+        >
+          <SettingsIcon size={16} strokeWidth={1.5} aria-hidden="true" />
+        </button>
+      )}
       <NewThreadButton
         addingProjectDirectory={props.addingProjectDirectory}
         creatingThread={props.creatingThread}

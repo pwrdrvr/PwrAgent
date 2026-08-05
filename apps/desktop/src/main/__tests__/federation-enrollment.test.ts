@@ -400,6 +400,54 @@ describe("federation enrollment", () => {
     });
   });
 
+  it("refreshes the stored profile name on reconnect", () => {
+    const keyPair = generateFederationIdentityKeyPair();
+    // Enrolled before profiles were advertised: no stored profileName.
+    store.upsertPeer({
+      updatedAt: 1_000,
+      peer: {
+        id: "client_one",
+        label: "Mac-Mini-M4",
+        role: "client",
+        status: "disconnected",
+        capabilities: ["remote_window"],
+        protocolVersion: 1,
+        pinnedPublicKeyPem: keyPair.publicKeyPem,
+      },
+    });
+    const message = buildFederationProofMessage({
+      purpose: "reconnect",
+      gatewayInstanceId: "gateway_one",
+      peerInstanceId: "client_one",
+      publicKeyPem: keyPair.publicKeyPem,
+      protocolVersion: 1,
+      nonce: "nonce-profile",
+      capabilities: ["remote_window"],
+    });
+
+    expect(
+      authenticateFederationReconnect({
+        store,
+        gatewayInstanceId: "gateway_one",
+        peerInstanceId: "client_one",
+        protocolVersion: 1,
+        nonce: "nonce-profile",
+        requestedCapabilities: ["remote_window"],
+        signatureBase64: signFederationMessage({
+          privateKeyPem: keyPair.privateKeyPem,
+          message,
+        }),
+        now: 2_000,
+        label: "Mac-Mini-M4",
+        profileName: "dev",
+      }),
+    ).toMatchObject({
+      accepted: true,
+      peer: { id: "client_one", profileName: "dev" },
+    });
+    expect(store.getPeer("client_one")?.profileName).toBe("dev");
+  });
+
   it("refreshes stored capabilities to the peer's current advertisement", () => {
     const keyPair = generateFederationIdentityKeyPair();
     store.upsertPeer({

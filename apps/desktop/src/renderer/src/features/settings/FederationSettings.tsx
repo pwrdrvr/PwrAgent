@@ -15,6 +15,7 @@ import type {
 } from "@pwragent/shared";
 import {
   DESKTOP_FEDERATION_MODES,
+  formatFederationPeerDisplayLabel,
   isFederationGatewayEndpointUrl,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -856,7 +857,12 @@ export function FederationSettings(props: FederationSettingsProps) {
           <dl className="settings-aboutkv">
             {effectiveHealth.peers.map((peer) => (
               <div key={peer.id}>
-                <dt>{peer.label}</dt>
+                <dt>
+                  {formatFederationPeerDisplayLabel(
+                    peer,
+                    effectiveHealth.peers,
+                  )}
+                </dt>
                 <dd className="federation-peer-summary">
                   <span>
                     {roleLabel(peer.role)} · {statusLabel(peer.status)}
@@ -897,7 +903,6 @@ export function FederationSettings(props: FederationSettingsProps) {
                     onClick={() => {
                       void props.desktopApi?.openFederationWindow?.({
                         target: { scope: "remote", instanceId: peer.id },
-                        label: peer.label,
                       });
                     }}
                   >
@@ -1480,7 +1485,9 @@ function peerDisplayName(
   peers: FederationHealthStatus["peers"],
 ): string {
   const peer = peers.find((candidate) => candidate.id === peerId);
-  return peer && peer.label !== peerId ? peer.label : peerId;
+  return peer && peer.label !== peerId
+    ? formatFederationPeerDisplayLabel(peer, peers)
+    : peerId;
 }
 
 function trimmedOrUndefined(value: string): string | undefined {
