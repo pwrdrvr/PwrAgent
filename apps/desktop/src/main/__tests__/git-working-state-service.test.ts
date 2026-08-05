@@ -1,11 +1,15 @@
+import { execFile } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import {
   GitWorkingStateService,
   probeWorktreeWorkingState,
 } from "../app-server/git-working-state-service";
+
+const execFileAsync = promisify(execFile);
 
 type GitCall = { cwd: string; args: string[]; input?: string };
 
@@ -15,6 +19,11 @@ function makeTempPrefix(): string {
 
 function normalizeTestPath(value: string): string {
   return path.resolve(value).replace(/\\/g, "/");
+}
+
+async function git(cwd: string, ...args: string[]): Promise<string> {
+  const { stdout } = await execFileAsync("git", args, { cwd });
+  return stdout;
 }
 
 function fakeGit(
@@ -138,6 +147,56 @@ describe("probeWorktreeWorkingState", () => {
     expect(calls.find((call) => call.args.includes("rev-list"))?.input)
       .toBe(`^${mergedPrHeadSha}\n`);
   });
+
+  it("does not count a deleted multi-commit PR worktree after a squash merge", async () => {
+    const root = await mkdtemp(makeTempPrefix());
+    const primary = path.join(root, "primary");
+    const remote = path.join(root, "remote.git");
+    const worktree = path.join(root, "feature-worktree");
+
+    try {
+      await mkdir(primary);
+      await git(root, "init", "--bare", remote);
+      await git(primary, "init", "-b", "main");
+      await git(primary, "config", "user.email", "test@example.com");
+      await git(primary, "config", "user.name", "PwrAgent Test");
+      await writeFile(path.join(primary, "base.txt"), "base\n");
+      await git(primary, "add", "base.txt");
+      await git(primary, "commit", "-m", "base");
+      await git(primary, "remote", "add", "origin", remote);
+      await git(primary, "push", "-u", "origin", "main");
+
+      await git(primary, "worktree", "add", "-b", "feature", worktree, "main");
+      for (let index = 1; index <= 3; index += 1) {
+        const file = `feature-${index}.txt`;
+        await writeFile(path.join(worktree, file), `feature ${index}\n`);
+        await git(worktree, "add", file);
+        await git(worktree, "commit", "-m", `feature ${index}`);
+      }
+      await git(worktree, "push", "-u", "origin", "feature");
+      const mergedPrHeadSha = (await git(worktree, "rev-parse", "HEAD")).trim();
+
+      await git(primary, "merge", "--squash", "feature");
+      await git(primary, "commit", "-m", "squash feature");
+      await git(primary, "push", "origin", "main");
+      await git(primary, "push", "origin", "--delete", "feature");
+
+      const beforePrMetadata = await probeWorktreeWorkingState(worktree);
+      const afterPrMetadata = await probeWorktreeWorkingState(worktree, {
+        acceptedPushedCommitShas: [mergedPrHeadSha],
+      });
+
+      expect(beforePrMetadata?.unpushedCommits).toBe(3);
+      expect(afterPrMetadata?.unpushedCommits).toBe(0);
+    } finally {
+      await rm(root, {
+        recursive: true,
+        force: true,
+        maxRetries: 3,
+        retryDelay: 100,
+      });
+    }
+  }, 20_000);
 
   it("falls back to the raw local count when PR exclusion input fails", async () => {
     const mergedPrHeadSha = "a".repeat(40);
