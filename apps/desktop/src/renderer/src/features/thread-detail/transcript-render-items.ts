@@ -213,8 +213,18 @@ function buildCommentaryOnlyGroups(entries: AppServerThreadEntry[]): RenderGroup
     currentMessages = [];
   };
 
+  const completedTurnIds = new Set<string>();
   for (const entry of entries) {
-    if (isAssistantCommentaryMessage(entry)) {
+    if (entry.turn && isCompletedTurnMetadata(entry.turn)) {
+      completedTurnIds.add(entry.turn.id);
+    }
+  }
+
+  for (const entry of entries) {
+    if (
+      isAssistantCommentaryMessage(entry) &&
+      !isLiveInProgressTurn(entry.turn, completedTurnIds)
+    ) {
       currentMessages.push(entry);
       continue;
     }
@@ -223,6 +233,29 @@ function buildCommentaryOnlyGroups(entries: AppServerThreadEntry[]): RenderGroup
 
   flushCurrent();
   return groups;
+}
+
+function isLiveInProgressTurn(
+  turn: AppServerThreadTurnMetadata | undefined,
+  completedTurnIds: ReadonlySet<string>
+): boolean {
+  return Boolean(
+    turn &&
+      turn.status === "in_progress" &&
+      !isCompletedTurnMetadata(turn) &&
+      !completedTurnIds.has(turn.id)
+  );
+}
+
+function isCompletedTurnMetadata(turn: AppServerThreadTurnMetadata): boolean {
+  return (
+    turn.status === "completed" ||
+    turn.status === "failed" ||
+    turn.status === "cancelled" ||
+    turn.status === "interrupted" ||
+    typeof turn.durationMs === "number" ||
+    typeof turn.completedAt === "number"
+  );
 }
 
 function renderWithGroups(
@@ -338,15 +371,7 @@ function readCompletedTurn(
   return entries
     .map((entry) => entry.turn)
     .find((turn): turn is AppServerThreadTurnMetadata =>
-      Boolean(
-        turn &&
-          (turn.status === "completed" ||
-            turn.status === "failed" ||
-            turn.status === "cancelled" ||
-            turn.status === "interrupted" ||
-            typeof turn.durationMs === "number" ||
-            typeof turn.completedAt === "number")
-      )
+      Boolean(turn && isCompletedTurnMetadata(turn))
     );
 }
 

@@ -700,6 +700,87 @@ describe("buildTranscriptRenderItems", () => {
       },
     ]);
   });
+
+  it("does not collapse in-progress turn commentary when the active turn id is unknown", () => {
+    // A viewer that hydrates mid-turn (e.g. the federation remote window) has
+    // no session activeTurnId. The transcript must still keep the running
+    // turn's commentary visible instead of eliding it as "previous messages".
+    const turn = {
+      id: "turn-1",
+      status: "in_progress" as const,
+      startedAt: 1_000,
+    };
+    const first = commentary("c1", "First update.", turn);
+    const activity: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "tool-1",
+      summary: "Used 2 tools",
+      details: [],
+      turn,
+    };
+    const second = commentary("c2", "Second update.", turn);
+
+    const items = buildTranscriptRenderItems({
+      entries: [first, activity, second],
+      now: 62_000,
+    });
+
+    expect(items).toEqual([
+      { type: "entry", entry: first },
+      { type: "entry", entry: activity },
+      { type: "entry", entry: second },
+    ]);
+  });
+
+  it("keeps collapsing legacy commentary while in-progress turn commentary stays visible", () => {
+    const legacyFirst = commentary("c1", "Old note.");
+    const legacySecond = commentary("c2", "Another old note.");
+    const live = commentary("c3", "Live update.", {
+      id: "turn-2",
+      status: "in_progress",
+    });
+
+    const items = buildTranscriptRenderItems({
+      entries: [legacyFirst, legacySecond, live],
+    });
+
+    expect(items).toEqual([
+      {
+        type: "workPhaseGroup",
+        id: "commentary:c1:c2:complete",
+        collapsible: true,
+        entries: [legacyFirst, legacySecond],
+        label: "2 previous messages",
+      },
+      { type: "entry", entry: live },
+    ]);
+  });
+
+  it("still collapses commentary whose turn completed under mixed metadata in the fallback path", () => {
+    // Same turn id seen as both in_progress (live entry) and completed
+    // (hydrated entry): the turn is over, so the fallback may collapse it.
+    const staleLive = commentary("c1", "Streamed note.", {
+      id: "turn-3",
+      status: "in_progress",
+    });
+    const answer = final("f1", "Final answer.", {
+      id: "turn-3",
+      completedAt: 2_000,
+    });
+
+    const items = buildTranscriptRenderItems({ entries: [staleLive, answer] });
+
+    expect(items).toEqual([
+      {
+        type: "workPhaseGroup",
+        id: "commentary:c1:c1:complete",
+        collapsible: true,
+        entries: [staleLive],
+        label: "1 previous message",
+      },
+      { type: "entry", entry: answer },
+    ]);
+  });
 });
 
 function commentary(
