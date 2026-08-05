@@ -1037,6 +1037,7 @@ export type SetThreadAgentResponse = {
 };
 
 export type ReorderThreadPinsRequest = {
+  federationTarget?: FederationTarget;
   /**
    * Complete pinned order across ALL backends, first item at the top.
    * Entries are thread identity keys (`buildThreadIdentityKey`), so a Codex

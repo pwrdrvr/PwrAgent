@@ -42,19 +42,18 @@ export function evaluateFederationSessionPolicy(params: {
     };
   }
 
-  // Negotiate rather than reject: grant the intersection of what the
-  // peer requests and what its enrollment authorized. All-or-nothing
-  // rejection would hard-fail every existing pairing whenever a newer
-  // build adds a capability to its default request set — the stored
-  // allowlist predates the new capability by definition. The peer never
-  // receives anything beyond its stored grant; zero overlap still
-  // rejects (a peer with no usable capabilities has no business with a
-  // session).
-  const allowed = new Set(params.peer.capabilities);
-  const granted = params.requestedCapabilities.filter((capability) =>
-    allowed.has(capability),
-  );
-  if (granted.length === 0) {
+  // Enrollment is identity trust, not a capability allowlist: federation
+  // pairs instances owned by the same operator, so an enrolled peer is
+  // granted whatever capability set its build advertises. The stored
+  // peer row's capabilities are informational (refreshed on reconnect
+  // for the UI), never an authorization boundary — pinning them at
+  // enrollment time would hard-fail every pairing the moment a newer
+  // build adds a capability to its default set. Per-peer narrowing is a
+  // future RBAC concern, deliberately out of scope. Unknown capability
+  // names from newer builds are filtered at the transport layer before
+  // reaching this policy, so the grant below is always within what THIS
+  // build understands.
+  if (params.requestedCapabilities.length === 0) {
     return {
       accepted: false,
       failure: federationFailure("capability_denied"),
@@ -63,6 +62,6 @@ export function evaluateFederationSessionPolicy(params: {
 
   return {
     accepted: true,
-    capabilities: granted,
+    capabilities: params.requestedCapabilities.slice(),
   };
 }

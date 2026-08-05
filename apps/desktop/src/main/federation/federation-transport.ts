@@ -12,7 +12,7 @@ import { getMainLogger } from "../log";
 import {
   FEDERATION_PROTOCOL_VERSION,
   FEDERATION_TRANSPORT_VERSION,
-  isFederationCapability,
+  filterKnownFederationCapabilities,
   isFederationInstanceId,
 } from "@pwragent/shared";
 import {
@@ -692,7 +692,10 @@ export async function connectFederationClient(params: {
 
   return {
     sessionId: accepted.sessionId,
-    capabilities: accepted.capabilities,
+    // The signature above covered the raw list; narrow to capabilities
+    // THIS build understands only after it verified, so a newer gateway
+    // granting a capability we predate is ignored, not fatal.
+    capabilities: knownCapabilities(accepted.capabilities),
     sendEnvelope: (envelope) => {
       sendFrame(socket, { kind: "envelope", envelope }, transport);
     },
@@ -843,6 +846,29 @@ function isTransportHelloMessage(
   );
 }
 
+/**
+ * Forward-compatibility seam: a newer build may advertise capability
+ * names this build has never heard of. Those must not read as a
+ * malformed frame — rejecting the auth exchange over an unknown name
+ * would make every future capability addition a breaking protocol
+ * change. Frames validate structurally (a list of strings) and carry
+ * the RAW list through signature verification (both proofs sign the
+ * list as transmitted); consumers narrow to known capabilities with
+ * `knownCapabilities` only after signatures check out.
+ */
+function isCapabilityNameList(value: unknown): value is string[] {
+  return (
+    Array.isArray(value)
+    && value.every((entry) => typeof entry === "string")
+  );
+}
+
+function knownCapabilities(
+  value: readonly string[],
+): FederationCapability[] {
+  return filterKnownFederationCapabilities(value);
+}
+
 function isAuthMessage(value: Partial<FederationSocketAuthMessage>): value is FederationSocketAuthMessage {
   return (
     value.kind === "auth" &&
@@ -852,8 +878,7 @@ function isAuthMessage(value: Partial<FederationSocketAuthMessage>): value is Fe
     typeof value.protocolVersion === "number" &&
     typeof value.nonce === "string" &&
     typeof value.signatureBase64 === "string" &&
-    Array.isArray(value.capabilities) &&
-    value.capabilities.every(isFederationCapability)
+    isCapabilityNameList(value.capabilities)
   );
 }
 
@@ -880,7 +905,6 @@ function isAcceptedMessage(
     typeof value.protocolVersion === "number" &&
     typeof value.nonce === "string" &&
     typeof value.signatureBase64 === "string" &&
-    Array.isArray(value.capabilities) &&
-    value.capabilities.every(isFederationCapability)
+    isCapabilityNameList(value.capabilities)
   );
 }

@@ -157,6 +157,55 @@ describe("federation transport", () => {
     expect(server?.closePeer("client_one")).toBe(false);
   });
 
+  it("ignores capability names from newer builds instead of failing the handshake", async () => {
+    const clientKeyPair = generateFederationIdentityKeyPair();
+    const invite = createFederationEnrollmentInvite({
+      store,
+      token: "invite-token-future-capability",
+      gatewayInstanceId: "gateway_one",
+      generatedAt: Date.now() - 1_000,
+      expiresAt: Date.now() + 60_000,
+    });
+    server = new FederationGatewayWebSocketServer({
+      gatewayInstanceId: "gateway_one",
+      gatewayPrivateKeyPem: gatewayKeyPair.privateKeyPem,
+      gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+      host: "127.0.0.1",
+      port: 0,
+      store,
+    });
+    const { url } = await server.start();
+
+    // Simulate a client from a future release advertising a capability
+    // this build has never heard of. The signed proof covers the raw
+    // list, so the handshake must succeed and the unknown name must be
+    // dropped from the granted set and the stored peer row.
+    const futureCapabilities = [
+      "thread_navigation",
+      "capability_from_the_future",
+    ] as unknown as import("@pwragent/shared").FederationCapability[];
+    const client = await connectFederationClient({
+      url,
+      mode: "enroll",
+      gatewayInstanceId: "gateway_one",
+      gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+      peerInstanceId: "client_future",
+      privateKeyPem: clientKeyPair.privateKeyPem,
+      publicKeyPem: clientKeyPair.publicKeyPem,
+      capabilities: futureCapabilities,
+      inviteToken: invite.token,
+      label: "Future Client",
+      role: "client",
+    });
+
+    expect(client.capabilities).toEqual(["thread_navigation"]);
+    expect(store.getPeer("client_future")).toMatchObject({
+      status: "connected",
+      capabilities: ["thread_navigation"],
+    });
+    client.close();
+  });
+
   it("rejects websocket clients that cannot prove an enrolled identity", async () => {
     const clientKeyPair = generateFederationIdentityKeyPair();
     server = new FederationGatewayWebSocketServer({

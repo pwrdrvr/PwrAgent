@@ -271,6 +271,9 @@ export function FederationSettings(props: FederationSettingsProps) {
       peers: [],
     } satisfies FederationHealthStatus);
   const now = Date.now();
+  const connectionRemediation = effectiveHealth.unavailableReason
+    ? remediationForConnectionFailure(effectiveHealth.unavailableReason)
+    : undefined;
 
   return (
     <SettingsSectionStack paneId="federation" aria-label="Federation settings">
@@ -747,16 +750,10 @@ export function FederationSettings(props: FederationSettingsProps) {
               {effectiveHealth.unavailableReason}
             </p>
           ) : null}
-          {effectiveHealth.unavailableReason ? (
-            remediationForConnectionFailure(
-              effectiveHealth.unavailableReason,
-            ) ? (
-              <p className="federation-security-note">
-                {remediationForConnectionFailure(
-                  effectiveHealth.unavailableReason,
-                )}
-              </p>
-            ) : null
+          {connectionRemediation ? (
+            <p className="federation-security-note">
+              {connectionRemediation}
+            </p>
           ) : null}
         </div>
       </SettingsSection>

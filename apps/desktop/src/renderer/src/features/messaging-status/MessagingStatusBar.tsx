@@ -70,10 +70,12 @@ export function MessagingStatusBar(props: {
   // Remote federation windows must not render LOCAL messaging state —
   // there is no remote-messaging surface yet, and showing the local
   // instance's platforms in a window branded as another machine reads
-  // as that machine's messaging. Render nothing there.
+  // as that machine's messaging. Render nothing there, and starve every
+  // effect of the api so no local status/settings polling runs either.
   const isFederationWindow = Boolean(readRendererFederationTarget());
+  const desktopApi = isFederationWindow ? undefined : props.desktopApi;
   const { statuses, activeAtByPlatform } = useMessagingPlatformStatuses(
-    isFederationWindow ? undefined : props.desktopApi,
+    desktopApi,
   );
   const [open, setOpen] = useState(false);
   const [pinned, setPinned] = useState(false);
@@ -139,13 +141,13 @@ export function MessagingStatusBar(props: {
 
   useEffect(() => {
     if (
-      !props.desktopApi?.getMessagingPlatformStatuses
-      || !props.desktopApi?.readSettings
+      !desktopApi?.getMessagingPlatformStatuses
+      || !desktopApi?.readSettings
     ) {
       return;
     }
     let cancelled = false;
-    void props.desktopApi.readSettings({}).then((response) => {
+    void desktopApi.readSettings({}).then((response) => {
       if (!cancelled) setSettingsSnapshot(response.snapshot);
     }).catch(() => {
       // Settings screen owns user-facing errors; keep this controller quiet.
@@ -153,18 +155,18 @@ export function MessagingStatusBar(props: {
     return () => {
       cancelled = true;
     };
-  }, [props.desktopApi, statuses.length]);
+  }, [desktopApi, statuses.length]);
 
   useEffect(() => {
     if (
       !open
-      || !props.desktopApi?.getMessagingPlatformStatuses
-      || !props.desktopApi?.readSettings
+      || !desktopApi?.getMessagingPlatformStatuses
+      || !desktopApi?.readSettings
     ) {
       return;
     }
     let cancelled = false;
-    void props.desktopApi.readSettings({}).then((response) => {
+    void desktopApi.readSettings({}).then((response) => {
       if (!cancelled) setSettingsSnapshot(response.snapshot);
     }).catch(() => {
       // Settings screen owns user-facing errors; keep this controller quiet.
@@ -172,14 +174,14 @@ export function MessagingStatusBar(props: {
     return () => {
       cancelled = true;
     };
-  }, [open, props.desktopApi]);
+  }, [open, desktopApi]);
 
   useEffect(() => {
-    if (!open || !props.desktopApi?.getMessagingActivitySummary) return;
+    if (!open || !desktopApi?.getMessagingActivitySummary) return;
     let cancelled = false;
     const refresh = async (): Promise<void> => {
       try {
-        const response = await props.desktopApi!.getMessagingActivitySummary!();
+        const response = await desktopApi!.getMessagingActivitySummary!();
         if (!cancelled) {
           setActivityByPlatform(summarizeActivityByPlatform(response.summaries));
         }
@@ -195,7 +197,7 @@ export function MessagingStatusBar(props: {
       cancelled = true;
       window.clearInterval(intervalId);
     };
-  }, [open, props.desktopApi]);
+  }, [open, desktopApi]);
 
   useEffect(() => {
     const observed =
@@ -226,7 +228,7 @@ export function MessagingStatusBar(props: {
   }, [hideSettingsTooltip, open]);
 
   const handleToggleMessaging = async (): Promise<void> => {
-    if (!props.desktopApi?.setMessagingEnabled) {
+    if (!desktopApi?.setMessagingEnabled) {
       setToggleError("Messaging can only be toggled from the desktop app.");
       return;
     }
@@ -235,7 +237,7 @@ export function MessagingStatusBar(props: {
     setToggleError(null);
     setSessionOverride(nextEnabled);
     try {
-      const result = await props.desktopApi.setMessagingEnabled({
+      const result = await desktopApi.setMessagingEnabled({
         enabled: nextEnabled,
       });
       setSessionOverride(result.enabled);
@@ -264,7 +266,7 @@ export function MessagingStatusBar(props: {
       setPlatformToggleError("Turn messaging on before changing a platform.");
       return;
     }
-    if (!props.desktopApi?.writeSettingsConfig) {
+    if (!desktopApi?.writeSettingsConfig) {
       setPlatformToggleError("Settings are unavailable.");
       return;
     }
@@ -274,7 +276,7 @@ export function MessagingStatusBar(props: {
       [platform]: true,
     }));
     try {
-      const response = await props.desktopApi.writeSettingsConfig({
+      const response = await desktopApi.writeSettingsConfig({
         patch: platformEnabledPatch(platform, enabled),
       });
       setSettingsSnapshot(response.snapshot);

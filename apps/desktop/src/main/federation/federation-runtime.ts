@@ -68,6 +68,8 @@ import {
   type MarkThreadSeenRequest,
   type SetThreadPinRequest,
   type SetThreadPinResponse,
+  type ReorderThreadPinsRequest,
+  type ReorderThreadPinsResponse,
   type NavigationSnapshot,
   type OpenDesktopApplicationRequest,
   type QueueThreadExecutionModeRequest,
@@ -1443,6 +1445,26 @@ function localBackendOperations(): FederationBackendOperations {
         threadId: request.threadId,
         pinnedRank: overlay.pinnedRank,
       };
+    },
+    async reorderThreadPins(
+      request: ReorderThreadPinsRequest,
+    ): Promise<ReorderThreadPinsResponse> {
+      const pinnedRanks = await getDesktopOverlayStore().reorderThreadPins({
+        threadKeys: request.threadKeys,
+      });
+      // Pin order is global across backends; the backend field is
+      // required by publishLocalEvent but irrelevant here (matches the
+      // app-server reorder handler).
+      await getDesktopBackendRegistry().publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "thread/pin/reordered",
+          params: {
+            pinnedRanks,
+          },
+        },
+      });
+      return { pinnedRanks };
     },
     async archiveThread(request) {
       return await getDesktopBackendRegistry().archiveThread(request);

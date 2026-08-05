@@ -320,6 +320,17 @@ export function isFederationCapability(
   );
 }
 
+/**
+ * Narrow a capability-name list to the capabilities THIS build knows.
+ * Unknown names from newer builds are ignored, never an error — that is
+ * what lets capability additions ship without breaking older peers.
+ */
+export function filterKnownFederationCapabilities(
+  value: readonly string[],
+): FederationCapability[] {
+  return value.filter(isFederationCapability);
+}
+
 export function isFederationInstanceId(value: unknown): value is FederationInstanceId {
   if (typeof value !== "string") return false;
   if (value.length < 3 || value.length > 120) return false;

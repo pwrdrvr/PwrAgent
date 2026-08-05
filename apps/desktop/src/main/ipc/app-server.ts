@@ -5092,6 +5092,15 @@ class DesktopAppServerService {
   async reorderThreadPins(
     request: ReorderThreadPinsRequest,
   ): Promise<ReorderThreadPinsResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .reorderThreadPins(remoteRequest);
+    }
     const pinnedRanks = await this.getOverlayStore().reorderThreadPins({
       threadKeys: request.threadKeys,
     });
@@ -6354,15 +6363,13 @@ export function registerAppServerIpcHandlers(): void {
       // Defense in depth behind the renderer-side guard: a remote
       // federation window's PR lookups belong to the owning instance.
       // Running them here would use THIS machine's paths and GitHub
-      // credentials against a remote thread id.
+      // credentials against a remote thread id. Throw (renderer refresh
+      // paths swallow errors) rather than return an empty result a
+      // caller might diff against snapshot PRs and loop on.
       if (isFederationWindowWebContents(event?.sender)) {
-        return {
-          backend: request.backend ?? "codex",
-          threadId: request.threadId,
-          provider: "github",
-          prs: [],
-          ghAvailable: false,
-        };
+        throw new Error(
+          "PR lookups for remote threads run on the owning instance.",
+        );
       }
       return await timeStartupProfileOperation({
         type: "ipc-main:refreshThreadPullRequests",

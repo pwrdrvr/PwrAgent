@@ -5886,13 +5886,6 @@ export function useThreadNavigation(
       if (!reorderThreadPinsRequest) {
         return;
       }
-      // Pin reorder is not routed over federation yet — in a remote
-      // window it would write order into the viewer's overlay store and
-      // revert on the next remote snapshot (same class as the
-      // setThreadPin bug this branch fixed). Skip until routed.
-      if (readRendererFederationTarget()) {
-        return;
-      }
 
       const pinnedRanksByThreadKey = buildPinnedRanks(orderedThreadKeys);
       setState((current) => ({
@@ -5904,6 +5897,8 @@ export function useThreadNavigation(
 
       try {
         const result = await reorderThreadPinsRequest({
+          // A federation window reorders the owning instance's pins.
+          federationTarget: readRendererFederationTarget(),
           threadKeys: orderedThreadKeys,
         });
         setState((current) => ({
