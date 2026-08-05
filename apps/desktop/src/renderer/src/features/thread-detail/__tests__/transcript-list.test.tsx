@@ -1423,6 +1423,44 @@ describe("TranscriptList", () => {
     });
   });
 
+  it("shows the owner path when a federated inline image fails to load", async () => {
+    const fileUrl =
+      "file:///Users/owner/.pwragent/profiles/default/state/image-inputs/missing.png";
+    const ownerUrl = `pwragent-image://file/${encodeURIComponent(fileUrl)}`;
+    const renderUrl =
+      `pwragent-image://federation/owner_one/${encodeURIComponent(ownerUrl)}`;
+
+    render(
+      <TranscriptList
+        entries={[{
+          type: "message",
+          id: "message-1",
+          role: "user",
+          text: "What's in this?",
+          parts: [{
+            type: "image",
+            url: renderUrl,
+            alt: "Missing federated transcript image",
+          }],
+        }]}
+        loading={false}
+        loadingMore={false}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    fireEvent.error(screen.getByAltText("Missing federated transcript image"));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          "/Users/owner/.pwragent/profiles/default/state/image-inputs/missing.png"
+        )
+      ).toBeInTheDocument();
+    });
+  });
+
   it("renders pending status inside the transcript list", () => {
     render(
       <TranscriptList

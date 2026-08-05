@@ -7,6 +7,7 @@ import type {
   AppServerThreadMessage,
   AppServerThreadMessageEntry,
   AppServerThreadMessagePart,
+  FederationInstanceId,
 } from "@pwragent/shared";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
@@ -51,6 +52,22 @@ export type TranscriptImageProtocolOptions = {
   homeDir?: string;
 };
 
+export type FederatedTranscriptImageRequest = {
+  instanceId: FederationInstanceId;
+  url: string;
+};
+
+export type FederatedTranscriptImageResponse = {
+  dataBase64: string;
+  mimeType: string;
+};
+
+export type TranscriptImageProtocolInstallOptions = {
+  resolveFederatedImage?: (
+    request: FederatedTranscriptImageRequest,
+  ) => Promise<FederatedTranscriptImageResponse>;
+};
+
 export type TranscriptImageMaterializationOptions = {
   /** Linked project/worktree roots approved for this thread's Markdown image links. */
   approvedLocalImageRoots?: readonly string[];
@@ -91,6 +108,7 @@ export type TranscriptImageFileResolution =
 type MaterializedTranscriptImage = {
   buffer: Buffer;
   extension: string;
+  mimeType: string;
   sha256: string;
 };
 
@@ -148,17 +166,30 @@ export function toTranscriptImageProtocolUrl(src: string): string {
   return `pwragent-image://file/${encodeURIComponent(src)}`;
 }
 
+export function toFederatedTranscriptImageProtocolUrl(
+  instanceId: FederationInstanceId,
+  src: string,
+): string {
+  return `pwragent-image://federation/${encodeURIComponent(instanceId)}/${encodeURIComponent(src)}`;
+}
+
 export function rewriteTranscriptImageUrlsForRenderer(
   response: AppServerReadThreadResponse,
 ): AppServerReadThreadResponse {
-  return {
-    ...response,
-    replay: {
-      ...response.replay,
-      entries: response.replay.entries.map(rewriteTranscriptEntryImageUrls),
-      messages: response.replay.messages.map(rewriteTranscriptMessageImageUrls),
-    },
-  };
+  return rewriteTranscriptImageUrls(response, (url) =>
+    isFileImageUrl(url) ? toTranscriptImageProtocolUrl(url) : undefined,
+  );
+}
+
+export function rewriteFederatedTranscriptImageUrlsForRenderer(
+  response: AppServerReadThreadResponse,
+  instanceId: FederationInstanceId,
+): AppServerReadThreadResponse {
+  return rewriteTranscriptImageUrls(response, (url) =>
+    isFederationOwnerImageUrl(url)
+      ? toFederatedTranscriptImageProtocolUrl(instanceId, url)
+      : undefined,
+  );
 }
 
 export async function materializeTranscriptImageUrlsForRenderer(
@@ -501,7 +532,7 @@ async function fetchLoopbackSignedImage(
 
 async function fetchLoopbackSignedImageOnce(
   url: string,
-  deps: TranscriptImageMaterializerDependencies,
+  deps: Pick<TranscriptImageMaterializerDependencies, "fetch">,
 ): Promise<MaterializedTranscriptImage | undefined> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), FETCHED_TRANSCRIPT_IMAGE_TIMEOUT_MS);
@@ -528,7 +559,7 @@ async function fetchLoopbackSignedImageOnce(
       ?.trim()
       .toLowerCase();
     const extension = mimeType ? DATA_IMAGE_EXTENSIONS.get(mimeType) : undefined;
-    if (!extension) {
+    if (!mimeType || !extension) {
       return undefined;
     }
 
@@ -540,6 +571,7 @@ async function fetchLoopbackSignedImageOnce(
     return {
       buffer,
       extension,
+      mimeType,
       sha256: createHash("sha256").update(buffer).digest("hex"),
     };
   } catch {
@@ -856,6 +888,7 @@ async function readMarkdownLinkedTranscriptImage(
   return {
     buffer,
     extension,
+    mimeType: resolution.mimeType,
     sha256: createHash("sha256").update(buffer).digest("hex"),
   };
 }
@@ -974,38 +1007,66 @@ function isInsideInlineCode(line: string, offset: number): boolean {
   return markerLength > 0;
 }
 
-function rewriteTranscriptEntryImageUrls(entry: AppServerThreadEntry): AppServerThreadEntry {
+type TranscriptImageUrlRewriter = (url: string) => string | undefined;
+
+function rewriteTranscriptImageUrls(
+  response: AppServerReadThreadResponse,
+  rewriteUrl: TranscriptImageUrlRewriter,
+): AppServerReadThreadResponse {
+  return {
+    ...response,
+    replay: {
+      ...response.replay,
+      entries: response.replay.entries.map((entry) =>
+        rewriteTranscriptEntryImageUrls(entry, rewriteUrl),
+      ),
+      messages: response.replay.messages.map((message) =>
+        rewriteTranscriptMessageImageUrls(message, rewriteUrl),
+      ),
+    },
+  };
+}
+
+function rewriteTranscriptEntryImageUrls(
+  entry: AppServerThreadEntry,
+  rewriteUrl: TranscriptImageUrlRewriter,
+): AppServerThreadEntry {
   if (entry.type !== "message") {
     return entry;
   }
 
-  return rewriteTranscriptMessageImageUrls(entry) as AppServerThreadMessageEntry;
+  return rewriteTranscriptMessageImageUrls(
+    entry,
+    rewriteUrl,
+  ) as AppServerThreadMessageEntry;
 }
 
 function rewriteTranscriptMessageImageUrls<T extends AppServerThreadMessage>(
   message: T,
+  rewriteUrl: TranscriptImageUrlRewriter,
 ): T {
-  if (!message.parts?.some((part) => part.type === "image" && isFileImageUrl(part.url))) {
-    return message;
-  }
+  let changed = false;
+  const parts = message.parts?.map((part) => {
+    if (part.type !== "image") {
+      return part;
+    }
+    const url = rewriteUrl(part.url);
+    if (!url) {
+      return part;
+    }
+    changed = true;
+    return { ...part, url };
+  });
 
-  return {
-    ...message,
-    parts: message.parts.map(rewriteTranscriptMessagePartImageUrl),
-  };
+  return changed ? { ...message, parts } : message;
 }
 
-function rewriteTranscriptMessagePartImageUrl(
-  part: AppServerThreadMessagePart,
-): AppServerThreadMessagePart {
-  if (part.type !== "image" || !isFileImageUrl(part.url)) {
-    return part;
-  }
+function isLocalTranscriptImageUrl(url: string): boolean {
+  return url.startsWith(`${TRANSCRIPT_IMAGE_PROTOCOL_SCHEME}://file/`);
+}
 
-  return {
-    ...part,
-    url: toTranscriptImageProtocolUrl(part.url),
-  };
+function isFederationOwnerImageUrl(url: string): boolean {
+  return isLocalTranscriptImageUrl(url) || isPwrSnapSignedMediaUrl(url);
 }
 
 function isFileImageUrl(url: string): boolean {
@@ -1020,8 +1081,46 @@ function isMaterializableImageUrl(url: string): boolean {
   );
 }
 
-export function installTranscriptImageProtocol(): void {
+export function installTranscriptImageProtocol(
+  options: TranscriptImageProtocolInstallOptions = {},
+): void {
   protocol.handle(TRANSCRIPT_IMAGE_PROTOCOL_SCHEME, async (request) => {
+    const federatedRequest = decodeFederatedTranscriptImageProtocolRequest(
+      request.url,
+    );
+    if (federatedRequest) {
+      if (!options.resolveFederatedImage) {
+        return new Response("federated transcript image transport unavailable", {
+          status: 503,
+          headers: { "content-type": "text/plain; charset=utf-8" },
+        });
+      }
+
+      try {
+        const remote = await options.resolveFederatedImage(federatedRequest);
+        const bytes = Buffer.from(remote.dataBase64, "base64");
+        if (
+          !remote.mimeType.startsWith("image/")
+          || bytes.byteLength === 0
+          || bytes.byteLength > MAX_FETCHED_TRANSCRIPT_IMAGE_BYTES
+        ) {
+          return new Response("invalid federated transcript image response", {
+            status: 502,
+            headers: { "content-type": "text/plain; charset=utf-8" },
+          });
+        }
+        return transcriptImageResponse(bytes, remote.mimeType);
+      } catch (error) {
+        return new Response(
+          error instanceof Error ? error.message : String(error),
+          {
+            status: 502,
+            headers: { "content-type": "text/plain; charset=utf-8" },
+          },
+        );
+      }
+    }
+
     const resolution = await resolveTranscriptImageProtocolRequest(request.url);
     if (!resolution.ok) {
       return new Response(resolution.message, {
@@ -1031,13 +1130,56 @@ export function installTranscriptImageProtocol(): void {
     }
 
     const bytes = await readFile(resolution.path);
-    return new Response(new Uint8Array(bytes), {
-      headers: {
-        "cache-control": "public, max-age=31536000, immutable",
-        "content-type": resolution.mimeType,
-      },
-    });
+    return transcriptImageResponse(bytes, resolution.mimeType);
   });
+}
+
+function transcriptImageResponse(
+  bytes: Uint8Array,
+  mimeType: string,
+): Response {
+  return new Response(new Uint8Array(bytes), {
+    headers: {
+      "cache-control": "public, max-age=31536000, immutable",
+      "content-type": mimeType,
+    },
+  });
+}
+
+function decodeFederatedTranscriptImageProtocolRequest(
+  requestUrl: string,
+): FederatedTranscriptImageRequest | undefined {
+  let parsed: URL;
+  try {
+    parsed = new URL(requestUrl);
+  } catch {
+    return undefined;
+  }
+
+  if (
+    parsed.protocol !== `${TRANSCRIPT_IMAGE_PROTOCOL_SCHEME}:`
+    || parsed.hostname !== "federation"
+  ) {
+    return undefined;
+  }
+
+  const [encodedInstanceId, encodedUrl, ...unexpected] = parsed.pathname
+    .replace(/^\//, "")
+    .split("/");
+  if (!encodedInstanceId || !encodedUrl || unexpected.length > 0) {
+    return undefined;
+  }
+
+  try {
+    const instanceId = decodeURIComponent(encodedInstanceId);
+    const url = decodeURIComponent(encodedUrl);
+    if (!instanceId || !isFederationOwnerImageUrl(url)) {
+      return undefined;
+    }
+    return { instanceId, url };
+  } catch {
+    return undefined;
+  }
 }
 
 export async function resolveTranscriptImageProtocolRequest(
@@ -1050,6 +1192,42 @@ export async function resolveTranscriptImageProtocolRequest(
   }
 
   return await resolveTranscriptImageFile(sourcePath, options);
+}
+
+export async function readTranscriptImageProtocolRequest(
+  requestUrl: string,
+  options?: TranscriptImageProtocolOptions,
+  dependencies: Pick<TranscriptImageMaterializerDependencies, "fetch"> =
+    defaultMaterializerDependencies,
+): Promise<FederatedTranscriptImageResponse> {
+  if (isPwrSnapSignedMediaUrl(requestUrl)) {
+    const image = await fetchLoopbackSignedImageOnce(requestUrl, dependencies);
+    if (!image) {
+      throw new Error("PwrSnap transcript image could not be fetched");
+    }
+    return {
+      dataBase64: image.buffer.toString("base64"),
+      mimeType: image.mimeType,
+    };
+  }
+
+  const resolution = await resolveTranscriptImageProtocolRequest(
+    requestUrl,
+    options,
+  );
+  if (!resolution.ok) {
+    throw new Error(resolution.message);
+  }
+
+  const fileStat = await stat(resolution.path);
+  if (fileStat.size === 0 || fileStat.size > MAX_FETCHED_TRANSCRIPT_IMAGE_BYTES) {
+    throw new Error("transcript image size is not supported");
+  }
+  const bytes = await readFile(resolution.path);
+  return {
+    dataBase64: bytes.toString("base64"),
+    mimeType: resolution.mimeType,
+  };
 }
 
 function decodeTranscriptImageProtocolRequest(requestUrl: string): string | undefined {
@@ -1180,7 +1358,7 @@ function mimeTypeForImagePath(filePath: string): string | undefined {
 
 function parseSupportedImageDataUrl(
   url: string,
-): { buffer: Buffer; extension: string; sha256: string } | undefined {
+): MaterializedTranscriptImage | undefined {
   const match = /^data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/]+={0,2})$/iu.exec(
     url,
   );
@@ -1191,7 +1369,7 @@ function parseSupportedImageDataUrl(
   const mimeType = match[1]?.toLowerCase();
   const extension = mimeType ? DATA_IMAGE_EXTENSIONS.get(mimeType) : undefined;
   const payload = match[2] ?? "";
-  if (!extension || payload.length % 4 === 1) {
+  if (!mimeType || !extension || payload.length % 4 === 1) {
     return undefined;
   }
 
@@ -1203,6 +1381,7 @@ function parseSupportedImageDataUrl(
   return {
     buffer,
     extension,
+    mimeType,
     sha256: createHash("sha256").update(buffer).digest("hex"),
   };
 }

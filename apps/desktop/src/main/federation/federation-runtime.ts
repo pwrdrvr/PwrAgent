@@ -110,7 +110,11 @@ import {
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
 import { spawnTerminalPty } from "../terminal/integrated-terminal-service";
-import { rewriteTranscriptImageUrlsForRenderer } from "../transcript-image-protocol";
+import {
+  readTranscriptImageProtocolRequest,
+  rewriteFederatedTranscriptImageUrlsForRenderer,
+  rewriteTranscriptImageUrlsForRenderer,
+} from "../transcript-image-protocol";
 import { getMainLogger } from "../log";
 import {
   discoverDesktopApplications,
@@ -619,7 +623,13 @@ export class DesktopFederationRuntime {
   }
 
   remoteBackend(target: FederationRemoteTarget): FederationBackendOperations {
-    return new FederationRemoteBackendClient(this.rpcFor(target));
+    return new FederationRemoteBackendClient(
+      this.rpcFor(target),
+      (response) => rewriteFederatedTranscriptImageUrlsForRenderer(
+        response,
+        target.instanceId,
+      ),
+    );
   }
 
   /**
@@ -1930,7 +1940,10 @@ function localBackendOperations(): FederationBackendOperations {
       });
       return rewriteTranscriptImageUrlsForRenderer(response);
     },
-  async listSkills(
+    async readTranscriptImage(request) {
+      return await readTranscriptImageProtocolRequest(request.url);
+    },
+    async listSkills(
       request: AppServerListSkillsRequest = {},
     ): Promise<AppServerListSkillsResponse> {
       const backend = request.backend ?? "codex";
