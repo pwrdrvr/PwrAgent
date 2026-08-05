@@ -636,8 +636,15 @@ function readCommandActionLabel(item: Record<string, unknown>): string | undefin
     const actionPath = readString(record, "path");
     const actionQuery = readString(record, "query");
     const fallbackName = readString(record, "name");
-    if (actionType === "read" && actionPath) {
-      return `Read ${actionPath.split("/").filter(Boolean).pop() ?? actionPath}`;
+    if (actionType === "read") {
+      if (actionPath) {
+        return `Read ${actionPath.split("/").filter(Boolean).pop() ?? actionPath}`;
+      }
+      if (fallbackName) {
+        return /^(?:read|fetched)\b/i.test(fallbackName)
+          ? fallbackName
+          : `Read ${fallbackName}`;
+      }
     }
     if (actionType === "listFiles") {
       return "Listed files";
