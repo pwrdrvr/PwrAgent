@@ -32,14 +32,9 @@
   to removing invalid `id` fields from response items whose type is `message`.
 - Use the project-local [desktop E2E fixture seeding skill](.agents/skills/desktop-e2e-fixture-seeding/SKILL.md) when seeding or refreshing desktop replay fixtures from live captured sessions.
 - For reliable desktop E2E runs, prefer `pnpm test:desktop-e2e` from the repo root. The package-level `pnpm --filter @pwragent/desktop test:e2e` path is also safe now because it builds `apps/desktop/out/` before launching Playwright.
-- **Run disruptive macOS desktop E2E in the Tart VM lab, not on the user's
-  desktop.** Headed Electron tests flash and steal focus. If
-  `~/pwragent-mac-vm/run-e2e.sh` is present, run the suite there; windows render
-  on the guest display and the host desktop is untouched. Use
-  `~/pwragent-mac-vm/run-e2e.sh --local <repo-path> [playwright args]` for a
-  committed, unpushed HEAD. The local lab details live in the
-  `macos-vm-e2e-lab` skill at
-  [`.agents/skills/macos-vm-e2e-lab/SKILL.md`](.agents/skills/macos-vm-e2e-lab/SKILL.md).
+- **An operator may have a lab available for off-desktop Windows or macOS E2E
+  testing.** Ask the operator for a pointer to the appropriate lab repository
+  or skill before running headed desktop E2E.
 - The macOS CI lane uses the selected-repository **PwrDrvr macOS**
   organization runner group, shared only with PwrSnap. Do not add a
   repository-scoped runner or widen access to the rest of the organization.
