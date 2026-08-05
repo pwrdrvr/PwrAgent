@@ -1343,6 +1343,7 @@ export function TranscriptList(props: TranscriptListProps) {
               ) : item.entry.type === "activity" ? (
                 <TranscriptActivity
                   applications={props.applications}
+                  directoryPaths={props.directoryPaths}
                   desktopApi={props.desktopApi}
                   entry={item.entry}
                   expanded={controlledExpandedActivityIds?.has(item.entry.id)}

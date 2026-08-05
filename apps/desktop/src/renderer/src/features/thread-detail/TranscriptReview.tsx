@@ -4,6 +4,7 @@ import type {
   DesktopApplicationsSnapshot,
   MarkdownFileViewerContext,
 } from "@pwragent/shared";
+import { formatPathRelativeToDirectories } from "@pwragent/shared";
 import { useCallback, useMemo, type MouseEvent } from "react";
 import { normalizeReviewDisplayText } from "../../../../shared/review-command";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -29,19 +30,7 @@ function formatConfidence(value: number | undefined): string | undefined {
 }
 
 function formatPath(path: string, directoryPaths: string[] | undefined): string {
-  const normalized = normalizePath(path);
-  const matchingDirectory = normalizedDirectoryPaths(directoryPaths)
-    .filter(
-      (directoryPath) =>
-        normalized === directoryPath || normalized.startsWith(`${directoryPath}/`)
-    )
-    .sort((left, right) => right.length - left.length)[0];
-
-  if (!matchingDirectory) {
-    return normalized || path;
-  }
-
-  return normalized.slice(matchingDirectory.length).replace(/^\//, "") || normalized;
+  return formatPathRelativeToDirectories(normalizePath(path), directoryPaths);
 }
 
 function priorityLabel(priority: number | undefined): string {
@@ -286,12 +275,6 @@ export function TranscriptReview(props: TranscriptReviewProps) {
 
 function normalizePath(path: string): string {
   return path.replace(/\\/g, "/").replace(/\/+$/, "");
-}
-
-function normalizedDirectoryPaths(paths: string[] | undefined): string[] {
-  return (paths ?? [])
-    .map((path) => normalizePath(path))
-    .filter((path) => path.startsWith("/"));
 }
 
 function fileHref(path: string, line: number): string {

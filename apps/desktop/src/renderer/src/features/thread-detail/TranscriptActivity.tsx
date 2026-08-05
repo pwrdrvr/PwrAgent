@@ -6,6 +6,7 @@ import type {
   DesktopApplicationsSnapshot,
   MarkdownFileViewerContext,
 } from "@pwragent/shared";
+import { formatPathRelativeToDirectories } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { ThreadMarkdown } from "./ThreadMarkdown";
 import { TranscriptCommandOutput } from "./TranscriptCommandOutput";
@@ -19,6 +20,7 @@ type TranscriptActivityProps = {
     DesktopApi,
     "copyText" | "openApplication" | "openMarkdownFileViewer" | "readMarkdownFile"
   >;
+  directoryPaths?: string[];
   entry: AppServerThreadActivityEntry;
   expanded?: boolean;
   fileViewerContext?: MarkdownFileViewerContext;
@@ -36,6 +38,11 @@ export function TranscriptActivity(props: TranscriptActivityProps) {
   const directDetail = singleDirectDetail(props.entry);
   const images = props.entry.details.flatMap((detail) => detail.images ?? []);
   const activityCopyText = buildActivityCopyText(props.entry);
+  const displaySummary = formatActivityText(
+    props.entry.summary,
+    props.entry.details,
+    props.directoryPaths,
+  );
   const className =
     props.entry.tone === "warning"
       ? "transcript-activity transcript-activity--warning"
@@ -61,7 +68,7 @@ export function TranscriptActivity(props: TranscriptActivityProps) {
               }}
             >
               <span className="transcript-activity__chevron" aria-hidden="true" />
-              <span className="transcript-activity__label">{props.entry.summary}</span>
+              <span className="transcript-activity__label">{displaySummary}</span>
             </button>
             <span className="transcript-activity__header-actions">
               <TranscriptCopyButton
@@ -85,7 +92,7 @@ export function TranscriptActivity(props: TranscriptActivityProps) {
           </>
         ) : (
           <>
-            <span className="transcript-activity__label">{props.entry.summary}</span>
+            <span className="transcript-activity__label">{displaySummary}</span>
             <span className="transcript-activity__header-actions">
               <TranscriptCopyButton
                 className="transcript-copy-button--activity"
@@ -134,7 +141,10 @@ export function TranscriptActivity(props: TranscriptActivityProps) {
 
       {directDetail && isExpanded ? (
         <div id={detailsId} className="transcript-activity__detail-body">
-          <TranscriptCommandOutput detail={directDetail} />
+          <TranscriptCommandOutput
+            detail={directDetail}
+            directoryPaths={props.directoryPaths}
+          />
         </div>
       ) : hasDetails && isExpanded ? (
         <ul id={detailsId} className="transcript-activity__details">
@@ -143,6 +153,11 @@ export function TranscriptActivity(props: TranscriptActivityProps) {
             const hasNestedDetails = Boolean(detail.fileDiff || detail.command);
             const isDetailExpanded = expandedDetailIds.has(detail.id);
             const markdown = detail.markdown?.trim();
+            const displayLabel = formatActivityText(
+              detail.label,
+              [detail],
+              props.directoryPaths,
+            );
             const markdownContent =
               markdown && !hasNestedDetails ? (
                 <ThreadMarkdown
@@ -162,10 +177,10 @@ export function TranscriptActivity(props: TranscriptActivityProps) {
                 target="_blank"
                 rel="noreferrer"
               >
-                {detail.label}
+                {displayLabel}
               </a>
             ) : (
-              <span className="transcript-activity__detail-label">{detail.label}</span>
+              <span className="transcript-activity__detail-label">{displayLabel}</span>
             );
 
             return (
@@ -223,7 +238,12 @@ export function TranscriptActivity(props: TranscriptActivityProps) {
                 {hasNestedDetails && isDetailExpanded ? (
                   <div id={nestedId} className="transcript-activity__detail-body">
                     {detail.fileDiff ? <TranscriptDiff detail={detail} /> : null}
-                    {detail.command ? <TranscriptCommandOutput detail={detail} /> : null}
+                    {detail.command ? (
+                      <TranscriptCommandOutput
+                        detail={detail}
+                        directoryPaths={props.directoryPaths}
+                      />
+                    ) : null}
                   </div>
                 ) : null}
               </li>
@@ -255,6 +275,26 @@ function buildActivityCopyText(entry: AppServerThreadActivityEntry): string {
   return [entry.summary, ...entry.details.map((detail) => detail.label)]
     .filter((text) => text.trim().length > 0)
     .join("\n");
+}
+
+function formatActivityText(
+  text: string,
+  details: AppServerThreadActivityEntry["details"],
+  directoryPaths: string[] | undefined,
+): string {
+  let displayText = text;
+  const pathDetails = details
+    .filter((detail): detail is typeof detail & { path: string } => Boolean(detail.path))
+    .sort((left, right) => right.path.length - left.path.length);
+
+  for (const detail of pathDetails) {
+    const displayPath = formatPathRelativeToDirectories(detail.path, directoryPaths);
+    if (displayPath !== detail.path) {
+      displayText = displayText.replaceAll(detail.path, displayPath);
+    }
+  }
+
+  return displayText;
 }
 
 function formatActivityDetailStatus(

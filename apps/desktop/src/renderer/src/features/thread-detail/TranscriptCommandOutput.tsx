@@ -1,10 +1,14 @@
 import { useMemo, useState } from "react";
-import type { AppServerThreadActivityDetail } from "@pwragent/shared";
+import {
+  formatPathRelativeToDirectories,
+  type AppServerThreadActivityDetail,
+} from "@pwragent/shared";
 import { copyText } from "../../lib/copy-text";
 import { TranscriptSubAgentCall } from "./TranscriptSubAgentCall";
 
 type TranscriptCommandOutputProps = {
   detail: AppServerThreadActivityDetail;
+  directoryPaths?: string[];
 };
 
 const PREVIEW_LINE_LIMIT = 12;
@@ -33,6 +37,9 @@ function GenericTranscriptCommandOutput(props: TranscriptCommandOutputProps) {
     (isAgentCommand(command.rawCommand) ? "agent" : "shell");
   const sourceLabel =
     source === "agent" ? "Agent" : source === "tool" ? "Tool" : "Shell";
+  const displayCwd = command.cwd
+    ? formatPathRelativeToDirectories(command.cwd, props.directoryPaths)
+    : undefined;
 
   return (
     <div className="transcript-command">
@@ -66,7 +73,7 @@ function GenericTranscriptCommandOutput(props: TranscriptCommandOutputProps) {
       </div>
       {command.cwd ? (
         <p className="transcript-command__cwd" title={command.cwd}>
-          {command.cwd}
+          {displayCwd}
         </p>
       ) : null}
       <pre className="transcript-command__block">
