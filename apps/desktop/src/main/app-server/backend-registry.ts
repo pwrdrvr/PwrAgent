@@ -9454,7 +9454,7 @@ export class DesktopBackendRegistry {
       return await this.readAcpThread(request, backend);
     }
 
-    const replay =
+    const backendReplay =
       backend === "codex"
         ? await this.withCodexThreadClient(
             request.threadId,
@@ -9476,6 +9476,13 @@ export class DesktopBackendRegistry {
             before: request.before,
             limit: request.limit,
           });
+    // Some backends accept before/limit but return the complete transcript
+    // without pagination metadata. Bound that normalized replay locally so a
+    // long tool-heavy thread does not become one oversized renderer or
+    // federation payload.
+    const replay = backendReplay.pagination.supportsPagination
+      ? backendReplay
+      : pageNormalizedReplay(backendReplay, request);
 
     if (backend === "codex") {
       this.reconcileBackendCodexThreadStatus(request.threadId, replay.threadStatus);

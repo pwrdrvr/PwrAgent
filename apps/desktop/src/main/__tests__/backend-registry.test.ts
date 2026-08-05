@@ -3179,7 +3179,9 @@ describe("DesktopBackendRegistry", () => {
     const registry = new DesktopBackendRegistry({
       codexClient,
       grokClient: new MockBackendClient({
-        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+        initializeError: new Error(
+          "grok app server unavailable: XAI_API_KEY is not set",
+        ),
       }),
       overlayStore,
     });
@@ -31284,6 +31286,97 @@ script = "printf setup"
       threadId: "thread-1",
       before: "cursor-1",
       limit: 25,
+    });
+
+    await registry.close();
+  });
+
+  it("pages normalized thread history when the backend ignores pagination", async () => {
+    const entries: AppServerThreadReplay["entries"] = [
+      {
+        type: "message",
+        id: "entry-1",
+        role: "user",
+        text: "First",
+      },
+      {
+        type: "activity",
+        id: "entry-2",
+        summary: "Worked",
+        status: "completed",
+        details: [],
+      },
+      {
+        type: "message",
+        id: "entry-3",
+        role: "assistant",
+        text: "Third",
+      },
+      {
+        type: "message",
+        id: "entry-4",
+        role: "user",
+        text: "Fourth",
+      },
+    ];
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/read"] },
+      replay: {
+        entries,
+        messages: entries.flatMap((entry) =>
+          entry.type === "message"
+            ? [{ id: entry.id, role: entry.role, text: entry.text }]
+            : [],
+        ),
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    const latest = await registry.readThread({
+      backend: "codex",
+      threadId: "thread-1",
+      limit: 2,
+    });
+    expect(latest.replay.entries.map((entry) => entry.id)).toEqual([
+      "entry-3",
+      "entry-4",
+    ]);
+    expect(latest.replay.messages.map((message) => message.id)).toEqual([
+      "entry-3",
+      "entry-4",
+    ]);
+    expect(latest.replay.pagination).toEqual({
+      supportsPagination: true,
+      hasPreviousPage: true,
+      previousCursor: "entry-3",
+    });
+
+    const older = await registry.readThread({
+      backend: "codex",
+      threadId: "thread-1",
+      before: "entry-3",
+      limit: 2,
+    });
+    expect(older.replay.entries.map((entry) => entry.id)).toEqual([
+      "entry-1",
+      "entry-2",
+    ]);
+    expect(older.replay.messages.map((message) => message.id)).toEqual([
+      "entry-1",
+    ]);
+    expect(older.replay.pagination).toEqual({
+      supportsPagination: true,
+      hasPreviousPage: false,
     });
 
     await registry.close();
