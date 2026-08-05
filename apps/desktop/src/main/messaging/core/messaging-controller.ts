@@ -1706,6 +1706,15 @@ export class MessagingController {
         continue;
       }
 
+      // A terminal private response owns the visible completion for this turn.
+      // Backend work events may continue after the tool returns, but must not
+      // re-arm provider typing/activity on either the source binding or the
+      // newly-created private continuation. Terminal lifecycle still flows
+      // through below so any existing activity lease is explicitly cleared.
+      if (suppressSourceResponse && activeTurn?.status === "working") {
+        continue;
+      }
+
       if (turnStateChanged && (lifecycle || (isThreadStatusIdleEvent(event) && activeTurn))) {
         await this.signalTurnActivity(binding, activeTurn!, {
           reason: event.notification.method,
@@ -3088,7 +3097,10 @@ export class MessagingController {
     event: MessagingInboundTextEvent | MessagingInboundMediaEvent,
     binding?: MessagingBindingRecord,
   ): Promise<boolean> {
-    if (event.channel.conversation.kind === "dm") {
+    if (
+      event.channel.conversation.kind === "dm"
+      || event.channel.conversation.isDirectMessage === true
+    ) {
       return true;
     }
     if (
@@ -13926,6 +13938,32 @@ export class MessagingController {
     );
   }
 
+  private async clearTerminalPrivateResponseActivity(
+    binding: MessagingBindingRecord,
+    turnId: string,
+  ): Promise<void> {
+    try {
+      await this.signalTurnActivity(
+        binding,
+        {
+          turnId,
+          status: "completed",
+          updatedAt: this.now(),
+        },
+        {
+          force: true,
+          reason: "terminal_private_response",
+        },
+      );
+    } catch (error) {
+      this.logger.debug?.("messaging terminal private activity cleanup failed", {
+        bindingId: binding.id,
+        error: error instanceof Error ? error.message : String(error),
+        turnId,
+      });
+    }
+  }
+
   private logBindingTurnStateChange(
     binding: MessagingBindingRecord,
     previousTurn: MessagingActiveTurnSummary | undefined,
@@ -14050,6 +14088,7 @@ export class MessagingController {
     target: {
       backend: AppServerBackendKind;
       federatedThread?: FederatedThreadRef;
+      recordTransition?: boolean;
       threadId: ThreadIdentifier;
       targetKind?: MessagingBindingRecord["targetKind"];
     },
@@ -14091,6 +14130,7 @@ export class MessagingController {
     }
     const upserted = await this.options.store.upsertBinding(binding);
     if (
+      target.recordTransition !== false &&
       previousBinding &&
       (previousBinding.backend !== upserted.backend ||
         previousBinding.threadId !== upserted.threadId ||
@@ -14102,12 +14142,15 @@ export class MessagingController {
       await this.recordBindingTransition("unbound", previousBinding, now);
     }
     if (
-      !previousBinding ||
-      previousBinding.backend !== upserted.backend ||
-      previousBinding.threadId !== upserted.threadId ||
-      !federationRefsMatch(
-        previousBinding.federatedThread,
-        upserted.federatedThread,
+      target.recordTransition !== false &&
+      (
+        !previousBinding ||
+        previousBinding.backend !== upserted.backend ||
+        previousBinding.threadId !== upserted.threadId ||
+        !federationRefsMatch(
+          previousBinding.federatedThread,
+          upserted.federatedThread,
+        )
       )
     ) {
       await this.recordBindingTransition("bound", upserted, now);
@@ -15097,9 +15140,15 @@ export class MessagingController {
         },
       };
     }
+    if (sourceBinding) {
+      await this.clearTerminalPrivateResponseActivity(
+        sourceBinding,
+        request.context.turnId,
+      );
+    }
     if (sourceBinding && result.continuation) {
       try {
-        await this.bindChannelToThread(
+        const continuationBinding = await this.bindChannelToThread(
           {
             ...privateEvent,
             id: `${privateEvent.id}:continuation`,
@@ -15108,9 +15157,14 @@ export class MessagingController {
           },
           {
             backend: request.context.backend,
+            recordTransition: false,
             threadId: request.context.threadId,
             targetKind: sourceBinding.targetKind ?? "agent_thread",
           },
+        );
+        await this.clearTerminalPrivateResponseActivity(
+          continuationBinding,
+          request.context.turnId,
         );
       } catch (error) {
         this.logger.warn?.("messaging private response continuation bind failed", {

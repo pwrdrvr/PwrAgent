@@ -300,6 +300,12 @@ export type MessagingConversationKind = "dm" | "channel" | "thread" | "topic";
 export type MessagingConversationRef = {
   id: string;
   kind: MessagingConversationKind;
+  /**
+   * True when this conversation is a 1:1 direct message or a child thread
+   * inside one. Thread normalization must not discard the access and ambient
+   * reply semantics inherited from its containing direct conversation.
+   */
+  isDirectMessage?: boolean;
   parentId?: string;
   /**
    * Normalized containing conversation used for scope inheritance. This is

@@ -3374,6 +3374,26 @@ function hasReviewEntryForTurn(
   );
 }
 
+function hasCompletedAssistantMessageForTurn(
+  response: AppServerReadThreadResponse | undefined,
+  turnId: string | undefined,
+  text: string | undefined
+): boolean {
+  if (!response || !turnId || !text) {
+    return false;
+  }
+
+  const normalizedText = normalizeTranscriptText(text);
+  return response.replay.entries.some(
+    (entry) =>
+      entry.type === "message" &&
+      entry.role === "assistant" &&
+      entry.phase !== "commentary" &&
+      entry.turn?.id === turnId &&
+      normalizeTranscriptText(entry.text) === normalizedText
+  );
+}
+
 function retainSessionCache(
   sessions: ThreadSessionState,
   selectedThreadKey?: string
@@ -4890,7 +4910,12 @@ export function useThreadSessionState(params: {
               : completedTurnText ?? current.pendingAssistantMessage?.text;
           const shouldAppendFinalMessage = Boolean(
             completedText &&
-              current.pendingAssistantMessage?.text !== completedText
+              current.pendingAssistantMessage?.text !== completedText &&
+              !hasCompletedAssistantMessageForTurn(
+                current.response,
+                completedTurn?.id,
+                completedText
+              )
           );
           const unphasedAssistantCompletionPhase =
             shouldAppendFinalMessage ? "commentary" : undefined;

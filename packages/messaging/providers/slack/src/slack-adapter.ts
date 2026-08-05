@@ -793,6 +793,10 @@ export class SlackAdapter implements SlackProviderAdapter {
       conversation: {
         id: target.channelId,
         kind: "thread",
+        ...(request.parent.conversation.kind === "dm"
+          || request.parent.conversation.isDirectMessage === true
+          ? { isDirectMessage: true }
+          : {}),
         parentId: target.threadTs,
         parentConversationId: request.parent.conversation.id,
         ...(request.parent.conversation.workspaceId
@@ -845,6 +849,7 @@ export class SlackAdapter implements SlackProviderAdapter {
       channel: this.channel,
       conversation: {
         id: request.actor.platformUserId,
+        isDirectMessage: true,
         kind: "dm",
         ...(request.source.conversation.workspaceId
           ? { workspaceId: request.source.conversation.workspaceId }
@@ -1844,7 +1849,10 @@ export class SlackAdapter implements SlackProviderAdapter {
 
     // DMs are governed by the DM access mode alone — the team/channel gates
     // are about (shared) channel traffic and never apply to direct messages.
-    if (params.channel.conversation.kind === "dm") {
+    if (
+      params.channel.conversation.kind === "dm"
+      || params.channel.conversation.isDirectMessage === true
+    ) {
       const dmMode = slackDmAccessMode(this.config);
       if (dmMode === "none") return reject("unauthorized-conversation");
       if (dmMode === "authorized_users" && !actorAuthorized) {
@@ -1900,9 +1908,11 @@ export class SlackAdapter implements SlackProviderAdapter {
     ts: string;
   }): Promise<MessagingChannelRef> {
     const isThread = Boolean(params.threadTs && params.threadTs !== params.ts);
+    const isDirectMessage =
+      params.channelType === "im" || params.channelId.startsWith("D");
     const kind: MessagingConversationKind = isThread
       ? "thread"
-      : params.channelType === "im" || params.channelId.startsWith("D")
+      : isDirectMessage
         ? "dm"
         : "channel";
     const channelTitle =
@@ -1918,6 +1928,7 @@ export class SlackAdapter implements SlackProviderAdapter {
       conversation: {
         id: params.channelId,
         kind,
+        ...(isDirectMessage ? { isDirectMessage: true } : {}),
         ...(params.teamId ? { workspaceId: params.teamId } : {}),
         ...(kind === "dm" && channelTitle ? { title: channelTitle } : {}),
         ...(isThread && params.threadTs ? { parentId: params.threadTs } : {}),
@@ -2699,6 +2710,7 @@ function slackReplyContinuation(params: {
       channel: "slack",
       conversation: {
         id: params.channelId,
+        isDirectMessage: true,
         kind: "thread",
         parentId: params.rootTs,
         parentConversationId: params.channelId,

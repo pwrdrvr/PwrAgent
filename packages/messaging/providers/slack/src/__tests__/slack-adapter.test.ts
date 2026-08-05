@@ -464,6 +464,7 @@ describe("SlackAdapter", () => {
       channel: "slack",
       conversation: {
         id: "U012ABCDEF0",
+        isDirectMessage: true,
         kind: "dm",
         title: "Alice",
         workspaceId: "T012ABCDEF0",
@@ -511,6 +512,7 @@ describe("SlackAdapter", () => {
           channel: "slack",
           conversation: {
             id: "D012PRIVATE0",
+            isDirectMessage: true,
             kind: "thread",
             parentConversationId: "D012PRIVATE0",
             parentId: "1712023032.123456",
@@ -2422,11 +2424,68 @@ describe("SlackAdapter", () => {
         channel: expect.objectContaining({
           conversation: expect.objectContaining({
             id: "D012ABCDEF0",
+            isDirectMessage: true,
             kind: "dm",
           }),
         }),
       }),
     ]);
+  });
+
+  it("preserves direct-message access for replies in a DM thread", async () => {
+    const socket = fakeSocket();
+    const adapter = new SlackAdapter({
+      config: {
+        ...baseConfig,
+        authorizedConversationIds: [],
+        authorizedTeamIds: [],
+        channelAuthorizationMode: "approved_only",
+        teamAuthorizationMode: "approved_only",
+      },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      socketClient: socket,
+      now: () => 1_700_000_000_000,
+    });
+    const events: MessagingInboundEvent[] = [];
+    const rejected: MessagingRejectedInboundEvent[] = [];
+    adapter.onInboundRejected((event) => {
+      rejected.push(event);
+    });
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await socket.emitEvent("slack_event", {
+      ack: async () => undefined,
+      event: {
+        type: "message",
+        channel: "D012ABCDEF0",
+        channel_type: "im",
+        team: "T012ABCDEF0",
+        thread_ts: "1712023032.123456",
+        ts: "1712023033.123456",
+        user: "U012ABCDEF0",
+        text: "reply without mentioning the bot",
+      },
+    });
+
+    expect(rejected).toEqual([]);
+    expect(events).toEqual([
+      expect.objectContaining({
+        kind: "text",
+        channel: expect.objectContaining({
+          conversation: expect.objectContaining({
+            id: "D012ABCDEF0",
+            isDirectMessage: true,
+            kind: "thread",
+            parentConversationId: "D012ABCDEF0",
+            parentId: "1712023032.123456",
+          }),
+        }),
+      }),
+    ]);
+    expect(events[0]).not.toHaveProperty("botMention");
   });
 
   it("allows authorized conversations without authorizing the whole workspace", async () => {

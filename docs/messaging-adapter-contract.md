@@ -163,6 +163,12 @@ to the originating Agent. Replies in that message's native thread therefore
 survive restarts and route deterministically, while a top-level DM remains
 available to the configured default Agent.
 
+Providers set `conversation.isDirectMessage` on both a 1:1 DM and any native
+thread nested inside it. This preserves DM authorization and ambient-reply
+semantics after normalization changes the child conversation's `kind` to
+`thread`; shared-channel allowlists and mention-only policies must not be
+applied to those private thread replies.
+
 ## Attachment Policy
 
 Providers expose metadata and transport:

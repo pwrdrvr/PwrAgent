@@ -1722,6 +1722,7 @@ describe("MessagingController", () => {
     deliver?: (intent: MessagingSurfaceIntent) => Promise<MessagingDeliveryResult>;
     now?: () => number;
     resolveDeliveryScope?: MessagingAdapter["resolveDeliveryScope"];
+    responseModeForConversation?: MessagingControllerOptions["responseModeForConversation"];
     sleepUntil?: MessagingControllerOptions["sleepUntil"];
     streamingResponsesDefault?: boolean;
   }) {
@@ -1754,6 +1755,7 @@ describe("MessagingController", () => {
             channel: "slack" as const,
             conversation: {
               id: "D012HAROLD",
+              isDirectMessage: true,
               kind: "thread" as const,
               parentConversationId: "D012HAROLD",
               parentId: surface.id,
@@ -1809,6 +1811,9 @@ describe("MessagingController", () => {
       navigation,
       ...(options?.now ? { now: options.now } : {}),
       resolvePrivateConversation,
+      ...(options?.responseModeForConversation
+        ? { responseModeForConversation: options.responseModeForConversation }
+        : {}),
       ...(options?.resolveDeliveryScope
         ? { resolveDeliveryScope: options.resolveDeliveryScope }
         : {}),
@@ -1845,7 +1850,9 @@ describe("MessagingController", () => {
       channel,
       harness,
       resolvePrivateConversation,
-    } = await createSlackPrivateResponseHarness();
+    } = await createSlackPrivateResponseHarness({
+      responseModeForConversation: () => "mention_only",
+    });
 
     const response = await harness.controller.handlePwrAgentMessagingRequest({
       operation: "send_private_response",
@@ -1872,7 +1879,9 @@ describe("MessagingController", () => {
       source: channel,
       routingState: { opaque: { channelId: "C012SIGNALS" } },
     });
-    expect(harness.delivered).toEqual([
+    expect(
+      harness.delivered.filter((intent) => intent.kind === "message"),
+    ).toEqual([
       expect.objectContaining({
         audit: expect.objectContaining({
           actor: expect.objectContaining({ platformUserId: "user-1" }),
@@ -1911,6 +1920,7 @@ describe("MessagingController", () => {
         channel: "slack",
         conversation: {
           id: "D012HAROLD",
+          isDirectMessage: true,
           kind: "thread",
           parentConversationId: "D012HAROLD",
           parentId: expect.stringContaining("surface:private-response"),
@@ -1919,6 +1929,12 @@ describe("MessagingController", () => {
       targetKind: "agent_thread",
       threadId: "thread-1",
     });
+    expect(
+      harness.delivered.filter(
+        (intent) => intent.kind === "activity" && intent.state === "idle",
+      ),
+    ).toHaveLength(2);
+    expect(harness.recordMessagingBindingTransition).not.toHaveBeenCalled();
 
     await harness.controller.handleBackendEvent({
       backend: "codex",
@@ -1936,7 +1952,14 @@ describe("MessagingController", () => {
       },
     });
 
-    expect(harness.delivered).toHaveLength(1);
+    expect(
+      harness.delivered.filter((intent) => intent.kind === "message"),
+    ).toHaveLength(1);
+    expect(
+      harness.delivered.filter(
+        (intent) => intent.kind === "activity" && intent.state === "active",
+      ),
+    ).toHaveLength(0);
 
     await harness.controller.handleBackendEvent({
       backend: "codex",
@@ -2059,7 +2082,7 @@ describe("MessagingController", () => {
     });
 
     expect(response).toMatchObject({ ok: true });
-    expect(delivered.at(-1)).toMatchObject({
+    expect(delivered.findLast((intent) => intent.kind === "dismiss")).toMatchObject({
       kind: "dismiss",
       reason: "terminal_private_response",
       targetSurface: {
@@ -2176,7 +2199,7 @@ describe("MessagingController", () => {
     const [, response] = await Promise.all([sourceDelivery, privateRequest]);
 
     expect(response).toMatchObject({ ok: true });
-    expect(delivered.at(-1)).toMatchObject({
+    expect(delivered.findLast((intent) => intent.kind === "dismiss")).toMatchObject({
       kind: "dismiss",
       reason: "terminal_private_response",
       targetSurface: {
