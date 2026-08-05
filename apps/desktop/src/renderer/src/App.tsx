@@ -1107,11 +1107,18 @@ function DesktopAppShell(props: {
   // Shared by the sidebar masthead's home (AppTitleBar on Windows) and the
   // thread-header relocation when the sidebar is hidden on macOS/Linux.
   const mastheadActions = {
+    addingProjectDirectory: navigation.pickingDirectory,
     automationsActive: mainView === "automations",
     settingsActive: mainView === "settings",
     threadSearchActive: mainView === "search",
     creatingThread: Boolean(navigation.creatingThread),
     newThreadDirectoryLabel: navigation.newThreadDirectoryLabel,
+    onAddProjectDirectory: readRendererFederationTarget()
+      ? undefined
+      : async () => {
+          setMainView("thread");
+          await navigation.addProjectDirectory();
+        },
     onOpenAutomations: () => {
       setMainView("automations");
     },
@@ -1484,9 +1491,11 @@ function DesktopAppShell(props: {
         style={{ "--sidebar-width": `${sidebarWidthRef.current}px` } as CSSProperties}
       >
         <Sidebar
+          addingProjectDirectory={navigation.pickingDirectory}
           backends={backendSummaries.backends}
           browseMode={navigation.browseMode}
           createThreadError={navigation.createThreadError}
+          pickDirectoryError={navigation.pickDirectoryError}
           creatingThread={navigation.creatingThread}
           directories={navigation.directories}
           error={navigation.error}
@@ -1524,6 +1533,12 @@ function DesktopAppShell(props: {
               forceWorkspace: true,
             });
           }}
+          onAddProjectDirectory={readRendererFederationTarget()
+            ? undefined
+            : async () => {
+                setMainView("thread");
+                await navigation.addProjectDirectory();
+              }}
           onCreateSubthread={async (thread, mode) => {
             setMainView("thread");
             await navigation.createSubthread(thread, mode);

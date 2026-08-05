@@ -48,6 +48,14 @@ function sqliteValue(value) {
   return String(value).replaceAll("'", "''");
 }
 
+function readonlyDbUri(dbPath) {
+  const encodedPath = dbPath
+    .replaceAll("%", "%25")
+    .replaceAll("?", "%3F")
+    .replaceAll("#", "%23");
+  return `file:${encodedPath}?mode=ro`;
+}
+
 function readStartedInstance(options, trackedInstanceId) {
   if (!fs.existsSync(options.stateDb)) return null;
   const candidatePids = trackedInstanceId ? [] : electronDescendantPids(Number(options.childPid));
@@ -56,7 +64,7 @@ function readStartedInstance(options, trackedInstanceId) {
     ? `instance_id = '${sqliteValue(trackedInstanceId)}'`
     : `profile_name = '${sqliteValue(options.profile)}' AND cwd_hash = '${sqliteValue(options.rootHash)}' AND heartbeat_at >= ${Number(options.startedAfter)} AND process_id IN (${candidatePids.join(",")}) AND exited_at IS NULL`;
   const sql = `SELECT instance_id, process_id, coalesce(exited_at, '') FROM app_runtime_instances WHERE ${selector} ORDER BY heartbeat_at DESC LIMIT 1;`;
-  const result = spawnSync("sqlite3", ["-readonly", "-separator", "\t", options.stateDb, sql], {
+  const result = spawnSync("sqlite3", ["-separator", "\t", readonlyDbUri(options.stateDb), sql], {
     encoding: "utf8",
   });
   if (result.status !== 0) return null;
@@ -115,14 +123,18 @@ async function run(options) {
   fs.writeFileSync(options.pidFile, `${process.pid}\n`);
 
   const out = fs.openSync(options.log, "a");
+  const childEnv = {
+    ...process.env,
+    PWRAGENT_PROFILE: options.profile,
+    [INSTANCE_ROOT_ENV]: options.root,
+  };
+  for (const key of ["ELECTRON_EXEC_PATH", "ELECTRON_CLI_ARGS", "ELECTRON_MAJOR_VER"]) {
+    delete childEnv[key];
+  }
   const child = spawn("/bin/zsh", ["-lc", "exec pnpm dev"], {
     cwd: options.root,
     detached: true,
-    env: {
-      ...process.env,
-      PWRAGENT_PROFILE: options.profile,
-      [INSTANCE_ROOT_ENV]: options.root,
-    },
+    env: childEnv,
     stdio: ["ignore", out, out],
   });
   options.childPid = child.pid;

@@ -8703,6 +8703,47 @@ describe("useThreadNavigation", () => {
       expect(result.current.pickingDirectory).toBe(false);
     });
 
+    it("addProjectDirectory tracks an empty repo and reveals the Directories lens", async () => {
+      const launchpad = buildPickedLaunchpad({ registeredAt: 1_500 });
+      const desktopApi = buildBaseDesktopApi({
+        pickDirectoryFromDisk: vi.fn(async () => ({
+          canceled: false as const,
+          path: "/Users/me/repos/PwrAgent",
+        })),
+        registerDirectoryFromDisk: vi.fn(async () => ({
+          ok: true as const,
+          directoryPath: "/Users/me/repos/PwrAgent",
+          directoryKey: launchpad.directoryKey,
+          directoryLabel: "PwrAgent",
+          currentBranch: "main",
+          launchpad,
+          defaults: launchpadDefaults,
+        })),
+      });
+
+      const { result } = renderHook(() => useThreadNavigation(desktopApi));
+      await waitFor(() => expect(result.current.loading).toBe(false));
+
+      await act(async () => {
+        await result.current.addProjectDirectory();
+      });
+
+      expect(result.current.browseMode).toBe("directories");
+      expect(result.current.selectedItemKey).toBeUndefined();
+      expect(result.current.directories).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            key: launchpad.directoryKey,
+            label: "PwrAgent",
+            threadKeys: [],
+            launchpad: expect.objectContaining({
+              registeredAt: launchpad.registeredAt,
+            }),
+          }),
+        ]),
+      );
+    });
+
     it("pickDirectoryForReference surfaces validation failures and resolves undefined", async () => {
       const pickDirectoryFromDisk = vi.fn(async () => ({
         canceled: false as const,

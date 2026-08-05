@@ -45,14 +45,24 @@ Verify that a previously started instance is still up:
 
 1. Run `status` first when the user asks what is running or when closing processes may be surprising.
 2. Run `restart` when the user asks to start the dev profile; it closes the prior managed dev-profile instance, starts `PWRAGENT_PROFILE=dev PWRAGENT_INSTANCE_ROOT="$PWD" pnpm dev` detached from the checkout, and waits until the app writes a matching profile runtime record.
-3. Run `close` when the user only wants the dev-profile app stopped.
-4. Relay the script output and the log path to the user. The default log is `.local/pwragent-dev-profile.log`.
+3. For visual QA, use the emitted `Computer Use target` line. Target its exact
+   checkout-local `appPath`, then verify the native window title is `PwrAgnt`
+   and the AX URL matches the emitted `rendererUrl`. Never target the generic
+   `Electron` display name, shared `com.github.Electron` bundle id, or installed
+   `com.pwrdrvr.pwragent` app: those can select a sibling project, another
+   checkout, or a packaged build that does not contain the code under test.
+4. Run `close` when the user only wants the dev-profile app stopped.
+5. Relay the script output and the log path to the user. The default log is `.local/pwragent-dev-profile.log`.
 
 ## Script Notes
 
 - The script defaults to `--profile dev`, `--root "$PWD"`, `.local/pwragent-dev-profile.pid`, and `.local/pwragent-dev-profile.log`.
 - Prefer `restart` over hand-running `PWRAGENT_PROFILE=dev pnpm dev`; the script passes `PWRAGENT_INSTANCE_ROOT`, starts a detached daemon helper, then uses the app's lease-backed runtime metadata in `~/.pwragent/profiles/dev/state/state.db` to find the Electron owner process.
 - The detached daemon helper stops the `pnpm dev` supervisor when the first lease-backed Electron instance it started exits, so closing the spawned app does not leave a dev supervisor relaunching it.
+- The daemon clears inherited `ELECTRON_EXEC_PATH`, `ELECTRON_CLI_ARGS`, and
+  `ELECTRON_MAJOR_VER` before launching. An agent hosted by another Pwr-family
+  Electron app can otherwise silently start this checkout through the host
+  app's Electron installation.
 - The script only targets the app instance whose recorded root hash matches the requested checkout, plus that instance's bounded `pnpm dev` / `electron-vite` parent chain.
 - Use `leases` when debugging which process owns the profile messaging lease.
 - If verification fails, inspect the last log lines printed by the script before retrying.
