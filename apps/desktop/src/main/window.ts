@@ -71,9 +71,11 @@ import { federationWindowTargetAdditionalArguments } from "../shared/federation-
 const federationWindowWebContentsIds = new Set<number>();
 
 export function isFederationWindowWebContents(
-  webContents: Electron.WebContents,
+  webContents: Electron.WebContents | undefined,
 ): boolean {
-  return federationWindowWebContentsIds.has(webContents.id);
+  // Tolerate absent senders (unit-test harness events, destroyed frames):
+  // an unidentifiable sender is treated as a normal local window.
+  return webContents ? federationWindowWebContentsIds.has(webContents.id) : false;
 }
 
 const isDevelopment = process.env.NODE_ENV !== "production";

@@ -5858,6 +5858,11 @@ export function useThreadNavigation(
       try {
         const result = await setThreadPinRequest({
           backend: thread.source,
+          // Remote threads pin on their owning instance; without the
+          // target the write lands in the viewer machine's overlay
+          // store and reverts on the next remote snapshot.
+          federationTarget:
+            thread.federation?.ref.target ?? readRendererFederationTarget(),
           threadId: thread.id,
           pinnedRank,
         });
@@ -6334,6 +6339,14 @@ export function useThreadNavigation(
       if (!setThreadPrAutoDispatchRequest) {
         setSetThreadModelSettingsError(
           "Desktop bridge is missing setThreadPrAutoDispatch().",
+        );
+        return;
+      }
+      // Not routed over federation yet — the toggle would flip a phantom
+      // row in the viewer's DB while the owner keeps dispatching (or not).
+      if (thread.federation?.ref.target.scope === "remote") {
+        setSetThreadModelSettingsError(
+          "PR auto-dispatch for remote threads must be changed on the owning instance.",
         );
         return;
       }

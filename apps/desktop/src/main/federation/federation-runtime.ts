@@ -66,6 +66,8 @@ import {
   type MaterializeDirectoryLaunchpadRequest,
   type MaterializeDirectoryLaunchpadOptions,
   type MarkThreadSeenRequest,
+  type SetThreadPinRequest,
+  type SetThreadPinResponse,
   type NavigationSnapshot,
   type OpenDesktopApplicationRequest,
   type QueueThreadExecutionModeRequest,
@@ -355,9 +357,20 @@ export class DesktopFederationRuntime {
     stateDb.setMeta(GATEWAY_NOISE_PUBLIC_KEY_META_KEY, "");
     stateDb.setMeta(PENDING_INVITE_TOKEN_META_KEY, "");
     stateDb.setMeta(GATEWAY_ENROLLED_AT_META_KEY, "");
-    const settings = await getDesktopSettingsService().readSettings();
+    const settingsService = getDesktopSettingsService();
+    const settings = await settingsService.readSettings();
     const mode = settings.federation.mode.value;
-    await getDesktopSettingsService().writeConfigPatch({
+    if (mode === "client" || mode === "disabled") {
+      // A pure client's own key material only matters to the gateway it
+      // just forgot, so drop it too. This is the documented recovery when
+      // the stored keys became undecryptable (keychain identity change):
+      // the next enrollment mints fresh keys and the new invite pins
+      // them. Gateway/dual instances keep their keys — enrolled clients
+      // pinned them.
+      await settingsService.clearSecret("federationInstancePrivateKey");
+      await settingsService.clearSecret("federationNoiseStaticPrivateKey");
+    }
+    await settingsService.writeConfigPatch({
       federation: {
         gatewayUrl: "",
         ...(mode === "client" ? { mode: "disabled" as const } : {}),
@@ -410,6 +423,12 @@ export class DesktopFederationRuntime {
     ttlMs?: number;
   }): Promise<{ invite: string; expiresAt: number }> {
     const settings = await getDesktopSettingsService().readSettings();
+    const mode = settings.federation.mode.value;
+    if (mode !== "gateway" && mode !== "dual") {
+      throw new Error(
+        "Invites are issued by the gateway. Switch Mode to gateway or dual first.",
+      );
+    }
     const gatewayUrl = settings.federation.publicUrl.value.trim() || this.listenUrl;
     if (!gatewayUrl) {
       throw new Error("Federation gateway URL is not configured.");
@@ -459,9 +478,16 @@ export class DesktopFederationRuntime {
     );
     stateDb.setMeta(PENDING_INVITE_TOKEN_META_KEY, payload.token);
     stateDb.setMeta(GATEWAY_ENROLLED_AT_META_KEY, String(Date.now()));
+    // Importing on a listening instance must not silently kill its
+    // listener: gateway/dual become dual, everything else becomes client.
+    const currentMode = (await getDesktopSettingsService().readSettings())
+      .federation.mode.value;
     await getDesktopSettingsService().writeConfigPatch({
       federation: {
-        mode: "client",
+        mode:
+          currentMode === "gateway" || currentMode === "dual"
+            ? "dual"
+            : "client",
         gatewayUrl: payload.gatewayUrl,
       },
     });
@@ -1383,6 +1409,40 @@ function localBackendOperations(): FederationBackendOperations {
         seenUpdatedAt: request.seenUpdatedAt,
         threadId: request.threadId,
       });
+    },
+    async setThreadPin(
+      request: SetThreadPinRequest,
+    ): Promise<SetThreadPinResponse> {
+      const backend = request.backend ?? "codex";
+      const overlay = await getDesktopOverlayStore().setThreadPin({
+        backend,
+        threadId: request.threadId,
+        pinnedRank: request.pinnedRank,
+      });
+      // Publish so this instance's own windows AND connected remote
+      // viewers converge on the new pin state.
+      await getDesktopBackendRegistry().publishLocalEvent({
+        backend,
+        notification: overlay.pinnedRank
+          ? {
+              method: "thread/pin/added",
+              params: {
+                threadId: request.threadId,
+                pinnedRank: overlay.pinnedRank,
+              },
+            }
+          : {
+              method: "thread/pin/removed",
+              params: {
+                threadId: request.threadId,
+              },
+            },
+      });
+      return {
+        backend,
+        threadId: request.threadId,
+        pinnedRank: overlay.pinnedRank,
+      };
     },
     async archiveThread(request) {
       return await getDesktopBackendRegistry().archiveThread(request);

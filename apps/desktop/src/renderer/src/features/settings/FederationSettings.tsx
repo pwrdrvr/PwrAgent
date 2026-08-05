@@ -410,6 +410,7 @@ export function FederationSettings(props: FederationSettingsProps) {
               type="button"
               disabled={props.saving}
               onClick={() => {
+                setActionError(undefined);
                 void props.onWriteConfig({
                   federation: {
                     mode,
@@ -421,7 +422,18 @@ export function FederationSettings(props: FederationSettingsProps) {
                     cloudflareMtlsEnabled,
                     cloudflareAccessServiceAuthEnabled,
                   },
-                }).then(() => loadHealth());
+                }).then(async (written) => {
+                  // A silent false here is how "I set it to client" turns
+                  // into a disabled-mode surprise on the next launch.
+                  if (!written) {
+                    setActionError(
+                      "Federation settings could not be saved to config.toml.",
+                    );
+                    return;
+                  }
+                  await props.onSettingsChanged();
+                  await loadHealth();
+                });
               }}
             >
               Save federation settings
@@ -475,13 +487,20 @@ export function FederationSettings(props: FederationSettingsProps) {
         <div className="settings-fields">
           <SettingsField
             label="Generate invite"
-            sub="Creates a one-time client enrollment payload and copies it to the clipboard."
+            sub={
+              listensForPeers
+                ? "Creates a one-time client enrollment payload and copies it to the clipboard."
+                : "Invites are issued by the gateway. Switch Mode to gateway or dual to enroll clients from this instance."
+            }
             control={
               <div className="federation-invite">
                 <button
                   className="button button--secondary"
                   type="button"
-                  disabled={!props.desktopApi?.generateFederationInvite}
+                  disabled={
+                    !listensForPeers ||
+                    !props.desktopApi?.generateFederationInvite
+                  }
                   onClick={() => {
                     setActionError(undefined);
                     props.desktopApi?.generateFederationInvite?.({})
@@ -1341,6 +1360,12 @@ function remediationForConnectionFailure(reason: string): string | undefined {
     reason.includes("gateway URL is not configured")
   ) {
     return "This instance has no gateway pairing. Import a federation invite to pair it.";
+  }
+  if (reason.includes("federation key cannot be decrypted")) {
+    return "This machine's keychain identity changed (common for unsigned dev builds), so the stored federation key is unreadable. Forget the gateway pairing here, then generate and import a fresh invite.";
+  }
+  if (reason.includes("secret storage is unavailable")) {
+    return "Federation keys need the system credential store. Re-enable secret storage (unset PWRAGENT_DEV_DISABLE_SECRET_STORAGE for dev builds) and restart.";
   }
   return undefined;
 }

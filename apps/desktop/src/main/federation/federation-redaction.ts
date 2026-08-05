@@ -55,6 +55,8 @@ const AUTH_FAILURE_MESSAGE_PATTERNS = [
   "Missing pinned gateway Noise key",
   "missing its gateway identity",
   "missing its pinned gateway",
+  "federation key cannot be decrypted",
+  "secret storage is unavailable",
 ];
 
 /**

@@ -174,7 +174,11 @@ export function ThreadHeader(props: ThreadHeaderProps) {
               onToggleRail={props.layout.onToggleRail}
             />
           ) : null}
-          {props.layout ? (
+          {/* The integrated terminal is a LOCAL shell. For a remote
+              (federated) thread it would open a terminal on the viewer
+              machine while the window is branded as the peer — hide it
+              until a remote PTY exists in the protocol. */}
+          {props.layout && !props.thread.federation ? (
             <button
               type="button"
               className={`thread-header__terminal-toggle${

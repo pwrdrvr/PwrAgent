@@ -223,6 +223,7 @@ import {
   NAVIGATION_UPDATE_DIRECTORY_LAUNCHPAD_CHANNEL,
 } from "../../shared/ipc";
 import { subscribersForChannel } from "../window-channels";
+import { isFederationWindowWebContents } from "../window";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { FocusedDiffService } from "../diff-focus/focused-diff-service";
 import { renderComposerPdfPreview } from "../pdf/composer-pdf-preview";
@@ -5001,6 +5002,18 @@ class DesktopAppServerService {
   async setThreadPin(
     request: SetThreadPinRequest,
   ): Promise<SetThreadPinResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      // Pin state lives in the owning instance's overlay store; writing
+      // it locally would only create a phantom pin on the viewer machine
+      // that the next remote snapshot overwrites.
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .setThreadPin(remoteRequest);
+    }
     const backend = request.backend ?? "codex";
 
     const overlay = await this.getOverlayStore().setThreadPin({
@@ -6335,9 +6348,22 @@ export function registerAppServerIpcHandlers(): void {
   ipcMain.handle(
     NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
     async (
-      _event,
+      event,
       request: RefreshThreadPullRequestsRequest,
     ): Promise<RefreshThreadPullRequestsResponse> => {
+      // Defense in depth behind the renderer-side guard: a remote
+      // federation window's PR lookups belong to the owning instance.
+      // Running them here would use THIS machine's paths and GitHub
+      // credentials against a remote thread id.
+      if (isFederationWindowWebContents(event?.sender)) {
+        return {
+          backend: request.backend ?? "codex",
+          threadId: request.threadId,
+          provider: "github",
+          prs: [],
+          ghAvailable: false,
+        };
+      }
       return await timeStartupProfileOperation({
         type: "ipc-main:refreshThreadPullRequests",
         detail: {
@@ -6354,7 +6380,12 @@ export function registerAppServerIpcHandlers(): void {
   ipcMain.removeHandler(NAVIGATION_SET_PR_POLLING_FOCUS_CHANNEL);
   ipcMain.handle(
     NAVIGATION_SET_PR_POLLING_FOCUS_CHANNEL,
-    async (_event, request: SetPullRequestPollingFocusRequest): Promise<void> => {
+    async (event, request: SetPullRequestPollingFocusRequest): Promise<void> => {
+      // The focus set is shared main-process state; a federation window's
+      // remote thread keys would clobber the local window's fast tier.
+      if (isFederationWindowWebContents(event?.sender)) {
+        return;
+      }
       appServerService.setPullRequestPollingFocus(request);
     },
   );
@@ -6362,9 +6393,16 @@ export function registerAppServerIpcHandlers(): void {
   ipcMain.handle(
     NAVIGATION_DETACH_THREAD_PR_CHANNEL,
     async (
-      _event,
+      event,
       request: DetachThreadPullRequestRequest,
     ): Promise<DetachThreadPullRequestResponse> => {
+      // PR attachments live on the owning instance; a federation window
+      // detaching here would only pollute this machine's overlay store.
+      if (isFederationWindowWebContents(event?.sender)) {
+        throw new Error(
+          "Detaching a pull request is not yet supported for remote threads.",
+        );
+      }
       return await appServerService.detachThreadPullRequest(request);
     },
   );

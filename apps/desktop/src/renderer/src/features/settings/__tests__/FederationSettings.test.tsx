@@ -530,6 +530,7 @@ describe("FederationSettings", () => {
     const { unmount } = render(
       <FederationSettings
         desktopApi={{
+          generateFederationInvite: vi.fn(),
           readFederationHealth: vi.fn(async () => ({
             health: {
               enabled: true,
@@ -552,6 +553,9 @@ describe("FederationSettings", () => {
     expect(screen.getByLabelText("Listen port")).toBeEnabled();
     expect(screen.getByLabelText("Public URL")).toBeEnabled();
     expect(screen.getByLabelText("Gateway URL")).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Generate invite" }),
+    ).toBeEnabled();
     unmount();
 
     const clientSnapshot: DesktopSettingsSnapshot = {
@@ -564,6 +568,7 @@ describe("FederationSettings", () => {
     render(
       <FederationSettings
         desktopApi={{
+          generateFederationInvite: vi.fn(),
           readFederationHealth: vi.fn(async () => ({
             health: {
               enabled: true,
@@ -586,6 +591,10 @@ describe("FederationSettings", () => {
     expect(screen.getByLabelText("Listen port")).toBeDisabled();
     expect(screen.getByLabelText("Public URL")).toBeDisabled();
     expect(screen.getByLabelText("Gateway URL")).toBeEnabled();
+    // Only the listening side issues invites.
+    expect(
+      screen.getByRole("button", { name: "Generate invite" }),
+    ).toBeDisabled();
   });
 
   it("shows gateway enrollment and forgets it after confirmation", async () => {
