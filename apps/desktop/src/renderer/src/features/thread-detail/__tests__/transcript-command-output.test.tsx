@@ -260,4 +260,37 @@ describe("TranscriptCommandOutput", () => {
     expect(copyText).toHaveBeenNthCalledWith(1, "npm view dive");
     expect(copyText).toHaveBeenNthCalledWith(2, "line 1\nline 2");
   });
+
+  it("shortens the displayed cwd without changing executable command text", () => {
+    const copyText = vi.fn(async () => undefined);
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: {
+        copyText,
+      },
+    });
+    const absolutePath = "/repo/worktree/apps/desktop/src/main.ts";
+    const command = `sed -n '1,80p' ${absolutePath}`;
+
+    render(
+      <TranscriptCommandOutput
+        directoryPaths={["/repo/worktree"]}
+        detail={{
+          id: "cmd-relative-cwd",
+          kind: "command",
+          label: command,
+          command: {
+            cwd: "/repo/worktree",
+            displayCommand: command,
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByText(".")).toHaveAttribute("title", "/repo/worktree");
+    expect(screen.getByText(`$ ${command}`)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy command" }));
+    expect(copyText).toHaveBeenCalledWith(command);
+  });
 });

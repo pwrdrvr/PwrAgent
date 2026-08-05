@@ -141,6 +141,7 @@ function renderEntry(params: {
     <TranscriptActivity
       key={entry.id}
       applications={params.applications}
+      directoryPaths={params.directoryPaths}
       desktopApi={params.desktopApi}
       entry={entry}
       expanded={params.expandedActivityIds?.has(entry.id)}

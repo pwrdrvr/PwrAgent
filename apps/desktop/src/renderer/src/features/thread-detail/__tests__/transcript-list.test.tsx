@@ -1878,6 +1878,93 @@ describe("TranscriptList", () => {
     });
   });
 
+  it("passes directory paths to ungrouped activities", () => {
+    const absolutePath = "/repo/worktree/PwrAgnt/apps/desktop/src/main.ts";
+
+    render(
+      <TranscriptList
+        directoryPaths={["/repo/PwrAgnt", "/repo/worktree/PwrAgnt"]}
+        entries={[
+          {
+            type: "activity",
+            id: "ungrouped-relative-path",
+            summary: `Read \`${absolutePath}\``,
+            details: [
+              {
+                id: "ungrouped-relative-path:detail",
+                kind: "read",
+                label: `Read \`${absolutePath}\``,
+                path: absolutePath,
+              },
+            ],
+          },
+        ]}
+        loading={false}
+        loadingMore={false}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Read `apps/desktop/src/main.ts`" }),
+    ).toBeInTheDocument();
+  });
+
+  it("passes directory paths to activities inside a work phase group", async () => {
+    const absolutePath = "/repo/worktrees/PwrAgnt/apps/desktop/src/renderer/App.tsx";
+    const completedTurn = {
+      id: "turn-relative-path",
+      status: "completed" as const,
+      startedAt: 1_000,
+      completedAt: 3_000,
+      durationMs: 2_000,
+    };
+
+    render(
+      <TranscriptList
+        directoryPaths={["/repo/PwrAgnt", "/repo/worktrees/PwrAgnt"]}
+        entries={[
+          {
+            type: "activity",
+            id: "read-relative-path",
+            summary: `Read \`${absolutePath}\``,
+            details: [
+              {
+                id: "read-relative-path:detail",
+                kind: "read",
+                label: `Read \`${absolutePath}\``,
+                path: absolutePath,
+              },
+            ],
+            turn: completedTurn,
+          },
+          {
+            type: "message",
+            id: "message-relative-path",
+            role: "assistant",
+            text: "Done.",
+            turn: completedTurn,
+          },
+        ]}
+        loading={false}
+        loadingMore={false}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Previous work" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", {
+          name: "Read `apps/desktop/src/renderer/App.tsx`",
+        }),
+      ).toBeVisible();
+    });
+  });
+
   it("anchors a freshly loaded transcript to the newest entry", () => {
     render(
       <TranscriptList

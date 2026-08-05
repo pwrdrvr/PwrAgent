@@ -5,6 +5,7 @@ import type {
   AppServerThreadEntry,
   AppServerThreadFileDiffRef,
 } from "./contracts/normalized-app-server";
+import { formatPathRelativeToDirectories } from "./path-display";
 
 export type PendingRequestDecision = "approve" | "decline" | "cancel";
 export type PendingRequestActionDecision =
@@ -325,27 +326,7 @@ export function formatApprovalPath(
   value: string,
   directoryPaths: string[] | undefined,
 ): string {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return "";
-  }
-
-  const roots = [...(directoryPaths ?? [])]
-    .map((root) => normalizePath(root))
-    .filter(Boolean)
-    .sort((left, right) => right.length - left.length);
-  const normalizedValue = normalizePath(trimmed);
-
-  for (const root of roots) {
-    if (normalizedValue === root) {
-      return ".";
-    }
-    if (normalizedValue.startsWith(`${root}/`)) {
-      return normalizedValue.slice(root.length + 1) || ".";
-    }
-  }
-
-  return trimmed;
+  return formatPathRelativeToDirectories(value, directoryPaths);
 }
 
 export function buildPendingRequestResponse(
@@ -988,9 +969,4 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : undefined;
-}
-
-function normalizePath(value: string): string {
-  const normalized = value.trim().replace(/\\/g, "/");
-  return normalized.length > 1 ? normalized.replace(/\/+$/, "") : normalized;
 }
