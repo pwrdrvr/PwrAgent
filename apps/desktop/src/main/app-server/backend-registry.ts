@@ -1523,6 +1523,13 @@ type ThreadPullRequestWatchToolHandler = (
   args: WatchThreadPullRequestToolArgs,
 ) => PwrAgentThreadInspectionResponse | Promise<PwrAgentThreadInspectionResponse>;
 
+type DirectoryGitStatusWriter = (params: {
+  directory?: NavigationDirectorySummary;
+  directoryKey: string;
+  fetchedAt: number;
+  gitStatus?: NavigationDirectoryGitStatus;
+}) => void | Promise<void>;
+
 type ThreadPrAutoDispatchHandler = {
   preferenceChanged: (request: SetThreadPrAutoDispatchRequest) => Promise<void>;
   preferencesChanged?: (
@@ -6114,6 +6121,7 @@ export class DesktopBackendRegistry {
   private threadPullRequestWatchToolHandler:
     | ThreadPullRequestWatchToolHandler
     | undefined;
+  private directoryGitStatusWriter: DirectoryGitStatusWriter | undefined;
   private threadPrAutoDispatchHandler: ThreadPrAutoDispatchHandler | undefined;
   private threadPullRequestCanonicalizer:
     | ThreadPullRequestCanonicalizer
@@ -6802,6 +6810,12 @@ export class DesktopBackendRegistry {
     handler: ThreadPullRequestWatchToolHandler | null | undefined,
   ): void {
     this.threadPullRequestWatchToolHandler = handler ?? undefined;
+  }
+
+  setDirectoryGitStatusWriter(
+    writer: DirectoryGitStatusWriter | null | undefined,
+  ): void {
+    this.directoryGitStatusWriter = writer ?? undefined;
   }
 
   setThreadPrAutoDispatchHandler(
@@ -8902,12 +8916,23 @@ export class DesktopBackendRegistry {
     for await (const entry of this.gitDirectoryService.readDirectoryStatusEntries(
       directories,
     )) {
+      const fetchedAt = Date.now();
+      const directory = this.navigationDirectoriesByKey.get(entry.directoryKey);
+      if (this.directoryGitStatusWriter) {
+        await this.directoryGitStatusWriter({
+          directory,
+          directoryKey: entry.directoryKey,
+          fetchedAt,
+          gitStatus: entry.gitStatus,
+        });
+        continue;
+      }
       const notification: NavigationDirectoryGitStatusUpdatedNotification = {
         method: "navigation/directoryGitStatus/updated",
         params: {
           directoryKey: entry.directoryKey,
           gitStatus: entry.gitStatus ?? null,
-          fetchedAt: Date.now(),
+          fetchedAt,
         },
       };
       await this.emit({

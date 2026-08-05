@@ -2255,6 +2255,8 @@ describe("DesktopBackendRegistry", () => {
       } as never,
     });
     const events: AgentEvent[] = [];
+    const writeDirectoryGitStatus = vi.fn(async () => undefined);
+    registry.setDirectoryGitStatusWriter(writeDirectoryGitStatus);
     const unsubscribe = registry.onEvent((event) => {
       events.push(event);
     });
@@ -2298,20 +2300,19 @@ describe("DesktopBackendRegistry", () => {
           path: "/owner/repo",
         }),
       ]);
-      expect(events).toContainEqual({
-        backend: "codex",
-        notification: {
-          method: "navigation/directoryGitStatus/updated",
-          params: {
-            directoryKey: "directory:/owner/repo",
-            fetchedAt: expect.any(Number),
-            gitStatus: {
-              currentBranch: "main",
-              syncState: "in-sync",
-            },
-          },
+      expect(writeDirectoryGitStatus).toHaveBeenCalledExactlyOnceWith({
+        directory: expect.objectContaining({
+          key: "directory:/owner/repo",
+          path: "/owner/repo",
+        }),
+        directoryKey: "directory:/owner/repo",
+        fetchedAt: expect.any(Number),
+        gitStatus: {
+          currentBranch: "main",
+          syncState: "in-sync",
         },
       });
+      expect(events).toEqual([]);
     } finally {
       unsubscribe();
       await registry.close();

@@ -337,6 +337,7 @@ const setThreadPullRequestStatusToolHandler = vi.fn();
 const setThreadPullRequestCanonicalizer = vi.fn();
 const setThreadPullRequestWatchToolHandler = vi.fn();
 const setThreadPrAutoDispatchHandler = vi.fn();
+const setDirectoryGitStatusWriter = vi.fn();
 const setThreadPrAutoDispatchBatch = vi.fn(async () => undefined);
 const ensureDirectoryLaunchpad = vi.fn(async (request: {
   directoryKey: string;
@@ -696,6 +697,7 @@ vi.mock("../app-server/backend-registry", () => {
     setThreadPullRequestCanonicalizer,
     setThreadPullRequestWatchToolHandler,
     setThreadPrAutoDispatchHandler,
+    setDirectoryGitStatusWriter,
     setThreadPrAutoDispatchBatch,
     ensureDirectoryLaunchpad,
     getQueuedExecutionModesSnapshot: () => ({}),
@@ -788,6 +790,7 @@ describe("app server ipc", () => {
     setThreadPullRequestCanonicalizer.mockClear();
     setThreadPullRequestWatchToolHandler.mockClear();
     setThreadPrAutoDispatchHandler.mockClear();
+    setDirectoryGitStatusWriter.mockClear();
     setThreadPrAutoDispatchBatch.mockClear();
     ensureDirectoryLaunchpad.mockClear();
     markThreadSeen.mockClear();
@@ -956,6 +959,54 @@ describe("app server ipc", () => {
     expect(setThreadPullRequestCanonicalizer).toHaveBeenCalledWith(
       expect.any(Function),
     );
+  });
+
+  it("persists owner-refreshed directory Git status before publishing it", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+
+    registerAppServerIpcHandlers();
+
+    const writer = setDirectoryGitStatusWriter.mock.calls.at(-1)?.[0];
+    await writer?.({
+      directory: {
+        key: "directory:/owner/repo",
+        kind: "directory",
+        label: "repo",
+        path: "/owner/repo",
+        threadKeys: [],
+        needsAttentionCount: 0,
+      },
+      directoryKey: "directory:/owner/repo",
+      fetchedAt: 2_000,
+      gitStatus: {
+        currentBranch: "main",
+        syncState: "in-sync",
+      },
+    });
+
+    expect(writeDirectoryGitStatusCacheEntry).toHaveBeenCalledExactlyOnceWith({
+      directoryKey: "directory:/owner/repo",
+      directoryPath: "/owner/repo",
+      fetchedAt: 2_000,
+      gitStatus: {
+        currentBranch: "main",
+        syncState: "in-sync",
+      },
+    });
+    expect(publishLocalEvent).toHaveBeenCalledExactlyOnceWith({
+      backend: "codex",
+      notification: {
+        method: "navigation/directoryGitStatus/updated",
+        params: {
+          directoryKey: "directory:/owner/repo",
+          fetchedAt: 2_000,
+          gitStatus: {
+            currentBranch: "main",
+            syncState: "in-sync",
+          },
+        },
+      },
+    });
   });
 
   it("hydrates the thread inspection PR canonicalizer from durable cache", async () => {

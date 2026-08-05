@@ -2461,7 +2461,7 @@ class DesktopAppServerService {
     }
   }
 
-  private async writeDirectoryGitStatusEntry(params: {
+  async writeDirectoryGitStatusEntry(params: {
     directory?: NavigationSnapshot["directories"][number];
     directoryKey: string;
     fetchedAt: number;
@@ -5959,6 +5959,9 @@ export function registerAppServerIpcHandlers(): void {
   getDesktopBackendRegistry().setThreadPullRequestWatchToolHandler(
     async (args) => await appServerService.watchThreadPullRequestForTool(args),
   );
+  getDesktopBackendRegistry().setDirectoryGitStatusWriter(
+    async (params) => await appServerService.writeDirectoryGitStatusEntry(params),
+  );
   getDesktopBackendRegistry().setThreadPrAutoDispatchHandler({
     preferenceChanged: async (request) =>
       await appServerService.handleThreadPrAutoDispatchPreference(request),
@@ -6587,6 +6590,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   registry?.setThreadPullRequestStatusToolHandler(undefined);
   registry?.setThreadPullRequestCanonicalizer(undefined);
   registry?.setThreadPullRequestWatchToolHandler(undefined);
+  registry?.setDirectoryGitStatusWriter(undefined);
   registry?.setThreadPrAutoDispatchHandler(undefined);
   await appServerService.close();
 }

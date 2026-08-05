@@ -311,6 +311,31 @@ describe("GitDirectoryService", () => {
     expect(workspace.workMode).toBe("worktree");
     expect(runGit(workspace.cwd!, ["rev-parse", "HEAD"])).toBe(mainRevision);
     await workspace.rollback?.();
+
+    const explicitAttached = await service.prepareLaunchpadWorkspace({
+      directoryKind: "directory",
+      directoryLabel: "FixtureRepo",
+      directoryPath: repoDir,
+      workMode: "worktree",
+      branchName: "origin/main",
+      worktreeBranchMode: "attached",
+    });
+    expect(explicitAttached).toEqual({
+      cwd: toForwardSlashes(repoDir),
+      workMode: "local",
+    });
+
+    const implicitAttached = await service.prepareLaunchpadWorkspace({
+      directoryKind: "directory",
+      directoryLabel: "FixtureRepo",
+      directoryPath: repoDir,
+      workMode: "worktree",
+      worktreeBranchMode: "attached",
+    });
+    expect(implicitAttached).toEqual({
+      cwd: toForwardSlashes(repoDir),
+      workMode: "local",
+    });
   }, 15_000);
 
   it("refreshes cached unborn status after the initial branch is published", async () => {

@@ -604,15 +604,19 @@ async function resolveVerifiedWorktreeBaseBranch(params: {
   repoRoot: string;
   sourceRoot?: string;
   requestedBranch?: string;
+  requireLocalBranch?: boolean;
   gitEnv?: NodeJS.ProcessEnv;
   runGit?: GitCommandRunner;
 }): Promise<string | undefined> {
   const runGit = params.runGit ?? defaultRunGit;
   const requestedBranch = sanitizeBranchName(params.requestedBranch ?? "");
   if (requestedBranch && requestedBranch !== "HEAD") {
+    const requestedRef = params.requireLocalBranch
+      ? `refs/heads/${requestedBranch}`
+      : requestedBranch;
     const commit = await runGit(
       params.repoRoot,
-      ["rev-parse", "--verify", `${requestedBranch}^{commit}`],
+      ["rev-parse", "--verify", `${requestedRef}^{commit}`],
       params.gitEnv,
     ).catch(() => "");
     return commit ? requestedBranch : undefined;
@@ -628,7 +632,7 @@ async function resolveVerifiedWorktreeBaseBranch(params: {
       [
         "for-each-ref",
         "refs/heads",
-        "refs/remotes",
+        ...(params.requireLocalBranch ? [] : ["refs/remotes"]),
         "--sort=-committerdate",
         "--format=%(refname)%09%(refname:short)%09%(committerdate:unix)%09%(symref)",
       ],
@@ -1248,6 +1252,7 @@ export class GitDirectoryService {
       gitEnv: this.gitEnv,
       repoRoot,
       requestedBranch: launchpad.branchName,
+      requireLocalBranch: launchpad.worktreeBranchMode === "attached",
       runGit: this.runGitCommand,
       sourceRoot,
     });
