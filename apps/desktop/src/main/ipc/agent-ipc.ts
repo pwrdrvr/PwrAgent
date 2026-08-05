@@ -875,6 +875,14 @@ export function registerAgentIpcHandlers(): void {
       _event,
       request: CheckThreadBranchDriftRequest,
     ): Promise<CheckThreadBranchDriftResponse> => {
+      if (
+        request.federationTarget &&
+        isRemoteFederationTarget(request.federationTarget)
+      ) {
+        return await getDesktopFederationRuntime()
+          .remoteBackend(request.federationTarget)
+          .checkThreadBranchDrift(stripFederationTarget(request));
+      }
       return await registry.checkThreadBranchDrift(request);
     },
   );
@@ -886,6 +894,14 @@ export function registerAgentIpcHandlers(): void {
       _event,
       request: UpdateThreadExpectedBranchRequest,
     ): Promise<UpdateThreadExpectedBranchResponse> => {
+      if (
+        request.federationTarget &&
+        isRemoteFederationTarget(request.federationTarget)
+      ) {
+        return await getDesktopFederationRuntime()
+          .remoteBackend(request.federationTarget)
+          .updateThreadExpectedBranch(stripFederationTarget(request));
+      }
       return await registry.updateThreadExpectedBranch(request);
     },
   );
@@ -897,6 +913,14 @@ export function registerAgentIpcHandlers(): void {
       _event,
       request: RetainThreadBranchDriftRequest,
     ): Promise<RetainThreadBranchDriftResponse> => {
+      if (
+        request.federationTarget &&
+        isRemoteFederationTarget(request.federationTarget)
+      ) {
+        return await getDesktopFederationRuntime()
+          .remoteBackend(request.federationTarget)
+          .retainThreadBranchDrift(stripFederationTarget(request));
+      }
       return await registry.retainThreadBranchDrift(request);
     },
   );

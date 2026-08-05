@@ -1799,6 +1799,9 @@ export function ThreadView(props: ThreadViewProps) {
       const result = await props.desktopApi.checkThreadBranchDrift({
         backend: thread.source,
         expectedBranch: thread.gitBranch,
+        federationTarget:
+          thread.federation?.ref.target
+          ?? readRendererFederationTarget(),
         threadId: thread.id,
       });
       // Stale-closure guard: user navigated away mid-IPC.
@@ -3456,6 +3459,9 @@ export function ThreadView(props: ThreadViewProps) {
                     try {
                       await props.desktopApi.retainThreadBranchDrift({
                         backend: selectedThread.source,
+                        federationTarget:
+                          selectedThread.federation?.ref.target
+                          ?? readRendererFederationTarget(),
                         threadId: selectedThread.id,
                         expectedBranch: branchDriftDialog.expectedBranch,
                         observedBranch: branchDriftDialog.observedBranch,
@@ -3501,6 +3507,9 @@ export function ThreadView(props: ThreadViewProps) {
                     try {
                       await props.desktopApi.updateThreadExpectedBranch({
                         backend: selectedThread.source,
+                        federationTarget:
+                          selectedThread.federation?.ref.target
+                          ?? readRendererFederationTarget(),
                         threadId: selectedThread.id,
                         branch: branchDriftDialog.observedBranch,
                       });

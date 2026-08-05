@@ -175,6 +175,106 @@ describe("federation backend bridge", () => {
     ]);
   });
 
+  it("routes branch drift reads and mutations to the owning peer", async () => {
+    const backend = {
+      checkThreadBranchDrift: vi.fn(async (request) => ({
+        ...request,
+        checkedAt: 1_100,
+        drifted: true,
+        observedBranch: "main",
+      })),
+      updateThreadExpectedBranch: vi.fn(async (request) => ({
+        ...request,
+        updatedAt: 1_200,
+      })),
+      retainThreadBranchDrift: vi.fn(async (request) => ({
+        ...request,
+        retainedAt: 1_300,
+      })),
+    } as unknown as FederationBackendOperations;
+    const ownerRouter = new FederationRouter({
+      localInstanceId: "owner_one",
+      methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+    });
+    ownerRouter.registerConnection({
+      peerId: "viewer_one",
+      capabilities: ["thread_navigation", "turn_control"],
+      sendEnvelope: (envelope) => {
+        rpc.receiveEnvelope(envelope);
+      },
+    });
+    registerFederationBackendHandlers({ router: ownerRouter, backend });
+    const rpc = new FederationRpcEndpoint({
+      localInstanceId: "viewer_one",
+      remoteInstanceId: "owner_one",
+      sendEnvelope: (envelope) => {
+        void ownerRouter.routeEnvelope({
+          envelope,
+          sourcePeerId: "viewer_one",
+        });
+      },
+    });
+    const client = new FederationRemoteBackendClient(rpc);
+
+    await expect(client.checkThreadBranchDrift({
+      backend: "codex",
+      expectedBranch: "feature/expected",
+      threadId: "thread-1",
+    })).resolves.toMatchObject({
+      checkedAt: 1_100,
+      drifted: true,
+      observedBranch: "main",
+    });
+    await expect(client.updateThreadExpectedBranch({
+      backend: "codex",
+      branch: "main",
+      threadId: "thread-1",
+    })).resolves.toMatchObject({
+      branch: "main",
+      updatedAt: 1_200,
+    });
+    await expect(client.retainThreadBranchDrift({
+      backend: "codex",
+      expectedBranch: "feature/expected",
+      observedBranch: "main",
+      threadId: "thread-1",
+    })).resolves.toMatchObject({
+      retainedAt: 1_300,
+    });
+
+    expect(backend.checkThreadBranchDrift).toHaveBeenCalledExactlyOnceWith({
+      backend: "codex",
+      expectedBranch: "feature/expected",
+      threadId: "thread-1",
+    });
+    expect(backend.updateThreadExpectedBranch).toHaveBeenCalledExactlyOnceWith({
+      backend: "codex",
+      branch: "main",
+      threadId: "thread-1",
+    });
+    expect(backend.retainThreadBranchDrift).toHaveBeenCalledExactlyOnceWith({
+      backend: "codex",
+      expectedBranch: "feature/expected",
+      observedBranch: "main",
+      threadId: "thread-1",
+    });
+    expect(
+      FEDERATION_BACKEND_METHOD_CAPABILITIES[
+        FEDERATION_BACKEND_METHODS.checkThreadBranchDrift
+      ],
+    ).toBe("thread_navigation");
+    expect(
+      FEDERATION_BACKEND_METHOD_CAPABILITIES[
+        FEDERATION_BACKEND_METHODS.updateThreadExpectedBranch
+      ],
+    ).toBe("turn_control");
+    expect(
+      FEDERATION_BACKEND_METHOD_CAPABILITIES[
+        FEDERATION_BACKEND_METHODS.retainThreadBranchDrift
+      ],
+    ).toBe("turn_control");
+  });
+
   it("routes pin reorder over RPC with thread_navigation authorization", async () => {
     const sent: FederationProtocolEnvelope[] = [];
     const rpc = new FederationRpcEndpoint({
@@ -891,6 +991,9 @@ describe("federation backend bridge", () => {
         ...request,
         status: "acknowledged-new-thread" as const,
       })),
+      checkThreadBranchDrift: vi.fn(),
+      updateThreadExpectedBranch: vi.fn(),
+      retainThreadBranchDrift: vi.fn(),
       submitServerRequest: vi.fn(async () => ({
         backend: "codex" as const,
         threadId: "thread-1",
@@ -1093,6 +1196,9 @@ describe("federation backend bridge", () => {
         setAcpSessionRuntimeOption: vi.fn(),
         setThreadModelSettings: vi.fn(),
         applyThreadModelMigration: vi.fn(),
+        checkThreadBranchDrift: vi.fn(),
+        updateThreadExpectedBranch: vi.fn(),
+        retainThreadBranchDrift: vi.fn(),
         submitServerRequest: vi.fn(),
         runCodexEnvironmentAction: vi.fn(),
         stopCodexEnvironmentAction: vi.fn(),

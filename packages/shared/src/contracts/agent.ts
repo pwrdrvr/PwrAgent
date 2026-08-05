@@ -510,6 +510,7 @@ export type SetAcpSessionRuntimeOptionResponse = {
 export type CheckThreadBranchDriftRequest = {
   backend: AppServerBackendKind;
   expectedBranch?: string;
+  federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
 };
 
@@ -524,6 +525,7 @@ export type CheckThreadBranchDriftResponse = {
 
 export type UpdateThreadExpectedBranchRequest = {
   backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   branch: string;
 };
@@ -537,6 +539,7 @@ export type UpdateThreadExpectedBranchResponse = {
 
 export type RetainThreadBranchDriftRequest = {
   backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   expectedBranch: string;
   observedBranch: string;
