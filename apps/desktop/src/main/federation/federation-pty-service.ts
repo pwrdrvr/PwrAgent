@@ -61,6 +61,9 @@ export const FEDERATION_PTY_LOW_WATER_BYTES = 256 * 1024;
 export const FEDERATION_PTY_ACK_INTERVAL_BYTES = 256 * 1024;
 /** Sessions survive a close/disconnect this long before the PTY is killed. */
 export const FEDERATION_PTY_REAP_GRACE_MS = 10_000;
+/** Ceiling on live + spawning sessions per peer. Well above anything the one
+ *  pane-per-thread UI can produce; purely a runaway/abuse backstop. */
+export const FEDERATION_PTY_MAX_SESSIONS_PER_PEER = 16;
 
 export type FederationPtyOpenRequest = {
   backend: AppServerBackendKind;
@@ -213,6 +216,9 @@ export class FederationPtyService {
   /** Bumped per peer on disconnect so an in-flight spawn can detect that its
    *  requester went away and kill the shell instead of leaking it. */
   private readonly peerEpochs = new Map<FederationInstanceId, number>();
+  /** Spawns that have not registered a session yet, counted toward the
+   *  per-peer cap so concurrent opens cannot slip past it. */
+  private readonly spawningCountByPeer = new Map<FederationInstanceId, number>();
   private disposed = false;
 
   constructor(private readonly options: FederationPtyServiceOptions) {}
@@ -228,16 +234,37 @@ export class FederationPtyService {
     if (!threadId) {
       throw new Error("A thread id is required to open a remote terminal.");
     }
+    if (
+      this.sessionCountForPeer(peerId)
+        + (this.spawningCountByPeer.get(peerId) ?? 0)
+      >= FEDERATION_PTY_MAX_SESSIONS_PER_PEER
+    ) {
+      throw new Error("Remote terminal session limit reached for this peer.");
+    }
     const epoch = this.peerEpochs.get(peerId) ?? 0;
-    const cwd = await this.options.resolveThreadCwd({
-      backend: request.backend,
-      threadId,
-    });
-    const spawned = await this.options.spawnPty({
-      cwd,
-      cols: clampDimension(request.cols, 80, MAX_PTY_COLUMNS),
-      rows: clampDimension(request.rows, 18, MAX_PTY_ROWS),
-    });
+    this.spawningCountByPeer.set(
+      peerId,
+      (this.spawningCountByPeer.get(peerId) ?? 0) + 1,
+    );
+    let spawned;
+    try {
+      const cwd = await this.options.resolveThreadCwd({
+        backend: request.backend,
+        threadId,
+      });
+      spawned = await this.options.spawnPty({
+        cwd,
+        cols: clampDimension(request.cols, 80, MAX_PTY_COLUMNS),
+        rows: clampDimension(request.rows, 18, MAX_PTY_ROWS),
+      });
+    } finally {
+      const remaining = (this.spawningCountByPeer.get(peerId) ?? 1) - 1;
+      if (remaining > 0) {
+        this.spawningCountByPeer.set(peerId, remaining);
+      } else {
+        this.spawningCountByPeer.delete(peerId);
+      }
+    }
     // The requester disconnected (or the service shut down) while the shell
     // was spawning: nobody can ever learn this sessionId, so a live shell
     // here is a leak, not a session.

@@ -4,6 +4,7 @@ import { FEDERATION_PROTOCOL_VERSION } from "@pwragent/shared";
 import {
   FEDERATION_PTY_HIGH_WATER_BYTES,
   FEDERATION_PTY_LOW_WATER_BYTES,
+  FEDERATION_PTY_MAX_SESSIONS_PER_PEER,
   FEDERATION_PTY_METHOD_CAPABILITIES,
   FEDERATION_PTY_METHODS,
   FEDERATION_PTY_OUTPUT_CHUNK_CHARS,
@@ -89,6 +90,7 @@ function createHarness(options?: {
     cwd: string;
     shell: { file: string; args: string[] };
   }>;
+  resolveThreadCwd?: () => Promise<string | undefined>;
 }) {
   const pty = new FakePty();
   const sent: SentNotification[] = [];
@@ -101,7 +103,8 @@ function createHarness(options?: {
         cwd: "/owner/worktree",
         shell: { file: "/bin/zsh", args: ["-l"] },
       })),
-    resolveThreadCwd: async () => "/owner/worktree",
+    resolveThreadCwd:
+      options?.resolveThreadCwd ?? (async () => "/owner/worktree"),
     sendNotification: (peerId, method, params) => {
       if (options?.deliverable && !options.deliverable()) return false;
       sent.push({ peerId, method, params });
@@ -231,6 +234,38 @@ describe("FederationPtyService sessions", () => {
     pty.emitData("y".repeat(FEDERATION_PTY_HIGH_WATER_BYTES + 1));
     expect(sent.filter((entry) => entry.method === "pty.output")).toHaveLength(0);
     expect(pty.paused).toBe(true);
+  });
+
+  it("does not spawn when the owner cannot resolve the thread", async () => {
+    const spawnPty = vi.fn();
+    const service = new FederationPtyService({
+      spawnPty: spawnPty as never,
+      resolveThreadCwd: async () => {
+        throw new Error(
+          "Remote terminal thread was not found on the owning instance.",
+        );
+      },
+      sendNotification: () => true,
+    });
+    await expect(service.open("peer-a", OPEN_REQUEST)).rejects.toThrow(
+      /not found on the owning instance/,
+    );
+    expect(spawnPty).not.toHaveBeenCalled();
+    expect(service.sessionCountForPeer("peer-a")).toBe(0);
+  });
+
+  it("caps live and spawning sessions per peer", async () => {
+    const { service } = createHarness();
+    for (let index = 0; index < FEDERATION_PTY_MAX_SESSIONS_PER_PEER; index += 1) {
+      await service.open("peer-a", OPEN_REQUEST);
+    }
+    await expect(service.open("peer-a", OPEN_REQUEST)).rejects.toThrow(
+      /session limit reached/,
+    );
+    // The cap is per peer, not global.
+    await expect(service.open("peer-b", OPEN_REQUEST)).resolves.toMatchObject({
+      cwd: "/owner/worktree",
+    });
   });
 
   it("notifies exit and forgets the session", async () => {

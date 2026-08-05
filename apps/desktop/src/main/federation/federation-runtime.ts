@@ -766,7 +766,16 @@ export class DesktopFederationRuntime {
           callerReason: "federation-remote-pty",
         });
         const thread = threads.find((candidate) => candidate.id === threadId);
-        return thread ? resolveThreadTerminalCwd(thread) : undefined;
+        if (!thread) {
+          // Refuse rather than fall through to the home-directory default: a
+          // shell should only ever open for a thread this instance actually
+          // has. (A thread that exists but has no directory still gets the
+          // same home fallback the local panel uses.)
+          throw new Error(
+            "Remote terminal thread was not found on the owning instance.",
+          );
+        }
+        return resolveThreadTerminalCwd(thread);
       },
       sendNotification: (peerId, method, params) =>
         this.sendPtyNotification(peerId, method, params),

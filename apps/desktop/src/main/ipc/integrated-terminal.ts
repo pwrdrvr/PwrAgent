@@ -133,6 +133,9 @@ export function disposeIntegratedTerminalIpcHandlers(): void {
   ipcMain.removeHandler(INTEGRATED_TERMINAL_SET_PANEL_HIDDEN_CHANNEL);
   service?.dispose();
   service = undefined;
+  // Drops the viewer-side registry without sending pty.close for each
+  // session: this runs at app shutdown, where the federation runtime is
+  // tearing down anyway and the owner's disconnect reap ends the shells.
   federationBridge?.dispose();
   federationBridge = undefined;
 }

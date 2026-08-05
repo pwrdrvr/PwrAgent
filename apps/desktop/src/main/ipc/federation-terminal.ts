@@ -54,8 +54,19 @@ type RemoteTerminalSession = {
  * INTEGRATED_TERMINAL_* IPC surface it uses for local shells, and this bridge
  * translates to `pty.*` federation RPCs plus streamed notifications.
  */
+type PendingRemoteOpen = {
+  closeRequested: boolean;
+  promise: Promise<IntegratedTerminalCreateResponse>;
+};
+
 export class FederationTerminalBridge {
   private readonly sessionsById = new Map<string, RemoteTerminalSession>();
+  /** In-flight `pty.open`s keyed by `${webContentsId}:${threadKey}`. This is
+   *  the remote analogue of the local service's close-during-spawn hardening:
+   *  a close issued while the open is still in flight must kill the session
+   *  the moment it exists, and a concurrent second create must attach to the
+   *  first open instead of spawning a second owner-side shell. */
+  private readonly pendingOpens = new Map<string, PendingRemoteOpen>();
   private readonly watchedWebContents = new Set<WebContents>();
   private unsubscribeStreamEvents?: () => void;
 
@@ -72,40 +83,70 @@ export class FederationTerminalBridge {
     if (existing) {
       return this.toCreateResponse(existing);
     }
+    const pendingKey = this.pendingKey(webContents, threadKey);
+    const inFlight = this.pendingOpens.get(pendingKey);
+    if (inFlight) {
+      return await inFlight.promise;
+    }
     const separator = threadKey.indexOf(":");
     if (separator <= 0 || separator === threadKey.length - 1) {
       throw new Error("Remote terminal thread key is malformed.");
     }
     const backend = threadKey.slice(0, separator) as AppServerBackendKind;
     const threadId = threadKey.slice(separator + 1);
-    // The viewer sends only the thread identity and dimensions. Shell and cwd
-    // are resolved by the owning instance from ITS thread state.
-    const opened = await getDesktopFederationRuntime()
-      .remotePty(target)
-      .open({
-        backend,
-        threadId,
-        cols: request.cols,
-        rows: request.rows,
-      });
-    const session: RemoteTerminalSession = {
-      sessionId: opened.sessionId,
-      threadKey,
-      target,
-      cwd: opened.cwd,
-      shell: opened.shell,
-      buffer: "",
-      panelHidden: false,
-      createdAt: Date.now(),
-      webContents,
-      lastSeq: 0,
-      consumedBytes: 0,
+    const pending: PendingRemoteOpen = {
+      closeRequested: false,
+      promise: Promise.resolve() as unknown as Promise<IntegratedTerminalCreateResponse>,
     };
-    this.sessionsById.set(session.sessionId, session);
-    this.ensureStreamSubscription();
-    this.watchWebContents(webContents);
-    this.broadcastSessions(webContents);
-    return this.toCreateResponse(session);
+    pending.promise = (async () => {
+      try {
+        // The viewer sends only the thread identity and dimensions. Shell and
+        // cwd are resolved by the owning instance from ITS thread state.
+        const opened = await getDesktopFederationRuntime()
+          .remotePty(target)
+          .open({
+            backend,
+            threadId,
+            cols: request.cols,
+            rows: request.rows,
+          });
+        if (pending.closeRequested || webContents.isDestroyed()) {
+          // The pane was dismissed (or the window died) while the open was in
+          // flight. Registering + broadcasting the session anyway would make
+          // the renderer re-adopt a shell the user already closed — the exact
+          // regression the local service's pendingClose hardening fixed.
+          void getDesktopFederationRuntime()
+            .remotePty(target)
+            .close({ sessionId: opened.sessionId })
+            .catch(() => {
+              // Peer unreachable — the owner's disconnect reap covers it.
+            });
+          throw new Error("Remote terminal was closed before it finished starting.");
+        }
+        const session: RemoteTerminalSession = {
+          sessionId: opened.sessionId,
+          threadKey,
+          target,
+          cwd: opened.cwd,
+          shell: opened.shell,
+          buffer: "",
+          panelHidden: false,
+          createdAt: Date.now(),
+          webContents,
+          lastSeq: 0,
+          consumedBytes: 0,
+        };
+        this.sessionsById.set(session.sessionId, session);
+        this.ensureStreamSubscription();
+        this.watchWebContents(webContents);
+        this.broadcastSessions(webContents);
+        return this.toCreateResponse(session);
+      } finally {
+        this.pendingOpens.delete(pendingKey);
+      }
+    })();
+    this.pendingOpens.set(pendingKey, pending);
+    return await pending.promise;
   }
 
   write(request: IntegratedTerminalWriteRequest, webContents: WebContents): void {
@@ -147,7 +188,20 @@ export class FederationTerminalBridge {
       (request.threadKey
         ? this.sessionForThread(webContents, request.threadKey)
         : undefined);
-    if (!session) return;
+    if (!session) {
+      // Nothing registered yet. If the open is still in flight, mark it so
+      // the session is closed the moment it exists instead of the close
+      // being silently lost.
+      if (request.threadKey) {
+        const pending = this.pendingOpens.get(
+          this.pendingKey(webContents, request.threadKey.trim()),
+        );
+        if (pending) {
+          pending.closeRequested = true;
+        }
+      }
+      return;
+    }
     this.dropSession(session);
     this.broadcastSessions(webContents);
     void getDesktopFederationRuntime()
@@ -257,6 +311,11 @@ export class FederationTerminalBridge {
     this.watchedWebContents.add(webContents);
     webContents.once("destroyed", () => {
       this.watchedWebContents.delete(webContents);
+      for (const [key, pending] of this.pendingOpens) {
+        if (key.startsWith(`${webContents.id}:`)) {
+          pending.closeRequested = true;
+        }
+      }
       for (const session of Array.from(this.sessionsById.values())) {
         if (session.webContents !== webContents) continue;
         this.dropSession(session);
@@ -269,6 +328,10 @@ export class FederationTerminalBridge {
           });
       }
     });
+  }
+
+  private pendingKey(webContents: WebContents, threadKey: string): string {
+    return `${webContents.id}:${threadKey}`;
   }
 
   private ownedSession(
