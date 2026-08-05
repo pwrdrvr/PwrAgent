@@ -41,6 +41,7 @@ import type {
   MarkThreadSeenRequest,
   MarkThreadSeenResponse,
   MessagingPlatformStatus,
+  PwrSnapConnectionStatus,
   SetThreadPinRequest,
   SetThreadPinResponse,
   SetThreadPrAutoDispatchRequest,
@@ -147,6 +148,7 @@ export const FEDERATION_BACKEND_METHODS = {
   readApplications: "backend.readApplications",
   openApplication: "backend.openApplication",
   readMessagingPlatformStatuses: "backend.readMessagingPlatformStatuses",
+  readPwrSnapConnectionStatus: "backend.readPwrSnapConnectionStatus",
   trustCodexProject: "backend.trustCodexProject",
 } as const;
 
@@ -221,6 +223,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   // Read-only peer messaging health for the remote window's MSG chip.
   // messaging_route stays reserved for messaging-originated remote control.
   [FEDERATION_BACKEND_METHODS.readMessagingPlatformStatuses]: "remote_window",
+  [FEDERATION_BACKEND_METHODS.readPwrSnapConnectionStatus]: "pwrsnap_connection",
   [FEDERATION_BACKEND_METHODS.trustCodexProject]: "environment_actions",
 };
 
@@ -347,6 +350,7 @@ export type FederationBackendOperations = {
     request: OpenDesktopApplicationRequest,
   ): Promise<OpenDesktopApplicationResponse>;
   readMessagingPlatformStatuses(): Promise<MessagingPlatformStatus[]>;
+  readPwrSnapConnectionStatus(): Promise<PwrSnapConnectionStatus>;
   trustCodexProject(
     request: TrustCodexProjectRequest,
   ): Promise<TrustCodexProjectResponse>;
@@ -677,6 +681,10 @@ export function registerFederationBackendHandlers(params: {
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.readMessagingPlatformStatuses,
     async () => await params.backend.readMessagingPlatformStatuses(),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.readPwrSnapConnectionStatus,
+    async () => await params.backend.readPwrSnapConnectionStatus(),
   );
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.openApplication,
@@ -1090,6 +1098,13 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   async readMessagingPlatformStatuses(): Promise<MessagingPlatformStatus[]> {
     return await this.rpc.request<MessagingPlatformStatus[]>({
       method: FEDERATION_BACKEND_METHODS.readMessagingPlatformStatuses,
+      params: {},
+    });
+  }
+
+  async readPwrSnapConnectionStatus(): Promise<PwrSnapConnectionStatus> {
+    return await this.rpc.request<PwrSnapConnectionStatus>({
+      method: FEDERATION_BACKEND_METHODS.readPwrSnapConnectionStatus,
       params: {},
     });
   }

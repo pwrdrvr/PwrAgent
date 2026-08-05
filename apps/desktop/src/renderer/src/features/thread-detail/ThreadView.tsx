@@ -32,6 +32,7 @@ import type {
   DesktopChatReplyComposer,
   DesktopProviderModelDefaults,
   DesktopProviderThreadModelMigration,
+  FederationRemoteTarget,
   HandoffThreadWorkspaceRequest,
   MarkdownFileViewerContext,
   MessagingChannelKind,
@@ -848,6 +849,8 @@ function activityHasFileDiff(entry: AppServerThreadActivityEntry | undefined): b
 }
 
 export type ThreadViewProps = {
+  activeFederationOwnerLabel?: string;
+  activeFederationTarget?: FederationRemoteTarget;
   activeTurnId?: string;
   activeTurnStartedAt?: number;
   /**
@@ -2892,6 +2895,11 @@ export function ThreadView(props: ThreadViewProps) {
                   selectedLaunchpad.mcpConnectionIds?.includes(
                     PWRSNAP_MCP_CONNECTION_ID,
                   ) === true
+                }
+                remoteOwnerLabel={
+                  props.activeFederationTarget
+                    ? props.activeFederationOwnerLabel ?? "the remote machine"
+                    : undefined
                 }
                 onEnabledChange={async (enabled) => {
                   await props.onUpdateLaunchpad?.(

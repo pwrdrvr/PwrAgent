@@ -2121,6 +2121,7 @@ describe("useThreadNavigation", () => {
     let title = "Before disconnect";
     const getNavigationSnapshot = vi.fn(async () => ({
       backend: "all" as const,
+      federationTarget,
       fetchedAt: Date.now(),
       unchanged: false,
       inboxThreadKeys: ["codex:thread-remote"],
@@ -2154,6 +2155,7 @@ describe("useThreadNavigation", () => {
     await waitFor(() => {
       expect(result.current.selectedThread?.title).toBe("Before disconnect");
     });
+    expect(result.current.federationTarget).toEqual(federationTarget);
 
     act(() => {
       for (const listener of listeners) {

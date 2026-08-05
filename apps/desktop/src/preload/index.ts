@@ -154,6 +154,7 @@ import type {
   ConnectPwrSnapResponse,
   OpenPwrSnapResponse,
   PwrSnapConnectionStatus,
+  ReadPwrSnapConnectionStatusRequest,
   InspectPdfReferencePathsRequest,
   InspectPdfReferencePathsResponse,
   RenderComposerPdfPreviewRequest,
@@ -672,8 +673,10 @@ const desktopApi = Object.freeze({
   copyRichText: async (payload: { text: string; html: string }): Promise<void> => {
     await ipcRenderer.invoke(CLIPBOARD_WRITE_RICH_TEXT_CHANNEL, payload);
   },
-  readPwrSnapConnectionStatus: async (): Promise<PwrSnapConnectionStatus> =>
-    await ipcRenderer.invoke(MCP_CONNECTION_PWRSNAP_STATUS_CHANNEL),
+  readPwrSnapConnectionStatus: async (
+    request: ReadPwrSnapConnectionStatusRequest = {},
+  ): Promise<PwrSnapConnectionStatus> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_PWRSNAP_STATUS_CHANNEL, request),
   connectPwrSnap: async (): Promise<ConnectPwrSnapResponse> =>
     await ipcRenderer.invoke(MCP_CONNECTION_PWRSNAP_CONNECT_CHANNEL),
   openPwrSnap: async (): Promise<OpenPwrSnapResponse> =>

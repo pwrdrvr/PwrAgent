@@ -15,6 +15,50 @@ import { FederationRouter } from "../federation/federation-router";
 import { FederationRpcEndpoint } from "../federation/federation-rpc";
 
 describe("federation backend bridge", () => {
+  it("reads remote PwrSnap status through its dedicated capability", async () => {
+    const sent: FederationProtocolEnvelope[] = [];
+    const rpc = new FederationRpcEndpoint({
+      localInstanceId: "viewer_one",
+      remoteInstanceId: "owner_one",
+      sendEnvelope: (envelope) => sent.push(envelope),
+      now: () => 1_000,
+    });
+    const client = new FederationRemoteBackendClient(rpc);
+
+    const pending = client.readPwrSnapConnectionStatus();
+    const request = sent.at(-1)!;
+    expect(request).toMatchObject({
+      kind: "request",
+      method: FEDERATION_BACKEND_METHODS.readPwrSnapConnectionStatus,
+      params: {},
+    });
+    expect(
+      FEDERATION_BACKEND_METHOD_CAPABILITIES[
+        FEDERATION_BACKEND_METHODS.readPwrSnapConnectionStatus
+      ],
+    ).toBe("pwrsnap_connection");
+
+    rpc.receiveEnvelope({
+      id: "response-pwrsnap",
+      kind: "response",
+      requestId: request.id,
+      protocolVersion: 1,
+      sourceInstanceId: "owner_one",
+      targetInstanceId: "viewer_one",
+      createdAt: 1_100,
+      result: {
+        connectionId: "pwrsnap",
+        displayName: "PwrSnap",
+        availability: "running",
+        configured: true,
+      },
+    });
+    await expect(pending).resolves.toMatchObject({
+      availability: "running",
+      configured: true,
+    });
+  });
+
   it("maps federation backend methods to local app-server operations", async () => {
     const backend: FederationBackendOperations = {
       listThreads: vi.fn(async () => ({
@@ -1172,6 +1216,7 @@ describe("federation backend bridge", () => {
       readApplications: vi.fn(),
       openApplication: vi.fn(),
       readMessagingPlatformStatuses: vi.fn(),
+      readPwrSnapConnectionStatus: vi.fn(),
       trustCodexProject: vi.fn(),
     };
     const replies: FederationProtocolEnvelope[] = [];
@@ -1366,6 +1411,7 @@ describe("federation backend bridge", () => {
         readApplications: vi.fn(),
         openApplication: vi.fn(),
         readMessagingPlatformStatuses: vi.fn(),
+        readPwrSnapConnectionStatus: vi.fn(),
         trustCodexProject: vi.fn(),
       } as FederationBackendOperations,
     });

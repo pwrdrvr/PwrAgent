@@ -8,9 +8,19 @@ describe("scopeDesktopApiToFederationTarget", () => {
     const refreshDirectoryGitStatuses = vi.fn(async () => ({
       scheduledCount: 1,
     }));
+    const readPwrSnapConnectionStatus = vi.fn(async () => ({
+      connectionId: "pwrsnap" as const,
+      displayName: "PwrSnap" as const,
+      availability: "running" as const,
+      configured: true,
+    }));
     const desktopApi = {
       openApplication,
       refreshDirectoryGitStatuses,
+      readPwrSnapConnectionStatus,
+      connectPwrSnap: vi.fn(),
+      openPwrSnap: vi.fn(),
+      openPwrSnapDownload: vi.fn(),
       openPath: vi.fn(),
       revealPath: vi.fn(),
       readMarkdownFile: vi.fn(),
@@ -36,6 +46,7 @@ describe("scopeDesktopApiToFederationTarget", () => {
       directoryKeys: ["directory:/remote/repo"],
       force: true,
     });
+    await scopedApi?.readPwrSnapConnectionStatus?.();
 
     expect(openApplication).toHaveBeenCalledWith({
       applicationId: "vscode",
@@ -48,6 +59,12 @@ describe("scopeDesktopApiToFederationTarget", () => {
       force: true,
       federationTarget,
     });
+    expect(readPwrSnapConnectionStatus).toHaveBeenCalledWith({
+      federationTarget,
+    });
+    expect(scopedApi?.connectPwrSnap).toBeUndefined();
+    expect(scopedApi?.openPwrSnap).toBeUndefined();
+    expect(scopedApi?.openPwrSnapDownload).toBeUndefined();
     expect(scopedApi?.openPath).toBeUndefined();
     expect(scopedApi?.revealPath).toBeUndefined();
     expect(scopedApi?.readMarkdownFile).toBeUndefined();

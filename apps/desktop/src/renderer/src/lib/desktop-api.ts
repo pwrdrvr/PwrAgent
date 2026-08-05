@@ -172,6 +172,7 @@ import type {
   ConnectPwrSnapResponse,
   OpenPwrSnapResponse,
   PwrSnapConnectionStatus,
+  ReadPwrSnapConnectionStatusRequest,
   InspectPdfReferencePathsRequest,
   InspectPdfReferencePathsResponse,
   RenderComposerPdfPreviewRequest,
@@ -345,7 +346,9 @@ import type {
 export type DesktopApi = {
   copyText?: (text: string) => Promise<void>;
   copyRichText?: (payload: { text: string; html: string }) => Promise<void>;
-  readPwrSnapConnectionStatus?: () => Promise<PwrSnapConnectionStatus>;
+  readPwrSnapConnectionStatus?: (
+    request?: ReadPwrSnapConnectionStatusRequest,
+  ) => Promise<PwrSnapConnectionStatus>;
   connectPwrSnap?: () => Promise<ConnectPwrSnapResponse>;
   openPwrSnap?: () => Promise<OpenPwrSnapResponse>;
   openPwrSnapDownload?: () => Promise<OpenPwrSnapResponse>;

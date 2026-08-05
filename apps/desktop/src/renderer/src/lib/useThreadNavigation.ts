@@ -8,6 +8,7 @@ import type {
   AppServerTurnInputItem,
   ArchiveThreadCleanupResult,
   CodexThreadEnvironmentRuntime,
+  FederationTarget,
   HandoffThreadWorkspaceRequest,
   LinkedDirectorySummary,
   NavigationBrowseMode,
@@ -2375,6 +2376,8 @@ export function useThreadNavigation(
   creatingThread?: CreatingThreadState;
   directories: NavigationDirectorySummary[];
   error?: string;
+  /** Instance that owns the active navigation snapshot. */
+  federationTarget?: FederationTarget;
   inboxThreads: NavigationThreadSummary[];
   recentThreads: NavigationThreadSummary[];
   launchpadError?: string;
@@ -6540,6 +6543,7 @@ export function useThreadNavigation(
     creatingThread,
     directories,
     error: state.error,
+    federationTarget: state.response?.federationTarget,
     inboxThreads,
     recentThreads,
     launchpadError,

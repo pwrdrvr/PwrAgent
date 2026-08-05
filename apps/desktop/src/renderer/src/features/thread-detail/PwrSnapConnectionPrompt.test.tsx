@@ -3,6 +3,60 @@ import { describe, expect, it, vi } from "vitest";
 import { PwrSnapConnectionPrompt } from "./PwrSnapConnectionPrompt";
 
 describe("PwrSnapConnectionPrompt", () => {
+  it("renders nothing when a remote owner does not report PwrSnap available", async () => {
+    const readPwrSnapConnectionStatus = vi.fn(async () => ({
+      connectionId: "pwrsnap" as const,
+      displayName: "PwrSnap" as const,
+      availability: "running" as const,
+      configured: false,
+    }));
+    render(
+      <PwrSnapConnectionPrompt
+        backend="codex"
+        desktopApi={{ readPwrSnapConnectionStatus }}
+        enabled={false}
+        remoteOwnerLabel="Studio Mac"
+        onEnabledChange={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => expect(readPwrSnapConnectionStatus).toHaveBeenCalledOnce());
+    expect(screen.queryByLabelText(/PwrSnap connection/i)).toBeNull();
+    expect(screen.queryByRole("button", { name: /PwrSnap/i })).toBeNull();
+  });
+
+  it("offers only per-thread enablement for PwrSnap on an available remote owner", async () => {
+    const onEnabledChange = vi.fn(async () => undefined);
+    render(
+      <PwrSnapConnectionPrompt
+        backend="codex"
+        desktopApi={{
+          readPwrSnapConnectionStatus: async () => ({
+            connectionId: "pwrsnap",
+            displayName: "PwrSnap",
+            availability: "running",
+            configured: true,
+          }),
+        }}
+        enabled={false}
+        remoteOwnerLabel="Studio Mac"
+        onEnabledChange={onEnabledChange}
+      />,
+    );
+
+    expect(await screen.findByText("PwrSnap is available on Studio Mac"))
+      .toBeTruthy();
+    expect(screen.getByText(/where the thread runs/)).toBeTruthy();
+    expect(screen.queryByText("Connect to PwrSnap")).toBeNull();
+    expect(screen.queryByText("Get PwrSnap")).toBeNull();
+    expect(screen.queryByText("Open PwrSnap")).toBeNull();
+
+    fireEvent.click(screen.getByRole("switch", {
+      name: "Enable PwrSnap on Studio Mac in this thread",
+    }));
+    await waitFor(() => expect(onEnabledChange).toHaveBeenCalledWith(true));
+  });
+
   it("offers the PwrSnap download when the app is not installed", async () => {
     const openPwrSnapDownload = vi.fn(async () => ({ opened: true }));
     render(

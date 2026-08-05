@@ -1614,6 +1614,67 @@ describe("ThreadView", () => {
     expect(screen.getByRole("group", { name: "Messaging platform status" })).toBeInTheDocument();
   });
 
+  it("treats a main-window launchpad as remote from the active federation target", async () => {
+    const selectedDirectory = {
+      key: "directory:/remote/repo",
+      kind: "directory",
+      label: "Remote Repo",
+      path: "/remote/repo",
+      threadKeys: [],
+      needsAttentionCount: 0,
+    } satisfies NavigationDirectorySummary;
+    const selectedLaunchpad = {
+      backend: "codex",
+      createdAt: 1_000,
+      directoryKey: selectedDirectory.key,
+      directoryKind: selectedDirectory.kind,
+      directoryLabel: selectedDirectory.label,
+      directoryPath: selectedDirectory.path,
+      executionMode: "default",
+      prompt: "",
+      updatedAt: 1_000,
+      workMode: "local",
+    } satisfies NavigationLaunchpadDraft;
+    const readPwrSnapConnectionStatus = vi.fn(async () => ({
+      connectionId: "pwrsnap" as const,
+      displayName: "PwrSnap" as const,
+      availability: "running" as const,
+      configured: false,
+    }));
+
+    render(
+      <ThreadView
+        activeFederationOwnerLabel="Studio Mac"
+        activeFederationTarget={{
+          scope: "remote",
+          instanceId: "studio-mac",
+        }}
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[]}
+        clearPendingRequest={() => undefined}
+        composerDisabled={false}
+        desktopApi={{ readPwrSnapConnectionStatus }}
+        loading={false}
+        loadingMore={false}
+        messageCount={0}
+        selectedDirectory={selectedDirectory}
+        selectedLaunchpad={selectedLaunchpad}
+        skills={[]}
+        transcriptEntries={[]}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(readPwrSnapConnectionStatus).toHaveBeenCalledOnce();
+    });
+    expect(screen.queryByLabelText("PwrSnap connection")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Connect to PwrSnap" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("shows environment setup details from config even when the deprecated setup flag is false", async () => {
     const selectedDirectory = {
       key: "directory:/repo",

@@ -736,17 +736,32 @@ function DesktopAppShell(props: {
   });
   const selectedThreadFederationTarget =
     navigation.selectedThread?.federation?.ref.target;
+  const navigationFederationTarget = navigation.federationTarget;
   const remoteApplicationInstanceId =
     selectedThreadFederationTarget
     && isRemoteFederationTarget(selectedThreadFederationTarget)
       ? selectedThreadFederationTarget.instanceId
-      : readRendererFederationTarget()?.instanceId;
+      : navigationFederationTarget
+        && isRemoteFederationTarget(navigationFederationTarget)
+        ? navigationFederationTarget.instanceId
+        : readRendererFederationTarget()?.instanceId;
   const activeFederationTarget = useMemo(
     () => remoteApplicationInstanceId
       ? { scope: "remote" as const, instanceId: remoteApplicationInstanceId }
       : undefined,
     [remoteApplicationInstanceId],
   );
+  const activeFederationOwnerLabel = activeFederationTarget
+    ? navigation.selectedThread?.federation?.instanceLabel
+      ?? navigation.threads.find((thread) => {
+        const target = thread.federation?.ref.target;
+        return target
+          && isRemoteFederationTarget(target)
+          && target.instanceId === activeFederationTarget.instanceId;
+      })?.federation?.instanceLabel
+      ?? readRendererFederationLabel()
+      ?? "the remote machine"
+    : undefined;
   const threadDesktopApi = useMemo(
     () => scopeDesktopApiToFederationTarget(desktopApi, activeFederationTarget),
     [activeFederationTarget, desktopApi],
@@ -1179,6 +1194,8 @@ function DesktopAppShell(props: {
     },
   };
   const threadViewProps = {
+    activeFederationOwnerLabel,
+    activeFederationTarget,
     activeTurnId: session.activeTurnId,
     activeTurnStartedAt: session.activeTurnStartedAt,
     terminals,
