@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { LinkedDirectorySummary, PrSummary } from "@pwragent/shared";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
+import { hasGitHubRemoteForDirectory } from "./git-remote";
 import type { GithubPrFetcher } from "./github-pr-fetcher";
 
 const execFileAsync = promisify(execFile);
@@ -25,8 +26,9 @@ type TrackedRemoteBranch = {
 };
 
 /**
- * Detect PRs for a single thread by walking the resolved directory paths
- * and asking `gh pr list --head <branch> --state all` per directory.
+ * Detect PRs for a single thread by walking the resolved directory paths that
+ * have a configured GitHub remote and asking
+ * `gh pr list --head <branch> --state all` per eligible directory.
  * Aggregates results, dedupes by URL (in case multiple linked dirs point
  * at the same repo).
  *
@@ -53,6 +55,9 @@ export async function detectPullRequestsForThread(params: {
 
   const results = await Promise.all(
     dirs.map(async (cwd) => {
+      if (!(await hasGitHubRemoteForDirectory(cwd))) {
+        return [];
+      }
       const branches = await resolvePrLookupBranches({ branch, cwd });
       const prsByBranch = await Promise.all(
         branches.map((lookupBranch) =>
