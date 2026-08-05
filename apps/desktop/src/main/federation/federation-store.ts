@@ -43,7 +43,9 @@ export type FederationSessionAuditKind =
   | "rejected"
   | "disconnected"
   | "relay"
-  | "error";
+  | "error"
+  | "remote_pty_open"
+  | "remote_pty_close";
 
 export type FederationSessionAuditEntry = {
   eventId: number;

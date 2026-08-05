@@ -10,7 +10,10 @@ import type {
   SetThreadPinRequest,
   SetThreadPinResponse,
 } from "@pwragent/shared";
-import { FEDERATION_INVITE_VERSION } from "@pwragent/shared";
+import {
+  FEDERATION_INVITE_VERSION,
+  FEDERATION_PROTOCOL_VERSION,
+} from "@pwragent/shared";
 import { StateDb } from "../../src/main/state/state-db";
 import {
   createFederationEnrollmentInvite,
@@ -24,6 +27,12 @@ import {
 } from "../../src/main/federation/federation-backend-bridge";
 import { generateFederationIdentityKeyPair } from "../../src/main/federation/federation-identity";
 import { generateNoiseStaticKeyPair } from "../../src/main/federation/federation-noise";
+import {
+  FEDERATION_PTY_METHOD_CAPABILITIES,
+  FederationPtyService,
+  registerFederationPtyHandlers,
+  type FederationPtyProcess,
+} from "../../src/main/federation/federation-pty-service";
 import { FederationRouter } from "../../src/main/federation/federation-router";
 import { FederationStore } from "../../src/main/federation/federation-store";
 import { FederationGatewayWebSocketServer } from "../../src/main/federation/federation-transport";
@@ -61,6 +70,13 @@ export type InProcessFederationGateway = {
 export async function startInProcessFederationGateway(params: {
   threads: GatewayThreadSeed[];
   instanceLabel?: string;
+  /**
+   * Serve remote PTY sessions with a REAL shell spawned via node-pty inside
+   * the test process, rooted at `cwd`. This is what lets the E2E prove the
+   * command ran on the OWNER: the marker file lands in this directory, not
+   * anywhere the Electron viewer can write.
+   */
+  remotePty?: { cwd: string };
 }): Promise<InProcessFederationGateway> {
   const stateRoot = await mkdtemp(
     path.join(os.tmpdir(), "pwragent-e2e-federation-gateway-"),
@@ -189,10 +205,52 @@ export async function startInProcessFederationGateway(params: {
 
   const router = new FederationRouter({
     localInstanceId: gatewayInstanceId,
-    methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+    methodCapabilities: {
+      ...FEDERATION_BACKEND_METHOD_CAPABILITIES,
+      ...FEDERATION_PTY_METHOD_CAPABILITIES,
+    },
     additionalRequiredCapabilities: additionalFederationBackendCapabilities,
   });
   registerFederationBackendHandlers({ router, backend });
+
+  let ptyService: FederationPtyService | undefined;
+  if (params.remotePty) {
+    const ptyCwd = params.remotePty.cwd;
+    ptyService = new FederationPtyService({
+      spawnPty: async (spawnParams) => {
+        // node-pty ships prebuilds for the plain-Node ABI too, so the OWNER
+        // side of the wire runs a genuine PTY inside the Playwright process.
+        const nodePty = await import("node-pty");
+        const shell = resolveHarnessShell();
+        const pty = nodePty.spawn(shell.file, shell.args, {
+          name: "xterm-256color",
+          cols: spawnParams.cols,
+          rows: spawnParams.rows,
+          cwd: spawnParams.cwd ?? ptyCwd,
+          env: { ...process.env, TERM: "xterm-256color" },
+        });
+        return {
+          pty: pty as unknown as FederationPtyProcess,
+          cwd: spawnParams.cwd ?? ptyCwd,
+          shell: { file: shell.file, args: shell.args },
+        };
+      },
+      resolveThreadCwd: async () => ptyCwd,
+      sendNotification: (peerId, method, notificationParams) =>
+        router.sendToPeer(peerId, {
+          id: `federation-pty:${randomBytes(8).toString("hex")}`,
+          kind: "notification",
+          method,
+          params: notificationParams,
+          protocolVersion: FEDERATION_PROTOCOL_VERSION,
+          sourceInstanceId: gatewayInstanceId,
+          targetInstanceId: peerId,
+          createdAt: Date.now(),
+        }),
+      graceMs: 2_000,
+    });
+    registerFederationPtyHandlers({ router, service: ptyService });
+  }
 
   let connectionCount = 0;
   const connectionWaiters: (() => void)[] = [];
@@ -210,6 +268,7 @@ export async function startInProcessFederationGateway(params: {
         capabilities: connection.capabilities,
         sendEnvelope: connection.sendEnvelope,
       });
+      ptyService?.notifyPeerConnected(connection.peerId);
       connectionCount += 1;
       for (const resolve of connectionWaiters.splice(0)) {
         resolve();
@@ -217,6 +276,7 @@ export async function startInProcessFederationGateway(params: {
     },
     onDisconnect: (connection) => {
       router.unregisterConnection(connection.peerId);
+      ptyService?.notifyPeerDisconnected(connection.peerId);
     },
     onEnvelope: (envelope, connection) => {
       void router.routeEnvelope({
@@ -269,9 +329,23 @@ export async function startInProcessFederationGateway(params: {
       });
     },
     close: async () => {
+      ptyService?.disposeAll();
       await server.stop();
       stateDb.close();
       await rm(stateRoot, { force: true, recursive: true });
     },
   };
+}
+
+/**
+ * Minimal per-platform shell pick for the harness-owned PTY. The production
+ * owner resolves this through the settings service; the harness only needs a
+ * real interactive shell for `echo`-level commands.
+ */
+function resolveHarnessShell(): { file: string; args: string[] } {
+  if (process.platform === "win32") {
+    return { file: process.env.ComSpec || "cmd.exe", args: [] };
+  }
+  const configured = process.env.SHELL?.trim();
+  return { file: configured || "/bin/sh", args: [] };
 }

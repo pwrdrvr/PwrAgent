@@ -185,6 +185,9 @@ describe("DesktopFederationRuntime", () => {
       }),
       listPeers: () => [],
     });
+    // remoteNavigationSnapshot also consults the live peer view for the
+    // granted-capability set; there is no app state db in this harness.
+    runtime.visiblePeers = () => [];
 
     const snapshot = await runtime.remoteNavigationSnapshot(
       { scope: "remote", instanceId: "client_one" },

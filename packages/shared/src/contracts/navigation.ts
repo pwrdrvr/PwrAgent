@@ -27,6 +27,7 @@ import type { BackendAcpSessionRuntimeState } from "./backend";
 import type { AutomationThreadSummary } from "./automations";
 import type {
   FederatedThreadRef,
+  FederationCapability,
   FederationPeerSummary,
   FederationTarget,
 } from "./federation";
@@ -70,6 +71,12 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
     ref: FederatedThreadRef;
     instanceLabel: string;
     peerStatus?: FederationPeerSummary["status"];
+    /**
+     * Capabilities the owning instance granted this viewer over a DIRECT
+     * connection. `remote_pty` is stripped when the peer is only reachable
+     * through a gateway relay — PTY streams are point-to-point in v1.
+     */
+    capabilities?: FederationCapability[];
   };
   inbox: ThreadInboxState;
   /**

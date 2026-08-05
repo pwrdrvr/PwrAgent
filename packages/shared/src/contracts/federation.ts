@@ -20,6 +20,7 @@ export const FEDERATION_CAPABILITIES = [
   "federated_search",
   "messaging_route",
   "gateway_relay",
+  "remote_pty",
 ] as const;
 
 export type FederationCapability = (typeof FEDERATION_CAPABILITIES)[number];
@@ -268,7 +269,9 @@ export type FederationDiagnosticEventKind =
   | "rejected"
   | "disconnected"
   | "relay"
-  | "error";
+  | "error"
+  | "remote_pty_open"
+  | "remote_pty_close";
 
 export type FederationDiagnosticEvent = {
   eventId: number;

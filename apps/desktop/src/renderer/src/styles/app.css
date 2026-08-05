@@ -1241,6 +1241,21 @@ textarea,
   outline-offset: 1px;
 }
 
+/* Remote thread whose peer lacks remote_pty or is disconnected: the toggle
+   stays visible (the terminal exists as a concept) but reads inert, with the
+   tooltip carrying the reason. aria-disabled, not disabled, so hover still
+   reaches it and the tooltip can explain why. */
+.thread-header__terminal-toggle.is-disabled {
+  color: var(--text-muted);
+  opacity: 0.45;
+  cursor: default;
+}
+
+.thread-header__terminal-toggle.is-disabled:hover {
+  background: transparent;
+  color: var(--text-muted);
+}
+
 .thread-header__terminal-toggle.is-open {
   color: var(--accent-bright);
 }

@@ -1074,6 +1074,159 @@ describe("ThreadView", () => {
     });
   });
 
+  it("opens a remote thread's terminal without sending a viewer-side cwd", async () => {
+    const remoteThread: NavigationThreadSummary = {
+      id: "remote-thread-1",
+      title: "Remote thread",
+      titleSource: "explicit",
+      source: "codex",
+      executionMode: "default",
+      updatedAt: Date.now(),
+      projectKey: "/viewer/should-not-be-sent",
+      linkedDirectories: [],
+      inbox: { inInbox: true },
+      federation: {
+        ref: {
+          backend: "codex",
+          target: { scope: "remote", instanceId: "peer-a" },
+          threadId: "remote-thread-1",
+        },
+        instanceLabel: "Peer Mac",
+        peerStatus: "connected",
+        capabilities: ["thread_detail", "remote_pty"],
+      },
+    };
+
+    render(
+      <ThreadView
+        {...({
+          addOptimisticUserMessage: () => "optimistic-1",
+          backends: [],
+          clearPendingRequest: () => undefined,
+          composerDisabled: false,
+          desktopApi: {},
+          loading: false,
+          loadingMore: false,
+          messageCount: 1,
+          onLoadOlder: async () => undefined,
+          removeOptimisticMessage: () => undefined,
+          skills: [],
+          transcriptEntries: [],
+        } as unknown as Omit<ThreadViewProps, "terminals" | "selectedThread">)}
+        selectedThread={remoteThread}
+      />,
+    );
+
+    const toggle = screen.getByRole("button", { name: "Open integrated terminal" });
+    expect(toggle).not.toHaveAttribute("aria-disabled");
+    fireEvent.click(toggle);
+
+    const pane = await screen.findByLabelText("Integrated terminal");
+    expect(pane).toHaveAttribute("data-thread-key", "codex:remote-thread-1");
+    // The owner resolves the cwd; the viewer must not pick one.
+    expect(pane).toHaveAttribute("data-cwd", "");
+  });
+
+  it("disables the remote terminal toggle with a reason when the peer lacks remote_pty", () => {
+    const remoteThread: NavigationThreadSummary = {
+      id: "remote-thread-1",
+      title: "Remote thread",
+      titleSource: "explicit",
+      source: "codex",
+      executionMode: "default",
+      updatedAt: Date.now(),
+      linkedDirectories: [],
+      inbox: { inInbox: true },
+      federation: {
+        ref: {
+          backend: "codex",
+          target: { scope: "remote", instanceId: "peer-a" },
+          threadId: "remote-thread-1",
+        },
+        instanceLabel: "Peer Mac",
+        peerStatus: "connected",
+        capabilities: ["thread_detail"],
+      },
+    };
+
+    render(
+      <ThreadView
+        {...({
+          addOptimisticUserMessage: () => "optimistic-1",
+          backends: [],
+          clearPendingRequest: () => undefined,
+          composerDisabled: false,
+          desktopApi: {},
+          loading: false,
+          loadingMore: false,
+          messageCount: 1,
+          onLoadOlder: async () => undefined,
+          removeOptimisticMessage: () => undefined,
+          skills: [],
+          transcriptEntries: [],
+        } as unknown as Omit<ThreadViewProps, "terminals" | "selectedThread">)}
+        selectedThread={remoteThread}
+      />,
+    );
+
+    const toggle = screen.getByRole("button", {
+      name: "Remote terminal not granted by Peer Mac.",
+    });
+    expect(toggle).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(toggle);
+    expect(screen.queryByLabelText("Integrated terminal")).not.toBeInTheDocument();
+  });
+
+  it("disables the remote terminal toggle when the peer is disconnected", () => {
+    const remoteThread: NavigationThreadSummary = {
+      id: "remote-thread-1",
+      title: "Remote thread",
+      titleSource: "explicit",
+      source: "codex",
+      executionMode: "default",
+      updatedAt: Date.now(),
+      linkedDirectories: [],
+      inbox: { inInbox: true },
+      federation: {
+        ref: {
+          backend: "codex",
+          target: { scope: "remote", instanceId: "peer-a" },
+          threadId: "remote-thread-1",
+        },
+        instanceLabel: "Peer Mac",
+        peerStatus: "disconnected",
+        capabilities: ["thread_detail", "remote_pty"],
+      },
+    };
+
+    render(
+      <ThreadView
+        {...({
+          addOptimisticUserMessage: () => "optimistic-1",
+          backends: [],
+          clearPendingRequest: () => undefined,
+          composerDisabled: false,
+          desktopApi: {},
+          loading: false,
+          loadingMore: false,
+          messageCount: 1,
+          onLoadOlder: async () => undefined,
+          removeOptimisticMessage: () => undefined,
+          skills: [],
+          transcriptEntries: [],
+        } as unknown as Omit<ThreadViewProps, "terminals" | "selectedThread">)}
+        selectedThread={remoteThread}
+      />,
+    );
+
+    const toggle = screen.getByRole("button", {
+      name: "Remote terminal unavailable: Peer Mac is disconnected.",
+    });
+    expect(toggle).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(toggle);
+    expect(screen.queryByLabelText("Integrated terminal")).not.toBeInTheDocument();
+  });
+
   // Regression: terminal state used to live in ThreadView's useState, so every
   // unmount (search view, or a refresh that flips `threadDetailPending`) left
   // the PTY running in main with nothing in the UI pointing at it. Main is the

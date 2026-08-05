@@ -134,15 +134,20 @@ The renderer terminal panel already talks to the main process over
 
 ## Verification
 
-- [ ] Unit: capability mapping — every `pty.*` control method requires
+- [x] Unit: capability mapping — every `pty.*` control method requires
       `remote_pty`; input/close from a non-opener peer is rejected.
-- [ ] Unit: flow control — synthetic 10 MiB burst pauses the PTY at the
+      (`federation-pty-service.test.ts`)
+- [x] Unit: flow control — synthetic multi-MiB burst pauses the PTY at the
       high-water mark and resumes on acks; seq stays gapless.
-- [ ] Unit: reaping — disconnect kills the session after grace; close-during-
-      spawn does not leak a shell (reuses the existing hardening tests).
-- [ ] Unit: federation-window IPC branch never reaches the local spawn path.
-- [ ] E2E (two in-process instances, per the federation E2E plan): open remote
-      terminal, run `echo`, assert output renders in the viewer and the
-      process ran on the owner (marker file in the owner's worktree).
+- [x] Unit: reaping — disconnect kills the session after grace; a reconnect
+      inside the grace cancels it; disconnect-during-spawn does not leak a
+      shell; owner shutdown kills immediately.
+- [x] Unit: federation-window IPC branch never reaches the local spawn path
+      (`federation-terminal-ipc.test.ts`); renderer toggle disabled-with-
+      reason cases covered in `thread-view.test.tsx`.
+- [x] E2E (two in-process instances, in-process gateway harness): open remote
+      terminal, run `echo`, output renders in the viewer's xterm and the
+      marker file lands in the gateway process's temp worktree
+      (`federation-remote-window.spec.ts`).
 - [ ] Manual: interactive feel over Tailscale between two machines; resize;
       Ctrl-C; peer revokes `remote_pty` → toggle disables with reason.

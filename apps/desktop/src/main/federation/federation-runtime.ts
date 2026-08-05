@@ -57,6 +57,7 @@ import {
   isFederationGatewayEndpointUrl,
   formatFederationPeerDisplayLabel,
   isRemoteFederationTarget,
+  resolveThreadTerminalCwd,
   type AppServerListSkillsRequest,
   type AppServerListThreadsRequest,
   type AppServerReadThreadRequest,
@@ -100,6 +101,7 @@ import {
 } from "@pwragent/shared";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
+import { spawnTerminalPty } from "../terminal/integrated-terminal-service";
 import { rewriteTranscriptImageUrlsForRenderer } from "../transcript-image-protocol";
 import { getMainLogger } from "../log";
 import {
@@ -130,6 +132,18 @@ import {
   buildFederationHealthStatus,
   publicPeerSummary,
 } from "./federation-health";
+import {
+  FEDERATION_PTY_ERROR_METHOD,
+  FEDERATION_PTY_EXIT_METHOD,
+  FEDERATION_PTY_OUTPUT_METHOD,
+  FEDERATION_PTY_METHOD_CAPABILITIES,
+  FederationPtyService,
+  FederationRemotePtyClient,
+  isFederationPtyStreamMethod,
+  registerFederationPtyHandlers,
+  type FederationPtyStreamEvent,
+  type FederationRemotePtyOperations,
+} from "./federation-pty-service";
 import { FederationRouter } from "./federation-router";
 import { FederationRpcEndpoint } from "./federation-rpc";
 import { FederationStore } from "./federation-store";
@@ -175,6 +189,10 @@ const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "federated_search",
   "messaging_route",
   "gateway_relay",
+  // Federation is a same-operator trust domain and turn_control already
+  // permits code execution via agent turns, so the direct shell defaults to
+  // granted — but stays a dedicated capability so it is revocable on its own.
+  "remote_pty",
 ];
 
 type FederationPeerDirectoryNotification = {
@@ -214,6 +232,10 @@ export class DesktopFederationRuntime {
   private publishEnvironmentSetupProgress?: (
     event: CodexEnvironmentSetupProgressEvent,
   ) => void;
+  private ptyService?: FederationPtyService;
+  private readonly remotePtyEventListeners = new Set<
+    (event: FederationPtyStreamEvent) => void
+  >();
   private readonly remoteBackendEventListeners = new Set<
     (event: AgentEvent) => void | Promise<void>
   >();
@@ -308,6 +330,10 @@ export class DesktopFederationRuntime {
     }
     this.unsubscribeLocalBackendEvents?.();
     this.unsubscribeLocalBackendEvents = undefined;
+    // Owner shutdown kills every remote session immediately, mirroring how
+    // the local panel's shells die with the app.
+    this.ptyService?.disposeAll();
+    this.ptyService = undefined;
     this.client?.close();
     this.client = undefined;
     await this.server?.stop();
@@ -572,6 +598,27 @@ export class DesktopFederationRuntime {
   }
 
   remoteBackend(target: FederationRemoteTarget): FederationBackendOperations {
+    return new FederationRemoteBackendClient(this.rpcFor(target));
+  }
+
+  /**
+   * Viewer-side control client for a peer's remote PTY sessions. Streamed
+   * output/exit/error frames arrive via {@link onRemotePtyEvent}.
+   */
+  remotePty(target: FederationRemoteTarget): FederationRemotePtyOperations {
+    return new FederationRemotePtyClient(this.rpcFor(target));
+  }
+
+  onRemotePtyEvent(
+    listener: (event: FederationPtyStreamEvent) => void,
+  ): () => void {
+    this.remotePtyEventListeners.add(listener);
+    return () => {
+      this.remotePtyEventListeners.delete(listener);
+    };
+  }
+
+  private rpcFor(target: FederationRemoteTarget): FederationRpcEndpoint {
     if (!isRemoteFederationTarget(target)) {
       throw new Error("Federation target is not remote.");
     }
@@ -586,7 +633,7 @@ export class DesktopFederationRuntime {
       });
       this.rpcByPeer.set(target.instanceId, rpc);
     }
-    return new FederationRemoteBackendClient(rpc);
+    return rpc;
   }
 
   async remoteNavigationSnapshot(
@@ -608,14 +655,25 @@ export class DesktopFederationRuntime {
     } catch {
       visible = [];
     }
-    const peer =
-      visible.find((candidate) => candidate.id === target.instanceId)
-      ?? this.store().getPeer(target.instanceId);
+    const visiblePeer = visible.find(
+      (candidate) => candidate.id === target.instanceId,
+    );
+    const peer = visiblePeer ?? this.store().getPeer(target.instanceId);
     // Same composed label as connectedPeerTargets so search chips and
     // thread rows agree with the window title on multi-profile peers.
     const instanceLabel = peer
       ? formatFederationPeerDisplayLabel(peer, visible)
       : target.instanceId;
+    // The granted set the viewer can act on. remote_pty is stripped when the
+    // peer is only reachable through a gateway relay: PTY streams are
+    // point-to-point in v1, so the toggle must read as unavailable there.
+    const directConnection = this.router?.getConnection(target.instanceId);
+    const capabilities = directConnection
+      ? [...directConnection.capabilities]
+      : (visiblePeer?.capabilities ?? []).filter(
+          (capability) => capability !== "remote_pty",
+        );
+    const peerStatus = visiblePeer?.status ?? peer?.status;
     const threads = response.threads.map((thread) => {
       const ref = buildFederatedThreadRef({
         backend: thread.source,
@@ -627,7 +685,8 @@ export class DesktopFederationRuntime {
         federation: {
           ref,
           instanceLabel,
-          peerStatus: peer?.status,
+          peerStatus,
+          capabilities,
         },
       };
     });
@@ -683,7 +742,10 @@ export class DesktopFederationRuntime {
     const localInstanceId = this.ensureLocalInstanceId();
     const router = new FederationRouter({
       localInstanceId,
-      methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+      methodCapabilities: {
+        ...FEDERATION_BACKEND_METHOD_CAPABILITIES,
+        ...FEDERATION_PTY_METHOD_CAPABILITIES,
+      },
       additionalRequiredCapabilities: additionalFederationBackendCapabilities,
     });
     registerFederationBackendHandlers({
@@ -693,6 +755,51 @@ export class DesktopFederationRuntime {
         this.sendEnvironmentSetupProgress(event, targetInstanceId);
       },
     });
+    this.ptyService = new FederationPtyService({
+      spawnPty: async (params) => await spawnTerminalPty(params),
+      resolveThreadCwd: async ({ backend, threadId }) => {
+        // Owner-resolved shell + cwd from THIS instance's thread state; the
+        // viewer never sends a path, so a compromised viewer cannot pick the
+        // cwd or binary.
+        const threads = await getDesktopBackendRegistry().listThreads({
+          backend,
+          callerReason: "federation-remote-pty",
+        });
+        const thread = threads.find((candidate) => candidate.id === threadId);
+        if (!thread) {
+          // Refuse rather than fall through to the home-directory default: a
+          // shell should only ever open for a thread this instance actually
+          // has. (A thread that exists but has no directory still gets the
+          // same home fallback the local panel uses.)
+          throw new Error(
+            "Remote terminal thread was not found on the owning instance.",
+          );
+        }
+        return resolveThreadTerminalCwd(thread);
+      },
+      sendNotification: (peerId, method, params) =>
+        this.sendPtyNotification(peerId, method, params),
+      onAudit: (entry) => {
+        // The audit trail must show which machine drove the shell, not just
+        // its opaque instance id.
+        const label =
+          this.store().getPeer(entry.peerId)?.label
+          ?? this.remotePeerDirectory.get(entry.peerId)?.label
+          ?? entry.peerId;
+        this.store().appendAudit({
+          peerId: entry.peerId,
+          sessionId: entry.sessionId,
+          kind: entry.kind,
+          createdAt: Date.now(),
+          detail: `${entry.detail} · ${label}`,
+        });
+      },
+      log: {
+        info: (message, meta) => log.info(message, meta),
+        warn: (message, meta) => log.warn(message, meta),
+      },
+    });
+    registerFederationPtyHandlers({ router, service: this.ptyService });
     this.router = router;
     this.subscribeLocalBackendEvents();
 
@@ -1004,6 +1111,9 @@ export class DesktopFederationRuntime {
       capabilities: client.capabilities,
       sendEnvelope: (envelope) => this.client?.sendEnvelope(envelope),
     });
+    // This instance can also be the OWNER of remote PTY sessions the gateway
+    // is viewing; a reconnect inside the grace keeps those alive.
+    this.ptyService?.notifyPeerConnected(gatewayInstanceId);
     this.recordClientConnection({
       gatewayInstanceId,
       gatewayUrl,
@@ -1127,6 +1237,9 @@ export class DesktopFederationRuntime {
       capabilities: connection.capabilities,
       sendEnvelope: connection.sendEnvelope,
     });
+    // A transport blip that healed inside the reap grace keeps the peer's
+    // remote PTY sessions alive.
+    this.ptyService?.notifyPeerConnected(connection.peerId);
     this.publishPeerStatus(connection.peerId, "connected");
     this.broadcastPeerDirectory();
   }
@@ -1147,6 +1260,9 @@ export class DesktopFederationRuntime {
 
   private unregisterPeer(peerId: FederationInstanceId): void {
     this.router?.unregisterConnection(peerId);
+    // Remote PTY sessions this peer opened get the 10s reap grace; if the
+    // peer reconnects first, registerGatewayConnection cancels the reap.
+    this.ptyService?.notifyPeerDisconnected(peerId);
     this.rpcByPeer.get(peerId)?.rejectAll(
       new Error(`Federation peer ${peerId} disconnected.`),
     );
@@ -1179,6 +1295,9 @@ export class DesktopFederationRuntime {
     if (this.applyPeerDirectory(envelope)) {
       return;
     }
+    if (this.publishRemotePtyStreamEvent(envelope, sourcePeerId)) {
+      return;
+    }
     if (this.publishRemoteEnvironmentSetupProgress(envelope, sourcePeerId)) {
       return;
     }
@@ -1198,6 +1317,82 @@ export class DesktopFederationRuntime {
       if (handled) return;
     }
     await this.router?.routeEnvelope({ envelope, sourcePeerId });
+  }
+
+  /**
+   * Owner → viewer PTY stream frame. Deliberately DIRECT-only: no gateway
+   * fallback, so `hopCount` stays 0 and a shell stream can never transit a
+   * relay. Returns false when the peer has no direct connection — the
+   * service's disconnect reap owns cleanup in that case.
+   */
+  private sendPtyNotification(
+    peerId: FederationInstanceId,
+    method: string,
+    params: unknown,
+  ): boolean {
+    const connection = this.router?.getConnection(peerId);
+    if (!connection) return false;
+    connection.sendEnvelope({
+      id: `federation-pty:${randomUUID()}`,
+      kind: "notification",
+      method,
+      params,
+      protocolVersion: FEDERATION_PROTOCOL_VERSION,
+      sourceInstanceId: this.ensureLocalInstanceId(),
+      targetInstanceId: peerId,
+      createdAt: Date.now(),
+    });
+    return true;
+  }
+
+  private publishRemotePtyStreamEvent(
+    envelope: FederationProtocolEnvelope,
+    sourcePeerId: FederationInstanceId,
+  ): boolean {
+    if (
+      envelope.kind !== "notification" ||
+      !isFederationPtyStreamMethod(envelope.method)
+    ) {
+      return false;
+    }
+    // Point-to-point invariant, receive side: a PTY frame addressed to some
+    // other instance is dropped, never relayed onward; and a frame whose
+    // claimed origin differs from the authenticated link it arrived on is
+    // spoofed, not trusted.
+    if (
+      envelope.targetInstanceId &&
+      envelope.targetInstanceId !== this.ensureLocalInstanceId()
+    ) {
+      return true;
+    }
+    if (
+      envelope.sourceInstanceId &&
+      envelope.sourceInstanceId !== sourcePeerId
+    ) {
+      return true;
+    }
+    const kind =
+      envelope.method === FEDERATION_PTY_OUTPUT_METHOD
+        ? "output"
+        : envelope.method === FEDERATION_PTY_EXIT_METHOD
+          ? "exit"
+          : "error";
+    const event = {
+      kind,
+      peerId: sourcePeerId,
+      params: envelope.params,
+    } as FederationPtyStreamEvent;
+    for (const listener of this.remotePtyEventListeners) {
+      try {
+        listener(event);
+      } catch (error) {
+        log.warn("federation remote pty event listener failed", {
+          error: error instanceof Error ? error.message : String(error),
+          method: envelope.method,
+        });
+      }
+    }
+    return true;
   }
 
   private sendEnvironmentSetupProgress(

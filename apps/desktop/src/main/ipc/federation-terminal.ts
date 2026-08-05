@@ -1,0 +1,418 @@
+import type { WebContents } from "electron";
+import type {
+  AppServerBackendKind,
+  FederationRemoteTarget,
+} from "@pwragent/shared";
+import {
+  INTEGRATED_TERMINAL_ERROR_CHANNEL,
+  INTEGRATED_TERMINAL_EXIT_CHANNEL,
+  INTEGRATED_TERMINAL_OUTPUT_CHANNEL,
+  INTEGRATED_TERMINAL_SESSIONS_CHANNEL,
+} from "../../shared/ipc";
+import type {
+  IntegratedTerminalCloseRequest,
+  IntegratedTerminalCreateRequest,
+  IntegratedTerminalCreateResponse,
+  IntegratedTerminalResizeRequest,
+  IntegratedTerminalSessionSummary,
+  IntegratedTerminalSetPanelHiddenRequest,
+  IntegratedTerminalWriteRequest,
+} from "../../shared/integrated-terminal";
+import {
+  FEDERATION_PTY_ACK_INTERVAL_BYTES,
+  type FederationPtyStreamEvent,
+} from "../federation/federation-pty-service";
+import { getDesktopFederationRuntime } from "../federation/federation-runtime";
+import { getMainLogger } from "../log";
+import { federationWindowTargetForWebContents } from "../window";
+
+const log = getMainLogger("pwragent:federation-terminal");
+
+/** Mirrors the local service's replay buffer so a pane remount inside the
+ *  viewer replays scrollback without any server-side persistence. */
+const OUTPUT_BUFFER_LIMIT = 128 * 1024;
+
+type RemoteTerminalSession = {
+  sessionId: string;
+  threadKey: string;
+  target: FederationRemoteTarget;
+  cwd: string;
+  shell: string;
+  buffer: string;
+  panelHidden: boolean;
+  createdAt: number;
+  webContents: WebContents;
+  /** Last stream sequence number seen; gaps are surfaced, never repaired. */
+  lastSeq: number;
+  /** Output bytes consumed since the last pty.ack. */
+  consumedBytes: number;
+};
+
+/**
+ * Viewer-side remote terminal sessions, one registry entry per federation
+ * window pane. The renderer stays protocol-unaware: it speaks the exact
+ * INTEGRATED_TERMINAL_* IPC surface it uses for local shells, and this bridge
+ * translates to `pty.*` federation RPCs plus streamed notifications.
+ */
+type PendingRemoteOpen = {
+  closeRequested: boolean;
+  promise: Promise<IntegratedTerminalCreateResponse>;
+};
+
+export class FederationTerminalBridge {
+  private readonly sessionsById = new Map<string, RemoteTerminalSession>();
+  /** In-flight `pty.open`s keyed by `${webContentsId}:${threadKey}`. This is
+   *  the remote analogue of the local service's close-during-spawn hardening:
+   *  a close issued while the open is still in flight must kill the session
+   *  the moment it exists, and a concurrent second create must attach to the
+   *  first open instead of spawning a second owner-side shell. */
+  private readonly pendingOpens = new Map<string, PendingRemoteOpen>();
+  private readonly watchedWebContents = new Set<WebContents>();
+  private unsubscribeStreamEvents?: () => void;
+
+  async createOrAttach(
+    request: IntegratedTerminalCreateRequest,
+    webContents: WebContents,
+  ): Promise<IntegratedTerminalCreateResponse> {
+    const target = this.requireTarget(webContents);
+    const threadKey = request.threadKey.trim();
+    if (!threadKey) {
+      throw new Error("A thread key is required to start a remote terminal.");
+    }
+    const existing = this.sessionForThread(webContents, threadKey);
+    if (existing) {
+      return this.toCreateResponse(existing);
+    }
+    const pendingKey = this.pendingKey(webContents, threadKey);
+    const inFlight = this.pendingOpens.get(pendingKey);
+    if (inFlight) {
+      return await inFlight.promise;
+    }
+    const separator = threadKey.indexOf(":");
+    if (separator <= 0 || separator === threadKey.length - 1) {
+      throw new Error("Remote terminal thread key is malformed.");
+    }
+    const backend = threadKey.slice(0, separator) as AppServerBackendKind;
+    const threadId = threadKey.slice(separator + 1);
+    const pending: PendingRemoteOpen = {
+      closeRequested: false,
+      promise: Promise.resolve() as unknown as Promise<IntegratedTerminalCreateResponse>,
+    };
+    pending.promise = (async () => {
+      try {
+        // The viewer sends only the thread identity and dimensions. Shell and
+        // cwd are resolved by the owning instance from ITS thread state.
+        const opened = await getDesktopFederationRuntime()
+          .remotePty(target)
+          .open({
+            backend,
+            threadId,
+            cols: request.cols,
+            rows: request.rows,
+          });
+        if (pending.closeRequested || webContents.isDestroyed()) {
+          // The pane was dismissed (or the window died) while the open was in
+          // flight. Registering + broadcasting the session anyway would make
+          // the renderer re-adopt a shell the user already closed — the exact
+          // regression the local service's pendingClose hardening fixed.
+          void getDesktopFederationRuntime()
+            .remotePty(target)
+            .close({ sessionId: opened.sessionId })
+            .catch(() => {
+              // Peer unreachable — the owner's disconnect reap covers it.
+            });
+          throw new Error("Remote terminal was closed before it finished starting.");
+        }
+        const session: RemoteTerminalSession = {
+          sessionId: opened.sessionId,
+          threadKey,
+          target,
+          cwd: opened.cwd,
+          shell: opened.shell,
+          buffer: "",
+          panelHidden: false,
+          createdAt: Date.now(),
+          webContents,
+          lastSeq: 0,
+          consumedBytes: 0,
+        };
+        this.sessionsById.set(session.sessionId, session);
+        this.ensureStreamSubscription();
+        this.watchWebContents(webContents);
+        this.broadcastSessions(webContents);
+        return this.toCreateResponse(session);
+      } finally {
+        this.pendingOpens.delete(pendingKey);
+      }
+    })();
+    this.pendingOpens.set(pendingKey, pending);
+    return await pending.promise;
+  }
+
+  write(request: IntegratedTerminalWriteRequest, webContents: WebContents): void {
+    const session = this.ownedSession(webContents, request.sessionId);
+    if (!session) return;
+    void getDesktopFederationRuntime()
+      .remotePty(session.target)
+      .input({
+        sessionId: session.sessionId,
+        dataBase64: Buffer.from(request.data, "utf8").toString("base64"),
+      })
+      .catch((error) => {
+        this.sendError(session, error);
+      });
+  }
+
+  resize(request: IntegratedTerminalResizeRequest, webContents: WebContents): void {
+    const session = this.ownedSession(webContents, request.sessionId);
+    if (!session) return;
+    void getDesktopFederationRuntime()
+      .remotePty(session.target)
+      .resize({
+        sessionId: session.sessionId,
+        cols: request.cols,
+        rows: request.rows,
+      })
+      .catch((error) => {
+        log.warn("remote terminal resize failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+  }
+
+  close(request: IntegratedTerminalCloseRequest, webContents: WebContents): void {
+    const session =
+      (request.sessionId
+        ? this.ownedSession(webContents, request.sessionId)
+        : undefined) ??
+      (request.threadKey
+        ? this.sessionForThread(webContents, request.threadKey)
+        : undefined);
+    if (!session) {
+      // Nothing registered yet. If the open is still in flight, mark it so
+      // the session is closed the moment it exists instead of the close
+      // being silently lost.
+      if (request.threadKey) {
+        const pending = this.pendingOpens.get(
+          this.pendingKey(webContents, request.threadKey.trim()),
+        );
+        if (pending) {
+          pending.closeRequested = true;
+        }
+      }
+      return;
+    }
+    this.dropSession(session);
+    this.broadcastSessions(webContents);
+    void getDesktopFederationRuntime()
+      .remotePty(session.target)
+      .close({ sessionId: session.sessionId })
+      .catch((error) => {
+        // The owner's disconnect reap covers an undeliverable close.
+        log.warn("remote terminal close failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+  }
+
+  setPanelHidden(
+    request: IntegratedTerminalSetPanelHiddenRequest,
+    webContents: WebContents,
+  ): void {
+    const session = this.sessionForThread(webContents, request.threadKey);
+    if (!session || session.panelHidden === request.hidden) return;
+    session.panelHidden = request.hidden;
+    this.broadcastSessions(webContents);
+  }
+
+  listSessions(webContents: WebContents): IntegratedTerminalSessionSummary[] {
+    return this.sessionsForWindow(webContents)
+      .sort((left, right) => left.createdAt - right.createdAt)
+      .map((session) => this.toSummary(session));
+  }
+
+  dispose(): void {
+    this.unsubscribeStreamEvents?.();
+    this.unsubscribeStreamEvents = undefined;
+    this.sessionsById.clear();
+    this.watchedWebContents.clear();
+  }
+
+  private requireTarget(webContents: WebContents): FederationRemoteTarget {
+    const target = federationWindowTargetForWebContents(webContents);
+    if (!target) {
+      // Defense in depth: a federation window whose remote target is missing
+      // must fail loudly, never fall through to spawning a LOCAL shell under
+      // peer branding.
+      throw new Error(
+        "Remote terminal sessions run on the owning instance; this window has no federation target.",
+      );
+    }
+    return target;
+  }
+
+  private ensureStreamSubscription(): void {
+    this.unsubscribeStreamEvents ??= getDesktopFederationRuntime()
+      .onRemotePtyEvent((event) => this.handleStreamEvent(event));
+  }
+
+  private handleStreamEvent(event: FederationPtyStreamEvent): void {
+    const session = this.sessionsById.get(event.params.sessionId);
+    // Only the owning peer may stream into a session it opened for us.
+    if (!session || session.target.instanceId !== event.peerId) return;
+    if (event.kind === "output") {
+      const data = Buffer.from(event.params.dataBase64, "base64").toString("utf8");
+      if (event.params.seq !== session.lastSeq + 1) {
+        // The transport is ordered, so a gap means a bug — surface it.
+        this.send(session, INTEGRATED_TERMINAL_ERROR_CHANNEL, {
+          sessionId: session.sessionId,
+          message: `Remote terminal stream skipped from frame ${session.lastSeq} to ${event.params.seq}.`,
+        });
+      }
+      session.lastSeq = event.params.seq;
+      session.buffer = trimBufferedOutput(session.buffer + data);
+      this.send(session, INTEGRATED_TERMINAL_OUTPUT_CHANNEL, {
+        sessionId: session.sessionId,
+        data,
+      });
+      session.consumedBytes += Buffer.byteLength(data, "utf8");
+      if (session.consumedBytes >= FEDERATION_PTY_ACK_INTERVAL_BYTES) {
+        const bytes = session.consumedBytes;
+        session.consumedBytes = 0;
+        void getDesktopFederationRuntime()
+          .remotePty(session.target)
+          .ack({ sessionId: session.sessionId, bytes })
+          .catch((error) => {
+            log.warn("remote terminal ack failed", {
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
+      }
+      return;
+    }
+    if (event.kind === "exit") {
+      this.send(session, INTEGRATED_TERMINAL_EXIT_CHANNEL, {
+        sessionId: session.sessionId,
+        exitCode: event.params.exitCode ?? null,
+        signal: event.params.signal ?? null,
+      });
+      this.dropSession(session);
+      this.broadcastSessions(session.webContents);
+      return;
+    }
+    this.send(session, INTEGRATED_TERMINAL_ERROR_CHANNEL, {
+      sessionId: session.sessionId,
+      message: event.params.message,
+    });
+  }
+
+  private watchWebContents(webContents: WebContents): void {
+    if (this.watchedWebContents.has(webContents)) return;
+    this.watchedWebContents.add(webContents);
+    webContents.once("destroyed", () => {
+      this.watchedWebContents.delete(webContents);
+      for (const [key, pending] of this.pendingOpens) {
+        if (key.startsWith(`${webContents.id}:`)) {
+          pending.closeRequested = true;
+        }
+      }
+      for (const session of Array.from(this.sessionsById.values())) {
+        if (session.webContents !== webContents) continue;
+        this.dropSession(session);
+        // Closing the remote window ends the PTY (owner applies its grace).
+        void getDesktopFederationRuntime()
+          .remotePty(session.target)
+          .close({ sessionId: session.sessionId })
+          .catch(() => {
+            // Peer unreachable — the owner's disconnect reap covers it.
+          });
+      }
+    });
+  }
+
+  private pendingKey(webContents: WebContents, threadKey: string): string {
+    return `${webContents.id}:${threadKey}`;
+  }
+
+  private ownedSession(
+    webContents: WebContents,
+    sessionId: string,
+  ): RemoteTerminalSession | undefined {
+    const session = this.sessionsById.get(sessionId);
+    return session && session.webContents === webContents ? session : undefined;
+  }
+
+  private sessionForThread(
+    webContents: WebContents,
+    threadKey: string,
+  ): RemoteTerminalSession | undefined {
+    return this.sessionsForWindow(webContents).find(
+      (session) => session.threadKey === threadKey,
+    );
+  }
+
+  private sessionsForWindow(webContents: WebContents): RemoteTerminalSession[] {
+    return [...this.sessionsById.values()].filter(
+      (session) => session.webContents === webContents,
+    );
+  }
+
+  private dropSession(session: RemoteTerminalSession): void {
+    this.sessionsById.delete(session.sessionId);
+  }
+
+  private broadcastSessions(webContents: WebContents): void {
+    if (webContents.isDestroyed()) return;
+    webContents.send(INTEGRATED_TERMINAL_SESSIONS_CHANNEL, {
+      sessions: this.listSessions(webContents),
+    });
+  }
+
+  private send(
+    session: RemoteTerminalSession,
+    channel: string,
+    payload: unknown,
+  ): void {
+    if (session.webContents.isDestroyed()) return;
+    session.webContents.send(channel, payload);
+  }
+
+  private sendError(session: RemoteTerminalSession, error: unknown): void {
+    this.send(session, INTEGRATED_TERMINAL_ERROR_CHANNEL, {
+      sessionId: session.sessionId,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  private toCreateResponse(
+    session: RemoteTerminalSession,
+  ): IntegratedTerminalCreateResponse {
+    return {
+      sessionId: session.sessionId,
+      threadKey: session.threadKey,
+      cwd: session.cwd,
+      shell: session.shell,
+      buffer: session.buffer || undefined,
+    };
+  }
+
+  private toSummary(
+    session: RemoteTerminalSession,
+  ): IntegratedTerminalSessionSummary {
+    return {
+      sessionId: session.sessionId,
+      threadKey: session.threadKey,
+      cwd: session.cwd,
+      shell: session.shell,
+      panelHidden: session.panelHidden,
+      createdAt: session.createdAt,
+    };
+  }
+}
+
+function trimBufferedOutput(value: string): string {
+  if (value.length <= OUTPUT_BUFFER_LIMIT) {
+    return value;
+  }
+  return value.slice(value.length - OUTPUT_BUFFER_LIMIT);
+}
