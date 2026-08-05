@@ -1383,8 +1383,16 @@ export class DesktopFederationRuntime {
           canRevoke: false,
         });
         previousPeers.delete(peer.id);
-        this.publishPeerStatus(peer.id, peer.status, peer.unavailableReason);
       }
+    }
+    // Publish only after the complete snapshot is installed. Status listeners
+    // synchronously read visiblePeers() (the application menu is one of them),
+    // so notifying while this map is still being rebuilt can expose a partial
+    // directory. If the remaining peers retain their previous statuses, the
+    // deduplicating publisher will not fire again and that partial view can
+    // remain visible indefinitely.
+    for (const peer of this.remotePeerDirectory.values()) {
+      this.publishPeerStatus(peer.id, peer.status, peer.unavailableReason);
     }
     for (const peerId of previousPeers.keys()) {
       this.publishPeerStatus(

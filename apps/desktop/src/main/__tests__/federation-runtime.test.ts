@@ -38,6 +38,7 @@ type RuntimeHarness = {
     sourcePeerId: FederationInstanceId,
   ) => boolean;
   remotePeerDirectory: Map<FederationInstanceId, unknown>;
+  onPeerStatusChanged: (listener: () => void) => () => void;
   recordClientConnection: (params: {
     gatewayInstanceId: FederationInstanceId;
     gatewayUrl: string;
@@ -276,6 +277,60 @@ describe("DesktopFederationRuntime", () => {
     expect(runtime.visiblePeers()).toMatchObject([
       { id: "gateway_one", status: "connected" },
       { id: "client_two", status: "connected" },
+    ]);
+  });
+
+  it("publishes peer status changes after installing the full directory", () => {
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.localInstanceId = "client_one";
+    runtime.store = () => ({
+      getPeer: () => undefined,
+      listPeers: () => [],
+    });
+    const peerDirectory = (
+      id: string,
+      peers: Array<{
+        id: FederationInstanceId;
+        label: string;
+      }>,
+    ): FederationProtocolEnvelope => ({
+      id,
+      kind: "notification",
+      method: "federation.peerDirectory",
+      params: {
+        peers: peers.map((peer) => ({
+          ...peer,
+          role: peer.id === "gateway_one" ? "gateway" : "client",
+          status: "connected",
+          capabilities: ["remote_window"],
+        })),
+      },
+      protocolVersion: FEDERATION_PROTOCOL_VERSION,
+      sourceInstanceId: "gateway_one",
+      targetInstanceId: "client_one",
+      createdAt: 2_000,
+    });
+
+    runtime.applyPeerDirectory(peerDirectory("peers-1", [
+      { id: "gateway_one", label: "Gateway" },
+      { id: "client_m5", label: "M5" },
+    ]));
+
+    const visibleSnapshots: FederationInstanceId[][] = [];
+    runtime.onPeerStatusChanged(() => {
+      visibleSnapshots.push(
+        runtime.connectedPeerTargets().map((peer) => peer.target.instanceId),
+      );
+    });
+
+    runtime.applyPeerDirectory(peerDirectory("peers-2", [
+      { id: "gateway_one", label: "Gateway" },
+      { id: "client_2018", label: "2018" },
+      { id: "client_m5", label: "M5" },
+    ]));
+
+    expect(visibleSnapshots).toEqual([
+      ["gateway_one", "client_2018", "client_m5"],
     ]);
   });
 
