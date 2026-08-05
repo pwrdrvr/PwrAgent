@@ -1787,6 +1787,80 @@ describe("DesktopMessagingRuntime", () => {
     }
   }, 30_000);
 
+  it("restores errored adapter health after an explicit reconnect recovery", async () => {
+    await prepareRuntimeStore();
+    let fireReconnect: ((info: MessagingReconnectInfo) => void) | undefined;
+    let fireRuntimeError: ((reason: string) => void) | undefined;
+    const adapter = createAdapter("telegram", {
+      onReconnect: (listener: (info: MessagingReconnectInfo) => void) => {
+        fireReconnect = listener;
+        return () => {
+          fireReconnect = undefined;
+        };
+      },
+      onRuntimeError: (listener: (reason: string) => void) => {
+        fireRuntimeError = listener;
+        return () => {
+          fireRuntimeError = undefined;
+        };
+      },
+    });
+    const { DesktopMessagingRuntime: Runtime } = await import(
+      "../messaging/messaging-runtime"
+    );
+    const runtime = new Runtime({
+      adapterFactory: () => [adapter],
+      backendBridge: createBackendBridge(),
+      config: {
+        telegram: {
+          channel: "telegram",
+          botToken: "telegram-token",
+          authorizedActorIds: [{ id: "user-1", displayName: "" }],
+        },
+      },
+    });
+
+    try {
+      await runtime.start();
+      const events: unknown[] = [];
+      runtime.onPlatformStatus((event) => events.push(event));
+      fireRuntimeError?.("websocket disconnected");
+      expect(runtime.getPlatformStatuses()).toEqual([
+        expect.objectContaining({
+          health: "errored",
+          platform: "telegram",
+          reason: "websocket disconnected",
+        }),
+      ]);
+
+      fireReconnect?.({ attemptCount: 4, state: "started" });
+      expect(runtime.getPlatformStatuses()).toEqual([
+        expect.objectContaining({
+          health: "errored",
+          platform: "telegram",
+        }),
+      ]);
+
+      fireReconnect?.({ state: "recovered" });
+      expect(runtime.getPlatformStatuses()).toEqual([
+        expect.objectContaining({
+          health: "enabled",
+          platform: "telegram",
+          reason: undefined,
+        }),
+      ]);
+      expect(events.at(-1)).toEqual(
+        expect.objectContaining({
+          health: "enabled",
+          kind: "health-changed",
+          platform: "telegram",
+        }),
+      );
+    } finally {
+      await runtime.stop();
+    }
+  }, 30_000);
+
   it("detaches adapter runtime-error listeners on stop so a graceful shutdown does not flip to errored", async () => {
     await prepareRuntimeStore();
     let fireRuntimeError: ((reason: string) => void) | undefined;

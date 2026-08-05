@@ -106,12 +106,11 @@ export type DesktopMessagingAdapter = {
     limit?: number;
   }): Promise<MessagingInboundEvent[]>;
   /**
-   * Optional subscription for fatal runtime errors that took the
-   * adapter offline after a successful start (e.g. Telegram's 409
-   * Conflict when a second bot instance starts polling). The runtime
-   * subscribes after `start()` and flips the platform health to
-   * `errored` so the renderer status pill turns red. Adapters that
-   * cannot detect post-start failures may simply omit the method.
+   * Optional subscription for serious runtime errors after a successful
+   * start (e.g. Telegram's 409 Conflict when a second bot instance starts
+   * polling, or Mattermost's sustained reconnect failures). The runtime
+   * flips platform health to `errored`; an adapter that keeps retrying can
+   * later restore health by emitting `onReconnect({ state: "recovered" })`.
    */
   onRuntimeError?(listener: (reason: string) => void): () => void;
   onRateLimit?(listener: (info: MessagingRateLimitInfo) => void): () => void;
@@ -1819,6 +1818,13 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     const key = degradationKey(platform, "reconnecting", "adapter");
     if (info.state === "recovered") {
       this.clearPlatformDegradationReason(platform, key);
+      const previous = this.platformStatuses.get(platform);
+      if (previous?.health === "errored") {
+        const adapter = this.runningAdapters.get(platform)?.adapter;
+        this.setPlatformHealth(platform, "enabled", {
+          credentialMetadata: adapter?.readCredentialMetadata?.(),
+        });
+      }
       return;
     }
     this.addPlatformDegradationReason(platform, {
