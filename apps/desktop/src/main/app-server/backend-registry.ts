@@ -16129,13 +16129,6 @@ export class DesktopBackendRegistry {
   private async readCheapCodexThreadForRepair(
     threadId: string,
   ): Promise<AppServerThreadSummary | undefined> {
-    const pending = this.pendingStartedThreads.get(
-      buildThreadIdentityKey("codex", threadId),
-    );
-    if (pending) {
-      return pending;
-    }
-
     const cached = this.findCachedCodexThread(threadId);
     if (cached) {
       return cached;
@@ -16160,6 +16153,15 @@ export class DesktopBackendRegistry {
     threadId: string;
   }): Promise<void> {
     if (!this.codexClient.enrichThreadDirectories) {
+      return;
+    }
+    // Pending threads already carry the workspace PwrAgent just prepared.
+    // Repairing them can persist a second identity for that same worktree.
+    if (
+      this.pendingStartedThreads.has(
+        buildThreadIdentityKey("codex", params.threadId),
+      )
+    ) {
       return;
     }
 
@@ -16749,6 +16751,15 @@ export class DesktopBackendRegistry {
     > = {};
 
     for (const thread of params.threads) {
+      // Wait for the provider to acknowledge the prepared workspace before
+      // deriving a persisted directory identity from its thread summary.
+      if (
+        this.pendingStartedThreads.has(
+          buildThreadIdentityKey("codex", thread.id),
+        )
+      ) {
+        continue;
+      }
       const directory = buildCachedDirectoryRelationship(thread);
       if (!directory) {
         continue;
@@ -16791,6 +16802,14 @@ export class DesktopBackendRegistry {
     }
 
     const candidates = params.threads.filter((thread) => {
+      // The pending summary is already enriched from workspace preparation.
+      if (
+        this.pendingStartedThreads.has(
+          buildThreadIdentityKey("codex", thread.id),
+        )
+      ) {
+        return false;
+      }
       if (overlayHasHandoffWorkspace(params.overlaysByThreadId[thread.id])) {
         return false;
       }

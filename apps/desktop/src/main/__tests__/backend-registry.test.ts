@@ -12932,19 +12932,40 @@ script = "printf setup-output"
   });
 
   it("records Codex owner metadata when materializing a worktree launchpad", async () => {
+    const repoPath = "/repo/app";
+    const worktreePath = "/repo/app/.worktrees/thread-1/app";
     const recordCodexWorktreeOwnerThread = vi.fn(async () => {});
+    const overlayStore = createOverlayStoreMock();
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start"] },
+      threads: [
+        {
+          id: "thread-1",
+          title: "Worktree thread",
+          titleSource: "derived",
+          source: "codex",
+          linkedDirectories: [
+            {
+              id: repoPath,
+              kind: "worktree",
+              label: "app",
+              path: repoPath,
+              worktreePath,
+            },
+          ],
+        },
+      ],
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
       grokClient: new MockBackendClient({
         initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
       }),
-      overlayStore: createOverlayStoreMock(),
+      overlayStore,
       gitDirectoryService: {
         prepareLaunchpadWorkspace: vi.fn(async () => ({
-          cwd: "/repo/app/.worktrees/thread-1/app",
+          cwd: worktreePath,
+          repositoryPath: repoPath,
           workMode: "worktree" as const,
         })),
         recordCodexWorktreeOwnerThread,
@@ -12970,16 +12991,38 @@ script = "printf setup-output"
     });
 
     expect(recordCodexWorktreeOwnerThread).toHaveBeenCalledWith({
-      worktreePath: "/repo/app/.worktrees/thread-1/app",
+      worktreePath,
       threadId: "thread-1",
     });
     expect(response.linkedDirectory).toEqual({
-      id: expectedDir("/repo/app"),
+      id: expectedDir(repoPath),
       kind: "worktree",
       label: "app",
-      path: expectedDir("/repo/app"),
-      worktreePath: expectedDir("/repo/app/.worktrees/thread-1/app"),
+      path: expectedDir(repoPath),
+      worktreePath: expectedDir(worktreePath),
     });
+
+    await registry.readThread({ backend: "codex", threadId: "thread-1" });
+    const [listedThread] = await registry.listThreads({
+      backend: "codex",
+      callerReason: "navigation-snapshot",
+      forceRefresh: true,
+    });
+    expect(listedThread.linkedDirectories).toEqual([
+      {
+        id: repoPath,
+        kind: "worktree",
+        label: "app",
+        path: repoPath,
+        worktreePath,
+      },
+    ]);
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-1",
+      }),
+    ).resolves.toMatchObject({ extraLinkedDirectories: [] });
 
     await registry.close();
   });
@@ -13569,6 +13612,7 @@ command = "pnpm dev"
       ).resolves.toMatchObject({
         extraLinkedDirectories: [
           {
+            id: expectedDir(repoPath),
             label: "app",
             path: expectedDir(repoPath),
             worktreePath: expectedDir(forkWorktreePath),
