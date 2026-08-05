@@ -555,7 +555,11 @@ describe("useThreadNavigation", () => {
     });
   });
 
-  it("marks a read thread unread until the user returns to it", async () => {
+  it("marks a remote read thread unread until the user returns to it", async () => {
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "remote-instance",
+    };
     const markThreadSeen = vi.fn(
       async (
         request: Parameters<NonNullable<DesktopApi["markThreadSeen"]>>[0],
@@ -579,6 +583,14 @@ describe("useThreadNavigation", () => {
           summary: "Read thread summary",
           source: "codex" as const,
           linkedDirectories: [],
+          federation: {
+            instanceLabel: "Remote Mac",
+            ref: {
+              backend: "codex" as const,
+              target: federationTarget,
+              threadId: "thread-read",
+            },
+          },
           inbox: {
             inInbox: false,
             lastSeenUpdatedAt: 2_000,
@@ -622,6 +634,7 @@ describe("useThreadNavigation", () => {
 
     expect(markThreadSeen).toHaveBeenCalledWith({
       backend: "codex",
+      federationTarget,
       threadId: "thread-read",
       seenUpdatedAt: 1_999,
     });
@@ -652,6 +665,7 @@ describe("useThreadNavigation", () => {
     await waitFor(() => {
       expect(markThreadSeen).toHaveBeenCalledWith({
         backend: "codex",
+        federationTarget,
         threadId: "thread-read",
         seenUpdatedAt: 2_000,
       });

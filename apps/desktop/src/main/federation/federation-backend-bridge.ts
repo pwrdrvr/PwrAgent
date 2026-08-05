@@ -26,6 +26,8 @@ import type {
   MaterializeDirectoryLaunchpadOptions,
   MaterializeDirectoryLaunchpadRequest,
   MaterializeDirectoryLaunchpadResponse,
+  MarkThreadSeenRequest,
+  MarkThreadSeenResponse,
   NavigationSnapshot,
   DesktopApplicationsSnapshot,
   OpenDesktopApplicationRequest,
@@ -68,6 +70,7 @@ export const FEDERATION_BACKEND_METHODS = {
   readThread: "backend.readThread",
   listSkills: "backend.listSkills",
   listBackends: "backend.listBackends",
+  markThreadSeen: "backend.markThreadSeen",
   archiveThread: "backend.archiveThread",
   startThread: "backend.startThread",
   forkThread: "backend.forkThread",
@@ -119,6 +122,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.readThread]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.listSkills]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.listBackends]: "thread_detail",
+  [FEDERATION_BACKEND_METHODS.markThreadSeen]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.archiveThread]: "turn_control",
   [FEDERATION_BACKEND_METHODS.startThread]: "turn_control",
   [FEDERATION_BACKEND_METHODS.forkThread]: "turn_control",
@@ -158,6 +162,7 @@ export type FederationBackendOperations = {
     request?: AppServerListSkillsRequest,
   ): Promise<AppServerListSkillsResponse>;
   listBackends(request?: ListBackendsRequest): Promise<ListBackendsResponse>;
+  markThreadSeen(request: MarkThreadSeenRequest): Promise<MarkThreadSeenResponse>;
   archiveThread(request: ArchiveThreadRequest): Promise<ArchiveThreadResponse>;
   startThread(request: StartThreadRequest): Promise<StartThreadResponse>;
   forkThread(
@@ -257,6 +262,13 @@ export function registerFederationBackendHandlers(params: {
     async (envelope) =>
       await params.backend.listBackends(
         (envelope.params ?? {}) as ListBackendsRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.markThreadSeen,
+    async (envelope) =>
+      await params.backend.markThreadSeen(
+        envelope.params as MarkThreadSeenRequest,
       ),
   );
   params.router.registerHandler(
@@ -488,6 +500,15 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   ): Promise<ArchiveThreadResponse> {
     return await this.rpc.request<ArchiveThreadResponse>({
       method: FEDERATION_BACKEND_METHODS.archiveThread,
+      params: request,
+    });
+  }
+
+  async markThreadSeen(
+    request: MarkThreadSeenRequest,
+  ): Promise<MarkThreadSeenResponse> {
+    return await this.rpc.request<MarkThreadSeenResponse>({
+      method: FEDERATION_BACKEND_METHODS.markThreadSeen,
       params: request,
     });
   }

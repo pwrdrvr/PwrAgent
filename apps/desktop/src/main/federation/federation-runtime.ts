@@ -20,6 +20,7 @@ import type {
   HandoffThreadWorkspaceResponse,
   InterruptTurnResponse,
   MaterializeDirectoryLaunchpadResponse,
+  MarkThreadSeenResponse,
   OpenDesktopApplicationResponse,
   QueueThreadExecutionModeResponse,
   RenameThreadResponse,
@@ -51,6 +52,7 @@ import {
   type InterruptTurnRequest,
   type MaterializeDirectoryLaunchpadRequest,
   type MaterializeDirectoryLaunchpadOptions,
+  type MarkThreadSeenRequest,
   type NavigationSnapshot,
   type OpenDesktopApplicationRequest,
   type QueueThreadExecutionModeRequest,
@@ -70,6 +72,7 @@ import {
   type TrustCodexProjectRequest,
 } from "@pwragent/shared";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
+import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
 import { rewriteTranscriptImageUrlsForRenderer } from "../transcript-image-protocol";
 import { getMainLogger } from "../log";
 import {
@@ -1065,6 +1068,17 @@ function localBackendOperations(): FederationBackendOperations {
     },
     async listBackends(request = {}) {
       return await getDesktopBackendRegistry().listBackends(request);
+    },
+    async markThreadSeen(
+      request: MarkThreadSeenRequest,
+    ): Promise<MarkThreadSeenResponse> {
+      const backend = request.backend ?? "codex";
+      return await getDesktopOverlayStore().markThreadSeen({
+        backend,
+        seenAt: request.seenAt,
+        seenUpdatedAt: request.seenUpdatedAt,
+        threadId: request.threadId,
+      });
     },
     async archiveThread(request) {
       return await getDesktopBackendRegistry().archiveThread(request);

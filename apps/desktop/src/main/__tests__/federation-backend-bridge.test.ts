@@ -169,6 +169,105 @@ describe("federation backend bridge", () => {
     });
   });
 
+  it("routes mark-seen requests through the remote overlay owner", async () => {
+    const backend = {
+      markThreadSeen: vi.fn(async () => ({
+        backend: "codex" as const,
+        threadId: "thread-1",
+        seenAt: 2_000,
+        seenUpdatedAt: 1_999,
+      })),
+    } as unknown as FederationBackendOperations;
+    const replies: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({
+      localInstanceId: "client_one",
+      methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+      now: () => 2_000,
+    });
+    router.registerConnection({
+      peerId: "gateway_one",
+      capabilities: ["thread_navigation"],
+      sendEnvelope: (envelope) => replies.push(envelope),
+    });
+    registerFederationBackendHandlers({ router, backend });
+
+    await router.routeEnvelope({
+      sourcePeerId: "gateway_one",
+      envelope: {
+        id: "mark-seen-request",
+        kind: "request",
+        method: FEDERATION_BACKEND_METHODS.markThreadSeen,
+        params: {
+          backend: "codex",
+          threadId: "thread-1",
+          seenUpdatedAt: 1_999,
+        },
+        protocolVersion: 1,
+        sourceInstanceId: "gateway_one",
+        targetInstanceId: "client_one",
+        createdAt: 1_000,
+      },
+    });
+
+    expect(backend.markThreadSeen).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      seenUpdatedAt: 1_999,
+    });
+    expect(replies).toMatchObject([{
+      kind: "response",
+      requestId: "mark-seen-request",
+      result: {
+        backend: "codex",
+        threadId: "thread-1",
+        seenUpdatedAt: 1_999,
+      },
+    }]);
+
+    const sent: FederationProtocolEnvelope[] = [];
+    const rpc = new FederationRpcEndpoint({
+      localInstanceId: "gateway_one",
+      remoteInstanceId: "client_one",
+      sendEnvelope: (envelope) => sent.push(envelope),
+      now: () => 3_000,
+    });
+    const client = new FederationRemoteBackendClient(rpc);
+    const pending = client.markThreadSeen({
+      backend: "codex",
+      threadId: "thread-1",
+      seenUpdatedAt: 1_999,
+    });
+    const request = sent[0]!;
+    expect(request).toMatchObject({
+      kind: "request",
+      method: FEDERATION_BACKEND_METHODS.markThreadSeen,
+      params: {
+        backend: "codex",
+        threadId: "thread-1",
+        seenUpdatedAt: 1_999,
+      },
+    });
+    rpc.receiveEnvelope({
+      id: "mark-seen-response",
+      kind: "response",
+      requestId: request.id,
+      protocolVersion: 1,
+      sourceInstanceId: "client_one",
+      targetInstanceId: "gateway_one",
+      createdAt: 3_100,
+      result: {
+        backend: "codex",
+        threadId: "thread-1",
+        seenAt: 3_100,
+        seenUpdatedAt: 1_999,
+      },
+    });
+    await expect(pending).resolves.toMatchObject({
+      threadId: "thread-1",
+      seenUpdatedAt: 1_999,
+    });
+  });
+
   it("requires thread-detail capability for remote thread reads", async () => {
     const replies: FederationProtocolEnvelope[] = [];
     const router = new FederationRouter({
@@ -278,6 +377,7 @@ describe("federation backend bridge", () => {
       readThread: vi.fn(),
       listSkills: vi.fn(),
       listBackends: vi.fn(),
+      markThreadSeen: vi.fn(),
       archiveThread: vi.fn(),
       startThread: vi.fn(),
       forkThread: vi.fn(),
@@ -441,6 +541,7 @@ describe("federation backend bridge", () => {
         readThread: vi.fn(),
         listSkills: vi.fn(),
         listBackends: vi.fn(),
+        markThreadSeen: vi.fn(),
         archiveThread: vi.fn(),
         startThread: vi.fn(),
         forkThread: vi.fn(),

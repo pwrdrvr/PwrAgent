@@ -2751,6 +2751,15 @@ class DesktopAppServerService {
   async markThreadSeen(
     request: MarkThreadSeenRequest,
   ): Promise<MarkThreadSeenResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .markThreadSeen(remoteRequest);
+    }
     const backend = request.backend ?? "codex";
 
     const response = await this.getOverlayStore().markThreadSeen({

@@ -36,6 +36,12 @@ const federationMock = vi.hoisted(() => {
       archivedAt: 6_000,
       cleanup: [],
     })),
+    markThreadSeen: vi.fn(async (request: MarkThreadSeenRequest) => ({
+      backend: request.backend ?? "codex",
+      threadId: request.threadId,
+      seenAt: request.seenAt ?? 6_000,
+      seenUpdatedAt: request.seenUpdatedAt,
+    })),
     renameThread: vi.fn(async (request: RenameThreadRequest) => ({
       backend: request.backend,
       threadId: request.threadId,
@@ -758,6 +764,7 @@ describe("app server ipc", () => {
     renameThread.mockClear();
     federationMock.remoteBackend.renameThread.mockClear();
     federationMock.remoteBackend.archiveThread.mockClear();
+    federationMock.remoteBackend.markThreadSeen.mockClear();
     federationMock.runtime.remoteBackend.mockClear();
     listThreads.mockClear();
     readThread.mockClear();
@@ -2235,6 +2242,40 @@ describe("app server ipc", () => {
       threadId: "thread-1",
       seenAt: 2000,
       seenUpdatedAt: 3000,
+    });
+  });
+
+  it("marks remote threads seen on the owning federation peer", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_MARK_THREAD_SEEN_CHANNEL } = await import("../../shared/ipc");
+
+    registerAppServerIpcHandlers();
+
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "remote-instance",
+    };
+    const response = await handlers.get(NAVIGATION_MARK_THREAD_SEEN_CHANNEL)?.({}, {
+      backend: "codex",
+      federationTarget,
+      threadId: "thread-remote",
+      seenUpdatedAt: 3_000,
+    } satisfies MarkThreadSeenRequest);
+
+    expect(federationMock.runtime.remoteBackend).toHaveBeenCalledWith(
+      federationTarget,
+    );
+    expect(federationMock.remoteBackend.markThreadSeen).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-remote",
+      seenUpdatedAt: 3_000,
+    });
+    expect(markThreadSeen).not.toHaveBeenCalled();
+    expect(response).toEqual({
+      backend: "codex",
+      threadId: "thread-remote",
+      seenAt: 6_000,
+      seenUpdatedAt: 3_000,
     });
   });
 

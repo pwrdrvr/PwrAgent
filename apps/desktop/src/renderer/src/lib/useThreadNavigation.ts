@@ -3976,6 +3976,9 @@ export function useThreadNavigation(
       try {
         await markThreadSeenRequest({
           backend: threadToMarkSeen.source,
+          ...(threadToMarkSeen.federation?.ref.target
+            ? { federationTarget: threadToMarkSeen.federation.ref.target }
+            : {}),
           threadId: threadToMarkSeen.id,
           seenUpdatedAt: threadToMarkSeen.updatedAt,
         });
@@ -4122,6 +4125,9 @@ export function useThreadNavigation(
         unreadThreads.map(async (thread) => {
           await markThreadSeen({
             backend: thread.source,
+            ...(thread.federation?.ref.target
+              ? { federationTarget: thread.federation.ref.target }
+              : {}),
             threadId: thread.id,
             seenUpdatedAt: thread.updatedAt,
           });
@@ -4177,6 +4183,9 @@ export function useThreadNavigation(
       const seenUpdatedAt = Math.max(0, thread.updatedAt - 1);
       await markThreadSeen({
         backend: thread.source,
+        ...(thread.federation?.ref.target
+          ? { federationTarget: thread.federation.ref.target }
+          : {}),
         threadId: thread.id,
         seenUpdatedAt,
       });
