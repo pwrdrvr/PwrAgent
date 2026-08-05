@@ -1580,6 +1580,43 @@ function responseHasInProgressTurn(
   return turnEntries.some((entry) => entry.turn?.status === "in_progress");
 }
 
+function readTrailingInProgressTurn(
+  response: AppServerReadThreadResponse
+): { id: string; startedAt?: number } | undefined {
+  const entries = response.replay.entries;
+  let trailingTurnId: string | undefined;
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const turn = entries[index]?.turn;
+    if (turn) {
+      trailingTurnId = turn.id;
+      break;
+    }
+  }
+  if (!trailingTurnId) {
+    return undefined;
+  }
+
+  const turnEntries = entries.filter(
+    (entry) => entry.turn?.id === trailingTurnId
+  );
+  if (turnEntries.some((entry) => isCompletedTurnMetadata(entry.turn))) {
+    return undefined;
+  }
+  if (!turnEntries.some((entry) => entry.turn?.status === "in_progress")) {
+    return undefined;
+  }
+
+  const startedAtCandidates = turnEntries
+    .map((entry) => entry.turn?.startedAt)
+    .filter((value): value is number => typeof value === "number");
+  return {
+    id: trailingTurnId,
+    ...(startedAtCandidates.length > 0
+      ? { startedAt: Math.min(...startedAtCandidates) }
+      : {}),
+  };
+}
+
 function responseHasCompletedTurn(
   response: AppServerReadThreadResponse,
   turnId: string | undefined
@@ -3711,14 +3748,34 @@ export function useThreadSessionState(params: {
             });
           }
 
+          // A window that opens a thread mid-turn (a fresh local window, or a
+          // federation remote viewer) never saw turn/started, so the hydrated
+          // snapshot is its only signal that a turn is running. Without an
+          // active turn id the transcript collapses live commentary into
+          // "previous messages" groups while the turn is still writing them.
+          const trailingInProgressTurn =
+            !shouldClearStaleThinking && responseThreadStatus === "active"
+              ? readTrailingInProgressTurn(responseWithLoadedHistory)
+              : undefined;
+          const shouldAdoptHydratedTurn =
+            trailingInProgressTurn !== undefined
+            && shouldAdoptStartedTurn(current, trailingInProgressTurn.id);
+
           return {
             ...current,
             activeTurnId: shouldClearStaleThinking
               ? undefined
-              : current.activeTurnId,
+              : shouldAdoptHydratedTurn
+                ? trailingInProgressTurn.id
+                : current.activeTurnId,
             activeTurnStartedAt: shouldClearStaleThinking
               ? undefined
-              : current.activeTurnStartedAt,
+              : shouldAdoptHydratedTurn
+                ? trailingInProgressTurn.startedAt
+                  ?? (current.activeTurnId === trailingInProgressTurn.id
+                    ? current.activeTurnStartedAt
+                    : undefined)
+                : current.activeTurnStartedAt,
             backendReportedActive,
             error: undefined,
             expectOwnUpdate: false,
