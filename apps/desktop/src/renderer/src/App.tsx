@@ -1106,6 +1106,16 @@ function DesktopAppShell(props: {
   // Window-level masthead actions (Automations / Settings / New Thread).
   // Shared by the sidebar masthead's home (AppTitleBar on Windows) and the
   // thread-header relocation when the sidebar is hidden on macOS/Linux.
+  const addProjectDirectory = async (): Promise<void> => {
+    setMainView("thread");
+    // The hidden-sidebar masthead is the only visible home for this action in
+    // that layout. Restore the sidebar before opening the picker so either the
+    // newly registered directory or a validation error has a visible result.
+    if (sidebarHidden) {
+      setSidebarHiddenPersisted(false);
+    }
+    await navigation.addProjectDirectory();
+  };
   const mastheadActions = {
     addingProjectDirectory: navigation.pickingDirectory,
     automationsActive: mainView === "automations",
@@ -1115,10 +1125,7 @@ function DesktopAppShell(props: {
     newThreadDirectoryLabel: navigation.newThreadDirectoryLabel,
     onAddProjectDirectory: readRendererFederationTarget()
       ? undefined
-      : async () => {
-          setMainView("thread");
-          await navigation.addProjectDirectory();
-        },
+      : addProjectDirectory,
     onOpenAutomations: () => {
       setMainView("automations");
     },
@@ -1535,10 +1542,7 @@ function DesktopAppShell(props: {
           }}
           onAddProjectDirectory={readRendererFederationTarget()
             ? undefined
-            : async () => {
-                setMainView("thread");
-                await navigation.addProjectDirectory();
-              }}
+            : addProjectDirectory}
           onCreateSubthread={async (thread, mode) => {
             setMainView("thread");
             await navigation.createSubthread(thread, mode);

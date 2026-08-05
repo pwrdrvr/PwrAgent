@@ -301,20 +301,32 @@ electron_app_path_from_command() {
   print -r -- "$app_path"
 }
 
+single_electron_window_target() {
+  (( $# == 1 )) || return 1
+  print -r -- "$1"
+}
+
 describe_dev_window_target() {
-  local pid command app_path renderer_url
+  local pid command app_path renderer_url target
+  local -a candidates
 
   renderer_url="$(sed -n 's/.*locationHref=\([^ ]*\).*/\1/p' "$log_path" 2>/dev/null | tail -n 1)"
   for pid in $(matching_dev_pids); do
     command="$(process_command "$pid")"
     app_path="$(electron_app_path_from_command "$command" 2>/dev/null || true)"
     [[ -n "$app_path" ]] || continue
-    say "Computer Use target pid=$pid appPath=$app_path expectedWindowTitle=PwrAgnt rendererUrl=${renderer_url:-unknown}"
-    return 0
+    candidates+=("$pid"$'\t'"$app_path")
   done
 
-  say "could not resolve an unambiguous checkout-local Electron window target"
-  return 1
+  target="$(single_electron_window_target "${candidates[@]}" 2>/dev/null || true)"
+  if [[ -z "$target" ]]; then
+    say "could not resolve an unambiguous checkout-local Electron window target (${#candidates[@]} main-process candidates)"
+    return 1
+  fi
+
+  pid="${target%%$'\t'*}"
+  app_path="${target#*$'\t'}"
+  say "Computer Use target pid=$pid appPath=$app_path expectedWindowTitle=PwrAgnt rendererUrl=${renderer_url:-unknown}"
 }
 
 describe_root_instances() {
@@ -548,6 +560,9 @@ run_self_test() {
   [[ "$(readonly_state_db_uri)" == "file:/Users/example/Pwr Agent/state%23dev%3F.db?mode=ro" ]] || die "self-test failed: unexpected readonly state DB URI"
   [[ "$(electron_app_path_from_command "/Users/example/Pwr Agent/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron .")" == "/Users/example/Pwr Agent/node_modules/electron/dist/Electron.app" ]] || die "self-test failed: unexpected Electron app path"
   assert_failure "Electron helper is not a main app target" electron_app_path_from_command "/Users/example/Electron.app/Contents/MacOS/Electron --type=renderer"
+  [[ "$(single_electron_window_target $'101\t/Users/example/Electron.app')" == $'101\t/Users/example/Electron.app' ]] || die "self-test failed: unexpected single Electron target"
+  assert_failure "missing Electron main target is ambiguous" single_electron_window_target
+  assert_failure "multiple Electron main targets are ambiguous" single_electron_window_target $'101\t/Users/example/Electron.app' $'202\t/Users/example/Electron.app'
   [[ "$root_hash_value" == "c976f17804e892f9" ]] || die "self-test failed: unexpected root hash $root_hash_value"
 
   say "self-test passed"
