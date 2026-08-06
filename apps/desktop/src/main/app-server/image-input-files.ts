@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
-import { mkdir, readdir, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { AppServerTurnInputItem } from "@pwragent/shared";
 import { resolveActiveProfilePath } from "../profile";
 
@@ -8,6 +9,7 @@ const LOCAL_IMAGE_INPUT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 export type ImageInputFileDependencies = {
   now: () => number;
+  readFile: (filePath: string) => Promise<Buffer>;
   resolveRoot: () => string;
   writeFile: (filePath: string, data: Buffer) => Promise<unknown>;
   mkdir: (dirPath: string, options: { recursive: true }) => Promise<unknown>;
@@ -26,6 +28,7 @@ export type ImageInputFileDependencies = {
 
 const defaultDependencies: ImageInputFileDependencies = {
   now: () => Date.now(),
+  readFile,
   resolveRoot: () => resolveActiveProfilePath(path.join("state", "image-inputs")),
   writeFile,
   mkdir,
@@ -45,17 +48,22 @@ export async function materializeLocalImageInputs(
   let materializedRoot: string | undefined;
 
   for (const item of input) {
-    if (item.type !== "image") {
+    if (item.type !== "image" && item.type !== "localImage") {
       materialized.push(item);
       continue;
     }
 
-    const dataImage = parseSupportedImageDataUrl(item.url);
+    const dataImage = item.type === "image"
+      ? parseSupportedImageDataUrl(item.url)
+      : undefined;
     if (dataImage) {
       const root = deps.resolveRoot();
       materializedRoot = root;
       await deps.mkdir(root, { recursive: true });
-      const filePath = materializedImageFilePath(root, item.name, dataImage);
+      const filePath = materializedImageFilePath(root, item.name, {
+        extension: extensionForMimeType(dataImage.mimeType),
+        sha256: dataImage.sha256,
+      });
       await deps.mkdir(path.dirname(filePath), { recursive: true });
       await deps.writeFile(filePath, dataImage.buffer);
       materializedFilePaths.add(filePath);
@@ -67,12 +75,25 @@ export async function materializeLocalImageInputs(
       continue;
     }
 
-    const filePath = filePathFromFileUrl(item.url);
+    const filePath = item.type === "localImage"
+      ? item.path
+      : filePathFromFileUrl(item.url);
     if (filePath && isSupportedImagePath(filePath)) {
+      const root = deps.resolveRoot();
+      materializedRoot = root;
+      const buffer = await deps.readFile(filePath);
+      const extension = normalizedImageExtension(filePath);
+      const materializedPath = materializedImageFilePath(root, item.name, {
+        extension,
+        sha256: createHash("sha256").update(buffer).digest("hex"),
+      });
+      await deps.mkdir(path.dirname(materializedPath), { recursive: true });
+      await deps.writeFile(materializedPath, buffer);
+      materializedFilePaths.add(materializedPath);
       materialized.push({
         type: "localImage",
         ...(item.name ? { name: item.name } : {}),
-        path: filePath,
+        path: materializedPath,
       });
       continue;
     }
@@ -116,7 +137,7 @@ function parseSupportedImageDataUrl(
 function filePathFromFileUrl(url: string): string | undefined {
   try {
     const parsed = new URL(url);
-    return parsed.protocol === "file:" ? decodeURIComponent(parsed.pathname) : undefined;
+    return parsed.protocol === "file:" ? fileURLToPath(parsed) : undefined;
   } catch {
     return undefined;
   }
@@ -125,21 +146,20 @@ function filePathFromFileUrl(url: string): string | undefined {
 function materializedImageFilePath(
   root: string,
   name: string | undefined,
-  dataImage: { mimeType: "image/jpeg" | "image/png"; sha256: string },
+  image: { extension: string; sha256: string },
 ): string {
-  const extension = extensionForMimeType(dataImage.mimeType);
-  const fallback = path.join(root, `${dataImage.sha256}.${extension}`);
-  const basename = sanitizeImageBasename(name, extension);
+  const fallback = path.join(root, `${image.sha256}.${image.extension}`);
+  const basename = sanitizeImageBasename(name, image.extension);
   if (!basename) {
     return fallback;
   }
 
-  return path.join(root, dataImage.sha256, basename);
+  return path.join(root, image.sha256, basename);
 }
 
 function sanitizeImageBasename(
   name: string | undefined,
-  extension: "jpg" | "png",
+  extension: string,
 ): string | undefined {
   const normalized = name
     ?.trim()
@@ -169,8 +189,22 @@ function extensionForMimeType(mimeType: "image/jpeg" | "image/png"): "jpg" | "pn
 }
 
 function isSupportedImagePath(filePath: string): boolean {
-  const extension = path.extname(filePath).toLowerCase();
-  return extension === ".jpg" || extension === ".jpeg" || extension === ".png";
+  return SUPPORTED_LOCAL_IMAGE_EXTENSIONS.has(path.extname(filePath).toLowerCase());
+}
+
+const SUPPORTED_LOCAL_IMAGE_EXTENSIONS = new Set([
+  ".avif",
+  ".bmp",
+  ".gif",
+  ".jpeg",
+  ".jpg",
+  ".png",
+  ".webp",
+]);
+
+function normalizedImageExtension(filePath: string): string {
+  const extension = path.extname(filePath).toLowerCase().slice(1);
+  return extension === "jpeg" ? "jpg" : extension;
 }
 
 async function cleanupOldImageInputs(

@@ -6084,10 +6084,11 @@ type PendingThreadMessageContext = {
   turnId?: string;
 };
 
-function pendingThreadMessageImageParts(
+async function pendingThreadMessageImageParts(
   input: AppServerTurnInputItem[] | undefined,
-): AppServerThreadImagePart[] {
-  return (input ?? []).flatMap((item): AppServerThreadImagePart[] => {
+): Promise<AppServerThreadImagePart[]> {
+  const materializedInput = await materializeLocalImageInputs(input ?? []);
+  return materializedInput.flatMap((item): AppServerThreadImagePart[] => {
     if (item.type === "localImage") {
       return [{
         type: "image",
@@ -10983,7 +10984,7 @@ export class DesktopBackendRegistry {
           params.backend,
           params.threadId,
         );
-        pendingMessageContextId = this.registerPendingThreadMessageContext({
+        pendingMessageContextId = await this.registerPendingThreadMessageContext({
           backend: params.backend,
           input,
           threadId: params.threadId,
@@ -11156,7 +11157,7 @@ export class DesktopBackendRegistry {
     // turn/start call resolves. It must receive the same prepared input that
     // goes to the agent, not raw local PDF references from the composer.
     this.pendingTitleGenerationInputs.set(titleGenerationKey, input);
-    const pendingMessageContextId = this.registerPendingThreadMessageContext({
+    const pendingMessageContextId = await this.registerPendingThreadMessageContext({
       backend: params.backend,
       input,
       threadId: params.threadId,
@@ -11370,15 +11371,15 @@ export class DesktopBackendRegistry {
     return response;
   }
 
-  private registerPendingThreadMessageContext(params: {
+  private async registerPendingThreadMessageContext(params: {
     backend: AppServerBackendKind;
     input?: AppServerTurnInputItem[];
     threadId: string;
     origin?: AppServerThreadMessageOrigin;
     text?: string;
     turnId?: string;
-  }): string | undefined {
-    const imageParts = pendingThreadMessageImageParts(params.input);
+  }): Promise<string | undefined> {
+    const imageParts = await pendingThreadMessageImageParts(params.input);
     if (!params.origin && imageParts.length === 0) {
       return undefined;
     }
@@ -12444,7 +12445,7 @@ export class DesktopBackendRegistry {
     const input = await enrichLocalFileInputs(params.input, {
       privateStorageRoots: this.localFilePrivateStorageRoots,
     });
-    const pendingMessageContextId = this.registerPendingThreadMessageContext({
+    const pendingMessageContextId = await this.registerPendingThreadMessageContext({
       backend: params.backend,
       input,
       threadId: params.threadId,

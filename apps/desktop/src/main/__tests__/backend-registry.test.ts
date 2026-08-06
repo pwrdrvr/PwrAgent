@@ -17128,7 +17128,7 @@ command = "pnpm dev"
     await registry.startTurn({
       backend: "codex",
       threadId: "thread-title",
-      input: [{ type: "image", url: "file:///tmp/image.png" }],
+      input: [{ type: "image", url: "https://example.test/image.png" }],
     });
     await flushAsync();
 
@@ -17186,8 +17186,11 @@ command = "pnpm dev"
     }
   });
 
-  it("restores materialized images onto text-only Codex user item events", async () => {
+  it("copies external local images before restoring text-only Codex user item events", async () => {
     const tempHome = await mkdtemp(path.join(os.tmpdir(), "pwragent-image-event-"));
+    const sourceRoot = await mkdtemp(path.join(os.tmpdir(), "pwragent-image-source-"));
+    const sourcePath = path.join(sourceRoot, "remote-paste.png");
+    await writeFile(sourcePath, Buffer.from([1, 2, 3]));
     const previousHome = process.env.PWRAGENT_HOME;
     process.env.PWRAGENT_HOME = tempHome;
     const codexClient = new MockBackendClient({
@@ -17212,14 +17215,16 @@ command = "pnpm dev"
         input: [
           { type: "text", text: "Describe it" },
           {
-            type: "image",
+            type: "localImage",
             name: "remote-paste.png",
-            url: "data:image/png;base64,AQID",
+            path: sourcePath,
           },
         ],
       });
       const imageInput = codexClient.lastStartTurnParams?.input[1];
       const imagePath = imageInput?.type === "localImage" ? imageInput.path : "";
+      expect(imagePath).toContain(path.join("state", "image-inputs"));
+      expect(imagePath).not.toBe(sourcePath);
 
       await codexClient.emit({
         method: "item/completed",
@@ -17256,6 +17261,7 @@ command = "pnpm dev"
     } finally {
       await registry.close();
       await rm(tempHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      await rm(sourceRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       if (previousHome === undefined) {
         delete process.env.PWRAGENT_HOME;
       } else {
