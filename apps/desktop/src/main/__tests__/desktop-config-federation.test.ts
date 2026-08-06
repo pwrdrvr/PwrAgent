@@ -11,6 +11,7 @@ describe("desktop config [federation] section", () => {
       "[federation]",
       'mode = "gateway"',
       'instance_label = "Studio Mac"',
+      'instance_notes = "PwrSnap dev + screen recording"',
       'listen_host = "127.0.0.1"',
       "listen_port = 47830",
       'public_url = "https://pwragent.example.com"',
@@ -25,6 +26,7 @@ describe("desktop config [federation] section", () => {
     expect(config.federation).toEqual({
       mode: "gateway",
       instanceLabel: "Studio Mac",
+      instanceNotes: "PwrSnap dev + screen recording",
       listenHost: "127.0.0.1",
       listenPort: 47830,
       publicUrl: "https://pwragent.example.com",
@@ -39,6 +41,7 @@ describe("desktop config [federation] section", () => {
       federation: {
         mode: "dual",
         instanceLabel: "Studio Mac",
+        instanceNotes: "PwrSnap dev + screen recording",
         listenHost: "0.0.0.0",
         listenPort: 47831,
         publicUrl: "https://gateway.example.com",
@@ -53,6 +56,7 @@ describe("desktop config [federation] section", () => {
     expect(config.federation).toEqual({
       mode: "dual",
       instanceLabel: "Studio Mac",
+      instanceNotes: "PwrSnap dev + screen recording",
       listenHost: "0.0.0.0",
       listenPort: 47831,
       publicUrl: "https://gateway.example.com",
@@ -67,6 +71,7 @@ describe("desktop config [federation] section", () => {
       "[federation]",
       'mode = "gateway"',
       'instance_label = "Studio Mac"',
+      'instance_notes = "PwrSnap dev + screen recording"',
       'listen_host = "127.0.0.1"',
       "listen_port = 47830",
       'public_url = "https://gateway.example.com"',
@@ -80,6 +85,7 @@ describe("desktop config [federation] section", () => {
         federation: {
           mode: "disabled",
           instanceLabel: "",
+          instanceNotes: "",
           listenHost: "",
           listenPort: 0,
           publicUrl: "",

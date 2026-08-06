@@ -77,6 +77,9 @@ export function FederationSettings(props: FederationSettingsProps) {
   const [instanceLabel, setInstanceLabel] = useState(
     props.snapshot.federation.instanceLabel.value,
   );
+  const [instanceNotes, setInstanceNotes] = useState(
+    props.snapshot.federation.instanceNotes.value,
+  );
   const [listenHost, setListenHost] = useState(
     props.snapshot.federation.listenHost.value,
   );
@@ -115,6 +118,7 @@ export function FederationSettings(props: FederationSettingsProps) {
   useEffect(() => {
     setMode(props.snapshot.federation.mode.value);
     setInstanceLabel(props.snapshot.federation.instanceLabel.value);
+    setInstanceNotes(props.snapshot.federation.instanceNotes.value);
     setListenHost(props.snapshot.federation.listenHost.value);
     setListenPort(String(props.snapshot.federation.listenPort.value));
     setPublicUrl(props.snapshot.federation.publicUrl.value);
@@ -427,6 +431,19 @@ export function FederationSettings(props: FederationSettingsProps) {
             }
           />
           <SettingsField
+            label="Purpose notes"
+            sub="What this machine is for, e.g. 'Studio Mac — PwrSnap dev + screen recording'. Shown to peers and read by agents when routing work to an instance."
+            control={
+              <input
+                aria-label="Purpose notes"
+                value={instanceNotes}
+                placeholder="What is this machine for?"
+                disabled={props.saving}
+                onChange={(event) => setInstanceNotes(event.target.value)}
+              />
+            }
+          />
+          <SettingsField
             label="Listen host"
             sub={
               listensForPeers
@@ -534,6 +551,7 @@ export function FederationSettings(props: FederationSettingsProps) {
                   federation: {
                     mode,
                     instanceLabel,
+                    instanceNotes,
                     listenHost,
                     listenPort: Number.parseInt(listenPort, 10) || 0,
                     publicUrl,

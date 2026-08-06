@@ -208,3 +208,22 @@ use that profile's unlocked desktop secret storage, or commands explicitly
 approved on a remote coding-agent thread. Treat every enrolled peer as able to
 exercise the capabilities shown in Settings and revoke peers that are lost or
 retired.
+
+Peer-authored metadata — instance labels, purpose notes, thread titles, and
+host facts (OS, hostname, CPU/RAM/disk figures) — flows into local agent
+context through the federation tool catalog and federated search. An enrolled
+peer can therefore place text in front of your agents; this is accepted under
+the same trusted-operator boundary, and host facts are self-reported hints,
+not verified measurements.
+
+## Agent Access to Federation
+
+In-thread agents get a `federation` tool catalog (`list_federation_instances`,
+`list_instance_projects`, `create_instance_thread`,
+`search_federation_threads`) that composes the same capability-gated RPCs the
+UI uses; agent-originated cross-instance control is authorized exactly like
+operator-originated control, with enrollment as the trust boundary. Instances
+describe themselves to peers with the Settings → Federation "Instance name"
+and "Purpose notes" fields, so agents can route work by what each machine is
+for. Operators can steer routing and thread-startup defaults with
+[`~/.pwragent/AGENTS.md`](agent-operator-preferences.md).

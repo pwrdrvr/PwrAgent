@@ -1,6 +1,7 @@
 import { mkdtemp, readFile, rm, writeFile as writeFileFs } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { materializeLocalImageInputs } from "../app-server/image-input-files";
 
@@ -60,13 +61,60 @@ describe("image input files", () => {
   });
 
   it("converts file URLs for supported local image paths", async () => {
-    const result = await materializeLocalImageInputs([
-      { type: "image", name: "friendly screenshot.jpg", url: "file:///tmp/screenshot%20one.jpg" },
-    ]);
+    const sourceRoot = await mkdtemp(path.join(os.tmpdir(), "pwragent-image-source-"));
+    const materializedRoot = await mkdtemp(path.join(os.tmpdir(), "pwragent-image-inputs-"));
+    const sourcePath = path.join(sourceRoot, "screenshot one.jpg");
+    await writeFileFs(sourcePath, Buffer.from([1, 2, 3]));
+    try {
+      const result = await materializeLocalImageInputs(
+        [{
+          type: "image",
+          name: "friendly screenshot.jpg",
+          url: pathToFileURL(sourcePath).toString(),
+        }],
+        { resolveRoot: () => materializedRoot },
+      );
 
-    expect(result).toEqual([
-      { type: "localImage", name: "friendly screenshot.jpg", path: "/tmp/screenshot one.jpg" },
-    ]);
+      expect(result).toEqual([{
+        type: "localImage",
+        name: "friendly screenshot.jpg",
+        path: path.join(
+          materializedRoot,
+          "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81",
+          "friendly screenshot.jpg",
+        ),
+      }]);
+      const imagePath = result[0]?.type === "localImage" ? result[0].path : "";
+      await expect(readFile(imagePath)).resolves.toEqual(Buffer.from([1, 2, 3]));
+    } finally {
+      await rm(sourceRoot, { recursive: true, force: true });
+      await rm(materializedRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("copies external local images into the approved image-input root", async () => {
+    const sourceRoot = await mkdtemp(path.join(os.tmpdir(), "pwragent-image-source-"));
+    const materializedRoot = await mkdtemp(path.join(os.tmpdir(), "pwragent-image-inputs-"));
+    const sourcePath = path.join(sourceRoot, "external.png");
+    await writeFileFs(sourcePath, Buffer.from([4, 5, 6]));
+    try {
+      const [result] = await materializeLocalImageInputs(
+        [{ type: "localImage", name: "external.png", path: sourcePath }],
+        { resolveRoot: () => materializedRoot },
+      );
+
+      expect(result).toMatchObject({
+        type: "localImage",
+        name: "external.png",
+      });
+      const imagePath = result?.type === "localImage" ? result.path : "";
+      expect(imagePath.startsWith(`${materializedRoot}${path.sep}`)).toBe(true);
+      expect(imagePath).not.toBe(sourcePath);
+      await expect(readFile(imagePath)).resolves.toEqual(Buffer.from([4, 5, 6]));
+    } finally {
+      await rm(sourceRoot, { recursive: true, force: true });
+      await rm(materializedRoot, { recursive: true, force: true });
+    }
   });
 
   it("does not delete a reused stale cached image while materializing it", async () => {

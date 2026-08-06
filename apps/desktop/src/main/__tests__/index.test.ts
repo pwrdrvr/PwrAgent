@@ -93,6 +93,7 @@ const requestBindingRevokeAllForThreadMock = vi.fn();
 const setMessagingArchiveCleanerMock = vi.fn();
 const setMessagingAgentToolServiceMock = vi.fn();
 const setPwrAgentAppManagementHandlerMock = vi.fn();
+const setPwrAgentFederationHandlerMock = vi.fn();
 const listThreadsMock = vi.fn<(request?: unknown) => Promise<unknown[]>>();
 const disposeDesktopMessagingRuntimeMock = vi.fn();
 const registerMessagingStatusIpcHandlersMock = vi.fn();
@@ -422,6 +423,7 @@ vi.mock("../app-server/backend-registry", () => ({
     listThreads: listThreadsMock,
     setMessagingAgentToolService: setMessagingAgentToolServiceMock,
     setPwrAgentAppManagementHandler: setPwrAgentAppManagementHandlerMock,
+    setPwrAgentFederationHandler: setPwrAgentFederationHandlerMock,
     setMessagingArchiveCleaner: setMessagingArchiveCleanerMock,
   })),
 }));
@@ -597,6 +599,7 @@ describe("bootstrapApp", () => {
     setMessagingArchiveCleanerMock.mockReset();
     setMessagingAgentToolServiceMock.mockReset();
     setPwrAgentAppManagementHandlerMock.mockReset();
+    setPwrAgentFederationHandlerMock.mockReset();
     listThreadsMock.mockReset();
     listThreadsMock.mockResolvedValue([]);
     disposeDesktopMessagingRuntimeMock.mockReset();

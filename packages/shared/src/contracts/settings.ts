@@ -547,6 +547,13 @@ export type DesktopFederationSettingsSnapshot = {
    * recognize a raw instance GUID.
    */
   instanceLabel: DesktopSettingsValue<string>;
+  /**
+   * Operator-written purpose notes for this instance ("Studio Mac — PwrSnap
+   * dev + screen recording"). Advertised to federation peers and read by
+   * orchestration agents when routing work to an instance. Empty means no
+   * notes.
+   */
+  instanceNotes: DesktopSettingsValue<string>;
   listenHost: DesktopSettingsValue<string>;
   listenPort: DesktopSettingsValue<number>;
   publicUrl: DesktopSettingsValue<string>;
@@ -955,6 +962,7 @@ export type DesktopSettingsConfigPatch = {
   federation?: {
     mode?: DesktopFederationMode;
     instanceLabel?: string;
+    instanceNotes?: string;
     listenHost?: string;
     listenPort?: number;
     publicUrl?: string;

@@ -19,6 +19,7 @@ import type {
   FederatedSearchRequest,
   FederatedSearchResponse,
   FederationHealthStatus,
+  FederationHostInfo,
   FederationInstanceId,
   FederationInstanceRole,
   FederationPeerSummary,
@@ -125,6 +126,7 @@ import {
   readTranscriptImageProtocolRequest,
   rewriteFederatedTranscriptImageUrlsForRenderer,
   rewriteTranscriptImageUrlsForRenderer,
+  toFederatedTranscriptImageProtocolUrl,
 } from "../transcript-image-protocol";
 import { getMainLogger } from "../log";
 import {
@@ -141,6 +143,7 @@ import {
   encodeFederationInvite,
 } from "./federation-enrollment";
 import { FederatedSearchService } from "./federated-search-service";
+import { collectFederationHostInfo } from "./federation-host-info";
 import {
   FEDERATION_BACKEND_EVENT_METHOD,
   FEDERATION_BACKEND_METHOD_CAPABILITIES,
@@ -214,6 +217,67 @@ const DUPLICATE_IDENTITY_NOTE_TTL_MS = 5 * 60_000;
 /** A session must last this long before it counts as stable enough to reset backoff. */
 const FEDERATION_STABLE_SESSION_MS = 60_000;
 
+function rewriteLiveTranscriptImagesForFederation(
+  event: AgentEvent,
+  ownerInstanceId: FederationInstanceId,
+): AgentEvent {
+  if (
+    event.notification.method !== "item/started"
+    && event.notification.method !== "item/completed"
+  ) {
+    return event;
+  }
+  const params = event.notification.params as Record<string, unknown>;
+  const itemValue = params.item;
+  if (
+    !itemValue
+    || typeof itemValue !== "object"
+    || Array.isArray(itemValue)
+  ) {
+    return event;
+  }
+  const item = itemValue as Record<string, unknown>;
+  if (item.type !== "userMessage" || !Array.isArray(item.content)) {
+    return event;
+  }
+  let changed = false;
+  const content = item.content.map((part) => {
+    if (
+      !part
+      || typeof part !== "object"
+      || Array.isArray(part)
+      || !("type" in part)
+      || !("url" in part)
+      || part.type !== "image"
+      || typeof part.url !== "string"
+      || !part.url.startsWith("pwragent-image://file/")
+    ) {
+      return part;
+    }
+    changed = true;
+    return {
+      ...part,
+      url: toFederatedTranscriptImageProtocolUrl(ownerInstanceId, part.url),
+    };
+  });
+  if (!changed) {
+    return event;
+  }
+  return {
+    ...event,
+    notification: {
+      ...event.notification,
+      params: {
+        ...params,
+        item: {
+          ...item,
+          content,
+        },
+      },
+    },
+  } as AgentEvent;
+}
+
 const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "remote_window",
   "thread_navigation",
@@ -252,6 +316,8 @@ export class DesktopFederationRuntime {
   private client?: FederationClientWebSocketClient;
   private localInstanceId?: FederationInstanceId;
   private instanceLabel?: string;
+  private instanceNotes?: string;
+  private localHostInfo?: FederationHostInfo;
   private listenUrl?: string;
   private gatewayUrl?: string;
   private gatewayInstanceId?: FederationInstanceId;
@@ -689,6 +755,15 @@ export class DesktopFederationRuntime {
   }
 
   /**
+   * The same backend-operations surface {@link remoteBackend} exposes for a
+   * peer, served by this instance. Lets callers (the federation agent tools)
+   * treat local and remote targets uniformly.
+   */
+  localBackend(): FederationBackendOperations {
+    return localBackendOperations();
+  }
+
+  /**
    * Viewer-side control client for a peer's remote PTY sessions. Streamed
    * output/exit/error frames arrive via {@link onRemotePtyEvent}.
    */
@@ -820,6 +895,12 @@ export class DesktopFederationRuntime {
     const settings = await getDesktopSettingsService().readSettings();
     this.instanceLabel =
       settings.federation.instanceLabel.value.trim() || defaultInstanceLabel();
+    this.instanceNotes = settings.federation.instanceNotes.value.trim();
+    try {
+      this.localHostInfo = await collectFederationHostInfo();
+    } catch {
+      this.localHostInfo = undefined;
+    }
     const mode = settings.federation.mode.value;
     if (mode === "disabled") {
       return;
@@ -1130,6 +1211,10 @@ export class DesktopFederationRuntime {
       // Advertise which profile this instance runs so peers can tell
       // several enrollments of the same machine apart in their UI.
       profileName: getAppStateDb().getMeta("profile_name") || undefined,
+      // Always a string: present-but-empty clears the gateway's stored
+      // notes when the operator erases theirs (absent means "old client").
+      notes: this.instanceNotes ?? settings.federation.instanceNotes.value.trim(),
+      host: this.localHostInfo,
       role: "client",
       headers: cloudflareAccessEnabled
         ? {
@@ -1302,6 +1387,8 @@ export class DesktopFederationRuntime {
         existing?.protocolVersion ?? FEDERATION_PROTOCOL_VERSION,
       endpoint: existing?.endpoint ?? params.gatewayUrl,
       profileName: existing?.profileName,
+      notes: existing?.notes,
+      host: existing?.host,
       lastConnectedAt: params.connectedAt,
       lastActivityAt: params.connectedAt,
       canRevoke: false,
@@ -1657,6 +1744,8 @@ export class DesktopFederationRuntime {
         protocolVersion: existing?.protocolVersion,
         endpoint: existing?.endpoint,
         profileName: existing?.profileName,
+        notes: existing?.notes,
+        host: existing?.host,
         lastConnectedAt: existing?.lastConnectedAt,
         lastActivityAt: existing?.lastActivityAt,
         revokedAt: existing?.revokedAt,
@@ -1730,6 +1819,8 @@ export class DesktopFederationRuntime {
         protocolVersion: FEDERATION_PROTOCOL_VERSION,
         profileName: localProfileName,
         celestialIcon: this.celestialIconFor(localInstanceId),
+        notes: this.instanceNotes || undefined,
+        host: this.localHostInfo,
       },
     ];
 
@@ -2288,10 +2379,15 @@ export class DesktopFederationRuntime {
   private forwardLocalBackendEvent(event: AgentEvent): void {
     const router = this.router;
     if (!router) return;
+    const ownerInstanceId = this.ensureLocalInstanceId();
+    const federatedEvent = rewriteLiveTranscriptImagesForFederation(
+      event,
+      ownerInstanceId,
+    );
 
     for (const connection of router.listConnections()) {
       const scheduledActionEvent =
-        event.notification.method === "thread/scheduledAction/updated";
+        federatedEvent.notification.method === "thread/scheduledAction/updated";
       if (
         scheduledActionEvent
           ? !connection.capabilities.includes("scheduled_actions")
@@ -2306,11 +2402,11 @@ export class DesktopFederationRuntime {
         kind: "notification",
         method: FEDERATION_BACKEND_EVENT_METHOD,
         params: {
-          backend: event.backend,
-          notification: event.notification,
+          backend: federatedEvent.backend,
+          notification: federatedEvent.notification,
         },
         protocolVersion: FEDERATION_PROTOCOL_VERSION,
-        sourceInstanceId: this.ensureLocalInstanceId(),
+        sourceInstanceId: ownerInstanceId,
         targetInstanceId: connection.peerId,
         createdAt: Date.now(),
       });
@@ -2391,7 +2487,7 @@ export class DesktopFederationRuntime {
  * hostname (minus the mDNS suffix) beats both the profile name (almost
  * always "default") and the raw instance GUID for recognizing a peer.
  */
-function defaultInstanceLabel(): string {
+export function defaultInstanceLabel(): string {
   const host = hostname().trim().replace(/\.local$/i, "");
   return host || "PwrAgent";
 }

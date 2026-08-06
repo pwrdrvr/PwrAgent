@@ -28,6 +28,10 @@ import {
   buildPwrAgentTaskMonitorToolDefinitions,
   type PwrAgentTaskMonitorHandler,
 } from "./pwragent-task-monitor-agent-tools.js";
+import {
+  buildPwrAgentFederationToolRouter,
+  type PwrAgentFederationHandler,
+} from "./pwragent-federation-agent-tools.js";
 import { AgentToolRouter } from "./agent-tool-router.js";
 
 export type ResolvedAgentToolCatalog = {
@@ -40,6 +44,7 @@ export type ResolvedAgentToolCatalog = {
 export function resolveAgentToolCatalogs(params: {
   appManagementHandler?: PwrAgentAppManagementHandler;
   automationInspectionHandler?: AutomationInspectionHandler;
+  federationHandler?: PwrAgentFederationHandler;
   messagingHandler?: PwrAgentMessagingHandler;
   taskMonitorHandler?: PwrAgentTaskMonitorHandler;
   threadInspectionHandler?: PwrAgentThreadInspectionHandler;
@@ -65,6 +70,10 @@ export function resolveAgentToolCatalogs(params: {
   );
   const threadOrchestrationDynamicTools =
     threadOrchestrationRouter.buildDynamicToolSpecs();
+  const federationRouter = buildPwrAgentFederationToolRouter(
+    params.federationHandler,
+  );
+  const federationDynamicTools = federationRouter.buildDynamicToolSpecs();
   return [
     {
       id: "automation_inspection",
@@ -143,6 +152,22 @@ export function resolveAgentToolCatalogs(params: {
           id: "thread_orchestration",
           namespace: PWRAGENT_TOOL_NAMESPACE,
           tools: threadOrchestrationDynamicTools,
+        }),
+      },
+    },
+    {
+      id: "federation",
+      dynamicTools: federationDynamicTools,
+      router: federationRouter,
+      summary: {
+        id: "federation",
+        namespace: PWRAGENT_TOOL_NAMESPACE,
+        enabled: true,
+        toolCount: countDynamicTools(federationDynamicTools),
+        fingerprint: buildCatalogFingerprint({
+          id: "federation",
+          namespace: PWRAGENT_TOOL_NAMESPACE,
+          tools: federationDynamicTools,
         }),
       },
     },

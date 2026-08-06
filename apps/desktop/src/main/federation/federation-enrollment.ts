@@ -1,5 +1,6 @@
 import type {
   FederationCapability,
+  FederationHostInfo,
   FederationInstanceId,
   FederationInstanceRole,
   FederationPeerSummary,
@@ -154,6 +155,8 @@ export function completeFederationEnrollment(params: {
     signatureBase64: string;
     endpoint?: string;
     profileName?: string;
+    notes?: string;
+    host?: FederationHostInfo;
   };
 }): FederationAuthDecision {
   if (!isFederationInstanceId(params.peer.instanceId)) {
@@ -222,6 +225,8 @@ export function completeFederationEnrollment(params: {
     protocolVersion: params.peer.protocolVersion,
     endpoint: params.peer.endpoint ?? enrollment.endpoint,
     profileName: params.peer.profileName,
+    notes: params.peer.notes?.trim() || undefined,
+    host: params.peer.host,
     lastConnectedAt: params.now,
     lastActivityAt: params.now,
     pinnedPublicKeyPem: params.peer.publicKeyPem,
@@ -263,6 +268,17 @@ export function authenticateFederationReconnect(params: {
    * the next reconnect instead of needing a re-enrollment.
    */
   profileName?: string;
+  /**
+   * Purpose notes advertised by the peer. Present-but-empty clears the
+   * stored value (an operator can genuinely erase their notes), while
+   * absent keeps it (older clients never advertise the field).
+   */
+  notes?: string;
+  /**
+   * Host facts advertised by the peer. Present replaces the stored block
+   * wholesale; absent keeps it (older clients never advertise host facts).
+   */
+  host?: FederationHostInfo;
 }): FederationAuthDecision {
   if (!isFederationInstanceId(params.peerInstanceId)) {
     return {
@@ -324,6 +340,9 @@ export function authenticateFederationReconnect(params: {
     ...peer,
     label: params.label?.trim() || peer.label,
     profileName: params.profileName?.trim() || peer.profileName,
+    notes:
+      params.notes === undefined ? peer.notes : params.notes.trim() || undefined,
+    host: params.host ?? peer.host,
     // Stored capabilities are informational, not an allowlist: refresh
     // them to what the peer's current build advertises so peer cards and
     // capability-gated surfaces (messaging fan-out, event forwarding)
