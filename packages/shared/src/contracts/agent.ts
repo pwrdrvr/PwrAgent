@@ -447,6 +447,7 @@ export type SetEligibleThreadsPrAutoDispatchResponse = {
 
 export type CancelThreadPrAutoDispatchRequest = {
   backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   fingerprint: string;
 };

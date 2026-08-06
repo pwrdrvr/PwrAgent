@@ -6522,6 +6522,10 @@ export function useThreadNavigation(
       if (!cancelThreadPrAutoDispatchRequest) return;
       await cancelThreadPrAutoDispatchRequest({
         backend: thread.source,
+        // The pending dispatch lives in the owning instance's
+        // coordinator, so the cancel has to travel there.
+        federationTarget: thread.federation?.ref.target ??
+          readRendererFederationTarget(),
         threadId: thread.id,
         fingerprint,
       });
@@ -6537,6 +6541,10 @@ export function useThreadNavigation(
       if (!sendThreadPrAutoDispatchNowRequest) return;
       await sendThreadPrAutoDispatchNowRequest({
         backend: thread.source,
+        // Promoting the scheduled turn only works on the owner, which is
+        // where the pending dispatch was armed.
+        federationTarget: thread.federation?.ref.target ??
+          readRendererFederationTarget(),
         threadId: thread.id,
         fingerprint,
       });

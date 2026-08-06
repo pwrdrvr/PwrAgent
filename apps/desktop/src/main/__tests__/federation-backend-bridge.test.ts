@@ -767,6 +767,114 @@ describe("federation backend bridge", () => {
     });
   });
 
+  it("routes pending PR auto-dispatch cancel over RPC with turn_control authorization", async () => {
+    const sent: FederationProtocolEnvelope[] = [];
+    const rpc = new FederationRpcEndpoint({
+      localInstanceId: "viewer_one",
+      remoteInstanceId: "owner_one",
+      sendEnvelope: (envelope) => sent.push(envelope),
+      now: () => 1_000,
+    });
+    const client = new FederationRemoteBackendClient(rpc);
+
+    const pending = client.cancelThreadPrAutoDispatch({
+      backend: "codex",
+      threadId: "thread-1",
+      fingerprint: "fingerprint-1",
+    });
+    const request = sent.at(-1)!;
+    expect(request).toMatchObject({
+      kind: "request",
+      method: FEDERATION_BACKEND_METHODS.cancelThreadPrAutoDispatch,
+      params: {
+        backend: "codex",
+        threadId: "thread-1",
+        fingerprint: "fingerprint-1",
+      },
+    });
+    expect(
+      FEDERATION_BACKEND_METHOD_CAPABILITIES[
+        FEDERATION_BACKEND_METHODS.cancelThreadPrAutoDispatch
+      ],
+    ).toBe("turn_control");
+
+    rpc.receiveEnvelope({
+      id: "response-auto-dispatch-cancel",
+      kind: "response",
+      requestId: request.id,
+      protocolVersion: 1,
+      sourceInstanceId: "owner_one",
+      targetInstanceId: "viewer_one",
+      createdAt: 1_100,
+      result: {
+        backend: "codex",
+        threadId: "thread-1",
+        fingerprint: "fingerprint-1",
+        cancelled: true,
+      },
+    });
+    await expect(pending).resolves.toMatchObject({
+      backend: "codex",
+      threadId: "thread-1",
+      fingerprint: "fingerprint-1",
+      cancelled: true,
+    });
+  });
+
+  it("routes pending PR auto-dispatch send-now over RPC with turn_control authorization", async () => {
+    const sent: FederationProtocolEnvelope[] = [];
+    const rpc = new FederationRpcEndpoint({
+      localInstanceId: "viewer_one",
+      remoteInstanceId: "owner_one",
+      sendEnvelope: (envelope) => sent.push(envelope),
+      now: () => 1_000,
+    });
+    const client = new FederationRemoteBackendClient(rpc);
+
+    const pending = client.sendThreadPrAutoDispatchNow({
+      backend: "codex",
+      threadId: "thread-1",
+      fingerprint: "fingerprint-1",
+    });
+    const request = sent.at(-1)!;
+    expect(request).toMatchObject({
+      kind: "request",
+      method: FEDERATION_BACKEND_METHODS.sendThreadPrAutoDispatchNow,
+      params: {
+        backend: "codex",
+        threadId: "thread-1",
+        fingerprint: "fingerprint-1",
+      },
+    });
+    expect(
+      FEDERATION_BACKEND_METHOD_CAPABILITIES[
+        FEDERATION_BACKEND_METHODS.sendThreadPrAutoDispatchNow
+      ],
+    ).toBe("turn_control");
+
+    rpc.receiveEnvelope({
+      id: "response-auto-dispatch-send-now",
+      kind: "response",
+      requestId: request.id,
+      protocolVersion: 1,
+      sourceInstanceId: "owner_one",
+      targetInstanceId: "viewer_one",
+      createdAt: 1_100,
+      result: {
+        backend: "codex",
+        threadId: "thread-1",
+        fingerprint: "fingerprint-1",
+        accepted: true,
+      },
+    });
+    await expect(pending).resolves.toMatchObject({
+      backend: "codex",
+      threadId: "thread-1",
+      fingerprint: "fingerprint-1",
+      accepted: true,
+    });
+  });
+
   it("serializes remote backend requests over RPC envelopes", async () => {
     const sent: FederationProtocolEnvelope[] = [];
     const rpc = new FederationRpcEndpoint({
@@ -1402,6 +1510,8 @@ describe("federation backend bridge", () => {
       reorderThreadPins: vi.fn(),
       detachThreadPullRequest: vi.fn(),
       setThreadPrAutoDispatch: vi.fn(),
+      cancelThreadPrAutoDispatch: vi.fn(),
+      sendThreadPrAutoDispatchNow: vi.fn(),
       archiveThread: vi.fn(),
       startThread: vi.fn(),
       forkThread: vi.fn(),
@@ -1618,6 +1728,8 @@ describe("federation backend bridge", () => {
       reorderThreadPins: vi.fn(),
         detachThreadPullRequest: vi.fn(),
         setThreadPrAutoDispatch: vi.fn(),
+        cancelThreadPrAutoDispatch: vi.fn(),
+        sendThreadPrAutoDispatchNow: vi.fn(),
         archiveThread: vi.fn(),
         startThread: vi.fn(),
         forkThread: vi.fn(),
