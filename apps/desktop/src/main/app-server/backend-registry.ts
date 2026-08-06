@@ -6323,11 +6323,21 @@ export class DesktopBackendRegistry {
    * Live lifecycle notifications and thread reads can be newer than Codex's
    * cached thread/list status. Preserve that observation until thread/list
    * returns the same value, then hand authority back to the list snapshot.
+   * Read sequences are reserved before awaiting the backend; the per-thread
+   * high-water mark survives that handoff so a delayed older read stays stale.
    */
   private readonly observedCodexThreadStatuses = new Map<
     string,
-    AppServerThreadStatus
+    {
+      sequence: number;
+      status: AppServerThreadStatus;
+    }
   >();
+  private readonly latestCodexThreadStatusObservationSequences = new Map<
+    string,
+    number
+  >();
+  private codexThreadStatusObservationSequence = 0;
   private readonly liveThreadUsageBaselines = new Map<
     string,
     TaskMonitorTokenUsageBreakdown
@@ -9479,6 +9489,11 @@ export class DesktopBackendRegistry {
       return await this.readAcpThread(request, backend);
     }
 
+    const codexStatusObservationSequence =
+      backend === "codex"
+        ? this.reserveCodexThreadStatusObservationSequence()
+        : undefined;
+
     const replay =
       backend === "codex"
         ? await this.withCodexThreadClient(
@@ -9503,7 +9518,11 @@ export class DesktopBackendRegistry {
           });
 
     if (backend === "codex") {
-      this.reconcileBackendCodexThreadStatus(request.threadId, replay.threadStatus);
+      this.reconcileBackendCodexThreadStatus(
+        request.threadId,
+        replay.threadStatus,
+        codexStatusObservationSequence,
+      );
     }
 
     if (
@@ -13162,12 +13181,27 @@ export class DesktopBackendRegistry {
   private reconcileBackendCodexThreadStatus(
     threadId: string,
     status: string | undefined,
+    sequence = this.reserveCodexThreadStatusObservationSequence(),
   ): void {
     if (!isAppServerThreadStatus(status)) {
       return;
     }
-    this.observedCodexThreadStatuses.set(threadId, status);
+    const latestSequence =
+      this.latestCodexThreadStatusObservationSequences.get(threadId);
+    if (latestSequence !== undefined && latestSequence > sequence) {
+      return;
+    }
+    this.latestCodexThreadStatusObservationSequences.set(threadId, sequence);
+    this.observedCodexThreadStatuses.set(threadId, {
+      sequence,
+      status,
+    });
     this.seedBackendCodexThreadStatus(threadId, status);
+  }
+
+  private reserveCodexThreadStatusObservationSequence(): number {
+    this.codexThreadStatusObservationSequence += 1;
+    return this.codexThreadStatusObservationSequence;
   }
 
   private seedBackendCodexThreadStatus(
@@ -13186,11 +13220,12 @@ export class DesktopBackendRegistry {
   private reconcileCodexThreadListStatus(
     thread: AppServerThreadSummary,
   ): AppServerThreadSummary {
-    const observedStatus = this.observedCodexThreadStatuses.get(thread.id);
-    if (!observedStatus) {
+    const observation = this.observedCodexThreadStatuses.get(thread.id);
+    if (!observation) {
       this.seedBackendCodexThreadStatus(thread.id, thread.threadStatus);
       return thread;
     }
+    const observedStatus = observation.status;
 
     // Codex review flows can emit an idle boundary for one turn while another
     // tracked turn remains active. In-memory turn ownership wins in that case;
@@ -13201,7 +13236,10 @@ export class DesktopBackendRegistry {
         : observedStatus;
     this.seedBackendCodexThreadStatus(thread.id, reconciledStatus);
     if (thread.threadStatus === reconciledStatus) {
-      if (reconciledStatus === observedStatus) {
+      if (
+        reconciledStatus === observedStatus
+        && this.observedCodexThreadStatuses.get(thread.id) === observation
+      ) {
         this.observedCodexThreadStatuses.delete(thread.id);
       }
       return thread;

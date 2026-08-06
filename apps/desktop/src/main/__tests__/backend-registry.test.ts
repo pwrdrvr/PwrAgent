@@ -1460,6 +1460,7 @@ class MockBackendClient {
       nativeSubAgentThreads?: AppServerThreadSummary[];
       replay?: AppServerThreadReplay;
       readThreadReplays?: AppServerThreadReplay[];
+      readThreadDelay?: Promise<unknown>;
       skills?: Array<{
         commands?: AppServerAvailableCommandSummary[];
         cwd?: string;
@@ -1634,6 +1635,9 @@ class MockBackendClient {
       this.readThreadCalls.push(_params);
     }
     const replay = this.options.readThreadReplays?.shift();
+    if (this.options.readThreadDelay) {
+      await this.options.readThreadDelay;
+    }
     if (replay) {
       return replay;
     }
@@ -15135,6 +15139,100 @@ command = "pnpm dev"
     expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
       count: 1,
       threadIds: ["codex:thread-stale-active"],
+    });
+
+    await registry.close();
+  });
+
+  it("ignores an active Codex thread read that started before completion", async () => {
+    const readThreadDelay = createDeferred<void>();
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "thread/read"] },
+      readThreadDelay: readThreadDelay.promise,
+      replay: {
+        entries: [],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+        threadStatus: "active",
+      },
+      threads: [
+        {
+          id: "thread-stale-read",
+          title: "Finished while reading",
+          titleSource: "explicit",
+          threadStatus: "active",
+          linkedDirectories: [],
+          source: "codex",
+          updatedAt: 1_000,
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    await registry.listThreads({ backend: "codex" });
+    const readPromise = registry.readThread({
+      backend: "codex",
+      threadId: "thread-stale-read",
+    });
+    await waitForCondition(() => codexClient.readThreadCalls.length === 1);
+
+    await codexClient.emit({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-stale-read",
+        turnId: "turn-1",
+        turn: {
+          id: "turn-1",
+          status: "completed",
+          output: [],
+        },
+      },
+    });
+    codexClient.setThreads([
+      {
+        id: "thread-stale-read",
+        title: "Finished while reading",
+        titleSource: "explicit",
+        threadStatus: "idle",
+        linkedDirectories: [],
+        source: "codex",
+        updatedAt: 2_000,
+      },
+    ]);
+    await expect(
+      registry.listThreads({ backend: "codex" }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: "thread-stale-read",
+        threadStatus: "idle",
+      }),
+    ]);
+
+    readThreadDelay.resolve();
+    await expect(readPromise).resolves.toMatchObject({
+      threadStatus: "active",
+    });
+
+    await expect(
+      registry.listThreads({ backend: "codex", forceRefresh: true }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: "thread-stale-read",
+        threadStatus: "idle",
+      }),
+    ]);
+    expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
+      count: 0,
+      threadIds: [],
     });
 
     await registry.close();
