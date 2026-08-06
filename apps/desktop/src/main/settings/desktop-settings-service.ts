@@ -754,6 +754,7 @@ export class DesktopSettingsService {
       federation: {
         mode: this.resolveFederationMode(config.federation?.mode),
         instanceLabel: this.resolveConfigString(config.federation?.instanceLabel),
+        instanceNotes: this.resolveConfigString(config.federation?.instanceNotes),
         listenHost: this.resolveConfigStringWithDefault(
           config.federation?.listenHost,
           "127.0.0.1",

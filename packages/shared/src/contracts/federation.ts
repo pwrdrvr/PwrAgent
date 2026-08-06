@@ -74,6 +74,25 @@ export type FederationCapabilitySet = {
   capabilities: FederationCapability[];
 };
 
+/**
+ * Static host facts an instance advertises to enrolled peers. Refreshed on
+ * every reconnect; `diskFreeBytes` is a snapshot from the last handshake or
+ * directory broadcast, not a live reading. `machineId` is minted once per
+ * PwrAgent root (`<root>/machine-id`) and shared by every profile on the
+ * machine — instances with the same machineId run on the same hardware and
+ * compete for its CPUs/RAM.
+ */
+export type FederationHostInfo = {
+  platform?: string;
+  osVersion?: string;
+  hostname?: string;
+  arch?: string;
+  cpuCount?: number;
+  memoryBytes?: number;
+  diskFreeBytes?: number;
+  machineId?: string;
+};
+
 export type FederationPeerSummary = {
   id: FederationPeerId;
   label: string;
@@ -86,6 +105,13 @@ export type FederationPeerSummary = {
   profileName?: string;
   /** Assigned celestial identity icon, when the assignment map knows one. */
   celestialIcon?: CelestialIconId;
+  /**
+   * Operator-written purpose notes for the instance ("Studio Mac — PwrSnap
+   * dev + screen recording"). Advertised on handshake and peer-directory
+   * gossip; read by orchestration agents when routing work.
+   */
+  notes?: string;
+  host?: FederationHostInfo;
   lastConnectedAt?: number;
   lastActivityAt?: number;
   revokedAt?: number;

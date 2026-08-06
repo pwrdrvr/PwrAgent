@@ -189,6 +189,42 @@ describe("FederationSettings", () => {
     ]);
   });
 
+  it("saves the instance purpose notes", async () => {
+    const onWriteConfig = vi.fn(async (_patch: DesktopSettingsConfigPatch) => true);
+    render(
+      <FederationSettings
+        desktopApi={{
+          readFederationHealth: vi.fn(async () => ({
+            health: {
+              enabled: true,
+              role: "client",
+              status: "disconnected",
+              peers: [],
+            } satisfies FederationHealthStatus,
+          })),
+        }}
+        onClearSecret={vi.fn(async () => true)}
+        onReplaceSecret={vi.fn(async () => true)}
+        saving={false}
+        snapshot={settingsSnapshot()}
+        onSettingsChanged={vi.fn()}
+        onWriteConfig={onWriteConfig}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Purpose notes"), {
+      target: { value: "Studio Mac — PwrSnap dev + screen recording" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Save federation settings" }),
+    );
+
+    await waitFor(() => expect(onWriteConfig).toHaveBeenCalled());
+    expect(onWriteConfig.mock.calls[0][0].federation?.instanceNotes).toBe(
+      "Studio Mac — PwrSnap dev + screen recording",
+    );
+  });
+
   it("rejects an invalid gateway endpoint before saving", async () => {
     const onWriteConfig = vi.fn(async () => true);
     render(
@@ -799,6 +835,7 @@ function settingsSnapshot(): DesktopSettingsSnapshot {
     federation: {
       mode: { value: "gateway", source: "config" },
       instanceLabel: { value: "", source: "default" },
+      instanceNotes: { value: "", source: "default" },
       listenHost: { value: "127.0.0.1", source: "config" },
       listenPort: { value: 8765, source: "config" },
       publicUrl: {

@@ -143,6 +143,7 @@ export type DesktopSettingsConfig = {
   federation?: {
     mode?: DesktopFederationMode;
     instanceLabel?: string;
+    instanceNotes?: string;
     listenHost?: string;
     listenPort?: number;
     publicUrl?: string;
@@ -931,6 +932,13 @@ export function desktopSettingsPatchToEdits(
       set(["federation", "instance_label"], patch.federation.instanceLabel);
     }
   }
+  if (patch.federation?.instanceNotes !== undefined) {
+    if (patch.federation.instanceNotes.trim() === "") {
+      edits.push({ op: "delete", path: ["federation", "instance_notes"] });
+    } else {
+      set(["federation", "instance_notes"], patch.federation.instanceNotes);
+    }
+  }
   if (patch.federation?.listenHost !== undefined) {
     if (patch.federation.listenHost.trim() === "") {
       edits.push({ op: "delete", path: ["federation", "listen_host"] });
@@ -1676,6 +1684,7 @@ function normalizeDesktopConfig(
     federation: {
       mode: readFederationMode(federation?.mode),
       instanceLabel: readString(federation?.instance_label),
+      instanceNotes: readString(federation?.instance_notes),
       listenHost: readString(federation?.listen_host),
       listenPort: readNumber(federation?.listen_port),
       publicUrl: readString(federation?.public_url),

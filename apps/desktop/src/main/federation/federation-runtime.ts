@@ -19,6 +19,7 @@ import type {
   FederatedSearchRequest,
   FederatedSearchResponse,
   FederationHealthStatus,
+  FederationHostInfo,
   FederationInstanceId,
   FederationInstanceRole,
   FederationPeerSummary,
@@ -139,6 +140,7 @@ import {
   encodeFederationInvite,
 } from "./federation-enrollment";
 import { FederatedSearchService } from "./federated-search-service";
+import { collectFederationHostInfo } from "./federation-host-info";
 import {
   FEDERATION_BACKEND_EVENT_METHOD,
   FEDERATION_BACKEND_METHOD_CAPABILITIES,
@@ -244,6 +246,8 @@ export class DesktopFederationRuntime {
   private client?: FederationClientWebSocketClient;
   private localInstanceId?: FederationInstanceId;
   private instanceLabel?: string;
+  private instanceNotes?: string;
+  private localHostInfo?: FederationHostInfo;
   private listenUrl?: string;
   private gatewayUrl?: string;
   private gatewayInstanceId?: FederationInstanceId;
@@ -662,6 +666,15 @@ export class DesktopFederationRuntime {
   }
 
   /**
+   * The same backend-operations surface {@link remoteBackend} exposes for a
+   * peer, served by this instance. Lets callers (the federation agent tools)
+   * treat local and remote targets uniformly.
+   */
+  localBackend(): FederationBackendOperations {
+    return localBackendOperations();
+  }
+
+  /**
    * Viewer-side control client for a peer's remote PTY sessions. Streamed
    * output/exit/error frames arrive via {@link onRemotePtyEvent}.
    */
@@ -793,6 +806,12 @@ export class DesktopFederationRuntime {
     const settings = await getDesktopSettingsService().readSettings();
     this.instanceLabel =
       settings.federation.instanceLabel.value.trim() || defaultInstanceLabel();
+    this.instanceNotes = settings.federation.instanceNotes.value.trim();
+    try {
+      this.localHostInfo = await collectFederationHostInfo();
+    } catch {
+      this.localHostInfo = undefined;
+    }
     const mode = settings.federation.mode.value;
     if (mode === "disabled") {
       return;
@@ -1103,6 +1122,10 @@ export class DesktopFederationRuntime {
       // Advertise which profile this instance runs so peers can tell
       // several enrollments of the same machine apart in their UI.
       profileName: getAppStateDb().getMeta("profile_name") || undefined,
+      // Always a string: present-but-empty clears the gateway's stored
+      // notes when the operator erases theirs (absent means "old client").
+      notes: this.instanceNotes ?? settings.federation.instanceNotes.value.trim(),
+      host: this.localHostInfo,
       role: "client",
       headers: cloudflareAccessEnabled
         ? {
@@ -1275,6 +1298,8 @@ export class DesktopFederationRuntime {
         existing?.protocolVersion ?? FEDERATION_PROTOCOL_VERSION,
       endpoint: existing?.endpoint ?? params.gatewayUrl,
       profileName: existing?.profileName,
+      notes: existing?.notes,
+      host: existing?.host,
       lastConnectedAt: params.connectedAt,
       lastActivityAt: params.connectedAt,
       canRevoke: false,
@@ -1630,6 +1655,8 @@ export class DesktopFederationRuntime {
         protocolVersion: existing?.protocolVersion,
         endpoint: existing?.endpoint,
         profileName: existing?.profileName,
+        notes: existing?.notes,
+        host: existing?.host,
         lastConnectedAt: existing?.lastConnectedAt,
         lastActivityAt: existing?.lastActivityAt,
         revokedAt: existing?.revokedAt,
@@ -1705,6 +1732,8 @@ export class DesktopFederationRuntime {
         protocolVersion: FEDERATION_PROTOCOL_VERSION,
         profileName: localProfileName,
         celestialIcon: this.celestialAssignmentMap().get(localInstanceId)?.icon,
+        notes: this.instanceNotes || undefined,
+        host: this.localHostInfo,
       },
     ];
 
@@ -2217,7 +2246,7 @@ export class DesktopFederationRuntime {
  * hostname (minus the mDNS suffix) beats both the profile name (almost
  * always "default") and the raw instance GUID for recognizing a peer.
  */
-function defaultInstanceLabel(): string {
+export function defaultInstanceLabel(): string {
   const host = hostname().trim().replace(/\.local$/i, "");
   return host || "PwrAgent";
 }
