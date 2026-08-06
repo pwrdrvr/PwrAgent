@@ -666,14 +666,30 @@ describe("GithubGraphqlPrClient", () => {
 });
 
 describe("readGithubDotComAuthToken", () => {
-  it("requests the token for github.com explicitly", async () => {
-    const run = vi.fn(async () => ({
-      stdout: "github.com\n  - Token: *******************\ngho_test_token\n",
-    }));
+  it("uses gh auth token when available", async () => {
+    const run = vi.fn(async () => ({ stdout: "gho_test_token\n", stderr: "" }));
 
     await expect(readGithubDotComAuthToken("/opt/homebrew/bin/gh", run))
       .resolves.toBe("gho_test_token");
     expect(run).toHaveBeenCalledWith("/opt/homebrew/bin/gh", [
+      "auth",
+      "token",
+      "--hostname",
+      "github.com",
+    ]);
+  });
+
+  it("falls back to legacy status output, including stderr", async () => {
+    const run = vi.fn()
+      .mockRejectedValueOnce(new Error("unknown command: token"))
+      .mockResolvedValueOnce({
+        stdout: "github.com\n  - Token: *******************\n",
+        stderr: "gho_test_token\n",
+      });
+
+    await expect(readGithubDotComAuthToken("/opt/homebrew/bin/gh", run))
+      .resolves.toBe("gho_test_token");
+    expect(run).toHaveBeenNthCalledWith(2, "/opt/homebrew/bin/gh", [
       "auth",
       "status",
       "--hostname",

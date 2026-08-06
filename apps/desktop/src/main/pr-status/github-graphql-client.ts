@@ -29,10 +29,9 @@ const graphqlLog = getMainLogger("pwragent:pr-graphql");
  * `gh` subprocess is limited to exporting its auth token and reporting
  * installation/login status in Settings.
  *
- * Auth is still `gh`'s: we read the token from `gh auth status --show-token`
- * rather than asking the operator for a PAT, so there is no new credential to
- * store. `--show-token` is supported by the older GitHub CLI versions still
- * found on some operator machines; `gh auth token` is not.
+ * Auth is still `gh`'s: we read the token from `gh` rather than asking the
+ * operator for a PAT, so there is no new credential to store. Newer CLIs have
+ * `gh auth token`; older CLIs only have `gh auth status --show-token`.
  */
 
 /** How many aliased PR lookups go into one GraphQL request. */
@@ -49,7 +48,13 @@ const TOKEN_TTL_MS = 5 * 60_000;
 type GhAuthTokenRunner = (
   command: string,
   args: string[],
-) => Promise<{ stdout: string }>;
+) => Promise<{ stdout: string; stderr?: string }>;
+
+const GITHUB_TOKEN_PATTERN = /(?:gh[oprsu]_\w+|github_pat_\w+)/;
+
+function findGithubToken(output: { stdout: string; stderr?: string }): string | null {
+  return `${output.stdout}\n${output.stderr ?? ""}`.match(GITHUB_TOKEN_PATTERN)?.[0] ?? null;
+}
 
 /** Export the credential for the same host this client queries. */
 export async function readGithubDotComAuthToken(
@@ -61,14 +66,29 @@ export async function readGithubDotComAuthToken(
       encoding: "utf8",
     }),
 ): Promise<string | null> {
-  const { stdout } = await run(command, [
+  try {
+    const output = await run(command, [
+      "auth",
+      "token",
+      "--hostname",
+      "github.com",
+    ]);
+    const token = findGithubToken(output);
+    if (token) {
+      return token;
+    }
+  } catch {
+    // Older gh versions do not have `auth token`; try their status output.
+  }
+
+  const output = await run(command, [
     "auth",
     "status",
     "--hostname",
     "github.com",
     "--show-token",
   ]);
-  return stdout.match(/(?:gh[oprsu]_\w+|github_pat_\w+)/)?.[0] ?? null;
+  return findGithubToken(output);
 }
 
 /**
