@@ -2503,6 +2503,17 @@ function readStatusType(value: unknown): string | undefined {
   return typeof type === "string" ? type : undefined;
 }
 
+function isAppServerThreadStatus(
+  value: string | undefined,
+): value is AppServerThreadStatus {
+  return (
+    value === "active"
+    || value === "idle"
+    || value === "notLoaded"
+    || value === "unknown"
+  );
+}
+
 function readNotificationItemType(notification: AppServerNotification): string | undefined {
   if (
     notification.method !== "item/started" &&
@@ -6308,6 +6319,25 @@ export class DesktopBackendRegistry {
    * original `turn/started` notification.
    */
   private readonly backendActiveCodexThreadIds = new Set<string>();
+  /**
+   * Live lifecycle notifications and thread reads can be newer than Codex's
+   * cached thread/list status. Preserve that observation until thread/list
+   * returns the same value, then hand authority back to the list snapshot.
+   * Read sequences are reserved before awaiting the backend; the per-thread
+   * high-water mark survives that handoff so a delayed older read stays stale.
+   */
+  private readonly observedCodexThreadStatuses = new Map<
+    string,
+    {
+      sequence: number;
+      status: AppServerThreadStatus;
+    }
+  >();
+  private readonly latestCodexThreadStatusObservationSequences = new Map<
+    string,
+    number
+  >();
+  private codexThreadStatusObservationSequence = 0;
   private readonly liveThreadUsageBaselines = new Map<
     string,
     TaskMonitorTokenUsageBreakdown
@@ -9459,6 +9489,11 @@ export class DesktopBackendRegistry {
       return await this.readAcpThread(request, backend);
     }
 
+    const codexStatusObservationSequence =
+      backend === "codex"
+        ? this.reserveCodexThreadStatusObservationSequence()
+        : undefined;
+
     const replay =
       backend === "codex"
         ? await this.withCodexThreadClient(
@@ -9483,7 +9518,11 @@ export class DesktopBackendRegistry {
           });
 
     if (backend === "codex") {
-      this.reconcileBackendCodexThreadStatus(request.threadId, replay.threadStatus);
+      this.reconcileBackendCodexThreadStatus(
+        request.threadId,
+        replay.threadStatus,
+        codexStatusObservationSequence,
+      );
     }
 
     if (
@@ -13142,6 +13181,32 @@ export class DesktopBackendRegistry {
   private reconcileBackendCodexThreadStatus(
     threadId: string,
     status: string | undefined,
+    sequence = this.reserveCodexThreadStatusObservationSequence(),
+  ): void {
+    if (!isAppServerThreadStatus(status)) {
+      return;
+    }
+    const latestSequence =
+      this.latestCodexThreadStatusObservationSequences.get(threadId);
+    if (latestSequence !== undefined && latestSequence > sequence) {
+      return;
+    }
+    this.latestCodexThreadStatusObservationSequences.set(threadId, sequence);
+    this.observedCodexThreadStatuses.set(threadId, {
+      sequence,
+      status,
+    });
+    this.seedBackendCodexThreadStatus(threadId, status);
+  }
+
+  private reserveCodexThreadStatusObservationSequence(): number {
+    this.codexThreadStatusObservationSequence += 1;
+    return this.codexThreadStatusObservationSequence;
+  }
+
+  private seedBackendCodexThreadStatus(
+    threadId: string,
+    status: AppServerThreadStatus | undefined,
   ): void {
     if (status === "active") {
       this.backendActiveCodexThreadIds.add(threadId);
@@ -13150,6 +13215,40 @@ export class DesktopBackendRegistry {
     if (status) {
       this.backendActiveCodexThreadIds.delete(threadId);
     }
+  }
+
+  private reconcileCodexThreadListStatus(
+    thread: AppServerThreadSummary,
+  ): AppServerThreadSummary {
+    const observation = this.observedCodexThreadStatuses.get(thread.id);
+    if (!observation) {
+      this.seedBackendCodexThreadStatus(thread.id, thread.threadStatus);
+      return thread;
+    }
+    const observedStatus = observation.status;
+
+    // Codex review flows can emit an idle boundary for one turn while another
+    // tracked turn remains active. In-memory turn ownership wins in that case;
+    // retain the observation so the next genuine terminal event can settle it.
+    const reconciledStatus =
+      observedStatus !== "active" && this.threadHasActiveTurn(thread.id)
+        ? "active"
+        : observedStatus;
+    this.seedBackendCodexThreadStatus(thread.id, reconciledStatus);
+    if (thread.threadStatus === reconciledStatus) {
+      if (
+        reconciledStatus === observedStatus
+        && this.observedCodexThreadStatuses.get(thread.id) === observation
+      ) {
+        this.observedCodexThreadStatuses.delete(thread.id);
+      }
+      return thread;
+    }
+
+    return {
+      ...thread,
+      threadStatus: reconciledStatus,
+    };
   }
 
   private threadHasActiveTurn(
@@ -17085,11 +17184,11 @@ export class DesktopBackendRegistry {
       }),
     );
 
-    for (const thread of enrichedThreads) {
-      this.reconcileBackendCodexThreadStatus(thread.id, thread.threadStatus);
-    }
+    const statusReconciledThreads = enrichedThreads.map((thread) =>
+      this.reconcileCodexThreadListStatus(thread)
+    );
 
-    return enrichedThreads.sort(
+    return statusReconciledThreads.sort(
       (left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0),
     );
   }
@@ -25538,7 +25637,10 @@ export class DesktopBackendRegistry {
       };
       const turnId = turnIdFromStartedNotification(notification);
       if (event.backend === "codex") {
-        this.backendActiveCodexThreadIds.add(notification.params.threadId);
+        this.reconcileBackendCodexThreadStatus(
+          notification.params.threadId,
+          "active",
+        );
       }
       if (!isAcpBackendId(event.backend)) {
         this.schedulePendingThreadTitleGenerationFromLifecycle({
@@ -25594,7 +25696,10 @@ export class DesktopBackendRegistry {
         });
       }
       if (event.backend === "codex") {
-        this.backendActiveCodexThreadIds.delete(notification.params.threadId);
+        this.reconcileBackendCodexThreadStatus(
+          notification.params.threadId,
+          "idle",
+        );
       }
       const managedReview = turnId
         ? this.findActiveReviewSubAgentForTerminal({
