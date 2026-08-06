@@ -57,6 +57,10 @@ type RuntimeHarness = {
     }) => void,
   ) => () => void;
   remotePeerDirectory: Map<FederationInstanceId, unknown>;
+  ptyService?: {
+    notifyPeerConnected: (peerId: FederationInstanceId) => void;
+    notifyPeerDisconnected: (peerId: FederationInstanceId) => void;
+  };
   onPeerStatusChanged: (listener: () => void) => () => void;
   recordClientConnection: (params: {
     gatewayInstanceId: FederationInstanceId;
@@ -389,6 +393,70 @@ describe("DesktopFederationRuntime", () => {
     ]);
   });
 
+  it("propagates advertised viewer disconnects and reconnects to remote PTY sessions", () => {
+    const connected: FederationInstanceId[] = [];
+    const disconnected: FederationInstanceId[] = [];
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.localInstanceId = "owner_one";
+    runtime.ptyService = {
+      notifyPeerConnected: (peerId) => connected.push(peerId),
+      notifyPeerDisconnected: (peerId) => disconnected.push(peerId),
+    };
+    const directory = (
+      id: string,
+      status?: "connected" | "disconnected",
+    ): FederationProtocolEnvelope => ({
+      id,
+      kind: "notification",
+      method: "federation.peerDirectory",
+      params: {
+        peers: status
+          ? [{
+              id: "viewer_one",
+              label: "Viewer",
+              role: "client",
+              status,
+              capabilities: ["remote_pty"],
+            }]
+          : [],
+      },
+      protocolVersion: FEDERATION_PROTOCOL_VERSION,
+      sourceInstanceId: "gateway_one",
+      targetInstanceId: "owner_one",
+      createdAt: 2_000,
+    });
+
+    runtime.applyPeerDirectory(directory("peers-1", "connected"));
+    expect(connected).toEqual(["viewer_one"]);
+    runtime.applyPeerDirectory(directory("peers-2", "disconnected"));
+    expect(disconnected).toEqual(["viewer_one"]);
+    runtime.applyPeerDirectory(directory("peers-3", "connected"));
+    expect(connected).toEqual(["viewer_one", "viewer_one"]);
+    runtime.applyPeerDirectory(directory("peers-4"));
+    expect(disconnected).toEqual(["viewer_one", "viewer_one"]);
+  });
+
+  it("disconnects every relayed PTY viewer when the upstream gateway closes", () => {
+    const disconnected: FederationInstanceId[] = [];
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.localInstanceId = "owner_one";
+    runtime.ptyService = {
+      notifyPeerConnected: () => undefined,
+      notifyPeerDisconnected: (peerId) => disconnected.push(peerId),
+    };
+    runtime.remotePeerDirectory.set("viewer_one", {
+      id: "viewer_one",
+      label: "Viewer",
+      role: "client",
+      status: "connected",
+      capabilities: ["remote_pty"],
+    });
+
+    runtime.disconnectAdvertisedPeers("Gateway disconnected.");
+
+    expect(disconnected).toEqual(["viewer_one"]);
+  });
+
   it("records a successful client session and preserves its timing", () => {
     const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
     const audits: Array<{
@@ -605,7 +673,10 @@ describe("DesktopFederationRuntime", () => {
 
   it("resolves sibling RPC responses received from the gateway transport", async () => {
     const sentToGateway: FederationProtocolEnvelope[] = [];
-    const router = new FederationRouter({ localInstanceId: "client_one" });
+    const router = new FederationRouter({
+      localInstanceId: "client_one",
+      trustedRelayPeerId: "gateway_one",
+    });
     router.registerConnection(
       createConnection({
         peerId: "gateway_one",
@@ -633,6 +704,7 @@ describe("DesktopFederationRuntime", () => {
         sourceInstanceId: "client_two",
         targetInstanceId: "client_one",
         createdAt: 2_000,
+        hopCount: 1,
         result: { backend: "codex", fetchedAt: 2_000, threads: [] },
       },
       "gateway_one",
@@ -1160,7 +1232,10 @@ describe("DesktopFederationRuntime", () => {
       },
     ]);
 
-    const viewerRouter = new FederationRouter({ localInstanceId: "viewer_one" });
+    const viewerRouter = new FederationRouter({
+      localInstanceId: "viewer_one",
+      trustedRelayPeerId: "gateway_one",
+    });
     viewerRouter.registerConnection(createConnection({
       peerId: "gateway_one",
       capabilities: ["gateway_relay", "remote_pty"],
@@ -1182,6 +1257,12 @@ describe("DesktopFederationRuntime", () => {
         params: { sessionId: "session-1", seq: 1 },
       },
     ]);
+
+    expect(viewer.publishRemotePtyStreamEvent(
+      relayed[0]!,
+      "other_peer",
+    )).toBe(true);
+    expect(events).toHaveLength(1);
   });
 
   it("sends owner PTY notifications through the enrolled gateway fallback", () => {

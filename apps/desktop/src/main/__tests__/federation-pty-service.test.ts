@@ -456,6 +456,7 @@ describe("federation pty router integration", () => {
     const { pty, service, sent } = createHarness();
     const router = new FederationRouter({
       localInstanceId: "owner",
+      trustedRelayPeerId: "gateway",
       methodCapabilities: { ...FEDERATION_PTY_METHOD_CAPABILITIES },
     });
     registerFederationPtyHandlers({ router, service });
@@ -538,8 +539,32 @@ describe("federation pty router integration", () => {
       envelope: buildEnvelope(FEDERATION_PTY_METHODS.open, OPEN_REQUEST, "viewer"),
       sourcePeerId: "gateway",
     });
-    expect(result).toMatchObject({ status: "rejected" });
-    expect((result as { message?: string }).message).toMatch(/relay is not authorized/);
+    expect(result).toMatchObject({
+      status: "rejected",
+      code: "relay_origin_mismatch",
+    });
+  });
+
+  it("rejects a fabricated origin from a non-gateway peer", async () => {
+    const { router } = createRouterHarness();
+    router.registerConnection({
+      peerId: "other_peer",
+      capabilities: ["remote_pty", "gateway_relay"],
+      sendEnvelope: () => undefined,
+    });
+    const result = await router.routeEnvelope({
+      envelope: buildEnvelope(
+        FEDERATION_PTY_METHODS.open,
+        OPEN_REQUEST,
+        "fabricated_viewer",
+        1,
+      ),
+      sourcePeerId: "other_peer",
+    });
+    expect(result).toMatchObject({
+      status: "rejected",
+      code: "relay_origin_mismatch",
+    });
   });
 
   it("opens a session for a directly connected peer with remote_pty", async () => {

@@ -594,11 +594,7 @@ export function registerFederationPtyHandlers(params: {
     if (sourcePeerId === originInstanceId) {
       return originInstanceId;
     }
-    const relay = params.router.getConnection(sourcePeerId);
-    if (
-      (envelope.hopCount ?? 0) < 1
-      || !relay?.capabilities.includes("gateway_relay")
-    ) {
+    if (!params.router.authenticatesOrigin(envelope, sourcePeerId)) {
       throw new Error(
         "Remote terminal relay is not authorized for the claimed origin.",
       );

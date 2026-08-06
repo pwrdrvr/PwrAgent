@@ -973,6 +973,11 @@ export class DesktopFederationRuntime {
     const localInstanceId = this.ensureLocalInstanceId();
     const router = new FederationRouter({
       localInstanceId,
+      trustedRelayPeerId: () =>
+        this.gatewayInstanceId
+        ?? (isAppStateInitialized()
+          ? getAppStateDb().getMeta(GATEWAY_INSTANCE_ID_META_KEY) || undefined
+          : undefined),
       methodCapabilities: {
         ...FEDERATION_BACKEND_METHOD_CAPABILITIES,
         ...FEDERATION_PTY_METHOD_CAPABILITIES,
@@ -1575,6 +1580,9 @@ export class DesktopFederationRuntime {
         status: peer.status === "revoked" ? "revoked" : "disconnected",
         unavailableReason: reason,
       });
+      if (peer.status === "connected") {
+        this.ptyService?.notifyPeerDisconnected(peerId);
+      }
       this.publishPeerStatus(
         peerId,
         peer.status === "revoked" ? "revoked" : "disconnected",
@@ -1591,6 +1599,16 @@ export class DesktopFederationRuntime {
     envelope: FederationProtocolEnvelope,
     sourcePeerId: FederationInstanceId,
   ): Promise<void> {
+    if (
+      this.router
+      && !this.router.authenticatesOrigin(envelope, sourcePeerId)
+    ) {
+      log.warn("federation envelope claimed an unauthenticated relay origin", {
+        claimedSourceInstanceId: envelope.sourceInstanceId,
+        sourcePeerId,
+      });
+      return;
+    }
     if (this.applyPeerDirectory(envelope)) {
       return;
     }
@@ -1671,16 +1689,11 @@ export class DesktopFederationRuntime {
     if (!isFederationInstanceId(originInstanceId)) {
       return true;
     }
-    // Direct frames must name their authenticated peer. A different origin
-    // is accepted only from an enrolled relay-capable gateway after a hop.
-    if (originInstanceId !== sourcePeerId) {
-      const relay = this.router?.getConnection(sourcePeerId);
-      if (
-        (envelope.hopCount ?? 0) < 1
-        || !relay?.capabilities.includes("gateway_relay")
-      ) {
-        return true;
-      }
+    if (
+      originInstanceId !== sourcePeerId
+      && !this.router?.authenticatesOrigin(envelope, sourcePeerId)
+    ) {
+      return true;
     }
     const kind =
       envelope.method === FEDERATION_PTY_OUTPUT_METHOD
@@ -1948,6 +1961,13 @@ export class DesktopFederationRuntime {
           lastActivityAt: peer.lastActivityAt ?? previous?.lastActivityAt,
           canRevoke: false,
         });
+        if (peer.status === "connected") {
+          if (previous?.status !== "connected") {
+            this.ptyService?.notifyPeerConnected(peer.id);
+          }
+        } else if (previous?.status === "connected") {
+          this.ptyService?.notifyPeerDisconnected(peer.id);
+        }
         previousPeers.delete(peer.id);
       }
     }
@@ -1961,6 +1981,9 @@ export class DesktopFederationRuntime {
       this.publishPeerStatus(peer.id, peer.status, peer.unavailableReason);
     }
     for (const peerId of previousPeers.keys()) {
+      if (previousPeers.get(peerId)?.status === "connected") {
+        this.ptyService?.notifyPeerDisconnected(peerId);
+      }
       this.publishPeerStatus(
         peerId,
         "disconnected",
