@@ -57,7 +57,9 @@ const FILTERS_STORAGE_KEY = "pwragent.starMap.filters";
 const MAX_CARDS_PER_INSTANCE = 8;
 const STAR_COUNT = 130;
 /** Orbit rings use a fixed card width; lanes narrow theirs to fit. */
-const ORBIT_CARD_WIDTH = 220;
+const ORBIT_CARD_WIDTH = 200;
+/** Rings hold far more than a lane column, so orbit shows deeper. */
+const ORBIT_MAX_CARDS_PER_INSTANCE = 16;
 const MIN_ZOOM = 0.35;
 const MAX_ZOOM = 2;
 
@@ -406,7 +408,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
       // Lanes are bounded by the window; an orbit ring grows its radius
       // instead, so it only obeys the hard cap.
       const count = orbitMode
-        ? Math.min(threads.length, MAX_CARDS_PER_INSTANCE)
+        ? Math.min(threads.length, ORBIT_MAX_CARDS_PER_INSTANCE)
         : visibleCardCount({
             heights,
             availableHeight: viewportSize.height - STAR_MAP_BODY_ROW_Y,

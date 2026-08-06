@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { FederationPeerSummary } from "@pwragent/shared";
 import {
-  cardRingRadius,
+  cardRingExtent,
+  cardRings,
+  cardRingSlots,
   computeOrbitPlacement,
   shouldStartCanvasPan,
 } from "../star-map-orbit";
@@ -50,13 +52,42 @@ describe("buildFederationTopology", () => {
   });
 });
 
-describe("cardRingRadius", () => {
-  it("grows so cards on the ring cannot collide", () => {
-    const few = cardRingRadius(2, 220);
-    const many = cardRingRadius(10, 220);
-    expect(many).toBeGreaterThan(few);
-    // Circumference has to cover every card plus a gap.
-    expect(2 * Math.PI * many).toBeGreaterThanOrEqual(10 * 220);
+describe("card rings", () => {
+  it("seats a small cloud on one tight ring near the body", () => {
+    const rings = cardRings(4, 200);
+    expect(rings).toHaveLength(1);
+    // Close in: a handful of cards should not be flung to the far orbit.
+    expect(rings[0].rx).toBeLessThan(200);
+  });
+
+  it("adds a ring instead of inflating the first one", () => {
+    const single = cardRingExtent(4, 200);
+    const many = cardRingExtent(16, 200);
+    expect(cardRings(16, 200).length).toBeGreaterThan(1);
+    // Sixteen cards on one circle would need a radius over 500; rings keep
+    // the outermost far tighter than that.
+    expect(many.rx).toBeLessThan(500);
+    expect(many.rx).toBeGreaterThan(single.rx);
+  });
+
+  it("is squashed to the card's aspect so rings hug the body vertically", () => {
+    const extent = cardRingExtent(8, 200);
+    expect(extent.ry).toBeLessThan(extent.rx);
+  });
+
+  it("gives every card a distinct slot and fills inner rings first", () => {
+    const slots = cardRingSlots(16, 200);
+    expect(slots).toHaveLength(16);
+    const unique = new Set(
+      slots.map((slot) => `${Math.round(slot.dx)}:${Math.round(slot.dy)}`),
+    );
+    expect(unique.size).toBe(16);
+    const inner = cardRings(16, 200)[0];
+    const firstRingRadius = Math.hypot(
+      slots[0].dx / inner.rx,
+      slots[0].dy / inner.ry,
+    );
+    expect(firstRingRadius).toBeCloseTo(1, 5);
   });
 });
 
@@ -99,7 +130,7 @@ describe("computeOrbitPlacement", () => {
       cardCounts: counts,
       cardWidth: 220,
     });
-    const ring = cardRingRadius(6, 220);
+    const ring = cardRingExtent(6, 220).rx;
     const spokes = placement.instances.filter((instance) => !instance.isHub);
     for (let i = 0; i < spokes.length; i += 1) {
       for (let j = i + 1; j < spokes.length; j += 1) {
