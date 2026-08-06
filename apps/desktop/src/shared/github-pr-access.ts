@@ -10,6 +10,11 @@ export type GithubPrSamlEnforcementEvent = {
   target: GithubPrAccessTarget;
 };
 
+export type GithubPrAuthenticationFailureEvent = {
+  occurredAt: number;
+  detail?: string;
+};
+
 export function githubPrAccessTargetKey(target: GithubPrAccessTarget): string {
   return `github:${target.owner.toLowerCase()}/${target.repo.toLowerCase()}`;
 }

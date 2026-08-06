@@ -11,7 +11,10 @@ import type {
   CaptureHeapSnapshotResult,
 } from "../../../shared/heap-snapshot";
 import type { HotCpuProfileCapturedEvent } from "../../../shared/hot-cpu-profile";
-import type { GithubPrSamlEnforcementEvent } from "../../../shared/github-pr-access";
+import type {
+  GithubPrAuthenticationFailureEvent,
+  GithubPrSamlEnforcementEvent,
+} from "../../../shared/github-pr-access";
 import type {
   IntegratedTerminalCloseRequest,
   IntegratedTerminalCreateRequest,
@@ -947,6 +950,9 @@ export type DesktopApi = {
   ) => () => void;
   onGithubPrSamlEnforcement?: (
     callback: (event: GithubPrSamlEnforcementEvent) => void,
+  ) => () => void;
+  onGithubPrAuthenticationFailure?: (
+    callback: (event: GithubPrAuthenticationFailureEvent) => void,
   ) => () => void;
   /**
    * Subscription for main → renderer appearance broadcasts. Fired
