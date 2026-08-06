@@ -455,6 +455,11 @@ export type CancelThreadPrAutoDispatchRequest = {
 export type CancelThreadPrAutoDispatchResponse =
   CancelThreadPrAutoDispatchRequest & { cancelled: boolean };
 
+/**
+ * Same shape as the cancel request, including its optional
+ * `federationTarget` — both operations address a pending dispatch that
+ * only exists in the owning instance's coordinator.
+ */
 export type SendThreadPrAutoDispatchNowRequest =
   CancelThreadPrAutoDispatchRequest;
 
