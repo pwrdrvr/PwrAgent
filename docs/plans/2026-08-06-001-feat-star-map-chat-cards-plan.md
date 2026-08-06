@@ -97,11 +97,18 @@ Subsumes the old items 1 and 3.
   cost zero vertical space.
 - Swapped into the card in place of Unit 1's minimal input.
 
-Whether this is a `compact` prop threaded through `Composer.tsx` or a
-separate small component that shares the send/queue hooks is deliberately
-left to implementation — 12,000 lines is enough that the answer depends on
-how separable the control row turns out to be. Decide it in Unit 2, record
-it here.
+**Resolved during implementation: a separate component, not a `compact`
+prop on `Composer.tsx`.** The control row is not the separable part — the
+component needs the backend list, skills, directories, launchpad state, and
+provider defaults, none of which a floating card has. Threading those
+through would have reproduced the ThreadView problem one layer down. The
+two share a contract (send text, stop a running turn), not an
+implementation.
+
+Secondary actions are scoped to what a thread summary plus the desktop
+bridge can do on their own: access-mode switch, compaction (gated on an
+idle thread), and open-in-full-view. Anything needing the backend list
+stays behind the card header's Open button.
 
 ## Verification
 
@@ -112,5 +119,5 @@ raise) and for the card's federation-target derivation.
 
 ## Progress
 
-- [ ] Unit 1 — floating chat card surface
-- [ ] Unit 2 — compact composer variant
+- [x] Unit 1 — floating chat card surface
+- [x] Unit 2 — compact composer variant

@@ -9800,7 +9800,10 @@ textarea,
   font-size: 11px;
 }
 
-.star-map-chat-card__composer {
+/* Compact composer: for surfaces with no vertical budget. Secondary
+   actions collapse under the kebab and model/effort render as ambient text
+   inside the field, so the whole control row stays one line tall. */
+.compact-composer {
   display: flex;
   flex: 0 0 auto;
   align-items: flex-end;
@@ -9810,9 +9813,17 @@ textarea,
   background: var(--bg-panel-elevated);
 }
 
-.star-map-chat-card__input {
+.compact-composer__field {
+  position: relative;
   flex: 1 1 auto;
-  padding: 6px 8px;
+}
+
+.compact-composer__input {
+  display: block;
+  width: 100%;
+  /* Right padding reserves the ambient model/effort strip so typed text
+     never runs underneath it. */
+  padding: 6px 8px 16px;
   border: 1px solid var(--border-subtle);
   border-radius: 6px;
   background: var(--bg-input);
@@ -9822,12 +9833,88 @@ textarea,
   resize: none;
 }
 
-.star-map-chat-card__input:focus-visible {
+.compact-composer__input:focus-visible {
   border-color: var(--accent-border);
   outline: none;
 }
 
-.star-map-chat-card__send {
+.compact-composer__ambient {
+  position: absolute;
+  right: 9px;
+  bottom: 5px;
+  max-width: 70%;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 10px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
+.compact-composer__controls {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+}
+
+.compact-composer__menu {
+  position: relative;
+}
+
+.compact-composer__kebab {
+  padding: 5px 7px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.compact-composer__kebab:hover,
+.compact-composer__kebab[aria-expanded="true"] {
+  border-color: var(--accent-border);
+  color: var(--text-primary);
+}
+
+.compact-composer__menu-list {
+  display: flex;
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 6px);
+  z-index: 2;
+  flex-direction: column;
+  min-width: 190px;
+  padding: 4px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: var(--shadow-popover);
+}
+
+.compact-composer__menu-item {
+  padding: 6px 8px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.compact-composer__menu-item:hover:not(:disabled) {
+  background: var(--bg-panel-hover);
+}
+
+.compact-composer__menu-item:disabled {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.compact-composer__send {
   flex: 0 0 auto;
   padding: 6px 12px;
   border: 1px solid var(--accent-border);
@@ -9838,7 +9925,7 @@ textarea,
   cursor: pointer;
 }
 
-.star-map-chat-card__send:disabled {
+.compact-composer__send:disabled {
   border-color: var(--border-subtle);
   background: transparent;
   color: var(--text-muted);

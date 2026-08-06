@@ -1,10 +1,10 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
-  type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import type {
@@ -12,6 +12,10 @@ import type {
   NavigationThreadSummary,
 } from "@pwragent/shared";
 import { CelestialIcon } from "../../icons";
+import {
+  CompactComposer,
+  type CompactComposerAction,
+} from "../composer/CompactComposer";
 import { TranscriptList } from "../thread-detail/TranscriptList";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
@@ -64,7 +68,6 @@ function viewportSize(): { width: number; height: number } {
 export function StarMapChatCard(props: StarMapChatCardProps) {
   const { cardKey, desktopApi, onRaise, onRectChange, rect, thread } = props;
   const dragRef = useRef<DragState | undefined>(undefined);
-  const [draft, setDraft] = useState("");
   const [sendError, setSendError] = useState<string | undefined>(undefined);
 
   const session = useThreadSessionState({ desktopApi, thread });
@@ -135,26 +138,28 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     return () => window.removeEventListener("resize", onResize);
   }, [cardKey, onRectChange, rect]);
 
-  const send = useCallback(async () => {
-    const text = draft.trim();
-    if (!text || !desktopApi?.startTurn) return;
-    setSendError(undefined);
-    setDraft("");
-    session.addOptimisticUserMessage(text);
-    try {
-      await desktopApi.startTurn({
-        backend: thread.source,
-        federationTarget,
-        threadId: thread.id,
-        input: [{ type: "text", text }],
-      });
-    } catch (error) {
-      setSendError(
-        error instanceof Error ? error.message : "Could not send that message.",
-      );
-      setDraft(text);
-    }
-  }, [desktopApi, draft, federationTarget, session, thread]);
+  const send = useCallback(
+    async (text: string) => {
+      if (!desktopApi?.startTurn) return;
+      setSendError(undefined);
+      session.addOptimisticUserMessage(text);
+      try {
+        await desktopApi.startTurn({
+          backend: thread.source,
+          federationTarget,
+          threadId: thread.id,
+          input: [{ type: "text", text }],
+        });
+      } catch (error) {
+        setSendError(
+          error instanceof Error
+            ? error.message
+            : "Could not send that message.",
+        );
+      }
+    },
+    [desktopApi, federationTarget, session, thread],
+  );
 
   const activeTurnId = session.activeTurnId;
   const interrupt = useCallback(async () => {
@@ -173,15 +178,71 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     }
   }, [activeTurnId, desktopApi, federationTarget, thread]);
 
-  const onDraftKeyDown = useCallback(
-    (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
-      if (event.key === "Enter" && !event.shiftKey) {
-        event.preventDefault();
-        void send();
-      }
-    },
-    [send],
-  );
+  /**
+   * Everything the card can do with only a thread summary and the desktop
+   * bridge. Anything needing the backend list, skills, or launchpad state
+   * lives behind the header's Open button in the full thread view.
+   */
+  const secondaryActions = useMemo<CompactComposerAction[]>(() => {
+    const entries: CompactComposerAction[] = [];
+    const nextMode =
+      thread.executionMode === "full-access" ? "default" : "full-access";
+    if (desktopApi?.setThreadExecutionMode) {
+      entries.push({
+        key: "execution-mode",
+        label:
+          nextMode === "full-access"
+            ? "Switch to full access"
+            : "Switch to default access",
+        onSelect: () => {
+          void desktopApi
+            .setThreadExecutionMode?.({
+              backend: thread.source,
+              executionMode: nextMode,
+              federationTarget,
+              threadId: thread.id,
+            })
+            .catch((error: unknown) => {
+              setSendError(
+                error instanceof Error
+                  ? error.message
+                  : "Could not change access mode.",
+              );
+            });
+        },
+      });
+    }
+    if (desktopApi?.compactThread) {
+      entries.push({
+        key: "compact",
+        // Compaction rewrites history mid-turn, so gate it on an idle
+        // thread the same way the full composer's /compact does.
+        disabled: session.threadBusy,
+        label: "Compact thread",
+        onSelect: () => {
+          void desktopApi
+            .compactThread?.({
+              backend: thread.source,
+              federationTarget,
+              threadId: thread.id,
+            })
+            .catch((error: unknown) => {
+              setSendError(
+                error instanceof Error
+                  ? error.message
+                  : "Could not compact the thread.",
+              );
+            });
+        },
+      });
+    }
+    entries.push({
+      key: "open-full",
+      label: "Open in full view",
+      onSelect: () => props.onOpenFull(thread),
+    });
+    return entries;
+  }, [desktopApi, federationTarget, props, session.threadBusy, thread]);
 
   const style: CSSProperties = {
     left: `${rect.left}px`,
@@ -266,35 +327,16 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         </p>
       ) : undefined}
 
-      <div className="star-map-chat-card__composer">
-        <textarea
-          aria-label={`Message ${thread.title}`}
-          className="star-map-chat-card__input"
-          onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={onDraftKeyDown}
-          placeholder="Reply…"
-          rows={2}
-          value={draft}
-        />
-        {session.threadBusy ? (
-          <button
-            className="star-map-chat-card__send"
-            onClick={() => void interrupt()}
-            type="button"
-          >
-            Stop
-          </button>
-        ) : (
-          <button
-            className="star-map-chat-card__send"
-            disabled={draft.trim().length === 0}
-            onClick={() => void send()}
-            type="button"
-          >
-            Send
-          </button>
-        )}
-      </div>
+      <CompactComposer
+        busy={session.threadBusy}
+        executionMode={thread.executionMode}
+        model={thread.model}
+        onInterrupt={() => void interrupt()}
+        onSend={(text) => void send(text)}
+        reasoningEffort={thread.reasoningEffort}
+        secondaryActions={secondaryActions}
+        threadTitle={thread.title}
+      />
 
       <span
         aria-hidden="true"
