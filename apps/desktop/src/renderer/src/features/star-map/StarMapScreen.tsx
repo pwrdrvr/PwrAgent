@@ -36,6 +36,12 @@ import {
   type StarMapInstancePosition,
 } from "./star-map-layout";
 import { IntakeDialog, type IntakeDialogTarget } from "./IntakeDialog";
+import {
+  readStoredPreferences,
+  writeStoredPreferences,
+  type StarMapViewPreferences,
+} from "./star-map-preferences";
+import { StarMapViewOptions } from "./StarMapViewOptions";
 import { StarMapInstanceCard } from "./StarMapInstanceCard";
 import { StarMapThreadCard } from "./StarMapThreadCard";
 import { useStarMapArrangement } from "./useStarMapArrangement";
@@ -114,6 +120,9 @@ export function StarMapScreen(props: StarMapScreenProps) {
   // measurements - a fixed pitch clipped tall cards mid-glyph.
   const [cardHeights, setCardHeights] = useState<Map<string, number>>(
     new Map(),
+  );
+  const [preferences, setPreferences] = useState<StarMapViewPreferences>(
+    readStoredPreferences,
   );
 
   // Focus the layer on open AND whenever the floating thread closes -
@@ -195,11 +204,17 @@ export function StarMapScreen(props: StarMapScreenProps) {
   }, []);
 
   const localInstanceId = health?.instanceId ?? "local";
-  const peers = useMemo(
-    () =>
-      (health?.peers ?? []).filter((peer) => peer.status !== "revoked"),
-    [health],
-  );
+  const peers = useMemo(() => {
+    const visible = (health?.peers ?? []).filter(
+      (peer) => peer.status !== "revoked",
+    );
+    // Hiding offline instances is about the operator's own fleet noise (an
+    // unused dev profile), so it only ever drops peers - the local body
+    // stays on the map regardless of its own connection state.
+    return preferences.hideOfflineInstances
+      ? visible.filter((peer) => peer.status === "connected")
+      : visible;
+  }, [health, preferences.hideOfflineInstances]);
   const remote = useStarMapThreads({
     desktopApi: props.desktopApi,
     peers,
@@ -421,6 +436,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
               offset={arrangement.offsetFor(position.instanceId, threadKey)}
               width={layout.cardWidth}
               stackIndex={index}
+              cardFields={preferences.cardFields}
               onCommitOffset={
                 // Drags persist + sync only once the durable instance id is
                 // known; before that, cards stay in their default slots.
@@ -629,6 +645,15 @@ export function StarMapScreen(props: StarMapScreenProps) {
         <CloseIcon size={14} />
         <span>Close map</span>
       </button>
+      <div className="star-map__chrome">
+        <StarMapViewOptions
+          preferences={preferences}
+          onChange={(next) => {
+            setPreferences(next);
+            writeStoredPreferences(next);
+          }}
+        />
+      </div>
       <div className="star-map__filters" role="group" aria-label="Attention filters">
         {STAR_MAP_ATTENTION_CATEGORIES.map((category) => (
           <button

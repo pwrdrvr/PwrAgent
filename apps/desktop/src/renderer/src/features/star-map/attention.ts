@@ -2,6 +2,7 @@ import {
   buildThreadIdentityKey,
   type NavigationThreadSummary,
 } from "@pwragent/shared";
+import { isOpenPullRequest } from "./star-map-preferences";
 
 export const STAR_MAP_ATTENTION_CATEGORIES = [
   "unread",
@@ -50,15 +51,7 @@ export function threadAttentionCategories(
   ) {
     categories.push("approval");
   }
-  if (
-    thread.prs?.some(
-      (pr) =>
-        pr.state !== "merged"
-        && pr.state !== "closed"
-        && pr.lifecycleState !== "merged"
-        && pr.lifecycleState !== "closed",
-    )
-  ) {
+  if (thread.prs?.some(isOpenPullRequest)) {
     categories.push("pr");
   }
   if ((thread.gitWorkingState?.unpushedCommits ?? 0) > 0) {

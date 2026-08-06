@@ -9382,6 +9382,56 @@ textarea,
   }
 }
 
+/* "View" popover: card density + instance visibility, parked opposite the
+   attention filters. */
+.star-map__chrome {
+  position: absolute;
+  top: 14px;
+  left: 16px;
+  z-index: 4;
+}
+
+.star-map__view-options {
+  position: relative;
+}
+
+.star-map__view-panel {
+  display: flex;
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  flex-direction: column;
+  gap: 4px;
+  width: 208px;
+  padding: 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: var(--shadow-popover);
+}
+
+.star-map__view-heading {
+  margin: 4px 0 2px;
+  color: var(--text-muted);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.star-map__view-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.star-map__chrome,
+.star-map__chrome * {
+  -webkit-app-region: no-drag;
+}
+
 .star-map__filters {
   display: flex;
   position: absolute;

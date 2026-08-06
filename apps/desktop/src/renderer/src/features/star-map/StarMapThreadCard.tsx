@@ -12,6 +12,10 @@ import {
   ThreadRowStatus,
 } from "../navigation/ThreadRowStatus";
 import { clampToCloudRadius, STAR_MAP_CLOUD_RADIUS } from "./star-map-layout";
+import {
+  visiblePullRequests,
+  type StarMapCardFields,
+} from "./star-map-preferences";
 import type { StarMapSessionKeys } from "./attention";
 
 const DRAG_THRESHOLD_PX = 4;
@@ -41,6 +45,8 @@ export function StarMapThreadCard(props: {
   width: number;
   /** Lane position, so dragged-into-overlap cards paint front-to-back. */
   stackIndex: number;
+  /** Which chips this card carries (operator preference). */
+  cardFields: StarMapCardFields;
   /** Owning instance's celestial mark, watermarked behind the content. */
   instanceIcon?: CelestialIconId;
   /** Present when the card is draggable; receives the clamped offset. */
@@ -159,12 +165,19 @@ export function StarMapThreadCard(props: {
           hasInputRequest={
             props.sessionKeys?.inputRequestThreadKeys?.[threadKey] === true
           }
-          includeLinkedDirectories
+          includeLinkedDirectories={props.cardFields.primaryDirectory}
           linkedDirectoryMode="label"
           // The lane and the watermark already say which machine this is.
           hideInstanceChip
+          chipVisibility={{
+            provider: props.cardFields.provider,
+            branch: props.cardFields.branch,
+            maxLinkedDirectories: props.cardFields.secondaryDirectories
+              ? undefined
+              : 1,
+          }}
         />
-        {thread.prs?.map((pr) => (
+        {visiblePullRequests(thread.prs, props.cardFields).map((pr) => (
           <PrChip
             key={`${pr.org}/${pr.repo}#${pr.number}`}
             pr={pr}

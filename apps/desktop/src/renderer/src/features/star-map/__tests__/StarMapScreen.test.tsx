@@ -237,4 +237,97 @@ describe("StarMapScreen", () => {
     });
     expect(screen.queryByText("Harold-MBP-M2-Max")).toBeNull();
   });
+
+  it("shows only the project and open PRs on a card by default", async () => {
+    const thread = {
+      ...unreadThread("t7"),
+      gitBranch: "agent/some-branch",
+      prs: [
+        {
+          provider: "github",
+          number: 10,
+          org: "pwrdrvr",
+          repo: "PwrAgnt",
+          state: "passing",
+          url: "https://example.test/10",
+        },
+        {
+          provider: "github",
+          number: 11,
+          org: "pwrdrvr",
+          repo: "PwrAgnt",
+          state: "merged",
+          url: "https://example.test/11",
+        },
+      ],
+    } as unknown as NavigationThreadSummary;
+    render(
+      <StarMapScreen
+        desktopApi={buildDesktopApi()}
+        localThreads={[thread]}
+        sessionKeys={{}}
+        floating={false}
+        onClose={() => undefined}
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+    const card = await screen.findByRole("button", { name: /Thread t7/ });
+    // Project chip stays; provider and branch are opt-in.
+    expect(card.textContent).toContain("PwrSnap");
+    expect(card.textContent).not.toContain("OpenAI");
+    expect(card.textContent).not.toContain("agent/some-branch");
+    // Open PR only - the merged one is hidden.
+    expect(card.textContent).toContain("#10");
+    expect(card.textContent).not.toContain("#11");
+  });
+
+  it("hides offline instances when the view option is set", async () => {
+    window.localStorage.clear();
+    const desktopApi: DesktopApi = {
+      readFederationHealth: vi.fn(async () => ({
+        health: {
+          enabled: true,
+          role: "gateway" as const,
+          status: "listening" as const,
+          instanceId: "pwr_local",
+          localLabel: "Local",
+          peers: [
+            {
+              id: "pwr_off",
+              label: "Sleepy-Dev-Box",
+              profileName: "dev",
+              role: "client" as const,
+              status: "disconnected" as const,
+              capabilities: [],
+            },
+          ],
+        },
+      })) as unknown as DesktopApi["readFederationHealth"],
+      onAgentEvent: vi.fn(() => () => undefined),
+    };
+    render(
+      <StarMapScreen
+        desktopApi={desktopApi}
+        localThreads={[]}
+        sessionKeys={{}}
+        floating={false}
+        onClose={() => undefined}
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+    await waitFor(() => {
+      // Disambiguated label: the profile suffix rides along.
+      expect(screen.getByText(/Sleepy-Dev-Box/)).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "View" }));
+    fireEvent.click(screen.getByLabelText("Hide offline instances"));
+    await waitFor(() => {
+      expect(screen.queryByText(/Sleepy-Dev-Box/)).toBeNull();
+    });
+    // The local instance is never hidden by this option.
+    expect(screen.getByText("Local")).toBeTruthy();
+  });
 });
