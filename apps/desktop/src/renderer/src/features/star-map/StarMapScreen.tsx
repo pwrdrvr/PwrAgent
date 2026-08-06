@@ -817,6 +817,11 @@ export function StarMapScreen(props: StarMapScreenProps) {
         <span>Close map</span>
       </button>
       <div className="star-map__chrome">
+        {/* Same wordmark primitive as the sidebar/Settings nav so the brand
+            reads identically across every window (theme-contract test). */}
+        <p className="sidebar__brand">
+          Pwr<span className="sidebar__brand-accent">Agent</span>
+        </p>
         <StarMapViewOptions
           preferences={preferences}
           onChange={(next) => {

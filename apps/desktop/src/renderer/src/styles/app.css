@@ -9385,10 +9385,34 @@ textarea,
 /* "View" popover: card density + instance visibility, parked opposite the
    attention filters. */
 .star-map__chrome {
+  display: flex;
   position: absolute;
   top: 14px;
   left: 16px;
   z-index: 4;
+  align-items: center;
+  gap: 12px;
+}
+
+/* The map covers the whole window, so its top-left chrome has to clear the
+   OS window controls itself. macOS floats the traffic lights over the
+   content: reserve the same 80px the sidebar masthead does, so the
+   wordmark lands in exactly the spot it occupies on the main window. */
+:root[data-platform="darwin"] .star-map__chrome {
+  padding-left: 80px;
+}
+
+/* macOS fullscreen hides the stoplights, so the reservation becomes a dead
+   gap - same fallback the masthead uses. */
+:root[data-platform="darwin"][data-fullscreen="true"] .star-map__chrome {
+  padding-left: 0;
+}
+
+/* Windows draws its caption buttons in the AppTitleBar strip above the
+   shell, and Linux uses a normal OS frame, so neither reserves anything
+   here. */
+:root[data-platform]:not([data-platform="darwin"]) .star-map__chrome {
+  padding-left: 0;
 }
 
 .star-map__view-options {
