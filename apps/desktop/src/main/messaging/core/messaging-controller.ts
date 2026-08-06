@@ -15759,10 +15759,10 @@ export class MessagingController {
         createdAt: this.now(),
         role: "assistant",
         attribution: {
-          label: `${attributionLabel} · Private response`,
+          label: attributionLabel,
           hint: awaitReply
-            ? "Reply in this message's thread; this agent will return the completion to the original conversation."
-            : "Reply in this message's thread to continue with this agent.",
+            ? "Private Request · Reply in Thread to Respond to this Agent; Completion Returns to the Original Conversation"
+            : "Private Request · Reply in Thread to Respond to this Agent",
         },
         parts: [{ type: "text", text, markdown: "markdown" }],
       },

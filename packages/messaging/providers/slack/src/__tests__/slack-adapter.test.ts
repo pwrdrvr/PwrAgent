@@ -488,8 +488,8 @@ describe("SlackAdapter", () => {
       createdAt: 1,
       role: "assistant",
       attribution: {
-        label: "Signals Agent · Private response",
-        hint: "Reply in this message's thread to continue with this agent.",
+        label: "Signals Agent",
+        hint: "Private Request · Reply in Thread to Respond to this Agent",
       },
       parts: [{ type: "text", text: "Private details", markdown: "markdown" }],
       audit: {
@@ -547,7 +547,7 @@ describe("SlackAdapter", () => {
             elements: [{
               type: "plain_text",
               text:
-                "Signals Agent · Private response · Reply in this message's thread to continue with this agent.",
+                "Signals Agent · Private Request · Reply in Thread to Respond to this Agent",
               emoji: true,
             }],
           },

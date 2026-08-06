@@ -1907,8 +1907,8 @@ describe("MessagingController", () => {
           }),
         }),
         attribution: {
-          label: "Signals Agent · Private response",
-          hint: "Reply in this message's thread to continue with this agent.",
+          label: "Signals Agent",
+          hint: "Private Request · Reply in Thread to Respond to this Agent",
         },
         kind: "message",
         parts: [
@@ -2095,6 +2095,16 @@ describe("MessagingController", () => {
       ok: true,
       data: { awaitingReply: true },
     });
+    expect(harness.delivered).toContainEqual(
+      expect.objectContaining({
+        attribution: {
+          label: "Signals Agent",
+          hint:
+            "Private Request · Reply in Thread to Respond to this Agent; Completion Returns to the Original Conversation",
+        },
+        kind: "message",
+      }),
+    );
 
     const continuationBinding = (
       await harness.store.findActiveBindingsForThread({
@@ -2352,7 +2362,7 @@ describe("MessagingController", () => {
     ).toEqual([
       expect.objectContaining({
         attribution: expect.objectContaining({
-          label: "Signals Agent · Private response",
+          label: "Signals Agent",
         }),
         parts: [expect.objectContaining({
           text: expect.stringContaining("PRIVATE-CODE"),
