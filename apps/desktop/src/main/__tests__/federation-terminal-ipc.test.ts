@@ -87,6 +87,15 @@ vi.mock("../federation/federation-runtime", () => ({
       ack: mocks.remotePtyAck,
       close: mocks.remotePtyClose,
     }),
+    connectedPeerTargets: () => [
+      {
+        target: { scope: "remote" as const, instanceId: "peer-a" },
+        label: "Peer Mac",
+        capabilities: [],
+      },
+    ],
+    celestialIconFor: (instanceId: string) =>
+      instanceId === "peer-a" ? ("moon" as const) : undefined,
     onRemotePtyEvent: (
       listener: (event: {
         kind: string;
@@ -161,6 +170,91 @@ describe("integrated terminal IPC federation branch", () => {
     expect(response.sessionId).toBe("remote-session");
     expect(response.cwd).toBe("/owner/worktree");
     expect(mocks.localCreateOrAttach).not.toHaveBeenCalled();
+  });
+
+  it("routes a MAIN window's create remotely when the request names an owning instance", async () => {
+    const sender = fakeWebContents(2);
+
+    const response = (await invoke(INTEGRATED_TERMINAL_CREATE_CHANNEL, sender, {
+      threadKey: "codex:remote-pinned",
+      cols: 100,
+      rows: 30,
+      federationTarget: { scope: "remote", instanceId: "peer-a" },
+    })) as {
+      sessionId: string;
+      cwd: string;
+    };
+
+    expect(mocks.remotePtyOpen).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "remote-pinned",
+      cols: 100,
+      rows: 30,
+    });
+    expect(response.sessionId).toBe("remote-session");
+    // The shell runs on the peer — nothing may spawn locally.
+    expect(mocks.localCreateOrAttach).not.toHaveBeenCalled();
+
+    // Follow-up traffic routes by session ownership, not window identity.
+    await invoke(INTEGRATED_TERMINAL_WRITE_CHANNEL, sender, {
+      sessionId: "remote-session",
+      data: "ls\n",
+    });
+    expect(mocks.remotePtyInput).toHaveBeenCalledTimes(1);
+    expect(mocks.localWrite).not.toHaveBeenCalled();
+
+    // The merged session list brands the remote session with its owner.
+    const sessions = (await invoke(
+      INTEGRATED_TERMINAL_LIST_CHANNEL,
+      sender,
+    )) as Array<{
+      sessionId: string;
+      remote?: { instanceId: string; instanceLabel: string; celestialIcon?: string };
+    }>;
+    const remoteSession = sessions.find(
+      (session) => session.sessionId === "remote-session",
+    );
+    expect(remoteSession?.remote).toEqual({
+      instanceId: "peer-a",
+      instanceLabel: "Peer Mac",
+      celestialIcon: "moon",
+    });
+  });
+
+  it("keeps a MAIN window's local writes off the remote bridge", async () => {
+    const sender = fakeWebContents(3);
+    await invoke(INTEGRATED_TERMINAL_CREATE_CHANNEL, sender, {
+      threadKey: "codex:local-thread",
+      cols: 80,
+      rows: 24,
+    });
+    await invoke(INTEGRATED_TERMINAL_WRITE_CHANNEL, sender, {
+      sessionId: "local-session",
+      data: "pwd\n",
+    });
+    expect(mocks.localWrite).toHaveBeenCalledTimes(1);
+    expect(mocks.remotePtyInput).not.toHaveBeenCalled();
+  });
+
+  it("ignores a renderer-supplied target in a federation window: the window target wins", async () => {
+    const sender = fakeWebContents(11);
+    mocks.federationWindowIds.add(11);
+    mocks.federationTargets.set(11, { scope: "remote", instanceId: "peer-a" });
+
+    await invoke(INTEGRATED_TERMINAL_CREATE_CHANNEL, sender, {
+      threadKey: "codex:remote-thread",
+      cols: 80,
+      rows: 24,
+      // A compromised renderer must not be able to steer the pane at a
+      // different peer than the window is branded as.
+      federationTarget: { scope: "remote", instanceId: "peer-EVIL" },
+    });
+
+    const sessions = (await invoke(
+      INTEGRATED_TERMINAL_LIST_CHANNEL,
+      sender,
+    )) as Array<{ remote?: { instanceId: string } }>;
+    expect(sessions[0]?.remote?.instanceId).toBe("peer-a");
   });
 
   it("throws for a federation window with no remote target instead of spawning locally", async () => {

@@ -22,6 +22,7 @@ vi.mock("../IntegratedTerminal", () => ({
   IntegratedTerminal: (props: {
     threadKey: string;
     cwd?: string;
+    remote?: { instanceId: string; instanceLabel: string };
     height: number;
     visible?: boolean;
     onClose: () => void;
@@ -31,6 +32,8 @@ vi.mock("../IntegratedTerminal", () => ({
       aria-label="Integrated terminal"
       data-cwd={props.cwd ?? ""}
       data-height={props.height}
+      data-remote-instance={props.remote?.instanceId}
+      data-remote-label={props.remote?.instanceLabel}
       data-thread-key={props.threadKey}
       hidden={props.visible === false}
     >
@@ -1257,11 +1260,10 @@ describe("ThreadView", () => {
     expect(screen.queryByLabelText("Integrated terminal")).not.toBeInTheDocument();
   });
 
-  it("disables the terminal for a remote-pinned thread in the main window", () => {
-    // No window-level federation target: this is the MAIN window showing a
-    // viewer-pinned remote thread. The integrated-terminal IPC routes by
-    // window identity, so a toggle here would spawn a LOCAL shell under a
-    // remote thread — it must be disabled even with remote_pty granted.
+  it("opens a remote-pinned thread's terminal from the MAIN window against its owner", async () => {
+    // No window-level federation target: the MAIN window showing a
+    // viewer-pinned remote thread. The shell runs on the owning instance —
+    // the create request names it, and no viewer-side cwd is sent.
     const remoteThread: NavigationThreadSummary = {
       id: "remote-thread-1",
       title: "Remote thread",
@@ -1269,6 +1271,7 @@ describe("ThreadView", () => {
       source: "codex",
       executionMode: "default",
       updatedAt: Date.now(),
+      projectKey: "/viewer/should-not-be-sent",
       linkedDirectories: [],
       inbox: { inInbox: true },
       federation: {
@@ -1280,6 +1283,7 @@ describe("ThreadView", () => {
         instanceLabel: "Peer Mac",
         peerStatus: "connected",
         capabilities: ["thread_detail", "remote_pty"],
+        celestialIcon: "moon",
       },
     };
 
@@ -1303,12 +1307,18 @@ describe("ThreadView", () => {
       />,
     );
 
-    const toggle = screen.getByRole("button", {
-      name: "Terminal for this thread runs on Peer Mac — open its remote window.",
-    });
-    expect(toggle).toHaveAttribute("aria-disabled", "true");
+    const toggle = screen.getByRole("button", { name: "Open integrated terminal" });
+    expect(toggle).not.toHaveAttribute("aria-disabled");
     fireEvent.click(toggle);
-    expect(screen.queryByLabelText("Integrated terminal")).not.toBeInTheDocument();
+
+    const pane = await screen.findByLabelText("Integrated terminal");
+    expect(pane).toHaveAttribute("data-thread-key", "codex:remote-thread-1");
+    // The owner resolves the cwd; the viewer must not pick one.
+    expect(pane).toHaveAttribute("data-cwd", "");
+    // The pane carries the owning instance's identity for the chip + the
+    // create request's federation target.
+    expect(pane).toHaveAttribute("data-remote-instance", "peer-a");
+    expect(pane).toHaveAttribute("data-remote-label", "Peer Mac");
   });
 
   // Regression: terminal state used to live in ThreadView's useState, so every

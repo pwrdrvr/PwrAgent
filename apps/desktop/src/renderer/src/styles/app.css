@@ -15686,6 +15686,24 @@ a.transcript-message__messaging-origin:focus-visible {
   outline-offset: -2px;
 }
 
+/* Remote-shell identity mark: the owning instance's celestial chip pinned
+   to the pane's top edge, next to the close affordance, so a shell running
+   on another machine is always visibly branded as such. */
+.integrated-terminal__remote {
+  position: absolute;
+  z-index: 2;
+  top: 2px;
+  right: 28px;
+  display: inline-flex;
+}
+
+.integrated-terminal__remote .chip--instance {
+  height: 20px;
+  padding: 0 6px;
+  background: var(--bg-panel-elevated);
+  font-size: 10px;
+}
+
 .integrated-terminal__close {
   position: absolute;
   z-index: 2;

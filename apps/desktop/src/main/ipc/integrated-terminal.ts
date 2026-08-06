@@ -18,6 +18,7 @@ import type {
   IntegratedTerminalSetPanelHiddenRequest,
   IntegratedTerminalWriteRequest,
 } from "../../shared/integrated-terminal";
+import { isRemoteFederationTarget } from "@pwragent/shared";
 import { IntegratedTerminalService } from "../terminal/integrated-terminal-service";
 import type { IntegratedTerminalQuitSnapshot } from "../terminal/integrated-terminal-service";
 import { isFederationWindowWebContents } from "../window";
@@ -37,7 +38,14 @@ function broadcastSessions(
     // directly); the local PTY list would let this machine's shells leak
     // into a window branded as the peer.
     if (isFederationWindowWebContents(webContents)) continue;
-    webContents.send(INTEGRATED_TERMINAL_SESSIONS_CHANNEL, { sessions });
+    // The renderer replaces its whole list per event, so a main window
+    // hosting remote-pinned threads' terminals must see both kinds.
+    webContents.send(INTEGRATED_TERMINAL_SESSIONS_CHANNEL, {
+      sessions: [
+        ...sessions,
+        ...(federationBridge?.listSessions(webContents) ?? []),
+      ],
+    });
   }
 }
 
@@ -45,7 +53,9 @@ export function registerIntegratedTerminalIpcHandlers(): void {
   service ??= new IntegratedTerminalService({
     onSessionsChanged: broadcastSessions,
   });
-  federationBridge ??= new FederationTerminalBridge();
+  federationBridge ??= new FederationTerminalBridge({
+    localSessionsFor: () => service?.listSessions() ?? [],
+  });
 
   ipcMain.removeHandler(INTEGRATED_TERMINAL_CREATE_CHANNEL);
   ipcMain.handle(
@@ -56,8 +66,13 @@ export function registerIntegratedTerminalIpcHandlers(): void {
     ): Promise<IntegratedTerminalCreateResponse> => {
       // A federation window NEVER falls through to a local spawn: the bridge
       // routes to the owning instance and throws when the remote target or
-      // capability is missing.
-      if (isFederationWindowWebContents(event.sender)) {
+      // capability is missing. A main window routes remotely per request —
+      // a remote-pinned thread's terminal names its owning instance.
+      if (
+        isFederationWindowWebContents(event.sender)
+        || (request.federationTarget !== undefined
+          && isRemoteFederationTarget(request.federationTarget))
+      ) {
         return await federationBridge!.createOrAttach(request, event.sender);
       }
       return await service!.createOrAttach(request, event.sender);
@@ -68,7 +83,10 @@ export function registerIntegratedTerminalIpcHandlers(): void {
   ipcMain.handle(
     INTEGRATED_TERMINAL_WRITE_CHANNEL,
     (event, request: IntegratedTerminalWriteRequest): void => {
-      if (isFederationWindowWebContents(event.sender)) {
+      if (
+        isFederationWindowWebContents(event.sender)
+        || federationBridge?.hasSession(event.sender, request.sessionId)
+      ) {
         federationBridge?.write(request, event.sender);
         return;
       }
@@ -80,7 +98,10 @@ export function registerIntegratedTerminalIpcHandlers(): void {
   ipcMain.handle(
     INTEGRATED_TERMINAL_RESIZE_CHANNEL,
     (event, request: IntegratedTerminalResizeRequest): void => {
-      if (isFederationWindowWebContents(event.sender)) {
+      if (
+        isFederationWindowWebContents(event.sender)
+        || federationBridge?.hasSession(event.sender, request.sessionId)
+      ) {
         federationBridge?.resize(request, event.sender);
         return;
       }
@@ -92,7 +113,13 @@ export function registerIntegratedTerminalIpcHandlers(): void {
   ipcMain.handle(
     INTEGRATED_TERMINAL_CLOSE_CHANNEL,
     (event, request: IntegratedTerminalCloseRequest): void => {
-      if (isFederationWindowWebContents(event.sender)) {
+      if (
+        isFederationWindowWebContents(event.sender)
+        || (request.sessionId
+          && federationBridge?.hasSession(event.sender, request.sessionId))
+        || (request.threadKey
+          && federationBridge?.hasThreadSession(event.sender, request.threadKey))
+      ) {
         federationBridge?.close(request, event.sender);
         return;
       }
@@ -107,7 +134,10 @@ export function registerIntegratedTerminalIpcHandlers(): void {
       if (isFederationWindowWebContents(event.sender)) {
         return federationBridge?.listSessions(event.sender) ?? [];
       }
-      return service?.listSessions() ?? [];
+      return [
+        ...(service?.listSessions() ?? []),
+        ...(federationBridge?.listSessions(event.sender) ?? []),
+      ];
     },
   );
 
@@ -115,7 +145,10 @@ export function registerIntegratedTerminalIpcHandlers(): void {
   ipcMain.handle(
     INTEGRATED_TERMINAL_SET_PANEL_HIDDEN_CHANNEL,
     (event, request: IntegratedTerminalSetPanelHiddenRequest): void => {
-      if (isFederationWindowWebContents(event.sender)) {
+      if (
+        isFederationWindowWebContents(event.sender)
+        || federationBridge?.hasThreadSession(event.sender, request.threadKey)
+      ) {
         federationBridge?.setPanelHidden(request, event.sender);
         return;
       }

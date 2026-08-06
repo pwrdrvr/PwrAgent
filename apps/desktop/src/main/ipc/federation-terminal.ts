@@ -3,6 +3,7 @@ import type {
   AppServerBackendKind,
   FederationRemoteTarget,
 } from "@pwragent/shared";
+import { isRemoteFederationTarget } from "@pwragent/shared";
 import {
   INTEGRATED_TERMINAL_ERROR_CHANNEL,
   INTEGRATED_TERMINAL_EXIT_CHANNEL,
@@ -13,6 +14,7 @@ import type {
   IntegratedTerminalCloseRequest,
   IntegratedTerminalCreateRequest,
   IntegratedTerminalCreateResponse,
+  IntegratedTerminalRemoteInfo,
   IntegratedTerminalResizeRequest,
   IntegratedTerminalSessionSummary,
   IntegratedTerminalSetPanelHiddenRequest,
@@ -60,6 +62,20 @@ type PendingRemoteOpen = {
 };
 
 export class FederationTerminalBridge {
+  constructor(
+    private readonly options: {
+      /**
+       * Local PTY sessions to merge into this window's session broadcasts.
+       * The MAIN window hosts local and remote sessions side by side and
+       * the renderer replaces its whole list per event; a federation window
+       * passes nothing — local shells must never leak into peer branding.
+       */
+      localSessionsFor?: (
+        webContents: WebContents,
+      ) => IntegratedTerminalSessionSummary[];
+    } = {},
+  ) {}
+
   private readonly sessionsById = new Map<string, RemoteTerminalSession>();
   /** In-flight `pty.open`s keyed by `${webContentsId}:${threadKey}`. This is
    *  the remote analogue of the local service's close-during-spawn hardening:
@@ -74,15 +90,17 @@ export class FederationTerminalBridge {
     request: IntegratedTerminalCreateRequest,
     webContents: WebContents,
   ): Promise<IntegratedTerminalCreateResponse> {
-    const target = this.requireTarget(webContents);
     const threadKey = request.threadKey.trim();
     if (!threadKey) {
       throw new Error("A thread key is required to start a remote terminal.");
     }
+    // Reattach before target resolution so a pane remount never needs to
+    // re-supply the target it created with.
     const existing = this.sessionForThread(webContents, threadKey);
     if (existing) {
       return this.toCreateResponse(existing);
     }
+    const target = this.requireTarget(webContents, request);
     const pendingKey = this.pendingKey(webContents, threadKey);
     const inFlight = this.pendingOpens.get(pendingKey);
     if (inFlight) {
@@ -238,17 +256,48 @@ export class FederationTerminalBridge {
     this.watchedWebContents.clear();
   }
 
-  private requireTarget(webContents: WebContents): FederationRemoteTarget {
-    const target = federationWindowTargetForWebContents(webContents);
-    if (!target) {
-      // Defense in depth: a federation window whose remote target is missing
-      // must fail loudly, never fall through to spawning a LOCAL shell under
-      // peer branding.
-      throw new Error(
-        "Remote terminal sessions run on the owning instance; this window has no federation target.",
-      );
+  private requireTarget(
+    webContents: WebContents,
+    request: IntegratedTerminalCreateRequest,
+  ): FederationRemoteTarget {
+    // The window's own target stays authoritative: a federation window can
+    // never be steered at a different peer by a renderer-supplied field.
+    const windowTarget = federationWindowTargetForWebContents(webContents);
+    if (windowTarget) {
+      return windowTarget;
     }
-    return target;
+    // Main-window path: a remote-pinned thread's terminal names its owning
+    // instance per request. The owner still resolves shell + cwd itself and
+    // capability-checks remote_pty, exactly as for federation windows.
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      return request.federationTarget;
+    }
+    // Defense in depth: never fall through to spawning a LOCAL shell for a
+    // request that meant to reach a peer.
+    throw new Error(
+      "Remote terminal sessions run on the owning instance; no federation target was provided.",
+    );
+  }
+
+  /** Whether this bridge owns the given session for this window. */
+  hasSession(webContents: WebContents, sessionId: string): boolean {
+    return this.ownedSession(webContents, sessionId) !== undefined;
+  }
+
+  /**
+   * Whether a close/panel request for this thread belongs to the bridge:
+   * either a registered session or an open still in flight (which the close
+   * path must be able to mark).
+   */
+  hasThreadSession(webContents: WebContents, threadKey: string): boolean {
+    const trimmed = threadKey.trim();
+    return (
+      this.sessionForThread(webContents, trimmed) !== undefined
+      || this.pendingOpens.has(this.pendingKey(webContents, trimmed))
+    );
   }
 
   private ensureStreamSubscription(): void {
@@ -363,8 +412,14 @@ export class FederationTerminalBridge {
 
   private broadcastSessions(webContents: WebContents): void {
     if (webContents.isDestroyed()) return;
+    // The renderer replaces its whole session list per event, so a window
+    // hosting both kinds must always see both. Federation windows never get
+    // local sessions merged in (see localSessionsFor).
+    const localSessions = federationWindowTargetForWebContents(webContents)
+      ? []
+      : this.options.localSessionsFor?.(webContents) ?? [];
     webContents.send(INTEGRATED_TERMINAL_SESSIONS_CHANNEL, {
-      sessions: this.listSessions(webContents),
+      sessions: [...localSessions, ...this.listSessions(webContents)],
     });
   }
 
@@ -406,7 +461,32 @@ export class FederationTerminalBridge {
       shell: session.shell,
       panelHidden: session.panelHidden,
       createdAt: session.createdAt,
+      remote: this.remoteInfoFor(session.target),
     };
+  }
+
+  private remoteInfoFor(
+    target: FederationRemoteTarget,
+  ): IntegratedTerminalRemoteInfo {
+    const runtime = getDesktopFederationRuntime();
+    const info: IntegratedTerminalRemoteInfo = {
+      instanceId: target.instanceId,
+      instanceLabel: target.instanceId,
+    };
+    // Identity decoration is best-effort: during early boot (or in
+    // harnesses) the peer store / assignment map may be absent, and the raw
+    // instance id still labels the session correctly.
+    try {
+      info.instanceLabel =
+        runtime
+          .connectedPeerTargets()
+          .find((peer) => peer.target.instanceId === target.instanceId)?.label
+        ?? target.instanceId;
+      info.celestialIcon = runtime.celestialIconFor(target.instanceId);
+    } catch {
+      // Keep the bare-id fallback.
+    }
+    return info;
   }
 }
 
