@@ -199,6 +199,7 @@ export function buildBindingStatusIntent(params: {
   );
   const showResponseModeControl =
     params.binding.channel.conversation.kind !== "dm" &&
+    params.binding.channel.conversation.isDirectMessage !== true &&
     params.capabilityProfile?.conversationInput?.reportsBotMention === true;
   const acpRuntimeMode = isAcpBackendId(params.binding.backend)
     ? buildMessagingAcpRuntimeModeSummary({

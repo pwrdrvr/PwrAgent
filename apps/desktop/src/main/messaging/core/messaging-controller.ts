@@ -86,6 +86,8 @@ import type {
   MessagingMonitorState,
   MessagingMonitorSubscriptionRecord,
   MessagingPendingIntentRecord,
+  MessagingPrivateConversationResolveResult,
+  MessagingPrivateReplySource,
   MessagingQuestionnaireAnswer,
   MessagingQuestionnaireIntent,
   MessagingReviewIntent,
@@ -293,6 +295,36 @@ type MessagingTurnProseState = {
 const DEFAULT_MESSAGING_AGENT_NAME = "Messaging Agent";
 const DEFAULT_MESSAGING_AGENT_INSTRUCTIONS =
   "You are an Agent thread created from messaging. Keep shared context for the attached messaging surfaces and use available Agent tools when they are relevant.";
+const PRIVATE_RESPONSE_FALLBACK_INSTRUCTION =
+  "PwrAgent detected an explicit request for a private terminal response. "
+  + "Do not include sensitive response content in commentary or working updates. "
+  + "Use send_private_response if it is available. If that tool is unavailable, "
+  + "put the intended private content only in your final answer; PwrAgent will "
+  + "deliver that final privately and suppress it on the source surface.";
+const PRIVATE_REPLY_CONTINUATION_TTL_MS = 24 * 60 * 60 * 1_000;
+const PRIVATE_REPLY_COMPLETION_INSTRUCTION =
+  "PwrAgent is completing a one-shot private reply requested by this Agent. "
+  + "Treat the user's following message as the private response to your earlier request. "
+  + "Your final answer will be delivered to the originating messaging surface, not this private thread. "
+  + "Do not quote or expose private reply content there unless the initiating instructions explicitly require it. "
+  + "Do not emit commentary, working updates, or partial answers containing the private reply. "
+  + "If the private exchange is not complete, call send_private_response again with awaitReply and new replyInstructions; otherwise answer finally to complete the callback on the originating surface.";
+const EXPLICIT_PRIVATE_RESPONSE_REQUEST_PATTERN = new RegExp(
+  [
+    "\\b(?:dm|direct[\\s-]+message|private[\\s-]+message)\\s+me\\b",
+    "\\bsend\\s+me(?:\\s+\\S+){0,3}\\s+(?:dm|direct[\\s-]+message|private[\\s-]+message)\\b",
+    "\\b(?:send|reply|respond)(?:\\s+\\S+){0,6}\\s+privately\\b",
+    "\\bsend(?:\\s+\\S+){0,6}\\s+(?:only|just)\\s+to\\s+me\\b",
+  ].join("|"),
+  "i",
+);
+const NEGATED_PRIVATE_RESPONSE_PREFIX_PATTERN = new RegExp(
+  [
+    "\\b(?:(?:do\\s+not|don't|dont|never)(?:\\s+\\w+){0,8}(?:\\s+to)?",
+    "|not(?:\\s+(?:asking|requesting|telling|wanting|going|trying|supposed|allowed|permitted|send|reply|respond|dm)){1,8}(?:\\s+to)?)\\s*$",
+  ].join(""),
+  "i",
+);
 const ACTIVE_TURN_HANDOFF_ERROR =
   "Worktree/local migration is not available while a turn is in progress. Resubmit when the turn completes.";
 
@@ -362,6 +394,8 @@ type ActiveAgentMessagingOrigin = {
   binding?: MessagingBindingRecord;
   deliveryBinding?: MessagingBindingRecord;
   event: MessagingInboundEvent;
+  privateReplyContinuationBindingId?: string;
+  privateResponseRequested?: boolean;
 };
 
 type AgentMessagingOriginResolution =
@@ -697,6 +731,12 @@ type PendingNewThreadPromptBundle = {
 
 type MessagingDeliveryGuard = {
   isCancelled: () => boolean;
+  onCancelledDelivery?: (result: MessagingDeliveryResult) => Promise<void>;
+  whenCancelled?: Promise<void>;
+};
+
+type MessagingCancellationSignal = MessagingDeliveryGuard & {
+  cancel: () => void;
 };
 
 export type MessagingControllerOptions = {
@@ -761,6 +801,21 @@ export class MessagingController {
   private readonly deliveredAssistantMessageKeys = new Set<string>();
   private readonly assistantStreamBuffers = new Map<string, AssistantStreamBuffer>();
   private readonly assistantStreamDeliveryQueues = new Map<string, Promise<void>>();
+  private readonly assistantStreamCancellationFailures = new Set<string>();
+  private readonly assistantStreamCancellationSignals = new Map<
+    string,
+    MessagingCancellationSignal
+  >();
+  private readonly workingUpdateCancellationSignals = new Map<
+    string,
+    MessagingCancellationSignal
+  >();
+  private readonly workingUpdateDeliveries = new Map<string, Set<Promise<void>>>();
+  private readonly workingUpdateSurfaces = new Map<
+    string,
+    Map<string, MessagingSurfaceRef>
+  >();
+  private readonly workingUpdateCancellationFailures = new Set<string>();
   private readonly automationTurnsByTurnKey = new Map<
     string,
     AutomationTurnMessagingContext
@@ -769,6 +824,14 @@ export class MessagingController {
     string,
     ActiveAgentMessagingOrigin
   >();
+  private readonly startingAgentMessagingOriginsByThreadKey = new Map<
+    string,
+    ActiveAgentMessagingOrigin
+  >();
+  private readonly privateReplyCompletionTurnKeys = new Set<string>();
+  private readonly terminalPrivateResponseTurnKeys = new Set<string>();
+  private readonly privateResponseFallbackTurnKeys = new Set<string>();
+  private readonly attemptedPrivateResponseFallbackTurnKeys = new Set<string>();
   private readonly queuedAgentMessagingOriginsByQueueKey = new Map<
     string,
     ActiveAgentMessagingOrigin
@@ -900,6 +963,8 @@ export class MessagingController {
           },
         };
       }
+      case "send_private_response":
+        return await this.sendPrivateResponseFromAgentMessagingOrigin(request);
       case "attach_thread_here":
         return await this.attachThreadHereFromAgentMessagingOrigin(request);
       case "inspect_messaging_pdfs":
@@ -912,6 +977,7 @@ export class MessagingController {
   }
 
   async startMonitoringForEnabledBindings(): Promise<void> {
+    await this.cleanupExpiredPrivateReplyContinuations();
     if (this.options.channel) {
       const subscriptions =
         await this.options.store.findActiveMonitorSubscriptionsForChannelKind({
@@ -1493,11 +1559,30 @@ export class MessagingController {
         }
       }
 
-      await this.deliverToolActivityForBackendEvent(
-        event,
-        binding,
-        activeTurn?.turnId,
+      const terminalPrivateResponse = this.isTerminalPrivateResponseTurn(
+        event.backend,
+        binding.threadId,
+        eventTurnId ?? activeTurn?.turnId,
       );
+      const privateResponseFallback = this.isPrivateResponseFallbackTurn(
+        event.backend,
+        binding.threadId,
+        eventTurnId ?? activeTurn?.turnId,
+      );
+      const privateReplyCompletion = this.isPrivateReplyCompletionTurn(
+        event.backend,
+        binding.threadId,
+        eventTurnId ?? activeTurn?.turnId,
+      );
+      const suppressSourceResponse =
+        terminalPrivateResponse || privateResponseFallback;
+      if (!suppressSourceResponse && !privateReplyCompletion) {
+        await this.deliverToolActivityForBackendEvent(
+          event,
+          binding,
+          activeTurn?.turnId,
+        );
+      }
       if (eventTurnId && isTaskMonitorCompletionEvent(event)) {
         // A monitor's terminal result wakes the parent agent, whose final
         // response is the one user-facing completion notification. Tombstone
@@ -1518,26 +1603,93 @@ export class MessagingController {
           (isThreadStatusIdleEvent(event) && activeTurn))
       ) {
         const terminalTurnId = turnIdForBackendEvent(event) ?? activeTurn?.turnId;
-        await this.flushToolUpdatesForBinding(binding, {
-          clear: true,
-          turnId: terminalTurnId,
-        });
+        if (suppressSourceResponse && terminalTurnId) {
+          this.toolUpdatePolicy.flush({
+            bindingId: binding.id,
+            clear: true,
+            turnId: terminalTurnId,
+          });
+        } else {
+          await this.flushToolUpdatesForBinding(binding, {
+            clear: true,
+            turnId: terminalTurnId,
+          });
+        }
         if (terminalTurnId) {
           this.clearTurnProse(binding.id, terminalTurnId);
+          if (!privateResponseFallback) {
+            const workingUpdateKey = this.turnProseKey(
+              binding.id,
+              terminalTurnId,
+            );
+            this.workingUpdateCancellationSignals.delete(workingUpdateKey);
+            this.workingUpdateDeliveries.delete(workingUpdateKey);
+            this.workingUpdateSurfaces.delete(workingUpdateKey);
+            this.workingUpdateCancellationFailures.delete(workingUpdateKey);
+          }
         }
       }
 
       const assistantDelta = assistantDeltaForBackendEvent(event);
-      if (assistantDelta && !reviewTurnEvent) {
+      if (
+        assistantDelta
+        && !reviewTurnEvent
+        && !terminalPrivateResponse
+        && !privateReplyCompletion
+      ) {
         if (!automationTurnEvent) {
-          await this.deliverAssistantStreamUpdate(assistantDelta, binding);
+          await this.deliverAssistantStreamUpdate(assistantDelta, binding, {
+            bufferOnly: privateResponseFallback,
+          });
         }
       }
 
       const assistantText = standaloneReviewAssistantText ?? (
         isFinalReviewAssistant ? undefined : rawAssistantText
       );
-      if (assistantText) {
+      if (
+        assistantText
+        && privateResponseFallback
+        && !terminalPrivateResponse
+        && !isNonFinalAssistantTextForBackendEvent(event)
+      ) {
+        const fallbackTurnId = eventTurnId ?? activeTurn?.turnId;
+        if (fallbackTurnId) {
+          await this.deliverPrivateResponseFallback({
+            binding,
+            event,
+            text: assistantText,
+            turnId: fallbackTurnId,
+          });
+        }
+      } else if (
+        privateResponseFallback
+        && !terminalPrivateResponse
+        && isTerminalTurnLifecycle(activeTurn)
+        && !assistantDelta
+      ) {
+        await this.waitForAssistantStreamDeliveriesForEvent(event, binding);
+        const bufferedText = this.takeBufferedAssistantTextForTerminalEvent(
+          event,
+          binding,
+        );
+        const fallbackTurnId = eventTurnId ?? activeTurn?.turnId;
+        if (bufferedText && fallbackTurnId) {
+          await this.deliverPrivateResponseFallback({
+            binding,
+            event,
+            text: bufferedText,
+            turnId: fallbackTurnId,
+          });
+        }
+      } else if (
+        assistantText
+        && !suppressSourceResponse
+        && (
+          !privateReplyCompletion
+          || !isNonFinalAssistantTextForBackendEvent(event)
+        )
+      ) {
         if (
           !isNonFinalAssistantTextForBackendEvent(event)
           && !isTaskMonitorProgressEvent(event)
@@ -1600,6 +1752,7 @@ export class MessagingController {
         }
       } else {
         if (
+          !suppressSourceResponse &&
           isFinalAssistantImageResolutionEvent(event)
           && !reviewTurnEvent
           && !isTaskMonitorProgressEvent(event)
@@ -1612,6 +1765,7 @@ export class MessagingController {
           await this.deliverAssistantImages(assistantImages, event, binding);
         }
         if (
+          !suppressSourceResponse &&
           isTerminalTurnLifecycle(activeTurn)
           && !assistantDelta
           && !reviewTurnEvent
@@ -1630,14 +1784,18 @@ export class MessagingController {
 
       // Automation turns surface their own terminal output (incl. errors) via
       // handleAutomationTurnTerminal, so skip them here to avoid a double post.
-      if (!automationTurnEvent && activeTurn?.status === "failed") {
+      if (
+        !suppressSourceResponse
+        && !automationTurnEvent
+        && activeTurn?.status === "failed"
+      ) {
         const turnFailureText = errorTextForBackendEvent(event);
         if (turnFailureText) {
           await this.deliverTurnFailureMessage(turnFailureText, event, binding);
         }
       }
 
-      if (completedPlan && !automationTurnEvent) {
+      if (completedPlan && !automationTurnEvent && !suppressSourceResponse) {
         await this.deliverArtifactForBinding({
           artifact: artifactFromPlanEntry(completedPlan),
           binding,
@@ -1645,7 +1803,11 @@ export class MessagingController {
         });
       }
 
-      if (completedReviewArtifact && !automationTurnEvent) {
+      if (
+        completedReviewArtifact
+        && !automationTurnEvent
+        && !suppressSourceResponse
+      ) {
         await this.deliverArtifactForBinding({
           artifact: artifactFromReviewEntry(completedReviewArtifact),
           binding,
@@ -1653,7 +1815,11 @@ export class MessagingController {
         });
       }
 
-      if (markdownFileArtifactSelection && !automationTurnEvent) {
+      if (
+        markdownFileArtifactSelection
+        && !automationTurnEvent
+        && !suppressSourceResponse
+      ) {
         await this.deliverArtifactForBinding({
           artifact: artifactFromMarkdownFileSelection(markdownFileArtifactSelection),
           binding,
@@ -1662,11 +1828,20 @@ export class MessagingController {
       }
 
       if (isThreadNameUpdatedEvent(event)) {
-        await this.renderBindingStatus(
+        await this.renderAutomaticBindingStatus(
           binding,
           undefined,
           await this.navigationSnapshotWithThreadNameFromEvent(event),
         );
+        continue;
+      }
+
+      // A terminal private response owns the visible completion for this turn.
+      // Backend work events may continue after the tool returns, but must not
+      // re-arm provider typing/activity on either the source binding or the
+      // newly-created private continuation. Terminal lifecycle still flows
+      // through below so any existing activity lease is explicitly cleared.
+      if (suppressSourceResponse && activeTurn?.status === "working") {
         continue;
       }
 
@@ -1676,7 +1851,7 @@ export class MessagingController {
           force: true,
         });
         if (shouldRenderStatusForTurnStateChange(event, lifecycle)) {
-          await this.renderBindingStatus(binding);
+          await this.renderAutomaticBindingStatus(binding);
         }
         await this.startNextQueuedTurn(binding);
       } else if (activeTurn?.status === "waiting" && isTurnWorkActivityEvent(event, activeTurn)) {
@@ -1712,6 +1887,18 @@ export class MessagingController {
       }
     }
     if (lifecycle && isTerminalTurnLifecycle(lifecycle)) {
+      const turnKey = agentMessagingTurnKey(
+        event.backend,
+        threadId,
+        lifecycle.turnId,
+      );
+      const origin = this.activeAgentMessagingOriginsByTurnKey.get(turnKey);
+      if (origin?.privateReplyContinuationBindingId) {
+        await this.completePrivateReplyContinuation(
+          origin.privateReplyContinuationBindingId,
+        );
+      }
+      this.privateReplyCompletionTurnKeys.delete(turnKey);
       this.forgetAutomationTurn(event.backend, threadId, lifecycle.turnId);
       this.forgetAgentMessagingOrigin(event.backend, threadId, lifecycle.turnId);
       this.planArtifactsByTurnKey.delete(artifactTurnKey(event.backend, threadId, lifecycle.turnId));
@@ -1839,7 +2026,7 @@ export class MessagingController {
         await this.signalTurnActivity(binding, activeTurn, {
           force: true,
         });
-        await this.renderBindingStatus(binding);
+        await this.renderAutomaticBindingStatus(binding);
       }
     }
   }
@@ -2855,7 +3042,8 @@ export class MessagingController {
       return;
     }
 
-    const binding = await this.options.store.findActiveBindingForChannel(event.channel);
+    let binding = await this.options.store.findActiveBindingForChannel(event.channel);
+    binding = await this.revokeExpiredPrivateReplyContinuation(binding);
     if (!binding) {
       if (!await this.shouldHandleAmbientSharedMessage(event)) {
         return;
@@ -3013,7 +3201,8 @@ export class MessagingController {
       return;
     }
 
-    const binding = await this.options.store.findActiveBindingForChannel(event.channel);
+    let binding = await this.options.store.findActiveBindingForChannel(event.channel);
+    binding = await this.revokeExpiredPrivateReplyContinuation(binding);
     if (!binding) {
       if (!await this.shouldHandleAmbientSharedMessage(event)) {
         return;
@@ -3052,7 +3241,10 @@ export class MessagingController {
     event: MessagingInboundTextEvent | MessagingInboundMediaEvent,
     binding?: MessagingBindingRecord,
   ): Promise<boolean> {
-    if (event.channel.conversation.kind === "dm") {
+    if (
+      event.channel.conversation.kind === "dm"
+      || event.channel.conversation.isDirectMessage === true
+    ) {
       return true;
     }
     if (
@@ -3087,6 +3279,9 @@ export class MessagingController {
       prepared,
       currentBinding,
     );
+    if (currentBinding.privateReplyContinuation) {
+      await this.completePrivateReplyContinuation(currentBinding.id);
+    }
     const consumedSkillBinding = currentBinding.pendingSkillSelection
       ? bindingWithoutPendingSkillSelection(currentBinding)
       : currentBinding;
@@ -3100,6 +3295,7 @@ export class MessagingController {
         event: bundle.events[0],
         input: preparedWithSkill.input,
         pdfAttachments: preparedWithSkill.pdfAttachments,
+        privateResponseRequested: preparedWithSkill.privateResponseRequested,
         preview: preparedWithSkill.preview,
         threadKey: bundle.threadKey,
       });
@@ -3113,13 +3309,14 @@ export class MessagingController {
       binding: consumedSkillBinding,
       input: preparedWithSkill.input,
       pdfAttachments: preparedWithSkill.pdfAttachments,
+      privateResponseRequested: preparedWithSkill.privateResponseRequested,
       preview: preparedWithSkill.preview,
       threadKey: bundle.threadKey,
       event: bundle.events[0],
     });
     if (startResult !== "failed" && currentBinding.pendingSkillSelection) {
       const updatedBinding = await this.clearPendingSkillSelection(currentBinding);
-      await this.renderBindingStatus(updatedBinding, bundle.events[0]);
+      await this.renderAutomaticBindingStatus(updatedBinding, bundle.events[0]);
     }
   }
 
@@ -3127,12 +3324,14 @@ export class MessagingController {
     prepared: {
       input: AppServerTurnInputItem[];
       pdfAttachments: PendingPdfAttachment[];
+      privateResponseRequested: boolean;
       preview: string;
     },
     binding: MessagingBindingRecord,
   ): {
     input: AppServerTurnInputItem[];
     pdfAttachments: PendingPdfAttachment[];
+    privateResponseRequested: boolean;
     preview: string;
   } {
     const selection = binding.pendingSkillSelection;
@@ -3147,6 +3346,7 @@ export class MessagingController {
         ...prepared.input,
       ],
       pdfAttachments: prepared.pdfAttachments,
+      privateResponseRequested: prepared.privateResponseRequested,
       preview: `${prefix}\n${prepared.preview}`,
     };
   }
@@ -3295,6 +3495,7 @@ export class MessagingController {
     | {
         input: AppServerTurnInputItem[];
         pdfAttachments: PendingPdfAttachment[];
+        privateResponseRequested: boolean;
         preview: string;
       }
     | undefined
@@ -3304,6 +3505,31 @@ export class MessagingController {
     const previewParts: string[] = [];
     const rejections: MessagingAttachmentRejection[] = [];
     const pdfHandling = await this.resolveMessagingPdfHandling(binding);
+    const privateReplyContinuation = binding?.privateReplyContinuation;
+    if (
+      privateReplyContinuation
+      && privateReplyContinuation.expiresAt > this.now()
+    ) {
+      input.push({
+        type: "text",
+        text: [
+          PRIVATE_REPLY_COMPLETION_INSTRUCTION,
+          "",
+          "Initiating Agent instructions:",
+          privateReplyContinuation.instructions,
+        ].join("\n"),
+      });
+    }
+    const privateResponseRequested = events.some(
+      (turnEvent) => requestsExplicitPrivateResponse(turnEvent),
+    );
+
+    if (privateResponseRequested) {
+      input.push({
+        type: "text",
+        text: PRIVATE_RESPONSE_FALLBACK_INSTRUCTION,
+      });
+    }
 
     for (const turnEvent of events) {
       if (turnEvent.kind === "text") {
@@ -3372,8 +3598,46 @@ export class MessagingController {
     return {
       input,
       pdfAttachments,
+      privateResponseRequested,
       preview: buildQueuedInputPreview(previewParts),
     };
+  }
+
+  private async revokeExpiredPrivateReplyContinuation(
+    binding: MessagingBindingRecord | undefined,
+  ): Promise<MessagingBindingRecord | undefined> {
+    if (
+      !binding?.privateReplyContinuation
+      || binding.privateReplyContinuation.expiresAt > this.now()
+    ) {
+      return binding;
+    }
+    await this.options.store.revokeBinding({
+      bindingId: binding.id,
+      revokedAt: this.now(),
+    });
+    this.notifyBindingChanged("private-reply-expired");
+    return undefined;
+  }
+
+  private async cleanupExpiredPrivateReplyContinuations(): Promise<void> {
+    const now = this.now();
+    const expired = this.filterBindingsForChannel(
+      await this.options.store.findActiveBindings(),
+    ).filter(
+      (binding) =>
+        binding.privateReplyContinuation
+        && binding.privateReplyContinuation.expiresAt <= now,
+    );
+    for (const binding of expired) {
+      await this.options.store.revokeBinding({
+        bindingId: binding.id,
+        revokedAt: now,
+      });
+    }
+    if (expired.length > 0) {
+      this.notifyBindingChanged("private-reply-expired");
+    }
   }
 
   private async resolveMessagingPdfHandling(
@@ -3419,17 +3683,35 @@ export class MessagingController {
     input: AppServerTurnInputItem[];
     navigation?: NavigationSnapshot;
     pdfAttachments?: PendingPdfAttachment[];
+    privateResponseRequested?: boolean;
     preview: string;
     queueOnConcurrentStart?: boolean;
     threadKey: string;
   }): Promise<PreparedInputStartResult> {
     this.turnAdmission.markStarting(params.threadKey);
     let turnStarted = false;
+    let startingOrigin: ActiveAgentMessagingOrigin | undefined;
+    const startingThreadKey = agentMessagingThreadKey(
+      params.binding.backend,
+      params.binding.threadId,
+    );
 
     try {
       const navigation = params.navigation ?? await this.options.backend.getNavigationSnapshot({
         backend: "all",
       });
+      startingOrigin = await this.buildAgentMessagingOrigin({
+        binding: params.binding,
+        event: params.event,
+        navigation,
+        privateResponseRequested: params.privateResponseRequested,
+      });
+      if (startingOrigin) {
+        this.startingAgentMessagingOriginsByThreadKey.set(
+          startingThreadKey,
+          startingOrigin,
+        );
+      }
       const turnSettings = turnSettingsForBinding(params.binding, navigation);
       const executionResolution = resolveExecutionModeForBinding(
         params.binding,
@@ -3480,6 +3762,7 @@ export class MessagingController {
           binding: params.binding,
           event: params.event,
           navigation,
+          origin: startingOrigin,
           queueEntryId: started.queueEntryId ?? started.turnId,
         });
         this.logger.info?.("messaging turn queued in shared thread FIFO", {
@@ -3503,7 +3786,6 @@ export class MessagingController {
         startedAt: this.now(),
         updatedAt: this.now(),
       };
-      this.setActiveTurn(params.binding, activeTurn);
       this.pdfAttachmentStore.bindTurn(
         {
           backend: params.binding.backend,
@@ -3516,12 +3798,21 @@ export class MessagingController {
         binding: params.binding,
         event: params.event,
         navigation,
+        origin: startingOrigin,
         turnId: started.turnId,
       });
-      await this.signalTurnActivity(params.binding, activeTurn, {
+      const deliveryBinding = startingOrigin?.deliveryBinding
+        ?? startingOrigin?.binding
+        ?? params.binding;
+      this.setActiveTurn(deliveryBinding, activeTurn);
+      await this.signalTurnActivity(deliveryBinding, activeTurn, {
         force: true,
       });
-      await this.renderBindingStatus(params.binding, undefined, navigation);
+      await this.renderAutomaticBindingStatus(
+        deliveryBinding,
+        undefined,
+        navigation,
+      );
       return "started";
     } catch (error) {
       if (turnStarted) {
@@ -3538,6 +3829,7 @@ export class MessagingController {
             event: params.event,
             input: params.input,
             pdfAttachments: params.pdfAttachments,
+            privateResponseRequested: params.privateResponseRequested,
             preview: params.preview,
             threadKey: params.threadKey,
           });
@@ -3559,6 +3851,13 @@ export class MessagingController {
       return "failed";
     } finally {
       this.turnAdmission.clearStarting(params.threadKey);
+      if (
+        startingOrigin
+        && this.startingAgentMessagingOriginsByThreadKey.get(startingThreadKey)
+          === startingOrigin
+      ) {
+        this.startingAgentMessagingOriginsByThreadKey.delete(startingThreadKey);
+      }
     }
   }
 
@@ -3593,7 +3892,11 @@ export class MessagingController {
       currentTurn?.turnId === params.turnId &&
       isTerminalTurnLifecycle(currentTurn)
     ) {
-      await this.renderBindingStatus(params.binding, undefined, params.navigation);
+      await this.renderAutomaticBindingStatus(
+        params.binding,
+        undefined,
+        params.navigation,
+      );
       return;
     }
     const activeTurn: MessagingActiveTurnSummary = {
@@ -3612,7 +3915,11 @@ export class MessagingController {
     await this.signalTurnActivity(params.binding, activeTurn, {
       force: true,
     });
-    await this.renderBindingStatus(params.binding, undefined, params.navigation);
+    await this.renderAutomaticBindingStatus(
+      params.binding,
+      undefined,
+      params.navigation,
+    );
   }
 
   private async queuePreparedInput(params: {
@@ -3620,6 +3927,7 @@ export class MessagingController {
     event?: MessagingInboundEvent;
     input: AppServerTurnInputItem[];
     pdfAttachments?: PendingPdfAttachment[];
+    privateResponseRequested?: boolean;
     preview: string;
     threadKey: string;
   }): Promise<void> {
@@ -3817,6 +4125,7 @@ export class MessagingController {
       event: entry.event,
       input: entry.input,
       pdfAttachments: entry.pdfAttachments,
+      privateResponseRequested: entry.privateResponseRequested,
       preview: entry.preview,
       queueOnConcurrentStart: false,
       threadKey,
@@ -5159,7 +5468,17 @@ export class MessagingController {
   private async deliverAssistantStreamUpdate(
     delta: AssistantStreamDelta,
     binding: MessagingBindingRecord,
+    options?: { bufferOnly?: boolean },
   ): Promise<void> {
+    if (
+      this.isTerminalPrivateResponseTurn(
+        binding.backend,
+        binding.threadId,
+        delta.turnId,
+      )
+    ) {
+      return;
+    }
     const bufferKey = this.assistantStreamBufferKey(delta.streamKey, binding);
     const now = this.now();
     const existing = this.assistantStreamBuffers.get(bufferKey);
@@ -5184,6 +5503,10 @@ export class MessagingController {
     // flush re-creates an entry that no later terminal event clears. Cap it so
     // those orphans are reclaimed rather than accumulating for the process life.
     evictStaleStreamAnchors(this.assistantStreamBuffers);
+
+    if (options?.bufferOnly) {
+      return;
+    }
 
     // Streaming off: keep accumulating deltas (the terminal flush still needs
     // the buffered text — e.g. ACP turns whose only output arrives as deltas)
@@ -5219,11 +5542,13 @@ export class MessagingController {
   ): Promise<boolean> {
     const streamingEnabled = this.isStreamingResponsesEnabledForBinding(binding);
     let deliveredFinalStream = false;
+    const completedTurnIds = new Set<string>();
     for (const bufferKey of this.assistantStreamBufferKeysForEvent(event, binding)) {
       const buffer = this.assistantStreamBuffers.get(bufferKey);
       if (!buffer) {
         continue;
       }
+      completedTurnIds.add(buffer.turnId);
       // Streaming off: drop the accumulator without emitting a final
       // `stream_update`. Returning `false` routes the caller to
       // `deliverAssistantMessage`, so the turn lands as a single message
@@ -5244,6 +5569,11 @@ export class MessagingController {
       this.assistantStreamBuffers.delete(bufferKey);
       this.assistantStreamDeliveryQueues.delete(bufferKey);
     }
+    for (const turnId of completedTurnIds) {
+      this.assistantStreamCancellationSignals.delete(
+        this.turnProseKey(binding.id, turnId),
+      );
+    }
     return deliveredFinalStream;
   }
 
@@ -5256,11 +5586,13 @@ export class MessagingController {
       identity: AssistantMessageDeliveryIdentity;
       text: string;
     }> = [];
+    const completedTurnIds = new Set<string>();
     for (const bufferKey of this.assistantStreamBufferKeysForEvent(event, binding)) {
       const buffer = this.assistantStreamBuffers.get(bufferKey);
       if (!buffer) {
         continue;
       }
+      completedTurnIds.add(buffer.turnId);
       const text = buffer.text.trim();
       if (!text) {
         this.assistantStreamBuffers.delete(bufferKey);
@@ -5304,6 +5636,12 @@ export class MessagingController {
       this.assistantStreamDeliveryQueues.delete(bufferKey);
     }
 
+    for (const turnId of completedTurnIds) {
+      this.assistantStreamCancellationSignals.delete(
+        this.turnProseKey(binding.id, turnId),
+      );
+    }
+
     for (const fallback of fallbackMessages) {
       await this.deliverAssistantMessage(
         fallback.text,
@@ -5313,6 +5651,34 @@ export class MessagingController {
         fallback.identity,
       );
     }
+  }
+
+  private takeBufferedAssistantTextForTerminalEvent(
+    event: AgentEvent,
+    binding: MessagingBindingRecord,
+  ): string | undefined {
+    const completedTurnIds = new Set<string>();
+    const messages: string[] = [];
+    for (const bufferKey of this.assistantStreamBufferKeysForEvent(event, binding)) {
+      const buffer = this.assistantStreamBuffers.get(bufferKey);
+      if (!buffer) {
+        continue;
+      }
+      completedTurnIds.add(buffer.turnId);
+      const text = buffer.text.trim();
+      if (text) {
+        messages.push(text);
+      }
+      this.assistantStreamBuffers.delete(bufferKey);
+      this.assistantStreamDeliveryQueues.delete(bufferKey);
+    }
+    for (const turnId of completedTurnIds) {
+      this.assistantStreamCancellationSignals.delete(
+        this.turnProseKey(binding.id, turnId),
+      );
+    }
+    const text = messages.join("\n\n").trim();
+    return text || undefined;
   }
 
   private async waitForAssistantStreamDeliveriesForEvent(
@@ -5390,6 +5756,11 @@ export class MessagingController {
     binding: MessagingBindingRecord,
     isFinal: boolean,
   ): Promise<MessagingDeliveryResult> {
+    const cancellationKey = this.turnProseKey(binding.id, buffer.turnId);
+    const cancellation = this.ensureAssistantStreamCancellationSignal(
+      binding,
+      buffer.turnId,
+    );
     const now = this.now();
     const intent: MessagingStreamUpdateIntent = {
       id: this.newIntentId(isFinal ? "assistant-stream-final" : "assistant-stream"),
@@ -5418,7 +5789,31 @@ export class MessagingController {
         isFinal,
       },
     };
-    const result = await this.deliver(intent, binding);
+    const result = await this.deliver(intent, binding, undefined, {
+      isCancelled: cancellation.isCancelled,
+      whenCancelled: cancellation.whenCancelled,
+      onCancelledDelivery: async (cancelledResult) => {
+        if (
+          cancelledResult.surface
+          && isVisibleAssistantStreamDelivery(cancelledResult)
+          && !isSameMessagingSurface(cancelledResult.surface, buffer.surface)
+        ) {
+          const dismissed = await this.dismissTerminalPrivateResponseSurface(
+            binding,
+            buffer.turnId,
+            cancelledResult.surface,
+          );
+          if (!dismissed) {
+            this.assistantStreamCancellationFailures.add(cancellationKey);
+          }
+        }
+      },
+    });
+    if (cancellation.isCancelled()) {
+      const bufferKey = this.assistantStreamBufferKey(buffer.streamKey, binding);
+      this.assistantStreamBuffers.delete(bufferKey);
+      return result;
+    }
     const surface =
       result.surface && isVisibleAssistantStreamDelivery(result)
         ? result.surface
@@ -5437,6 +5832,222 @@ export class MessagingController {
     binding: MessagingBindingRecord,
   ): string {
     return `${binding.id}\0${streamKey}`;
+  }
+
+  private ensureAssistantStreamCancellationSignal(
+    binding: MessagingBindingRecord,
+    turnId: string,
+  ): MessagingCancellationSignal {
+    const key = this.turnProseKey(binding.id, turnId);
+    const existing = this.assistantStreamCancellationSignals.get(key);
+    if (existing) {
+      return existing;
+    }
+    let cancelled = this.isTerminalPrivateResponseTurn(
+      binding.backend,
+      binding.threadId,
+      turnId,
+    );
+    let resolveCancellation!: () => void;
+    const whenCancelled = new Promise<void>((resolve) => {
+      resolveCancellation = resolve;
+    });
+    const cancellation: MessagingCancellationSignal = {
+      cancel: () => {
+        if (cancelled) {
+          return;
+        }
+        cancelled = true;
+        resolveCancellation();
+      },
+      isCancelled: () =>
+        cancelled
+        || this.isTerminalPrivateResponseTurn(
+          binding.backend,
+          binding.threadId,
+          turnId,
+        ),
+      whenCancelled,
+    };
+    if (cancelled) {
+      resolveCancellation();
+    }
+    this.assistantStreamCancellationSignals.set(key, cancellation);
+    return cancellation;
+  }
+
+  private async cancelAssistantStreamsForTurn(
+    binding: MessagingBindingRecord,
+    turnId: string,
+  ): Promise<boolean> {
+    const cancellationKey = this.turnProseKey(binding.id, turnId);
+    const deliveries = new Set<Promise<void>>();
+    const surfaces = new Map<string, MessagingSurfaceRef>();
+    this.assistantStreamCancellationFailures.delete(cancellationKey);
+    this.assistantStreamCancellationSignals.get(cancellationKey)?.cancel();
+    for (const [bufferKey, buffer] of this.assistantStreamBuffers) {
+      if (
+        bufferKey.startsWith(`${binding.id}\0`)
+        && buffer.turnId === turnId
+      ) {
+        if (buffer.surface) {
+          surfaces.set(messagingSurfaceKey(buffer.surface), buffer.surface);
+        }
+        const delivery = this.assistantStreamDeliveryQueues.get(bufferKey);
+        if (delivery) {
+          deliveries.add(delivery);
+        }
+        this.assistantStreamBuffers.delete(bufferKey);
+      }
+    }
+    await Promise.allSettled(deliveries);
+
+    // A delivery already awaiting its adapter can finish after the buffers are
+    // cleared. The delivery guard retracts a newly-created surface; make one
+    // final sweep for an existing surface before reporting private success.
+    for (const [bufferKey, buffer] of this.assistantStreamBuffers) {
+      if (
+        bufferKey.startsWith(`${binding.id}\0`)
+        && buffer.turnId === turnId
+      ) {
+        if (buffer.surface) {
+          surfaces.set(messagingSurfaceKey(buffer.surface), buffer.surface);
+        }
+        this.assistantStreamBuffers.delete(bufferKey);
+        this.assistantStreamDeliveryQueues.delete(bufferKey);
+      }
+    }
+    for (const surface of surfaces.values()) {
+      const dismissed = await this.dismissTerminalPrivateResponseSurface(
+        binding,
+        turnId,
+        surface,
+      );
+      if (!dismissed) {
+        this.assistantStreamCancellationFailures.add(cancellationKey);
+      }
+    }
+    const cancelledCleanly = !this.assistantStreamCancellationFailures.has(
+      cancellationKey,
+    );
+    this.assistantStreamCancellationFailures.delete(cancellationKey);
+    this.assistantStreamCancellationSignals.delete(cancellationKey);
+    return cancelledCleanly;
+  }
+
+  private ensureWorkingUpdateCancellationSignal(
+    binding: MessagingBindingRecord,
+    turnId: string,
+  ): MessagingCancellationSignal {
+    const key = this.turnProseKey(binding.id, turnId);
+    const existing = this.workingUpdateCancellationSignals.get(key);
+    if (existing) {
+      return existing;
+    }
+    let cancelled = this.isTerminalPrivateResponseTurn(
+      binding.backend,
+      binding.threadId,
+      turnId,
+    );
+    let resolveCancellation!: () => void;
+    const whenCancelled = new Promise<void>((resolve) => {
+      resolveCancellation = resolve;
+    });
+    const cancellation: MessagingCancellationSignal = {
+      cancel: () => {
+        if (cancelled) {
+          return;
+        }
+        cancelled = true;
+        resolveCancellation();
+      },
+      isCancelled: () =>
+        cancelled
+        || this.isTerminalPrivateResponseTurn(
+          binding.backend,
+          binding.threadId,
+          turnId,
+        ),
+      whenCancelled,
+    };
+    if (cancelled) {
+      resolveCancellation();
+    }
+    this.workingUpdateCancellationSignals.set(key, cancellation);
+    return cancellation;
+  }
+
+  private async cancelWorkingUpdatesForTurn(
+    binding: MessagingBindingRecord,
+    turnId: string,
+  ): Promise<boolean> {
+    const key = this.turnProseKey(binding.id, turnId);
+    this.workingUpdateCancellationFailures.delete(key);
+    this.workingUpdateCancellationSignals.get(key)?.cancel();
+    await Promise.allSettled(this.workingUpdateDeliveries.get(key) ?? []);
+
+    const surfaces = this.workingUpdateSurfaces.get(key);
+    if (surfaces) {
+      for (const surface of surfaces.values()) {
+        const dismissed = await this.dismissTerminalPrivateResponseSurface(
+          binding,
+          turnId,
+          surface,
+        );
+        if (!dismissed) {
+          this.workingUpdateCancellationFailures.add(key);
+        }
+      }
+    }
+
+    const cancelledCleanly = !this.workingUpdateCancellationFailures.has(key);
+    this.workingUpdateCancellationFailures.delete(key);
+    this.workingUpdateCancellationSignals.delete(key);
+    this.workingUpdateDeliveries.delete(key);
+    this.workingUpdateSurfaces.delete(key);
+    return cancelledCleanly;
+  }
+
+  private async dismissTerminalPrivateResponseSurface(
+    binding: MessagingBindingRecord,
+    turnId: string,
+    surface: MessagingSurfaceRef,
+  ): Promise<boolean> {
+    try {
+      const result = await this.deliver(
+        {
+          id: this.newIntentId("private-response-source-dismiss"),
+          kind: "dismiss",
+          bindingId: binding.id,
+          createdAt: this.now(),
+          delivery: { mode: "dismiss" },
+          reason: "terminal_private_response",
+          targetSurface: surface,
+        },
+        binding,
+      );
+      if (result.outcome === "dismissed") {
+        return true;
+      }
+      this.logger.warn?.("messaging private response source dismissal failed", {
+        bindingId: binding.id,
+        errorMessage: result.errorMessage,
+        outcome: result.outcome,
+        surfaceId: surface.id,
+        threadId: binding.threadId,
+        turnId,
+      });
+      return false;
+    } catch (error) {
+      this.logger.warn?.("messaging private response source dismissal failed", {
+        bindingId: binding.id,
+        error: error instanceof Error ? error.message : String(error),
+        surfaceId: surface.id,
+        threadId: binding.threadId,
+        turnId,
+      });
+      return false;
+    }
   }
 
   private async deliverAssistantMessage(
@@ -5741,6 +6352,23 @@ export class MessagingController {
     this.toolUpdatePolicy.dispose();
     this.completedTaskMonitorTurns.clear();
     this.activeAgentMessagingOriginsByTurnKey.clear();
+    this.startingAgentMessagingOriginsByThreadKey.clear();
+    this.privateReplyCompletionTurnKeys.clear();
+    this.terminalPrivateResponseTurnKeys.clear();
+    this.privateResponseFallbackTurnKeys.clear();
+    this.attemptedPrivateResponseFallbackTurnKeys.clear();
+    this.assistantStreamCancellationFailures.clear();
+    for (const cancellation of this.assistantStreamCancellationSignals.values()) {
+      cancellation.cancel();
+    }
+    this.assistantStreamCancellationSignals.clear();
+    this.workingUpdateCancellationFailures.clear();
+    for (const cancellation of this.workingUpdateCancellationSignals.values()) {
+      cancellation.cancel();
+    }
+    this.workingUpdateCancellationSignals.clear();
+    this.workingUpdateDeliveries.clear();
+    this.workingUpdateSurfaces.clear();
     this.queuedAgentMessagingOriginsByQueueKey.clear();
   }
 
@@ -12718,6 +13346,21 @@ export class MessagingController {
     });
   }
 
+  private async renderAutomaticBindingStatus(
+    binding: MessagingBindingRecord,
+    event?: MessagingInboundEvent,
+    navigation?: NavigationSnapshot,
+  ): Promise<MessagingBindingRecord> {
+    if (
+      binding.statusPresentation === "on_demand"
+      && !binding.statusSurface
+      && !binding.pinnedStatusSurface
+    ) {
+      return binding;
+    }
+    return await this.renderBindingStatus(binding, event, navigation);
+  }
+
   private async navigationSnapshotWithThreadNameFromEvent(
     event: AgentEvent,
   ): Promise<NavigationSnapshot> {
@@ -13398,30 +14041,102 @@ export class MessagingController {
     binding: MessagingBindingRecord;
     event?: MessagingInboundEvent;
     navigation: NavigationSnapshot;
+    origin?: ActiveAgentMessagingOrigin;
     turnId: string;
   }): void {
-    if (
-      !params.event ||
-      !isLiveMessagingToolOriginBinding(params.binding, params.navigation)
-    ) {
+    const origin = params.origin ?? (
+      params.event
+      && isLiveMessagingToolOriginBinding(params.binding, params.navigation)
+        ? {
+            binding: isDefaultAgentRouteBinding(params.binding)
+              ? undefined
+              : params.binding,
+            deliveryBinding: isDefaultAgentRouteBinding(params.binding)
+              ? params.binding
+              : undefined,
+            event: params.event,
+          }
+        : undefined
+    );
+    if (!origin) {
       return;
     }
-    this.activeAgentMessagingOriginsByTurnKey.set(
-      agentMessagingTurnKey(
-        params.binding.backend,
-        params.binding.threadId,
-        params.turnId,
-      ),
-      {
-        binding: isDefaultAgentRouteBinding(params.binding)
-          ? undefined
-          : params.binding,
-        deliveryBinding: isDefaultAgentRouteBinding(params.binding)
-          ? params.binding
-          : undefined,
-        event: params.event,
-      },
+    const turnKey = agentMessagingTurnKey(
+      params.binding.backend,
+      params.binding.threadId,
+      params.turnId,
     );
+    this.activeAgentMessagingOriginsByTurnKey.set(
+      turnKey,
+      origin,
+    );
+    if (origin.privateReplyContinuationBindingId) {
+      rememberBoundedKey(this.privateReplyCompletionTurnKeys, turnKey);
+    }
+    if (
+      origin.privateResponseRequested
+      || requestsExplicitPrivateResponse(origin.event)
+    ) {
+      rememberBoundedKey(this.privateResponseFallbackTurnKeys, turnKey);
+    }
+  }
+
+  private async buildAgentMessagingOrigin(params: {
+    binding: MessagingBindingRecord;
+    event?: MessagingInboundEvent;
+    navigation: NavigationSnapshot;
+    privateResponseRequested?: boolean;
+  }): Promise<ActiveAgentMessagingOrigin | undefined> {
+    if (
+      !params.event
+      || !isLiveMessagingToolOriginBinding(params.binding, params.navigation)
+    ) {
+      return undefined;
+    }
+    const continuation = params.binding.privateReplyContinuation;
+    if (continuation && continuation.expiresAt > this.now()) {
+      return {
+        binding: params.binding,
+        deliveryBinding: await this.resolvePrivateReplySourceBinding(
+          continuation.source,
+        ),
+        event: params.event,
+        privateReplyContinuationBindingId: params.binding.id,
+        privateResponseRequested: params.privateResponseRequested,
+      };
+    }
+    return {
+      binding: isDefaultAgentRouteBinding(params.binding)
+        ? undefined
+        : params.binding,
+      deliveryBinding: isDefaultAgentRouteBinding(params.binding)
+        ? params.binding
+        : undefined,
+      event: params.event,
+      privateResponseRequested: params.privateResponseRequested,
+    };
+  }
+
+  private async resolvePrivateReplySourceBinding(
+    source: MessagingPrivateReplySource,
+  ): Promise<MessagingBindingRecord> {
+    const stored = await this.options.store.getBinding(source.id);
+    if (
+      stored
+      && !stored.revokedAt
+      && stored.backend === source.backend
+      && stored.threadId === source.threadId
+    ) {
+      return stored;
+    }
+    return {
+      ...source,
+      channel: structuredClone(source.channel),
+      routingState: source.routingState
+        ? structuredClone(source.routingState)
+        : undefined,
+      statusPresentation: "on_demand",
+    };
   }
 
   private forgetAgentMessagingOrigin(
@@ -13429,39 +14144,105 @@ export class MessagingController {
     threadId: ThreadIdentifier,
     turnId: string,
   ): void {
-    this.activeAgentMessagingOriginsByTurnKey.delete(
-      agentMessagingTurnKey(backend, threadId, turnId),
-    );
+    const turnKey = agentMessagingTurnKey(backend, threadId, turnId);
+    this.activeAgentMessagingOriginsByTurnKey.delete(turnKey);
     this.pdfAttachmentStore.releaseTurn({ backend, threadId, turnId });
+  }
+
+  private isTerminalPrivateResponseTurn(
+    backend: AppServerBackendKind,
+    threadId: ThreadIdentifier,
+    turnId: string | undefined,
+  ): boolean {
+    return Boolean(
+      turnId
+      && this.terminalPrivateResponseTurnKeys.has(
+        agentMessagingTurnKey(backend, threadId, turnId),
+      ),
+    );
+  }
+
+  private isPrivateResponseFallbackTurn(
+    backend: AppServerBackendKind,
+    threadId: ThreadIdentifier,
+    turnId: string | undefined,
+  ): boolean {
+    return Boolean(
+      turnId
+      && this.privateResponseFallbackTurnKeys.has(
+        agentMessagingTurnKey(backend, threadId, turnId),
+      ),
+    );
+  }
+
+  private isPrivateReplyCompletionTurn(
+    backend: AppServerBackendKind,
+    threadId: ThreadIdentifier,
+    turnId: string | undefined,
+  ): boolean {
+    if (!turnId) {
+      return false;
+    }
+    if (
+      this.privateReplyCompletionTurnKeys.has(
+        agentMessagingTurnKey(backend, threadId, turnId),
+      )
+    ) {
+      return true;
+    }
+    return Boolean(
+      this.startingAgentMessagingOriginsByThreadKey.get(
+        agentMessagingThreadKey(backend, threadId),
+      )?.privateReplyContinuationBindingId,
+    );
+  }
+
+  private async completePrivateReplyContinuation(
+    bindingId: string,
+  ): Promise<void> {
+    const binding = await this.options.store.getBinding(bindingId);
+    if (!binding || binding.revokedAt || !binding.privateReplyContinuation) {
+      return;
+    }
+    await this.options.store.revokeBinding({
+      bindingId,
+      revokedAt: this.now(),
+    });
+    this.notifyBindingChanged("private-reply-completed");
   }
 
   private rememberQueuedAgentMessagingOrigin(params: {
     binding: MessagingBindingRecord;
     event?: MessagingInboundEvent;
     navigation: NavigationSnapshot;
+    origin?: ActiveAgentMessagingOrigin;
     queueEntryId: string;
   }): void {
-    if (
-      !params.event
-      || !isLiveMessagingToolOriginBinding(params.binding, params.navigation)
-    ) {
+    const origin = params.origin ?? (
+      params.event
+      && isLiveMessagingToolOriginBinding(params.binding, params.navigation)
+        ? {
+            binding: isDefaultAgentRouteBinding(params.binding)
+              ? undefined
+              : params.binding,
+            deliveryBinding: isDefaultAgentRouteBinding(params.binding)
+              ? params.binding
+              : undefined,
+            event: params.event,
+          }
+        : undefined
+    );
+    if (!origin) {
       return;
     }
+    const queueKey = agentMessagingQueueKey(
+      params.binding.backend,
+      params.binding.threadId,
+      params.queueEntryId,
+    );
     this.queuedAgentMessagingOriginsByQueueKey.set(
-      agentMessagingQueueKey(
-        params.binding.backend,
-        params.binding.threadId,
-        params.queueEntryId,
-      ),
-      {
-        binding: isDefaultAgentRouteBinding(params.binding)
-          ? undefined
-          : params.binding,
-        deliveryBinding: isDefaultAgentRouteBinding(params.binding)
-          ? params.binding
-          : undefined,
-        event: params.event,
-      },
+      queueKey,
+      origin,
     );
   }
 
@@ -13484,14 +14265,24 @@ export class MessagingController {
     }
     if (params.update.status === "started" && params.update.turnId) {
       this.queuedAgentMessagingOriginsByQueueKey.delete(queueKey);
+      const turnKey = agentMessagingTurnKey(
+        params.backend,
+        params.threadId,
+        params.update.turnId,
+      );
       this.activeAgentMessagingOriginsByTurnKey.set(
-        agentMessagingTurnKey(
-          params.backend,
-          params.threadId,
-          params.update.turnId,
-        ),
+        turnKey,
         origin,
       );
+      if (origin.privateReplyContinuationBindingId) {
+        rememberBoundedKey(this.privateReplyCompletionTurnKeys, turnKey);
+      }
+      if (
+        origin.privateResponseRequested
+        || requestsExplicitPrivateResponse(origin.event)
+      ) {
+        rememberBoundedKey(this.privateResponseFallbackTurnKeys, turnKey);
+      }
       const activeTurn: MessagingActiveTurnSummary = {
         turnId: params.update.turnId,
         status: "working",
@@ -13543,10 +14334,26 @@ export class MessagingController {
     persistentBindings: MessagingBindingRecord[],
   ): MessagingBindingRecord[] {
     if (!turnId) {
+      const startingOrigin = this.startingAgentMessagingOriginsByThreadKey.get(
+        agentMessagingThreadKey(backend, threadId),
+      );
+      const startingDeliveryBinding = startingOrigin?.deliveryBinding
+        ?? startingOrigin?.binding;
+      if (
+        startingDeliveryBinding
+        && this.isChannelInScope(startingDeliveryBinding.channel)
+      ) {
+        const persistedOrigin = persistentBindings.find(
+          (binding) => binding.id === startingDeliveryBinding.id,
+        );
+        return [persistedOrigin ?? startingDeliveryBinding];
+      }
       return persistentBindings;
     }
     const origin = this.activeAgentMessagingOriginsByTurnKey.get(
       agentMessagingTurnKey(backend, threadId, turnId),
+    ) ?? this.startingAgentMessagingOriginsByThreadKey.get(
+      agentMessagingThreadKey(backend, threadId),
     );
     const deliveryBinding = origin?.deliveryBinding ?? origin?.binding;
     if (!origin || !deliveryBinding || !this.isChannelInScope(deliveryBinding.channel)) {
@@ -13676,6 +14483,32 @@ export class MessagingController {
     );
   }
 
+  private async clearTerminalPrivateResponseActivity(
+    binding: MessagingBindingRecord,
+    turnId: string,
+  ): Promise<void> {
+    try {
+      await this.signalTurnActivity(
+        binding,
+        {
+          turnId,
+          status: "completed",
+          updatedAt: this.now(),
+        },
+        {
+          force: true,
+          reason: "terminal_private_response",
+        },
+      );
+    } catch (error) {
+      this.logger.debug?.("messaging terminal private activity cleanup failed", {
+        bindingId: binding.id,
+        error: error instanceof Error ? error.message : String(error),
+        turnId,
+      });
+    }
+  }
+
   private logBindingTurnStateChange(
     binding: MessagingBindingRecord,
     previousTurn: MessagingActiveTurnSummary | undefined,
@@ -13800,6 +14633,8 @@ export class MessagingController {
     target: {
       backend: AppServerBackendKind;
       federatedThread?: FederatedThreadRef;
+      recordTransition?: boolean;
+      statusPresentation?: MessagingBindingRecord["statusPresentation"];
       threadId: ThreadIdentifier;
       targetKind?: MessagingBindingRecord["targetKind"];
     },
@@ -13820,6 +14655,7 @@ export class MessagingController {
       federatedThread: target.federatedThread,
       authorizedActorIds: [event.actor.platformUserId],
       routingState: event.routingState,
+      statusPresentation: target.statusPresentation,
       createdAt: now,
       updatedAt: now,
       displayName: event.actor.displayName ?? event.actor.username,
@@ -13841,6 +14677,7 @@ export class MessagingController {
     }
     const upserted = await this.options.store.upsertBinding(binding);
     if (
+      target.recordTransition !== false &&
       previousBinding &&
       (previousBinding.backend !== upserted.backend ||
         previousBinding.threadId !== upserted.threadId ||
@@ -13852,12 +14689,15 @@ export class MessagingController {
       await this.recordBindingTransition("unbound", previousBinding, now);
     }
     if (
-      !previousBinding ||
-      previousBinding.backend !== upserted.backend ||
-      previousBinding.threadId !== upserted.threadId ||
-      !federationRefsMatch(
-        previousBinding.federatedThread,
-        upserted.federatedThread,
+      target.recordTransition !== false &&
+      (
+        !previousBinding ||
+        previousBinding.backend !== upserted.backend ||
+        previousBinding.threadId !== upserted.threadId ||
+        !federationRefsMatch(
+          previousBinding.federatedThread,
+          upserted.federatedThread,
+        )
       )
     ) {
       await this.recordBindingTransition("bound", upserted, now);
@@ -14098,7 +14938,15 @@ export class MessagingController {
             slowMode: admission.slowMode,
           });
           this.notifyDeliveryBudgetEvent(budgetEvent);
-          await (this.options.sleepUntil ?? sleepUntil)(admission.retryAt, this.now);
+          const delay = (this.options.sleepUntil ?? sleepUntil)(
+            admission.retryAt,
+            this.now,
+          );
+          if (guard?.whenCancelled) {
+            await Promise.race([delay, guard.whenCancelled]);
+          } else {
+            await delay;
+          }
           if (guard?.isCancelled()) {
             return cancelledResult();
           }
@@ -14146,6 +14994,10 @@ export class MessagingController {
         return cancelledResult();
       }
       const result = await this.options.adapter.deliver(routedIntent);
+      if (guard?.isCancelled()) {
+        await guard.onCancelledDelivery?.(result);
+        return cancelledResult();
+      }
       this.logDeliveryResult(routedIntent, binding, result);
       if (this.deliveryBudget && result.rateLimit) {
         scope = result.rateLimit.scope;
@@ -14443,9 +15295,13 @@ export class MessagingController {
     delivery: MessagingToolUpdatePolicyDelivery,
     knownBinding?: MessagingBindingRecord,
   ): Promise<void> {
-    const isCancelled = () =>
+    const cancellationKey = this.turnProseKey(
+      delivery.bindingId,
+      delivery.turnId,
+    );
+    const isTaskMonitorCancelled = () =>
       this.isTaskMonitorTurnComplete(delivery.bindingId, delivery.turnId);
-    if (isCancelled()) {
+    if (isTaskMonitorCancelled()) {
       return;
     }
     const binding =
@@ -14478,7 +15334,59 @@ export class MessagingController {
             id: this.newIntentId("tool-update-batch"),
           });
     this.markProseActivitiesDelivered({ ...delivery, activities });
-    await this.deliver(intent, binding, undefined, { isCancelled });
+    const cancellation = this.ensureWorkingUpdateCancellationSignal(
+      binding,
+      delivery.turnId,
+    );
+    const guardedIsCancelled = () =>
+      isTaskMonitorCancelled() || cancellation.isCancelled();
+    const deliveryPromise = (async () => {
+      const result = await this.deliver(intent, binding, undefined, {
+        isCancelled: guardedIsCancelled,
+        whenCancelled: cancellation.whenCancelled,
+        onCancelledDelivery: async (cancelledResult) => {
+          if (
+            cancelledResult.surface
+            && isVisibleAssistantStreamDelivery(cancelledResult)
+          ) {
+            const dismissed = await this.dismissTerminalPrivateResponseSurface(
+              binding,
+              delivery.turnId,
+              cancelledResult.surface,
+            );
+            if (!dismissed) {
+              this.workingUpdateCancellationFailures.add(cancellationKey);
+            }
+          }
+        },
+      });
+      if (
+        !guardedIsCancelled()
+        && result.surface
+        && isVisibleAssistantStreamDelivery(result)
+      ) {
+        let surfaces = this.workingUpdateSurfaces.get(cancellationKey);
+        if (!surfaces) {
+          surfaces = new Map();
+          this.workingUpdateSurfaces.set(cancellationKey, surfaces);
+        }
+        surfaces.set(messagingSurfaceKey(result.surface), result.surface);
+      }
+    })();
+    let deliveries = this.workingUpdateDeliveries.get(cancellationKey);
+    if (!deliveries) {
+      deliveries = new Set();
+      this.workingUpdateDeliveries.set(cancellationKey, deliveries);
+    }
+    deliveries.add(deliveryPromise);
+    try {
+      await deliveryPromise;
+    } finally {
+      deliveries.delete(deliveryPromise);
+      if (deliveries.size === 0) {
+        this.workingUpdateDeliveries.delete(cancellationKey);
+      }
+    }
   }
 
   private filterUndeliveredProseActivities(
@@ -14535,6 +15443,49 @@ export class MessagingController {
     if (!result.surface) {
       state.deliveredIds.delete(latest.activityId);
     }
+  }
+
+  private async deliverPrivateResponseFallback(params: {
+    binding: MessagingBindingRecord;
+    event: AgentEvent;
+    text: string;
+    turnId: string;
+  }): Promise<void> {
+    const turnKey = agentMessagingTurnKey(
+      params.event.backend,
+      params.binding.threadId,
+      params.turnId,
+    );
+    if (this.attemptedPrivateResponseFallbackTurnKeys.has(turnKey)) {
+      return;
+    }
+    rememberBoundedKey(this.attemptedPrivateResponseFallbackTurnKeys, turnKey);
+
+    const response = await this.sendPrivateResponseFromAgentMessagingOrigin({
+      operation: "send_private_response",
+      context: {
+        backend: params.event.backend,
+        threadId: params.binding.threadId,
+        turnId: params.turnId,
+      },
+      args: { text: params.text },
+    });
+    if (response.ok) {
+      return;
+    }
+    rememberBoundedKey(this.privateResponseFallbackTurnKeys, turnKey);
+
+    await this.deliver(
+      buildErrorIntent({
+        id: this.newIntentId("private-response-fallback-failed"),
+        createdAt: this.now(),
+        title: "Private response not delivered",
+        body:
+          "PwrAgent withheld the response from this conversation because it could not confirm private delivery. Try the request again or DM the bot directly.",
+        recoverable: true,
+      }),
+      params.binding,
+    );
   }
 
   private async attachThreadHereFromAgentMessagingOrigin(
@@ -14674,6 +15625,270 @@ export class MessagingController {
           ? "created_and_attached"
           : "attached",
         placement: resolvedPlacement.placement,
+      },
+    };
+  }
+
+  private async sendPrivateResponseFromAgentMessagingOrigin(
+    request: Extract<
+      PwrAgentMessagingRequest,
+      { operation: "send_private_response" }
+    >,
+  ): Promise<PwrAgentMessagingResponse> {
+    const text = typeof request.args?.text === "string"
+      ? request.args.text
+      : "";
+    const awaitReply = request.args?.awaitReply === true;
+    const replyInstructions = typeof request.args?.replyInstructions === "string"
+      ? request.args.replyInstructions.trim()
+      : "";
+    if (!text.trim() || text.length > 40_000) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message:
+            "send_private_response requires text between 1 and 40,000 characters.",
+        },
+      };
+    }
+    if (
+      awaitReply
+      && (!replyInstructions || replyInstructions.length > 4_000)
+    ) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message:
+            "send_private_response requires replyInstructions between 1 and 4,000 characters when awaitReply is true.",
+        },
+      };
+    }
+    if (!request.context.turnId) {
+      return {
+        ok: false,
+        error: {
+          code: "not_found",
+          message:
+            "Private responses require the active messaging turn that identified the requesting user.",
+        },
+      };
+    }
+    const turnKey = agentMessagingTurnKey(
+      request.context.backend,
+      request.context.threadId,
+      request.context.turnId,
+    );
+    this.privateResponseFallbackTurnKeys.delete(turnKey);
+    rememberBoundedKey(this.attemptedPrivateResponseFallbackTurnKeys, turnKey);
+    const origin = await this.resolveAgentMessagingOrigin(request.context);
+    if (!origin.ok) {
+      return origin;
+    }
+    if (!this.options.adapter.resolvePrivateConversation) {
+      return {
+        ok: false,
+        error: {
+          code: "unsupported_operation",
+          message:
+            "This messaging provider cannot start a private response to the requesting user.",
+        },
+      };
+    }
+
+    let privateConversation: MessagingPrivateConversationResolveResult;
+    try {
+      privateConversation = await this.options.adapter.resolvePrivateConversation({
+        actor: origin.origin.event.actor,
+        ...(awaitReply ? { replyContinuationRequired: true } : {}),
+        source: origin.origin.event.channel,
+        routingState: origin.origin.event.routingState,
+      });
+    } catch (error) {
+      return {
+        ok: false,
+        error: {
+          code: "internal_error",
+          message:
+            error instanceof Error
+              ? `Could not resolve a private conversation: ${error.message}`
+              : "Could not resolve a private conversation.",
+        },
+      };
+    }
+    if (
+      privateConversation.outcome !== "resolved"
+      || !privateConversation.conversation
+      || privateConversation.channel !== origin.origin.event.channel.channel
+    ) {
+      return {
+        ok: false,
+        error: {
+          code: privateConversation.outcome === "unsupported"
+            ? "unsupported_operation"
+            : "internal_error",
+          message:
+            privateConversation.errorMessage
+            ?? "The messaging provider could not resolve a private conversation.",
+        },
+      };
+    }
+
+    const privateEvent: MessagingInboundEvent = {
+      ...origin.origin.event,
+      id: `${origin.origin.event.id}:private-response:${this.now()}`,
+      channel: {
+        channel: privateConversation.channel,
+        conversation: privateConversation.conversation,
+      },
+      receivedAt: this.now(),
+      routingState: privateConversation.routingState,
+    };
+    const sourceBinding = origin.origin.deliveryBinding ?? origin.origin.binding;
+    const sourceThread = sourceBinding
+      ? await this.resolveBoundThreadSummary(sourceBinding)
+      : undefined;
+    const attributionLabel = sourceThread?.agentName
+      ?? sourceThread?.title
+      ?? "PwrAgent Agent";
+    const result = await this.deliver(
+      {
+        id: this.newIntentId("private-response"),
+        kind: "message",
+        bindingId: sourceBinding?.id,
+        createdAt: this.now(),
+        role: "assistant",
+        attribution: {
+          label: attributionLabel,
+          hint: awaitReply
+            ? "Private Request · Reply in Thread to Respond to this Agent; Completion Returns to the Original Conversation"
+            : "Private Request · Reply in Thread to Respond to this Agent",
+        },
+        parts: [{ type: "text", text, markdown: "markdown" }],
+      },
+      undefined,
+      privateEvent,
+    );
+    if (!isVisibleAssistantStreamDelivery(result)) {
+      return {
+        ok: false,
+        error: {
+          code: result.outcome === "unsupported"
+            ? "unsupported_operation"
+            : "internal_error",
+          message:
+            result.errorMessage
+            ?? "The private response was not delivered, so the source response was not suppressed.",
+        },
+      };
+    }
+
+    rememberBoundedKey(this.terminalPrivateResponseTurnKeys, turnKey);
+    let sourceStreamsCancelled = true;
+    let sourceWorkingUpdatesCancelled = true;
+    if (sourceBinding) {
+      this.toolUpdatePolicy.flush({
+        bindingId: sourceBinding.id,
+        clear: true,
+        turnId: request.context.turnId,
+      });
+      this.clearTurnProse(sourceBinding.id, request.context.turnId);
+      [sourceStreamsCancelled, sourceWorkingUpdatesCancelled] = await Promise.all([
+        this.cancelAssistantStreamsForTurn(
+          sourceBinding,
+          request.context.turnId,
+        ),
+        this.cancelWorkingUpdatesForTurn(
+          sourceBinding,
+          request.context.turnId,
+        ),
+      ]);
+    }
+    if (!sourceStreamsCancelled || !sourceWorkingUpdatesCancelled) {
+      return {
+        ok: false,
+        error: {
+          code: "internal_error",
+          message:
+            "The private response was delivered, but existing source output could not be fully retracted. Further source output remains suppressed.",
+        },
+      };
+    }
+    if (sourceBinding) {
+      await this.clearTerminalPrivateResponseActivity(
+        sourceBinding,
+        request.context.turnId,
+      );
+    }
+    if (awaitReply && (!sourceBinding || !result.continuation)) {
+      return {
+        ok: false,
+        error: {
+          code: "unsupported_operation",
+          message:
+            "The private response was delivered, but this provider did not return a reply thread for the requested continuation. Further source output remains suppressed.",
+        },
+      };
+    }
+    if (sourceBinding && result.continuation) {
+      try {
+        let continuationBinding = await this.bindChannelToThread(
+          {
+            ...privateEvent,
+            id: `${privateEvent.id}:continuation`,
+            channel: result.continuation.channel,
+            routingState: result.continuation.routingState,
+          },
+          {
+            backend: request.context.backend,
+            recordTransition: false,
+            statusPresentation: "on_demand",
+            threadId: request.context.threadId,
+            targetKind: sourceBinding.targetKind ?? "agent_thread",
+          },
+        );
+        if (awaitReply) {
+          continuationBinding = await this.options.store.upsertBinding({
+            ...continuationBinding,
+            privateReplyContinuation: {
+              createdAt: this.now(),
+              expiresAt: this.now() + PRIVATE_REPLY_CONTINUATION_TTL_MS,
+              instructions: replyInstructions,
+              source: privateReplySourceFromBinding(sourceBinding),
+            },
+            updatedAt: this.now(),
+          });
+          this.notifyBindingChanged("private-reply-awaiting");
+        }
+        await this.clearTerminalPrivateResponseActivity(
+          continuationBinding,
+          request.context.turnId,
+        );
+      } catch (error) {
+        this.logger.warn?.("messaging private response continuation bind failed", {
+          backend: request.context.backend,
+          error: error instanceof Error ? error.message : String(error),
+          threadId: request.context.threadId,
+        });
+        return {
+          ok: false,
+          error: {
+            code: "internal_error",
+            message:
+              "The private response was delivered, but replies to it could not be routed back to this Agent. Further source output remains suppressed.",
+          },
+        };
+      }
+    }
+    return {
+      ok: true,
+      data: {
+        awaitingReply: awaitReply,
+        channel: result.channel,
+        deliveredAt: result.deliveredAt,
+        outcome: "delivered",
+        recipient: summarizeMessagingActor(origin.origin.event.actor),
       },
     };
   }
@@ -17182,6 +18397,13 @@ function agentMessagingTurnKey(
   return `${backend}:${threadId}:${turnId}`;
 }
 
+function agentMessagingThreadKey(
+  backend: AppServerBackendKind,
+  threadId: ThreadIdentifier,
+): string {
+  return `${backend}:${threadId}`;
+}
+
 function agentMessagingQueueKey(
   backend: AppServerBackendKind,
   threadId: ThreadIdentifier,
@@ -17192,6 +18414,26 @@ function agentMessagingQueueKey(
 
 function isDefaultAgentRouteBinding(binding: MessagingBindingRecord): boolean {
   return binding.id.startsWith("default-agent-route:");
+}
+
+function privateReplySourceFromBinding(
+  binding: MessagingBindingRecord,
+): MessagingPrivateReplySource {
+  return {
+    authorizedActorIds: [...binding.authorizedActorIds],
+    backend: binding.backend,
+    channel: structuredClone(binding.channel),
+    createdAt: binding.createdAt,
+    displayName: binding.displayName,
+    federatedThread: binding.federatedThread,
+    id: binding.id,
+    routingState: binding.routingState
+      ? structuredClone(binding.routingState)
+      : undefined,
+    targetKind: binding.targetKind,
+    threadId: binding.threadId,
+    updatedAt: binding.updatedAt,
+  };
 }
 
 function summarizeMessagingConversation(
@@ -17209,7 +18451,7 @@ function summarizeMessagingConversation(
 
 function summarizeMessagingActor(
   actor: MessagingInboundEvent["actor"],
-): PwrAgentMessagingLocationSummary["actor"] {
+): NonNullable<PwrAgentMessagingLocationSummary["actor"]> {
   return {
     platformUserId: actor.platformUserId,
     displayName: actor.displayName,
@@ -17986,6 +19228,21 @@ function isVisibleAssistantStreamDelivery(result: MessagingDeliveryResult): bool
   );
 }
 
+function messagingSurfaceKey(surface: MessagingSurfaceRef): string {
+  return `${surface.channel}\0${surface.id}`;
+}
+
+function isSameMessagingSurface(
+  left: MessagingSurfaceRef,
+  right: MessagingSurfaceRef | undefined,
+): boolean {
+  return Boolean(
+    right
+    && left.channel === right.channel
+    && left.id === right.id,
+  );
+}
+
 function shouldRecordOutboundActivity(
   intent: MessagingSurfaceIntent,
   result: MessagingDeliveryResult,
@@ -18693,6 +19950,34 @@ function messageOriginForInboundEvent(
       },
     },
   };
+}
+
+function requestsExplicitPrivateResponse(
+  event: MessagingInboundEvent | MessagingTurnInputEvent,
+): boolean {
+  if (!("text" in event) || typeof event.text !== "string") {
+    return false;
+  }
+  const text = event.text.trim();
+  if (!text) {
+    return false;
+  }
+  const request = EXPLICIT_PRIVATE_RESPONSE_REQUEST_PATTERN.exec(text);
+  if (!request) {
+    return false;
+  }
+  const prefix = text.slice(0, request.index);
+  const clauseStart = Math.max(
+    prefix.lastIndexOf("."),
+    prefix.lastIndexOf("!"),
+    prefix.lastIndexOf("?"),
+    prefix.lastIndexOf(";"),
+    prefix.lastIndexOf(","),
+    prefix.lastIndexOf("\n"),
+  );
+  return !NEGATED_PRIVATE_RESPONSE_PREFIX_PATTERN.test(
+    prefix.slice(clauseStart + 1),
+  );
 }
 
 function describeConversation(

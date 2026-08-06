@@ -300,6 +300,12 @@ export type MessagingConversationKind = "dm" | "channel" | "thread" | "topic";
 export type MessagingConversationRef = {
   id: string;
   kind: MessagingConversationKind;
+  /**
+   * True when this conversation is a 1:1 direct message or a child thread
+   * inside one. Thread normalization must not discard the access and ambient
+   * reply semantics inherited from its containing direct conversation.
+   */
+  isDirectMessage?: boolean;
   parentId?: string;
   /**
    * Normalized containing conversation used for scope inheritance. This is
@@ -436,6 +442,27 @@ export type MessagingManagedConversationCreateResult = {
   conversation?: MessagingConversationRef;
   errorMessage?: string;
   outcome: "created" | "unsupported" | "failed";
+  routingState?: MessagingAdapterState;
+  updatedAt: number;
+};
+
+export type MessagingPrivateConversationResolveRequest = {
+  actor: MessagingActorIdentity;
+  /**
+   * True when delivery must produce a conversation where this actor can reply.
+   * Providers reject resolution when their inbound policy would deny that
+   * continuation instead of promising an unusable reply route.
+   */
+  replyContinuationRequired?: boolean;
+  source: MessagingChannelRef;
+  routingState?: MessagingAdapterState;
+};
+
+export type MessagingPrivateConversationResolveResult = {
+  channel: MessagingChannelKind;
+  conversation?: MessagingConversationRef;
+  errorMessage?: string;
+  outcome: "resolved" | "unsupported" | "failed";
   routingState?: MessagingAdapterState;
   updatedAt: number;
 };
@@ -788,6 +815,10 @@ export type MessagingBaseSurfaceIntent = {
 
 export type MessagingMessageIntent = MessagingBaseSurfaceIntent & {
   kind: "message";
+  attribution?: {
+    label: string;
+    hint?: string;
+  };
   parts: MessagingContentPart[];
   role?: "assistant" | "user" | "system";
 };
@@ -1132,6 +1163,15 @@ export type MessagingDeliveryResult = {
   outcome: MessagingDeliveryOutcome;
   channel: MessagingChannelKind;
   surface?: MessagingSurfaceRef;
+  /**
+   * Native conversation where a reply to the delivered surface arrives.
+   * Providers populate this only when they can identify a stable reply route
+   * without workflow code parsing opaque adapter state.
+   */
+  continuation?: {
+    channel: MessagingChannelRef;
+    routingState?: MessagingAdapterState;
+  };
   errorMessage?: string;
   /**
    * Structured provider rate-limit feedback for this delivery attempt.
@@ -1452,6 +1492,27 @@ export type MessagingPendingSkillSelection = {
   shortDescription?: string;
 };
 
+export type MessagingPrivateReplySource = {
+  authorizedActorIds: string[];
+  backend: AppServerBackendKind;
+  channel: MessagingChannelRef;
+  createdAt: number;
+  displayName?: string;
+  federatedThread?: FederatedThreadRef;
+  id: string;
+  routingState?: MessagingAdapterState;
+  targetKind?: MessagingBindingTargetKind;
+  threadId: ThreadIdentifier;
+  updatedAt: number;
+};
+
+export type MessagingPrivateReplyContinuation = {
+  createdAt: number;
+  expiresAt: number;
+  instructions: string;
+  source: MessagingPrivateReplySource;
+};
+
 export type MessagingBindingRecord = {
   id: string;
   channel: MessagingChannelRef;
@@ -1474,7 +1535,19 @@ export type MessagingBindingRecord = {
   monitorSurface?: MessagingSurfaceRef;
   pinnedStatusSurface?: MessagingSurfaceRef;
   pendingSkillSelection?: MessagingPendingSkillSelection;
+  /**
+   * Restart-safe, one-shot route created when an Agent asks for a private
+   * reply. The private response is supplied to the Agent, while its final
+   * completion is delivered through `source`; the binding is then revoked.
+   */
+  privateReplyContinuation?: MessagingPrivateReplyContinuation;
   preferences?: MessagingBindingPreferences;
+  /**
+   * `on_demand` keeps implicitly-created bindings quiet until the user asks
+   * for a status surface. Once a surface exists, ordinary refreshes may update
+   * it. Omitted bindings retain the normal automatic status-card behavior.
+   */
+  statusPresentation?: "automatic" | "on_demand";
   statusSurface?: MessagingSurfaceRef;
   threadDisplay?: MessagingThreadDisplaySummary;
 };

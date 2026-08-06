@@ -139,6 +139,46 @@ stores the run artifact for the assigned Agent's dynamic inspection tools.
 deliver it relative to the source inbound event. The provider still owns final
 platform translation, including source-thread targeting and broadcast flags.
 
+Agent turns can also use the scoped `send_private_response` messaging tool for
+an explicitly private terminal reply. The controller resolves the active
+turn's inbound actor, asks only that provider's optional
+`resolvePrivateConversation` hook for a normalized `dm` target, and sends the
+message through the ordinary intent/delivery-budget path. Only a successful
+private delivery suppresses the source-conversation final response. Provider
+user IDs and DM routing remain validated and opaque inside the adapter; the
+Agent cannot select an arbitrary recipient.
+
+Because Codex fixes a thread's dynamic-tool catalog at thread creation, the
+controller also recognizes explicit private-response requests as a compatibility
+path for older threads. It suppresses source output from the start of the turn
+and privately delivers the final answer to the recorded actor. A failed fallback
+withholds that answer and emits only a generic source error; an explicit tool
+attempt keeps the tool's normal success/failure semantics.
+
+Private messages carry controller-generated Agent attribution rather than a
+provider-specific sender-name override. When delivery returns a normalized
+reply continuation, the controller persists that exact native thread as a
+binding to the originating Agent. Thread replies then route back to that Agent;
+top-level DMs deliberately keep their normal default-Agent routing instead of
+using ambiguous "last Agent wins" state.
+
+The continuation binding is internal routing state: creating it does not emit a
+user-facing bound/unbound transcript transition, and its status presentation is
+on demand so the first reply does not insert a full binding card. Its normalized
+conversation retains whether it lives inside a 1:1 DM so replies bypass
+shared-channel authorization and mention-only response policy.
+If the Agent sets `awaitReply`, that binding becomes a 24-hour one-shot callback
+route. Its stored completion instructions are prepended to the private reply,
+working and streaming output are withheld, and the final answer is delivered
+back to the original source binding. Admitting the first reply revokes the
+callback binding before another reply can queue against it, while the admitted
+turn retains the captured return route until its final delivery completes.
+Terminal private delivery also clears provider activity on both the source and
+continuation surfaces and
+suppresses later work events from re-arming that activity. Before it reports
+success, the controller cancels queued and in-flight source streams, prose, and
+tool updates and retracts any surface returned after cancellation.
+
 ## 1:1 controller:adapter mapping
 
 Each adapter gets its own controller. Backend events broadcast to all controllers in parallel; each one decides whether the event is relevant to any of its bindings and renders to its own adapter.

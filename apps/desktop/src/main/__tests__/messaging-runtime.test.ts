@@ -530,6 +530,51 @@ describe("DesktopMessagingRuntime", () => {
     );
   });
 
+  it("dispatches ambient replies in a native thread inside a 1:1 DM", async () => {
+    const { adapter, bridge } = await startMentionOnlyRuntime({
+      automationInboundHandler: vi.fn(async () => false),
+      automationInboundMatches: vi.fn(() => false),
+    });
+    const { getDesktopMessagingStore } = await import(
+      "../messaging/desktop-messaging-store"
+    );
+    const channel = {
+      channel: "telegram" as const,
+      conversation: {
+        id: "dm-1",
+        isDirectMessage: true,
+        kind: "thread" as const,
+        parentConversationId: "dm-1",
+        parentId: "private-response-1",
+      },
+    };
+    await getDesktopMessagingStore().upsertBinding({
+      id: "binding:telegram:thread:private-response-1:dm-1:codex:thread-1",
+      authorizedActorIds: ["user-1"],
+      backend: "codex",
+      channel,
+      createdAt: 1000,
+      targetKind: "agent_thread",
+      threadId: "thread-1",
+      updatedAt: 1000,
+    });
+
+    await adapter.listener?.({
+      ...ambientEvent,
+      channel,
+      id: "dm-thread-reply",
+      text: "continue without a mention",
+    });
+    await waitFor(() => vi.mocked(bridge.startTurn).mock.calls.length > 0);
+
+    expect(bridge.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: "thread-1",
+        input: [{ type: "text", text: "continue without a mention" }],
+      }),
+    );
+  });
+
   it("does not enforce response modes without bot-mention reporting", async () => {
     const { adapter, bridge } = await startMentionOnlyRuntime({
       automationInboundHandler: vi.fn(async () => false),

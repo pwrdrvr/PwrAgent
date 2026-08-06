@@ -64,6 +64,8 @@ function fakeApi(spies: {
   deleteErrors?: Error[];
   publishedHomes?: Array<{ userId: string; view: SlackHomeView }>;
   posted?: unknown[];
+  postedChannel?: string;
+  postedTimestamps?: string[];
   replies?: Record<string, string>;
   updated?: unknown[];
   users?: Record<string, { displayName?: string; realName?: string; username?: string }>;
@@ -104,7 +106,10 @@ function fakeApi(spies: {
     filesInfo: async () => undefined,
     postMessage: async (params) => {
       spies.posted?.push(params);
-      return { channel: params.channel, ts: "1712023032.123456" };
+      return {
+        channel: spies.postedChannel ?? params.channel,
+        ts: spies.postedTimestamps?.shift() ?? "1712023032.123456",
+      };
     },
     publishHomeView: async (params) => {
       spies.publishedHomes?.push(params);
@@ -421,6 +426,190 @@ describe("SlackAdapter", () => {
         thread_ts: "1712023030.000000",
       }),
     ]);
+  });
+
+  it("resolves and delivers a private response to an inbound Slack actor", async () => {
+    const posted: unknown[] = [];
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({ posted, postedChannel: "D012PRIVATE0" }),
+      socketClient: fakeSocket(),
+      now: () => 1_700_000_000_000,
+    });
+    const source = {
+      channel: "slack" as const,
+      conversation: {
+        id: "C012ABCDEF0",
+        kind: "channel" as const,
+        title: "signals-chat",
+        workspaceId: "T012ABCDEF0",
+      },
+    };
+
+    const resolved = await adapter.resolvePrivateConversation({
+      actor: {
+        platformUserId: "U012ABCDEF0",
+        displayName: "Alice",
+      },
+      source,
+      routingState: {
+        opaque: {
+          channelId: "C012ABCDEF0",
+          teamId: "T012ABCDEF0",
+        },
+      },
+    });
+
+    expect(resolved).toEqual({
+      channel: "slack",
+      conversation: {
+        id: "U012ABCDEF0",
+        isDirectMessage: true,
+        kind: "dm",
+        title: "Alice",
+        workspaceId: "T012ABCDEF0",
+      },
+      outcome: "resolved",
+      routingState: {
+        opaque: {
+          channelId: "U012ABCDEF0",
+          teamId: "T012ABCDEF0",
+        },
+      },
+      updatedAt: 1_700_000_000_000,
+    });
+    if (resolved.outcome !== "resolved" || !resolved.conversation) {
+      throw new Error("Expected a resolved private Slack conversation");
+    }
+
+    const privateIntent = {
+      id: "private-response",
+      kind: "message",
+      createdAt: 1,
+      role: "assistant",
+      attribution: {
+        label: "Signals Agent",
+        hint: "Private Request · Reply in Thread to Respond to this Agent",
+      },
+      parts: [{ type: "text", text: "Private details", markdown: "markdown" }],
+      audit: {
+        actor: { platformUserId: "U012ABCDEF0" },
+        channel: {
+          channel: "slack",
+          conversation: resolved.conversation,
+        },
+        occurredAt: 1,
+      },
+      targetSurface: {
+        channel: "slack",
+        id: "private-response-target",
+        state: resolved.routingState,
+      },
+    } satisfies MessagingSurfaceIntent;
+    expect(adapter.resolveDeliveryScope(privateIntent)).toMatchObject({
+      budget: { limit: 60, reserved: 0 },
+      kind: "dm",
+      label: "Slack DM",
+    });
+
+    await expect(adapter.deliver(privateIntent)).resolves.toMatchObject({
+      channel: "slack",
+      continuation: {
+        channel: {
+          channel: "slack",
+          conversation: {
+            id: "D012PRIVATE0",
+            isDirectMessage: true,
+            kind: "thread",
+            parentConversationId: "D012PRIVATE0",
+            parentId: "1712023032.123456",
+            workspaceId: "T012ABCDEF0",
+          },
+        },
+        routingState: {
+          opaque: {
+            channelId: "D012PRIVATE0",
+            teamId: "T012ABCDEF0",
+            threadTs: "1712023032.123456",
+          },
+        },
+      },
+      outcome: "presented",
+    });
+
+    expect(posted).toEqual([
+      expect.objectContaining({
+        channel: "U012ABCDEF0",
+        text: "Private details",
+        blocks: expect.arrayContaining([
+          {
+            type: "context",
+            elements: [{
+              type: "plain_text",
+              text:
+                "Signals Agent · Private Request · Reply in Thread to Respond to this Agent",
+              emoji: true,
+            }],
+          },
+        ]),
+      }),
+    ]);
+  });
+
+  it("rejects reply continuations that Slack DM policy would reject", async () => {
+    const source = {
+      channel: "slack" as const,
+      conversation: {
+        id: "C012ABCDEF0",
+        kind: "channel" as const,
+        workspaceId: "T012ABCDEF0",
+      },
+    };
+    const unlistedActor = {
+      platformUserId: "U999UNLISTED",
+      displayName: "Unlisted User",
+    };
+    const restrictedAdapter = new SlackAdapter({
+      config: {
+        ...baseConfig,
+        channelUserAccessMode: "any_channel_user",
+        dmAccessMode: "authorized_users",
+      },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      socketClient: fakeSocket(),
+      now: () => 1_700_000_000_000,
+    });
+
+    await expect(restrictedAdapter.resolvePrivateConversation({
+      actor: unlistedActor,
+      replyContinuationRequired: true,
+      source,
+    })).resolves.toMatchObject({
+      outcome: "unsupported",
+      errorMessage: expect.stringContaining("DM access policy"),
+    });
+    await expect(restrictedAdapter.resolvePrivateConversation({
+      actor: unlistedActor,
+      source,
+    })).resolves.toMatchObject({ outcome: "resolved" });
+
+    const closedAdapter = new SlackAdapter({
+      config: { ...baseConfig, dmAccessMode: "none" },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      socketClient: fakeSocket(),
+      now: () => 1_700_000_000_000,
+    });
+    await expect(closedAdapter.resolvePrivateConversation({
+      actor: { platformUserId: "U012ABCDEF0", displayName: "Alice" },
+      replyContinuationRequired: true,
+      source,
+    })).resolves.toMatchObject({
+      outcome: "unsupported",
+      errorMessage: expect.stringContaining("DM access policy"),
+    });
   });
 
   it("signals Slack Assistant thread status for active typing activity", async () => {
@@ -2298,11 +2487,68 @@ describe("SlackAdapter", () => {
         channel: expect.objectContaining({
           conversation: expect.objectContaining({
             id: "D012ABCDEF0",
+            isDirectMessage: true,
             kind: "dm",
           }),
         }),
       }),
     ]);
+  });
+
+  it("preserves direct-message access for replies in a DM thread", async () => {
+    const socket = fakeSocket();
+    const adapter = new SlackAdapter({
+      config: {
+        ...baseConfig,
+        authorizedConversationIds: [],
+        authorizedTeamIds: [],
+        channelAuthorizationMode: "approved_only",
+        teamAuthorizationMode: "approved_only",
+      },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      socketClient: socket,
+      now: () => 1_700_000_000_000,
+    });
+    const events: MessagingInboundEvent[] = [];
+    const rejected: MessagingRejectedInboundEvent[] = [];
+    adapter.onInboundRejected((event) => {
+      rejected.push(event);
+    });
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await socket.emitEvent("slack_event", {
+      ack: async () => undefined,
+      event: {
+        type: "message",
+        channel: "D012ABCDEF0",
+        channel_type: "im",
+        team: "T012ABCDEF0",
+        thread_ts: "1712023032.123456",
+        ts: "1712023033.123456",
+        user: "U012ABCDEF0",
+        text: "reply without mentioning the bot",
+      },
+    });
+
+    expect(rejected).toEqual([]);
+    expect(events).toEqual([
+      expect.objectContaining({
+        kind: "text",
+        channel: expect.objectContaining({
+          conversation: expect.objectContaining({
+            id: "D012ABCDEF0",
+            isDirectMessage: true,
+            kind: "thread",
+            parentConversationId: "D012ABCDEF0",
+            parentId: "1712023032.123456",
+          }),
+        }),
+      }),
+    ]);
+    expect(events[0]).not.toHaveProperty("botMention");
   });
 
   it("allows authorized conversations without authorizing the whole workspace", async () => {
@@ -3253,6 +3499,7 @@ describe("SlackAdapter", () => {
   });
 
   it("splits a long Markdown message across native Markdown posts", async () => {
+    const deleted: Array<{ channel: string; ts: string }> = [];
     const posted: Array<{
       blocks?: Array<{ text?: string; type: string }>;
       channel: string;
@@ -3261,30 +3508,51 @@ describe("SlackAdapter", () => {
     const adapter = new SlackAdapter({
       config: baseConfig,
       callbackHandleStore: fakeStore(),
-      api: fakeApi({ posted }),
+      api: fakeApi({
+        deleted,
+        posted,
+        postedTimestamps: [
+          "1712023032.000001",
+          "1712023032.000002",
+          "1712023032.000003",
+        ],
+      }),
       socketClient: fakeSocket(),
       now: () => 1_700_000_000_000,
     });
     const longText = "This is a full sentence that keeps going. ".repeat(320);
 
-    await expect(
-      adapter.deliver({
-        id: "assistant-message-1",
-        kind: "message",
-        createdAt: 1,
-        role: "assistant",
-        parts: [{ type: "text", text: longText, markdown: "markdown" }],
-        audit: {
-          actor: { platformUserId: "U012ABCDEF0" },
-          bindingId: "slack-binding-1",
-          channel: {
-            channel: "slack",
-            conversation: { id: "D012ABCDEF0", kind: "dm" },
-          },
-          occurredAt: 1,
+    const result = await adapter.deliver({
+      id: "assistant-message-1",
+      kind: "message",
+      createdAt: 1,
+      role: "assistant",
+      parts: [{ type: "text", text: longText, markdown: "markdown" }],
+      audit: {
+        actor: { platformUserId: "U012ABCDEF0" },
+        bindingId: "slack-binding-1",
+        channel: {
+          channel: "slack",
+          conversation: { id: "D012ABCDEF0", kind: "dm" },
         },
-      } as unknown as MessagingSurfaceIntent),
-    ).resolves.toMatchObject({ channel: "slack", outcome: "presented" });
+        occurredAt: 1,
+      },
+    } as unknown as MessagingSurfaceIntent);
+
+    expect(result).toMatchObject({
+      channel: "slack",
+      outcome: "presented",
+      surface: {
+        state: {
+          opaque: {
+            messageTimestamps: [
+              "1712023032.000001",
+              "1712023032.000002",
+            ],
+          },
+        },
+      },
+    });
 
     expect(posted.length).toBeGreaterThan(1);
     for (const post of posted) {
@@ -3293,6 +3561,19 @@ describe("SlackAdapter", () => {
       ]);
       expect(post.blocks?.[0]?.text?.length ?? 0).toBeLessThanOrEqual(12_000);
     }
+
+    await expect(adapter.deliver({
+      id: "dismiss-assistant-message-1",
+      kind: "dismiss",
+      createdAt: 2,
+      reason: "terminal_private_response",
+      targetSurface: result.surface!,
+    })).resolves.toMatchObject({ outcome: "dismissed" });
+    expect(deleted).toEqual(
+      (result.surface!.state!.opaque as { messageTimestamps: string[] })
+        .messageTimestamps
+        .map((ts) => ({ channel: "D012ABCDEF0", ts })),
+    );
   });
 
   it("splits long Markdown with images and attaches them to the final post", async () => {

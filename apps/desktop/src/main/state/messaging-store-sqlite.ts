@@ -1213,6 +1213,23 @@ function sanitizeBinding(
     authorizedActorIds: [...new Set(binding.authorizedActorIds)],
     monitorSurface: sanitizeSurfaceRef(binding.monitorSurface),
     pinnedStatusSurface: sanitizeSurfaceRef(binding.pinnedStatusSurface),
+    privateReplyContinuation: binding.privateReplyContinuation
+      ? {
+          ...binding.privateReplyContinuation,
+          source: {
+            ...binding.privateReplyContinuation.source,
+            authorizedActorIds: [
+              ...new Set(binding.privateReplyContinuation.source.authorizedActorIds),
+            ],
+            channel: structuredClone(
+              binding.privateReplyContinuation.source.channel,
+            ),
+            routingState: sanitizeAdapterState(
+              binding.privateReplyContinuation.source.routingState,
+            ),
+          },
+        }
+      : undefined,
     routingState: sanitizeAdapterState(binding.routingState),
     statusSurface: sanitizeSurfaceRef(binding.statusSurface),
     targetKind: normalizeMessagingBindingTargetKind(binding.targetKind),

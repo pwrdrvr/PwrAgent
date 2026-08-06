@@ -30,7 +30,7 @@ describe("PwrAgent task monitor agent tools", () => {
       "render_messaging_pdf_pages",
       "search_messaging_pdf_text",
     ]);
-    expect(dynamicTools).toHaveLength(30);
+    expect(dynamicTools).toHaveLength(31);
     expect(mcpTools).toEqual(
       dynamicTools.filter((tool) => !dynamicOnlyToolNames.has(tool.name)),
     );
