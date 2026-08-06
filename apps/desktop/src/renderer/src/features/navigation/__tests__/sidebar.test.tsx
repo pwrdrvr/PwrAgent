@@ -1047,8 +1047,9 @@ describe("Sidebar", () => {
     expect(onCreateSubthread).toHaveBeenCalledWith(sharedThread, "same-worktree");
   });
 
-  it("offers only pin removal and copy actions for a remote-pinned row", () => {
+  it("offers viewer-owned pin, pin removal, and copy actions for a remote-pinned row", () => {
     const onRemoveRemoteThreadPin = vi.fn(async () => undefined);
+    const onSetThreadPin = vi.fn(async () => undefined);
     const remotePinnedThread: NavigationThreadSummary = {
       ...sharedThread,
       id: "thread-remote",
@@ -1083,7 +1084,7 @@ describe("Sidebar", () => {
         onRemoveRemoteThreadPin={onRemoveRemoteThreadPin}
         onRenameThread={async () => undefined}
         onSelectThread={() => undefined}
-        onSetThreadPin={async () => undefined}
+        onSetThreadPin={onSetThreadPin}
       />,
     );
 
@@ -1091,15 +1092,22 @@ describe("Sidebar", () => {
       screen.getByRole("button", { name: "Remote pinned thread" }),
     );
 
-    // Owner-mutating and local-overlay actions are absent…
+    // Owner-mutating actions are absent…
     expect(screen.queryByRole("menuitem", { name: "Archive Thread" })).toBeNull();
     expect(screen.queryByRole("menuitem", { name: "Rename Thread" })).toBeNull();
-    expect(screen.queryByRole("menuitem", { name: "Pin Thread" })).toBeNull();
     expect(
       screen.queryByRole("menuitem", { name: /Sub-thread/ }),
     ).toBeNull();
 
+    // …the VIEWER-owned pin is offered (rank lives on the pin row, never
+    // the owner's list)…
+    fireEvent.click(screen.getByRole("menuitem", { name: "Pin Thread" }));
+    expect(onSetThreadPin).toHaveBeenCalledWith(remotePinnedThread, true);
+
     // …and the viewer-side removal dispatches even while disconnected.
+    fireEvent.contextMenu(
+      screen.getByRole("button", { name: "Remote pinned thread" }),
+    );
     fireEvent.click(
       screen.getByRole("menuitem", { name: /Remove from My List/ }),
     );

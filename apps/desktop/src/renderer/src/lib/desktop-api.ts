@@ -108,6 +108,8 @@ import type {
   FederationJumpSearchResponse,
   RemoveRemoteThreadPinRequest,
   RemoveRemoteThreadPinResponse,
+  SetRemoteThreadLocalPinRequest,
+  SetRemoteThreadLocalPinResponse,
   ResetFederationEnrollmentRequest,
   ResetFederationEnrollmentResponse,
   RevokeFederationPeerRequest,
@@ -783,6 +785,13 @@ export type DesktopApi = {
   removeRemoteThreadPin?: (
     request: RemoveRemoteThreadPinRequest
   ) => Promise<RemoveRemoteThreadPinResponse>;
+  /**
+   * VIEWER-owned rank for a remote row in the local Pins section. Never
+   * routed to the owner — pin or unpin and only the viewer knows.
+   */
+  setRemoteThreadLocalPin?: (
+    request: SetRemoteThreadLocalPinRequest
+  ) => Promise<SetRemoteThreadLocalPinResponse>;
   /** ⌘K federated jump search across connected peers. */
   jumpSearchRemoteThreads?: (
     request: FederationJumpSearchRequest

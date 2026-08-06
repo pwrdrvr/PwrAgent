@@ -5871,6 +5871,7 @@ export function useThreadNavigation(
 
   const setThreadReactionRequest = desktopApi?.setThreadReaction;
   const setThreadPinRequest = desktopApi?.setThreadPin;
+  const setRemoteThreadLocalPinRequest = desktopApi?.setRemoteThreadLocalPin;
   const setThreadAgentRequest = desktopApi?.setThreadAgent;
   const reorderThreadPinsRequest = desktopApi?.reorderThreadPins;
   const setThreadParentRequest = desktopApi?.setThreadParent;
@@ -5956,11 +5957,33 @@ export function useThreadNavigation(
       }));
 
       try {
+        // A remote row pinned in the MAIN window takes a VIEWER-owned rank
+        // on its remote_thread_pins row — only the viewer knows. In a
+        // remote-viewer window (window-level target set) the row pins on
+        // its owning instance as before: without that target the write
+        // would land in the viewer machine's overlay store and revert on
+        // the next remote snapshot.
+        if (
+          thread.federation
+          && !readRendererFederationTarget()
+          && setRemoteThreadLocalPinRequest
+        ) {
+          const result = await setRemoteThreadLocalPinRequest({
+            ref: thread.federation.ref,
+            pinnedRank,
+          });
+          setState((current) => ({
+            ...current,
+            response: updateThreadPinInSnapshot(current.response, {
+              backend: thread.source,
+              threadId: thread.id,
+              pinnedRank: result.pinnedRank,
+            }),
+          }));
+          return;
+        }
         const result = await setThreadPinRequest({
           backend: thread.source,
-          // Remote threads pin on their owning instance; without the
-          // target the write lands in the viewer machine's overlay
-          // store and reverts on the next remote snapshot.
           federationTarget:
             thread.federation?.ref.target ?? readRendererFederationTarget(),
           threadId: thread.id,
@@ -5978,7 +6001,12 @@ export function useThreadNavigation(
         await refresh(buildThreadIdentityKey(thread.source, thread.id));
       }
     },
-    [refresh, setThreadPinRequest, state.response?.threads],
+    [
+      refresh,
+      setRemoteThreadLocalPinRequest,
+      setThreadPinRequest,
+      state.response?.threads,
+    ],
   );
 
   const reorderThreadPins = useCallback(

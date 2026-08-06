@@ -161,6 +161,39 @@ describe("SqliteOverlayStore — remote thread pins", () => {
     }
   });
 
+  it("sets and clears a viewer-owned local pin rank", async () => {
+    await store.addRemoteThreadPin({
+      ref: ref(),
+      summary: summary(),
+      instanceLabel: "Laptop",
+      pinnedVia: "explicit",
+    });
+
+    expect(
+      await store.setRemoteThreadLocalPin({ ref: ref(), pinnedRank: "2048" }),
+    ).toEqual({ pinnedRank: "2048" });
+    let listed = await store.listRemoteThreadPins();
+    expect(listed[0].localPinnedRank).toBe("2048");
+    // The rank patch must not disturb the rest of the payload.
+    expect(listed[0].summary?.title).toBe("Remote fix");
+    expect(listed[0].pinnedVia).toBe("explicit");
+
+    expect(
+      await store.setRemoteThreadLocalPin({ ref: ref(), pinnedRank: null }),
+    ).toEqual({});
+    listed = await store.listRemoteThreadPins();
+    expect(listed[0].localPinnedRank).toBeUndefined();
+
+    // A rank write for a thread that was never pinned is a no-op.
+    expect(
+      await store.setRemoteThreadLocalPin({
+        ref: ref("never-pinned"),
+        pinnedRank: "1024",
+      }),
+    ).toEqual({});
+    expect(await store.listRemoteThreadPins()).toHaveLength(1);
+  });
+
   it("round-trips pinnedVia and answers membership checks", async () => {
     await store.addRemoteThreadPin({
       ref: ref("child"),

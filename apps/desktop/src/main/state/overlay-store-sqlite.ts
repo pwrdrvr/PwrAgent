@@ -1827,6 +1827,54 @@ export class SqliteOverlayStore {
     };
   }
 
+  /**
+   * Set or clear the VIEWER-owned rank for a pinned remote thread. Patches
+   * the payload in place so the cached summary, label, and pinnedVia are
+   * untouched; a missing pin row is a no-op (returns undefined rank).
+   */
+  async setRemoteThreadLocalPin(params: {
+    ref: FederatedThreadRef;
+    pinnedRank?: string | null;
+  }): Promise<{ pinnedRank?: string }> {
+    const instanceId = remotePinInstanceId(params.ref);
+    const row = this.stateDb.raw
+      .prepare(
+        `SELECT payload FROM remote_thread_pins
+         WHERE instance_id = ? AND backend = ? AND thread_id = ?`,
+      )
+      .get(instanceId, params.ref.backend, params.ref.threadId) as
+        | { payload: string }
+        | undefined;
+    if (!row) {
+      return {};
+    }
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(row.payload) as Record<string, unknown>;
+    } catch {
+      parsed = {};
+    }
+    const pinnedRank = params.pinnedRank?.trim() || undefined;
+    if (pinnedRank === undefined) {
+      delete parsed.localPinnedRank;
+    } else {
+      parsed.localPinnedRank = pinnedRank;
+    }
+    this.stateDb.raw
+      .prepare(
+        `UPDATE remote_thread_pins
+         SET payload = ?
+         WHERE instance_id = ? AND backend = ? AND thread_id = ?`,
+      )
+      .run(
+        JSON.stringify(parsed),
+        instanceId,
+        params.ref.backend,
+        params.ref.threadId,
+      );
+    return pinnedRank === undefined ? {} : { pinnedRank };
+  }
+
   async hasRemoteThreadPin(params: { ref: FederatedThreadRef }): Promise<boolean> {
     const row = this.stateDb.raw
       .prepare(
@@ -1871,7 +1919,12 @@ export class SqliteOverlayStore {
       }>;
     const pins: RemoteThreadPin[] = [];
     for (const row of rows) {
-      let parsed: { instanceLabel?: unknown; summary?: unknown; pinnedVia?: unknown };
+      let parsed: {
+        instanceLabel?: unknown;
+        summary?: unknown;
+        pinnedVia?: unknown;
+        localPinnedRank?: unknown;
+      };
       try {
         parsed = JSON.parse(row.payload) as typeof parsed;
       } catch {
@@ -1895,6 +1948,9 @@ export class SqliteOverlayStore {
           : {}),
         ...(parsed.pinnedVia === "companion" || parsed.pinnedVia === "explicit"
           ? { pinnedVia: parsed.pinnedVia }
+          : {}),
+        ...(typeof parsed.localPinnedRank === "string" && parsed.localPinnedRank
+          ? { localPinnedRank: parsed.localPinnedRank }
           : {}),
       });
     }

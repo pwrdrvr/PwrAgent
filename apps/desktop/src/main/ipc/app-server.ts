@@ -89,10 +89,14 @@ import {
   type PrAutoDispatchBudgetStatus,
   type AddRemoteThreadPinRequest,
   type AddRemoteThreadPinResponse,
+  type FederatedThreadRef,
   type FederationJumpSearchRequest,
   type FederationJumpSearchResponse,
+  type RemoteThreadPin,
   type RemoveRemoteThreadPinRequest,
   type RemoveRemoteThreadPinResponse,
+  type SetRemoteThreadLocalPinRequest,
+  type SetRemoteThreadLocalPinResponse,
   type ReorderDirectoryPinsRequest,
   type ReorderDirectoryPinsResponse,
   type ReorderThreadPinsRequest,
@@ -149,9 +153,11 @@ import {
   DEFAULT_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
   DEFAULT_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
   DEFAULT_PULL_REQUEST_PROVIDER,
+  buildAppendPinRank,
   buildFederatedThreadRef,
   buildPullRequestStatusKey,
   buildThreadIdentityKey,
+  PIN_RANK_STEP,
   federatedThreadIdentityKey,
   isAppServerBackendKind,
   isRemoteFederationTarget,
@@ -206,6 +212,7 @@ import {
   NAVIGATION_ATTACH_DIRECTORY_TO_THREAD_CHANNEL,
   NAVIGATION_DETACH_DIRECTORY_FROM_THREAD_CHANNEL,
   NAVIGATION_REMOVE_REMOTE_THREAD_PIN_CHANNEL,
+  NAVIGATION_SET_REMOTE_THREAD_LOCAL_PIN_CHANNEL,
   NAVIGATION_DETACH_THREAD_PR_CHANNEL,
   NAVIGATION_REFRESH_THREAD_PRS_CHANNEL,
   NAVIGATION_SET_PR_POLLING_FOCUS_CHANNEL,
@@ -326,6 +333,7 @@ type AppServerOverlayStoreLike = OverlayStoreLike &
     | "addRemoteThreadPin"
     | "hasRemoteThreadPin"
     | "removeRemoteThreadPin"
+    | "setRemoteThreadLocalPin"
     | "listRemoteThreadPins"
     | "updateRemoteThreadPinSnapshots"
   >;
@@ -1925,16 +1933,27 @@ class DesktopAppServerService {
       if (pins.length > 0) {
         const cache = getDesktopFederationRuntime().remoteThreadSummaries();
         const resolution = await cache.resolvePinnedThreads(pins);
+        // The owner's pinnedRank describes ITS pinned section — carrying it
+        // over would promote the row into the viewer's Pins section by a
+        // foreign rank and wire the pin chip to an owner-side unpin. Replace
+        // it with the VIEWER-owned rank from the pin row (usually absent):
+        // pin or unpin locally and only the viewer knows. The remote-viewer
+        // window path is untouched — owner semantics are correct there.
+        const localRankByKey = new Map(
+          pins.map((pin) => [
+            buildThreadIdentityKey(pin.ref.backend, pin.ref.threadId),
+            pin.localPinnedRank,
+          ]),
+        );
         resolved = {
           ...resolution,
-          // The owner's pinnedRank describes ITS pinned section. Carrying it
-          // into the main window would promote the row into the viewer's
-          // local Pins section (ranked by a foreign rank) and wire the pin
-          // chip to an owner-side unpin. The viewer's list membership is the
-          // remote_thread_pins row; rank stays owner-local. The remote-viewer
-          // window path is untouched — owner semantics are correct there.
           threads: resolution.threads.map(
-            ({ pinnedRank: _pinnedRank, ...thread }) => thread,
+            ({ pinnedRank: _pinnedRank, ...thread }) => {
+              const localRank = localRankByKey.get(
+                buildThreadIdentityKey(thread.source, thread.id),
+              );
+              return localRank ? { ...thread, pinnedRank: localRank } : thread;
+            },
           ),
         };
         if (resolution.refreshed.length > 0) {
@@ -1956,6 +1975,8 @@ class DesktopAppServerService {
         updatedAt: thread.updatedAt,
         prs: thread.prs,
         federation: thread.federation,
+        // Viewer-owned rank: a local pin/unpin must invalidate the snapshot.
+        pinnedRank: thread.pinnedRank,
         // Directory-group membership derives from these; a peer-side project
         // change must invalidate the snapshot like a title change does.
         linkedDirectories: thread.linkedDirectories,
@@ -5354,12 +5375,74 @@ class DesktopAppServerService {
         .remoteBackend(federationTarget)
         .reorderThreadPins(remoteRequest);
     }
-    const pinnedRanks = await this.getOverlayStore().reorderThreadPins({
-      threadKeys: request.threadKeys,
+    // The pinned section interleaves local pins and viewer-owned remote
+    // pins. Ranks come from the FULL requested order so the two kinds sort
+    // together; each key routes to its own storage — local thread overlay
+    // vs the remote pin row — and remote ranks never reach the owner.
+    const overlayStore = this.getOverlayStore();
+    const remotePins =
+      typeof overlayStore.listRemoteThreadPins === "function"
+        ? await overlayStore.listRemoteThreadPins()
+        : [];
+    const remotePinByKey = new Map(
+      remotePins.map((pin) => [
+        buildThreadIdentityKey(pin.ref.backend, pin.ref.threadId),
+        pin,
+      ]),
+    );
+    const localThreadKeys: string[] = [];
+    const remoteRankWrites: Array<{
+      key: string;
+      ref: RemoteThreadPin["ref"];
+      pinnedRank: string;
+    }> = [];
+    request.threadKeys.forEach((threadKey, index) => {
+      const remotePin = remotePinByKey.get(threadKey);
+      if (remotePin) {
+        remoteRankWrites.push({
+          key: threadKey,
+          ref: remotePin.ref,
+          pinnedRank: String(index * PIN_RANK_STEP),
+        });
+      } else {
+        localThreadKeys.push(threadKey);
+      }
     });
+    const pinnedRanks =
+      remoteRankWrites.length === 0
+        ? await overlayStore.reorderThreadPins({
+            threadKeys: request.threadKeys,
+          })
+        : Object.fromEntries(
+            await Promise.all(
+              request.threadKeys.map(async (threadKey, index) => {
+                const rank = String(index * PIN_RANK_STEP);
+                const remoteWrite = remoteRankWrites.find(
+                  (write) => write.key === threadKey,
+                );
+                if (remoteWrite) {
+                  await overlayStore.setRemoteThreadLocalPin({
+                    ref: remoteWrite.ref,
+                    pinnedRank: rank,
+                  });
+                } else {
+                  const parsed = parseThreadIdentityKey(threadKey);
+                  if (parsed) {
+                    await overlayStore.setThreadPin({
+                      backend: parsed.backend,
+                      threadId: parsed.threadId,
+                      pinnedRank: rank,
+                    });
+                  }
+                }
+                return [threadKey, rank] as const;
+              }),
+            ),
+          );
 
     logDebug("reorderThreadPins", {
       pinCount: request.threadKeys.length,
+      remotePinCount: remoteRankWrites.length,
     });
 
     // Pin order is global across backends, so this is a global notification.
@@ -5395,7 +5478,12 @@ class DesktopAppServerService {
       instanceLabel,
       pinnedVia: "explicit",
     });
-    await this.pinCompanionParent(request, instanceId, instanceLabel);
+    const companionParentRef = await this.pinCompanionParent(
+      request,
+      instanceId,
+      instanceLabel,
+    );
+    await this.rankRemotePinForVisibility(request, companionParentRef);
 
     logDebug("addRemoteThreadPin", {
       backend: request.ref.backend,
@@ -5432,10 +5520,10 @@ class DesktopAppServerService {
     request: AddRemoteThreadPinRequest,
     instanceId: string,
     instanceLabel: string,
-  ): Promise<void> {
+  ): Promise<FederatedThreadRef | undefined> {
     const parentThreadId = request.summary?.parentThreadId;
     if (!parentThreadId || parentThreadId === request.ref.threadId) {
-      return;
+      return undefined;
     }
     try {
       const parentRef = buildFederatedThreadRef({
@@ -5445,7 +5533,7 @@ class DesktopAppServerService {
       });
       const overlayStore = this.getOverlayStore();
       if (await overlayStore.hasRemoteThreadPin({ ref: parentRef })) {
-        return;
+        return parentRef;
       }
       const parentSummary = await getDesktopFederationRuntime()
         .remoteThreadSummaries()
@@ -5455,7 +5543,7 @@ class DesktopAppServerService {
           threadId: parentThreadId,
         });
       if (!parentSummary) {
-        return;
+        return undefined;
       }
       await overlayStore.addRemoteThreadPin({
         ref: parentRef,
@@ -5480,10 +5568,82 @@ class DesktopAppServerService {
           },
         },
       });
+      return parentRef;
     } catch (error) {
       // Companion pinning is a convenience — the explicit pin must succeed
       // regardless.
       appServerLog.warn("Companion parent pin failed.", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
+  }
+
+  /**
+   * Mirror of the created-thread visibility auto-pin (backend-registry):
+   * when the freshly pinned remote thread's home directory group has its
+   * Directory Threads section collapsed and the pinned section is in use,
+   * the row would be invisible — give its top-level row (the companion
+   * parent when one exists) a VIEWER-owned rank so it surfaces in Pins.
+   * Best-effort; the pin itself must succeed regardless.
+   */
+  private async rankRemotePinForVisibility(
+    request: AddRemoteThreadPinRequest,
+    companionParentRef: FederatedThreadRef | undefined,
+  ): Promise<void> {
+    try {
+      const snapshot = await this.getNavigationSnapshot({});
+      const targetRef = companionParentRef ?? request.ref;
+      const targetKey = buildThreadIdentityKey(
+        targetRef.backend,
+        targetRef.threadId,
+      );
+      const targetRow = snapshot.threads.find(
+        (thread) =>
+          buildThreadIdentityKey(thread.source, thread.id) === targetKey,
+      );
+      // Only top-level rows join the pinned section; an already-ranked row
+      // needs nothing.
+      if (!targetRow || targetRow.parentThreadId || targetRow.pinnedRank) {
+        return;
+      }
+      const directory = snapshot.directories.find((entry) =>
+        entry.threadKeys.includes(targetKey),
+      );
+      const hasPinnedTopLevelThread = snapshot.threads.some(
+        (thread) => thread.pinnedRank && !thread.parentThreadId,
+      );
+      if (!directory?.directoryThreadsCollapsed || !hasPinnedTopLevelThread) {
+        return;
+      }
+      const pinnedRank = buildAppendPinRank(
+        snapshot.threads.map((thread) => thread.pinnedRank),
+      );
+      await this.getOverlayStore().setRemoteThreadLocalPin({
+        ref: targetRef,
+        pinnedRank,
+      });
+      logDebug("addRemoteThreadPin:visibility-rank", {
+        backend: targetRef.backend,
+        threadId: targetRef.threadId,
+        directoryKey: directory.key,
+      });
+      await getDesktopBackendRegistry().publishLocalEvent({
+        backend: targetRef.backend,
+        notification: {
+          method: "navigation/remoteThreadPins/changed",
+          params: {
+            instanceId:
+              targetRef.target.scope === "remote"
+                ? targetRef.target.instanceId
+                : "",
+            threadId: targetRef.threadId,
+            pinned: true,
+          },
+        },
+      });
+    } catch (error) {
+      appServerLog.warn("Remote pin visibility rank failed.", {
         error: error instanceof Error ? error.message : String(error),
       });
     }
@@ -5523,6 +5683,36 @@ class DesktopAppServerService {
     }
 
     return { removed };
+  }
+
+  /**
+   * VIEWER-owned pin rank for a remote thread in the main window's list.
+   * Never routed to the owner: pin or unpin here and only the viewer knows.
+   * (Remote-viewer windows keep the existing setThreadPin owner routing —
+   * operating the owner's pinned section is intended there.)
+   */
+  async setRemoteThreadLocalPin(
+    request: SetRemoteThreadLocalPinRequest,
+  ): Promise<SetRemoteThreadLocalPinResponse> {
+    if (!isRemoteFederationTarget(request.ref.target)) {
+      throw new Error("Remote thread pins require a remote federation target.");
+    }
+    const result = await this.getOverlayStore().setRemoteThreadLocalPin({
+      ref: request.ref,
+      pinnedRank: request.pinnedRank,
+    });
+    await getDesktopBackendRegistry().publishLocalEvent({
+      backend: request.ref.backend,
+      notification: {
+        method: "navigation/remoteThreadPins/changed",
+        params: {
+          instanceId: request.ref.target.instanceId,
+          threadId: request.ref.threadId,
+          pinned: true,
+        },
+      },
+    });
+    return { ref: request.ref, pinnedRank: result.pinnedRank };
   }
 
   async jumpSearchRemoteThreads(
@@ -6728,6 +6918,16 @@ export function registerAppServerIpcHandlers(): void {
       request: RemoveRemoteThreadPinRequest,
     ): Promise<RemoveRemoteThreadPinResponse> => {
       return await appServerService.removeRemoteThreadPin(request);
+    },
+  );
+  ipcMain.removeHandler(NAVIGATION_SET_REMOTE_THREAD_LOCAL_PIN_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_SET_REMOTE_THREAD_LOCAL_PIN_CHANNEL,
+    async (
+      _event,
+      request: SetRemoteThreadLocalPinRequest,
+    ): Promise<SetRemoteThreadLocalPinResponse> => {
+      return await appServerService.setRemoteThreadLocalPin(request);
     },
   );
   ipcMain.removeHandler(FEDERATION_JUMP_SEARCH_CHANNEL);
