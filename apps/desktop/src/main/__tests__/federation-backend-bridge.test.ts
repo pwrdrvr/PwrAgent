@@ -13,6 +13,7 @@ import {
 } from "../federation/federation-backend-bridge";
 import { FederationRouter } from "../federation/federation-router";
 import { FederationRpcEndpoint } from "../federation/federation-rpc";
+import { FEDERATION_MAX_FRAME_BYTES } from "../federation/federation-transport";
 
 describe("federation backend bridge", () => {
   it("reads remote PwrSnap status through its dedicated capability", async () => {
@@ -353,6 +354,109 @@ describe("federation backend bridge", () => {
       before: "entry-3",
       limit: 2,
     });
+  });
+
+  it("compacts an oversized retained entry below the frame ceiling", async () => {
+    const oversizedOutput = "x".repeat(FEDERATION_MAX_FRAME_BYTES);
+    const response: AppServerReadThreadResponse = {
+      backend: "codex",
+      fetchedAt: 1_000,
+      threadId: "thread-1",
+      replay: {
+        entries: [
+          {
+            type: "message",
+            id: "older-message",
+            role: "user",
+            text: "Older history remains available through the cursor.",
+          },
+          {
+            type: "activity",
+            id: "oversized-activity",
+            summary: "Ran a command",
+            status: "completed",
+            details: [
+              {
+                id: "oversized-command",
+                kind: "command",
+                label: "Generated verbose output",
+                command: {
+                  displayCommand: "verbose-command",
+                  output: oversizedOutput,
+                },
+              },
+            ],
+          },
+        ],
+        messages: [
+          {
+            id: "older-message",
+            role: "user",
+            text: "Older history remains available through the cursor.",
+          },
+        ],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+      },
+    };
+    const backend = {
+      readThread: vi.fn(async () => response),
+    } as unknown as FederationBackendOperations;
+    const replies: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({
+      localInstanceId: "owner_one",
+      methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+    });
+    router.registerConnection({
+      peerId: "viewer_one",
+      capabilities: ["thread_detail"],
+      sendEnvelope: (envelope) => replies.push(envelope),
+    });
+    registerFederationBackendHandlers({ router, backend });
+
+    await router.routeEnvelope({
+      sourcePeerId: "viewer_one",
+      envelope: {
+        id: "oversized-request",
+        kind: "request",
+        method: FEDERATION_BACKEND_METHODS.readThread,
+        params: { backend: "codex", threadId: "thread-1", limit: 5 },
+        protocolVersion: 1,
+        sourceInstanceId: "viewer_one",
+        targetInstanceId: "owner_one",
+        createdAt: 1_000,
+      },
+    });
+
+    expect(replies).toHaveLength(1);
+    expect(replies[0]).toMatchObject({
+      kind: "response",
+      requestId: "oversized-request",
+      result: {
+        replay: {
+          entries: [
+            {
+              id: "oversized-activity",
+              summary: expect.stringContaining("exceeded the federation frame limit"),
+              details: [],
+            },
+          ],
+          pagination: {
+            supportsPagination: true,
+            hasPreviousPage: true,
+            previousCursor: "oversized-activity",
+          },
+        },
+      },
+    });
+    const encryptedFrameBytes =
+      Buffer.byteLength(
+        JSON.stringify({ kind: "envelope", envelope: replies[0] }),
+        "utf8",
+      ) + 16;
+    expect(encryptedFrameBytes).toBeLessThan(FEDERATION_MAX_FRAME_BYTES);
   });
 
   it("routes branch drift reads and mutations to the owning peer", async () => {
