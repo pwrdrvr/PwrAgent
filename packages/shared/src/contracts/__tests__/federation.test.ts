@@ -60,6 +60,7 @@ describe("federation contracts", () => {
     expect(isFederationCapability("launchpad_metadata")).toBe(true);
     expect(isFederationCapability("event_subscriptions")).toBe(true);
     expect(isFederationCapability("navigation_snapshot_deltas")).toBe(true);
+    expect(isFederationCapability("transport_brotli")).toBe(true);
     expect(isFederationCapability("unknown")).toBe(false);
     expect(isFederationEventClass("navigation")).toBe(true);
     expect(isFederationEventClass("pending_requests")).toBe(true);
