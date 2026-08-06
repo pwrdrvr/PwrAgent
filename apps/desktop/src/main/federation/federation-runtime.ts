@@ -823,7 +823,8 @@ export class DesktopFederationRuntime {
    */
   async resetEnrollment(): Promise<{ cleared: boolean }> {
     const stateDb = getAppStateDb();
-    const hadEnrollment = Boolean(stateDb.getMeta(GATEWAY_INSTANCE_ID_META_KEY));
+    const gatewayInstanceId = stateDb.getMeta(GATEWAY_INSTANCE_ID_META_KEY);
+    const hadEnrollment = Boolean(gatewayInstanceId);
     stateDb.setMeta(GATEWAY_INSTANCE_ID_META_KEY, "");
     stateDb.setMeta(GATEWAY_PUBLIC_KEY_META_KEY, "");
     stateDb.setMeta(GATEWAY_NOISE_PUBLIC_KEY_META_KEY, "");
@@ -876,6 +877,12 @@ export class DesktopFederationRuntime {
       this.persistCelestialAssignments();
       this.publishCelestialIconsChanged();
     }
+    if (gatewayInstanceId) {
+      // Pins for peers reached only THROUGH the forgotten gateway keep
+      // dimming until removed by hand — attribution is unreliable — but
+      // the gateway's own pins are provably dead pairing state.
+      await this.cleanupRemoteThreadPins(gatewayInstanceId);
+    }
     await this.restart();
     return { cleared: hadEnrollment };
   }
@@ -914,11 +921,43 @@ export class DesktopFederationRuntime {
     // Free the revoked instance's celestial icon and propagate the removal
     // so it cannot squat one of the five ids forever.
     this.removeCelestialAssignment(peerId, revokedAt);
+    await this.cleanupRemoteThreadPins(peerId);
     return publicPeerSummary({
       ...peer,
       status: "revoked",
       revokedAt,
     });
+  }
+
+  /**
+   * A revoked (or forgotten) peer's pinned rows would otherwise dim
+   * forever — this viewer can never reach that instance again, so drop
+   * its pins and poke the renderer. Best-effort: pin cleanup must never
+   * block or fail the enrollment teardown itself.
+   */
+  private async cleanupRemoteThreadPins(
+    instanceId: FederationInstanceId,
+  ): Promise<void> {
+    try {
+      this.remoteThreadSummaryCache?.invalidate(instanceId);
+      const removed = await getDesktopOverlayStore()
+        .removeRemoteThreadPinsForInstance({ instanceId });
+      if (removed === 0) {
+        return;
+      }
+      await getDesktopBackendRegistry().publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "navigation/remoteThreadPins/changed",
+          params: { instanceId, pinned: false },
+        },
+      });
+    } catch (error) {
+      log.warn("remote thread pin cleanup failed", {
+        instanceId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   async generateInvite(request: {
@@ -1183,6 +1222,24 @@ export class DesktopFederationRuntime {
               eventClasses: ["navigation"],
             })),
         );
+      },
+      // Pinned-summary refreshes land in the background (the snapshot
+      // merge never awaits a peer) — poke the renderer so its next
+      // navigation refresh serves the fresh rows.
+      onPinnedSummariesRefreshed: (instanceId) => {
+        void getDesktopBackendRegistry()
+          .publishLocalEvent({
+            backend: "codex",
+            notification: {
+              method: "navigation/remoteThreadPins/changed",
+              params: { instanceId },
+            },
+          })
+          .catch((error: unknown) => {
+            log.warn("remote pin summary refresh publish failed", {
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
       },
     });
     return this.remoteThreadSummaryCache;

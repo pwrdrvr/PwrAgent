@@ -70,6 +70,13 @@ export class RemoteThreadSummaryCache {
   >();
   private globalGeneration = 0;
   private readonly peerGenerations = new Map<string, number>();
+  /** Peers whose most recent background refresh failed while connected. */
+  private readonly refreshFailures = new Set<string>();
+  /**
+   * Thread keys a background pass proved archived on their owner, keyed by
+   * instance, awaiting report to the caller that removes the pin.
+   */
+  private readonly provenArchived = new Map<string, Set<string>>();
 
   constructor(
     private readonly options: {
@@ -90,6 +97,13 @@ export class RemoteThreadSummaryCache {
       };
       /** Peers whose cached summaries currently need navigation updates. */
       onPeerInterestChanged?: (instanceIds: string[]) => void;
+      /**
+       * Fired when a background pinned-summary pass would change what
+       * `resolvePinnedThreads` serves: fresh rows landed, pins were proved
+       * archived, a failing peer recovered, or a peer failed for the first
+       * time (rows must dim).
+       */
+      onPinnedSummariesRefreshed?: (instanceId: string) => void;
       ttlMs?: number;
       peerTimeoutMs?: number;
       now?: () => number;
@@ -101,6 +115,8 @@ export class RemoteThreadSummaryCache {
       this.globalGeneration += 1;
       this.cache.clear();
       this.archivedCache.clear();
+      this.refreshFailures.clear();
+      this.provenArchived.clear();
       return;
     }
     this.peerGenerations.set(
@@ -108,6 +124,8 @@ export class RemoteThreadSummaryCache {
       (this.peerGenerations.get(instanceId) ?? 0) + 1,
     );
     this.cache.delete(instanceId);
+    this.refreshFailures.delete(instanceId);
+    this.provenArchived.delete(instanceId);
     for (const key of this.archivedCache.keys()) {
       if (key.startsWith(`${instanceId}:`)) {
         this.archivedCache.delete(key);
@@ -194,6 +212,20 @@ export class RemoteThreadSummaryCache {
     }
   }
 
+  /**
+   * Never awaits a peer: navigation-refresh latency must stay independent
+   * of peer responsiveness (a connected-but-slow owner used to stall every
+   * snapshot merge by up to the per-peer timeout). Serves the cached
+   * snapshot — stale or fresh — immediately, kicks a background refetch
+   * when the TTL has lapsed, and reports fresh data via
+   * `onPinnedSummariesRefreshed` so the owner can re-merge.
+   *
+   * Archive detection rides the same background pass: proving a pin
+   * archived needs a fresh snapshot AND an owner lookup, so it cannot
+   * happen inline without reintroducing the stall. Proofs land in
+   * `provenArchived` and are reported by the next resolve — which the
+   * refresh event triggers immediately.
+   */
   async resolvePinnedThreads(
     pins: readonly RemoteThreadPin[],
   ): Promise<ResolvedRemotePins> {
@@ -213,91 +245,189 @@ export class RemoteThreadSummaryCache {
       pinsByInstanceId.set(pin.ref.target.instanceId, group);
     }
 
-    await Promise.all(
-      [...pinsByInstanceId.entries()].map(async ([instanceId, group]) => {
-        const peer = connectedByInstanceId.get(instanceId);
-        const peerTimeoutMs =
-          this.options.peerTimeoutMs ?? REMOTE_SNAPSHOT_PEER_TIMEOUT_MS;
-        const peerDeadlineAt = (this.options.now?.() ?? Date.now()) + peerTimeoutMs;
-        let fresh: NavigationThreadSummary[] | undefined;
-        let fetchFailed = false;
-        if (peer) {
-          try {
-            fresh = await this.threadsForPeer(peer.target);
-          } catch {
-            fetchFailed = true;
-          }
+    for (const [instanceId, group] of pinsByInstanceId) {
+      const peer = connectedByInstanceId.get(instanceId);
+      let served: NavigationThreadSummary[] | undefined;
+      let fetchFailed = false;
+      if (peer) {
+        const now = this.options.now?.() ?? Date.now();
+        const ttlMs = this.options.ttlMs ?? REMOTE_SNAPSHOT_TTL_MS;
+        const cached = this.cache.get(instanceId);
+        if (!cached || now - cached.fetchedAt >= ttlMs) {
+          this.refreshPeerSummariesInBackground(peer.target, group);
         }
-        const freshByKey = new Map(
-          (fresh ?? []).map((thread) => [`${thread.source}:${thread.id}`, thread]),
-        );
-        const archivedKeys = new Set<string>();
-        if (peer && fresh) {
-          const missingBackends = new Set(
-            group
-              .filter(
-                (pin) =>
-                  !freshByKey.has(`${pin.ref.backend}:${pin.ref.threadId}`),
-              )
-              .map((pin) => pin.ref.backend),
+        served = cached?.threads;
+        fetchFailed = this.refreshFailures.has(instanceId);
+      }
+      const servedByKey = new Map(
+        (served ?? []).map((thread) => [`${thread.source}:${thread.id}`, thread]),
+      );
+      for (const pin of group) {
+        const threadKey = `${pin.ref.backend}:${pin.ref.threadId}`;
+        const servedThread = servedByKey.get(threadKey);
+        if (servedThread) {
+          threads.push(
+            fetchFailed ? this.dimDegraded(servedThread) : servedThread,
           );
-          await Promise.all(
-            [...missingBackends].map(async (backend) => {
-              const candidateKeys = new Set(
-                group
-                  .filter(
-                    (pin) =>
-                      pin.ref.backend === backend
-                      && !freshByKey.has(
-                        `${pin.ref.backend}:${pin.ref.threadId}`,
-                      ),
-                  )
-                  .map((pin) => `${pin.ref.backend}:${pin.ref.threadId}`),
-              );
-              try {
-                const remainingMs =
-                  peerDeadlineAt - (this.options.now?.() ?? Date.now());
-                if (remainingMs <= 0) {
-                  return;
-                }
-                const keys = await this.archivedThreadKeysForPeer(
-                  peer.target,
-                  backend,
-                  candidateKeys,
-                  remainingMs,
-                );
-                for (const key of keys) {
-                  archivedKeys.add(key);
-                }
-              } catch {
-                // Archive detection is proof-based. If the lookup fails, keep
-                // the cached row just as we do when the active fetch fails.
-              }
-            }),
-          );
-        }
-        for (const pin of group) {
-          const threadKey = `${pin.ref.backend}:${pin.ref.threadId}`;
-          const freshThread = freshByKey.get(threadKey);
-          if (freshThread) {
-            threads.push(freshThread);
+          if (!fetchFailed) {
             refreshed.push({
               ref: pin.ref,
-              summary: freshThread,
+              summary: servedThread,
               instanceLabel:
-                freshThread.federation?.instanceLabel ?? pin.instanceLabel,
+                servedThread.federation?.instanceLabel ?? pin.instanceLabel,
             });
-            continue;
           }
-          if (archivedKeys.has(threadKey)) {
-            archived.push(pin.ref);
-            continue;
+          continue;
+        }
+        if (this.consumeArchivedProof(instanceId, threadKey)) {
+          archived.push(pin.ref);
+          continue;
+        }
+        threads.push(this.fallbackThread(pin, fetchFailed));
+      }
+    }
+    return { threads, refreshed, archived };
+  }
+
+  /**
+   * Read-and-clear: a proof is spent the moment it is reported, so a
+   * thread the owner restored (and the viewer re-pinned) after the probe
+   * can never be deleted by yesterday's evidence. A still-archived thread
+   * simply earns a fresh proof on the next background pass.
+   */
+  private consumeArchivedProof(instanceId: string, threadKey: string): boolean {
+    const proofs = this.provenArchived.get(instanceId);
+    if (!proofs?.delete(threadKey)) {
+      return false;
+    }
+    if (proofs.size === 0) {
+      this.provenArchived.delete(instanceId);
+    }
+    return true;
+  }
+
+  /**
+   * Kick a stale-snapshot refetch without blocking the caller, then prove
+   * which of this peer's pins are archived rather than merely missing.
+   * Completion fires `onPinnedSummariesRefreshed` only when a re-merge
+   * would serve something different — fresh rows differing from the served
+   * ones, archive proofs to act on, a failing peer recovering, or a first
+   * failure (rows must dim). A repeat failure stays silent: firing on every
+   * failed attempt would loop (event → re-merge → another kick → another
+   * failure → event).
+   */
+  private refreshPeerSummariesInBackground(
+    target: FederationRemoteTarget,
+    pins: readonly RemoteThreadPin[],
+  ): void {
+    const instanceId = target.instanceId;
+    // Dedup against the CURRENT generation only: a fetch started before an
+    // invalidate is answering a question we no longer trust, so it must not
+    // suppress the fresh one.
+    if (
+      this.inFlight.get(instanceId)?.generation
+      === this.generationFor(instanceId)
+    ) {
+      return;
+    }
+    const previous = this.cache.get(instanceId)?.threads;
+    const failedBefore = this.refreshFailures.has(instanceId);
+    this.threadsForPeer(target).then(
+      async (threads) => {
+        this.refreshFailures.delete(instanceId);
+        const provedArchived = await this.proveArchivedPins(
+          target,
+          pins,
+          threads,
+        );
+        const changed =
+          previous === undefined
+          || JSON.stringify(previous) !== JSON.stringify(threads);
+        if (failedBefore || changed || provedArchived) {
+          this.options.onPinnedSummariesRefreshed?.(instanceId);
+        }
+      },
+      () => {
+        this.refreshFailures.add(instanceId);
+        if (!failedBefore) {
+          this.options.onPinnedSummariesRefreshed?.(instanceId);
+        }
+      },
+    );
+  }
+
+  /**
+   * Ask the owner which of the pins absent from its fresh snapshot are
+   * archived. Absence alone is not proof — an unreachable backend or a
+   * filtered snapshot looks identical — so only a positive archive listing
+   * authorizes removing the viewer's pin. Returns whether anything new was
+   * proved, so the caller knows a re-merge is worth announcing.
+   */
+  private async proveArchivedPins(
+    target: FederationRemoteTarget,
+    pins: readonly RemoteThreadPin[],
+    fresh: readonly NavigationThreadSummary[],
+  ): Promise<boolean> {
+    const freshKeys = new Set(
+      fresh.map((thread) => `${thread.source}:${thread.id}`),
+    );
+    const missing = pins.filter(
+      (pin) => !freshKeys.has(`${pin.ref.backend}:${pin.ref.threadId}`),
+    );
+    if (missing.length === 0) {
+      return false;
+    }
+    const timeoutMs =
+      this.options.peerTimeoutMs ?? REMOTE_SNAPSHOT_PEER_TIMEOUT_MS;
+    const backends = new Set(missing.map((pin) => pin.ref.backend));
+    let proved = false;
+    await Promise.all(
+      [...backends].map(async (backend) => {
+        const candidateKeys = new Set(
+          missing
+            .filter((pin) => pin.ref.backend === backend)
+            .map((pin) => `${pin.ref.backend}:${pin.ref.threadId}`),
+        );
+        try {
+          const keys = await this.archivedThreadKeysForPeer(
+            target,
+            backend,
+            candidateKeys,
+            timeoutMs,
+          );
+          for (const key of candidateKeys) {
+            if (!keys.has(key)) {
+              continue;
+            }
+            const proofs =
+              this.provenArchived.get(target.instanceId) ?? new Set<string>();
+            proofs.add(key);
+            this.provenArchived.set(target.instanceId, proofs);
+            proved = true;
           }
-          threads.push(this.fallbackThread(pin, fetchFailed));
+        } catch {
+          // Archive detection is proof-based. If the lookup fails, keep the
+          // cached row just as we do when the active fetch fails.
         }
       }),
     );
-    return { threads, refreshed, archived };
+    return proved;
+  }
+
+  /**
+   * A connected peer whose last background refresh failed still serves its
+   * cached rows, but they must dim like fallback rows: the data is not live.
+   */
+  private dimDegraded(
+    thread: NavigationThreadSummary,
+  ): NavigationThreadSummary {
+    if (!thread.federation) {
+      return thread;
+    }
+    return {
+      ...thread,
+      federation: { ...thread.federation, peerStatus: "degraded" },
+    };
   }
 
   private fallbackThread(
@@ -373,6 +503,10 @@ export class RemoteThreadSummaryCache {
         threads,
       });
       this.touchPeerInterest(target.instanceId, ttlMs);
+      // ANY successful fetch is proof of life, including one the jump
+      // search started. Clearing the flag only in the pinned-refresh path
+      // would keep freshly-fetched rows dimmed until the next TTL lapse.
+      this.refreshFailures.delete(target.instanceId);
       return threads;
     })();
     const entry = { generation, promise };

@@ -262,7 +262,18 @@ const reconcileNavigationSnapshot = vi.fn(async (params: unknown) => ({
   backend: (params as { backend: "all" | "codex" | "grok" }).backend,
   fetchedAt: 1234,
   unchanged: false,
-  threads: (params as { threads: unknown[] }).threads,
+  // Mirror the real reconcile: every materialized row carries a derived
+  // inbox state, consistent with the inboxThreadKeys below. The remote-pin
+  // merge re-ranks the combined local + remote rows from these states.
+  threads: (params as { threads: Array<{ source: string; id: string }> }).threads.map(
+    (thread) => ({
+      inbox:
+        `${thread.source}:${thread.id}` === "grok:thread-1"
+          ? { inInbox: true, reason: "updated-since-seen" as const }
+          : { inInbox: false },
+      ...thread,
+    }),
+  ) as unknown[],
   inboxThreadKeys: ["grok:thread-1"],
   directories: [
     {
@@ -1838,7 +1849,11 @@ describe("app server ipc", () => {
       threads: Array<{ id: string }>;
       inboxThreadKeys: string[];
       unchanged: boolean;
-      directories: Array<{ key: string; threadKeys: string[] }>;
+      directories: Array<{
+        key: string;
+        threadKeys: string[];
+        needsAttentionCount: number;
+      }>;
     };
 
     expect(
@@ -1854,8 +1869,13 @@ describe("app server ipc", () => {
       (thread) => thread.id === "remote-1",
     ) as { pinnedRank?: string } | undefined;
     expect(mergedRemoteRow?.pinnedRank).toBeUndefined();
-    // The remote row joins the inbox ranking behind the local keys.
-    expect(response.inboxThreadKeys).toContain("codex:remote-1");
+    // Unified inbox ranking over local + remote rows: the fresher remote
+    // unread (updatedAt 9000) outranks the stale local unread (1000)
+    // instead of always trailing every local key.
+    expect(response.inboxThreadKeys).toEqual([
+      "codex:remote-1",
+      "grok:thread-1",
+    ]);
     // A newly appearing remote row must defeat the unchanged optimization.
     expect(response.unchanged).toBe(false);
     // Consolidated into the matching LOCAL project group (label "app"), so
@@ -1864,6 +1884,9 @@ describe("app server ipc", () => {
       (directory) => directory.key === "directory:/repo/app",
     );
     expect(appDirectory?.threadKeys).toContain("codex:remote-1");
+    // The unread remote row bumps the group's "N to review" badge past the
+    // reconcile-computed local count.
+    expect(appDirectory?.needsAttentionCount).toBe(2);
   });
 
   it("removes a viewer-side remote pin when the owner proves it is archived", async () => {
@@ -1908,7 +1931,10 @@ describe("app server ipc", () => {
       backend: (params as { backend: "all" | "codex" | "grok" }).backend,
       fetchedAt: 1234,
       unchanged: false,
-      threads: (params as { threads: unknown[] }).threads,
+      threads: (params as { threads: object[] }).threads.map((thread) => ({
+        inbox: { inInbox: false },
+        ...thread,
+      })),
       inboxThreadKeys: [],
       directories: [
         {
@@ -2280,6 +2306,58 @@ describe("app server ipc", () => {
     expect(addRemoteThreadPinStore.mock.calls[0][0]).toMatchObject({
       pinnedVia: "explicit",
     });
+  });
+
+  it("rejects malformed pin refs at the service boundary", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const {
+      NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL,
+      NAVIGATION_REMOVE_REMOTE_THREAD_PIN_CHANNEL,
+      NAVIGATION_SET_REMOTE_THREAD_LOCAL_PIN_CHANNEL,
+    } = await import("../../shared/ipc");
+
+    registerAppServerIpcHandlers();
+    addRemoteThreadPinStore.mockClear();
+    setRemoteThreadLocalPin.mockClear();
+
+    // A malformed instance id (spaces, punctuation) must never reach the
+    // store — the sqlite key would persist a row that dims forever.
+    const badInstanceRef = {
+      backend: "codex" as const,
+      target: { scope: "remote" as const, instanceId: "peer laptop!" },
+      threadId: "thread-1",
+    };
+    // An unknown backend kind is equally unresolvable later.
+    const badBackendRef = {
+      backend: "not-a-backend",
+      target: { scope: "remote" as const, instanceId: "peer-laptop" },
+      threadId: "thread-1",
+    };
+    await expect(
+      handlers.get(NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL)?.({}, {
+        ref: badInstanceRef,
+        instanceLabel: "Laptop",
+      }),
+    ).rejects.toThrow(/remote federation target/i);
+    await expect(
+      handlers.get(NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL)?.({}, {
+        ref: badBackendRef,
+        instanceLabel: "Laptop",
+      }),
+    ).rejects.toThrow(/backend/i);
+    await expect(
+      handlers.get(NAVIGATION_REMOVE_REMOTE_THREAD_PIN_CHANNEL)?.({}, {
+        ref: badInstanceRef,
+      }),
+    ).rejects.toThrow(/remote federation target/i);
+    await expect(
+      handlers.get(NAVIGATION_SET_REMOTE_THREAD_LOCAL_PIN_CHANNEL)?.({}, {
+        ref: badInstanceRef,
+        pinnedRank: "1024",
+      }),
+    ).rejects.toThrow(/remote federation target/i);
+    expect(addRemoteThreadPinStore).not.toHaveBeenCalled();
+    expect(setRemoteThreadLocalPin).not.toHaveBeenCalled();
   });
 
   it("keeps pinned remote rows, dimmed, when the owner is unreachable", async () => {

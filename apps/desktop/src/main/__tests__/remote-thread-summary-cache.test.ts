@@ -383,20 +383,40 @@ describe("RemoteThreadSummaryCache — threadFromPeer", () => {
   });
 });
 
+/** Let a kicked-off background refresh chain settle. */
+async function settle(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 describe("RemoteThreadSummaryCache — resolvePinnedThreads", () => {
-  it("serves fresh stamped rows for reachable owners and queues payload refreshes", async () => {
+  it("serves cached stamped rows for reachable owners and queues payload refreshes", async () => {
     const fresh = stampedThread({
       instanceId: "peer-a",
       threadId: "t1",
       title: "Fresh title",
       updatedAt: 50,
     });
+    const onPinnedSummariesRefreshed = vi.fn();
     const cache = new RemoteThreadSummaryCache({
       peers: () => [peer("peer-a", "Laptop")],
       fetchSnapshot: async () => snapshotOf([fresh]),
       fetchArchivedThreads: noArchivedThreads,
       peerStatus: () => ({ status: "connected", label: "Laptop" }),
+      onPinnedSummariesRefreshed,
     });
+
+    // Cold cache: the pin's persisted payload serves immediately while the
+    // snapshot fetch runs in the background.
+    const cold = await cache.resolvePinnedThreads([
+      pin({ instanceId: "peer-a", threadId: "t1" }),
+    ]);
+    expect(cold.threads).toHaveLength(1);
+    expect(cold.threads[0].title).toBe("t1");
+    expect(cold.refreshed).toEqual([]);
+
+    await settle();
+    expect(onPinnedSummariesRefreshed).toHaveBeenCalledWith("peer-a");
 
     const resolved = await cache.resolvePinnedThreads([
       pin({ instanceId: "peer-a", threadId: "t1" }),
@@ -405,6 +425,45 @@ describe("RemoteThreadSummaryCache — resolvePinnedThreads", () => {
     expect(resolved.threads[0].title).toBe("Fresh title");
     expect(resolved.refreshed).toHaveLength(1);
     expect(resolved.refreshed[0].summary.title).toBe("Fresh title");
+  });
+
+  it("returns promptly with cached rows while a peer fetch hangs", async () => {
+    let now = 0;
+    let hang = false;
+    const fetchSnapshot = vi.fn(async () => {
+      if (hang) {
+        return await new Promise<never>(() => {});
+      }
+      return snapshotOf([
+        stampedThread({ instanceId: "peer-a", threadId: "t1", title: "Cached" }),
+      ]);
+    });
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [peer("peer-a")],
+      fetchSnapshot,
+      fetchArchivedThreads: noArchivedThreads,
+      peerStatus: () => ({ status: "connected" }),
+      ttlMs: 100,
+      peerTimeoutMs: 10_000,
+      now: () => now,
+    });
+
+    await cache.resolvePinnedThreads([
+      pin({ instanceId: "peer-a", threadId: "t1" }),
+    ]);
+    await settle();
+
+    // TTL expired and the peer stops answering: the resolve must still
+    // return immediately with the stale cached rows — a slow peer can
+    // never stall the navigation snapshot.
+    now = 500;
+    hang = true;
+    const resolved = await cache.resolvePinnedThreads([
+      pin({ instanceId: "peer-a", threadId: "t1" }),
+    ]);
+    expect(fetchSnapshot).toHaveBeenCalledTimes(2);
+    expect(resolved.threads[0].title).toBe("Cached");
+    expect(resolved.threads[0].federation?.peerStatus).toBe("connected");
   });
 
   it("falls back to the cached payload, dimmed, when the owner is unreachable", async () => {
@@ -433,7 +492,8 @@ describe("RemoteThreadSummaryCache — resolvePinnedThreads", () => {
     expect(resolved.refreshed).toEqual([]);
   });
 
-  it("dims rows as degraded when a connected owner fails the fetch", async () => {
+  it("dims rows as degraded once a connected owner fails the background fetch", async () => {
+    const onPinnedSummariesRefreshed = vi.fn();
     const cache = new RemoteThreadSummaryCache({
       peers: () => [peer("peer-a")],
       fetchSnapshot: async () => {
@@ -441,12 +501,180 @@ describe("RemoteThreadSummaryCache — resolvePinnedThreads", () => {
       },
       fetchArchivedThreads: noArchivedThreads,
       peerStatus: () => ({ status: "connected" }),
+      onPinnedSummariesRefreshed,
     });
+
+    // First resolve is optimistic — the failure lands in the background
+    // and pokes the callback so the next merge can dim the rows.
+    await cache.resolvePinnedThreads([
+      pin({ instanceId: "peer-a", threadId: "t1" }),
+    ]);
+    await settle();
+    expect(onPinnedSummariesRefreshed).toHaveBeenCalledTimes(1);
 
     const resolved = await cache.resolvePinnedThreads([
       pin({ instanceId: "peer-a", threadId: "t1" }),
     ]);
     expect(resolved.threads[0].federation?.peerStatus).toBe("degraded");
+
+    // A repeat failure stays silent — re-firing would loop the renderer
+    // refresh cycle against a peer that keeps failing.
+    await settle();
+    expect(onPinnedSummariesRefreshed).toHaveBeenCalledTimes(1);
+  });
+
+  it("announces recovery so dimmed rows can un-dim", async () => {
+    let fail = true;
+    const onPinnedSummariesRefreshed = vi.fn();
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [peer("peer-a")],
+      fetchSnapshot: async () => {
+        if (fail) {
+          throw new Error("boom");
+        }
+        return snapshotOf([
+          stampedThread({ instanceId: "peer-a", threadId: "t1", title: "Live" }),
+        ]);
+      },
+      fetchArchivedThreads: noArchivedThreads,
+      peerStatus: () => ({ status: "connected" }),
+      onPinnedSummariesRefreshed,
+    });
+    const pins = [pin({ instanceId: "peer-a", threadId: "t1" })];
+
+    await cache.resolvePinnedThreads(pins);
+    await settle();
+    expect(onPinnedSummariesRefreshed).toHaveBeenCalledTimes(1);
+
+    fail = false;
+    await cache.resolvePinnedThreads(pins);
+    await settle();
+    expect(onPinnedSummariesRefreshed).toHaveBeenCalledTimes(2);
+
+    const resolved = await cache.resolvePinnedThreads(pins);
+    expect(resolved.threads[0].title).toBe("Live");
+    expect(resolved.threads[0].federation?.peerStatus).toBe("connected");
+  });
+
+  it("un-dims when a jump-search fetch proves the peer is alive", async () => {
+    let now = 0;
+    let fail = true;
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [peer("peer-a")],
+      fetchSnapshot: async () => {
+        if (fail) {
+          throw new Error("boom");
+        }
+        return snapshotOf([
+          stampedThread({ instanceId: "peer-a", threadId: "t1", title: "Live" }),
+        ]);
+      },
+      fetchArchivedThreads: noArchivedThreads,
+      peerStatus: () => ({ status: "connected" }),
+      ttlMs: 100,
+      now: () => now,
+    });
+    const pins = [pin({ instanceId: "peer-a", threadId: "t1" })];
+
+    await cache.resolvePinnedThreads(pins);
+    await settle();
+
+    // The peer recovers, and it is the JUMP SEARCH that observes it — the
+    // pinned-refresh path never runs. The failure flag must still clear,
+    // or live rows would render dimmed until the next TTL lapse.
+    now = 50;
+    fail = false;
+    await cache.searchForJump({ query: "Live" });
+    await settle();
+
+    const resolved = await cache.resolvePinnedThreads(pins);
+    expect(resolved.threads[0].title).toBe("Live");
+    expect(resolved.threads[0].federation?.peerStatus).toBe("connected");
+    expect(resolved.refreshed).toHaveLength(1);
+  });
+
+  it("serves stale cached rows dimmed while a connected owner keeps failing", async () => {
+    let now = 0;
+    let fail = false;
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [peer("peer-a")],
+      fetchSnapshot: async () => {
+        if (fail) {
+          throw new Error("boom");
+        }
+        return snapshotOf([
+          stampedThread({ instanceId: "peer-a", threadId: "t1", title: "Cached" }),
+        ]);
+      },
+      fetchArchivedThreads: noArchivedThreads,
+      peerStatus: () => ({ status: "connected" }),
+      ttlMs: 100,
+      now: () => now,
+    });
+
+    await cache.resolvePinnedThreads([
+      pin({ instanceId: "peer-a", threadId: "t1" }),
+    ]);
+    await settle();
+
+    now = 500;
+    fail = true;
+    await cache.resolvePinnedThreads([
+      pin({ instanceId: "peer-a", threadId: "t1" }),
+    ]);
+    await settle();
+
+    // Stale snapshot data still beats the pin payload, but must dim: the
+    // peer claims connected and is not actually serving.
+    const resolved = await cache.resolvePinnedThreads([
+      pin({ instanceId: "peer-a", threadId: "t1" }),
+    ]);
+    expect(resolved.threads[0].title).toBe("Cached");
+    expect(resolved.threads[0].federation?.peerStatus).toBe("degraded");
+    expect(resolved.refreshed).toEqual([]);
+  });
+
+  it("stamps the peer's viewer-actionable capabilities onto fallback rows", async () => {
+    // Capabilities belong to the PEER, not the cached row, so a row served
+    // before any snapshot has landed must still carry them — otherwise the
+    // thread view reports "remote terminal not granted" for a peer that
+    // grants it, on every cold start. The owner supplies the already
+    // relay-stripped set; the cache must not invent one.
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [peer("peer-a")],
+      fetchSnapshot: async () => await new Promise<never>(() => {}),
+      fetchArchivedThreads: noArchivedThreads,
+      peerStatus: () => ({
+        status: "connected",
+        label: "Laptop",
+        capabilities: ["thread_navigation", "remote_pty"],
+      }),
+    });
+
+    const resolved = await cache.resolvePinnedThreads([
+      pin({ instanceId: "peer-a", threadId: "t1" }),
+    ]);
+    expect(resolved.threads[0].federation?.capabilities).toEqual([
+      "thread_navigation",
+      "remote_pty",
+    ]);
+  });
+
+  it("stamps no capabilities when the owner reports none", async () => {
+    // A gateway-relayed peer arrives here already stripped of remote_pty,
+    // and an unknown peer reports nothing at all. Either way the cache
+    // passes through rather than falling back to the raw granted set.
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [],
+      fetchSnapshot: async () => snapshotOf([]),
+      fetchArchivedThreads: noArchivedThreads,
+      peerStatus: () => ({ status: "disconnected", label: "Laptop" }),
+    });
+
+    const resolved = await cache.resolvePinnedThreads([
+      pin({ instanceId: "peer-a", threadId: "t1" }),
+    ]);
+    expect(resolved.threads[0].federation?.capabilities).toEqual([]);
   });
 
   it("synthesizes a minimal row when the pin has no cached summary", async () => {
@@ -504,12 +732,20 @@ describe("RemoteThreadSummaryCache — resolvePinnedThreads", () => {
     });
     const archivedPin = pin({ instanceId: "peer-a", threadId: "archived" });
 
-    const resolved = await cache.resolvePinnedThreads([archivedPin]);
+    // Proving a pin archived needs a fresh snapshot AND an owner lookup,
+    // both of which run in the background so the merge never stalls. The
+    // first resolve therefore still serves the cached row; the proof is
+    // reported on the next one, which the refresh event triggers.
+    const optimistic = await cache.resolvePinnedThreads([archivedPin]);
+    expect(optimistic.archived).toEqual([]);
+    await settle();
 
     expect(fetchArchivedThreads).toHaveBeenCalledWith(
       remoteTarget("peer-a"),
       "codex",
     );
+
+    const resolved = await cache.resolvePinnedThreads([archivedPin]);
     expect(resolved.threads).toEqual([]);
     expect(resolved.refreshed).toEqual([]);
     expect(resolved.archived).toEqual([archivedPin.ref]);
@@ -525,17 +761,26 @@ describe("RemoteThreadSummaryCache — resolvePinnedThreads", () => {
       .fn()
       .mockResolvedValueOnce([archivedThread])
       .mockResolvedValueOnce([]);
+    let now = 0;
     const cache = new RemoteThreadSummaryCache({
       peers: () => [peer("peer-a")],
       fetchSnapshot: async () => snapshotOf([]),
       fetchArchivedThreads,
       peerStatus: () => ({ status: "connected" }),
+      ttlMs: 100,
+      now: () => now,
     });
     const firstPin = pin({ instanceId: "peer-a", threadId: "restored" });
+
+    await cache.resolvePinnedThreads([firstPin]);
+    await settle();
     expect((await cache.resolvePinnedThreads([firstPin])).archived).toEqual([
       firstPin.ref,
     ]);
 
+    // The owner restored the thread and the viewer re-pinned it. The spent
+    // proof must never prune it a second time — only fresh evidence can,
+    // and this pass proves it is no longer archived.
     const cachedSummary = { ...archivedThread };
     delete cachedSummary.federation;
     const readdedPin = {
@@ -546,6 +791,9 @@ describe("RemoteThreadSummaryCache — resolvePinnedThreads", () => {
       }),
       addedAt: 2_000,
     };
+    now = 500;
+    await cache.resolvePinnedThreads([readdedPin]);
+    await settle();
     const resolved = await cache.resolvePinnedThreads([readdedPin]);
 
     expect(fetchArchivedThreads).toHaveBeenCalledTimes(2);
@@ -554,37 +802,28 @@ describe("RemoteThreadSummaryCache — resolvePinnedThreads", () => {
     expect(resolved.threads[0].title).toBe("Restored on owner");
   });
 
-  it("shares one peer deadline between the active and archived lookups", async () => {
-    vi.useFakeTimers();
-    try {
-      const cache = new RemoteThreadSummaryCache({
-        peers: () => [peer("peer-a")],
-        fetchSnapshot: async () => {
-          await new Promise((resolve) => setTimeout(resolve, 75));
-          return snapshotOf([]);
-        },
-        fetchArchivedThreads: async () => await new Promise<never>(() => {}),
-        peerStatus: () => ({ status: "connected" }),
-        peerTimeoutMs: 100,
-      });
-      const resolution = cache.resolvePinnedThreads([
-        pin({ instanceId: "peer-a", threadId: "missing" }),
-      ]);
-      let settled = false;
-      void resolution.then(() => {
-        settled = true;
-      });
+  it("never waits on the archived lookup, even when it hangs", async () => {
+    // The archived probe used to share the merge's peer deadline, which
+    // meant a slow owner delayed navigation. It now runs in the same
+    // background pass as the snapshot fetch, so a probe that never answers
+    // costs the merge nothing — the pin simply keeps its cached row.
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [peer("peer-a")],
+      fetchSnapshot: async () => snapshotOf([]),
+      fetchArchivedThreads: async () => await new Promise<never>(() => {}),
+      peerStatus: () => ({ status: "connected" }),
+      peerTimeoutMs: 100,
+    });
+    const missingPin = pin({ instanceId: "peer-a", threadId: "missing" });
 
-      await vi.advanceTimersByTimeAsync(99);
-      expect(settled).toBe(false);
-      await vi.advanceTimersByTimeAsync(1);
+    const resolved = await cache.resolvePinnedThreads([missingPin]);
+    expect(resolved.archived).toEqual([]);
+    expect(resolved.threads).toHaveLength(1);
 
-      const resolved = await resolution;
-      expect(resolved.archived).toEqual([]);
-      expect(resolved.threads).toHaveLength(1);
-    } finally {
-      vi.useRealTimers();
-    }
+    await settle();
+    const again = await cache.resolvePinnedThreads([missingPin]);
+    expect(again.archived).toEqual([]);
+    expect(again.threads).toHaveLength(1);
   });
 
   it("keeps the cached row when archive detection fails", async () => {
