@@ -12,7 +12,7 @@ import {
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
@@ -17328,7 +17328,7 @@ command = "pnpm dev"
     await registry.startTurn({
       backend: "codex",
       threadId: "thread-title",
-      input: [{ type: "image", url: "file:///tmp/image.png" }],
+      input: [{ type: "image", url: "https://example.test/image.png" }],
     });
     await flushAsync();
 
@@ -17378,6 +17378,90 @@ command = "pnpm dev"
     } finally {
       await registry.close();
       await rm(tempHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      if (previousHome === undefined) {
+        delete process.env.PWRAGENT_HOME;
+      } else {
+        process.env.PWRAGENT_HOME = previousHome;
+      }
+    }
+  });
+
+  it("copies external local images before restoring text-only Codex user item events", async () => {
+    const tempHome = await mkdtemp(path.join(os.tmpdir(), "pwragent-image-event-"));
+    const sourceRoot = await mkdtemp(path.join(os.tmpdir(), "pwragent-image-source-"));
+    const sourcePath = path.join(sourceRoot, "remote-paste.png");
+    await writeFile(sourcePath, Buffer.from([1, 2, 3]));
+    const previousHome = process.env.PWRAGENT_HOME;
+    process.env.PWRAGENT_HOME = tempHome;
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
+
+    try {
+      await registry.startTurn({
+        backend: "codex",
+        threadId: "thread-image",
+        input: [
+          { type: "text", text: "Describe it" },
+          {
+            type: "localImage",
+            name: "remote-paste.png",
+            path: sourcePath,
+          },
+        ],
+      });
+      const imageInput = codexClient.lastStartTurnParams?.input[1];
+      const imagePath = imageInput?.type === "localImage" ? imageInput.path : "";
+      expect(imagePath).toContain(path.join("state", "image-inputs"));
+      expect(imagePath).not.toBe(sourcePath);
+
+      await codexClient.emit({
+        method: "item/completed",
+        params: {
+          threadId: "thread-image",
+          turnId: "turn-1",
+          item: {
+            id: "user-message-1",
+            type: "userMessage",
+            content: [{ type: "text", text: "Describe it" }],
+          },
+        },
+      });
+
+      expect(events.at(-1)).toMatchObject({
+        notification: {
+          method: "item/completed",
+          params: {
+            item: {
+              content: [
+                { type: "text", text: "Describe it" },
+                {
+                  alt: "remote-paste.png",
+                  type: "image",
+                  url: `pwragent-image://file/${encodeURIComponent(
+                    pathToFileURL(imagePath).toString(),
+                  )}`,
+                },
+              ],
+            },
+          },
+        },
+      });
+    } finally {
+      await registry.close();
+      await rm(tempHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      await rm(sourceRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
       if (previousHome === undefined) {
         delete process.env.PWRAGENT_HOME;
       } else {
