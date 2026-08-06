@@ -261,6 +261,18 @@ these tools — coordinate so it does not invent its own; the shared icon
 field name is `icon` on `FederationPeerSummary`. Cmd+K unification is
 independent but can adopt `search_federation_threads`.
 
+## Rebase reconciliation (post-#1249)
+
+The Star Map branch's celestial-icon unit (#1249) merged to main before
+this branch. It shipped the icon as a typed
+`FederationPeerSummary.celestialIcon?: CelestialIconId` with a
+gateway-coordinated LWW assignment protocol — superseding Unit B's
+free-form `icon?: string` carry field, which was dropped during the
+rebase (contract, auth message, enrollment, store, gossip, health). The
+agent-tool descriptor's `icon` field remains and is now fed from the
+assignment map (`peer.celestialIcon` / `health.localCelestialIcon`).
+References to a carry-only `icon` field below are pre-rebase history.
+
 ## Follow-up round (same branch, post-review)
 
 Decided with the operator after the first review pass:

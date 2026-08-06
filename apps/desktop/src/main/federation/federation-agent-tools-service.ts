@@ -149,7 +149,7 @@ async function listFederationInstances(
     capabilities: [...peer.capabilities],
     role: peer.role,
     notes: peer.notes,
-    icon: peer.icon,
+    icon: peer.celestialIcon,
     profileName: peer.profileName,
     host: peer.host,
     unavailableReason: peer.unavailableReason,
@@ -434,6 +434,7 @@ async function localInstanceDescriptor(
     capabilities: [...FEDERATION_CAPABILITIES],
     role: health.role,
     notes: settings.federation.instanceNotes.value.trim() || undefined,
+    icon: health.localCelestialIcon,
     ...(host ? { host } : {}),
   };
 }

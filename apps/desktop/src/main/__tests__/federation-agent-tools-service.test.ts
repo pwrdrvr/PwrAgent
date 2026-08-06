@@ -132,7 +132,7 @@ describe("federation agent tools service", () => {
                 status: "connected",
                 capabilities: ["thread_navigation", "federated_search"],
                 notes: "PwrSnap dev + screen recording",
-                icon: "nebula",
+                celestialIcon: "ringed-planet",
               },
               {
                 id: "pwr_rack",
@@ -160,7 +160,7 @@ describe("federation agent tools service", () => {
       isLocal: false,
       status: "connected",
       notes: "PwrSnap dev + screen recording",
-      icon: "nebula",
+      icon: "ringed-planet",
     });
     expect(data.instances[2]).toMatchObject({
       instanceId: "pwr_rack",
