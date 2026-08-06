@@ -84,7 +84,7 @@ import { useEditCommitStates } from "./useEditCommitStates";
 import type { HistoryNavControls } from "../chrome/HistoryNavButtons";
 import type { MastheadActionsProps } from "../chrome/MastheadActions";
 import { ThreadFindBar } from "./ThreadFindBar";
-import { ThreadHeader } from "./ThreadHeader";
+import { ThreadHeader, type StarMapToggleControls } from "./ThreadHeader";
 import { ThreadPlaceholderHeader } from "./ThreadPlaceholderHeader";
 import { ImageLightbox } from "./ImageLightbox";
 import { TranscriptCopyButton } from "./TranscriptCopyButton";
@@ -1005,6 +1005,8 @@ export type ThreadViewProps = {
    * Owned by App's useNavigationHistory.
    */
   historyNav?: HistoryNavControls;
+  /** Star Map toggle rendered in the header chrome. Owned by App. */
+  starMap?: StarMapToggleControls;
   /** In-thread find bar (⌘F): open state + close callback, owned by App. */
   findOpen?: boolean;
   onFindOpenChange?: (open: boolean) => void;
@@ -2740,6 +2742,7 @@ export function ThreadView(props: ThreadViewProps) {
           }}
           masthead={props.mastheadActions}
           history={props.historyNav}
+          starMap={props.starMap}
         />
 
         <div
@@ -2798,6 +2801,7 @@ export function ThreadView(props: ThreadViewProps) {
           }}
           masthead={props.mastheadActions}
           history={props.historyNav}
+          starMap={props.starMap}
         />
         <div className="thread-empty-state">
           <div className="thread-empty-state__content">
@@ -2890,6 +2894,7 @@ export function ThreadView(props: ThreadViewProps) {
           }}
           masthead={props.mastheadActions}
           history={props.historyNav}
+          starMap={props.starMap}
         />
 
         <div
@@ -3062,6 +3067,7 @@ export function ThreadView(props: ThreadViewProps) {
         }}
         masthead={props.mastheadActions}
         history={props.historyNav}
+        starMap={props.starMap}
       />
 
       <div

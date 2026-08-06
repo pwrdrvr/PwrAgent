@@ -1,0 +1,449 @@
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import {
+  buildThreadIdentityKey,
+  isRemoteFederationTarget,
+  type FederationPeerSummary,
+  type NavigationThreadSummary,
+} from "@pwragent/shared";
+import type { DesktopApi } from "../../lib/desktop-api";
+import { useCelestialIcons } from "../../lib/useCelestialIcons";
+import { useFederationHealth } from "../../lib/useFederationHealth";
+import {
+  selectAttentionThreads,
+  STAR_MAP_ATTENTION_CATEGORIES,
+  STAR_MAP_ATTENTION_LABELS,
+  type StarMapAttentionCategory,
+  type StarMapSessionKeys,
+} from "./attention";
+import {
+  computeStarMapLayout,
+  generateStarField,
+  starMapCardSlot,
+  type StarMapInstancePosition,
+} from "./star-map-layout";
+import { StarMapInstanceCard } from "./StarMapInstanceCard";
+import { StarMapThreadCard } from "./StarMapThreadCard";
+import { useStarMapThreads } from "./useStarMapThreads";
+
+const FILTERS_STORAGE_KEY = "pwragent.starMap.filters";
+const MAX_CARDS_PER_INSTANCE = 6;
+const STAR_COUNT = 130;
+
+function readStoredFilters(): Set<StarMapAttentionCategory> {
+  if (typeof window === "undefined") {
+    return new Set(STAR_MAP_ATTENTION_CATEGORIES);
+  }
+  try {
+    const raw = window.localStorage.getItem(FILTERS_STORAGE_KEY);
+    if (!raw) return new Set(STAR_MAP_ATTENTION_CATEGORIES);
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return new Set(STAR_MAP_ATTENTION_CATEGORIES);
+    const valid = parsed.filter(
+      (entry): entry is StarMapAttentionCategory =>
+        typeof entry === "string"
+        && (STAR_MAP_ATTENTION_CATEGORIES as readonly string[]).includes(entry),
+    );
+    return new Set(valid);
+  } catch {
+    return new Set(STAR_MAP_ATTENTION_CATEGORIES);
+  }
+}
+
+type StarMapScreenProps = {
+  desktopApi?: DesktopApi;
+  /** Local navigation snapshot threads (already live in the App shell). */
+  localThreads: readonly NavigationThreadSummary[];
+  sessionKeys: StarMapSessionKeys;
+  /** Fallback label for the local instance card (instanceLabel setting). */
+  localInstanceLabel?: string;
+  /** A thread is floating over the map; the map shoves left behind it. */
+  floating: boolean;
+  onClose: () => void;
+  /** Open a local thread floating over the map. */
+  onOpenLocalThread: (thread: NavigationThreadSummary) => void;
+  /** The local instance card's open action: back to the thread shell. */
+  onFocusLocalInstance: () => void;
+};
+
+/**
+ * The Star Map mission-control surface: every federation instance as a
+ * celestial body on a star field, hub-and-spoke health links arcing
+ * between them, and each instance's attention threads flowing down its
+ * own lane. The antithesis of the left-bar thread list - pick a machine,
+ * see what needs review.
+ */
+export function StarMapScreen(props: StarMapScreenProps) {
+  const layerRef = useRef<HTMLDivElement>(null);
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const { health } = useFederationHealth({ desktopApi: props.desktopApi });
+  const celestialIcons = useCelestialIcons({ desktopApi: props.desktopApi });
+  const [filters, setFilters] = useState<Set<StarMapAttentionCategory>>(
+    readStoredFilters,
+  );
+  const [viewportSize, setViewportSize] = useState<{
+    width: number;
+    height: number;
+  }>({ width: 1280, height: 800 });
+  const stars = useMemo(() => generateStarField(STAR_COUNT), []);
+
+  // Focus the layer on open AND whenever the floating thread closes -
+  // "Back to map" leaves focus inside <main>, and without a refocus the
+  // layer's Escape-to-close handler would never hear the key again.
+  useEffect(() => {
+    if (!props.floating) {
+      layerRef.current?.focus();
+    }
+  }, [props.floating]);
+
+  // The constellation lays out in pixels of the real viewport, not
+  // percentages - lanes need true widths to guarantee cards never overlap.
+  useLayoutEffect(() => {
+    const element = viewportRef.current;
+    if (!element) return;
+    const measure = () => {
+      const rect = element.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) {
+        setViewportSize((current) =>
+          current.width === rect.width && current.height === rect.height
+            ? current
+            : { width: rect.width, height: rect.height },
+        );
+      }
+    };
+    measure();
+    // jsdom has no ResizeObserver; the initial measure still runs there.
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  const toggleFilter = useCallback((category: StarMapAttentionCategory) => {
+    setFilters((current) => {
+      const next = new Set(current);
+      if (next.has(category)) {
+        next.delete(category);
+      } else {
+        next.add(category);
+      }
+      try {
+        window.localStorage.setItem(
+          FILTERS_STORAGE_KEY,
+          JSON.stringify([...next]),
+        );
+      } catch {
+        // Filters are per-window viewing state; losing them is harmless.
+      }
+      return next;
+    });
+  }, []);
+
+  const localInstanceId = health?.instanceId ?? "local";
+  const peers = useMemo(
+    () =>
+      (health?.peers ?? []).filter((peer) => peer.status !== "revoked"),
+    [health],
+  );
+  const remote = useStarMapThreads({
+    desktopApi: props.desktopApi,
+    peers,
+    enabled: true,
+  });
+
+  // The hub is the local instance unless this instance is a pure client -
+  // then its enrolled gateway anchors the constellation and the local node
+  // rides a lane with its siblings.
+  const hubInstanceId = useMemo(() => {
+    if (!health || health.role !== "client") return localInstanceId;
+    const gatewayId =
+      health.clientEnrollment?.gatewayInstanceId
+      ?? peers.find((peer) => peer.role === "gateway")?.id;
+    return gatewayId ?? localInstanceId;
+  }, [health, localInstanceId, peers]);
+
+  const layout = useMemo(
+    () =>
+      computeStarMapLayout(
+        [
+          {
+            instanceId: localInstanceId,
+            isHub: hubInstanceId === localInstanceId,
+          },
+          ...peers.map((peer) => ({
+            instanceId: peer.id,
+            isHub: peer.id === hubInstanceId,
+          })),
+        ],
+        viewportSize.width,
+      ),
+    [hubInstanceId, localInstanceId, peers, viewportSize.width],
+  );
+
+  const attentionByInstance = useMemo(() => {
+    const result = new Map<string, NavigationThreadSummary[]>();
+    // The main-window snapshot also carries viewer-side pinned REMOTE
+    // threads (Cmd+K unification). Those render under their owning
+    // instance's cloud via the per-peer fetch - the local cloud takes
+    // locally-owned threads only, or pinned remote cards would double up.
+    result.set(
+      localInstanceId,
+      selectAttentionThreads({
+        threads: props.localThreads.filter(
+          (thread) =>
+            !thread.federation
+            || !isRemoteFederationTarget(thread.federation.ref.target),
+        ),
+        enabled: filters,
+        sessionKeys: props.sessionKeys,
+      }),
+    );
+    for (const [instanceId, threads] of remote.threadsByInstance) {
+      result.set(
+        instanceId,
+        selectAttentionThreads({ threads, enabled: filters }),
+      );
+    }
+    return result;
+  }, [filters, localInstanceId, props.localThreads, props.sessionKeys, remote]);
+
+  const peerById = useMemo(
+    () => new Map(peers.map((peer) => [peer.id, peer])),
+    [peers],
+  );
+
+  const { desktopApi, onFocusLocalInstance, onOpenLocalThread } = props;
+  const openInstance = useCallback(
+    (instanceId: string) => {
+      if (instanceId === localInstanceId) {
+        onFocusLocalInstance();
+        return;
+      }
+      void desktopApi?.openFederationWindow?.({
+        target: { scope: "remote", instanceId },
+      });
+    },
+    [desktopApi, localInstanceId, onFocusLocalInstance],
+  );
+
+  const openThread = useCallback(
+    (thread: NavigationThreadSummary) => {
+      if (
+        thread.federation
+        && isRemoteFederationTarget(thread.federation.ref.target)
+      ) {
+        void desktopApi?.openFederationWindow?.({
+          target: thread.federation.ref.target,
+          initialThread: thread.federation.ref,
+        });
+        return;
+      }
+      onOpenLocalThread(thread);
+    },
+    [desktopApi, onOpenLocalThread],
+  );
+
+  const linkState = (peerId: string) => {
+    const status = peerById.get(peerId)?.status
+      ?? (peerId === localInstanceId ? "connected" : "disconnected");
+    return status;
+  };
+
+  const renderCloud = (position: StarMapInstancePosition) => {
+    const threads = attentionByInstance.get(position.instanceId) ?? [];
+    const visible = threads.slice(0, MAX_CARDS_PER_INSTANCE);
+    const overflow = threads.length - visible.length;
+    return (
+      <div
+        key={`cloud:${position.instanceId}`}
+        className="star-map__cloud"
+        style={{ left: position.x, top: position.y }}
+      >
+        {visible.length > 0 ? (
+          <span
+            className="star-map__cloud-halo"
+            aria-hidden="true"
+            style={{
+              width: layout.cardWidth + 56,
+              height: starMapCardSlot(visible.length - 1).dy + 120,
+            }}
+          />
+        ) : null}
+        {visible.map((thread, index) => {
+          const slot = starMapCardSlot(index);
+          return (
+            <StarMapThreadCard
+              key={buildThreadIdentityKey(thread.source, thread.id)}
+              thread={thread}
+              sessionKeys={
+                position.instanceId === localInstanceId
+                  ? props.sessionKeys
+                  : undefined
+              }
+              riseDelayMs={index * 45}
+              // left/top positioning (not transform) so the rise/bubble
+              // keyframes own the transform channel without snapping the
+              // card back to its anchor origin mid-animation.
+              style={{
+                width: layout.cardWidth,
+                left: slot.dx,
+                top: slot.dy,
+                marginLeft: -layout.cardWidth / 2,
+              }}
+              onOpen={openThread}
+            />
+          );
+        })}
+        {overflow > 0 ? (
+          <span
+            className="star-map__cloud-overflow"
+            style={{
+              transform: `translate(-50%, ${
+                starMapCardSlot(visible.length).dy + 8
+              }px)`,
+            }}
+          >
+            +{overflow} more
+          </span>
+        ) : null}
+      </div>
+    );
+  };
+
+  const instanceEntry = (
+    instanceId: string,
+  ): { label: string; peer?: FederationPeerSummary } => {
+    if (instanceId === localInstanceId) {
+      return {
+        label: props.localInstanceLabel?.trim() || "This instance",
+      };
+    }
+    const peer = peerById.get(instanceId);
+    return { label: peer?.label ?? instanceId, peer };
+  };
+
+  return (
+    <div
+      ref={layerRef}
+      className={`star-map${props.floating ? " star-map--floating" : ""}`}
+      role="region"
+      aria-label="Star Map"
+      tabIndex={-1}
+      onKeyDown={(event) => {
+        if (event.key === "Escape") {
+          event.stopPropagation();
+          props.onClose();
+        }
+      }}
+    >
+      <div ref={viewportRef} className="star-map__viewport">
+        <svg
+          className="star-map__sky"
+          viewBox="0 0 100 100"
+          preserveAspectRatio="none"
+          aria-hidden="true"
+        >
+          {stars.map((star, index) => (
+            <circle
+              key={index}
+              className="star-map__star"
+              cx={star.x}
+              cy={star.y}
+              r={star.radius * 0.08}
+              fillOpacity={star.opacity}
+              style={{ animationDelay: `${star.twinkleDelay}s` }}
+            />
+          ))}
+        </svg>
+        <svg
+          className="star-map__links"
+          viewBox={`0 0 ${viewportSize.width} ${viewportSize.height}`}
+          aria-hidden="true"
+        >
+          {layout.links.map((link) => {
+            const state = linkState(
+              link.toInstanceId === localInstanceId
+                ? link.fromInstanceId
+                : link.toInstanceId,
+            );
+            const healthy = state === "connected";
+            const pending = state === "connecting" || state === "handshaking";
+            const d = `M ${link.path.x1} ${link.path.y1} Q ${link.path.cx} ${link.path.cy} ${link.path.x2} ${link.path.y2}`;
+            return (
+              <g key={`${link.fromInstanceId}->${link.toInstanceId}`}>
+                <path
+                  className={`star-map__link${
+                    healthy
+                      ? " star-map__link--healthy"
+                      : pending
+                        ? " star-map__link--pending"
+                        : " star-map__link--dead"
+                  }`}
+                  d={d}
+                />
+                {healthy ? (
+                  <path className="star-map__link-flow" d={d} />
+                ) : null}
+              </g>
+            );
+          })}
+        </svg>
+        {layout.positions.map((position) => {
+          const entry = instanceEntry(position.instanceId);
+          return (
+            <div
+              key={position.instanceId}
+              className="star-map__anchor"
+              style={{ left: position.x, top: position.y }}
+            >
+              <StarMapInstanceCard
+                instanceId={position.instanceId}
+                label={entry.label}
+                icon={celestialIcons.iconFor(
+                  position.instanceId === localInstanceId
+                    ? undefined
+                    : position.instanceId,
+                )}
+                status={
+                  position.instanceId === localInstanceId
+                    ? health?.status === "disabled"
+                      ? "listening"
+                      : health?.status ?? "listening"
+                    : entry.peer?.status ?? "disconnected"
+                }
+                isLocal={position.instanceId === localInstanceId}
+                isHub={position.isHub}
+                unreachable={remote.unreachableInstanceIds.has(
+                  position.instanceId,
+                )}
+                onOpen={() => openInstance(position.instanceId)}
+              />
+            </div>
+          );
+        })}
+        {layout.positions.map((position) => renderCloud(position))}
+      </div>
+      <div className="star-map__filters" role="group" aria-label="Attention filters">
+        {STAR_MAP_ATTENTION_CATEGORIES.map((category) => (
+          <button
+            key={category}
+            type="button"
+            className={`star-map__filter-chip${
+              filters.has(category) ? " is-on" : ""
+            }`}
+            aria-pressed={filters.has(category)}
+            onClick={() => toggleFilter(category)}
+          >
+            {STAR_MAP_ATTENTION_LABELS[category]}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}

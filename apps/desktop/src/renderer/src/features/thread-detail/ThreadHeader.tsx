@@ -9,6 +9,7 @@ import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import { getDesktopApi, type DesktopApi } from "../../lib/desktop-api";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { TerminalIcon } from "../../icons/TerminalIcon";
+import { StarMapIcon } from "../../icons/StarMapIcon";
 import { PanelToggleButtons } from "../chrome/PanelToggleButtons";
 import {
   HistoryNavButtons,
@@ -35,6 +36,11 @@ type ThreadHeaderLayoutControls = {
   onToggleTerminal: () => void;
 };
 
+export type StarMapToggleControls = {
+  active: boolean;
+  onToggle: () => void;
+};
+
 type ThreadHeaderProps = {
   desktopApi?: DesktopApi;
   projectLabel?: string;
@@ -51,6 +57,13 @@ type ThreadHeaderProps = {
    * is skipped to avoid a duplicate control + a second hotkey listener.
    */
   layout?: ThreadHeaderLayoutControls;
+  /**
+   * Star Map mission-control toggle, rendered left of the MSG chip on
+   * macOS/Linux (Windows renders it in the AppTitleBar instead). Absent in
+   * federation remote windows — the map is a whole-federation surface owned
+   * by the primary window.
+   */
+  starMap?: StarMapToggleControls;
   /**
    * The wordmark + action buttons that normally live in the sidebar
    * masthead. When the sidebar is hidden (macOS/Linux), they relocate
@@ -94,6 +107,8 @@ export function ThreadHeader(props: ThreadHeaderProps) {
   // sidebar/rail toggles sitting right beside it instead of falling back to the
   // slow, edge-clipping native `title`.
   const terminalTooltip = useViewportTooltip({ className: "viewport-tooltip" });
+  const starMapTooltip = useViewportTooltip({ className: "viewport-tooltip" });
+  const starMapLabel = props.starMap?.active ? "Close Star Map" : "Open Star Map";
   // A collapsed-but-running terminal gets its own affordance: the toggle wears
   // a live dot and says so, otherwise the shell is invisible from here.
   const terminalCollapsedRunning =
@@ -217,6 +232,31 @@ export function ThreadHeader(props: ThreadHeaderProps) {
             </button>
           ) : null}
           {terminalTooltip.tooltipNode}
+          {props.starMap ? (
+            <button
+              type="button"
+              className={`thread-header__star-map-toggle${
+                props.starMap.active ? " is-open" : ""
+              }`}
+              aria-label={starMapLabel}
+              aria-pressed={props.starMap.active}
+              onClick={() => {
+                starMapTooltip.hide();
+                props.starMap?.onToggle();
+              }}
+              onMouseEnter={(event) =>
+                starMapTooltip.show(event.currentTarget, starMapLabel)
+              }
+              onMouseLeave={starMapTooltip.hide}
+              onFocus={(event) =>
+                starMapTooltip.show(event.currentTarget, starMapLabel)
+              }
+              onBlur={starMapTooltip.hide}
+            >
+              <StarMapIcon size={14} />
+            </button>
+          ) : null}
+          {starMapTooltip.tooltipNode}
           <MessagingStatusBar
             desktopApi={props.desktopApi}
             onOpenActivity={props.onOpenMessagingActivity}

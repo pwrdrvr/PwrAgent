@@ -127,6 +127,10 @@ const LazySettingsScreen = lazy(async () => ({
   default: (await import("./features/settings/SettingsScreen")).SettingsScreen,
 }));
 
+const LazyStarMapScreen = lazy(async () => ({
+  default: (await import("./features/star-map/StarMapScreen")).StarMapScreen,
+}));
+
 const LazyOnboardingWizard = lazy(async () => ({
   default: (await import("./features/onboarding/OnboardingWizard")).OnboardingWizard,
 }));
@@ -242,8 +246,22 @@ function DesktopAppShell(props: {
     DEFAULT_ACTION_RUNS_DOCK,
   );
   const [mainView, setMainView] = useState<
-    "thread" | "settings" | "automations" | "search"
+    "thread" | "settings" | "automations" | "search" | "star-map"
   >("thread");
+  // Star Map floating thread: while the map is up, a clicked local thread
+  // elevates the (already mounted) main ThreadView into a floating card
+  // over the map instead of remounting a second instance.
+  const [starMapFloatOpen, setStarMapFloatOpen] = useState(false);
+  const appMainRef = useRef<HTMLElement>(null);
+  // Each float session starts at the default position. Without the reset, a
+  // drag from the previous session persists in the element's CSS vars and a
+  // card once shoved mostly off-screen would reopen unreachable.
+  useEffect(() => {
+    if (starMapFloatOpen) {
+      appMainRef.current?.style.removeProperty("--star-map-float-dx");
+      appMainRef.current?.style.removeProperty("--star-map-float-dy");
+    }
+  }, [starMapFloatOpen]);
   // In-thread find bar (⌘F). `manualFindOpen` is the ⌘F toggle; `findRequest`
   // is a deep-link from a search result (seeded query + its target thread).
   // The bar is open when either applies (see `threadFindOpen` below).
@@ -1194,6 +1212,21 @@ function DesktopAppShell(props: {
       await navigation.createThread(undefined, "default", { forceWorkspace: true });
     },
   };
+  // The Star Map is a whole-federation surface owned by the primary window;
+  // federation remote-viewer windows never render its toggle.
+  const starMapControls = readRendererFederationTarget()
+    ? undefined
+    : {
+        active: mainView === "star-map",
+        onToggle: () => {
+          setStarMapFloatOpen(false);
+          setMainView(mainView === "star-map" ? "thread" : "star-map");
+        },
+      };
+  const closeStarMap = () => {
+    setStarMapFloatOpen(false);
+    setMainView("thread");
+  };
   const threadViewProps = {
     activeFederationOwnerLabel,
     activeFederationTarget,
@@ -1347,6 +1380,7 @@ function DesktopAppShell(props: {
     onToggleSidebar: () => setSidebarHiddenPersisted(!sidebarHidden),
     mastheadActions,
     historyNav,
+    starMap: starMapControls,
     findOpen: threadFindOpen,
     findInitialQuery: threadFindInitialQuery,
     findTurnId: threadFindTurnId,
@@ -1545,6 +1579,7 @@ function DesktopAppShell(props: {
           onToggleSidebar: () => setSidebarHiddenPersisted(!sidebarHidden),
           onToggleRail: () => setContextRailPinnedPersisted(!contextRailPinned),
         }}
+        starMap={starMapControls}
         actions={mastheadActions}
       />
       <div
@@ -1745,10 +1780,93 @@ function DesktopAppShell(props: {
         />
 
         <main
+          ref={appMainRef}
           className={`app-main${
             threadDetailPending ? " app-main--thread-detail-pending" : ""
+          }${
+            mainView === "star-map" && starMapFloatOpen
+              ? " app-main--star-map-float"
+              : ""
           }`}
         >
+          {mainView === "star-map" && starMapFloatOpen ? (
+            <div
+              className="star-map-float-handle"
+              onPointerDown={(event) => {
+                if (event.button !== 0) return;
+                if (
+                  event.target instanceof HTMLElement
+                  && event.target.closest("button")
+                ) {
+                  return;
+                }
+                const main = event.currentTarget.closest("main");
+                if (!(main instanceof HTMLElement)) return;
+                event.preventDefault();
+                const startX = event.clientX;
+                const startY = event.clientY;
+                const baseX =
+                  Number.parseFloat(
+                    main.style.getPropertyValue("--star-map-float-dx"),
+                  ) || 0;
+                const baseY =
+                  Number.parseFloat(
+                    main.style.getPropertyValue("--star-map-float-dy"),
+                  ) || 0;
+                // Clamp drags so a strip of the card (and its handle row)
+                // always stays on-screen — an off-screen float has no other
+                // recovery affordance.
+                const MIN_VISIBLE_PX = 160;
+                const rect = main.getBoundingClientRect();
+                const untranslatedLeft = rect.left - baseX;
+                const untranslatedTop = rect.top - baseY;
+                const clampDx = (dx: number) =>
+                  Math.min(
+                    Math.max(dx, MIN_VISIBLE_PX - untranslatedLeft - rect.width),
+                    window.innerWidth - MIN_VISIBLE_PX - untranslatedLeft,
+                  );
+                const clampDy = (dy: number) =>
+                  Math.min(
+                    Math.max(dy, -untranslatedTop),
+                    window.innerHeight - MIN_VISIBLE_PX - untranslatedTop,
+                  );
+                let lastDx = baseX;
+                let lastDy = baseY;
+                let frame = 0;
+                const move = (pointerEvent: globalThis.PointerEvent) => {
+                  lastDx = clampDx(baseX + pointerEvent.clientX - startX);
+                  lastDy = clampDy(baseY + pointerEvent.clientY - startY);
+                  if (!frame) {
+                    frame = requestAnimationFrame(() => {
+                      frame = 0;
+                      main.style.setProperty("--star-map-float-dx", `${lastDx}px`);
+                      main.style.setProperty("--star-map-float-dy", `${lastDy}px`);
+                    });
+                  }
+                };
+                const stop = () => {
+                  window.removeEventListener("pointermove", move);
+                  window.removeEventListener("pointerup", stop);
+                  window.removeEventListener("pointercancel", stop);
+                };
+                window.addEventListener("pointermove", move);
+                window.addEventListener("pointerup", stop);
+                window.addEventListener("pointercancel", stop);
+              }}
+            >
+              <span className="star-map-float-handle__grip" aria-hidden="true" />
+              <span className="star-map-float-handle__title">
+                {navigation.selectedThread?.title ?? ""}
+              </span>
+              <button
+                type="button"
+                className="star-map-float-handle__close"
+                onClick={() => setStarMapFloatOpen(false)}
+              >
+                Back to map
+              </button>
+            </div>
+          ) : null}
           {!peerConnectivity.connected ? (
             // The runtime keeps reconnecting on its own; this banner
             // explains why the window went read-only (composer disabled,
@@ -1831,6 +1949,7 @@ function DesktopAppShell(props: {
                 }}
                 masthead={mastheadActions}
                 history={historyNav}
+                starMap={starMapControls}
               />
             </section>
           ) : ThreadViewComponent ? (
@@ -1860,6 +1979,36 @@ function DesktopAppShell(props: {
                   setMainView("thread");
                   void navigation.showThread(target);
                 }}
+              />
+            </Suspense>
+          </div>
+        ) : null}
+
+        {mainView === "star-map" ? (
+          <div
+            className={`app-shell__star-map-layer${
+              starMapFloatOpen ? " is-floating" : ""
+            }`}
+          >
+            <Suspense fallback={null}>
+              <LazyStarMapScreen
+                desktopApi={desktopApi}
+                localThreads={navigation.threads}
+                sessionKeys={{
+                  approvalRequestThreadKeys: session.approvalRequestThreadKeys,
+                  inputRequestThreadKeys: session.inputRequestThreadKeys,
+                  thinkingThreadKeys: session.thinkingThreadKeys,
+                }}
+                localInstanceLabel={
+                  settings.snapshot?.federation.instanceLabel.value
+                }
+                floating={starMapFloatOpen}
+                onClose={closeStarMap}
+                onOpenLocalThread={(thread) => {
+                  navigation.selectThread(thread);
+                  setStarMapFloatOpen(true);
+                }}
+                onFocusLocalInstance={closeStarMap}
               />
             </Suspense>
           </div>
