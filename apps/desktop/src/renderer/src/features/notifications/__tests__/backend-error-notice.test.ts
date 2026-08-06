@@ -22,7 +22,6 @@ describe("resolveBackendErrorNotice", () => {
     );
     expect(repairing).toEqual({
       autoDismiss: false,
-      copyText: invalidIdFailure,
       detail: "Fix the flaky test",
       id: "codex-invalid-id-recovery:codex:thread-1:turn-9",
       message: invalidIdFailure,
@@ -48,7 +47,6 @@ describe("resolveBackendErrorNotice", () => {
     );
     expect(succeeded).toMatchObject({
       autoDismiss: true,
-      copyText: invalidIdFailure,
       id: repairing?.id,
       status: {
         label: "Saved history repaired. Your message was retried.",
@@ -59,7 +57,7 @@ describe("resolveBackendErrorNotice", () => {
     });
   });
 
-  it("keeps a failed Codex repair sticky with both errors visible or copyable", () => {
+  it("keeps a failed Codex repair sticky and uses the complete notice copy", () => {
     const notice = resolveBackendErrorNotice(
       {
         kind: "codex-invalid-id-recovery",
@@ -74,7 +72,6 @@ describe("resolveBackendErrorNotice", () => {
     );
     expect(notice).toMatchObject({
       autoDismiss: false,
-      copyText: invalidIdFailure,
       message: invalidIdFailure,
       status: {
         label:
@@ -84,6 +81,7 @@ describe("resolveBackendErrorNotice", () => {
       title: "Codex repair failed",
       tone: "error",
     });
+    expect(notice).not.toHaveProperty("copyText");
   });
 
   it("builds a sticky, thread-scoped, copyable notice for a failed turn", () => {
