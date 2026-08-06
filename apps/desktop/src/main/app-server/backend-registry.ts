@@ -10129,7 +10129,7 @@ export class DesktopBackendRegistry {
         id: result.threadId,
         source: backend,
         title: agentName || "Untitled thread",
-        titleSource: agentName ? "explicit" : "fallback",
+        titleSource: "fallback",
         projectKey: cwd,
         createdAt: startedAt,
         updatedAt: startedAt,
