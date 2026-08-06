@@ -3243,6 +3243,13 @@ export function useThreadNavigation(
       }
 
       markNavigationActivity({ refreshOnIdleResume: false });
+      if (method === "navigation/remoteThreadPins/changed") {
+        // Viewer-side pin membership or rank changed (possibly in another
+        // window) — the merged snapshot is the source of truth for the row
+        // set, so refresh rather than patch.
+        scheduleRefresh();
+        return;
+      }
       if (method === "federation/peerStatus/changed") {
         const params = event.notification.params as {
           instanceId: string;

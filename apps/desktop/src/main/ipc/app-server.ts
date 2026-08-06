@@ -92,7 +92,6 @@ import {
   type FederatedThreadRef,
   type FederationJumpSearchRequest,
   type FederationJumpSearchResponse,
-  type RemoteThreadPin,
   type RemoveRemoteThreadPinRequest,
   type RemoveRemoteThreadPinResponse,
   type SetRemoteThreadLocalPinRequest,
@@ -157,7 +156,6 @@ import {
   buildFederatedThreadRef,
   buildPullRequestStatusKey,
   buildThreadIdentityKey,
-  PIN_RANK_STEP,
   federatedThreadIdentityKey,
   isAppServerBackendKind,
   isRemoteFederationTarget,
@@ -332,6 +330,7 @@ type AppServerOverlayStoreLike = OverlayStoreLike &
     | "writeThreadGitWorkingStateCacheEntry"
     | "addRemoteThreadPin"
     | "hasRemoteThreadPin"
+    | "listPinnedThreadOverlayRanks"
     | "removeRemoteThreadPin"
     | "setRemoteThreadLocalPin"
     | "listRemoteThreadPins"
@@ -527,13 +526,16 @@ async function renderExplicitComposerPdfPreview(
  * Remote threads whose project has no local counterpart stay ungrouped and
  * surface only in the Updated / Created lenses.
  */
-function attachRemoteThreadsToLocalDirectories(
-  directories: NavigationSnapshot["directories"],
-  remoteThreads: NavigationThreadSummary[],
-): NavigationSnapshot["directories"] {
-  if (remoteThreads.length === 0) {
-    return directories;
-  }
+/**
+ * The single local directory group a remote thread belongs to, by project
+ * identity (directory label / path basename — peer paths never match viewer
+ * paths). Home preference mirrors `pickHomeDirectory`: repo checkouts
+ * (`kind: "local"`) before worktree links, then the owner's linked order.
+ */
+function findRemoteHomeDirectoryIndex(
+  directories: ReadonlyArray<{ label: string; path?: string }>,
+  linkedDirectories: NavigationThreadSummary["linkedDirectories"] | undefined,
+): number | undefined {
   const directoryIndexByName = new Map<string, number>();
   directories.forEach((directory, index) => {
     const names = new Set(
@@ -547,32 +549,42 @@ function attachRemoteThreadsToLocalDirectories(
       }
     }
   });
+  const linkedByHomePreference = [...(linkedDirectories ?? [])].sort(
+    (left, right) => {
+      if (left.kind !== right.kind) {
+        return left.kind === "worktree" ? 1 : -1;
+      }
+      return 0;
+    },
+  );
+  for (const linked of linkedByHomePreference) {
+    const names = [linked.label, path.basename(linked.path)]
+      .map((name) => (name ?? "").trim().toLowerCase())
+      .filter(Boolean);
+    for (const name of names) {
+      const index = directoryIndexByName.get(name);
+      if (index !== undefined) {
+        return index;
+      }
+    }
+  }
+  return undefined;
+}
+
+function attachRemoteThreadsToLocalDirectories(
+  directories: NavigationSnapshot["directories"],
+  remoteThreads: NavigationThreadSummary[],
+): NavigationSnapshot["directories"] {
+  if (remoteThreads.length === 0) {
+    return directories;
+  }
   const addedKeysByDirectoryIndex = new Map<number, string[]>();
   for (const thread of remoteThreads) {
     const threadKey = buildThreadIdentityKey(thread.source, thread.id);
-    const linkedByHomePreference = [...(thread.linkedDirectories ?? [])].sort(
-      (left, right) => {
-        if (left.kind !== right.kind) {
-          return left.kind === "worktree" ? 1 : -1;
-        }
-        return 0;
-      },
+    const homeIndex = findRemoteHomeDirectoryIndex(
+      directories,
+      thread.linkedDirectories,
     );
-    let homeIndex: number | undefined;
-    for (const linked of linkedByHomePreference) {
-      const names = [linked.label, path.basename(linked.path)]
-        .map((name) => (name ?? "").trim().toLowerCase())
-        .filter(Boolean);
-      for (const name of names) {
-        homeIndex = directoryIndexByName.get(name);
-        if (homeIndex !== undefined) {
-          break;
-        }
-      }
-      if (homeIndex !== undefined) {
-        break;
-      }
-    }
     if (homeIndex === undefined) {
       continue;
     }
@@ -5376,73 +5388,29 @@ class DesktopAppServerService {
         .reorderThreadPins(remoteRequest);
     }
     // The pinned section interleaves local pins and viewer-owned remote
-    // pins. Ranks come from the FULL requested order so the two kinds sort
-    // together; each key routes to its own storage — local thread overlay
-    // vs the remote pin row — and remote ranks never reach the owner.
+    // pins. The store assigns ranks from the FULL requested order in one
+    // transaction, routing each key to its own storage — local thread
+    // overlay vs the remote pin row — so remote ranks never reach the owner
+    // and a mixed reorder is atomic.
     const overlayStore = this.getOverlayStore();
     const remotePins =
       typeof overlayStore.listRemoteThreadPins === "function"
         ? await overlayStore.listRemoteThreadPins()
         : [];
-    const remotePinByKey = new Map(
+    const remoteRefsByKey = Object.fromEntries(
       remotePins.map((pin) => [
         buildThreadIdentityKey(pin.ref.backend, pin.ref.threadId),
-        pin,
+        pin.ref,
       ]),
     );
-    const localThreadKeys: string[] = [];
-    const remoteRankWrites: Array<{
-      key: string;
-      ref: RemoteThreadPin["ref"];
-      pinnedRank: string;
-    }> = [];
-    request.threadKeys.forEach((threadKey, index) => {
-      const remotePin = remotePinByKey.get(threadKey);
-      if (remotePin) {
-        remoteRankWrites.push({
-          key: threadKey,
-          ref: remotePin.ref,
-          pinnedRank: String(index * PIN_RANK_STEP),
-        });
-      } else {
-        localThreadKeys.push(threadKey);
-      }
+    const pinnedRanks = await overlayStore.reorderThreadPins({
+      threadKeys: request.threadKeys,
+      remoteRefsByKey,
     });
-    const pinnedRanks =
-      remoteRankWrites.length === 0
-        ? await overlayStore.reorderThreadPins({
-            threadKeys: request.threadKeys,
-          })
-        : Object.fromEntries(
-            await Promise.all(
-              request.threadKeys.map(async (threadKey, index) => {
-                const rank = String(index * PIN_RANK_STEP);
-                const remoteWrite = remoteRankWrites.find(
-                  (write) => write.key === threadKey,
-                );
-                if (remoteWrite) {
-                  await overlayStore.setRemoteThreadLocalPin({
-                    ref: remoteWrite.ref,
-                    pinnedRank: rank,
-                  });
-                } else {
-                  const parsed = parseThreadIdentityKey(threadKey);
-                  if (parsed) {
-                    await overlayStore.setThreadPin({
-                      backend: parsed.backend,
-                      threadId: parsed.threadId,
-                      pinnedRank: rank,
-                    });
-                  }
-                }
-                return [threadKey, rank] as const;
-              }),
-            ),
-          );
 
     logDebug("reorderThreadPins", {
       pinCount: request.threadKeys.length,
-      remotePinCount: remoteRankWrites.length,
+      remotePinCount: Object.keys(remoteRefsByKey).length,
     });
 
     // Pin order is global across backends, so this is a global notification.
@@ -5583,8 +5551,12 @@ class DesktopAppServerService {
    * Mirror of the created-thread visibility auto-pin (backend-registry):
    * when the freshly pinned remote thread's home directory group has its
    * Directory Threads section collapsed and the pinned section is in use,
-   * the row would be invisible — give its top-level row (the companion
-   * parent when one exists) a VIEWER-owned rank so it surfaces in Pins.
+   * the row would be invisible — give its top-level row a VIEWER-owned rank
+   * so it surfaces in Pins. The top-level row is the companion parent when
+   * one is pinned; otherwise the thread itself, since a child whose parent
+   * is absent from the list renders top-level. Reads overlay-store scans and
+   * the cached directory summaries from the last snapshot build — never a
+   * fresh snapshot, so pin latency stays independent of backends and peers.
    * Best-effort; the pin itself must succeed regardless.
    */
   private async rankRemotePinForVisibility(
@@ -5592,41 +5564,59 @@ class DesktopAppServerService {
     companionParentRef: FederatedThreadRef | undefined,
   ): Promise<void> {
     try {
-      const snapshot = await this.getNavigationSnapshot({});
       const targetRef = companionParentRef ?? request.ref;
-      const targetKey = buildThreadIdentityKey(
-        targetRef.backend,
-        targetRef.threadId,
+      const overlayStore = this.getOverlayStore();
+      const pins =
+        typeof overlayStore.listRemoteThreadPins === "function"
+          ? await overlayStore.listRemoteThreadPins()
+          : [];
+      const targetPin = pins.find(
+        (pin) =>
+          pin.ref.backend === targetRef.backend
+          && pin.ref.threadId === targetRef.threadId
+          && isRemoteFederationTarget(pin.ref.target)
+          && isRemoteFederationTarget(targetRef.target)
+          && pin.ref.target.instanceId === targetRef.target.instanceId,
       );
-      const targetRow = snapshot.threads.find(
-        (thread) =>
-          buildThreadIdentityKey(thread.source, thread.id) === targetKey,
-      );
-      // Only top-level rows join the pinned section; an already-ranked row
-      // needs nothing.
-      if (!targetRow || targetRow.parentThreadId || targetRow.pinnedRank) {
+      // An already-ranked row needs nothing.
+      if (!targetPin || targetPin.localPinnedRank) {
         return;
       }
-      const directory = snapshot.directories.find((entry) =>
-        entry.threadKeys.includes(targetKey),
+      const targetSummary = targetPin.summary ?? request.summary;
+      // Cached from the last snapshot build — always warm in a running
+      // window; a cold cache just skips this best-effort step.
+      const directories = [...this.lastDirectoriesByKey.values()];
+      const homeIndex = findRemoteHomeDirectoryIndex(
+        directories,
+        targetSummary?.linkedDirectories,
       );
-      const hasPinnedTopLevelThread = snapshot.threads.some(
-        (thread) => thread.pinnedRank && !thread.parentThreadId,
-      );
-      if (!directory?.directoryThreadsCollapsed || !hasPinnedTopLevelThread) {
+      const home = homeIndex === undefined ? undefined : directories[homeIndex];
+      if (!home?.directoryThreadsCollapsed) {
         return;
       }
-      const pinnedRank = buildAppendPinRank(
-        snapshot.threads.map((thread) => thread.pinnedRank),
-      );
-      await this.getOverlayStore().setRemoteThreadLocalPin({
+      const localRanks = await overlayStore.listPinnedThreadOverlayRanks();
+      // Mirror the created-thread rule: only when the pinned section is in
+      // use would the row otherwise be invisible.
+      const hasPinnedTopLevelThread =
+        localRanks.some((entry) => !entry.parentThreadId)
+        || pins.some(
+          (pin) => pin.localPinnedRank && !pin.summary?.parentThreadId,
+        );
+      if (!hasPinnedTopLevelThread) {
+        return;
+      }
+      const pinnedRank = buildAppendPinRank([
+        ...localRanks.map((entry) => entry.pinnedRank),
+        ...pins.map((pin) => pin.localPinnedRank),
+      ]);
+      await overlayStore.setRemoteThreadLocalPin({
         ref: targetRef,
         pinnedRank,
       });
       logDebug("addRemoteThreadPin:visibility-rank", {
         backend: targetRef.backend,
         threadId: targetRef.threadId,
-        directoryKey: directory.key,
+        directoryKey: home.key,
       });
       await getDesktopBackendRegistry().publishLocalEvent({
         backend: targetRef.backend,
@@ -5708,7 +5698,7 @@ class DesktopAppServerService {
         params: {
           instanceId: request.ref.target.instanceId,
           threadId: request.ref.threadId,
-          pinned: true,
+          pinned: Boolean(result.pinnedRank),
         },
       },
     });

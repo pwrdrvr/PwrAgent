@@ -299,6 +299,18 @@ const setThreadPinOverlay = vi.fn(
     pinnedRank: params.pinnedRank ?? undefined,
   }),
 );
+const listPinnedThreadOverlayRanks = vi.fn(
+  async (): Promise<Array<{ pinnedRank: string; parentThreadId?: string }>> => [],
+);
+const reorderThreadPinsStore = vi.fn(
+  async (params: { threadKeys: string[] }): Promise<Record<string, string>> =>
+    Object.fromEntries(
+      params.threadKeys.map((threadKey, index) => [
+        threadKey,
+        String((index + 1) * 1024),
+      ]),
+    ),
+);
 const readDirectoryStatuses = vi.fn(async () => ({
   "directory:/repo/app": {
     currentBranch: "main",
@@ -740,6 +752,8 @@ vi.mock("../app-server/desktop-overlay-store", () => ({
     hasRemoteThreadPin,
     setRemoteThreadLocalPin,
     setThreadPin: setThreadPinOverlay,
+    listPinnedThreadOverlayRanks,
+    reorderThreadPins: reorderThreadPinsStore,
   }),
 }));
 
@@ -1928,8 +1942,7 @@ describe("app server ipc", () => {
       instanceId: "peer-laptop",
       threadId: "remote-pin",
     });
-    setRemoteThreadLocalPin.mockClear();
-    setThreadPinOverlay.mockClear();
+    reorderThreadPinsStore.mockClear();
     listRemoteThreadPins.mockResolvedValueOnce([
       { ref: remoteRef, addedAt: 1_000, instanceLabel: "Laptop" },
     ]);
@@ -1941,19 +1954,15 @@ describe("app server ipc", () => {
       { threadKeys: ["codex:remote-pin", "codex:local-pin"] },
     )) as { pinnedRanks: Record<string, string> };
 
-    // Ranks come from the FULL order so both kinds interleave correctly.
-    expect(setRemoteThreadLocalPin).toHaveBeenCalledWith({
-      ref: remoteRef,
-      pinnedRank: "0",
-    });
-    expect(setThreadPinOverlay).toHaveBeenCalledWith({
-      backend: "codex",
-      threadId: "local-pin",
-      pinnedRank: "1024",
+    // The store gets the FULL order plus the remote-key routing map so both
+    // kinds interleave in one atomic write.
+    expect(reorderThreadPinsStore).toHaveBeenCalledWith({
+      threadKeys: ["codex:remote-pin", "codex:local-pin"],
+      remoteRefsByKey: { "codex:remote-pin": remoteRef },
     });
     expect(response.pinnedRanks).toEqual({
-      "codex:remote-pin": "0",
-      "codex:local-pin": "1024",
+      "codex:remote-pin": "1024",
+      "codex:local-pin": "2048",
     });
   });
 
@@ -1964,60 +1973,21 @@ describe("app server ipc", () => {
     );
     const { buildFederatedThreadRef } = await import("@pwragent/shared");
 
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     const ref = buildFederatedThreadRef({
       backend: "codex",
       instanceId: "peer-laptop",
       threadId: "remote-hidden",
     });
     setRemoteThreadLocalPin.mockClear();
-    // The visibility check reads a fresh snapshot AFTER the pin lands: the
-    // remote row is merged and its home group ("app") reports Directory
-    // Threads collapsed while the pinned section is in use locally.
-    listRemoteThreadPins.mockResolvedValueOnce([
-      { ref, addedAt: 1_000, instanceLabel: "Laptop" },
-    ]);
-    federationMock.remoteThreadSummaries.resolvePinnedThreads.mockResolvedValueOnce({
-      threads: [
-        {
-          source: "codex" as const,
-          id: "remote-hidden",
-          title: "Hidden remote",
-          titleSource: "derived" as const,
-          linkedDirectories: [
-            {
-              id: "dir-app",
-              label: "app",
-              path: "/peer/dev/app",
-              kind: "local" as const,
-            },
-          ],
-          inbox: { inInbox: false },
-          federation: {
-            ref,
-            instanceLabel: "Laptop",
-            peerStatus: "connected" as const,
-            capabilities: [],
-          },
-        },
-      ],
-      refreshed: [],
-    });
+    // The visibility check reads the CACHED directory summaries from the
+    // last snapshot build (never a fresh snapshot) — warm the cache with a
+    // snapshot whose "app" group reports Directory Threads collapsed.
     reconcileNavigationSnapshot.mockImplementationOnce(async (params: unknown) => ({
       backend: (params as { backend: "all" | "codex" | "grok" }).backend,
       fetchedAt: 1234,
       unchanged: false,
-      threads: [
-        {
-          source: "codex" as const,
-          id: "local-pinned",
-          title: "Local pinned",
-          titleSource: "explicit" as const,
-          pinnedRank: "0",
-          linkedDirectories: [],
-          inbox: { inInbox: false },
-        },
-        ...((params as { threads: unknown[] }).threads as never[]),
-      ],
+      threads: (params as { threads: unknown[] }).threads,
       inboxThreadKeys: [],
       directories: [
         {
@@ -2038,6 +2008,36 @@ describe("app server ipc", () => {
     }));
 
     registerAppServerIpcHandlers();
+    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.(
+      {},
+      {} satisfies GetNavigationSnapshotRequest,
+    );
+
+    // The pinned section is in use locally, and the freshly added pin's
+    // payload carries the home-directory link.
+    listPinnedThreadOverlayRanks.mockResolvedValueOnce([{ pinnedRank: "0" }]);
+    listRemoteThreadPins.mockResolvedValueOnce([
+      {
+        ref,
+        addedAt: 1_000,
+        instanceLabel: "Laptop",
+        summary: {
+          source: "codex" as const,
+          id: "remote-hidden",
+          title: "Hidden remote",
+          titleSource: "derived" as const,
+          linkedDirectories: [
+            {
+              id: "dir-app",
+              label: "app",
+              path: "/peer/dev/app",
+              kind: "local" as const,
+            },
+          ],
+          inbox: { inInbox: false },
+        },
+      },
+    ]);
 
     await handlers.get(NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL)?.({}, {
       ref,
