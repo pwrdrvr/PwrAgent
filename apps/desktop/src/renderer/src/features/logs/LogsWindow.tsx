@@ -8,7 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import type { AppLogEntry, AppLogSnapshot } from "../../../../shared/app-metadata";
-import { CopyIcon, FolderIcon } from "../../icons";
+import { CheckIcon, CopyIcon, FolderIcon } from "../../icons";
 import { copyText } from "../../lib/copy-text";
 import { useDesktopApi } from "../../lib/desktop-api";
 
@@ -72,12 +72,14 @@ export function LogsWindow() {
   const syncDebugCollectionRef = useRef<() => void>(() => undefined);
   const entryBufferRef = useRef(createRenderedLogEntryBuffer());
   const copyResetTimerRef = useRef<number | undefined>(undefined);
+  const lineCopyResetTimerRef = useRef<number | undefined>(undefined);
   const [renderVersion, setRenderVersion] = useState(0);
   const [truncated, setTruncated] = useState(false);
   const [logFilePath, setLogFilePath] = useState<string | undefined>(
     readBootstrapLogFilePath,
   );
   const [copiedLogFilePath, setCopiedLogFilePath] = useState(false);
+  const [copiedLineNumber, setCopiedLineNumber] = useState<number | undefined>();
   const [error, setError] = useState<string | undefined>();
   const [loading, setLoading] = useState(false);
   const [query, setQuery] = useState("");
@@ -148,6 +150,9 @@ export function LogsWindow() {
     return () => {
       if (copyResetTimerRef.current) {
         window.clearTimeout(copyResetTimerRef.current);
+      }
+      if (lineCopyResetTimerRef.current) {
+        window.clearTimeout(lineCopyResetTimerRef.current);
       }
     };
   }, []);
@@ -348,6 +353,26 @@ export function LogsWindow() {
     });
   }, [desktopApi, logFilePath]);
 
+  const handleCopyLogLine = useCallback(
+    (lineNumber: number, text: string) => {
+      void copyText(text, desktopApi)
+        .then(() => {
+          if (lineCopyResetTimerRef.current) {
+            window.clearTimeout(lineCopyResetTimerRef.current);
+          }
+          setCopiedLineNumber(lineNumber);
+          lineCopyResetTimerRef.current = window.setTimeout(() => {
+            setCopiedLineNumber(undefined);
+            lineCopyResetTimerRef.current = undefined;
+          }, 1400);
+        })
+        .catch((copyError: unknown) => {
+          console.error("Failed to copy log line", copyError);
+        });
+    },
+    [desktopApi],
+  );
+
   const activeMatchLabel =
     rendered.matchCount > 0 ? `${activeMatchIndex + 1} / ${rendered.matchCount}` : "0";
 
@@ -500,8 +525,10 @@ export function LogsWindow() {
                   <LogLine
                     key={line.lineNumber}
                     activeMatchIndex={activeMatchIndex}
+                    copied={copiedLineNumber === line.lineNumber}
                     line={line}
                     activeMatchRef={activeMatchRef}
+                    onCopy={handleCopyLogLine}
                   />
                 ))}
               </pre>
@@ -579,14 +606,36 @@ function shouldShowLogEntry(
 function LogLine(props: {
   activeMatchIndex: number;
   activeMatchRef: MutableRefObject<HTMLElement | null>;
+  copied: boolean;
   line: RenderedLogLine;
+  onCopy: (lineNumber: number, text: string) => void;
 }) {
   const levelClass = props.line.level
     ? ` log-window__line--${props.line.level}`
     : "";
+  const copyLabel = props.copied
+    ? `Copied line ${props.line.lineNumber}`
+    : `Copy line ${props.line.lineNumber}`;
+  const lineText = props.line.parts.map((part) => part.text).join("");
   return (
     <span className={`log-window__line${levelClass}`}>
-      <span className="log-window__line-number">{props.line.lineNumber}</span>
+      <span className="log-window__line-gutter">
+        <button
+          aria-label={copyLabel}
+          className="log-window__line-copy"
+          data-copied={props.copied ? "true" : undefined}
+          title={copyLabel}
+          type="button"
+          onClick={() => props.onCopy(props.line.lineNumber, lineText)}
+        >
+          {props.copied ? (
+            <CheckIcon aria-hidden="true" size={12} />
+          ) : (
+            <CopyIcon aria-hidden="true" size={12} />
+          )}
+        </button>
+        <span className="log-window__line-number">{props.line.lineNumber}</span>
+      </span>
       <span className="log-window__line-text">
         {props.line.parts.map((part, index) =>
           renderLogLinePart({

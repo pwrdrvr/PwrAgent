@@ -196,6 +196,43 @@ describe("LogsWindow", () => {
     });
   });
 
+  it("copies an individual log line without its line number", async () => {
+    const copyText = vi.fn(async () => undefined);
+    const desktopApi = {
+      copyText,
+      readAppLogSnapshot: vi.fn(async () => ({
+        kind: "log-snapshot",
+        title: "Logs",
+        debugCollectionEnabled: false,
+        entries: [
+          {
+            sequence: 1,
+            timestamp: Date.now(),
+            level: "info",
+            line: "[2026-05-12 20:06:28.722] [info] (pwragent:main) exact line",
+          },
+        ],
+        readAt: Date.now(),
+        truncated: false,
+      })),
+      onAppLogEntry: vi.fn(() => () => undefined),
+    } as unknown as DesktopApi;
+    (window as Window & { pwragent?: DesktopApi }).pwragent = desktopApi;
+
+    render(<LogsWindow />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Copy line 1" }));
+
+    await waitFor(() => {
+      expect(copyText).toHaveBeenCalledWith(
+        "[2026-05-12 20:06:28.722] [info] (pwragent:main) exact line",
+      );
+    });
+    expect(
+      screen.getByRole("button", { name: "Copied line 1" }),
+    ).toBeInTheDocument();
+  });
+
   it("defaults to Error, Warning, and Info toggles with Debug off", async () => {
     const entries = [
       {
