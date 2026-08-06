@@ -4,6 +4,7 @@ import type { Duplex } from "node:stream";
 import WebSocket, { WebSocketServer } from "ws";
 import type {
   FederationCapability,
+  FederationHostInfo,
   FederationInstanceId,
   FederationInstanceRole,
   FederationProtocolEnvelope,
@@ -187,6 +188,7 @@ type FederationSocketAuthMessage = {
   endpoint?: string;
   profileName?: string;
   notes?: string;
+  host?: FederationHostInfo;
 };
 
 type FederationSocketChallengeMessage = {
@@ -716,6 +718,7 @@ export class FederationGatewayWebSocketServer {
           endpoint: message.endpoint,
           profileName: message.profileName,
           notes: message.notes,
+          host: message.host,
         },
       });
     }
@@ -732,6 +735,7 @@ export class FederationGatewayWebSocketServer {
       label: message.label,
       profileName: message.profileName,
       notes: message.notes,
+      host: message.host,
     });
   }
 }
@@ -758,6 +762,7 @@ export async function connectFederationClient(params: {
   endpoint?: string;
   profileName?: string;
   notes?: string;
+  host?: FederationHostInfo;
   headers?: Record<string, string>;
   clientCertificate?: string;
   clientPrivateKey?: string;
@@ -959,6 +964,7 @@ async function establishFederationClient(
     endpoint: params.endpoint,
     profileName: params.profileName,
     notes: params.notes,
+    host: params.host,
   };
   sendFrame(socket, authMessage, transport);
 

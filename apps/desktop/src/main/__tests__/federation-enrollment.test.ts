@@ -575,6 +575,12 @@ describe("federation enrollment", () => {
           message,
         }),
         notes: " PwrSnap dev + screen recording ",
+        host: {
+          platform: "darwin",
+          hostname: "studio",
+          cpuCount: 16,
+          machineId: "mach_studio",
+        },
       },
     });
 
@@ -584,6 +590,12 @@ describe("federation enrollment", () => {
     });
     expect(store.getPeer("client_one")).toMatchObject({
       notes: "PwrSnap dev + screen recording",
+      host: {
+        platform: "darwin",
+        hostname: "studio",
+        cpuCount: 16,
+        machineId: "mach_studio",
+      },
     });
   });
 
@@ -641,6 +653,64 @@ describe("federation enrollment", () => {
       accepted: true,
     });
     expect(store.getPeer("client_one")?.notes).toBeUndefined();
+  });
+
+  it("replaces stored host facts on reconnect and keeps them when absent", async () => {
+    const keyPair = generateFederationIdentityKeyPair();
+    store.upsertPeer({
+      updatedAt: 1_000,
+      peer: {
+        id: "client_one",
+        label: "Studio Mac",
+        role: "client",
+        status: "disconnected",
+        capabilities: ["remote_window"],
+        protocolVersion: 1,
+        pinnedPublicKeyPem: keyPair.publicKeyPem,
+        host: { platform: "darwin", cpuCount: 8, machineId: "mach_studio" },
+      },
+    });
+    const reconnect = (
+      nonce: string,
+      fields: { host?: { platform?: string; cpuCount?: number; machineId?: string } },
+    ) => {
+      const message = buildFederationProofMessage({
+        purpose: "reconnect",
+        gatewayInstanceId: "gateway_one",
+        peerInstanceId: "client_one",
+        publicKeyPem: keyPair.publicKeyPem,
+        protocolVersion: 1,
+        nonce,
+        capabilities: ["remote_window"],
+      });
+      return authenticateFederationReconnect({
+        store,
+        gatewayInstanceId: "gateway_one",
+        peerInstanceId: "client_one",
+        protocolVersion: 1,
+        nonce,
+        requestedCapabilities: ["remote_window"],
+        signatureBase64: signFederationMessage({
+          privateKeyPem: keyPair.privateKeyPem,
+          message,
+        }),
+        now: 2_000,
+        label: "Studio Mac",
+        ...fields,
+      });
+    };
+
+    // A hardware upgrade replaces the stored block wholesale.
+    expect(
+      reconnect("nonce-host-1", {
+        host: { platform: "darwin", cpuCount: 16, machineId: "mach_studio" },
+      }),
+    ).toMatchObject({ accepted: true });
+    expect(store.getPeer("client_one")?.host?.cpuCount).toBe(16);
+
+    // An older client that never advertises host facts keeps the last block.
+    expect(reconnect("nonce-host-2", {})).toMatchObject({ accepted: true });
+    expect(store.getPeer("client_one")?.host?.cpuCount).toBe(16);
   });
 
   it("refreshes stored capabilities to the peer's current advertisement", () => {

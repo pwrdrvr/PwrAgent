@@ -19,6 +19,7 @@ import type {
   FederatedSearchRequest,
   FederatedSearchResponse,
   FederationHealthStatus,
+  FederationHostInfo,
   FederationInstanceId,
   FederationInstanceRole,
   FederationPeerSummary,
@@ -139,6 +140,7 @@ import {
   encodeFederationInvite,
 } from "./federation-enrollment";
 import { FederatedSearchService } from "./federated-search-service";
+import { collectFederationHostInfo } from "./federation-host-info";
 import {
   FEDERATION_BACKEND_EVENT_METHOD,
   FEDERATION_BACKEND_METHOD_CAPABILITIES,
@@ -245,6 +247,7 @@ export class DesktopFederationRuntime {
   private localInstanceId?: FederationInstanceId;
   private instanceLabel?: string;
   private instanceNotes?: string;
+  private localHostInfo?: FederationHostInfo;
   private listenUrl?: string;
   private gatewayUrl?: string;
   private gatewayInstanceId?: FederationInstanceId;
@@ -804,6 +807,11 @@ export class DesktopFederationRuntime {
     this.instanceLabel =
       settings.federation.instanceLabel.value.trim() || defaultInstanceLabel();
     this.instanceNotes = settings.federation.instanceNotes.value.trim();
+    try {
+      this.localHostInfo = await collectFederationHostInfo();
+    } catch {
+      this.localHostInfo = undefined;
+    }
     const mode = settings.federation.mode.value;
     if (mode === "disabled") {
       return;
@@ -1117,6 +1125,7 @@ export class DesktopFederationRuntime {
       // Always a string: present-but-empty clears the gateway's stored
       // notes when the operator erases theirs (absent means "old client").
       notes: this.instanceNotes ?? settings.federation.instanceNotes.value.trim(),
+      host: this.localHostInfo,
       role: "client",
       headers: cloudflareAccessEnabled
         ? {
@@ -1290,6 +1299,7 @@ export class DesktopFederationRuntime {
       endpoint: existing?.endpoint ?? params.gatewayUrl,
       profileName: existing?.profileName,
       notes: existing?.notes,
+      host: existing?.host,
       lastConnectedAt: params.connectedAt,
       lastActivityAt: params.connectedAt,
       canRevoke: false,
@@ -1646,6 +1656,7 @@ export class DesktopFederationRuntime {
         endpoint: existing?.endpoint,
         profileName: existing?.profileName,
         notes: existing?.notes,
+        host: existing?.host,
         lastConnectedAt: existing?.lastConnectedAt,
         lastActivityAt: existing?.lastActivityAt,
         revokedAt: existing?.revokedAt,
@@ -1722,6 +1733,7 @@ export class DesktopFederationRuntime {
         profileName: localProfileName,
         celestialIcon: this.celestialAssignmentMap().get(localInstanceId)?.icon,
         notes: this.instanceNotes || undefined,
+        host: this.localHostInfo,
       },
     ];
 
