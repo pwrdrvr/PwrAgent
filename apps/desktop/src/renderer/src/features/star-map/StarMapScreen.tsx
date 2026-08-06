@@ -5,6 +5,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type PointerEvent as ReactPointerEvent,
 } from "react";
 import {
   buildThreadIdentityKey,
@@ -35,7 +36,10 @@ import {
   visibleCardCount,
   type StarMapCardSlot,
 } from "./star-map-layout";
-import { computeOrbitPlacement } from "./star-map-orbit";
+import {
+  computeOrbitPlacement,
+  shouldStartCanvasPan,
+} from "./star-map-orbit";
 import { buildFederationTopology } from "./star-map-topology";
 import { IntakeDialog, type IntakeDialogTarget } from "./IntakeDialog";
 import {
@@ -105,6 +109,7 @@ type StarMapScreenProps = {
 export function StarMapScreen(props: StarMapScreenProps) {
   const layerRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLDivElement>(null);
   const { health } = useFederationHealth({ desktopApi: props.desktopApi });
   const celestialIcons = useCelestialIcons({ desktopApi: props.desktopApi });
   const [filters, setFilters] = useState<Set<StarMapAttentionCategory>>(
@@ -228,6 +233,47 @@ export function StarMapScreen(props: StarMapScreenProps) {
     element.addEventListener("wheel", onWheel, { passive: false });
     return () => element.removeEventListener("wheel", onWheel);
   }, [orbitMode]);
+
+  const startCanvasPan = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!orbitMode || event.button !== 0) return;
+    if (!shouldStartCanvasPan(event.target)) return;
+    const canvas = canvasRef.current;
+    const viewport = viewportRef.current;
+    if (!canvas) return;
+    event.preventDefault();
+    viewport?.classList.add("is-panning");
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const base = view;
+    let lastX = base.x;
+    let lastY = base.y;
+    let frame = 0;
+    const move = (pointerEvent: globalThis.PointerEvent) => {
+      lastX = base.x + pointerEvent.clientX - startX;
+      lastY = base.y + pointerEvent.clientY - startY;
+      if (!frame) {
+        frame = requestAnimationFrame(() => {
+          frame = 0;
+          canvas.style.transform =
+            `translate(${lastX}px, ${lastY}px) scale(${base.scale})`;
+        });
+      }
+    };
+    const stop = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+      window.removeEventListener("pointercancel", stop);
+      if (frame) {
+        cancelAnimationFrame(frame);
+        frame = 0;
+      }
+      viewport?.classList.remove("is-panning");
+      setView((current) => ({ ...current, x: lastX, y: lastY }));
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop);
+    window.addEventListener("pointercancel", stop);
+  };
 
   const toggleFilter = useCallback((category: StarMapAttentionCategory) => {
     setFilters((current) => {
@@ -628,7 +674,11 @@ export function StarMapScreen(props: StarMapScreenProps) {
         }
       }}
     >
-      <div ref={viewportRef} className="star-map__viewport">
+      <div
+        ref={viewportRef}
+        className="star-map__viewport"
+        onPointerDown={startCanvasPan}
+      >
         <svg
           className="star-map__sky"
           viewBox="0 0 100 100"
@@ -648,6 +698,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
           ))}
         </svg>
         <div
+          ref={canvasRef}
           className={`star-map__canvas${orbitMode ? " is-orbit" : ""}`}
           style={
             orbitMode

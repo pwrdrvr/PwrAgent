@@ -159,3 +159,16 @@ export function computeOrbitPlacement(params: {
     canvasHeight: maxY - minY + CANVAS_PADDING * 2,
   };
 }
+
+/**
+ * Whether a pointerdown on the map should start a canvas pan.
+ *
+ * Anything interactive owns its own gesture — cards drag themselves,
+ * bodies open, chrome clicks — so a pan only begins on bare sky.
+ */
+export function shouldStartCanvasPan(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  return !target.closest(
+    "button, a, input, label, .star-map__chrome, .star-map__filters",
+  );
+}

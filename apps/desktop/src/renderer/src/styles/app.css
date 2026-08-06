@@ -9449,6 +9449,17 @@ textarea,
   will-change: transform;
 }
 
+/* Bare sky is a pan handle in orbit; cards and bodies keep their own
+   cursors because the pan never starts on them. */
+.star-map__viewport:has(.star-map__canvas.is-orbit) {
+  cursor: grab;
+}
+
+.star-map__viewport.is-panning,
+.star-map__viewport.is-panning .star-map__canvas {
+  cursor: grabbing;
+}
+
 .star-map__layout-switch {
   display: flex;
   gap: 4px;

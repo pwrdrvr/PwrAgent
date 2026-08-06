@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { FederationPeerSummary } from "@pwragent/shared";
-import { cardRingRadius, computeOrbitPlacement } from "../star-map-orbit";
+import {
+  cardRingRadius,
+  computeOrbitPlacement,
+  shouldStartCanvasPan,
+} from "../star-map-orbit";
 import { buildFederationTopology, topologyEdges } from "../star-map-topology";
 
 function peer(
@@ -121,5 +125,40 @@ describe("computeOrbitPlacement", () => {
       hub?.cardSlots.map((slot) => `${Math.round(slot.dx)}:${Math.round(slot.dy)}`),
     );
     expect(unique.size).toBe(4);
+  });
+});
+
+describe("shouldStartCanvasPan", () => {
+  function element(html: string): Element {
+    const host = document.createElement("div");
+    host.innerHTML = html;
+    return host.firstElementChild!;
+  }
+
+  it("pans from bare sky", () => {
+    expect(shouldStartCanvasPan(element('<div class="star-map__sky" />'))).toBe(
+      true,
+    );
+  });
+
+  it("never steals a gesture from a card, body, or chrome", () => {
+    // Cards and instance bodies are buttons and drag/open themselves.
+    const card = element('<button class="star-map-card"><span>x</span></button>');
+    expect(shouldStartCanvasPan(card)).toBe(false);
+    expect(shouldStartCanvasPan(card.firstElementChild)).toBe(false);
+
+    const chrome = element(
+      '<div class="star-map__chrome"><p>PwrAgent</p></div>',
+    );
+    expect(shouldStartCanvasPan(chrome.firstElementChild)).toBe(false);
+
+    const filters = element(
+      '<div class="star-map__filters"><span>Unread</span></div>',
+    );
+    expect(shouldStartCanvasPan(filters.firstElementChild)).toBe(false);
+  });
+
+  it("ignores a non-element target", () => {
+    expect(shouldStartCanvasPan(null)).toBe(false);
   });
 });
