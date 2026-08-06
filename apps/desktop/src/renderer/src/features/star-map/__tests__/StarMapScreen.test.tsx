@@ -208,6 +208,83 @@ describe("StarMapScreen", () => {
     expect(screen.queryByText("This instance")).toBeNull();
   });
 
+  it("subscribes only to bounded Star Map event classes while mounted", async () => {
+    const setFederationEventSubscriptions = vi.fn(async (request) => request);
+    const desktopApi: DesktopApi = {
+      readFederationHealth: vi.fn(async () => ({
+        health: {
+          enabled: true,
+          role: "gateway" as const,
+          status: "listening" as const,
+          instanceId: "pwr_local",
+          peers: [{
+            id: "pwr_remote",
+            label: "Remote",
+            role: "client" as const,
+            status: "connected" as const,
+            capabilities: [
+              "event_subscriptions",
+              "thread_navigation",
+              "scheduled_actions",
+            ],
+          }],
+        },
+      })) as unknown as DesktopApi["readFederationHealth"],
+      getNavigationSnapshot: vi.fn(async () => ({
+        backend: "all",
+        fetchedAt: 1_000,
+        threads: [],
+        inboxThreadKeys: [],
+        directories: [],
+        launchpadDefaults: {
+          backend: "codex",
+          executionMode: "default",
+        },
+      })) as unknown as DesktopApi["getNavigationSnapshot"],
+      onAgentEvent: vi.fn(() => () => undefined),
+      setFederationEventSubscriptions,
+    };
+    const rendered = render(
+      <StarMapScreen
+        desktopApi={desktopApi}
+        localThreads={[]}
+        sessionKeys={{}}
+        floating={false}
+        onClose={() => undefined}
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(setFederationEventSubscriptions).toHaveBeenCalledWith({
+        subscriptions: [{
+          sourceInstanceId: "pwr_remote",
+          eventClasses: [
+            "navigation",
+            "star_map",
+            "scheduled_actions",
+          ],
+        }],
+      });
+    });
+    expect(setFederationEventSubscriptions).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        subscriptions: [expect.objectContaining({
+          eventClasses: expect.arrayContaining([
+            "transcript",
+            "pending_requests",
+          ]),
+        })],
+      }),
+    );
+
+    rendered.unmount();
+    expect(setFederationEventSubscriptions).toHaveBeenLastCalledWith({
+      subscriptions: [],
+    });
+  });
+
   it("drops the machine-name chip from cards - the lane already says which instance", async () => {
     render(
       <StarMapScreen

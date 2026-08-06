@@ -16,6 +16,7 @@ import type {
   EnsureDirectoryLaunchpadRequest,
   EnsureDirectoryLaunchpadResponse,
   FederationCapability,
+  FederationEventSubscription,
   FederationRemoteTarget,
   FederationTarget,
   GetNavigationSnapshotRequest,
@@ -78,6 +79,10 @@ export type DesktopMessagingFederationBridge = {
   onRemoteBackendEvent(
     listener: (event: AgentEvent) => void | Promise<void>,
   ): () => void;
+  setEventSubscriptions?(
+    consumerId: string,
+    subscriptions: readonly FederationEventSubscription[],
+  ): FederationEventSubscription[];
   remoteBackend(target: FederationRemoteTarget): FederationBackendOperations;
   remoteNavigationSnapshot(
     target: FederationRemoteTarget,
@@ -678,6 +683,12 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
       unsubscribeLocal();
       unsubscribeRemote?.();
     };
+  }
+
+  setRemoteEventSubscriptions(
+    subscriptions: readonly FederationEventSubscription[],
+  ): void {
+    this.federation?.setEventSubscriptions?.("messaging", subscriptions);
   }
 
   private remoteBackend(

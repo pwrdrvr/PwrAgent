@@ -20,8 +20,14 @@ import type {
   RevokeFederationPeerResponse,
   SetCelestialIconRequest,
   SetCelestialIconResponse,
+  SetFederationEventSubscriptionsRequest,
+  SetFederationEventSubscriptionsResponse,
 } from "@pwragent/shared";
-import { isCelestialIconId, isFederationInstanceId } from "@pwragent/shared";
+import {
+  isCelestialIconId,
+  isFederationEventClass,
+  isFederationInstanceId,
+} from "@pwragent/shared";
 import {
   FEDERATION_GET_HEALTH_CHANNEL,
   FEDERATION_GET_DIAGNOSTICS_CHANNEL,
@@ -31,12 +37,34 @@ import {
   FEDERATION_RESET_ENROLLMENT_CHANNEL,
   FEDERATION_REVOKE_PEER_CHANNEL,
   FEDERATION_SET_CELESTIAL_ICON_CHANNEL,
+  FEDERATION_SET_EVENT_SUBSCRIPTIONS_CHANNEL,
   FEDERATION_TAILSCALE_CONFIGURE_CHANNEL,
   FEDERATION_TAILSCALE_STATUS_CHANNEL,
 } from "../../shared/ipc";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { getFederationTailscaleService } from "../federation/federation-tailscale";
 import { createMainWindow } from "../window";
+
+const rendererSubscriptionCleanupIds = new Set<number>();
+
+function peerAllowsEventClass(
+  capabilities: readonly string[],
+  eventClass: string,
+): boolean {
+  switch (eventClass) {
+    case "navigation":
+    case "star_map":
+      return capabilities.includes("thread_navigation");
+    case "transcript":
+      return capabilities.includes("thread_detail");
+    case "pending_requests":
+      return capabilities.includes("pending_request_control");
+    case "scheduled_actions":
+      return capabilities.includes("scheduled_actions");
+    default:
+      return false;
+  }
+}
 
 export function registerFederationIpcHandlers(): void {
   ipcMain.removeHandler(FEDERATION_OPEN_WINDOW_CHANNEL);
@@ -49,6 +77,58 @@ export function registerFederationIpcHandlers(): void {
   ipcMain.removeHandler(FEDERATION_TAILSCALE_STATUS_CHANNEL);
   ipcMain.removeHandler(FEDERATION_TAILSCALE_CONFIGURE_CHANNEL);
   ipcMain.removeHandler(FEDERATION_SET_CELESTIAL_ICON_CHANNEL);
+  ipcMain.removeHandler(FEDERATION_SET_EVENT_SUBSCRIPTIONS_CHANNEL);
+  ipcMain.handle(
+    FEDERATION_SET_EVENT_SUBSCRIPTIONS_CHANNEL,
+    async (
+      event,
+      request: SetFederationEventSubscriptionsRequest,
+    ): Promise<SetFederationEventSubscriptionsResponse> => {
+      const runtime = getDesktopFederationRuntime();
+      if (!rendererSubscriptionCleanupIds.has(event.sender.id)) {
+        const webContentsId = event.sender.id;
+        rendererSubscriptionCleanupIds.add(webContentsId);
+        event.sender.once("destroyed", () => {
+          rendererSubscriptionCleanupIds.delete(webContentsId);
+          runtime.clearRendererEventSubscriptions(webContentsId);
+        });
+      }
+      const peers = new Map(
+        runtime.connectedPeerTargets().map((peer) => [
+          peer.target.instanceId,
+          peer,
+        ]),
+      );
+      const subscriptions = Array.isArray(request?.subscriptions)
+        ? request.subscriptions.flatMap((subscription) => {
+            const peer = peers.get(subscription?.sourceInstanceId);
+            if (!peer || !peer.capabilities.includes("event_subscriptions")) {
+              return [];
+            }
+            const eventClasses = Array.isArray(subscription.eventClasses)
+              ? subscription.eventClasses.filter(
+                  (eventClass) =>
+                    isFederationEventClass(eventClass)
+                    && peerAllowsEventClass(peer.capabilities, eventClass),
+                )
+              : [];
+            return eventClasses.length > 0
+              ? [{
+                  sourceInstanceId: peer.target.instanceId,
+                  eventClasses,
+                }]
+              : [];
+          })
+        : [];
+      return {
+        subscriptions: runtime.setRendererEventSubscriptions(
+          event.sender.id,
+          "star-map",
+          subscriptions,
+        ),
+      };
+    },
+  );
   ipcMain.handle(
     FEDERATION_SET_CELESTIAL_ICON_CHANNEL,
     async (
@@ -133,6 +213,27 @@ export function registerFederationIpcHandlers(): void {
             }
           : undefined,
       });
+      const webContentsId = window.webContents.id;
+      runtime.setRendererEventSubscriptions(webContentsId, "remote-window", [{
+        sourceInstanceId: request.target.instanceId,
+        eventClasses: [
+          ...(peer.capabilities.includes("thread_navigation")
+            ? ["navigation" as const]
+            : []),
+          ...(peer.capabilities.includes("thread_detail")
+            ? ["transcript" as const]
+            : []),
+          ...(peer.capabilities.includes("pending_request_control")
+            ? ["pending_requests" as const]
+            : []),
+          ...(peer.capabilities.includes("scheduled_actions")
+            ? ["scheduled_actions" as const]
+            : []),
+        ],
+      }]);
+      window.once("closed", () => {
+        runtime.clearRendererEventSubscriptions(webContentsId, "remote-window");
+      });
       return {
         opened: true,
         windowId: window.id,
@@ -202,4 +303,6 @@ export function disposeFederationIpcHandlers(): void {
   ipcMain.removeHandler(FEDERATION_TAILSCALE_STATUS_CHANNEL);
   ipcMain.removeHandler(FEDERATION_TAILSCALE_CONFIGURE_CHANNEL);
   ipcMain.removeHandler(FEDERATION_SET_CELESTIAL_ICON_CHANNEL);
+  ipcMain.removeHandler(FEDERATION_SET_EVENT_SUBSCRIPTIONS_CHANNEL);
+  rendererSubscriptionCleanupIds.clear();
 }

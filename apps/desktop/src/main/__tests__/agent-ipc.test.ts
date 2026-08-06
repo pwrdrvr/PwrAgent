@@ -36,7 +36,15 @@ const send = vi.fn();
 // A second subscriber standing in for a federation (remote viewer)
 // window, so PR-authority fan-out can be asserted per window kind.
 const federationWindowSend = vi.fn();
-const federationWindowWebContents = { send: federationWindowSend };
+const federationWindowWebContents = { id: 2, send: federationWindowSend };
+let channelSubscribers: Array<{ id: number; send: typeof send }> = [
+  { id: 1, send },
+  federationWindowWebContents,
+];
+const channelSubscriberTargets = new Map<number, {
+  scope: "remote";
+  instanceId: string;
+}>();
 let registryListener: ((event: AgentEvent) => void | Promise<void>) | undefined;
 
 const registry = {
@@ -308,6 +316,7 @@ const federationMock = vi.hoisted(() => {
     remoteBackend,
     runtime: {
       remoteBackend: vi.fn(() => remoteBackend),
+      rendererWantsRemoteEvent: vi.fn(() => true),
       setAgentEventPublisher: vi.fn(),
       setEnvironmentSetupProgressPublisher: vi.fn(),
     },
@@ -338,18 +347,10 @@ vi.mock("electron", () => ({
 // `BrowserWindow.getAllWindows()`. The test pretends a single
 // subscriber exists for any channel, which routes back to the
 // shared `send` mock above.
-// `broadcastAgentEvent` asks which remote instance a window fronts so a
-// peer's PR observation can be withheld from windows that have a local
-// monitor for the same PR. Only the federation subscriber has a target.
-vi.mock("../window", () => ({
-  federationWindowTargetForWebContents: (webContents: unknown) =>
-    webContents === federationWindowWebContents
-      ? { scope: "remote", instanceId: "peer-1" }
-      : undefined,
-}));
-
 vi.mock("../window-channels", () => ({
-  subscribersForChannel: () => [{ send }, federationWindowWebContents],
+  federationTargetForChannelSubscriber: (webContents: { id: number }) =>
+    channelSubscriberTargets.get(webContents.id),
+  subscribersForChannel: () => channelSubscribers,
   WINDOW_KIND_MAIN: "main",
   WINDOW_KIND_MESSAGING_ACTIVITY: "messaging-activity",
   registerWindowChannels: () => undefined,
@@ -362,6 +363,7 @@ vi.mock("../app-server/backend-registry", () => ({
 }));
 
 vi.mock("../federation/federation-runtime", () => ({
+  federationEventClassForMethod: () => "transcript",
   getDesktopFederationRuntime: () => federationMock.runtime,
 }));
 
@@ -376,6 +378,12 @@ describe("agent ipc", () => {
     federationWindowSend.mockReset();
     registry.isPullRequestLocallyMonitored.mockClear();
     registry.isPullRequestLocallyMonitored.mockReturnValue(false);
+    channelSubscribers = [{ id: 1, send }, federationWindowWebContents];
+    channelSubscriberTargets.clear();
+    channelSubscriberTargets.set(2, {
+      scope: "remote",
+      instanceId: "peer-1",
+    });
     registry.listBackends.mockClear();
     registry.onEvent.mockClear();
     registry.startThread.mockClear();
@@ -391,6 +399,8 @@ describe("agent ipc", () => {
     registry.cancelThreadPrAutoDispatch.mockClear();
     registry.sendThreadPrAutoDispatchNow.mockClear();
     federationMock.runtime.remoteBackend.mockClear();
+    federationMock.runtime.rendererWantsRemoteEvent.mockReset();
+    federationMock.runtime.rendererWantsRemoteEvent.mockReturnValue(true);
     federationMock.runtime.setAgentEventPublisher.mockClear();
     federationMock.runtime.setEnvironmentSetupProgressPublisher.mockClear();
     for (const method of Object.values(federationMock.remoteBackend)) {
@@ -937,6 +947,48 @@ describe("agent ipc", () => {
     });
 
     disposeAgentIpcHandlers();
+  });
+
+  it("routes remote events only to subscribed windows for the owning instance", async () => {
+    const { broadcastAgentEvent } = await import("../ipc/agent-ipc");
+    const localSend = vi.fn();
+    const ownerSend = vi.fn();
+    const unrelatedSend = vi.fn();
+    channelSubscribers = [
+      { id: 1, send: localSend },
+      { id: 2, send: ownerSend },
+      { id: 3, send: unrelatedSend },
+    ];
+    channelSubscriberTargets.set(2, {
+      scope: "remote",
+      instanceId: "owner_one",
+    });
+    channelSubscriberTargets.set(3, {
+      scope: "remote",
+      instanceId: "owner_two",
+    });
+    federationMock.runtime.rendererWantsRemoteEvent.mockImplementation(
+      (webContentsId?: number, instanceId?: string) =>
+        webContentsId === 2 && instanceId === "owner_one",
+    );
+
+    broadcastAgentEvent({
+      backend: "codex",
+      federationTarget: { scope: "remote", instanceId: "owner_one" },
+      notification: {
+        method: "item/agentMessage/delta",
+        params: {
+          delta: "hello",
+          itemId: "item-1",
+          threadId: "thread-1",
+          turnId: "turn-1",
+        },
+      },
+    } as AgentEvent);
+
+    expect(ownerSend).toHaveBeenCalledTimes(1);
+    expect(localSend).not.toHaveBeenCalled();
+    expect(unrelatedSend).not.toHaveBeenCalled();
   });
 
   it("caps oversized live agent event strings before broadcasting to renderer subscribers", async () => {

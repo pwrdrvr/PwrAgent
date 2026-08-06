@@ -4,10 +4,13 @@ import type {
   CelestialIconAssignment,
   CodexEnvironmentSetupProgressEvent,
   FederationCapability,
+  FederationEventClass,
+  FederationEventSubscription,
   FederationInstanceId,
   FederationProtocolEnvelope,
   NavigationSnapshot,
   SetCelestialIconResponse,
+  StarMapArrangementEntry,
 } from "@pwragent/shared";
 import {
   FEDERATION_PROTOCOL_VERSION,
@@ -33,7 +36,14 @@ type RuntimeHarness = {
     sourcePeerId: FederationInstanceId,
   ) => Promise<void>;
   applyPeerDirectory: (envelope: FederationProtocolEnvelope) => boolean;
+  applyEventSubscription: (
+    envelope: FederationProtocolEnvelope,
+    sourcePeerId: FederationInstanceId,
+  ) => boolean;
   forwardLocalBackendEvent: (event: AgentEvent) => void;
+  broadcastStarMapArrangement: (
+    entries: StarMapArrangementEntry[],
+  ) => void;
   gatewayInstanceId?: FederationInstanceId;
   localInstanceId?: FederationInstanceId;
   publishRemoteBackendEvent: (
@@ -100,6 +110,24 @@ type RuntimeHarness = {
     envelope: FederationProtocolEnvelope,
   ) => void;
   setAgentEventPublisher: (publisher: (event: AgentEvent) => void) => void;
+  setEventSubscriptions: (
+    consumerId: string,
+    subscriptions: readonly FederationEventSubscription[],
+  ) => FederationEventSubscription[];
+  setRendererEventSubscriptions: (
+    webContentsId: number,
+    consumerId: "remote-window" | "star-map",
+    subscriptions: readonly FederationEventSubscription[],
+  ) => FederationEventSubscription[];
+  clearRendererEventSubscriptions: (
+    webContentsId: number,
+    consumerId?: "remote-window" | "star-map",
+  ) => void;
+  rendererWantsRemoteEvent: (
+    webContentsId: number,
+    sourceInstanceId: FederationInstanceId,
+    eventClass: FederationEventClass,
+  ) => boolean;
   setEnvironmentSetupProgressPublisher: (
     publisher: (event: CodexEnvironmentSetupProgressEvent) => void,
   ) => void;
@@ -166,6 +194,25 @@ function createConnection(params: {
     sendEnvelope: params.sendEnvelope ?? (() => undefined),
     close: () => undefined,
   };
+}
+
+function applyEventSubscription(params: {
+  runtime: RuntimeHarness;
+  sourceInstanceId: FederationInstanceId;
+  subscriberInstanceId: FederationInstanceId;
+  sourcePeerId?: FederationInstanceId;
+  eventClasses: FederationEventClass[];
+}): void {
+  expect(params.runtime.applyEventSubscription({
+    id: `subscription:${params.subscriberInstanceId}`,
+    kind: "notification",
+    method: "federation.eventSubscription",
+    params: { eventClasses: params.eventClasses },
+    protocolVersion: FEDERATION_PROTOCOL_VERSION,
+    sourceInstanceId: params.subscriberInstanceId,
+    targetInstanceId: params.sourceInstanceId,
+    createdAt: 1_000,
+  }, params.sourcePeerId ?? params.subscriberInstanceId)).toBe(true);
 }
 
 describe("DesktopFederationRuntime", () => {
@@ -750,13 +797,17 @@ describe("DesktopFederationRuntime", () => {
     });
   });
 
-  it("forwards local backend events to remote-capable peers", () => {
+  it("keeps connected peers idle until they subscribe to backend events", () => {
     const forwarded: FederationProtocolEnvelope[] = [];
     const router = new FederationRouter({ localInstanceId: "gateway_one" });
     router.registerConnection(
       createConnection({
         peerId: "client_one",
-        capabilities: ["remote_window"],
+        capabilities: [
+          "remote_window",
+          "thread_navigation",
+          "event_subscriptions",
+        ],
         sendEnvelope: (envelope) => forwarded.push(envelope),
       }),
     );
@@ -783,24 +834,276 @@ describe("DesktopFederationRuntime", () => {
       },
     } as AgentEvent);
 
-    expect(forwarded).toMatchObject([
-      {
-        kind: "notification",
-        method: FEDERATION_BACKEND_EVENT_METHOD,
-        params: {
-          backend: "codex",
-          notification: {
-            method: "turn/started",
-            params: {
-              threadId: "thread-1",
-              turnId: "turn-1",
-            },
-          },
+    expect(forwarded).toEqual([]);
+  });
+
+  it("replaces viewer subscriptions when retargeted and unsubscribes on close", () => {
+    const sentToOne: FederationProtocolEnvelope[] = [];
+    const sentToTwo: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({ localInstanceId: "viewer_one" });
+    router.registerConnection(createConnection({
+      peerId: "owner_one",
+      capabilities: [
+        "thread_navigation",
+        "event_subscriptions",
+      ],
+      sendEnvelope: (envelope) => sentToOne.push(envelope),
+    }));
+    router.registerConnection(createConnection({
+      peerId: "owner_two",
+      capabilities: ["thread_detail", "event_subscriptions"],
+      sendEnvelope: (envelope) => sentToTwo.push(envelope),
+    }));
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.localInstanceId = "viewer_one";
+    runtime.router = router;
+
+    runtime.setEventSubscriptions("renderer:7", [{
+      sourceInstanceId: "owner_one",
+      eventClasses: ["navigation"],
+    }]);
+    runtime.setEventSubscriptions("renderer:7", [{
+      sourceInstanceId: "owner_two",
+      eventClasses: ["transcript"],
+    }]);
+    runtime.setEventSubscriptions("renderer:7", []);
+
+    expect(sentToOne.map((envelope) =>
+      envelope.kind === "notification" ? envelope.params : undefined
+    )).toEqual([
+      { eventClasses: ["navigation"] },
+      { eventClasses: [] },
+    ]);
+    expect(sentToTwo.map((envelope) =>
+      envelope.kind === "notification" ? envelope.params : undefined
+    )).toEqual([
+      { eventClasses: ["transcript"] },
+      { eventClasses: [] },
+    ]);
+  });
+
+  it("keeps a viewer subscription while Star Map opens and closes in its window", () => {
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.localInstanceId = "viewer_one";
+    runtime.router = new FederationRouter({ localInstanceId: "viewer_one" });
+    runtime.router.registerConnection(createConnection({
+      peerId: "owner_one",
+      capabilities: [
+        "thread_navigation",
+        "thread_detail",
+        "event_subscriptions",
+      ],
+    }));
+    runtime.router.registerConnection(createConnection({
+      peerId: "owner_two",
+      capabilities: ["thread_navigation", "event_subscriptions"],
+    }));
+
+    runtime.setRendererEventSubscriptions(7, "remote-window", [{
+      sourceInstanceId: "owner_one",
+      eventClasses: ["navigation", "transcript"],
+    }]);
+    runtime.setRendererEventSubscriptions(7, "star-map", [{
+      sourceInstanceId: "owner_one",
+      eventClasses: ["navigation", "star_map"],
+    }, {
+      sourceInstanceId: "owner_two",
+      eventClasses: ["navigation", "star_map"],
+    }]);
+    runtime.clearRendererEventSubscriptions(7, "star-map");
+
+    expect(runtime.rendererWantsRemoteEvent(7, "owner_one", "navigation"))
+      .toBe(true);
+    expect(runtime.rendererWantsRemoteEvent(7, "owner_one", "transcript"))
+      .toBe(true);
+    expect(runtime.rendererWantsRemoteEvent(7, "owner_one", "star_map"))
+      .toBe(false);
+    expect(runtime.rendererWantsRemoteEvent(7, "owner_two", "navigation"))
+      .toBe(false);
+  });
+
+  it("publishes only the event classes and source instances Star Map requests", () => {
+    const published: AgentEvent[] = [];
+    const router = new FederationRouter({ localInstanceId: "viewer_one" });
+    for (const peerId of ["owner_one", "owner_two"] as const) {
+      router.registerConnection(createConnection({
+        peerId,
+        capabilities: [
+          "gateway_relay",
+          "thread_navigation",
+          "scheduled_actions",
+          "event_subscriptions",
+        ],
+      }));
+    }
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.localInstanceId = "viewer_one";
+    runtime.router = router;
+    runtime.setAgentEventPublisher((event) => published.push(event));
+    runtime.setEventSubscriptions("renderer:star-map", [{
+      sourceInstanceId: "owner_one",
+      eventClasses: ["navigation", "scheduled_actions", "star_map"],
+    }]);
+
+    const publish = (
+      sourceInstanceId: FederationInstanceId,
+      method: string,
+    ) => runtime.publishRemoteBackendEvent({
+      id: `event:${sourceInstanceId}:${method}`,
+      kind: "notification",
+      method: FEDERATION_BACKEND_EVENT_METHOD,
+      params: {
+        backend: "codex",
+        notification: {
+          method,
+          params: { threadId: "thread-1" },
         },
-        protocolVersion: FEDERATION_PROTOCOL_VERSION,
-        sourceInstanceId: "gateway_one",
-        targetInstanceId: "client_one",
       },
+      protocolVersion: FEDERATION_PROTOCOL_VERSION,
+      sourceInstanceId,
+      targetInstanceId: "viewer_one",
+      createdAt: 2_000,
+    }, sourceInstanceId);
+
+    publish("owner_one", "thread/status/changed");
+    publish("owner_one", "item/agentMessage/delta");
+    publish("owner_one", "thread/scheduledAction/updated");
+    publish("owner_one", "starMap/intake/status");
+    publish("owner_two", "thread/status/changed");
+
+    expect(published.map((event) => ({
+      instanceId: event.federationTarget?.scope === "remote"
+        ? event.federationTarget.instanceId
+        : undefined,
+      method: event.notification.method,
+    }))).toEqual([
+      { instanceId: "owner_one", method: "thread/status/changed" },
+      {
+        instanceId: "owner_one",
+        method: "thread/scheduledAction/updated",
+      },
+      { instanceId: "owner_one", method: "starMap/intake/status" },
+    ]);
+  });
+
+  it("sends Star Map arrangement deltas only to star-map subscribers", () => {
+    const subscribed: FederationProtocolEnvelope[] = [];
+    const unrelated: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({ localInstanceId: "owner_one" });
+    router.registerConnection(createConnection({
+      peerId: "viewer_one",
+      capabilities: ["thread_navigation", "event_subscriptions"],
+      sendEnvelope: (envelope) => subscribed.push(envelope),
+    }));
+    router.registerConnection(createConnection({
+      peerId: "viewer_two",
+      capabilities: ["thread_navigation", "event_subscriptions"],
+      sendEnvelope: (envelope) => unrelated.push(envelope),
+    }));
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.localInstanceId = "owner_one";
+    runtime.router = router;
+    applyEventSubscription({
+      runtime,
+      sourceInstanceId: "owner_one",
+      subscriberInstanceId: "viewer_one",
+      eventClasses: ["star_map"],
+    });
+
+    runtime.broadcastStarMapArrangement([{
+      instanceId: "owner_one",
+      threadKey: "codex:thread-1",
+      dx: 10,
+      dy: 20,
+      updatedAt: 1_000,
+      by: "owner_one",
+    }]);
+
+    expect(subscribed).toMatchObject([{
+      method: "federation.starMapArrangement",
+      sourceInstanceId: "owner_one",
+      targetInstanceId: "viewer_one",
+    }]);
+    expect(unrelated).toEqual([]);
+  });
+
+  it("rejects a direct peer spoofing a subscribed source instance", () => {
+    const published: AgentEvent[] = [];
+    const router = new FederationRouter({ localInstanceId: "viewer_one" });
+    router.registerConnection(createConnection({
+      peerId: "owner_one",
+      capabilities: ["thread_detail", "event_subscriptions"],
+    }));
+    router.registerConnection(createConnection({
+      peerId: "owner_two",
+      capabilities: [
+        "gateway_relay",
+        "thread_detail",
+        "event_subscriptions",
+      ],
+    }));
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.localInstanceId = "viewer_one";
+    runtime.router = router;
+    runtime.setAgentEventPublisher((event) => published.push(event));
+    runtime.setEventSubscriptions("viewer", [{
+      sourceInstanceId: "owner_one",
+      eventClasses: ["transcript"],
+    }]);
+
+    runtime.publishRemoteBackendEvent({
+      id: "spoofed-event",
+      kind: "notification",
+      method: FEDERATION_BACKEND_EVENT_METHOD,
+      params: {
+        backend: "codex",
+        notification: {
+          method: "item/agentMessage/delta",
+          params: { threadId: "thread-1" },
+        },
+      },
+      protocolVersion: FEDERATION_PROTOCOL_VERSION,
+      sourceInstanceId: "owner_one",
+      targetInstanceId: "viewer_one",
+      createdAt: 2_000,
+    }, "owner_two");
+
+    expect(published).toEqual([]);
+  });
+
+  it("replays desired subscriptions once per reconnect without duplicates", () => {
+    const sent: FederationProtocolEnvelope[] = [];
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.localInstanceId = "viewer_one";
+    runtime.router = new FederationRouter({ localInstanceId: "viewer_one" });
+    runtime.setEventSubscriptions("renderer:7", [{
+      sourceInstanceId: "owner_one",
+      eventClasses: ["navigation"],
+    }]);
+    const connection = createConnection({
+      peerId: "owner_one",
+      capabilities: [
+        "thread_navigation",
+        "event_subscriptions",
+      ],
+      sendEnvelope: (envelope) => sent.push(envelope),
+    });
+
+    runtime.registerGatewayConnection(connection);
+    runtime.unregisterGatewayConnection(connection);
+    runtime.registerGatewayConnection(connection);
+
+    expect(
+      sent.filter(
+        (envelope) =>
+          envelope.kind === "notification"
+          && envelope.method === "federation.eventSubscription",
+      ).map((envelope) =>
+        envelope.kind === "notification" ? envelope.params : undefined
+      ),
+    ).toEqual([
+      { eventClasses: ["navigation"] },
+      { eventClasses: ["navigation"] },
     ]);
   });
 
@@ -810,13 +1113,19 @@ describe("DesktopFederationRuntime", () => {
     router.registerConnection(
       createConnection({
         peerId: "client_one",
-        capabilities: ["remote_window"],
+        capabilities: ["thread_detail", "event_subscriptions"],
         sendEnvelope: (envelope) => forwarded.push(envelope),
       }),
     );
     const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
     runtime.localInstanceId = "gateway_one";
     runtime.router = router;
+    applyEventSubscription({
+      runtime,
+      sourceInstanceId: "gateway_one",
+      subscriberInstanceId: "client_one",
+      eventClasses: ["transcript"],
+    });
     const ownerUrl =
       `pwragent-image://file/${encodeURIComponent("file:///Users/owner/.pwragent/profiles/default/state/image-inputs/image.png")}`;
 
@@ -869,7 +1178,7 @@ describe("DesktopFederationRuntime", () => {
     router.registerConnection(
       createConnection({
         peerId: "client_one",
-        capabilities: ["scheduled_actions"],
+        capabilities: ["scheduled_actions", "event_subscriptions"],
         sendEnvelope: (envelope) => forwarded.push(envelope),
       }),
     );
@@ -883,6 +1192,12 @@ describe("DesktopFederationRuntime", () => {
     const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
     runtime.localInstanceId = "gateway_one";
     runtime.router = router;
+    applyEventSubscription({
+      runtime,
+      sourceInstanceId: "gateway_one",
+      subscriberInstanceId: "client_one",
+      eventClasses: ["scheduled_actions"],
+    });
 
     runtime.forwardLocalBackendEvent({
       backend: "codex",
@@ -923,7 +1238,18 @@ describe("DesktopFederationRuntime", () => {
 
   it("publishes remote backend events with the source peer as federation target", () => {
     const published: AgentEvent[] = [];
+    const router = new FederationRouter({ localInstanceId: "gateway_one" });
+    router.registerConnection(createConnection({
+      peerId: "client_one",
+      capabilities: ["thread_detail", "event_subscriptions"],
+    }));
     const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.localInstanceId = "gateway_one";
+    runtime.router = router;
+    runtime.setEventSubscriptions("viewer", [{
+      sourceInstanceId: "client_one",
+      eventClasses: ["transcript"],
+    }]);
     runtime.setAgentEventPublisher((event) => {
       published.push(event);
     });
@@ -1073,50 +1399,62 @@ describe("DesktopFederationRuntime", () => {
     ]);
   });
 
-  it("relays client backend events to sibling peers through the gateway", () => {
+  it("relays client backend events only toward a subscribed sibling", () => {
     const relayedToSibling: FederationProtocolEnvelope[] = [];
     const router = new FederationRouter({ localInstanceId: "gateway_one" });
     router.registerConnection(
       createConnection({
         peerId: "client_one",
-        capabilities: ["remote_window"],
+        capabilities: ["gateway_relay", "event_subscriptions"],
       }),
     );
     router.registerConnection(
       createConnection({
         peerId: "client_two",
-        capabilities: ["remote_window"],
+        capabilities: [
+          "gateway_relay",
+          "thread_detail",
+          "event_subscriptions",
+        ],
         sendEnvelope: (envelope) => relayedToSibling.push(envelope),
       }),
     );
     const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
     runtime.localInstanceId = "gateway_one";
     runtime.router = router;
-
-    runtime.publishRemoteBackendEvent(
-      {
-        id: "event-1",
-        kind: "notification",
-        method: FEDERATION_BACKEND_EVENT_METHOD,
-        params: {
-          backend: "codex",
-          notification: {
-            method: "item/agentMessage/delta",
-            params: {
-              delta: "hello",
-              itemId: "item-1",
-              threadId: "thread-1",
-              turnId: "turn-1",
-            },
+    const event: FederationProtocolEnvelope = {
+      id: "event-1",
+      kind: "notification",
+      method: FEDERATION_BACKEND_EVENT_METHOD,
+      params: {
+        backend: "codex",
+        notification: {
+          method: "item/agentMessage/delta",
+          params: {
+            delta: "hello",
+            itemId: "item-1",
+            threadId: "thread-1",
+            turnId: "turn-1",
           },
         },
-        protocolVersion: FEDERATION_PROTOCOL_VERSION,
-        sourceInstanceId: "client_one",
-        targetInstanceId: "gateway_one",
-        createdAt: 2_000,
       },
-      "client_one",
-    );
+      protocolVersion: FEDERATION_PROTOCOL_VERSION,
+      sourceInstanceId: "client_one",
+      targetInstanceId: "client_two",
+      createdAt: 2_000,
+    };
+
+    runtime.publishRemoteBackendEvent(event, "client_one");
+    expect(relayedToSibling).toEqual([]);
+
+    applyEventSubscription({
+      runtime,
+      sourceInstanceId: "client_one",
+      subscriberInstanceId: "client_two",
+      eventClasses: ["transcript"],
+    });
+
+    runtime.publishRemoteBackendEvent(event, "client_one");
 
     expect(relayedToSibling).toMatchObject([
       {
@@ -1130,24 +1468,37 @@ describe("DesktopFederationRuntime", () => {
     ]);
   });
 
-  it("relays scheduler lifecycle events only to scheduler-capable siblings", () => {
+  it("relays scheduler lifecycle events only to an explicitly subscribed sibling", () => {
     const authorized: FederationProtocolEnvelope[] = [];
     const unauthorized: FederationProtocolEnvelope[] = [];
     const router = new FederationRouter({ localInstanceId: "gateway_one" });
-    router.registerConnection(createConnection({ peerId: "client_one" }));
+    router.registerConnection(createConnection({
+      peerId: "client_one",
+      capabilities: ["gateway_relay", "event_subscriptions"],
+    }));
     router.registerConnection(createConnection({
       peerId: "client_two",
-      capabilities: ["remote_window", "thread_detail"],
+      capabilities: ["gateway_relay", "thread_detail", "event_subscriptions"],
       sendEnvelope: (envelope) => unauthorized.push(envelope),
     }));
     router.registerConnection(createConnection({
       peerId: "client_three",
-      capabilities: ["scheduled_actions"],
+      capabilities: [
+        "gateway_relay",
+        "scheduled_actions",
+        "event_subscriptions",
+      ],
       sendEnvelope: (envelope) => authorized.push(envelope),
     }));
     const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
     runtime.localInstanceId = "gateway_one";
     runtime.router = router;
+    applyEventSubscription({
+      runtime,
+      sourceInstanceId: "client_one",
+      subscriberInstanceId: "client_three",
+      eventClasses: ["scheduled_actions"],
+    });
 
     runtime.publishRemoteBackendEvent({
       id: "scheduled-event-1",
@@ -1175,7 +1526,7 @@ describe("DesktopFederationRuntime", () => {
       },
       protocolVersion: FEDERATION_PROTOCOL_VERSION,
       sourceInstanceId: "client_one",
-      targetInstanceId: "gateway_one",
+      targetInstanceId: "client_three",
       createdAt: 2_000,
     }, "client_one");
 

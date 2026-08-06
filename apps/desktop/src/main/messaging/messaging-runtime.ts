@@ -16,6 +16,7 @@ import type {
   AgentEvent,
   GenerateMessagingPairingTokenRequest,
   GenerateMessagingPairingTokenResponse,
+  FederationEventSubscription,
   InboundPreviewMessage,
   ListMessagingPairingRequestsRequest,
   ListMessagingPairingRequestsResponse,
@@ -373,6 +374,9 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       adapterFactory: DesktopMessagingAdapterFactory;
       backendBridge: MessagingBackendBridge & {
         onEvent?: (listener: (event: AgentEvent) => void | Promise<void>) => () => void;
+        setRemoteEventSubscriptions?: (
+          subscriptions: readonly FederationEventSubscription[],
+        ) => void;
       };
       config: DesktopMessagingConfig | DesktopMessagingConfigLoader;
       automationInboundHandler?: MessagingAutomationInboundHandler;
@@ -431,6 +435,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
 
     this.unsubscribeBackendEvents?.();
     this.unsubscribeBackendEvents = undefined;
+    this.options.backendBridge.setRemoteEventSubscriptions?.([]);
     const stoppedChannels = [...this.runningAdapters.keys()];
     await Promise.all(
       [...this.runningAdapters.values()].map(async (running) =>
@@ -594,6 +599,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
         "messaging runtime started with no adapters — no platforms configured",
       );
     }
+    await this.syncFederationEventSubscriptions();
   }
 
   async applyLatestConfig(
@@ -1539,6 +1545,33 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     });
   }
 
+  private async syncFederationEventSubscriptions(): Promise<void> {
+    const setSubscriptions =
+      this.options.backendBridge.setRemoteEventSubscriptions;
+    if (!setSubscriptions) return;
+    if (!this.started || this.runningAdapters.size === 0) {
+      setSubscriptions([]);
+      return;
+    }
+    const instanceIds = new Set<string>();
+    for (const binding of await getDesktopMessagingStore().findActiveBindings()) {
+      if (binding.federatedThread?.target.scope === "remote") {
+        instanceIds.add(binding.federatedThread.target.instanceId);
+      }
+    }
+    setSubscriptions(
+      [...instanceIds].map((sourceInstanceId) => ({
+        sourceInstanceId,
+        eventClasses: [
+          "navigation",
+          "transcript",
+          "pending_requests",
+          "scheduled_actions",
+        ],
+      })),
+    );
+  }
+
   private syncRunningAdapterLists(): void {
     const running = [...this.runningAdapters.values()];
     this.adapters = running.map((record) => record.adapter);
@@ -1600,6 +1633,11 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   }
 
   private broadcastBindingsChanged(): void {
+    void this.syncFederationEventSubscriptions().catch((error) => {
+      messagingLog.warn("federation event subscription sync failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
     for (const listener of this.bindingsChangedListeners) {
       try {
         listener();

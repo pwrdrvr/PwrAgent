@@ -1,4 +1,5 @@
 import type { BrowserWindow, WebContents } from "electron";
+import type { FederationRemoteTarget } from "@pwragent/shared";
 
 /**
  * Per-window channel-subscription registry.
@@ -51,6 +52,7 @@ interface Entry {
   kind: WindowKind;
   channels: Set<string>;
   webContents: WebContents;
+  federationTarget?: FederationRemoteTarget;
 }
 
 const entries = new Map<WebContents, Entry>();
@@ -59,16 +61,24 @@ export function registerWindowChannels(
   window: BrowserWindow,
   kind: WindowKind,
   channels: readonly string[],
+  federationTarget?: FederationRemoteTarget,
 ): void {
   const webContents = window.webContents;
   entries.set(webContents, {
     kind,
     channels: new Set(channels),
     webContents,
+    ...(federationTarget ? { federationTarget } : {}),
   });
   window.on("closed", () => {
     entries.delete(webContents);
   });
+}
+
+export function federationTargetForChannelSubscriber(
+  webContents: WebContents,
+): FederationRemoteTarget | undefined {
+  return entries.get(webContents)?.federationTarget;
 }
 
 /** Return every WebContents that has subscribed to the given channel. */

@@ -1512,6 +1512,7 @@ const FEDERATION_CAPABILITY_LABELS: Record<FederationCapability, string> = {
   pwrsnap_connection: "read PwrSnap availability",
   gateway_relay: "reach sibling instances",
   remote_pty: "open a remote terminal",
+  event_subscriptions: "stream explicitly subscribed events",
 };
 
 function formatFederationCapabilities(

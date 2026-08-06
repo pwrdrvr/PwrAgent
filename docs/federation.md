@@ -151,6 +151,14 @@ and workspace handoff to the selected instance. The owning instance persists,
 times, and dispatches scheduled work. Backend events and environment setup
 output stream back with the source instance identity.
 
+Live backend events are subscription-driven. Opening a remote workspace
+subscribes that window to its owning instance and closing it unsubscribes.
+Star Map and messaging establish their own narrower, instance-scoped
+subscriptions only while those features need them. Merely connecting or
+enrolling a peer does not opt it into transcript, approval, scheduler, PR, or
+error event traffic. Environment setup output remains a targeted response to
+the operation that started it rather than a broadcast stream.
+
 Global thread search fans out metadata queries to connected peers. Remote
 results carry their instance label and open directly in a window scoped to that
 instance.
