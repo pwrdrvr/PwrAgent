@@ -186,3 +186,37 @@ export function generateStarField(count: number, seed = 7): StarMapStar[] {
   }
   return stars;
 }
+
+export type StarMapCardHitBox = {
+  threadKey: string;
+  rect: { left: number; right: number; top: number; bottom: number };
+};
+
+/**
+ * Which card the pointer is "on" in an overlapping lane stack.
+ *
+ * Cards are pitched tighter than their own height, so each card's top
+ * band sits under the previous card's bottom. Whenever the pointer is in
+ * that shared band the LATER card wins: moving down past the start of the
+ * next card flips to it, even though the raised card is painted over it.
+ * Hit-testing on layout rects (not paint order) keeps the raise from
+ * feeding back into the pick.
+ */
+export function pickHoveredCardKey(
+  cards: readonly StarMapCardHitBox[],
+  point: { x: number; y: number },
+): string | undefined {
+  let picked: string | undefined;
+  for (const card of cards) {
+    const { rect } = card;
+    if (
+      point.x >= rect.left
+      && point.x <= rect.right
+      && point.y >= rect.top
+      && point.y <= rect.bottom
+    ) {
+      picked = card.threadKey;
+    }
+  }
+  return picked;
+}

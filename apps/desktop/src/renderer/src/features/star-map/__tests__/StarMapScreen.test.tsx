@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
@@ -88,7 +94,9 @@ describe("StarMapScreen", () => {
     );
 
     expect(screen.getByRole("button", { name: /Thread t2/ })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Unread" }));
+    // Scope to the chip row: thread cards also expose an "Unread" status.
+    const filterRow = screen.getByRole("group", { name: "Attention filters" });
+    fireEvent.click(within(filterRow).getByRole("button", { name: /^Unread/ }));
     expect(screen.queryByRole("button", { name: /Thread t2/ })).toBeNull();
   });
 

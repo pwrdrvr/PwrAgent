@@ -37,6 +37,8 @@ export function StarMapThreadCard(props: {
   offset?: { dx: number; dy: number };
   /** Card width for this lane (dense federations narrow it). */
   width: number;
+  /** Raised above its neighbours while hovered (the lane stack overlaps). */
+  raised?: boolean;
   /** Present when the card is draggable; receives the clamped offset. */
   onCommitOffset?: (offset: { dx: number; dy: number }) => void;
   onOpen: (thread: NavigationThreadSummary) => void;
@@ -118,7 +120,9 @@ export function StarMapThreadCard(props: {
   return (
     <button
       type="button"
-      className={`star-map-card${props.entering ? " star-map-card--entering" : ""}`}
+      className={`star-map-card${props.entering ? " star-map-card--entering" : ""}${
+        props.raised ? " is-raised" : ""
+      }`}
       style={style}
       data-thread-key={threadKey}
       onPointerDown={startDrag}

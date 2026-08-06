@@ -85,3 +85,49 @@ export function selectAttentionThreads(params: {
     )
     .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
 }
+
+/**
+ * How many cards each filter chip is responsible for right now: for an
+ * enabled category, the threads that would DISAPPEAR if it were switched
+ * off (it is their only enabled reason); for a disabled category, the
+ * threads that would APPEAR if it were switched on (nothing else in the
+ * enabled set currently claims them). Either way the number answers "how
+ * many cards does flipping this change".
+ */
+export function countFilterImpact(params: {
+  threads: readonly NavigationThreadSummary[];
+  enabled: ReadonlySet<StarMapAttentionCategory>;
+  sessionKeys?: StarMapSessionKeys;
+}): Record<StarMapAttentionCategory, number> {
+  const counts = Object.fromEntries(
+    STAR_MAP_ATTENTION_CATEGORIES.map((category) => [category, 0]),
+  ) as Record<StarMapAttentionCategory, number>;
+  for (const thread of params.threads) {
+    if (thread.archivedAt !== undefined) continue;
+    const categories = threadAttentionCategories(thread, params.sessionKeys);
+    const enabledMatches = categories.filter((category) =>
+      params.enabled.has(category),
+    );
+    for (const category of categories) {
+      if (params.enabled.has(category)) {
+        // Removing this chip only drops the card when nothing else keeps it.
+        if (enabledMatches.length === 1) counts[category] += 1;
+      } else if (enabledMatches.length === 0) {
+        counts[category] += 1;
+      }
+    }
+  }
+  return counts;
+}
+
+export function addFilterImpactCounts(
+  left: Record<StarMapAttentionCategory, number>,
+  right: Record<StarMapAttentionCategory, number>,
+): Record<StarMapAttentionCategory, number> {
+  return Object.fromEntries(
+    STAR_MAP_ATTENTION_CATEGORIES.map((category) => [
+      category,
+      left[category] + right[category],
+    ]),
+  ) as Record<StarMapAttentionCategory, number>;
+}

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import {
+  countFilterImpact,
   selectAttentionThreads,
   threadAttentionCategories,
 } from "../attention";
@@ -8,6 +9,7 @@ import {
   clampToCloudRadius,
   computeStarMapLayout,
   generateStarField,
+  pickHoveredCardKey,
   starMapCardSlot,
 } from "../star-map-layout";
 
@@ -228,5 +230,93 @@ describe("clampToCloudRadius", () => {
     expect(clampToCloudRadius(30, 40, 100)).toEqual({ dx: 30, dy: 40 });
     const clamped = clampToCloudRadius(300, 400, 100);
     expect(Math.hypot(clamped.dx, clamped.dy)).toBeCloseTo(100);
+  });
+});
+
+describe("countFilterImpact", () => {
+  const threads = [
+    // Unread only: turning Unread off drops it.
+    thread({
+      id: "only-unread",
+      inbox: { inInbox: true, reason: "updated-since-seen" },
+    }),
+    // Unread AND working: neither chip alone drops it.
+    thread({
+      id: "unread-and-working",
+      inbox: { inInbox: true, reason: "updated-since-seen" },
+      threadStatus: "active",
+    }),
+    // Matches only a disabled category, so it would appear if flipped on.
+    thread({
+      id: "only-unpushed",
+      gitWorkingState: {
+        dirtyFiles: 0,
+        dirtyAdditions: 0,
+        dirtyDeletions: 0,
+        untrackedFiles: 0,
+        unpushedCommits: 3,
+      },
+    }),
+    thread({ id: "quiet" }),
+  ];
+
+  it("counts cards that a chip alone is keeping on the map", () => {
+    const counts = countFilterImpact({
+      threads,
+      enabled: new Set(["unread", "active"]),
+    });
+    expect(counts.unread).toBe(1);
+    expect(counts.active).toBe(0);
+  });
+
+  it("counts cards a disabled chip would bring back", () => {
+    const counts = countFilterImpact({
+      threads,
+      enabled: new Set(["unread", "active"]),
+    });
+    expect(counts.unpushed).toBe(1);
+  });
+
+  it("ignores archived threads", () => {
+    const counts = countFilterImpact({
+      threads: [
+        thread({
+          id: "archived",
+          archivedAt: 1,
+          inbox: { inInbox: true, reason: "updated-since-seen" },
+        }),
+      ],
+      enabled: new Set(["unread"]),
+    });
+    expect(counts.unread).toBe(0);
+  });
+});
+
+describe("pickHoveredCardKey", () => {
+  // Pitch is tighter than card height, so each card's top band sits under
+  // the previous card's bottom.
+  const cards = [0, 1, 2].map((index) => ({
+    threadKey: `card-${index}`,
+    rect: {
+      left: 0,
+      right: 200,
+      top: index * 84,
+      bottom: index * 84 + 100,
+    },
+  }));
+
+  it("picks the only card under the pointer", () => {
+    expect(pickHoveredCardKey(cards, { x: 10, y: 20 })).toBe("card-0");
+  });
+
+  it("flips to the lower card once the pointer crosses its start", () => {
+    // y=90 is inside card-0's tail AND card-1's head; the next card wins.
+    expect(pickHoveredCardKey(cards, { x: 10, y: 90 })).toBe("card-1");
+    expect(pickHoveredCardKey(cards, { x: 10, y: 174 })).toBe("card-2");
+  });
+
+  it("returns nothing outside the stack", () => {
+    expect(pickHoveredCardKey(cards, { x: 10, y: 400 })).toBeUndefined();
+    expect(pickHoveredCardKey(cards, { x: 900, y: 20 })).toBeUndefined();
   });
 });

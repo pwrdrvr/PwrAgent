@@ -9263,9 +9263,18 @@ textarea,
   transition: border-color 120ms ease, transform 120ms ease;
 }
 
-.star-map-card:hover {
+.star-map-card:hover,
+.star-map-card.is-raised {
   border-color: var(--accent-border);
-  transform: translateY(-1px);
+}
+
+/* Lane stacks overlap by design, so the pointer's card lifts clear of its
+   neighbours. Raise is z-index + shadow only: a transform here would move
+   the card's own rect and feed back into the hover hit-test. */
+.star-map-card.is-raised {
+  z-index: 5;
+  background: var(--bg-panel-elevated);
+  box-shadow: var(--shadow-popover);
 }
 
 .star-map-card:focus-visible {
@@ -9290,8 +9299,8 @@ textarea,
   .star-map-card {
     animation-duration: 0s;
   }
-  .star-map-card:hover {
-    transform: none;
+  .star-map-card {
+    transition: none;
   }
 }
 
@@ -9361,6 +9370,9 @@ textarea,
 }
 
 .star-map__filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   padding: 4px 10px;
   border: 1px solid var(--border-subtle);
   border-radius: 6px;
@@ -9379,6 +9391,41 @@ textarea,
 .star-map__filter-chip:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+}
+
+/* How many cards appear/disappear if this chip is flipped. */
+.star-map__filter-count {
+  min-width: 14px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-muted) 18%, transparent);
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  line-height: 15px;
+  text-align: center;
+}
+
+.star-map__filter-chip.is-on .star-map__filter-count {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--text-primary);
+}
+
+/* The map's top chrome sits inside the macOS title-bar drag band, and
+   Chromium ignores `-webkit-app-region` on inline-level boxes - a plain
+   <button> there has its clicks swallowed by the OS (the same trap
+   documented on .messaging-status-bar). Every interactive element gets an
+   explicit no-drag on a non-inline box; the bare sky stays draggable so
+   the window can still be moved while the map is open. */
+.star-map__filters,
+.star-map__filters *,
+.star-map__close,
+.star-map__close *,
+.star-map-instance,
+.star-map-instance *,
+.star-map-card,
+.star-map-card * {
+  -webkit-app-region: no-drag;
 }
 
 /* Floating thread over the map: the already-mounted main pane elevates

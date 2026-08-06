@@ -18,6 +18,8 @@ import type { DesktopApi } from "../../lib/desktop-api";
 import { useCelestialIcons } from "../../lib/useCelestialIcons";
 import { useFederationHealth } from "../../lib/useFederationHealth";
 import {
+  addFilterImpactCounts,
+  countFilterImpact,
   selectAttentionThreads,
   STAR_MAP_ATTENTION_CATEGORIES,
   STAR_MAP_ATTENTION_LABELS,
@@ -27,6 +29,7 @@ import {
 import {
   computeStarMapLayout,
   generateStarField,
+  pickHoveredCardKey,
   starMapCardSlot,
   type StarMapInstancePosition,
 } from "./star-map-layout";
@@ -105,6 +108,8 @@ export function StarMapScreen(props: StarMapScreenProps) {
     new Set(),
   );
   const [remoteRefreshNonce, setRemoteRefreshNonce] = useState(0);
+  // Lane stacks overlap, so the hovered card raises above its neighbours.
+  const [hoveredCardKey, setHoveredCardKey] = useState<string>();
 
   // Focus the layer on open AND whenever the floating thread closes -
   // "Back to map" leaves focus inside <main>, and without a refocus the
@@ -228,6 +233,27 @@ export function StarMapScreen(props: StarMapScreenProps) {
     return result;
   }, [filters, localInstanceId, props.localThreads, props.sessionKeys, remote]);
 
+  // Chip counts answer "how many cards does flipping this change" across
+  // every lane, local session state included.
+  const filterCounts = useMemo(() => {
+    let counts = countFilterImpact({
+      threads: props.localThreads.filter(
+        (thread) =>
+          !thread.federation
+          || !isRemoteFederationTarget(thread.federation.ref.target),
+      ),
+      enabled: filters,
+      sessionKeys: props.sessionKeys,
+    });
+    for (const threads of remote.threadsByInstance.values()) {
+      counts = addFilterImpactCounts(
+        counts,
+        countFilterImpact({ threads, enabled: filters }),
+      );
+    }
+    return counts;
+  }, [filters, props.localThreads, props.sessionKeys, remote]);
+
   const peerById = useMemo(
     () => new Map(peers.map((peer) => [peer.id, peer])),
     [peers],
@@ -314,6 +340,23 @@ export function StarMapScreen(props: StarMapScreenProps) {
             : ""
         }`}
         style={{ left: position.x, top: position.y }}
+        onPointerMove={(event) => {
+          const boxes = [
+            ...event.currentTarget.querySelectorAll<HTMLElement>(
+              "[data-thread-key]",
+            ),
+          ].map((element) => ({
+            threadKey: element.dataset.threadKey ?? "",
+            rect: element.getBoundingClientRect(),
+          }));
+          setHoveredCardKey(
+            pickHoveredCardKey(boxes, {
+              x: event.clientX,
+              y: event.clientY,
+            }),
+          );
+        }}
+        onPointerLeave={() => setHoveredCardKey(undefined)}
       >
         {visible.length > 0 ? (
           <span
@@ -339,6 +382,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
               }
               riseDelayMs={index * 45}
               entering={enteringThreadKeys.has(threadKey)}
+              raised={hoveredCardKey === threadKey}
               baseSlot={slot}
               offset={arrangement.offsetFor(position.instanceId, threadKey)}
               width={layout.cardWidth}
@@ -559,7 +603,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
             aria-pressed={filters.has(category)}
             onClick={() => toggleFilter(category)}
           >
-            {STAR_MAP_ATTENTION_LABELS[category]}
+            <span>{STAR_MAP_ATTENTION_LABELS[category]}</span>
+            <span className="star-map__filter-count">
+              {filterCounts[category]}
+            </span>
           </button>
         ))}
       </div>
