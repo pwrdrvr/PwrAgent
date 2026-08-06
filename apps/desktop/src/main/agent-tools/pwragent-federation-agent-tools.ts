@@ -1,5 +1,6 @@
 import type {
   CreateInstanceThreadToolArgs,
+  FederationSearchScope,
   ListFederationInstancesToolArgs,
   ListInstanceProjectsToolArgs,
   PwrAgentFederationOperationName,
@@ -9,6 +10,7 @@ import type {
   ThreadExecutionMode,
 } from "@pwragent/shared";
 import {
+  FEDERATION_SEARCH_SCOPES,
   PWRAGENT_FEDERATION_OPERATION_NAMES,
   PWRAGENT_TOOL_NAMESPACE,
 } from "@pwragent/shared";
@@ -90,13 +92,13 @@ function descriptionForOperation(
 ): string {
   switch (operation) {
     case "list_federation_instances":
-      return "List every PwrAgent instance this app can reach: the local instance plus any federated peers, each with its id, display label, celestial icon, operator-written purpose notes, connection status, capabilities, and an isLocal flag. Use this first when the user wants work routed to a particular machine ('on the studio Mac', 'on the rack mini') or when deciding where a task should run — the purpose notes describe what each machine is for. Works with federation disabled too: the result is then just the local instance, so there is no need to check whether federation is configured before calling. Only instances with status connected (or the local instance) can accept new work.";
+      return "List the PwrAgent instances this app can reach: the local instance plus any federated peers, each with its id, display label, celestial icon, operator-written purpose notes, connection status, capabilities, an isLocal flag, and host facts (OS platform/version, hostname, CPU architecture and count, total RAM, free disk, machineId). Use this first when the user wants work routed to a particular machine ('on the studio Mac', 'on the rack mini') or for 'find me a place to run this' requests — purpose notes describe intent, host facts describe capability. Instances sharing the same host.machineId are profiles on one physical machine and compete for the same CPUs/RAM — never sum their capacity. Disk/host figures are snapshots from the last handshake, not live readings. Results are paged: at most `limit` rows (default 25) per call, with nextCursor and totalCount when more remain; pass nextCursor back promptly (tokens expire after about a minute), or better, use `query` to filter by label, notes, profile, hostname, platform, or architecture instead of paging through a large fleet. Works with federation disabled too: the result is then just the local instance, so there is no need to check whether federation is configured before calling. Only instances with status connected (or the local instance) can accept new work.";
     case "list_instance_projects":
       return "List the projects/directories available on one PwrAgent instance, local or remote. Pass an instanceId from list_federation_instances. Each project row carries the key to pass to create_instance_thread as projectKey, plus its label, filesystem path, and whether a launchpad (per-project environment, model, and execution-mode presets) is configured. Use this to find the project the user is talking about on the chosen instance before creating a thread there.";
     case "create_instance_thread":
       return "Create and start a new PwrAgent thread in a project on a chosen instance, local or remote. Pass instanceId from list_federation_instances and projectKey from list_instance_projects; input becomes the first prompt of the created thread. Omitted settings inherit the project's launchpad presets, then the instance defaults — only pass model/executionMode/workMode overrides the user asked for. Consult ~/.pwragent/AGENTS.md (when it exists) for the operator's thread-startup preferences such as default projects and settings before choosing values. For delegating work on the local instance from an ordinary thread, prefer handoff_task, which offers richer workspace and grouping options; use create_instance_thread when targeting another instance or when routing intake work by instance. Thread startup can take minutes while a worktree or environment is prepared; if this call is slow, do not call it again — use search_federation_threads to check whether the thread appeared. When the result includes threadLink, include it verbatim when telling the user about the thread so it renders as a clickable chip; a bare threadId is a dead end for the user. Remote-instance results carry no threadLink yet — name the instance label instead.";
     case "search_federation_threads":
-      return "Search threads across every reachable PwrAgent instance, including the local one, in a single call — use it to find 'the PwrSnap thread about X' wherever it lives. Pass instanceId to scope the search to one instance. Results carry the owning instanceId, its display label, and an isLocal flag; failures lists peers that could not be searched. This is a metadata search (titles, summaries, project paths). For deeper local-only search with transcript content modes, use search_threads instead. When mentioning a local result to the user, include its threadLink verbatim so it renders as a clickable chip.";
+      return "Search threads across every reachable PwrAgent instance, including the local one, in a single call — use it to find 'the PwrSnap thread about X' wherever it lives. Use scope to pick the search surface: `all` (default) is local plus every connected peer, `local` is this instance only, and `remote` is every connected peer excluding local — the right choice when the user knows the thread is not on this machine. Pass instanceId to target one specific instance; scope and instanceId intersect when both are given. Results carry the owning instanceId, its display label, and an isLocal flag; failures lists peers that could not be searched. This is a metadata search (titles, summaries, project paths). For deeper local-only search with transcript content modes, use search_threads instead. When mentioning a local result to the user, include its threadLink verbatim so it renders as a clickable chip.";
   }
 }
 
@@ -108,7 +110,24 @@ function inputSchemaForOperation(
       return {
         type: "object",
         additionalProperties: false,
-        properties: {},
+        properties: {
+          query: {
+            type: "string",
+            description:
+              "Optional case-insensitive substring filter matched against label, purpose notes, profile name, instance id, hostname, OS platform/version, and CPU architecture. Prefer filtering over paging through a large fleet. Ignored when cursor is set.",
+          },
+          limit: {
+            type: "integer",
+            minimum: 1,
+            maximum: 100,
+            description: "Page size. Defaults to 25.",
+          },
+          cursor: {
+            type: "string",
+            description:
+              "Continuation token from a previous truncated result. Tokens expire after about a minute; on an expired-cursor error, call again without a cursor.",
+          },
+        },
       };
     case "list_instance_projects":
       return {
@@ -170,16 +189,22 @@ function inputSchemaForOperation(
             type: "string",
             description: "Search text matched against thread titles, summaries, and project paths.",
           },
+          scope: {
+            type: "string",
+            enum: FEDERATION_SEARCH_SCOPES,
+            description:
+              "`all` (default) searches the local instance plus every connected peer. `local` searches only this instance. `remote` searches every connected peer and excludes local — use it when the thread is known to live on another machine.",
+          },
           instanceId: {
             type: "string",
             description:
-              "Optional instance id to search only that instance. Omitted searches the local instance and every connected peer.",
+              "Optional instance id to search only that instance. Intersects with scope when both are given.",
           },
           limit: {
             type: "integer",
             minimum: 1,
             maximum: 200,
-            description: "Maximum results across all instances. Defaults to 20.",
+            description: "Maximum results across all instances. Defaults to 50.",
           },
         },
       };
@@ -197,7 +222,7 @@ function normalizeArgsForOperation(
   | undefined {
   switch (operation) {
     case "list_federation_instances":
-      return {};
+      return normalizeListFederationInstancesArgs(args);
     case "list_instance_projects":
       return normalizeListInstanceProjectsArgs(args);
     case "create_instance_thread":
@@ -212,14 +237,43 @@ function invalidArgumentsMessageForOperation(
 ): string {
   switch (operation) {
     case "list_federation_instances":
-      return "list_federation_instances accepts no arguments.";
+      return "list_federation_instances accepts an optional non-empty query, an integer limit between 1 and 100, and an optional non-empty cursor.";
     case "list_instance_projects":
       return "list_instance_projects requires a non-empty instanceId string.";
     case "create_instance_thread":
       return "create_instance_thread requires non-empty instanceId and projectKey strings, and accepts only known workMode values.";
     case "search_federation_threads":
-      return "search_federation_threads requires a non-empty query string; limit must be an integer between 1 and 200.";
+      return "search_federation_threads requires a non-empty query string; scope must be all, local, or remote; limit must be an integer between 1 and 200.";
   }
+}
+
+function normalizeListFederationInstancesArgs(
+  args: Record<string, unknown>,
+): ListFederationInstancesToolArgs | undefined {
+  for (const field of ["query", "cursor"] as const) {
+    if (Object.hasOwn(args, field) && !readTrimmedString(args[field])) {
+      return undefined;
+    }
+  }
+  let limit: number | undefined;
+  if (args.limit !== undefined) {
+    if (
+      typeof args.limit !== "number"
+      || !Number.isInteger(args.limit)
+      || args.limit < 1
+      || args.limit > 100
+    ) {
+      return undefined;
+    }
+    limit = args.limit;
+  }
+  const query = readTrimmedString(args.query);
+  const cursor = readTrimmedString(args.cursor);
+  return {
+    ...(query ? { query } : {}),
+    ...(limit !== undefined ? { limit } : {}),
+    ...(cursor ? { cursor } : {}),
+  };
 }
 
 function normalizeListInstanceProjectsArgs(
@@ -289,6 +343,13 @@ function normalizeSearchFederationThreadsArgs(
   if (Object.hasOwn(args, "instanceId") && !readTrimmedString(args.instanceId)) {
     return undefined;
   }
+  const scope =
+    args.scope === undefined
+      ? undefined
+      : readChoice(args.scope, FEDERATION_SEARCH_SCOPES);
+  if (args.scope !== undefined && !scope) {
+    return undefined;
+  }
   let limit: number | undefined;
   if (args.limit !== undefined) {
     if (
@@ -304,6 +365,7 @@ function normalizeSearchFederationThreadsArgs(
   const instanceId = readTrimmedString(args.instanceId);
   return {
     query,
+    ...(scope ? { scope: scope as FederationSearchScope } : {}),
     ...(instanceId ? { instanceId } : {}),
     ...(limit !== undefined ? { limit } : {}),
   };

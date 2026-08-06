@@ -3,6 +3,7 @@ import type {
   FederatedSearchPeerFailure,
   FederationCapability,
   FederationConnectionState,
+  FederationHostInfo,
   FederationInstanceId,
   FederationInstanceRole,
 } from "./federation";
@@ -63,14 +64,38 @@ export type FederationInstanceDescriptor = {
   /** Celestial icon token assigned by the Star Map surface. */
   icon?: string;
   profileName?: string;
+  /**
+   * Static host facts (OS, arch, CPU count, RAM, disk free, machineId).
+   * Instances sharing a machineId run on the same hardware — their CPU/RAM
+   * capacity must not be summed.
+   */
+  host?: FederationHostInfo;
   unavailableReason?: string;
 };
 
-export type ListFederationInstancesToolArgs = Record<string, never>;
+export type ListFederationInstancesToolArgs = {
+  /**
+   * Case-insensitive substring filter matched against label, notes,
+   * profile name, instance id, and host facts (hostname, platform, arch,
+   * OS version). Ignored when continuing from a cursor.
+   */
+  query?: string;
+  /** Page size, 1-100. Defaults to 25. */
+  limit?: number;
+  /** Continuation token from a previous truncated result. Short-lived. */
+  cursor?: string;
+};
 
 export type ListFederationInstancesResult = {
   federationEnabled: boolean;
   instances: FederationInstanceDescriptor[];
+  /** Total instances matching the query across all pages. */
+  totalCount: number;
+  /**
+   * Present when more instances remain. Pass back as `cursor` promptly —
+   * tokens expire after about a minute.
+   */
+  nextCursor?: string;
 };
 
 export type ListInstanceProjectsToolArgs = {
@@ -141,9 +166,20 @@ export type CreateInstanceThreadResult = {
   codexEnvironmentStartupFailure?: CodexEnvironmentStartupFailure;
 };
 
+export const FEDERATION_SEARCH_SCOPES = ["all", "local", "remote"] as const;
+
+export type FederationSearchScope = (typeof FEDERATION_SEARCH_SCOPES)[number];
+
 export type SearchFederationThreadsToolArgs = {
   query: string;
-  /** Restrict the search to one instance; omitted searches the whole fleet. */
+  /**
+   * Which instances to search: `all` (default) is local plus every
+   * connected peer, `local` is this instance only, `remote` is every
+   * connected peer excluding local. Intersects with `instanceId` when both
+   * are given.
+   */
+  scope?: FederationSearchScope;
+  /** Restrict the search to one instance; omitted searches the whole scope. */
   instanceId?: FederationInstanceId;
   limit?: number;
 };

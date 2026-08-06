@@ -1,12 +1,15 @@
+import { randomUUID } from "node:crypto";
 import type {
   CreateInstanceThreadResult,
   CreateInstanceThreadToolArgs,
   FederationHealthStatus,
+  FederationHostInfo,
   FederationInstanceDescriptor,
   FederationInstanceId,
   FederationRemoteTarget,
   FederationThreadSearchResultSummary,
   ListFederationInstancesResult,
+  ListFederationInstancesToolArgs,
   ListInstanceProjectsResult,
   ListInstanceProjectsToolArgs,
   NavigationLaunchpadDraft,
@@ -27,11 +30,28 @@ import type { PwrAgentFederationHandler } from "../agent-tools/pwragent-federati
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { FederatedSearchService } from "./federated-search-service";
 import type { FederationBackendOperations } from "./federation-backend-bridge";
+import { collectFederationHostInfo } from "./federation-host-info";
 import {
   defaultInstanceLabel,
   getDesktopFederationRuntime,
   type DesktopFederationRuntime,
 } from "./federation-runtime";
+
+const DEFAULT_INSTANCE_PAGE_SIZE = 25;
+
+/**
+ * Continuation tokens deliberately live for about a minute: they exist so an
+ * agent can page through one oversized listing in a single reasoning step,
+ * not to serve as a durable snapshot of the fleet.
+ */
+const INSTANCE_CURSOR_TTL_MS = 60_000;
+
+type InstanceListCursorEntry = {
+  expiresAt: number;
+  offset: number;
+  federationEnabled: boolean;
+  instances: FederationInstanceDescriptor[];
+};
 
 type ResolvedInstance = {
   instanceId: FederationInstanceId;
@@ -56,21 +76,33 @@ type ResolvedInstance = {
 export function createFederationAgentToolsHandler(
   options: {
     runtime?: () => DesktopFederationRuntime;
+    collectHostInfo?: () => Promise<FederationHostInfo>;
   } = {},
 ): PwrAgentFederationHandler {
   const runtime = options.runtime ?? getDesktopFederationRuntime;
+  const collectHostInfo = options.collectHostInfo ?? collectFederationHostInfo;
+  const cursors = new Map<string, InstanceListCursorEntry>();
   return async (request) => {
     try {
       if (request.operation === "list_federation_instances") {
-        return ok(await listFederationInstances(runtime()));
+        return listFederationInstances(
+          runtime(),
+          request.args,
+          cursors,
+          collectHostInfo,
+        );
       }
       if (request.operation === "list_instance_projects") {
-        return await listInstanceProjects(runtime(), request.args);
+        return await listInstanceProjects(runtime(), request.args, collectHostInfo);
       }
       if (request.operation === "create_instance_thread") {
-        return await createInstanceThread(runtime(), request.args);
+        return await createInstanceThread(runtime(), request.args, collectHostInfo);
       }
-      return await searchFederationThreads(runtime(), request.args);
+      return await searchFederationThreads(
+        runtime(),
+        request.args,
+        collectHostInfo,
+      );
     } catch (error) {
       return failure(
         classifyFederationToolError(error),
@@ -82,9 +114,33 @@ export function createFederationAgentToolsHandler(
 
 async function listFederationInstances(
   runtime: DesktopFederationRuntime,
-): Promise<ListFederationInstancesResult> {
+  args: ListFederationInstancesToolArgs,
+  cursors: Map<string, InstanceListCursorEntry>,
+  collectHostInfo: () => Promise<FederationHostInfo>,
+): Promise<PwrAgentFederationResponse> {
+  const limit = args.limit ?? DEFAULT_INSTANCE_PAGE_SIZE;
+  pruneExpiredCursors(cursors);
+
+  if (args.cursor) {
+    const entry = cursors.get(args.cursor);
+    if (!entry) {
+      return failure(
+        "invalid_arguments",
+        "The cursor is unknown or expired. Call list_federation_instances again without a cursor (tokens last about a minute).",
+      );
+    }
+    return ok(
+      pageInstances({
+        cursors,
+        entry,
+        cursorId: args.cursor,
+        limit,
+      }),
+    );
+  }
+
   const health = await runtime.health();
-  const local = await localInstanceDescriptor(health);
+  const local = await localInstanceDescriptor(health, collectHostInfo);
   const peers = health.peers.map((peer): FederationInstanceDescriptor => ({
     instanceId: peer.id,
     label: formatFederationPeerDisplayLabel(peer, health.peers),
@@ -95,19 +151,93 @@ async function listFederationInstances(
     notes: peer.notes,
     icon: peer.icon,
     profileName: peer.profileName,
+    host: peer.host,
     unavailableReason: peer.unavailableReason,
   }));
+  const instances = [local, ...peers].filter((instance) =>
+    matchesInstanceQuery(instance, args.query),
+  );
+  return ok(
+    pageInstances({
+      cursors,
+      entry: {
+        expiresAt: Date.now() + INSTANCE_CURSOR_TTL_MS,
+        offset: 0,
+        federationEnabled: health.enabled,
+        instances,
+      },
+      limit,
+    }),
+  );
+}
+
+function pageInstances(params: {
+  cursors: Map<string, InstanceListCursorEntry>;
+  entry: InstanceListCursorEntry;
+  cursorId?: string;
+  limit: number;
+}): ListFederationInstancesResult {
+  const { cursors, entry, limit } = params;
+  const page = entry.instances.slice(entry.offset, entry.offset + limit);
+  const nextOffset = entry.offset + page.length;
+  const exhausted = nextOffset >= entry.instances.length;
+  if (params.cursorId) {
+    cursors.delete(params.cursorId);
+  }
+  let nextCursor: string | undefined;
+  if (!exhausted) {
+    nextCursor = randomUUID();
+    cursors.set(nextCursor, { ...entry, offset: nextOffset });
+  }
   return {
-    federationEnabled: health.enabled,
-    instances: [local, ...peers],
+    federationEnabled: entry.federationEnabled,
+    instances: page,
+    totalCount: entry.instances.length,
+    ...(nextCursor ? { nextCursor } : {}),
   };
+}
+
+function pruneExpiredCursors(
+  cursors: Map<string, InstanceListCursorEntry>,
+): void {
+  const now = Date.now();
+  for (const [id, entry] of cursors) {
+    if (entry.expiresAt <= now) {
+      cursors.delete(id);
+    }
+  }
+}
+
+function matchesInstanceQuery(
+  instance: FederationInstanceDescriptor,
+  query: string | undefined,
+): boolean {
+  if (!query) {
+    return true;
+  }
+  const needle = query.toLowerCase();
+  const haystack = [
+    instance.label,
+    instance.notes,
+    instance.profileName,
+    instance.instanceId,
+    instance.host?.hostname,
+    instance.host?.platform,
+    instance.host?.osVersion,
+    instance.host?.arch,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  return haystack.includes(needle);
 }
 
 async function listInstanceProjects(
   runtime: DesktopFederationRuntime,
   args: ListInstanceProjectsToolArgs,
+  collectHostInfo: () => Promise<FederationHostInfo>,
 ): Promise<PwrAgentFederationResponse> {
-  const resolved = await resolveInstance(runtime, args.instanceId);
+  const resolved = await resolveInstance(runtime, args.instanceId, collectHostInfo);
   if (!resolved.ok) {
     return resolved.response;
   }
@@ -137,8 +267,9 @@ async function listInstanceProjects(
 async function createInstanceThread(
   runtime: DesktopFederationRuntime,
   args: CreateInstanceThreadToolArgs,
+  collectHostInfo: () => Promise<FederationHostInfo>,
 ): Promise<PwrAgentFederationResponse> {
-  const resolved = await resolveInstance(runtime, args.instanceId);
+  const resolved = await resolveInstance(runtime, args.instanceId, collectHostInfo);
   if (!resolved.ok) {
     return resolved.response;
   }
@@ -194,23 +325,27 @@ async function createInstanceThread(
 async function searchFederationThreads(
   runtime: DesktopFederationRuntime,
   args: SearchFederationThreadsToolArgs,
+  collectHostInfo: () => Promise<FederationHostInfo>,
 ): Promise<PwrAgentFederationResponse> {
+  const scope = args.scope ?? "all";
   const health = await runtime.health();
   const localId = health.instanceId;
-  const local = await localInstanceDescriptor(health);
+  const local = await localInstanceDescriptor(health, collectHostInfo);
   if (args.instanceId && args.instanceId !== localId) {
-    const resolved = await resolveInstance(runtime, args.instanceId);
+    const resolved = await resolveInstance(runtime, args.instanceId, collectHostInfo);
     if (!resolved.ok) {
       return resolved.response;
     }
   }
-  const includeLocal = !args.instanceId || args.instanceId === localId;
+  // scope and instanceId intersect: each masks the surface independently.
+  const includeLocal =
+    scope !== "remote" && (!args.instanceId || args.instanceId === localId);
+  const includePeers = scope !== "local";
   const service = new FederatedSearchService({
     includeLocal,
     local: runtime.localBackend(),
     peers: () =>
-      runtime
-        .connectedPeerTargets()
+      (includePeers ? runtime.connectedPeerTargets() : [])
         .filter((peer) => peer.capabilities.includes("federated_search"))
         .filter(
           (peer) =>
@@ -279,8 +414,15 @@ async function searchFederationThreads(
 
 async function localInstanceDescriptor(
   health: FederationHealthStatus,
+  collectHostInfo: () => Promise<FederationHostInfo>,
 ): Promise<FederationInstanceDescriptor> {
   const settings = await getDesktopSettingsService().readSettings();
+  let host: FederationHostInfo | undefined;
+  try {
+    host = await collectHostInfo();
+  } catch {
+    host = undefined;
+  }
   return {
     instanceId: health.instanceId ?? "local",
     label:
@@ -292,7 +434,7 @@ async function localInstanceDescriptor(
     capabilities: [...FEDERATION_CAPABILITIES],
     role: health.role,
     notes: settings.federation.instanceNotes.value.trim() || undefined,
-    profileName: undefined,
+    ...(host ? { host } : {}),
   };
 }
 
@@ -303,10 +445,11 @@ type ResolveInstanceOutcome =
 async function resolveInstance(
   runtime: DesktopFederationRuntime,
   instanceId: FederationInstanceId,
+  collectHostInfo: () => Promise<FederationHostInfo>,
 ): Promise<ResolveInstanceOutcome> {
   const health = await runtime.health();
   if (instanceId === health.instanceId) {
-    const local = await localInstanceDescriptor(health);
+    const local = await localInstanceDescriptor(health, collectHostInfo);
     return {
       ok: true,
       instance: {

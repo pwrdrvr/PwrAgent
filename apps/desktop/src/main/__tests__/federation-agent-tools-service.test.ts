@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type {
   CreateInstanceThreadResult,
   FederationHealthStatus,
+  FederationHostInfo,
   ListFederationInstancesResult,
   ListInstanceProjectsResult,
   MaterializeDirectoryLaunchpadRequest,
@@ -10,6 +11,18 @@ import type {
 } from "@pwragent/shared";
 import { createFederationAgentToolsHandler } from "../federation/federation-agent-tools-service";
 import type { DesktopFederationRuntime } from "../federation/federation-runtime";
+
+const localHostInfo: FederationHostInfo = {
+  platform: "darwin",
+  osVersion: "25.5.0",
+  hostname: "local-mac",
+  arch: "arm64",
+  cpuCount: 16,
+  memoryBytes: 68_719_476_736,
+  diskFreeBytes: 512_000_000_000,
+  machineId: "mach_local",
+};
+
 
 vi.mock("../settings/desktop-settings-singleton", () => ({
   getDesktopSettingsService: () => ({
@@ -70,6 +83,8 @@ function buildRuntime(overrides: Partial<DesktopFederationRuntime>): () =>
 describe("federation agent tools service", () => {
   it("lists just the local instance when federation is disabled", async () => {
     const handler = createFederationAgentToolsHandler({
+      // Never let unit tests mint a machine-id in the real PwrAgent root.
+      collectHostInfo: async () => localHostInfo,
       runtime: buildRuntime({
         health: async () => buildHealth({ enabled: false, status: "disabled" }),
       }),
@@ -86,17 +101,26 @@ describe("federation agent tools service", () => {
       .data;
     expect(data.federationEnabled).toBe(false);
     expect(data.instances).toHaveLength(1);
+    expect(data.totalCount).toBe(1);
+    expect(data.nextCursor).toBeUndefined();
     expect(data.instances[0]).toMatchObject({
       instanceId: "pwr_local",
       label: "Local Mac",
       isLocal: true,
       status: "connected",
       notes: "Primary dev machine",
+      host: {
+        platform: "darwin",
+        cpuCount: 16,
+        machineId: "mach_local",
+      },
     });
   });
 
   it("lists peers with purpose notes, icons, and status", async () => {
     const handler = createFederationAgentToolsHandler({
+      // Never let unit tests mint a machine-id in the real PwrAgent root.
+      collectHostInfo: async () => localHostInfo,
       runtime: buildRuntime({
         health: async () =>
           buildHealth({
@@ -144,6 +168,135 @@ describe("federation agent tools service", () => {
     });
   });
 
+  it("pages the instance list with single-use continuation tokens", async () => {
+    const peers = Array.from({ length: 30 }, (_, index) => ({
+      id: `pwr_peer_${index}`,
+      label: `Peer ${index}`,
+      role: "client" as const,
+      status: "connected" as const,
+      capabilities: [],
+    }));
+    const handler = createFederationAgentToolsHandler({
+      // Never let unit tests mint a machine-id in the real PwrAgent root.
+      collectHostInfo: async () => localHostInfo,
+      runtime: buildRuntime({
+        health: async () => buildHealth({ peers }),
+      }),
+    });
+
+    const first = await handler({
+      operation: "list_federation_instances",
+      context,
+      args: {},
+    });
+    const firstData = (first as { ok: true; data: ListFederationInstancesResult })
+      .data;
+    expect(firstData.instances).toHaveLength(25);
+    expect(firstData.totalCount).toBe(31);
+    expect(firstData.nextCursor).toBeDefined();
+
+    const second = await handler({
+      operation: "list_federation_instances",
+      context,
+      args: { cursor: firstData.nextCursor! },
+    });
+    const secondData = (second as { ok: true; data: ListFederationInstancesResult })
+      .data;
+    expect(secondData.instances).toHaveLength(6);
+    expect(secondData.totalCount).toBe(31);
+    expect(secondData.nextCursor).toBeUndefined();
+    expect([
+      ...firstData.instances.map((instance) => instance.instanceId),
+      ...secondData.instances.map((instance) => instance.instanceId),
+    ]).toHaveLength(31);
+
+    // Tokens are single-use: replaying the consumed cursor fails.
+    const replay = await handler({
+      operation: "list_federation_instances",
+      context,
+      args: { cursor: firstData.nextCursor! },
+    });
+    expect(replay).toMatchObject({
+      ok: false,
+      error: { code: "invalid_arguments" },
+    });
+  });
+
+  it("rejects an unknown instance-list cursor", async () => {
+    const handler = createFederationAgentToolsHandler({
+      // Never let unit tests mint a machine-id in the real PwrAgent root.
+      collectHostInfo: async () => localHostInfo,
+      runtime: buildRuntime({
+        health: async () => buildHealth(),
+      }),
+    });
+
+    const response = await handler({
+      operation: "list_federation_instances",
+      context,
+      args: { cursor: "cursor-from-another-life" },
+    });
+
+    expect(response).toMatchObject({
+      ok: false,
+      error: { code: "invalid_arguments" },
+    });
+  });
+
+  it("filters the instance list by query across labels, notes, and host facts", async () => {
+    const handler = createFederationAgentToolsHandler({
+      // Never let unit tests mint a machine-id in the real PwrAgent root.
+      collectHostInfo: async () => localHostInfo,
+      runtime: buildRuntime({
+        health: async () =>
+          buildHealth({
+            peers: [
+              {
+                id: "pwr_studio",
+                label: "Studio Mac",
+                role: "client",
+                status: "connected",
+                capabilities: [],
+                host: { platform: "darwin", hostname: "studio" },
+              },
+              {
+                id: "pwr_rack",
+                label: "Rack Mini",
+                role: "client",
+                status: "connected",
+                capabilities: [],
+                notes: "long-running agents",
+                host: { platform: "linux", hostname: "rack-01" },
+              },
+            ],
+          }),
+      }),
+    });
+
+    const byPlatform = await handler({
+      operation: "list_federation_instances",
+      context,
+      args: { query: "linux" },
+    });
+    const platformData = (
+      byPlatform as { ok: true; data: ListFederationInstancesResult }
+    ).data;
+    expect(platformData.totalCount).toBe(1);
+    expect(platformData.instances[0]).toMatchObject({ instanceId: "pwr_rack" });
+
+    const byNotes = await handler({
+      operation: "list_federation_instances",
+      context,
+      args: { query: "long-running" },
+    });
+    const notesData = (
+      byNotes as { ok: true; data: ListFederationInstancesResult }
+    ).data;
+    expect(notesData.instances.map((instance) => instance.instanceId)).toEqual([
+      "pwr_rack",
+    ]);
+  });
+
   it("routes list_instance_projects to the remote backend and filters unlinked", async () => {
     const getNavigationSnapshot = vi.fn(async () =>
       buildSnapshot({
@@ -179,6 +332,8 @@ describe("federation agent tools service", () => {
       }),
     );
     const handler = createFederationAgentToolsHandler({
+      // Never let unit tests mint a machine-id in the real PwrAgent root.
+      collectHostInfo: async () => localHostInfo,
       runtime: buildRuntime({
         health: async () =>
           buildHealth({
@@ -226,6 +381,8 @@ describe("federation agent tools service", () => {
 
   it("returns not_found for an unknown instance", async () => {
     const handler = createFederationAgentToolsHandler({
+      // Never let unit tests mint a machine-id in the real PwrAgent root.
+      collectHostInfo: async () => localHostInfo,
       runtime: buildRuntime({
         health: async () => buildHealth(),
       }),
@@ -245,6 +402,8 @@ describe("federation agent tools service", () => {
 
   it("returns peer_unavailable for a disconnected instance", async () => {
     const handler = createFederationAgentToolsHandler({
+      // Never let unit tests mint a machine-id in the real PwrAgent root.
+      collectHostInfo: async () => localHostInfo,
       runtime: buildRuntime({
         health: async () =>
           buildHealth({
@@ -299,6 +458,8 @@ describe("federation agent tools service", () => {
       }),
     );
     const handler = createFederationAgentToolsHandler({
+      // Never let unit tests mint a machine-id in the real PwrAgent root.
+      collectHostInfo: async () => localHostInfo,
       runtime: buildRuntime({
         health: async () => buildHealth(),
         localBackend: (() => ({
@@ -363,6 +524,8 @@ describe("federation agent tools service", () => {
       updatedAt: 3,
     };
     const handler = createFederationAgentToolsHandler({
+      // Never let unit tests mint a machine-id in the real PwrAgent root.
+      collectHostInfo: async () => localHostInfo,
       runtime: buildRuntime({
         health: async () => buildHealth(),
         localBackend: (() => ({
@@ -418,9 +581,90 @@ describe("federation agent tools service", () => {
     ]);
   });
 
+  it("excludes local results for scope remote and peers for scope local", async () => {
+    const localListThreads = vi.fn(async () => ({
+      backend: "all",
+      fetchedAt: 10,
+      threads: [
+        {
+          id: "thread-local",
+          title: "Recorder crash on stop",
+          source: "codex" as const,
+          linkedDirectories: [],
+          createdAt: 1,
+          updatedAt: 2,
+        },
+      ],
+    }));
+    const remoteListThreads = vi.fn(async () => ({
+      backend: "all",
+      fetchedAt: 10,
+      threads: [
+        {
+          id: "thread-remote",
+          title: "Recorder crash investigation",
+          source: "codex" as const,
+          linkedDirectories: [],
+          createdAt: 1,
+          updatedAt: 3,
+        },
+      ],
+    }));
+    const handler = createFederationAgentToolsHandler({
+      // Never let unit tests mint a machine-id in the real PwrAgent root.
+      collectHostInfo: async () => localHostInfo,
+      runtime: buildRuntime({
+        health: async () => buildHealth(),
+        localBackend: (() => ({ listThreads: localListThreads })) as never,
+        connectedPeerTargets: () => [
+          {
+            target: { scope: "remote", instanceId: "pwr_studio" },
+            label: "Studio Mac",
+            capabilities: ["federated_search"],
+          },
+        ],
+        remoteBackend: (() => ({ listThreads: remoteListThreads })) as never,
+      }),
+    });
+
+    const remoteOnly = await handler({
+      operation: "search_federation_threads",
+      context,
+      args: { query: "recorder crash", scope: "remote" },
+    });
+    const remoteData = (
+      remoteOnly as { ok: true; data: SearchFederationThreadsResult }
+    ).data;
+    expect(localListThreads).not.toHaveBeenCalled();
+    expect(remoteData.results.map((entry) => entry.threadId)).toEqual([
+      "thread-remote",
+    ]);
+    expect(remoteData.searchedInstances).toEqual([
+      { instanceId: "pwr_studio", instanceLabel: "Studio Mac", resultCount: 1 },
+    ]);
+
+    const localOnly = await handler({
+      operation: "search_federation_threads",
+      context,
+      args: { query: "recorder crash", scope: "local" },
+    });
+    const localData = (
+      localOnly as { ok: true; data: SearchFederationThreadsResult }
+    ).data;
+    expect(remoteListThreads).toHaveBeenCalledTimes(1);
+    expect(localData.results.map((entry) => entry.threadId)).toEqual([
+      "thread-local",
+    ]);
+    expect(localData.searchedInstances).toEqual([
+      { instanceId: "pwr_local", instanceLabel: "Local Mac", resultCount: 1 },
+    ]);
+  });
+
   it("scopes search_federation_threads to one peer and skips local", async () => {
     const localListThreads = vi.fn();
     const handler = createFederationAgentToolsHandler({
+      // Never let unit tests mint a machine-id in the real PwrAgent root.
+      collectHostInfo: async () => localHostInfo,
       runtime: buildRuntime({
         health: async () =>
           buildHealth({
