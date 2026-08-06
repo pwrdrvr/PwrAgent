@@ -3192,12 +3192,57 @@ export function useThreadNavigation(
     }
 
     return desktopApi.onAgentEvent((event) => {
-      if (!federationTargetsEqual(event.federationTarget, readRendererFederationTarget())) {
+      const windowTarget = readRendererFederationTarget();
+      const method = event.notification.method as string;
+      if (!federationTargetsEqual(event.federationTarget, windowTarget)) {
+        // Peer-status events are stamped with the peer's own remote target,
+        // which never matches the main window's (absent) window target. The
+        // main window still hosts that peer's threads via viewer-side remote
+        // pins, so let those events through to dim/refresh the pinned rows.
+        if (method !== "federation/peerStatus/changed" || windowTarget) {
+          return;
+        }
+        const params = event.notification.params as {
+          instanceId: string;
+          status: string;
+        };
+        markNavigationActivity({ refreshOnIdleResume: false });
+        if (params.status === "connected") {
+          scheduleRefresh(undefined, undefined, false, {
+            forceRefresh: true,
+            refreshMode: "full",
+          });
+          return;
+        }
+        setState((current) => ({
+          ...current,
+          // Patch only the affected pinned rows. Unlike the federation
+          // window, no window-level error is raised: the rest of the list
+          // is local and healthy.
+          response: current.response
+            ? {
+                ...current.response,
+                threads: current.response.threads.map((thread) =>
+                  thread.federation &&
+                  isRemoteFederationTarget(thread.federation.ref.target) &&
+                  thread.federation.ref.target.instanceId === params.instanceId
+                    ? {
+                        ...thread,
+                        federation: {
+                          ...thread.federation,
+                          peerStatus:
+                            params.status as FederationPeerSummary["status"],
+                        },
+                      }
+                    : thread,
+                ),
+              }
+            : current.response,
+        }));
         return;
       }
 
       markNavigationActivity({ refreshOnIdleResume: false });
-      const method = event.notification.method as string;
       if (method === "federation/peerStatus/changed") {
         const params = event.notification.params as {
           instanceId: string;

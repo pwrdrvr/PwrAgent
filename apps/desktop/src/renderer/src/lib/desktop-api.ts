@@ -102,6 +102,12 @@ import type {
   ReadFederationDiagnosticsResponse,
   ReadFederationTailscaleStatusRequest,
   ReadFederationTailscaleStatusResponse,
+  AddRemoteThreadPinRequest,
+  AddRemoteThreadPinResponse,
+  FederationJumpSearchRequest,
+  FederationJumpSearchResponse,
+  RemoveRemoteThreadPinRequest,
+  RemoveRemoteThreadPinResponse,
   ResetFederationEnrollmentRequest,
   ResetFederationEnrollmentResponse,
   RevokeFederationPeerRequest,
@@ -766,6 +772,21 @@ export type DesktopApi = {
   reorderThreadPins?: (
     request: ReorderThreadPinsRequest
   ) => Promise<ReorderThreadPinsResponse>;
+  /**
+   * Viewer-owned pins of remote federated threads (⌘K "add to my list").
+   * Stored only on this instance; removal works while the owner is
+   * unreachable and never archives the owner's thread.
+   */
+  addRemoteThreadPin?: (
+    request: AddRemoteThreadPinRequest
+  ) => Promise<AddRemoteThreadPinResponse>;
+  removeRemoteThreadPin?: (
+    request: RemoveRemoteThreadPinRequest
+  ) => Promise<RemoveRemoteThreadPinResponse>;
+  /** ⌘K federated jump search across connected peers. */
+  jumpSearchRemoteThreads?: (
+    request: FederationJumpSearchRequest
+  ) => Promise<FederationJumpSearchResponse>;
   setThreadParent?: (
     request: SetThreadParentRequest
   ) => Promise<SetThreadParentResponse>;

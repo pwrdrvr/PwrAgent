@@ -25,6 +25,7 @@ import type {
 import type { DesktopGhDiscoverySnapshot } from "./settings";
 import type { BackendAcpSessionRuntimeState } from "./backend";
 import type { AutomationThreadSummary } from "./automations";
+import type { CelestialIconId } from "./celestial";
 import type {
   FederatedThreadRef,
   FederationCapability,
@@ -77,6 +78,13 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
      * through a gateway relay — PTY streams are point-to-point in v1.
      */
     capabilities?: FederationCapability[];
+    /**
+     * The owning instance's celestial identity icon, resolved from the
+     * federation-wide assignment map at stamping time. Absent for peers
+     * that haven't been assigned one (e.g. pre-celestial builds) —
+     * renderers fall back to a placeholder glyph.
+     */
+    celestialIcon?: CelestialIconId;
   };
   inbox: ThreadInboxState;
   /**
@@ -1044,6 +1052,59 @@ export type SetThreadPinResponse = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   pinnedRank?: string;
+};
+
+/**
+ * Viewer-owned pin of a thread that lives on another PwrAgent instance.
+ * Stored only on the viewing instance (`remote_thread_pins`); the owning
+ * instance never learns it has been pinned. The cached summary/label render
+ * the row while the owner is unreachable.
+ */
+export type RemoteThreadPin = {
+  ref: FederatedThreadRef;
+  addedAt: number;
+  /** Peer display label captured at pin/refresh time. */
+  instanceLabel: string;
+  /** Last successfully fetched summary (unstamped), for offline rendering. */
+  summary?: NavigationThreadSummary;
+  /**
+   * How this pin came to exist. "companion" marks a parent pulled in
+   * automatically when one of its sub-threads was pinned, so future UX can
+   * treat it differently (e.g. offer group removal). Absent = explicit.
+   */
+  pinnedVia?: "explicit" | "companion";
+};
+
+export type AddRemoteThreadPinRequest = {
+  ref: FederatedThreadRef;
+  /** Summary the caller already holds (e.g. a ⌘K result) so the pinned row
+   *  can render before the next peer fetch. */
+  summary?: NavigationThreadSummary;
+  instanceLabel?: string;
+};
+
+export type AddRemoteThreadPinResponse = {
+  pin: RemoteThreadPin;
+};
+
+export type RemoveRemoteThreadPinRequest = {
+  ref: FederatedThreadRef;
+};
+
+export type RemoveRemoteThreadPinResponse = {
+  removed: boolean;
+};
+
+/** ⌘K federated jump search: query connected peers' navigation summaries. */
+export type FederationJumpSearchRequest = {
+  query: string;
+  /** Max remote rows returned. Clamped to 1..50; default 8. */
+  limit?: number;
+};
+
+export type FederationJumpSearchResponse = {
+  /** Stamped remote rows (`federation` set), ordered by updatedAt desc. */
+  results: NavigationThreadSummary[];
 };
 
 export type SetThreadAgentRequest = {

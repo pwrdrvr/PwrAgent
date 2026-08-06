@@ -115,6 +115,11 @@ export const NAVIGATION_SET_THREAD_AGENT_CHANNEL =
   "navigation:set-thread-agent";
 export const NAVIGATION_REORDER_THREAD_PINS_CHANNEL =
   "navigation:reorder-thread-pins";
+export const NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL =
+  "navigation:add-remote-thread-pin";
+export const NAVIGATION_REMOVE_REMOTE_THREAD_PIN_CHANNEL =
+  "navigation:remove-remote-thread-pin";
+export const FEDERATION_JUMP_SEARCH_CHANNEL = "federation:jump-search";
 export const NAVIGATION_SET_THREAD_PARENT_CHANNEL =
   "navigation:set-thread-parent";
 export const NAVIGATION_UPDATE_SUBTHREAD_ORDER_CHANNEL =

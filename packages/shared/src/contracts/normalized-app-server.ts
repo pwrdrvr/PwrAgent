@@ -1600,6 +1600,15 @@ export type AppServerNotification =
       };
     }
   | {
+      method: "navigation/remoteThreadPins/changed";
+      params: {
+        /** Instance the pinned/unpinned thread lives on. */
+        instanceId: string;
+        threadId: string;
+        pinned: boolean;
+      };
+    }
+  | {
       method: "thread/parent/set";
       params: {
         threadId: string;

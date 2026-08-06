@@ -39,6 +39,7 @@ export * from "./path-display";
 export * from "./renderer-payload-boundary";
 export * from "./review-branches";
 export * from "./subthreads";
+export * from "./thread-jump-match";
 export * from "./thread-pins";
 export * from "./thread-terminal";
 export * from "./thread-titles";

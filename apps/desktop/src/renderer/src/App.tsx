@@ -1652,6 +1652,49 @@ function DesktopAppShell(props: {
             }
             requestAnimationFrame(() => revealSelectedThreadInList({ instant }));
           }}
+          onJumpToRemoteThread={(thread) => {
+            const ref = thread.federation?.ref;
+            if (!ref) {
+              return;
+            }
+            // Pin first (viewer-owned overlay row), then refresh so the
+            // merged snapshot carries the new row, then select it — the
+            // selection scopes ThreadView's IPC to the owning instance via
+            // selectedThreadFederationTarget.
+            const instant = threadJump.isPeeking();
+            if (instant) {
+              threadJump.deferPeekRestore();
+            }
+            void (async () => {
+              try {
+                await desktopApi?.addRemoteThreadPin?.({
+                  ref,
+                  summary: thread,
+                  instanceLabel: thread.federation?.instanceLabel,
+                });
+              } catch (error) {
+                console.warn("Pinning the remote thread failed.", error);
+              }
+              await navigation.refresh();
+              setMainView("thread");
+              navigation.selectThread(thread);
+              requestAnimationFrame(() =>
+                revealSelectedThreadInList({ instant }),
+              );
+            })();
+          }}
+          onRemoveRemoteThreadPin={async (thread) => {
+            const ref = thread.federation?.ref;
+            if (!ref) {
+              return;
+            }
+            try {
+              await desktopApi?.removeRemoteThreadPin?.({ ref });
+            } catch (error) {
+              console.warn("Removing the remote thread pin failed.", error);
+            }
+            await navigation.refresh();
+          }}
           onArchiveThread={navigation.archiveThread}
           onMarkThreadsSeen={
             desktopApi?.markThreadSeen ? navigation.markThreadsSeen : undefined

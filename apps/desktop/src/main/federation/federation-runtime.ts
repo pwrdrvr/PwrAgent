@@ -142,6 +142,7 @@ import {
 } from "./federation-enrollment";
 import { FederatedSearchService } from "./federated-search-service";
 import { collectFederationHostInfo } from "./federation-host-info";
+import { RemoteThreadSummaryCache } from "./remote-thread-summary-cache";
 import {
   FEDERATION_BACKEND_EVENT_METHOD,
   FEDERATION_BACKEND_METHOD_CAPABILITIES,
@@ -349,6 +350,7 @@ export class DesktopFederationRuntime {
   private readonly peerStatusListeners = new Set<() => void>();
   private unsubscribeLocalBackendEvents?: () => void;
   private restartPromise: Promise<void> | undefined;
+  private remoteThreadSummaryCache: RemoteThreadSummaryCache | undefined;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
   private reconnectAttempt = 0;
   private connectionGeneration = 0;
@@ -822,6 +824,7 @@ export class DesktopFederationRuntime {
           instanceLabel,
           peerStatus,
           capabilities,
+          celestialIcon: visiblePeer?.celestialIcon,
         },
       };
     });
@@ -831,6 +834,36 @@ export class DesktopFederationRuntime {
       unchanged: false,
       threads,
     };
+  }
+
+  /**
+   * Shared cache of stamped peer navigation summaries, serving the ⌘K
+   * federated jump search and the pinned-remote-thread snapshot merge.
+   * Snapshot-based (not `listThreads`) so remote rows carry PR chips and
+   * the shared `threadMatchesQuery` gives local/remote matching parity.
+   */
+  remoteThreadSummaries(): RemoteThreadSummaryCache {
+    this.remoteThreadSummaryCache ??= new RemoteThreadSummaryCache({
+      peers: () => this.connectedPeerTargets(),
+      fetchSnapshot: (target) => this.remoteNavigationSnapshot(target, {}),
+      peerStatus: (instanceId) => {
+        try {
+          const visible = this.visiblePeers();
+          const peer = visible.find((candidate) => candidate.id === instanceId);
+          return peer
+            ? {
+                status: peer.status,
+                label: formatFederationPeerDisplayLabel(peer, visible),
+                celestialIcon: peer.celestialIcon,
+              }
+            : {};
+        } catch {
+          // Early boot: the app-state db backing visiblePeers may be absent.
+          return {};
+        }
+      },
+    });
+    return this.remoteThreadSummaryCache;
   }
 
   async searchConnectedPeers(
