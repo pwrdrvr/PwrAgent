@@ -71,7 +71,7 @@ describe("StarMapScreen", () => {
       ).toBeTruthy();
     });
 
-    const card = screen.getByRole("button", { name: /Thread t1/ });
+    const card = screen.getByRole("button", { name: /Open thread: Thread t1/ });
     expect(card.textContent).toContain("PwrSnap");
     expect(card.textContent).not.toMatch(/local/i);
     expect(card.textContent).not.toMatch(/worktree/i);
@@ -112,7 +112,7 @@ describe("StarMapScreen", () => {
         screen.getByRole("button", { name: /Open this instance \(Mac-Mini-M4\)/ }),
       ).toBeTruthy();
     });
-    const card = screen.getByRole("button", { name: /Thread t1/ });
+    const card = screen.getByRole("button", { name: /Open thread: Thread t1/ });
     fireEvent.click(card);
     await screen.findByRole("region", { name: "Chat: Thread t1" });
     fireEvent.click(card);
@@ -141,7 +141,7 @@ describe("StarMapScreen", () => {
         screen.getByRole("button", { name: /Open this instance \(Mac-Mini-M4\)/ }),
       ).toBeTruthy();
     });
-    fireEvent.click(screen.getByRole("button", { name: /Thread t1/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Open thread: Thread t1/ }));
     const chat = await screen.findByRole("region", { name: "Chat: Thread t1" });
     fireEvent.click(
       within(chat).getByRole("button", { name: "Close chat: Thread t1" }),
@@ -167,11 +167,11 @@ describe("StarMapScreen", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: /Thread t2/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Open thread: Thread t2/ })).toBeTruthy();
     // Scope to the chip row: thread cards also expose an "Unread" status.
     const filterRow = screen.getByRole("group", { name: "Attention filters" });
     fireEvent.click(within(filterRow).getByRole("button", { name: /^Unread/ }));
-    expect(screen.queryByRole("button", { name: /Thread t2/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Open thread: Thread t2/ })).toBeNull();
   });
 
   it("closes on Escape", async () => {
@@ -423,7 +423,7 @@ describe("StarMapScreen", () => {
         onFocusLocalInstance={() => undefined}
       />,
     );
-    const card = await screen.findByRole("button", { name: /Thread t7/ });
+    const card = await screen.findByRole("button", { name: /Open thread: Thread t7/ });
     // Project chip stays; provider and branch are opt-in.
     expect(card.textContent).toContain("PwrSnap");
     expect(card.textContent).not.toContain("OpenAI");
@@ -480,5 +480,107 @@ describe("StarMapScreen", () => {
     });
     // The local instance is never hidden by this option.
     expect(screen.getByText("Local")).toBeTruthy();
+  });
+
+  it("archives a thread from the card kebab and refreshes its cloud", async () => {
+    const archiveThread = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "t1",
+    }));
+    const onRefreshLocalThreads = vi.fn();
+    render(
+      <StarMapScreen
+        desktopApi={{ ...buildDesktopApi(), archiveThread } as unknown as DesktopApi}
+        localThreads={[unreadThread("t1")]}
+        sessionKeys={{}}
+        localInstanceLabel="Mac-Mini-M4"
+        floating={false}
+        onClose={() => undefined}
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+        onRefreshLocalThreads={onRefreshLocalThreads}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /Open this instance \(Mac-Mini-M4\)/ }),
+      ).toBeTruthy();
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Actions for Thread t1" }),
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Archive thread" }));
+
+    await waitFor(() => {
+      expect(archiveThread).toHaveBeenCalledWith(
+        expect.objectContaining({ backend: "codex", threadId: "t1" }),
+      );
+    });
+    await waitFor(() => {
+      expect(onRefreshLocalThreads).toHaveBeenCalled();
+    });
+  });
+
+  it("surfaces an archive failure instead of silently dropping it", async () => {
+    const archiveThread = vi.fn(async () => {
+      throw new Error("peer is offline");
+    });
+    render(
+      <StarMapScreen
+        desktopApi={{ ...buildDesktopApi(), archiveThread } as unknown as DesktopApi}
+        localThreads={[unreadThread("t1")]}
+        sessionKeys={{}}
+        localInstanceLabel="Mac-Mini-M4"
+        floating={false}
+        onClose={() => undefined}
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /Open this instance \(Mac-Mini-M4\)/ }),
+      ).toBeTruthy();
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Actions for Thread t1" }),
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Archive thread" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(/peer is offline/);
+  });
+
+  it("closes the kebab on Escape without running anything", async () => {
+    const archiveThread = vi.fn();
+    render(
+      <StarMapScreen
+        desktopApi={{ ...buildDesktopApi(), archiveThread } as unknown as DesktopApi}
+        localThreads={[unreadThread("t1")]}
+        sessionKeys={{}}
+        localInstanceLabel="Mac-Mini-M4"
+        floating={false}
+        onClose={() => undefined}
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /Open this instance \(Mac-Mini-M4\)/ }),
+      ).toBeTruthy();
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Actions for Thread t1" }),
+    );
+    expect(screen.getByRole("menu")).toBeTruthy();
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => {
+      expect(screen.queryByRole("menu")).toBeNull();
+    });
+    expect(archiveThread).not.toHaveBeenCalled();
   });
 });

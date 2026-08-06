@@ -44,7 +44,9 @@ import {
   shouldStartCanvasPan,
 } from "./star-map-orbit";
 import { buildFederationTopology } from "./star-map-topology";
+import { readRendererFederationTarget } from "../../lib/federation-window";
 import { StarMapChatCard } from "./StarMapChatCard";
+import type { StarMapCardMenuAction } from "./StarMapCardMenu";
 import { useStarMapChatCards } from "./useStarMapChatCards";
 import { IntakeDialog, type IntakeDialogTarget } from "./IntakeDialog";
 import {
@@ -678,6 +680,92 @@ export function StarMapScreen(props: StarMapScreenProps) {
     [desktopApi, onOpenLocalThread],
   );
 
+  const [cardError, setCardError] = useState<string | undefined>(undefined);
+
+  /**
+   * Refresh whichever cloud owns a thread. Archive removes it from the
+   * owning instance, so the map has to re-fetch rather than guess.
+   */
+  const refreshOwner = useCallback(
+    (instanceId: string) => {
+      if (instanceId === localInstanceId) {
+        props.onRefreshLocalThreads?.();
+      } else {
+        setRemoteRefreshNonce((nonce) => nonce + 1);
+      }
+    },
+    [localInstanceId, props],
+  );
+
+  const cardMenuActions = useCallback(
+    (
+      thread: NavigationThreadSummary,
+      instanceId: string,
+    ): StarMapCardMenuAction[] => {
+      const federationTarget =
+        thread.federation?.ref.target ?? readRendererFederationTarget();
+      const actions: StarMapCardMenuAction[] = [
+        {
+          key: "open-full",
+          label: "Open in full view",
+          onSelect: () => openThreadFully(thread),
+        },
+      ];
+      if (desktopApi?.markThreadSeen && thread.inbox.inInbox) {
+        actions.push({
+          key: "mark-seen",
+          label: "Mark as seen",
+          onSelect: () => {
+            void desktopApi
+              .markThreadSeen?.({
+                backend: thread.source,
+                federationTarget,
+                threadId: thread.id,
+              })
+              .then(() => refreshOwner(instanceId))
+              .catch((error: unknown) => {
+                setCardError(
+                  error instanceof Error
+                    ? error.message
+                    : "Could not mark that thread seen.",
+                );
+              });
+          },
+        });
+      }
+      if (desktopApi?.archiveThread) {
+        actions.push({
+          danger: true,
+          key: "archive",
+          label: "Archive thread",
+          onSelect: () => {
+            void desktopApi
+              .archiveThread?.({
+                backend: thread.source,
+                federationTarget,
+                threadId: thread.id,
+              })
+              .then(() => {
+                chatCards.close(
+                  buildThreadIdentityKey(thread.source, thread.id),
+                );
+                refreshOwner(instanceId);
+              })
+              .catch((error: unknown) => {
+                setCardError(
+                  error instanceof Error
+                    ? error.message
+                    : "Could not archive that thread.",
+                );
+              });
+          },
+        });
+      }
+      return actions;
+    },
+    [chatCards, desktopApi, openThreadFully, refreshOwner],
+  );
+
   const linkState = (peerId: string) => {
     const status = peerById.get(peerId)?.status
       ?? (peerId === localInstanceId ? "connected" : "disconnected");
@@ -745,6 +833,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
               centered={orbitMode}
               stackIndex={index}
               cardFields={preferences.cardFields}
+              menuActions={cardMenuActions(thread, position.instanceId)}
               onCommitOffset={
                 // Drags persist + sync only once the durable instance id is
                 // known; before that, cards stay in their default slots.
@@ -1021,6 +1110,18 @@ export function StarMapScreen(props: StarMapScreenProps) {
           />
         );
       })}
+      {cardError ? (
+        <p className="star-map__card-error" role="alert">
+          {cardError}
+          <button
+            type="button"
+            aria-label="Dismiss error"
+            onClick={() => setCardError(undefined)}
+          >
+            ×
+          </button>
+        </p>
+      ) : null}
       {/* The map layer covers the app chrome, including the header toggle
           that opened it, so it must carry its own way out. */}
       <button

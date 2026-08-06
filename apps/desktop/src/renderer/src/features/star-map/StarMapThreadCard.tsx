@@ -6,6 +6,10 @@ import {
 } from "@pwragent/shared";
 import { CelestialIcon } from "../../icons";
 import { PrChip } from "../pr-status/PrChip";
+import {
+  StarMapCardMenu,
+  type StarMapCardMenuAction,
+} from "./StarMapCardMenu";
 import { ThreadMetaChips } from "../navigation/ThreadMetaChips";
 import {
   getThreadRowStatus,
@@ -54,6 +58,8 @@ export function StarMapThreadCard(props: {
   /** Present when the card is draggable; receives the clamped offset. */
   onCommitOffset?: (offset: { dx: number; dy: number }) => void;
   onOpen: (thread: NavigationThreadSummary) => void;
+  /** Kebab entries; the kebab is hidden when empty. */
+  menuActions?: StarMapCardMenuAction[];
 }) {
   const thread = props.thread;
   const threadKey = buildThreadIdentityKey(thread.source, thread.id);
@@ -78,7 +84,7 @@ export function StarMapThreadCard(props: {
       : {}),
   };
 
-  const startDrag = (event: ReactPointerEvent<HTMLButtonElement>) => {
+  const startDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (!props.onCommitOffset || event.button !== 0) return;
     const element = event.currentTarget;
     const startX = event.clientX;
@@ -132,19 +138,16 @@ export function StarMapThreadCard(props: {
   };
 
   return (
-    <button
-      type="button"
-      className={`star-map-card${props.entering ? " star-map-card--entering" : ""}`}
+    // Shell owns position, drag and stacking so the clickable surface can
+    // stay a plain button and the kebab can sit beside it rather than
+    // nested inside it.
+    <div
+      className={`star-map-card-shell${
+        props.entering ? " star-map-card-shell--entering" : ""
+      }`}
       style={style}
       data-thread-key={threadKey}
       onPointerDown={startDrag}
-      onClick={() => {
-        if (suppressClickRef.current) {
-          suppressClickRef.current = false;
-          return;
-        }
-        props.onOpen(thread);
-      }}
     >
       {/* Top-right, and large: the next card covers this one's bottom, so
           the mark has to live in the strip that stays visible. */}
@@ -153,6 +156,24 @@ export function StarMapThreadCard(props: {
           <CelestialIcon icon={props.instanceIcon} size={104} />
         </span>
       ) : null}
+      {props.menuActions && props.menuActions.length > 0 ? (
+        <StarMapCardMenu actions={props.menuActions} threadTitle={thread.title} />
+      ) : null}
+      <button
+        type="button"
+        className="star-map-card"
+        // Names the action rather than letting the button's whole content
+        // become its accessible name; the chips stay readable as content,
+        // and the kebab beside it gets a distinct name of its own.
+        aria-label={`Open thread: ${thread.title}`}
+        onClick={() => {
+          if (suppressClickRef.current) {
+            suppressClickRef.current = false;
+            return;
+          }
+          props.onOpen(thread);
+        }}
+      >
       <span className="star-map-card__heading">
         <ThreadRowStatus status={status} />
         <span className="star-map-card__title" title={thread.title}>
@@ -194,6 +215,7 @@ export function StarMapThreadCard(props: {
           />
         ))}
       </span>
-    </button>
+      </button>
+    </div>
   );
 }

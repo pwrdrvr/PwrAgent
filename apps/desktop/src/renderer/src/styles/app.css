@@ -9322,12 +9322,21 @@ textarea,
   white-space: nowrap;
 }
 
+/* Shell: position, stacking, drag target and rise animation. The visual
+   card is a plain button inside it, so the kebab can be a sibling rather
+   than a button nested in a button. */
+.star-map-card-shell {
+  position: absolute;
+  animation: star-map-rise 380ms ease-out backwards;
+}
+
 .star-map-card {
   display: flex;
-  position: absolute;
+  position: relative;
   flex-direction: column;
   overflow: hidden;
   gap: 6px;
+  width: 100%;
   padding: 8px 10px;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
@@ -9337,7 +9346,6 @@ textarea,
   color: var(--text-primary);
   text-align: left;
   cursor: pointer;
-  animation: star-map-rise 380ms ease-out backwards;
   transition: border-color 120ms ease, transform 120ms ease;
 }
 
@@ -9348,11 +9356,118 @@ textarea,
    the next card the moment the pointer crossed its top band, which made
    everything below the first line unclickable.) No transform: the card
    must not move under the pointer. */
-.star-map-card:hover {
+.star-map-card-shell:hover {
   z-index: 5;
+}
+
+.star-map-card-shell:hover .star-map-card {
   border-color: var(--accent-border);
   background: var(--bg-panel-elevated);
   box-shadow: var(--shadow-popover);
+}
+
+/* The kebab only appears on the card under the pointer (or while its own
+   menu is open) so a dense cloud is not peppered with dots. */
+.star-map-card__menu {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 6;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.star-map-card-shell:hover .star-map-card__menu,
+.star-map-card__menu:focus-within,
+.star-map-card__menu:has([aria-expanded="true"]) {
+  opacity: 1;
+}
+
+.star-map-card__menu-button {
+  padding: 1px 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 5px;
+  background: var(--bg-panel-elevated);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.star-map-card__menu-button:hover,
+.star-map-card__menu-button[aria-expanded="true"] {
+  border-color: var(--accent-border);
+  color: var(--text-primary);
+}
+
+.star-map-card__menu-list {
+  display: flex;
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 7;
+  flex-direction: column;
+  min-width: 168px;
+  padding: 4px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: var(--shadow-popover);
+}
+
+.star-map-card__menu-item {
+  padding: 6px 8px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 11px;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.star-map-card__menu-item:hover:not(:disabled) {
+  background: var(--bg-panel-hover);
+}
+
+.star-map-card__menu-item--danger {
+  color: var(--danger-text);
+}
+
+.star-map-card__menu-item:disabled {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+/* Card-action failures (archive, mark seen) surface over the map rather
+   than on the card, which may have just been refreshed away. */
+.star-map__card-error {
+  display: flex;
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  z-index: 30;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 7px 10px;
+  transform: translateX(-50%);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: var(--shadow-popover);
+  color: var(--danger-text);
+  font-size: 11px;
+}
+
+.star-map__card-error button {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
 }
 
 .star-map-card:focus-visible {
@@ -9427,7 +9542,7 @@ textarea,
 
 /* New-thread "bubble in" entrance (AI intake). Fade only under reduced
    motion. */
-.star-map-card--entering {
+.star-map-card-shell--entering {
   animation: star-map-card-enter 480ms ease-out;
 }
 
