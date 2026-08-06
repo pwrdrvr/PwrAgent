@@ -23,6 +23,8 @@ export function useStarMapThreads(params: {
   desktopApi?: DesktopApi;
   peers: readonly FederationPeerSummary[];
   enabled: boolean;
+  /** Bump to force an immediate refetch (e.g. after intake creates a thread). */
+  refreshNonce?: number;
 }): StarMapRemoteThreads {
   const desktopApi = params.desktopApi;
   const [state, setState] = useState<StarMapRemoteThreads>({
@@ -111,7 +113,7 @@ export function useStarMapThreads(params: {
       generationRef.current += 1;
       clearInterval(timer);
     };
-  }, [desktopApi, connectedIds, params.enabled]);
+  }, [desktopApi, connectedIds, params.enabled, params.refreshNonce]);
 
   return state;
 }

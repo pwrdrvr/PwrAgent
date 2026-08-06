@@ -2009,6 +2009,9 @@ function DesktopAppShell(props: {
                   setStarMapFloatOpen(true);
                 }}
                 onFocusLocalInstance={closeStarMap}
+                onRefreshLocalThreads={() => {
+                  void navigation.refresh?.();
+                }}
               />
             </Suspense>
           </div>

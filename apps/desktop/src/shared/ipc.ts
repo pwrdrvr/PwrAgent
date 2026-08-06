@@ -15,6 +15,7 @@ export const FEDERATION_SET_CELESTIAL_ICON_CHANNEL =
   "federation:set-celestial-icon";
 export const STAR_MAP_READ_ARRANGEMENT_CHANNEL = "star-map:read-arrangement";
 export const STAR_MAP_SET_CARD_POSITION_CHANNEL = "star-map:set-card-position";
+export const STAR_MAP_INTAKE_CHANNEL = "star-map:intake";
 export const APP_SERVER_READ_THREAD_CHANNEL = "app-server:read-thread";
 export const APP_SERVER_GET_THREAD_FILE_DIFF_CHANNEL =
   "app-server:get-thread-file-diff";

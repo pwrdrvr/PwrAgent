@@ -118,3 +118,52 @@ export type SetStarMapCardPositionRequest = {
   dx: number | null;
   dy: number | null;
 };
+
+/* ==== AI intake ==== */
+
+export type StarMapIntakeCandidate = {
+  directoryKey: string;
+  label: string;
+  path?: string;
+};
+
+/**
+ * Intake dispatch, executed ON the owning instance so its directory
+ * registry, launchpad defaults, and ~/.pwragent/AGENTS.md preferences are
+ * the ones consulted. `directoryKey` is set on a disambiguation resubmit.
+ *
+ * Backend/thread ids are plain strings here (not the normalized app-server
+ * types) so this contract stays leaf-importable without a type cycle.
+ */
+export type StarMapIntakeRequest = {
+  requestId: string;
+  request: string;
+  directoryKey?: string;
+};
+
+export type StarMapIntakeResponse =
+  | {
+      status: "created";
+      requestId: string;
+      backend: string;
+      threadId: string;
+      title?: string;
+    }
+  | {
+      status: "needs_disambiguation";
+      requestId: string;
+      /** Ranked candidate projects for the operator to pick from. */
+      candidates: StarMapIntakeCandidate[];
+    }
+  | {
+      status: "failed";
+      requestId: string;
+      error: string;
+    };
+
+export type StarMapIntakePhase =
+  | "resolving"
+  | "creating"
+  | "needs_disambiguation"
+  | "done"
+  | "failed";

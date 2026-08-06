@@ -32,6 +32,8 @@ export function StarMapInstanceCard(props: {
   isHub: boolean;
   unreachable?: boolean;
   onOpen: () => void;
+  /** Present when AI intake can target this instance. */
+  onIntake?: () => void;
 }) {
   return (
     <div
@@ -65,8 +67,20 @@ export function StarMapInstanceCard(props: {
           aria-hidden="true"
         />
       </button>
-      <span className="star-map-instance__label" title={props.label}>
-        {props.label}
+      <span className="star-map-instance__row">
+        <span className="star-map-instance__label" title={props.label}>
+          {props.label}
+        </span>
+        {props.onIntake ? (
+          <button
+            type="button"
+            className="star-map-instance__intake"
+            aria-label={`New thread on ${props.label}`}
+            onClick={props.onIntake}
+          >
+            +
+          </button>
+        ) : null}
       </span>
       {props.unreachable ? (
         <span className="star-map-instance__unreachable">Unreachable</span>

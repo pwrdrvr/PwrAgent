@@ -68,6 +68,8 @@ import type {
   SetAcpSessionRuntimeOptionResponse,
   SetCelestialIconRequest,
   SetCelestialIconResponse,
+  StarMapIntakeRequest,
+  StarMapIntakeResponse,
   SetCodexThreadEnvironmentRequest,
   SetCodexThreadEnvironmentResponse,
   SetThreadExecutionModeRequest,
@@ -161,6 +163,7 @@ export const FEDERATION_BACKEND_METHODS = {
   readPwrSnapConnectionStatus: "backend.readPwrSnapConnectionStatus",
   trustCodexProject: "backend.trustCodexProject",
   setCelestialIcon: "backend.setCelestialIcon",
+  starMapIntake: "backend.starMapIntake",
 } as const;
 
 export const FEDERATION_BACKEND_EVENT_METHOD = "backend.event";
@@ -241,6 +244,9 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   // cosmetic state; thread_navigation is the least-privileged grant every
   // browsing peer already holds.
   [FEDERATION_BACKEND_METHODS.setCelestialIcon]: "thread_navigation",
+  // Intake creates a thread and starts its first turn on the owning
+  // instance — the same trust the materialize-launchpad path carries.
+  [FEDERATION_BACKEND_METHODS.starMapIntake]: "environment_actions",
 };
 
 export function additionalFederationBackendCapabilities(
@@ -373,6 +379,7 @@ export type FederationBackendOperations = {
   setCelestialIcon(
     request: SetCelestialIconRequest,
   ): Promise<SetCelestialIconResponse>;
+  starMapIntake(request: StarMapIntakeRequest): Promise<StarMapIntakeResponse>;
 };
 
 export function registerFederationBackendHandlers(params: {
@@ -740,6 +747,13 @@ export function registerFederationBackendHandlers(params: {
     async (envelope) =>
       await params.backend.setCelestialIcon(
         envelope.params as SetCelestialIconRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.starMapIntake,
+    async (envelope) =>
+      await params.backend.starMapIntake(
+        envelope.params as StarMapIntakeRequest,
       ),
   );
 }
@@ -1166,6 +1180,18 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
     return await this.rpc.request<SetCelestialIconResponse>({
       method: FEDERATION_BACKEND_METHODS.setCelestialIcon,
       params: request,
+    });
+  }
+
+  async starMapIntake(
+    request: StarMapIntakeRequest,
+  ): Promise<StarMapIntakeResponse> {
+    return await this.rpc.request<StarMapIntakeResponse>({
+      method: FEDERATION_BACKEND_METHODS.starMapIntake,
+      params: request,
+      // Resolution + thread materialization can outlive the default 30s
+      // (Grok call + worktree preparation), so give intake a longer leash.
+      timeoutMs: 120_000,
     });
   }
 }

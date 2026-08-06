@@ -118,6 +118,9 @@ import type {
   SetCelestialIconResponse,
   ReadStarMapArrangementResponse,
   SetStarMapCardPositionRequest,
+  StarMapIntakeRequest,
+  StarMapIntakeResponse,
+  FederationTarget,
   ReorderDirectoryPinsRequest,
   ReorderDirectoryPinsResponse,
   ReorderThreadPinsRequest,
@@ -505,6 +508,9 @@ export type DesktopApi = {
   setStarMapCardPosition?: (
     request: SetStarMapCardPositionRequest,
   ) => Promise<ReadStarMapArrangementResponse>;
+  dispatchStarMapIntake?: (
+    request: StarMapIntakeRequest & { federationTarget?: FederationTarget },
+  ) => Promise<StarMapIntakeResponse>;
   ping?: () => string;
   listSkills?: (
     request?: AppServerListSkillsRequest
