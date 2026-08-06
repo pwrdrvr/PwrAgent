@@ -66,6 +66,8 @@ import type {
   ScheduledThreadActionMutationResponse,
   SetAcpSessionRuntimeOptionRequest,
   SetAcpSessionRuntimeOptionResponse,
+  SetCelestialIconRequest,
+  SetCelestialIconResponse,
   SetCodexThreadEnvironmentRequest,
   SetCodexThreadEnvironmentResponse,
   SetThreadExecutionModeRequest,
@@ -150,6 +152,7 @@ export const FEDERATION_BACKEND_METHODS = {
   readMessagingPlatformStatuses: "backend.readMessagingPlatformStatuses",
   readPwrSnapConnectionStatus: "backend.readPwrSnapConnectionStatus",
   trustCodexProject: "backend.trustCodexProject",
+  setCelestialIcon: "backend.setCelestialIcon",
 } as const;
 
 export const FEDERATION_BACKEND_EVENT_METHOD = "backend.event";
@@ -225,6 +228,11 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.readMessagingPlatformStatuses]: "remote_window",
   [FEDERATION_BACKEND_METHODS.readPwrSnapConnectionStatus]: "pwrsnap_connection",
   [FEDERATION_BACKEND_METHODS.trustCodexProject]: "environment_actions",
+  // Celestial icon overrides are directed at the gateway (the assignment
+  // coordinator). No dedicated capability exists for federation-level
+  // cosmetic state; thread_navigation is the least-privileged grant every
+  // browsing peer already holds.
+  [FEDERATION_BACKEND_METHODS.setCelestialIcon]: "thread_navigation",
 };
 
 export function additionalFederationBackendCapabilities(
@@ -354,6 +362,9 @@ export type FederationBackendOperations = {
   trustCodexProject(
     request: TrustCodexProjectRequest,
   ): Promise<TrustCodexProjectResponse>;
+  setCelestialIcon(
+    request: SetCelestialIconRequest,
+  ): Promise<SetCelestialIconResponse>;
 };
 
 export function registerFederationBackendHandlers(params: {
@@ -698,6 +709,13 @@ export function registerFederationBackendHandlers(params: {
     async (envelope) =>
       await params.backend.trustCodexProject(
         envelope.params as TrustCodexProjectRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.setCelestialIcon,
+    async (envelope) =>
+      await params.backend.setCelestialIcon(
+        envelope.params as SetCelestialIconRequest,
       ),
   );
 }
@@ -1114,6 +1132,15 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   ): Promise<TrustCodexProjectResponse> {
     return await this.rpc.request<TrustCodexProjectResponse>({
       method: FEDERATION_BACKEND_METHODS.trustCodexProject,
+      params: request,
+    });
+  }
+
+  async setCelestialIcon(
+    request: SetCelestialIconRequest,
+  ): Promise<SetCelestialIconResponse> {
+    return await this.rpc.request<SetCelestialIconResponse>({
+      method: FEDERATION_BACKEND_METHODS.setCelestialIcon,
       params: request,
     });
   }

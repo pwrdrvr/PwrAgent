@@ -59,9 +59,13 @@ import {
   FEDERATION_PROTOCOL_VERSION,
   buildFederatedThreadRef,
   federationEndpointAcceptsCloudflareCredentials,
+  isCelestialIconAssignment,
+  isCelestialIconId,
   isFederationGatewayEndpointUrl,
   formatFederationPeerDisplayLabel,
   isRemoteFederationTarget,
+  mergeCelestialIconAssignments,
+  pickCelestialIcon,
   resolveThreadTerminalCwd,
   type AppServerListSkillsRequest,
   type AppServerListThreadsRequest,
@@ -69,6 +73,8 @@ import {
   type ApplyThreadModelMigrationRequest,
   type CancelQueuedTurnRequest,
   type CancelThreadExecutionModeQueueRequest,
+  type CelestialIconAssignment,
+  type CelestialIconId,
   type CheckThreadBranchDriftRequest,
   type CompactThreadRequest,
   type ForkThreadRequest,
@@ -95,6 +101,8 @@ import {
   type RenameThreadRequest,
   type RunCodexEnvironmentActionRequest,
   type SetAcpSessionRuntimeOptionRequest,
+  type SetCelestialIconRequest,
+  type SetCelestialIconResponse,
   type SetCodexThreadEnvironmentRequest,
   type SetThreadExecutionModeRequest,
   type SetThreadModelSettingsRequest,
@@ -190,6 +198,9 @@ const GATEWAY_LAST_ENDPOINT_META_KEY = "federation_gateway_last_endpoint";
 const PENDING_INVITE_TOKEN_META_KEY = "federation_pending_invite_token";
 const GATEWAY_ENROLLED_AT_META_KEY = "federation_gateway_enrolled_at";
 const FEDERATION_PEER_DIRECTORY_METHOD = "federation.peerDirectory";
+const FEDERATION_CELESTIAL_ICONS_METHOD = "federation.celestialIcons";
+const CELESTIAL_ICON_ASSIGNMENTS_META_KEY =
+  "federation_celestial_icon_assignments";
 const FEDERATION_RECONNECT_MAX_DELAY_MS = 30_000;
 const DUPLICATE_IDENTITY_NOTE_TTL_MS = 5 * 60_000;
 /** A session must last this long before it counts as stable enough to reset backoff. */
@@ -220,6 +231,13 @@ type FederationPeerDirectoryNotification = {
   };
 };
 
+type FederationCelestialIconsNotification = {
+  method: typeof FEDERATION_CELESTIAL_ICONS_METHOD;
+  params: {
+    assignments: CelestialIconAssignment[];
+  };
+};
+
 export class DesktopFederationRuntime {
   private router?: FederationRouter;
   private server?: FederationGatewayWebSocketServer;
@@ -239,6 +257,11 @@ export class DesktopFederationRuntime {
     FederationInstanceId,
     FederationPeerSummary
   >();
+  /** Lazily loaded from state.db meta; authoritative copy on the gateway. */
+  private celestialAssignments?: Map<
+    FederationInstanceId,
+    CelestialIconAssignment
+  >;
   private readonly publishedPeerStatuses = new Map<
     FederationInstanceId,
     {
@@ -426,6 +449,9 @@ export class DesktopFederationRuntime {
       settings.federation.gatewayEndpoints.value[0]?.trim()
         || settings.federation.gatewayUrl.value.trim(),
     );
+    health.localCelestialIcon = this.celestialIconAssignments().find(
+      (assignment) => assignment.instanceId === health.instanceId,
+    )?.icon;
     return health;
   }
 
@@ -1201,6 +1227,10 @@ export class DesktopFederationRuntime {
       connectedAt: Date.now(),
     });
     this.publishPeerStatus(gatewayInstanceId, "connected");
+    // Push our persisted assignments up so overrides made while offline win
+    // LWW merges at the gateway; its authoritative snapshot comes back on
+    // the same channel.
+    this.broadcastCelestialIcons();
     if (pendingInviteToken) {
       getAppStateDb().setMeta(PENDING_INVITE_TOKEN_META_KEY, "");
     }
@@ -1321,6 +1351,11 @@ export class DesktopFederationRuntime {
     this.ptyService?.notifyPeerConnected(connection.peerId);
     this.publishPeerStatus(connection.peerId, "connected");
     this.broadcastPeerDirectory();
+    // Mirrors the broadcastPeerDirectory guard: connections registered
+    // before app state exists (unit harnesses) skip icon coordination.
+    if (isAppStateInitialized()) {
+      this.reconcileCelestialAssignments();
+    }
   }
 
   private unregisterGatewayConnection(connection: FederationGatewayConnection): void {
@@ -1378,6 +1413,9 @@ export class DesktopFederationRuntime {
     sourcePeerId: FederationInstanceId,
   ): Promise<void> {
     if (this.applyPeerDirectory(envelope)) {
+      return;
+    }
+    if (this.applyCelestialIcons(envelope, sourcePeerId)) {
       return;
     }
     if (this.publishRemotePtyStreamEvent(envelope, sourcePeerId)) {
@@ -1631,7 +1669,13 @@ export class DesktopFederationRuntime {
                 + "unstable until one is reset.",
             }
           : peer;
-      });
+      })
+      .map((peer) => ({
+        ...peer,
+        celestialIcon:
+          this.celestialAssignmentMap().get(peer.id)?.icon
+          ?? peer.celestialIcon,
+      }));
   }
 
   private defaultPeerLabel(peerId: FederationInstanceId): string {
@@ -1660,6 +1704,7 @@ export class DesktopFederationRuntime {
         capabilities: DEFAULT_CAPABILITIES,
         protocolVersion: FEDERATION_PROTOCOL_VERSION,
         profileName: localProfileName,
+        celestialIcon: this.celestialAssignmentMap().get(localInstanceId)?.icon,
       },
     ];
 
@@ -1733,6 +1778,291 @@ export class DesktopFederationRuntime {
       );
     }
     return true;
+  }
+
+  /**
+   * Lazily load the persisted celestial assignment map. Every instance
+   * persists the latest merged snapshot so icons survive restarts and
+   * offline periods everywhere, not just on the gateway.
+   */
+  private celestialAssignmentMap(): Map<
+    FederationInstanceId,
+    CelestialIconAssignment
+  > {
+    if (this.celestialAssignments) return this.celestialAssignments;
+    if (!isAppStateInitialized()) {
+      // Pre-init (and unit-test) callers get a throwaway empty map; the
+      // persisted snapshot loads on the first post-init read.
+      return new Map();
+    }
+    const map = new Map<FederationInstanceId, CelestialIconAssignment>();
+    const raw = getAppStateDb().getMeta(CELESTIAL_ICON_ASSIGNMENTS_META_KEY);
+    if (raw) {
+      try {
+        const parsed: unknown = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          for (const entry of parsed) {
+            if (isCelestialIconAssignment(entry)) {
+              map.set(entry.instanceId, entry);
+            }
+          }
+        }
+      } catch {
+        // Corrupt cache — reconciliation rebuilds it.
+      }
+    }
+    this.celestialAssignments = map;
+    return map;
+  }
+
+  private persistCelestialAssignments(): void {
+    if (!this.celestialAssignments || !isAppStateInitialized()) return;
+    getAppStateDb().setMeta(
+      CELESTIAL_ICON_ASSIGNMENTS_META_KEY,
+      JSON.stringify([...this.celestialAssignments.values()]),
+    );
+  }
+
+  /**
+   * The assignment coordinator is the root gateway — an instance with no
+   * upstream enrollment. Dual instances defer to their upstream gateway; a
+   * non-federated instance coordinates itself.
+   */
+  private actsAsCelestialCoordinator(): boolean {
+    if (!isAppStateInitialized()) return true;
+    return !getAppStateDb().getMeta(GATEWAY_INSTANCE_ID_META_KEY);
+  }
+
+  /** All known assignments, self-assigning the local instance on first read. */
+  celestialIconAssignments(): CelestialIconAssignment[] {
+    const map = this.celestialAssignmentMap();
+    const localInstanceId = this.ensureLocalInstanceId();
+    if (!map.has(localInstanceId)) {
+      map.set(localInstanceId, {
+        instanceId: localInstanceId,
+        icon: pickCelestialIcon(this.celestialIconsById(), localInstanceId, {
+          isGateway: this.actsAsCelestialCoordinator(),
+        }),
+        source: "auto",
+        updatedAt: Date.now(),
+      });
+      this.persistCelestialAssignments();
+    }
+    return [...map.values()];
+  }
+
+  celestialIconFor(
+    instanceId: FederationInstanceId,
+  ): CelestialIconId | undefined {
+    return this.celestialAssignmentMap().get(instanceId)?.icon;
+  }
+
+  private celestialIconsById(): Map<string, CelestialIconId> {
+    return new Map(
+      [...this.celestialAssignmentMap().values()].map((entry) => [
+        entry.instanceId,
+        entry.icon,
+      ]),
+    );
+  }
+
+  /** The assignment view without one instance — used when reassigning it. */
+  private celestialIconsByIdExcluding(
+    instanceId: FederationInstanceId,
+  ): Map<string, CelestialIconId> {
+    const map = this.celestialIconsById();
+    map.delete(instanceId);
+    return map;
+  }
+
+  /**
+   * Coordinator-side: ensure every visible peer and the local instance has
+   * an icon, then broadcast the authoritative map. Runs on every peer
+   * connect, so late joiners get icons without a dedicated request. The
+   * broadcast goes out even when nothing changed — the peer that just
+   * connected still needs the current map, and merges are idempotent.
+   */
+  private reconcileCelestialAssignments(): void {
+    if (!this.actsAsCelestialCoordinator()) {
+      this.broadcastCelestialIcons();
+      return;
+    }
+    const map = this.celestialAssignmentMap();
+    const localInstanceId = this.ensureLocalInstanceId();
+    let changed = false;
+    if (!map.has(localInstanceId)) {
+      map.set(localInstanceId, {
+        instanceId: localInstanceId,
+        icon: pickCelestialIcon(this.celestialIconsById(), localInstanceId, {
+          isGateway: true,
+        }),
+        source: "auto",
+        updatedAt: Date.now(),
+      });
+      changed = true;
+    }
+    for (const peer of this.visiblePeers()) {
+      if (map.has(peer.id)) continue;
+      map.set(peer.id, {
+        instanceId: peer.id,
+        icon: pickCelestialIcon(this.celestialIconsById(), peer.id),
+        source: "auto",
+        updatedAt: Date.now(),
+      });
+      changed = true;
+    }
+    // LWW merges can produce collisions (a client that self-assigned while
+    // offline, two clients that never met). The coordinator resolves them:
+    // overrides and older assignments keep their icon; newer auto entries
+    // get reassigned, and the fresh updatedAt makes the fix win everywhere.
+    const byIcon = new Map<CelestialIconId, CelestialIconAssignment[]>();
+    for (const assignment of map.values()) {
+      const bucket = byIcon.get(assignment.icon) ?? [];
+      bucket.push(assignment);
+      byIcon.set(assignment.icon, bucket);
+    }
+    for (const bucket of byIcon.values()) {
+      if (bucket.length < 2) continue;
+      const keeper = bucket.reduce((best, candidate) => {
+        if (best.source !== candidate.source) {
+          return best.source === "override" ? best : candidate;
+        }
+        return candidate.updatedAt < best.updatedAt ? candidate : best;
+      });
+      for (const loser of bucket) {
+        if (loser === keeper || loser.source === "override") continue;
+        map.set(loser.instanceId, {
+          instanceId: loser.instanceId,
+          icon: pickCelestialIcon(
+            this.celestialIconsByIdExcluding(loser.instanceId),
+            loser.instanceId,
+            { isGateway: false },
+          ),
+          source: "auto",
+          updatedAt: Date.now(),
+        });
+        changed = true;
+      }
+    }
+    if (changed) {
+      this.persistCelestialAssignments();
+      this.publishCelestialIconsChanged();
+    }
+    this.broadcastCelestialIcons();
+  }
+
+  private broadcastCelestialIcons(excludePeerId?: FederationInstanceId): void {
+    const router = this.router;
+    if (!router) return;
+    const localInstanceId = this.ensureLocalInstanceId();
+    const assignments = this.celestialIconAssignments();
+    for (const connection of router.listConnections()) {
+      if (connection.peerId === excludePeerId) continue;
+      connection.sendEnvelope({
+        id: `federation-celestial:${randomUUID()}`,
+        kind: "notification",
+        method: FEDERATION_CELESTIAL_ICONS_METHOD,
+        params: { assignments },
+        protocolVersion: FEDERATION_PROTOCOL_VERSION,
+        sourceInstanceId: localInstanceId,
+        targetInstanceId: connection.peerId,
+        createdAt: Date.now(),
+      });
+    }
+  }
+
+  private applyCelestialIcons(
+    envelope: FederationProtocolEnvelope,
+    sourcePeerId: FederationInstanceId,
+  ): boolean {
+    if (
+      envelope.kind !== "notification" ||
+      envelope.method !== FEDERATION_CELESTIAL_ICONS_METHOD
+    ) {
+      return false;
+    }
+    const notification =
+      envelope as FederationCelestialIconsNotification & typeof envelope;
+    const incoming = Array.isArray(notification.params?.assignments)
+      ? notification.params.assignments.filter(isCelestialIconAssignment)
+      : [];
+    if (incoming.length === 0) return true;
+    const merged = mergeCelestialIconAssignments(
+      this.celestialIconAssignments(),
+      incoming,
+    );
+    if (!merged.changed) return true;
+    const map = this.celestialAssignmentMap();
+    map.clear();
+    for (const assignment of merged.assignments) {
+      map.set(assignment.instanceId, assignment);
+    }
+    this.persistCelestialAssignments();
+    this.publishCelestialIconsChanged();
+    // Re-fan-out on change only (idempotent merges terminate the loop):
+    // a dual hub forwards the gateway's map down to its own clients, and a
+    // client's offline overrides ride up to the gateway the same way.
+    this.broadcastCelestialIcons(sourcePeerId);
+    return true;
+  }
+
+  private publishCelestialIconsChanged(): void {
+    this.publishAgentEvent?.({
+      backend: "codex",
+      notification: {
+        method: "federation/celestialIcons/changed",
+        params: {
+          assignments: this.celestialIconAssignments(),
+        },
+      },
+    });
+  }
+
+  /**
+   * Apply an operator override. Coordinators mutate directly; everyone else
+   * forwards to the gateway when it is reachable and falls back to a local
+   * LWW write that syncs up on the next reconnect.
+   */
+  async setCelestialIcon(
+    request: SetCelestialIconRequest,
+  ): Promise<SetCelestialIconResponse> {
+    if (!isCelestialIconId(request.icon) || !request.instanceId) {
+      throw new Error("Invalid celestial icon override request.");
+    }
+    const gatewayInstanceId = this.actsAsCelestialCoordinator()
+      ? undefined
+      : getAppStateDb().getMeta(GATEWAY_INSTANCE_ID_META_KEY) || undefined;
+    if (gatewayInstanceId && this.router?.getConnection(gatewayInstanceId)) {
+      const response = await this.remoteBackend({
+        scope: "remote",
+        instanceId: gatewayInstanceId,
+      }).setCelestialIcon(request);
+      const merged = mergeCelestialIconAssignments(
+        this.celestialIconAssignments(),
+        response.assignments.filter(isCelestialIconAssignment),
+      );
+      if (merged.changed) {
+        const map = this.celestialAssignmentMap();
+        map.clear();
+        for (const assignment of merged.assignments) {
+          map.set(assignment.instanceId, assignment);
+        }
+        this.persistCelestialAssignments();
+        this.publishCelestialIconsChanged();
+      }
+      return { assignments: this.celestialIconAssignments() };
+    }
+    const map = this.celestialAssignmentMap();
+    map.set(request.instanceId, {
+      instanceId: request.instanceId,
+      icon: request.icon,
+      source: "override",
+      updatedAt: Date.now(),
+    });
+    this.persistCelestialAssignments();
+    this.publishCelestialIconsChanged();
+    this.broadcastCelestialIcons();
+    return { assignments: this.celestialIconAssignments() };
   }
 
   private publishPeerStatus(
@@ -2272,6 +2602,11 @@ function localBackendOperations(): FederationBackendOperations {
       request: TrustCodexProjectRequest,
     ): Promise<TrustCodexProjectResponse> {
       return await getDesktopBackendRegistry().trustCodexProject(request);
+    },
+    async setCelestialIcon(
+      request: SetCelestialIconRequest,
+    ): Promise<SetCelestialIconResponse> {
+      return await getDesktopFederationRuntime().setCelestialIcon(request);
     },
   };
 }

@@ -55,6 +55,8 @@ import {
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { agentEventMatchesThread } from "../../lib/federated-thread-events";
+import { useCelestialIcons } from "../../lib/useCelestialIcons";
+import { CelestialWatermark } from "../../components/CelestialWatermark";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import type { IntegratedTerminalsController } from "../../lib/useIntegratedTerminals";
 import type { ThreadContextWindowState } from "../../lib/useThreadSessionState";
@@ -1344,6 +1346,14 @@ export function ThreadView(props: ThreadViewProps) {
   }, [props.activeTurnId]);
 
   const selectedThread = props.selectedThread;
+  const celestialIcons = useCelestialIcons({ desktopApi: props.desktopApi });
+  // Owning instance's identity mark: remote threads show their instance's
+  // icon, local threads (and the local viewer) show the local icon.
+  const celestialWatermarkIcon = celestialIcons.iconFor(
+    selectedThread?.federation?.ref.target.scope === "remote"
+      ? selectedThread.federation.ref.target.instanceId
+      : undefined,
+  );
   const envActionRuns = readCodexEnvironmentActionRuns(
     selectedThread?.codexEnvironmentRuntime,
   );
@@ -3051,6 +3061,7 @@ export function ThreadView(props: ThreadViewProps) {
         }${contextRailResizing ? " is-resizing-context-rail" : ""}`}
       >
         <div className="thread-view__primary">
+          <CelestialWatermark icon={celestialWatermarkIcon} />
           {showSetupFailureChoice && selectedThread && selectedThreadKey ? (
             <EnvironmentSetupFailureChoice
               archiving={setupFailureArchiving}

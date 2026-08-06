@@ -11,6 +11,8 @@ export const FEDERATION_RESET_ENROLLMENT_CHANNEL =
 export const FEDERATION_TAILSCALE_STATUS_CHANNEL = "federation:tailscale-status";
 export const FEDERATION_TAILSCALE_CONFIGURE_CHANNEL =
   "federation:tailscale-configure";
+export const FEDERATION_SET_CELESTIAL_ICON_CHANNEL =
+  "federation:set-celestial-icon";
 export const APP_SERVER_READ_THREAD_CHANNEL = "app-server:read-thread";
 export const APP_SERVER_GET_THREAD_FILE_DIFF_CHANNEL =
   "app-server:get-thread-file-diff";

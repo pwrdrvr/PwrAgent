@@ -4,6 +4,7 @@ import type {
   MessagingChannelKind,
   MessagingConversationKind,
 } from "./messaging";
+import type { CelestialIconAssignment } from "./celestial";
 import type {
   FederationConnectionState,
   FederationTarget,
@@ -1037,6 +1038,13 @@ export type FederationPeerStatusChangedNotification = {
   };
 };
 
+export type FederationCelestialIconsChangedNotification = {
+  method: "federation/celestialIcons/changed";
+  params: {
+    assignments: CelestialIconAssignment[];
+  };
+};
+
 export type AppServerMcpElicitationAction = "accept" | "decline" | "cancel";
 
 export type AppServerMcpElicitationSchema = {
@@ -1669,4 +1677,5 @@ export type AppServerNotification =
       };
     }
   | FederationPeerStatusChangedNotification
+  | FederationCelestialIconsChangedNotification
   | AppServerPendingRequestNotification;

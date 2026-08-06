@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type {
   AgentEvent,
+  CelestialIconAssignment,
   CodexEnvironmentSetupProgressEvent,
   FederationCapability,
   FederationInstanceId,
   FederationProtocolEnvelope,
   NavigationSnapshot,
+  SetCelestialIconResponse,
 } from "@pwragent/shared";
 import {
   FEDERATION_PROTOCOL_VERSION,
@@ -91,6 +93,17 @@ type RuntimeHarness = {
     listPeers: () => [];
   };
   unregisterGatewayConnection: (connection: FederationGatewayConnection) => void;
+  celestialAssignments?: Map<FederationInstanceId, CelestialIconAssignment>;
+  celestialIconAssignments: () => CelestialIconAssignment[];
+  reconcileCelestialAssignments: () => void;
+  applyCelestialIcons: (
+    envelope: FederationProtocolEnvelope,
+    sourcePeerId: FederationInstanceId,
+  ) => boolean;
+  setCelestialIcon: (request: {
+    instanceId: string;
+    icon: string;
+  }) => Promise<SetCelestialIconResponse>;
   visiblePeers: () => Array<{
     id: FederationInstanceId;
     status: string;
@@ -1034,5 +1047,191 @@ describe("DesktopFederationRuntime", () => {
     runtime.unregisterGatewayConnection(newConnection);
 
     expect(router.getConnection("client_one")).toBeUndefined();
+  });
+
+  it("assigns unique celestial icons on peer connect and broadcasts the map", () => {
+    const router = new FederationRouter({ localInstanceId: "gateway_one" });
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.router = router;
+    runtime.localInstanceId = "gateway_one";
+    runtime.celestialAssignments = new Map();
+    runtime.store = () => ({
+      getPeer: () => undefined,
+      listPeers: () => [],
+    });
+    const sent: FederationProtocolEnvelope[] = [];
+    runtime.visiblePeers = () => [
+      { id: "client_one", status: "connected" },
+      { id: "client_two", status: "connected" },
+    ];
+    router.registerConnection({
+      peerId: "client_one",
+      capabilities: ["thread_navigation"],
+      sendEnvelope: (envelope) => sent.push(envelope),
+    });
+    router.registerConnection({
+      peerId: "client_two",
+      capabilities: ["thread_navigation"],
+      sendEnvelope: (envelope) => sent.push(envelope),
+    });
+    runtime.reconcileCelestialAssignments();
+
+    const assignments = runtime.celestialIconAssignments();
+    const byInstance = new Map(
+      assignments.map((entry) => [entry.instanceId, entry.icon]),
+    );
+    expect(byInstance.get("gateway_one")).toBe("sun");
+    expect(new Set(byInstance.values()).size).toBe(3);
+
+    const celestialBroadcasts = sent.filter(
+      (envelope) =>
+        envelope.kind === "notification"
+        && envelope.method === "federation.celestialIcons",
+    );
+    expect(celestialBroadcasts.length).toBeGreaterThan(0);
+    const lastBroadcast = celestialBroadcasts[
+      celestialBroadcasts.length - 1
+    ] as FederationProtocolEnvelope & {
+      params: { assignments: CelestialIconAssignment[] };
+    };
+    expect(lastBroadcast.params.assignments).toHaveLength(3);
+  });
+
+  it("merges incoming celestial snapshots last-writer-wins and republishes on change only", () => {
+    const router = new FederationRouter({ localInstanceId: "client_one" });
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.router = router;
+    runtime.localInstanceId = "client_one";
+    runtime.celestialAssignments = new Map([
+      [
+        "client_one",
+        {
+          instanceId: "client_one",
+          icon: "moon" as const,
+          source: "auto" as const,
+          updatedAt: 1_000,
+        },
+      ],
+    ]);
+    runtime.store = () => ({
+      getPeer: () => undefined,
+      listPeers: () => [],
+    });
+    const published: AgentEvent[] = [];
+    runtime.setAgentEventPublisher((event) => published.push(event));
+
+    const snapshot = (
+      id: string,
+      assignments: CelestialIconAssignment[],
+    ): FederationProtocolEnvelope => ({
+      id,
+      kind: "notification",
+      method: "federation.celestialIcons",
+      params: { assignments },
+      protocolVersion: FEDERATION_PROTOCOL_VERSION,
+      sourceInstanceId: "gateway_one",
+      targetInstanceId: "client_one",
+      createdAt: 2_000,
+    });
+
+    const gatewaySnapshot: CelestialIconAssignment[] = [
+      {
+        instanceId: "gateway_one",
+        icon: "sun",
+        source: "auto",
+        updatedAt: 2_000,
+      },
+      {
+        instanceId: "client_one",
+        icon: "black-hole",
+        source: "override",
+        updatedAt: 3_000,
+      },
+    ];
+
+    expect(
+      runtime.applyCelestialIcons(snapshot("celestial-1", gatewaySnapshot), "gateway_one"),
+    ).toBe(true);
+    const merged = new Map(
+      runtime
+        .celestialIconAssignments()
+        .map((entry) => [entry.instanceId, entry]),
+    );
+    expect(merged.get("client_one")?.icon).toBe("black-hole");
+    expect(merged.get("gateway_one")?.icon).toBe("sun");
+    expect(
+      published.filter(
+        (event) =>
+          event.notification.method === "federation/celestialIcons/changed",
+      ),
+    ).toHaveLength(1);
+
+    // Replaying the same snapshot is a no-op: no extra publish.
+    runtime.applyCelestialIcons(snapshot("celestial-2", gatewaySnapshot), "gateway_one");
+    expect(
+      published.filter(
+        (event) =>
+          event.notification.method === "federation/celestialIcons/changed",
+      ),
+    ).toHaveLength(1);
+
+    // An older entry for the same instance loses the merge.
+    runtime.applyCelestialIcons(
+      snapshot("celestial-3", [
+        {
+          instanceId: "client_one",
+          icon: "moon",
+          source: "auto",
+          updatedAt: 500,
+        },
+      ]),
+      "gateway_one",
+    );
+    expect(
+      new Map(
+        runtime
+          .celestialIconAssignments()
+          .map((entry) => [entry.instanceId, entry]),
+      ).get("client_one")?.icon,
+    ).toBe("black-hole");
+  });
+
+  it("applies coordinator overrides locally and broadcasts them", async () => {
+    const router = new FederationRouter({ localInstanceId: "gateway_one" });
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.router = router;
+    runtime.localInstanceId = "gateway_one";
+    runtime.celestialAssignments = new Map();
+    runtime.store = () => ({
+      getPeer: () => undefined,
+      listPeers: () => [],
+    });
+    const sent: FederationProtocolEnvelope[] = [];
+    router.registerConnection({
+      peerId: "client_one",
+      capabilities: ["thread_navigation"],
+      sendEnvelope: (envelope) => sent.push(envelope),
+    });
+
+    const response = await runtime.setCelestialIcon({
+      instanceId: "client_one",
+      icon: "black-hole",
+    });
+    const override = response.assignments.find(
+      (entry) => entry.instanceId === "client_one",
+    );
+    expect(override?.icon).toBe("black-hole");
+    expect(override?.source).toBe("override");
+    expect(
+      sent.some(
+        (envelope) =>
+          envelope.kind === "notification"
+          && envelope.method === "federation.celestialIcons",
+      ),
+    ).toBe(true);
+
+    await expect(
+      runtime.setCelestialIcon({ instanceId: "client_one", icon: "comet" }),
+    ).rejects.toThrow(/invalid celestial icon/i);
   });
 });

@@ -18,8 +18,10 @@ import type {
   ReadFederationTailscaleStatusResponse,
   RevokeFederationPeerRequest,
   RevokeFederationPeerResponse,
+  SetCelestialIconRequest,
+  SetCelestialIconResponse,
 } from "@pwragent/shared";
-import { isFederationInstanceId } from "@pwragent/shared";
+import { isCelestialIconId, isFederationInstanceId } from "@pwragent/shared";
 import {
   FEDERATION_GET_HEALTH_CHANNEL,
   FEDERATION_GET_DIAGNOSTICS_CHANNEL,
@@ -28,6 +30,7 @@ import {
   FEDERATION_OPEN_WINDOW_CHANNEL,
   FEDERATION_RESET_ENROLLMENT_CHANNEL,
   FEDERATION_REVOKE_PEER_CHANNEL,
+  FEDERATION_SET_CELESTIAL_ICON_CHANNEL,
   FEDERATION_TAILSCALE_CONFIGURE_CHANNEL,
   FEDERATION_TAILSCALE_STATUS_CHANNEL,
 } from "../../shared/ipc";
@@ -45,6 +48,22 @@ export function registerFederationIpcHandlers(): void {
   ipcMain.removeHandler(FEDERATION_RESET_ENROLLMENT_CHANNEL);
   ipcMain.removeHandler(FEDERATION_TAILSCALE_STATUS_CHANNEL);
   ipcMain.removeHandler(FEDERATION_TAILSCALE_CONFIGURE_CHANNEL);
+  ipcMain.removeHandler(FEDERATION_SET_CELESTIAL_ICON_CHANNEL);
+  ipcMain.handle(
+    FEDERATION_SET_CELESTIAL_ICON_CHANNEL,
+    async (
+      _event,
+      request: SetCelestialIconRequest,
+    ): Promise<SetCelestialIconResponse> => {
+      if (
+        !isFederationInstanceId(request.instanceId)
+        || !isCelestialIconId(request.icon)
+      ) {
+        throw new Error("Invalid celestial icon override request");
+      }
+      return await getDesktopFederationRuntime().setCelestialIcon(request);
+    },
+  );
   ipcMain.handle(
     FEDERATION_TAILSCALE_STATUS_CHANNEL,
     async (
@@ -182,4 +201,5 @@ export function disposeFederationIpcHandlers(): void {
   ipcMain.removeHandler(FEDERATION_RESET_ENROLLMENT_CHANNEL);
   ipcMain.removeHandler(FEDERATION_TAILSCALE_STATUS_CHANNEL);
   ipcMain.removeHandler(FEDERATION_TAILSCALE_CONFIGURE_CHANNEL);
+  ipcMain.removeHandler(FEDERATION_SET_CELESTIAL_ICON_CHANNEL);
 }

@@ -8673,6 +8673,32 @@ textarea,
   line-height: 1.5;
 }
 
+/* Celestial identity icon picker: 16px preview + select, in both the
+   Configuration card (local instance) and each peer row. */
+.federation-celestial-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+}
+
+.federation-celestial-picker svg {
+  flex: 0 0 auto;
+}
+
+/* Celestial instance watermark: identity mark behind thread content.
+   Opacity must stay low enough that transcript text keeps AA contrast on
+   both themes — the a11y axe gate audits the composited result. */
+.celestial-watermark {
+  position: absolute;
+  right: -56px;
+  bottom: -56px;
+  color: var(--text-muted);
+  opacity: 0.05;
+  pointer-events: none;
+  z-index: 0;
+}
+
 /* Generated invite payload: single-line code chip + Copy button,
    mirroring the messaging pairing message pattern. */
 .federation-invite {

@@ -1,3 +1,4 @@
+import type { CelestialIconId } from "./celestial";
 import type {
   AppServerBackendKind,
   AppServerBackendScope,
@@ -83,6 +84,8 @@ export type FederationPeerSummary = {
   protocolVersion?: number;
   endpoint?: string;
   profileName?: string;
+  /** Assigned celestial identity icon, when the assignment map knows one. */
+  celestialIcon?: CelestialIconId;
   lastConnectedAt?: number;
   lastActivityAt?: number;
   revokedAt?: number;
@@ -223,6 +226,8 @@ export type FederationHealthStatus = {
   unavailableReason?: string;
   /** Client-mode gateway endpoints in configured order with live status. */
   gatewayEndpoints?: FederationEndpointStatus[];
+  /** This instance's own assigned celestial identity icon. */
+  localCelestialIcon?: CelestialIconId;
   peers: FederationPeerSummary[];
   clientEnrollment?: FederationClientEnrollment;
 };
