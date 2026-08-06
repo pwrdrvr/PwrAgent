@@ -714,6 +714,11 @@ function threadSummariesEqual(
     left.gitBranch === right.gitBranch &&
     left.observedGitBranch === right.observedGitBranch &&
     left.primaryGitRepository === right.primaryGitRepository &&
+    // Federation reachability changes independently of owner thread data.
+    // Include the whole stamp so a successful reconnect cannot reuse the
+    // previous disconnected row and leave it dimmed indefinitely.
+    JSON.stringify(left.federation ?? null) ===
+      JSON.stringify(right.federation ?? null) &&
     // Working state is probed on its own cadence (background refresh +
     // post-turn invalidation), independent of `updatedAt` — like PRs and
     // messaging bindings below. Without this check the reconciler would

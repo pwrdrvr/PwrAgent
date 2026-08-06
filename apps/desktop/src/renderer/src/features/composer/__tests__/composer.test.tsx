@@ -1159,6 +1159,55 @@ describe("Composer", () => {
     expect(screen.getByText(unavailableReason)).toHaveClass("composer__meta--error");
   });
 
+  it("keeps an unavailable thread draft and its images editable", async () => {
+    const file = new File([new Uint8Array([1])], "recovery.png", {
+      type: "image/png",
+    });
+
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        desktopApi={{ onAgentEvent: () => () => undefined }}
+        disabled={true}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Recover this draft",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+
+    const reply = screen.getByLabelText("Reply");
+    expect(reply).toHaveAttribute("contenteditable", "true");
+    fireEvent.change(reply, {
+      target: { value: "Continue editing while disconnected" },
+    });
+    fireEvent.paste(reply, {
+      clipboardData: {
+        files: [],
+        items: [{ kind: "file", type: file.type, getAsFile: () => file }],
+      },
+    });
+
+    expect(await screen.findByAltText("recovery.png")).toBeInTheDocument();
+    expect(reply).toHaveTextContent("Continue editing while disconnected");
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+    expect(
+      screen.getByText(
+        "This thread's backend is unavailable right now. You can keep drafting, but send is unavailable.",
+      ),
+    ).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Remove recovery.png" }),
+    );
+    expect(screen.queryByAltText("recovery.png")).not.toBeInTheDocument();
+  });
+
   it("opens a remote thread workspace on its owning instance", async () => {
     const openApplication = vi.fn(async () => ({ opened: true as const }));
 

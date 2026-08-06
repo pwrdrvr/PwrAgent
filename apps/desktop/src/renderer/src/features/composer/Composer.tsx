@@ -8816,8 +8816,10 @@ export function Composer(props: ComposerProps) {
     }
   };
 
-  const composerDisabled =
-    launchpadSubmitting || (props.disabled && !hasComposerContent);
+  // Backend availability gates submission and remote actions, not the draft.
+  // Keeping the editor live lets an operator inspect, copy, revise, or remove
+  // durable text and attachments while federation reconnects.
+  const composerDisabled = launchpadSubmitting;
   const composerPlaceholder = isLaunchpad
     ? `Start a new thread in ${props.launchpad?.directoryLabel ?? "this directory"}`
     : "Reply to this thread";

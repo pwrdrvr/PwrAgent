@@ -79,6 +79,8 @@ type SidebarProps = {
   error?: string;
   inboxThreads?: NavigationThreadSummary[];
   recentThreads?: NavigationThreadSummary[];
+  /** A snapshot exists even if its latest refresh failed. */
+  loaded?: boolean;
   loading: boolean;
   creatingThread?: {
     backend: AppServerBackendKind;
@@ -1555,7 +1557,7 @@ export function Sidebar(props: SidebarProps) {
         <div className="sidebar__scroll-region">
           {props.loading ? (
             <p className="sidebar-empty">Loading threads…</p>
-          ) : props.error ? (
+          ) : props.error && !props.loaded ? (
             <p className="sidebar-error">{props.error}</p>
           ) : props.browseMode === "directories" ? (
             <DirectoriesList

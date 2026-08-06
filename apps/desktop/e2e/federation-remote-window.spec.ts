@@ -251,8 +251,8 @@ test.describe("federation remote window", () => {
 
       // Opening a remote thread renders the peer transcript with the
       // remote-PTY terminal toggle enabled (the gateway granted remote_pty).
-      const remoteRowOne = remote.locator(".thread-row__title", {
-        hasText: "Remote gateway thread one",
+      const remoteRowOne = remote.getByRole("button", {
+        name: "Remote gateway thread one",
       });
       await remoteRowOne.click();
       await expect(
@@ -400,9 +400,10 @@ test.describe("federation remote window", () => {
         remote.getByTestId("composer-tiptap-input"),
       ).toHaveAttribute("data-value", "");
       await remoteRowOne.click();
-      await expect(
-        remote.getByRole("textbox", { name: "Reply" }),
-      ).toBeVisible();
+      const remoteReply = remote.getByRole("textbox", { name: "Reply" });
+      const recoveryDraft = "Keep this draft while the gateway reconnects";
+      await expect(remoteReply).toBeVisible();
+      await remoteReply.fill(recoveryDraft);
 
       // The gateway only ever served federation RPCs — no local PR
       // refresh or other local-only method leaked across the wire.
@@ -410,16 +411,20 @@ test.describe("federation remote window", () => {
         gateway.calls.map((call) => call.method),
       ).not.toContain("refreshThreadPullRequests");
 
-      // Peer death: the window flips to an explicit read-only state —
-      // disconnected banner, composer disabled — instead of a half-dead
-      // surface hammering the peer with failing RPCs.
+      // Peer death: the window keeps its stale navigation and durable draft
+      // visible. Remote writes are disabled, but the editor stays live so the
+      // operator can inspect, copy, and revise text while reconnecting.
       await gateway.stop();
       await expect(
         remote.locator(".federation-disconnected-banner"),
       ).toBeVisible({ timeout: 30_000 });
       await expect(
         remote.locator(".composer-tiptap-input__editor"),
-      ).toHaveAttribute("contenteditable", "false", { timeout: 15_000 });
+      ).toHaveAttribute("contenteditable", "true", { timeout: 15_000 });
+      await expect(remoteReply).toContainText(recoveryDraft);
+      await expect(remote.getByRole("button", { name: "Send" })).toBeDisabled();
+      await expect(remoteRowOne).toBeVisible();
+      await expect(remoteRowOne).toHaveClass(/is-remote-offline/);
 
       // Recovery: the same identity returns on the same port; the client
       // reconnects on its own backoff and the window heals without a
@@ -434,6 +439,9 @@ test.describe("federation remote window", () => {
           hasText: "Remote gateway thread one",
         }),
       ).toBeVisible({ timeout: 30_000 });
+      await expect(remoteRowOne).not.toHaveClass(/is-remote-offline/);
+      await expect(remoteReply).toContainText(recoveryDraft);
+      await expect(remote.getByRole("button", { name: "Send" })).toBeEnabled();
     } finally {
       await app?.close();
       await gateway?.close();
