@@ -296,8 +296,8 @@ describe("integrated terminal IPC federation branch", () => {
         federationTarget: { scope: "remote", instanceId },
       });
 
-    // Malformed id never reaches the transport (where an unknown peer falls
-    // through to the gateway relay and surfaces as an opaque error).
+    // Malformed id never reaches the transport (where an unknown peer could
+    // otherwise fall through to the gateway relay as an opaque error).
     await expect(create("x")).rejects.toThrow(/invalid remote terminal/i);
     // Well-formed but not a connected peer.
     await expect(create("peer-unknown")).rejects.toThrow(/not connected/i);

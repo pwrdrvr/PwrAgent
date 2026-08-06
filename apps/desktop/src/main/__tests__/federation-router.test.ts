@@ -97,6 +97,67 @@ describe("FederationRouter", () => {
     ]);
   });
 
+  it("enforces method capabilities on the originating peer before relaying", async () => {
+    const replies: FederationProtocolEnvelope[] = [];
+    const relayed: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({
+      localInstanceId: "gateway_one",
+      methodCapabilities: {
+        "pty.open": "remote_pty",
+      },
+    });
+    router.registerConnection({
+      peerId: "client_one",
+      capabilities: ["gateway_relay"],
+      sendEnvelope: (envelope) => replies.push(envelope),
+    });
+    router.registerConnection({
+      peerId: "client_two",
+      capabilities: ["gateway_relay", "remote_pty"],
+      sendEnvelope: (envelope) => relayed.push(envelope),
+    });
+    const request = {
+      id: "pty-open-1",
+      kind: "request" as const,
+      method: "pty.open",
+      params: {},
+      protocolVersion: 1 as const,
+      sourceInstanceId: "client_one",
+      targetInstanceId: "client_two",
+      createdAt: 1_000,
+    };
+
+    await expect(router.routeEnvelope({
+      sourcePeerId: "client_one",
+      envelope: request,
+    })).resolves.toMatchObject({
+      status: "rejected",
+      code: "capability_denied",
+    });
+    expect(relayed).toEqual([]);
+    expect(replies).toMatchObject([
+      { kind: "error", error: { code: "capability_denied" } },
+    ]);
+
+    router.registerConnection({
+      peerId: "client_one",
+      capabilities: ["gateway_relay", "remote_pty"],
+      sendEnvelope: (envelope) => replies.push(envelope),
+    });
+    await expect(router.routeEnvelope({
+      sourcePeerId: "client_one",
+      envelope: request,
+    })).resolves.toMatchObject({ status: "relayed" });
+    expect(relayed).toMatchObject([
+      {
+        method: "pty.open",
+        sourceInstanceId: "client_one",
+        targetInstanceId: "client_two",
+        hopCount: 1,
+      },
+    ]);
+  });
+
   it("requires scheduler authorization before invoking a durable steer fallback", async () => {
     let handled = 0;
     const router = new FederationRouter({

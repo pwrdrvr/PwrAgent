@@ -19,8 +19,9 @@ export type FederationRequestHandler = (
   /**
    * The authenticated peer the envelope arrived from. For direct connections
    * this matches `envelope.sourceInstanceId`; for gateway-relayed requests it
-   * is the relaying gateway. Handlers that must be point-to-point (remote
-   * PTY) compare the two — the envelope field alone is peer-asserted.
+   * is the relaying gateway. Handlers that preserve end-to-end ownership
+   * compare the two and verify the relay hop — the envelope field alone is
+   * peer-asserted.
    */
   sourcePeerId?: FederationInstanceId,
 ) => Promise<unknown> | unknown;
@@ -91,6 +92,18 @@ export class FederationRouter {
     }
 
     if (params.envelope.kind === "request") {
+      const capabilityFailure = this.checkCapability(
+        params.envelope,
+        params.sourcePeerId,
+      );
+      if (capabilityFailure) {
+        this.replyToSource(params.sourcePeerId, capabilityFailure);
+        return {
+          status: "rejected",
+          code: capabilityFailure.error.code,
+          message: capabilityFailure.error.message,
+        };
+      }
       const additionalCapabilityFailure = this.checkAdditionalCapabilities(
         params.envelope,
         params.sourcePeerId,
@@ -114,19 +127,6 @@ export class FederationRouter {
 
     if (params.envelope.kind !== "request") {
       return { status: "handled" };
-    }
-
-    const capabilityFailure = this.checkCapability(
-      params.envelope,
-      params.sourcePeerId,
-    );
-    if (capabilityFailure) {
-      this.replyToSource(params.sourcePeerId, capabilityFailure);
-      return {
-        status: "rejected",
-        code: capabilityFailure.error.code,
-        message: capabilityFailure.error.message,
-      };
     }
 
     const handler = this.handlers.get(params.envelope.method);

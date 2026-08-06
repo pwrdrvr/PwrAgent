@@ -860,15 +860,13 @@ export class DesktopFederationRuntime {
     const instanceLabel = peer
       ? formatFederationPeerDisplayLabel(peer, visible)
       : target.instanceId;
-    // The granted set the viewer can act on. remote_pty is stripped when the
-    // peer is only reachable through a gateway relay: PTY streams are
-    // point-to-point in v1, so the toggle must read as unavailable there.
+    // The granted set the viewer can act on. Gateway-advertised capabilities
+    // remain authoritative for relayed peers just as live connection
+    // capabilities are for direct peers.
     const directConnection = this.router?.getConnection(target.instanceId);
     const capabilities = directConnection
       ? [...directConnection.capabilities]
-      : (visiblePeer?.capabilities ?? []).filter(
-          (capability) => capability !== "remote_pty",
-        );
+      : [...(visiblePeer?.capabilities ?? [])];
     const peerStatus = visiblePeer?.status ?? peer?.status;
     const threads = response.threads.map((thread) => {
       const ref = buildFederatedThreadRef({
@@ -1626,30 +1624,28 @@ export class DesktopFederationRuntime {
     await this.router?.routeEnvelope({ envelope, sourcePeerId });
   }
 
-  /**
-   * Owner → viewer PTY stream frame. Deliberately DIRECT-only: no gateway
-   * fallback, so `hopCount` stays 0 and a shell stream can never transit a
-   * relay. Returns false when the peer has no direct connection — the
-   * service's disconnect reap owns cleanup in that case.
-   */
+  /** Owner → viewer PTY stream frame, routed directly when possible and
+   * through this client's enrolled gateway otherwise. */
   private sendPtyNotification(
     peerId: FederationInstanceId,
     method: string,
     params: unknown,
   ): boolean {
-    const connection = this.router?.getConnection(peerId);
-    if (!connection) return false;
-    connection.sendEnvelope({
-      id: `federation-pty:${randomUUID()}`,
-      kind: "notification",
-      method,
-      params,
-      protocolVersion: FEDERATION_PROTOCOL_VERSION,
-      sourceInstanceId: this.ensureLocalInstanceId(),
-      targetInstanceId: peerId,
-      createdAt: Date.now(),
-    });
-    return true;
+    try {
+      this.sendEnvelopeToTarget(peerId, {
+        id: `federation-pty:${randomUUID()}`,
+        kind: "notification",
+        method,
+        params,
+        protocolVersion: FEDERATION_PROTOCOL_VERSION,
+        sourceInstanceId: this.ensureLocalInstanceId(),
+        targetInstanceId: peerId,
+        createdAt: Date.now(),
+      });
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private publishRemotePtyStreamEvent(
@@ -1662,21 +1658,29 @@ export class DesktopFederationRuntime {
     ) {
       return false;
     }
-    // Point-to-point invariant, receive side: a PTY frame addressed to some
-    // other instance is dropped, never relayed onward; and a frame whose
-    // claimed origin differs from the authenticated link it arrived on is
-    // spoofed, not trusted.
+    // Gateway hop: keep the end-to-end source/target intact and let the
+    // router enforce relay authorization + hop limits.
     if (
       envelope.targetInstanceId &&
       envelope.targetInstanceId !== this.ensureLocalInstanceId()
     ) {
+      void this.router?.routeEnvelope({ envelope, sourcePeerId });
       return true;
     }
-    if (
-      envelope.sourceInstanceId &&
-      envelope.sourceInstanceId !== sourcePeerId
-    ) {
+    const originInstanceId = envelope.sourceInstanceId ?? sourcePeerId;
+    if (!isFederationInstanceId(originInstanceId)) {
       return true;
+    }
+    // Direct frames must name their authenticated peer. A different origin
+    // is accepted only from an enrolled relay-capable gateway after a hop.
+    if (originInstanceId !== sourcePeerId) {
+      const relay = this.router?.getConnection(sourcePeerId);
+      if (
+        (envelope.hopCount ?? 0) < 1
+        || !relay?.capabilities.includes("gateway_relay")
+      ) {
+        return true;
+      }
     }
     const kind =
       envelope.method === FEDERATION_PTY_OUTPUT_METHOD
@@ -1686,7 +1690,7 @@ export class DesktopFederationRuntime {
           : "error";
     const event = {
       kind,
-      peerId: sourcePeerId,
+      peerId: originInstanceId,
       params: envelope.params,
     } as FederationPtyStreamEvent;
     for (const listener of this.remotePtyEventListeners) {
