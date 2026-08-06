@@ -398,10 +398,20 @@ describe("FederationSettings", () => {
       .toBeDisabled();
 
     fireEvent.click(screen.getByRole("button", { name: "Revoke" }));
+    // With no pin-impact reader wired (older preload), the confirm stays a
+    // plain one — never a silent forget.
+    const confirm = await screen.findByRole("button", {
+      name: "Confirm revoke",
+    });
+    expect(
+      screen.queryByRole("button", { name: "Revoke and forget threads" }),
+    ).toBeNull();
+    fireEvent.click(confirm);
 
     await waitFor(() =>
       expect(revokeFederationPeer).toHaveBeenCalledWith({
         peerId: "client_one",
+        pinDisposition: "remember",
       }),
     );
     expect(openFederationWindow).not.toHaveBeenCalled();
@@ -908,8 +918,142 @@ describe("FederationSettings", () => {
       await screen.findByRole("button", { name: "Confirm forget" }),
     );
     await waitFor(() =>
-      expect(resetFederationEnrollment).toHaveBeenCalledWith({}),
+      expect(resetFederationEnrollment).toHaveBeenCalledWith({
+        pinDisposition: "remember",
+      }),
     );
+  });
+
+  it("offers keep-or-forget only when the revoked peer has pinned threads", async () => {
+    const revokeFederationPeer = vi.fn(async () => ({
+      peer: {
+        id: "client_one",
+        label: "Studio Mac",
+        role: "client" as const,
+        status: "revoked" as const,
+        capabilities: [],
+      },
+    }));
+    const readFederationPinImpact = vi.fn(async () => ({
+      pinnedThreadCount: 3,
+      tombstonedThreadCount: 0,
+      instanceLabels: ["Studio Mac"],
+    }));
+
+    render(
+      <FederationSettings
+        desktopApi={{
+          readFederationHealth: vi.fn(async () => ({
+            health: {
+              enabled: true,
+              role: "gateway" as const,
+              status: "listening" as const,
+              peers: [
+                {
+                  id: "client_one",
+                  label: "Studio Mac",
+                  role: "client" as const,
+                  status: "connected" as const,
+                  capabilities: [],
+                  canRevoke: true,
+                },
+              ],
+            },
+          })),
+          revokeFederationPeer,
+          readFederationPinImpact,
+        }}
+        onClearSecret={vi.fn(async () => true)}
+        onReplaceSecret={vi.fn(async () => true)}
+        saving={false}
+        snapshot={settingsSnapshot()}
+        onSettingsChanged={vi.fn()}
+        onWriteConfig={vi.fn(async () => true)}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Revoke" }));
+
+    // The operator is told what is at stake and that keeping is reversible.
+    expect(
+      await screen.findByText(
+        /3 pinned threads from Studio Mac will stop showing/,
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/come back automatically if you re-enroll/),
+    ).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Revoke and forget threads" }),
+    );
+    await waitFor(() =>
+      expect(revokeFederationPeer).toHaveBeenCalledWith({
+        peerId: "client_one",
+        pinDisposition: "forget",
+      }),
+    );
+  });
+
+  it("skips the keep-or-forget question when nothing is pinned", async () => {
+    const revokeFederationPeer = vi.fn(async () => ({
+      peer: {
+        id: "client_one",
+        label: "Studio Mac",
+        role: "client" as const,
+        status: "revoked" as const,
+        capabilities: [],
+      },
+    }));
+    const readFederationPinImpact = vi.fn(async () => ({
+      pinnedThreadCount: 0,
+      tombstonedThreadCount: 0,
+      instanceLabels: [],
+    }));
+
+    render(
+      <FederationSettings
+        desktopApi={{
+          readFederationHealth: vi.fn(async () => ({
+            health: {
+              enabled: true,
+              role: "gateway" as const,
+              status: "listening" as const,
+              peers: [
+                {
+                  id: "client_one",
+                  label: "Studio Mac",
+                  role: "client" as const,
+                  status: "connected" as const,
+                  capabilities: [],
+                  canRevoke: true,
+                },
+              ],
+            },
+          })),
+          revokeFederationPeer,
+          readFederationPinImpact,
+        }}
+        onClearSecret={vi.fn(async () => true)}
+        onReplaceSecret={vi.fn(async () => true)}
+        saving={false}
+        snapshot={settingsSnapshot()}
+        onSettingsChanged={vi.fn()}
+        onWriteConfig={vi.fn(async () => true)}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Revoke" }));
+    await waitFor(() => expect(readFederationPinImpact).toHaveBeenCalled());
+
+    // Nothing pinned means nothing to decide: one plain confirm, no
+    // forget-threads button, no scary copy.
+    expect(
+      await screen.findByRole("button", { name: "Confirm revoke" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Revoke and forget threads" }),
+    ).toBeNull();
   });
 });
 

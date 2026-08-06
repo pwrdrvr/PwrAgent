@@ -9,7 +9,7 @@ import {
 } from "@pwragent/shared";
 import { getNativeBinding } from "./native-binding.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 44;
+export const CURRENT_STATE_DB_USER_VERSION = 45;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -886,11 +886,26 @@ CREATE TABLE IF NOT EXISTS remote_thread_pins (
   thread_id   TEXT NOT NULL,
   added_at    INTEGER NOT NULL,
   payload     TEXT NOT NULL,
+  revoked_at  INTEGER,
   PRIMARY KEY (instance_id, backend, thread_id)
 );
 CREATE INDEX IF NOT EXISTS idx_remote_thread_pins_instance
   ON remote_thread_pins(instance_id, added_at DESC);
 `;
+
+/**
+ * `revoked_at` tombstones a pin whose owning instance was revoked or whose
+ * gateway pairing was forgotten. The row stops rendering but survives, so
+ * the very common revoke-then-re-enroll repair cycle restores the operator's
+ * curated list instead of making them re-find every thread.
+ */
+function ensureRemoteThreadPinRevokedAtColumn(
+  db: BetterSqlite3.Database,
+): void {
+  if (!tableColumnExists(db, "remote_thread_pins", "revoked_at")) {
+    db.exec("ALTER TABLE remote_thread_pins ADD COLUMN revoked_at INTEGER");
+  }
+}
 
 export const FEDERATION_SCHEMA = `
 CREATE TABLE IF NOT EXISTS federation_peers (
@@ -1289,6 +1304,14 @@ export class StateDb {
     if ((db.pragma("user_version", { simple: true }) as number) < 44) {
       db.transaction(() => {
         db.exec(STAR_MAP_ARRANGEMENT_SCHEMA);
+        db.pragma("user_version = 44");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 45) {
+      db.transaction(() => {
+        // Revoking a peer used to hard-delete its pins. Tombstone them
+        // instead so a re-enrollment can restore the operator's list.
+        ensureRemoteThreadPinRevokedAtColumn(db);
         db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
       })();
     }
@@ -1476,6 +1499,7 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     ensureThreadMessageOriginSchema(db);
     db.exec(FEDERATION_SCHEMA);
     db.exec(REMOTE_THREAD_PIN_SCHEMA);
+    ensureRemoteThreadPinRevokedAtColumn(db);
     db.exec(STAR_MAP_ARRANGEMENT_SCHEMA);
     if ((db.pragma("user_version", { simple: true }) as number) < 4) {
       db.pragma("user_version = 4");
@@ -2501,6 +2525,7 @@ function tableColumnExists(
     | "pr_status_cache"
     | "thread_message_origins"
     | "thread_pricing_summaries"
+    | "remote_thread_pins"
     | "thread_search_fts"
     | "thread_usage_lines"
     | "thread_usage_turns",
@@ -2539,6 +2564,7 @@ function readTableInfo(
     | "pr_status_cache"
     | "thread_message_origins"
     | "thread_pricing_summaries"
+    | "remote_thread_pins"
     | "thread_search_fts"
     | "thread_usage_lines"
     | "thread_usage_turns",
@@ -2566,6 +2592,10 @@ function readTableInfo(
       }>;
     case "thread_pricing_summaries":
       return db.prepare("PRAGMA table_info(thread_pricing_summaries)").all() as Array<{
+        name: string;
+      }>;
+    case "remote_thread_pins":
+      return db.prepare("PRAGMA table_info(remote_thread_pins)").all() as Array<{
         name: string;
       }>;
     case "thread_search_fts":

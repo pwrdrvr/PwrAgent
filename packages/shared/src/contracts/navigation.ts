@@ -1076,6 +1076,14 @@ export type RemoteThreadPin = {
    * list): pin or unpin here and only the viewer knows.
    */
   localPinnedRank?: string;
+  /**
+   * Set when the owning instance was revoked or its gateway pairing was
+   * forgotten. Tombstoned pins are hidden rather than deleted, because
+   * revoking and re-enrolling to repair a peer is routine and the operator
+   * would otherwise have to re-find and re-pin every thread. Cleared when
+   * that instance connects again.
+   */
+  revokedAt?: number;
 };
 
 export type SetRemoteThreadLocalPinRequest = {
