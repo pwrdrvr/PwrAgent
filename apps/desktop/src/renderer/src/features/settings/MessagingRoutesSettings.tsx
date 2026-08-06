@@ -659,7 +659,7 @@ function DefaultAgentEditor(props: {
                 Conversation
               </option>
               <option disabled={props.platforms.length === 0} value="parent">
-                Parent channel or group
+                Threads/topics in a channel or group
               </option>
               <option disabled={props.platforms.length === 0} value="workspace">
                 Workspace or server
@@ -735,8 +735,7 @@ function DefaultAgentEditor(props: {
               </select>
               {surfaceCandidates.length === 0 && !hasConfiguredSurface ? (
                 <small>
-                  No matching surfaces observed yet. Send the bot a message there,
-                  or enter the ID manually.
+                  {emptySurfaceMessage(form.scopeKind)}
                 </small>
               ) : null}
             </label>
@@ -910,27 +909,21 @@ function observedSurfaceCandidates(
       };
       label = formatConversationLabel(surface.platform, conversation);
     } else if (form.scopeKind === "parent") {
-      const parentConversationId = conversation.parentConversationId
-        ?? (conversation.kind === "channel" ? conversation.id : undefined);
+      const parentConversationId = conversation.parentConversationId;
       if (!parentConversationId) continue;
       candidateForm = {
         ...EMPTY_FORM,
         scopeKind: "parent",
         platform: surface.platform,
         parentConversationId,
-        title:
-          conversation.parentConversationId
-            ? conversation.parentTitle ?? ""
-            : conversation.title ?? "",
+        title: conversation.parentTitle ?? "",
       };
       label = formatObservedContainerLabel({
         platform: surface.platform,
         id: parentConversationId,
         names: [
           conversation.ancestorTitle,
-          conversation.parentConversationId
-            ? conversation.parentTitle
-            : conversation.title,
+          conversation.parentTitle,
         ],
       });
     } else {
@@ -1194,9 +1187,22 @@ function formatScopeKind(kind: DefaultScopeKind): string {
     case "profile": return "Profile default";
     case "provider": return "Provider default";
     case "workspace": return "Workspace default";
-    case "parent": return "Parent default";
+    case "parent": return "Child thread/topic default";
     case "conversation": return "Conversation default";
   }
+}
+
+function emptySurfaceMessage(kind: DefaultScopeKind): string {
+  if (kind === "parent") {
+    return (
+      "No child threads or topics observed yet. Send the bot a message in one, "
+      + "or enter the containing channel or group ID manually."
+    );
+  }
+  return (
+    "No matching surfaces observed yet. Send the bot a message there, "
+    + "or enter the ID manually."
+  );
 }
 
 function formatConversationKind(kind: MessagingConversationKind): string {
@@ -1216,8 +1222,8 @@ function workspaceIdLabel(platform: MessagingChannelKind): string {
 }
 
 function parentIdLabel(platform: MessagingChannelKind): string {
-  if (platform === "telegram") return "Group ID";
-  return "Parent channel ID";
+  if (platform === "telegram") return "Containing group ID";
+  return "Containing channel ID";
 }
 
 function identityParentIdLabel(
