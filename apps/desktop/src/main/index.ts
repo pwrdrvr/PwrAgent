@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { getDesktopBackendRegistry } from "./app-server/backend-registry";
 import { createPwrAgentAppManagementHandler } from "./agent-tools/pwragent-app-management-service";
 import { createFederationAgentToolsHandler } from "./federation/federation-agent-tools-service";
+import { createFederatedThreadMessageHandler } from "./federation/federated-thread-message-service";
 import { disposeAgentIpcHandlers, registerAgentIpcHandlers } from "./ipc/agent-ipc";
 import {
   disposeScheduledActionIpcHandlers,
@@ -1003,6 +1004,9 @@ export function bootstrapApp(): void {
     // already imports the registry, so the reverse import would be a cycle.
     getDesktopBackendRegistry().setPwrAgentFederationHandler(
       createFederationAgentToolsHandler(),
+    );
+    getDesktopBackendRegistry().setFederatedThreadMessageHandler(
+      createFederatedThreadMessageHandler(),
     );
     // Windows: serve the painted title-bar menu bar from the live application
     // menu (idempotent; the renderer mounts the bar only on win32).

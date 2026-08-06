@@ -21,6 +21,86 @@ function thread(
 }
 
 describe("FederatedSearchService", () => {
+  it("uses exact resolution for a pasted thread UUID", async () => {
+    const threadId = "019fd821-1450-7952-85ca-3bb8e5d150da";
+    const localListThreads = vi.fn();
+    const remoteListThreads = vi.fn();
+    const service = new FederatedSearchService({
+      local: {
+        listThreads: localListThreads,
+        resolveThread: vi.fn(async () => ({})),
+      },
+      peers: () => [
+        {
+          instanceId: "pwr_harold",
+          label: "Harold-Mac-Mini-M4",
+          backend: {
+            listThreads: remoteListThreads,
+            resolveThread: vi.fn(async () => ({
+              thread: thread(
+                threadId,
+                "Thread list stays disabled after reconnect",
+                3_000,
+              ),
+            })),
+          },
+        },
+      ],
+    });
+
+    const response = await service.search({ query: threadId, backend: "codex" });
+
+    expect(response.results).toHaveLength(1);
+    expect(response.results[0]).toMatchObject({
+      ref: {
+        backend: "codex",
+        target: { scope: "remote", instanceId: "pwr_harold" },
+        threadId,
+      },
+      instanceLabel: "Harold-Mac-Mini-M4",
+    });
+    expect(localListThreads).not.toHaveBeenCalled();
+    expect(remoteListThreads).not.toHaveBeenCalled();
+  });
+
+  it("falls back to exact list scanning when a peer lacks resolution RPC", async () => {
+    const threadId = "019fd821-1450-7952-85ca-3bb8e5d150da";
+    const service = new FederatedSearchService({
+      includeLocal: false,
+      local: { listThreads: vi.fn() },
+      peers: () => [
+        {
+          instanceId: "pwr_older",
+          label: "Older Mac",
+          backend: {
+            resolveThread: vi.fn(async () => {
+              throw new Error("Unsupported federation method");
+            }),
+            listThreads: vi.fn(async () => ({
+              backend: "codex" as const,
+              fetchedAt: 1_000,
+              threads: [thread(threadId, "Reconnect fix", 3_000)],
+            })),
+          },
+        },
+      ],
+    });
+
+    await expect(
+      service.search({ query: threadId, backend: "codex" }),
+    ).resolves.toMatchObject({
+      results: [
+        {
+          ref: {
+            target: { scope: "remote", instanceId: "pwr_older" },
+            threadId,
+          },
+        },
+      ],
+      failures: [],
+    });
+  });
+
   it("fans out to local and remote peers and preserves source identity", async () => {
     const service = new FederatedSearchService({
       now: () => 10_000,

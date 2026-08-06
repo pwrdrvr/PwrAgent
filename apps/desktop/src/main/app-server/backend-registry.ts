@@ -347,7 +347,10 @@ import {
   isPwrAgentThreadOrchestrationDynamicToolCall,
   readPwrAgentThreadOrchestrationDynamicToolCall,
 } from "../agent-tools/pwragent-thread-orchestration-codex-tools";
-import type { PwrAgentThreadOrchestrationHandler } from "../agent-tools/pwragent-thread-orchestration-agent-tools";
+import type {
+  PwrAgentFederatedThreadMessageHandler,
+  PwrAgentThreadOrchestrationHandler,
+} from "../agent-tools/pwragent-thread-orchestration-agent-tools";
 import {
   buildPwrAgentFederationDynamicToolErrorResponse,
   handlePwrAgentFederationDynamicToolCall,
@@ -6394,6 +6397,9 @@ export class DesktopBackendRegistry {
   private readonly threadOrchestrationHandler: PwrAgentThreadOrchestrationHandler =
     async (request) => await this.handleThreadOrchestrationRequest(request);
   private federationHandler: PwrAgentFederationHandler | undefined;
+  private federatedThreadMessageHandler:
+    | PwrAgentFederatedThreadMessageHandler
+    | undefined;
   private threadPullRequestStatusToolHandler:
     | ThreadPullRequestStatusToolHandler
     | undefined;
@@ -7110,6 +7116,12 @@ export class DesktopBackendRegistry {
     this.federationHandler = handler ?? undefined;
   }
 
+  setFederatedThreadMessageHandler(
+    handler: PwrAgentFederatedThreadMessageHandler | null | undefined,
+  ): void {
+    this.federatedThreadMessageHandler = handler ?? undefined;
+  }
+
   setThreadPullRequestStatusToolHandler(
     handler: ThreadPullRequestStatusToolHandler | null | undefined,
   ): void {
@@ -7641,6 +7653,33 @@ export class DesktopBackendRegistry {
       });
     this.threadListCache.set(cacheKey, { promise });
     return await promise;
+  }
+
+  async resolveThread(params: {
+    backend?: AppServerBackendKind;
+    threadId: string;
+  }): Promise<AppServerThreadSummary | undefined> {
+    const threadId = params.threadId.trim();
+    if (!threadId) {
+      return undefined;
+    }
+    for (const state of this.threadListCache.values()) {
+      const cached = state.threads?.find(
+        (thread) =>
+          (!params.backend || thread.source === params.backend)
+          && thread.id === threadId,
+      );
+      if (cached) {
+        return cached;
+      }
+    }
+    const threads = await this.listThreads({
+      backend: params.backend,
+      archived: false,
+      callerReason: "thread-id-lookup",
+      enrichDirectories: false,
+    });
+    return threads.find((thread) => thread.id === threadId);
   }
 
   async getThreadAgentMetadata(params: {
@@ -22181,34 +22220,69 @@ export class DesktopBackendRegistry {
           : {}),
         ...(request.args.sandbox ? { sandbox: request.args.sandbox } : {}),
       };
-      const turn = await this.startTurn({
-        backend,
-        threadId,
-        input: [{ type: "text", text: prompt }],
-        messageOrigin: {
-          kind: "agent",
-          sourceThread: {
-            backend: request.context.backend,
-            threadId: request.context.threadId,
-          },
+      const input = [{ type: "text" as const, text: prompt }];
+      const messageOrigin = {
+        kind: "agent" as const,
+        sourceThread: {
+          backend: request.context.backend,
+          threadId: request.context.threadId,
         },
-        executionMode: request.args.executionMode,
-        model: request.args.model,
-        reasoningEffort: request.args.reasoningEffort,
-        serviceTier: request.args.serviceTier,
-        fastMode: request.args.fastMode,
-        approvalPolicy: request.args.approvalPolicy,
-        sandbox: request.args.sandbox,
-      });
+      };
+      let targetTitle: string | undefined;
+      let turn: { backend: AppServerBackendKind; threadId: string; turnId: string };
+      try {
+        turn = await this.startTurn({
+          backend,
+          threadId,
+          input,
+          messageOrigin,
+          executionMode: request.args.executionMode,
+          model: request.args.model,
+          reasoningEffort: request.args.reasoningEffort,
+          serviceTier: request.args.serviceTier,
+          fastMode: request.args.fastMode,
+          approvalPolicy: request.args.approvalPolicy,
+          sandbox: request.args.sandbox,
+        });
+      } catch (localError) {
+        const localMessage =
+          localError instanceof Error ? localError.message : String(localError);
+        if (
+          !this.federatedThreadMessageHandler
+          || !/thread not found/i.test(localMessage)
+        ) {
+          throw localError;
+        }
+        const remoteTurn = await this.federatedThreadMessageHandler({
+          backend,
+          threadId,
+          input,
+          messageOrigin,
+          executionMode: request.args.executionMode,
+          model: request.args.model,
+          reasoningEffort: request.args.reasoningEffort,
+          serviceTier: request.args.serviceTier,
+          fastMode: request.args.fastMode,
+          approvalPolicy: request.args.approvalPolicy,
+          sandbox: request.args.sandbox,
+        });
+        if (!remoteTurn) {
+          throw localError;
+        }
+        turn = remoteTurn;
+        targetTitle = remoteTurn.title;
+      }
       // Best-effort: give the link its human title so it reads well on
       // surfaces that can't resolve the id against the live snapshot (the
       // desktop chip shows the live title regardless). `listThreads` is
       // cached, so this usually costs nothing.
-      const targetThread = await this.findThreadForWorkspaceHandoff({
-        backend,
-        callerReason: "send-message-link",
-        threadId: turn.threadId,
-      });
+      const targetThread = targetTitle
+        ? undefined
+        : await this.findThreadForWorkspaceHandoff({
+            backend,
+            callerReason: "send-message-link",
+            threadId: turn.threadId,
+          });
       return {
         ok: true,
         data: {
@@ -22220,7 +22294,7 @@ export class DesktopBackendRegistry {
           threadLink: buildThreadMarkdownLink({
             backend,
             threadId: turn.threadId,
-            title: targetThread?.title,
+            title: targetTitle ?? targetThread?.title,
           }),
           settings,
         },

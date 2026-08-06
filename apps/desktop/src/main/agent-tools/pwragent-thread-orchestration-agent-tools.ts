@@ -1,4 +1,6 @@
 import type {
+  AppServerThreadMessageOrigin,
+  AppServerTurnInputItem,
   AttachThreadDirectoryToolArgs,
   AttachThreadDirectoryWorkspaceMode,
   AttachThreadDirectoryWorktreeBranchMode,
@@ -46,6 +48,33 @@ export type PwrAgentThreadOrchestrationHandler = (
 ) =>
   | PwrAgentThreadOrchestrationResponse
   | Promise<PwrAgentThreadOrchestrationResponse>;
+
+export type PwrAgentFederatedThreadMessageRequest = {
+  backend: SendMessageToThreadToolArgs["backend"];
+  threadId: SendMessageToThreadToolArgs["threadId"];
+  input: AppServerTurnInputItem[];
+  messageOrigin: AppServerThreadMessageOrigin;
+  model?: string;
+  reasoningEffort?: string;
+  serviceTier?: string;
+  fastMode?: boolean;
+  executionMode?: SendMessageToThreadToolArgs["executionMode"];
+  approvalPolicy?: string;
+  sandbox?: string;
+};
+
+export type PwrAgentFederatedThreadMessageResult = {
+  backend: SendMessageToThreadToolArgs["backend"];
+  threadId: SendMessageToThreadToolArgs["threadId"];
+  turnId: string;
+  title?: string;
+  instanceId: string;
+  instanceLabel: string;
+};
+
+export type PwrAgentFederatedThreadMessageHandler = (
+  request: PwrAgentFederatedThreadMessageRequest,
+) => Promise<PwrAgentFederatedThreadMessageResult | undefined>;
 
 export function buildPwrAgentThreadOrchestrationToolRouter(
   handler: PwrAgentThreadOrchestrationHandler | undefined,
@@ -114,7 +143,7 @@ function descriptionForOperation(
     case "move_thread_workspace":
       return "Move the current PwrAgent thread runtime workspace after the invoking turn reaches a terminal boundary. Use this when the user asks to continue this same thread from an isolated worktree instead of creating a child handoff thread. The operation is path-keyed: pass sourcePath when the thread has multiple linked directories or when the intended workspace is not obvious. The tool returns a pending workspaceMoveId and stop-and-wait guidance; after the current turn ends, PwrAgent performs the move, updates future-turn cwd metadata, rebinds an ACP session when required, and starts a same-thread continuation with the result. Do not keep editing after a successful call in the invoking turn; wait for the continuation or inspect get_thread_status pendingWorkspaceMoves.";
     case "send_message_to_thread":
-      return "Send a follow-up prompt to another existing PwrAgent thread. Use search_threads or read_thread first when the target threadId is unknown. Do not use this for the current thread; reply normally instead. The result includes threadLink, a ready-made markdown link to the target thread. When you mention that thread to the user, include threadLink verbatim instead of the raw threadId so it renders as a clickable chip.";
+      return "Send a follow-up prompt to another existing PwrAgent thread. Use search_threads or read_thread first when the target threadId is unknown. Federation ownership is resolved automatically from the threadId, so do not ask the user for an instance id. Do not use this for the current thread; reply normally instead. The result includes threadLink, a ready-made markdown link to the target thread. When you mention that thread to the user, include threadLink verbatim instead of the raw threadId so it renders as a clickable chip.";
     case "start_review":
       return "Schedule a code review of the invoking PwrAgent thread after the current turn completes successfully. Use this only when the operator explicitly asks for a review. Choose one structured target: uncommittedChanges, baseBranch, commit, or custom. The tool returns a pendingReviewId; after a successful call, stop work and let the current turn finish so PwrAgent can start the review. Do not poll or call the tool again for the same request.";
   }
@@ -301,7 +330,8 @@ function inputSchemaForOperation(
         properties: {
           backend: {
             type: "string",
-            description: "Backend that owns the target thread.",
+            description:
+              "Backend type for the target thread. PwrAgent resolves its owning instance automatically.",
           },
           threadId: {
             type: "string",

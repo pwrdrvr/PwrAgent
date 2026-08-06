@@ -5,6 +5,7 @@ import type {
   AppServerListThreadsResponse,
   AppServerReadThreadRequest,
   AppServerReadThreadResponse,
+  AppServerThreadMessageOrigin,
   AgentEvent,
   ApplyThreadModelMigrationRequest,
   ApplyThreadModelMigrationResponse,
@@ -60,6 +61,8 @@ import type {
   QueueThreadExecutionModeResponse,
   RefreshDirectoryGitStatusesRequest,
   RefreshDirectoryGitStatusesResponse,
+  ResolveThreadRequest,
+  ResolveThreadResponse,
   RetainThreadBranchDriftRequest,
   RetainThreadBranchDriftResponse,
   RenameThreadRequest,
@@ -120,9 +123,14 @@ export type FederatedTranscriptImageResponse = {
   mimeType: string;
 };
 
+export type FederationStartTurnRequest = StartTurnRequest & {
+  messageOrigin?: AppServerThreadMessageOrigin;
+};
+
 export const FEDERATION_BACKEND_METHODS = {
   getNavigationSnapshot: "backend.getNavigationSnapshot",
   listThreads: "backend.listThreads",
+  resolveThread: "backend.resolveThread",
   readThread: "backend.readThread",
   readTranscriptImage: "backend.readTranscriptImage",
   listSkills: "backend.listSkills",
@@ -198,6 +206,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
 > = {
   [FEDERATION_BACKEND_METHODS.getNavigationSnapshot]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.listThreads]: "thread_navigation",
+  [FEDERATION_BACKEND_METHODS.resolveThread]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.readThread]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.readTranscriptImage]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.listSkills]: "thread_detail",
@@ -276,6 +285,7 @@ export type FederationBackendOperations = {
   listThreads(
     request?: AppServerListThreadsRequest,
   ): Promise<AppServerListThreadsResponse>;
+  resolveThread(request: ResolveThreadRequest): Promise<ResolveThreadResponse>;
   readThread(
     request: AppServerReadThreadRequest,
   ): Promise<AppServerReadThreadResponse>;
@@ -312,7 +322,7 @@ export type FederationBackendOperations = {
       "onCodexEnvironmentSetupProgress"
     >,
   ): Promise<ForkThreadResponse>;
-  startTurn(request: StartTurnRequest): Promise<StartTurnResponse>;
+  startTurn(request: FederationStartTurnRequest): Promise<StartTurnResponse>;
   cancelQueuedTurn(
     request: CancelQueuedTurnRequest,
   ): Promise<CancelQueuedTurnResponse>;
@@ -421,6 +431,13 @@ export function registerFederationBackendHandlers(params: {
     async (envelope) =>
       await params.backend.listThreads(
         (envelope.params ?? {}) as AppServerListThreadsRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.resolveThread,
+    async (envelope) =>
+      await params.backend.resolveThread(
+        envelope.params as ResolveThreadRequest,
       ),
   );
   params.router.registerHandler(
@@ -566,7 +583,7 @@ export function registerFederationBackendHandlers(params: {
     FEDERATION_BACKEND_METHODS.startTurn,
     async (envelope) =>
       await params.backend.startTurn(
-        envelope.params as StartTurnRequest,
+        envelope.params as FederationStartTurnRequest,
       ),
   );
   params.router.registerHandler(
@@ -841,6 +858,15 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
     });
   }
 
+  async resolveThread(
+    request: ResolveThreadRequest,
+  ): Promise<ResolveThreadResponse> {
+    return await this.rpc.request<ResolveThreadResponse>({
+      method: FEDERATION_BACKEND_METHODS.resolveThread,
+      params: request,
+    });
+  }
+
   async readThread(
     request: AppServerReadThreadRequest,
   ): Promise<AppServerReadThreadResponse> {
@@ -964,7 +990,9 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
     });
   }
 
-  async startTurn(request: StartTurnRequest): Promise<StartTurnResponse> {
+  async startTurn(
+    request: FederationStartTurnRequest,
+  ): Promise<StartTurnResponse> {
     return await this.rpc.request<StartTurnResponse>({
       method: FEDERATION_BACKEND_METHODS.startTurn,
       params: request,
