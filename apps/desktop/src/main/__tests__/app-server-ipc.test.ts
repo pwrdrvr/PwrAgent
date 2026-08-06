@@ -1672,6 +1672,9 @@ describe("app server ipc", () => {
       id: "remote-1",
       title: "Remote fix",
       titleSource: "derived" as const,
+      // Pinned on the OWNER's list; must not leak into the viewer's
+      // pinned section or wire the pin chip to an owner-side unpin.
+      pinnedRank: "1024",
       // Peer path differs from any local checkout; consolidation into the
       // local project group matches by label / path basename.
       linkedDirectories: [
@@ -1718,6 +1721,10 @@ describe("app server ipc", () => {
     expect(response.threads).toEqual(
       expect.arrayContaining([expect.objectContaining({ id: "remote-1" })]),
     );
+    const mergedRemoteRow = response.threads.find(
+      (thread) => thread.id === "remote-1",
+    ) as { pinnedRank?: string } | undefined;
+    expect(mergedRemoteRow?.pinnedRank).toBeUndefined();
     // The remote row joins the inbox ranking behind the local keys.
     expect(response.inboxThreadKeys).toContain("codex:remote-1");
     // A newly appearing remote row must defeat the unchanged optimization.

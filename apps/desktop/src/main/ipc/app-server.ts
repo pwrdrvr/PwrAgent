@@ -1923,7 +1923,18 @@ class DesktopAppServerService {
       if (pins.length > 0) {
         const cache = getDesktopFederationRuntime().remoteThreadSummaries();
         const resolution = await cache.resolvePinnedThreads(pins);
-        resolved = resolution;
+        resolved = {
+          ...resolution,
+          // The owner's pinnedRank describes ITS pinned section. Carrying it
+          // into the main window would promote the row into the viewer's
+          // local Pins section (ranked by a foreign rank) and wire the pin
+          // chip to an owner-side unpin. The viewer's list membership is the
+          // remote_thread_pins row; rank stays owner-local. The remote-viewer
+          // window path is untouched — owner semantics are correct there.
+          threads: resolution.threads.map(
+            ({ pinnedRank: _pinnedRank, ...thread }) => thread,
+          ),
+        };
         if (resolution.refreshed.length > 0) {
           await this.getOverlayStore().updateRemoteThreadPinSnapshots(
             resolution.refreshed,
