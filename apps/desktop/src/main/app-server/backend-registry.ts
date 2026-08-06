@@ -2503,6 +2503,17 @@ function readStatusType(value: unknown): string | undefined {
   return typeof type === "string" ? type : undefined;
 }
 
+function isAppServerThreadStatus(
+  value: string | undefined,
+): value is AppServerThreadStatus {
+  return (
+    value === "active"
+    || value === "idle"
+    || value === "notLoaded"
+    || value === "unknown"
+  );
+}
+
 function readNotificationItemType(notification: AppServerNotification): string | undefined {
   if (
     notification.method !== "item/started" &&
@@ -6308,6 +6319,15 @@ export class DesktopBackendRegistry {
    * original `turn/started` notification.
    */
   private readonly backendActiveCodexThreadIds = new Set<string>();
+  /**
+   * Live lifecycle notifications and thread reads can be newer than Codex's
+   * cached thread/list status. Preserve that observation until thread/list
+   * returns the same value, then hand authority back to the list snapshot.
+   */
+  private readonly observedCodexThreadStatuses = new Map<
+    string,
+    AppServerThreadStatus
+  >();
   private readonly liveThreadUsageBaselines = new Map<
     string,
     TaskMonitorTokenUsageBreakdown
@@ -13143,6 +13163,17 @@ export class DesktopBackendRegistry {
     threadId: string,
     status: string | undefined,
   ): void {
+    if (!isAppServerThreadStatus(status)) {
+      return;
+    }
+    this.observedCodexThreadStatuses.set(threadId, status);
+    this.seedBackendCodexThreadStatus(threadId, status);
+  }
+
+  private seedBackendCodexThreadStatus(
+    threadId: string,
+    status: AppServerThreadStatus | undefined,
+  ): void {
     if (status === "active") {
       this.backendActiveCodexThreadIds.add(threadId);
       return;
@@ -13150,6 +13181,36 @@ export class DesktopBackendRegistry {
     if (status) {
       this.backendActiveCodexThreadIds.delete(threadId);
     }
+  }
+
+  private reconcileCodexThreadListStatus(
+    thread: AppServerThreadSummary,
+  ): AppServerThreadSummary {
+    const observedStatus = this.observedCodexThreadStatuses.get(thread.id);
+    if (!observedStatus) {
+      this.seedBackendCodexThreadStatus(thread.id, thread.threadStatus);
+      return thread;
+    }
+
+    // Codex review flows can emit an idle boundary for one turn while another
+    // tracked turn remains active. In-memory turn ownership wins in that case;
+    // retain the observation so the next genuine terminal event can settle it.
+    const reconciledStatus =
+      observedStatus !== "active" && this.threadHasActiveTurn(thread.id)
+        ? "active"
+        : observedStatus;
+    this.seedBackendCodexThreadStatus(thread.id, reconciledStatus);
+    if (thread.threadStatus === reconciledStatus) {
+      if (reconciledStatus === observedStatus) {
+        this.observedCodexThreadStatuses.delete(thread.id);
+      }
+      return thread;
+    }
+
+    return {
+      ...thread,
+      threadStatus: reconciledStatus,
+    };
   }
 
   private threadHasActiveTurn(
@@ -17085,11 +17146,11 @@ export class DesktopBackendRegistry {
       }),
     );
 
-    for (const thread of enrichedThreads) {
-      this.reconcileBackendCodexThreadStatus(thread.id, thread.threadStatus);
-    }
+    const statusReconciledThreads = enrichedThreads.map((thread) =>
+      this.reconcileCodexThreadListStatus(thread)
+    );
 
-    return enrichedThreads.sort(
+    return statusReconciledThreads.sort(
       (left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0),
     );
   }
@@ -25538,7 +25599,10 @@ export class DesktopBackendRegistry {
       };
       const turnId = turnIdFromStartedNotification(notification);
       if (event.backend === "codex") {
-        this.backendActiveCodexThreadIds.add(notification.params.threadId);
+        this.reconcileBackendCodexThreadStatus(
+          notification.params.threadId,
+          "active",
+        );
       }
       if (!isAcpBackendId(event.backend)) {
         this.schedulePendingThreadTitleGenerationFromLifecycle({
@@ -25594,7 +25658,10 @@ export class DesktopBackendRegistry {
         });
       }
       if (event.backend === "codex") {
-        this.backendActiveCodexThreadIds.delete(notification.params.threadId);
+        this.reconcileBackendCodexThreadStatus(
+          notification.params.threadId,
+          "idle",
+        );
       }
       const managedReview = turnId
         ? this.findActiveReviewSubAgentForTerminal({

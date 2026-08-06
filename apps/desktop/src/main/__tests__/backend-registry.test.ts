@@ -15038,6 +15038,108 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("preserves a newer idle observation over a stale active Codex thread list", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "thread/read"] },
+      replay: {
+        entries: [],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+        threadStatus: "idle",
+      },
+      threads: [
+        {
+          id: "thread-stale-active",
+          title: "Finished remotely",
+          titleSource: "explicit",
+          threadStatus: "active",
+          linkedDirectories: [],
+          source: "codex",
+          updatedAt: 1_000,
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    await expect(
+      registry.listThreads({ backend: "codex" }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: "thread-stale-active",
+        threadStatus: "active",
+      }),
+    ]);
+
+    await codexClient.emit({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-stale-active",
+        turnId: "turn-1",
+        turn: {
+          id: "turn-1",
+          status: "completed",
+          output: [],
+        },
+      },
+    });
+    await expect(
+      registry.readThread({
+        backend: "codex",
+        threadId: "thread-stale-active",
+      }),
+    ).resolves.toMatchObject({
+      threadStatus: "idle",
+    });
+
+    await expect(
+      registry.listThreads({ backend: "codex" }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: "thread-stale-active",
+        threadStatus: "idle",
+      }),
+    ]);
+    expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
+      count: 0,
+      threadIds: [],
+    });
+
+    await codexClient.emit({
+      method: "turn/started",
+      params: {
+        threadId: "thread-stale-active",
+        turn: {
+          id: "turn-2",
+          status: "inProgress",
+          items: [],
+        },
+      },
+    });
+    await expect(
+      registry.listThreads({ backend: "codex", forceRefresh: true }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: "thread-stale-active",
+        threadStatus: "active",
+      }),
+    ]);
+    expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
+      count: 1,
+      threadIds: ["codex:thread-stale-active"],
+    });
+
+    await registry.close();
+  });
+
   it("reserves Codex turn starts before awaited pre-start work", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
