@@ -11,6 +11,7 @@ import type {
 } from "@pwragent/shared";
 import {
   FEDERATION_PROTOCOL_VERSION,
+  MAX_CELESTIAL_ASSIGNMENTS,
   findPreferredReviewWorkspaceCwd,
 } from "@pwragent/shared";
 import {
@@ -87,14 +88,25 @@ type RuntimeHarness = {
       detail?: string;
     }) => void;
     getPeer: (peerId: FederationInstanceId) => {
+      id?: FederationInstanceId;
       label: string;
+      role?: "client";
       status: "connected";
+      capabilities?: FederationCapability[];
+      canRevoke?: boolean;
     } | undefined;
-    listPeers: () => [];
+    listPeers: (options?: { includeRevoked?: boolean }) => Array<{
+      id: FederationInstanceId;
+      status?: string;
+    }>;
+    revokePeer?: (peerId: FederationInstanceId, revokedAt: number) => void;
   };
   unregisterGatewayConnection: (connection: FederationGatewayConnection) => void;
   celestialAssignments?: Map<FederationInstanceId, CelestialIconAssignment>;
   celestialIconAssignments: () => CelestialIconAssignment[];
+  celestialIconFor: (
+    instanceId: FederationInstanceId,
+  ) => CelestialIconAssignment["icon"] | undefined;
   reconcileCelestialAssignments: () => void;
   applyCelestialIcons: (
     envelope: FederationProtocolEnvelope,
@@ -102,8 +114,9 @@ type RuntimeHarness = {
   ) => boolean;
   setCelestialIcon: (request: {
     instanceId: string;
-    icon: string;
+    icon: string | null;
   }) => Promise<SetCelestialIconResponse>;
+  revokePeer: (peerId: FederationInstanceId) => Promise<unknown>;
   visiblePeers: () => Array<{
     id: FederationInstanceId;
     status: string;
@@ -1291,5 +1304,549 @@ describe("DesktopFederationRuntime", () => {
     await expect(
       runtime.setCelestialIcon({ instanceId: "client_one", icon: "comet" }),
     ).rejects.toThrow(/invalid celestial icon/i);
+  });
+
+  it("resolves icon collisions: override keeps, oldest keeps, losers reassign", () => {
+    const assignment = (
+      instanceId: FederationInstanceId,
+      icon: CelestialIconAssignment["icon"],
+      updatedAt: number,
+      source: "auto" | "override" = "auto",
+    ): [FederationInstanceId, CelestialIconAssignment] => [
+      instanceId,
+      { instanceId, icon, source, updatedAt },
+    ];
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.router = new FederationRouter({ localInstanceId: "gateway_one" });
+    runtime.localInstanceId = "gateway_one";
+    runtime.store = () => ({
+      getPeer: () => undefined,
+      listPeers: () => [],
+    });
+    runtime.visiblePeers = () => [
+      { id: "client_a", status: "connected" },
+      { id: "client_b", status: "connected" },
+      { id: "client_c", status: "connected" },
+    ];
+    // Three instances collided on the moon while apart: the override entry
+    // must keep it, the auto entries must both move to distinct free icons.
+    runtime.celestialAssignments = new Map([
+      assignment("gateway_one", "sun", 1_000),
+      assignment("client_a", "moon", 5_000, "override"),
+      assignment("client_b", "moon", 2_000),
+      assignment("client_c", "moon", 3_000),
+    ]);
+    runtime.reconcileCelestialAssignments();
+
+    const byInstance = new Map(
+      runtime.celestialIconAssignments().map((entry) => [entry.instanceId, entry]),
+    );
+    expect(byInstance.get("client_a")).toMatchObject({
+      icon: "moon",
+      source: "override",
+      updatedAt: 5_000,
+    });
+    expect(byInstance.get("client_b")?.icon).not.toBe("moon");
+    expect(byInstance.get("client_c")?.icon).not.toBe("moon");
+    expect(byInstance.get("client_b")?.icon).not.toBe(
+      byInstance.get("client_c")?.icon,
+    );
+    const icons = [...byInstance.values()].map((entry) => entry.icon);
+    expect(new Set(icons).size).toBe(icons.length);
+  });
+
+  it("keeps the oldest auto entry in a collision when no override is involved", () => {
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.router = new FederationRouter({ localInstanceId: "gateway_one" });
+    runtime.localInstanceId = "gateway_one";
+    runtime.store = () => ({
+      getPeer: () => undefined,
+      listPeers: () => [],
+    });
+    runtime.visiblePeers = () => [
+      { id: "client_b", status: "connected" },
+      { id: "client_c", status: "connected" },
+    ];
+    runtime.celestialAssignments = new Map([
+      [
+        "client_b",
+        {
+          instanceId: "client_b",
+          icon: "moon" as const,
+          source: "auto" as const,
+          updatedAt: 2_000,
+        },
+      ],
+      [
+        "client_c",
+        {
+          instanceId: "client_c",
+          icon: "moon" as const,
+          source: "auto" as const,
+          updatedAt: 3_000,
+        },
+      ],
+    ]);
+    runtime.reconcileCelestialAssignments();
+
+    const byInstance = new Map(
+      runtime.celestialIconAssignments().map((entry) => [entry.instanceId, entry]),
+    );
+    expect(byInstance.get("client_b")).toMatchObject({
+      icon: "moon",
+      updatedAt: 2_000,
+    });
+    expect(byInstance.get("client_c")?.icon).not.toBe("moon");
+  });
+
+  it("tombstones a revoked peer's icon and frees it for reuse", async () => {
+    const router = new FederationRouter({ localInstanceId: "gateway_one" });
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.router = router;
+    runtime.localInstanceId = "gateway_one";
+    runtime.store = () => ({
+      getPeer: () => ({
+        id: "client_one",
+        label: "Studio Mac",
+        role: "client",
+        status: "connected",
+        capabilities: [],
+        canRevoke: true,
+      }),
+      listPeers: () => [],
+      revokePeer: () => undefined,
+    });
+    runtime.celestialAssignments = new Map([
+      [
+        "client_one",
+        {
+          instanceId: "client_one",
+          icon: "moon" as const,
+          source: "auto" as const,
+          updatedAt: 1_000,
+        },
+      ],
+    ]);
+    const sent: FederationProtocolEnvelope[] = [];
+    router.registerConnection({
+      peerId: "client_two",
+      capabilities: ["thread_navigation"],
+      sendEnvelope: (envelope) => sent.push(envelope),
+    });
+
+    await runtime.revokePeer("client_one");
+
+    expect(runtime.celestialIconFor("client_one")).toBeUndefined();
+    const tombstone = runtime
+      .celestialIconAssignments()
+      .find((entry) => entry.instanceId === "client_one");
+    expect(tombstone?.removed).toBe(true);
+    const broadcast = sent.findLast(
+      (envelope) =>
+        envelope.kind === "notification"
+        && envelope.method === "federation.celestialIcons",
+    ) as (FederationProtocolEnvelope & {
+      params: { assignments: CelestialIconAssignment[] };
+    }) | undefined;
+    expect(
+      broadcast?.params.assignments.find(
+        (entry) => entry.instanceId === "client_one",
+      )?.removed,
+    ).toBe(true);
+
+    // The freed icon is reusable: a new peer picks the moon again.
+    runtime.visiblePeers = () => [{ id: "client_three", status: "connected" }];
+    runtime.reconcileCelestialAssignments();
+    expect(runtime.celestialIconFor("client_three")).toBe("moon");
+  });
+
+  it("keeps a revoked peer tombstoned across reconcile (real visiblePeers)", async () => {
+    // Deliberately does NOT stub visiblePeers: it retains revoked peers via
+    // listPeers({ includeRevoked: true }) to feed the Settings list, and a
+    // celestial pass that reads it directly both spares the revoked peer
+    // from pruning and re-assigns it a live icon, undoing the tombstone.
+    const router = new FederationRouter({ localInstanceId: "gateway_one" });
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.router = router;
+    runtime.localInstanceId = "gateway_one";
+    let revoked = false;
+    runtime.store = () => ({
+      getPeer: () => ({
+        id: "client_one",
+        label: "Studio Mac",
+        role: "client",
+        status: "connected",
+        capabilities: [],
+        canRevoke: true,
+      }),
+      listPeers: (options?: { includeRevoked?: boolean }) =>
+        revoked && !options?.includeRevoked
+          ? []
+          : [
+              {
+                id: "client_one",
+                label: "Studio Mac",
+                role: "client" as const,
+                status: revoked ? ("revoked" as const) : ("connected" as const),
+                capabilities: [],
+              },
+            ],
+      revokePeer: () => {
+        revoked = true;
+      },
+    });
+    runtime.celestialAssignments = new Map([
+      [
+        "client_one",
+        {
+          instanceId: "client_one",
+          icon: "moon" as const,
+          source: "auto" as const,
+          updatedAt: 1_000,
+        },
+      ],
+    ]);
+
+    await runtime.revokePeer("client_one");
+    expect(runtime.celestialIconFor("client_one")).toBeUndefined();
+
+    // Any later peer connect reconciles; the tombstone must survive it.
+    runtime.reconcileCelestialAssignments();
+    expect(runtime.celestialIconFor("client_one")).toBeUndefined();
+    expect(
+      runtime
+        .celestialIconAssignments()
+        .find((entry) => entry.instanceId === "client_one")?.removed,
+    ).toBe(true);
+  });
+
+  it("tombstones a revoked peer even without an explicit revoke call", () => {
+    // The prune pass is the safety net: a peer revoked by an earlier build
+    // (or in a session whose removeCelestialAssignment never ran) still
+    // loses its icon on the next reconcile.
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.router = new FederationRouter({ localInstanceId: "gateway_one" });
+    runtime.localInstanceId = "gateway_one";
+    runtime.store = () => ({
+      getPeer: () => undefined,
+      listPeers: (options?: { includeRevoked?: boolean }) =>
+        options?.includeRevoked
+          ? [
+              {
+                id: "client_one",
+                label: "Studio Mac",
+                role: "client" as const,
+                status: "revoked" as const,
+                capabilities: [],
+              },
+            ]
+          : [],
+    });
+    runtime.celestialAssignments = new Map([
+      [
+        "client_one",
+        {
+          instanceId: "client_one",
+          icon: "moon" as const,
+          source: "auto" as const,
+          updatedAt: 1_000,
+        },
+      ],
+    ]);
+
+    runtime.reconcileCelestialAssignments();
+
+    expect(runtime.celestialIconFor("client_one")).toBeUndefined();
+  });
+
+  it("prunes entries unknown to the directory and store, sparing enrolled peers", () => {
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.router = new FederationRouter({ localInstanceId: "gateway_one" });
+    runtime.localInstanceId = "gateway_one";
+    runtime.store = () => ({
+      getPeer: () => undefined,
+      listPeers: () => [{ id: "enrolled_offline" }],
+    });
+    runtime.visiblePeers = () => [];
+    runtime.celestialAssignments = new Map([
+      [
+        "enrolled_offline",
+        {
+          instanceId: "enrolled_offline",
+          icon: "moon" as const,
+          source: "auto" as const,
+          updatedAt: 1_000,
+        },
+      ],
+      [
+        "long_gone",
+        {
+          instanceId: "long_gone",
+          icon: "ringed-planet" as const,
+          source: "auto" as const,
+          updatedAt: 1_000,
+        },
+      ],
+    ]);
+    runtime.reconcileCelestialAssignments();
+
+    expect(runtime.celestialIconFor("enrolled_offline")).toBe("moon");
+    expect(runtime.celestialIconFor("long_gone")).toBeUndefined();
+    const tombstone = runtime
+      .celestialIconAssignments()
+      .find((entry) => entry.instanceId === "long_gone");
+    expect(tombstone?.removed).toBe(true);
+  });
+
+  it("rejects malformed instance ids and bounds snapshot growth", () => {
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.router = new FederationRouter({ localInstanceId: "client_one" });
+    runtime.localInstanceId = "client_one";
+    runtime.store = () => ({
+      getPeer: () => undefined,
+      listPeers: () => [],
+    });
+    runtime.celestialAssignments = new Map();
+    const assignments: CelestialIconAssignment[] = [
+      {
+        instanceId: "not a valid id!",
+        icon: "moon",
+        source: "auto",
+        updatedAt: 2_000,
+      },
+    ];
+    for (let index = 0; index < 100; index += 1) {
+      assignments.push({
+        instanceId: `flood_${index}`,
+        icon: "black-hole",
+        source: "auto",
+        updatedAt: 2_000,
+      });
+    }
+    runtime.applyCelestialIcons(
+      {
+        id: "celestial-flood",
+        kind: "notification",
+        method: "federation.celestialIcons",
+        params: { assignments },
+        protocolVersion: FEDERATION_PROTOCOL_VERSION,
+        sourceInstanceId: "gateway_one",
+        targetInstanceId: "client_one",
+        createdAt: 2_000,
+      },
+      "gateway_one",
+    );
+
+    const merged = runtime.celestialIconAssignments();
+    expect(merged.length).toBeLessThanOrEqual(MAX_CELESTIAL_ASSIGNMENTS);
+    expect(
+      merged.some((entry) => entry.instanceId === "not a valid id!"),
+    ).toBe(false);
+    // Entries for already-known instances still merge at the cap.
+    const knownUpdate = runtime.applyCelestialIcons(
+      {
+        id: "celestial-known",
+        kind: "notification",
+        method: "federation.celestialIcons",
+        params: {
+          assignments: [
+            {
+              instanceId: "flood_0",
+              icon: "moon",
+              source: "auto",
+              updatedAt: 3_000,
+            },
+          ],
+        },
+        protocolVersion: FEDERATION_PROTOCOL_VERSION,
+        sourceInstanceId: "gateway_one",
+        targetInstanceId: "client_one",
+        createdAt: 3_000,
+      },
+      "gateway_one",
+    );
+    expect(knownUpdate).toBe(true);
+    expect(runtime.celestialIconFor("flood_0")).toBe("moon");
+  });
+
+  it("expires stale tombstones on the client receive path and keeps them off the cap", () => {
+    // A pure client never reconciles, so applyCelestialIcons owns expiry
+    // there; and tombstones must not consume the entry budget or a churning
+    // federation would starve out real peers.
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.router = new FederationRouter({ localInstanceId: "client_one" });
+    runtime.localInstanceId = "client_one";
+    runtime.store = () => ({
+      getPeer: () => undefined,
+      listPeers: () => [],
+    });
+    const stale = Date.now() - 8 * 24 * 60 * 60_000;
+    const assignments = new Map<FederationInstanceId, CelestialIconAssignment>([
+      [
+        "long_gone",
+        {
+          instanceId: "long_gone",
+          icon: "moon",
+          source: "auto",
+          updatedAt: stale,
+          removed: true,
+        },
+      ],
+    ]);
+    // Fill the rest of the budget with fresh tombstones: they should not
+    // block the one live entry arriving below.
+    for (let index = 0; index < MAX_CELESTIAL_ASSIGNMENTS; index += 1) {
+      assignments.set(`dead_${index}`, {
+        instanceId: `dead_${index}`,
+        icon: "black-hole",
+        source: "auto",
+        updatedAt: 1_000,
+        removed: true,
+      });
+    }
+    runtime.celestialAssignments = assignments;
+
+    runtime.applyCelestialIcons(
+      {
+        id: "celestial-live",
+        kind: "notification",
+        method: "federation.celestialIcons",
+        params: {
+          assignments: [
+            {
+              instanceId: "gateway_one",
+              icon: "sun",
+              source: "auto",
+              updatedAt: 2_000,
+            },
+          ],
+        },
+        protocolVersion: FEDERATION_PROTOCOL_VERSION,
+        sourceInstanceId: "gateway_one",
+        targetInstanceId: "client_one",
+        createdAt: 2_000,
+      },
+      "gateway_one",
+    );
+
+    // The stale tombstone is gone; fresh ones remain but did not crowd out
+    // the newly advertised live gateway.
+    expect(
+      runtime
+        .celestialIconAssignments()
+        .some((entry) => entry.instanceId === "long_gone"),
+    ).toBe(false);
+    expect(runtime.celestialIconFor("gateway_one")).toBe("sun");
+  });
+
+  it("clears an operator override back to auto and broadcasts the reset", async () => {
+    const router = new FederationRouter({ localInstanceId: "gateway_one" });
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.router = router;
+    runtime.localInstanceId = "gateway_one";
+    runtime.store = () => ({
+      getPeer: () => undefined,
+      listPeers: () => [],
+    });
+    runtime.celestialAssignments = new Map([
+      [
+        "gateway_one",
+        {
+          instanceId: "gateway_one",
+          icon: "sun" as const,
+          source: "auto" as const,
+          updatedAt: 1_000,
+        },
+      ],
+      [
+        "client_one",
+        {
+          instanceId: "client_one",
+          icon: "black-hole" as const,
+          source: "override" as const,
+          updatedAt: 2_000,
+        },
+      ],
+    ]);
+    const sent: FederationProtocolEnvelope[] = [];
+    router.registerConnection({
+      peerId: "client_one",
+      capabilities: ["thread_navigation"],
+      sendEnvelope: (envelope) => sent.push(envelope),
+    });
+
+    const response = await runtime.setCelestialIcon({
+      instanceId: "client_one",
+      icon: null,
+    });
+    const cleared = response.assignments.find(
+      (entry) => entry.instanceId === "client_one",
+    );
+    expect(cleared?.source).toBe("auto");
+    expect(cleared?.icon).toBe("moon");
+    expect(cleared?.updatedAt).toBeGreaterThan(2_000);
+    expect(
+      sent.some(
+        (envelope) =>
+          envelope.kind === "notification"
+          && envelope.method === "federation.celestialIcons",
+      ),
+    ).toBe(true);
+
+    await expect(
+      runtime.setCelestialIcon({ instanceId: "not a valid id!", icon: null }),
+    ).rejects.toThrow(/invalid celestial icon/i);
+  });
+
+  it("applies an incoming tombstone and stops reporting the icon", () => {
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.router = new FederationRouter({ localInstanceId: "client_one" });
+    runtime.localInstanceId = "client_one";
+    runtime.store = () => ({
+      getPeer: () => undefined,
+      listPeers: () => [],
+    });
+    runtime.celestialAssignments = new Map([
+      [
+        "client_two",
+        {
+          instanceId: "client_two",
+          icon: "moon" as const,
+          source: "auto" as const,
+          updatedAt: 1_000,
+        },
+      ],
+    ]);
+
+    runtime.applyCelestialIcons(
+      {
+        id: "celestial-tombstone",
+        kind: "notification",
+        method: "federation.celestialIcons",
+        params: {
+          assignments: [
+            {
+              instanceId: "client_two",
+              icon: "moon",
+              source: "auto",
+              updatedAt: 2_000,
+              removed: true,
+            },
+          ],
+        },
+        protocolVersion: FEDERATION_PROTOCOL_VERSION,
+        sourceInstanceId: "gateway_one",
+        targetInstanceId: "client_one",
+        createdAt: 2_000,
+      },
+      "gateway_one",
+    );
+
+    expect(runtime.celestialIconFor("client_two")).toBeUndefined();
+    expect(
+      runtime
+        .celestialIconAssignments()
+        .find((entry) => entry.instanceId === "client_two")?.removed,
+    ).toBe(true);
   });
 });

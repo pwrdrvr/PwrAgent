@@ -57,7 +57,7 @@ export function registerFederationIpcHandlers(): void {
     ): Promise<SetCelestialIconResponse> => {
       if (
         !isFederationInstanceId(request.instanceId)
-        || !isCelestialIconId(request.icon)
+        || (request.icon !== null && !isCelestialIconId(request.icon))
       ) {
         throw new Error("Invalid celestial icon override request");
       }

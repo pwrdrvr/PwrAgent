@@ -36,6 +36,18 @@ describe("isCelestialIconAssignment", () => {
     expect(isCelestialIconAssignment({ instanceId: "pwr_a", icon: "moon", source: "auto", updatedAt: Number.NaN })).toBe(false);
     expect(isCelestialIconAssignment(null)).toBe(false);
   });
+
+  it("accepts tombstones and rejects non-boolean removed flags", () => {
+    expect(
+      isCelestialIconAssignment({ ...assignment("pwr_a", "moon", 1), removed: true }),
+    ).toBe(true);
+    expect(
+      isCelestialIconAssignment({ ...assignment("pwr_a", "moon", 1), removed: false }),
+    ).toBe(true);
+    expect(
+      isCelestialIconAssignment({ ...assignment("pwr_a", "moon", 1), removed: "yes" }),
+    ).toBe(false);
+  });
 });
 
 describe("pickCelestialIcon", () => {
@@ -74,6 +86,15 @@ describe("pickCelestialIcon", () => {
     const second = pickCelestialIcon(assigned, "pwr_overflow");
     expect(first).toBe(second);
     expect(isCelestialIconId(first)).toBe(true);
+  });
+
+  it("never hands a non-gateway the sun, even in the hash fallback", () => {
+    const assigned = new Map<string, CelestialIconId>(
+      CELESTIAL_ICON_IDS.map((icon, index) => [`pwr_${index}`, icon]),
+    );
+    for (let index = 0; index < 32; index += 1) {
+      expect(pickCelestialIcon(assigned, `pwr_overflow_${index}`)).not.toBe("sun");
+    }
   });
 });
 
@@ -127,6 +148,64 @@ describe("mergeCelestialIconAssignments", () => {
         left.instanceId.localeCompare(right.instanceId),
       );
     expect(sortById(ab)).toEqual(sortById(ba));
+  });
+
+  it("propagates a newer tombstone and lets a newer assignment revive it", () => {
+    const tombstone: CelestialIconAssignment = {
+      ...assignment("pwr_a", "moon", 20),
+      removed: true,
+    };
+    const removedMerge = mergeCelestialIconAssignments(
+      [assignment("pwr_a", "moon", 10)],
+      [tombstone],
+    );
+    expect(removedMerge.changed).toBe(true);
+    expect(removedMerge.assignments).toEqual([tombstone]);
+
+    // Replaying the tombstone is a no-op.
+    const replay = mergeCelestialIconAssignments(removedMerge.assignments, [tombstone]);
+    expect(replay.changed).toBe(false);
+
+    // An older tombstone loses to the live assignment.
+    const staleTombstone = mergeCelestialIconAssignments(
+      [assignment("pwr_a", "moon", 30)],
+      [tombstone],
+    );
+    expect(staleTombstone.changed).toBe(false);
+    expect(staleTombstone.assignments).toEqual([assignment("pwr_a", "moon", 30)]);
+
+    // A newer assignment (re-enrollment) revives the instance.
+    const revived = mergeCelestialIconAssignments(
+      removedMerge.assignments,
+      [assignment("pwr_a", "ringed-planet", 40)],
+    );
+    expect(revived.changed).toBe(true);
+    expect(revived.assignments).toEqual([assignment("pwr_a", "ringed-planet", 40)]);
+  });
+
+  it("breaks full ties toward removal so merge order cannot resurrect", () => {
+    const live = assignment("pwr_a", "moon", 10);
+    const tombstone: CelestialIconAssignment = { ...live, removed: true };
+    const forward = mergeCelestialIconAssignments([live], [tombstone]);
+    const backward = mergeCelestialIconAssignments([tombstone], [live]);
+    expect(forward.assignments).toEqual([tombstone]);
+    expect(backward.assignments).toEqual([tombstone]);
+  });
+
+  it("ranks removal above source so a tied override cannot resurrect", () => {
+    // The tombstone revokePeer writes is source:"auto"; an operator
+    // override landing in the same millisecond must not outrank it.
+    const tombstone: CelestialIconAssignment = {
+      ...assignment("pwr_a", "moon", 10),
+      removed: true,
+    };
+    const override = assignment("pwr_a", "sun", 10, "override");
+    expect(
+      mergeCelestialIconAssignments([tombstone], [override]).assignments,
+    ).toEqual([tombstone]);
+    expect(
+      mergeCelestialIconAssignments([override], [tombstone]).assignments,
+    ).toEqual([tombstone]);
   });
 
   it("drops malformed incoming entries", () => {

@@ -27,11 +27,28 @@ export function isCelestialIconId(value: unknown): value is CelestialIconId {
 
 export type CelestialIconAssignmentSource = "auto" | "override";
 
+/**
+ * Upper bound on how many assignment entries an instance will accept and
+ * persist. The LWW merge otherwise grows without limit, so a buggy or
+ * hostile peer could permanently bloat every instance's persisted map by
+ * streaming fabricated instance ids.
+ */
+export const MAX_CELESTIAL_ASSIGNMENTS = 64;
+
 export interface CelestialIconAssignment {
   instanceId: string;
   icon: CelestialIconId;
   source: CelestialIconAssignmentSource;
   updatedAt: number;
+  /**
+   * Tombstone: the instance left the federation (revoked or pruned), so its
+   * icon is free again. Tombstones ride the same LWW merge that assignments
+   * do — that is what lets a removal propagate, since a plain merge can only
+   * ever add. The `icon` field keeps the last assigned value so older builds
+   * that predate tombstones still validate the entry; they simply keep
+   * showing the icon, which matches their pre-tombstone behavior.
+   */
+  removed?: boolean;
 }
 
 export function isCelestialIconAssignment(
@@ -48,6 +65,7 @@ export function isCelestialIconAssignment(
     && (candidate.source === "auto" || candidate.source === "override")
     && typeof candidate.updatedAt === "number"
     && Number.isFinite(candidate.updatedAt)
+    && (candidate.removed === undefined || typeof candidate.removed === "boolean")
   );
 }
 
@@ -82,7 +100,14 @@ export function pickCelestialIcon(
       return icon;
     }
   }
-  return CELESTIAL_ICON_IDS[hashInstanceId(instanceId) % CELESTIAL_ICON_IDS.length];
+  // All ids taken: degrade to a stable hash so recomputation never flaps.
+  // Non-hub instances hash over the sun-less pool, keeping the sun-last
+  // rule intact even here: a duplicated planet is recoverable noise, a
+  // duplicated sun reads as two hubs.
+  const fallback = options?.isGateway
+    ? order
+    : order.filter((icon) => icon !== "sun");
+  return fallback[hashInstanceId(instanceId) % fallback.length];
 }
 
 /**
@@ -114,6 +139,7 @@ export function mergeCelestialIconAssignments(
       || existing.icon !== assignment.icon
       || existing.source !== assignment.source
       || existing.updatedAt !== assignment.updatedAt
+      || (existing.removed ?? false) !== (assignment.removed ?? false)
     ) {
       changed = true;
     }
@@ -129,6 +155,12 @@ function celestialAssignmentBeats(
   if (candidate.updatedAt !== incumbent.updatedAt) {
     return candidate.updatedAt > incumbent.updatedAt;
   }
+  // Removal outranks source: an instance that left the federation is gone
+  // regardless of who last styled it, and ranking this below source would
+  // let a same-instant override resurrect a revoked peer.
+  if ((candidate.removed ?? false) !== (incumbent.removed ?? false)) {
+    return candidate.removed === true;
+  }
   if (candidate.source !== incumbent.source) {
     return candidate.source === "override";
   }
@@ -137,7 +169,11 @@ function celestialAssignmentBeats(
 
 export type SetCelestialIconRequest = {
   instanceId: string;
-  icon: CelestialIconId;
+  /**
+   * A concrete id applies an operator override; null clears the override
+   * back to auto-assignment.
+   */
+  icon: CelestialIconId | null;
 };
 
 export type SetCelestialIconResponse = {

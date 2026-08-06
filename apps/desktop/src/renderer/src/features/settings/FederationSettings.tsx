@@ -308,13 +308,14 @@ export function FederationSettings(props: FederationSettingsProps) {
   const now = Date.now();
 
   const changeCelestialIcon = (instanceId: string, value: string) => {
-    if (!isCelestialIconId(value) || !props.desktopApi?.setCelestialIcon) {
-      return;
-    }
+    // The empty value is the Auto option: it clears an operator override
+    // back to auto-assignment. Anything else must be a known icon id.
+    if (value !== "" && !isCelestialIconId(value)) return;
+    if (!props.desktopApi?.setCelestialIcon) return;
     setActionError(undefined);
     setSettingIconFor(instanceId);
     props.desktopApi
-      .setCelestialIcon({ instanceId, icon: value })
+      .setCelestialIcon({ instanceId, icon: value === "" ? null : value })
       .then(() => loadHealth())
       .catch((err: unknown) =>
         setActionError(err instanceof Error ? err.message : String(err)),
@@ -419,9 +420,7 @@ export function FederationSettings(props: FederationSettingsProps) {
                     );
                   }}
                 >
-                  <option value="" disabled>
-                    Auto
-                  </option>
+                  <option value="">Auto</option>
                   {CELESTIAL_ICON_IDS.map((icon) => (
                     <option key={icon} value={icon}>
                       {celestialIconLabel(icon)}
@@ -984,9 +983,7 @@ export function FederationSettings(props: FederationSettingsProps) {
                         changeCelestialIcon(peer.id, event.target.value)
                       }
                     >
-                      <option value="" disabled>
-                        Auto
-                      </option>
+                      <option value="">Auto</option>
                       {CELESTIAL_ICON_IDS.map((icon) => (
                         <option key={icon} value={icon}>
                           {celestialIconLabel(icon)}
