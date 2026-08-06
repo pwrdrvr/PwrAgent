@@ -1,4 +1,10 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -8,8 +14,10 @@ const ARGUMENT_1_ENV = "PWRAGENT_JOB_WRAPPER_ARGUMENT_1";
 const WORKING_DIRECTORY_ENV = "PWRAGENT_JOB_WRAPPER_CWD";
 const READY_FILE_ENV = "PWRAGENT_JOB_WRAPPER_READY_FILE";
 const EXIT_FILE_ENV = "PWRAGENT_JOB_WRAPPER_EXIT_FILE";
+const STARTED_AT_ENV = "PWRAGENT_JOB_WRAPPER_STARTED_AT";
+const STARTUP_STATUS_FILE_ENV = "PWRAGENT_JOB_WRAPPER_STARTUP_STATUS_FILE";
 const BASH_EXIT_TRAP =
-  "trap 'pwragent_exit=$?; trap - EXIT; printf \"%s\" \"$pwragent_exit\" > \"$PWRAGENT_JOB_WRAPPER_EXIT_FILE\"; exit \"$pwragent_exit\"' EXIT";
+  "trap 'pwragent_exit=$?; trap - EXIT; set +e; pwragent_exit_file=$(/usr/bin/cygpath.exe -u \"$PWRAGENT_JOB_WRAPPER_EXIT_FILE\"); if [ -n \"$pwragent_exit_file\" ]; then printf \"%s\" \"$pwragent_exit\" > \"$pwragent_exit_file\"; fi; exit \"$pwragent_exit\"' EXIT";
 
 /**
  * PowerShell hosts this small native launcher because Node does not expose the
@@ -25,11 +33,33 @@ $argument1 = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([string
 $workingDirectory = [string]$env:PWRAGENT_JOB_WRAPPER_CWD
 $readyFile = [string]$env:PWRAGENT_JOB_WRAPPER_READY_FILE
 $exitFile = [string]$env:PWRAGENT_JOB_WRAPPER_EXIT_FILE
+$startupStartedAt = [long]$env:PWRAGENT_JOB_WRAPPER_STARTED_AT
+$startupStatusFile = [string]$env:PWRAGENT_JOB_WRAPPER_STARTUP_STATUS_FILE
 Remove-Item Env:PWRAGENT_JOB_WRAPPER_EXECUTABLE -ErrorAction SilentlyContinue
 Remove-Item Env:PWRAGENT_JOB_WRAPPER_ARGUMENT_0 -ErrorAction SilentlyContinue
 Remove-Item Env:PWRAGENT_JOB_WRAPPER_ARGUMENT_1 -ErrorAction SilentlyContinue
 Remove-Item Env:PWRAGENT_JOB_WRAPPER_CWD -ErrorAction SilentlyContinue
 Remove-Item Env:PWRAGENT_JOB_WRAPPER_READY_FILE -ErrorAction SilentlyContinue
+Remove-Item Env:PWRAGENT_JOB_WRAPPER_STARTED_AT -ErrorAction SilentlyContinue
+Remove-Item Env:PWRAGENT_JOB_WRAPPER_STARTUP_STATUS_FILE -ErrorAction SilentlyContinue
+
+function Write-StartupPhase {
+  param(
+    [Parameter(Mandatory = $true)][string]$Phase,
+    [string]$Detail = ''
+  )
+  try {
+    $elapsedMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() - $startupStartedAt
+    $encodedDetail = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Detail))
+    [IO.File]::AppendAllText(
+      $startupStatusFile,
+      ([string]$elapsedMs + [char]9 + $Phase + [char]9 + $encodedDetail + [Environment]::NewLine))
+  } catch {
+    # Startup telemetry is best-effort and must never weaken Job ownership.
+  }
+}
+
+Write-StartupPhase -Phase 'powershell-started'
 
 $source = @'
 using System;
@@ -196,6 +226,24 @@ public static class PwrAgentWindowsJobRunner
             operation + " failed");
     }
 
+    private static void WriteStartupPhase(
+        string startupStatusFile,
+        long startupStartedAt,
+        string phase)
+    {
+        try
+        {
+            long elapsedMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - startupStartedAt;
+            File.AppendAllText(
+                startupStatusFile,
+                elapsedMs.ToString() + "\t" + phase + "\t" + Environment.NewLine);
+        }
+        catch
+        {
+            // Startup telemetry is best-effort and must never weaken Job ownership.
+        }
+    }
+
     private static void MakeInheritable(IntPtr handle)
     {
         if (handle == IntPtr.Zero || handle == new IntPtr(-1))
@@ -260,8 +308,11 @@ public static class PwrAgentWindowsJobRunner
         string application,
         string[] arguments,
         string workingDirectory,
-        string readyFile)
+        string readyFile,
+        string startupStatusFile,
+        long startupStartedAt)
     {
+        WriteStartupPhase(startupStatusFile, startupStartedAt, "native-job-started");
         IntPtr job = CreateJobObject(IntPtr.Zero, null);
         if (job == IntPtr.Zero)
         {
@@ -293,6 +344,7 @@ public static class PwrAgentWindowsJobRunner
             {
                 Marshal.FreeHGlobal(limitsPointer);
             }
+            WriteStartupPhase(startupStatusFile, startupStartedAt, "job-configured");
 
             STARTUPINFO startupInfo = new STARTUPINFO();
             startupInfo.cb = (uint)Marshal.SizeOf(typeof(STARTUPINFO));
@@ -325,18 +377,25 @@ public static class PwrAgentWindowsJobRunner
                 ThrowLastWin32Error("CreateProcess");
             }
             processCreated = true;
+            WriteStartupPhase(
+                startupStatusFile,
+                startupStartedAt,
+                "target-created-suspended");
 
             if (!AssignProcessToJobObject(job, processInformation.hProcess))
             {
                 TerminateProcess(processInformation.hProcess, 127);
                 ThrowLastWin32Error("AssignProcessToJobObject");
             }
+            WriteStartupPhase(startupStatusFile, startupStartedAt, "target-assigned");
             if (ResumeThread(processInformation.hThread) == UInt32.MaxValue)
             {
                 TerminateProcess(processInformation.hProcess, 127);
                 ThrowLastWin32Error("ResumeThread");
             }
+            WriteStartupPhase(startupStatusFile, startupStartedAt, "target-resumed");
             File.WriteAllText(readyFile, "ready");
+            WriteStartupPhase(startupStatusFile, startupStartedAt, "ready");
             if (WaitForSingleObject(processInformation.hProcess, INFINITE) == WAIT_FAILED)
             {
                 ThrowLastWin32Error("WaitForSingleObject");
@@ -366,12 +425,16 @@ public static class PwrAgentWindowsJobRunner
 '@
 
 try {
+  Write-StartupPhase -Phase 'helper-compile-started'
   Add-Type -TypeDefinition $source -Language CSharp -ErrorAction Stop
+  Write-StartupPhase -Phase 'helper-ready'
   $exitCode = [PwrAgentWindowsJobRunner]::Run(
     $application,
     [string[]]@($argument0, $argument1),
     $workingDirectory,
-    $readyFile)
+    $readyFile,
+    $startupStatusFile,
+    $startupStartedAt)
   if (Test-Path -LiteralPath $exitFile) {
     $reportedExitCode = 0
     if ([int]::TryParse(
@@ -382,6 +445,7 @@ try {
   }
   exit $exitCode
 } catch {
+  Write-StartupPhase -Phase 'failed' -Detail $_.Exception.Message
   [Console]::Error.WriteLine('PwrAgent Windows job wrapper failed: ' + $_.Exception.Message)
   exit 127
 }
@@ -393,7 +457,111 @@ export type WindowsJobWrappedCommand = {
   command: string;
   env: NodeJS.ProcessEnv;
   readyFilePath: string;
+  startupStatusFilePath: string;
 };
+
+export type WindowsJobStartupPhase = {
+  detail?: string;
+  elapsedMs: number;
+  phase: string;
+};
+
+export type WindowsJobStartupTelemetry = {
+  phases: WindowsJobStartupPhase[];
+};
+
+export type WindowsJobReadyPoll = {
+  cancel: () => void;
+};
+
+// Public Windows CI placed cold startup on both sides of the former 10-second
+// edge while warm launches completed much sooner. Doubling that observed edge
+// gives helper compilation bounded headroom without approaching the existing
+// 30-second Windows test contract or weakening atomic Job ownership.
+export const WINDOWS_JOB_READY_TIMEOUT_MS = 20_000;
+const WINDOWS_JOB_READY_POLL_INTERVAL_MS = 25;
+
+export function readWindowsJobStartupTelemetry(
+  launch: Pick<WindowsJobWrappedCommand, "startupStatusFilePath">,
+): WindowsJobStartupTelemetry {
+  let content: string;
+  try {
+    content = readFileSync(launch.startupStatusFilePath, "utf8");
+  } catch {
+    return { phases: [] };
+  }
+  const phases: WindowsJobStartupPhase[] = [];
+  for (const line of content.split(/\r?\n/)) {
+    if (!line) continue;
+    const [elapsedValue, phase, encodedDetail = ""] = line.split("\t", 3);
+    const elapsedMs = Number(elapsedValue);
+    if (!phase || !Number.isFinite(elapsedMs) || elapsedMs < 0) {
+      continue;
+    }
+    let detail: string | undefined;
+    if (encodedDetail) {
+      try {
+        detail = Buffer.from(encodedDetail, "base64").toString("utf8");
+      } catch {
+        // Ignore a partial final telemetry line while the wrapper is appending.
+      }
+    }
+    phases.push({ detail, elapsedMs, phase });
+  }
+  return { phases };
+}
+
+export function formatWindowsJobStartupTelemetry(
+  telemetry: WindowsJobStartupTelemetry,
+): string {
+  if (telemetry.phases.length === 0) {
+    return "startup phases unavailable";
+  }
+  return telemetry.phases
+    .map(({ detail, elapsedMs, phase }) =>
+      `${phase}@${elapsedMs}ms${detail ? ` (${detail})` : ""}`,
+    )
+    .join(" -> ");
+}
+
+export function startWindowsJobReadyPoll(params: {
+  launch: Pick<
+    WindowsJobWrappedCommand,
+    "readyFilePath" | "startupStatusFilePath"
+  >;
+  onReady: (telemetry: WindowsJobStartupTelemetry) => void;
+  onTimeout: (telemetry: WindowsJobStartupTelemetry) => void;
+  timeoutMs?: number;
+}): WindowsJobReadyPoll {
+  const timeoutMs = params.timeoutMs ?? WINDOWS_JOB_READY_TIMEOUT_MS;
+  const deadline = Date.now() + timeoutMs;
+  let cancelled = false;
+  let timer: NodeJS.Timeout | undefined;
+  const cancel = () => {
+    cancelled = true;
+    if (timer) {
+      clearTimeout(timer);
+      timer = undefined;
+    }
+  };
+  const poll = () => {
+    timer = undefined;
+    if (cancelled) return;
+    if (existsSync(params.launch.readyFilePath)) {
+      cancelled = true;
+      params.onReady(readWindowsJobStartupTelemetry(params.launch));
+      return;
+    }
+    if (Date.now() >= deadline) {
+      cancelled = true;
+      params.onTimeout(readWindowsJobStartupTelemetry(params.launch));
+      return;
+    }
+    timer = setTimeout(poll, WINDOWS_JOB_READY_POLL_INTERVAL_MS);
+  };
+  poll();
+  return { cancel };
+}
 
 function encodeArgument(value: string): string {
   return Buffer.from(value, "utf8").toString("base64");
@@ -410,7 +578,13 @@ export function wrapCommandInWindowsJob(params: {
   );
   const readyFilePath = path.join(stateDirectory, "ready");
   const exitFilePath = path.join(stateDirectory, "exit");
+  const startupStatusFilePath = path.join(stateDirectory, "startup-status.tsv");
   const scriptPath = path.join(stateDirectory, "wrapper.ps1");
+  const startupStartedAt = Date.now();
+  writeFileSync(startupStatusFilePath, "0\twrapper-created\t\n", {
+    encoding: "utf8",
+    mode: 0o600,
+  });
   writeFileSync(scriptPath, WINDOWS_JOB_WRAPPER_SCRIPT, {
     encoding: "utf8",
     mode: 0o600,
@@ -462,7 +636,10 @@ export function wrapCommandInWindowsJob(params: {
       [WORKING_DIRECTORY_ENV]: params.cwd ?? process.cwd(),
       [READY_FILE_ENV]: readyFilePath,
       [EXIT_FILE_ENV]: exitFilePath,
+      [STARTED_AT_ENV]: String(startupStartedAt),
+      [STARTUP_STATUS_FILE_ENV]: startupStatusFilePath,
     },
     readyFilePath,
+    startupStatusFilePath,
   };
 }
