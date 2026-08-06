@@ -504,6 +504,16 @@ async function renderExplicitComposerPdfPreview(
  * breadcrumb (selectedDirectory resolves by threadKeys membership) carries
  * the project name. Peer paths never match viewer paths, so matching is by
  * project identity: the linked directory's label, or its path basename.
+ *
+ * Mirrors `buildDirectorySummaries`' one-row-per-thread invariant
+ * (`pickHomeDirectory`): a multi-directory thread joins exactly ONE local
+ * group — its home directory — never every group it can match. Duplicating
+ * the row made selection "jump" groups, because `selectedDirectory` resolves
+ * to the first directory containing the key, which is whichever sorts first,
+ * not the group the user clicked in. Home preference matches
+ * `pickHomeDirectory`: repo checkouts (`kind: "local"`) before worktrees,
+ * then the owner's linked-directory order.
+ *
  * Remote threads whose project has no local counterpart stay ungrouped and
  * surface only in the Updated / Created lenses.
  */
@@ -514,7 +524,7 @@ function attachRemoteThreadsToLocalDirectories(
   if (remoteThreads.length === 0) {
     return directories;
   }
-  const directoryIndexesByName = new Map<string, number[]>();
+  const directoryIndexByName = new Map<string, number>();
   directories.forEach((directory, index) => {
     const names = new Set(
       [directory.label, directory.path ? path.basename(directory.path) : ""]
@@ -522,35 +532,43 @@ function attachRemoteThreadsToLocalDirectories(
         .filter(Boolean),
     );
     for (const name of names) {
-      const indexes = directoryIndexesByName.get(name);
-      if (indexes) {
-        indexes.push(index);
-      } else {
-        directoryIndexesByName.set(name, [index]);
+      if (!directoryIndexByName.has(name)) {
+        directoryIndexByName.set(name, index);
       }
     }
   });
   const addedKeysByDirectoryIndex = new Map<number, string[]>();
   for (const thread of remoteThreads) {
     const threadKey = buildThreadIdentityKey(thread.source, thread.id);
-    const matchedIndexes = new Set<number>();
-    for (const linked of thread.linkedDirectories ?? []) {
-      const names = new Set(
-        [linked.label, path.basename(linked.path)]
-          .map((name) => (name ?? "").trim().toLowerCase())
-          .filter(Boolean),
-      );
+    const linkedByHomePreference = [...(thread.linkedDirectories ?? [])].sort(
+      (left, right) => {
+        if (left.kind !== right.kind) {
+          return left.kind === "worktree" ? 1 : -1;
+        }
+        return 0;
+      },
+    );
+    let homeIndex: number | undefined;
+    for (const linked of linkedByHomePreference) {
+      const names = [linked.label, path.basename(linked.path)]
+        .map((name) => (name ?? "").trim().toLowerCase())
+        .filter(Boolean);
       for (const name of names) {
-        for (const index of directoryIndexesByName.get(name) ?? []) {
-          matchedIndexes.add(index);
+        homeIndex = directoryIndexByName.get(name);
+        if (homeIndex !== undefined) {
+          break;
         }
       }
+      if (homeIndex !== undefined) {
+        break;
+      }
     }
-    for (const index of matchedIndexes) {
-      const added = addedKeysByDirectoryIndex.get(index) ?? [];
-      added.push(threadKey);
-      addedKeysByDirectoryIndex.set(index, added);
+    if (homeIndex === undefined) {
+      continue;
     }
+    const added = addedKeysByDirectoryIndex.get(homeIndex) ?? [];
+    added.push(threadKey);
+    addedKeysByDirectoryIndex.set(homeIndex, added);
   }
   if (addedKeysByDirectoryIndex.size === 0) {
     return directories;

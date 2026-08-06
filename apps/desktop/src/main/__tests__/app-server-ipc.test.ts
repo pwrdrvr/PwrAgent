@@ -1730,6 +1730,112 @@ describe("app server ipc", () => {
     expect(appDirectory?.threadKeys).toContain("codex:remote-1");
   });
 
+  it("groups a multi-directory remote thread into exactly one local project", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+    const { buildFederatedThreadRef } = await import("@pwragent/shared");
+
+    // Two local project groups; "agent-kit" sorts before "PwrAgent", which is
+    // what made the duplicated row "jump" groups on selection.
+    reconcileNavigationSnapshot.mockImplementationOnce(async (params: unknown) => ({
+      backend: (params as { backend: "all" | "codex" | "grok" }).backend,
+      fetchedAt: 1234,
+      unchanged: false,
+      threads: (params as { threads: unknown[] }).threads,
+      inboxThreadKeys: [],
+      directories: [
+        {
+          key: "directory:/repo/agent-kit",
+          kind: "directory" as const,
+          label: "agent-kit",
+          path: "/repo/agent-kit",
+          threadKeys: [],
+          needsAttentionCount: 0,
+          latestUpdatedAt: 2000,
+        },
+        {
+          key: "directory:/repo/PwrAgent",
+          kind: "directory" as const,
+          label: "PwrAgent",
+          path: "/repo/PwrAgent",
+          threadKeys: [],
+          needsAttentionCount: 0,
+          latestUpdatedAt: 2000,
+        },
+      ],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+
+    const ref = buildFederatedThreadRef({
+      backend: "codex",
+      instanceId: "peer-laptop",
+      threadId: "remote-multi",
+    });
+    listRemoteThreadPins.mockResolvedValueOnce([
+      { ref, addedAt: 1_000, instanceLabel: "Laptop" },
+    ]);
+    federationMock.remoteThreadSummaries.resolvePinnedThreads.mockResolvedValueOnce({
+      threads: [
+        {
+          source: "codex" as const,
+          id: "remote-multi",
+          title: "MCP registration",
+          titleSource: "derived" as const,
+          // Home directory on the owner prefers the repo checkout over the
+          // worktree entry, then linked order — so PwrAgent, even though the
+          // worktree link for agent-kit comes first. The extra links must not
+          // duplicate the row into other local groups — one row per thread,
+          // like local threads.
+          linkedDirectories: [
+            {
+              id: "dir-b",
+              label: "agent-kit",
+              path: "/peer/dev/agent-kit",
+              kind: "worktree" as const,
+              worktreePath: "/peer/worktrees/x/agent-kit",
+            },
+            {
+              id: "dir-a",
+              label: "PwrAgent",
+              path: "/peer/dev/PwrAgent",
+              kind: "local" as const,
+            },
+          ],
+          inbox: { inInbox: false },
+          federation: {
+            ref,
+            instanceLabel: "Laptop",
+            peerStatus: "connected" as const,
+            capabilities: [],
+          },
+        },
+      ],
+      refreshed: [],
+    });
+
+    registerAppServerIpcHandlers();
+
+    const response = (await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.(
+      {},
+      {} satisfies GetNavigationSnapshotRequest,
+    )) as {
+      directories: Array<{ key: string; threadKeys: string[] }>;
+    };
+
+    const byKey = new Map(
+      response.directories.map((directory) => [directory.key, directory]),
+    );
+    expect(byKey.get("directory:/repo/PwrAgent")?.threadKeys).toContain(
+      "codex:remote-multi",
+    );
+    expect(byKey.get("directory:/repo/agent-kit")?.threadKeys).not.toContain(
+      "codex:remote-multi",
+    );
+  });
+
   it("keeps pinned remote rows, dimmed, when the owner is unreachable", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
