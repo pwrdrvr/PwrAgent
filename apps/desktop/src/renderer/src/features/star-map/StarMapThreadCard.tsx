@@ -134,9 +134,11 @@ export function StarMapThreadCard(props: {
         props.onOpen(thread);
       }}
     >
+      {/* Top-right, and large: the next card covers this one's bottom, so
+          the mark has to live in the strip that stays visible. */}
       {props.instanceIcon ? (
         <span className="star-map-card__watermark" aria-hidden="true">
-          <CelestialIcon icon={props.instanceIcon} size={84} />
+          <CelestialIcon icon={props.instanceIcon} size={104} />
         </span>
       ) : null}
       <span className="star-map-card__heading">
