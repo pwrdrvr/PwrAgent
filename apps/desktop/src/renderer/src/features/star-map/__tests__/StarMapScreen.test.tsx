@@ -108,4 +108,23 @@ describe("StarMapScreen", () => {
     });
     expect(onClose).toHaveBeenCalledTimes(1);
   });
+
+  it("refocuses the layer when the floating thread closes so Escape works again", () => {
+    const props = {
+      desktopApi: buildDesktopApi(),
+      localThreads: [],
+      sessionKeys: {},
+      onClose: () => undefined,
+      onOpenLocalThread: () => undefined,
+      onFocusLocalInstance: () => undefined,
+    };
+    const { rerender } = render(<StarMapScreen {...props} floating />);
+    const region = screen.getByRole("region", { name: "Star Map" });
+    // While the float is up, focus lives in the thread view — simulate it
+    // being elsewhere, then close the float.
+    (document.activeElement as HTMLElement | null)?.blur?.();
+    expect(document.activeElement).not.toBe(region);
+    rerender(<StarMapScreen {...props} floating={false} />);
+    expect(document.activeElement).toBe(region);
+  });
 });

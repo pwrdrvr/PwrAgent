@@ -77,9 +77,14 @@ export function StarMapScreen(props: StarMapScreenProps) {
     readStoredFilters,
   );
 
+  // Focus the layer on open AND whenever the floating thread closes —
+  // "Back to map" leaves focus inside <main>, and without a refocus the
+  // layer's Escape-to-close handler would never hear the key again.
   useEffect(() => {
-    layerRef.current?.focus();
-  }, []);
+    if (!props.floating) {
+      layerRef.current?.focus();
+    }
+  }, [props.floating]);
 
   const toggleFilter = useCallback((category: StarMapAttentionCategory) => {
     setFilters((current) => {
@@ -176,17 +181,18 @@ export function StarMapScreen(props: StarMapScreenProps) {
     [peers],
   );
 
+  const { desktopApi, onFocusLocalInstance, onOpenLocalThread } = props;
   const openInstance = useCallback(
     (instanceId: string) => {
       if (instanceId === localInstanceId) {
-        props.onFocusLocalInstance();
+        onFocusLocalInstance();
         return;
       }
-      void props.desktopApi?.openFederationWindow?.({
+      void desktopApi?.openFederationWindow?.({
         target: { scope: "remote", instanceId },
       });
     },
-    [localInstanceId, props],
+    [desktopApi, localInstanceId, onFocusLocalInstance],
   );
 
   const openThread = useCallback(
@@ -195,15 +201,15 @@ export function StarMapScreen(props: StarMapScreenProps) {
         thread.federation
         && isRemoteFederationTarget(thread.federation.ref.target)
       ) {
-        void props.desktopApi?.openFederationWindow?.({
+        void desktopApi?.openFederationWindow?.({
           target: thread.federation.ref.target,
           initialThread: thread.federation.ref,
         });
         return;
       }
-      props.onOpenLocalThread(thread);
+      onOpenLocalThread(thread);
     },
-    [props],
+    [desktopApi, onOpenLocalThread],
   );
 
   const renderCloud = (

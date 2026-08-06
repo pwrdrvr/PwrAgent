@@ -48,6 +48,31 @@ export function useStarMapThreads(params: {
     }
     const instanceIds = connectedIds.length > 0 ? connectedIds.split("\n") : [];
     const generation = (generationRef.current += 1);
+    // Prune instances that left the connected set: without this, a
+    // disconnected peer's last thread list keeps rendering as if current
+    // under an instance card that already shows it offline.
+    setState((current) => {
+      const keep = new Set(instanceIds);
+      const stale = [...current.threadsByInstance.keys()].some(
+        (instanceId) => !keep.has(instanceId),
+      )
+        || [...current.unreachableInstanceIds].some(
+          (instanceId) => !keep.has(instanceId),
+        );
+      if (!stale) return current;
+      return {
+        threadsByInstance: new Map(
+          [...current.threadsByInstance].filter(([instanceId]) =>
+            keep.has(instanceId),
+          ),
+        ),
+        unreachableInstanceIds: new Set(
+          [...current.unreachableInstanceIds].filter((instanceId) =>
+            keep.has(instanceId),
+          ),
+        ),
+      };
+    });
 
     const fetchAll = () => {
       for (const instanceId of instanceIds) {

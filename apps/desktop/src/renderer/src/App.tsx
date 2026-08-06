@@ -252,6 +252,16 @@ function DesktopAppShell(props: {
   // elevates the (already mounted) main ThreadView into a floating card
   // over the map instead of remounting a second instance.
   const [starMapFloatOpen, setStarMapFloatOpen] = useState(false);
+  const appMainRef = useRef<HTMLElement>(null);
+  // Each float session starts at the default position. Without the reset, a
+  // drag from the previous session persists in the element's CSS vars and a
+  // card once shoved mostly off-screen would reopen unreachable.
+  useEffect(() => {
+    if (starMapFloatOpen) {
+      appMainRef.current?.style.removeProperty("--star-map-float-dx");
+      appMainRef.current?.style.removeProperty("--star-map-float-dy");
+    }
+  }, [starMapFloatOpen]);
   // In-thread find bar (⌘F). `manualFindOpen` is the ⌘F toggle; `findRequest`
   // is a deep-link from a search result (seeded query + its target thread).
   // The bar is open when either applies (see `threadFindOpen` below).
@@ -1770,6 +1780,7 @@ function DesktopAppShell(props: {
         />
 
         <main
+          ref={appMainRef}
           className={`app-main${
             threadDetailPending ? " app-main--thread-detail-pending" : ""
           }${
@@ -1802,12 +1813,29 @@ function DesktopAppShell(props: {
                   Number.parseFloat(
                     main.style.getPropertyValue("--star-map-float-dy"),
                   ) || 0;
+                // Clamp drags so a strip of the card (and its handle row)
+                // always stays on-screen — an off-screen float has no other
+                // recovery affordance.
+                const MIN_VISIBLE_PX = 160;
+                const rect = main.getBoundingClientRect();
+                const untranslatedLeft = rect.left - baseX;
+                const untranslatedTop = rect.top - baseY;
+                const clampDx = (dx: number) =>
+                  Math.min(
+                    Math.max(dx, MIN_VISIBLE_PX - untranslatedLeft - rect.width),
+                    window.innerWidth - MIN_VISIBLE_PX - untranslatedLeft,
+                  );
+                const clampDy = (dy: number) =>
+                  Math.min(
+                    Math.max(dy, -untranslatedTop),
+                    window.innerHeight - MIN_VISIBLE_PX - untranslatedTop,
+                  );
                 let lastDx = baseX;
                 let lastDy = baseY;
                 let frame = 0;
                 const move = (pointerEvent: globalThis.PointerEvent) => {
-                  lastDx = baseX + pointerEvent.clientX - startX;
-                  lastDy = baseY + pointerEvent.clientY - startY;
+                  lastDx = clampDx(baseX + pointerEvent.clientX - startX);
+                  lastDy = clampDy(baseY + pointerEvent.clientY - startY);
                   if (!frame) {
                     frame = requestAnimationFrame(() => {
                       frame = 0;
