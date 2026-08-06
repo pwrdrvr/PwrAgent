@@ -183,6 +183,7 @@ import {
   APP_SERVER_GET_PR_AUTO_DISPATCH_BUDGET_STATUS_CHANNEL,
   APP_SERVER_RESUME_PR_AUTO_DISPATCH_BUDGET_CHANNEL,
   PR_AUTO_DISPATCH_BUDGET_CHANGED_EVENT_CHANNEL,
+  GITHUB_PR_AUTHENTICATION_FAILURE_EVENT_CHANNEL,
   GITHUB_PR_SAML_ENFORCEMENT_EVENT_CHANNEL,
   APP_SERVER_LIST_THREADS_CHANNEL,
   THREAD_SEARCH_CHANNEL,
@@ -1208,6 +1209,7 @@ class DesktopAppServerService {
   private prLookupRegistryLoadPromise: Promise<void> | undefined;
   private prGraphqlClient: GithubGraphqlPrClient | undefined;
   private readonly githubSamlBlockedRepositories = new Set<string>();
+  private githubPrAuthenticationFailureNotified = false;
   private prPollingScheduler: PrPollingScheduler | undefined;
   private backgroundPrPollingEnabled = false;
   private prAutoDispatchAllowed = false;
@@ -4476,7 +4478,30 @@ class DesktopAppServerService {
   private getPrGraphqlClient(): GithubGraphqlPrClient {
     if (!this.prGraphqlClient) {
       this.prGraphqlClient = new GithubGraphqlPrClient({
+        onAuthenticationFailure: (event) => {
+          if (this.githubPrAuthenticationFailureNotified) {
+            return;
+          }
+          this.githubPrAuthenticationFailureNotified = true;
+          const notice = {
+            occurredAt: Date.now(),
+            ...(event.detail ? { detail: event.detail } : {}),
+          };
+          for (const webContents of subscribersForChannel(
+            GITHUB_PR_AUTHENTICATION_FAILURE_EVENT_CHANNEL,
+          )) {
+            if (!webContents.isDestroyed()) {
+              webContents.send(
+                GITHUB_PR_AUTHENTICATION_FAILURE_EVENT_CHANNEL,
+                notice,
+              );
+            }
+          }
+        },
         onRepositoryAccess: (event) => {
+          if (event.status === "available") {
+            this.githubPrAuthenticationFailureNotified = false;
+          }
           const target = {
             kind: "github-repository" as const,
             owner: event.owner,
@@ -6305,6 +6330,7 @@ class DesktopAppServerService {
     this.prPollingSettingsUnsubscribe = undefined;
     this.prGraphqlClient = undefined;
     this.githubSamlBlockedRepositories.clear();
+    this.githubPrAuthenticationFailureNotified = false;
     this.prPollingFocus.clear();
     this.prPollBackendByKey.clear();
     this.prStatusTransitionListeners.clear();

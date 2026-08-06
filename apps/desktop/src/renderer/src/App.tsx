@@ -91,6 +91,7 @@ import {
 import { buildPrAutoDispatchBudgetNotice } from "./features/notifications/pr-auto-dispatch-budget-notice";
 import { MessagingErrorNotices } from "./features/notifications/MessagingErrorNotices";
 import { buildGithubPrSamlEnforcementNotice } from "./features/notifications/github-pr-saml-notice";
+import { buildGithubPrAuthenticationNotice } from "./features/notifications/github-pr-authentication-notice";
 import {
   buildHeapSnapshotHandoffMessage,
   describeHeapSnapshotResult,
@@ -102,6 +103,7 @@ import {
 } from "../../shared/hot-cpu-profile";
 import {
   githubPrAccessTargetKey,
+  type GithubPrAuthenticationFailureEvent,
   type GithubPrSamlEnforcementEvent,
 } from "../../shared/github-pr-access";
 import { AppUpdateBanner } from "./features/update/AppUpdateBanner";
@@ -316,6 +318,8 @@ function DesktopAppShell(props: {
   }, []);
   const [githubPrSamlEvents, setGithubPrSamlEvents] =
     useState<GithubPrSamlEnforcementEvent[]>([]);
+  const [githubPrAuthenticationFailure, setGithubPrAuthenticationFailure] =
+    useState<GithubPrAuthenticationFailureEvent>();
   // Latest thread list, mirrored into a ref so the backend-error toast
   // subscription can resolve a thread's title without re-subscribing on
   // every navigation change. Kept fresh by an effect below, once
@@ -379,6 +383,11 @@ function DesktopAppShell(props: {
   }, []);
   const openGitSettings = useCallback(() => {
     dismissGithubPrSamlNotice();
+    dispatchAppNotice({
+      type: "dismiss-prefix",
+      prefix: "github-pr-authentication-failure",
+    });
+    setGithubPrAuthenticationFailure(undefined);
     setSettingsInitialSection("git");
     setMainView("settings");
   }, [dismissGithubPrSamlNotice]);
@@ -396,6 +405,33 @@ function DesktopAppShell(props: {
   useEffect(() => {
     if (githubPrSamlNotice) showAppNotice(githubPrSamlNotice);
   }, [githubPrSamlNotice, showAppNotice]);
+
+  const dismissGithubPrAuthenticationNotice = useCallback(() => {
+    dispatchAppNotice({
+      type: "dismiss-prefix",
+      prefix: "github-pr-authentication-failure",
+    });
+    setGithubPrAuthenticationFailure(undefined);
+  }, []);
+  const githubPrAuthenticationNotice = useMemo(() => {
+    return githubPrAuthenticationFailure
+      ? buildGithubPrAuthenticationNotice({
+          event: githubPrAuthenticationFailure,
+          onDismiss: dismissGithubPrAuthenticationNotice,
+          onOpenGitSettings: openGitSettings,
+        })
+      : undefined;
+  }, [
+    dismissGithubPrAuthenticationNotice,
+    githubPrAuthenticationFailure,
+    openGitSettings,
+  ]);
+
+  useEffect(() => {
+    if (githubPrAuthenticationNotice) {
+      showAppNotice(githubPrAuthenticationNotice);
+    }
+  }, [githubPrAuthenticationNotice, showAppNotice]);
 
   const syncMessagingErrorNotice = useCallback((
     platform: MessagingChannelKind,
@@ -421,6 +457,12 @@ function DesktopAppShell(props: {
           ? current
           : [...current, event];
       });
+    });
+  }, [desktopApi]);
+
+  useEffect(() => {
+    return desktopApi?.onGithubPrAuthenticationFailure?.((event) => {
+      setGithubPrAuthenticationFailure(event);
     });
   }, [desktopApi]);
 
