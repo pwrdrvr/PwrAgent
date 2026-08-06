@@ -3,7 +3,10 @@ import type {
   AppServerBackendKind,
   FederationRemoteTarget,
 } from "@pwragent/shared";
-import { isRemoteFederationTarget } from "@pwragent/shared";
+import {
+  isFederationInstanceId,
+  isRemoteFederationTarget,
+} from "@pwragent/shared";
 import {
   INTEGRATED_TERMINAL_ERROR_CHANNEL,
   INTEGRATED_TERMINAL_EXIT_CHANNEL,
@@ -244,9 +247,27 @@ export class FederationTerminalBridge {
   }
 
   listSessions(webContents: WebContents): IntegratedTerminalSessionSummary[] {
+    // Resolve peer identity ONCE per list build: connectedPeerTargets walks
+    // the gateway directory, the store, and live connections and composes
+    // display labels, and this runs on every session broadcast.
+    const identities = this.remoteIdentities();
     return this.sessionsForWindow(webContents)
       .sort((left, right) => left.createdAt - right.createdAt)
-      .map((session) => this.toSummary(session));
+      .map((session) => this.toSummary(session, identities));
+  }
+
+  /**
+   * Every live remote session, across windows, for the quit blocker. Remote
+   * shells cannot be foreground-filtered the way local ones are (the process
+   * lives on the owner), so all of them count: quitting the viewer ends them,
+   * and silently killing a shell mid-command is the failure this dialog
+   * exists to prevent. A future `pty.status` round-trip could narrow it.
+   */
+  quitSnapshotSessions(): Array<{ sessionId: string; threadKey: string }> {
+    return [...this.sessionsById.values()].map((session) => ({
+      sessionId: session.sessionId,
+      threadKey: session.threadKey,
+    }));
   }
 
   dispose(): void {
@@ -268,12 +289,32 @@ export class FederationTerminalBridge {
     }
     // Main-window path: a remote-pinned thread's terminal names its owning
     // instance per request. The owner still resolves shell + cwd itself and
-    // capability-checks remote_pty, exactly as for federation windows.
-    if (
-      request.federationTarget
-      && isRemoteFederationTarget(request.federationTarget)
-    ) {
-      return request.federationTarget;
+    // capability-checks remote_pty, exactly as for federation windows — but
+    // main must not forward an unvalidated renderer-supplied id to the
+    // transport, where an unknown peer falls through to the gateway relay
+    // and surfaces as an opaque transport error. Same three checks
+    // openFederationWindow applies to its target.
+    const requested = request.federationTarget;
+    if (requested && isRemoteFederationTarget(requested)) {
+      if (!isFederationInstanceId(requested.instanceId)) {
+        throw new Error("Invalid remote terminal federation target.");
+      }
+      const peer = getDesktopFederationRuntime()
+        .connectedPeerTargets()
+        .find(
+          (candidate) => candidate.target.instanceId === requested.instanceId,
+        );
+      if (!peer) {
+        throw new Error(
+          `Federation peer ${requested.instanceId} is not connected.`,
+        );
+      }
+      if (!peer.capabilities.includes("remote_pty")) {
+        throw new Error(
+          `Remote terminal not granted by ${peer.label} (remote_pty capability).`,
+        );
+      }
+      return requested;
     }
     // Defense in depth: never fall through to spawning a LOCAL shell for a
     // request that meant to reach a peer.
@@ -419,7 +460,10 @@ export class FederationTerminalBridge {
       ? []
       : this.options.localSessionsFor?.(webContents) ?? [];
     webContents.send(INTEGRATED_TERMINAL_SESSIONS_CHANNEL, {
-      sessions: [...localSessions, ...this.listSessions(webContents)],
+      sessions: sortSessionsByCreatedAt([
+        ...localSessions,
+        ...this.listSessions(webContents),
+      ]),
     });
   }
 
@@ -453,6 +497,7 @@ export class FederationTerminalBridge {
 
   private toSummary(
     session: RemoteTerminalSession,
+    identities: Map<string, IntegratedTerminalRemoteInfo>,
   ): IntegratedTerminalSessionSummary {
     return {
       sessionId: session.sessionId,
@@ -461,33 +506,64 @@ export class FederationTerminalBridge {
       shell: session.shell,
       panelHidden: session.panelHidden,
       createdAt: session.createdAt,
-      remote: this.remoteInfoFor(session.target),
+      remote: identities.get(session.target.instanceId) ?? {
+        instanceId: session.target.instanceId,
+        instanceLabel: session.target.instanceId,
+      },
     };
   }
 
-  private remoteInfoFor(
-    target: FederationRemoteTarget,
-  ): IntegratedTerminalRemoteInfo {
+  /**
+   * Display identity per peer that owns a live session here. Best-effort:
+   * during early boot (or in harnesses) the peer store / assignment map may
+   * be absent, and the raw instance id still labels the session correctly.
+   */
+  private remoteIdentities(): Map<string, IntegratedTerminalRemoteInfo> {
+    const identities = new Map<string, IntegratedTerminalRemoteInfo>();
+    const instanceIds = new Set(
+      [...this.sessionsById.values()].map(
+        (session) => session.target.instanceId,
+      ),
+    );
+    if (instanceIds.size === 0) {
+      return identities;
+    }
     const runtime = getDesktopFederationRuntime();
-    const info: IntegratedTerminalRemoteInfo = {
-      instanceId: target.instanceId,
-      instanceLabel: target.instanceId,
-    };
-    // Identity decoration is best-effort: during early boot (or in
-    // harnesses) the peer store / assignment map may be absent, and the raw
-    // instance id still labels the session correctly.
+    let labelByInstanceId = new Map<string, string>();
     try {
-      info.instanceLabel =
+      labelByInstanceId = new Map(
         runtime
           .connectedPeerTargets()
-          .find((peer) => peer.target.instanceId === target.instanceId)?.label
-        ?? target.instanceId;
-      info.celestialIcon = runtime.celestialIconFor(target.instanceId);
+          .map((peer) => [peer.target.instanceId, peer.label]),
+      );
     } catch {
       // Keep the bare-id fallback.
     }
-    return info;
+    for (const instanceId of instanceIds) {
+      const info: IntegratedTerminalRemoteInfo = {
+        instanceId,
+        instanceLabel: labelByInstanceId.get(instanceId) ?? instanceId,
+      };
+      try {
+        info.celestialIcon = runtime.celestialIconFor(instanceId);
+      } catch {
+        // Assignment map unavailable — the chip falls back to its glyph.
+      }
+      identities.set(instanceId, info);
+    }
+    return identities;
   }
+}
+
+/**
+ * One ordering across both registries. Each side sorts its own sessions by
+ * age; a merged list must too, or local and remote shells render as two
+ * blocks that reshuffle as sessions come and go.
+ */
+export function sortSessionsByCreatedAt(
+  sessions: IntegratedTerminalSessionSummary[],
+): IntegratedTerminalSessionSummary[] {
+  return [...sessions].sort((left, right) => left.createdAt - right.createdAt);
 }
 
 function trimBufferedOutput(value: string): string {

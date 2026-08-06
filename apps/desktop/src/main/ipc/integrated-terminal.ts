@@ -23,7 +23,10 @@ import { IntegratedTerminalService } from "../terminal/integrated-terminal-servi
 import type { IntegratedTerminalQuitSnapshot } from "../terminal/integrated-terminal-service";
 import { isFederationWindowWebContents } from "../window";
 import { subscribersForChannel } from "../window-channels";
-import { FederationTerminalBridge } from "./federation-terminal";
+import {
+  FederationTerminalBridge,
+  sortSessionsByCreatedAt,
+} from "./federation-terminal";
 
 let service: IntegratedTerminalService | undefined;
 let federationBridge: FederationTerminalBridge | undefined;
@@ -41,10 +44,10 @@ function broadcastSessions(
     // The renderer replaces its whole list per event, so a main window
     // hosting remote-pinned threads' terminals must see both kinds.
     webContents.send(INTEGRATED_TERMINAL_SESSIONS_CHANNEL, {
-      sessions: [
+      sessions: sortSessionsByCreatedAt([
         ...sessions,
         ...(federationBridge?.listSessions(webContents) ?? []),
-      ],
+      ]),
     });
   }
 }
@@ -134,10 +137,10 @@ export function registerIntegratedTerminalIpcHandlers(): void {
       if (isFederationWindowWebContents(event.sender)) {
         return federationBridge?.listSessions(event.sender) ?? [];
       }
-      return [
+      return sortSessionsByCreatedAt([
         ...(service?.listSessions() ?? []),
         ...(federationBridge?.listSessions(event.sender) ?? []),
-      ];
+      ]);
     },
   );
 
@@ -174,13 +177,31 @@ export function disposeIntegratedTerminalIpcHandlers(): void {
 }
 
 export function getIntegratedTerminalQuitSnapshot(): IntegratedTerminalQuitSnapshot {
-  return (
-    service?.getQuitSnapshot() ?? {
-      count: 0,
-      sessionIds: [],
-      threadKeys: [],
-    }
-  );
+  const local = service?.getQuitSnapshot() ?? {
+    count: 0,
+    sessionIds: [],
+    threadKeys: [],
+  };
+  // Quitting closes remote sessions too (the bridge ends them when the
+  // window dies), so they belong in the blocker — otherwise a shell running
+  // a long command on another machine dies without the prompt its local
+  // equivalent would get. They cannot be foreground-filtered like local
+  // sessions: the process lives on the owner.
+  const remote = federationBridge?.quitSnapshotSessions() ?? [];
+  if (remote.length === 0) {
+    return local;
+  }
+  return {
+    count: local.count + remote.length,
+    sessionIds: [
+      ...local.sessionIds,
+      ...remote.map((session) => session.sessionId),
+    ].sort(),
+    threadKeys: [
+      ...local.threadKeys,
+      ...remote.map((session) => session.threadKey),
+    ].sort(),
+  };
 }
 
 /**
