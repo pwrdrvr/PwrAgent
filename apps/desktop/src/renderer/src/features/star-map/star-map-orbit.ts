@@ -40,23 +40,49 @@ const CARD_HALF_HEIGHT = 56;
    never visually touches the pill it is clearing. */
 const KEEPOUT_GAP = 10;
 
+/** Above the body centre there is only the icon; the chrome hangs below. */
+const INSTANCE_KEEPOUT_ABOVE = 58;
+
 /**
- * Innermost ring radii for a given card width: the larger of the aesthetic
- * base and whatever it takes to clear the instance's own chrome. Derived
- * rather than hardcoded so a change to card width or to the name pill
- * cannot silently start covering the [+] button again.
+ * Does a card centred here clear the instance's own chrome?
+ *
+ * Only the handful of slots that actually collide get pushed out (see
+ * `pushOutOfKeepout`). Inflating every ring instead would shove the whole
+ * cloud away from its body to protect a box most cards never touch — the
+ * opposite of keeping cards close to the sun.
  */
-function ringBase(cardWidth: number): { rx: number; ry: number } {
-  return {
-    rx: Math.max(
-      RING_BASE_RX,
-      INSTANCE_KEEPOUT_HALF_WIDTH + cardWidth / 2 + KEEPOUT_GAP,
-    ),
-    ry: Math.max(
-      RING_BASE_RY,
-      INSTANCE_KEEPOUT_BELOW + CARD_HALF_HEIGHT + KEEPOUT_GAP,
-    ),
-  };
+function clearsKeepout(dx: number, dy: number, cardWidth: number): boolean {
+  const overlapsX =
+    Math.abs(dx) < INSTANCE_KEEPOUT_HALF_WIDTH + cardWidth / 2 + KEEPOUT_GAP;
+  const overlapsY =
+    dy + CARD_HALF_HEIGHT > -INSTANCE_KEEPOUT_ABOVE
+    && dy - CARD_HALF_HEIGHT < INSTANCE_KEEPOUT_BELOW + KEEPOUT_GAP;
+  return !(overlapsX && overlapsY);
+}
+
+/** Slide a colliding slot straight out along its own radius until it clears. */
+function pushOutOfKeepout(
+  slot: StarMapCardSlot,
+  cardWidth: number,
+): StarMapCardSlot {
+  const length = Math.hypot(slot.dx, slot.dy);
+  if (length < 1) return slot;
+  const ux = slot.dx / length;
+  const uy = slot.dy / length;
+  let scale = 1;
+  let dx = slot.dx;
+  let dy = slot.dy;
+  // Bounded: a slot never needs more than a few card-widths of relief.
+  while (!clearsKeepout(dx, dy, cardWidth) && scale < 4) {
+    scale += 0.04;
+    dx = ux * length * scale;
+    dy = uy * length * scale;
+  }
+  return { dx, dy };
+}
+
+function ringBase(_cardWidth: number): { rx: number; ry: number } {
+  return { rx: RING_BASE_RX, ry: RING_BASE_RY };
 }
 /* Successive rings step out far enough that a card on one clears the card
    height of the ring inside it. */
@@ -164,10 +190,20 @@ export function cardRings(count: number, cardWidth: number): CardRing[] {
 }
 
 /** Outermost extent of an instance's card rings, for spacing and bounds. */
+/** Radius an instance claims when it has no cards at all — its own body. */
+const EMPTY_INSTANCE_EXTENT = 70;
+
 export function cardRingExtent(
   count: number,
   cardWidth: number,
 ): { rx: number; ry: number } {
+  // An instance with nothing to show claims only its body. `cardRings`
+  // always returns at least one ring so a lone card has somewhere to sit;
+  // charging an empty instance for that phantom ring pushed every other
+  // body a full ring-width further out and left a void around the hub.
+  if (count <= 0) {
+    return { rx: EMPTY_INSTANCE_EXTENT, ry: EMPTY_INSTANCE_EXTENT };
+  }
   const rings = cardRings(count, cardWidth);
   const outer = rings[rings.length - 1];
   return { rx: outer.rx, ry: outer.ry };
@@ -195,10 +231,15 @@ export function cardRingSlots(
         Math.PI / 2
         + (index * 2 * Math.PI) / onThisRing
         + (ringIndex % 2 === 1 ? Math.PI / onThisRing : 0);
-      slots.push({
-        dx: Math.cos(angle) * ring.rx,
-        dy: Math.sin(angle) * ring.ry,
-      });
+      slots.push(
+        pushOutOfKeepout(
+          {
+            dx: Math.cos(angle) * ring.rx,
+            dy: Math.sin(angle) * ring.ry,
+          },
+          cardWidth,
+        ),
+      );
     }
   });
   return slots;
