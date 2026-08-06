@@ -157,6 +157,9 @@ describe("App", () => {
   afterEach(async () => {
     await flushReactUpdates();
     cleanup();
+    delete (window as typeof window & {
+      __pwragentFederationTarget?: unknown;
+    }).__pwragentFederationTarget;
   });
 
   it("shows the thread shell without starting backends while the startup settings read is pending", async () => {
@@ -291,6 +294,76 @@ describe("App", () => {
     });
     const gitSettingsButton = screen.getByRole("button", { name: "Git" });
     expect(gitSettingsButton).toHaveAttribute("aria-current", "page");
+  });
+
+  it("only surfaces backend error toasts for the renderer window's federation target", async () => {
+    const agentEventListeners = new Set<(event: AgentEvent) => void>();
+    (window as typeof window & {
+      __pwragentFederationTarget?: unknown;
+    }).__pwragentFederationTarget = {
+      scope: "remote",
+      instanceId: "remote-gateway",
+    };
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: {
+        getNavigationSnapshot: async () => ({
+          backend: "all" as const,
+          fetchedAt: Date.now(),
+          unchanged: false,
+          inboxThreadKeys: [],
+          threads: [],
+          directories: [],
+          launchpadDefaults: {
+            backend: "codex" as const,
+            executionMode: "default" as const,
+          },
+        }),
+        listBackends: async () => ({ fetchedAt: Date.now(), backends: [] }),
+        onAgentEvent: (listener: (event: AgentEvent) => void) => {
+          agentEventListeners.add(listener);
+          return () => {
+            agentEventListeners.delete(listener);
+          };
+        },
+        readSettings: async () =>
+          await new Promise<never>(() => {
+            // Keep the shell mounted without needing a full settings fixture.
+          }),
+      },
+    });
+
+    render(<App />);
+    await waitFor(() => expect(agentEventListeners.size).toBeGreaterThan(0));
+
+    const emitSystemError = (
+      federationTarget?: AgentEvent["federationTarget"],
+    ) => {
+      for (const listener of agentEventListeners) {
+        listener({
+          backend: "codex",
+          federationTarget,
+          notification: {
+            method: "thread/status/changed",
+            params: {
+              threadId: "thread-1",
+              status: { type: "systemError" },
+            },
+          },
+        });
+      }
+    };
+
+    act(() => {
+      emitSystemError();
+      emitSystemError({ scope: "remote", instanceId: "another-peer" });
+    });
+    expect(screen.queryByText("Agent backend error")).not.toBeInTheDocument();
+
+    act(() => {
+      emitSystemError({ scope: "remote", instanceId: "remote-gateway" });
+    });
+    expect(screen.getByText("Agent backend error")).toBeInTheDocument();
   });
 
   it("reveals the sidebar when adding a project from the hidden-sidebar masthead", async () => {

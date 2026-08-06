@@ -62,6 +62,7 @@ import {
 } from "./lib/federation-window";
 import { useFederationPeerConnectivity } from "./lib/useFederationPeerConnectivity";
 import { scopeDesktopApiToFederationTarget } from "./lib/federation-desktop-api";
+import { federationTargetsEqual } from "./lib/federated-thread-events";
 import { useRuntimeIdentity } from "./lib/runtime-identity";
 import {
   useNavigationHistory,
@@ -578,10 +579,10 @@ function DesktopAppShell(props: {
 
   // Surface backend turn failures + system errors as a durable toast. The
   // matching transcript entry (rendered from the thread overlay's
-  // turnFailureLog) is the in-context record; this toast is the global
-  // "something just broke" signal that has to be acknowledged. Notices are
-  // keyed by thread and queued so a failure on one thread can't suppress a
-  // signal from another.
+  // turnFailureLog) is the in-context record; this toast is the window-scoped
+  // "something just broke" signal that has to be acknowledged.
+  // Notices are keyed by thread and queued so a failure on one thread can't
+  // suppress a signal from another.
   useEffect(() => {
     const labelForThread = (backend: string, threadId?: string): string => {
       const match = threadId
@@ -600,6 +601,14 @@ function DesktopAppShell(props: {
           : `${backend} thread`;
     };
     return desktopApi?.onAgentEvent?.((event) => {
+      if (
+        !federationTargetsEqual(
+          event.federationTarget,
+          readRendererFederationTarget(),
+        )
+      ) {
+        return;
+      }
       // Params are cast explicitly: the AppServerNotification union is too
       // wide for the discriminant to narrow `params` reliably here.
       if (event.notification.method === "turn/failed") {
