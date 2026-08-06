@@ -2458,6 +2458,124 @@ describe("useThreadNavigation", () => {
     });
   });
 
+  it("re-enables a locally mounted remote thread after reconnect", async () => {
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "remote-instance",
+    };
+    const listeners = new Set<
+      Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+    >();
+    let peerStatus: "connected" | "disconnected" = "connected";
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: ["codex:thread-local", "codex:thread-remote"],
+      threads: [
+        {
+          id: "thread-local",
+          title: "Local thread",
+          titleSource: "explicit" as const,
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: { inInbox: true },
+        },
+        {
+          id: "thread-remote",
+          title: "Mounted remote thread",
+          titleSource: "explicit" as const,
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: { inInbox: true },
+          federation: {
+            ref: {
+              backend: "codex" as const,
+              target: federationTarget,
+              threadId: "thread-remote",
+            },
+            instanceLabel: "Remote fixture",
+            peerStatus,
+          },
+        },
+      ],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      onAgentEvent: (callback) => {
+        listeners.add(callback);
+        return () => {
+          listeners.delete(callback);
+        };
+      },
+    };
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.threads[1]?.federation?.peerStatus).toBe(
+        "connected",
+      );
+    });
+
+    act(() => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          federationTarget,
+          notification: {
+            method: "federation/peerStatus/changed",
+            params: {
+              instanceId: "remote-instance",
+              status: "disconnected",
+              unavailableReason: "Federation gateway connection closed.",
+            },
+          },
+        });
+      }
+    });
+
+    expect(result.current.threads[0]?.federation).toBeUndefined();
+    expect(result.current.threads[1]?.federation?.peerStatus).toBe(
+      "disconnected",
+    );
+    // A mounted peer going away must not turn the otherwise-local main
+    // window into a global navigation error surface.
+    expect(result.current.error).toBeUndefined();
+
+    peerStatus = "connected";
+    act(() => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          federationTarget,
+          notification: {
+            method: "federation/peerStatus/changed",
+            params: {
+              instanceId: "remote-instance",
+              status: "connected",
+            },
+          },
+        });
+      }
+    });
+
+    await waitFor(() => {
+      expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
+      expect(result.current.threads[1]?.federation?.peerStatus).toBe(
+        "connected",
+      );
+    });
+    expect(getNavigationSnapshot).toHaveBeenLastCalledWith({
+      forceRefresh: true,
+      refreshMode: "full",
+    });
+  });
+
   it("retries a failed remote snapshot until its route recovers", async () => {
     const federationTarget = {
       scope: "remote" as const,
