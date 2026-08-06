@@ -238,6 +238,7 @@ export type SlackAdapterOptions = {
 
 type SlackSurfaceOpaqueState = {
   channelId?: string;
+  messageTimestamps?: string[];
   threadTs?: string;
   ts?: string;
 };
@@ -845,6 +846,24 @@ export class SlackAdapter implements SlackProviderAdapter {
         updatedAt: this.now(),
       };
     }
+    if (request.replyContinuationRequired) {
+      const dmMode = slackDmAccessMode(this.config);
+      const actorAuthorized = this.authorizedActorIds.includes(
+        request.actor.platformUserId,
+      );
+      if (
+        dmMode === "none"
+        || (dmMode === "authorized_users" && !actorAuthorized)
+      ) {
+        return {
+          channel: this.channel,
+          errorMessage:
+            "Slack DM access policy does not allow this user to reply to the private response.",
+          outcome: "unsupported",
+          updatedAt: this.now(),
+        };
+      }
+    }
     return {
       channel: this.channel,
       conversation: {
@@ -1233,7 +1252,12 @@ export class SlackAdapter implements SlackProviderAdapter {
     intent: Extract<MessagingSurfaceIntent, { kind: "dismiss" }>,
   ): Promise<MessagingDeliveryResult> {
     const target = readSlackSurfaceState(intent.targetSurface);
-    if (!target?.channelId || !target.ts) {
+    const messageTimestamps = target?.messageTimestamps?.length
+      ? target.messageTimestamps
+      : target?.ts
+        ? [target.ts]
+        : [];
+    if (!target?.channelId || messageTimestamps.length === 0) {
       return {
         outcome: "failed",
         channel: this.channel,
@@ -1242,25 +1266,32 @@ export class SlackAdapter implements SlackProviderAdapter {
       };
     }
     const channelId = target.channelId;
-    try {
-      await this.api.deleteMessage({ channel: channelId, ts: target.ts });
+    let firstError: unknown;
+    for (const ts of new Set(messageTimestamps)) {
+      try {
+        await this.api.deleteMessage({ channel: channelId, ts });
+      } catch (error) {
+        firstError ??= error;
+      }
+    }
+    if (!firstError) {
       return {
         outcome: "dismissed",
         channel: this.channel,
         deliveredAt: this.now(),
       };
-    } catch (error) {
-      const rateLimit = this.emitRateLimitFromError(error, { channelId }, {
-        retryable: true,
-      });
-      return {
-        outcome: "failed",
-        channel: this.channel,
-        deliveredAt: this.now(),
-        errorMessage: error instanceof Error ? error.message : String(error),
-        ...(rateLimit ? { rateLimit } : {}),
-      };
     }
+    const rateLimit = this.emitRateLimitFromError(firstError, { channelId }, {
+      retryable: true,
+    });
+    return {
+      outcome: "failed",
+      channel: this.channel,
+      deliveredAt: this.now(),
+      errorMessage:
+        firstError instanceof Error ? firstError.message : String(firstError),
+      ...(rateLimit ? { rateLimit } : {}),
+    };
   }
 
   /**
@@ -1268,7 +1299,8 @@ export class SlackAdapter implements SlackProviderAdapter {
    * the content is never truncated at the 3000-char section-block limit. The
    * chunks are already boundary-split by the caller. Remote image blocks and
    * uploaded data images are associated with the final chunk. Returns the first
-   * message as the surface (mirrors a single-post delivery).
+   * message as the surface and records every posted timestamp in its opaque
+   * state so a later dismissal retracts the complete delivery.
    */
   private async deliverChunkedTextMessage(params: {
     intent: Extract<MessagingSurfaceIntent, { kind: "message" }>;
@@ -1280,6 +1312,7 @@ export class SlackAdapter implements SlackProviderAdapter {
     chunks: string[];
   }): Promise<MessagingDeliveryResult> {
     let firstSurface: MessagingSurfaceRef | undefined;
+    const messageTimestamps: string[] = [];
     let deliveredAny = false;
     let lastTs: string | undefined;
     try {
@@ -1303,6 +1336,9 @@ export class SlackAdapter implements SlackProviderAdapter {
         deliveredAny = true;
         const ts = result.ts;
         lastTs = ts ?? lastTs;
+        if (ts) {
+          messageTimestamps.push(ts);
+        }
         if (ts && !firstSurface) {
           firstSurface = {
             channel: this.channel,
@@ -1322,6 +1358,20 @@ export class SlackAdapter implements SlackProviderAdapter {
         intent: params.intent,
         threadTs: params.target.threadTs ?? lastTs,
       });
+      if (firstSurface && messageTimestamps.length > 1) {
+        const firstState = readSlackSurfaceState(firstSurface);
+        firstSurface = {
+          ...firstSurface,
+          state: {
+            opaque: {
+              channelId: firstState?.channelId ?? params.target.channelId,
+              messageTimestamps,
+              ts: firstState?.ts ?? firstSurface.id,
+              ...(firstState?.threadTs ? { threadTs: firstState.threadTs } : {}),
+            },
+          },
+        };
+      }
       return {
         outcome: "presented",
         channel: this.channel,
@@ -1480,6 +1530,7 @@ export class SlackAdapter implements SlackProviderAdapter {
         evictStaleStreamAnchors(this.streamSurfaces);
       }
       const head = anchors[0]!;
+      const messageTimestamps = anchors.map((anchor) => anchor.ts);
       return {
         outcome: firstOutcome ?? "updated",
         channel: this.channel,
@@ -1490,6 +1541,7 @@ export class SlackAdapter implements SlackProviderAdapter {
           state: {
             opaque: {
               channelId: head.channelId,
+              ...(messageTimestamps.length > 1 ? { messageTimestamps } : {}),
               ts: head.ts,
               ...(head.threadTs ? { threadTs: head.threadTs } : {}),
             },
@@ -2580,8 +2632,14 @@ function readSlackOpaqueState(
     return undefined;
   }
   const record = opaque as Record<string, MessagingJsonValue>;
+  const messageTimestamps = Array.isArray(record.messageTimestamps)
+    ? record.messageTimestamps
+      .filter((value): value is string => typeof value === "string")
+      .slice(0, 100)
+    : [];
   return {
     ...(typeof record.channelId === "string" ? { channelId: record.channelId } : {}),
+    ...(messageTimestamps.length > 0 ? { messageTimestamps } : {}),
     ...(typeof record.teamId === "string" ? { teamId: record.teamId } : {}),
     ...(typeof record.threadTs === "string" ? { threadTs: record.threadTs } : {}),
     ...(typeof record.ts === "string" ? { ts: record.ts } : {}),

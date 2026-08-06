@@ -15701,6 +15701,7 @@ export class MessagingController {
     try {
       privateConversation = await this.options.adapter.resolvePrivateConversation({
         actor: origin.origin.event.actor,
+        ...(awaitReply ? { replyContinuationRequired: true } : {}),
         source: origin.origin.event.channel,
         routingState: origin.origin.event.routingState,
       });

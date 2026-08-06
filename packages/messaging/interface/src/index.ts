@@ -448,6 +448,12 @@ export type MessagingManagedConversationCreateResult = {
 
 export type MessagingPrivateConversationResolveRequest = {
   actor: MessagingActorIdentity;
+  /**
+   * True when delivery must produce a conversation where this actor can reply.
+   * Providers reject resolution when their inbound policy would deny that
+   * continuation instead of promising an unusable reply route.
+   */
+  replyContinuationRequired?: boolean;
   source: MessagingChannelRef;
   routingState?: MessagingAdapterState;
 };

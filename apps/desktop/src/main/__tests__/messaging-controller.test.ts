@@ -2038,7 +2038,7 @@ describe("MessagingController", () => {
   it("returns a requested private reply to the source and retires its one-shot binding", async () => {
     let startedTurnCount = 0;
     const controllerDuringStart: { current?: MessagingController } = {};
-    const { harness } = await createSlackPrivateResponseHarness({
+    const { harness, resolvePrivateConversation } = await createSlackPrivateResponseHarness({
       startTurn: async (request) => {
         const turnId = `turn-${++startedTurnCount}`;
         if (turnId === "turn-2") {
@@ -2095,6 +2095,9 @@ describe("MessagingController", () => {
       ok: true,
       data: { awaitingReply: true },
     });
+    expect(resolvePrivateConversation).toHaveBeenCalledWith(
+      expect.objectContaining({ replyContinuationRequired: true }),
+    );
     expect(harness.delivered).toContainEqual(
       expect.objectContaining({
         attribution: {
