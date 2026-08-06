@@ -410,6 +410,101 @@ describe("MessagingRoutesSettings", () => {
     });
   });
 
+  it("routes a selected Slack channel as an exact conversation, not a parent fallback", async () => {
+    const routes = buildRoutes();
+    routes.defaultAgents = [];
+    routes.bindings = [];
+    routes.observedSurfaces = [
+      {
+        platform: "slack",
+        conversation: {
+          id: "C0BN6UXFREE",
+          kind: "channel",
+          title: "p-pwragent-testing",
+          workspaceId: "T1",
+        },
+        firstSeenAt: 1000,
+        lastSeenAt: 2000,
+      },
+    ];
+    const api = buildDesktopApi(routes);
+    renderRoutes(api.desktopApi);
+    await screen.findByText("No default Agents configured.");
+
+    fireEvent.click(screen.getByRole("button", { name: "Add default" }));
+    expect(
+      screen.getByRole("option", {
+        name: "Threads/topics in a channel or group",
+      }),
+    ).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Default scope"), {
+      target: { value: "parent" },
+    });
+    expect(
+      [...screen.getByLabelText("Messaging surface").querySelectorAll("option")]
+        .map((option) => option.textContent),
+    ).toEqual([
+      "Choose a recently seen surface...",
+      "Enter an ID manually...",
+    ]);
+
+    fireEvent.change(screen.getByLabelText("Default scope"), {
+      target: { value: "conversation" },
+    });
+    fireEvent.change(screen.getByLabelText("Messaging surface"), {
+      target: {
+        value: JSON.stringify([
+          "conversation",
+          "slack",
+          "channel",
+          "",
+          "C0BN6UXFREE",
+        ]),
+      },
+    });
+    fireEvent.change(screen.getByLabelText("Default Agent"), {
+      target: { value: JSON.stringify(["codex", "agent-1"]) },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save default" }));
+
+    await waitFor(() => {
+      expect(api.setMessagingDefaultAgent).toHaveBeenCalledWith({
+        scope: {
+          kind: "conversation",
+          platform: "slack",
+          conversation: {
+            id: "C0BN6UXFREE",
+            kind: "channel",
+            title: "p-pwragent-testing",
+            workspaceId: "T1",
+          },
+        },
+        target: { backend: "codex", threadId: "agent-1" },
+      });
+    });
+  });
+
+  it("labels an existing parent route as a child thread or topic default", async () => {
+    const routes = buildRoutes();
+    routes.defaultAgents = [{
+      ...routes.defaultAgents[0]!,
+      scope: {
+        kind: "parent",
+        platform: "slack",
+        conversationId: "C13056",
+      },
+    }];
+    routes.bindings = [];
+    const { desktopApi } = buildDesktopApi(routes);
+
+    renderRoutes(desktopApi);
+
+    expect(
+      await screen.findByText(/Child thread\/topic default/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Parent default/)).not.toBeInTheDocument();
+  });
+
   it("offers only messaging platforms configured for this instance", async () => {
     const api = buildDesktopApi();
     renderRoutes(
@@ -448,7 +543,22 @@ describe("MessagingRoutesSettings", () => {
   });
 
   it("orders observed surfaces by recency and derives parent and workspace choices", async () => {
-    const api = buildDesktopApi();
+    const routes = buildRoutes();
+    routes.observedSurfaces.push({
+      platform: "slack",
+      conversation: {
+        id: "C13056",
+        kind: "thread",
+        parentId: "1700000000.000100",
+        parentConversationId: "C13056",
+        parentTitle: "p-search-signals-project",
+        title: "13056 investigation",
+        workspaceId: "T1",
+      },
+      firstSeenAt: 2500,
+      lastSeenAt: 3000,
+    });
+    const api = buildDesktopApi(routes);
     renderRoutes(api.desktopApi);
     await screen.findByText("Search Signals Agent");
 
@@ -458,6 +568,7 @@ describe("MessagingRoutesSettings", () => {
       [...surfaceSelect.querySelectorAll("option")].map((option) => option.textContent),
     ).toEqual([
       "Choose a recently seen surface...",
+      expect.stringContaining("13056 investigation"),
       expect.stringContaining("p-search-signals-project"),
       expect.stringContaining("archived-project"),
       "Enter an ID manually...",
@@ -466,9 +577,14 @@ describe("MessagingRoutesSettings", () => {
     fireEvent.change(screen.getByLabelText("Default scope"), {
       target: { value: "parent" },
     });
-    expect(screen.getByLabelText("Messaging surface")).toHaveTextContent(
-      "Slack / p-search-signals-project",
-    );
+    expect(
+      [...screen.getByLabelText("Messaging surface").querySelectorAll("option")]
+        .map((option) => option.textContent),
+    ).toEqual([
+      "Choose a recently seen surface...",
+      expect.stringContaining("Slack / p-search-signals-project"),
+      "Enter an ID manually...",
+    ]);
 
     fireEvent.change(screen.getByLabelText("Default scope"), {
       target: { value: "workspace" },
