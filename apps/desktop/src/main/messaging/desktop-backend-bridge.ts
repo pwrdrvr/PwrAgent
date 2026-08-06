@@ -134,8 +134,19 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
       threads: listedThreads,
       workspaceRoots: resolveScratchProjectsRoots(),
     });
+    // The overlay's stored PR rows carry whatever status was persisted
+    // when the attachment list was last rewritten; the background poller
+    // keeps the canonical status in the PR status registry instead. The
+    // renderer's local snapshot path canonicalizes before serving, and
+    // this bridge — the serving path for federation remote viewers and
+    // messaging browse — has to do the same or viewers get stale chips
+    // that never converge.
+    const canonicalThreads =
+      await this.registry.canonicalizeNavigationThreadPullRequests(
+        snapshot.threads,
+      );
     const threads = await this.registry.hydrateThreadGitWorkingStates(
-      snapshot.threads,
+      canonicalThreads,
       { probeMissing: true },
     );
     const hydratedSnapshot = {

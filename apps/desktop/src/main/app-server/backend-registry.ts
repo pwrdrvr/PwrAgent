@@ -25143,6 +25143,40 @@ export class DesktopBackendRegistry {
     );
   }
 
+  /**
+   * Project a navigation snapshot's PR chips through the canonical PR
+   * status registry.
+   *
+   * The thread overlay stores which PRs are attached to a thread; the
+   * *status* on those stored rows is only a cached projection, and the
+   * background poller does not write back into it — it updates the PR
+   * status registry (and its `pr_status_cache` table) and emits
+   * `pullRequest/status/updated`. Every path that serves PR chips to a
+   * client therefore has to canonicalize, or it hands out whatever
+   * status happened to be persisted the last time the attachment list
+   * was rewritten. The renderer's own snapshot path does this; so must
+   * the bridge that serves federation viewers and messaging browse,
+   * otherwise a viewer sees a PR that merged hours ago still rendered
+   * open with checks running, and never converges — the poller skips
+   * terminal PRs, so no further event is ever emitted to correct it.
+   */
+  async canonicalizeNavigationThreadPullRequests(
+    threads: NavigationSnapshot["threads"],
+  ): Promise<NavigationSnapshot["threads"]> {
+    const canonicalizer = this.threadPullRequestCanonicalizer;
+    if (!canonicalizer) {
+      return threads;
+    }
+    return await Promise.all(
+      threads.map(async (thread) => {
+        if (!thread.prs?.length) {
+          return thread;
+        }
+        return { ...thread, prs: await canonicalizer(thread.prs) };
+      }),
+    );
+  }
+
   private async projectCanonicalPullRequests(
     overlay: ThreadOverlayState | undefined,
   ): Promise<ThreadOverlayState | undefined> {

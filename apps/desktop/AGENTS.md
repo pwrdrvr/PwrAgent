@@ -321,6 +321,44 @@ ACP fallback direction, read
 before changing ACP session storage, thread replay restoration, or rollout
 persistence.
 
+## Pull-Request Status Source of Truth
+
+There are two stores holding PR data, and they answer **different
+questions**. Do not treat them as interchangeable:
+
+- **Attachment list** — `ThreadOverlayState.prs` (sqlite `threads`
+  overlay JSON, written by `setThreadPullRequests`). Authoritative for
+  *which* PRs belong to a thread. The status fields on those rows are a
+  cached projection and go stale by design: they are only rewritten when
+  the attachment list itself is rewritten (a branch lookup).
+- **Status** — the PR status registry in `DesktopAppServerService`
+  (`prStatusRegistry`, durable via the `pr_status_cache` table).
+  Authoritative for *what state* a PR is in. The background poller
+  writes here and here only, then emits `pullRequest/status/updated`.
+  It never writes back into the overlay.
+
+**Every path that serves PR chips to a client MUST canonicalize the
+overlay rows through the status registry.** The seam is the injected
+`ThreadPullRequestCanonicalizer` (`setThreadPullRequestCanonicalizer`,
+backed by `canonicalizeStoredPullRequests`, which loads
+`pr_status_cache` first so it works before any window has driven a
+lookup). Use `canonicalizeNavigationThreadPullRequests` for a navigation
+snapshot's threads.
+
+Skipping it is not a cosmetic staleness bug. The poller stops polling
+terminal PRs, so once a PR merges no further `pullRequest/status/updated`
+is ever emitted — a client served an uncanonicalized snapshot shows that
+PR as open with checks running **forever**. This is exactly what
+federation remote viewers hit: their only snapshot source is
+`DesktopMessagingBackendBridge.getNavigationSnapshot`, which did not
+canonicalize, while the renderer's local path did.
+
+Known remaining gap: remote-stamped `pullRequest/status/updated` and
+`thread/pullRequests/updated` events are dropped by the main window's
+federation-target filter in `useThreadNavigation`, so viewer-side pinned
+remote rows converge on the next snapshot refresh rather than live.
+Dedicated remote windows do apply these events.
+
 ## Thread-State Update Bus
 
 When mutating persistent thread state (model, reasoning effort, fast mode,

@@ -115,6 +115,9 @@ describe("DesktopMessagingBackendBridge", () => {
       },
     });
     const registry = {
+      canonicalizeNavigationThreadPullRequests: vi.fn(
+        async (threads: NavigationSnapshot["threads"]) => threads,
+      ),
       getQueuedExecutionModesSnapshot: vi.fn(() => ({})),
       getQueuedTurnsSnapshot: vi.fn(() => ({})),
       hydrateThreadGitWorkingStates: vi.fn(async (
@@ -177,6 +180,9 @@ describe("DesktopMessagingBackendBridge", () => {
       },
     } as unknown as NavigationSnapshot);
     const registry = {
+      canonicalizeNavigationThreadPullRequests: vi.fn(
+        async (threads: NavigationSnapshot["threads"]) => threads,
+      ),
       getQueuedExecutionModesSnapshot: vi.fn(() => ({})),
       getQueuedTurnsSnapshot: vi.fn(() => ({})),
       hydrateThreadGitWorkingStates: vi.fn(
@@ -197,6 +203,93 @@ describe("DesktopMessagingBackendBridge", () => {
     });
     // Directories without a launchpad pass through untouched.
     expect(snapshot.directories[1]?.launchpad).toBeUndefined();
+  });
+
+  it("serves canonical PR status rather than the stale overlay copy", async () => {
+    // The background poller writes fresh status into the PR status
+    // registry, never back into the thread overlay. A federation viewer
+    // is served through this bridge, so without canonicalization it sees
+    // the status frozen at the last attachment rewrite — a PR that
+    // merged hours ago still rendered open with checks running, and it
+    // never converges because the poller skips terminal PRs.
+    const stalePr = {
+      number: 1242,
+      provider: "github" as const,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      title: "federation queue boundary review",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/1242",
+      state: "open" as const,
+      lifecycleState: "open" as const,
+      checkState: "pending" as const,
+      checksStillRunning: true,
+    };
+    const canonicalPr = {
+      ...stalePr,
+      state: "merged" as const,
+      lifecycleState: "merged" as const,
+      checkState: "success" as const,
+      checksStillRunning: false,
+    };
+    reconcileNavigationSnapshot.mockResolvedValueOnce({
+      backend: "all",
+      fetchedAt: 1_000,
+      unchanged: false,
+      threads: [
+        {
+          id: "thread-1",
+          title: "Thread",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+          prs: [stalePr],
+        },
+        {
+          id: "thread-2",
+          title: "No PRs",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        },
+      ],
+      inboxThreadKeys: [],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+    } as unknown as NavigationSnapshot);
+    const canonicalizeNavigationThreadPullRequests = vi.fn(
+      async (threads: NavigationSnapshot["threads"]) =>
+        threads.map((thread) =>
+          thread.prs?.length ? { ...thread, prs: [canonicalPr] } : thread
+        ),
+    );
+    const registry = {
+      canonicalizeNavigationThreadPullRequests,
+      getQueuedExecutionModesSnapshot: vi.fn(() => ({})),
+      getQueuedTurnsSnapshot: vi.fn(() => ({})),
+      hydrateThreadGitWorkingStates: vi.fn(
+        async (threads: NavigationSnapshot["threads"]) => threads,
+      ),
+      listThreads: vi.fn(async () => []),
+      readDirectoryStatuses: vi.fn(async () => ({})),
+      rememberCompleteNavigationSnapshot: vi.fn(),
+    } as unknown as DesktopBackendRegistry;
+    const bridge = new DesktopMessagingBackendBridge(registry);
+
+    const snapshot = await bridge.getNavigationSnapshot({});
+
+    expect(canonicalizeNavigationThreadPullRequests).toHaveBeenCalledTimes(1);
+    expect(snapshot.threads[0]?.prs).toEqual([canonicalPr]);
+    // Canonicalization runs before git hydration, so the served threads
+    // carry the canonical chips rather than the reconciled overlay ones.
+    expect(registry.hydrateThreadGitWorkingStates).toHaveBeenCalledWith(
+      [expect.objectContaining({ prs: [canonicalPr] }), expect.anything()],
+      { probeMissing: true },
+    );
   });
 
   it("preserves enriched messaging provenance when starting a turn", async () => {
