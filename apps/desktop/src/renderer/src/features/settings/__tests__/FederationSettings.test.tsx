@@ -6,6 +6,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -368,6 +369,88 @@ describe("FederationSettings", () => {
       }),
     );
     expect(openFederationWindow).not.toHaveBeenCalled();
+  });
+
+  it("drives the celestial icon pickers: override, reset to auto, pending lock, invalid guard", async () => {
+    const health: FederationHealthStatus = {
+      enabled: true,
+      role: "gateway",
+      status: "listening",
+      instanceId: "gateway_one",
+      localCelestialIcon: "sun",
+      peers: [
+        {
+          id: "client_one",
+          label: "Studio Mac",
+          role: "client",
+          status: "connected",
+          capabilities: ["thread_navigation"],
+          celestialIcon: "moon",
+        },
+      ],
+    };
+    let resolveSet: (response: { assignments: [] }) => void = () => undefined;
+    const setCelestialIcon = vi.fn(
+      () =>
+        new Promise<{ assignments: [] }>((resolve) => {
+          resolveSet = resolve;
+        }),
+    );
+    const desktopApi: DesktopApi = {
+      readFederationHealth: vi.fn(async () => ({ health })),
+      setCelestialIcon,
+    };
+
+    render(
+      <FederationSettings
+        desktopApi={desktopApi}
+        onClearSecret={vi.fn(async () => true)}
+        onReplaceSecret={vi.fn(async () => true)}
+        saving={false}
+        snapshot={settingsSnapshot()}
+        onSettingsChanged={vi.fn()}
+        onWriteConfig={vi.fn(async () => true)}
+      />,
+    );
+
+    const peerPicker = await screen.findByLabelText(
+      "Celestial icon for Studio Mac",
+    );
+    fireEvent.change(peerPicker, { target: { value: "black-hole" } });
+    expect(setCelestialIcon).toHaveBeenCalledWith({
+      instanceId: "client_one",
+      icon: "black-hole",
+    });
+    // The picker locks while the override request is in flight, then frees.
+    expect(peerPicker).toBeDisabled();
+    await act(async () => {
+      resolveSet({ assignments: [] });
+    });
+    await waitFor(() => expect(peerPicker).not.toBeDisabled());
+
+    // The Auto option is selectable and clears the override (null icon).
+    const localPicker = screen.getByLabelText("Instance icon");
+    expect(
+      within(localPicker).getByRole("option", { name: "Auto" }),
+    ).not.toBeDisabled();
+    fireEvent.change(localPicker, { target: { value: "" } });
+    expect(setCelestialIcon).toHaveBeenLastCalledWith({
+      instanceId: "gateway_one",
+      icon: null,
+    });
+    await act(async () => {
+      resolveSet({ assignments: [] });
+    });
+    await waitFor(() => expect(localPicker).not.toBeDisabled());
+
+    // A non-empty value that is not a known icon id never reaches the API.
+    const callsBefore = setCelestialIcon.mock.calls.length;
+    Object.defineProperty(peerPicker, "value", {
+      configurable: true,
+      get: () => "comet",
+    });
+    fireEvent.change(peerPicker);
+    expect(setCelestialIcon.mock.calls.length).toBe(callsBefore);
   });
 
   it("refreshes stale connection health while settings remains open", async () => {
