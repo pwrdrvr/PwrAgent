@@ -1047,6 +1047,73 @@ describe("Sidebar", () => {
     expect(onCreateSubthread).toHaveBeenCalledWith(sharedThread, "same-worktree");
   });
 
+  it("offers viewer-owned pin, pin removal, and copy actions for a remote-pinned row", () => {
+    const onRemoveRemoteThreadPin = vi.fn(async () => undefined);
+    const onSetThreadPin = vi.fn(async () => undefined);
+    const remotePinnedThread: NavigationThreadSummary = {
+      ...sharedThread,
+      id: "thread-remote",
+      title: "Remote pinned thread",
+      federation: {
+        ref: {
+          backend: "codex",
+          target: { scope: "remote", instanceId: "peer-laptop" },
+          threadId: "thread-remote",
+        },
+        instanceLabel: "Laptop",
+        // Removal is a viewer-side delete: it must work while the owning
+        // instance is unreachable.
+        peerStatus: "disconnected",
+        capabilities: [],
+      },
+    };
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="inbox"
+        directories={directories}
+        inboxThreads={[remotePinnedThread]}
+        loading={false}
+        selectedItemKey="codex:thread-remote"
+        threads={[remotePinnedThread]}
+        onArchiveThread={async () => undefined}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onCreateSubthread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onRemoveRemoteThreadPin={onRemoveRemoteThreadPin}
+        onRenameThread={async () => undefined}
+        onSelectThread={() => undefined}
+        onSetThreadPin={onSetThreadPin}
+      />,
+    );
+
+    fireEvent.contextMenu(
+      screen.getByRole("button", { name: "Remote pinned thread" }),
+    );
+
+    // Owner-mutating actions are absent…
+    expect(screen.queryByRole("menuitem", { name: "Archive Thread" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Rename Thread" })).toBeNull();
+    expect(
+      screen.queryByRole("menuitem", { name: /Sub-thread/ }),
+    ).toBeNull();
+
+    // …the VIEWER-owned pin is offered (rank lives on the pin row, never
+    // the owner's list)…
+    fireEvent.click(screen.getByRole("menuitem", { name: "Pin Thread" }));
+    expect(onSetThreadPin).toHaveBeenCalledWith(remotePinnedThread, true);
+
+    // …and the viewer-side removal dispatches even while disconnected.
+    fireEvent.contextMenu(
+      screen.getByRole("button", { name: "Remote pinned thread" }),
+    );
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: /Remove from My List/ }),
+    );
+    expect(onRemoveRemoteThreadPin).toHaveBeenCalledWith(remotePinnedThread);
+  });
+
   it("closes its context menu when another renderer menu opens", () => {
     render(
       <Sidebar

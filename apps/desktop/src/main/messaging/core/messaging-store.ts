@@ -880,7 +880,29 @@ function sanitizeBinding(binding: MessagingBindingRecord): MessagingBindingRecor
     authorizedActorIds: [...new Set(binding.authorizedActorIds)],
     monitorSurface: sanitizeSurfaceRef(binding.monitorSurface),
     pinnedStatusSurface: sanitizeSurfaceRef(binding.pinnedStatusSurface),
+    privateReplyContinuation: binding.privateReplyContinuation
+      ? {
+          ...binding.privateReplyContinuation,
+          source: {
+            ...binding.privateReplyContinuation.source,
+            authorizedActorIds: [
+              ...new Set(binding.privateReplyContinuation.source.authorizedActorIds),
+            ],
+            channel: structuredClone(
+              binding.privateReplyContinuation.source.channel,
+            ),
+            routingState: sanitizeAdapterState(
+              binding.privateReplyContinuation.source.routingState,
+            ),
+          },
+        }
+      : undefined,
     routingState: sanitizeAdapterState(binding.routingState),
+    statusPresentation:
+      binding.statusPresentation === "automatic"
+      || binding.statusPresentation === "on_demand"
+        ? binding.statusPresentation
+        : undefined,
     statusSurface: sanitizeSurfaceRef(binding.statusSurface),
     targetKind: normalizeMessagingBindingTargetKind(binding.targetKind),
   };

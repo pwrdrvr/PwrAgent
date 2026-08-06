@@ -737,6 +737,79 @@ describe("useThreadSessionState", () => {
     ]);
   });
 
+  it("does not duplicate a final reported by both item and turn completion", async () => {
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex" | "grok";
+          notification: {
+            method: string;
+            params: Record<string, unknown>;
+          };
+        }) => void)
+      | undefined;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback as typeof agentEventHandler;
+        return () => undefined;
+      },
+      readThread: async () => readThreadResponse({
+        entries: [],
+        hasPreviousPage: false,
+      }),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+    await waitForThreadHydration(result);
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              id: "assistant-final-1",
+              type: "agentMessage",
+              phase: "final_answer",
+              text: "Sent.",
+            },
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            turn: {
+              id: "turn-1",
+              status: "completed",
+              output: [{ type: "text", text: "Sent." }],
+            },
+          },
+        },
+      });
+    });
+
+    expect(
+      result.current.entries.filter(
+        (entry) =>
+          entry.type === "message"
+          && entry.role === "assistant"
+          && entry.text === "Sent."
+      )
+    ).toHaveLength(1);
+  });
+
   it("replaces a promoted optimistic user message when the completed user item arrives later", async () => {
     let now = 1_000;
     vi.spyOn(Date, "now").mockImplementation(() => {

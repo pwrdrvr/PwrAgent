@@ -955,6 +955,62 @@ textarea,
   text-align: center;
 }
 
+/* ⌘K federated section: remote hits append below the instant local rows. */
+.sidebar-search__section-divider {
+  margin: 2px 0 0;
+  padding: 6px 8px 2px;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.sidebar-search__loading {
+  padding: 6px 8px 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-style: italic;
+}
+
+.sidebar-search__result-meta .chip--instance {
+  flex: none;
+  height: 18px;
+  padding: 0 6px;
+  font-family: var(--font-sans, sans-serif);
+  font-size: 10px;
+}
+
+/* Instance chip: peer celestial icon (placeholder glyph when unassigned)
+   + display label. */
+.chip--instance {
+  gap: 4px;
+  color: var(--text-secondary);
+}
+
+.chip--instance svg {
+  flex: none;
+  color: var(--accent);
+}
+
+.chip--instance__label {
+  overflow: hidden;
+  max-width: 140px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Remote-owned row whose peer is unreachable: last-known data, dimmed but
+   still clickable — opening shows the graceful disconnected state. */
+.thread-row.is-remote-offline {
+  opacity: 0.55;
+}
+
+.thread-row.is-remote-offline .thread-row__title {
+  color: var(--text-secondary);
+}
+
 .sidebar__resize-handle,
 .context-rail__resize-handle {
   position: absolute;
@@ -8684,6 +8740,672 @@ textarea,
 
 .federation-celestial-picker svg {
   flex: 0 0 auto;
+}
+
+/* ==== Star Map mission-control surface ==== */
+
+/* Header chrome toggle, cloned from the terminal toggle beside it. */
+.thread-header__star-map-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.thread-header__star-map-toggle,
+.thread-header__star-map-toggle * {
+  -webkit-app-region: no-drag;
+}
+
+.thread-header__star-map-toggle:hover {
+  background: var(--bg-row-active);
+  color: var(--text-secondary);
+}
+
+.thread-header__star-map-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.thread-header__star-map-toggle.is-open {
+  color: var(--accent-bright);
+}
+
+/* Full-window layer over the app shell (same tier as Settings). A faint
+   accent aurora washes down from the top of the sky; the stars are a
+   seeded SVG field colored from --text-primary so they read as space in
+   both themes. */
+.app-shell__star-map-layer {
+  display: flex;
+  position: absolute;
+  z-index: 120;
+  inset: 0;
+  min-width: 0;
+  min-height: 0;
+  background:
+    radial-gradient(
+      120% 85% at 50% -10%,
+      color-mix(in srgb, var(--accent) 6%, transparent),
+      transparent 62%
+    ),
+    var(--bg-app);
+}
+
+.star-map {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  outline: none;
+  overflow: hidden;
+}
+
+.star-map__viewport {
+  position: absolute;
+  inset: 0;
+  transition: transform 240ms ease, opacity 240ms ease;
+}
+
+/* A floating thread shoves the map off to the left behind it. */
+.star-map--floating .star-map__viewport {
+  transform: translateX(-36%);
+  opacity: 0.85;
+}
+
+.star-map__sky {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  color: color-mix(in srgb, var(--text-primary) 78%, transparent);
+  pointer-events: none;
+}
+
+.star-map__star {
+  fill: currentColor;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .star-map__star {
+    animation: star-map-twinkle 5.5s ease-in-out infinite;
+  }
+}
+
+@keyframes star-map-twinkle {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.star-map__links {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.star-map__link {
+  fill: none;
+  stroke-width: 1.5;
+}
+
+.star-map__link--healthy {
+  stroke: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+.star-map__link--pending {
+  stroke: var(--text-subtle);
+  stroke-dasharray: 2 6;
+}
+
+.star-map__link--dead {
+  stroke: var(--border-strong);
+  stroke-dasharray: 6 5;
+}
+
+/* Comet dots streaming along healthy arcs. Static under reduced motion
+   (the solid arc already encodes "healthy"). */
+.star-map__link-flow {
+  fill: none;
+  stroke: var(--accent-bright);
+  stroke-width: 2.25;
+  stroke-linecap: round;
+  stroke-dasharray: 1 26;
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .star-map__link-flow {
+    opacity: 0.95;
+    animation: star-map-flow 2.4s linear infinite;
+  }
+}
+
+@keyframes star-map-flow {
+  to {
+    stroke-dashoffset: -27;
+  }
+}
+
+.star-map__anchor {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  z-index: 2;
+}
+
+/* A celestial body, not a box: glowing icon, label pill beneath. */
+.star-map-instance {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.star-map-instance__body {
+  display: inline-flex;
+  position: relative;
+  align-items: center;
+  justify-content: center;
+  width: 96px;
+  height: 96px;
+  border: none;
+  /* Fully-round like the status cookie/pill primitives - this is a
+     celestial body, not a panel corner. */
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.star-map-instance--hub .star-map-instance__body {
+  width: 116px;
+  height: 116px;
+}
+
+.star-map-instance__body:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
+
+.star-map-instance__glow {
+  position: absolute;
+  inset: -12%;
+  border-radius: 999px;
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--accent) 17%, transparent),
+    transparent 70%
+  );
+  opacity: 0.8;
+  transition: opacity 160ms ease, transform 160ms ease;
+  pointer-events: none;
+}
+
+.star-map-instance__body:hover .star-map-instance__glow {
+  opacity: 1;
+  transform: scale(1.12);
+}
+
+.star-map-instance__icon {
+  position: relative;
+}
+
+.star-map-instance__status {
+  position: absolute;
+  right: 16%;
+  bottom: 13%;
+}
+
+.star-map-instance__icon-placeholder {
+  width: 56px;
+  height: 56px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 999px;
+}
+
+.star-map-instance__label {
+  max-width: 210px;
+  overflow: hidden;
+  padding: 3px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg-panel) 80%, transparent);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.star-map-instance--local .star-map-instance__label {
+  box-shadow: 0 0 0 1px var(--accent-border);
+}
+
+.star-map-instance__unreachable {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+/* Label pill + [+] intake side by side under the body. */
+.star-map-instance__row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.star-map-instance__intake {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--accent-border);
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.star-map-instance__intake:hover {
+  background: var(--accent-bg-medium);
+}
+
+.star-map-instance__intake:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* AI intake dialog: a small centered chat panel over the map. */
+.star-map-intake {
+  position: fixed;
+  inset: 0;
+  z-index: 140;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.star-map-intake__backdrop {
+  position: absolute;
+  inset: 0;
+  border: none;
+  background: var(--scrim-medium);
+  cursor: default;
+}
+
+.star-map-intake__panel {
+  display: flex;
+  position: relative;
+  flex-direction: column;
+  gap: 10px;
+  width: min(520px, calc(100vw - 48px));
+  padding: 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: var(--shadow-popover);
+}
+
+.star-map-intake__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-primary);
+}
+
+.star-map-intake__target {
+  flex: 1;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.star-map-intake__close {
+  border: none;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.star-map-intake__close:hover {
+  background: var(--bg-row-active);
+  color: var(--text-primary);
+}
+
+.star-map-intake__input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 13px;
+  resize: vertical;
+}
+
+.star-map-intake__input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.star-map-intake__hint {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.star-map-intake__candidates {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.star-map-intake__candidate {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 6px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.star-map-intake__candidate:hover {
+  border-color: var(--accent-border);
+}
+
+.star-map-intake__candidate-label {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.star-map-intake__candidate-path {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.star-map-intake__footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.star-map-intake__status {
+  flex: 1;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.star-map-intake__status.is-failed {
+  color: var(--danger-text);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .star-map-intake__status.is-busy {
+    animation: star-map-intake-pulse 1.2s ease-in-out infinite;
+  }
+}
+
+@keyframes star-map-intake-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+.star-map__cloud {
+  position: absolute;
+  z-index: 1;
+}
+
+/* Soft halo behind a lane's cards so ownership reads at a glance. */
+.star-map__cloud-halo {
+  position: absolute;
+  left: 0;
+  top: 84px;
+  transform: translateX(-50%);
+  background: radial-gradient(
+    ellipse 60% 50% at 50% 30%,
+    color-mix(in srgb, var(--accent) 5%, transparent),
+    transparent 75%
+  );
+  pointer-events: none;
+}
+
+.star-map__cloud-overflow {
+  position: absolute;
+  left: 0;
+  top: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.star-map-card {
+  display: flex;
+  position: absolute;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-panel) 94%, transparent);
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+  animation: star-map-rise 380ms ease-out backwards;
+  transition: border-color 120ms ease, transform 120ms ease;
+}
+
+.star-map-card:hover {
+  border-color: var(--accent-border);
+  transform: translateY(-1px);
+}
+
+.star-map-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Cards rise into their slots with a small stagger (delay set inline).
+   Position comes from left/top, so the keyframes own transform. */
+@keyframes star-map-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .star-map-card {
+    animation-duration: 0s;
+  }
+  .star-map-card:hover {
+    transform: none;
+  }
+}
+
+.star-map-card__heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.star-map-card__title {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.star-map-card__chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+/* New-thread "bubble in" entrance (AI intake). Fade only under reduced
+   motion. */
+.star-map-card--entering {
+  animation: star-map-card-enter 480ms ease-out;
+}
+
+@keyframes star-map-card-enter {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes star-map-card-enter {
+    0% {
+      opacity: 0;
+      transform: scale(0.6);
+    }
+    70% {
+      opacity: 1;
+      transform: scale(1.05);
+    }
+    100% {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+}
+
+.star-map__filters {
+  display: flex;
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  gap: 6px;
+  transform: translateX(-50%);
+  z-index: 3;
+}
+
+.star-map__filter-chip {
+  padding: 4px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg-panel) 75%, transparent);
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.star-map__filter-chip.is-on {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
+.star-map__filter-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Floating thread over the map: the already-mounted main pane elevates
+   above the layer as a movable rounded card. */
+.app-main--star-map-float {
+  position: absolute;
+  z-index: 130;
+  inset: 24px 24px 24px 264px;
+  flex-direction: column;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-app);
+  box-shadow: var(--shadow-popover);
+  overflow: hidden;
+  transform: translate(
+    var(--star-map-float-dx, 0px),
+    var(--star-map-float-dy, 0px)
+  );
+}
+
+.star-map-float-handle {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
+  cursor: grab;
+  user-select: none;
+}
+
+.star-map-float-handle:active {
+  cursor: grabbing;
+}
+
+.star-map-float-handle__grip {
+  width: 28px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border-strong);
+}
+
+.star-map-float-handle__title {
+  flex: 1;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.star-map-float-handle__close {
+  padding: 3px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.star-map-float-handle__close:hover {
+  border-color: var(--accent-border);
+  color: var(--text-primary);
 }
 
 /* Celestial instance watermark: identity mark behind thread content.

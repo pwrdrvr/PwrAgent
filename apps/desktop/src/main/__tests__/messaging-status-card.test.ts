@@ -302,6 +302,38 @@ describe("buildBindingStatusIntent", () => {
     );
   });
 
+  it("hides response-mode controls in a native thread inside a 1:1 DM", () => {
+    const binding = {
+      ...buildBinding(),
+      channel: {
+        channel: "slack" as const,
+        conversation: {
+          id: "D012ABCDEF0",
+          isDirectMessage: true,
+          kind: "thread" as const,
+          parentConversationId: "D012ABCDEF0",
+          parentId: "1712023032.123456",
+        },
+      },
+    };
+    const intent = buildBindingStatusIntent({
+      id: "status-dm-thread-response-mode",
+      binding,
+      capabilityProfile: PERMISSIVE_CAPABILITY_PROFILE,
+      createdAt: 1000,
+      responseModeDefault: "mention_only",
+      threadState: resolveMessagingThreadState({
+        binding,
+        navigation: buildNavigationSnapshot(),
+      }),
+    });
+
+    expect(intent.text).not.toContain("Responses:");
+    expect(intent.actions).not.toContainEqual(
+      expect.objectContaining({ id: "status:response-mode" }),
+    );
+  });
+
   it("redacts backend account email in shared conversations", () => {
     const binding = {
       ...buildBinding(),

@@ -131,6 +131,71 @@ thread-reply broadcast flag, such as Slack's `reply_broadcast`, should map
 providers may fall back to a normal fresh message or return a structured
 unsupported delivery result.
 
+## Private Terminal Responses
+
+An adapter may implement `resolvePrivateConversation` when the platform can
+start or recover a 1:1 conversation with the actor who initiated an inbound
+turn. The request carries only the normalized actor, source conversation, and
+opaque provider routing state. The result returns a normalized `dm`
+conversation plus opaque routing state for ordinary `deliver(intent)` handling;
+desktop orchestration must not parse provider user IDs or DM channel IDs.
+
+This resolver is used by the scoped Agent `send_private_response` tool. The
+tool can address only the actor recorded for its active messaging turn, and the
+controller suppresses the normal source-conversation final response only after
+the private delivery succeeds. Resolver and delivery failure leave source
+delivery unchanged. Adapters must revalidate the actor identifier at this
+boundary and reject bot actors or unsupported conversation types explicitly.
+
+Codex dynamic tool catalogs are fixed when a thread starts. For older threads
+whose catalog predates `send_private_response`, an explicit natural-language
+private-response request (for example, "DM me") activates a controller-owned
+compatibility path: source prose and working updates are suppressed, and the
+turn's final answer is delivered to the recorded actor through the same private
+resolver. If that fallback delivery fails, the private content remains withheld
+and the source receives only a generic delivery error.
+
+Before reporting private-delivery success, the controller cancels queued and
+in-flight source streams, prose, and tool updates. Adapters may still complete a
+delivery after cancellation, so any late surface returned by `deliver` must be
+retracted through `dismissSurface`; private success is withheld when an existing
+source surface cannot be dismissed.
+
+Slack resolves the requesting user ID as the initial direct-message target;
+`chat.postMessage` opens the bot's 1:1 conversation when needed and returns the
+durable `D...` conversation ID in its delivery result. This uses the existing
+`chat:write` scope and does not require core workflow code to persist or inspect
+Slack-specific identifiers.
+
+When a provider can identify the native conversation where replies to a newly
+delivered surface will arrive, it should populate
+`MessagingDeliveryResult.continuation`. The continuation contains a normalized
+channel plus opaque routing state; workflow code may persist it as an ordinary
+binding but must not recover it by parsing the delivered surface state. Slack
+uses this to bind the private message's `D...` channel and root timestamp back
+to the originating Agent. Replies in that message's native thread therefore
+survive restarts and route deterministically, while a top-level DM remains
+available to the configured default Agent.
+
+That continuation is an implicit, on-demand-status binding. Starting a turn
+from its replies must not insert the full binding status card into the private
+conversation. An explicit status command may create the card, after which
+ordinary refreshes may update it.
+
+When `send_private_response` requests a reply, the continuation additionally
+stores a bounded, expiring one-shot return route and Agent-authored completion
+instructions. The first private-thread reply starts the originating Agent with
+those instructions, suppresses non-final source updates, delivers the final
+answer through the original source binding, and atomically consumes the
+continuation when that first reply is admitted. Providers do not implement
+this workflow and still see only normalized continuation and delivery requests.
+
+Providers set `conversation.isDirectMessage` on both a 1:1 DM and any native
+thread nested inside it. This preserves DM authorization and ambient-reply
+semantics after normalization changes the child conversation's `kind` to
+`thread`; shared-channel allowlists and mention-only policies must not be
+applied to those private thread replies.
+
 ## Attachment Policy
 
 Providers expose metadata and transport:

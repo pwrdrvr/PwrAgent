@@ -3192,12 +3192,64 @@ export function useThreadNavigation(
     }
 
     return desktopApi.onAgentEvent((event) => {
-      if (!federationTargetsEqual(event.federationTarget, readRendererFederationTarget())) {
+      const windowTarget = readRendererFederationTarget();
+      const method = event.notification.method as string;
+      if (!federationTargetsEqual(event.federationTarget, windowTarget)) {
+        // Peer-status events are stamped with the peer's own remote target,
+        // which never matches the main window's (absent) window target. The
+        // main window still hosts that peer's threads via viewer-side remote
+        // pins, so let those events through to dim/refresh the pinned rows.
+        if (method !== "federation/peerStatus/changed" || windowTarget) {
+          return;
+        }
+        const params = event.notification.params as {
+          instanceId: string;
+          status: string;
+        };
+        markNavigationActivity({ refreshOnIdleResume: false });
+        if (params.status === "connected") {
+          scheduleRefresh(undefined, undefined, false, {
+            forceRefresh: true,
+            refreshMode: "full",
+          });
+          return;
+        }
+        setState((current) => ({
+          ...current,
+          // Patch only the affected pinned rows. Unlike the federation
+          // window, no window-level error is raised: the rest of the list
+          // is local and healthy.
+          response: current.response
+            ? {
+                ...current.response,
+                threads: current.response.threads.map((thread) =>
+                  thread.federation &&
+                  isRemoteFederationTarget(thread.federation.ref.target) &&
+                  thread.federation.ref.target.instanceId === params.instanceId
+                    ? {
+                        ...thread,
+                        federation: {
+                          ...thread.federation,
+                          peerStatus:
+                            params.status as FederationPeerSummary["status"],
+                        },
+                      }
+                    : thread,
+                ),
+              }
+            : current.response,
+        }));
         return;
       }
 
       markNavigationActivity({ refreshOnIdleResume: false });
-      const method = event.notification.method as string;
+      if (method === "navigation/remoteThreadPins/changed") {
+        // Viewer-side pin membership or rank changed (possibly in another
+        // window) — the merged snapshot is the source of truth for the row
+        // set, so refresh rather than patch.
+        scheduleRefresh();
+        return;
+      }
       if (method === "federation/peerStatus/changed") {
         const params = event.notification.params as {
           instanceId: string;
@@ -5826,6 +5878,7 @@ export function useThreadNavigation(
 
   const setThreadReactionRequest = desktopApi?.setThreadReaction;
   const setThreadPinRequest = desktopApi?.setThreadPin;
+  const setRemoteThreadLocalPinRequest = desktopApi?.setRemoteThreadLocalPin;
   const setThreadAgentRequest = desktopApi?.setThreadAgent;
   const reorderThreadPinsRequest = desktopApi?.reorderThreadPins;
   const setThreadParentRequest = desktopApi?.setThreadParent;
@@ -5911,11 +5964,33 @@ export function useThreadNavigation(
       }));
 
       try {
+        // A remote row pinned in the MAIN window takes a VIEWER-owned rank
+        // on its remote_thread_pins row — only the viewer knows. In a
+        // remote-viewer window (window-level target set) the row pins on
+        // its owning instance as before: without that target the write
+        // would land in the viewer machine's overlay store and revert on
+        // the next remote snapshot.
+        if (
+          thread.federation
+          && !readRendererFederationTarget()
+          && setRemoteThreadLocalPinRequest
+        ) {
+          const result = await setRemoteThreadLocalPinRequest({
+            ref: thread.federation.ref,
+            pinnedRank,
+          });
+          setState((current) => ({
+            ...current,
+            response: updateThreadPinInSnapshot(current.response, {
+              backend: thread.source,
+              threadId: thread.id,
+              pinnedRank: result.pinnedRank,
+            }),
+          }));
+          return;
+        }
         const result = await setThreadPinRequest({
           backend: thread.source,
-          // Remote threads pin on their owning instance; without the
-          // target the write lands in the viewer machine's overlay
-          // store and reverts on the next remote snapshot.
           federationTarget:
             thread.federation?.ref.target ?? readRendererFederationTarget(),
           threadId: thread.id,
@@ -5933,7 +6008,12 @@ export function useThreadNavigation(
         await refresh(buildThreadIdentityKey(thread.source, thread.id));
       }
     },
-    [refresh, setThreadPinRequest, state.response?.threads],
+    [
+      refresh,
+      setRemoteThreadLocalPinRequest,
+      setThreadPinRequest,
+      state.response?.threads,
+    ],
   );
 
   const reorderThreadPins = useCallback(

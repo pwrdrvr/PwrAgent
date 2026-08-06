@@ -34,6 +34,7 @@ export type MessagingQueuedTurnEntry = {
   id: string;
   input: AppServerTurnInputItem[];
   pdfAttachments?: PendingPdfAttachment[];
+  privateResponseRequested?: boolean;
   preview: string;
   status: "queued" | "steered" | "cancelled" | "submitted" | "failed";
   surface?: MessagingSurfaceRef;

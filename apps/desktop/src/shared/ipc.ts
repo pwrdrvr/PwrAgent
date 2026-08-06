@@ -13,6 +13,9 @@ export const FEDERATION_TAILSCALE_CONFIGURE_CHANNEL =
   "federation:tailscale-configure";
 export const FEDERATION_SET_CELESTIAL_ICON_CHANNEL =
   "federation:set-celestial-icon";
+export const STAR_MAP_READ_ARRANGEMENT_CHANNEL = "star-map:read-arrangement";
+export const STAR_MAP_SET_CARD_POSITION_CHANNEL = "star-map:set-card-position";
+export const STAR_MAP_INTAKE_CHANNEL = "star-map:intake";
 export const APP_SERVER_READ_THREAD_CHANNEL = "app-server:read-thread";
 export const APP_SERVER_GET_THREAD_FILE_DIFF_CHANNEL =
   "app-server:get-thread-file-diff";
@@ -115,6 +118,13 @@ export const NAVIGATION_SET_THREAD_AGENT_CHANNEL =
   "navigation:set-thread-agent";
 export const NAVIGATION_REORDER_THREAD_PINS_CHANNEL =
   "navigation:reorder-thread-pins";
+export const NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL =
+  "navigation:add-remote-thread-pin";
+export const NAVIGATION_REMOVE_REMOTE_THREAD_PIN_CHANNEL =
+  "navigation:remove-remote-thread-pin";
+export const NAVIGATION_SET_REMOTE_THREAD_LOCAL_PIN_CHANNEL =
+  "navigation:set-remote-thread-local-pin";
+export const FEDERATION_JUMP_SEARCH_CHANNEL = "federation:jump-search";
 export const NAVIGATION_SET_THREAD_PARENT_CHANNEL =
   "navigation:set-thread-parent";
 export const NAVIGATION_UPDATE_SUBTHREAD_ORDER_CHANNEL =

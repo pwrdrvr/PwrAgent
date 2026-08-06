@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import type { AutomationGateConfig, AutomationGateRunResult } from "@pwragent/shared";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
+import { wrapCommandInWindowsJob } from "../windows-job-wrapper";
 import { resolveWindowsBashShell } from "../windows-shell";
 
 const DEFAULT_GATE_TIMEOUT_MS = 60_000;
@@ -42,13 +43,40 @@ function runShellGate(config: AutomationGateConfig): Promise<AutomationGateRunRe
   const shell =
     childEnv.SHELL?.trim() ||
     (process.platform === "win32" ? resolveWindowsBashShell() : "/bin/sh");
+  let windowsJobLaunch: ReturnType<typeof wrapCommandInWindowsJob> | undefined;
+  try {
+    windowsJobLaunch =
+      process.platform === "win32"
+        ? wrapCommandInWindowsJob({
+            args: ["-lc", command],
+            command: shell,
+            cwd: config.cwd,
+            env: childEnv,
+          })
+        : undefined;
+  } catch (error) {
+    return Promise.resolve({
+      status: "failed",
+      command,
+      cwd: config.cwd,
+      durationMs: Date.now() - startedAt,
+      output: "",
+      errorMessage: error instanceof Error ? error.message : String(error),
+    });
+  }
+  const launch = windowsJobLaunch ?? {
+    args: ["-lc", command],
+    command: shell,
+    env: childEnv,
+  };
 
   return new Promise((resolve) => {
-    const child = spawn(shell, ["-lc", command], {
+    const child = spawn(launch.command, launch.args, {
       cwd: config.cwd,
-      detached: Boolean(timeoutMs),
-      env: childEnv,
+      detached: !windowsJobLaunch && Boolean(timeoutMs),
+      env: launch.env,
       stdio: "pipe",
+      windowsHide: true,
     });
 
     let output = "";
@@ -72,6 +100,7 @@ function runShellGate(config: AutomationGateConfig): Promise<AutomationGateRunRe
         clearTimeout(forceSettleHandle);
         forceSettleHandle = undefined;
       }
+      windowsJobLaunch?.cleanup();
       resolve(result);
     };
 
@@ -80,7 +109,11 @@ function runShellGate(config: AutomationGateConfig): Promise<AutomationGateRunRe
         return;
       }
       try {
-        if (process.platform !== "win32") {
+        if (windowsJobLaunch) {
+          // The wrapper owns the shell and all descendants in a
+          // KILL_ON_JOB_CLOSE Job, so terminating this one process is atomic.
+          child.kill("SIGKILL");
+        } else if (process.platform !== "win32") {
           process.kill(-child.pid, "SIGTERM");
         } else {
           // child.kill only terminates the immediate bash.exe; its children

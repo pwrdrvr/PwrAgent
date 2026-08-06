@@ -496,6 +496,49 @@ describe("SqliteMessagingStore", () => {
     });
   });
 
+  it("routes a Settings-selected Slack channel ahead of the provider default", async () => {
+    const store = await createStore();
+    const channel = {
+      channel: "slack" as const,
+      conversation: {
+        id: "C0BN6UXFREE",
+        kind: "channel" as const,
+        title: "p-pwragent-testing",
+        workspaceId: "T1",
+      },
+    };
+    await store.upsertDefaultAgentAssignment(
+      buildDefaultAgentAssignment({
+        id: "slack-provider-default",
+        scope: { kind: "provider", channel: "slack" },
+        target: {
+          kind: "agent",
+          backend: "codex",
+          threadId: "provider-agent",
+        },
+      }),
+    );
+    await store.upsertDefaultAgentAssignment(
+      buildDefaultAgentAssignment({
+        id: "slack-channel-default",
+        scope: { kind: "conversation", channel },
+        target: {
+          kind: "agent",
+          backend: "codex",
+          threadId: "channel-agent",
+        },
+        createdAt: 1100,
+        updatedAt: 1100,
+      }),
+    );
+
+    await expect(store.findActiveDefaultAgentAssignmentForChannel(channel))
+      .resolves.toMatchObject({
+        id: "slack-channel-default",
+        target: { threadId: "channel-agent" },
+      });
+  });
+
   it("replaces active default Agent assignments within the same scope", async () => {
     const store = await createStore();
     await store.upsertDefaultAgentAssignment(buildDefaultAgentAssignment());

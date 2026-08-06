@@ -29,6 +29,8 @@ import type {
   MessagingManagedConversationCreateResult,
   MessagingManagedConversationRightsRequest,
   MessagingManagedConversationRightsResult,
+  MessagingPrivateConversationResolveRequest,
+  MessagingPrivateConversationResolveResult,
   MessagingRateLimitInfo,
   MessagingRejectedInboundEvent,
   MessagingSurfaceAction,
@@ -214,6 +216,9 @@ export type SlackProviderAdapter = {
   createManagedConversation(
     request: MessagingManagedConversationCreateRequest,
   ): Promise<MessagingManagedConversationCreateResult>;
+  resolvePrivateConversation(
+    request: MessagingPrivateConversationResolveRequest,
+  ): Promise<MessagingPrivateConversationResolveResult>;
   onInboundRejected?(listener: MessagingInboundRejectedListener): () => void;
   setConversationTitle(
     request: MessagingConversationTitleUpdateRequest,
@@ -233,6 +238,7 @@ export type SlackAdapterOptions = {
 
 type SlackSurfaceOpaqueState = {
   channelId?: string;
+  messageTimestamps?: string[];
   threadTs?: string;
   ts?: string;
 };
@@ -662,6 +668,11 @@ export class SlackAdapter implements SlackProviderAdapter {
         outcome: updated ? "updated" : "presented",
         channel: this.channel,
         deliveredAt: this.now(),
+        continuation: slackReplyContinuation({
+          channelId,
+          channelRef: target.channelRef,
+          rootTs: target.threadTs ?? ts,
+        }),
         surface: {
           channel: this.channel,
           id: ts,
@@ -783,6 +794,10 @@ export class SlackAdapter implements SlackProviderAdapter {
       conversation: {
         id: target.channelId,
         kind: "thread",
+        ...(request.parent.conversation.kind === "dm"
+          || request.parent.conversation.isDirectMessage === true
+          ? { isDirectMessage: true }
+          : {}),
         parentId: target.threadTs,
         parentConversationId: request.parent.conversation.id,
         ...(request.parent.conversation.workspaceId
@@ -799,6 +814,76 @@ export class SlackAdapter implements SlackProviderAdapter {
           channelId: target.channelId,
           ...(target.teamId ? { teamId: target.teamId } : {}),
           threadTs: target.threadTs,
+        },
+      },
+      updatedAt: this.now(),
+    };
+  }
+
+  async resolvePrivateConversation(
+    request: MessagingPrivateConversationResolveRequest,
+  ): Promise<MessagingPrivateConversationResolveResult> {
+    const validation = validateSlackUserId(request.actor.platformUserId);
+    if (!validation.ok) {
+      logSlackInvalidIdentifier({
+        field: "user_id",
+        logger: this.logger,
+        reason: validation.reason,
+        value: request.actor.platformUserId,
+      });
+      return {
+        channel: this.channel,
+        errorMessage: "Slack private delivery requires a valid user ID.",
+        outcome: "failed",
+        updatedAt: this.now(),
+      };
+    }
+    if (request.actor.isBot) {
+      return {
+        channel: this.channel,
+        errorMessage: "Slack private delivery is not available for bot actors.",
+        outcome: "unsupported",
+        updatedAt: this.now(),
+      };
+    }
+    if (request.replyContinuationRequired) {
+      const dmMode = slackDmAccessMode(this.config);
+      const actorAuthorized = this.authorizedActorIds.includes(
+        request.actor.platformUserId,
+      );
+      if (
+        dmMode === "none"
+        || (dmMode === "authorized_users" && !actorAuthorized)
+      ) {
+        return {
+          channel: this.channel,
+          errorMessage:
+            "Slack DM access policy does not allow this user to reply to the private response.",
+          outcome: "unsupported",
+          updatedAt: this.now(),
+        };
+      }
+    }
+    return {
+      channel: this.channel,
+      conversation: {
+        id: request.actor.platformUserId,
+        isDirectMessage: true,
+        kind: "dm",
+        ...(request.source.conversation.workspaceId
+          ? { workspaceId: request.source.conversation.workspaceId }
+          : {}),
+        ...(request.actor.displayName || request.actor.username
+          ? { title: request.actor.displayName ?? request.actor.username }
+          : {}),
+      },
+      outcome: "resolved",
+      routingState: {
+        opaque: {
+          channelId: request.actor.platformUserId,
+          ...(request.source.conversation.workspaceId
+            ? { teamId: request.source.conversation.workspaceId }
+            : {}),
         },
       },
       updatedAt: this.now(),
@@ -1167,7 +1252,12 @@ export class SlackAdapter implements SlackProviderAdapter {
     intent: Extract<MessagingSurfaceIntent, { kind: "dismiss" }>,
   ): Promise<MessagingDeliveryResult> {
     const target = readSlackSurfaceState(intent.targetSurface);
-    if (!target?.channelId || !target.ts) {
+    const messageTimestamps = target?.messageTimestamps?.length
+      ? target.messageTimestamps
+      : target?.ts
+        ? [target.ts]
+        : [];
+    if (!target?.channelId || messageTimestamps.length === 0) {
       return {
         outcome: "failed",
         channel: this.channel,
@@ -1176,25 +1266,32 @@ export class SlackAdapter implements SlackProviderAdapter {
       };
     }
     const channelId = target.channelId;
-    try {
-      await this.api.deleteMessage({ channel: channelId, ts: target.ts });
+    let firstError: unknown;
+    for (const ts of new Set(messageTimestamps)) {
+      try {
+        await this.api.deleteMessage({ channel: channelId, ts });
+      } catch (error) {
+        firstError ??= error;
+      }
+    }
+    if (!firstError) {
       return {
         outcome: "dismissed",
         channel: this.channel,
         deliveredAt: this.now(),
       };
-    } catch (error) {
-      const rateLimit = this.emitRateLimitFromError(error, { channelId }, {
-        retryable: true,
-      });
-      return {
-        outcome: "failed",
-        channel: this.channel,
-        deliveredAt: this.now(),
-        errorMessage: error instanceof Error ? error.message : String(error),
-        ...(rateLimit ? { rateLimit } : {}),
-      };
     }
+    const rateLimit = this.emitRateLimitFromError(firstError, { channelId }, {
+      retryable: true,
+    });
+    return {
+      outcome: "failed",
+      channel: this.channel,
+      deliveredAt: this.now(),
+      errorMessage:
+        firstError instanceof Error ? firstError.message : String(firstError),
+      ...(rateLimit ? { rateLimit } : {}),
+    };
   }
 
   /**
@@ -1202,14 +1299,20 @@ export class SlackAdapter implements SlackProviderAdapter {
    * the content is never truncated at the 3000-char section-block limit. The
    * chunks are already boundary-split by the caller. Remote image blocks and
    * uploaded data images are associated with the final chunk. Returns the first
-   * message as the surface (mirrors a single-post delivery).
+   * message as the surface and records every posted timestamp in its opaque
+   * state so a later dismissal retracts the complete delivery.
    */
   private async deliverChunkedTextMessage(params: {
     intent: Extract<MessagingSurfaceIntent, { kind: "message" }>;
-    target: { channelId: string; threadTs?: string };
+    target: {
+      channelId: string;
+      channelRef: MessagingChannelRef;
+      threadTs?: string;
+    };
     chunks: string[];
   }): Promise<MessagingDeliveryResult> {
     let firstSurface: MessagingSurfaceRef | undefined;
+    const messageTimestamps: string[] = [];
     let deliveredAny = false;
     let lastTs: string | undefined;
     try {
@@ -1233,6 +1336,9 @@ export class SlackAdapter implements SlackProviderAdapter {
         deliveredAny = true;
         const ts = result.ts;
         lastTs = ts ?? lastTs;
+        if (ts) {
+          messageTimestamps.push(ts);
+        }
         if (ts && !firstSurface) {
           firstSurface = {
             channel: this.channel,
@@ -1252,16 +1358,40 @@ export class SlackAdapter implements SlackProviderAdapter {
         intent: params.intent,
         threadTs: params.target.threadTs ?? lastTs,
       });
+      if (firstSurface && messageTimestamps.length > 1) {
+        const firstState = readSlackSurfaceState(firstSurface);
+        firstSurface = {
+          ...firstSurface,
+          state: {
+            opaque: {
+              channelId: firstState?.channelId ?? params.target.channelId,
+              messageTimestamps,
+              ts: firstState?.ts ?? firstSurface.id,
+              ...(firstState?.threadTs ? { threadTs: firstState.threadTs } : {}),
+            },
+          },
+        };
+      }
       return {
         outcome: "presented",
         channel: this.channel,
         deliveredAt: this.now(),
+        ...(firstSurface
+          ? {
+              continuation: slackReplyContinuation({
+                channelId: readSlackSurfaceState(firstSurface)?.channelId
+                  ?? params.target.channelId,
+                channelRef: params.target.channelRef,
+                rootTs: params.target.threadTs ?? firstSurface.id,
+              }),
+            }
+          : {}),
         ...(firstSurface ? { surface: firstSurface } : {}),
       };
     } catch (error) {
       const rateLimit = this.emitRateLimitFromError(
         error,
-        { channelId: params.target.channelId },
+        params.target,
         { retryable: !deliveredAny },
       );
       return {
@@ -1400,6 +1530,7 @@ export class SlackAdapter implements SlackProviderAdapter {
         evictStaleStreamAnchors(this.streamSurfaces);
       }
       const head = anchors[0]!;
+      const messageTimestamps = anchors.map((anchor) => anchor.ts);
       return {
         outcome: firstOutcome ?? "updated",
         channel: this.channel,
@@ -1410,6 +1541,7 @@ export class SlackAdapter implements SlackProviderAdapter {
           state: {
             opaque: {
               channelId: head.channelId,
+              ...(messageTimestamps.length > 1 ? { messageTimestamps } : {}),
               ts: head.ts,
               ...(head.threadTs ? { threadTs: head.threadTs } : {}),
             },
@@ -1470,8 +1602,15 @@ export class SlackAdapter implements SlackProviderAdapter {
     };
   }
 
-  private rateLimitScopeForTarget(target: { channelId: string }): MessagingDeliveryScope {
-    const isDm = target.channelId.startsWith("D");
+  private rateLimitScopeForTarget(target: {
+    channelId: string;
+    channelRef?: MessagingChannelRef;
+  }): MessagingDeliveryScope {
+    const conversation = target.channelRef?.conversation;
+    const isDm =
+      conversation?.kind === "dm"
+      || conversation?.isDirectMessage === true
+      || target.channelId.startsWith("D");
     return {
       platform: this.channel,
       id: `slack:channel:${target.channelId}`,
@@ -1491,7 +1630,7 @@ export class SlackAdapter implements SlackProviderAdapter {
 
   private emitRateLimitFromError(
     error: unknown,
-    target: { channelId: string },
+    target: { channelId: string; channelRef?: MessagingChannelRef },
     options?: { retryable?: boolean },
   ): MessagingRateLimitInfo | undefined {
     const retryAfterMs = retryAfterMsFromError(error);
@@ -1769,7 +1908,10 @@ export class SlackAdapter implements SlackProviderAdapter {
 
     // DMs are governed by the DM access mode alone — the team/channel gates
     // are about (shared) channel traffic and never apply to direct messages.
-    if (params.channel.conversation.kind === "dm") {
+    if (
+      params.channel.conversation.kind === "dm"
+      || params.channel.conversation.isDirectMessage === true
+    ) {
       const dmMode = slackDmAccessMode(this.config);
       if (dmMode === "none") return reject("unauthorized-conversation");
       if (dmMode === "authorized_users" && !actorAuthorized) {
@@ -1825,9 +1967,11 @@ export class SlackAdapter implements SlackProviderAdapter {
     ts: string;
   }): Promise<MessagingChannelRef> {
     const isThread = Boolean(params.threadTs && params.threadTs !== params.ts);
+    const isDirectMessage =
+      params.channelType === "im" || params.channelId.startsWith("D");
     const kind: MessagingConversationKind = isThread
       ? "thread"
-      : params.channelType === "im" || params.channelId.startsWith("D")
+      : isDirectMessage
         ? "dm"
         : "channel";
     const channelTitle =
@@ -1843,6 +1987,7 @@ export class SlackAdapter implements SlackProviderAdapter {
       conversation: {
         id: params.channelId,
         kind,
+        ...(isDirectMessage ? { isDirectMessage: true } : {}),
         ...(params.teamId ? { workspaceId: params.teamId } : {}),
         ...(kind === "dm" && channelTitle ? { title: channelTitle } : {}),
         ...(isThread && params.threadTs ? { parentId: params.threadTs } : {}),
@@ -2487,8 +2632,14 @@ function readSlackOpaqueState(
     return undefined;
   }
   const record = opaque as Record<string, MessagingJsonValue>;
+  const messageTimestamps = Array.isArray(record.messageTimestamps)
+    ? record.messageTimestamps
+      .filter((value): value is string => typeof value === "string")
+      .slice(0, 100)
+    : [];
   return {
     ...(typeof record.channelId === "string" ? { channelId: record.channelId } : {}),
+    ...(messageTimestamps.length > 0 ? { messageTimestamps } : {}),
     ...(typeof record.teamId === "string" ? { teamId: record.teamId } : {}),
     ...(typeof record.threadTs === "string" ? { threadTs: record.threadTs } : {}),
     ...(typeof record.ts === "string" ? { ts: record.ts } : {}),
@@ -2611,6 +2762,41 @@ function isSlackGroupDm(params: { channelType?: string }): boolean {
 
 function callbackBindingId(intent: MessagingSurfaceIntent): string | undefined {
   return intent.audit?.bindingId ?? intent.bindingId;
+}
+
+function slackReplyContinuation(params: {
+  channelId: string;
+  channelRef: MessagingChannelRef;
+  rootTs: string;
+}): NonNullable<MessagingDeliveryResult["continuation"]> {
+  const sourceConversation = params.channelRef.conversation;
+  return {
+    channel: {
+      channel: "slack",
+      conversation: {
+        id: params.channelId,
+        isDirectMessage: true,
+        kind: "thread",
+        parentId: params.rootTs,
+        parentConversationId: params.channelId,
+        ...(sourceConversation.workspaceId
+          ? { workspaceId: sourceConversation.workspaceId }
+          : {}),
+        ...(sourceConversation.title
+          ? { parentTitle: sourceConversation.title }
+          : {}),
+      },
+    },
+    routingState: {
+      opaque: {
+        channelId: params.channelId,
+        threadTs: params.rootTs,
+        ...(sourceConversation.workspaceId
+          ? { teamId: sourceConversation.workspaceId }
+          : {}),
+      },
+    },
+  };
 }
 
 function slackCallbackRecordId(

@@ -4985,11 +4985,21 @@ export function Composer(props: ComposerProps) {
             turnQueueRecord.status === "failed" ||
             turnQueueRecord.status === "cancelled")
         ) {
-          const queued = queuedTurns.find(
-            (candidate) => candidate.queueEntryId === turnQueueRecord.queueEntryId,
-          );
+          // The durable store is updated before React necessarily commits the
+          // corresponding queued-turn state. A fast terminal notification can
+          // therefore race this listener's render closure; resolve by stable
+          // queue id from the store first so the UI cannot retain a dead chip.
+          const queued =
+            draftStore.getQueuedTurns(queueScopeKey).find(
+              (candidate) =>
+                candidate.queueEntryId === turnQueueRecord.queueEntryId,
+            )
+            ?? queuedTurns.find(
+              (candidate) =>
+                candidate.queueEntryId === turnQueueRecord.queueEntryId,
+            );
           if (queued) {
-            removeQueuedTurn(queued);
+            removeQueuedTurnInScope(queueScopeKey, queued);
           }
         }
         if (

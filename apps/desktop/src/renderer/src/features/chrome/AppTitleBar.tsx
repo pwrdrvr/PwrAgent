@@ -6,6 +6,8 @@ import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import { AppMenuBar } from "./AppMenuBar";
 import { NewThreadButton } from "./NewThreadButton";
 import { PanelToggleButtons } from "./PanelToggleButtons";
+import { StarMapIcon } from "../../icons/StarMapIcon";
+import type { StarMapToggleControls } from "../thread-detail/ThreadHeader";
 
 export type AppTitleBarLayoutControls = {
   sidebarOpen: boolean;
@@ -34,6 +36,8 @@ export function AppTitleBar(props: {
   onOpenMessagingActivity?: () => void;
   onOpenMessagingSettings?: () => void;
   layout?: AppTitleBarLayoutControls;
+  /** Star Map toggle, left of the MSG chip. Absent in federation windows. */
+  starMap?: StarMapToggleControls;
   actions?: {
     addingProjectDirectory?: boolean;
     automationsActive: boolean;
@@ -113,6 +117,19 @@ export function AppTitleBar(props: {
               onToggleSidebar={props.layout.onToggleSidebar}
               onToggleRail={props.layout.onToggleRail}
             />
+          ) : null}
+          {props.starMap && !isFederationWindow ? (
+            <button
+              type="button"
+              aria-label={props.starMap.active ? "Close Star Map" : "Open Star Map"}
+              aria-pressed={props.starMap.active}
+              className={`thread-header__star-map-toggle${
+                props.starMap.active ? " is-open" : ""
+              }`}
+              onClick={props.starMap.onToggle}
+            >
+              <StarMapIcon size={14} />
+            </button>
           ) : null}
           {props.desktopApi ? (
             <MessagingStatusBar

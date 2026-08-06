@@ -49,6 +49,8 @@ import type {
   MessagingManagedConversationCreateResult,
   MessagingManagedConversationRightsRequest,
   MessagingManagedConversationRightsResult,
+  MessagingPrivateConversationResolveRequest,
+  MessagingPrivateConversationResolveResult,
   MessagingRateLimitInfo,
   MessagingReconnectInfo,
   MessagingRejectedInboundEvent,
@@ -130,6 +132,9 @@ export type DesktopMessagingAdapter = {
   createManagedConversation?(
     request: MessagingManagedConversationCreateRequest,
   ): Promise<MessagingManagedConversationCreateResult>;
+  resolvePrivateConversation?(
+    request: MessagingPrivateConversationResolveRequest,
+  ): Promise<MessagingPrivateConversationResolveResult>;
   closeManagedConversation?(
     request: MessagingManagedConversationActionRequest,
   ): Promise<MessagingManagedConversationActionResult>;
@@ -1019,7 +1024,11 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     if (event.kind !== "text" && event.kind !== "media") {
       return false;
     }
-    if (event.botMention || event.channel.conversation.kind === "dm") {
+    if (
+      event.botMention
+      || event.channel.conversation.kind === "dm"
+      || event.channel.conversation.isDirectMessage === true
+    ) {
       return false;
     }
     if (!params.reportsBotMention) {

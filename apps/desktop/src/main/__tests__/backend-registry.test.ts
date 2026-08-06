@@ -11515,7 +11515,7 @@ command = "pnpm grok"
     await registry.close();
   });
 
-  it("seeds an idle newly started Agent thread with the Agent name", async () => {
+  it("seeds an idle newly started Agent thread with the Agent name as a fallback", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/list", "thread/start"] },
       threads: [],
@@ -11538,7 +11538,7 @@ command = "pnpm grok"
       expect.objectContaining({
         id: "thread-1",
         title: "Summy Dummy",
-        titleSource: "explicit",
+        titleSource: "fallback",
       }),
     ]);
 
@@ -15471,6 +15471,73 @@ command = "pnpm dev"
           threadName: "Leopard tea button",
         },
       },
+    });
+
+    await registry.close();
+  });
+
+  it("generates a title for a desktop composer Agent thread", async () => {
+    const titleService = {
+      generateTitle: vi.fn(async () => ({
+        status: "generated" as const,
+        title: "Testing manager agent",
+      })),
+    };
+    const overlayStore = createOverlayStoreMock();
+    const codexClient = new MockBackendClient({
+      initializeResult: {
+        methods: ["thread/start", "turn/start", "thread/name/set"],
+      },
+      threads: [],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      overlayStore,
+      threadTitleGenerationService: titleService,
+    });
+    const prompt =
+      "Testing testing is this thing on, I need to test the manager agent.";
+
+    await registry.startThread({
+      agent: {
+        name: "PwrAgent Agent",
+        instructions: "Manage PwrAgent threads.",
+      },
+      backend: "codex",
+      cwd: "/repo-a",
+    });
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "thread-1",
+      input: [{ type: "text", text: prompt }],
+    });
+    await waitForCondition(() => codexClient.lastRenameThreadParams !== undefined);
+
+    expect(titleService.generateTitle).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      userPrompt: prompt,
+    });
+    expect(codexClient.lastRenameThreadParams).toEqual({
+      threadId: "thread-1",
+      name: "Testing manager agent",
+    });
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-1",
+      }),
+    ).resolves.toMatchObject({
+      subAgents: [
+        expect.objectContaining({
+          monitorId: "system:title-helper:codex:thread-1",
+          status: "success",
+          task: "Name this thread",
+        }),
+      ],
     });
 
     await registry.close();

@@ -5,6 +5,7 @@ import type {
   MessagingConversationKind,
 } from "./messaging";
 import type { CelestialIconAssignment } from "./celestial";
+import type { StarMapArrangementEntry, StarMapIntakePhase } from "./star-map";
 import type {
   FederationConnectionState,
   FederationTarget,
@@ -1045,6 +1046,24 @@ export type FederationCelestialIconsChangedNotification = {
   };
 };
 
+export type StarMapArrangementChangedNotification = {
+  method: "starMap/arrangement/changed";
+  params: {
+    entries: StarMapArrangementEntry[];
+  };
+};
+
+export type StarMapIntakeStatusNotification = {
+  method: "starMap/intake/status";
+  params: {
+    requestId: string;
+    phase: StarMapIntakePhase;
+    message?: string;
+    backend?: string;
+    threadId?: string;
+  };
+};
+
 export type AppServerMcpElicitationAction = "accept" | "decline" | "cancel";
 
 export type AppServerMcpElicitationSchema = {
@@ -1600,6 +1619,15 @@ export type AppServerNotification =
       };
     }
   | {
+      method: "navigation/remoteThreadPins/changed";
+      params: {
+        /** Instance the pinned/unpinned thread lives on. */
+        instanceId: string;
+        threadId: string;
+        pinned: boolean;
+      };
+    }
+  | {
       method: "thread/parent/set";
       params: {
         threadId: string;
@@ -1678,4 +1706,6 @@ export type AppServerNotification =
     }
   | FederationPeerStatusChangedNotification
   | FederationCelestialIconsChangedNotification
+  | StarMapArrangementChangedNotification
+  | StarMapIntakeStatusNotification
   | AppServerPendingRequestNotification;

@@ -16,16 +16,45 @@ export function windowsBashCandidates(): string[] {
   const localAppData = process.env.LOCALAPPDATA;
 
   const candidates = [
-    path.join(programFiles, "Git", "bin", "bash.exe"),
-    path.join(programFiles, "Git", "usr", "bin", "bash.exe"),
-    path.join(programFilesX86, "Git", "bin", "bash.exe"),
+    path.win32.join(programFiles, "Git", "usr", "bin", "bash.exe"),
+    path.win32.join(programFiles, "Git", "bin", "bash.exe"),
+    path.win32.join(programFilesX86, "Git", "usr", "bin", "bash.exe"),
+    path.win32.join(programFilesX86, "Git", "bin", "bash.exe"),
   ];
   if (localAppData) {
-    candidates.push(path.join(localAppData, "Programs", "Git", "bin", "bash.exe"));
+    candidates.push(
+      path.win32.join(localAppData, "Programs", "Git", "usr", "bin", "bash.exe"),
+      path.win32.join(localAppData, "Programs", "Git", "bin", "bash.exe"),
+    );
   }
   // Last resort: rely on PATH resolution.
   candidates.push("bash.exe");
   return candidates;
+}
+
+/**
+ * Prefer Git-for-Windows' stable MSYS bash over its `bin\\bash.exe` launcher.
+ * The launcher can exit after spawning a differently-pid'd `usr\\bin\\bash.exe`,
+ * which breaks process-tree ownership and leaves detached commands behind.
+ */
+export function preferStableWindowsBashPath(
+  shell: string,
+  pathExists: (candidate: string) => boolean = existsSync,
+): string {
+  const normalized = path.win32.normalize(shell);
+  if (path.win32.basename(normalized).toLowerCase() !== "bash.exe") {
+    return shell;
+  }
+  const binDir = path.win32.dirname(normalized);
+  if (path.win32.basename(binDir).toLowerCase() !== "bin") {
+    return shell;
+  }
+  const binParent = path.win32.dirname(binDir);
+  if (path.win32.basename(binParent).toLowerCase() === "usr") {
+    return normalized;
+  }
+  const stableBash = path.win32.join(binParent, "usr", "bin", "bash.exe");
+  return pathExists(stableBash) ? stableBash : shell;
 }
 
 /**

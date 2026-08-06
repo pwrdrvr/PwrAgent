@@ -9,7 +9,7 @@ import {
 } from "@pwragent/shared";
 import { getNativeBinding } from "./native-binding.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 42;
+export const CURRENT_STATE_DB_USER_VERSION = 44;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -210,6 +210,16 @@ const DIRECTORY_OVERLAY_SCHEMA = `
 CREATE TABLE IF NOT EXISTS directory_overlay (
   directory_key TEXT PRIMARY KEY,
   payload       TEXT NOT NULL
+);
+`;
+
+/* Star Map card arrangement: one row per dragged card
+   (entry_key = "<instanceId> <threadKey>"), LWW-merged and synced across
+   the federation. Payload is a StarMapArrangementEntry JSON blob. */
+const STAR_MAP_ARRANGEMENT_SCHEMA = `
+CREATE TABLE IF NOT EXISTS star_map_arrangement (
+  entry_key TEXT PRIMARY KEY,
+  payload   TEXT NOT NULL
 );
 `;
 
@@ -869,6 +879,19 @@ CREATE INDEX IF NOT EXISTS idx_thread_message_origins_thread
   ON thread_message_origins(backend, thread_id, created_at, message_id);
 `;
 
+const REMOTE_THREAD_PIN_SCHEMA = `
+CREATE TABLE IF NOT EXISTS remote_thread_pins (
+  instance_id TEXT NOT NULL,
+  backend     TEXT NOT NULL,
+  thread_id   TEXT NOT NULL,
+  added_at    INTEGER NOT NULL,
+  payload     TEXT NOT NULL,
+  PRIMARY KEY (instance_id, backend, thread_id)
+);
+CREATE INDEX IF NOT EXISTS idx_remote_thread_pins_instance
+  ON remote_thread_pins(instance_id, added_at DESC);
+`;
+
 export const FEDERATION_SCHEMA = `
 CREATE TABLE IF NOT EXISTS federation_peers (
   peer_id       TEXT PRIMARY KEY,
@@ -1251,6 +1274,21 @@ export class StateDb {
     if ((db.pragma("user_version", { simple: true }) as number) < 42) {
       db.transaction(() => {
         repairReenrolledFederationPeerRevocations(db);
+        db.pragma("user_version = 42");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 43) {
+      db.transaction(() => {
+        // Viewer-owned pins of remote federated threads (Cmd+K "add to my
+        // list"). Deliberately local-only state: the owning instance never
+        // learns it has been pinned.
+        db.exec(REMOTE_THREAD_PIN_SCHEMA);
+        db.pragma("user_version = 43");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 44) {
+      db.transaction(() => {
+        db.exec(STAR_MAP_ARRANGEMENT_SCHEMA);
         db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
       })();
     }
@@ -1437,6 +1475,8 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     db.exec(THREAD_TOOL_ACCOUNTING_SCHEMA);
     ensureThreadMessageOriginSchema(db);
     db.exec(FEDERATION_SCHEMA);
+    db.exec(REMOTE_THREAD_PIN_SCHEMA);
+    db.exec(STAR_MAP_ARRANGEMENT_SCHEMA);
     if ((db.pragma("user_version", { simple: true }) as number) < 4) {
       db.pragma("user_version = 4");
     }

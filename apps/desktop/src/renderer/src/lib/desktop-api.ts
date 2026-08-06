@@ -102,12 +102,25 @@ import type {
   ReadFederationDiagnosticsResponse,
   ReadFederationTailscaleStatusRequest,
   ReadFederationTailscaleStatusResponse,
+  AddRemoteThreadPinRequest,
+  AddRemoteThreadPinResponse,
+  FederationJumpSearchRequest,
+  FederationJumpSearchResponse,
+  RemoveRemoteThreadPinRequest,
+  RemoveRemoteThreadPinResponse,
+  SetRemoteThreadLocalPinRequest,
+  SetRemoteThreadLocalPinResponse,
   ResetFederationEnrollmentRequest,
   ResetFederationEnrollmentResponse,
   RevokeFederationPeerRequest,
   RevokeFederationPeerResponse,
   SetCelestialIconRequest,
   SetCelestialIconResponse,
+  ReadStarMapArrangementResponse,
+  SetStarMapCardPositionRequest,
+  StarMapIntakeRequest,
+  StarMapIntakeResponse,
+  FederationTarget,
   ReorderDirectoryPinsRequest,
   ReorderDirectoryPinsResponse,
   ReorderThreadPinsRequest,
@@ -491,6 +504,13 @@ export type DesktopApi = {
   setCelestialIcon?: (
     request: SetCelestialIconRequest,
   ) => Promise<SetCelestialIconResponse>;
+  readStarMapArrangement?: () => Promise<ReadStarMapArrangementResponse>;
+  setStarMapCardPosition?: (
+    request: SetStarMapCardPositionRequest,
+  ) => Promise<ReadStarMapArrangementResponse>;
+  dispatchStarMapIntake?: (
+    request: StarMapIntakeRequest & { federationTarget?: FederationTarget },
+  ) => Promise<StarMapIntakeResponse>;
   ping?: () => string;
   listSkills?: (
     request?: AppServerListSkillsRequest
@@ -766,6 +786,28 @@ export type DesktopApi = {
   reorderThreadPins?: (
     request: ReorderThreadPinsRequest
   ) => Promise<ReorderThreadPinsResponse>;
+  /**
+   * Viewer-owned pins of remote federated threads (⌘K "add to my list").
+   * Stored only on this instance; removal works while the owner is
+   * unreachable and never archives the owner's thread.
+   */
+  addRemoteThreadPin?: (
+    request: AddRemoteThreadPinRequest
+  ) => Promise<AddRemoteThreadPinResponse>;
+  removeRemoteThreadPin?: (
+    request: RemoveRemoteThreadPinRequest
+  ) => Promise<RemoveRemoteThreadPinResponse>;
+  /**
+   * VIEWER-owned rank for a remote row in the local Pins section. Never
+   * routed to the owner — pin or unpin and only the viewer knows.
+   */
+  setRemoteThreadLocalPin?: (
+    request: SetRemoteThreadLocalPinRequest
+  ) => Promise<SetRemoteThreadLocalPinResponse>;
+  /** ⌘K federated jump search across connected peers. */
+  jumpSearchRemoteThreads?: (
+    request: FederationJumpSearchRequest
+  ) => Promise<FederationJumpSearchResponse>;
   setThreadParent?: (
     request: SetThreadParentRequest
   ) => Promise<SetThreadParentResponse>;

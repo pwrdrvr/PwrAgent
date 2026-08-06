@@ -57,6 +57,7 @@ describe("PwrAgent messaging agent tools", () => {
     expect(specs[0]?.type === "namespace" ? specs[0].tools.map((tool) => tool.name) : [])
       .toEqual([
       "get_current_messaging_surface",
+      "send_private_response",
       "attach_thread_here",
       "inspect_messaging_pdfs",
       "search_messaging_pdf_text",
@@ -64,6 +65,7 @@ describe("PwrAgent messaging agent tools", () => {
     ]);
     expect(router.buildMcpTools().map((tool) => tool.name)).toEqual([
       "get_current_messaging_surface",
+      "send_private_response",
       "attach_thread_here",
     ]);
     expect(

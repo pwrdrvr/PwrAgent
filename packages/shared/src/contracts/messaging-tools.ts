@@ -14,6 +14,7 @@ export const PWRAGENT_MESSAGING_TOOL_NAMESPACE = "pwragent_messaging";
 
 export const PWRAGENT_MESSAGING_OPERATION_NAMES = [
   "get_current_messaging_surface",
+  "send_private_response",
   "attach_thread_here",
   "inspect_messaging_pdfs",
   "search_messaging_pdf_text",
@@ -125,6 +126,12 @@ export type PwrAgentMessagingLocationSummary = {
 
 export type GetCurrentMessagingSurfaceToolArgs = Record<string, never>;
 
+export type SendPrivateResponseToolArgs = {
+  awaitReply?: boolean;
+  replyInstructions?: string;
+  text: string;
+};
+
 export type AttachThreadHerePlacement =
   | "auto"
   | "new_child"
@@ -160,6 +167,14 @@ export type AttachThreadHereResult = {
   location: PwrAgentMessagingLocationSummary;
   outcome: "attached" | "created_and_attached";
   placement: Exclude<AttachThreadHerePlacement, "auto">;
+};
+
+export type SendPrivateResponseResult = {
+  awaitingReply?: boolean;
+  channel: MessagingChannelKind;
+  deliveredAt: number;
+  outcome: "delivered";
+  recipient: PwrAgentMessagingActorSummary;
 };
 
 export type PwrAgentMessagingPdfAttachmentSummary = {
@@ -215,6 +230,7 @@ export type PwrAgentMessagingToolImage = {
 export type PwrAgentMessagingToolArgsByOperation = {
   get_current_messaging_surface: GetCurrentMessagingSurfaceToolArgs;
   get_current_location: GetCurrentMessagingSurfaceToolArgs;
+  send_private_response: SendPrivateResponseToolArgs;
   attach_thread_here: AttachThreadHereToolArgs;
   inspect_messaging_pdfs: InspectMessagingPdfsToolArgs;
   search_messaging_pdf_text: SearchMessagingPdfTextToolArgs;
@@ -244,6 +260,7 @@ export type PwrAgentMessagingResponse =
         | {
             location: PwrAgentMessagingLocationSummary;
           }
+        | SendPrivateResponseResult
         | AttachThreadHereResult
         | {
             attachments: PwrAgentMessagingPdfAttachmentSummary[];

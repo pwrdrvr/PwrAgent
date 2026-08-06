@@ -93,8 +93,16 @@ import type {
   AttachDirectoryToThreadResponse,
   DetachDirectoryFromThreadRequest,
   DetachDirectoryFromThreadResponse,
+  AddRemoteThreadPinRequest,
+  AddRemoteThreadPinResponse,
+  FederationJumpSearchRequest,
+  FederationJumpSearchResponse,
   MarkThreadSeenRequest,
   MarkThreadSeenResponse,
+  RemoveRemoteThreadPinRequest,
+  RemoveRemoteThreadPinResponse,
+  SetRemoteThreadLocalPinRequest,
+  SetRemoteThreadLocalPinResponse,
   ReorderDirectoryPinsRequest,
   ReorderDirectoryPinsResponse,
   ReorderThreadPinsRequest,
@@ -269,6 +277,11 @@ import type {
   RevokeFederationPeerResponse,
   SetCelestialIconRequest,
   SetCelestialIconResponse,
+  ReadStarMapArrangementResponse,
+  SetStarMapCardPositionRequest,
+  StarMapIntakeRequest,
+  StarMapIntakeResponse,
+  FederationTarget,
   ReadDesktopSettingsRequest,
   ReadDesktopSettingsResponse,
   RefreshDesktopCodexDiscoveryRequest,
@@ -447,6 +460,9 @@ import {
   FEDERATION_RESET_ENROLLMENT_CHANNEL,
   FEDERATION_REVOKE_PEER_CHANNEL,
   FEDERATION_SET_CELESTIAL_ICON_CHANNEL,
+  STAR_MAP_INTAKE_CHANNEL,
+  STAR_MAP_READ_ARRANGEMENT_CHANNEL,
+  STAR_MAP_SET_CARD_POSITION_CHANNEL,
   FEDERATION_TAILSCALE_CONFIGURE_CHANNEL,
   FEDERATION_TAILSCALE_STATUS_CHANNEL,
   CODEX_ENVIRONMENT_SETUP_PROGRESS_CHANNEL,
@@ -503,6 +519,10 @@ import {
   NAVIGATION_RESOLVE_EDIT_COMMIT_STATES_CHANNEL,
   NAVIGATION_LIST_WORKTREE_OTHER_CHANGES_CHANNEL,
   NAVIGATION_GET_WORKTREE_OTHER_CHANGE_DIFF_CHANNEL,
+  FEDERATION_JUMP_SEARCH_CHANNEL,
+  NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL,
+  NAVIGATION_REMOVE_REMOTE_THREAD_PIN_CHANNEL,
+  NAVIGATION_SET_REMOTE_THREAD_LOCAL_PIN_CHANNEL,
   NAVIGATION_REORDER_DIRECTORY_PINS_CHANNEL,
   NAVIGATION_REORDER_THREAD_PINS_CHANNEL,
   NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL,
@@ -875,6 +895,16 @@ const desktopApi = Object.freeze({
     request: SetCelestialIconRequest,
   ): Promise<SetCelestialIconResponse> =>
     await ipcRenderer.invoke(FEDERATION_SET_CELESTIAL_ICON_CHANNEL, request),
+  readStarMapArrangement: async (): Promise<ReadStarMapArrangementResponse> =>
+    await ipcRenderer.invoke(STAR_MAP_READ_ARRANGEMENT_CHANNEL),
+  setStarMapCardPosition: async (
+    request: SetStarMapCardPositionRequest,
+  ): Promise<ReadStarMapArrangementResponse> =>
+    await ipcRenderer.invoke(STAR_MAP_SET_CARD_POSITION_CHANNEL, request),
+  dispatchStarMapIntake: async (
+    request: StarMapIntakeRequest & { federationTarget?: FederationTarget },
+  ): Promise<StarMapIntakeResponse> =>
+    await ipcRenderer.invoke(STAR_MAP_INTAKE_CHANNEL, request),
   ...(isDevelopment
     ? {
         getRuntimeIdentity: async (): Promise<RuntimeIdentity> =>
@@ -1389,6 +1419,28 @@ const desktopApi = Object.freeze({
     request: ReorderThreadPinsRequest,
   ): Promise<ReorderThreadPinsResponse> =>
     await ipcRenderer.invoke(NAVIGATION_REORDER_THREAD_PINS_CHANNEL, request),
+  addRemoteThreadPin: async (
+    request: AddRemoteThreadPinRequest,
+  ): Promise<AddRemoteThreadPinResponse> =>
+    await ipcRenderer.invoke(NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL, request),
+  removeRemoteThreadPin: async (
+    request: RemoveRemoteThreadPinRequest,
+  ): Promise<RemoveRemoteThreadPinResponse> =>
+    await ipcRenderer.invoke(
+      NAVIGATION_REMOVE_REMOTE_THREAD_PIN_CHANNEL,
+      request,
+    ),
+  setRemoteThreadLocalPin: async (
+    request: SetRemoteThreadLocalPinRequest,
+  ): Promise<SetRemoteThreadLocalPinResponse> =>
+    await ipcRenderer.invoke(
+      NAVIGATION_SET_REMOTE_THREAD_LOCAL_PIN_CHANNEL,
+      request,
+    ),
+  jumpSearchRemoteThreads: async (
+    request: FederationJumpSearchRequest,
+  ): Promise<FederationJumpSearchResponse> =>
+    await ipcRenderer.invoke(FEDERATION_JUMP_SEARCH_CHANNEL, request),
   setThreadParent: async (
     request: SetThreadParentRequest,
   ): Promise<SetThreadParentResponse> =>

@@ -6,6 +6,7 @@ import type {
   AutomationThreadSummary,
   DirectoryLaunchpadOverlayState,
   DirectoryOverlayState,
+  FederatedThreadRef,
   LinkedDirectorySummary,
   MarkThreadSeenResponse,
   MessagingThreadBindingSummary,
@@ -14,6 +15,7 @@ import type {
   NavigationDirectoryGitStatus,
   NavigationLaunchpadDefaults,
   NavigationSnapshot,
+  NavigationThreadSummary,
   PrSummary,
   PrAutoDispatchBudgetConfig,
   PrAutoDispatchBudgetStatus,
@@ -31,12 +33,17 @@ import type {
   ThreadPrAutoDispatchEventKind,
   ThreadPrAutoDispatchPending,
   ThreadPullRequestWatchSummary,
+  RemoteThreadPin,
+  StarMapArrangementEntry,
   ThreadSubAgentSummary,
   ThreadTurnFailure,
   ThreadUsageLineRecord,
   WorktreeSnapshotSummary,
 } from "@pwragent/shared";
 import {
+  isStarMapArrangementEntry,
+  mergeStarMapArrangementEntries,
+  starMapArrangementEntryKey,
   DEFAULT_PULL_REQUEST_PROVIDER,
   AGENT_PERSONA_INSTRUCTIONS_LINE_GUIDANCE,
   MAX_MESSAGING_BINDING_TRANSITION_LOG_ENTRIES,
@@ -45,12 +52,14 @@ import {
   MAX_PERMISSION_TRANSITION_LOG_ENTRIES,
   MAX_TURN_FAILURE_LOG_ENTRIES,
   buildPullRequestStatusKey,
+  buildFederatedThreadRef,
   buildThreadIdentityKey,
   buildNavigationSnapshot,
   buildNavigationSnapshotHash,
   applyNavigationLaunchpadProviderSettingsPatch,
   estimateTokenUsageCost,
   isAcpBackendId,
+  isRemoteFederationTarget,
   parseThreadIdentityKey,
   projectNavigationLaunchpadProviderSettings,
   resolveOpenAiPricingServiceTier,
@@ -463,6 +472,26 @@ function shouldApplyAcpExecutionModeSnapshot(
       )
     )
   );
+}
+
+function remotePinInstanceId(ref: FederatedThreadRef): string {
+  if (!isRemoteFederationTarget(ref.target)) {
+    throw new Error("Remote thread pins require a remote federation target.");
+  }
+  return ref.target.instanceId;
+}
+
+/**
+ * Cached pin summaries persist unstamped: the `federation` stamp (label,
+ * peer status, capabilities) is live state re-applied at snapshot-merge
+ * time, and persisting a stale copy would let an old peerStatus leak into
+ * rendered rows.
+ */
+function stripFederationStamp(
+  summary: NavigationThreadSummary,
+): NavigationThreadSummary {
+  const { federation: _federation, ...rest } = summary;
+  return rest;
 }
 
 export class SqliteOverlayStore {
@@ -1758,6 +1787,262 @@ export class SqliteOverlayStore {
     return nextState;
   }
 
+  async addRemoteThreadPin(params: {
+    ref: FederatedThreadRef;
+    summary?: NavigationThreadSummary;
+    instanceLabel: string;
+    addedAt?: number;
+    pinnedVia?: RemoteThreadPin["pinnedVia"];
+  }): Promise<RemoteThreadPin> {
+    const instanceId = remotePinInstanceId(params.ref);
+    const addedAt = params.addedAt ?? Date.now();
+    const payload = JSON.stringify({
+      instanceLabel: params.instanceLabel,
+      summary: params.summary ? stripFederationStamp(params.summary) : undefined,
+      pinnedVia: params.pinnedVia,
+    });
+    this.stateDb.raw
+      .prepare(
+        `INSERT INTO remote_thread_pins(
+           instance_id,
+           backend,
+           thread_id,
+           added_at,
+           payload
+         ) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(instance_id, backend, thread_id) DO UPDATE SET
+           payload = excluded.payload`,
+      )
+      .run(instanceId, params.ref.backend, params.ref.threadId, addedAt, payload);
+    const row = this.stateDb.raw
+      .prepare(
+        `SELECT added_at FROM remote_thread_pins
+         WHERE instance_id = ? AND backend = ? AND thread_id = ?`,
+      )
+      .get(instanceId, params.ref.backend, params.ref.threadId) as
+        | { added_at: number }
+        | undefined;
+    return {
+      ref: params.ref,
+      addedAt: row?.added_at ?? addedAt,
+      instanceLabel: params.instanceLabel,
+      ...(params.summary ? { summary: stripFederationStamp(params.summary) } : {}),
+      ...(params.pinnedVia ? { pinnedVia: params.pinnedVia } : {}),
+    };
+  }
+
+  /**
+   * Set or clear the VIEWER-owned rank for a pinned remote thread. Patches
+   * the payload in place so the cached summary, label, and pinnedVia are
+   * untouched; a missing pin row is a no-op (returns undefined rank).
+   */
+  async setRemoteThreadLocalPin(params: {
+    ref: FederatedThreadRef;
+    pinnedRank?: string | null;
+  }): Promise<{ pinnedRank?: string }> {
+    const instanceId = remotePinInstanceId(params.ref);
+    const row = this.stateDb.raw
+      .prepare(
+        `SELECT payload FROM remote_thread_pins
+         WHERE instance_id = ? AND backend = ? AND thread_id = ?`,
+      )
+      .get(instanceId, params.ref.backend, params.ref.threadId) as
+        | { payload: string }
+        | undefined;
+    if (!row) {
+      return {};
+    }
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(row.payload) as Record<string, unknown>;
+    } catch {
+      parsed = {};
+    }
+    const pinnedRank = params.pinnedRank?.trim() || undefined;
+    if (pinnedRank === undefined) {
+      delete parsed.localPinnedRank;
+    } else {
+      parsed.localPinnedRank = pinnedRank;
+    }
+    this.stateDb.raw
+      .prepare(
+        `UPDATE remote_thread_pins
+         SET payload = ?
+         WHERE instance_id = ? AND backend = ? AND thread_id = ?`,
+      )
+      .run(
+        JSON.stringify(parsed),
+        instanceId,
+        params.ref.backend,
+        params.ref.threadId,
+      );
+    return pinnedRank === undefined ? {} : { pinnedRank };
+  }
+
+  /**
+   * Local threads' pin ranks (with sub-thread linkage), scanned from the
+   * overlay payloads. Cheap one-shot read for pin-visibility decisions that
+   * must not pay for a full navigation snapshot build.
+   */
+  async listPinnedThreadOverlayRanks(): Promise<
+    Array<{ pinnedRank: string; parentThreadId?: string }>
+  > {
+    const rows = this.stateDb.raw
+      .prepare("SELECT payload FROM threads")
+      .all() as Array<{ payload: string }>;
+    const ranks: Array<{ pinnedRank: string; parentThreadId?: string }> = [];
+    for (const row of rows) {
+      try {
+        const parsed = JSON.parse(row.payload) as {
+          pinnedRank?: unknown;
+          parentThreadId?: unknown;
+        };
+        if (typeof parsed.pinnedRank === "string" && parsed.pinnedRank) {
+          ranks.push({
+            pinnedRank: parsed.pinnedRank,
+            ...(typeof parsed.parentThreadId === "string" && parsed.parentThreadId
+              ? { parentThreadId: parsed.parentThreadId }
+              : {}),
+          });
+        }
+      } catch {
+        // Malformed payloads never block a best-effort visibility check.
+      }
+    }
+    return ranks;
+  }
+
+  async hasRemoteThreadPin(params: { ref: FederatedThreadRef }): Promise<boolean> {
+    const row = this.stateDb.raw
+      .prepare(
+        `SELECT 1 FROM remote_thread_pins
+         WHERE instance_id = ? AND backend = ? AND thread_id = ?`,
+      )
+      .get(
+        remotePinInstanceId(params.ref),
+        params.ref.backend,
+        params.ref.threadId,
+      );
+    return row !== undefined;
+  }
+
+  async removeRemoteThreadPin(params: { ref: FederatedThreadRef }): Promise<boolean> {
+    const result = this.stateDb.raw
+      .prepare(
+        `DELETE FROM remote_thread_pins
+         WHERE instance_id = ? AND backend = ? AND thread_id = ?`,
+      )
+      .run(
+        remotePinInstanceId(params.ref),
+        params.ref.backend,
+        params.ref.threadId,
+      );
+    return result.changes > 0;
+  }
+
+  async listRemoteThreadPins(): Promise<RemoteThreadPin[]> {
+    const rows = this.stateDb.raw
+      .prepare(
+        `SELECT instance_id, backend, thread_id, added_at, payload
+         FROM remote_thread_pins
+         ORDER BY added_at DESC`,
+      )
+      .all() as Array<{
+        instance_id: string;
+        backend: string;
+        thread_id: string;
+        added_at: number;
+        payload: string;
+      }>;
+    const pins: RemoteThreadPin[] = [];
+    for (const row of rows) {
+      let parsed: {
+        instanceLabel?: unknown;
+        summary?: unknown;
+        pinnedVia?: unknown;
+        localPinnedRank?: unknown;
+      };
+      try {
+        parsed = JSON.parse(row.payload) as typeof parsed;
+      } catch {
+        // A malformed payload must not break the whole list; the row still
+        // identifies a pinned thread and can be re-hydrated on the next fetch.
+        parsed = {};
+      }
+      pins.push({
+        ref: buildFederatedThreadRef({
+          backend: row.backend as FederatedThreadRef["backend"],
+          instanceId: row.instance_id,
+          threadId: row.thread_id,
+        }),
+        addedAt: row.added_at,
+        instanceLabel:
+          typeof parsed.instanceLabel === "string" && parsed.instanceLabel
+            ? parsed.instanceLabel
+            : row.instance_id,
+        ...(parsed.summary && typeof parsed.summary === "object"
+          ? { summary: parsed.summary as NavigationThreadSummary }
+          : {}),
+        ...(parsed.pinnedVia === "companion" || parsed.pinnedVia === "explicit"
+          ? { pinnedVia: parsed.pinnedVia }
+          : {}),
+        ...(typeof parsed.localPinnedRank === "string" && parsed.localPinnedRank
+          ? { localPinnedRank: parsed.localPinnedRank }
+          : {}),
+      });
+    }
+    return pins;
+  }
+
+  async updateRemoteThreadPinSnapshots(
+    entries: Array<{
+      ref: FederatedThreadRef;
+      summary: NavigationThreadSummary;
+      instanceLabel: string;
+    }>,
+  ): Promise<void> {
+    if (entries.length === 0) {
+      return;
+    }
+    const select = this.stateDb.raw.prepare(
+      `SELECT payload FROM remote_thread_pins
+       WHERE instance_id = ? AND backend = ? AND thread_id = ?`,
+    );
+    const update = this.stateDb.raw.prepare(
+      `UPDATE remote_thread_pins
+       SET payload = ?
+       WHERE instance_id = ? AND backend = ? AND thread_id = ?`,
+    );
+    this.stateDb.raw.transaction(() => {
+      for (const entry of entries) {
+        const instanceId = remotePinInstanceId(entry.ref);
+        // Patch, never replace: the payload also carries viewer-owned state
+        // (localPinnedRank, pinnedVia) that a snapshot refresh must not wipe.
+        const row = select.get(instanceId, entry.ref.backend, entry.ref.threadId) as
+          | { payload: string }
+          | undefined;
+        let parsed: Record<string, unknown> = {};
+        if (row) {
+          try {
+            parsed = JSON.parse(row.payload) as Record<string, unknown>;
+          } catch {
+            parsed = {};
+          }
+        }
+        update.run(
+          JSON.stringify({
+            ...parsed,
+            instanceLabel: entry.instanceLabel,
+            summary: stripFederationStamp(entry.summary),
+          }),
+          instanceId,
+          entry.ref.backend,
+          entry.ref.threadId,
+        );
+      }
+    })();
+  }
+
   async setThreadAgent(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;
@@ -1841,11 +2126,55 @@ export class SqliteOverlayStore {
    */
   async reorderThreadPins(params: {
     threadKeys: string[];
+    /**
+     * Keys owned by remote thread pins: their rank writes patch the
+     * remote_thread_pins payload (viewer-owned) instead of the local thread
+     * overlay, inside the same transaction so a mixed reorder is atomic.
+     */
+    remoteRefsByKey?: Record<string, FederatedThreadRef>;
   }): Promise<Record<string, string>> {
     const pinnedRanks: Record<string, string> = {};
+    const selectRemote = this.stateDb.raw.prepare(
+      `SELECT payload FROM remote_thread_pins
+       WHERE instance_id = ? AND backend = ? AND thread_id = ?`,
+    );
+    const updateRemote = this.stateDb.raw.prepare(
+      `UPDATE remote_thread_pins
+       SET payload = ?
+       WHERE instance_id = ? AND backend = ? AND thread_id = ?`,
+    );
     const write = this.stateDb.raw.transaction(() => {
       let rankIndex = 0;
       for (const threadKey of params.threadKeys) {
+        const remoteRef = params.remoteRefsByKey?.[threadKey];
+        if (remoteRef) {
+          const instanceId = remotePinInstanceId(remoteRef);
+          const row = selectRemote.get(
+            instanceId,
+            remoteRef.backend,
+            remoteRef.threadId,
+          ) as { payload: string } | undefined;
+          if (!row) {
+            continue;
+          }
+          let parsed: Record<string, unknown>;
+          try {
+            parsed = JSON.parse(row.payload) as Record<string, unknown>;
+          } catch {
+            parsed = {};
+          }
+          rankIndex += 1;
+          const pinnedRank = String(rankIndex * 1024);
+          pinnedRanks[threadKey] = pinnedRank;
+          parsed.localPinnedRank = pinnedRank;
+          updateRemote.run(
+            JSON.stringify(parsed),
+            instanceId,
+            remoteRef.backend,
+            remoteRef.threadId,
+          );
+          continue;
+        }
         const parts = parseThreadIdentityKey(threadKey);
         if (!parts) {
           continue;
@@ -2019,6 +2348,52 @@ export class SqliteOverlayStore {
 
   async readAllDirectoryOverlays(): Promise<Record<string, DirectoryOverlayState>> {
     return this.readAllDirectoryOverlaysSync();
+  }
+
+  async readStarMapArrangement(): Promise<StarMapArrangementEntry[]> {
+    const rows = this.stateDb.raw
+      .prepare("SELECT payload FROM star_map_arrangement")
+      .all() as { payload: string }[];
+    return rows
+      .map((row) => JSON.parse(row.payload) as unknown)
+      .filter(isStarMapArrangementEntry);
+  }
+
+  /**
+   * LWW-merge arrangement entries into the table. Returns the accepted
+   * (newer-than-stored) entries so the federation layer re-broadcasts
+   * deltas only; an empty accepted list means the merge was a no-op.
+   */
+  async mergeStarMapArrangement(
+    incoming: StarMapArrangementEntry[],
+  ): Promise<{ accepted: StarMapArrangementEntry[] }> {
+    const accepted: StarMapArrangementEntry[] = [];
+    const write = this.stateDb.raw.transaction(() => {
+      const select = this.stateDb.raw.prepare(
+        "SELECT payload FROM star_map_arrangement WHERE entry_key = ?",
+      );
+      const upsert = this.stateDb.raw.prepare(
+        `INSERT OR REPLACE INTO star_map_arrangement(entry_key, payload)
+         VALUES (?, ?)`,
+      );
+      for (const entry of incoming) {
+        if (!isStarMapArrangementEntry(entry)) continue;
+        const key = starMapArrangementEntryKey(entry);
+        const row = select.get(key) as { payload: string } | undefined;
+        const existing = row
+          ? (JSON.parse(row.payload) as StarMapArrangementEntry)
+          : undefined;
+        const merged = mergeStarMapArrangementEntries(
+          existing ? [existing] : [],
+          [entry],
+        );
+        if (!merged.changed) continue;
+        upsert.run(key, JSON.stringify(entry));
+        accepted.push(entry);
+      }
+    });
+    write();
+    return { accepted };
   }
 
   async setThreadPullRequests(params: {

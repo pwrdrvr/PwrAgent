@@ -84,7 +84,7 @@ import { useEditCommitStates } from "./useEditCommitStates";
 import type { HistoryNavControls } from "../chrome/HistoryNavButtons";
 import type { MastheadActionsProps } from "../chrome/MastheadActions";
 import { ThreadFindBar } from "./ThreadFindBar";
-import { ThreadHeader } from "./ThreadHeader";
+import { ThreadHeader, type StarMapToggleControls } from "./ThreadHeader";
 import { ThreadPlaceholderHeader } from "./ThreadPlaceholderHeader";
 import { ImageLightbox } from "./ImageLightbox";
 import { TranscriptCopyButton } from "./TranscriptCopyButton";
@@ -1005,6 +1005,8 @@ export type ThreadViewProps = {
    * Owned by App's useNavigationHistory.
    */
   historyNav?: HistoryNavControls;
+  /** Star Map toggle rendered in the header chrome. Owned by App. */
+  starMap?: StarMapToggleControls;
   /** In-thread find bar (⌘F): open state + close callback, owned by App. */
   findOpen?: boolean;
   onFindOpenChange?: (open: boolean) => void;
@@ -1615,6 +1617,7 @@ export function ThreadView(props: ThreadViewProps) {
       : undefined;
   const selectedThreadTerminalDisabledReason = resolveRemoteTerminalDisabledReason(
     selectedThread?.federation,
+    Boolean(readRendererFederationTarget()),
   );
   const toggleSelectedThreadTerminal = useCallback(() => {
     if (!selectedThreadKey) return;
@@ -2739,6 +2742,7 @@ export function ThreadView(props: ThreadViewProps) {
           }}
           masthead={props.mastheadActions}
           history={props.historyNav}
+          starMap={props.starMap}
         />
 
         <div
@@ -2797,6 +2801,7 @@ export function ThreadView(props: ThreadViewProps) {
           }}
           masthead={props.mastheadActions}
           history={props.historyNav}
+          starMap={props.starMap}
         />
         <div className="thread-empty-state">
           <div className="thread-empty-state__content">
@@ -2889,6 +2894,7 @@ export function ThreadView(props: ThreadViewProps) {
           }}
           masthead={props.mastheadActions}
           history={props.historyNav}
+          starMap={props.starMap}
         />
 
         <div
@@ -3035,7 +3041,15 @@ export function ThreadView(props: ThreadViewProps) {
     >
       <ThreadHeader
         desktopApi={props.desktopApi}
-        projectLabel={props.selectedDirectory?.label}
+        projectLabel={
+          props.selectedDirectory?.label
+          // A remote-pinned thread whose project has no local counterpart
+          // belongs to no local directory summary; the breadcrumb still
+          // shows the owner-reported project name.
+          ?? (selectedThread?.federation
+            ? selectedThread.linkedDirectories?.[0]?.label
+            : undefined)
+        }
         thread={selectedThread!}
         backends={props.backends}
         onOpenMessagingActivity={props.onOpenMessagingActivity}
@@ -3053,6 +3067,7 @@ export function ThreadView(props: ThreadViewProps) {
         }}
         masthead={props.mastheadActions}
         history={props.historyNav}
+        starMap={props.starMap}
       />
 
       <div
@@ -3580,9 +3595,17 @@ function threadDirectoryPaths(thread: NavigationThreadSummary): string[] {
  */
 function resolveRemoteTerminalDisabledReason(
   federation: NavigationThreadSummary["federation"],
+  isFederationWindow: boolean,
 ): string | undefined {
   if (!federation) {
     return undefined;
+  }
+  if (!isFederationWindow) {
+    // Remote-pinned thread viewed in the MAIN window. The integrated-terminal
+    // IPC routes by window identity (main never trusts a renderer-supplied
+    // target), so a toggle here would spawn a LOCAL shell under a remote
+    // thread — the exact misrepresentation the remote-PTY design forbids.
+    return `Terminal for this thread runs on ${federation.instanceLabel} — open its remote window.`;
   }
   if (
     federation.peerStatus !== undefined &&

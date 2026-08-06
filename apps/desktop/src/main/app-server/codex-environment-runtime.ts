@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import {
   accessSync,
   constants,
+  existsSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -22,7 +23,11 @@ import {
 } from "@pwragent/shared";
 import { getMainLogger } from "../log";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
-import { windowsBashCandidates } from "../windows-shell";
+import { wrapCommandInWindowsJob } from "../windows-job-wrapper";
+import {
+  preferStableWindowsBashPath,
+  windowsBashCandidates,
+} from "../windows-shell";
 import type { CodexEnvironmentHydrationStoreLike } from "./codex-environment-hydration-store";
 
 const environmentRuntimeLog = getMainLogger("pwragent:codex-environment-runtime");
@@ -162,6 +167,7 @@ export type CodexEnvironmentDetachedOutput = {
 
 export const DETACHED_OUTPUT_SNAPSHOT_MS = 500;
 const DETACHED_STOP_SIGKILL_GRACE_MS = 2_000;
+const WINDOWS_JOB_READY_TIMEOUT_MS = 10_000;
 
 export type CodexEnvironmentCommandResult = {
   durationMs?: number;
@@ -660,20 +666,52 @@ function runShellCommand(
   const capture = params.captureShellEnvironment
     ? createShellEnvironmentCaptureTarget()
     : undefined;
+  const useWindowsJob =
+    process.platform === "win32"
+    && (params.mode === "detach" || Boolean(params.timeoutMs));
+  const shellArgs: [string, string] = [
+    "-lc",
+    wrapShellCommand(
+      shell,
+      params.command,
+      capture?.filePath,
+      processId,
+    ),
+  ];
+  const windowsJobLaunch = useWindowsJob
+    ? wrapCommandInWindowsJob({
+        args: shellArgs,
+        command: shell,
+        cwd: params.cwd,
+        env: commandEnv,
+      })
+    : undefined;
+  const launch = windowsJobLaunch ?? {
+    args: shellArgs,
+    command: shell,
+    env: commandEnv,
+  };
 
   return new Promise((resolve, reject) => {
     const child = spawn(
-      shell,
-      ["-lc", wrapShellCommand(shell, params.command, capture?.filePath)],
+      launch.command,
+      launch.args,
       {
         cwd: params.cwd,
-        detached: params.mode === "detach" || Boolean(params.timeoutMs),
-        env: commandEnv,
+        // Windows' detached-process flag breaks inherited stdio for the
+        // PowerShell-hosted Job launcher: commands can report exit 0 without
+        // ever running. The Job already owns the complete process tree, so a
+        // second detached process group is both unnecessary and harmful.
+        detached:
+          !windowsJobLaunch
+          && (params.mode === "detach" || Boolean(params.timeoutMs)),
+        env: launch.env,
         // Pipe output even in detach mode so we can drain to a ring buffer,
         // stream to the renderer's anchored output UI, and log non-zero exits.
         // Caller still resolves on spawn for detach mode; we keep listening so
         // long-running children (e.g., `pnpm dev`) report failures.
         stdio: "pipe",
+        windowsHide: true,
       },
     );
 
@@ -684,6 +722,7 @@ function runShellCommand(
     let timeoutHandle: NodeJS.Timeout | undefined;
     let killHandle: NodeJS.Timeout | undefined;
     let forceSettleHandle: NodeJS.Timeout | undefined;
+    let windowsJobReadyTimer: NodeJS.Timeout | undefined;
 
     const appendOutput = (text: string) => {
       combinedOutput = `${combinedOutput}${text}`.slice(-32_000);
@@ -694,15 +733,14 @@ function runShellCommand(
         return;
       }
       try {
-        if (process.platform !== "win32") {
+        if (windowsJobLaunch) {
+          // The launcher is the only process outside its Job. Terminating it
+          // closes the KILL_ON_JOB_CLOSE handle and atomically terminates the
+          // shell plus every descendant, so no taskkill tree walk is needed.
+          child.kill(signal);
+        } else if (process.platform !== "win32") {
           process.kill(-child.pid, signal);
         } else {
-          // child.kill only terminates the immediate bash.exe; its children
-          // (the actual command, e.g. `sleep`) linger, which keeps the `close`
-          // event from firing (timeouts hang) and holds handles on the
-          // workspace temp dir (EBUSY on cleanup). Kill the whole process tree.
-          // Match POSIX stop semantics: SIGTERM gets a non-forced taskkill,
-          // while SIGKILL is the immediate/fallback forced termination.
           const taskkillArgs = ["/pid", String(child.pid), "/t"];
           if (signal === "SIGKILL") {
             taskkillArgs.push("/f");
@@ -711,15 +749,16 @@ function runShellCommand(
           const systemRoot = Object.entries(taskkillEnv).find(
             ([key]) => key.toUpperCase() === "SYSTEMROOT",
           )?.[1];
-          // The explicit environment is necessary to keep the renderer URL out
-          // of the helper, so resolve taskkill without relying on its PATH.
           const taskkill = systemRoot
             ? path.join(systemRoot, "System32", "taskkill.exe")
             : "taskkill";
-          spawnSync(taskkill, taskkillArgs, {
+          const result = spawnSync(taskkill, taskkillArgs, {
             env: taskkillEnv,
             stdio: "ignore",
           });
+          if (result.status !== 0) {
+            child.kill(signal);
+          }
         }
       } catch (error) {
         environmentRuntimeLog.warn("codex-environment-command-kill-failed", {
@@ -758,6 +797,10 @@ function runShellCommand(
       if (forceSettleHandle) {
         clearTimeout(forceSettleHandle);
         forceSettleHandle = undefined;
+      }
+      if (windowsJobReadyTimer) {
+        clearTimeout(windowsJobReadyTimer);
+        windowsJobReadyTimer = undefined;
       }
       cleanupShellEnvironmentCaptureTarget(capture);
       callback();
@@ -868,6 +911,7 @@ function runShellCommand(
         processId,
         message,
       });
+      windowsJobLaunch?.cleanup();
       settle(() => {
         reject(new CodexEnvironmentCommandError(message));
       });
@@ -875,7 +919,6 @@ function runShellCommand(
 
     if (params.mode === "detach") {
       child.once("spawn", () => {
-        registerDetachedProcess();
         // Let the parent exit independently of this child. child.unref()
         // alone doesn't suffice when stdio is "pipe": the libuv pipe
         // handles on child.stdout/stderr also keep the parent's event
@@ -901,9 +944,44 @@ function runShellCommand(
         // Node versions where the type might tighten.
         (child.stdout as { unref?: () => void } | null)?.unref?.();
         (child.stderr as { unref?: () => void } | null)?.unref?.();
-        settle(() => {
-          resolve({ pid: child.pid });
-        });
+        const resolveStarted = () => {
+          // Do not expose the command to Stop/Quit until its Windows Job owns
+          // the shell. Otherwise an immediate stop can kill the launcher while
+          // startup is still pending and reject an action that was reported as
+          // registered.
+          registerDetachedProcess();
+          settle(() => {
+            resolve({ pid: child.pid });
+          });
+        };
+        if (!windowsJobLaunch) {
+          resolveStarted();
+          return;
+        }
+        const readyDeadline = Date.now() + WINDOWS_JOB_READY_TIMEOUT_MS;
+        const pollReady = () => {
+          windowsJobReadyTimer = undefined;
+          if (settled || closed) {
+            return;
+          }
+          if (existsSync(windowsJobLaunch.readyFilePath)) {
+            resolveStarted();
+            return;
+          }
+          if (Date.now() >= readyDeadline) {
+            terminateChild("SIGKILL");
+            settle(() => {
+              reject(
+                new CodexEnvironmentCommandError(
+                  `Windows Job shell did not become ready within ${WINDOWS_JOB_READY_TIMEOUT_MS}ms`,
+                ),
+              );
+            });
+            return;
+          }
+          windowsJobReadyTimer = setTimeout(pollReady, 25);
+        };
+        pollReady();
       });
       // Even in detach mode, log non-zero exits so failed `pnpm dev` /
       // PwrSnap-style launches don't disappear silently, and fire
@@ -911,6 +989,10 @@ function runShellCommand(
       // overlay state for the anchored env-action output UI.
       child.once("close", (code, signal) => {
         closed = true;
+        if (windowsJobReadyTimer) {
+          clearTimeout(windowsJobReadyTimer);
+          windowsJobReadyTimer = undefined;
+        }
         if (params.detachedTerminationKey) {
           const processEntry = detachedCommandProcesses.get(
             params.detachedTerminationKey,
@@ -928,6 +1010,26 @@ function runShellCommand(
         }
         const durationMs = Date.now() - startedAt;
         const output = combinedOutput.trimEnd();
+        if (!settled) {
+          if (windowsJobLaunch && existsSync(windowsJobLaunch.readyFilePath)) {
+            settle(() => {
+              resolve({ pid: child.pid });
+            });
+          } else {
+            settle(() => {
+              reject(
+                new CodexEnvironmentCommandError(
+                  `Codex environment command exited before its Windows Job became ready${buildExitErrorSuffix(output)}`,
+                  {
+                    durationMs,
+                    exitCode: typeof code === "number" ? code : undefined,
+                    output,
+                  },
+                ),
+              );
+            });
+          }
+        }
         if (code === 0) {
           environmentRuntimeLog.info("codex-environment-detached-exit", {
             processId,
@@ -966,12 +1068,14 @@ function runShellCommand(
             },
           );
         }
+        windowsJobLaunch?.cleanup();
       });
       return;
     }
 
     child.once("close", (code, signal) => {
       closed = true;
+      windowsJobLaunch?.cleanup();
       if (killHandle) {
         clearTimeout(killHandle);
         killHandle = undefined;
@@ -1207,18 +1311,25 @@ function isParentElectronRuntimeEnvKey(key: string): boolean {
 
 function resolveCommandShell(env: NodeJS.ProcessEnv): string {
   const requested = env.SHELL?.trim() || process.env.SHELL?.trim();
+  const preferredRequested = requested
+    ? preferStableWindowsBashPath(requested)
+    : undefined;
   // Windows has no /bin/sh; run the agent's bash scripts through
   // Git-for-Windows bash (already a hard dependency) instead.
   const candidates =
     process.platform === "win32"
-      ? [requested, ...windowsBashCandidates()]
+      ? [preferredRequested, requested, ...windowsBashCandidates()]
       : [requested, "/bin/zsh", "/bin/bash", "/bin/sh"];
   const inspected: Array<{ shell: string; reason: string }> = [];
 
   for (const shell of [...new Set(candidates.filter(Boolean))] as string[]) {
     const availability = inspectCommandPath(shell);
     if (availability.available) {
-      if (requested && shell !== requested) {
+      if (
+        requested
+        && shell !== requested
+        && shell !== preferredRequested
+      ) {
         environmentRuntimeLog.warn("codex-environment-shell-fallback", {
           requested,
           shell,
@@ -1344,12 +1455,14 @@ function wrapShellCommand(
   shell: string,
   command: string,
   captureEnvPath?: string,
+  processMarker?: string,
 ): string {
   return [
     ...shellStartupCommands(shell),
     '[ -n "${NVM_DIR:-}" ] && [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"',
     '[ -z "${NVM_DIR:-}" ] && [ -s "$HOME/.nvm/nvm.sh" ] && . "$HOME/.nvm/nvm.sh"',
     "set -e",
+    ...(processMarker ? [`: ${processMarker}`] : []),
     command,
     ...(captureEnvPath
       ? [`{ /usr/bin/env || /bin/env || env; } > ${quoteShellArg(captureEnvPath)} || true`]
