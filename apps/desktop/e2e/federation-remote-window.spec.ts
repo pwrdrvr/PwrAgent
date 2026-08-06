@@ -451,6 +451,8 @@ test.describe("federation remote window", () => {
       const recoveryDraft = "Keep this draft while the gateway reconnects";
       await expect(remoteReply).toBeVisible();
       await remoteReply.fill(recoveryDraft);
+      const sendButton = remote.getByRole("button", { name: "Send" });
+      await expect(sendButton).toBeEnabled();
 
       // The gateway only ever served federation RPCs — no local PR
       // refresh or other local-only method leaked across the wire.
@@ -469,7 +471,7 @@ test.describe("federation remote window", () => {
         remote.locator(".composer-tiptap-input__editor"),
       ).toHaveAttribute("contenteditable", "true", { timeout: 15_000 });
       await expect(remoteReply).toContainText(recoveryDraft);
-      await expect(remote.getByRole("button", { name: "Send" })).toBeDisabled();
+      await expect(sendButton).toBeDisabled();
       await expect(remoteRowOne).toBeVisible();
       await expect(remoteRowOne).toHaveClass(/is-remote-offline/);
       await expect(locallyMountedRemoteRow).toBeVisible();
@@ -491,7 +493,7 @@ test.describe("federation remote window", () => {
       await expect(remoteRowOne).not.toHaveClass(/is-remote-offline/);
       await expect(locallyMountedRemoteRow).not.toHaveClass(/is-remote-offline/);
       await expect(remoteReply).toContainText(recoveryDraft);
-      await expect(remote.getByRole("button", { name: "Send" })).toBeEnabled();
+      await expect(sendButton).toBeEnabled();
     } finally {
       await app?.close();
       await gateway?.close();
