@@ -18,9 +18,10 @@ function statusTone(status: FederationConnectionState): string {
 }
 
 /**
- * One celestial body on the map: the instance's icon, its display label,
- * connection status, and the open-viewer action. The [+] AI-intake action
- * lands in the intake unit of the Star Map plan.
+ * One celestial body on the map: the instance's icon floating on the star
+ * field with a glow, its label on a pill beneath, and the connection
+ * status pinned to the body. No bordered card - the body IS the presence.
+ * The [+] AI-intake action lands in the intake unit of the Star Map plan.
  */
 export function StarMapInstanceCard(props: {
   instanceId: string;
@@ -28,12 +29,15 @@ export function StarMapInstanceCard(props: {
   icon?: CelestialIconId;
   status: FederationConnectionState;
   isLocal: boolean;
+  isHub: boolean;
   unreachable?: boolean;
   onOpen: () => void;
 }) {
   return (
     <div
-      className={`star-map-instance${props.isLocal ? " star-map-instance--local" : ""}`}
+      className={`star-map-instance${props.isLocal ? " star-map-instance--local" : ""}${
+        props.isHub ? " star-map-instance--hub" : ""
+      }`}
       data-instance-id={props.instanceId}
     >
       <button
@@ -46,19 +50,24 @@ export function StarMapInstanceCard(props: {
         }
         onClick={props.onOpen}
       >
+        <span className="star-map-instance__glow" aria-hidden="true" />
         {props.icon ? (
-          <CelestialIcon icon={props.icon} size={48} />
+          <CelestialIcon
+            icon={props.icon}
+            size={props.isHub ? 72 : 56}
+            className="star-map-instance__icon"
+          />
         ) : (
           <span className="star-map-instance__icon-placeholder" aria-hidden="true" />
         )}
-        <span className="star-map-instance__label" title={props.label}>
-          {props.label}
-        </span>
         <span
-          className={`status-dot status-dot--${statusTone(props.status)}`}
+          className={`status-dot status-dot--${statusTone(props.status)} star-map-instance__status`}
           aria-hidden="true"
         />
       </button>
+      <span className="star-map-instance__label" title={props.label}>
+        {props.label}
+      </span>
       {props.unreachable ? (
         <span className="star-map-instance__unreachable">Unreachable</span>
       ) : null}

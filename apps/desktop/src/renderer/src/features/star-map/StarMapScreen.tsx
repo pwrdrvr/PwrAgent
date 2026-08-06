@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   buildThreadIdentityKey,
   isRemoteFederationTarget,
@@ -17,6 +24,7 @@ import {
 } from "./attention";
 import {
   computeStarMapLayout,
+  generateStarField,
   starMapCardSlot,
   type StarMapInstancePosition,
 } from "./star-map-layout";
@@ -26,6 +34,7 @@ import { useStarMapThreads } from "./useStarMapThreads";
 
 const FILTERS_STORAGE_KEY = "pwragent.starMap.filters";
 const MAX_CARDS_PER_INSTANCE = 6;
+const STAR_COUNT = 130;
 
 function readStoredFilters(): Set<StarMapAttentionCategory> {
   if (typeof window === "undefined") {
@@ -65,19 +74,26 @@ type StarMapScreenProps = {
 
 /**
  * The Star Map mission-control surface: every federation instance as a
- * celestial body on a star field, hub-and-spoke health links between them,
- * and each instance's attention threads floating beneath it. The antithesis
- * of the left-bar thread list — pick a machine, see what needs review.
+ * celestial body on a star field, hub-and-spoke health links arcing
+ * between them, and each instance's attention threads flowing down its
+ * own lane. The antithesis of the left-bar thread list - pick a machine,
+ * see what needs review.
  */
 export function StarMapScreen(props: StarMapScreenProps) {
   const layerRef = useRef<HTMLDivElement>(null);
+  const viewportRef = useRef<HTMLDivElement>(null);
   const { health } = useFederationHealth({ desktopApi: props.desktopApi });
   const celestialIcons = useCelestialIcons({ desktopApi: props.desktopApi });
   const [filters, setFilters] = useState<Set<StarMapAttentionCategory>>(
     readStoredFilters,
   );
+  const [viewportSize, setViewportSize] = useState<{
+    width: number;
+    height: number;
+  }>({ width: 1280, height: 800 });
+  const stars = useMemo(() => generateStarField(STAR_COUNT), []);
 
-  // Focus the layer on open AND whenever the floating thread closes —
+  // Focus the layer on open AND whenever the floating thread closes -
   // "Back to map" leaves focus inside <main>, and without a refocus the
   // layer's Escape-to-close handler would never hear the key again.
   useEffect(() => {
@@ -85,6 +101,29 @@ export function StarMapScreen(props: StarMapScreenProps) {
       layerRef.current?.focus();
     }
   }, [props.floating]);
+
+  // The constellation lays out in pixels of the real viewport, not
+  // percentages - lanes need true widths to guarantee cards never overlap.
+  useLayoutEffect(() => {
+    const element = viewportRef.current;
+    if (!element) return;
+    const measure = () => {
+      const rect = element.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) {
+        setViewportSize((current) =>
+          current.width === rect.width && current.height === rect.height
+            ? current
+            : { width: rect.width, height: rect.height },
+        );
+      }
+    };
+    measure();
+    // jsdom has no ResizeObserver; the initial measure still runs there.
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
 
   const toggleFilter = useCallback((category: StarMapAttentionCategory) => {
     setFilters((current) => {
@@ -118,9 +157,9 @@ export function StarMapScreen(props: StarMapScreenProps) {
     enabled: true,
   });
 
-  // The hub is the local instance unless this instance is a pure client —
-  // then its enrolled gateway anchors the map and the local node rides the
-  // ring with its siblings.
+  // The hub is the local instance unless this instance is a pure client -
+  // then its enrolled gateway anchors the constellation and the local node
+  // rides a lane with its siblings.
   const hubInstanceId = useMemo(() => {
     if (!health || health.role !== "client") return localInstanceId;
     const gatewayId =
@@ -131,29 +170,27 @@ export function StarMapScreen(props: StarMapScreenProps) {
 
   const layout = useMemo(
     () =>
-      computeStarMapLayout([
-        {
-          instanceId: localInstanceId,
-          isHub: hubInstanceId === localInstanceId,
-        },
-        ...peers.map((peer) => ({
-          instanceId: peer.id,
-          isHub: peer.id === hubInstanceId,
-        })),
-      ]),
-    [hubInstanceId, localInstanceId, peers],
-  );
-  const positionByInstance = useMemo(
-    () =>
-      new Map(layout.positions.map((position) => [position.instanceId, position])),
-    [layout],
+      computeStarMapLayout(
+        [
+          {
+            instanceId: localInstanceId,
+            isHub: hubInstanceId === localInstanceId,
+          },
+          ...peers.map((peer) => ({
+            instanceId: peer.id,
+            isHub: peer.id === hubInstanceId,
+          })),
+        ],
+        viewportSize.width,
+      ),
+    [hubInstanceId, localInstanceId, peers, viewportSize.width],
   );
 
   const attentionByInstance = useMemo(() => {
     const result = new Map<string, NavigationThreadSummary[]>();
     // The main-window snapshot also carries viewer-side pinned REMOTE
     // threads (Cmd+K unification). Those render under their owning
-    // instance's cloud via the per-peer fetch — the local cloud takes
+    // instance's cloud via the per-peer fetch - the local cloud takes
     // locally-owned threads only, or pinned remote cards would double up.
     result.set(
       localInstanceId,
@@ -212,19 +249,32 @@ export function StarMapScreen(props: StarMapScreenProps) {
     [desktopApi, onOpenLocalThread],
   );
 
-  const renderCloud = (
-    instanceId: string,
-    position: StarMapInstancePosition,
-  ) => {
-    const threads = attentionByInstance.get(instanceId) ?? [];
+  const linkState = (peerId: string) => {
+    const status = peerById.get(peerId)?.status
+      ?? (peerId === localInstanceId ? "connected" : "disconnected");
+    return status;
+  };
+
+  const renderCloud = (position: StarMapInstancePosition) => {
+    const threads = attentionByInstance.get(position.instanceId) ?? [];
     const visible = threads.slice(0, MAX_CARDS_PER_INSTANCE);
     const overflow = threads.length - visible.length;
     return (
       <div
-        key={`cloud:${instanceId}`}
+        key={`cloud:${position.instanceId}`}
         className="star-map__cloud"
-        style={{ left: `${position.x}%`, top: `${position.y}%` }}
+        style={{ left: position.x, top: position.y }}
       >
+        {visible.length > 0 ? (
+          <span
+            className="star-map__cloud-halo"
+            aria-hidden="true"
+            style={{
+              width: layout.cardWidth + 56,
+              height: starMapCardSlot(visible.length - 1).dy + 120,
+            }}
+          />
+        ) : null}
         {visible.map((thread, index) => {
           const slot = starMapCardSlot(index);
           return (
@@ -232,10 +282,19 @@ export function StarMapScreen(props: StarMapScreenProps) {
               key={buildThreadIdentityKey(thread.source, thread.id)}
               thread={thread}
               sessionKeys={
-                instanceId === localInstanceId ? props.sessionKeys : undefined
+                position.instanceId === localInstanceId
+                  ? props.sessionKeys
+                  : undefined
               }
+              riseDelayMs={index * 45}
+              // left/top positioning (not transform) so the rise/bubble
+              // keyframes own the transform channel without snapping the
+              // card back to its anchor origin mid-animation.
               style={{
-                transform: `translate(calc(${slot.dx}px - 50%), ${slot.dy}px)`,
+                width: layout.cardWidth,
+                left: slot.dx,
+                top: slot.dy,
+                marginLeft: -layout.cardWidth / 2,
               }}
               onOpen={openThread}
             />
@@ -283,33 +342,42 @@ export function StarMapScreen(props: StarMapScreenProps) {
         }
       }}
     >
-      <div className="star-map__viewport">
+      <div ref={viewportRef} className="star-map__viewport">
         <svg
-          className="star-map__links"
+          className="star-map__sky"
           viewBox="0 0 100 100"
           preserveAspectRatio="none"
           aria-hidden="true"
         >
+          {stars.map((star, index) => (
+            <circle
+              key={index}
+              className="star-map__star"
+              cx={star.x}
+              cy={star.y}
+              r={star.radius * 0.08}
+              fillOpacity={star.opacity}
+              style={{ animationDelay: `${star.twinkleDelay}s` }}
+            />
+          ))}
+        </svg>
+        <svg
+          className="star-map__links"
+          viewBox={`0 0 ${viewportSize.width} ${viewportSize.height}`}
+          aria-hidden="true"
+        >
           {layout.links.map((link) => {
-            const from = positionByInstance.get(link.fromInstanceId);
-            const to = positionByInstance.get(link.toInstanceId);
-            if (!from || !to) return null;
-            const peer =
-              peerById.get(
-                link.toInstanceId === localInstanceId
-                  ? link.fromInstanceId
-                  : link.toInstanceId,
-              );
-            const state =
-              link.fromInstanceId === localInstanceId
-              || link.toInstanceId === localInstanceId
-                ? peer?.status ?? "connected"
-                : peer?.status ?? "disconnected";
+            const state = linkState(
+              link.toInstanceId === localInstanceId
+                ? link.fromInstanceId
+                : link.toInstanceId,
+            );
             const healthy = state === "connected";
             const pending = state === "connecting" || state === "handshaking";
+            const d = `M ${link.path.x1} ${link.path.y1} Q ${link.path.cx} ${link.path.cy} ${link.path.x2} ${link.path.y2}`;
             return (
               <g key={`${link.fromInstanceId}->${link.toInstanceId}`}>
-                <line
+                <path
                   className={`star-map__link${
                     healthy
                       ? " star-map__link--healthy"
@@ -317,19 +385,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
                         ? " star-map__link--pending"
                         : " star-map__link--dead"
                   }`}
-                  x1={from.x}
-                  y1={from.y}
-                  x2={to.x}
-                  y2={to.y}
+                  d={d}
                 />
                 {healthy ? (
-                  <line
-                    className="star-map__link-flow"
-                    x1={from.x}
-                    y1={from.y}
-                    x2={to.x}
-                    y2={to.y}
-                  />
+                  <path className="star-map__link-flow" d={d} />
                 ) : null}
               </g>
             );
@@ -341,7 +400,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
             <div
               key={position.instanceId}
               className="star-map__anchor"
-              style={{ left: `${position.x}%`, top: `${position.y}%` }}
+              style={{ left: position.x, top: position.y }}
             >
               <StarMapInstanceCard
                 instanceId={position.instanceId}
@@ -359,6 +418,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
                     : entry.peer?.status ?? "disconnected"
                 }
                 isLocal={position.instanceId === localInstanceId}
+                isHub={position.isHub}
                 unreachable={remote.unreachableInstanceIds.has(
                   position.instanceId,
                 )}
@@ -367,9 +427,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
             </div>
           );
         })}
-        {layout.positions.map((position) =>
-          renderCloud(position.instanceId, position),
-        )}
+        {layout.positions.map((position) => renderCloud(position))}
       </div>
       <div className="star-map__filters" role="group" aria-label="Attention filters">
         {STAR_MAP_ATTENTION_CATEGORIES.map((category) => (

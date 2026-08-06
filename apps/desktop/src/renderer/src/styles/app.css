@@ -8777,9 +8777,10 @@ textarea,
   color: var(--accent-bright);
 }
 
-/* Full-window layer over the app shell (same tier as Settings). The
-   star field is pure tokens: layered radial-gradient "stars" derived
-   from --text-muted so both themes read correctly. */
+/* Full-window layer over the app shell (same tier as Settings). A faint
+   accent aurora washes down from the top of the sky; the stars are a
+   seeded SVG field colored from --text-primary so they read as space in
+   both themes. */
 .app-shell__star-map-layer {
   display: flex;
   position: absolute;
@@ -8787,45 +8788,13 @@ textarea,
   inset: 0;
   min-width: 0;
   min-height: 0;
-  background-color: var(--bg-app);
-  background-image:
+  background:
     radial-gradient(
-      1px 1px at 12% 24%,
-      color-mix(in srgb, var(--text-muted) 60%, transparent) 50%,
-      transparent 51%
+      120% 85% at 50% -10%,
+      color-mix(in srgb, var(--accent) 6%, transparent),
+      transparent 62%
     ),
-    radial-gradient(
-      1px 1px at 34% 68%,
-      color-mix(in srgb, var(--text-muted) 45%, transparent) 50%,
-      transparent 51%
-    ),
-    radial-gradient(
-      1.5px 1.5px at 58% 15%,
-      color-mix(in srgb, var(--text-muted) 55%, transparent) 50%,
-      transparent 51%
-    ),
-    radial-gradient(
-      1px 1px at 72% 44%,
-      color-mix(in srgb, var(--text-muted) 40%, transparent) 50%,
-      transparent 51%
-    ),
-    radial-gradient(
-      1.5px 1.5px at 87% 76%,
-      color-mix(in srgb, var(--text-muted) 50%, transparent) 50%,
-      transparent 51%
-    ),
-    radial-gradient(
-      1px 1px at 45% 88%,
-      color-mix(in srgb, var(--text-muted) 35%, transparent) 50%,
-      transparent 51%
-    );
-  background-size:
-    280px 280px,
-    340px 340px,
-    420px 420px,
-    260px 260px,
-    380px 380px,
-    300px 300px;
+    var(--bg-app);
 }
 
 .star-map {
@@ -8849,6 +8818,35 @@ textarea,
   opacity: 0.85;
 }
 
+.star-map__sky {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  color: color-mix(in srgb, var(--text-primary) 78%, transparent);
+  pointer-events: none;
+}
+
+.star-map__star {
+  fill: currentColor;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .star-map__star {
+    animation: star-map-twinkle 5.5s ease-in-out infinite;
+  }
+}
+
+@keyframes star-map-twinkle {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
 .star-map__links {
   position: absolute;
   inset: 0;
@@ -8858,17 +8856,17 @@ textarea,
 }
 
 .star-map__link {
-  vector-effect: non-scaling-stroke;
-  stroke-width: 1.5px;
   fill: none;
+  stroke-width: 1.5;
 }
 
 .star-map__link--healthy {
-  stroke: var(--accent-border);
+  stroke: color-mix(in srgb, var(--accent) 55%, transparent);
 }
 
 .star-map__link--pending {
   stroke: var(--text-subtle);
+  stroke-dasharray: 2 6;
 }
 
 .star-map__link--dead {
@@ -8876,27 +8874,27 @@ textarea,
   stroke-dasharray: 6 5;
 }
 
-/* Directional flow shimmer on healthy links. Static under reduced motion
-   (the solid base line already encodes "healthy"). */
+/* Comet dots streaming along healthy arcs. Static under reduced motion
+   (the solid arc already encodes "healthy"). */
 .star-map__link-flow {
-  vector-effect: non-scaling-stroke;
-  stroke: var(--accent);
-  stroke-width: 1.5px;
-  stroke-dasharray: 3 14;
   fill: none;
+  stroke: var(--accent-bright);
+  stroke-width: 2.25;
+  stroke-linecap: round;
+  stroke-dasharray: 1 26;
   opacity: 0;
 }
 
 @media (prefers-reduced-motion: no-preference) {
   .star-map__link-flow {
-    opacity: 0.9;
-    animation: star-map-flow 1.6s linear infinite;
+    opacity: 0.95;
+    animation: star-map-flow 2.4s linear infinite;
   }
 }
 
 @keyframes star-map-flow {
   to {
-    stroke-dashoffset: -17;
+    stroke-dashoffset: -27;
   }
 }
 
@@ -8906,43 +8904,82 @@ textarea,
   z-index: 2;
 }
 
+/* A celestial body, not a box: glowing icon, label pill beneath. */
 .star-map-instance {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
+  gap: 8px;
 }
 
 .star-map-instance__body {
-  display: flex;
-  flex-direction: column;
+  display: inline-flex;
+  position: relative;
   align-items: center;
-  gap: 6px;
-  padding: 12px 18px 10px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--bg-panel-elevated) 82%, transparent);
-  color: var(--text-secondary);
+  justify-content: center;
+  width: 96px;
+  height: 96px;
+  border: none;
+  /* Fully-round like the status cookie/pill primitives - this is a
+     celestial body, not a panel corner. */
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-primary);
   cursor: pointer;
 }
 
-.star-map-instance__body:hover {
-  border-color: var(--accent-border);
-  color: var(--text-primary);
+.star-map-instance--hub .star-map-instance__body {
+  width: 116px;
+  height: 116px;
 }
 
 .star-map-instance__body:focus-visible {
   outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  outline-offset: 4px;
 }
 
-.star-map-instance--local .star-map-instance__body {
-  border-color: var(--accent-border);
+.star-map-instance__glow {
+  position: absolute;
+  inset: -12%;
+  border-radius: 999px;
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--accent) 17%, transparent),
+    transparent 70%
+  );
+  opacity: 0.8;
+  transition: opacity 160ms ease, transform 160ms ease;
+  pointer-events: none;
+}
+
+.star-map-instance__body:hover .star-map-instance__glow {
+  opacity: 1;
+  transform: scale(1.12);
+}
+
+.star-map-instance__icon {
+  position: relative;
+}
+
+.star-map-instance__status {
+  position: absolute;
+  right: 16%;
+  bottom: 13%;
+}
+
+.star-map-instance__icon-placeholder {
+  width: 56px;
+  height: 56px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 999px;
 }
 
 .star-map-instance__label {
-  max-width: 160px;
+  max-width: 210px;
   overflow: hidden;
+  padding: 3px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg-panel) 80%, transparent);
   color: var(--text-primary);
   font-size: 13px;
   font-weight: 600;
@@ -8950,11 +8987,8 @@ textarea,
   white-space: nowrap;
 }
 
-.star-map-instance__icon-placeholder {
-  width: 48px;
-  height: 48px;
-  border: 1px dashed var(--border-strong);
-  border-radius: 8px;
+.star-map-instance--local .star-map-instance__label {
+  box-shadow: 0 0 0 1px var(--accent-border);
 }
 
 .star-map-instance__unreachable {
@@ -8965,6 +8999,20 @@ textarea,
 .star-map__cloud {
   position: absolute;
   z-index: 1;
+}
+
+/* Soft halo behind a lane's cards so ownership reads at a glance. */
+.star-map__cloud-halo {
+  position: absolute;
+  left: 0;
+  top: 84px;
+  transform: translateX(-50%);
+  background: radial-gradient(
+    ellipse 60% 50% at 50% 30%,
+    color-mix(in srgb, var(--accent) 5%, transparent),
+    transparent 75%
+  );
+  pointer-events: none;
 }
 
 .star-map__cloud-overflow {
@@ -8979,28 +9027,49 @@ textarea,
 .star-map-card {
   display: flex;
   position: absolute;
-  left: 0;
-  top: 0;
   flex-direction: column;
   gap: 6px;
-  width: 220px;
   padding: 8px 10px;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
-  background: var(--bg-panel);
+  background: color-mix(in srgb, var(--bg-panel) 94%, transparent);
   color: var(--text-primary);
   text-align: left;
   cursor: pointer;
+  animation: star-map-rise 380ms ease-out backwards;
+  transition: border-color 120ms ease, transform 120ms ease;
 }
 
 .star-map-card:hover {
   border-color: var(--accent-border);
-  background: var(--bg-panel-elevated);
+  transform: translateY(-1px);
 }
 
 .star-map-card:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+}
+
+/* Cards rise into their slots with a small stagger (delay set inline).
+   Position comes from left/top, so the keyframes own transform. */
+@keyframes star-map-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .star-map-card {
+    animation-duration: 0s;
+  }
+  .star-map-card:hover {
+    transform: none;
+  }
 }
 
 .star-map-card__heading {

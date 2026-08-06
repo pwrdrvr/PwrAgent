@@ -22,6 +22,8 @@ export function StarMapThreadCard(props: {
   thread: NavigationThreadSummary;
   sessionKeys?: StarMapSessionKeys;
   entering?: boolean;
+  /** Staggered rise-in offset so a cloud settles like a constellation. */
+  riseDelayMs?: number;
   style?: CSSProperties;
   onOpen: (thread: NavigationThreadSummary) => void;
 }) {
@@ -31,12 +33,18 @@ export function StarMapThreadCard(props: {
     thread,
     props.sessionKeys?.thinkingThreadKeys,
   );
+  const style: CSSProperties = {
+    ...props.style,
+    ...(props.riseDelayMs
+      ? { animationDelay: `${props.riseDelayMs}ms` }
+      : {}),
+  };
 
   return (
     <button
       type="button"
       className={`star-map-card${props.entering ? " star-map-card--entering" : ""}`}
-      style={props.style}
+      style={style}
       data-thread-key={threadKey}
       onClick={() => props.onOpen(thread)}
     >

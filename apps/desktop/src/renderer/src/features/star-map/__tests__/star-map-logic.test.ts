@@ -7,6 +7,7 @@ import {
 import {
   clampToCloudRadius,
   computeStarMapLayout,
+  generateStarField,
   starMapCardSlot,
 } from "../star-map-layout";
 
@@ -126,45 +127,99 @@ describe("selectAttentionThreads", () => {
 
 describe("computeStarMapLayout", () => {
   it("centers a lone instance with no links", () => {
-    const layout = computeStarMapLayout([
-      { instanceId: "pwr_solo", isHub: true },
-    ]);
+    const layout = computeStarMapLayout(
+      [{ instanceId: "pwr_solo", isHub: true }],
+      1200,
+    );
     expect(layout.positions).toHaveLength(1);
     expect(layout.links).toHaveLength(0);
-    expect(layout.positions[0].x).toBe(50);
+    expect(layout.positions[0].x).toBe(600);
   });
 
-  it("spreads spokes deterministically around the hub", () => {
-    const layout = computeStarMapLayout([
-      { instanceId: "pwr_b", isHub: false },
-      { instanceId: "pwr_hub", isHub: true },
-      { instanceId: "pwr_a", isHub: false },
+  it("gives every instance an exclusive lane with the hub in the middle", () => {
+    const layout = computeStarMapLayout(
+      [
+        { instanceId: "pwr_b", isHub: false },
+        { instanceId: "pwr_hub", isHub: true },
+        { instanceId: "pwr_a", isHub: false },
+      ],
+      1200,
+    );
+    // Lane order: sorted spokes with the hub spliced into the middle.
+    expect(layout.positions.map((position) => position.instanceId)).toEqual([
+      "pwr_a",
+      "pwr_hub",
+      "pwr_b",
     ]);
-    expect(layout.links).toEqual([
-      { fromInstanceId: "pwr_hub", toInstanceId: "pwr_a" },
-      { fromInstanceId: "pwr_hub", toInstanceId: "pwr_b" },
+    expect(layout.links.map((link) => link.toInstanceId)).toEqual([
+      "pwr_a",
+      "pwr_b",
     ]);
-    // Same input, same shape — every federation member renders identically.
-    expect(computeStarMapLayout([
-      { instanceId: "pwr_a", isHub: false },
-      { instanceId: "pwr_b", isHub: false },
-      { instanceId: "pwr_hub", isHub: true },
-    ])).toEqual(layout);
-    for (const position of layout.positions) {
-      expect(position.x).toBeGreaterThanOrEqual(0);
-      expect(position.x).toBeLessThanOrEqual(100);
-      expect(position.y).toBeGreaterThanOrEqual(0);
-      expect(position.y).toBeLessThanOrEqual(100);
-    }
+    // Deterministic: same input, same shape, regardless of node order.
+    expect(
+      computeStarMapLayout(
+        [
+          { instanceId: "pwr_a", isHub: false },
+          { instanceId: "pwr_b", isHub: false },
+          { instanceId: "pwr_hub", isHub: true },
+        ],
+        1200,
+      ),
+    ).toEqual(layout);
+    // Lanes tile the row without overlap: neighbors are one lane apart.
+    const xs = layout.positions.map((position) => position.x);
+    expect(xs[1] - xs[0]).toBeCloseTo(layout.positions[0].laneWidth);
+    expect(xs[2] - xs[1]).toBeCloseTo(layout.positions[0].laneWidth);
+  });
+
+  it("arcs links through the sky above the body row", () => {
+    const layout = computeStarMapLayout(
+      [
+        { instanceId: "pwr_hub", isHub: true },
+        { instanceId: "pwr_a", isHub: false },
+      ],
+      1000,
+    );
+    const arc = layout.links[0].path;
+    expect(arc.cy).toBeLessThan(arc.y1);
+    expect(arc.cy).toBeLessThan(arc.y2);
+  });
+
+  it("narrows cards to fit dense federations", () => {
+    const nodes = Array.from({ length: 6 }, (_, index) => ({
+      instanceId: `pwr_${index}`,
+      isHub: index === 0,
+    }));
+    const layout = computeStarMapLayout(nodes, 900);
+    expect(layout.cardWidth).toBeLessThan(240);
+    expect(layout.cardWidth).toBeGreaterThan(120);
   });
 });
 
 describe("starMapCardSlot", () => {
-  it("lays cards in centered rows of three", () => {
-    expect(starMapCardSlot(0).dx).toBeLessThan(0);
+  it("flows cards down a single lane column", () => {
+    expect(starMapCardSlot(0).dx).toBe(0);
     expect(starMapCardSlot(1).dx).toBe(0);
-    expect(starMapCardSlot(2).dx).toBeGreaterThan(0);
-    expect(starMapCardSlot(3).dy).toBeGreaterThan(starMapCardSlot(0).dy);
+    expect(starMapCardSlot(1).dy).toBeGreaterThan(starMapCardSlot(0).dy);
+    expect(starMapCardSlot(2).dy - starMapCardSlot(1).dy).toBe(
+      starMapCardSlot(1).dy - starMapCardSlot(0).dy,
+    );
+  });
+});
+
+describe("generateStarField", () => {
+  it("is deterministic and stays in percent bounds", () => {
+    const first = generateStarField(40);
+    expect(generateStarField(40)).toEqual(first);
+    expect(first).toHaveLength(40);
+    for (const star of first) {
+      expect(star.x).toBeGreaterThanOrEqual(0);
+      expect(star.x).toBeLessThanOrEqual(100);
+      expect(star.y).toBeGreaterThanOrEqual(0);
+      expect(star.y).toBeLessThanOrEqual(100);
+      expect(star.opacity).toBeGreaterThan(0);
+      expect(star.opacity).toBeLessThanOrEqual(1);
+    }
   });
 });
 
