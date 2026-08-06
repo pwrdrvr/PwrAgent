@@ -1,8 +1,28 @@
+import type {
+  CelestialIconId,
+  FederationRemoteTarget,
+} from "@pwragent/shared";
+
 export type IntegratedTerminalCreateRequest = {
   threadKey: string;
   cwd?: string;
   cols: number;
   rows: number;
+  /**
+   * Owning instance for a remote thread's terminal opened from the MAIN
+   * window. The shell runs on that instance (it resolves shell + cwd from
+   * its own thread state); without this the request spawns locally. In a
+   * federation window the window's own target stays authoritative and this
+   * field is ignored.
+   */
+  federationTarget?: FederationRemoteTarget;
+};
+
+/** Identity of the instance a remote terminal session runs on. */
+export type IntegratedTerminalRemoteInfo = {
+  instanceId: string;
+  instanceLabel: string;
+  celestialIcon?: CelestialIconId;
 };
 
 /**
@@ -24,6 +44,8 @@ export type IntegratedTerminalSessionSummary = {
   pid?: number;
   panelHidden: boolean;
   createdAt: number;
+  /** Present when the shell runs on another instance over federation. */
+  remote?: IntegratedTerminalRemoteInfo;
 };
 
 export type IntegratedTerminalSessionsEvent = {

@@ -1,6 +1,8 @@
 import "@xterm/xterm/css/xterm.css";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { DesktopApi } from "../../lib/desktop-api";
+import type { IntegratedTerminalPaneRemote } from "../../lib/useIntegratedTerminals";
+import { InstanceChip } from "../federation/InstanceGlyph";
 import type { Terminal } from "@xterm/xterm";
 import type {
   CSSProperties,
@@ -16,6 +18,12 @@ type IntegratedTerminalProps = {
   desktopApi?: DesktopApi;
   threadKey: string;
   cwd?: string;
+  /**
+   * Present when this shell runs on another instance: the create request
+   * names the owning target and the pane wears that instance's chip so a
+   * remote shell can never be mistaken for a local one.
+   */
+  remote?: IntegratedTerminalPaneRemote;
   height: number;
   visible?: boolean;
   onHeightChange: (height: number) => void;
@@ -27,6 +35,7 @@ export function IntegratedTerminal({
   desktopApi,
   threadKey,
   cwd,
+  remote,
   height,
   visible = true,
   onHeightChange,
@@ -49,6 +58,10 @@ export function IntegratedTerminal({
   // discarding anything the user had typed during the spawn.
   const cwdRef = useRef(cwd);
   cwdRef.current = cwd;
+  // Same rationale as cwdRef: the owning target is a create-time input and
+  // must not tear down a live xterm when the pane object identity changes.
+  const remoteTargetRef = useRef(remote?.target);
+  remoteTargetRef.current = remote?.target;
   const [status, setStatus] = useState<string>("Starting shell...");
 
   useEffect(() => {
@@ -151,6 +164,7 @@ export function IntegratedTerminal({
           cwd: cwdRef.current,
           cols: dimensions?.cols ?? terminal.cols,
           rows: dimensions?.rows ?? terminal.rows,
+          federationTarget: remoteTargetRef.current,
         })
           .then((response) => {
             if (disposed) return;
@@ -304,6 +318,15 @@ export function IntegratedTerminal({
         onKeyDown={handleResizeKeyDown}
         onPointerDown={startResize}
       />
+      {remote ? (
+        <span className="integrated-terminal__remote">
+          <InstanceChip
+            icon={remote.celestialIcon}
+            instanceId={remote.instanceId}
+            label={remote.instanceLabel}
+          />
+        </span>
+      ) : null}
       <button
         type="button"
         className="integrated-terminal__close"

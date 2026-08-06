@@ -4,6 +4,8 @@ import {
   INTEGRATED_TERMINAL_CLOSE_CHANNEL,
   INTEGRATED_TERMINAL_CREATE_CHANNEL,
   INTEGRATED_TERMINAL_LIST_CHANNEL,
+  INTEGRATED_TERMINAL_SESSIONS_CHANNEL,
+  INTEGRATED_TERMINAL_SET_PANEL_HIDDEN_CHANNEL,
   INTEGRATED_TERMINAL_WRITE_CHANNEL,
 } from "../../shared/ipc";
 
@@ -21,8 +23,26 @@ const mocks = vi.hoisted(() => {
       shell: "/bin/zsh",
     })),
     localWrite: vi.fn(),
+    localClose: vi.fn(),
+    localSetPanelHidden: vi.fn(),
     federationWindowIds: new Set<number>(),
     federationTargets: new Map<number, { scope: "remote"; instanceId: string }>(),
+    connectedPeers: [
+      {
+        target: { scope: "remote" as const, instanceId: "peer-a" },
+        label: "Peer Mac",
+        capabilities: ["remote_pty"] as string[],
+      },
+    ],
+    localQuitSnapshot: {
+      count: 0,
+      sessionIds: [] as string[],
+      threadKeys: [] as string[],
+    },
+    channelSubscribers: [] as Array<{ id: number; send: (...args: unknown[]) => void }>,
+    localSessionsChanged: undefined as
+      | ((sessions: unknown[]) => void)
+      | undefined,
     remotePtyOpen: vi.fn(async () => ({
       sessionId: "remote-session",
       cwd: "/owner/worktree",
@@ -56,12 +76,16 @@ vi.mock("electron", () => ({
 
 vi.mock("../terminal/integrated-terminal-service", () => ({
   IntegratedTerminalService: class {
+    constructor(options: { onSessionsChanged: (sessions: unknown[]) => void }) {
+      mocks.localSessionsChanged = options.onSessionsChanged;
+    }
     createOrAttach = mocks.localCreateOrAttach;
     write = mocks.localWrite;
     resize = vi.fn();
-    close = vi.fn();
+    close = mocks.localClose;
     listSessions = vi.fn(() => []);
-    setPanelHidden = vi.fn();
+    setPanelHidden = mocks.localSetPanelHidden;
+    getQuitSnapshot = () => mocks.localQuitSnapshot;
     dispose = vi.fn();
   },
 }));
@@ -75,7 +99,7 @@ vi.mock("../window", () => ({
 }));
 
 vi.mock("../window-channels", () => ({
-  subscribersForChannel: () => [],
+  subscribersForChannel: () => mocks.channelSubscribers,
 }));
 
 vi.mock("../federation/federation-runtime", () => ({
@@ -87,6 +111,9 @@ vi.mock("../federation/federation-runtime", () => ({
       ack: mocks.remotePtyAck,
       close: mocks.remotePtyClose,
     }),
+    connectedPeerTargets: () => mocks.connectedPeers,
+    celestialIconFor: (instanceId: string) =>
+      instanceId === "peer-a" ? ("moon" as const) : undefined,
     onRemotePtyEvent: (
       listener: (event: {
         kind: string;
@@ -102,6 +129,7 @@ vi.mock("../federation/federation-runtime", () => ({
 
 import {
   disposeIntegratedTerminalIpcHandlers,
+  getIntegratedTerminalQuitSnapshot,
   registerIntegratedTerminalIpcHandlers,
 } from "../ipc/integrated-terminal";
 
@@ -126,6 +154,16 @@ describe("integrated terminal IPC federation branch", () => {
     mocks.federationWindowIds.clear();
     mocks.federationTargets.clear();
     mocks.remotePtyEventListener = undefined;
+    mocks.connectedPeers = [
+      {
+        target: { scope: "remote" as const, instanceId: "peer-a" },
+        label: "Peer Mac",
+        capabilities: ["remote_pty"],
+      },
+    ];
+    mocks.localQuitSnapshot = { count: 0, sessionIds: [], threadKeys: [] };
+    mocks.channelSubscribers = [];
+    mocks.localSessionsChanged = undefined;
     disposeIntegratedTerminalIpcHandlers();
     registerIntegratedTerminalIpcHandlers();
   });
@@ -161,6 +199,204 @@ describe("integrated terminal IPC federation branch", () => {
     expect(response.sessionId).toBe("remote-session");
     expect(response.cwd).toBe("/owner/worktree");
     expect(mocks.localCreateOrAttach).not.toHaveBeenCalled();
+  });
+
+  it("routes a MAIN window's create remotely when the request names an owning instance", async () => {
+    const sender = fakeWebContents(2);
+
+    const response = (await invoke(INTEGRATED_TERMINAL_CREATE_CHANNEL, sender, {
+      threadKey: "codex:remote-pinned",
+      cols: 100,
+      rows: 30,
+      federationTarget: { scope: "remote", instanceId: "peer-a" },
+    })) as {
+      sessionId: string;
+      cwd: string;
+    };
+
+    expect(mocks.remotePtyOpen).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "remote-pinned",
+      cols: 100,
+      rows: 30,
+    });
+    expect(response.sessionId).toBe("remote-session");
+    // The shell runs on the peer — nothing may spawn locally.
+    expect(mocks.localCreateOrAttach).not.toHaveBeenCalled();
+
+    // Follow-up traffic routes by session ownership, not window identity.
+    await invoke(INTEGRATED_TERMINAL_WRITE_CHANNEL, sender, {
+      sessionId: "remote-session",
+      data: "ls\n",
+    });
+    expect(mocks.remotePtyInput).toHaveBeenCalledTimes(1);
+    expect(mocks.localWrite).not.toHaveBeenCalled();
+
+    // The merged session list brands the remote session with its owner.
+    const sessions = (await invoke(
+      INTEGRATED_TERMINAL_LIST_CHANNEL,
+      sender,
+    )) as Array<{
+      sessionId: string;
+      remote?: { instanceId: string; instanceLabel: string; celestialIcon?: string };
+    }>;
+    const remoteSession = sessions.find(
+      (session) => session.sessionId === "remote-session",
+    );
+    expect(remoteSession?.remote).toEqual({
+      instanceId: "peer-a",
+      instanceLabel: "Peer Mac",
+      celestialIcon: "moon",
+    });
+  });
+
+  it("keeps a MAIN window's local writes off the remote bridge", async () => {
+    const sender = fakeWebContents(3);
+    await invoke(INTEGRATED_TERMINAL_CREATE_CHANNEL, sender, {
+      threadKey: "codex:local-thread",
+      cols: 80,
+      rows: 24,
+    });
+    await invoke(INTEGRATED_TERMINAL_WRITE_CHANNEL, sender, {
+      sessionId: "local-session",
+      data: "pwd\n",
+    });
+    expect(mocks.localWrite).toHaveBeenCalledTimes(1);
+    expect(mocks.remotePtyInput).not.toHaveBeenCalled();
+  });
+
+  it("ignores a renderer-supplied target in a federation window: the window target wins", async () => {
+    const sender = fakeWebContents(11);
+    mocks.federationWindowIds.add(11);
+    mocks.federationTargets.set(11, { scope: "remote", instanceId: "peer-a" });
+
+    await invoke(INTEGRATED_TERMINAL_CREATE_CHANNEL, sender, {
+      threadKey: "codex:remote-thread",
+      cols: 80,
+      rows: 24,
+      // A compromised renderer must not be able to steer the pane at a
+      // different peer than the window is branded as.
+      federationTarget: { scope: "remote", instanceId: "peer-EVIL" },
+    });
+
+    const sessions = (await invoke(
+      INTEGRATED_TERMINAL_LIST_CHANNEL,
+      sender,
+    )) as Array<{ remote?: { instanceId: string } }>;
+    expect(sessions[0]?.remote?.instanceId).toBe("peer-a");
+  });
+
+  it("rejects a main-window target that is malformed, unconnected, or ungranted", async () => {
+    const sender = fakeWebContents(4);
+    const create = (instanceId: string) =>
+      invoke(INTEGRATED_TERMINAL_CREATE_CHANNEL, sender, {
+        threadKey: "codex:remote-pinned",
+        cols: 80,
+        rows: 24,
+        federationTarget: { scope: "remote", instanceId },
+      });
+
+    // Malformed id never reaches the transport (where an unknown peer falls
+    // through to the gateway relay and surfaces as an opaque error).
+    await expect(create("x")).rejects.toThrow(/invalid remote terminal/i);
+    // Well-formed but not a connected peer.
+    await expect(create("peer-unknown")).rejects.toThrow(/not connected/i);
+    // Connected, but the owner withheld the capability.
+    mocks.connectedPeers = [
+      {
+        target: { scope: "remote" as const, instanceId: "peer-a" },
+        label: "Peer Mac",
+        capabilities: [],
+      },
+    ];
+    await expect(create("peer-a")).rejects.toThrow(/remote_pty/i);
+
+    expect(mocks.remotePtyOpen).not.toHaveBeenCalled();
+    expect(mocks.localCreateOrAttach).not.toHaveBeenCalled();
+  });
+
+  it("routes a main window's close and panel-hidden for a remote pane to the bridge", async () => {
+    const sender = fakeWebContents(5);
+    await invoke(INTEGRATED_TERMINAL_CREATE_CHANNEL, sender, {
+      threadKey: "codex:remote-pinned",
+      cols: 80,
+      rows: 24,
+      federationTarget: { scope: "remote", instanceId: "peer-a" },
+    });
+
+    await invoke(INTEGRATED_TERMINAL_SET_PANEL_HIDDEN_CHANNEL, sender, {
+      threadKey: "codex:remote-pinned",
+      hidden: true,
+    });
+    expect(mocks.localSetPanelHidden).not.toHaveBeenCalled();
+    const hiddenSessions = (await invoke(
+      INTEGRATED_TERMINAL_LIST_CHANNEL,
+      sender,
+    )) as Array<{ panelHidden: boolean }>;
+    expect(hiddenSessions[0]?.panelHidden).toBe(true);
+
+    await invoke(INTEGRATED_TERMINAL_CLOSE_CHANNEL, sender, {
+      threadKey: "codex:remote-pinned",
+    });
+    expect(mocks.remotePtyClose).toHaveBeenCalledTimes(1);
+    expect(mocks.localClose).not.toHaveBeenCalled();
+  });
+
+  it("broadcasts local and remote sessions together to a main window", async () => {
+    const sender = fakeWebContents(8);
+    mocks.channelSubscribers = [sender as unknown as { id: number; send: (...args: unknown[]) => void }];
+    await invoke(INTEGRATED_TERMINAL_CREATE_CHANNEL, sender, {
+      threadKey: "codex:remote-pinned",
+      cols: 80,
+      rows: 24,
+      federationTarget: { scope: "remote", instanceId: "peer-a" },
+    });
+
+    // A LOCAL session change must not blank the remote rows: the renderer
+    // replaces its whole list per event.
+    mocks.localSessionsChanged?.([
+      {
+        sessionId: "local-session",
+        threadKey: "codex:local-thread",
+        cwd: "/local",
+        shell: "/bin/zsh",
+        panelHidden: false,
+        createdAt: 1,
+      },
+    ]);
+
+    const send = sender.send as unknown as {
+      mock: { calls: Array<[string, { sessions: Array<{ sessionId: string }> }]> };
+    };
+    const lastSessionsEvent = [...send.mock.calls]
+      .reverse()
+      .find(([channel]) => channel === INTEGRATED_TERMINAL_SESSIONS_CHANNEL);
+    expect(
+      lastSessionsEvent?.[1].sessions.map((session) => session.sessionId),
+    ).toEqual(["local-session", "remote-session"]);
+  });
+
+  it("counts remote sessions as quit blockers so they are not killed silently", async () => {
+    const sender = fakeWebContents(6);
+    mocks.localQuitSnapshot = {
+      count: 1,
+      sessionIds: ["local-session"],
+      threadKeys: ["codex:local-thread"],
+    };
+    await invoke(INTEGRATED_TERMINAL_CREATE_CHANNEL, sender, {
+      threadKey: "codex:remote-pinned",
+      cols: 80,
+      rows: 24,
+      federationTarget: { scope: "remote", instanceId: "peer-a" },
+    });
+
+    const snapshot = getIntegratedTerminalQuitSnapshot();
+    expect(snapshot.count).toBe(2);
+    expect(snapshot.threadKeys).toEqual([
+      "codex:local-thread",
+      "codex:remote-pinned",
+    ]);
+    expect(snapshot.sessionIds).toContain("remote-session");
   });
 
   it("throws for a federation window with no remote target instead of spawning locally", async () => {

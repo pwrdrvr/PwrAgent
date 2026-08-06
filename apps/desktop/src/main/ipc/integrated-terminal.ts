@@ -18,11 +18,15 @@ import type {
   IntegratedTerminalSetPanelHiddenRequest,
   IntegratedTerminalWriteRequest,
 } from "../../shared/integrated-terminal";
+import { isRemoteFederationTarget } from "@pwragent/shared";
 import { IntegratedTerminalService } from "../terminal/integrated-terminal-service";
 import type { IntegratedTerminalQuitSnapshot } from "../terminal/integrated-terminal-service";
 import { isFederationWindowWebContents } from "../window";
 import { subscribersForChannel } from "../window-channels";
-import { FederationTerminalBridge } from "./federation-terminal";
+import {
+  FederationTerminalBridge,
+  sortSessionsByCreatedAt,
+} from "./federation-terminal";
 
 let service: IntegratedTerminalService | undefined;
 let federationBridge: FederationTerminalBridge | undefined;
@@ -37,7 +41,14 @@ function broadcastSessions(
     // directly); the local PTY list would let this machine's shells leak
     // into a window branded as the peer.
     if (isFederationWindowWebContents(webContents)) continue;
-    webContents.send(INTEGRATED_TERMINAL_SESSIONS_CHANNEL, { sessions });
+    // The renderer replaces its whole list per event, so a main window
+    // hosting remote-pinned threads' terminals must see both kinds.
+    webContents.send(INTEGRATED_TERMINAL_SESSIONS_CHANNEL, {
+      sessions: sortSessionsByCreatedAt([
+        ...sessions,
+        ...(federationBridge?.listSessions(webContents) ?? []),
+      ]),
+    });
   }
 }
 
@@ -45,7 +56,9 @@ export function registerIntegratedTerminalIpcHandlers(): void {
   service ??= new IntegratedTerminalService({
     onSessionsChanged: broadcastSessions,
   });
-  federationBridge ??= new FederationTerminalBridge();
+  federationBridge ??= new FederationTerminalBridge({
+    localSessionsFor: () => service?.listSessions() ?? [],
+  });
 
   ipcMain.removeHandler(INTEGRATED_TERMINAL_CREATE_CHANNEL);
   ipcMain.handle(
@@ -56,8 +69,13 @@ export function registerIntegratedTerminalIpcHandlers(): void {
     ): Promise<IntegratedTerminalCreateResponse> => {
       // A federation window NEVER falls through to a local spawn: the bridge
       // routes to the owning instance and throws when the remote target or
-      // capability is missing.
-      if (isFederationWindowWebContents(event.sender)) {
+      // capability is missing. A main window routes remotely per request —
+      // a remote-pinned thread's terminal names its owning instance.
+      if (
+        isFederationWindowWebContents(event.sender)
+        || (request.federationTarget !== undefined
+          && isRemoteFederationTarget(request.federationTarget))
+      ) {
         return await federationBridge!.createOrAttach(request, event.sender);
       }
       return await service!.createOrAttach(request, event.sender);
@@ -68,7 +86,10 @@ export function registerIntegratedTerminalIpcHandlers(): void {
   ipcMain.handle(
     INTEGRATED_TERMINAL_WRITE_CHANNEL,
     (event, request: IntegratedTerminalWriteRequest): void => {
-      if (isFederationWindowWebContents(event.sender)) {
+      if (
+        isFederationWindowWebContents(event.sender)
+        || federationBridge?.hasSession(event.sender, request.sessionId)
+      ) {
         federationBridge?.write(request, event.sender);
         return;
       }
@@ -80,7 +101,10 @@ export function registerIntegratedTerminalIpcHandlers(): void {
   ipcMain.handle(
     INTEGRATED_TERMINAL_RESIZE_CHANNEL,
     (event, request: IntegratedTerminalResizeRequest): void => {
-      if (isFederationWindowWebContents(event.sender)) {
+      if (
+        isFederationWindowWebContents(event.sender)
+        || federationBridge?.hasSession(event.sender, request.sessionId)
+      ) {
         federationBridge?.resize(request, event.sender);
         return;
       }
@@ -92,7 +116,13 @@ export function registerIntegratedTerminalIpcHandlers(): void {
   ipcMain.handle(
     INTEGRATED_TERMINAL_CLOSE_CHANNEL,
     (event, request: IntegratedTerminalCloseRequest): void => {
-      if (isFederationWindowWebContents(event.sender)) {
+      if (
+        isFederationWindowWebContents(event.sender)
+        || (request.sessionId
+          && federationBridge?.hasSession(event.sender, request.sessionId))
+        || (request.threadKey
+          && federationBridge?.hasThreadSession(event.sender, request.threadKey))
+      ) {
         federationBridge?.close(request, event.sender);
         return;
       }
@@ -107,7 +137,10 @@ export function registerIntegratedTerminalIpcHandlers(): void {
       if (isFederationWindowWebContents(event.sender)) {
         return federationBridge?.listSessions(event.sender) ?? [];
       }
-      return service?.listSessions() ?? [];
+      return sortSessionsByCreatedAt([
+        ...(service?.listSessions() ?? []),
+        ...(federationBridge?.listSessions(event.sender) ?? []),
+      ]);
     },
   );
 
@@ -115,7 +148,10 @@ export function registerIntegratedTerminalIpcHandlers(): void {
   ipcMain.handle(
     INTEGRATED_TERMINAL_SET_PANEL_HIDDEN_CHANNEL,
     (event, request: IntegratedTerminalSetPanelHiddenRequest): void => {
-      if (isFederationWindowWebContents(event.sender)) {
+      if (
+        isFederationWindowWebContents(event.sender)
+        || federationBridge?.hasThreadSession(event.sender, request.threadKey)
+      ) {
         federationBridge?.setPanelHidden(request, event.sender);
         return;
       }
@@ -141,13 +177,31 @@ export function disposeIntegratedTerminalIpcHandlers(): void {
 }
 
 export function getIntegratedTerminalQuitSnapshot(): IntegratedTerminalQuitSnapshot {
-  return (
-    service?.getQuitSnapshot() ?? {
-      count: 0,
-      sessionIds: [],
-      threadKeys: [],
-    }
-  );
+  const local = service?.getQuitSnapshot() ?? {
+    count: 0,
+    sessionIds: [],
+    threadKeys: [],
+  };
+  // Quitting closes remote sessions too (the bridge ends them when the
+  // window dies), so they belong in the blocker — otherwise a shell running
+  // a long command on another machine dies without the prompt its local
+  // equivalent would get. They cannot be foreground-filtered like local
+  // sessions: the process lives on the owner.
+  const remote = federationBridge?.quitSnapshotSessions() ?? [];
+  if (remote.length === 0) {
+    return local;
+  }
+  return {
+    count: local.count + remote.length,
+    sessionIds: [
+      ...local.sessionIds,
+      ...remote.map((session) => session.sessionId),
+    ].sort(),
+    threadKeys: [
+      ...local.threadKeys,
+      ...remote.map((session) => session.threadKey),
+    ].sort(),
+  };
 }
 
 /**

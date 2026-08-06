@@ -58,7 +58,10 @@ import { agentEventMatchesThread } from "../../lib/federated-thread-events";
 import { useCelestialIcons } from "../../lib/useCelestialIcons";
 import { CelestialWatermark } from "../../components/CelestialWatermark";
 import { readRendererFederationTarget } from "../../lib/federation-window";
-import type { IntegratedTerminalsController } from "../../lib/useIntegratedTerminals";
+import type {
+  IntegratedTerminalPaneRemote,
+  IntegratedTerminalsController,
+} from "../../lib/useIntegratedTerminals";
 import type { ThreadContextWindowState } from "../../lib/useThreadSessionState";
 import type { PendingForkEnvironmentSetup } from "../../lib/useThreadNavigation";
 import {
@@ -1617,16 +1620,36 @@ export function ThreadView(props: ThreadViewProps) {
       : undefined;
   const selectedThreadTerminalDisabledReason = resolveRemoteTerminalDisabledReason(
     selectedThread?.federation,
-    Boolean(readRendererFederationTarget()),
   );
+  // For a remote thread the create request must name the owning instance and
+  // the pane wears its chip — the shell runs there, not on this machine.
+  const selectedThreadTerminalRemote = useMemo<
+    IntegratedTerminalPaneRemote | undefined
+  >(() => {
+    const federation = selectedThread?.federation;
+    if (!federation || federation.ref.target.scope !== "remote") {
+      return undefined;
+    }
+    return {
+      target: federation.ref.target,
+      instanceId: federation.ref.target.instanceId,
+      instanceLabel: federation.instanceLabel,
+      celestialIcon: federation.celestialIcon,
+    };
+  }, [selectedThread?.federation]);
   const toggleSelectedThreadTerminal = useCallback(() => {
     if (!selectedThreadKey) return;
     if (selectedThreadTerminalDisabledReason) return;
-    terminals.togglePanel(selectedThreadKey, selectedThreadTerminalCwd);
+    terminals.togglePanel(
+      selectedThreadKey,
+      selectedThreadTerminalCwd,
+      selectedThreadTerminalRemote,
+    );
   }, [
     selectedThreadKey,
     selectedThreadTerminalCwd,
     selectedThreadTerminalDisabledReason,
+    selectedThreadTerminalRemote,
     terminals,
   ]);
   const suppressBranchDriftDialogRef = useRef(
@@ -3316,6 +3339,7 @@ export function ThreadView(props: ThreadViewProps) {
                   desktopApi={props.desktopApi}
                   threadKey={terminal.threadKey}
                   cwd={terminal.cwd}
+                  remote={terminal.remote}
                   height={terminals.heightByThread[terminal.threadKey] ?? 260}
                   visible={terminalVisible}
                   onHeightChange={(height) => {
@@ -3595,17 +3619,9 @@ function threadDirectoryPaths(thread: NavigationThreadSummary): string[] {
  */
 function resolveRemoteTerminalDisabledReason(
   federation: NavigationThreadSummary["federation"],
-  isFederationWindow: boolean,
 ): string | undefined {
   if (!federation) {
     return undefined;
-  }
-  if (!isFederationWindow) {
-    // Remote-pinned thread viewed in the MAIN window. The integrated-terminal
-    // IPC routes by window identity (main never trusts a renderer-supplied
-    // target), so a toggle here would spawn a LOCAL shell under a remote
-    // thread — the exact misrepresentation the remote-PTY design forbids.
-    return `Terminal for this thread runs on ${federation.instanceLabel} — open its remote window.`;
   }
   if (
     federation.peerStatus !== undefined &&

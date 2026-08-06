@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { IntegratedTerminalSessionSummary } from "../../../shared/integrated-terminal";
+import type { FederationRemoteTarget } from "@pwragent/shared";
+import type {
+  IntegratedTerminalRemoteInfo,
+  IntegratedTerminalSessionSummary,
+} from "../../../shared/integrated-terminal";
 import type { DesktopApi } from "./desktop-api";
 
 /**
@@ -23,15 +27,26 @@ import type { DesktopApi } from "./desktop-api";
  * `panelHidden` bit, which is why collapsing a terminal survives a remount.
  */
 
+/**
+ * A pane's remote-terminal identity: the target the create request must
+ * name (the shell runs on that instance), plus the label + celestial icon
+ * that keep the pane visibly branded as the remote machine's shell.
+ */
+export type IntegratedTerminalPaneRemote = IntegratedTerminalRemoteInfo & {
+  target: FederationRemoteTarget;
+};
+
 type LocalPane = {
   threadKey: string;
   cwd?: string;
   hidden: boolean;
+  remote?: IntegratedTerminalPaneRemote;
 };
 
 export type IntegratedTerminalPane = {
   threadKey: string;
   cwd?: string;
+  remote?: IntegratedTerminalPaneRemote;
 };
 
 export type IntegratedTerminalsController = {
@@ -43,9 +58,17 @@ export type IntegratedTerminalsController = {
   panes: IntegratedTerminalPane[];
   heightByThread: Record<string, number>;
   isPanelOpen: (threadKey: string) => boolean;
-  togglePanel: (threadKey: string, cwd?: string) => void;
+  togglePanel: (
+    threadKey: string,
+    cwd?: string,
+    remote?: IntegratedTerminalPaneRemote,
+  ) => void;
   /** Show the panel; a no-op when it is already showing. */
-  openPanel: (threadKey: string, cwd?: string) => void;
+  openPanel: (
+    threadKey: string,
+    cwd?: string,
+    remote?: IntegratedTerminalPaneRemote,
+  ) => void;
   closeTerminal: (threadKey: string) => void;
   handleExit: (threadKey: string) => void;
   setHeight: (threadKey: string, height: number) => void;
@@ -148,10 +171,28 @@ export function useIntegratedTerminals(
       ...sessions.map((session) => ({
         threadKey: session.threadKey,
         cwd: session.cwd,
+        // A rediscovered remote session (remount, renderer reload) carries
+        // its owning instance in the summary — rebuild the pane's target
+        // from it so re-attaches keep routing to the peer.
+        ...(session.remote
+          ? {
+              remote: {
+                ...session.remote,
+                target: {
+                  scope: "remote" as const,
+                  instanceId: session.remote.instanceId,
+                },
+              },
+            }
+          : {}),
       })),
       ...Object.values(localPanes)
         .filter((pane) => !sessionByThread.has(pane.threadKey))
-        .map((pane) => ({ threadKey: pane.threadKey, cwd: pane.cwd })),
+        .map((pane) => ({
+          threadKey: pane.threadKey,
+          cwd: pane.cwd,
+          ...(pane.remote ? { remote: pane.remote } : {}),
+        })),
     ],
     [localPanes, sessionByThread, sessions],
   );
@@ -169,7 +210,12 @@ export function useIntegratedTerminals(
   isPanelOpenRef.current = isPanelOpen;
 
   const setHidden = useCallback(
-    (threadKey: string, hidden: boolean, cwd?: string) => {
+    (
+      threadKey: string,
+      hidden: boolean,
+      cwd?: string,
+      remote?: IntegratedTerminalPaneRemote,
+    ) => {
       if (sessionByThread.has(threadKey)) {
         // Collapsing is a preference, not a teardown: the PTY keeps running
         // and main remembers the choice across remounts.
@@ -184,7 +230,12 @@ export function useIntegratedTerminals(
         if (existing && existing.hidden === hidden) return current;
         return {
           ...current,
-          [threadKey]: { threadKey, cwd: existing?.cwd ?? cwd, hidden },
+          [threadKey]: {
+            threadKey,
+            cwd: existing?.cwd ?? cwd,
+            hidden,
+            remote: existing?.remote ?? remote,
+          },
         };
       });
     },
@@ -192,15 +243,15 @@ export function useIntegratedTerminals(
   );
 
   const togglePanel = useCallback(
-    (threadKey: string, cwd?: string) => {
-      setHidden(threadKey, isPanelOpenRef.current(threadKey), cwd);
+    (threadKey: string, cwd?: string, remote?: IntegratedTerminalPaneRemote) => {
+      setHidden(threadKey, isPanelOpenRef.current(threadKey), cwd, remote);
     },
     [setHidden],
   );
 
   const openPanel = useCallback(
-    (threadKey: string, cwd?: string) => {
-      setHidden(threadKey, false, cwd);
+    (threadKey: string, cwd?: string, remote?: IntegratedTerminalPaneRemote) => {
+      setHidden(threadKey, false, cwd, remote);
     },
     [setHidden],
   );
