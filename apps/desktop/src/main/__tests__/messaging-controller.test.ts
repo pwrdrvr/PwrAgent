@@ -1715,9 +1715,11 @@ describe("MessagingController", () => {
     );
     expect(assistantReplies).toHaveLength(1);
     expect(assistantReplies[0]?.bindingId).toMatch(/^default-agent-route:/);
+    expect(assistantReplies[0]).not.toHaveProperty("attribution");
   });
 
   async function createSlackPrivateResponseHarness(options?: {
+    agentName?: string | null;
     deliveryBudget?: MessagingDeliveryBudget;
     deliver?: (intent: MessagingSurfaceIntent) => Promise<MessagingDeliveryResult>;
     inboundText?: string;
@@ -1728,6 +1730,8 @@ describe("MessagingController", () => {
     sleepUntil?: MessagingControllerOptions["sleepUntil"];
     startTurn?: NonNullable<MessagingBackendBridge["startTurn"]>;
     streamingResponsesDefault?: boolean;
+    targetKind?: "agent_thread" | "thread";
+    threadTitle?: string;
     toolUpdateDefaultMode?:
       | MessagingToolUpdateMode
       | ((targetKind: "thread" | "agent_thread") => MessagingToolUpdateMode);
@@ -1799,14 +1803,22 @@ describe("MessagingController", () => {
       updatedAt: 1000,
     }));
     const navigation = buildNavigationSnapshot();
+    const agentName = options?.agentName === undefined
+      ? "Signals Agent"
+      : options.agentName;
     navigation.threads[0] = {
       ...navigation.threads[0]!,
-      agent: {
-        name: "Signals Agent",
-        instructionLineCount: 1,
-        instructionsTooLong: false,
-        updatedAt: 1000,
-      },
+      title: options?.threadTitle ?? navigation.threads[0]!.title,
+      ...(agentName
+        ? {
+            agent: {
+              name: agentName,
+              instructionLineCount: 1,
+              instructionsTooLong: false,
+              updatedAt: 1000,
+            },
+          }
+        : { agent: undefined }),
     };
     const harness = await createHarness({
       channel: "slack",
@@ -1843,7 +1855,7 @@ describe("MessagingController", () => {
       channel,
       createdAt: 1000,
       routingState: { opaque: { channelId: "C012SIGNALS" } },
-      targetKind: "agent_thread",
+      targetKind: options?.targetKind ?? "agent_thread",
       threadId: "thread-1",
       updatedAt: 1000,
     });
@@ -1857,6 +1869,108 @@ describe("MessagingController", () => {
     harness.delivered.length = 0;
     return { channel, harness, resolvePrivateConversation };
   }
+
+  it("uses normalized Agent metadata for private response identity", async () => {
+    const { harness } = await createSlackPrivateResponseHarness({
+      agentName: "Signals Agent",
+      targetKind: "agent_thread",
+      threadTitle: "Investigate an alert from the first prompt",
+    });
+
+    await harness.controller.handlePwrAgentMessagingRequest({
+      operation: "send_private_response",
+      context: {
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-1",
+      },
+      args: { text: "Private details" },
+    });
+
+    expect(harness.delivered).toContainEqual(
+      expect.objectContaining({
+        attribution: expect.objectContaining({ label: "Signals Agent" }),
+        kind: "message",
+      }),
+    );
+  });
+
+  it("does not derive an Agent identity from its thread title", async () => {
+    const { harness } = await createSlackPrivateResponseHarness({
+      agentName: null,
+      targetKind: "agent_thread",
+      threadTitle: "Investigate an alert from the first prompt",
+    });
+
+    await harness.controller.handlePwrAgentMessagingRequest({
+      operation: "send_private_response",
+      context: {
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-1",
+      },
+      args: { text: "Private details" },
+    });
+
+    expect(harness.delivered).toContainEqual(
+      expect.objectContaining({
+        attribution: expect.objectContaining({ label: "PwrAgent Agent" }),
+        kind: "message",
+      }),
+    );
+  });
+
+  it("uses the bound ordinary thread title for private response identity", async () => {
+    const { harness } = await createSlackPrivateResponseHarness({
+      agentName: "Unrelated Agent Metadata",
+      targetKind: "thread",
+      threadTitle: "AWS incident follow-up",
+    });
+
+    await harness.controller.handlePwrAgentMessagingRequest({
+      operation: "send_private_response",
+      context: {
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-1",
+      },
+      args: { text: "Private details" },
+    });
+
+    expect(harness.delivered).toContainEqual(
+      expect.objectContaining({
+        attribution: expect.objectContaining({
+          label: "AWS incident follow-up",
+        }),
+        kind: "message",
+      }),
+    );
+  });
+
+  it("uses a restrained fallback for an untitled ordinary thread", async () => {
+    const { harness } = await createSlackPrivateResponseHarness({
+      agentName: null,
+      targetKind: "thread",
+      threadTitle: "",
+    });
+
+    await harness.controller.handlePwrAgentMessagingRequest({
+      operation: "send_private_response",
+      context: {
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-1",
+      },
+      args: { text: "Private details" },
+    });
+
+    expect(harness.delivered).toContainEqual(
+      expect.objectContaining({
+        attribution: expect.objectContaining({ label: "PwrAgent thread" }),
+        kind: "message",
+      }),
+    );
+  });
 
   it("delivers a terminal private response to the requesting Slack user", async () => {
     const {

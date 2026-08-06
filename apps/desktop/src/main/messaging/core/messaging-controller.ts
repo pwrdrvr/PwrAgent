@@ -15749,9 +15749,9 @@ export class MessagingController {
     const sourceThread = sourceBinding
       ? await this.resolveBoundThreadSummary(sourceBinding)
       : undefined;
-    const attributionLabel = sourceThread?.agentName
-      ?? sourceThread?.title
-      ?? "PwrAgent Agent";
+    const attributionLabel = sourceBinding
+      ? privateResponseAttributionLabel(sourceBinding, sourceThread)
+      : "PwrAgent Agent";
     const result = await this.deliver(
       {
         id: this.newIntentId("private-response"),
@@ -18548,6 +18548,23 @@ function summarizeNavigationThreadForMessaging(
     ...(thread.executionMode ? { executionMode: thread.executionMode } : {}),
     ...(thread.agent?.name ? { agentName: thread.agent.name } : {}),
   };
+}
+
+function privateResponseAttributionLabel(
+  binding: MessagingBindingRecord,
+  thread: PwrAgentMessagingBoundThreadSummary | undefined,
+): string {
+  const targetKind = binding.targetKind ?? "thread";
+  const identity = targetKind === "agent_thread"
+    ? thread?.agentName
+    : thread?.title;
+  const normalized = identity?.replace(/\s+/g, " ").trim();
+  if (normalized) {
+    return normalized;
+  }
+  return targetKind === "agent_thread"
+    ? "PwrAgent Agent"
+    : "PwrAgent thread";
 }
 
 function eventFromBinding(

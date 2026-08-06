@@ -815,6 +815,11 @@ export type MessagingBaseSurfaceIntent = {
 
 export type MessagingMessageIntent = MessagingBaseSurfaceIntent & {
   kind: "message";
+  /**
+   * Optional source identity and delivery context for a response routed away
+   * from its bound conversation. Routine replies should omit this when their
+   * destination already makes the source identity unambiguous.
+   */
   attribution?: {
     label: string;
     hint?: string;
