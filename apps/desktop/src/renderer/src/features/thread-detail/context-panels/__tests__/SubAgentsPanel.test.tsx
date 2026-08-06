@@ -91,4 +91,45 @@ describe("SubAgentsPanel", () => {
     ).toHaveTextContent("Sub-agent is no longer running.");
     expect(screen.getByRole("button", { name: "Stop" })).toBeEnabled();
   });
+
+  it("targets the owning instance when stopping a remote sub-agent", async () => {
+    const stopSubAgent = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "parent-thread",
+      monitorId: "monitor-1",
+      stoppedAt: 1_800_000_000_100,
+    }));
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "owner_one",
+    };
+
+    render(
+      <SubAgentsPanel
+        desktopApi={{ stopSubAgent } as DesktopApi}
+        thread={{
+          ...thread,
+          federation: {
+            instanceLabel: "Owner One",
+            ref: {
+              target: federationTarget,
+              backend: "codex",
+              threadId: "parent-thread",
+            },
+          },
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+
+    await waitFor(() => {
+      expect(stopSubAgent).toHaveBeenCalledWith({
+        backend: "codex",
+        federationTarget,
+        threadId: "parent-thread",
+        monitorId: "monitor-1",
+      });
+    });
+  });
 });

@@ -305,6 +305,7 @@ export type InterruptTurnResponse = {
 
 export type StopSubAgentRequest = {
   backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   monitorId: string;
 };
