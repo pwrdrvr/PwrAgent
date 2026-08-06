@@ -1688,6 +1688,8 @@ type ThreadPullRequestCanonicalizer = (
   prs: PrSummary[],
 ) => PrSummary[] | Promise<PrSummary[]>;
 
+type LocalPullRequestAuthorityResolver = (prKey: string) => boolean;
+
 type ThreadPullRequestWatchToolHandler = (
   args: WatchThreadPullRequestToolArgs,
 ) => PwrAgentThreadInspectionResponse | Promise<PwrAgentThreadInspectionResponse>;
@@ -6405,6 +6407,9 @@ export class DesktopBackendRegistry {
   private threadPullRequestCanonicalizer:
     | ThreadPullRequestCanonicalizer
     | undefined;
+  private localPullRequestAuthorityResolver:
+    | LocalPullRequestAuthorityResolver
+    | undefined;
   private threadInspectionSearchService: ThreadSearchService | null | undefined;
   private readonly headlessAutomationTurns = new Map<
     string,
@@ -7114,6 +7119,22 @@ export class DesktopBackendRegistry {
     canonicalizer: ThreadPullRequestCanonicalizer | null | undefined,
   ): void {
     this.threadPullRequestCanonicalizer = canonicalizer ?? undefined;
+  }
+
+  setLocalPullRequestAuthorityResolver(
+    resolver: LocalPullRequestAuthorityResolver | null | undefined,
+  ): void {
+    this.localPullRequestAuthorityResolver = resolver ?? undefined;
+  }
+
+  /**
+   * True when this instance monitors the PR itself, so a federated
+   * peer's observation of the same PR should not be applied on top of
+   * ours. Defaults to false when no resolver is injected — an instance
+   * that cannot answer the question has no claim to authority.
+   */
+  isPullRequestAttachedLocally(prKey: string): boolean {
+    return this.localPullRequestAuthorityResolver?.(prKey) ?? false;
   }
 
   setThreadPullRequestWatchToolHandler(

@@ -4250,6 +4250,19 @@ class DesktopAppServerService {
     return threadKeys;
   }
 
+  /**
+   * True when this instance already owns the status of a PR, because the
+   * PR is attached to the primary workspace of one of its own threads —
+   * the same test `collectPrPollTargets` uses to decide what to poll.
+   *
+   * Terminal PRs count. They drop out of the poll rotation, but the
+   * status this instance last observed for them is final, so a peer's
+   * observation of the same PR must not be allowed to overwrite it.
+   */
+  isPullRequestAttachedLocally(prKey: string): boolean {
+    return this.findThreadKeysForPrKey(prKey).length > 0;
+  }
+
   private rememberPrLookup(entry: {
     lookupKey: string;
     provider: string;
@@ -6626,6 +6639,9 @@ export function registerAppServerIpcHandlers(): void {
     async (prs) =>
       await appServerService.canonicalizeStoredPullRequests(prs),
   );
+  getDesktopBackendRegistry().setLocalPullRequestAuthorityResolver((prKey) =>
+    appServerService.isPullRequestAttachedLocally(prKey)
+  );
   getDesktopBackendRegistry().setThreadPullRequestWatchToolHandler(
     async (args) => await appServerService.watchThreadPullRequestForTool(args),
   );
@@ -7346,6 +7362,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   const registry = getExistingDesktopBackendRegistry();
   registry?.setThreadPullRequestStatusToolHandler(undefined);
   registry?.setThreadPullRequestCanonicalizer(undefined);
+  registry?.setLocalPullRequestAuthorityResolver(undefined);
   registry?.setThreadPullRequestWatchToolHandler(undefined);
   registry?.setDirectoryGitStatusWriter(undefined);
   registry?.setThreadPrAutoDispatchHandler(undefined);

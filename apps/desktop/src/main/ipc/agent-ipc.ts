@@ -1,5 +1,6 @@
 import { ipcMain, type IpcMainInvokeEvent } from "electron";
 import { subscribersForChannel } from "../window-channels";
+import { federationWindowTargetForWebContents } from "../window";
 import {
   sanitizeRendererPayload,
   type AgentEvent,
@@ -303,18 +304,55 @@ function withRendererActivityEntry(event: AgentEvent): AgentEvent {
   return rendererActivityEntry ? { ...event, rendererActivityEntry } : event;
 }
 
+/**
+ * A peer's PR-status observation is authoritative only for PRs this
+ * instance does not monitor itself.
+ *
+ * A window with no federation target renders local threads and pinned
+ * remote rows side by side. When the same PR is attached to a local
+ * thread, its status there is already driven by the local poller, and
+ * `pullRequest/status/updated` is matched by `prKey` across every thread
+ * in the snapshot — so the local observation reaches the pinned remote
+ * row too. Letting the peer's observation in as well means two monitors
+ * writing the same rows from slightly different points in time, which
+ * reads as the status flickering between values. One monitor wins:
+ * ours.
+ *
+ * A federation window has no local monitor to defer to — the peer is its
+ * only source of truth — so it always receives the event, and its own
+ * renderer-side target filter decides whether the event belongs to the
+ * instance it fronts.
+ */
+function remotePrStatusEventIsSupersededLocally(event: AgentEvent): boolean {
+  if (
+    !event.federationTarget
+    || event.notification.method !== "pullRequest/status/updated"
+  ) {
+    return false;
+  }
+  const { prKey } = event.notification.params as { prKey: string };
+  return getDesktopBackendRegistry().isPullRequestAttachedLocally(prKey);
+}
+
 export function broadcastAgentEvent(event: AgentEvent): void {
   const eventSummary = summarizeAgentEvent(event);
   if (eventSummary) {
     logAgentEventSummary(eventSummary);
   }
   const rendererEvent = sanitizeRendererPayload(withRendererActivityEntry(event));
+  const federationWindowsOnly = remotePrStatusEventIsSupersededLocally(event);
 
   // Only deliver to windows that registered for this channel.
   // Secondary windows (e.g. the Messaging Activity window) opt out by
   // default — see `apps/desktop/src/main/window-channels.ts`.
   for (const webContents of subscribersForChannel(AGENT_EVENT_CHANNEL)) {
     if (typeof webContents.send !== "function") continue;
+    if (
+      federationWindowsOnly
+      && !federationWindowTargetForWebContents(webContents)
+    ) {
+      continue;
+    }
     webContents.send(AGENT_EVENT_CHANNEL, rendererEvent);
   }
 }

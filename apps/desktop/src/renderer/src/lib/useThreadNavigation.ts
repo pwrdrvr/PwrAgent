@@ -1547,7 +1547,12 @@ function applyThreadStatusUpdate(
 
 function applyThreadPullRequestsUpdate(
   snapshot: NavigationSnapshot | undefined,
-  params: { backend: AppServerBackendKind; threadId: string; prs: PrSummary[] }
+  params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    prs: PrSummary[];
+    federationTarget?: FederationTarget;
+  }
 ): NavigationSnapshot | undefined {
   if (!snapshot) {
     return snapshot;
@@ -1556,6 +1561,20 @@ function applyThreadPullRequestsUpdate(
   let changed = false;
   const threads = snapshot.threads.map((thread) => {
     if (thread.source !== params.backend || thread.id !== params.threadId) {
+      return thread;
+    }
+
+    // A thread's attachment list is owned by the instance the thread
+    // lives on, so match the origin too: in a window that shows local
+    // threads alongside pinned remote ones, a peer's event must not
+    // rewrite a local thread that happens to share the id, and vice
+    // versa.
+    if (
+      !federationTargetsEqual(
+        thread.federation?.ref.target,
+        params.federationTarget,
+      )
+    ) {
       return thread;
     }
 
@@ -3194,7 +3213,26 @@ export function useThreadNavigation(
     return desktopApi.onAgentEvent((event) => {
       const windowTarget = readRendererFederationTarget();
       const method = event.notification.method as string;
-      if (!federationTargetsEqual(event.federationTarget, windowTarget)) {
+      // A peer's PR events are stamped with its own remote target, so they
+      // never match the main window's (absent) target — yet this window
+      // hosts that peer's threads as viewer-side remote pins, and those
+      // rows are the only place their PR chips are shown. Let them past
+      // the target filter and into the shared appliers below.
+      //
+      // Safe against duelling monitors: the main process drops a peer
+      // observation for any PR this instance monitors itself, so whatever
+      // arrives here has no local poller to contradict. When we do own the
+      // PR, our own local event patches the pinned row instead — status
+      // updates match by prKey across every thread in the snapshot.
+      const remotePullRequestPassthrough =
+        !windowTarget
+        && Boolean(event.federationTarget)
+        && (method === "pullRequest/status/updated"
+          || method === "thread/pullRequests/updated");
+      if (
+        !remotePullRequestPassthrough
+        && !federationTargetsEqual(event.federationTarget, windowTarget)
+      ) {
         // Peer-status events are stamped with the peer's own remote target,
         // which never matches the main window's (absent) window target. The
         // main window still hosts that peer's threads via viewer-side remote
@@ -3345,6 +3383,7 @@ export function useThreadNavigation(
         setState((current) => {
           const nextResponse = applyThreadPullRequestsUpdate(current.response, {
             backend: event.backend,
+            federationTarget: event.federationTarget,
             threadId,
             prs,
           });
