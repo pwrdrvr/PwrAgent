@@ -1,10 +1,16 @@
 import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { wrapCommandInWindowsJob } from "../windows-job-wrapper";
+import {
+  formatWindowsJobStartupTelemetry,
+  readWindowsJobStartupTelemetry,
+  startWindowsJobReadyPoll,
+  WINDOWS_JOB_READY_TIMEOUT_MS,
+  wrapCommandInWindowsJob,
+} from "../windows-job-wrapper";
 import { resolveWindowsBashShell } from "../windows-shell";
 
 function decodeBase64(value: string): string {
@@ -52,6 +58,11 @@ async function runWrappedCommand(params: {
 }
 
 describe("wrapCommandInWindowsJob", () => {
+  it("keeps cold startup bounded inside the Windows test contract", () => {
+    expect(WINDOWS_JOB_READY_TIMEOUT_MS).toBe(20_000);
+    expect(WINDOWS_JOB_READY_TIMEOUT_MS).toBeLessThan(30_000);
+  });
+
   it("launches the shell through an atomic kill-on-close Job wrapper", () => {
     const originalEnv = {
       PATH: "C:\\tools",
@@ -95,7 +106,7 @@ describe("wrapCommandInWindowsJob", () => {
       decodeBase64(wrapped.env.PWRAGENT_JOB_WRAPPER_ARGUMENT_1!),
     ).toBe(
       [
-        "trap 'pwragent_exit=$?; trap - EXIT; printf \"%s\" \"$pwragent_exit\" > \"$PWRAGENT_JOB_WRAPPER_EXIT_FILE\"; exit \"$pwragent_exit\"' EXIT",
+        "trap 'pwragent_exit=$?; trap - EXIT; set +e; pwragent_exit_file=$(/usr/bin/cygpath.exe -u \"$PWRAGENT_JOB_WRAPPER_EXIT_FILE\"); if [ -n \"$pwragent_exit_file\" ]; then printf \"%s\" \"$pwragent_exit\" > \"$pwragent_exit_file\"; fi; exit \"$pwragent_exit\"' EXIT",
         command,
       ].join("\n"),
     );
@@ -106,11 +117,94 @@ describe("wrapCommandInWindowsJob", () => {
     expect(wrapped.env.PWRAGENT_JOB_WRAPPER_EXIT_FILE).toMatch(
       /pwragent-windows-job-.*[\\/]exit$/,
     );
+    expect(wrapped.env.PWRAGENT_JOB_WRAPPER_STARTUP_STATUS_FILE).toBe(
+      wrapped.startupStatusFilePath,
+    );
+    expect(readWindowsJobStartupTelemetry(wrapped)).toEqual({
+      phases: [{ detail: undefined, elapsedMs: 0, phase: "wrapper-created" }],
+    });
     expect(originalEnv).toEqual({
       PATH: "C:\\tools",
       SystemRoot: "C:\\Windows",
     });
     wrapped.cleanup();
+  });
+
+  it("waits through delayed helper phases and reports their timings", async () => {
+    const wrapped = wrapCommandInWindowsJob({
+      args: ["/c", "exit 0"],
+      command: "C:\\Windows\\System32\\cmd.exe",
+      env: { SystemRoot: "C:\\Windows" },
+    });
+    try {
+      const telemetry = await new Promise<
+        ReturnType<typeof readWindowsJobStartupTelemetry>
+      >((resolve, reject) => {
+        startWindowsJobReadyPoll({
+          launch: wrapped,
+          onReady: resolve,
+          onTimeout: () => reject(new Error("Delayed readiness timed out")),
+          timeoutMs: 500,
+        });
+        setTimeout(() => {
+          appendFileSync(
+            wrapped.startupStatusFilePath,
+            "25\tpowershell-started\t\n50\thelper-compile-started\t\n",
+          );
+        }, 25);
+        setTimeout(() => {
+          appendFileSync(
+            wrapped.startupStatusFilePath,
+            "75\thelper-ready\t\n100\ttarget-assigned\t\n125\tready\t\n",
+          );
+          writeFileSync(wrapped.readyFilePath, "ready", "utf8");
+        }, 75);
+      });
+
+      expect(telemetry.phases.map(({ phase }) => phase)).toEqual([
+        "wrapper-created",
+        "powershell-started",
+        "helper-compile-started",
+        "helper-ready",
+        "target-assigned",
+        "ready",
+      ]);
+      expect(formatWindowsJobStartupTelemetry(telemetry)).toBe(
+        "wrapper-created@0ms -> powershell-started@25ms -> helper-compile-started@50ms -> helper-ready@75ms -> target-assigned@100ms -> ready@125ms",
+      );
+    } finally {
+      wrapped.cleanup();
+    }
+  });
+
+  it("reports the last startup phase when readiness times out", async () => {
+    const wrapped = wrapCommandInWindowsJob({
+      args: ["/c", "exit 0"],
+      command: "C:\\Windows\\System32\\cmd.exe",
+      env: { SystemRoot: "C:\\Windows" },
+    });
+    try {
+      appendFileSync(
+        wrapped.startupStatusFilePath,
+        "12\tpowershell-started\t\n18\thelper-compile-started\t\n",
+      );
+      const telemetry = await new Promise<
+        ReturnType<typeof readWindowsJobStartupTelemetry>
+      >((resolve, reject) => {
+        startWindowsJobReadyPoll({
+          launch: wrapped,
+          onReady: () => reject(new Error("Unexpected readiness")),
+          onTimeout: resolve,
+          timeoutMs: 40,
+        });
+      });
+      expect(telemetry.phases.at(-1)).toMatchObject({
+        elapsedMs: 18,
+        phase: "helper-compile-started",
+      });
+    } finally {
+      wrapped.cleanup();
+    }
   });
 
   it.skipIf(process.platform !== "win32")(
@@ -154,6 +248,30 @@ describe("wrapCommandInWindowsJob", () => {
           code: 0,
           stderr: "",
           stdout: "job-bash",
+        });
+      } finally {
+        await rm(root, { force: true, recursive: true });
+      }
+    },
+    30_000,
+  );
+
+  it.skipIf(process.platform !== "win32")(
+    "preserves a nonzero Git Bash exit through the status side channel",
+    async () => {
+      const root = await mkdtemp(
+        path.join(os.tmpdir(), "pwragent-windows-job-exit-test-"),
+      );
+      try {
+        const result = await runWrappedCommand({
+          args: ["-lc", 'printf "job-bash-failure"; exit 23'],
+          command: resolveWindowsBashShell(),
+          cwd: root,
+        });
+        expect(result, result.stderr).toMatchObject({
+          code: 23,
+          stderr: "",
+          stdout: "job-bash-failure",
         });
       } finally {
         await rm(root, { force: true, recursive: true });

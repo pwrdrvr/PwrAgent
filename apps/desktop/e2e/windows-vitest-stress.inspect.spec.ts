@@ -145,6 +145,7 @@ test(
         ...process.env,
         CI: "1",
         NO_COLOR: "1",
+        PWRAGENT_WINDOWS_JOB_STARTUP_DIAGNOSTICS: "1",
       },
       stdio: ["ignore", "pipe", "pipe"],
       // Windows resolves pnpm through its .cmd shim. The target is validated

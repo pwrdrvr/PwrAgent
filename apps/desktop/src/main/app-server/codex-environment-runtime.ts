@@ -23,7 +23,13 @@ import {
 } from "@pwragent/shared";
 import { getMainLogger } from "../log";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
-import { wrapCommandInWindowsJob } from "../windows-job-wrapper";
+import {
+  formatWindowsJobStartupTelemetry,
+  readWindowsJobStartupTelemetry,
+  startWindowsJobReadyPoll,
+  WINDOWS_JOB_READY_TIMEOUT_MS,
+  wrapCommandInWindowsJob,
+} from "../windows-job-wrapper";
 import {
   preferStableWindowsBashPath,
   windowsBashCandidates,
@@ -167,7 +173,8 @@ export type CodexEnvironmentDetachedOutput = {
 
 export const DETACHED_OUTPUT_SNAPSHOT_MS = 500;
 const DETACHED_STOP_SIGKILL_GRACE_MS = 2_000;
-const WINDOWS_JOB_READY_TIMEOUT_MS = 10_000;
+const WINDOWS_JOB_STARTUP_DIAGNOSTICS_ENV =
+  "PWRAGENT_WINDOWS_JOB_STARTUP_DIAGNOSTICS";
 
 export type CodexEnvironmentCommandResult = {
   durationMs?: number;
@@ -722,7 +729,9 @@ function runShellCommand(
     let timeoutHandle: NodeJS.Timeout | undefined;
     let killHandle: NodeJS.Timeout | undefined;
     let forceSettleHandle: NodeJS.Timeout | undefined;
-    let windowsJobReadyTimer: NodeJS.Timeout | undefined;
+    let windowsJobReadyPoll:
+      | ReturnType<typeof startWindowsJobReadyPoll>
+      | undefined;
 
     const appendOutput = (text: string) => {
       combinedOutput = `${combinedOutput}${text}`.slice(-32_000);
@@ -798,10 +807,8 @@ function runShellCommand(
         clearTimeout(forceSettleHandle);
         forceSettleHandle = undefined;
       }
-      if (windowsJobReadyTimer) {
-        clearTimeout(windowsJobReadyTimer);
-        windowsJobReadyTimer = undefined;
-      }
+      windowsJobReadyPoll?.cancel();
+      windowsJobReadyPoll = undefined;
       cleanupShellEnvironmentCaptureTarget(capture);
       callback();
     };
@@ -958,30 +965,39 @@ function runShellCommand(
           resolveStarted();
           return;
         }
-        const readyDeadline = Date.now() + WINDOWS_JOB_READY_TIMEOUT_MS;
-        const pollReady = () => {
-          windowsJobReadyTimer = undefined;
-          if (settled || closed) {
-            return;
-          }
-          if (existsSync(windowsJobLaunch.readyFilePath)) {
+        windowsJobReadyPoll = startWindowsJobReadyPoll({
+          launch: windowsJobLaunch,
+          onReady: (startupTelemetry) => {
+            windowsJobReadyPoll = undefined;
+            if (settled || closed) return;
+            const durationMs = Date.now() - startedAt;
+            environmentRuntimeLog.info("codex-environment-windows-job-ready", {
+              processId,
+              durationMs,
+              startupPhases: startupTelemetry.phases,
+            });
+            if (
+              process.env[WINDOWS_JOB_STARTUP_DIAGNOSTICS_ENV] === "1"
+            ) {
+              process.stderr.write(
+                `Windows Job startup ready after ${durationMs}ms: ${formatWindowsJobStartupTelemetry(startupTelemetry)}\n`,
+              );
+            }
             resolveStarted();
-            return;
-          }
-          if (Date.now() >= readyDeadline) {
+          },
+          onTimeout: (startupTelemetry) => {
+            windowsJobReadyPoll = undefined;
+            if (settled || closed) return;
             terminateChild("SIGKILL");
             settle(() => {
               reject(
                 new CodexEnvironmentCommandError(
-                  `Windows Job shell did not become ready within ${WINDOWS_JOB_READY_TIMEOUT_MS}ms`,
+                  `Windows Job shell did not become ready within ${WINDOWS_JOB_READY_TIMEOUT_MS}ms: ${formatWindowsJobStartupTelemetry(startupTelemetry)}`,
                 ),
               );
             });
-            return;
-          }
-          windowsJobReadyTimer = setTimeout(pollReady, 25);
-        };
-        pollReady();
+          },
+        });
       });
       // Even in detach mode, log non-zero exits so failed `pnpm dev` /
       // PwrSnap-style launches don't disappear silently, and fire
@@ -989,10 +1005,8 @@ function runShellCommand(
       // overlay state for the anchored env-action output UI.
       child.once("close", (code, signal) => {
         closed = true;
-        if (windowsJobReadyTimer) {
-          clearTimeout(windowsJobReadyTimer);
-          windowsJobReadyTimer = undefined;
-        }
+        windowsJobReadyPoll?.cancel();
+        windowsJobReadyPoll = undefined;
         if (params.detachedTerminationKey) {
           const processEntry = detachedCommandProcesses.get(
             params.detachedTerminationKey,
@@ -1011,6 +1025,9 @@ function runShellCommand(
         const durationMs = Date.now() - startedAt;
         const output = combinedOutput.trimEnd();
         if (!settled) {
+          const windowsStartup = windowsJobLaunch
+            ? readWindowsJobStartupTelemetry(windowsJobLaunch)
+            : undefined;
           if (windowsJobLaunch && existsSync(windowsJobLaunch.readyFilePath)) {
             settle(() => {
               resolve({ pid: child.pid });
@@ -1019,7 +1036,13 @@ function runShellCommand(
             settle(() => {
               reject(
                 new CodexEnvironmentCommandError(
-                  `Codex environment command exited before its Windows Job became ready${buildExitErrorSuffix(output)}`,
+                  [
+                    "Codex environment command exited before its Windows Job became ready",
+                    windowsStartup
+                      ? `: ${formatWindowsJobStartupTelemetry(windowsStartup)}`
+                      : "",
+                    buildExitErrorSuffix(output),
+                  ].join(""),
                   {
                     durationMs,
                     exitCode: typeof code === "number" ? code : undefined,
