@@ -46,6 +46,10 @@ import type {
   SetThreadPinResponse,
   SetThreadPrAutoDispatchRequest,
   SetThreadPrAutoDispatchResponse,
+  CancelThreadPrAutoDispatchRequest,
+  CancelThreadPrAutoDispatchResponse,
+  SendThreadPrAutoDispatchNowRequest,
+  SendThreadPrAutoDispatchNowResponse,
   ReorderThreadPinsRequest,
   ReorderThreadPinsResponse,
   NavigationSnapshot,
@@ -126,6 +130,8 @@ export const FEDERATION_BACKEND_METHODS = {
   reorderThreadPins: "backend.reorderThreadPins",
   detachThreadPullRequest: "backend.detachThreadPullRequest",
   setThreadPrAutoDispatch: "backend.setThreadPrAutoDispatch",
+  cancelThreadPrAutoDispatch: "backend.cancelThreadPrAutoDispatch",
+  sendThreadPrAutoDispatchNow: "backend.sendThreadPrAutoDispatchNow",
   archiveThread: "backend.archiveThread",
   startThread: "backend.startThread",
   forkThread: "backend.forkThread",
@@ -201,6 +207,8 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   // (like archiveThread) rather than the browse-level navigation grants.
   [FEDERATION_BACKEND_METHODS.detachThreadPullRequest]: "turn_control",
   [FEDERATION_BACKEND_METHODS.setThreadPrAutoDispatch]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.cancelThreadPrAutoDispatch]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.sendThreadPrAutoDispatchNow]: "turn_control",
   [FEDERATION_BACKEND_METHODS.archiveThread]: "turn_control",
   [FEDERATION_BACKEND_METHODS.startThread]: "turn_control",
   [FEDERATION_BACKEND_METHODS.forkThread]: "turn_control",
@@ -285,6 +293,12 @@ export type FederationBackendOperations = {
   setThreadPrAutoDispatch(
     request: SetThreadPrAutoDispatchRequest,
   ): Promise<SetThreadPrAutoDispatchResponse>;
+  cancelThreadPrAutoDispatch(
+    request: CancelThreadPrAutoDispatchRequest,
+  ): Promise<CancelThreadPrAutoDispatchResponse>;
+  sendThreadPrAutoDispatchNow(
+    request: SendThreadPrAutoDispatchNowRequest,
+  ): Promise<SendThreadPrAutoDispatchNowResponse>;
   archiveThread(request: ArchiveThreadRequest): Promise<ArchiveThreadResponse>;
   startThread(request: StartThreadRequest): Promise<StartThreadResponse>;
   forkThread(
@@ -481,6 +495,20 @@ export function registerFederationBackendHandlers(params: {
     async (envelope) =>
       await params.backend.setThreadPrAutoDispatch(
         envelope.params as SetThreadPrAutoDispatchRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.cancelThreadPrAutoDispatch,
+    async (envelope) =>
+      await params.backend.cancelThreadPrAutoDispatch(
+        envelope.params as CancelThreadPrAutoDispatchRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.sendThreadPrAutoDispatchNow,
+    async (envelope) =>
+      await params.backend.sendThreadPrAutoDispatchNow(
+        envelope.params as SendThreadPrAutoDispatchNowRequest,
       ),
   );
   params.router.registerHandler(
@@ -871,6 +899,24 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   ): Promise<SetThreadPrAutoDispatchResponse> {
     return await this.rpc.request<SetThreadPrAutoDispatchResponse>({
       method: FEDERATION_BACKEND_METHODS.setThreadPrAutoDispatch,
+      params: request,
+    });
+  }
+
+  async cancelThreadPrAutoDispatch(
+    request: CancelThreadPrAutoDispatchRequest,
+  ): Promise<CancelThreadPrAutoDispatchResponse> {
+    return await this.rpc.request<CancelThreadPrAutoDispatchResponse>({
+      method: FEDERATION_BACKEND_METHODS.cancelThreadPrAutoDispatch,
+      params: request,
+    });
+  }
+
+  async sendThreadPrAutoDispatchNow(
+    request: SendThreadPrAutoDispatchNowRequest,
+  ): Promise<SendThreadPrAutoDispatchNowResponse> {
+    return await this.rpc.request<SendThreadPrAutoDispatchNowResponse>({
+      method: FEDERATION_BACKEND_METHODS.sendThreadPrAutoDispatchNow,
       params: request,
     });
   }

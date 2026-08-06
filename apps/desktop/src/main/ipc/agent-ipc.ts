@@ -377,6 +377,17 @@ export function registerAgentIpcHandlers(): void {
       _event,
       request: CancelThreadPrAutoDispatchRequest,
     ): Promise<CancelThreadPrAutoDispatchResponse> => {
+      if (
+        request.federationTarget
+        && isRemoteFederationTarget(request.federationTarget)
+      ) {
+        // The pending dispatch and its fingerprint only exist in the
+        // owning instance's coordinator; cancelling locally would report
+        // a no-op while the owner still fires the scheduled repair turn.
+        return await getDesktopFederationRuntime()
+          .remoteBackend(request.federationTarget)
+          .cancelThreadPrAutoDispatch(stripFederationTarget(request));
+      }
       return await registry.cancelThreadPrAutoDispatch(request);
     },
   );
@@ -388,6 +399,16 @@ export function registerAgentIpcHandlers(): void {
       _event,
       request: SendThreadPrAutoDispatchNowRequest,
     ): Promise<SendThreadPrAutoDispatchNowResponse> => {
+      if (
+        request.federationTarget
+        && isRemoteFederationTarget(request.federationTarget)
+      ) {
+        // Same as cancel: only the owner holds the pending dispatch, so
+        // "send now" has to run there to promote the scheduled turn.
+        return await getDesktopFederationRuntime()
+          .remoteBackend(request.federationTarget)
+          .sendThreadPrAutoDispatchNow(stripFederationTarget(request));
+      }
       return await registry.sendThreadPrAutoDispatchNow(request);
     },
   );

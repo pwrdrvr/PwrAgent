@@ -4,6 +4,7 @@ import type {
   ApplyThreadModelMigrationRequest,
   CancelQueuedTurnRequest,
   CancelThreadExecutionModeQueueRequest,
+  CancelThreadPrAutoDispatchRequest,
   CheckThreadBranchDriftRequest,
   CompactThreadRequest,
   ForkThreadRequest,
@@ -16,8 +17,10 @@ import type {
   StopCodexEnvironmentActionRequest,
   SetAcpSessionRuntimeOptionRequest,
   SetCodexThreadEnvironmentRequest,
+  SendThreadPrAutoDispatchNowRequest,
   SetThreadExecutionModeRequest,
   SetThreadModelSettingsRequest,
+  SetThreadPrAutoDispatchRequest,
   StopSubAgentRequest,
   StartReviewRequest,
   StartThreadRequest,
@@ -100,6 +103,21 @@ const registry = {
     ...request,
     trusted: true,
   })),
+  setThreadPrAutoDispatch: vi.fn(
+    async (request: SetThreadPrAutoDispatchRequest) => request,
+  ),
+  cancelThreadPrAutoDispatch: vi.fn(
+    async (request: CancelThreadPrAutoDispatchRequest) => ({
+      ...request,
+      cancelled: true,
+    }),
+  ),
+  sendThreadPrAutoDispatchNow: vi.fn(
+    async (request: SendThreadPrAutoDispatchNowRequest) => ({
+      ...request,
+      accepted: true,
+    }),
+  ),
   getLatestCodexConfigWarning: vi.fn(() => ({})),
 };
 
@@ -179,6 +197,21 @@ const federationMock = vi.hoisted(() => {
     ),
     setThreadModelSettings: vi.fn(
       async (request: SetThreadModelSettingsRequest) => request,
+    ),
+    setThreadPrAutoDispatch: vi.fn(
+      async (request: SetThreadPrAutoDispatchRequest) => request,
+    ),
+    cancelThreadPrAutoDispatch: vi.fn(
+      async (request: CancelThreadPrAutoDispatchRequest) => ({
+        ...request,
+        cancelled: true,
+      }),
+    ),
+    sendThreadPrAutoDispatchNow: vi.fn(
+      async (request: SendThreadPrAutoDispatchNowRequest) => ({
+        ...request,
+        accepted: true,
+      }),
     ),
     applyThreadModelMigration: vi.fn(
       async (request: ApplyThreadModelMigrationRequest) => ({
@@ -330,6 +363,9 @@ describe("agent ipc", () => {
     registry.stopSubAgent.mockClear();
     registry.steerTurn.mockClear();
     registry.materializeDirectoryLaunchpad.mockClear();
+    registry.setThreadPrAutoDispatch.mockClear();
+    registry.cancelThreadPrAutoDispatch.mockClear();
+    registry.sendThreadPrAutoDispatchNow.mockClear();
     federationMock.runtime.remoteBackend.mockClear();
     federationMock.runtime.setAgentEventPublisher.mockClear();
     federationMock.runtime.setEnvironmentSetupProgressPublisher.mockClear();
@@ -346,6 +382,9 @@ describe("agent ipc", () => {
     const {
       AGENT_CANCEL_QUEUED_TURN_CHANNEL,
       AGENT_CANCEL_THREAD_EXECUTION_MODE_QUEUE_CHANNEL,
+      AGENT_CANCEL_THREAD_PR_AUTO_DISPATCH_CHANNEL,
+      AGENT_SEND_THREAD_PR_AUTO_DISPATCH_NOW_CHANNEL,
+      AGENT_SET_THREAD_PR_AUTO_DISPATCH_CHANNEL,
       AGENT_APPLY_THREAD_MODEL_MIGRATION_CHANNEL,
       AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL,
       AGENT_COMPACT_THREAD_CHANNEL,
@@ -454,6 +493,24 @@ describe("agent ipc", () => {
       federationTarget,
       threadId: "thread-1",
       model: "gpt-5-codex",
+    });
+    await handlers.get(AGENT_SET_THREAD_PR_AUTO_DISPATCH_CHANNEL)?.({}, {
+      backend: "codex",
+      federationTarget,
+      threadId: "thread-1",
+      enabled: true,
+    });
+    await handlers.get(AGENT_CANCEL_THREAD_PR_AUTO_DISPATCH_CHANNEL)?.({}, {
+      backend: "codex",
+      federationTarget,
+      threadId: "thread-1",
+      fingerprint: "fingerprint-1",
+    });
+    await handlers.get(AGENT_SEND_THREAD_PR_AUTO_DISPATCH_NOW_CHANNEL)?.({}, {
+      backend: "codex",
+      federationTarget,
+      threadId: "thread-1",
+      fingerprint: "fingerprint-1",
     });
     await handlers.get(AGENT_APPLY_THREAD_MODEL_MIGRATION_CHANNEL)?.({}, {
       backend: "codex",
@@ -581,6 +638,31 @@ describe("agent ipc", () => {
       threadId: "thread-1",
       model: "gpt-5-codex",
     });
+    expect(federationMock.remoteBackend.setThreadPrAutoDispatch).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      enabled: true,
+    });
+    expect(registry.setThreadPrAutoDispatch).not.toHaveBeenCalled();
+    // The pending dispatch and its fingerprint live only in the owner's
+    // coordinator, so a viewer that resolves these locally silently
+    // no-ops while the owner still fires the scheduled repair turn.
+    expect(
+      federationMock.remoteBackend.cancelThreadPrAutoDispatch,
+    ).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      fingerprint: "fingerprint-1",
+    });
+    expect(registry.cancelThreadPrAutoDispatch).not.toHaveBeenCalled();
+    expect(
+      federationMock.remoteBackend.sendThreadPrAutoDispatchNow,
+    ).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      fingerprint: "fingerprint-1",
+    });
+    expect(registry.sendThreadPrAutoDispatchNow).not.toHaveBeenCalled();
     expect(
       federationMock.remoteBackend.applyThreadModelMigration,
     ).toHaveBeenCalledWith({

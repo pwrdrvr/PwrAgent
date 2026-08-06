@@ -93,6 +93,10 @@ import {
   type SetThreadPinResponse,
   type SetThreadPrAutoDispatchRequest,
   type SetThreadPrAutoDispatchResponse,
+  type CancelThreadPrAutoDispatchRequest,
+  type CancelThreadPrAutoDispatchResponse,
+  type SendThreadPrAutoDispatchNowRequest,
+  type SendThreadPrAutoDispatchNowResponse,
   type DetachThreadPullRequestRequest,
   type DetachThreadPullRequestResponse,
   type ReorderThreadPinsRequest,
@@ -2823,6 +2827,20 @@ function localBackendOperations(): FederationBackendOperations {
       request: SetThreadPrAutoDispatchRequest,
     ): Promise<SetThreadPrAutoDispatchResponse> {
       return await getDesktopBackendRegistry().setThreadPrAutoDispatch(request);
+    },
+    async cancelThreadPrAutoDispatch(
+      request: CancelThreadPrAutoDispatchRequest,
+    ): Promise<CancelThreadPrAutoDispatchResponse> {
+      return await getDesktopBackendRegistry().cancelThreadPrAutoDispatch(
+        request,
+      );
+    },
+    async sendThreadPrAutoDispatchNow(
+      request: SendThreadPrAutoDispatchNowRequest,
+    ): Promise<SendThreadPrAutoDispatchNowResponse> {
+      return await getDesktopBackendRegistry().sendThreadPrAutoDispatchNow(
+        request,
+      );
     },
     async reorderThreadPins(
       request: ReorderThreadPinsRequest,
