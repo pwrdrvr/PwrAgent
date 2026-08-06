@@ -1141,13 +1141,10 @@ export class DesktopFederationRuntime {
     const instanceLabel = peer
       ? formatFederationPeerDisplayLabel(peer, visible)
       : target.instanceId;
-    // The granted set the viewer can act on. Gateway-advertised capabilities
-    // remain authoritative for relayed peers just as live connection
-    // capabilities are for direct peers.
-    const directConnection = this.router?.getConnection(target.instanceId);
-    const capabilities = directConnection
-      ? [...directConnection.capabilities]
-      : [...(visiblePeer?.capabilities ?? [])];
+    const capabilities = this.viewerCapabilitiesFor(
+      target.instanceId,
+      visiblePeer,
+    );
     const peerStatus = visiblePeer?.status ?? peer?.status;
     const threads = response.threads.map((thread) => {
       const ref = buildFederatedThreadRef({
@@ -1172,6 +1169,29 @@ export class DesktopFederationRuntime {
       unchanged: false,
       threads,
     };
+  }
+
+  /**
+   * The granted set the VIEWER can act on for a peer: the live connection's
+   * capabilities for a direct peer, the gateway-advertised set for a relayed
+   * one. Both are authoritative — PTY relays through gateways as of #1289,
+   * so nothing is withheld from a relayed peer.
+   *
+   * Single source of truth for every viewer-side stamp — the live snapshot
+   * rows AND the pinned-row fallback served from cache. Copying the rule
+   * into the fallback path instead would let the two drift, and the drift
+   * that matters is silent: a pinned row offering a capability the live row
+   * refuses, or withholding one it grants. `connectedPeerTargets()` is NOT a
+   * substitute — it only knows directly connected peers.
+   */
+  private viewerCapabilitiesFor(
+    instanceId: FederationInstanceId,
+    visiblePeer: FederationPeerSummary | undefined,
+  ): FederationCapability[] {
+    const directConnection = this.router?.getConnection(instanceId);
+    return directConnection
+      ? [...directConnection.capabilities]
+      : [...(visiblePeer?.capabilities ?? [])];
   }
 
   /**
@@ -1200,6 +1220,7 @@ export class DesktopFederationRuntime {
                 status: peer.status,
                 label: formatFederationPeerDisplayLabel(peer, visible),
                 celestialIcon: peer.celestialIcon,
+                capabilities: this.viewerCapabilitiesFor(instanceId, peer),
               }
             : {};
         } catch {

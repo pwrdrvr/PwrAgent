@@ -89,11 +89,17 @@ export class RemoteThreadSummaryCache {
         target: FederationRemoteTarget,
         backend: RemoteThreadPin["ref"]["backend"],
       ) => Promise<Array<Pick<NavigationThreadSummary, "source" | "id">>>;
-      /** Current visible status + composed label for any peer, connected or not. */
+      /**
+       * Current visible status, composed label, and the VIEWER-actionable
+       * capability set for any peer, connected or not. Capabilities must
+       * come from the owner's single stamping rule, never from the raw
+       * granted set.
+       */
       peerStatus: (instanceId: string) => {
         status?: FederationPeerSummary["status"];
         label?: string;
         celestialIcon?: CelestialIconId;
+        capabilities?: FederationCapability[];
       };
       /** Peers whose cached summaries currently need navigation updates. */
       onPeerInterestChanged?: (instanceIds: string[]) => void;
@@ -459,7 +465,11 @@ export class RemoteThreadSummaryCache {
         ref: pin.ref,
         instanceLabel: current.label ?? pin.instanceLabel,
         peerStatus,
-        capabilities: [],
+        // Capabilities are a property of the PEER, not of the cached row,
+        // so a fallback row can carry the live set. Stamping [] here would
+        // tell the thread view "remote terminal not granted" for a peer
+        // that grants it, every time the merge serves a cached row.
+        capabilities: current.capabilities ?? [],
         celestialIcon: current.celestialIcon,
       },
     };

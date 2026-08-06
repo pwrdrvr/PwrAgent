@@ -661,9 +661,9 @@ describe("RemoteThreadSummaryCache — resolvePinnedThreads", () => {
   });
 
   it("stamps no capabilities when the owner reports none", async () => {
-    // A gateway-relayed peer arrives here already stripped of remote_pty,
-    // and an unknown peer reports nothing at all. Either way the cache
-    // passes through rather than falling back to the raw granted set.
+    // An unknown or never-seen peer reports nothing. The cache passes the
+    // owner's answer through rather than inventing a set of its own — it
+    // has no way to know what the peer granted.
     const cache = new RemoteThreadSummaryCache({
       peers: () => [],
       fetchSnapshot: async () => snapshotOf([]),
