@@ -1359,7 +1359,11 @@ class MockBackendClient {
   startTurnCalls: Array<NonNullable<MockBackendClient["lastStartTurnParams"]>> = [];
   startTurnCallCount = 0;
   closeCallCount = 0;
-  invalidIdRecoveryCalls: Array<{ failureMessage: string; threadId: string }> = [];
+  invalidIdRecoveryCalls: Array<{
+    failureMessage: string;
+    forkLineageThreadIds?: string[];
+    threadId: string;
+  }> = [];
   lastSteerTurnParams?: {
     threadId: string;
     input: AppServerTurnInputItem[];
@@ -1727,6 +1731,7 @@ class MockBackendClient {
 
   async recoverInvalidPersistedResponseMessageIds(params: {
     failureMessage: string;
+    forkLineageThreadIds?: string[];
     threadId: string;
   }): Promise<{
     backupPath: string;
@@ -8018,6 +8023,8 @@ script = "echo setup"
 
   it("repairs an exact invalid message-ID failure and retries the turn once", async () => {
     const threadId = "019fb6c7-1545-77c1-be52-98f86cae3c11";
+    const forkSourceThreadId = "019fb6c7-1545-77c1-be52-98f86cae3c10";
+    const forkRootThreadId = "019fb6c7-1545-77c1-be52-98f86cae3c0f";
     const backupPath = "/codex/sessions/thread.invalid-id-backup.jsonl";
     const codexClient = new MockBackendClient({
       initializeResult: {
@@ -8034,7 +8041,24 @@ script = "echo setup"
         threadId,
       },
     });
-    const overlayStore = createOverlayStoreMock();
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        [`codex:${threadId}`]: {
+          backend: "codex",
+          threadId,
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          forkSourceThreadId,
+        },
+        [`codex:${forkSourceThreadId}`]: {
+          backend: "codex",
+          threadId: forkSourceThreadId,
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          forkSourceThreadId: forkRootThreadId,
+        },
+      },
+    });
     const registry = new DesktopBackendRegistry({
       codexClient,
       grokClient: new MockBackendClient({}),
@@ -8085,6 +8109,10 @@ script = "echo setup"
 
     expect(codexClient.invalidIdRecoveryCalls).toEqual([
       {
+        forkLineageThreadIds: [
+          forkSourceThreadId,
+          forkRootThreadId,
+        ],
         failureMessage: expect.stringContaining("[invalid_id_prefix]"),
         threadId,
       },

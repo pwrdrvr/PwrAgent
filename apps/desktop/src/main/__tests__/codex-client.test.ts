@@ -2062,6 +2062,7 @@ describe("CodexAppServerClient", () => {
 
   it("stops Codex, repairs the protocol-identified rollout, reloads, and resumes", async () => {
     const threadId = "019fb6c7-1545-77c1-be52-98f86cae3c11";
+    const forkSourceThreadId = "019fb6c7-1545-77c1-be52-98f86cae3c10";
     const tempRoot = await fs.mkdtemp(
       path.join(os.tmpdir(), "pwragent-codex-client-id-recovery-"),
     );
@@ -2077,7 +2078,10 @@ describe("CodexAppServerClient", () => {
       [
         JSON.stringify({
           type: "session_meta",
-          payload: { id: threadId, session_id: threadId },
+          payload: {
+            id: forkSourceThreadId,
+            session_id: forkSourceThreadId,
+          },
         }),
         JSON.stringify({
           type: "response_item",
@@ -2123,6 +2127,7 @@ describe("CodexAppServerClient", () => {
           "[ApiIdParam] [input[1].id] [invalid_id_prefix] "
           + "Invalid 'input[1].id': 'review_rollout_user'. "
           + "Expected an ID that begins with 'msg'.",
+        forkLineageThreadIds: [forkSourceThreadId],
         threadId,
       });
       const transport = MockTransport.instances.at(-1)!;

@@ -657,6 +657,7 @@ type BackendClient = {
   }>;
   recoverInvalidPersistedResponseMessageIds?(params: {
     failureMessage: string;
+    forkLineageThreadIds?: string[];
     threadId: string;
   }): Promise<CodexInvalidResponseMessageIdRecoveryResult>;
   startReview?(params: {
@@ -16013,7 +16014,14 @@ export class DesktopBackendRegistry {
       const recovery = this.pendingCodexInvalidIdRecoveries.shift()!;
       let retrySubmitted = false;
       try {
+        const forkLineageThreadIds =
+          await this.resolveCodexInvalidIdRecoveryForkLineage(
+            recovery.params.threadId,
+          );
         const repaired = await recover.call(this.codexClient, {
+          ...(forkLineageThreadIds.length > 0
+            ? { forkLineageThreadIds }
+            : {}),
           failureMessage: recovery.failureMessage,
           threadId: recovery.params.threadId,
         });
@@ -16177,6 +16185,32 @@ export class DesktopBackendRegistry {
           });
         }
       }
+    }
+  }
+
+  private async resolveCodexInvalidIdRecoveryForkLineage(
+    threadId: string,
+  ): Promise<string[]> {
+    const lineage: string[] = [];
+    const seen = new Set([threadId]);
+    let currentThreadId = threadId;
+    while (true) {
+      const overlay = await this.overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: currentThreadId,
+      });
+      const sourceThreadId = overlay?.forkSourceThreadId?.trim();
+      if (!sourceThreadId) {
+        return lineage;
+      }
+      if (seen.has(sourceThreadId)) {
+        throw new Error(
+          `Codex invalid-message-ID recovery found cyclic fork provenance for thread ${threadId}`,
+        );
+      }
+      seen.add(sourceThreadId);
+      lineage.push(sourceThreadId);
+      currentThreadId = sourceThreadId;
     }
   }
 

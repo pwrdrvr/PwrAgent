@@ -128,6 +128,32 @@ describe("invalid persisted Codex response-message ID recovery", () => {
     );
   });
 
+  it("repairs a fork rollout carrying authorized source-thread metadata", async () => {
+    const sourceThreadId = "019fb19b-637e-72f0-b567-56f624e2ee2c";
+    const forkThreadId = "019fb19b-637e-72f0-b567-56f624e2ee2d";
+    const fixture = await readFile(
+      path.join(fixtureRoot, "bare-uuid-message-id.jsonl"),
+    );
+    const target = await createRolloutTarget({
+      fixture,
+      threadId: forkThreadId,
+    });
+
+    const result = await repairCodexInvalidResponseMessageIds({
+      codexHome: target.codexHome,
+      forkLineageThreadIds: [sourceThreadId],
+      rolloutPath: target.rolloutPath,
+      threadId: forkThreadId,
+      uniqueSuffix: () => "fork-backup",
+    });
+
+    expect(result.removedMessageIdCount).toBe(1);
+    const records = await readJsonl(target.rolloutPath);
+    expect(records[0]!.payload.id).toBe(sourceThreadId);
+    expect(records[0]!.payload.session_id).toBe(sourceThreadId);
+    expect(records[1]!.payload).not.toHaveProperty("id");
+  });
+
   it("rejects a rollout path outside the configured Codex session roots", async () => {
     const threadId = "019fb19b-637e-72f0-b567-56f624e2ee2c";
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-codex-id-path-"));
