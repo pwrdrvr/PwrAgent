@@ -282,7 +282,14 @@ describe("App", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Open Git settings" }),
     );
-    const gitSettingsButton = await screen.findByRole("button", { name: "Git" });
+    // Settings is a lazy chunk. Under a loaded Windows worker the module can
+    // settle after Testing Library's default one-second find bound, even
+    // though navigation completed normally. Wait for the import lifecycle
+    // itself so this assertion measures the selected settings section.
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
+    const gitSettingsButton = screen.getByRole("button", { name: "Git" });
     expect(gitSettingsButton).toHaveAttribute("aria-current", "page");
   });
 

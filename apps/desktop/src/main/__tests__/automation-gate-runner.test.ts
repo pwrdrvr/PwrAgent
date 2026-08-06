@@ -63,9 +63,13 @@ describe("ShellAutomationGateRunner", () => {
 
   it("kills a runaway command on timeout and never hangs the caller", async () => {
     const startedAt = Date.now();
+    // Leave enough time on Windows for the native Job wrapper to compile and
+    // prove that it kills a running Git Bash descendant, rather than timing
+    // out before the shell starts.
+    const timeoutMs = process.platform === "win32" ? 3_000 : 200;
     const result = await new ShellAutomationGateRunner().runGate({
       command: "sleep 5",
-      timeoutMs: 200,
+      timeoutMs,
     });
 
     expect(result.status).toBe("failed");
@@ -73,6 +77,8 @@ describe("ShellAutomationGateRunner", () => {
     // Must settle shortly after the timeout (tree-kill → close, or the
     // force-settle net), well before `sleep 5` would have finished on its own.
     // A regression that leaves the child's tree alive would blow past this.
-    expect(Date.now() - startedAt).toBeLessThan(4_000);
+    expect(Date.now() - startedAt).toBeLessThan(
+      process.platform === "win32" ? 4_500 : 4_000,
+    );
   }, 10_000);
 });
