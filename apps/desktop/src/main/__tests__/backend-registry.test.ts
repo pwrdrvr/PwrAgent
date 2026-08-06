@@ -46,6 +46,7 @@ import type {
   DesktopProviderThreadModelMigration,
   LinkedDirectorySummary,
   NavigationLaunchpadDefaults,
+  NavigationSnapshot,
   NavigationLaunchpadDraft,
   PwrAgentThreadOrchestrationRequest,
   PwrAgentThreadOrchestrationResponse,
@@ -37927,5 +37928,57 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
     expect(threads[0]?.linkedDirectories).toEqual([
       { id: worktreeCwd, label: "PwrAgnt", path: worktreeCwd, kind: "local" },
     ]);
+  });
+
+  it("canonicalizes navigation PR chips and degrades when the registry read fails", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+    });
+    const stalePr = {
+      number: 1270,
+      provider: "github" as const,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      title: "canonical PR status",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/1270",
+      state: "open" as const,
+      lifecycleState: "open" as const,
+    };
+    const mergedPr = {
+      ...stalePr,
+      state: "merged" as const,
+      lifecycleState: "merged" as const,
+    };
+    const threads = [
+      { id: "thread-1", source: "codex", prs: [stalePr] },
+      { id: "thread-2", source: "codex" },
+    ] as unknown as NavigationSnapshot["threads"];
+
+    // No canonicalizer injected yet: threads pass through by reference
+    // rather than being rewritten with a half-initialized view.
+    expect(
+      await registry.canonicalizeNavigationThreadPullRequests(threads),
+    ).toBe(threads);
+
+    const canonicalizer = vi.fn(async () => [mergedPr]);
+    registry.setThreadPullRequestCanonicalizer(canonicalizer);
+    const canonical = await registry.canonicalizeNavigationThreadPullRequests(
+      threads,
+    );
+    expect(canonical[0]?.prs).toEqual([mergedPr]);
+    // Threads with no attached PRs skip the canonicalizer entirely.
+    expect(canonical[1]).toBe(threads[1]);
+    expect(canonicalizer).toHaveBeenCalledTimes(1);
+
+    // A failing status-registry read must not fail the snapshot: serving
+    // the overlay's own rows beats serving an error.
+    registry.setThreadPullRequestCanonicalizer(async () => {
+      throw new Error("pr_status_cache unreadable");
+    });
+    expect(
+      await registry.canonicalizeNavigationThreadPullRequests(threads),
+    ).toBe(threads);
   });
 });

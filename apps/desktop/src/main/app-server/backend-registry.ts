@@ -25157,8 +25157,17 @@ export class DesktopBackendRegistry {
    * was rewritten. The renderer's own snapshot path does this; so must
    * the bridge that serves federation viewers and messaging browse,
    * otherwise a viewer sees a PR that merged hours ago still rendered
-   * open with checks running, and never converges — the poller skips
-   * terminal PRs, so no further event is ever emitted to correct it.
+   * open with checks running, and never converges — the background
+   * poller drops terminal PRs from its rotation, so nothing it emits
+   * will correct the stale row.
+   *
+   * Deliberately does less than the renderer path's
+   * `applyCanonicalPrStatuses`: no seeding of the status registry from
+   * the passed threads (a serving path should read the registry, not
+   * write to it) and no equality check to preserve thread identity
+   * (these threads are about to be serialized over IPC or federation,
+   * so identity buys nothing). Keep it that way if the two are ever
+   * merged.
    */
   async canonicalizeNavigationThreadPullRequests(
     threads: NavigationSnapshot["threads"],
@@ -25167,14 +25176,28 @@ export class DesktopBackendRegistry {
     if (!canonicalizer) {
       return threads;
     }
-    return await Promise.all(
-      threads.map(async (thread) => {
-        if (!thread.prs?.length) {
-          return thread;
-        }
-        return { ...thread, prs: await canonicalizer(thread.prs) };
-      }),
-    );
+    try {
+      return await Promise.all(
+        threads.map(async (thread) => {
+          if (!thread.prs?.length) {
+            return thread;
+          }
+          return { ...thread, prs: await canonicalizer(thread.prs) };
+        }),
+      );
+    } catch (error) {
+      // Canonicalizing reads the durable `pr_status_cache`. If that read
+      // fails, serving the snapshot with the overlay's own PR rows is a
+      // far better outcome than failing the snapshot: the client gets
+      // possibly-stale chips instead of an error, and for a federation
+      // viewer an error means a disconnected window rather than one
+      // slightly wrong row.
+      backendRegistryLog.warn("pr status canonicalization failed", {
+        error: error instanceof Error ? error.message : String(error),
+        threadCount: threads.length,
+      });
+      return threads;
+    }
   }
 
   private async projectCanonicalPullRequests(

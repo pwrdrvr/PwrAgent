@@ -267,13 +267,14 @@ describe("DesktopMessagingBackendBridge", () => {
           thread.prs?.length ? { ...thread, prs: [canonicalPr] } : thread
         ),
     );
+    const hydrateThreadGitWorkingStates = vi.fn(
+      async (threads: NavigationSnapshot["threads"]) => threads,
+    );
     const registry = {
       canonicalizeNavigationThreadPullRequests,
       getQueuedExecutionModesSnapshot: vi.fn(() => ({})),
       getQueuedTurnsSnapshot: vi.fn(() => ({})),
-      hydrateThreadGitWorkingStates: vi.fn(
-        async (threads: NavigationSnapshot["threads"]) => threads,
-      ),
+      hydrateThreadGitWorkingStates,
       listThreads: vi.fn(async () => []),
       readDirectoryStatuses: vi.fn(async () => ({})),
       rememberCompleteNavigationSnapshot: vi.fn(),
@@ -284,12 +285,13 @@ describe("DesktopMessagingBackendBridge", () => {
 
     expect(canonicalizeNavigationThreadPullRequests).toHaveBeenCalledTimes(1);
     expect(snapshot.threads[0]?.prs).toEqual([canonicalPr]);
-    // Canonicalization runs before git hydration, so the served threads
-    // carry the canonical chips rather than the reconciled overlay ones.
-    expect(registry.hydrateThreadGitWorkingStates).toHaveBeenCalledWith(
-      [expect.objectContaining({ prs: [canonicalPr] }), expect.anything()],
-      { probeMissing: true },
-    );
+    // A thread with no attached PRs passes through untouched.
+    expect(snapshot.threads[1]?.prs).toBeUndefined();
+    // Canonicalization runs before git hydration, so hydration already
+    // sees the canonical chips rather than the reconciled overlay ones.
+    const hydratedThreads = hydrateThreadGitWorkingStates.mock.calls[0]?.[0];
+    expect(hydratedThreads?.[0]?.prs).toEqual([canonicalPr]);
+    expect(hydratedThreads?.[1]?.prs).toBeUndefined();
   });
 
   it("preserves enriched messaging provenance when starting a turn", async () => {

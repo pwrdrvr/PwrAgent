@@ -345,13 +345,22 @@ backed by `canonicalizeStoredPullRequests`, which loads
 lookup). Use `canonicalizeNavigationThreadPullRequests` for a navigation
 snapshot's threads.
 
-Skipping it is not a cosmetic staleness bug. The poller stops polling
-terminal PRs, so once a PR merges no further `pullRequest/status/updated`
-is ever emitted — a client served an uncanonicalized snapshot shows that
-PR as open with checks running **forever**. This is exactly what
-federation remote viewers hit: their only snapshot source is
-`DesktopMessagingBackendBridge.getNavigationSnapshot`, which did not
+Skipping it is not a cosmetic staleness bug. `collectPrPollTargets`
+drops terminal PRs from the rotation, so once a PR merges the background
+poller emits no further `pullRequest/status/updated` for it — a client
+served an uncanonicalized snapshot shows that PR as open with checks
+running until something else happens to refresh it. (An owner-side
+branch lookup still republishes terminal PRs via
+`thread/pullRequests/updated`, so the row can converge if the *owner*
+opens that thread — but nothing the viewer does will fix it.) This is
+exactly what federation remote viewers hit: their only snapshot source
+is `DesktopMessagingBackendBridge.getNavigationSnapshot`, which did not
 canonicalize, while the renderer's local path did.
+
+Canonicalization failures degrade rather than propagate:
+`canonicalizeNavigationThreadPullRequests` catches, logs, and serves the
+overlay rows, because possibly-stale chips beat a failed snapshot (which
+for a viewer means a disconnected window).
 
 Known remaining gap: remote-stamped `pullRequest/status/updated` and
 `thread/pullRequests/updated` events are dropped by the main window's
