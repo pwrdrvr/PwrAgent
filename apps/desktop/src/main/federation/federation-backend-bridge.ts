@@ -422,10 +422,27 @@ export function registerFederationBackendHandlers(params: {
     FEDERATION_BACKEND_METHODS.readThread,
     async (envelope) => {
       const request = envelope.params as AppServerReadThreadRequest;
-      const response = await params.backend.readThread(request);
-      // Codex currently accepts before/limit but can still return the complete
-      // transcript without pagination metadata. Bound that response before it
-      // reaches the federation transport's per-frame receive ceiling.
+      let response = await params.backend.readThread(request);
+
+      // Federation needs the complete replay to mint reliable cursors for a
+      // backend that does not expose native pagination. Some backends honor
+      // before/limit while still reporting supportsPagination=false, so retry
+      // without those bounds only after the bounded read proves that native
+      // pagination is unavailable.
+      if (
+        !response.replay.pagination.supportsPagination
+        && (request.before !== undefined || request.limit !== undefined)
+      ) {
+        const {
+          before: _before,
+          limit: _limit,
+          ...unpagedRequest
+        } = request;
+        response = await params.backend.readThread(unpagedRequest);
+      }
+
+      // Bound non-paginating replays before they reach the federation
+      // transport's per-frame receive ceiling.
       const pagedReplay = response.replay.pagination.supportsPagination
         ? response.replay
         : pageNormalizedReplay(response.replay, request);
