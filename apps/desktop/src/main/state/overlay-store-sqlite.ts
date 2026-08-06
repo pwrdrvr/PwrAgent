@@ -1811,7 +1811,13 @@ export class SqliteOverlayStore {
            payload
          ) VALUES (?, ?, ?, ?, ?)
          ON CONFLICT(instance_id, backend, thread_id) DO UPDATE SET
-           payload = excluded.payload`,
+           payload = excluded.payload,
+           -- Pinning is unambiguous intent that this row should be live.
+           -- Leaving a tombstone in place would swallow the click: the pin
+           -- succeeds in the db and never appears in the list. Restoring on
+           -- reconnect is best-effort, so the invariant has to hold here too
+           -- rather than depend on that hook having run.
+           revoked_at = NULL`,
       )
       .run(instanceId, params.ref.backend, params.ref.threadId, addedAt, payload);
     const row = this.stateDb.raw
@@ -1912,11 +1918,19 @@ export class SqliteOverlayStore {
     return ranks;
   }
 
+  /**
+   * Whether a LIVE pin exists. A tombstoned row must answer false: callers
+   * ask this to decide whether they still need to pin something, and a
+   * hidden row cannot satisfy that. Counting one would, for instance, let
+   * companion-parent pinning skip a parent that never renders, leaving its
+   * child as a bare top-level row.
+   */
   async hasRemoteThreadPin(params: { ref: FederatedThreadRef }): Promise<boolean> {
     const row = this.stateDb.raw
       .prepare(
         `SELECT 1 FROM remote_thread_pins
-         WHERE instance_id = ? AND backend = ? AND thread_id = ?`,
+         WHERE instance_id = ? AND backend = ? AND thread_id = ?
+           AND revoked_at IS NULL`,
       )
       .get(
         remotePinInstanceId(params.ref),
@@ -2118,33 +2132,35 @@ export class SqliteOverlayStore {
   }
 
   /**
-   * Live vs tombstoned pin counts for one instance. Drives the
+   * Live vs tombstoned pin counts, keyed by instance. Drives the
    * keep-or-forget prompt, which must stay hidden when the operator has
-   * nothing pinned from that instance — there would be nothing to decide.
+   * nothing pinned from the affected instances — there would be nothing to
+   * decide. One grouped read rather than a query per instance: the caller
+   * needs several at once and an absent instance is simply a missing key.
    */
-  async countRemoteThreadPinsForInstance(params: {
-    instanceId: string;
-  }): Promise<{ live: number; revoked: number }> {
-    const row = this.stateDb.raw
+  async countRemoteThreadPinsByInstance(): Promise<
+    Map<string, { live: number; revoked: number }>
+  > {
+    const rows = this.stateDb.raw
       .prepare(
         `SELECT
+           instance_id,
            SUM(CASE WHEN revoked_at IS NULL THEN 1 ELSE 0 END) AS live,
            SUM(CASE WHEN revoked_at IS NULL THEN 0 ELSE 1 END) AS revoked
          FROM remote_thread_pins
-         WHERE instance_id = ?`,
+         GROUP BY instance_id`,
       )
-      .get(params.instanceId) as
-        | { live: number | null; revoked: number | null }
-        | undefined;
-    return { live: row?.live ?? 0, revoked: row?.revoked ?? 0 };
-  }
-
-  /** Every instance id with at least one pin, tombstoned or not. */
-  async listRemoteThreadPinInstanceIds(): Promise<string[]> {
-    const rows = this.stateDb.raw
-      .prepare("SELECT DISTINCT instance_id FROM remote_thread_pins")
-      .all() as Array<{ instance_id: string }>;
-    return rows.map((row) => row.instance_id);
+      .all() as Array<{
+        instance_id: string;
+        live: number | null;
+        revoked: number | null;
+      }>;
+    return new Map(
+      rows.map((row) => [
+        row.instance_id,
+        { live: row.live ?? 0, revoked: row.revoked ?? 0 },
+      ]),
+    );
   }
 
   async setThreadAgent(params: {

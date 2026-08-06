@@ -889,7 +889,11 @@ export class DesktopFederationRuntime {
     // exactly as unreachable, and leaving them behind was the gap in the
     // first cut of this cleanup.
     const pinDisposition = request?.pinDisposition ?? "remember";
-    for (const instanceId of await this.enrollmentScopedPinInstanceIds()) {
+    const pinCountsByInstance = await getDesktopOverlayStore()
+      .countRemoteThreadPinsByInstance();
+    for (const instanceId of this.enrollmentScopedPinInstanceIds(
+      pinCountsByInstance,
+    )) {
       await this.cleanupRemoteThreadPins(instanceId, pinDisposition);
     }
     await this.restart();
@@ -1039,11 +1043,12 @@ export class DesktopFederationRuntime {
   async readRemoteThreadPinImpact(
     request: ReadFederationPinImpactRequest,
   ): Promise<ReadFederationPinImpactResponse> {
+    const countsByInstance = await getDesktopOverlayStore()
+      .countRemoteThreadPinsByInstance();
     const instanceIds =
       request.scope.kind === "peer"
         ? [request.scope.peerId]
-        : await this.enrollmentScopedPinInstanceIds();
-    const overlayStore = getDesktopOverlayStore();
+        : this.enrollmentScopedPinInstanceIds(countsByInstance);
     let pinnedThreadCount = 0;
     let tombstonedThreadCount = 0;
     const instanceLabels: string[] = [];
@@ -1054,10 +1059,8 @@ export class DesktopFederationRuntime {
       visible = [];
     }
     for (const instanceId of instanceIds) {
-      const counts = await overlayStore.countRemoteThreadPinsForInstance({
-        instanceId,
-      });
-      if (counts.live === 0 && counts.revoked === 0) {
+      const counts = countsByInstance.get(instanceId);
+      if (!counts) {
         continue;
       }
       pinnedThreadCount += counts.live;
@@ -1077,12 +1080,10 @@ export class DesktopFederationRuntime {
    * client) survives the upstream reset, so its pins must not be touched —
    * the same reasoning `resetEnrollment` applies to celestial icons.
    */
-  private async enrollmentScopedPinInstanceIds(): Promise<
-    FederationInstanceId[]
-  > {
-    const pinnedInstanceIds = await getDesktopOverlayStore()
-      .listRemoteThreadPinInstanceIds();
-    return pinnedInstanceIds.filter(
+  private enrollmentScopedPinInstanceIds(
+    countsByInstance: ReadonlyMap<string, unknown>,
+  ): FederationInstanceId[] {
+    return [...countsByInstance.keys()].filter(
       (instanceId) => !this.router?.getConnection(instanceId),
     );
   }

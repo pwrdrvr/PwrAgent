@@ -358,6 +358,53 @@ describe("SqliteOverlayStore — remote thread pins", () => {
     expect(t1?.summary?.title).toBe("Remote fix");
   });
 
+  it("re-pinning a tombstoned thread brings it straight back", async () => {
+    // Restoring on reconnect is best-effort. If it never ran, an explicit
+    // pin must still land visibly — otherwise the operator clicks pin, the
+    // write succeeds, and nothing appears.
+    await store.addRemoteThreadPin({
+      ref: ref(),
+      summary: summary({ title: "Old" }),
+      instanceLabel: "Laptop",
+    });
+    await store.tombstoneRemoteThreadPinsForInstance({
+      instanceId: "peer-laptop",
+    });
+    expect(await store.listRemoteThreadPins()).toHaveLength(0);
+
+    await store.addRemoteThreadPin({
+      ref: ref(),
+      summary: summary({ title: "Fresh" }),
+      instanceLabel: "Laptop",
+    });
+
+    const live = await store.listRemoteThreadPins();
+    expect(live).toHaveLength(1);
+    expect(live[0].revokedAt).toBeUndefined();
+    expect(live[0].summary?.title).toBe("Fresh");
+  });
+
+  it("reports a tombstoned pin as absent so it can be re-pinned", async () => {
+    // `hasRemoteThreadPin` gates companion-parent pinning. Counting a
+    // hidden row would skip a parent that never renders, stranding its
+    // child as a bare top-level row.
+    await store.addRemoteThreadPin({
+      ref: ref("parent"),
+      instanceLabel: "Laptop",
+    });
+    expect(await store.hasRemoteThreadPin({ ref: ref("parent") })).toBe(true);
+
+    await store.tombstoneRemoteThreadPinsForInstance({
+      instanceId: "peer-laptop",
+    });
+    expect(await store.hasRemoteThreadPin({ ref: ref("parent") })).toBe(false);
+
+    await store.restoreRemoteThreadPinsForInstance({
+      instanceId: "peer-laptop",
+    });
+    expect(await store.hasRemoteThreadPin({ ref: ref("parent") })).toBe(true);
+  });
+
   it("keeps the original tombstone timestamp on a repeat revoke", async () => {
     await store.addRemoteThreadPin({
       ref: ref("t1", "peer-revoked"),
@@ -394,21 +441,13 @@ describe("SqliteOverlayStore — remote thread pins", () => {
     });
     await store.tombstoneRemoteThreadPinsForInstance({ instanceId: "peer-b" });
 
-    expect(
-      await store.countRemoteThreadPinsForInstance({ instanceId: "peer-a" }),
-    ).toEqual({ live: 2, revoked: 0 });
-    expect(
-      await store.countRemoteThreadPinsForInstance({ instanceId: "peer-b" }),
-    ).toEqual({ live: 0, revoked: 1 });
-    // An instance the operator never pinned from must report zero, so the
+    const counts = await store.countRemoteThreadPinsByInstance();
+    expect(counts.get("peer-a")).toEqual({ live: 2, revoked: 0 });
+    expect(counts.get("peer-b")).toEqual({ live: 0, revoked: 1 });
+    // An instance the operator never pinned from is simply absent, so the
     // keep-or-forget prompt stays hidden.
-    expect(
-      await store.countRemoteThreadPinsForInstance({ instanceId: "peer-none" }),
-    ).toEqual({ live: 0, revoked: 0 });
-
-    expect(
-      (await store.listRemoteThreadPinInstanceIds()).sort(),
-    ).toEqual(["peer-a", "peer-b"]);
+    expect(counts.get("peer-none")).toBeUndefined();
+    expect([...counts.keys()].sort()).toEqual(["peer-a", "peer-b"]);
   });
 
   it("migrates a v44 database to v45 with the revoked_at column", () => {

@@ -85,6 +85,7 @@ export function FederationSettings(props: FederationSettingsProps) {
   }>();
   const [forgetPinImpact, setForgetPinImpact] =
     useState<ReadFederationPinImpactResponse>();
+  const forgetImpactGenerationRef = useRef(0);
   const [mode, setMode] = useState<DesktopFederationMode>(
     props.snapshot.federation.mode.value,
   );
@@ -388,7 +389,21 @@ export function FederationSettings(props: FederationSettingsProps) {
     setActionError(undefined);
     setConfirmingForget(true);
     setForgetPinImpact(undefined);
-    void readPinImpact({ kind: "enrollment" }).then(setForgetPinImpact);
+    // Generation guard, the counterpart to the peer-id check on the revoke
+    // side: a read from a confirm the operator already cancelled must not
+    // paint its copy onto the next one.
+    const generation = ++forgetImpactGenerationRef.current;
+    void readPinImpact({ kind: "enrollment" }).then((impact) => {
+      if (forgetImpactGenerationRef.current === generation) {
+        setForgetPinImpact(impact);
+      }
+    });
+  };
+
+  const cancelForgetGateway = () => {
+    forgetImpactGenerationRef.current += 1;
+    setConfirmingForget(false);
+    setForgetPinImpact(undefined);
   };
 
   const forgetGateway = (pinDisposition: FederationPinDisposition) => {
@@ -898,10 +913,7 @@ export function FederationSettings(props: FederationSettingsProps) {
                         className="button button--ghost"
                         type="button"
                         disabled={forgetting}
-                        onClick={() => {
-                          setConfirmingForget(false);
-                          setForgetPinImpact(undefined);
-                        }}
+                        onClick={cancelForgetGateway}
                       >
                         Cancel
                       </button>

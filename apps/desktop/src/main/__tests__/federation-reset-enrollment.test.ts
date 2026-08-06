@@ -19,11 +19,11 @@ const tombstoneRemoteThreadPinsForInstance = vi.hoisted(() =>
 const restoreRemoteThreadPinsForInstance = vi.hoisted(() =>
   vi.fn(async (_params: { instanceId: string }) => 0),
 );
-const listRemoteThreadPinInstanceIds = vi.hoisted(() =>
-  vi.fn(async (): Promise<string[]> => ["gateway_one"]),
-);
-const countRemoteThreadPinsForInstance = vi.hoisted(() =>
-  vi.fn(async (_params: { instanceId: string }) => ({ live: 2, revoked: 0 })),
+const countRemoteThreadPinsByInstance = vi.hoisted(() =>
+  vi.fn(
+    async (): Promise<Map<string, { live: number; revoked: number }>> =>
+      new Map([["gateway_one", { live: 2, revoked: 0 }]]),
+  ),
 );
 const publishLocalEvent = vi.hoisted(() => vi.fn(async () => undefined));
 
@@ -40,8 +40,7 @@ vi.mock("../app-server/desktop-overlay-store", () => ({
     removeRemoteThreadPinsForInstance,
     tombstoneRemoteThreadPinsForInstance,
     restoreRemoteThreadPinsForInstance,
-    listRemoteThreadPinInstanceIds,
-    countRemoteThreadPinsForInstance,
+    countRemoteThreadPinsByInstance,
   }),
 }));
 
@@ -94,8 +93,10 @@ describe("federation resetEnrollment", () => {
     removeRemoteThreadPinsForInstance.mockClear();
     tombstoneRemoteThreadPinsForInstance.mockClear();
     restoreRemoteThreadPinsForInstance.mockClear();
-    listRemoteThreadPinInstanceIds.mockClear();
-    listRemoteThreadPinInstanceIds.mockResolvedValue(["gateway_one"]);
+    countRemoteThreadPinsByInstance.mockClear();
+    countRemoteThreadPinsByInstance.mockResolvedValue(
+      new Map([["gateway_one", { live: 2, revoked: 0 }]]),
+    );
     publishLocalEvent.mockClear();
     metaStore.set(GATEWAY_ID_KEY, "gateway_one");
     metaStore.set("federation_gateway_public_key_pem", "pem");
@@ -137,7 +138,7 @@ describe("federation resetEnrollment", () => {
 
   it("reports nothing cleared when no pairing existed", async () => {
     metaStore.set(GATEWAY_ID_KEY, "");
-    listRemoteThreadPinInstanceIds.mockResolvedValue([]);
+    countRemoteThreadPinsByInstance.mockResolvedValue(new Map());
 
     expect(await createHarness().resetEnrollment()).toEqual({ cleared: false });
     expect(tombstoneRemoteThreadPinsForInstance).not.toHaveBeenCalled();
@@ -166,10 +167,12 @@ describe("federation resetEnrollment", () => {
   it("covers every instance reachable only through the forgotten gateway", async () => {
     // The gap in the first cut: pins for relayed peers, not just the
     // gateway's own threads, are equally unreachable afterwards.
-    listRemoteThreadPinInstanceIds.mockResolvedValue([
-      "gateway_one",
-      "relayed_peer",
-    ]);
+    countRemoteThreadPinsByInstance.mockResolvedValue(
+      new Map([
+        ["gateway_one", { live: 2, revoked: 0 }],
+        ["relayed_peer", { live: 1, revoked: 0 }],
+      ]),
+    );
 
     await createHarness().resetEnrollment();
 
@@ -261,12 +264,20 @@ describe("federation remote pin impact", () => {
   };
 
   beforeEach(() => {
-    countRemoteThreadPinsForInstance.mockClear();
-    countRemoteThreadPinsForInstance.mockResolvedValue({ live: 2, revoked: 0 });
-    listRemoteThreadPinInstanceIds.mockResolvedValue(["gateway_one"]);
+    countRemoteThreadPinsByInstance.mockClear();
+    countRemoteThreadPinsByInstance.mockResolvedValue(
+      new Map([["client_one", { live: 2, revoked: 0 }]]),
+    );
   });
 
-  it("reports one peer's counts", async () => {
+  it("reports one peer's counts, ignoring other pinned instances", async () => {
+    countRemoteThreadPinsByInstance.mockResolvedValue(
+      new Map([
+        ["client_one", { live: 2, revoked: 0 }],
+        // A second pinned instance must not leak into a peer-scoped read.
+        ["other_peer", { live: 9, revoked: 9 }],
+      ]),
+    );
     const runtime = new DesktopFederationRuntime() as unknown as ImpactHarness;
 
     expect(
@@ -281,11 +292,12 @@ describe("federation remote pin impact", () => {
   });
 
   it("sums every instance a gateway forget would affect", async () => {
-    listRemoteThreadPinInstanceIds.mockResolvedValue([
-      "gateway_one",
-      "relayed_peer",
-    ]);
-    countRemoteThreadPinsForInstance.mockResolvedValue({ live: 1, revoked: 2 });
+    countRemoteThreadPinsByInstance.mockResolvedValue(
+      new Map([
+        ["gateway_one", { live: 1, revoked: 2 }],
+        ["relayed_peer", { live: 1, revoked: 2 }],
+      ]),
+    );
 
     const runtime = new DesktopFederationRuntime() as unknown as ImpactHarness;
 
@@ -301,7 +313,7 @@ describe("federation remote pin impact", () => {
   it("reports zero for an instance with nothing pinned", async () => {
     // The renderer keys the whole keep-or-forget prompt off this: no pins
     // means no question worth asking.
-    countRemoteThreadPinsForInstance.mockResolvedValue({ live: 0, revoked: 0 });
+    countRemoteThreadPinsByInstance.mockResolvedValue(new Map());
 
     const runtime = new DesktopFederationRuntime() as unknown as ImpactHarness;
 

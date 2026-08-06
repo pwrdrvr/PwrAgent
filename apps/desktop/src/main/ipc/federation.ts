@@ -328,9 +328,7 @@ export function registerFederationIpcHandlers(): void {
  * by accident — only an explicit "forget" does.
  */
 function readPinDisposition(value: unknown): FederationPinDisposition {
-  return isFederationPinDisposition(value) && value === "forget"
-    ? "forget"
-    : "remember";
+  return isFederationPinDisposition(value) ? value : "remember";
 }
 
 export function disposeFederationIpcHandlers(): void {
