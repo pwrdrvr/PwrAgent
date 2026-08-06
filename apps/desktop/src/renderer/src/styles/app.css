@@ -9692,6 +9692,177 @@ textarea,
   color: var(--text-primary);
 }
 
+/* Floating chat cards.
+
+   These are windows over the star field, not objects in it: they render
+   outside `.star-map__canvas` so the map's pan/zoom transform never moves
+   or scales them. Position and size are inline (the card owns its own
+   geometry); everything visual lives here. */
+.star-map-chat-card {
+  display: flex;
+  position: absolute;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  /* Opaque: cards overlap each other and the map, and a translucent card
+     would let the transcript underneath bleed into this one's text. */
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-popover);
+  color: var(--text-primary);
+}
+
+.star-map-chat-card__bar {
+  display: flex;
+  position: relative;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px 7px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-panel-elevated);
+  cursor: grab;
+  /* The card can sit under the macOS title-bar band; without this the OS
+     swallows the drag and the card cannot be moved. */
+  -webkit-app-region: no-drag;
+}
+
+.star-map-chat-card__bar:active {
+  cursor: grabbing;
+}
+
+.star-map-chat-card__watermark {
+  position: absolute;
+  top: -8px;
+  right: 64px;
+  z-index: 0;
+  color: var(--text-muted);
+  opacity: 0.12;
+  pointer-events: none;
+}
+
+.star-map-chat-card__title {
+  z-index: 1;
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-weight: 600;
+  font-size: 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.star-map-chat-card__instance {
+  z-index: 1;
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.star-map-chat-card__expand,
+.star-map-chat-card__close {
+  z-index: 1;
+  flex: 0 0 auto;
+  padding: 2px 7px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.star-map-chat-card__close {
+  padding: 2px 6px;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.star-map-chat-card__expand:hover,
+.star-map-chat-card__close:hover {
+  border-color: var(--accent-border);
+  color: var(--text-primary);
+}
+
+.star-map-chat-card__transcript {
+  flex: 1 1 auto;
+  overflow: hidden auto;
+  padding: 8px 10px;
+}
+
+.star-map-chat-card__error {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 5px 10px;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--danger-text);
+  font-size: 11px;
+}
+
+.star-map-chat-card__composer {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: flex-end;
+  gap: 6px;
+  padding: 8px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-panel-elevated);
+}
+
+.star-map-chat-card__input {
+  flex: 1 1 auto;
+  padding: 6px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  resize: none;
+}
+
+.star-map-chat-card__input:focus-visible {
+  border-color: var(--accent-border);
+  outline: none;
+}
+
+.star-map-chat-card__send {
+  flex: 0 0 auto;
+  padding: 6px 12px;
+  border: 1px solid var(--accent-border);
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--text-primary);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.star-map-chat-card__send:disabled {
+  border-color: var(--border-subtle);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: default;
+}
+
+/* Bottom-right resize grip. Sized for a comfortable pointer target
+   without stealing clicks from the composer's send button. */
+.star-map-chat-card__resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  background: linear-gradient(
+    135deg,
+    transparent 50%,
+    var(--border-strong) 50%,
+    var(--border-strong) 100%
+  );
+  cursor: nwse-resize;
+  -webkit-app-region: no-drag;
+}
+
 /* Celestial instance watermark: identity mark behind thread content.
    Opacity must stay low enough that transcript text keeps AA contrast on
    both themes — the a11y axe gate audits the composited result. */

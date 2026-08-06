@@ -41,6 +41,8 @@ import {
   shouldStartCanvasPan,
 } from "./star-map-orbit";
 import { buildFederationTopology } from "./star-map-topology";
+import { StarMapChatCard } from "./StarMapChatCard";
+import { useStarMapChatCards } from "./useStarMapChatCards";
 import { IntakeDialog, type IntakeDialogTarget } from "./IntakeDialog";
 import {
   readStoredPreferences,
@@ -62,6 +64,11 @@ const ORBIT_CARD_WIDTH = 200;
 const ORBIT_MAX_CARDS_PER_INSTANCE = 16;
 const MIN_ZOOM = 0.35;
 const MAX_ZOOM = 2;
+/**
+ * Chat cards float above the map chrome (close button, filters, view
+ * options) so a card being read is never underneath a control strip.
+ */
+const STAR_MAP_CHAT_CARD_BASE_Z = 40;
 
 function readStoredFilters(): Set<StarMapAttentionCategory> {
   if (typeof window === "undefined") {
@@ -549,6 +556,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
     );
   }, [health, localInstanceId, peers, props.localInstanceLabel]);
 
+  const chatCards = useStarMapChatCards();
   const { desktopApi, onFocusLocalInstance, onOpenLocalThread } = props;
   const openInstance = useCallback(
     (instanceId: string) => {
@@ -563,7 +571,24 @@ export function StarMapScreen(props: StarMapScreenProps) {
     [desktopApi, localInstanceId, onFocusLocalInstance],
   );
 
+  // Thread cards float a chat card over the map rather than navigating
+  // away from it: the whole point of the surface is to work across
+  // instances without leaving. Cards carry their own session, so a remote
+  // thread needs no pin and no snapshot merge.
   const openThread = useCallback(
+    (thread: NavigationThreadSummary) => {
+      chatCards.open(thread);
+    },
+    [chatCards],
+  );
+
+  /**
+   * Escape hatch off the card and into the full thread surface, for when
+   * triage turns into real work. Local threads land in this window; remote
+   * ones open their owning instance's viewer, which is what the card click
+   * itself used to do.
+   */
+  const openThreadFully = useCallback(
     (thread: NavigationThreadSummary) => {
       if (
         thread.federation
@@ -890,6 +915,36 @@ export function StarMapScreen(props: StarMapScreenProps) {
           }}
         />
       ) : null}
+      {/* Chat cards sit outside `.star-map__canvas` on purpose: they are
+          windows over the star field, not objects in it, so panning and
+          zooming the map must not move or scale them. */}
+      {chatCards.cards.map((card) => {
+        const target = card.thread.federation?.ref.target;
+        const cardInstanceId =
+          target && isRemoteFederationTarget(target)
+            ? target.instanceId
+            : undefined;
+        return (
+          <StarMapChatCard
+            key={card.key}
+            cardKey={card.key}
+            desktopApi={props.desktopApi}
+            instanceIcon={celestialIcons.iconFor(cardInstanceId)}
+            instanceLabel={
+              cardInstanceId
+                ? displayLabelById.get(cardInstanceId)
+                : displayLabelById.get(localInstanceId ?? "")
+            }
+            onClose={chatCards.close}
+            onOpenFull={openThreadFully}
+            onRaise={chatCards.raise}
+            onRectChange={chatCards.setRect}
+            rect={card.rect}
+            thread={card.thread}
+            zIndex={STAR_MAP_CHAT_CARD_BASE_Z + chatCards.depthOf(card.key)}
+          />
+        );
+      })}
       {/* The map layer covers the app chrome, including the header toggle
           that opened it, so it must carry its own way out. */}
       <button
