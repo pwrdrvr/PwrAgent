@@ -2110,19 +2110,57 @@ describe("DesktopMessagingRuntime", () => {
     );
   });
 
+  it("logs a routed unauthorized DM without requiring a mention", async () => {
+    const { reject } = await createSlackRejectedRuntimeHarness();
+    const { getDesktopMessagingStore } = await import(
+      "../messaging/desktop-messaging-store"
+    );
+    await getDesktopMessagingStore().upsertDefaultAgentAssignment({
+      id: "default-agent:slack-provider",
+      scope: { kind: "provider", channel: "slack" },
+      target: {
+        kind: "agent",
+        backend: "codex",
+        threadId: "thread-1",
+      },
+      createdAt: 1000,
+      updatedAt: 1000,
+    });
+    const event = buildRejectedSlackEvent("slack-rejected:routed-dm");
+    event.channel.conversation = {
+      id: "D012ABCDEF0",
+      isDirectMessage: true,
+      kind: "dm",
+      title: "Other User",
+    };
+
+    await reject(event);
+
+    const { getAppStateDb } = await import("../state/app-state");
+    const count = getAppStateDb().raw
+      .prepare("SELECT COUNT(*) AS count FROM messaging_activity_log WHERE kind = ?")
+      .get("inbound-rejected") as { count: number };
+    expect(count.count).toBe(1);
+    expect(messagingLog.warn).toHaveBeenCalledWith(
+      "actionable messaging event rejected for a routed destination",
+      expect.objectContaining({
+        actorId: "user-2",
+        conversationId: "D012ABCDEF0",
+        conversationKind: "dm",
+        destinationThreadId: "thread-1",
+        reason: "unauthorized-actor",
+      }),
+    );
+  });
+
   it("logs a routed unauthorized mention with friendly conversation and Agent names", async () => {
     const { bridge, reject } = await createSlackRejectedRuntimeHarness();
-    const navigation = buildNavigationSnapshot();
-    navigation.threads[0] = {
-      ...navigation.threads[0]!,
-      agent: {
-        name: "PwrAgent - hhunt",
-        instructionLineCount: 1,
-        instructionsTooLong: false,
-        updatedAt: 1000,
-      },
-    };
-    bridge.getNavigationSnapshot = vi.fn(async () => navigation);
+    bridge.readThreadAgentMetadata = vi.fn(async () => ({
+      name: "PwrAgent - hhunt",
+      instructionLineCount: 1,
+      instructionsTooLong: false,
+      updatedAt: 1000,
+    }));
     const { getDesktopMessagingStore } = await import(
       "../messaging/desktop-messaging-store"
     );
@@ -2138,6 +2176,10 @@ describe("DesktopMessagingRuntime", () => {
       updatedAt: 1000,
     });
     await reject(buildRejectedSlackEvent("slack-rejected:routed-mention", true));
+    await reject(buildRejectedSlackEvent("slack-rejected:routed-mention-2", true));
+
+    expect(bridge.getNavigationSnapshot).not.toHaveBeenCalled();
+    expect(bridge.readThreadAgentMetadata).toHaveBeenCalledTimes(1);
 
     expect(messagingLog.warn).toHaveBeenCalledWith(
       "actionable messaging event rejected for a routed destination",

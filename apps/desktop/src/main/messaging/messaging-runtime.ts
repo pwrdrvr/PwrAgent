@@ -26,7 +26,6 @@ import type {
   MessagingPlatformHealth,
   MessagingPlatformStatus,
   MessagingPlatformStatusEvent,
-  NavigationSnapshot,
   PwrAgentMessagingRequest,
   PwrAgentMessagingResponse,
 } from "@pwragent/shared";
@@ -200,7 +199,6 @@ type RejectedInboundRoute = {
   backend: MessagingBindingRecord["backend"];
   bindingId?: string;
   destinationAgentName?: string;
-  destinationThreadTitle?: string;
   routeSource: "binding" | "default-agent";
   targetKind: NonNullable<MessagingBindingRecord["targetKind"]>;
   threadId: MessagingBindingRecord["threadId"];
@@ -239,6 +237,7 @@ const PAIRING_TOKEN_ALPHABET =
 const RATE_LIMIT_HEALTH_BUFFER_MS = 2_000;
 const DELIVERY_BUDGET_WARNING_TTL_MS = 30_000;
 const DELIVERY_BUDGET_DIAGNOSTIC_THROTTLE_MS = 30_000;
+const REJECTED_ROUTE_AGENT_METADATA_TTL_MS = 60_000;
 const DEFAULT_ADAPTER_START_TIMEOUT_MS = 90_000;
 const FAILED_START_STOP_TIMEOUT_MS = 3_000;
 const CONFIGURABLE_MESSAGING_CHANNELS = [
@@ -355,6 +354,10 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     ReturnType<typeof setTimeout>
   >();
   private readonly deliveryBudgetDiagnosticLastLoggedAt = new Map<string, number>();
+  private readonly rejectedRouteAgentNameCache = new Map<
+    string,
+    { expiresAt: number; value: Promise<string | undefined> }
+  >();
   private readonly platformStatusListeners = new Set<
     (event: MessagingPlatformStatusEvent) => void
   >();
@@ -451,6 +454,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     this.runningAdapters.clear();
     this.adapters = [];
     this.controllers = [];
+    this.rejectedRouteAgentNameCache.clear();
     // Mark each previously-running platform as suspended (not removed),
     // so the renderer keeps the icon visible with a gray dot — the user
     // knows it's configured but currently off.
@@ -2290,7 +2294,6 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       const actorName = event.actor.displayName ?? event.actor.platformUserId;
       const destinationName =
         route.destinationAgentName
-        ?? route.destinationThreadTitle
         ?? route.threadId;
       const conversationName = describeRejectedConversation(platform, conversation);
       const attemptKind = event.botMention ? "@mention" : event.kind;
@@ -2317,7 +2320,6 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
           conversationDisplayName: conversationName,
           rejectionReason: event.reason,
           destinationAgentName: route.destinationAgentName,
-          destinationThreadTitle: route.destinationThreadTitle,
           destinationBackend: route.backend,
           destinationTargetKind: route.targetKind,
           destinationThreadId: route.threadId,
@@ -2365,7 +2367,6 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
         destinationBackend: route.backend,
         destinationTargetKind: route.targetKind,
         destinationThreadId: route.threadId,
-        destinationThreadTitle: route.destinationThreadTitle,
         eventId: event.id,
         eventKind: event.kind,
         reason: event.reason,
@@ -2385,52 +2386,58 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     event: MessagingRejectedInboundEvent,
   ): Promise<RejectedInboundRoute | undefined> {
     const binding = await store.findActiveBindingForChannel(event.channel);
-    const assignments = binding
-      ? []
-      : await store.findActiveDefaultAgentAssignmentsForChannel(event.channel);
-    if (!binding && assignments.length === 0) {
-      return undefined;
-    }
-    let navigation: NavigationSnapshot | undefined;
-    try {
-      navigation = await this.options.backendBridge.getNavigationSnapshot({
-        backend: "all",
-      });
-    } catch {
-      // The durable route still identifies the intended destination even when
-      // its friendly Agent metadata is temporarily unavailable.
-    }
     const assignment = binding
       ? undefined
-      : navigation
-        ? assignments.find((candidate) =>
-            navigation.threads.some(
-              (thread) =>
-                thread.source === candidate.target.backend
-                && thread.id === candidate.target.threadId
-                && Boolean(thread.agent),
-            ),
-          )
-        : assignments[0];
+      : await store.findActiveDefaultAgentAssignmentForChannel(event.channel);
     if (!binding && !assignment) {
       return undefined;
     }
     const backend = binding?.backend ?? assignment!.target.backend;
     const threadId = binding?.threadId ?? assignment!.target.threadId;
-    const thread = navigation?.threads.find(
-      (candidate) =>
-        candidate.source === backend
-        && candidate.id === threadId,
-    );
     return {
       backend,
       ...(binding ? { bindingId: binding.id } : {}),
-      destinationAgentName: thread?.agent?.name,
-      destinationThreadTitle: thread?.title,
+      destinationAgentName: await this.resolveRejectedRouteAgentName(
+        backend,
+        threadId,
+      ),
       routeSource: binding ? "binding" : "default-agent",
       targetKind: binding?.targetKind ?? "agent_thread",
       threadId,
     };
+  }
+
+  private async resolveRejectedRouteAgentName(
+    backend: MessagingBindingRecord["backend"],
+    threadId: MessagingBindingRecord["threadId"],
+  ): Promise<string | undefined> {
+    if (!this.options.backendBridge.readThreadAgentMetadata) {
+      return undefined;
+    }
+    const key = `${backend}:${threadId}`;
+    const now = Date.now();
+    const cached = this.rejectedRouteAgentNameCache.get(key);
+    if (cached && cached.expiresAt > now) {
+      return await cached.value;
+    }
+    const value = this.options.backendBridge.readThreadAgentMetadata({
+      backend,
+      threadId,
+    })
+      .then((metadata) => clipStatusText(metadata?.name))
+      .catch((error) => {
+        messagingLog.debug("messaging rejected route Agent-name lookup failed", {
+          backend,
+          error: error instanceof Error ? error.message : String(error),
+          threadId,
+        });
+        return undefined;
+      });
+    this.rejectedRouteAgentNameCache.set(key, {
+      expiresAt: now + REJECTED_ROUTE_AGENT_METADATA_TTL_MS,
+      value,
+    });
+    return await value;
   }
 
   private broadcastPlatformStatus(event: MessagingPlatformStatusEvent): void {

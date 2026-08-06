@@ -44,6 +44,7 @@ import type {
   SteerTurnResponse,
   SubmitServerRequestRequest,
   SubmitServerRequestResponse,
+  ThreadAgentMetadata,
   ThreadMessagingBindingTransition,
   UpdateScheduledThreadActionRequest,
   UpdateDirectoryLaunchpadRequest,
@@ -145,6 +146,10 @@ export type MessagingBackendBridge = {
   getNavigationSnapshot(
     request?: GetNavigationSnapshotRequest,
   ): Promise<NavigationSnapshot>;
+  readThreadAgentMetadata?(request: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<ThreadAgentMetadata | undefined>;
   readThreadStatus?(request: {
     backend: AppServerBackendKind;
     federationTarget?: FederationTarget;
