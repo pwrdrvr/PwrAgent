@@ -1,5 +1,6 @@
 import type {
   AppServerBackendKind,
+  AppServerThreadTitleSource,
   ThreadExecutionMode,
   ThreadIdentifier,
 } from "./normalized-app-server";
@@ -83,6 +84,7 @@ export type PwrAgentMessagingActorSummary = {
 
 export type PwrAgentMessagingBoundThreadSummary = {
   title: string;
+  titleSource: AppServerThreadTitleSource;
   projectKey?: string;
   gitBranch?: string;
   model?: string;

@@ -18542,6 +18542,7 @@ function summarizeNavigationThreadForMessaging(
   const gitBranch = thread.gitBranch ?? thread.observedGitBranch;
   return {
     title: thread.title,
+    titleSource: thread.titleSource,
     ...(thread.projectKey ? { projectKey: thread.projectKey } : {}),
     ...(gitBranch ? { gitBranch } : {}),
     ...(thread.model ? { model: thread.model } : {}),
@@ -18557,7 +18558,9 @@ function privateResponseAttributionLabel(
   const targetKind = binding.targetKind ?? "thread";
   const identity = targetKind === "agent_thread"
     ? thread?.agentName
-    : thread?.title;
+    : thread?.titleSource === "fallback"
+      ? undefined
+      : thread?.title;
   const normalized = identity?.replace(/\s+/g, " ").trim();
   if (normalized) {
     return normalized;

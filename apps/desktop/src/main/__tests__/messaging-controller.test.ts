@@ -1732,6 +1732,7 @@ describe("MessagingController", () => {
     streamingResponsesDefault?: boolean;
     targetKind?: "agent_thread" | "thread";
     threadTitle?: string;
+    threadTitleSource?: NavigationSnapshot["threads"][number]["titleSource"];
     toolUpdateDefaultMode?:
       | MessagingToolUpdateMode
       | ((targetKind: "thread" | "agent_thread") => MessagingToolUpdateMode);
@@ -1809,6 +1810,8 @@ describe("MessagingController", () => {
     navigation.threads[0] = {
       ...navigation.threads[0]!,
       title: options?.threadTitle ?? navigation.threads[0]!.title,
+      titleSource:
+        options?.threadTitleSource ?? navigation.threads[0]!.titleSource,
       ...(agentName
         ? {
             agent: {
@@ -1951,7 +1954,8 @@ describe("MessagingController", () => {
     const { harness } = await createSlackPrivateResponseHarness({
       agentName: null,
       targetKind: "thread",
-      threadTitle: "",
+      threadTitle: "Untitled thread",
+      threadTitleSource: "fallback",
     });
 
     await harness.controller.handlePwrAgentMessagingRequest({
