@@ -440,6 +440,8 @@ const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "remote_pty",
   "event_subscriptions",
   "turn_input_blobs",
+  // Signed transport negotiation; not a user-authorized remote action.
+  "transport_brotli",
 ];
 
 const REMOTE_THREAD_SUMMARY_EVENT_CONSUMER_ID =
