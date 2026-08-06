@@ -39,6 +39,8 @@ export function StarMapThreadCard(props: {
   offset?: { dx: number; dy: number };
   /** Card width for this lane (dense federations narrow it). */
   width: number;
+  /** Lane position, so dragged-into-overlap cards paint front-to-back. */
+  stackIndex: number;
   /** Owning instance's celestial mark, watermarked behind the content. */
   instanceIcon?: CelestialIconId;
   /** Present when the card is draggable; receives the clamped offset. */
@@ -61,6 +63,7 @@ export function StarMapThreadCard(props: {
     left,
     top,
     marginLeft: -props.width / 2,
+    zIndex: props.stackIndex,
     ...(props.riseDelayMs
       ? { animationDelay: `${props.riseDelayMs}ms` }
       : {}),

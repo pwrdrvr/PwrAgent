@@ -27,9 +27,12 @@ import {
   type StarMapSessionKeys,
 } from "./attention";
 import {
+  computeCardSlots,
   computeStarMapLayout,
   generateStarField,
-  starMapCardSlot,
+  STAR_MAP_BODY_ROW_Y,
+  STAR_MAP_ESTIMATED_CARD_HEIGHT,
+  visibleCardCount,
   type StarMapInstancePosition,
 } from "./star-map-layout";
 import { IntakeDialog, type IntakeDialogTarget } from "./IntakeDialog";
@@ -39,7 +42,7 @@ import { useStarMapArrangement } from "./useStarMapArrangement";
 import { useStarMapThreads } from "./useStarMapThreads";
 
 const FILTERS_STORAGE_KEY = "pwragent.starMap.filters";
-const MAX_CARDS_PER_INSTANCE = 6;
+const MAX_CARDS_PER_INSTANCE = 8;
 const STAR_COUNT = 130;
 
 function readStoredFilters(): Set<StarMapAttentionCategory> {
@@ -107,6 +110,11 @@ export function StarMapScreen(props: StarMapScreenProps) {
     new Set(),
   );
   const [remoteRefreshNonce, setRemoteRefreshNonce] = useState(0);
+  // Cards vary in height with their chip rows, so lanes stack from real
+  // measurements - a fixed pitch clipped tall cards mid-glyph.
+  const [cardHeights, setCardHeights] = useState<Map<string, number>>(
+    new Map(),
+  );
 
   // Focus the layer on open AND whenever the floating thread closes -
   // "Back to map" leaves focus inside <main>, and without a refocus the
@@ -139,6 +147,32 @@ export function StarMapScreen(props: StarMapScreenProps) {
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
+
+  // Deliberately dependency-free: a card's height changes whenever its chip
+  // content does, and no prop reliably signals that. The identity check
+  // below is the loop guard - an unchanged measurement returns the very
+  // same Map, so the state never updates and the cycle stops.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useLayoutEffect(() => {
+    const root = viewportRef.current;
+    if (!root) return;
+    const measured = new Map<string, number>();
+    for (const element of root.querySelectorAll<HTMLElement>(
+      "[data-thread-key]",
+    )) {
+      const key = element.dataset.threadKey;
+      if (key) measured.set(key, element.offsetHeight);
+    }
+    setCardHeights((current) => {
+      if (
+        current.size === measured.size
+        && [...measured].every(([key, height]) => current.get(key) === height)
+      ) {
+        return current;
+      }
+      return measured;
+    });
+  });
 
   const toggleFilter = useCallback((category: StarMapAttentionCategory) => {
     setFilters((current) => {
@@ -326,7 +360,20 @@ export function StarMapScreen(props: StarMapScreenProps) {
 
   const renderCloud = (position: StarMapInstancePosition) => {
     const threads = attentionByInstance.get(position.instanceId) ?? [];
-    const visible = threads.slice(0, MAX_CARDS_PER_INSTANCE);
+    const heights = threads.map(
+      (thread) =>
+        cardHeights.get(buildThreadIdentityKey(thread.source, thread.id))
+        ?? STAR_MAP_ESTIMATED_CARD_HEIGHT,
+    );
+    // Only as many cards as actually fit between the body row and the
+    // bottom of the window; the rest roll into "+N more".
+    const count = visibleCardCount({
+      heights,
+      availableHeight: viewportSize.height - STAR_MAP_BODY_ROW_Y,
+      max: MAX_CARDS_PER_INSTANCE,
+    });
+    const visible = threads.slice(0, count);
+    const slots = computeCardSlots(heights.slice(0, count));
     const overflow = threads.length - visible.length;
     return (
       <div
@@ -344,12 +391,15 @@ export function StarMapScreen(props: StarMapScreenProps) {
             aria-hidden="true"
             style={{
               width: layout.cardWidth + 56,
-              height: starMapCardSlot(visible.length - 1).dy + 120,
+              height:
+                (slots[slots.length - 1]?.dy ?? 0)
+                + (heights[visible.length - 1] ?? 0)
+                + 40,
             }}
           />
         ) : null}
         {visible.map((thread, index) => {
-          const slot = starMapCardSlot(index);
+          const slot = slots[index];
           const threadKey = buildThreadIdentityKey(thread.source, thread.id);
           return (
             <StarMapThreadCard
@@ -370,6 +420,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
               baseSlot={slot}
               offset={arrangement.offsetFor(position.instanceId, threadKey)}
               width={layout.cardWidth}
+              stackIndex={index}
               onCommitOffset={
                 // Drags persist + sync only once the durable instance id is
                 // known; before that, cards stay in their default slots.
@@ -391,7 +442,9 @@ export function StarMapScreen(props: StarMapScreenProps) {
             className="star-map__cloud-overflow"
             style={{
               transform: `translate(-50%, ${
-                starMapCardSlot(visible.length).dy + 8
+                (slots[slots.length - 1]?.dy ?? 0)
+                + (heights[visible.length - 1] ?? 0)
+                + 14
               }px)`,
             }}
           >

@@ -8,8 +8,9 @@ import {
 import {
   clampToCloudRadius,
   computeStarMapLayout,
+  computeCardSlots,
   generateStarField,
-  starMapCardSlot,
+  visibleCardCount,
 } from "../star-map-layout";
 
 function thread(
@@ -197,14 +198,49 @@ describe("computeStarMapLayout", () => {
   });
 });
 
-describe("starMapCardSlot", () => {
-  it("flows cards down a single lane column", () => {
-    expect(starMapCardSlot(0).dx).toBe(0);
-    expect(starMapCardSlot(1).dx).toBe(0);
-    expect(starMapCardSlot(1).dy).toBeGreaterThan(starMapCardSlot(0).dy);
-    expect(starMapCardSlot(2).dy - starMapCardSlot(1).dy).toBe(
-      starMapCardSlot(1).dy - starMapCardSlot(0).dy,
-    );
+describe("computeCardSlots", () => {
+  it("stacks cards from their measured heights so none overlap", () => {
+    const heights = [124, 64, 96];
+    const slots = computeCardSlots(heights);
+    expect(slots.map((slot) => slot.dx)).toEqual([0, 0, 0]);
+    for (let index = 1; index < slots.length; index += 1) {
+      const previousBottom = slots[index - 1].dy + heights[index - 1];
+      expect(slots[index].dy).toBeGreaterThan(previousBottom);
+    }
+  });
+
+  it("keeps a uniform gap regardless of card height", () => {
+    const slots = computeCardSlots([100, 40], { top: 0, gap: 10 });
+    expect(slots[0].dy).toBe(0);
+    expect(slots[1].dy).toBe(110);
+  });
+});
+
+describe("visibleCardCount", () => {
+  it("stops before cards would run off the bottom", () => {
+    const count = visibleCardCount({
+      heights: [120, 120, 120, 120, 120],
+      availableHeight: 460,
+      max: 8,
+    });
+    expect(count).toBeGreaterThan(0);
+    expect(count).toBeLessThan(5);
+  });
+
+  it("never hides the only card a lane has", () => {
+    expect(
+      visibleCardCount({ heights: [400], availableHeight: 120, max: 8 }),
+    ).toBe(1);
+  });
+
+  it("respects the hard cap even with room to spare", () => {
+    expect(
+      visibleCardCount({
+        heights: Array.from({ length: 20 }, () => 40),
+        availableHeight: 5000,
+        max: 8,
+      }),
+    ).toBe(8);
   });
 });
 
