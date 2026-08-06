@@ -9,7 +9,6 @@ import {
   clampToCloudRadius,
   computeStarMapLayout,
   generateStarField,
-  pickHoveredCardKey,
   starMapCardSlot,
 } from "../star-map-layout";
 
@@ -289,34 +288,5 @@ describe("countFilterImpact", () => {
       enabled: new Set(["unread"]),
     });
     expect(counts.unread).toBe(0);
-  });
-});
-
-describe("pickHoveredCardKey", () => {
-  // Pitch is tighter than card height, so each card's top band sits under
-  // the previous card's bottom.
-  const cards = [0, 1, 2].map((index) => ({
-    threadKey: `card-${index}`,
-    rect: {
-      left: 0,
-      right: 200,
-      top: index * 84,
-      bottom: index * 84 + 100,
-    },
-  }));
-
-  it("picks the only card under the pointer", () => {
-    expect(pickHoveredCardKey(cards, { x: 10, y: 20 })).toBe("card-0");
-  });
-
-  it("flips to the lower card once the pointer crosses its start", () => {
-    // y=90 is inside card-0's tail AND card-1's head; the next card wins.
-    expect(pickHoveredCardKey(cards, { x: 10, y: 90 })).toBe("card-1");
-    expect(pickHoveredCardKey(cards, { x: 10, y: 174 })).toBe("card-2");
-  });
-
-  it("returns nothing outside the stack", () => {
-    expect(pickHoveredCardKey(cards, { x: 10, y: 400 })).toBeUndefined();
-    expect(pickHoveredCardKey(cards, { x: 900, y: 20 })).toBeUndefined();
   });
 });

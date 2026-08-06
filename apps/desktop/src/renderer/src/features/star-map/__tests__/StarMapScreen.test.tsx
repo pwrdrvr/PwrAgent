@@ -207,4 +207,34 @@ describe("StarMapScreen", () => {
     // The generic placeholder must never stand in for a real instance.
     expect(screen.queryByText("This instance")).toBeNull();
   });
+
+  it("drops the machine-name chip from cards - the lane already says which instance", async () => {
+    render(
+      <StarMapScreen
+        desktopApi={buildDesktopApi()}
+        localThreads={[
+          {
+            ...unreadThread("t9"),
+            federation: {
+              ref: {
+                backend: "codex",
+                target: { scope: "remote", instanceId: "pwr_peer" },
+                threadId: "t9",
+              },
+              instanceLabel: "Harold-MBP-M2-Max",
+            },
+          } as unknown as NavigationThreadSummary,
+        ]}
+        sessionKeys={{}}
+        floating={false}
+        onClose={() => undefined}
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByRole("region", { name: "Star Map" })).toBeTruthy();
+    });
+    expect(screen.queryByText("Harold-MBP-M2-Max")).toBeNull();
+  });
 });

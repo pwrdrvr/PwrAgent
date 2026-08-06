@@ -25,6 +25,12 @@ type ThreadMetaChipsProps = {
   queuedMessageState?: ThreadQueuedMessageState;
   includeLinkedDirectories?: boolean;
   linkedDirectoryMode?: "label" | "kind";
+  /**
+   * Suppresses the owning-instance chip for surfaces that already carry
+   * that identity (the Star Map groups cards under their instance and
+   * watermarks them), where a per-card machine name is pure noise.
+   */
+  hideInstanceChip?: boolean;
   thread: NavigationThreadSummary;
 };
 
@@ -36,6 +42,7 @@ export function ThreadMetaChips({
   queuedMessageState,
   includeLinkedDirectories = false,
   linkedDirectoryMode = "label",
+  hideInstanceChip = false,
   thread,
 }: ThreadMetaChipsProps) {
   // Hover tooltip for the icon-only pin marker — sighted users get the
@@ -165,7 +172,7 @@ export function ThreadMetaChips({
   // is already branded with its peer's identity, so per-row chips there
   // would be pure noise.
   const instanceChip =
-    thread.federation && !readRendererFederationTarget()
+    thread.federation && !hideInstanceChip && !readRendererFederationTarget()
       ? (
           <InstanceChip
             icon={thread.federation.celestialIcon}

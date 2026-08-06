@@ -1,8 +1,10 @@
 import { useRef, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import {
   buildThreadIdentityKey,
+  type CelestialIconId,
   type NavigationThreadSummary,
 } from "@pwragent/shared";
+import { CelestialIcon } from "../../icons";
 import { PrChip } from "../pr-status/PrChip";
 import { ThreadMetaChips } from "../navigation/ThreadMetaChips";
 import {
@@ -37,8 +39,8 @@ export function StarMapThreadCard(props: {
   offset?: { dx: number; dy: number };
   /** Card width for this lane (dense federations narrow it). */
   width: number;
-  /** Raised above its neighbours while hovered (the lane stack overlaps). */
-  raised?: boolean;
+  /** Owning instance's celestial mark, watermarked behind the content. */
+  instanceIcon?: CelestialIconId;
   /** Present when the card is draggable; receives the clamped offset. */
   onCommitOffset?: (offset: { dx: number; dy: number }) => void;
   onOpen: (thread: NavigationThreadSummary) => void;
@@ -120,9 +122,7 @@ export function StarMapThreadCard(props: {
   return (
     <button
       type="button"
-      className={`star-map-card${props.entering ? " star-map-card--entering" : ""}${
-        props.raised ? " is-raised" : ""
-      }`}
+      className={`star-map-card${props.entering ? " star-map-card--entering" : ""}`}
       style={style}
       data-thread-key={threadKey}
       onPointerDown={startDrag}
@@ -134,6 +134,11 @@ export function StarMapThreadCard(props: {
         props.onOpen(thread);
       }}
     >
+      {props.instanceIcon ? (
+        <span className="star-map-card__watermark" aria-hidden="true">
+          <CelestialIcon icon={props.instanceIcon} size={84} />
+        </span>
+      ) : null}
       <span className="star-map-card__heading">
         <ThreadRowStatus status={status} />
         <span className="star-map-card__title" title={thread.title}>
@@ -151,6 +156,8 @@ export function StarMapThreadCard(props: {
           }
           includeLinkedDirectories
           linkedDirectoryMode="label"
+          // The lane and the watermark already say which machine this is.
+          hideInstanceChip
         />
         {thread.prs?.map((pr) => (
           <PrChip

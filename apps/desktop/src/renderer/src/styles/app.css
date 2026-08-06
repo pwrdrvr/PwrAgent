@@ -9251,6 +9251,7 @@ textarea,
   display: flex;
   position: absolute;
   flex-direction: column;
+  overflow: hidden;
   gap: 6px;
   padding: 8px 10px;
   border: 1px solid var(--border-subtle);
@@ -9263,16 +9264,16 @@ textarea,
   transition: border-color 120ms ease, transform 120ms ease;
 }
 
-.star-map-card:hover,
-.star-map-card.is-raised {
-  border-color: var(--accent-border);
-}
-
 /* Lane stacks overlap by design, so the pointer's card lifts clear of its
-   neighbours. Raise is z-index + shadow only: a transform here would move
-   the card's own rect and feed back into the hover hit-test. */
-.star-map-card.is-raised {
+   neighbours. Plain :hover on purpose - a raised card keeps the pointer
+   until it leaves sideways, so its PR chips and links stay clickable all
+   the way down. (An earlier version hit-tested layout rects and flipped to
+   the next card the moment the pointer crossed its top band, which made
+   everything below the first line unclickable.) No transform: the card
+   must not move under the pointer. */
+.star-map-card:hover {
   z-index: 5;
+  border-color: var(--accent-border);
   background: var(--bg-panel-elevated);
   box-shadow: var(--shadow-popover);
 }
@@ -9302,6 +9303,26 @@ textarea,
   .star-map-card {
     transition: none;
   }
+}
+
+/* The owning instance's mark, watermarked behind the card content -
+   the lane already groups by instance, so the machine name chip was
+   spending prime card width on information the position carries. */
+.star-map-card__watermark {
+  position: absolute;
+  right: -18px;
+  bottom: -22px;
+  z-index: 0;
+  color: var(--text-muted);
+  opacity: 0.09;
+  pointer-events: none;
+}
+
+/* Positioned so the content paints above the watermark's z-index 0. */
+.star-map-card__heading,
+.star-map-card__chips {
+  position: relative;
+  z-index: 1;
 }
 
 .star-map-card__heading {

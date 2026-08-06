@@ -29,7 +29,6 @@ import {
 import {
   computeStarMapLayout,
   generateStarField,
-  pickHoveredCardKey,
   starMapCardSlot,
   type StarMapInstancePosition,
 } from "./star-map-layout";
@@ -108,8 +107,6 @@ export function StarMapScreen(props: StarMapScreenProps) {
     new Set(),
   );
   const [remoteRefreshNonce, setRemoteRefreshNonce] = useState(0);
-  // Lane stacks overlap, so the hovered card raises above its neighbours.
-  const [hoveredCardKey, setHoveredCardKey] = useState<string>();
 
   // Focus the layer on open AND whenever the floating thread closes -
   // "Back to map" leaves focus inside <main>, and without a refocus the
@@ -340,23 +337,6 @@ export function StarMapScreen(props: StarMapScreenProps) {
             : ""
         }`}
         style={{ left: position.x, top: position.y }}
-        onPointerMove={(event) => {
-          const boxes = [
-            ...event.currentTarget.querySelectorAll<HTMLElement>(
-              "[data-thread-key]",
-            ),
-          ].map((element) => ({
-            threadKey: element.dataset.threadKey ?? "",
-            rect: element.getBoundingClientRect(),
-          }));
-          setHoveredCardKey(
-            pickHoveredCardKey(boxes, {
-              x: event.clientX,
-              y: event.clientY,
-            }),
-          );
-        }}
-        onPointerLeave={() => setHoveredCardKey(undefined)}
       >
         {visible.length > 0 ? (
           <span
@@ -382,7 +362,11 @@ export function StarMapScreen(props: StarMapScreenProps) {
               }
               riseDelayMs={index * 45}
               entering={enteringThreadKeys.has(threadKey)}
-              raised={hoveredCardKey === threadKey}
+              instanceIcon={celestialIcons.iconFor(
+                position.instanceId === localInstanceId
+                  ? undefined
+                  : position.instanceId,
+              )}
               baseSlot={slot}
               offset={arrangement.offsetFor(position.instanceId, threadKey)}
               width={layout.cardWidth}
