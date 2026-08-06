@@ -261,6 +261,30 @@ these tools — coordinate so it does not invent its own; the shared icon
 field name is `icon` on `FederationPeerSummary`. Cmd+K unification is
 independent but can adopt `search_federation_threads`.
 
+## Follow-up round (same branch, post-review)
+
+Decided with the operator after the first review pass:
+
+- `search_federation_threads` gains `scope?: all | local | remote` — the
+  "remote only" intent ("I know it's not on this machine") was not
+  expressible in one call. scope and `instanceId` intersect.
+- `FederationPeerSummary.host` block: platform, osVersion, hostname, arch,
+  cpuCount, memoryBytes, diskFreeBytes (snapshot, not live), and
+  `machineId` — minted once at `<pwragent root>/machine-id` and shared by
+  every profile on the machine, so agents can tell that "work" and
+  "default" on one box compete for the same CPUs/RAM instead of summing
+  their capacity. Advertised like notes/icon (auth handshake, reconnect
+  replace-wholesale/absent-keeps, store payload, gossip, health).
+- `list_federation_instances` pages at 25 rows (limit 1-100) with
+  single-use ~60s continuation tokens, plus a `query` substring filter
+  over label/notes/profile/id/host facts — so a 75-instance fleet nudges
+  the agent toward filtering instead of eating tokens.
+- Live load signals (CPU load average, available RAM, free disk deltas)
+  are deliberately NOT in this round: they are a query-on-demand concern
+  (Star Map indicators + an opt-in flag on the instance list), not a
+  handshake field. Tracked as a spun-off task card; the `host` block is
+  shaped so a `load` sibling can join later.
+
 ## Progress
 
 - [x] Brainstorm doc
