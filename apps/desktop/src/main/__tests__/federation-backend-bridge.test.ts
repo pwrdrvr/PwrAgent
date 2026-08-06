@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type {
+  AppServerReadThreadRequest,
   AppServerReadThreadResponse,
   FederationProtocolEnvelope,
   TrustCodexProjectRequest,
@@ -221,7 +222,7 @@ describe("federation backend bridge", () => {
     ]);
   });
 
-  it("pages unbounded thread history before sending it over federation", async () => {
+  it("reads complete thread history before minting federation cursors", async () => {
     const response: AppServerReadThreadResponse = {
       backend: "codex",
       fetchedAt: 1_000,
@@ -346,14 +347,171 @@ describe("federation backend bridge", () => {
     expect(backend.readThread).toHaveBeenNthCalledWith(1, {
       backend: "codex",
       threadId: "thread-1",
-      limit: 2,
     });
     expect(backend.readThread).toHaveBeenNthCalledWith(2, {
       backend: "codex",
       threadId: "thread-1",
-      before: "entry-3",
+    });
+  });
+
+  it("does not lose older history when an unpaginated backend honors limit", async () => {
+    const allEntries: AppServerReadThreadResponse["replay"]["entries"] = [
+      {
+        type: "message",
+        id: "older-user",
+        role: "user",
+        text: "Older question",
+      },
+      {
+        type: "message",
+        id: "older-assistant",
+        role: "assistant",
+        text: "Older answer",
+      },
+      {
+        type: "message",
+        id: "latest-user",
+        role: "user",
+        text: "Latest question",
+      },
+      {
+        type: "message",
+        id: "latest-assistant",
+        role: "assistant",
+        text: "Latest answer",
+      },
+    ];
+    const backend = {
+      readThread: vi.fn(async (request: AppServerReadThreadRequest) => {
+        const entries = request.limit === undefined
+          ? allEntries
+          : allEntries.slice(-request.limit);
+        return {
+          backend: "codex" as const,
+          fetchedAt: 1_000,
+          threadId: "thread-1",
+          replay: {
+            entries,
+            messages: entries.flatMap((entry) =>
+              entry.type === "message"
+                ? [{ id: entry.id, role: entry.role, text: entry.text }]
+                : []
+            ),
+            pagination: {
+              supportsPagination: false,
+              hasPreviousPage: false,
+            },
+          },
+        };
+      }),
+    } as unknown as FederationBackendOperations;
+    const replies: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({
+      localInstanceId: "owner_one",
+      methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+    });
+    router.registerConnection({
+      peerId: "viewer_one",
+      capabilities: ["thread_detail"],
+      sendEnvelope: (envelope) => replies.push(envelope),
+    });
+    registerFederationBackendHandlers({ router, backend });
+
+    await router.routeEnvelope({
+      sourcePeerId: "viewer_one",
+      envelope: {
+        id: "latest-request",
+        kind: "request",
+        method: FEDERATION_BACKEND_METHODS.readThread,
+        params: { backend: "codex", threadId: "thread-1", limit: 2 },
+        protocolVersion: 1,
+        sourceInstanceId: "viewer_one",
+        targetInstanceId: "owner_one",
+        createdAt: 1_000,
+      },
+    });
+
+    expect(backend.readThread).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(backend.readThread).toHaveBeenCalledTimes(1);
+    expect(replies[0]).toMatchObject({
+      kind: "response",
+      requestId: "latest-request",
+      result: {
+        replay: {
+          entries: [{ id: "latest-user" }, { id: "latest-assistant" }],
+          pagination: {
+            supportsPagination: true,
+            hasPreviousPage: true,
+            previousCursor: "latest-user",
+          },
+        },
+      },
+    });
+  });
+
+  it("delegates bounded reads to backends with native pagination", async () => {
+    const response: AppServerReadThreadResponse = {
+      backend: "codex",
+      fetchedAt: 1_000,
+      threadId: "thread-1",
+      replay: {
+        entries: [],
+        messages: [],
+        pagination: {
+          supportsPagination: true,
+          hasPreviousPage: false,
+        },
+      },
+    };
+    const backend = {
+      readThread: vi.fn(async () => response),
+    } as unknown as FederationBackendOperations;
+    const replies: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({
+      localInstanceId: "owner_one",
+      methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+    });
+    router.registerConnection({
+      peerId: "viewer_one",
+      capabilities: ["thread_detail"],
+      sendEnvelope: (envelope) => replies.push(envelope),
+    });
+    registerFederationBackendHandlers({ router, backend });
+
+    await router.routeEnvelope({
+      sourcePeerId: "viewer_one",
+      envelope: {
+        id: "native-request",
+        kind: "request",
+        method: FEDERATION_BACKEND_METHODS.readThread,
+        params: {
+          backend: "codex",
+          threadId: "thread-1",
+          before: "cursor-1",
+          limit: 2,
+        },
+        protocolVersion: 1,
+        sourceInstanceId: "viewer_one",
+        targetInstanceId: "owner_one",
+        createdAt: 1_000,
+      },
+    });
+
+    expect(backend.readThread).toHaveBeenNthCalledWith(1, {
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(backend.readThread).toHaveBeenNthCalledWith(2, {
+      backend: "codex",
+      threadId: "thread-1",
+      before: "cursor-1",
       limit: 2,
     });
+    expect(backend.readThread).toHaveBeenCalledTimes(2);
+    expect(replies).toHaveLength(1);
   });
 
   it("compacts an oversized retained entry below the frame ceiling", async () => {
