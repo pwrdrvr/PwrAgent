@@ -25,6 +25,25 @@ type ThreadMetaChipsProps = {
   queuedMessageState?: ThreadQueuedMessageState;
   includeLinkedDirectories?: boolean;
   linkedDirectoryMode?: "label" | "kind";
+  /**
+   * Optional per-surface chip trimming. Defaults keep every chip, so the
+   * thread list is unaffected; the Star Map uses it to let an operator
+   * choose how dense a card should be.
+   */
+  chipVisibility?: {
+    /** Backend/provider chip. */
+    provider?: boolean;
+    /** Git branch chip. */
+    branch?: boolean;
+    /** Cap on linked-directory chips (undefined shows all). */
+    maxLinkedDirectories?: number;
+  };
+  /**
+   * Suppresses the owning-instance chip for surfaces that already carry
+   * that identity (the Star Map groups cards under their instance and
+   * watermarks them), where a per-card machine name is pure noise.
+   */
+  hideInstanceChip?: boolean;
   thread: NavigationThreadSummary;
 };
 
@@ -36,8 +55,13 @@ export function ThreadMetaChips({
   queuedMessageState,
   includeLinkedDirectories = false,
   linkedDirectoryMode = "label",
+  hideInstanceChip = false,
+  chipVisibility,
   thread,
 }: ThreadMetaChipsProps) {
+  const showProvider = chipVisibility?.provider ?? true;
+  const showBranch = chipVisibility?.branch ?? true;
+  const maxLinkedDirectories = chipVisibility?.maxLinkedDirectories;
   // Hover tooltip for the icon-only pin marker — sighted users get the
   // "Pinned" label without the old text pill; screen readers get it from
   // the marker's role="img" + aria-label. Uses the shared viewport
@@ -165,7 +189,7 @@ export function ThreadMetaChips({
   // is already branded with its peer's identity, so per-row chips there
   // would be pure noise.
   const instanceChip =
-    thread.federation && !readRendererFederationTarget()
+    thread.federation && !hideInstanceChip && !readRendererFederationTarget()
       ? (
           <InstanceChip
             icon={thread.federation.celestialIcon}
@@ -186,9 +210,11 @@ export function ThreadMetaChips({
     <>
       {instanceChip}
 
-      <span className="thread-row__chip thread-row__chip--backend">
-        {formatBackendLabel(thread.source)}
-      </span>
+      {showProvider ? (
+        <span className="thread-row__chip thread-row__chip--backend">
+          {formatBackendLabel(thread.source)}
+        </span>
+      ) : null}
 
       {thread.agent ? <AgentThreadChip threadRow /> : null}
 
@@ -246,7 +272,9 @@ export function ThreadMetaChips({
         </span>
       ) : null}
 
-      {linkedDirectoryChips}
+      {maxLinkedDirectories === undefined || !Array.isArray(linkedDirectoryChips)
+        ? linkedDirectoryChips
+        : linkedDirectoryChips.slice(0, maxLinkedDirectories)}
 
       {thread.pinnedRank && !thread.parentThreadId ? (
         <span
@@ -299,7 +327,7 @@ export function ThreadMetaChips({
       ) : null}
       {pinTooltip.tooltipNode}
 
-      {branchChip ? (
+      {branchChip && showBranch ? (
         <CopyableThreadChip
           aria-label={formatBranchCopyLabel({
             branch: branchChip,

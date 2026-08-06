@@ -1,14 +1,16 @@
 import { describe, expect, it } from "vitest";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import {
+  countFilterImpact,
   selectAttentionThreads,
   threadAttentionCategories,
 } from "../attention";
 import {
   clampToCloudRadius,
   computeStarMapLayout,
+  computeCardSlots,
   generateStarField,
-  starMapCardSlot,
+  visibleCardCount,
 } from "../star-map-layout";
 
 function thread(
@@ -196,14 +198,49 @@ describe("computeStarMapLayout", () => {
   });
 });
 
-describe("starMapCardSlot", () => {
-  it("flows cards down a single lane column", () => {
-    expect(starMapCardSlot(0).dx).toBe(0);
-    expect(starMapCardSlot(1).dx).toBe(0);
-    expect(starMapCardSlot(1).dy).toBeGreaterThan(starMapCardSlot(0).dy);
-    expect(starMapCardSlot(2).dy - starMapCardSlot(1).dy).toBe(
-      starMapCardSlot(1).dy - starMapCardSlot(0).dy,
-    );
+describe("computeCardSlots", () => {
+  it("stacks cards from their measured heights so none overlap", () => {
+    const heights = [124, 64, 96];
+    const slots = computeCardSlots(heights);
+    expect(slots.map((slot) => slot.dx)).toEqual([0, 0, 0]);
+    for (let index = 1; index < slots.length; index += 1) {
+      const previousBottom = slots[index - 1].dy + heights[index - 1];
+      expect(slots[index].dy).toBeGreaterThan(previousBottom);
+    }
+  });
+
+  it("keeps a uniform gap regardless of card height", () => {
+    const slots = computeCardSlots([100, 40], { top: 0, gap: 10 });
+    expect(slots[0].dy).toBe(0);
+    expect(slots[1].dy).toBe(110);
+  });
+});
+
+describe("visibleCardCount", () => {
+  it("stops before cards would run off the bottom", () => {
+    const count = visibleCardCount({
+      heights: [120, 120, 120, 120, 120],
+      availableHeight: 460,
+      max: 8,
+    });
+    expect(count).toBeGreaterThan(0);
+    expect(count).toBeLessThan(5);
+  });
+
+  it("never hides the only card a lane has", () => {
+    expect(
+      visibleCardCount({ heights: [400], availableHeight: 120, max: 8 }),
+    ).toBe(1);
+  });
+
+  it("respects the hard cap even with room to spare", () => {
+    expect(
+      visibleCardCount({
+        heights: Array.from({ length: 20 }, () => 40),
+        availableHeight: 5000,
+        max: 8,
+      }),
+    ).toBe(8);
   });
 });
 
@@ -228,5 +265,64 @@ describe("clampToCloudRadius", () => {
     expect(clampToCloudRadius(30, 40, 100)).toEqual({ dx: 30, dy: 40 });
     const clamped = clampToCloudRadius(300, 400, 100);
     expect(Math.hypot(clamped.dx, clamped.dy)).toBeCloseTo(100);
+  });
+});
+
+describe("countFilterImpact", () => {
+  const threads = [
+    // Unread only: turning Unread off drops it.
+    thread({
+      id: "only-unread",
+      inbox: { inInbox: true, reason: "updated-since-seen" },
+    }),
+    // Unread AND working: neither chip alone drops it.
+    thread({
+      id: "unread-and-working",
+      inbox: { inInbox: true, reason: "updated-since-seen" },
+      threadStatus: "active",
+    }),
+    // Matches only a disabled category, so it would appear if flipped on.
+    thread({
+      id: "only-unpushed",
+      gitWorkingState: {
+        dirtyFiles: 0,
+        dirtyAdditions: 0,
+        dirtyDeletions: 0,
+        untrackedFiles: 0,
+        unpushedCommits: 3,
+      },
+    }),
+    thread({ id: "quiet" }),
+  ];
+
+  it("counts cards that a chip alone is keeping on the map", () => {
+    const counts = countFilterImpact({
+      threads,
+      enabled: new Set(["unread", "active"]),
+    });
+    expect(counts.unread).toBe(1);
+    expect(counts.active).toBe(0);
+  });
+
+  it("counts cards a disabled chip would bring back", () => {
+    const counts = countFilterImpact({
+      threads,
+      enabled: new Set(["unread", "active"]),
+    });
+    expect(counts.unpushed).toBe(1);
+  });
+
+  it("ignores archived threads", () => {
+    const counts = countFilterImpact({
+      threads: [
+        thread({
+          id: "archived",
+          archivedAt: 1,
+          inbox: { inInbox: true, reason: "updated-since-seen" },
+        }),
+      ],
+      enabled: new Set(["unread"]),
+    });
+    expect(counts.unread).toBe(0);
   });
 });

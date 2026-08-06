@@ -1,8 +1,10 @@
 import { useRef, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import {
   buildThreadIdentityKey,
+  type CelestialIconId,
   type NavigationThreadSummary,
 } from "@pwragent/shared";
+import { CelestialIcon } from "../../icons";
 import { PrChip } from "../pr-status/PrChip";
 import { ThreadMetaChips } from "../navigation/ThreadMetaChips";
 import {
@@ -10,6 +12,10 @@ import {
   ThreadRowStatus,
 } from "../navigation/ThreadRowStatus";
 import { clampToCloudRadius, STAR_MAP_CLOUD_RADIUS } from "./star-map-layout";
+import {
+  visiblePullRequests,
+  type StarMapCardFields,
+} from "./star-map-preferences";
 import type { StarMapSessionKeys } from "./attention";
 
 const DRAG_THRESHOLD_PX = 4;
@@ -37,6 +43,12 @@ export function StarMapThreadCard(props: {
   offset?: { dx: number; dy: number };
   /** Card width for this lane (dense federations narrow it). */
   width: number;
+  /** Lane position, so dragged-into-overlap cards paint front-to-back. */
+  stackIndex: number;
+  /** Which chips this card carries (operator preference). */
+  cardFields: StarMapCardFields;
+  /** Owning instance's celestial mark, watermarked behind the content. */
+  instanceIcon?: CelestialIconId;
   /** Present when the card is draggable; receives the clamped offset. */
   onCommitOffset?: (offset: { dx: number; dy: number }) => void;
   onOpen: (thread: NavigationThreadSummary) => void;
@@ -57,6 +69,7 @@ export function StarMapThreadCard(props: {
     left,
     top,
     marginLeft: -props.width / 2,
+    zIndex: props.stackIndex,
     ...(props.riseDelayMs
       ? { animationDelay: `${props.riseDelayMs}ms` }
       : {}),
@@ -130,6 +143,13 @@ export function StarMapThreadCard(props: {
         props.onOpen(thread);
       }}
     >
+      {/* Top-right, and large: the next card covers this one's bottom, so
+          the mark has to live in the strip that stays visible. */}
+      {props.instanceIcon ? (
+        <span className="star-map-card__watermark" aria-hidden="true">
+          <CelestialIcon icon={props.instanceIcon} size={104} />
+        </span>
+      ) : null}
       <span className="star-map-card__heading">
         <ThreadRowStatus status={status} />
         <span className="star-map-card__title" title={thread.title}>
@@ -145,10 +165,19 @@ export function StarMapThreadCard(props: {
           hasInputRequest={
             props.sessionKeys?.inputRequestThreadKeys?.[threadKey] === true
           }
-          includeLinkedDirectories
+          includeLinkedDirectories={props.cardFields.primaryDirectory}
           linkedDirectoryMode="label"
+          // The lane and the watermark already say which machine this is.
+          hideInstanceChip
+          chipVisibility={{
+            provider: props.cardFields.provider,
+            branch: props.cardFields.branch,
+            maxLinkedDirectories: props.cardFields.secondaryDirectories
+              ? undefined
+              : 1,
+          }}
         />
-        {thread.prs?.map((pr) => (
+        {visiblePullRequests(thread.prs, props.cardFields).map((pr) => (
           <PrChip
             key={`${pr.org}/${pr.repo}#${pr.number}`}
             pr={pr}

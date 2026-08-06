@@ -120,19 +120,61 @@ export type StarMapCardSlot = {
   dy: number;
 };
 
-const CLOUD_TOP = 116;
-const CARD_PITCH = 84;
+/** Gap between stacked cards in a lane. */
+export const STAR_MAP_CARD_GAP = 12;
+/** Distance from the instance anchor to the first card. */
+export const STAR_MAP_CLOUD_TOP = 100;
+/** Height assumed for a card that has not been measured yet. */
+export const STAR_MAP_ESTIMATED_CARD_HEIGHT = 112;
+/** Room kept below the last card for the "+N more" affordance. */
+const CLOUD_BOTTOM_RESERVE = 40;
 
 /**
- * Default position of the i-th thread card in an instance's cloud: a
- * single column flowing down the instance's lane. Arrangement sync (drag
- * offsets) layers on top of these slots.
+ * Stack a lane's cards from measured heights.
+ *
+ * Card height varies with how many chip rows a thread carries (a PR chip
+ * plus a branch chip wraps to three rows), so a fixed pitch either
+ * overlaps tall cards - clipping them mid-glyph - or wastes space under
+ * short ones. Positions are cumulative instead, and the caller re-measures
+ * when content changes.
  */
-export function starMapCardSlot(index: number): StarMapCardSlot {
-  return {
-    dx: 0,
-    dy: CLOUD_TOP + index * CARD_PITCH,
-  };
+export function computeCardSlots(
+  heights: readonly number[],
+  options?: { top?: number; gap?: number },
+): StarMapCardSlot[] {
+  const top = options?.top ?? STAR_MAP_CLOUD_TOP;
+  const gap = options?.gap ?? STAR_MAP_CARD_GAP;
+  const slots: StarMapCardSlot[] = [];
+  let y = top;
+  for (const height of heights) {
+    slots.push({ dx: 0, dy: y });
+    y += height + gap;
+  }
+  return slots;
+}
+
+/**
+ * How many cards fit between the instance anchor and the bottom of the
+ * viewport. Always yields at least one so a lane never renders empty when
+ * it has something to show.
+ */
+export function visibleCardCount(params: {
+  heights: readonly number[];
+  availableHeight: number;
+  max: number;
+}): number {
+  const limit = Math.min(params.heights.length, params.max);
+  let used = STAR_MAP_CLOUD_TOP;
+  let count = 0;
+  for (let index = 0; index < limit; index += 1) {
+    const next = used + params.heights[index];
+    if (count > 0 && next + CLOUD_BOTTOM_RESERVE > params.availableHeight) {
+      break;
+    }
+    used = next + STAR_MAP_CARD_GAP;
+    count += 1;
+  }
+  return Math.max(count, Math.min(1, params.heights.length));
 }
 
 /** Clamp an offset to the cloud radius around the instance anchor. */

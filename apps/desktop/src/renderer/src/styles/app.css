@@ -9181,9 +9181,47 @@ textarea,
   }
 }
 
+/* The map covers the app chrome (including the header toggle that opened
+   it), so it carries its own exit. Top-RIGHT to stay clear of the macOS
+   traffic lights. */
+.star-map__close {
+  display: inline-flex;
+  position: absolute;
+  top: 14px;
+  right: 16px;
+  z-index: 4;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg-panel) 85%, transparent);
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.star-map__close:hover {
+  border-color: var(--accent-border);
+  color: var(--text-primary);
+}
+
+.star-map__close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .star-map__cloud {
   position: absolute;
   z-index: 1;
+}
+
+/* Last-known cards for a peer that is not currently connected: dimmed
+   rather than dropped, so a reconnect flap never blanks the lane. */
+.star-map__cloud--stale {
+  opacity: 0.45;
+  transition: opacity 200ms ease;
 }
 
 /* Soft halo behind a lane's cards so ownership reads at a glance. */
@@ -9213,11 +9251,14 @@ textarea,
   display: flex;
   position: absolute;
   flex-direction: column;
+  overflow: hidden;
   gap: 6px;
   padding: 8px 10px;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
-  background: color-mix(in srgb, var(--bg-panel) 94%, transparent);
+  /* Opaque on purpose: lanes overlap, and a translucent card lets the one
+     beneath show through its own text. */
+  background: var(--bg-panel);
   color: var(--text-primary);
   text-align: left;
   cursor: pointer;
@@ -9225,9 +9266,18 @@ textarea,
   transition: border-color 120ms ease, transform 120ms ease;
 }
 
+/* Lane stacks overlap by design, so the pointer's card lifts clear of its
+   neighbours. Plain :hover on purpose - a raised card keeps the pointer
+   until it leaves sideways, so its PR chips and links stay clickable all
+   the way down. (An earlier version hit-tested layout rects and flipped to
+   the next card the moment the pointer crossed its top band, which made
+   everything below the first line unclickable.) No transform: the card
+   must not move under the pointer. */
 .star-map-card:hover {
+  z-index: 5;
   border-color: var(--accent-border);
-  transform: translateY(-1px);
+  background: var(--bg-panel-elevated);
+  box-shadow: var(--shadow-popover);
 }
 
 .star-map-card:focus-visible {
@@ -9252,9 +9302,29 @@ textarea,
   .star-map-card {
     animation-duration: 0s;
   }
-  .star-map-card:hover {
-    transform: none;
+  .star-map-card {
+    transition: none;
   }
+}
+
+/* The owning instance's mark, watermarked behind the card content -
+   the lane already groups by instance, so the machine name chip was
+   spending prime card width on information the position carries. */
+.star-map-card__watermark {
+  position: absolute;
+  top: -14px;
+  right: -12px;
+  z-index: 0;
+  color: var(--text-muted);
+  opacity: 0.11;
+  pointer-events: none;
+}
+
+/* Positioned so the content paints above the watermark's z-index 0. */
+.star-map-card__heading,
+.star-map-card__chips {
+  position: relative;
+  z-index: 1;
 }
 
 .star-map-card__heading {
@@ -9312,6 +9382,56 @@ textarea,
   }
 }
 
+/* "View" popover: card density + instance visibility, parked opposite the
+   attention filters. */
+.star-map__chrome {
+  position: absolute;
+  top: 14px;
+  left: 16px;
+  z-index: 4;
+}
+
+.star-map__view-options {
+  position: relative;
+}
+
+.star-map__view-panel {
+  display: flex;
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  flex-direction: column;
+  gap: 4px;
+  width: 208px;
+  padding: 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: var(--shadow-popover);
+}
+
+.star-map__view-heading {
+  margin: 4px 0 2px;
+  color: var(--text-muted);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.star-map__view-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.star-map__chrome,
+.star-map__chrome * {
+  -webkit-app-region: no-drag;
+}
+
 .star-map__filters {
   display: flex;
   position: absolute;
@@ -9323,6 +9443,9 @@ textarea,
 }
 
 .star-map__filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   padding: 4px 10px;
   border: 1px solid var(--border-subtle);
   border-radius: 6px;
@@ -9341,6 +9464,41 @@ textarea,
 .star-map__filter-chip:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+}
+
+/* How many cards appear/disappear if this chip is flipped. */
+.star-map__filter-count {
+  min-width: 14px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-muted) 18%, transparent);
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  line-height: 15px;
+  text-align: center;
+}
+
+.star-map__filter-chip.is-on .star-map__filter-count {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--text-primary);
+}
+
+/* The map's top chrome sits inside the macOS title-bar drag band, and
+   Chromium ignores `-webkit-app-region` on inline-level boxes - a plain
+   <button> there has its clicks swallowed by the OS (the same trap
+   documented on .messaging-status-bar). Every interactive element gets an
+   explicit no-drag on a non-inline box; the bare sky stays draggable so
+   the window can still be moved while the map is open. */
+.star-map__filters,
+.star-map__filters *,
+.star-map__close,
+.star-map__close *,
+.star-map-instance,
+.star-map-instance *,
+.star-map-card,
+.star-map-card * {
+  -webkit-app-region: no-drag;
 }
 
 /* Floating thread over the map: the already-mounted main pane elevates

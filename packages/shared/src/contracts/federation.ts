@@ -254,6 +254,18 @@ export type FederationHealthStatus = {
   gatewayEndpoints?: FederationEndpointStatus[];
   /** This instance's own assigned celestial identity icon. */
   localCelestialIcon?: CelestialIconId;
+  /**
+   * This instance's display label — the resolved `instanceLabel` config
+   * value, falling back to the hostname default. Surfaces mirroring the
+   * peer list need the local instance's real name, not a placeholder.
+   */
+  localLabel?: string;
+  /**
+   * Active profile name for this instance. Two profiles on one machine
+   * share a label, so this is what tells them apart via
+   * {@link formatFederationPeerDisplayLabel}.
+   */
+  localProfileName?: string;
   peers: FederationPeerSummary[];
   clientEnrollment?: FederationClientEnrollment;
 };
