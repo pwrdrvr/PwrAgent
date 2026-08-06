@@ -144,6 +144,12 @@ const federationMock = vi.hoisted(() => {
       threadId: request.threadId,
       turnId: request.turnId,
     })),
+    stopSubAgent: vi.fn(async (request: StopSubAgentRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      monitorId: request.monitorId,
+      stoppedAt: 1,
+    })),
     steerTurn: vi.fn(async (request: SteerTurnRequest) => ({
       backend: request.backend,
       threadId: request.threadId,
@@ -364,6 +370,7 @@ describe("agent ipc", () => {
       AGENT_START_REVIEW_CHANNEL,
       AGENT_START_THREAD_CHANNEL,
       AGENT_STEER_TURN_CHANNEL,
+      AGENT_STOP_SUB_AGENT_CHANNEL,
       AGENT_SUBMIT_SERVER_REQUEST_CHANNEL,
       AGENT_TRUST_CODEX_PROJECT_CHANNEL,
       AGENT_UPDATE_THREAD_EXPECTED_BRANCH_CHANNEL,
@@ -416,6 +423,12 @@ describe("agent ipc", () => {
       federationTarget,
       threadId: "thread-1",
       turnId: "turn-1",
+    });
+    await handlers.get(AGENT_STOP_SUB_AGENT_CHANNEL)?.({}, {
+      backend: "codex",
+      federationTarget,
+      threadId: "thread-1",
+      monitorId: "monitor-1",
     });
     await handlers.get(AGENT_STEER_TURN_CHANNEL)?.({}, {
       backend: "codex",
@@ -547,6 +560,12 @@ describe("agent ipc", () => {
       threadId: "thread-1",
       turnId: "turn-1",
     });
+    expect(federationMock.remoteBackend.stopSubAgent).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      monitorId: "monitor-1",
+    });
+    expect(registry.stopSubAgent).not.toHaveBeenCalled();
     expect(federationMock.remoteBackend.steerTurn).toHaveBeenCalledWith({
       backend: "codex",
       threadId: "thread-1",

@@ -663,6 +663,14 @@ export function registerAgentIpcHandlers(): void {
       });
 
       try {
+        if (
+          request.federationTarget
+          && isRemoteFederationTarget(request.federationTarget)
+        ) {
+          return await getDesktopFederationRuntime()
+            .remoteBackend(request.federationTarget)
+            .stopSubAgent(stripFederationTarget(request));
+        }
         return await registry.stopSubAgent(request);
       } catch (error) {
         appServerLog.error("stopSubAgent failed", {

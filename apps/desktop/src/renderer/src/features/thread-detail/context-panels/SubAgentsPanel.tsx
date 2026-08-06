@@ -69,6 +69,9 @@ export function SubAgentsPanel(props: SubAgentsPanelProps) {
     try {
       await props.desktopApi.stopSubAgent({
         backend: props.thread.source,
+        ...(props.thread.federation?.ref.target
+          ? { federationTarget: props.thread.federation.ref.target }
+          : {}),
         threadId: props.thread.id,
         monitorId: subAgent.monitorId,
       });

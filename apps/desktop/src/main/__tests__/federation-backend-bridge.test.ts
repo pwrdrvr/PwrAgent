@@ -559,6 +559,60 @@ describe("federation backend bridge", () => {
     ).toBe("turn_control");
   });
 
+  it("routes sub-agent stops to the owning peer with turn-control authorization", async () => {
+    const backend = {
+      stopSubAgent: vi.fn(async (request) => ({
+        ...request,
+        stoppedAt: 1_100,
+      })),
+    } as unknown as FederationBackendOperations;
+    const ownerRouter = new FederationRouter({
+      localInstanceId: "owner_one",
+      methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+    });
+    ownerRouter.registerConnection({
+      peerId: "viewer_one",
+      capabilities: ["turn_control"],
+      sendEnvelope: (envelope) => {
+        rpc.receiveEnvelope(envelope);
+      },
+    });
+    registerFederationBackendHandlers({ router: ownerRouter, backend });
+    const rpc = new FederationRpcEndpoint({
+      localInstanceId: "viewer_one",
+      remoteInstanceId: "owner_one",
+      sendEnvelope: (envelope) => {
+        void ownerRouter.routeEnvelope({
+          envelope,
+          sourcePeerId: "viewer_one",
+        });
+      },
+    });
+    const client = new FederationRemoteBackendClient(rpc);
+
+    await expect(client.stopSubAgent({
+      backend: "codex",
+      threadId: "thread-1",
+      monitorId: "monitor-1",
+    })).resolves.toEqual({
+      backend: "codex",
+      threadId: "thread-1",
+      monitorId: "monitor-1",
+      stoppedAt: 1_100,
+    });
+
+    expect(backend.stopSubAgent).toHaveBeenCalledExactlyOnceWith({
+      backend: "codex",
+      threadId: "thread-1",
+      monitorId: "monitor-1",
+    });
+    expect(
+      FEDERATION_BACKEND_METHOD_CAPABILITIES[
+        FEDERATION_BACKEND_METHODS.stopSubAgent
+      ],
+    ).toBe("turn_control");
+  });
+
   it("routes pin reorder over RPC with thread_navigation authorization", async () => {
     const sent: FederationProtocolEnvelope[] = [];
     const rpc = new FederationRpcEndpoint({
@@ -1419,6 +1473,7 @@ describe("federation backend bridge", () => {
         turnId: "compact-1",
       })),
       interruptTurn: vi.fn(),
+      stopSubAgent: vi.fn(),
       steerTurn: vi.fn(),
       setThreadExecutionMode: vi.fn(),
       queueThreadExecutionMode: vi.fn(),
@@ -1630,6 +1685,7 @@ describe("federation backend bridge", () => {
         sendScheduledThreadActionNow: vi.fn(),
         compactThread: vi.fn(),
         interruptTurn: vi.fn(),
+        stopSubAgent: vi.fn(),
         steerTurn: vi.fn(),
         setThreadExecutionMode: vi.fn(),
         queueThreadExecutionMode: vi.fn(),

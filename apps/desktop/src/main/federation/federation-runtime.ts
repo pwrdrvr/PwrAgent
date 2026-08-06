@@ -50,6 +50,7 @@ import type {
   StartThreadResponse,
   SteerTurnResponse,
   StopCodexEnvironmentActionResponse,
+  StopSubAgentResponse,
   SubmitServerRequestResponse,
   TrustCodexProjectResponse,
   UpdateThreadExpectedBranchResponse,
@@ -114,6 +115,7 @@ import {
   type StartTurnResponse,
   type SubmitServerRequestRequest,
   type StopCodexEnvironmentActionRequest,
+  type StopSubAgentRequest,
   type TrustCodexProjectRequest,
   type UpdateThreadExpectedBranchRequest,
 } from "@pwragent/shared";
@@ -2614,6 +2616,11 @@ function localBackendOperations(): FederationBackendOperations {
       request: InterruptTurnRequest,
     ): Promise<InterruptTurnResponse> {
       return await getDesktopBackendRegistry().interruptTurn(request);
+    },
+    async stopSubAgent(
+      request: StopSubAgentRequest,
+    ): Promise<StopSubAgentResponse> {
+      return await getDesktopBackendRegistry().stopSubAgent(request);
     },
     async steerTurn(request: SteerTurnRequest): Promise<SteerTurnResponse> {
       const registry = getDesktopBackendRegistry();

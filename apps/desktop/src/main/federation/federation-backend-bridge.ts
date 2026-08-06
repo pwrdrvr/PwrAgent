@@ -82,6 +82,8 @@ import type {
   StartReviewResponse,
   StartThreadRequest,
   StartThreadResponse,
+  StopSubAgentRequest,
+  StopSubAgentResponse,
   StopCodexEnvironmentActionRequest,
   StopCodexEnvironmentActionResponse,
   SubmitServerRequestRequest,
@@ -137,6 +139,7 @@ export const FEDERATION_BACKEND_METHODS = {
   sendScheduledThreadActionNow: "backend.sendScheduledThreadActionNow",
   compactThread: "backend.compactThread",
   interruptTurn: "backend.interruptTurn",
+  stopSubAgent: "backend.stopSubAgent",
   steerTurn: "backend.steerTurn",
   setThreadExecutionMode: "backend.setThreadExecutionMode",
   queueThreadExecutionMode: "backend.queueThreadExecutionMode",
@@ -211,6 +214,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.sendScheduledThreadActionNow]: "scheduled_actions",
   [FEDERATION_BACKEND_METHODS.compactThread]: "turn_control",
   [FEDERATION_BACKEND_METHODS.interruptTurn]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.stopSubAgent]: "turn_control",
   [FEDERATION_BACKEND_METHODS.steerTurn]: "turn_control",
   [FEDERATION_BACKEND_METHODS.setThreadExecutionMode]: "turn_control",
   [FEDERATION_BACKEND_METHODS.queueThreadExecutionMode]: "turn_control",
@@ -310,6 +314,7 @@ export type FederationBackendOperations = {
   ): Promise<ScheduledThreadActionMutationResponse>;
   compactThread(request: CompactThreadRequest): Promise<CompactThreadResponse>;
   interruptTurn(request: InterruptTurnRequest): Promise<InterruptTurnResponse>;
+  stopSubAgent(request: StopSubAgentRequest): Promise<StopSubAgentResponse>;
   steerTurn(request: SteerTurnRequest): Promise<SteerTurnResponse>;
   setThreadExecutionMode(
     request: SetThreadExecutionModeRequest,
@@ -573,6 +578,13 @@ export function registerFederationBackendHandlers(params: {
     async (envelope) =>
       await params.backend.interruptTurn(
         envelope.params as InterruptTurnRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.stopSubAgent,
+    async (envelope) =>
+      await params.backend.stopSubAgent(
+        envelope.params as StopSubAgentRequest,
       ),
   );
   params.router.registerHandler(
@@ -957,6 +969,15 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   ): Promise<InterruptTurnResponse> {
     return await this.rpc.request<InterruptTurnResponse>({
       method: FEDERATION_BACKEND_METHODS.interruptTurn,
+      params: request,
+    });
+  }
+
+  async stopSubAgent(
+    request: StopSubAgentRequest,
+  ): Promise<StopSubAgentResponse> {
+    return await this.rpc.request<StopSubAgentResponse>({
+      method: FEDERATION_BACKEND_METHODS.stopSubAgent,
       params: request,
     });
   }
