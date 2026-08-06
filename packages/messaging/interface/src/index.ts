@@ -1227,6 +1227,12 @@ export type MessagingRejectedInboundEvent = {
   id: string;
   kind: MessagingInboundEventKind;
   actor: MessagingActorIdentity;
+  /**
+   * True when the rejected platform message explicitly addressed the bot.
+   * Hosts use this to distinguish actionable shared-channel attempts from
+   * ambient conversation that should remain silent.
+   */
+  botMention?: boolean;
   channel: MessagingChannelRef;
   receivedAt: number;
   reason: MessagingInboundRejectionReason;

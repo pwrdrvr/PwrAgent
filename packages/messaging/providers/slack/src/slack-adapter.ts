@@ -1024,10 +1024,16 @@ export class SlackAdapter implements SlackProviderAdapter {
 
     if (!this.authorizeInbound({
       actor,
+      botMention: isMention,
       channel,
       kind,
       isGroupDm,
       pairing: isPairingMessage,
+      reportRejection:
+        isMention
+        || Boolean(command)
+        || channel.conversation.kind === "dm"
+        || channel.conversation.isDirectMessage === true,
       routingState,
       teamId: ids.teamId,
     })) return;
@@ -1881,10 +1887,12 @@ export class SlackAdapter implements SlackProviderAdapter {
 
   private authorizeInbound(params: {
     actor: MessagingActorIdentity;
+    botMention?: boolean;
     channel: MessagingChannelRef;
     kind: MessagingInboundEvent["kind"];
     isGroupDm?: boolean;
     pairing?: boolean;
+    reportRejection?: boolean;
     routingState?: MessagingAdapterState;
     teamId?: string;
   }): boolean {
@@ -1894,15 +1902,18 @@ export class SlackAdapter implements SlackProviderAdapter {
       params.actor.platformUserId,
     );
     const reject = (reason: "unauthorized-actor" | "unauthorized-conversation"): boolean => {
-      this.emitInboundRejected({
-        id: this.newEventId("slack-rejected"),
-        kind: params.kind,
-        actor: params.actor,
-        channel: params.channel,
-        receivedAt: this.now(),
-        reason,
-        ...(params.routingState ? { routingState: params.routingState } : {}),
-      });
+      if (params.reportRejection !== false) {
+        this.emitInboundRejected({
+          id: this.newEventId("slack-rejected"),
+          kind: params.kind,
+          actor: params.actor,
+          ...(params.botMention ? { botMention: true } : {}),
+          channel: params.channel,
+          receivedAt: this.now(),
+          reason,
+          ...(params.routingState ? { routingState: params.routingState } : {}),
+        });
+      }
       return false;
     };
 

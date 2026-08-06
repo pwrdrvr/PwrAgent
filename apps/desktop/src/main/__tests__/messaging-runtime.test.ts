@@ -1955,7 +1955,7 @@ describe("DesktopMessagingRuntime", () => {
     );
   });
 
-  it("logs adapter-level rejected inbound IDs before provider dispatch", async () => {
+  it("logs actionable adapter rejections only after resolving a binding", async () => {
     await prepareRuntimeStore();
     let rejectedListener: MessagingInboundRejectedListener | undefined;
     const adapter = createAdapter("discord", {
@@ -1967,6 +1967,27 @@ describe("DesktopMessagingRuntime", () => {
       },
     });
     const bridge = createBackendBridge();
+    const { getDesktopMessagingStore } = await import(
+      "../messaging/desktop-messaging-store"
+    );
+    await getDesktopMessagingStore().upsertBinding({
+      id: "binding:discord:channel::1480554271907905000:codex:thread-1",
+      channel: {
+        channel: "discord",
+        conversation: {
+          id: "1480554271907905000",
+          kind: "channel",
+          parentId: "1480554271907905731",
+          title: "agent-testing",
+        },
+      },
+      targetKind: "agent_thread",
+      backend: "codex",
+      threadId: "thread-1",
+      authorizedActorIds: ["user-1"],
+      createdAt: 1000,
+      updatedAt: 1000,
+    });
     const { DesktopMessagingRuntime: Runtime } = await import(
       "../messaging/messaging-runtime"
     );
@@ -1985,22 +2006,24 @@ describe("DesktopMessagingRuntime", () => {
     await runtime.start();
     const rejectedEvent: MessagingRejectedInboundEvent = {
       id: "discord:message:msg-1:rejected",
-      kind: "command",
+      kind: "text",
       actor: {
         platformUserId: "1177378744822943744",
         displayName: "Other User",
         username: "other",
       },
+      botMention: true,
       channel: {
         channel: "discord",
         conversation: {
           id: "1480554271907905000",
           kind: "channel",
           parentId: "1480554271907905731",
+          title: "agent-testing",
         },
       },
       receivedAt: 1234,
-      reason: "unauthorized-conversation",
+      reason: "unauthorized-actor",
     };
     await rejectedListener?.(rejectedEvent);
 
@@ -2023,22 +2046,134 @@ describe("DesktopMessagingRuntime", () => {
     });
     expect(JSON.parse(row?.payload ?? "{}")).toMatchObject({
       conversationParentId: "1480554271907905731",
-      rejectionReason: "unauthorized-conversation",
+      destinationBackend: "codex",
+      destinationThreadId: "thread-1",
+      rejectionReason: "unauthorized-actor",
+      routeSource: "binding",
     });
     expect(messagingLog.warn).toHaveBeenCalledWith(
-      "messaging event rejected before dispatch",
+      "actionable messaging event rejected for a routed destination",
       expect.objectContaining({
         actorId: "1177378744822943744",
         conversationId: "1480554271907905000",
-        reason: "unauthorized-conversation",
+        conversationDisplayName: "agent-testing",
+        conversationTitle: "agent-testing",
+        destinationBackend: "codex",
+        destinationThreadId: "thread-1",
+        reason: "unauthorized-actor",
+        routeSource: "binding",
       }),
-    );
-    const { getDesktopMessagingStore } = await import(
-      "../messaging/desktop-messaging-store"
     );
     await expect(
       getDesktopMessagingStore().findObservedSurfaces(),
-    ).resolves.toEqual([]);
+    ).resolves.toEqual([
+      expect.objectContaining({
+        channel: expect.objectContaining({
+          conversation: expect.objectContaining({
+            id: "1480554271907905000",
+          }),
+        }),
+      }),
+    ]);
+  });
+
+  it("does not log or persist ambient shared-channel rejections", async () => {
+    const { reject } = await createSlackRejectedRuntimeHarness();
+    await reject(buildRejectedSlackEvent("slack-rejected:ambient"));
+
+    const { getAppStateDb } = await import("../state/app-state");
+    const count = getAppStateDb().raw
+      .prepare("SELECT COUNT(*) AS count FROM messaging_activity_log WHERE kind = ?")
+      .get("inbound-rejected") as { count: number };
+    expect(count.count).toBe(0);
+    expect(messagingLog.warn).not.toHaveBeenCalledWith(
+      "actionable messaging event rejected for a routed destination",
+      expect.anything(),
+    );
+  });
+
+  it("does not log or persist an unauthorized mention without a route", async () => {
+    const { reject } = await createSlackRejectedRuntimeHarness();
+    await reject(buildRejectedSlackEvent(
+      "slack-rejected:unroutable-mention",
+      true,
+    ));
+
+    const { getAppStateDb } = await import("../state/app-state");
+    const count = getAppStateDb().raw
+      .prepare("SELECT COUNT(*) AS count FROM messaging_activity_log WHERE kind = ?")
+      .get("inbound-rejected") as { count: number };
+    expect(count.count).toBe(0);
+    expect(messagingLog.warn).not.toHaveBeenCalledWith(
+      "actionable messaging event rejected for a routed destination",
+      expect.anything(),
+    );
+  });
+
+  it("logs a routed unauthorized mention with friendly conversation and Agent names", async () => {
+    const { bridge, reject } = await createSlackRejectedRuntimeHarness();
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      agent: {
+        name: "PwrAgent - hhunt",
+        instructionLineCount: 1,
+        instructionsTooLong: false,
+        updatedAt: 1000,
+      },
+    };
+    bridge.getNavigationSnapshot = vi.fn(async () => navigation);
+    const { getDesktopMessagingStore } = await import(
+      "../messaging/desktop-messaging-store"
+    );
+    await getDesktopMessagingStore().upsertDefaultAgentAssignment({
+      id: "default-agent:slack-provider",
+      scope: { kind: "provider", channel: "slack" },
+      target: {
+        kind: "agent",
+        backend: "codex",
+        threadId: "thread-1",
+      },
+      createdAt: 1000,
+      updatedAt: 1000,
+    });
+    await reject(buildRejectedSlackEvent("slack-rejected:routed-mention", true));
+
+    expect(messagingLog.warn).toHaveBeenCalledWith(
+      "actionable messaging event rejected for a routed destination",
+      expect.objectContaining({
+        actorDisplayName: "Other User",
+        conversationId: "C012ABCDEF0",
+        conversationDisplayName: "#p-search-signals-projects",
+        conversationTitle: "p-search-signals-projects",
+        destinationAgentName: "PwrAgent - hhunt",
+        destinationBackend: "codex",
+        destinationThreadId: "thread-1",
+        routeSource: "default-agent",
+      }),
+    );
+    const { getAppStateDb } = await import("../state/app-state");
+    const row = getAppStateDb().raw
+      .prepare(
+        `SELECT conversation_title, summary, payload
+         FROM messaging_activity_log
+         WHERE kind = ?
+         ORDER BY id DESC
+         LIMIT 1`,
+      )
+      .get("inbound-rejected") as
+        | { conversation_title: string; payload: string; summary: string }
+        | undefined;
+    expect(row?.conversation_title).toBe("p-search-signals-projects");
+    expect(row?.summary).toBe(
+      "Blocked @mention to PwrAgent - hhunt from Other User in #p-search-signals-projects",
+    );
+    expect(JSON.parse(row?.payload ?? "{}")).toMatchObject({
+      destinationAgentName: "PwrAgent - hhunt",
+      destinationBackend: "codex",
+      destinationThreadId: "thread-1",
+      routeSource: "default-agent",
+    });
   });
 
   it("records adapter diagnostics in Messaging Activity", async () => {
@@ -3075,6 +3210,71 @@ describe("DesktopMessagingRuntime", () => {
     expect(runtime.getPlatformCredentialMetadata("telegram")).toBeUndefined();
   });
 });
+
+async function createSlackRejectedRuntimeHarness(): Promise<{
+  bridge: ReturnType<typeof createBackendBridge>;
+  reject: (event: MessagingRejectedInboundEvent) => Promise<void>;
+}> {
+  await prepareRuntimeStore();
+  let rejectedListener: MessagingInboundRejectedListener | undefined;
+  const adapter = createAdapter("slack", {
+    onInboundRejected: (listener: MessagingInboundRejectedListener) => {
+      rejectedListener = listener;
+      return () => {
+        rejectedListener = undefined;
+      };
+    },
+  });
+  const bridge = createBackendBridge();
+  const { DesktopMessagingRuntime: Runtime } = await import(
+    "../messaging/messaging-runtime"
+  );
+  const runtime = trackRuntime(new Runtime({
+    adapterFactory: () => [adapter],
+    backendBridge: bridge,
+    config: {
+      slack: {
+        channel: "slack",
+        appToken: "slack-app-token",
+        botToken: "slack-bot-token",
+        signingSecret: "slack-signing-secret",
+        authorizedActorIds: [{ id: "user-1", displayName: "" }],
+      },
+    },
+  }));
+  await runtime.start();
+  return {
+    bridge,
+    reject: async (event) => {
+      await rejectedListener?.(event);
+    },
+  };
+}
+
+function buildRejectedSlackEvent(
+  id: string,
+  botMention = false,
+): MessagingRejectedInboundEvent {
+  return {
+    id,
+    kind: "text",
+    actor: {
+      platformUserId: "user-2",
+      displayName: "Other User",
+    },
+    ...(botMention ? { botMention: true } : {}),
+    channel: {
+      channel: "slack",
+      conversation: {
+        id: "C012ABCDEF0",
+        kind: "channel",
+        title: "p-search-signals-projects",
+      },
+    },
+    receivedAt: 1234,
+    reason: "unauthorized-actor",
+  };
+}
 
 async function createRuntimeHarness(options: {
   adapter?: ReturnType<typeof createAdapter>;
