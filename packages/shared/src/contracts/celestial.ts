@@ -101,11 +101,12 @@ export function pickCelestialIcon(
     }
   }
   // All ids taken: degrade to a stable hash so recomputation never flaps.
-  // Non-hub instances hash over the sun-less pool — the order array ends
-  // with the sun for them, so slicing it off keeps the sun-last rule intact
-  // even here: a duplicated planet is recoverable noise, a duplicated sun
-  // reads as two hubs.
-  const fallback = options?.isGateway ? order : order.slice(0, -1);
+  // Non-hub instances hash over the sun-less pool, keeping the sun-last
+  // rule intact even here: a duplicated planet is recoverable noise, a
+  // duplicated sun reads as two hubs.
+  const fallback = options?.isGateway
+    ? order
+    : order.filter((icon) => icon !== "sun");
   return fallback[hashInstanceId(instanceId) % fallback.length];
 }
 
@@ -154,13 +155,14 @@ function celestialAssignmentBeats(
   if (candidate.updatedAt !== incumbent.updatedAt) {
     return candidate.updatedAt > incumbent.updatedAt;
   }
+  // Removal outranks source: an instance that left the federation is gone
+  // regardless of who last styled it, and ranking this below source would
+  // let a same-instant override resurrect a revoked peer.
+  if ((candidate.removed ?? false) !== (incumbent.removed ?? false)) {
+    return candidate.removed === true;
+  }
   if (candidate.source !== incumbent.source) {
     return candidate.source === "override";
-  }
-  if ((candidate.removed ?? false) !== (incumbent.removed ?? false)) {
-    // Deterministic either way; removal wins so a same-instant revoke does
-    // not resurrect on merge order.
-    return candidate.removed === true;
   }
   return candidate.icon > incumbent.icon;
 }

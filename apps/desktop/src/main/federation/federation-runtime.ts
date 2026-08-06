@@ -588,6 +588,13 @@ export class DesktopFederationRuntime {
     // meaningless outside that federation and would otherwise occupy icons
     // in whatever federation this instance joins next. The local entry
     // stays so this machine's own mark survives the reset.
+    //
+    // Deliberately a hard delete, not a tombstone: this is local amnesia
+    // about a federation we are leaving, not an authoritative statement
+    // about those instances (which keep their icons among themselves). A
+    // dual instance's still-connected downstream clients therefore re-add
+    // their own entries on the next broadcast, which is the correct
+    // outcome — only the forgotten upstream's peers stay gone.
     const celestialMap = this.celestialAssignmentMap();
     const localInstanceId = this.ensureLocalInstanceId();
     let celestialChanged = false;
@@ -1947,6 +1954,10 @@ export class DesktopFederationRuntime {
    * Drop tombstones old enough that every peer has long since merged the
    * removal. Purely local hygiene — no broadcast; a peer that still carries
    * the tombstone re-shares it harmlessly and expires it on its own clock.
+   *
+   * Runs on both the coordinator path (reconcile) and the receive path
+   * (applyCelestialIcons): a pure client never reconciles, and would
+   * otherwise accumulate tombstones for the life of the process.
    */
   private expireCelestialTombstones(): boolean {
     const map = this.celestialAssignmentMap();
@@ -2067,18 +2078,29 @@ export class DesktopFederationRuntime {
     }
     const map = this.celestialAssignmentMap();
     const localInstanceId = this.ensureLocalInstanceId();
+    // visiblePeers() deliberately retains revoked peers (it feeds the
+    // Settings list, which must keep showing them). They are exactly what
+    // this GC exists to reclaim, so every celestial pass below works off
+    // the revoked-free view instead — using visiblePeers() directly would
+    // both spare a revoked peer from pruning and re-assign it a live icon
+    // on the next connect, undoing revokePeer's tombstone.
+    const assignablePeers = this.visiblePeers().filter(
+      (peer) => peer.status !== "revoked",
+    );
     // GC first, so icons freed by a removal are reusable in the assignment
-    // pass below. An entry that is neither the local instance, an advertised
-    // peer, nor an enrolled peer in the store belongs to a revoked or
-    // forgotten instance — or to a buggy peer's fabrication — and would
-    // otherwise occupy one of the five icons forever. Enrolled-but-offline
-    // peers stay in the store, so they are never pruned; a nested sub-client
-    // whose hub is offline can get pruned, and simply receives a fresh
-    // assignment when its hub reconnects and re-advertises it.
+    // pass below. An entry that is neither the local instance, a live
+    // advertised peer, nor a non-revoked enrolled peer in the store belongs
+    // to a revoked or forgotten instance — or to a buggy peer's fabrication
+    // — and would otherwise occupy one of the five icons forever.
+    // Enrolled-but-offline peers stay in the store, so they are never
+    // pruned; a nested sub-client whose hub is offline can get pruned, and
+    // simply receives a fresh assignment when its hub reconnects and
+    // re-advertises it.
     const activeIds = new Set<string>([localInstanceId]);
-    for (const peer of this.visiblePeers()) {
+    for (const peer of assignablePeers) {
       activeIds.add(peer.id);
     }
+    // listPeers() without includeRevoked already omits revoked enrollments.
     for (const peer of this.store().listPeers()) {
       activeIds.add(peer.id);
     }
@@ -2107,7 +2129,7 @@ export class DesktopFederationRuntime {
       });
       changed = true;
     }
-    for (const peer of this.visiblePeers()) {
+    for (const peer of assignablePeers) {
       const existing = map.get(peer.id);
       if (existing && !existing.removed) continue;
       map.set(peer.id, {
@@ -2201,18 +2223,27 @@ export class DesktopFederationRuntime {
         )
       : [];
     if (wellFormed.length === 0) return true;
+    // This is the only celestial path a pure client ever runs, so it owns
+    // tombstone expiry there — reconcile is gateway-only.
+    const expired = this.expireCelestialTombstones();
     // Bound the accepted set: entries for already-known instances always
     // merge, but new ids only land while the map has room. Without the cap
     // a buggy peer streaming fabricated ids would permanently bloat every
-    // instance's persisted map.
+    // instance's persisted map. Tombstones are deliberately excluded from
+    // the budget: they are transient bookkeeping, and counting them would
+    // let a churning federation starve out real peers.
     const current = this.celestialIconAssignments();
     const known = new Set(current.map((entry) => entry.instanceId));
+    let liveCount = current.filter((entry) => !entry.removed).length;
     const incoming: CelestialIconAssignment[] = [];
     let dropped = 0;
     for (const entry of wellFormed) {
-      if (known.has(entry.instanceId) || known.size < MAX_CELESTIAL_ASSIGNMENTS) {
+      if (known.has(entry.instanceId) || liveCount < MAX_CELESTIAL_ASSIGNMENTS) {
         incoming.push(entry);
-        known.add(entry.instanceId);
+        if (!known.has(entry.instanceId)) {
+          known.add(entry.instanceId);
+          if (!entry.removed) liveCount += 1;
+        }
       } else {
         dropped += 1;
       }
@@ -2223,9 +2254,15 @@ export class DesktopFederationRuntime {
         dropped,
       });
     }
-    if (incoming.length === 0) return true;
+    if (incoming.length === 0) {
+      if (expired) this.persistCelestialAssignments();
+      return true;
+    }
     const merged = mergeCelestialIconAssignments(current, incoming);
-    if (!merged.changed) return true;
+    if (!merged.changed) {
+      if (expired) this.persistCelestialAssignments();
+      return true;
+    }
     const map = this.celestialAssignmentMap();
     map.clear();
     for (const assignment of merged.assignments) {

@@ -192,6 +192,22 @@ describe("mergeCelestialIconAssignments", () => {
     expect(backward.assignments).toEqual([tombstone]);
   });
 
+  it("ranks removal above source so a tied override cannot resurrect", () => {
+    // The tombstone revokePeer writes is source:"auto"; an operator
+    // override landing in the same millisecond must not outrank it.
+    const tombstone: CelestialIconAssignment = {
+      ...assignment("pwr_a", "moon", 10),
+      removed: true,
+    };
+    const override = assignment("pwr_a", "sun", 10, "override");
+    expect(
+      mergeCelestialIconAssignments([tombstone], [override]).assignments,
+    ).toEqual([tombstone]);
+    expect(
+      mergeCelestialIconAssignments([override], [tombstone]).assignments,
+    ).toEqual([tombstone]);
+  });
+
   it("drops malformed incoming entries", () => {
     const merged = mergeCelestialIconAssignments(
       [],
