@@ -120,7 +120,7 @@ const getAppPathMock = vi.fn(() => "/test/app");
 const getVersionMock = vi.fn(() => "1.0.0-alpha.0");
 const whenReadyMock = vi.fn(() => Promise.resolve());
 const quitMock = vi.fn();
-const getAllWindowsMock = vi.fn(() => []);
+const getAllWindowsMock = vi.fn<() => unknown[]>(() => []);
 const dockSetIconMock = vi.fn();
 const protocolHandleMock = vi.fn();
 const protocolRegisterSchemesAsPrivilegedMock = vi.fn();
@@ -1306,6 +1306,43 @@ describe("bootstrapApp", () => {
     expect(disposeDesktopMessagingRuntimeMock).toHaveBeenCalledTimes(1);
     expect(disposeDesktopFederationRuntimeMock).toHaveBeenCalledTimes(1);
     expect(closePwrSnapConnectionServiceMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes renderer windows before disposing their ipc handlers", async () => {
+    let closeWindow!: () => void;
+    const window = {
+      close: vi.fn(),
+      destroy: vi.fn(),
+      isDestroyed: vi.fn(() => false),
+      once: vi.fn((event: string, handler: () => void) => {
+        if (event === "closed") {
+          closeWindow = handler;
+        }
+      }),
+    };
+    getAllWindowsMock.mockReturnValue([window]);
+    startupProfilerInstance.start.mockResolvedValue();
+
+    await import("../index");
+    await flushMicrotasks();
+
+    const event = { preventDefault: vi.fn() };
+    appEventHandlers.get("before-quit")?.(event);
+    await flushMicrotasks();
+
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+    expect(window.close).toHaveBeenCalledOnce();
+    expect(disposeComposerDraftIpcHandlersMock).not.toHaveBeenCalled();
+    expect(disposeAgentIpcHandlersMock).not.toHaveBeenCalled();
+    expect(disposeAppServerIpcHandlersMock).not.toHaveBeenCalled();
+
+    closeWindow();
+    await vi.waitFor(() => expect(quitMock).toHaveBeenCalledOnce());
+
+    expect(disposeComposerDraftIpcHandlersMock).toHaveBeenCalledOnce();
+    expect(disposeAgentIpcHandlersMock).toHaveBeenCalledOnce();
+    expect(disposeAppServerIpcHandlersMock).toHaveBeenCalledOnce();
+    expect(window.destroy).not.toHaveBeenCalled();
   });
 
   it("reuses one quit barrier while messaging and app-server teardown settle", async () => {

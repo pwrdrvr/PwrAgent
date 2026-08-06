@@ -181,6 +181,7 @@ const isMac = process.platform === "darwin";
 const isDevelopment = process.env.NODE_ENV !== "production";
 const mainLog = getMainLogger("pwragent:main");
 const mainProcessStartedAt = Date.now();
+const RENDERER_WINDOW_SHUTDOWN_TIMEOUT_MS = 2_000;
 const MAIN_PROCESS_SHUTDOWN_TIMEOUT_MS = 12_000;
 const MESSAGING_SHUTDOWN_TIMEOUT_MS = 4_000;
 const FEDERATION_SHUTDOWN_TIMEOUT_MS = 4_000;
@@ -199,6 +200,7 @@ if (process.env.PWRAGENT_E2E_DISABLE_GPU === "1") {
 let mainProcessResourcesDisposed = false;
 let mainProcessShutdownComplete = false;
 let mainProcessShutdownPromise: Promise<void> | undefined;
+let rendererWindowShutdownPromise: Promise<void> | undefined;
 let finalQuitPromise: Promise<void> | undefined;
 let quitInProgress = false;
 let profileFocusRequestWatcher: ProfileFocusRequestWatcher | null = null;
@@ -460,6 +462,72 @@ function disposeMainProcessResourcesSync(): void {
   runtimeMessagingLeaseCoordinator?.shutdownSync();
 }
 
+async function closeRendererWindowsBeforeResourceShutdown(
+  source: string,
+): Promise<void> {
+  rendererWindowShutdownPromise ??= (async () => {
+    const windows = BrowserWindow.getAllWindows().filter(
+      (window) => !window.isDestroyed(),
+    );
+    if (windows.length === 0) {
+      return;
+    }
+
+    mainLog.info("closing renderer windows before resource shutdown", {
+      source,
+      windowCount: windows.length,
+    });
+    const pendingWindows = new Set(windows);
+    const allWindowsClosed = Promise.all(
+      windows.map(
+        (window) =>
+          new Promise<void>((resolve) => {
+            window.once("closed", () => {
+              pendingWindows.delete(window);
+              resolve();
+            });
+            window.close();
+            if (window.isDestroyed()) {
+              pendingWindows.delete(window);
+              resolve();
+            }
+          }),
+      ),
+    );
+    let timeout: NodeJS.Timeout | undefined;
+    const outcome = await Promise.race([
+      allWindowsClosed.then(() => "closed" as const),
+      new Promise<"timed-out">((resolve) => {
+        timeout = setTimeout(
+          () => resolve("timed-out"),
+          RENDERER_WINDOW_SHUTDOWN_TIMEOUT_MS,
+        );
+      }),
+    ]);
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+    if (outcome === "timed-out") {
+      mainLog.warn("renderer window close timed out during shutdown", {
+        source,
+        remainingWindowCount: pendingWindows.size,
+        timeoutMs: RENDERER_WINDOW_SHUTDOWN_TIMEOUT_MS,
+      });
+      for (const window of pendingWindows) {
+        if (!window.isDestroyed()) {
+          window.destroy();
+        }
+      }
+    }
+    mainLog.info("renderer windows closed before resource shutdown", {
+      source,
+      durationLimitMs: RENDERER_WINDOW_SHUTDOWN_TIMEOUT_MS,
+      outcome,
+    });
+  })();
+  await rendererWindowShutdownPromise;
+}
+
 const runMainProcessShutdownBarrier = createShutdownBarrier({
   globalTimeoutMs: MAIN_PROCESS_SHUTDOWN_TIMEOUT_MS,
   logger: mainLog,
@@ -492,6 +560,10 @@ const runMainProcessShutdownBarrier = createShutdownBarrier({
 
 async function disposeMainProcessResources(source: string): Promise<void> {
   mainProcessShutdownPromise ??= (async () => {
+    // Electron emits before-quit while renderer windows are still live. Close
+    // them first so in-flight renderer work cannot cross the boundary where
+    // IPC handlers and their backing stores are disposed.
+    await closeRendererWindowsBeforeResourceShutdown(source);
     disposeMainProcessResourcesSync();
     await runMainProcessShutdownBarrier(source);
     // Keep the scheduler subscribed until the app-server registry is closed.
