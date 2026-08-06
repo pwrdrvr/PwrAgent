@@ -347,8 +347,19 @@ describe("federation backend bridge", () => {
     expect(backend.readThread).toHaveBeenNthCalledWith(1, {
       backend: "codex",
       threadId: "thread-1",
+      limit: 2,
     });
     expect(backend.readThread).toHaveBeenNthCalledWith(2, {
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(backend.readThread).toHaveBeenNthCalledWith(3, {
+      backend: "codex",
+      threadId: "thread-1",
+      before: "entry-3",
+      limit: 2,
+    });
+    expect(backend.readThread).toHaveBeenNthCalledWith(4, {
       backend: "codex",
       threadId: "thread-1",
     });
@@ -431,11 +442,16 @@ describe("federation backend bridge", () => {
       },
     });
 
-    expect(backend.readThread).toHaveBeenCalledWith({
+    expect(backend.readThread).toHaveBeenNthCalledWith(1, {
+      backend: "codex",
+      threadId: "thread-1",
+      limit: 2,
+    });
+    expect(backend.readThread).toHaveBeenNthCalledWith(2, {
       backend: "codex",
       threadId: "thread-1",
     });
-    expect(backend.readThread).toHaveBeenCalledTimes(1);
+    expect(backend.readThread).toHaveBeenCalledTimes(2);
     expect(replies[0]).toMatchObject({
       kind: "response",
       requestId: "latest-request",
@@ -503,14 +519,10 @@ describe("federation backend bridge", () => {
     expect(backend.readThread).toHaveBeenNthCalledWith(1, {
       backend: "codex",
       threadId: "thread-1",
-    });
-    expect(backend.readThread).toHaveBeenNthCalledWith(2, {
-      backend: "codex",
-      threadId: "thread-1",
       before: "cursor-1",
       limit: 2,
     });
-    expect(backend.readThread).toHaveBeenCalledTimes(2);
+    expect(backend.readThread).toHaveBeenCalledTimes(1);
     expect(replies).toHaveLength(1);
   });
 
