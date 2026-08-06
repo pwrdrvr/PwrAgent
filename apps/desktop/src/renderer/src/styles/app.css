@@ -9440,6 +9440,79 @@ textarea,
   cursor: default;
 }
 
+/* Projects lens: each project is a sun with its threads — pooled from
+   every instance — orbiting it. */
+.star-map__project-cloud {
+  position: absolute;
+  z-index: 1;
+}
+
+.star-map-project {
+  display: flex;
+  position: absolute;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  transform: translate(-50%, -50%);
+  z-index: 2;
+}
+
+.star-map-project__glow {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 168px;
+  height: 168px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  /* Cooler than an instance body: a project is a place, not a machine. */
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--accent) 26%, transparent) 0%,
+    transparent 68%
+  );
+  pointer-events: none;
+}
+
+.star-map-project__core {
+  width: 86px;
+  height: 86px;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle at 35% 32%,
+    var(--accent-bright) 0%,
+    var(--accent) 58%,
+    color-mix(in srgb, var(--accent) 55%, transparent) 100%
+  );
+}
+
+.star-map-project__label {
+  display: inline-flex;
+  z-index: 1;
+  align-items: center;
+  gap: 6px;
+  max-width: 190px;
+  padding: 3px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.star-map-project__name {
+  overflow: hidden;
+  color: var(--text-primary);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.star-map-project__count {
+  color: var(--text-muted);
+  font-weight: 500;
+  font-size: 11px;
+}
+
 /* Card-action failures (archive, mark seen) surface over the map rather
    than on the card, which may have just been refreshed away. */
 .star-map__card-error {

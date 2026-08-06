@@ -18,7 +18,7 @@ export type StarMapCardFields = {
   terminalPullRequests: boolean;
 };
 
-export type StarMapLayoutMode = "lanes" | "orbit";
+export type StarMapLayoutMode = "lanes" | "orbit" | "projects";
 
 /**
  * Include everything, only agent-driven threads, or everything except
@@ -50,7 +50,11 @@ export function nextAgentFilter(
 }
 
 export type StarMapViewPreferences = {
-  /** Lane columns under a body row, or bodies with orbiting card rings. */
+  /**
+   * Lane columns under a body row, instance bodies with orbiting card
+   * rings, or projects as suns with their threads pooled from every
+   * instance.
+   */
   layout: StarMapLayoutMode;
   cardFields: StarMapCardFields;
   /** Drop instances that are not currently connected from the map. */
@@ -97,7 +101,10 @@ export function readStoredPreferences(): StarMapViewPreferences {
     if (!raw) return DEFAULT_STAR_MAP_PREFERENCES;
     const parsed = JSON.parse(raw) as Partial<StarMapViewPreferences>;
     return {
-      layout: parsed.layout === "orbit" ? "orbit" : "lanes",
+      layout:
+        parsed.layout === "orbit" || parsed.layout === "projects"
+          ? parsed.layout
+          : "lanes",
       cardFields: {
         ...DEFAULT_STAR_MAP_PREFERENCES.cardFields,
         ...(parsed.cardFields ?? {}),

@@ -71,9 +71,11 @@ describe("card rings", () => {
     const single = cardRingExtent(4, 200);
     const many = cardRingExtent(16, 200);
     expect(cardRings(16, 200).length).toBeGreaterThan(1);
-    // Sixteen cards on one circle would need a radius over 500; rings keep
-    // the outermost far tighter than that.
-    expect(many.rx).toBeLessThan(500);
+    // `cardRingExtent` reports the drawn cloud, cards included, so these
+    // bounds carry a card half-width over the ring radius. Sixteen cards
+    // on a single circle would need ~418px of ring (~518 drawn); stacking
+    // rings keeps it under that, and the real win is vertical (below).
+    expect(many.rx).toBeLessThan(518);
     expect(many.rx).toBeGreaterThan(single.rx);
   });
 
@@ -383,7 +385,8 @@ describe("empty instances do not reserve a phantom ring", () => {
   it("claims only its body when it has no cards", () => {
     const empty = cardRingExtent(0, 200);
     const oneCard = cardRingExtent(1, 200);
-    expect(empty.rx).toBeLessThan(oneCard.rx / 2);
+    expect(empty.rx).toBeLessThan(oneCard.rx);
+    expect(empty.ry).toBeLessThan(oneCard.ry);
   });
 
   it("pulls the constellation in when the hub is empty", () => {

@@ -39,11 +39,18 @@ import {
   type StarMapCardSlot,
 } from "./star-map-layout";
 import {
+  cardRingSlots,
   computeOrbitPlacement,
   galaxyArmPath,
   shouldStartCanvasPan,
 } from "./star-map-orbit";
 import { buildFederationTopology } from "./star-map-topology";
+import {
+  groupThreadsByProject,
+  instanceIdForThread,
+} from "./star-map-projects";
+import { computeProjectLayout } from "./star-map-project-layout";
+import { StarMapProjectBody } from "./StarMapProjectBody";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import { StarMapChatCard } from "./StarMapChatCard";
 import type { StarMapCardMenuAction } from "./StarMapCardMenu";
@@ -155,6 +162,8 @@ export function StarMapScreen(props: StarMapScreenProps) {
   // pans and zooms rather than compressing the map to fit.
   const [view, setView] = useState({ x: 0, y: 0, scale: 1 });
   const orbitMode = preferences.layout === "orbit";
+  /** Projects as suns: threads pooled across instances, one body per repo. */
+  const projectsMode = preferences.layout === "projects";
 
   // Focus the layer on open AND whenever the floating thread closes -
   // "Back to map" leaves focus inside <main>, and without a refocus the
@@ -430,6 +439,26 @@ export function StarMapScreen(props: StarMapScreenProps) {
     props.sessionKeys,
     remote,
   ]);
+
+  const projects = useMemo(
+    () => groupThreadsByProject(attentionByInstance),
+    [attentionByInstance],
+  );
+
+  const projectLayout = useMemo(
+    () =>
+      computeProjectLayout({
+        cardWidth: ORBIT_CARD_WIDTH,
+        projects: projects.map((project) => ({
+          key: project.key,
+          cardCount: Math.min(
+            project.threads.length,
+            ORBIT_MAX_CARDS_PER_INSTANCE,
+          ),
+        })),
+      }),
+    [projects],
+  );
 
   // What the agent chip is currently holding back: cards the attention
   // filters would show but this one excludes.
@@ -920,7 +949,9 @@ export function StarMapScreen(props: StarMapScreenProps) {
         </svg>
         <div
           ref={canvasRef}
-          className={`star-map__canvas${orbitMode ? " is-orbit" : ""}`}
+          className={`star-map__canvas${
+            orbitMode || projectsMode ? " is-orbit" : ""
+          }`}
           style={
             orbitMode
               ? {
@@ -928,9 +959,16 @@ export function StarMapScreen(props: StarMapScreenProps) {
                   height: orbit.canvasHeight,
                   transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`,
                 }
-              : undefined
+              : projectsMode
+                ? {
+                    width: projectLayout.canvasWidth,
+                    height: projectLayout.canvasHeight,
+                    transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`,
+                  }
+                : undefined
           }
         >
+        {projectsMode ? null : (
         <svg
           className="star-map__links"
           viewBox={
@@ -989,7 +1027,8 @@ export function StarMapScreen(props: StarMapScreenProps) {
             );
           })}
         </svg>
-        {bodies.map((position) => {
+        )}
+        {(projectsMode ? [] : bodies).map((position) => {
           const entry = instanceEntry(position.instanceId);
           return (
             <div
@@ -1051,7 +1090,69 @@ export function StarMapScreen(props: StarMapScreenProps) {
             </div>
           );
         })}
-        {bodies.map((position) => renderCloud(position))}
+        {(projectsMode ? [] : bodies).map((position) => renderCloud(position))}
+        {projectsMode
+          ? projectLayout.projects.map((placement) => {
+              const project = projects.find(
+                (entry) => entry.key === placement.key,
+              );
+              if (!project) return null;
+              const visible = project.threads.slice(
+                0,
+                ORBIT_MAX_CARDS_PER_INSTANCE,
+              );
+              const slots = cardRingSlots(visible.length, ORBIT_CARD_WIDTH);
+              return (
+                <div
+                  key={`project:${placement.key}`}
+                  className="star-map__project-cloud"
+                  style={{ left: placement.x, top: placement.y }}
+                >
+                  <StarMapProjectBody
+                    label={project.label}
+                    projectKey={project.key}
+                    threadCount={project.threads.length}
+                  />
+                  {visible.map((thread, index) => {
+                    const owner = instanceIdForThread(
+                      attentionByInstance,
+                      thread,
+                    );
+                    return (
+                      <StarMapThreadCard
+                        key={buildThreadIdentityKey(thread.source, thread.id)}
+                        thread={thread}
+                        sessionKeys={
+                          owner === localInstanceId
+                            ? props.sessionKeys
+                            : undefined
+                        }
+                        instanceIcon={celestialIcons.iconFor(
+                          owner === localInstanceId ? undefined : owner,
+                        )}
+                        baseSlot={slots[index]}
+                        width={ORBIT_CARD_WIDTH}
+                        centered
+                        stackIndex={index}
+                        // The project IS the sun here, so the project chip
+                        // is redundant; the machine is what you cannot
+                        // otherwise tell, so the instance chip earns its
+                        // place instead.
+                        cardFields={{
+                          ...preferences.cardFields,
+                          primaryDirectory: false,
+                          secondaryDirectories: false,
+                        }}
+                        showInstanceChip
+                        menuActions={cardMenuActions(thread, owner ?? "")}
+                        onOpen={openThread}
+                      />
+                    );
+                  })}
+                </div>
+              );
+            })
+          : null}
         </div>
       </div>
       {intakeTarget ? (

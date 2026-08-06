@@ -60,6 +60,11 @@ export function StarMapThreadCard(props: {
   onOpen: (thread: NavigationThreadSummary) => void;
   /** Kebab entries; the kebab is hidden when empty. */
   menuActions?: StarMapCardMenuAction[];
+  /**
+   * Projects lens only: the sun is a project, so the machine is the thing
+   * you cannot otherwise tell from the card's position.
+   */
+  showInstanceChip?: boolean;
 }) {
   const thread = props.thread;
   const threadKey = buildThreadIdentityKey(thread.source, thread.id);
@@ -191,8 +196,9 @@ export function StarMapThreadCard(props: {
           }
           includeLinkedDirectories={props.cardFields.primaryDirectory}
           linkedDirectoryMode="label"
-          // The lane and the watermark already say which machine this is.
-          hideInstanceChip
+          // In the instance lenses the lane and the watermark already say
+          // which machine this is; under the projects lens they do not.
+          hideInstanceChip={!props.showInstanceChip}
           hidePinChip
           chipVisibility={{
             provider: props.cardFields.provider,

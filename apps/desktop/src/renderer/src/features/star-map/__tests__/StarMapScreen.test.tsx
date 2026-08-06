@@ -583,4 +583,38 @@ describe("StarMapScreen", () => {
     });
     expect(archiveThread).not.toHaveBeenCalled();
   });
+
+  it("groups threads under project suns and swaps the project chip for the instance", async () => {
+    window.localStorage.setItem(
+      "pwragent.starMap.viewPreferences",
+      JSON.stringify({ layout: "projects" }),
+    );
+    try {
+      render(
+        <StarMapScreen
+          desktopApi={buildDesktopApi()}
+          localThreads={[unreadThread("t1")]}
+          sessionKeys={{}}
+          localInstanceLabel="Mac-Mini-M4"
+          floating={false}
+          onClose={() => undefined}
+          onOpenLocalThread={() => undefined}
+          onFocusLocalInstance={() => undefined}
+        />,
+      );
+
+      // The fixture's linked directory is /tmp/pwrsnap, so the sun is the
+      // repo folder rather than the worktree label.
+      const sun = await screen.findByTitle("pwrsnap");
+      expect(sun).toBeTruthy();
+
+      const card = screen.getByRole("button", {
+        name: /Open thread: Thread t1/,
+      });
+      // The project is the sun, so its chip is redundant here.
+      expect(card.textContent).not.toContain("PwrSnap");
+    } finally {
+      window.localStorage.removeItem("pwragent.starMap.viewPreferences");
+    }
+  });
 });
