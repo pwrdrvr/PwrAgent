@@ -19,6 +19,10 @@ import {
   FEDERATION_ENVIRONMENT_SETUP_PROGRESS_METHOD,
 } from "../federation/federation-backend-bridge";
 import { DesktopFederationRuntime } from "../federation/federation-runtime";
+import {
+  FEDERATION_PEER_UNAVAILABLE_ERROR_CODE,
+  FederationPeerUnavailableError,
+} from "../federation/federation-peer-unavailable-error";
 import { FederationRouter } from "../federation/federation-router";
 import type { FederationGatewayConnection } from "../federation/federation-transport";
 
@@ -575,6 +579,35 @@ describe("DesktopFederationRuntime", () => {
     runtime.sendEnvelopeToTarget("client_two", request);
 
     expect(sentToGateway).toEqual([request]);
+  });
+
+  it("classifies a missing route as expected peer unavailability", () => {
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.gatewayInstanceId = "gateway_one";
+    runtime.localInstanceId = "client_one";
+    runtime.router = new FederationRouter({ localInstanceId: "client_one" });
+    const request: FederationProtocolEnvelope = {
+      id: "request-unavailable",
+      kind: "request",
+      method: "backend.listThreads",
+      params: {},
+      protocolVersion: FEDERATION_PROTOCOL_VERSION,
+      sourceInstanceId: "client_one",
+      targetInstanceId: "client_two",
+      createdAt: 2_000,
+    };
+
+    expect(() => runtime.sendEnvelopeToTarget("client_two", request)).toThrow(
+      FederationPeerUnavailableError,
+    );
+    try {
+      runtime.sendEnvelopeToTarget("client_two", request);
+    } catch (error) {
+      expect(error).toMatchObject({
+        code: FEDERATION_PEER_UNAVAILABLE_ERROR_CODE,
+        instanceId: "client_two",
+      });
+    }
   });
 
   it("resolves sibling RPC responses received from the gateway transport", async () => {

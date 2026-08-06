@@ -48,6 +48,9 @@ import {
   getDesktopFederationRuntime,
   setFederationMessagingPlatformStatusReader,
 } from "../federation/federation-runtime";
+import {
+  isFederationPeerUnavailableError,
+} from "../federation/federation-peer-unavailable-error";
 import { loadDesktopMessagingConfigFromSettings } from "../messaging/messaging-config";
 import { getDesktopMessagingActivityLog } from "../messaging/desktop-messaging-activity-log";
 import { getDesktopMessagingPairingStore } from "../messaging/desktop-messaging-pairing-store";
@@ -515,6 +518,47 @@ function recordPairingActivity(entry: MessagingPairingEntry, summary: string): v
 
 export function registerMessagingStatusIpcHandlers(): void {
   const runtime = getDesktopMessagingRuntime();
+  const cachedRemotePlatformStatuses = new Map<
+    string,
+    MessagingPlatformStatus[]
+  >();
+  const pendingRemotePlatformStatuses = new Map<
+    string,
+    Promise<MessagingPlatformStatus[]>
+  >();
+
+  const readRemotePlatformStatuses = async (
+    target: Extract<
+      NonNullable<GetMessagingPlatformStatusesRequest["federationTarget"]>,
+      { scope: "remote" }
+    >,
+  ): Promise<MessagingPlatformStatus[]> => {
+    const cacheKey = target.instanceId;
+    const pending = pendingRemotePlatformStatuses.get(cacheKey);
+    if (pending) {
+      return await pending;
+    }
+    const operation = (async () => {
+      try {
+        const statuses = await getDesktopFederationRuntime()
+          .remoteBackend(target)
+          .readMessagingPlatformStatuses();
+        cachedRemotePlatformStatuses.set(cacheKey, statuses);
+        return statuses;
+      } catch (error) {
+        if (!isFederationPeerUnavailableError(error)) {
+          throw error;
+        }
+        // The connectivity banner owns outage state. Preserve the last owner
+        // status here and resolve normally so Electron emits no handler stack.
+        return cachedRemotePlatformStatuses.get(cacheKey) ?? [];
+      }
+    })().finally(() => {
+      pendingRemotePlatformStatuses.delete(cacheKey);
+    });
+    pendingRemotePlatformStatuses.set(cacheKey, operation);
+    return await operation;
+  };
 
   // Let remote federation viewers read this instance's messaging health
   // for their MSG chip. Registered here (not in the federation runtime)
@@ -545,9 +589,7 @@ export function registerMessagingStatusIpcHandlers(): void {
       ) {
         // A federation window's MSG chip shows the OWNING instance's
         // messaging health; local runtime state would read as the peer's.
-        return await getDesktopFederationRuntime()
-          .remoteBackend(request.federationTarget)
-          .readMessagingPlatformStatuses();
+        return await readRemotePlatformStatuses(request.federationTarget);
       }
       return await timeStartupProfileOperation({
         type: "ipc-main:getMessagingPlatformStatuses",

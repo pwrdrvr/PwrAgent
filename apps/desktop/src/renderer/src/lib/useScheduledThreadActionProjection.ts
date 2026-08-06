@@ -120,6 +120,7 @@ export function useScheduledThreadActionProjection(params: {
     params.composerDraftStore,
     params.desktopApi,
     params.federationTarget,
+    params.suspended,
   ]);
 }
 

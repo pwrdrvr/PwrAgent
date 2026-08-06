@@ -573,6 +573,86 @@ describe("MessagingStatusBar", () => {
       delete federationWindow.__pwragentFederationTarget;
     }
   });
+
+  it("stops remote status polling until the peer reconnects", async () => {
+    vi.useFakeTimers();
+    const federationWindow = window as typeof window & {
+      __pwragentFederationTarget?: { scope: string; instanceId: string };
+    };
+    federationWindow.__pwragentFederationTarget = {
+      scope: "remote",
+      instanceId: "peer_polling",
+    };
+    const listeners = new Set<
+      Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+    >();
+    const getMessagingPlatformStatuses = vi.fn(async () => []);
+    const desktopApi: DesktopApi = {
+      getMessagingPlatformStatuses,
+      onAgentEvent: (callback) => {
+        listeners.add(callback);
+        return () => listeners.delete(callback);
+      },
+    };
+
+    try {
+      const view = render(<MessagingStatusBar desktopApi={desktopApi} />);
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(getMessagingPlatformStatuses).toHaveBeenCalledTimes(1);
+
+      act(() => {
+        for (const listener of listeners) {
+          listener({
+            backend: "codex",
+            federationTarget: {
+              scope: "remote",
+              instanceId: "peer_polling",
+            },
+            notification: {
+              method: "federation/peerStatus/changed",
+              params: {
+                instanceId: "peer_polling",
+                status: "disconnected",
+              },
+            },
+          });
+        }
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+      expect(getMessagingPlatformStatuses).toHaveBeenCalledTimes(1);
+
+      act(() => {
+        for (const listener of listeners) {
+          listener({
+            backend: "codex",
+            federationTarget: {
+              scope: "remote",
+              instanceId: "peer_polling",
+            },
+            notification: {
+              method: "federation/peerStatus/changed",
+              params: {
+                instanceId: "peer_polling",
+                status: "connected",
+              },
+            },
+          });
+        }
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(getMessagingPlatformStatuses).toHaveBeenCalledTimes(2);
+      view.unmount();
+    } finally {
+      delete federationWindow.__pwragentFederationTarget;
+      vi.useRealTimers();
+    }
+  });
 });
 
 function messagingSettingsSnapshot(enabled: {

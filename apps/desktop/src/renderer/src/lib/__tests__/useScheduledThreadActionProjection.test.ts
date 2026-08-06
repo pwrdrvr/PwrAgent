@@ -136,6 +136,52 @@ describe("scheduled thread action projections", () => {
     vi.useRealTimers();
   });
 
+  it("suspends remote reconciliation until the peer reconnects", async () => {
+    vi.useFakeTimers();
+    const { result } = renderHook(() => useComposerDraftStore());
+    const listScheduledThreadActions = vi.fn(async () => ({
+      actions: [],
+      observedAt: 1_000,
+    }));
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "peer-one",
+    };
+    const desktopApi = {
+      listScheduledThreadActions,
+      onAgentEvent: () => () => undefined,
+    } as unknown as DesktopApi;
+    const projection = renderHook(
+      ({ suspended }) => useScheduledThreadActionProjection({
+        composerDraftStore: result.current,
+        desktopApi,
+        federationTarget,
+        suspended,
+      }),
+      { initialProps: { suspended: false } },
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(listScheduledThreadActions).toHaveBeenCalledTimes(1);
+
+    projection.rerender({ suspended: true });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000);
+    });
+    expect(listScheduledThreadActions).toHaveBeenCalledTimes(1);
+
+    projection.rerender({ suspended: false });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(listScheduledThreadActions).toHaveBeenCalledTimes(2);
+
+    projection.unmount();
+    vi.useRealTimers();
+  });
+
   it("hydrates failures retained before the renderer subscribed", async () => {
     const { result } = renderHook(() => useComposerDraftStore());
     const listScheduledThreadActions = vi.fn(async () => ({

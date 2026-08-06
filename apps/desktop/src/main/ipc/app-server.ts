@@ -245,6 +245,9 @@ import { githubPrAccessTargetKey } from "../../shared/github-pr-access";
 import { subscribersForChannel } from "../window-channels";
 import { isFederationWindowWebContents } from "../window";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
+import {
+  isFederationPeerUnavailableError,
+} from "../federation/federation-peer-unavailable-error";
 import { FocusedDiffService } from "../diff-focus/focused-diff-service";
 import { renderComposerPdfPreview } from "../pdf/composer-pdf-preview";
 import { getMainLogger } from "../log";
@@ -757,6 +760,21 @@ function getNavigationSnapshotRequestKey(
   });
 }
 
+function getRemoteNavigationSnapshotCacheKey(
+  request: GetNavigationSnapshotRequest & {
+    federationTarget: { scope: "remote"; instanceId: string };
+  },
+): string {
+  // forceRefresh / refreshMode are renderer scheduling hints. The remote RPC
+  // reads the same owner snapshot either way, so every variant shares one
+  // last-known fallback during a disconnect.
+  return JSON.stringify({
+    backend: request.backend ?? "all",
+    federationTarget: request.federationTarget,
+    filter: request.filter ?? "",
+  });
+}
+
 function buildThreadSnapshotCacheKey(
   backend: AppServerBackendScope,
   filter?: string,
@@ -1177,6 +1195,10 @@ class DesktopAppServerService {
   private readonly pendingNavigationSnapshots = new Map<
     string,
     Promise<NavigationSnapshot>
+  >();
+  private readonly remoteNavigationSnapshotCache = new Map<
+    string,
+    NavigationSnapshot
   >();
   private readonly pendingThreadPullRequestRefreshes = new Map<
     string,
@@ -1753,7 +1775,13 @@ class DesktopAppServerService {
   async getNavigationSnapshot(
     request: GetNavigationSnapshotRequest = {},
   ): Promise<NavigationSnapshot> {
-    const requestKey = getNavigationSnapshotRequestKey(request);
+    const requestKey = request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+      ? getRemoteNavigationSnapshotCacheKey({
+          ...request,
+          federationTarget: request.federationTarget,
+        })
+      : getNavigationSnapshotRequestKey(request);
     const pending = this.pendingNavigationSnapshots.get(requestKey);
     if (pending) {
       return await pending;
@@ -1785,13 +1813,55 @@ class DesktopAppServerService {
     request: GetNavigationSnapshotRequest,
   ): Promise<NavigationSnapshot> {
     if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
-      return await getDesktopFederationRuntime().remoteNavigationSnapshot(
-        request.federationTarget,
-        {
-          backend: request.backend === "all" ? undefined : request.backend,
-          filter: request.filter,
-        },
-      );
+      const cacheKey = getRemoteNavigationSnapshotCacheKey({
+        ...request,
+        federationTarget: request.federationTarget,
+      });
+      try {
+        const snapshot = await getDesktopFederationRuntime()
+          .remoteNavigationSnapshot(
+            request.federationTarget,
+            {
+              backend: request.backend === "all" ? undefined : request.backend,
+              filter: request.filter,
+            },
+          );
+        this.remoteNavigationSnapshotCache.set(cacheKey, snapshot);
+        return snapshot;
+      } catch (error) {
+        if (!isFederationPeerUnavailableError(error)) {
+          throw error;
+        }
+        const cached = this.remoteNavigationSnapshotCache.get(cacheKey);
+        const fallback: NavigationSnapshot = cached ?? {
+          backend: request.backend ?? "all",
+          fetchedAt: Date.now(),
+          federationTarget: request.federationTarget,
+          unchanged: false,
+          threads: [],
+          inboxThreadKeys: [],
+          directories: [],
+          launchpadDefaults: {
+            backend: "codex",
+            executionMode: "default",
+          },
+        };
+        return {
+          ...fallback,
+          unchanged: false,
+          threads: fallback.threads.map((thread) =>
+            thread.federation
+              ? {
+                  ...thread,
+                  federation: {
+                    ...thread.federation,
+                    peerStatus: "disconnected",
+                  },
+                }
+              : thread,
+          ),
+        };
+      }
     }
     const backend: AppServerBackendScope = request.backend ?? "all";
     const refreshMode = request.refreshMode ?? "full";
@@ -6340,6 +6410,7 @@ class DesktopAppServerService {
     this.attachedPrsByThreadKey.clear();
     this.publishedPrimaryGitRepositoriesByThreadKey.clear();
     this.pendingNavigationSnapshots.clear();
+    this.remoteNavigationSnapshotCache.clear();
     this.pendingThreadPullRequestRefreshes.clear();
     this.pendingEditCommitResolves.clear();
     this.prStatusRegistry.clear();

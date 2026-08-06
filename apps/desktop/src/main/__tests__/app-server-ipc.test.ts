@@ -66,6 +66,7 @@ const federationMock = vi.hoisted(() => {
     remoteThreadSummaries,
     runtime: {
       remoteBackend: vi.fn(() => remoteBackend),
+      remoteNavigationSnapshot: vi.fn(),
       remoteThreadSummaries: vi.fn(() => remoteThreadSummaries),
     },
   };
@@ -860,6 +861,7 @@ describe("app server ipc", () => {
     federationMock.remoteBackend.markThreadSeen.mockClear();
     federationMock.remoteBackend.refreshDirectoryGitStatuses.mockClear();
     federationMock.runtime.remoteBackend.mockClear();
+    federationMock.runtime.remoteNavigationSnapshot.mockReset();
     listThreads.mockClear();
     readThread.mockClear();
     getThreadTranscriptImageRoots.mockClear();
@@ -1627,6 +1629,87 @@ describe("app server ipc", () => {
     });
     expect(registerThreadPrStatusWatch).toHaveBeenCalledOnce();
     expect(claimThreadPrStatusWatches).not.toHaveBeenCalled();
+  });
+
+  it("serves the last remote navigation snapshot during an expected disconnect", async () => {
+    const { FederationPeerUnavailableError } = await import(
+      "../federation/federation-peer-unavailable-error"
+    );
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "peer_navigation_stale",
+    };
+    const fresh = {
+      backend: "all" as const,
+      fetchedAt: 1_000,
+      federationTarget,
+      unchanged: false,
+      threads: [{
+        id: "remote-thread",
+        title: "Remote thread",
+        titleSource: "explicit" as const,
+        source: "codex" as const,
+        linkedDirectories: [],
+        inbox: { inInbox: true },
+        federation: {
+          ref: {
+            backend: "codex" as const,
+            target: federationTarget,
+            threadId: "remote-thread",
+          },
+          instanceLabel: "Remote fixture",
+          peerStatus: "connected" as const,
+        },
+      }],
+      inboxThreadKeys: ["codex:remote-thread"],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    };
+    federationMock.runtime.remoteNavigationSnapshot
+      .mockResolvedValueOnce(fresh)
+      .mockRejectedValueOnce(
+        new FederationPeerUnavailableError("peer_navigation_stale"),
+      );
+
+    registerAppServerIpcHandlers();
+    const handler = handlers.get(NAVIGATION_SNAPSHOT_CHANNEL);
+
+    await expect(handler?.({}, { federationTarget })).resolves.toBe(fresh);
+    const stale = await handler?.({}, {
+      federationTarget,
+      forceRefresh: true,
+      refreshMode: "full",
+    }) as typeof fresh;
+    expect(stale).toMatchObject({
+      federationTarget,
+      unchanged: false,
+      threads: [{
+        id: "remote-thread",
+        federation: { peerStatus: "disconnected" },
+      }],
+    });
+  });
+
+  it("keeps unexpected remote navigation failures actionable", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+    federationMock.runtime.remoteNavigationSnapshot.mockRejectedValueOnce(
+      new Error("invalid remote navigation payload"),
+    );
+
+    registerAppServerIpcHandlers();
+
+    await expect(handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {
+      federationTarget: {
+        scope: "remote",
+        instanceId: "peer_navigation_broken",
+      },
+    })).rejects.toThrow("invalid remote navigation payload");
   });
 
   it("aggregates navigation snapshots across backends by default", async () => {

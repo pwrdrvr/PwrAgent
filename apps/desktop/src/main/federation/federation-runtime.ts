@@ -183,6 +183,9 @@ import {
 } from "./federation-pty-service";
 import { FederationRouter } from "./federation-router";
 import { FederationRpcEndpoint } from "./federation-rpc";
+import {
+  FederationPeerUnavailableError,
+} from "./federation-peer-unavailable-error";
 import { FederationStore } from "./federation-store";
 import {
   classifyFederationClientFailure,
@@ -1559,7 +1562,10 @@ export class DesktopFederationRuntime {
     // peer reconnects first, registerGatewayConnection cancels the reap.
     this.ptyService?.notifyPeerDisconnected(peerId);
     this.rpcByPeer.get(peerId)?.rejectAll(
-      new Error(`Federation peer ${peerId} disconnected.`),
+      new FederationPeerUnavailableError(
+        peerId,
+        `Federation peer ${peerId} disconnected.`,
+      ),
     );
     this.rpcByPeer.delete(peerId);
   }
@@ -1583,8 +1589,8 @@ export class DesktopFederationRuntime {
         reason,
       );
     }
-    for (const rpc of this.rpcByPeer.values()) {
-      rpc.rejectAll(new Error(reason));
+    for (const [peerId, rpc] of this.rpcByPeer) {
+      rpc.rejectAll(new FederationPeerUnavailableError(peerId, reason));
     }
     this.rpcByPeer.clear();
   }
@@ -1784,7 +1790,7 @@ export class DesktopFederationRuntime {
       return;
     }
 
-    throw new Error(`Federation peer ${targetInstanceId} is not connected.`);
+    throw new FederationPeerUnavailableError(targetInstanceId);
   }
 
   private visiblePeers(): FederationPeerSummary[] {

@@ -125,4 +125,58 @@ describe("scheduled action IPC", () => {
     });
     expect(serviceMock.create).not.toHaveBeenCalled();
   });
+
+  it("serves the last remote list during an expected disconnect", async () => {
+    const { FederationPeerUnavailableError } = await import(
+      "../federation/federation-peer-unavailable-error"
+    );
+    const { registerScheduledActionIpcHandlers } = await import(
+      "../ipc/scheduled-actions-ipc"
+    );
+    const { SCHEDULED_ACTIONS_LIST_CHANNEL } = await import("../../shared/ipc");
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "client_stale",
+    };
+    const fresh = {
+      actions: [],
+      observedAt: 1_000,
+    };
+    remoteBackendMock.listScheduledThreadActions
+      .mockResolvedValueOnce(fresh)
+      .mockRejectedValueOnce(
+        new FederationPeerUnavailableError("client_stale"),
+      );
+
+    registerScheduledActionIpcHandlers();
+    const handler = handlers.get(SCHEDULED_ACTIONS_LIST_CHANNEL);
+
+    await expect(handler?.({}, {
+      federationTarget,
+      includeFailed: true,
+    })).resolves.toBe(fresh);
+    await expect(handler?.({}, {
+      federationTarget,
+      terminalUpdatedAfter: 1_000,
+    })).resolves.toBe(fresh);
+  });
+
+  it("keeps unexpected remote list failures actionable", async () => {
+    const { registerScheduledActionIpcHandlers } = await import(
+      "../ipc/scheduled-actions-ipc"
+    );
+    const { SCHEDULED_ACTIONS_LIST_CHANNEL } = await import("../../shared/ipc");
+    remoteBackendMock.listScheduledThreadActions.mockRejectedValueOnce(
+      new Error("remote scheduler protocol mismatch"),
+    );
+
+    registerScheduledActionIpcHandlers();
+
+    await expect(handlers.get(SCHEDULED_ACTIONS_LIST_CHANNEL)?.({}, {
+      federationTarget: {
+        scope: "remote",
+        instanceId: "client_broken",
+      },
+    })).rejects.toThrow("remote scheduler protocol mismatch");
+  });
 });

@@ -2431,6 +2431,10 @@ describe("useThreadNavigation", () => {
     expect(result.current.selectedThread?.federation?.peerStatus).toBe(
       "disconnected",
     );
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
 
     peerStatus = "connected";
     act(() => {

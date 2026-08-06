@@ -2656,6 +2656,7 @@ export function useThreadNavigation(
   const focusRefreshQueuedRef = useRef(false);
   const lastFocusRefreshCompletedAtRef = useRef(0);
   const remoteRecoveryAttemptRef = useRef(0);
+  const remotePeerDisconnectedRef = useRef(false);
   const lastNavigationActivityAtRef = useRef(Date.now());
   const backgroundRefreshIdleRef = useRef(false);
   const launchpadUpdateRevisionRef = useRef(new Map<string, number>());
@@ -2744,6 +2745,14 @@ export function useThreadNavigation(
         return;
       }
 
+      const federationTarget = readRendererFederationTarget();
+      if (federationTarget && remotePeerDisconnectedRef.current) {
+        // Peer-status events are the live connectivity source. While the
+        // route is known down, preserve the current response and let the
+        // connected transition below schedule the one authoritative refresh.
+        return;
+      }
+
       setState((current) => ({
         ...current,
         loading: !current.response,
@@ -2757,7 +2766,6 @@ export function useThreadNavigation(
           hasCurrentResponse: Boolean(stateRef.current.response),
           preferredSelectionKey: preferredSelectionKey ?? null,
         });
-        const federationTarget = readRendererFederationTarget();
         const snapshotRequest =
           options?.forceRefresh || options?.refreshMode || federationTarget
             ? {
@@ -3262,12 +3270,14 @@ export function useThreadNavigation(
           unavailableReason?: string;
         };
         if (params.status === "connected") {
+          remotePeerDisconnectedRef.current = false;
           scheduleRefresh(undefined, undefined, false, {
             forceRefresh: true,
             refreshMode: "full",
           });
           return;
         }
+        remotePeerDisconnectedRef.current = true;
         setState((current) => ({
           ...current,
           // Patch the live peer status onto the affected rows so surfaces
