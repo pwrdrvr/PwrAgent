@@ -207,6 +207,50 @@ describe("RemoteThreadSummaryCache — searchForJump", () => {
   });
 });
 
+describe("RemoteThreadSummaryCache — threadFromPeer", () => {
+  it("returns the matching thread from a connected peer's snapshot", async () => {
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [peer("peer-a")],
+      fetchSnapshot: async () =>
+        snapshotOf([
+          stampedThread({ instanceId: "peer-a", threadId: "t1", title: "Parent" }),
+        ]),
+      peerStatus: () => ({}),
+    });
+
+    const found = await cache.threadFromPeer({
+      target: remoteTarget("peer-a"),
+      backend: "codex",
+      threadId: "t1",
+    });
+    expect(found?.title).toBe("Parent");
+
+    const missing = await cache.threadFromPeer({
+      target: remoteTarget("peer-a"),
+      backend: "codex",
+      threadId: "archived",
+    });
+    expect(missing).toBeUndefined();
+  });
+
+  it("returns undefined for a peer that is not connected", async () => {
+    const fetchSnapshot = vi.fn(async () => snapshotOf([]));
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [],
+      fetchSnapshot,
+      peerStatus: () => ({}),
+    });
+
+    const found = await cache.threadFromPeer({
+      target: remoteTarget("peer-a"),
+      backend: "codex",
+      threadId: "t1",
+    });
+    expect(found).toBeUndefined();
+    expect(fetchSnapshot).not.toHaveBeenCalled();
+  });
+});
+
 describe("RemoteThreadSummaryCache — resolvePinnedThreads", () => {
   it("serves fresh stamped rows for reachable owners and queues payload refreshes", async () => {
     const fresh = stampedThread({

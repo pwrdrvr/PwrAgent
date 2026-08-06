@@ -59,6 +59,7 @@ const federationMock = vi.hoisted(() => {
       }),
     ),
     searchForJump: vi.fn(async () => ({ results: [] })),
+    threadFromPeer: vi.fn(async (): Promise<unknown> => undefined),
   };
   return {
     remoteBackend,
@@ -276,6 +277,14 @@ const reconcileNavigationSnapshot = vi.fn(async (params: unknown) => ({
 const rememberCompleteNavigationSnapshot = vi.fn();
 const listRemoteThreadPins = vi.fn(async (): Promise<unknown[]> => []);
 const updateRemoteThreadPinSnapshots = vi.fn(async () => {});
+const addRemoteThreadPinStore = vi.fn(
+  async (params: { ref: unknown; instanceLabel: string }) => ({
+    ref: params.ref,
+    addedAt: 1_000,
+    instanceLabel: params.instanceLabel,
+  }),
+);
+const hasRemoteThreadPin = vi.fn(async () => false);
 const readDirectoryStatuses = vi.fn(async () => ({
   "directory:/repo/app": {
     currentBranch: "main",
@@ -713,6 +722,8 @@ vi.mock("../app-server/desktop-overlay-store", () => ({
     writeThreadGitWorkingStateCacheEntry,
     listRemoteThreadPins,
     updateRemoteThreadPinSnapshots,
+    addRemoteThreadPin: addRemoteThreadPinStore,
+    hasRemoteThreadPin,
   }),
 }));
 
@@ -1841,6 +1852,112 @@ describe("app server ipc", () => {
     expect(byKey.get("directory:/repo/agent-kit")?.threadKeys).not.toContain(
       "codex:remote-multi",
     );
+  });
+
+  it("pins a remote sub-thread's reachable parent as a companion", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL } = await import(
+      "../../shared/ipc"
+    );
+    const { buildFederatedThreadRef } = await import("@pwragent/shared");
+
+    addRemoteThreadPinStore.mockClear();
+    hasRemoteThreadPin.mockClear();
+    hasRemoteThreadPin.mockResolvedValueOnce(false);
+    const parentSummary = {
+      source: "codex" as const,
+      id: "parent-1",
+      title: "MCP registration",
+      titleSource: "explicit" as const,
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    federationMock.remoteThreadSummaries.threadFromPeer.mockResolvedValueOnce(
+      parentSummary,
+    );
+
+    registerAppServerIpcHandlers();
+
+    const childRef = buildFederatedThreadRef({
+      backend: "codex",
+      instanceId: "peer-laptop",
+      threadId: "child-1",
+    });
+    await handlers.get(NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL)?.({}, {
+      ref: childRef,
+      instanceLabel: "Laptop",
+      summary: {
+        source: "codex" as const,
+        id: "child-1",
+        title: "Fix PwrSnap controls",
+        titleSource: "explicit" as const,
+        parentThreadId: "parent-1",
+        linkedDirectories: [],
+        inbox: { inInbox: false },
+      },
+    });
+
+    expect(addRemoteThreadPinStore).toHaveBeenCalledTimes(2);
+    expect(addRemoteThreadPinStore.mock.calls[0][0]).toMatchObject({
+      ref: childRef,
+      pinnedVia: "explicit",
+    });
+    expect(addRemoteThreadPinStore.mock.calls[1][0]).toMatchObject({
+      ref: buildFederatedThreadRef({
+        backend: "codex",
+        instanceId: "peer-laptop",
+        threadId: "parent-1",
+      }),
+      summary: parentSummary,
+      pinnedVia: "companion",
+    });
+  });
+
+  it("does not companion-pin an already-pinned or unreachable parent", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL } = await import(
+      "../../shared/ipc"
+    );
+    const { buildFederatedThreadRef } = await import("@pwragent/shared");
+
+    registerAppServerIpcHandlers();
+    const handler = handlers.get(NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL);
+    const childRequest = (threadId: string) => ({
+      ref: buildFederatedThreadRef({
+        backend: "codex" as const,
+        instanceId: "peer-laptop",
+        threadId,
+      }),
+      instanceLabel: "Laptop",
+      summary: {
+        source: "codex" as const,
+        id: threadId,
+        title: "Child",
+        titleSource: "explicit" as const,
+        parentThreadId: "parent-1",
+        linkedDirectories: [],
+        inbox: { inInbox: false },
+      },
+    });
+
+    // Parent already pinned (e.g. explicitly, earlier): keep that pin as-is.
+    addRemoteThreadPinStore.mockClear();
+    hasRemoteThreadPin.mockResolvedValueOnce(true);
+    await handler?.({}, childRequest("child-1"));
+    expect(addRemoteThreadPinStore).toHaveBeenCalledTimes(1);
+
+    // Parent missing from the peer snapshot (archived / peer gone): no
+    // phantom row.
+    addRemoteThreadPinStore.mockClear();
+    hasRemoteThreadPin.mockResolvedValueOnce(false);
+    federationMock.remoteThreadSummaries.threadFromPeer.mockResolvedValueOnce(
+      undefined,
+    );
+    await handler?.({}, childRequest("child-2"));
+    expect(addRemoteThreadPinStore).toHaveBeenCalledTimes(1);
+    expect(addRemoteThreadPinStore.mock.calls[0][0]).toMatchObject({
+      pinnedVia: "explicit",
+    });
   });
 
   it("keeps pinned remote rows, dimmed, when the owner is unreachable", async () => {

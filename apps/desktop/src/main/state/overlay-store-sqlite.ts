@@ -1788,12 +1788,14 @@ export class SqliteOverlayStore {
     summary?: NavigationThreadSummary;
     instanceLabel: string;
     addedAt?: number;
+    pinnedVia?: RemoteThreadPin["pinnedVia"];
   }): Promise<RemoteThreadPin> {
     const instanceId = remotePinInstanceId(params.ref);
     const addedAt = params.addedAt ?? Date.now();
     const payload = JSON.stringify({
       instanceLabel: params.instanceLabel,
       summary: params.summary ? stripFederationStamp(params.summary) : undefined,
+      pinnedVia: params.pinnedVia,
     });
     this.stateDb.raw
       .prepare(
@@ -1821,7 +1823,22 @@ export class SqliteOverlayStore {
       addedAt: row?.added_at ?? addedAt,
       instanceLabel: params.instanceLabel,
       ...(params.summary ? { summary: stripFederationStamp(params.summary) } : {}),
+      ...(params.pinnedVia ? { pinnedVia: params.pinnedVia } : {}),
     };
+  }
+
+  async hasRemoteThreadPin(params: { ref: FederatedThreadRef }): Promise<boolean> {
+    const row = this.stateDb.raw
+      .prepare(
+        `SELECT 1 FROM remote_thread_pins
+         WHERE instance_id = ? AND backend = ? AND thread_id = ?`,
+      )
+      .get(
+        remotePinInstanceId(params.ref),
+        params.ref.backend,
+        params.ref.threadId,
+      );
+    return row !== undefined;
   }
 
   async removeRemoteThreadPin(params: { ref: FederatedThreadRef }): Promise<boolean> {
@@ -1854,7 +1871,7 @@ export class SqliteOverlayStore {
       }>;
     const pins: RemoteThreadPin[] = [];
     for (const row of rows) {
-      let parsed: { instanceLabel?: unknown; summary?: unknown };
+      let parsed: { instanceLabel?: unknown; summary?: unknown; pinnedVia?: unknown };
       try {
         parsed = JSON.parse(row.payload) as typeof parsed;
       } catch {
@@ -1875,6 +1892,9 @@ export class SqliteOverlayStore {
             : row.instance_id,
         ...(parsed.summary && typeof parsed.summary === "object"
           ? { summary: parsed.summary as NavigationThreadSummary }
+          : {}),
+        ...(parsed.pinnedVia === "companion" || parsed.pinnedVia === "explicit"
+          ? { pinnedVia: parsed.pinnedVia }
           : {}),
       });
     }

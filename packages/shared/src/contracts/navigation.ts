@@ -1067,6 +1067,12 @@ export type RemoteThreadPin = {
   instanceLabel: string;
   /** Last successfully fetched summary (unstamped), for offline rendering. */
   summary?: NavigationThreadSummary;
+  /**
+   * How this pin came to exist. "companion" marks a parent pulled in
+   * automatically when one of its sub-threads was pinned, so future UX can
+   * treat it differently (e.g. offer group removal). Absent = explicit.
+   */
+  pinnedVia?: "explicit" | "companion";
 };
 
 export type AddRemoteThreadPinRequest = {

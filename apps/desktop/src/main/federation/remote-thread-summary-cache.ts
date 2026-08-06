@@ -109,6 +109,33 @@ export class RemoteThreadSummaryCache {
     return { results };
   }
 
+  /**
+   * A single thread from a connected peer's cached snapshot, or undefined
+   * when the peer is unreachable or the thread is absent (e.g. archived).
+   * Used for best-effort lookups like companion parent-pinning.
+   */
+  async threadFromPeer(params: {
+    target: FederationRemoteTarget;
+    backend: NavigationThreadSummary["source"];
+    threadId: string;
+  }): Promise<NavigationThreadSummary | undefined> {
+    const connected = this.navigationPeers().some(
+      (peer) => peer.target.instanceId === params.target.instanceId,
+    );
+    if (!connected) {
+      return undefined;
+    }
+    try {
+      const threads = await this.threadsForPeer(params.target);
+      return threads.find(
+        (thread) =>
+          thread.source === params.backend && thread.id === params.threadId,
+      );
+    } catch {
+      return undefined;
+    }
+  }
+
   async resolvePinnedThreads(
     pins: readonly RemoteThreadPin[],
   ): Promise<ResolvedRemotePins> {

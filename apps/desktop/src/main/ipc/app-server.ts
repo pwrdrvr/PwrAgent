@@ -149,6 +149,7 @@ import {
   DEFAULT_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
   DEFAULT_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
   DEFAULT_PULL_REQUEST_PROVIDER,
+  buildFederatedThreadRef,
   buildPullRequestStatusKey,
   buildThreadIdentityKey,
   federatedThreadIdentityKey,
@@ -323,6 +324,7 @@ type AppServerOverlayStoreLike = OverlayStoreLike &
     | "readThreadGitWorkingStateCache"
     | "writeThreadGitWorkingStateCacheEntry"
     | "addRemoteThreadPin"
+    | "hasRemoteThreadPin"
     | "removeRemoteThreadPin"
     | "listRemoteThreadPins"
     | "updateRemoteThreadPinSnapshots"
@@ -5391,7 +5393,9 @@ class DesktopAppServerService {
       ref: request.ref,
       summary: request.summary,
       instanceLabel,
+      pinnedVia: "explicit",
     });
+    await this.pinCompanionParent(request, instanceId, instanceLabel);
 
     logDebug("addRemoteThreadPin", {
       backend: request.ref.backend,
@@ -5412,6 +5416,77 @@ class DesktopAppServerService {
     });
 
     return { pin };
+  }
+
+  /**
+   * Deliberate opinion: pinning a remote sub-thread also pins its parent —
+   * an orphan child renders as a bare top-level row, losing the nesting and
+   * the parent's PR context that make it legible. One hop only (sub-threads
+   * are one level deep), best-effort (the parent must exist in the peer's
+   * current snapshot — an archived parent must not resurrect as a phantom
+   * row), and never downgrades an existing explicit pin. Removal stays
+   * per-row: companion pins are ordinary independent pins, tagged
+   * `pinnedVia: "companion"` for future group-removal UX.
+   */
+  private async pinCompanionParent(
+    request: AddRemoteThreadPinRequest,
+    instanceId: string,
+    instanceLabel: string,
+  ): Promise<void> {
+    const parentThreadId = request.summary?.parentThreadId;
+    if (!parentThreadId || parentThreadId === request.ref.threadId) {
+      return;
+    }
+    try {
+      const parentRef = buildFederatedThreadRef({
+        backend: request.ref.backend,
+        instanceId,
+        threadId: parentThreadId,
+      });
+      const overlayStore = this.getOverlayStore();
+      if (await overlayStore.hasRemoteThreadPin({ ref: parentRef })) {
+        return;
+      }
+      const parentSummary = await getDesktopFederationRuntime()
+        .remoteThreadSummaries()
+        .threadFromPeer({
+          target: { scope: "remote", instanceId },
+          backend: request.ref.backend,
+          threadId: parentThreadId,
+        });
+      if (!parentSummary) {
+        return;
+      }
+      await overlayStore.addRemoteThreadPin({
+        ref: parentRef,
+        summary: parentSummary,
+        instanceLabel,
+        pinnedVia: "companion",
+      });
+      logDebug("addRemoteThreadPin:companion-parent", {
+        backend: request.ref.backend,
+        instanceId,
+        threadId: parentThreadId,
+        childThreadId: request.ref.threadId,
+      });
+      await getDesktopBackendRegistry().publishLocalEvent({
+        backend: request.ref.backend,
+        notification: {
+          method: "navigation/remoteThreadPins/changed",
+          params: {
+            instanceId,
+            threadId: parentThreadId,
+            pinned: true,
+          },
+        },
+      });
+    } catch (error) {
+      // Companion pinning is a convenience — the explicit pin must succeed
+      // regardless.
+      appServerLog.warn("Companion parent pin failed.", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   async removeRemoteThreadPin(
