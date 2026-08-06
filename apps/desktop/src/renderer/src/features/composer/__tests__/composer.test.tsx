@@ -4091,9 +4091,6 @@ describe("Composer", () => {
       expect(screen.getByLabelText("Queued message 2")).toHaveTextContent(
         "Second queued reply",
       );
-      expect(
-        screen.getAllByRole("button", { name: "Edit" })[0],
-      ).toBeEnabled();
     });
     expect(screen.queryByText("A message is already queued.")).not.toBeInTheDocument();
 
@@ -4941,6 +4938,9 @@ describe("Composer", () => {
       expect(screen.getByLabelText("Queued message 2")).toHaveTextContent(
         "Second queued reply",
       );
+      expect(
+        screen.getAllByRole("button", { name: "Edit" })[0],
+      ).toBeEnabled();
     });
 
     fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[0]!);
