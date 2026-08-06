@@ -135,6 +135,9 @@ export function MessagingStatusBar(props: {
         `${formatMessagingPlatformName(status.platform)}: ${HEALTH_LABEL[status.health]}`,
     )
     .join("; ");
+  const showActivityFooter =
+    !isFederationWindow
+    && Boolean(props.onOpenActivity);
 
   useEffect(() => {
     if (!open) return;
@@ -418,7 +421,13 @@ export function MessagingStatusBar(props: {
                 ) : null}
               </div>
             </div>
-            <div className="messaging-status-popover__rows">
+            <div
+              className={`messaging-status-popover__rows${
+                showActivityFooter
+                  ? ""
+                  : " messaging-status-popover__rows--without-footer"
+              }`}
+            >
               {displayStatuses.map((status) => (
                 <PlatformStatusRow
                   key={status.platform}
@@ -447,7 +456,7 @@ export function MessagingStatusBar(props: {
                 {toggleError ?? platformToggleError}
               </p>
             ) : null}
-            {!isFederationWindow && props.onOpenActivity ? (
+            {showActivityFooter ? (
               <button
                 type="button"
                 className="messaging-status-popover__activity"

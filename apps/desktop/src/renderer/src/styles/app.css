@@ -1554,6 +1554,11 @@ textarea,
   border-bottom: 1px solid var(--border-subtle);
 }
 
+.messaging-status-popover__rows--without-footer
+  .messaging-status-popover__row:last-child {
+  border-bottom: none;
+}
+
 .messaging-status-popover__row-main {
   flex: 1 1 auto;
   min-width: 0;
