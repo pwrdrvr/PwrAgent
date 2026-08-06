@@ -633,19 +633,18 @@ export type DesktopSettingsSnapshot = {
      */
     markdownMathRendering?: DesktopSettingsValue<boolean>;
     /**
-     * Gates the thread context-rail Pricing tab. The pricing ledger may still
-     * collect data for validation, but the user-visible summary stays hidden
-     * while this experimental setting is disabled.
+     * Controls whether the released thread context-rail Pricing tab is visible.
+     * The pricing ledger continues collecting usage while the tab is hidden.
      */
     threadPricingSummary?: DesktopSettingsValue<boolean>;
     /**
-     * Shows provider API list-price estimates in USD when the experimental
-     * thread pricing tab is visible.
+     * Shows provider API list-price estimates in USD when the thread Pricing
+     * tab is visible.
      */
     threadPricingDisplayUsd?: DesktopSettingsValue<boolean>;
     /**
-     * Shows Codex Credits estimates when the experimental thread pricing tab
-     * is visible. Credits use Codex's token-based credit rate card rather than
+     * Shows Codex Credits estimates when the thread Pricing tab is visible.
+     * Credits use Codex's token-based credit rate card rather than
      * a currency conversion from USD.
      */
     threadPricingDisplayCodexCredits?: DesktopSettingsValue<boolean>;

@@ -121,6 +121,7 @@ const SETTINGS_SECTIONS = new Set<SettingsSection>([
   "worktrees",
   "messaging",
   "models",
+  "pricing",
   "experimental",
   "about",
 ]);

@@ -824,6 +824,27 @@ describe("SettingsScreen", () => {
       });
     });
 
+    fireEvent.click(
+      within(sections).getByRole("button", { name: "Usage & Pricing" }),
+    );
+    expect(
+      screen.getByRole("heading", { name: "Usage & pricing" }),
+    ).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("switch", {
+        name: "Show thread pricing",
+      }),
+    );
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        experimental: { threadPricingSummary: false },
+      });
+    });
+    expect(screen.getByRole("button", { name: "Dollars" })).not.toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Codex Credits" }),
+    ).not.toBeDisabled();
+
     fireEvent.click(within(sections).getByRole("button", { name: "Experimental" }));
     expect(screen.queryByRole("radiogroup", { name: "Chat Reply Composer" })).not.toBeInTheDocument();
     expect(
@@ -850,25 +871,12 @@ describe("SettingsScreen", () => {
       });
     });
 
-    fireEvent.click(
-      screen.getByRole("switch", {
-        name: "Enable thread pricing summary",
-      }),
-    );
-    await waitFor(() => {
-      expect(settings.writeConfig).toHaveBeenCalledWith({
-        experimental: { threadPricingSummary: false },
-      });
-    });
-    expect(
-      screen.getByRole("switch", { name: "Display USD" }),
-    ).not.toBeDisabled();
-    expect(
-      screen.getByRole("switch", { name: "Display Codex Credits" }),
-    ).not.toBeDisabled();
     expect(
       screen.getByRole("switch", { name: "Display tool output accounting" }),
     ).not.toBeDisabled();
+    expect(
+      screen.queryByRole("heading", { name: "Thread pricing" }),
+    ).not.toBeInTheDocument();
 
     fireEvent.click(
       screen.getByRole("switch", {
@@ -1205,7 +1213,7 @@ describe("SettingsScreen", () => {
     });
   });
 
-  it("saves thread pricing display unit toggles", async () => {
+  it("saves thread pricing display chips", async () => {
     const baseSnapshot = createSnapshot();
     const settings = createSettingsState(
       createSnapshot({
@@ -1221,34 +1229,31 @@ describe("SettingsScreen", () => {
 
     render(<SettingsScreen settings={settings} onClose={() => undefined} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Experimental" }));
+    fireEvent.click(screen.getByRole("button", { name: "Usage & Pricing" }));
 
-    const usdSwitch = screen.getByRole("switch", { name: "Display USD" });
-    const creditsSwitch = screen.getByRole("switch", {
-      name: "Display Codex Credits",
-    });
-    const toolAccountingSwitch = screen.getByRole("switch", {
-      name: "Display tool output accounting",
-    });
-    expect(usdSwitch).not.toBeDisabled();
-    expect(creditsSwitch).not.toBeDisabled();
-    expect(toolAccountingSwitch).not.toBeDisabled();
+    const dollarsChip = screen.getByRole("button", { name: "Dollars" });
+    const creditsChip = screen.getByRole("button", { name: "Codex Credits" });
+    expect(dollarsChip).toHaveAttribute("aria-pressed", "true");
+    expect(creditsChip).toHaveAttribute("aria-pressed", "false");
 
-    fireEvent.click(usdSwitch);
+    fireEvent.click(dollarsChip);
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         experimental: { threadPricingDisplayUsd: false },
       });
     });
 
-    fireEvent.click(creditsSwitch);
+    fireEvent.click(creditsChip);
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         experimental: { threadPricingDisplayCodexCredits: true },
       });
     });
 
-    fireEvent.click(toolAccountingSwitch);
+    fireEvent.click(screen.getByRole("button", { name: "Experimental" }));
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Display tool output accounting" }),
+    );
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         experimental: { threadToolAccounting: true },
@@ -1256,7 +1261,7 @@ describe("SettingsScreen", () => {
     });
   });
 
-  it("disables thread pricing display unit toggles when summary is off", () => {
+  it("disables thread pricing display chips when summary is off", () => {
     const baseSnapshot = createSnapshot();
     const settings = createSettingsState(
       createSnapshot({
@@ -1272,12 +1277,14 @@ describe("SettingsScreen", () => {
 
     render(<SettingsScreen settings={settings} onClose={() => undefined} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Experimental" }));
+    fireEvent.click(screen.getByRole("button", { name: "Usage & Pricing" }));
 
-    expect(screen.getByRole("switch", { name: "Display USD" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Dollars" })).toBeDisabled();
     expect(
-      screen.getByRole("switch", { name: "Display Codex Credits" }),
+      screen.getByRole("button", { name: "Codex Credits" }),
     ).toBeDisabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Experimental" }));
     expect(
       screen.getByRole("switch", { name: "Display tool output accounting" }),
     ).toBeDisabled();
@@ -4203,6 +4210,7 @@ describe("SettingsScreen", () => {
       "Applications",
       "Profiles",
       "AI Providers",
+      "Usage & Pricing",
       "Messaging",
       "Federation",
       "Git",
