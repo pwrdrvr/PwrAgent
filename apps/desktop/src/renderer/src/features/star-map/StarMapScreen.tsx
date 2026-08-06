@@ -12,6 +12,7 @@ import {
   type FederationPeerSummary,
   type NavigationThreadSummary,
 } from "@pwragent/shared";
+import { CloseIcon } from "../../icons";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { useCelestialIcons } from "../../lib/useCelestialIcons";
 import { useFederationHealth } from "../../lib/useFederationHealth";
@@ -275,7 +276,11 @@ export function StarMapScreen(props: StarMapScreenProps) {
     return (
       <div
         key={`cloud:${position.instanceId}`}
-        className="star-map__cloud"
+        className={`star-map__cloud${
+          remote.staleInstanceIds.has(position.instanceId)
+            ? " star-map__cloud--stale"
+            : ""
+        }`}
         style={{ left: position.x, top: position.y }}
       >
         {visible.length > 0 ? (
@@ -499,6 +504,17 @@ export function StarMapScreen(props: StarMapScreenProps) {
           }}
         />
       ) : null}
+      {/* The map layer covers the app chrome, including the header toggle
+          that opened it, so it must carry its own way out. */}
+      <button
+        type="button"
+        className="star-map__close"
+        aria-label="Close Star Map"
+        onClick={props.onClose}
+      >
+        <CloseIcon size={14} />
+        <span>Close map</span>
+      </button>
       <div className="star-map__filters" role="group" aria-label="Attention filters">
         {STAR_MAP_ATTENTION_CATEGORIES.map((category) => (
           <button

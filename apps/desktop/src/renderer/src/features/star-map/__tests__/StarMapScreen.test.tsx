@@ -127,4 +127,21 @@ describe("StarMapScreen", () => {
     rerender(<StarMapScreen {...props} floating={false} />);
     expect(document.activeElement).toBe(region);
   });
+
+  it("offers a visible exit because the map covers the header toggle", async () => {
+    const onClose = vi.fn();
+    render(
+      <StarMapScreen
+        desktopApi={buildDesktopApi()}
+        localThreads={[]}
+        sessionKeys={{}}
+        floating={false}
+        onClose={onClose}
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Close Star Map" }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
 });

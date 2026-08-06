@@ -9181,9 +9181,47 @@ textarea,
   }
 }
 
+/* The map covers the app chrome (including the header toggle that opened
+   it), so it carries its own exit. Top-RIGHT to stay clear of the macOS
+   traffic lights. */
+.star-map__close {
+  display: inline-flex;
+  position: absolute;
+  top: 14px;
+  right: 16px;
+  z-index: 4;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg-panel) 85%, transparent);
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.star-map__close:hover {
+  border-color: var(--accent-border);
+  color: var(--text-primary);
+}
+
+.star-map__close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .star-map__cloud {
   position: absolute;
   z-index: 1;
+}
+
+/* Last-known cards for a peer that is not currently connected: dimmed
+   rather than dropped, so a reconnect flap never blanks the lane. */
+.star-map__cloud--stale {
+  opacity: 0.45;
+  transition: opacity 200ms ease;
 }
 
 /* Soft halo behind a lane's cards so ownership reads at a glance. */
