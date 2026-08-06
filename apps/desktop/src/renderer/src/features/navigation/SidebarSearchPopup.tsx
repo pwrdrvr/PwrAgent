@@ -201,6 +201,7 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
             <span className="sidebar-search__result-meta">
               {thread.federation ? (
                 <InstanceChip
+                  icon={thread.federation.celestialIcon}
                   instanceId={
                     thread.federation.ref.target.scope === "remote"
                       ? thread.federation.ref.target.instanceId

@@ -982,14 +982,14 @@ textarea,
   font-size: 10px;
 }
 
-/* Instance chip: peer glyph + display label. Placeholder glyph until the
-   celestial icon set lands (see InstanceGlyph.tsx swap seam). */
+/* Instance chip: peer celestial icon (placeholder glyph when unassigned)
+   + display label. */
 .chip--instance {
   gap: 4px;
   color: var(--text-secondary);
 }
 
-.chip--instance .instance-glyph {
+.chip--instance svg {
   flex: none;
   color: var(--accent);
 }
@@ -1009,24 +1009,6 @@ textarea,
 
 .thread-row.is-remote-offline .thread-row__title {
   color: var(--text-secondary);
-}
-
-/* Owning-instance watermark behind the thread transcript. Decorative only:
-   very low alpha, no pointer events, sits under the transcript content. */
-.instance-watermark {
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
-  pointer-events: none;
-}
-
-.instance-watermark .instance-glyph {
-  color: var(--text-primary);
-  opacity: 0.04;
 }
 
 .sidebar__resize-handle,

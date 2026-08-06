@@ -1672,7 +1672,16 @@ describe("app server ipc", () => {
       id: "remote-1",
       title: "Remote fix",
       titleSource: "derived" as const,
-      linkedDirectories: [],
+      // Peer path differs from any local checkout; consolidation into the
+      // local project group matches by label / path basename.
+      linkedDirectories: [
+        {
+          id: "dir-remote",
+          label: "app",
+          path: "/peer/dev/app",
+          kind: "local" as const,
+        },
+      ],
       inbox: { inInbox: true, reason: "updated-since-seen" as const },
       updatedAt: 9_000,
       federation: {
@@ -1697,6 +1706,7 @@ describe("app server ipc", () => {
       threads: Array<{ id: string }>;
       inboxThreadKeys: string[];
       unchanged: boolean;
+      directories: Array<{ key: string; threadKeys: string[] }>;
     };
 
     expect(
@@ -1712,6 +1722,12 @@ describe("app server ipc", () => {
     expect(response.inboxThreadKeys).toContain("codex:remote-1");
     // A newly appearing remote row must defeat the unchanged optimization.
     expect(response.unchanged).toBe(false);
+    // Consolidated into the matching LOCAL project group (label "app"), so
+    // the Directories lens shows it and the breadcrumb resolves the project.
+    const appDirectory = response.directories.find(
+      (directory) => directory.key === "directory:/repo/app",
+    );
+    expect(appDirectory?.threadKeys).toContain("codex:remote-1");
   });
 
   it("keeps pinned remote rows, dimmed, when the owner is unreachable", async () => {

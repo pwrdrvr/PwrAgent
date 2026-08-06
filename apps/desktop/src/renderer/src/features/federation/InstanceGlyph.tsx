@@ -1,13 +1,15 @@
 import type { ReactElement } from "react";
+import type { CelestialIconId } from "@pwragent/shared";
+import { CelestialIcon } from "../../icons";
 
 /**
- * Placeholder per-instance glyph for federation surfaces (⌘K remote rows,
- * pinned remote thread chips, the transcript watermark).
+ * Fallback per-instance glyph for federation surfaces (⌘K remote rows,
+ * pinned remote thread chips).
  *
- * SWAP SEAM: the Star Map celestial icon system (SVG set + federation-synced
- * assignment) replaces the body of `InstanceGlyph` when it lands — callers
- * pass only `instanceId` + `size`, so the swap must not touch call sites.
- * Until then the glyph is a deterministic pick from a small abstract set,
+ * The primary identity mark is the celestial icon assigned through the
+ * federation protocol (`federation.celestialIcon` on stamped rows) —
+ * `InstanceChip` renders that when known. This deterministic placeholder
+ * remains for peers with no assignment yet (e.g. pre-celestial builds),
  * drawn with `currentColor` so it follows the surrounding text token.
  */
 const GLYPH_VARIANT_COUNT = 6;
@@ -81,12 +83,14 @@ export function InstanceGlyph(props: {
 }
 
 /**
- * Instance chip: glyph + peer display label. Rendered on ⌘K remote rows and
- * pinned remote thread rows so the operator can tell where a thread runs.
+ * Instance chip: celestial icon (or placeholder glyph while the peer has no
+ * assignment) + peer display label. Rendered on ⌘K remote rows and pinned
+ * remote thread rows so the operator can tell where a thread runs.
  */
 export function InstanceChip(props: {
   instanceId: string;
   label: string;
+  icon?: CelestialIconId;
 }): ReactElement {
   return (
     <span
@@ -94,23 +98,12 @@ export function InstanceChip(props: {
       className="chip chip--instance"
       title={`${props.label} · ${props.instanceId}`}
     >
-      <InstanceGlyph instanceId={props.instanceId} size={12} />
+      {props.icon ? (
+        <CelestialIcon icon={props.icon} size={12} />
+      ) : (
+        <InstanceGlyph instanceId={props.instanceId} size={12} />
+      )}
       <span className="chip--instance__label">{props.label}</span>
     </span>
-  );
-}
-
-/**
- * Alpha-blended instance glyph behind the transcript: the owning instance's
- * glyph while viewing a remote-pinned thread, the local instance's while
- * viewing a local thread. Purely decorative — hidden from the a11y tree.
- */
-export function InstanceWatermark(props: {
-  instanceId: string;
-}): ReactElement {
-  return (
-    <div aria-hidden="true" className="instance-watermark">
-      <InstanceGlyph instanceId={props.instanceId} size={280} />
-    </div>
   );
 }

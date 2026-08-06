@@ -225,3 +225,25 @@ has so the row renders before the next snapshot refresh.
 - `useFederationPeerConnectivity` already keys off `activeFederationTarget`
   (selected-thread-aware), so the unreachable banner needed no change for
   the main-window path.
+
+## Post-rebase onto the Star Map stack (PR #1249)
+
+- Rebased onto `star-map/celestial-icons` once it appeared; the placeholder
+  swap seam paid off: `InstanceWatermark` + `useLocalInstanceId` were deleted
+  in favor of #1249's `CelestialWatermark`/`useCelestialIcons`, and
+  `InstanceChip` now renders the assigned `CelestialIcon` (resolved at
+  stamping time via a new `federation.celestialIcon` field on
+  `NavigationThreadSummary`), keeping the placeholder glyph only as the
+  fallback for peers without an assignment (e.g. pre-celestial builds).
+- Operator testing found two viewer-side gaps, both fixed:
+  - Pinned remote threads were absent from the Directories lens — the merge
+    appended threads but never joined them to a local project group. They now
+    consolidate into matching local directory summaries by project identity
+    (directory label or path basename; peer paths never match viewer paths).
+    `selectedDirectory` resolves by `threadKeys` membership, so this also
+    restores the title-bar breadcrumb for matched projects.
+  - For remote projects with no local counterpart, the breadcrumb falls back
+    to the owner-reported `linkedDirectories[0].label`; such threads surface
+    in the Updated / Created lenses only.
+- Plan renumbered 003 → 004: the Star Map plan landed as
+  `2026-08-05-003-feat-star-map-mission-control-plan.md` on the same day.

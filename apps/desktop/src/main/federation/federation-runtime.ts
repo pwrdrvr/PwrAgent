@@ -824,6 +824,7 @@ export class DesktopFederationRuntime {
           instanceLabel,
           peerStatus,
           capabilities,
+          celestialIcon: visiblePeer?.celestialIcon,
         },
       };
     });
@@ -853,6 +854,7 @@ export class DesktopFederationRuntime {
             ? {
                 status: peer.status,
                 label: formatFederationPeerDisplayLabel(peer, visible),
+                celestialIcon: peer.celestialIcon,
               }
             : {};
         } catch {

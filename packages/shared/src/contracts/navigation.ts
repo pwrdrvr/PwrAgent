@@ -25,6 +25,7 @@ import type {
 import type { DesktopGhDiscoverySnapshot } from "./settings";
 import type { BackendAcpSessionRuntimeState } from "./backend";
 import type { AutomationThreadSummary } from "./automations";
+import type { CelestialIconId } from "./celestial";
 import type {
   FederatedThreadRef,
   FederationCapability,
@@ -77,6 +78,13 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
      * through a gateway relay — PTY streams are point-to-point in v1.
      */
     capabilities?: FederationCapability[];
+    /**
+     * The owning instance's celestial identity icon, resolved from the
+     * federation-wide assignment map at stamping time. Absent for peers
+     * that haven't been assigned one (e.g. pre-celestial builds) —
+     * renderers fall back to a placeholder glyph.
+     */
+    celestialIcon?: CelestialIconId;
   };
   inbox: ThreadInboxState;
   /**

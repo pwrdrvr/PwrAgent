@@ -3036,7 +3036,15 @@ export function ThreadView(props: ThreadViewProps) {
     >
       <ThreadHeader
         desktopApi={props.desktopApi}
-        projectLabel={props.selectedDirectory?.label}
+        projectLabel={
+          props.selectedDirectory?.label
+          // A remote-pinned thread whose project has no local counterpart
+          // belongs to no local directory summary; the breadcrumb still
+          // shows the owner-reported project name.
+          ?? (selectedThread?.federation
+            ? selectedThread.linkedDirectories?.[0]?.label
+            : undefined)
+        }
         thread={selectedThread!}
         backends={props.backends}
         onOpenMessagingActivity={props.onOpenMessagingActivity}

@@ -498,6 +498,76 @@ async function renderExplicitComposerPdfPreview(
   };
 }
 
+/**
+ * Consolidate pinned remote threads into the LOCAL project groups they
+ * correspond to, so the Directories lens shows them and the title-bar
+ * breadcrumb (selectedDirectory resolves by threadKeys membership) carries
+ * the project name. Peer paths never match viewer paths, so matching is by
+ * project identity: the linked directory's label, or its path basename.
+ * Remote threads whose project has no local counterpart stay ungrouped and
+ * surface only in the Updated / Created lenses.
+ */
+function attachRemoteThreadsToLocalDirectories(
+  directories: NavigationSnapshot["directories"],
+  remoteThreads: NavigationThreadSummary[],
+): NavigationSnapshot["directories"] {
+  if (remoteThreads.length === 0) {
+    return directories;
+  }
+  const directoryIndexesByName = new Map<string, number[]>();
+  directories.forEach((directory, index) => {
+    const names = new Set(
+      [directory.label, directory.path ? path.basename(directory.path) : ""]
+        .map((name) => name.trim().toLowerCase())
+        .filter(Boolean),
+    );
+    for (const name of names) {
+      const indexes = directoryIndexesByName.get(name);
+      if (indexes) {
+        indexes.push(index);
+      } else {
+        directoryIndexesByName.set(name, [index]);
+      }
+    }
+  });
+  const addedKeysByDirectoryIndex = new Map<number, string[]>();
+  for (const thread of remoteThreads) {
+    const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+    const matchedIndexes = new Set<number>();
+    for (const linked of thread.linkedDirectories ?? []) {
+      const names = new Set(
+        [linked.label, path.basename(linked.path)]
+          .map((name) => (name ?? "").trim().toLowerCase())
+          .filter(Boolean),
+      );
+      for (const name of names) {
+        for (const index of directoryIndexesByName.get(name) ?? []) {
+          matchedIndexes.add(index);
+        }
+      }
+    }
+    for (const index of matchedIndexes) {
+      const added = addedKeysByDirectoryIndex.get(index) ?? [];
+      added.push(threadKey);
+      addedKeysByDirectoryIndex.set(index, added);
+    }
+  }
+  if (addedKeysByDirectoryIndex.size === 0) {
+    return directories;
+  }
+  return directories.map((directory, index) => {
+    const added = addedKeysByDirectoryIndex.get(index);
+    if (!added) {
+      return directory;
+    }
+    const threadKeys = [
+      ...directory.threadKeys,
+      ...added.filter((key) => !directory.threadKeys.includes(key)),
+    ];
+    return { ...directory, threadKeys };
+  });
+}
+
 function logDebug(event: string, payload: Record<string, unknown>): void {
   if (!isDevelopment) {
     return;
@@ -1800,7 +1870,10 @@ class DesktopAppServerService {
         ...snapshot.inboxThreadKeys,
         ...rankInboxThreadKeys(remotePins.threads),
       ],
-      directories,
+      directories: attachRemoteThreadsToLocalDirectories(
+        directories,
+        remotePins.threads,
+      ),
       unchanged:
         snapshot.unchanged
         && directoriesUnchanged
@@ -1852,6 +1925,9 @@ class DesktopAppServerService {
         updatedAt: thread.updatedAt,
         prs: thread.prs,
         federation: thread.federation,
+        // Directory-group membership derives from these; a peer-side project
+        // change must invalidate the snapshot like a title change does.
+        linkedDirectories: thread.linkedDirectories,
       })),
     );
     const changed = hash !== this.lastRemoteThreadPinsMergeHash;

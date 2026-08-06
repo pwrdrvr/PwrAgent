@@ -1,4 +1,5 @@
 import type {
+  CelestialIconId,
   FederationCapability,
   FederationJumpSearchRequest,
   FederationJumpSearchResponse,
@@ -58,6 +59,7 @@ export class RemoteThreadSummaryCache {
       peerStatus: (instanceId: string) => {
         status?: FederationPeerSummary["status"];
         label?: string;
+        celestialIcon?: CelestialIconId;
       };
       ttlMs?: number;
       peerTimeoutMs?: number;
@@ -191,6 +193,7 @@ export class RemoteThreadSummaryCache {
         instanceLabel: current.label ?? pin.instanceLabel,
         peerStatus,
         capabilities: [],
+        celestialIcon: current.celestialIcon,
       },
     };
   }

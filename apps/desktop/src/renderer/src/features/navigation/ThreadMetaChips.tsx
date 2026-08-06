@@ -168,6 +168,7 @@ export function ThreadMetaChips({
     thread.federation && !readRendererFederationTarget()
       ? (
           <InstanceChip
+            icon={thread.federation.celestialIcon}
             instanceId={
               thread.federation.ref.target.scope === "remote"
                 ? thread.federation.ref.target.instanceId
