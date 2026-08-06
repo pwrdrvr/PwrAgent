@@ -1073,6 +1073,23 @@ export type RemoteThreadPin = {
    * treat it differently (e.g. offer group removal). Absent = explicit.
    */
   pinnedVia?: "explicit" | "companion";
+  /**
+   * VIEWER-owned rank in the local pinned section. Completely independent
+   * of the owner's own pinnedRank (which never crosses into the viewer's
+   * list): pin or unpin here and only the viewer knows.
+   */
+  localPinnedRank?: string;
+};
+
+export type SetRemoteThreadLocalPinRequest = {
+  ref: FederatedThreadRef;
+  /** Rank within the viewer's pinned section. Null/undefined removes it. */
+  pinnedRank?: string | null;
+};
+
+export type SetRemoteThreadLocalPinResponse = {
+  ref: FederatedThreadRef;
+  pinnedRank?: string;
 };
 
 export type AddRemoteThreadPinRequest = {

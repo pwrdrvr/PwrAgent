@@ -1827,6 +1827,87 @@ export class SqliteOverlayStore {
     };
   }
 
+  /**
+   * Set or clear the VIEWER-owned rank for a pinned remote thread. Patches
+   * the payload in place so the cached summary, label, and pinnedVia are
+   * untouched; a missing pin row is a no-op (returns undefined rank).
+   */
+  async setRemoteThreadLocalPin(params: {
+    ref: FederatedThreadRef;
+    pinnedRank?: string | null;
+  }): Promise<{ pinnedRank?: string }> {
+    const instanceId = remotePinInstanceId(params.ref);
+    const row = this.stateDb.raw
+      .prepare(
+        `SELECT payload FROM remote_thread_pins
+         WHERE instance_id = ? AND backend = ? AND thread_id = ?`,
+      )
+      .get(instanceId, params.ref.backend, params.ref.threadId) as
+        | { payload: string }
+        | undefined;
+    if (!row) {
+      return {};
+    }
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(row.payload) as Record<string, unknown>;
+    } catch {
+      parsed = {};
+    }
+    const pinnedRank = params.pinnedRank?.trim() || undefined;
+    if (pinnedRank === undefined) {
+      delete parsed.localPinnedRank;
+    } else {
+      parsed.localPinnedRank = pinnedRank;
+    }
+    this.stateDb.raw
+      .prepare(
+        `UPDATE remote_thread_pins
+         SET payload = ?
+         WHERE instance_id = ? AND backend = ? AND thread_id = ?`,
+      )
+      .run(
+        JSON.stringify(parsed),
+        instanceId,
+        params.ref.backend,
+        params.ref.threadId,
+      );
+    return pinnedRank === undefined ? {} : { pinnedRank };
+  }
+
+  /**
+   * Local threads' pin ranks (with sub-thread linkage), scanned from the
+   * overlay payloads. Cheap one-shot read for pin-visibility decisions that
+   * must not pay for a full navigation snapshot build.
+   */
+  async listPinnedThreadOverlayRanks(): Promise<
+    Array<{ pinnedRank: string; parentThreadId?: string }>
+  > {
+    const rows = this.stateDb.raw
+      .prepare("SELECT payload FROM threads")
+      .all() as Array<{ payload: string }>;
+    const ranks: Array<{ pinnedRank: string; parentThreadId?: string }> = [];
+    for (const row of rows) {
+      try {
+        const parsed = JSON.parse(row.payload) as {
+          pinnedRank?: unknown;
+          parentThreadId?: unknown;
+        };
+        if (typeof parsed.pinnedRank === "string" && parsed.pinnedRank) {
+          ranks.push({
+            pinnedRank: parsed.pinnedRank,
+            ...(typeof parsed.parentThreadId === "string" && parsed.parentThreadId
+              ? { parentThreadId: parsed.parentThreadId }
+              : {}),
+          });
+        }
+      } catch {
+        // Malformed payloads never block a best-effort visibility check.
+      }
+    }
+    return ranks;
+  }
+
   async hasRemoteThreadPin(params: { ref: FederatedThreadRef }): Promise<boolean> {
     const row = this.stateDb.raw
       .prepare(
@@ -1871,7 +1952,12 @@ export class SqliteOverlayStore {
       }>;
     const pins: RemoteThreadPin[] = [];
     for (const row of rows) {
-      let parsed: { instanceLabel?: unknown; summary?: unknown; pinnedVia?: unknown };
+      let parsed: {
+        instanceLabel?: unknown;
+        summary?: unknown;
+        pinnedVia?: unknown;
+        localPinnedRank?: unknown;
+      };
       try {
         parsed = JSON.parse(row.payload) as typeof parsed;
       } catch {
@@ -1896,6 +1982,9 @@ export class SqliteOverlayStore {
         ...(parsed.pinnedVia === "companion" || parsed.pinnedVia === "explicit"
           ? { pinnedVia: parsed.pinnedVia }
           : {}),
+        ...(typeof parsed.localPinnedRank === "string" && parsed.localPinnedRank
+          ? { localPinnedRank: parsed.localPinnedRank }
+          : {}),
       });
     }
     return pins;
@@ -1911,6 +2000,10 @@ export class SqliteOverlayStore {
     if (entries.length === 0) {
       return;
     }
+    const select = this.stateDb.raw.prepare(
+      `SELECT payload FROM remote_thread_pins
+       WHERE instance_id = ? AND backend = ? AND thread_id = ?`,
+    );
     const update = this.stateDb.raw.prepare(
       `UPDATE remote_thread_pins
        SET payload = ?
@@ -1918,12 +2011,27 @@ export class SqliteOverlayStore {
     );
     this.stateDb.raw.transaction(() => {
       for (const entry of entries) {
+        const instanceId = remotePinInstanceId(entry.ref);
+        // Patch, never replace: the payload also carries viewer-owned state
+        // (localPinnedRank, pinnedVia) that a snapshot refresh must not wipe.
+        const row = select.get(instanceId, entry.ref.backend, entry.ref.threadId) as
+          | { payload: string }
+          | undefined;
+        let parsed: Record<string, unknown> = {};
+        if (row) {
+          try {
+            parsed = JSON.parse(row.payload) as Record<string, unknown>;
+          } catch {
+            parsed = {};
+          }
+        }
         update.run(
           JSON.stringify({
+            ...parsed,
             instanceLabel: entry.instanceLabel,
             summary: stripFederationStamp(entry.summary),
           }),
-          remotePinInstanceId(entry.ref),
+          instanceId,
           entry.ref.backend,
           entry.ref.threadId,
         );
@@ -2014,11 +2122,55 @@ export class SqliteOverlayStore {
    */
   async reorderThreadPins(params: {
     threadKeys: string[];
+    /**
+     * Keys owned by remote thread pins: their rank writes patch the
+     * remote_thread_pins payload (viewer-owned) instead of the local thread
+     * overlay, inside the same transaction so a mixed reorder is atomic.
+     */
+    remoteRefsByKey?: Record<string, FederatedThreadRef>;
   }): Promise<Record<string, string>> {
     const pinnedRanks: Record<string, string> = {};
+    const selectRemote = this.stateDb.raw.prepare(
+      `SELECT payload FROM remote_thread_pins
+       WHERE instance_id = ? AND backend = ? AND thread_id = ?`,
+    );
+    const updateRemote = this.stateDb.raw.prepare(
+      `UPDATE remote_thread_pins
+       SET payload = ?
+       WHERE instance_id = ? AND backend = ? AND thread_id = ?`,
+    );
     const write = this.stateDb.raw.transaction(() => {
       let rankIndex = 0;
       for (const threadKey of params.threadKeys) {
+        const remoteRef = params.remoteRefsByKey?.[threadKey];
+        if (remoteRef) {
+          const instanceId = remotePinInstanceId(remoteRef);
+          const row = selectRemote.get(
+            instanceId,
+            remoteRef.backend,
+            remoteRef.threadId,
+          ) as { payload: string } | undefined;
+          if (!row) {
+            continue;
+          }
+          let parsed: Record<string, unknown>;
+          try {
+            parsed = JSON.parse(row.payload) as Record<string, unknown>;
+          } catch {
+            parsed = {};
+          }
+          rankIndex += 1;
+          const pinnedRank = String(rankIndex * 1024);
+          pinnedRanks[threadKey] = pinnedRank;
+          parsed.localPinnedRank = pinnedRank;
+          updateRemote.run(
+            JSON.stringify(parsed),
+            instanceId,
+            remoteRef.backend,
+            remoteRef.threadId,
+          );
+          continue;
+        }
         const parts = parseThreadIdentityKey(threadKey);
         if (!parts) {
           continue;

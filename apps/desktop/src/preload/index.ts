@@ -101,6 +101,8 @@ import type {
   MarkThreadSeenResponse,
   RemoveRemoteThreadPinRequest,
   RemoveRemoteThreadPinResponse,
+  SetRemoteThreadLocalPinRequest,
+  SetRemoteThreadLocalPinResponse,
   ReorderDirectoryPinsRequest,
   ReorderDirectoryPinsResponse,
   ReorderThreadPinsRequest,
@@ -512,6 +514,7 @@ import {
   FEDERATION_JUMP_SEARCH_CHANNEL,
   NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL,
   NAVIGATION_REMOVE_REMOTE_THREAD_PIN_CHANNEL,
+  NAVIGATION_SET_REMOTE_THREAD_LOCAL_PIN_CHANNEL,
   NAVIGATION_REORDER_DIRECTORY_PINS_CHANNEL,
   NAVIGATION_REORDER_THREAD_PINS_CHANNEL,
   NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL,
@@ -1407,6 +1410,13 @@ const desktopApi = Object.freeze({
   ): Promise<RemoveRemoteThreadPinResponse> =>
     await ipcRenderer.invoke(
       NAVIGATION_REMOVE_REMOTE_THREAD_PIN_CHANNEL,
+      request,
+    ),
+  setRemoteThreadLocalPin: async (
+    request: SetRemoteThreadLocalPinRequest,
+  ): Promise<SetRemoteThreadLocalPinResponse> =>
+    await ipcRenderer.invoke(
+      NAVIGATION_SET_REMOTE_THREAD_LOCAL_PIN_CHANNEL,
       request,
     ),
   jumpSearchRemoteThreads: async (

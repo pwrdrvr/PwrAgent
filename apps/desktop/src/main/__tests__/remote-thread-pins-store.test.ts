@@ -161,6 +161,97 @@ describe("SqliteOverlayStore — remote thread pins", () => {
     }
   });
 
+  it("sets and clears a viewer-owned local pin rank", async () => {
+    await store.addRemoteThreadPin({
+      ref: ref(),
+      summary: summary(),
+      instanceLabel: "Laptop",
+      pinnedVia: "explicit",
+    });
+
+    expect(
+      await store.setRemoteThreadLocalPin({ ref: ref(), pinnedRank: "2048" }),
+    ).toEqual({ pinnedRank: "2048" });
+    let listed = await store.listRemoteThreadPins();
+    expect(listed[0].localPinnedRank).toBe("2048");
+    // The rank patch must not disturb the rest of the payload.
+    expect(listed[0].summary?.title).toBe("Remote fix");
+    expect(listed[0].pinnedVia).toBe("explicit");
+
+    expect(
+      await store.setRemoteThreadLocalPin({ ref: ref(), pinnedRank: null }),
+    ).toEqual({});
+    listed = await store.listRemoteThreadPins();
+    expect(listed[0].localPinnedRank).toBeUndefined();
+
+    // A rank write for a thread that was never pinned is a no-op.
+    expect(
+      await store.setRemoteThreadLocalPin({
+        ref: ref("never-pinned"),
+        pinnedRank: "1024",
+      }),
+    ).toEqual({});
+    expect(await store.listRemoteThreadPins()).toHaveLength(1);
+  });
+
+  it("keeps viewer-owned pin state through snapshot payload refreshes", async () => {
+    await store.addRemoteThreadPin({
+      ref: ref(),
+      summary: summary({ title: "Stale" }),
+      instanceLabel: "Laptop",
+      pinnedVia: "companion",
+    });
+    await store.setRemoteThreadLocalPin({ ref: ref(), pinnedRank: "4096" });
+
+    // The reachable-owner refresh path rewrites summary + label on every
+    // merge; it must PATCH, never replace — a refresh that wiped the
+    // viewer's rank would silently unpin the row seconds after pinning.
+    await store.updateRemoteThreadPinSnapshots([
+      {
+        ref: ref(),
+        summary: summary({ title: "Fresh" }),
+        instanceLabel: "Laptop (renamed)",
+      },
+    ]);
+
+    const listed = await store.listRemoteThreadPins();
+    expect(listed[0].summary?.title).toBe("Fresh");
+    expect(listed[0].instanceLabel).toBe("Laptop (renamed)");
+    expect(listed[0].localPinnedRank).toBe("4096");
+    expect(listed[0].pinnedVia).toBe("companion");
+  });
+
+  it("reorders mixed local and remote pins atomically from the full order", async () => {
+    await store.addRemoteThreadPin({
+      ref: ref("remote-1"),
+      summary: summary({ id: "remote-1" }),
+      instanceLabel: "Laptop",
+    });
+    await store.setThreadPin({
+      backend: "codex",
+      threadId: "local-1",
+      pinnedRank: "9999",
+    });
+
+    const pinnedRanks = await store.reorderThreadPins({
+      threadKeys: ["codex:remote-1", "codex:local-1"],
+      remoteRefsByKey: { "codex:remote-1": ref("remote-1") },
+    });
+
+    expect(pinnedRanks).toEqual({
+      "codex:remote-1": "1024",
+      "codex:local-1": "2048",
+    });
+    const pins = await store.listRemoteThreadPins();
+    expect(pins[0].localPinnedRank).toBe("1024");
+    // The remote key must not have leaked into the local thread overlay.
+    const localOverlay = await store.getThreadOverlayState({
+      backend: "codex",
+      threadId: "local-1",
+    });
+    expect(localOverlay?.pinnedRank).toBe("2048");
+  });
+
   it("round-trips pinnedVia and answers membership checks", async () => {
     await store.addRemoteThreadPin({
       ref: ref("child"),

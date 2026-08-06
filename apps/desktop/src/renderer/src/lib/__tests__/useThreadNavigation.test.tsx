@@ -2107,6 +2107,151 @@ describe("useThreadNavigation", () => {
     });
   });
 
+  it("pins a main-window remote row through the viewer-owned local pin API", async () => {
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "remote-instance",
+    };
+    const remoteRef = {
+      backend: "codex" as const,
+      target: federationTarget,
+      threadId: "thread-remote",
+    };
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: 1_000,
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [
+        {
+          id: "thread-remote",
+          title: "Remote thread",
+          titleSource: "explicit" as const,
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+          federation: {
+            instanceLabel: "Remote Mac",
+            ref: remoteRef,
+          },
+        },
+      ],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const setThreadPin = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-remote",
+      pinnedRank: "1024",
+    }));
+    const setRemoteThreadLocalPin = vi.fn(async () => ({
+      ref: remoteRef,
+      pinnedRank: "1024",
+    }));
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      setThreadPin,
+      setRemoteThreadLocalPin,
+      onAgentEvent: () => () => undefined,
+    };
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.threads[0]?.id).toBe("thread-remote");
+    });
+    await act(async () => {
+      await result.current.setThreadPin(result.current.threads[0]!, true);
+    });
+
+    // Main window, remote row: the rank is VIEWER-owned — the owner-routing
+    // setThreadPin API must not be touched.
+    expect(setRemoteThreadLocalPin).toHaveBeenCalledWith({
+      ref: remoteRef,
+      pinnedRank: expect.any(String),
+    });
+    expect(setThreadPin).not.toHaveBeenCalled();
+    expect(result.current.threads[0]?.pinnedRank).toBe("1024");
+  });
+
+  it("pins through the owner in a remote-viewer window", async () => {
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "remote-instance",
+    };
+    (window as typeof window & {
+      __pwragentFederationTarget?: unknown;
+    }).__pwragentFederationTarget = federationTarget;
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: 1_000,
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [
+        {
+          id: "thread-remote",
+          title: "Remote thread",
+          titleSource: "explicit" as const,
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+          federation: {
+            instanceLabel: "Remote Mac",
+            ref: {
+              backend: "codex" as const,
+              target: federationTarget,
+              threadId: "thread-remote",
+            },
+          },
+        },
+      ],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const setThreadPin = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-remote",
+      pinnedRank: "1024",
+    }));
+    const setRemoteThreadLocalPin = vi.fn(async () => ({
+      ref: {
+        backend: "codex" as const,
+        target: federationTarget,
+        threadId: "thread-remote",
+      },
+      pinnedRank: "1024",
+    }));
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      setThreadPin,
+      setRemoteThreadLocalPin,
+      onAgentEvent: () => () => undefined,
+    };
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.threads[0]?.id).toBe("thread-remote");
+    });
+    await act(async () => {
+      await result.current.setThreadPin(result.current.threads[0]!, true);
+    });
+
+    // Remote-viewer window: operating the OWNER's pinned section is
+    // intended, so the owner-routing API carries the federation target.
+    expect(setThreadPin).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-remote",
+      federationTarget,
+      pinnedRank: expect.any(String),
+    });
+    expect(setRemoteThreadLocalPin).not.toHaveBeenCalled();
+  });
+
   it("marks a remote snapshot unavailable and refreshes it after reconnect", async () => {
     const federationTarget = {
       scope: "remote" as const,

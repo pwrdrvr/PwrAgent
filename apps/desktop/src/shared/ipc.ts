@@ -119,6 +119,8 @@ export const NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL =
   "navigation:add-remote-thread-pin";
 export const NAVIGATION_REMOVE_REMOTE_THREAD_PIN_CHANNEL =
   "navigation:remove-remote-thread-pin";
+export const NAVIGATION_SET_REMOTE_THREAD_LOCAL_PIN_CHANNEL =
+  "navigation:set-remote-thread-local-pin";
 export const FEDERATION_JUMP_SEARCH_CHANNEL = "federation:jump-search";
 export const NAVIGATION_SET_THREAD_PARENT_CHANNEL =
   "navigation:set-thread-parent";
