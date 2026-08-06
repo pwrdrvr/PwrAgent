@@ -79,6 +79,8 @@ function snapshotOf(threads: NavigationThreadSummary[]): NavigationSnapshot {
   } as unknown as NavigationSnapshot;
 }
 
+const noArchivedThreads = async () => [];
+
 function pin(params: {
   instanceId: string;
   threadId: string;
@@ -117,6 +119,7 @@ describe("RemoteThreadSummaryCache — searchForJump", () => {
     const cache = new RemoteThreadSummaryCache({
       peers: () => [peer("peer-a")],
       fetchSnapshot: async () => snapshotOf(threads),
+      fetchArchivedThreads: noArchivedThreads,
       peerStatus: () => ({}),
     });
 
@@ -138,6 +141,7 @@ describe("RemoteThreadSummaryCache — searchForJump", () => {
     const cache = new RemoteThreadSummaryCache({
       peers: () => [peer("peer-a")],
       fetchSnapshot: async () => snapshotOf(threads),
+      fetchArchivedThreads: noArchivedThreads,
       peerStatus: () => ({}),
     });
 
@@ -155,6 +159,7 @@ describe("RemoteThreadSummaryCache — searchForJump", () => {
     const cache = new RemoteThreadSummaryCache({
       peers: () => [peer("peer-a")],
       fetchSnapshot,
+      fetchArchivedThreads: noArchivedThreads,
       peerStatus: () => ({}),
       ttlMs: 100,
       now: () => now,
@@ -180,6 +185,7 @@ describe("RemoteThreadSummaryCache — searchForJump", () => {
           stampedThread({ instanceId: "peer-fast", threadId: "t1", title: "match" }),
         ]);
       },
+      fetchArchivedThreads: noArchivedThreads,
       peerStatus: () => ({}),
       peerTimeoutMs: 20,
     });
@@ -199,6 +205,7 @@ describe("RemoteThreadSummaryCache — searchForJump", () => {
         },
       ],
       fetchSnapshot,
+      fetchArchivedThreads: noArchivedThreads,
       peerStatus: () => ({}),
     });
 
@@ -215,6 +222,7 @@ describe("RemoteThreadSummaryCache — threadFromPeer", () => {
         snapshotOf([
           stampedThread({ instanceId: "peer-a", threadId: "t1", title: "Parent" }),
         ]),
+      fetchArchivedThreads: noArchivedThreads,
       peerStatus: () => ({}),
     });
 
@@ -238,6 +246,7 @@ describe("RemoteThreadSummaryCache — threadFromPeer", () => {
     const cache = new RemoteThreadSummaryCache({
       peers: () => [],
       fetchSnapshot,
+      fetchArchivedThreads: noArchivedThreads,
       peerStatus: () => ({}),
     });
 
@@ -262,6 +271,7 @@ describe("RemoteThreadSummaryCache — resolvePinnedThreads", () => {
     const cache = new RemoteThreadSummaryCache({
       peers: () => [peer("peer-a", "Laptop")],
       fetchSnapshot: async () => snapshotOf([fresh]),
+      fetchArchivedThreads: noArchivedThreads,
       peerStatus: () => ({ status: "connected", label: "Laptop" }),
     });
 
@@ -286,6 +296,7 @@ describe("RemoteThreadSummaryCache — resolvePinnedThreads", () => {
       fetchSnapshot: async () => {
         throw new Error("unreachable");
       },
+      fetchArchivedThreads: noArchivedThreads,
       peerStatus: () => ({ status: "disconnected", label: "Laptop" }),
     });
 
@@ -305,6 +316,7 @@ describe("RemoteThreadSummaryCache — resolvePinnedThreads", () => {
       fetchSnapshot: async () => {
         throw new Error("boom");
       },
+      fetchArchivedThreads: noArchivedThreads,
       peerStatus: () => ({ status: "connected" }),
     });
 
@@ -318,6 +330,7 @@ describe("RemoteThreadSummaryCache — resolvePinnedThreads", () => {
     const cache = new RemoteThreadSummaryCache({
       peers: () => [],
       fetchSnapshot: async () => snapshotOf([]),
+      fetchArchivedThreads: noArchivedThreads,
       peerStatus: () => ({}),
     });
 
@@ -333,6 +346,7 @@ describe("RemoteThreadSummaryCache — resolvePinnedThreads", () => {
     const cache = new RemoteThreadSummaryCache({
       peers: () => [peer("peer-a")],
       fetchSnapshot: async () => snapshotOf([]),
+      fetchArchivedThreads: noArchivedThreads,
       peerStatus: () => ({ status: "connected" }),
     });
 
@@ -348,5 +362,58 @@ describe("RemoteThreadSummaryCache — resolvePinnedThreads", () => {
     expect(resolved.threads[0].title).toBe("Archived on owner");
     expect(resolved.threads[0].federation?.peerStatus).toBe("connected");
     expect(resolved.refreshed).toEqual([]);
+    expect(resolved.archived).toEqual([]);
+  });
+
+  it("omits pins proven to be archived on a reachable owner", async () => {
+    const fetchArchivedThreads = vi.fn(async () => [
+      stampedThread({
+        instanceId: "peer-a",
+        threadId: "archived",
+        title: "Archived on owner",
+      }),
+    ]);
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [peer("peer-a")],
+      fetchSnapshot: async () => snapshotOf([]),
+      fetchArchivedThreads,
+      peerStatus: () => ({ status: "connected" }),
+    });
+    const archivedPin = pin({ instanceId: "peer-a", threadId: "archived" });
+
+    const resolved = await cache.resolvePinnedThreads([archivedPin]);
+
+    expect(fetchArchivedThreads).toHaveBeenCalledWith(
+      remoteTarget("peer-a"),
+      "codex",
+    );
+    expect(resolved.threads).toEqual([]);
+    expect(resolved.refreshed).toEqual([]);
+    expect(resolved.archived).toEqual([archivedPin.ref]);
+  });
+
+  it("keeps the cached row when archive detection fails", async () => {
+    const cached = stampedThread({
+      instanceId: "peer-a",
+      threadId: "missing",
+      title: "Cached title",
+    });
+    delete cached.federation;
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [peer("peer-a")],
+      fetchSnapshot: async () => snapshotOf([]),
+      fetchArchivedThreads: async () => {
+        throw new Error("archive lookup failed");
+      },
+      peerStatus: () => ({ status: "connected" }),
+    });
+
+    const resolved = await cache.resolvePinnedThreads([
+      pin({ instanceId: "peer-a", threadId: "missing", summary: cached }),
+    ]);
+
+    expect(resolved.threads).toHaveLength(1);
+    expect(resolved.threads[0].title).toBe("Cached title");
+    expect(resolved.archived).toEqual([]);
   });
 });

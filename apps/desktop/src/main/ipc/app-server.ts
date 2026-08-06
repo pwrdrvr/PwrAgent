@@ -1970,6 +1970,13 @@ class DesktopAppServerService {
             },
           ),
         };
+        if (resolution.archived.length > 0) {
+          await Promise.all(
+            resolution.archived.map(async (ref) => {
+              await this.getOverlayStore().removeRemoteThreadPin({ ref });
+            }),
+          );
+        }
         if (resolution.refreshed.length > 0) {
           await this.getOverlayStore().updateRemoteThreadPinSnapshots(
             resolution.refreshed,

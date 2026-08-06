@@ -27,6 +27,9 @@ export type ResolvedRemotePins = {
     summary: NavigationThreadSummary;
     instanceLabel: string;
   }>;
+  /** Pins proven to be archived on a reachable owner. The viewer can safely
+   *  remove these instead of preserving a permanently stale fallback row. */
+  archived: RemoteThreadPin["ref"][];
 };
 
 /**
@@ -48,6 +51,11 @@ export class RemoteThreadSummaryCache {
     { fetchedAt: number; threads: NavigationThreadSummary[] }
   >();
   private readonly inFlight = new Map<string, Promise<NavigationThreadSummary[]>>();
+  private readonly archivedCache = new Map<
+    string,
+    { fetchedAt: number; threadKeys: Set<string> }
+  >();
+  private readonly archivedInFlight = new Map<string, Promise<Set<string>>>();
 
   constructor(
     private readonly options: {
@@ -55,6 +63,11 @@ export class RemoteThreadSummaryCache {
       peers: () => RemoteThreadSummaryPeer[];
       /** Stamped snapshot fetch — `DesktopFederationRuntime.remoteNavigationSnapshot`. */
       fetchSnapshot: (target: FederationRemoteTarget) => Promise<NavigationSnapshot>;
+      /** Archived threads for one backend on a connected peer. */
+      fetchArchivedThreads: (
+        target: FederationRemoteTarget,
+        backend: RemoteThreadPin["ref"]["backend"],
+      ) => Promise<Array<Pick<NavigationThreadSummary, "source" | "id">>>;
       /** Current visible status + composed label for any peer, connected or not. */
       peerStatus: (instanceId: string) => {
         status?: FederationPeerSummary["status"];
@@ -70,9 +83,15 @@ export class RemoteThreadSummaryCache {
   invalidate(instanceId?: string): void {
     if (instanceId === undefined) {
       this.cache.clear();
+      this.archivedCache.clear();
       return;
     }
     this.cache.delete(instanceId);
+    for (const key of this.archivedCache.keys()) {
+      if (key.startsWith(`${instanceId}:`)) {
+        this.archivedCache.delete(key);
+      }
+    }
   }
 
   async searchForJump(
@@ -141,6 +160,7 @@ export class RemoteThreadSummaryCache {
   ): Promise<ResolvedRemotePins> {
     const threads: NavigationThreadSummary[] = [];
     const refreshed: ResolvedRemotePins["refreshed"] = [];
+    const archived: ResolvedRemotePins["archived"] = [];
     const connectedByInstanceId = new Map(
       this.navigationPeers().map((peer) => [peer.target.instanceId, peer]),
     );
@@ -169,10 +189,36 @@ export class RemoteThreadSummaryCache {
         const freshByKey = new Map(
           (fresh ?? []).map((thread) => [`${thread.source}:${thread.id}`, thread]),
         );
-        for (const pin of group) {
-          const freshThread = freshByKey.get(
-            `${pin.ref.backend}:${pin.ref.threadId}`,
+        const archivedKeys = new Set<string>();
+        if (peer && fresh) {
+          const missingBackends = new Set(
+            group
+              .filter(
+                (pin) =>
+                  !freshByKey.has(`${pin.ref.backend}:${pin.ref.threadId}`),
+              )
+              .map((pin) => pin.ref.backend),
           );
+          await Promise.all(
+            [...missingBackends].map(async (backend) => {
+              try {
+                const keys = await this.archivedThreadKeysForPeer(
+                  peer.target,
+                  backend,
+                );
+                for (const key of keys) {
+                  archivedKeys.add(key);
+                }
+              } catch {
+                // Archive detection is proof-based. If the lookup fails, keep
+                // the cached row just as we do when the active fetch fails.
+              }
+            }),
+          );
+        }
+        for (const pin of group) {
+          const threadKey = `${pin.ref.backend}:${pin.ref.threadId}`;
+          const freshThread = freshByKey.get(threadKey);
           if (freshThread) {
             threads.push(freshThread);
             refreshed.push({
@@ -183,11 +229,15 @@ export class RemoteThreadSummaryCache {
             });
             continue;
           }
+          if (archivedKeys.has(threadKey)) {
+            archived.push(pin.ref);
+            continue;
+          }
           threads.push(this.fallbackThread(pin, fetchFailed));
         }
       }),
     );
-    return { threads, refreshed };
+    return { threads, refreshed, archived };
   }
 
   private fallbackThread(
@@ -264,6 +314,46 @@ export class RemoteThreadSummaryCache {
       return await fetch;
     } finally {
       this.inFlight.delete(target.instanceId);
+    }
+  }
+
+  private async archivedThreadKeysForPeer(
+    target: FederationRemoteTarget,
+    backend: RemoteThreadPin["ref"]["backend"],
+  ): Promise<Set<string>> {
+    const cacheKey = `${target.instanceId}:${backend}`;
+    const now = this.options.now?.() ?? Date.now();
+    const ttlMs = this.options.ttlMs ?? REMOTE_SNAPSHOT_TTL_MS;
+    const cached = this.archivedCache.get(cacheKey);
+    if (cached && now - cached.fetchedAt < ttlMs) {
+      return cached.threadKeys;
+    }
+    const pending = this.archivedInFlight.get(cacheKey);
+    if (pending) {
+      return await pending;
+    }
+    const fetch = (async () => {
+      const timeoutMs =
+        this.options.peerTimeoutMs ?? REMOTE_SNAPSHOT_PEER_TIMEOUT_MS;
+      const archivedThreads = await withTimeout(
+        this.options.fetchArchivedThreads(target, backend),
+        timeoutMs,
+        `Remote archived threads timed out after ${Math.round(timeoutMs / 1000)}s.`,
+      );
+      const threadKeys = new Set(
+        archivedThreads.map((thread) => `${thread.source}:${thread.id}`),
+      );
+      this.archivedCache.set(cacheKey, {
+        fetchedAt: this.options.now?.() ?? Date.now(),
+        threadKeys,
+      });
+      return threadKeys;
+    })();
+    this.archivedInFlight.set(cacheKey, fetch);
+    try {
+      return await fetch;
+    } finally {
+      this.archivedInFlight.delete(cacheKey);
     }
   }
 }

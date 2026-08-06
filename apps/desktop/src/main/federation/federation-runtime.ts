@@ -907,6 +907,13 @@ export class DesktopFederationRuntime {
     this.remoteThreadSummaryCache ??= new RemoteThreadSummaryCache({
       peers: () => this.connectedPeerTargets(),
       fetchSnapshot: (target) => this.remoteNavigationSnapshot(target, {}),
+      fetchArchivedThreads: async (target, backend) =>
+        (
+          await this.remoteBackend(target).listThreads({
+            backend,
+            archived: true,
+          })
+        ).threads,
       peerStatus: (instanceId) => {
         try {
           const visible = this.visiblePeers();
