@@ -24,6 +24,40 @@ export type OrbitPlacement = {
    the body than a circle of the same capacity would. */
 const RING_BASE_RX = 178;
 const RING_BASE_RY = 130;
+/* Keep-out around an instance's own chrome. Cards may crowd right up to
+   this box but must never cover it: the body, its name pill, and the [+]
+   intake button are how you act on the instance, so a card sitting on top
+   of them takes the surface away. Measured from `.star-map-instance` in
+   app.css — hub body 116px tall, name pill 150px wide plus a 22px intake
+   button and their 6px gap, stacked under the body with an 8px gap and up
+   to two label lines. */
+const INSTANCE_KEEPOUT_HALF_WIDTH = 92;
+const INSTANCE_KEEPOUT_BELOW = 100;
+/* Half of STAR_MAP_ESTIMATED_CARD_HEIGHT: cards are placed by their
+   centre, so half a card overhangs the ring toward the body. */
+const CARD_HALF_HEIGHT = 56;
+/* Deliberately small — "very close to them" — but non-zero so a card edge
+   never visually touches the pill it is clearing. */
+const KEEPOUT_GAP = 10;
+
+/**
+ * Innermost ring radii for a given card width: the larger of the aesthetic
+ * base and whatever it takes to clear the instance's own chrome. Derived
+ * rather than hardcoded so a change to card width or to the name pill
+ * cannot silently start covering the [+] button again.
+ */
+function ringBase(cardWidth: number): { rx: number; ry: number } {
+  return {
+    rx: Math.max(
+      RING_BASE_RX,
+      INSTANCE_KEEPOUT_HALF_WIDTH + cardWidth / 2 + KEEPOUT_GAP,
+    ),
+    ry: Math.max(
+      RING_BASE_RY,
+      INSTANCE_KEEPOUT_BELOW + CARD_HALF_HEIGHT + KEEPOUT_GAP,
+    ),
+  };
+}
 /* Successive rings step out far enough that a card on one clears the card
    height of the ring inside it. */
 const RING_STEP_RX = 228;
@@ -36,11 +70,77 @@ const CANVAS_PADDING = 160;
 /** Floor on how close two instance bodies may sit, before ring clearance. */
 const INSTANCE_RING_MIN_RADIUS = 430;
 
+/* A galaxy is not a compass rose. Instances get a base rotation off the
+   cardinal axes plus a deterministic per-instance nudge, so four peers
+   never land exactly N/E/S/W at exactly 90 degrees apart. */
+const GALAXY_BASE_ROTATION = 0.22;
+/** Max angular nudge either way, in radians (~7.5 degrees). */
+const GALAXY_ANGLE_JITTER = 0.13;
+/** Max outward-only radius nudge. Outward-only so ring clearance holds. */
+const GALAXY_RADIUS_JITTER = 0.12;
+
+/**
+ * Stable [0,1) from an instance id. Deterministic so a body does not hop
+ * to a new spot on every render or reconnect.
+ */
+function instanceNoise(instanceId: string, salt: number): number {
+  let hash = 0x811c9dc5 ^ salt;
+  for (let index = 0; index < instanceId.length; index += 1) {
+    hash ^= instanceId.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return ((hash >>> 0) % 10_000) / 10_000;
+}
+
+/* Arm shape. The angular sweep is mostly back-loaded: a small linear term
+   gives the line a visible lean as it leaves the body, and the quintic-ish
+   term makes it bend hard only as it nears the hub. */
+const ARM_SWEEP = -0.62;
+const ARM_LINEAR_SHARE = 0.25;
+const ARM_EASE_POWER = 2.5;
+const ARM_SAMPLES = 28;
+
+/**
+ * A sweeping spiral-arm path from an instance in to the hub, the way a
+ * transfer orbit falls inward rather than a straight tether.
+ *
+ * Polar around the hub: radius shrinks linearly while the angle sweeps by
+ * `ARM_SWEEP`, weighted so most of the turn happens near the centre. For a
+ * body in the lower-right quadrant that reads as the line leaving toward
+ * the N/NW, drifting gently upward, then curving hard into the gateway.
+ */
+export function galaxyArmPath(
+  from: { x: number; y: number },
+  hub: { x: number; y: number },
+): string {
+  const dx = from.x - hub.x;
+  const dy = from.y - hub.y;
+  const radius = Math.hypot(dx, dy);
+  if (radius < 1) return `M ${from.x} ${from.y} L ${hub.x} ${hub.y}`;
+  const startAngle = Math.atan2(dy, dx);
+
+  const points: string[] = [];
+  for (let step = 0; step <= ARM_SAMPLES; step += 1) {
+    const t = step / ARM_SAMPLES;
+    const sweep =
+      ARM_SWEEP
+      * (ARM_LINEAR_SHARE * t
+        + (1 - ARM_LINEAR_SHARE) * Math.pow(t, ARM_EASE_POWER));
+    const r = radius * (1 - t);
+    const angle = startAngle + sweep;
+    const x = hub.x + Math.cos(angle) * r;
+    const y = hub.y + Math.sin(angle) * r;
+    points.push(`${step === 0 ? "M" : "L"} ${x.toFixed(2)} ${y.toFixed(2)}`);
+  }
+  return points.join(" ");
+}
+
 export type CardRing = { rx: number; ry: number; capacity: number };
 
 function ringAt(index: number, cardWidth: number): CardRing {
-  const rx = RING_BASE_RX + index * RING_STEP_RX;
-  const ry = RING_BASE_RY + index * RING_STEP_RY;
+  const base = ringBase(cardWidth);
+  const rx = base.rx + index * RING_STEP_RX;
+  const ry = base.ry + index * RING_STEP_RY;
   return {
     rx,
     ry,
@@ -135,7 +235,7 @@ export function computeOrbitPlacement(params: {
   // Space children so the widest pair of adjacent card rings still clears.
   const widestChildRing = children.reduce(
     (widest, node) => Math.max(widest, radiusFor(node.instanceId)),
-    RING_BASE_RX,
+    ringBase(params.cardWidth).rx,
   );
   const ringRadius = Math.max(
     INSTANCE_RING_MIN_RADIUS,
@@ -146,10 +246,18 @@ export function computeOrbitPlacement(params: {
   );
 
   children.forEach((node, index) => {
-    const angle = -Math.PI / 2 + (index * 2 * Math.PI) / children.length;
+    const even = -Math.PI / 2 + (index * 2 * Math.PI) / children.length;
+    const angle =
+      even
+      + GALAXY_BASE_ROTATION
+      + (instanceNoise(node.instanceId, 1) * 2 - 1) * GALAXY_ANGLE_JITTER;
+    // Outward-only so the clearance computed above still holds.
+    const radius =
+      ringRadius
+      * (1 + instanceNoise(node.instanceId, 2) * GALAXY_RADIUS_JITTER);
     raw.set(node.instanceId, {
-      x: Math.cos(angle) * ringRadius,
-      y: Math.sin(angle) * ringRadius,
+      x: Math.cos(angle) * radius,
+      y: Math.sin(angle) * radius,
     });
   });
 

@@ -9028,7 +9028,10 @@ textarea,
 }
 
 .star-map-instance__label {
-  max-width: 210px;
+  /* Narrower than it used to be: the profile name now wraps to its own
+     line beneath, so the pill no longer has to fit "machine / profile"
+     on one row. A narrow pill lets the card rings sit closer in. */
+  max-width: 150px;
   overflow: hidden;
   padding: 3px 10px;
   border-radius: 6px;
@@ -9038,6 +9041,25 @@ textarea,
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.star-map-instance__machine {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* Second line, quieter than the machine name: it only appears when the
+   profile is needed to tell two instances on one machine apart. */
+.star-map-instance__profile {
+  display: block;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-weight: 500;
+  font-size: 11px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .star-map-instance--local .star-map-instance__label {

@@ -26,6 +26,12 @@ function statusTone(status: FederationConnectionState): string {
 export function StarMapInstanceCard(props: {
   instanceId: string;
   label: string;
+  /**
+   * Rendered on its own line under the machine name. Only set when the
+   * profile is needed to tell two instances apart — stacking keeps the
+   * name pill narrow instead of letting "machine / profile" widen it.
+   */
+  profileName?: string;
   icon?: CelestialIconId;
   status: FederationConnectionState;
   isLocal: boolean;
@@ -35,6 +41,13 @@ export function StarMapInstanceCard(props: {
   /** Present when AI intake can target this instance. */
   onIntake?: () => void;
 }) {
+  // Display stacks the two lines to stay narrow, but every accessible name
+  // has to keep the profile inline: two instances on one machine would
+  // otherwise expose identical button names.
+  const fullLabel = props.profileName
+    ? `${props.label} / ${props.profileName}`
+    : props.label;
+
   return (
     <div
       className={`star-map-instance${props.isLocal ? " star-map-instance--local" : ""}${
@@ -47,8 +60,8 @@ export function StarMapInstanceCard(props: {
         className="star-map-instance__body"
         aria-label={
           props.isLocal
-            ? `Open this instance (${props.label})`
-            : `Open remote viewer for ${props.label}`
+            ? `Open this instance (${fullLabel})`
+            : `Open remote viewer for ${fullLabel}`
         }
         onClick={props.onOpen}
       >
@@ -68,14 +81,22 @@ export function StarMapInstanceCard(props: {
         />
       </button>
       <span className="star-map-instance__row">
-        <span className="star-map-instance__label" title={props.label}>
-          {props.label}
+        <span
+          className="star-map-instance__label"
+          title={fullLabel}
+        >
+          <span className="star-map-instance__machine">{props.label}</span>
+          {props.profileName ? (
+            <span className="star-map-instance__profile">
+              {props.profileName}
+            </span>
+          ) : null}
         </span>
         {props.onIntake ? (
           <button
             type="button"
             className="star-map-instance__intake"
-            aria-label={`New thread on ${props.label}`}
+            aria-label={`New thread on ${fullLabel}`}
             onClick={props.onIntake}
           >
             +

@@ -580,6 +580,33 @@ export function isRemoteFederationTarget(
  * builds) always keep the bare label, and revoked peers are dead
  * entries that must not force the suffix onto their live sibling.
  */
+/**
+ * The machine label plus the profile name, but only when the profile is
+ * actually needed to tell two instances apart. Surfaces that can lay the
+ * two out separately (the star map's instance card stacks them so the card
+ * stays narrow) should use this; `formatFederationPeerDisplayLabel` joins
+ * the same parts for single-line contexts.
+ */
+export function formatFederationPeerDisplayLabelParts(
+  peer: { label: string; profileName?: string },
+  visiblePeers: readonly {
+    label: string;
+    profileName?: string;
+    revokedAt?: number;
+  }[],
+): { label: string; profileName?: string } {
+  if (!peer.profileName) {
+    return { label: peer.label };
+  }
+  const sameMachinePeers = visiblePeers.filter(
+    (candidate) => !candidate.revokedAt && candidate.label === peer.label,
+  );
+  if (peer.profileName === "default" && sameMachinePeers.length <= 1) {
+    return { label: peer.label };
+  }
+  return { label: peer.label, profileName: peer.profileName };
+}
+
 export function formatFederationPeerDisplayLabel(
   peer: { label: string; profileName?: string },
   visiblePeers: readonly {
@@ -588,16 +615,10 @@ export function formatFederationPeerDisplayLabel(
     revokedAt?: number;
   }[],
 ): string {
-  if (!peer.profileName) {
-    return peer.label;
-  }
-  const sameMachinePeers = visiblePeers.filter(
-    (candidate) => !candidate.revokedAt && candidate.label === peer.label,
-  );
-  if (peer.profileName === "default" && sameMachinePeers.length <= 1) {
-    return peer.label;
-  }
-  return `${peer.label} / ${peer.profileName}`;
+  const parts = formatFederationPeerDisplayLabelParts(peer, visiblePeers);
+  return parts.profileName
+    ? `${parts.label} / ${parts.profileName}`
+    : parts.label;
 }
 
 export function federationTargetKey(target: FederationTarget): string {

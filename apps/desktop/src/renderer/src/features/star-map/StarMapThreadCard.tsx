@@ -172,6 +172,7 @@ export function StarMapThreadCard(props: {
           linkedDirectoryMode="label"
           // The lane and the watermark already say which machine this is.
           hideInstanceChip
+          hidePinChip
           chipVisibility={{
             provider: props.cardFields.provider,
             branch: props.cardFields.branch,

@@ -2,7 +2,10 @@ import {
   buildThreadIdentityKey,
   type NavigationThreadSummary,
 } from "@pwragent/shared";
-import { isOpenPullRequest } from "./star-map-preferences";
+import {
+  isOpenPullRequest,
+  type StarMapAgentFilter,
+} from "./star-map-preferences";
 
 export const STAR_MAP_ATTENTION_CATEGORIES = [
   "unread",
@@ -61,6 +64,28 @@ export function threadAttentionCategories(
 }
 
 /**
+ * Whether a thread is driven by a named agent. `thread.agent` is the same
+ * marker the row's "Agent" badge reads.
+ */
+export function isAgentThread(thread: NavigationThreadSummary): boolean {
+  return thread.agent !== undefined;
+}
+
+/**
+ * Agent participation is a different axis from attention: the attention
+ * chips OR together (a card shows if *any* enabled category claims it),
+ * so an "Agent" category could only ever add cards. Include/exclude has to
+ * narrow the result, so it applies as an AND on top.
+ */
+export function matchesAgentFilter(
+  thread: NavigationThreadSummary,
+  filter: StarMapAgentFilter,
+): boolean {
+  if (filter === "all") return true;
+  return filter === "only" ? isAgentThread(thread) : !isAgentThread(thread);
+}
+
+/**
  * Threads that need attention, filtered to the enabled categories, ordered
  * by recent activity. Archived threads never surface on the map.
  */
@@ -68,15 +93,39 @@ export function selectAttentionThreads(params: {
   threads: readonly NavigationThreadSummary[];
   enabled: ReadonlySet<StarMapAttentionCategory>;
   sessionKeys?: StarMapSessionKeys;
+  agentFilter?: StarMapAgentFilter;
 }): NavigationThreadSummary[] {
+  const agentFilter = params.agentFilter ?? "all";
   return params.threads
     .filter((thread) => thread.archivedAt === undefined)
+    .filter((thread) => matchesAgentFilter(thread, agentFilter))
     .filter((thread) =>
       threadAttentionCategories(thread, params.sessionKeys).some((category) =>
         params.enabled.has(category),
       ),
     )
     .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
+}
+
+/**
+ * How many cards the agent chip is holding back right now — the ones the
+ * attention filters would otherwise show but this filter is excluding.
+ * Zero means flipping it changes nothing on screen.
+ */
+export function countAgentFilterImpact(params: {
+  threads: readonly NavigationThreadSummary[];
+  enabled: ReadonlySet<StarMapAttentionCategory>;
+  sessionKeys?: StarMapSessionKeys;
+  agentFilter: StarMapAgentFilter;
+}): number {
+  return params.threads.filter(
+    (thread) =>
+      thread.archivedAt === undefined
+      && !matchesAgentFilter(thread, params.agentFilter)
+      && threadAttentionCategories(thread, params.sessionKeys).some((category) =>
+        params.enabled.has(category),
+      ),
+  ).length;
 }
 
 /**

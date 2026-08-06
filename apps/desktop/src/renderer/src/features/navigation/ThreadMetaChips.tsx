@@ -44,6 +44,12 @@ type ThreadMetaChipsProps = {
    * watermarks them), where a per-card machine name is pure noise.
    */
   hideInstanceChip?: boolean;
+  /**
+   * Suppresses the pinned marker. The Star Map is not the pinned section,
+   * so a pin chip there costs prime card space to say something the
+   * surface never acts on.
+   */
+  hidePinChip?: boolean;
   thread: NavigationThreadSummary;
 };
 
@@ -56,6 +62,7 @@ export function ThreadMetaChips({
   includeLinkedDirectories = false,
   linkedDirectoryMode = "label",
   hideInstanceChip = false,
+  hidePinChip = false,
   chipVisibility,
   thread,
 }: ThreadMetaChipsProps) {
@@ -276,7 +283,7 @@ export function ThreadMetaChips({
         ? linkedDirectoryChips
         : linkedDirectoryChips.slice(0, maxLinkedDirectories)}
 
-      {thread.pinnedRank && !thread.parentThreadId ? (
+      {thread.pinnedRank && !thread.parentThreadId && !hidePinChip ? (
         <span
           aria-label={pinIsActionable ? "Unpin thread" : "Pinned"}
           role={pinIsActionable ? "button" : "img"}

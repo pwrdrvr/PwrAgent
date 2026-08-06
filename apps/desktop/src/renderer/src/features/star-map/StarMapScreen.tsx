@@ -10,6 +10,7 @@ import {
 import {
   buildThreadIdentityKey,
   formatFederationPeerDisplayLabel,
+  formatFederationPeerDisplayLabelParts,
   isRemoteFederationTarget,
   type FederationPeerSummary,
   type NavigationThreadSummary,
@@ -20,6 +21,7 @@ import { useCelestialIcons } from "../../lib/useCelestialIcons";
 import { useFederationHealth } from "../../lib/useFederationHealth";
 import {
   addFilterImpactCounts,
+  countAgentFilterImpact,
   countFilterImpact,
   selectAttentionThreads,
   STAR_MAP_ATTENTION_CATEGORIES,
@@ -38,6 +40,7 @@ import {
 } from "./star-map-layout";
 import {
   computeOrbitPlacement,
+  galaxyArmPath,
   shouldStartCanvasPan,
 } from "./star-map-orbit";
 import { buildFederationTopology } from "./star-map-topology";
@@ -45,8 +48,10 @@ import { StarMapChatCard } from "./StarMapChatCard";
 import { useStarMapChatCards } from "./useStarMapChatCards";
 import { IntakeDialog, type IntakeDialogTarget } from "./IntakeDialog";
 import {
+  nextAgentFilter,
   readStoredPreferences,
   writeStoredPreferences,
+  STAR_MAP_AGENT_FILTER_LABELS,
   type StarMapViewPreferences,
 } from "./star-map-preferences";
 import { StarMapViewOptions } from "./StarMapViewOptions";
@@ -401,16 +406,57 @@ export function StarMapScreen(props: StarMapScreenProps) {
         ),
         enabled: filters,
         sessionKeys: props.sessionKeys,
+        agentFilter: preferences.agentFilter,
       }),
     );
     for (const [instanceId, threads] of remote.threadsByInstance) {
       result.set(
         instanceId,
-        selectAttentionThreads({ threads, enabled: filters }),
+        selectAttentionThreads({
+          threads,
+          enabled: filters,
+          agentFilter: preferences.agentFilter,
+        }),
       );
     }
     return result;
-  }, [filters, localInstanceId, props.localThreads, props.sessionKeys, remote]);
+  }, [
+    filters,
+    localInstanceId,
+    preferences.agentFilter,
+    props.localThreads,
+    props.sessionKeys,
+    remote,
+  ]);
+
+  // What the agent chip is currently holding back: cards the attention
+  // filters would show but this one excludes.
+  const agentFilterCount = useMemo(() => {
+    let count = countAgentFilterImpact({
+      threads: props.localThreads.filter(
+        (thread) =>
+          !thread.federation
+          || !isRemoteFederationTarget(thread.federation.ref.target),
+      ),
+      enabled: filters,
+      sessionKeys: props.sessionKeys,
+      agentFilter: preferences.agentFilter,
+    });
+    for (const threads of remote.threadsByInstance.values()) {
+      count += countAgentFilterImpact({
+        threads,
+        enabled: filters,
+        agentFilter: preferences.agentFilter,
+      });
+    }
+    return count;
+  }, [
+    filters,
+    preferences.agentFilter,
+    props.localThreads,
+    props.sessionKeys,
+    remote,
+  ]);
 
   // Chip counts answer "how many cards does flipping this change" across
   // every lane, local session state included.
@@ -552,6 +598,33 @@ export function StarMapScreen(props: StarMapScreenProps) {
       all.map((entry) => [
         entry.id,
         formatFederationPeerDisplayLabel(entry, all),
+      ]),
+    );
+  }, [health, localInstanceId, peers, props.localInstanceLabel]);
+
+  // The instance card stacks machine and profile on separate lines to stay
+  // narrow, so it needs the parts rather than the joined string.
+  const displayLabelPartsById = useMemo(() => {
+    const localSummary = {
+      id: localInstanceId,
+      label: health?.localLabel?.trim()
+        || props.localInstanceLabel?.trim()
+        || "This instance",
+      profileName: health?.localProfileName,
+    };
+    const all = [
+      localSummary,
+      ...peers.map((peer) => ({
+        id: peer.id,
+        label: peer.label,
+        profileName: peer.profileName,
+        revokedAt: peer.revokedAt,
+      })),
+    ];
+    return new Map(
+      all.map((entry) => [
+        entry.id,
+        formatFederationPeerDisplayLabelParts(entry, all),
       ]),
     );
   }, [health, localInstanceId, peers, props.localInstanceLabel]);
@@ -786,21 +859,16 @@ export function StarMapScreen(props: StarMapScreenProps) {
                 const to = orbit.instances.find(
                   (instance) => instance.instanceId === link.toInstanceId,
                 );
+                // Orbit links sweep in as spiral arms rather than running
+                // straight: `to` is the hub the arm falls into.
                 return from && to
-                  ? {
-                      ...link,
-                      path: {
-                        x1: from.x,
-                        y1: from.y,
-                        cx: (from.x + to.x) / 2,
-                        cy: (from.y + to.y) / 2,
-                        x2: to.x,
-                        y2: to.y,
-                      },
-                    }
+                  ? { ...link, d: galaxyArmPath(from, to) }
                   : undefined;
               })
-            : laneLayout.links
+            : laneLayout.links.map((link) => ({
+                ...link,
+                d: `M ${link.path.x1} ${link.path.y1} Q ${link.path.cx} ${link.path.cy} ${link.path.x2} ${link.path.y2}`,
+              }))
           ).map((link) => {
             if (!link) return null;
             const state = linkState(
@@ -810,7 +878,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
             );
             const healthy = state === "connected";
             const pending = state === "connecting" || state === "handshaking";
-            const d = `M ${link.path.x1} ${link.path.y1} Q ${link.path.cx} ${link.path.cy} ${link.path.x2} ${link.path.y2}`;
+            const d = link.d;
             return (
               <g key={`${link.fromInstanceId}->${link.toInstanceId}`}>
                 <path
@@ -840,7 +908,13 @@ export function StarMapScreen(props: StarMapScreenProps) {
             >
               <StarMapInstanceCard
                 instanceId={position.instanceId}
-                label={entry.label}
+                label={
+                  displayLabelPartsById.get(position.instanceId)?.label
+                  ?? entry.label
+                }
+                profileName={
+                  displayLabelPartsById.get(position.instanceId)?.profileName
+                }
                 icon={celestialIcons.iconFor(
                   position.instanceId === localInstanceId
                     ? undefined
@@ -987,6 +1061,31 @@ export function StarMapScreen(props: StarMapScreenProps) {
             </span>
           </button>
         ))}
+        {/* Separate from the attention chips because it behaves
+            differently: those OR together to widen the set, this ANDs on
+            top to narrow it. Hence a cycle, not a toggle. */}
+        <button
+          type="button"
+          className={`star-map__filter-chip star-map__filter-chip--agent${
+            preferences.agentFilter === "all" ? "" : " is-on"
+          }`}
+          aria-label={`${
+            STAR_MAP_AGENT_FILTER_LABELS[preferences.agentFilter]
+          } — click to change`}
+          onClick={() => {
+            const next = {
+              ...preferences,
+              agentFilter: nextAgentFilter(preferences.agentFilter),
+            };
+            setPreferences(next);
+            writeStoredPreferences(next);
+          }}
+        >
+          <span>{STAR_MAP_AGENT_FILTER_LABELS[preferences.agentFilter]}</span>
+          {agentFilterCount > 0 ? (
+            <span className="star-map__filter-count">{agentFilterCount}</span>
+          ) : null}
+        </button>
       </div>
     </div>
   );

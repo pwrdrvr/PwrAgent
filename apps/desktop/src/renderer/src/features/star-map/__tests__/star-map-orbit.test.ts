@@ -5,9 +5,14 @@ import {
   cardRings,
   cardRingSlots,
   computeOrbitPlacement,
+  galaxyArmPath,
   shouldStartCanvasPan,
 } from "../star-map-orbit";
-import { buildFederationTopology, topologyEdges } from "../star-map-topology";
+import {
+  buildFederationTopology,
+  topologyEdges,
+  type StarMapTopologyNode,
+} from "../star-map-topology";
 
 function peer(
   id: string,
@@ -56,8 +61,11 @@ describe("card rings", () => {
   it("seats a small cloud on one tight ring near the body", () => {
     const rings = cardRings(4, 200);
     expect(rings).toHaveLength(1);
-    // Close in: a handful of cards should not be flung to the far orbit.
-    expect(rings[0].rx).toBeLessThan(200);
+    // Close in: a handful of cards should not be flung to the far orbit,
+    // but the first ring must still clear the instance's own name pill and
+    // [+] button — a card may never cover the controls for its instance.
+    expect(rings[0].rx).toBeLessThan(260);
+    expect(rings[0].rx).toBeGreaterThanOrEqual(200);
   });
 
   it("adds a ring instead of inflating the first one", () => {
@@ -191,5 +199,135 @@ describe("shouldStartCanvasPan", () => {
 
   it("ignores a non-element target", () => {
     expect(shouldStartCanvasPan(null)).toBe(false);
+  });
+});
+
+describe("instance keep-out", () => {
+  // A card may cover the link lines without a care, but never the body,
+  // name pill, or [+] button of the instance it belongs to.
+  const KEEPOUT_HALF_WIDTH = 92;
+  const KEEPOUT_BELOW = 100;
+  const CARD_HALF_HEIGHT = 56;
+
+  it("clears the name pill and intake button horizontally", () => {
+    for (const cardWidth of [160, 200, 240]) {
+      const [inner] = cardRings(3, cardWidth);
+      // A card centred on the ring's flank reaches inward by half its width.
+      expect(inner.rx - cardWidth / 2).toBeGreaterThan(KEEPOUT_HALF_WIDTH);
+    }
+  });
+
+  it("clears the stacked label rows below the body", () => {
+    const [inner] = cardRings(3, 200);
+    expect(inner.ry - CARD_HALF_HEIGHT).toBeGreaterThan(KEEPOUT_BELOW);
+  });
+
+  it("widens the first ring as cards get wider", () => {
+    expect(cardRings(3, 260)[0].rx).toBeGreaterThan(cardRings(3, 200)[0].rx);
+  });
+});
+
+describe("galaxyArmPath", () => {
+  const hub = { x: 0, y: 0 };
+
+  function points(d: string): Array<{ x: number; y: number }> {
+    return d
+      .trim()
+      .split(/\s*[ML]\s*/)
+      .filter(Boolean)
+      .map((pair) => {
+        const [x, y] = pair.trim().split(/\s+/).map(Number);
+        return { x, y };
+      });
+  }
+
+  it("starts at the body and lands on the hub", () => {
+    const from = { x: 300, y: 300 };
+    const list = points(galaxyArmPath(from, hub));
+    expect(list[0].x).toBeCloseTo(from.x, 0);
+    expect(list[0].y).toBeCloseTo(from.y, 0);
+    const last = list[list.length - 1];
+    expect(Math.hypot(last.x - hub.x, last.y - hub.y)).toBeLessThan(1);
+  });
+
+  it("leaves a lower-right body toward the N/NW, rising more than it tracks left", () => {
+    // The operator'sdescription: out of the N/NW corner, "almost up a bit".
+    const list = points(galaxyArmPath({ x: 300, y: 300 }, hub));
+    const dx = list[1].x - list[0].x;
+    const dy = list[1].y - list[0].y;
+    expect(dx).toBeLessThan(0); // heading left
+    expect(dy).toBeLessThan(0); // heading up
+    expect(Math.abs(dy)).toBeGreaterThan(Math.abs(dx)); // more up than left
+  });
+
+  it("curves harder as it approaches the hub", () => {
+    const list = points(galaxyArmPath({ x: 400, y: 0 }, hub));
+    const heading = (a: { x: number; y: number }, b: { x: number; y: number }) =>
+      Math.atan2(b.y - a.y, b.x - a.x);
+    const turn = (index: number) =>
+      Math.abs(
+        heading(list[index + 1], list[index + 2])
+          - heading(list[index], list[index + 1]),
+      );
+    expect(turn(list.length - 4)).toBeGreaterThan(turn(0));
+  });
+
+  it("degenerates to a straight segment when the body sits on the hub", () => {
+    expect(galaxyArmPath({ x: 0, y: 0 }, hub)).toBe("M 0 0 L 0 0");
+  });
+});
+
+describe("computeOrbitPlacement galaxy scatter", () => {
+  const node = (
+    instanceId: string,
+    depth: number,
+    parentId?: string,
+  ): StarMapTopologyNode => ({
+    instanceId,
+    depth,
+    parentId,
+    isLocal: depth === 0,
+    role: depth === 0 ? "gateway" : "client",
+  });
+  const nodes: StarMapTopologyNode[] = [
+    node("hub", 0),
+    node("a", 1, "hub"),
+    node("b", 1, "hub"),
+    node("c", 1, "hub"),
+    node("d", 1, "hub"),
+  ];
+  const placement = () =>
+    computeOrbitPlacement({
+      nodes,
+      cardCounts: new Map(),
+      cardWidth: 200,
+    });
+
+  it("never lands four peers on exact compass points", () => {
+    const hub = placement().instances.find((i) => i.instanceId === "hub")!;
+    for (const instance of placement().instances) {
+      if (instance.instanceId === "hub") continue;
+      const angle = Math.atan2(instance.y - hub.y, instance.x - hub.x);
+      for (const cardinal of [0, Math.PI / 2, Math.PI, -Math.PI / 2]) {
+        expect(Math.abs(angle - cardinal)).toBeGreaterThan(0.02);
+      }
+    }
+  });
+
+  it("does not space peers at exactly 90 degrees", () => {
+    const result = placement();
+    const hub = result.instances.find((i) => i.instanceId === "hub")!;
+    const angles = result.instances
+      .filter((i) => i.instanceId !== "hub")
+      .map((i) => Math.atan2(i.y - hub.y, i.x - hub.x))
+      .sort((left, right) => left - right);
+    const gaps = angles
+      .slice(1)
+      .map((angle, index) => angle - angles[index]);
+    expect(gaps.some((gap) => Math.abs(gap - Math.PI / 2) > 0.02)).toBe(true);
+  });
+
+  it("is deterministic across renders", () => {
+    expect(placement().instances).toEqual(placement().instances);
   });
 });
