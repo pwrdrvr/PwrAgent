@@ -17,12 +17,87 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
+  # Keep the pull_request trigger path-unfiltered so the required check jobs
+  # exist on every PR. Documentation-only PRs skip those jobs below instead.
+  changes:
+    name: Classify Changes
+    runs-on: ubuntu-latest
+    outputs:
+      code_impacting: ${{ steps.classify.outputs.code_impacting }}
+      docs_only: ${{ steps.classify.outputs.docs_only }}
+    steps:
+      - name: Classify changed files
+        id: classify
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const fullCi = (reason) => {
+              core.setOutput("code_impacting", "true");
+              core.setOutput("docs_only", "false");
+              core.notice(`Running full CI: ${reason}`);
+            };
+
+            if (context.eventName !== "pull_request") {
+              fullCi(`${context.eventName} events are never docs-only`);
+              return;
+            }
+
+            let files;
+            try {
+              files = await github.paginate(github.rest.pulls.listFiles, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.issue.number,
+                per_page: 100,
+              });
+            } catch (error) {
+              fullCi(`changed-file lookup failed (${error.message})`);
+              return;
+            }
+
+            const reportedCount = context.payload.pull_request.changed_files;
+            if (files.length === 0 || files.length !== reportedCount) {
+              fullCi(
+                `changed-file list was incomplete (received ${files.length} of ${reportedCount})`,
+              );
+              return;
+            }
+
+            const isDocumentationPath = (path) =>
+              path.startsWith("docs/") || path.toLowerCase().endsWith(".md");
+            const codeImpactingFile = files.find((file) => {
+              const paths = [file.filename, file.previous_filename].filter(Boolean);
+              return paths.some((path) => !isDocumentationPath(path));
+            });
+            const docsOnly = codeImpactingFile === undefined;
+
+            core.setOutput("code_impacting", String(!docsOnly));
+            core.setOutput("docs_only", String(docsOnly));
+            await core.summary
+              .addHeading("Changed-file classification")
+              .addTable([
+                [{data: "Classification", header: true}, {data: "Files", header: true}],
+                [docsOnly ? "Documentation only" : "Code impacting", String(files.length)],
+              ])
+              .addRaw(
+                docsOnly
+                  ? "Only `docs/**` and Markdown files changed; expensive CI jobs are skipped."
+                  : `Full CI runs because \`${codeImpactingFile.filename}\` is not documentation-only.`,
+              )
+              .write();
+
   # Validation-only PR: rerun CI against pwrdrvr/configure-nodejs@v1 after v1 moved to v1.1.1.
   install-deps:
     name: Install Dependencies
     runs-on: ubuntu-latest
+    needs: changes
+    if: >-
+      needs.changes.outputs.code_impacting == 'true' ||
+      (github.event_name == 'pull_request' &&
+       contains(github.event.pull_request.labels.*.name, 'ci:live-agent-core'))
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -38,7 +113,8 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
-    needs: install-deps
+    needs: [changes, install-deps]
+    if: needs.changes.outputs.code_impacting == 'true'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -95,7 +171,8 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
-    needs: install-deps
+    needs: [changes, install-deps]
+    if: needs.changes.outputs.code_impacting == 'true'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -114,7 +191,8 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
-    needs: install-deps
+    needs: [changes, install-deps]
+    if: needs.changes.outputs.code_impacting == 'true'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -137,6 +215,8 @@ jobs:
   windows:
     name: Windows (build + test)
     runs-on: windows-latest
+    needs: changes
+    if: needs.changes.outputs.code_impacting == 'true'
     timeout-minutes: 30
     steps:
       - name: Checkout repository
@@ -174,6 +254,7 @@ jobs:
     # Opt-in only: add the `ci:windows-package` label to a PR to validate the
     # Windows NSIS installer build. Off by default — never runs on normal
     # PRs/pushes, so the ~15-minute packaging cost is paid only on demand.
+    needs: changes
     if: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:windows-package') }}
     # node-pty's Electron rebuild currently pulls node-gyp 11.x, which does
     # not recognize Visual Studio 2026 on windows-latest/windows-2025.
@@ -212,7 +293,8 @@ jobs:
   desktop-e2e:
     name: Desktop E2E
     runs-on: ubuntu-latest
-    needs: install-deps
+    needs: [changes, install-deps]
+    if: needs.changes.outputs.code_impacting == 'true'
     timeout-minutes: 20
     steps:
       - name: Checkout repository
@@ -254,11 +336,12 @@ jobs:
     # Never relax this fork guard: a public fork must not execute arbitrary
     # code on a self-hosted machine, even when the VM is softnet-isolated.
     if: >-
-      github.event_name == 'push' ||
-      (github.event_name == 'pull_request' &&
-       github.event.pull_request.head.repo.full_name == github.repository)
+      needs.changes.outputs.code_impacting == 'true' &&
+      (github.event_name == 'push' ||
+       (github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.full_name == github.repository))
     runs-on: [self-hosted, macOS, ARM64, pwrdrvr-macos]
-    needs: install-deps
+    needs: [changes, install-deps]
     timeout-minutes: 30
     steps:
       - name: Checkout repository
@@ -295,9 +378,12 @@ jobs:
 
   live-agent-core:
     name: Live Agent Core
-    if: ${{ github.event_name == 'pull_request' }}
+    if: >-
+      github.event_name == 'pull_request' &&
+      (needs.changes.outputs.code_impacting == 'true' ||
+       contains(github.event.pull_request.labels.*.name, 'ci:live-agent-core'))
     runs-on: ubuntu-latest
-    needs: install-deps
+    needs: [changes, install-deps]
     timeout-minutes: 10
     steps:
       - name: Checkout repository
