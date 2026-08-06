@@ -18,7 +18,11 @@ export type StarMapCardFields = {
   terminalPullRequests: boolean;
 };
 
+export type StarMapLayoutMode = "lanes" | "orbit";
+
 export type StarMapViewPreferences = {
+  /** Lane columns under a body row, or bodies with orbiting card rings. */
+  layout: StarMapLayoutMode;
   cardFields: StarMapCardFields;
   /** Drop instances that are not currently connected from the map. */
   hideOfflineInstances: boolean;
@@ -30,6 +34,7 @@ export type StarMapViewPreferences = {
  * scannable at a glance.
  */
 export const DEFAULT_STAR_MAP_PREFERENCES: StarMapViewPreferences = {
+  layout: "lanes",
   cardFields: {
     provider: false,
     branch: false,
@@ -60,6 +65,7 @@ export function readStoredPreferences(): StarMapViewPreferences {
     if (!raw) return DEFAULT_STAR_MAP_PREFERENCES;
     const parsed = JSON.parse(raw) as Partial<StarMapViewPreferences>;
     return {
+      layout: parsed.layout === "orbit" ? "orbit" : "lanes",
       cardFields: {
         ...DEFAULT_STAR_MAP_PREFERENCES.cardFields,
         ...(parsed.cardFields ?? {}),

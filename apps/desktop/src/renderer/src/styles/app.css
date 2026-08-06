@@ -9385,10 +9385,34 @@ textarea,
 /* "View" popover: card density + instance visibility, parked opposite the
    attention filters. */
 .star-map__chrome {
+  display: flex;
   position: absolute;
   top: 14px;
   left: 16px;
   z-index: 4;
+  align-items: center;
+  gap: 12px;
+}
+
+/* The map covers the whole window, so its top-left chrome has to clear the
+   OS window controls itself. macOS floats the traffic lights over the
+   content: reserve the same 80px the sidebar masthead does, so the
+   wordmark lands in exactly the spot it occupies on the main window. */
+:root[data-platform="darwin"] .star-map__chrome {
+  padding-left: 80px;
+}
+
+/* macOS fullscreen hides the stoplights, so the reservation becomes a dead
+   gap - same fallback the masthead uses. */
+:root[data-platform="darwin"][data-fullscreen="true"] .star-map__chrome {
+  padding-left: 0;
+}
+
+/* Windows draws its caption buttons in the AppTitleBar strip above the
+   shell, and Linux uses a normal OS frame, so neither reserves anything
+   here. */
+:root[data-platform]:not([data-platform="darwin"]) .star-map__chrome {
+  padding-left: 0;
 }
 
 .star-map__view-options {
@@ -9408,6 +9432,55 @@ textarea,
   border-radius: 8px;
   background: var(--bg-panel-elevated);
   box-shadow: var(--shadow-popover);
+}
+
+/* Canvas the bodies live on. Lanes fill the viewport; orbit is larger than
+   the window and pans/zooms under the pointer. */
+.star-map__canvas {
+  position: absolute;
+  inset: 0;
+}
+
+.star-map__canvas.is-orbit {
+  inset: auto;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+/* Bare sky is a pan handle in orbit; cards and bodies keep their own
+   cursors because the pan never starts on them. */
+.star-map__viewport:has(.star-map__canvas.is-orbit) {
+  cursor: grab;
+}
+
+.star-map__viewport.is-panning,
+.star-map__viewport.is-panning .star-map__canvas {
+  cursor: grabbing;
+}
+
+.star-map__layout-switch {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+
+.star-map__layout-option {
+  flex: 1;
+  padding: 4px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.star-map__layout-option.is-on {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--text-primary);
 }
 
 .star-map__view-heading {
