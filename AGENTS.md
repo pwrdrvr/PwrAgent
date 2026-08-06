@@ -35,6 +35,13 @@
 - **An operator may have a lab available for off-desktop Windows or macOS E2E
   testing.** Ask the operator for a pointer to the appropriate lab repository
   or skill before running headed desktop E2E.
+- Before changing Windows Git/Bash process launch or shutdown, Vitest process
+  isolation, queue/composer lifecycle tests, or lazy-renderer readiness, read
+  [Windows Vitest stability: process ownership and lifecycle truth](docs/solutions/2026-08-06-windows-vitest-process-isolation.md).
+  Git-for-Windows launcher handoffs, non-atomic descendant cleanup, and
+  optimistic renderer synchronization have all caused expensive Windows-only
+  flakes; retries, wider timeouts, fewer workers, and serial lanes are not
+  substitutes for evidence-backed ownership and readiness fixes.
 - The macOS CI lane uses the selected-repository **PwrDrvr macOS**
   organization runner group, shared only with PwrSnap. Do not add a
   repository-scoped runner or widen access to the rest of the organization.
