@@ -482,14 +482,26 @@ async function closeRendererWindowsBeforeResourceShutdown(
       windows.map(
         (window) =>
           new Promise<void>((resolve) => {
-            window.once("closed", () => {
+            const settle = (): void => {
               pendingWindows.delete(window);
               resolve();
-            });
-            window.close();
+            };
             if (window.isDestroyed()) {
-              pendingWindows.delete(window);
-              resolve();
+              settle();
+              return;
+            }
+            try {
+              window.once("closed", settle);
+              window.close();
+            } catch (error) {
+              mainLog.warn("failed to close renderer window during shutdown", {
+                source,
+                windowId: window.id,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            }
+            if (window.isDestroyed()) {
+              settle();
             }
           }),
       ),
@@ -515,7 +527,18 @@ async function closeRendererWindowsBeforeResourceShutdown(
       });
       for (const window of pendingWindows) {
         if (!window.isDestroyed()) {
-          window.destroy();
+          try {
+            window.destroy();
+          } catch (error) {
+            mainLog.warn(
+              "failed to force destroy renderer window during shutdown",
+              {
+                source,
+                windowId: window.id,
+                error: error instanceof Error ? error.message : String(error),
+              },
+            );
+          }
         }
       }
     }
