@@ -331,7 +331,7 @@ function remotePrStatusEventIsSupersededLocally(event: AgentEvent): boolean {
     return false;
   }
   const { prKey } = event.notification.params as { prKey: string };
-  return getDesktopBackendRegistry().isPullRequestAttachedLocally(prKey);
+  return getDesktopBackendRegistry().isPullRequestLocallyMonitored(prKey);
 }
 
 export function broadcastAgentEvent(event: AgentEvent): void {

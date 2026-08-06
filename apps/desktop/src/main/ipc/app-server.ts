@@ -4258,8 +4258,13 @@ class DesktopAppServerService {
    * Terminal PRs count. They drop out of the poll rotation, but the
    * status this instance last observed for them is final, so a peer's
    * observation of the same PR must not be allowed to overwrite it.
+   *
+   * Note the primary-workspace qualifier: a PR attached to a local
+   * thread but not to its primary repository is deliberately NOT ours.
+   * `collectPrPollTargets` skips those too, so we hold no fresher view
+   * of them than the peer does — deferring is the better answer.
    */
-  isPullRequestAttachedLocally(prKey: string): boolean {
+  isPullRequestLocallyMonitored(prKey: string): boolean {
     return this.findThreadKeysForPrKey(prKey).length > 0;
   }
 
@@ -6640,7 +6645,7 @@ export function registerAppServerIpcHandlers(): void {
       await appServerService.canonicalizeStoredPullRequests(prs),
   );
   getDesktopBackendRegistry().setLocalPullRequestAuthorityResolver((prKey) =>
-    appServerService.isPullRequestAttachedLocally(prKey)
+    appServerService.isPullRequestLocallyMonitored(prKey)
   );
   getDesktopBackendRegistry().setThreadPullRequestWatchToolHandler(
     async (args) => await appServerService.watchThreadPullRequestForTool(args),

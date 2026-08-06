@@ -40,7 +40,7 @@ const federationWindowWebContents = { send: federationWindowSend };
 let registryListener: ((event: AgentEvent) => void | Promise<void>) | undefined;
 
 const registry = {
-  isPullRequestAttachedLocally: vi.fn((_prKey: string) => false),
+  isPullRequestLocallyMonitored: vi.fn((_prKey: string) => false),
   listBackends: vi.fn(async (_request?: ListBackendsRequest) => ({
     fetchedAt: 1,
     backends: [],
@@ -368,8 +368,8 @@ describe("agent ipc", () => {
     handlers.clear();
     send.mockReset();
     federationWindowSend.mockReset();
-    registry.isPullRequestAttachedLocally.mockClear();
-    registry.isPullRequestAttachedLocally.mockReturnValue(false);
+    registry.isPullRequestLocallyMonitored.mockClear();
+    registry.isPullRequestLocallyMonitored.mockReturnValue(false);
     registry.listBackends.mockClear();
     registry.onEvent.mockClear();
     registry.startThread.mockClear();
@@ -1111,7 +1111,7 @@ describe("agent ipc", () => {
     // Not attached locally: the peer is the only observer, so every
     // window — including the main one rendering a pinned remote row —
     // needs it.
-    registry.isPullRequestAttachedLocally.mockReturnValue(false);
+    registry.isPullRequestLocallyMonitored.mockReturnValue(false);
     await registryListener?.(remotePrEvent as unknown as AgentEvent);
     expect(send).toHaveBeenCalledWith(
       AGENT_EVENT_CHANNEL,
@@ -1125,7 +1125,7 @@ describe("agent ipc", () => {
     // to defer to and still gets it.
     send.mockReset();
     federationWindowSend.mockReset();
-    registry.isPullRequestAttachedLocally.mockReturnValue(true);
+    registry.isPullRequestLocallyMonitored.mockReturnValue(true);
     await registryListener?.(remotePrEvent as unknown as AgentEvent);
     expect(send).not.toHaveBeenCalled();
     expect(federationWindowSend).toHaveBeenCalledTimes(1);
@@ -1138,6 +1138,26 @@ describe("agent ipc", () => {
       federationTarget: undefined,
     } as unknown as AgentEvent);
     expect(send).toHaveBeenCalledTimes(1);
+
+    // A peer's ATTACHMENT LIST is never gated, even while we monitor a
+    // PR on that list ourselves: which PRs hang off a peer's thread is
+    // the peer's to declare, and only its own rows are rewritten (the
+    // renderer scopes that apply by federation origin). Widening the
+    // gate to cover this method would silently freeze pinned remote
+    // rows, so this asymmetry is pinned on purpose.
+    send.mockReset();
+    federationWindowSend.mockReset();
+    registry.isPullRequestLocallyMonitored.mockReturnValue(true);
+    await registryListener?.({
+      backend: "codex",
+      federationTarget: { scope: "remote", instanceId: "peer-1" },
+      notification: {
+        method: "thread/pullRequests/updated",
+        params: { threadId: "peer-thread-1", prs: [remotePrEvent.notification.params.pr] },
+      },
+    } as unknown as AgentEvent);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(federationWindowSend).toHaveBeenCalledTimes(1);
 
     disposeAgentIpcHandlers();
   });

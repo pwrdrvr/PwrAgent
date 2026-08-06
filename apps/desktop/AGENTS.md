@@ -373,7 +373,7 @@ gap it alone can see**:
 
 - `broadcastAgentEvent` drops a remote-stamped `pullRequest/status/updated`
   before it reaches any non-federation window when
-  `registry.isPullRequestAttachedLocally(prKey)` — the PR is attached to
+  `registry.isPullRequestLocallyMonitored(prKey)` — the PR is attached to
   a local thread's primary workspace, so our own poller owns it. The
   resolver is injected from `DesktopAppServerService` and uses the same
   test as `collectPrPollTargets`. Terminal PRs still count as ours: they
@@ -386,11 +386,28 @@ gap it alone can see**:
   the snapshot, so the local observation lands on the remote row too.
   That is why dropping the peer's copy loses nothing.
 
-`thread/pullRequests/updated` is not gated: a thread's *attachment list*
-is owned by the instance the thread lives on. It is instead scoped by
-origin in `applyThreadPullRequestsUpdate`, which matches the thread's
+`thread/pullRequests/updated` is **not** gated: a thread's *attachment
+list* is owned by the instance the thread lives on, so a peer is always
+authoritative for its own threads' lists. It is instead scoped by origin
+in `applyThreadPullRequestsUpdate`, which matches the thread's
 `federation.ref.target` against the event's, so a peer's event cannot
-rewrite a local thread that happens to share an id.
+rewrite a local thread that happens to share an id. Do not "fix" the
+asymmetry by adding this method to the gate — status and attachment
+lists have different owners, and a test pins the distinction.
+
+Two deliberate cases where we defer to the peer rather than claim
+ownership, both because claiming it would assert a freshness we do not
+have:
+
+- **Non-primary attachments.** The test is the PR matching a local
+  thread's *primary* repository, matching `collectPrPollTargets`. A PR
+  attached to a local thread some other way is not polled by us either,
+  so the peer's observation is the fresher one.
+- **Before the first local snapshot.** `attachedPrsByThreadKey` is
+  populated by the local navigation-snapshot path, so until it first
+  runs every PR answers "not monitored" and peer observations flow
+  through. The local poller corrects any row it owns on its next
+  observation.
 
 ## Thread-State Update Bus
 

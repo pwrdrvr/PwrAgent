@@ -7130,10 +7130,13 @@ export class DesktopBackendRegistry {
   /**
    * True when this instance monitors the PR itself, so a federated
    * peer's observation of the same PR should not be applied on top of
-   * ours. Defaults to false when no resolver is injected — an instance
-   * that cannot answer the question has no claim to authority.
+   * ours. Defaults to false when no resolver is injected, and also
+   * answers false until the first local navigation snapshot has
+   * registered this instance's PR attachments — an instance that cannot
+   * yet answer the question has no claim to authority, and deferring to
+   * the peer beats asserting ownership we have not established.
    */
-  isPullRequestAttachedLocally(prKey: string): boolean {
+  isPullRequestLocallyMonitored(prKey: string): boolean {
     return this.localPullRequestAuthorityResolver?.(prKey) ?? false;
   }
 
