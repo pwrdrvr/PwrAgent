@@ -714,11 +714,13 @@ describe("Tangerine Terminal theme contract", () => {
     const editorRule = extractRuleBody(css, ".composer-tiptap-input__editor");
     expect(editorRule).toMatch(/min-height:\s*46px;/);
 
-    // The unused-but-styled `<textarea>` variant (`.composer__input`)
-    // shares the same empty-state floor so a future swap to it
-    // doesn't surprise the reading area.
-    const textareaRule = extractRuleBody(css, ".composer__input");
-    expect(textareaRule).toMatch(/min-height:\s*48px;/);
+    // The dead `<textarea>` variant (`.composer__input`) used to be
+    // pinned here too, on the theory that it shared the floor. It had
+    // no renderer references and its floor never applied (a textarea
+    // sizes from `rows`, default 2), so the rule is gone. Assert it
+    // stays gone rather than silently growing a second, unrendered
+    // height contract to keep in sync.
+    expect(css).not.toContain(".composer__input {");
   });
 
   it("uses --accent (not --accent-bright) for every brand-accent mark", () => {

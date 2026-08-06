@@ -2993,7 +2993,6 @@ textarea,
 .button:focus,
 .thread-row:focus,
 .transcript-activity__toggle:focus,
-.composer__input:focus,
 .composer-tiptap-input__editor:focus,
 .composer__select:focus,
 .composer__review-input:focus,
@@ -3004,7 +3003,6 @@ textarea,
 .button:focus-visible,
 .thread-row:focus-visible,
 .transcript-activity__toggle:focus-visible,
-.composer__input:focus-visible,
 .composer-tiptap-input__editor:focus-visible,
 .composer__select:focus-visible,
 .composer__review-input:focus-visible,
@@ -16674,22 +16672,15 @@ a.transcript-message__messaging-origin:focus-visible {
   scrollbar-color: var(--terminal-scrollbar-thumb) var(--terminal-bg);
 }
 
-.composer__input {
-  width: 100%;
-  /* Compact when empty — grows as the user types up to a max via the
-     contenteditable variant below. The previous 144px default
-     reserved ~6 lines of dead space when the input was empty, which
-     ate into the transcript's reading area on shorter viewports.
-     Matches the contenteditable variant's one-line floor so a swap
-     between the two doesn't change the composer's resting height. */
-  min-height: 48px;
-  resize: vertical;
-  padding: 12px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  background: var(--bg-input);
-  color: var(--text-primary);
-}
+/* The `<textarea>` composer variant (`.composer__input`) was removed
+   here — the renderer has rendered the contenteditable
+   `.composer-tiptap-input` for some time and nothing referenced the
+   class any more. Its `min-height` had also stopped meaning anything:
+   a textarea's intrinsic height comes from its `rows` attribute
+   (default 2 ≈ 71px with this padding), so any floor below that never
+   applied, and the rule's claim of sharing the contenteditable's
+   empty-state floor was decorative. Reintroduce a real textarea with
+   its own measured height contract if the composer ever swaps back. */
 
 .composer__input-wrap {
   position: relative;
