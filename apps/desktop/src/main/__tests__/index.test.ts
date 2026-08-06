@@ -41,6 +41,8 @@ const registerComposerDraftIpcHandlersMock = vi.fn();
 const disposeComposerDraftIpcHandlersMock = vi.fn();
 const registerFederationIpcHandlersMock = vi.fn();
 const disposeFederationIpcHandlersMock = vi.fn();
+const registerStarMapIpcHandlersMock = vi.fn();
+const disposeStarMapIpcHandlersMock = vi.fn();
 const registerPreloadLogIpcHandlersMock = vi.fn();
 const disposePreloadLogIpcHandlersMock = vi.fn();
 const registerProfilesIpcHandlersMock = vi.fn();
@@ -323,6 +325,11 @@ vi.mock("../ipc/federation", () => ({
   disposeFederationIpcHandlers: disposeFederationIpcHandlersMock,
 }));
 
+vi.mock("../ipc/star-map", () => ({
+  registerStarMapIpcHandlers: registerStarMapIpcHandlersMock,
+  disposeStarMapIpcHandlers: disposeStarMapIpcHandlersMock,
+}));
+
 vi.mock("../ipc/preload-log", () => ({
   registerPreloadLogIpcHandlers: registerPreloadLogIpcHandlersMock,
   disposePreloadLogIpcHandlers: disposePreloadLogIpcHandlersMock,
@@ -514,6 +521,8 @@ describe("bootstrapApp", () => {
     disposeComposerDraftIpcHandlersMock.mockReset();
     registerFederationIpcHandlersMock.mockReset();
     disposeFederationIpcHandlersMock.mockReset();
+    registerStarMapIpcHandlersMock.mockReset();
+    disposeStarMapIpcHandlersMock.mockReset();
     registerPreloadLogIpcHandlersMock.mockReset();
     disposePreloadLogIpcHandlersMock.mockReset();
     registerProfilesIpcHandlersMock.mockReset();

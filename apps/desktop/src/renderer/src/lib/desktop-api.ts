@@ -116,6 +116,8 @@ import type {
   RevokeFederationPeerResponse,
   SetCelestialIconRequest,
   SetCelestialIconResponse,
+  ReadStarMapArrangementResponse,
+  SetStarMapCardPositionRequest,
   ReorderDirectoryPinsRequest,
   ReorderDirectoryPinsResponse,
   ReorderThreadPinsRequest,
@@ -499,6 +501,10 @@ export type DesktopApi = {
   setCelestialIcon?: (
     request: SetCelestialIconRequest,
   ) => Promise<SetCelestialIconResponse>;
+  readStarMapArrangement?: () => Promise<ReadStarMapArrangementResponse>;
+  setStarMapCardPosition?: (
+    request: SetStarMapCardPositionRequest,
+  ) => Promise<ReadStarMapArrangementResponse>;
   ping?: () => string;
   listSkills?: (
     request?: AppServerListSkillsRequest

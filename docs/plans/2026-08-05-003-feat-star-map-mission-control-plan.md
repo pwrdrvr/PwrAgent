@@ -475,7 +475,17 @@ route; a `list_projects` orchestration tool is deliberately **not** added now
     (offline self-assigns): overrides and older assignments keep their
     icon; newer auto entries are reassigned with a fresh updatedAt so the
     fix wins everywhere.
-- [ ] Unit 2: star map surface
+- [x] Unit 2: star map surface
+  - Implementation deviations: (a) the floating thread window reuses the
+    already-mounted `<main>` ThreadView by elevating it over the layer
+    (`.app-main--star-map-float`) instead of mounting a second ThreadView —
+    no duplicate IPC subscriptions, instant open, and re-clicking another
+    local card retargets the same float; (b) clicking a REMOTE thread card
+    opens the existing remote-viewer window with the thread preselected —
+    inline remote selection lands with the Cmd+K-unification sibling
+    (remote threads in the local snapshot), which this surface will adopt
+    for free; (c) the [+] intake button ships with Unit 4 rather than as a
+    disabled placeholder (no scaffold controls in shipped UI).
 - [ ] Unit 3: arrangement sync
 - [ ] Unit 4: AI intake
 

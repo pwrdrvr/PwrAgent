@@ -62,6 +62,7 @@ import {
   federationEndpointAcceptsCloudflareCredentials,
   isCelestialIconAssignment,
   isCelestialIconId,
+  isStarMapArrangementEntry,
   isFederationGatewayEndpointUrl,
   formatFederationPeerDisplayLabel,
   isRemoteFederationTarget,
@@ -104,6 +105,7 @@ import {
   type SetAcpSessionRuntimeOptionRequest,
   type SetCelestialIconRequest,
   type SetCelestialIconResponse,
+  type StarMapArrangementEntry,
   type SetCodexThreadEnvironmentRequest,
   type SetThreadExecutionModeRequest,
   type SetThreadModelSettingsRequest,
@@ -203,6 +205,7 @@ const PENDING_INVITE_TOKEN_META_KEY = "federation_pending_invite_token";
 const GATEWAY_ENROLLED_AT_META_KEY = "federation_gateway_enrolled_at";
 const FEDERATION_PEER_DIRECTORY_METHOD = "federation.peerDirectory";
 const FEDERATION_CELESTIAL_ICONS_METHOD = "federation.celestialIcons";
+const FEDERATION_STAR_MAP_ARRANGEMENT_METHOD = "federation.starMapArrangement";
 const CELESTIAL_ICON_ASSIGNMENTS_META_KEY =
   "federation_celestial_icon_assignments";
 const FEDERATION_RECONNECT_MAX_DELAY_MS = 30_000;
@@ -300,6 +303,13 @@ type FederationCelestialIconsNotification = {
   method: typeof FEDERATION_CELESTIAL_ICONS_METHOD;
   params: {
     assignments: CelestialIconAssignment[];
+  };
+};
+
+type FederationStarMapArrangementNotification = {
+  method: typeof FEDERATION_STAR_MAP_ARRANGEMENT_METHOD;
+  params: {
+    entries: StarMapArrangementEntry[];
   };
 };
 
@@ -1349,6 +1359,7 @@ export class DesktopFederationRuntime {
     // LWW merges at the gateway; its authoritative snapshot comes back on
     // the same channel.
     this.broadcastCelestialIcons();
+    this.sendStarMapArrangementSnapshot();
     if (pendingInviteToken) {
       getAppStateDb().setMeta(PENDING_INVITE_TOKEN_META_KEY, "");
     }
@@ -1475,6 +1486,7 @@ export class DesktopFederationRuntime {
     // before app state exists (unit harnesses) skip icon coordination.
     if (isAppStateInitialized()) {
       this.reconcileCelestialAssignments();
+      this.sendStarMapArrangementSnapshot();
     }
   }
 
@@ -1536,6 +1548,9 @@ export class DesktopFederationRuntime {
       return;
     }
     if (this.applyCelestialIcons(envelope, sourcePeerId)) {
+      return;
+    }
+    if (this.applyStarMapArrangement(envelope, sourcePeerId)) {
       return;
     }
     if (this.publishRemotePtyStreamEvent(envelope, sourcePeerId)) {
@@ -1957,6 +1972,11 @@ export class DesktopFederationRuntime {
     return !getAppStateDb().getMeta(GATEWAY_INSTANCE_ID_META_KEY);
   }
 
+  /** This instance's durable federation identity (creates one if absent). */
+  localFederationInstanceId(): FederationInstanceId {
+    return this.ensureLocalInstanceId();
+  }
+
   /** All known assignments, self-assigning the local instance on first read. */
   celestialIconAssignments(): CelestialIconAssignment[] {
     const map = this.celestialAssignmentMap();
@@ -2128,6 +2148,99 @@ export class DesktopFederationRuntime {
     // client's offline overrides ride up to the gateway the same way.
     this.broadcastCelestialIcons(sourcePeerId);
     return true;
+  }
+
+  /**
+   * Fan an arrangement delta out to connected peers. Called for local
+   * writes (broadcast to everyone) and for received deltas (re-broadcast
+   * excluding the sender), so a gateway relays client drags to siblings.
+   */
+  broadcastStarMapArrangement(
+    entries: StarMapArrangementEntry[],
+    excludePeerId?: FederationInstanceId,
+  ): void {
+    const router = this.router;
+    if (!router || entries.length === 0) return;
+    const localInstanceId = this.ensureLocalInstanceId();
+    for (const connection of router.listConnections()) {
+      if (connection.peerId === excludePeerId) continue;
+      connection.sendEnvelope({
+        id: `federation-star-map:${randomUUID()}`,
+        kind: "notification",
+        method: FEDERATION_STAR_MAP_ARRANGEMENT_METHOD,
+        params: { entries },
+        protocolVersion: FEDERATION_PROTOCOL_VERSION,
+        sourceInstanceId: localInstanceId,
+        targetInstanceId: connection.peerId,
+        createdAt: Date.now(),
+      });
+    }
+  }
+
+  /** Reconnect convergence: push the full persisted arrangement snapshot. */
+  private sendStarMapArrangementSnapshot(): void {
+    if (!isAppStateInitialized()) return;
+    let store: ReturnType<typeof getDesktopOverlayStore>;
+    try {
+      // Connection churn can race overlay-store availability during boot
+      // and teardown (and unit harnesses stub app-state without it); the
+      // snapshot is a convergence optimization, not a correctness need.
+      store = getDesktopOverlayStore();
+    } catch {
+      return;
+    }
+    void store
+      .readStarMapArrangement()
+      .then((entries) => this.broadcastStarMapArrangement(entries))
+      .catch((error) => {
+        log.warn("star map arrangement snapshot send failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+  }
+
+  private applyStarMapArrangement(
+    envelope: FederationProtocolEnvelope,
+    sourcePeerId: FederationInstanceId,
+  ): boolean {
+    if (
+      envelope.kind !== "notification" ||
+      envelope.method !== FEDERATION_STAR_MAP_ARRANGEMENT_METHOD
+    ) {
+      return false;
+    }
+    if (!isAppStateInitialized()) return true;
+    const notification =
+      envelope as FederationStarMapArrangementNotification & typeof envelope;
+    const entries = Array.isArray(notification.params?.entries)
+      ? notification.params.entries.filter(isStarMapArrangementEntry)
+      : [];
+    if (entries.length === 0) return true;
+    void getDesktopOverlayStore()
+      .mergeStarMapArrangement(entries)
+      .then(({ accepted }) => {
+        if (accepted.length === 0) return;
+        this.publishStarMapArrangementChanged(accepted);
+        // Accepted-only re-broadcast: idempotent merges terminate the loop,
+        // and the gateway relays client drags to every sibling.
+        this.broadcastStarMapArrangement(accepted, sourcePeerId);
+      })
+      .catch((error) => {
+        log.warn("star map arrangement merge failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    return true;
+  }
+
+  publishStarMapArrangementChanged(entries: StarMapArrangementEntry[]): void {
+    this.publishAgentEvent?.({
+      backend: "codex",
+      notification: {
+        method: "starMap/arrangement/changed",
+        params: { entries },
+      },
+    });
   }
 
   private publishCelestialIconsChanged(): void {

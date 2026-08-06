@@ -9,7 +9,7 @@ import {
 } from "@pwragent/shared";
 import { getNativeBinding } from "./native-binding.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 43;
+export const CURRENT_STATE_DB_USER_VERSION = 44;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -210,6 +210,16 @@ const DIRECTORY_OVERLAY_SCHEMA = `
 CREATE TABLE IF NOT EXISTS directory_overlay (
   directory_key TEXT PRIMARY KEY,
   payload       TEXT NOT NULL
+);
+`;
+
+/* Star Map card arrangement: one row per dragged card
+   (entry_key = "<instanceId> <threadKey>"), LWW-merged and synced across
+   the federation. Payload is a StarMapArrangementEntry JSON blob. */
+const STAR_MAP_ARRANGEMENT_SCHEMA = `
+CREATE TABLE IF NOT EXISTS star_map_arrangement (
+  entry_key TEXT PRIMARY KEY,
+  payload   TEXT NOT NULL
 );
 `;
 
@@ -1273,6 +1283,12 @@ export class StateDb {
         // list"). Deliberately local-only state: the owning instance never
         // learns it has been pinned.
         db.exec(REMOTE_THREAD_PIN_SCHEMA);
+        db.pragma("user_version = 43");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 44) {
+      db.transaction(() => {
+        db.exec(STAR_MAP_ARRANGEMENT_SCHEMA);
         db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
       })();
     }
@@ -1460,6 +1476,7 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     ensureThreadMessageOriginSchema(db);
     db.exec(FEDERATION_SCHEMA);
     db.exec(REMOTE_THREAD_PIN_SCHEMA);
+    db.exec(STAR_MAP_ARRANGEMENT_SCHEMA);
     if ((db.pragma("user_version", { simple: true }) as number) < 4) {
       db.pragma("user_version = 4");
     }

@@ -54,6 +54,10 @@ import {
   registerFederationIpcHandlers,
 } from "./ipc/federation";
 import {
+  disposeStarMapIpcHandlers,
+  registerStarMapIpcHandlers,
+} from "./ipc/star-map";
+import {
   disposeDesktopFederationRuntime,
   getDesktopFederationRuntime,
 } from "./federation/federation-runtime";
@@ -428,6 +432,7 @@ function disposeMainProcessResourcesSync(): void {
   disposeComposerDraftIpcHandlers();
   disposeDiagnosticsIpcHandlers();
   disposeFederationIpcHandlers();
+  disposeStarMapIpcHandlers();
   disposeImageNormalizationIpcHandlers();
   disposeIntegratedTerminalIpcHandlers();
   disposeMcpConnectionIpcHandlers();
@@ -922,6 +927,7 @@ export function bootstrapApp(): void {
     registerComposerDraftIpcHandlers();
     registerDiagnosticsIpcHandlers();
     registerFederationIpcHandlers();
+    registerStarMapIpcHandlers();
     registerImageNormalizationIpcHandlers();
     registerIntegratedTerminalIpcHandlers();
     registerMcpConnectionIpcHandlers();
