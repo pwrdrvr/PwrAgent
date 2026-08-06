@@ -8,6 +8,7 @@ import {
 } from "react";
 import {
   buildThreadIdentityKey,
+  formatFederationPeerDisplayLabel,
   isRemoteFederationTarget,
   type FederationPeerSummary,
   type NavigationThreadSummary,
@@ -232,6 +233,37 @@ export function StarMapScreen(props: StarMapScreenProps) {
     [peers],
   );
 
+  /**
+   * Display labels for every body on the map, local included. Two profiles
+   * on one machine share a hostname label, so the shared formatter appends
+   * "/ <profile>" whenever a label is ambiguous - the local instance has to
+   * be part of that set or it cannot be told apart from its own sibling.
+   */
+  const displayLabelById = useMemo(() => {
+    const localSummary = {
+      id: localInstanceId,
+      label: health?.localLabel?.trim()
+        || props.localInstanceLabel?.trim()
+        || "This instance",
+      profileName: health?.localProfileName,
+    };
+    const all = [
+      localSummary,
+      ...peers.map((peer) => ({
+        id: peer.id,
+        label: peer.label,
+        profileName: peer.profileName,
+        revokedAt: peer.revokedAt,
+      })),
+    ];
+    return new Map(
+      all.map((entry) => [
+        entry.id,
+        formatFederationPeerDisplayLabel(entry, all),
+      ]),
+    );
+  }, [health, localInstanceId, peers, props.localInstanceLabel]);
+
   const { desktopApi, onFocusLocalInstance, onOpenLocalThread } = props;
   const openInstance = useCallback(
     (instanceId: string) => {
@@ -346,12 +378,13 @@ export function StarMapScreen(props: StarMapScreenProps) {
     instanceId: string,
   ): { label: string; peer?: FederationPeerSummary } => {
     if (instanceId === localInstanceId) {
-      return {
-        label: props.localInstanceLabel?.trim() || "This instance",
-      };
+      return { label: displayLabelById.get(instanceId) ?? "This instance" };
     }
     const peer = peerById.get(instanceId);
-    return { label: peer?.label ?? instanceId, peer };
+    return {
+      label: displayLabelById.get(instanceId) ?? peer?.label ?? instanceId,
+      peer,
+    };
   };
 
   return (

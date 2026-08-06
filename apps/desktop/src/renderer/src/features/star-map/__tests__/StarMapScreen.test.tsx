@@ -13,6 +13,8 @@ function buildDesktopApi(): DesktopApi {
         status: "disabled" as const,
         instanceId: "pwr_local",
         localCelestialIcon: "sun" as const,
+        localLabel: "Harold-MBP-M5-Max",
+        localProfileName: "default",
         peers: [],
       },
     })),
@@ -143,5 +145,58 @@ describe("StarMapScreen", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Close Star Map" }));
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("disambiguates two profiles on one machine, local included", async () => {
+    const desktopApi: DesktopApi = {
+      readFederationHealth: vi.fn(async () => ({
+        health: {
+          enabled: true,
+          role: "gateway" as const,
+          status: "listening" as const,
+          instanceId: "pwr_local",
+          localLabel: "Harold-MBP-M5-Max",
+          localProfileName: "default",
+          peers: [
+            {
+              id: "pwr_dev",
+              // Same machine, different profile: raw labels collide.
+              label: "Harold-MBP-M5-Max",
+              profileName: "dev",
+              role: "client" as const,
+              status: "disconnected" as const,
+              capabilities: [],
+            },
+          ],
+        },
+      })) as unknown as DesktopApi["readFederationHealth"],
+      onAgentEvent: vi.fn(() => () => undefined),
+    };
+    render(
+      <StarMapScreen
+        desktopApi={desktopApi}
+        localThreads={[]}
+        sessionKeys={{}}
+        floating={false}
+        onClose={() => undefined}
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", {
+          name: /Open this instance \(Harold-MBP-M5-Max \/ default\)/,
+        }),
+      ).toBeTruthy();
+    });
+    expect(
+      screen.getByRole("button", {
+        name: /Open remote viewer for Harold-MBP-M5-Max \/ dev/,
+      }),
+    ).toBeTruthy();
+    // The generic placeholder must never stand in for a real instance.
+    expect(screen.queryByText("This instance")).toBeNull();
   });
 });

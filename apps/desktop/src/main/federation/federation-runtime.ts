@@ -533,6 +533,14 @@ export class DesktopFederationRuntime {
     health.localCelestialIcon = this.celestialIconAssignments().find(
       (assignment) => assignment.instanceId === health.instanceId,
     )?.icon;
+    // Resolved from settings rather than `this.instanceLabel` so the label
+    // is correct even before the runtime has started (federation disabled,
+    // or health read during boot).
+    health.localLabel =
+      settings.federation.instanceLabel.value.trim() || defaultInstanceLabel();
+    health.localProfileName = isAppStateInitialized()
+      ? getAppStateDb().getMeta("profile_name") || undefined
+      : undefined;
     return health;
   }
 
