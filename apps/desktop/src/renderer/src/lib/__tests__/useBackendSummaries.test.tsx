@@ -524,4 +524,84 @@ describe("useBackendSummaries", () => {
       expect(listBackends).toHaveBeenCalledTimes(3);
     });
   });
+
+  it("preserves remote backend summaries while disconnected and refreshes on reconnect", async () => {
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "remote-instance",
+    };
+    const codexBackend = {
+      kind: "codex" as const,
+      label: "OpenAI",
+      available: true,
+      methods: [],
+      capabilities: {
+        listThreads: true,
+        createThread: true,
+        resumeThread: true,
+        renameThread: true,
+        readThread: true,
+        startTurn: true,
+        interruptTurn: true,
+        steerTurn: false,
+        transcriptPagination: false,
+        toolUse: false,
+        approvalRequests: false,
+        multiDirectoryThreads: true,
+      },
+      executionModes: [],
+    };
+    let rejectOutageRead: ((error: Error) => void) | undefined;
+    const outageRead = new Promise<never>((_resolve, reject) => {
+      rejectOutageRead = reject;
+    });
+    const listBackends = vi
+      .fn<NonNullable<DesktopApi["listBackends"]>>()
+      .mockResolvedValueOnce({
+        fetchedAt: 1,
+        backends: [codexBackend],
+      })
+      .mockReturnValueOnce(outageRead)
+      .mockResolvedValueOnce({
+        fetchedAt: 2,
+        backends: [{ ...codexBackend, label: "OpenAI reconnected" }],
+      });
+    const desktopApi: DesktopApi = {
+      listBackends,
+    };
+    const { rerender, result } = renderHook(
+      ({ suspended }) => useBackendSummaries(desktopApi, {
+        federationTarget,
+        suspended,
+      }),
+      { initialProps: { suspended: false } },
+    );
+
+    await waitFor(() => {
+      expect(result.current.backends[0]?.label).toBe("OpenAI");
+    });
+
+    act(() => {
+      window.dispatchEvent(new Event(BACKEND_SUMMARIES_REFRESH_EVENT));
+    });
+    await waitFor(() => {
+      expect(listBackends).toHaveBeenCalledTimes(2);
+    });
+    rerender({ suspended: true });
+    await act(async () => {
+      rejectOutageRead?.(new Error("Federation peer is not connected"));
+      await outageRead.catch(() => undefined);
+    });
+
+    expect(result.current.backends[0]?.label).toBe("OpenAI");
+    expect(result.current.error).toBeUndefined();
+    window.dispatchEvent(new Event(BACKEND_SUMMARIES_REFRESH_EVENT));
+    expect(listBackends).toHaveBeenCalledTimes(2);
+
+    rerender({ suspended: false });
+    await waitFor(() => {
+      expect(result.current.backends[0]?.label).toBe("OpenAI reconnected");
+    });
+    expect(listBackends).toHaveBeenCalledTimes(3);
+  });
 });

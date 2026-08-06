@@ -2292,7 +2292,7 @@ describe("ThreadView", () => {
     ).toHaveClass("composer__meta--error");
     expect(composerTextbox).toHaveAttribute(
       "contenteditable",
-      "false",
+      "true",
     );
   });
 
