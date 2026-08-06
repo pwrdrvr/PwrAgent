@@ -860,9 +860,11 @@ export function StarMapScreen(props: StarMapScreenProps) {
                   (instance) => instance.instanceId === link.toInstanceId,
                 );
                 // Orbit links sweep in as spiral arms rather than running
-                // straight: `to` is the hub the arm falls into.
+                // straight. Links are emitted parent -> child, so the arm
+                // starts at the CHILD body and falls into `from`, its
+                // parent hub — not the other way round.
                 return from && to
-                  ? { ...link, d: galaxyArmPath(from, to) }
+                  ? { ...link, d: galaxyArmPath(to, from) }
                   : undefined;
               })
             : laneLayout.links.map((link) => ({

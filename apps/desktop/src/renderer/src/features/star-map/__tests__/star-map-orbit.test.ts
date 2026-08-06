@@ -272,6 +272,19 @@ describe("galaxyArmPath", () => {
     expect(turn(list.length - 4)).toBeGreaterThan(turn(0));
   });
 
+  it("is not symmetric: swapping body and hub reverses the sweep", () => {
+    // Guards the call-site direction. Orbit links are emitted parent ->
+    // child, so the renderer must pass the CHILD as the body; passing them
+    // in link order spirals into the client instead of the gateway.
+    const body = { x: 300, y: 300 };
+    const outward = galaxyArmPath(body, hub);
+    const inward = galaxyArmPath(hub, body);
+    expect(outward).not.toBe(inward);
+    const first = points(outward)[0];
+    expect(first.x).toBeCloseTo(body.x, 0);
+    expect(first.y).toBeCloseTo(body.y, 0);
+  });
+
   it("degenerates to a straight segment when the body sits on the hub", () => {
     expect(galaxyArmPath({ x: 0, y: 0 }, hub)).toBe("M 0 0 L 0 0");
   });
