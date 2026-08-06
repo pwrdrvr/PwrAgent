@@ -33,8 +33,10 @@ import {
   STAR_MAP_BODY_ROW_Y,
   STAR_MAP_ESTIMATED_CARD_HEIGHT,
   visibleCardCount,
-  type StarMapInstancePosition,
+  type StarMapCardSlot,
 } from "./star-map-layout";
+import { computeOrbitPlacement } from "./star-map-orbit";
+import { buildFederationTopology } from "./star-map-topology";
 import { IntakeDialog, type IntakeDialogTarget } from "./IntakeDialog";
 import {
   readStoredPreferences,
@@ -50,6 +52,10 @@ import { useStarMapThreads } from "./useStarMapThreads";
 const FILTERS_STORAGE_KEY = "pwragent.starMap.filters";
 const MAX_CARDS_PER_INSTANCE = 8;
 const STAR_COUNT = 130;
+/** Orbit rings use a fixed card width; lanes narrow theirs to fit. */
+const ORBIT_CARD_WIDTH = 220;
+const MIN_ZOOM = 0.35;
+const MAX_ZOOM = 2;
 
 function readStoredFilters(): Set<StarMapAttentionCategory> {
   if (typeof window === "undefined") {
@@ -124,6 +130,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
   const [preferences, setPreferences] = useState<StarMapViewPreferences>(
     readStoredPreferences,
   );
+  // Orbit places bodies on a canvas larger than the window, so the surface
+  // pans and zooms rather than compressing the map to fit.
+  const [view, setView] = useState({ x: 0, y: 0, scale: 1 });
+  const orbitMode = preferences.layout === "orbit";
 
   // Focus the layer on open AND whenever the floating thread closes -
   // "Back to map" leaves focus inside <main>, and without a refocus the
@@ -183,6 +193,42 @@ export function StarMapScreen(props: StarMapScreenProps) {
     });
   });
 
+  // Trackpad: two-finger drag pans, pinch (ctrl+wheel) zooms about the
+  // pointer. Registered natively because the listener must not be passive.
+  useEffect(() => {
+    const element = viewportRef.current;
+    if (!element || !orbitMode) return;
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      if (event.ctrlKey) {
+        const rect = element.getBoundingClientRect();
+        const pointerX = event.clientX - rect.left;
+        const pointerY = event.clientY - rect.top;
+        setView((current) => {
+          const scale = Math.min(
+            MAX_ZOOM,
+            Math.max(MIN_ZOOM, current.scale * (1 - event.deltaY / 240)),
+          );
+          const ratio = scale / current.scale;
+          return {
+            scale,
+            // Keep the point under the cursor pinned while scaling.
+            x: pointerX - (pointerX - current.x) * ratio,
+            y: pointerY - (pointerY - current.y) * ratio,
+          };
+        });
+        return;
+      }
+      setView((current) => ({
+        ...current,
+        x: current.x - event.deltaX,
+        y: current.y - event.deltaY,
+      }));
+    };
+    element.addEventListener("wheel", onWheel, { passive: false });
+    return () => element.removeEventListener("wheel", onWheel);
+  }, [orbitMode]);
+
   const toggleFilter = useCallback((category: StarMapAttentionCategory) => {
     setFilters((current) => {
       const next = new Set(current);
@@ -234,7 +280,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
     return gatewayId ?? localInstanceId;
   }, [health, localInstanceId, peers]);
 
-  const layout = useMemo(
+  const laneLayout = useMemo(
     () =>
       computeStarMapLayout(
         [
@@ -299,6 +345,93 @@ export function StarMapScreen(props: StarMapScreenProps) {
     }
     return counts;
   }, [filters, props.localThreads, props.sessionKeys, remote]);
+
+  const lanes = useMemo(() => {
+    const result = new Map<
+      string,
+      { threads: NavigationThreadSummary[]; heights: number[]; count: number }
+    >();
+    for (const [instanceId, threads] of attentionByInstance) {
+      const heights = threads.map(
+        (thread) =>
+          cardHeights.get(buildThreadIdentityKey(thread.source, thread.id))
+          ?? STAR_MAP_ESTIMATED_CARD_HEIGHT,
+      );
+      // Lanes are bounded by the window; an orbit ring grows its radius
+      // instead, so it only obeys the hard cap.
+      const count = orbitMode
+        ? Math.min(threads.length, MAX_CARDS_PER_INSTANCE)
+        : visibleCardCount({
+            heights,
+            availableHeight: viewportSize.height - STAR_MAP_BODY_ROW_Y,
+            max: MAX_CARDS_PER_INSTANCE,
+          });
+      result.set(instanceId, { threads, heights, count });
+    }
+    return result;
+  }, [attentionByInstance, cardHeights, orbitMode, viewportSize.height]);
+
+  const topology = useMemo(
+    () =>
+      buildFederationTopology({
+        localInstanceId,
+        localRole: health?.role ?? "gateway",
+        peers,
+        gatewayInstanceId: health?.clientEnrollment?.gatewayInstanceId,
+      }),
+    [health, localInstanceId, peers],
+  );
+
+  const orbit = useMemo(
+    () =>
+      computeOrbitPlacement({
+        nodes: topology,
+        cardCounts: new Map(
+          [...lanes].map(([instanceId, lane]) => [instanceId, lane.count]),
+        ),
+        cardWidth: ORBIT_CARD_WIDTH,
+      }),
+    [lanes, topology],
+  );
+
+  /** Bodies plus their card slots, in whichever space the layout uses. */
+  const bodies = useMemo(() => {
+    if (orbitMode) {
+      return orbit.instances.map((instance) => ({
+        instanceId: instance.instanceId,
+        isHub: instance.isHub,
+        x: instance.x,
+        y: instance.y,
+        slots: instance.cardSlots,
+        cardWidth: ORBIT_CARD_WIDTH,
+      }));
+    }
+    return laneLayout.positions.map((position) => {
+      const lane = lanes.get(position.instanceId);
+      return {
+        instanceId: position.instanceId,
+        isHub: position.isHub,
+        x: position.x,
+        y: position.y,
+        slots: computeCardSlots(lane?.heights.slice(0, lane.count) ?? []),
+        cardWidth: laneLayout.cardWidth,
+      };
+    });
+  }, [laneLayout, lanes, orbit, orbitMode]);
+
+  // Centre the canvas on mode switch / topology change rather than leaving
+  // the operator staring at empty space in a corner.
+  useEffect(() => {
+    if (!orbitMode) {
+      setView({ x: 0, y: 0, scale: 1 });
+      return;
+    }
+    setView({
+      x: (viewportSize.width - orbit.canvasWidth) / 2,
+      y: (viewportSize.height - orbit.canvasHeight) / 2,
+      scale: 1,
+    });
+  }, [orbitMode, orbit.canvasWidth, orbit.canvasHeight, viewportSize.width, viewportSize.height]);
 
   const peerById = useMemo(
     () => new Map(peers.map((peer) => [peer.id, peer])),
@@ -373,22 +506,18 @@ export function StarMapScreen(props: StarMapScreenProps) {
     return status;
   };
 
-  const renderCloud = (position: StarMapInstancePosition) => {
-    const threads = attentionByInstance.get(position.instanceId) ?? [];
-    const heights = threads.map(
-      (thread) =>
-        cardHeights.get(buildThreadIdentityKey(thread.source, thread.id))
-        ?? STAR_MAP_ESTIMATED_CARD_HEIGHT,
-    );
-    // Only as many cards as actually fit between the body row and the
-    // bottom of the window; the rest roll into "+N more".
-    const count = visibleCardCount({
-      heights,
-      availableHeight: viewportSize.height - STAR_MAP_BODY_ROW_Y,
-      max: MAX_CARDS_PER_INSTANCE,
-    });
-    const visible = threads.slice(0, count);
-    const slots = computeCardSlots(heights.slice(0, count));
+  const renderCloud = (position: {
+    instanceId: string;
+    x: number;
+    y: number;
+    slots: StarMapCardSlot[];
+    cardWidth: number;
+  }) => {
+    const lane = lanes.get(position.instanceId);
+    const threads = lane?.threads ?? [];
+    const heights = lane?.heights ?? [];
+    const visible = threads.slice(0, lane?.count ?? 0);
+    const slots = position.slots;
     const overflow = threads.length - visible.length;
     return (
       <div
@@ -400,12 +529,12 @@ export function StarMapScreen(props: StarMapScreenProps) {
         }`}
         style={{ left: position.x, top: position.y }}
       >
-        {visible.length > 0 ? (
+        {visible.length > 0 && !orbitMode ? (
           <span
             className="star-map__cloud-halo"
             aria-hidden="true"
             style={{
-              width: layout.cardWidth + 56,
+              width: position.cardWidth + 56,
               height:
                 (slots[slots.length - 1]?.dy ?? 0)
                 + (heights[visible.length - 1] ?? 0)
@@ -434,7 +563,8 @@ export function StarMapScreen(props: StarMapScreenProps) {
               )}
               baseSlot={slot}
               offset={arrangement.offsetFor(position.instanceId, threadKey)}
-              width={layout.cardWidth}
+              width={position.cardWidth}
+              centered={orbitMode}
               stackIndex={index}
               cardFields={preferences.cardFields}
               onCommitOffset={
@@ -453,7 +583,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
             />
           );
         })}
-        {overflow > 0 ? (
+        {overflow > 0 && !orbitMode ? (
           <span
             className="star-map__cloud-overflow"
             style={{
@@ -517,12 +647,52 @@ export function StarMapScreen(props: StarMapScreenProps) {
             />
           ))}
         </svg>
+        <div
+          className={`star-map__canvas${orbitMode ? " is-orbit" : ""}`}
+          style={
+            orbitMode
+              ? {
+                  width: orbit.canvasWidth,
+                  height: orbit.canvasHeight,
+                  transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`,
+                }
+              : undefined
+          }
+        >
         <svg
           className="star-map__links"
-          viewBox={`0 0 ${viewportSize.width} ${viewportSize.height}`}
+          viewBox={
+            orbitMode
+              ? `0 0 ${orbit.canvasWidth} ${orbit.canvasHeight}`
+              : `0 0 ${viewportSize.width} ${viewportSize.height}`
+          }
           aria-hidden="true"
         >
-          {layout.links.map((link) => {
+          {(orbitMode
+            ? orbit.links.map((link) => {
+                const from = orbit.instances.find(
+                  (instance) => instance.instanceId === link.fromInstanceId,
+                );
+                const to = orbit.instances.find(
+                  (instance) => instance.instanceId === link.toInstanceId,
+                );
+                return from && to
+                  ? {
+                      ...link,
+                      path: {
+                        x1: from.x,
+                        y1: from.y,
+                        cx: (from.x + to.x) / 2,
+                        cy: (from.y + to.y) / 2,
+                        x2: to.x,
+                        y2: to.y,
+                      },
+                    }
+                  : undefined;
+              })
+            : laneLayout.links
+          ).map((link) => {
+            if (!link) return null;
             const state = linkState(
               link.toInstanceId === localInstanceId
                 ? link.fromInstanceId
@@ -550,7 +720,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
             );
           })}
         </svg>
-        {layout.positions.map((position) => {
+        {bodies.map((position) => {
           const entry = instanceEntry(position.instanceId);
           return (
             <div
@@ -606,7 +776,8 @@ export function StarMapScreen(props: StarMapScreenProps) {
             </div>
           );
         })}
-        {layout.positions.map((position) => renderCloud(position))}
+        {bodies.map((position) => renderCloud(position))}
+        </div>
       </div>
       {intakeTarget ? (
         <IntakeDialog

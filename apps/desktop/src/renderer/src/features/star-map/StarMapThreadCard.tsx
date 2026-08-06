@@ -47,6 +47,8 @@ export function StarMapThreadCard(props: {
   stackIndex: number;
   /** Which chips this card carries (operator preference). */
   cardFields: StarMapCardFields;
+  /** Orbit rings centre cards on their slot; lanes hang them from the top. */
+  centered?: boolean;
   /** Owning instance's celestial mark, watermarked behind the content. */
   instanceIcon?: CelestialIconId;
   /** Present when the card is draggable; receives the clamped offset. */
@@ -69,6 +71,7 @@ export function StarMapThreadCard(props: {
     left,
     top,
     marginLeft: -props.width / 2,
+    ...(props.centered ? { transform: "translateY(-50%)" } : {}),
     zIndex: props.stackIndex,
     ...(props.riseDelayMs
       ? { animationDelay: `${props.riseDelayMs}ms` }

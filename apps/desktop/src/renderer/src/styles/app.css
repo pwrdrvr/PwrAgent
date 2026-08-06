@@ -9410,6 +9410,44 @@ textarea,
   box-shadow: var(--shadow-popover);
 }
 
+/* Canvas the bodies live on. Lanes fill the viewport; orbit is larger than
+   the window and pans/zooms under the pointer. */
+.star-map__canvas {
+  position: absolute;
+  inset: 0;
+}
+
+.star-map__canvas.is-orbit {
+  inset: auto;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+.star-map__layout-switch {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+
+.star-map__layout-option {
+  flex: 1;
+  padding: 4px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.star-map__layout-option.is-on {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
 .star-map__view-heading {
   margin: 4px 0 2px;
   color: var(--text-muted);

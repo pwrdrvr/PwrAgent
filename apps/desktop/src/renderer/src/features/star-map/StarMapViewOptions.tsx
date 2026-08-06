@@ -70,6 +70,24 @@ export function StarMapViewOptions(props: {
             }
           }}
         >
+          <p className="star-map__view-heading">Layout</p>
+          <div className="star-map__layout-switch" role="group" aria-label="Layout">
+            {(["lanes", "orbit"] as const).map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                className={`star-map__layout-option${
+                  props.preferences.layout === mode ? " is-on" : ""
+                }`}
+                aria-pressed={props.preferences.layout === mode}
+                onClick={() =>
+                  props.onChange({ ...props.preferences, layout: mode })
+                }
+              >
+                {mode === "lanes" ? "Lanes" : "Orbit"}
+              </button>
+            ))}
+          </div>
           <p className="star-map__view-heading">Card details</p>
           {CARD_FIELD_ORDER.map((field) => (
             <label key={field} className="star-map__view-row">
