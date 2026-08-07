@@ -63,6 +63,12 @@ import {
   STAR_MAP_AGENT_FILTER_LABELS,
   type StarMapViewPreferences,
 } from "./star-map-preferences";
+import {
+  centerStarMapView,
+  clampStarMapView,
+  MAX_ZOOM,
+  MIN_ZOOM,
+} from "./star-map-view-geometry";
 import { StarMapViewOptions } from "./StarMapViewOptions";
 import { StarMapInstanceCard } from "./StarMapInstanceCard";
 import { StarMapThreadCard } from "./StarMapThreadCard";
@@ -76,8 +82,6 @@ const STAR_COUNT = 130;
 const ORBIT_CARD_WIDTH = 200;
 /** Rings hold far more than a lane column, so orbit shows deeper. */
 const ORBIT_MAX_CARDS_PER_INSTANCE = 16;
-const MIN_ZOOM = 0.35;
-const MAX_ZOOM = 2;
 /**
  * Chat cards float above the map chrome (close button, filters, view
  * options) so a card being read is never underneath a control strip.
@@ -235,44 +239,6 @@ export function StarMapScreen(props: StarMapScreenProps) {
     });
   });
 
-  // Trackpad: two-finger drag pans, pinch (ctrl+wheel) zooms about the
-  // pointer. Registered natively because the listener must not be passive.
-  useEffect(() => {
-    const element = viewportRef.current;
-    if (!element || !panZoomMode) return;
-    const onWheel = (event: WheelEvent) => {
-      event.preventDefault();
-      if (event.ctrlKey) {
-        operatorMovedViewRef.current = true;
-        const rect = element.getBoundingClientRect();
-        const pointerX = event.clientX - rect.left;
-        const pointerY = event.clientY - rect.top;
-        setView((current) => {
-          const scale = Math.min(
-            MAX_ZOOM,
-            Math.max(MIN_ZOOM, current.scale * (1 - event.deltaY / 240)),
-          );
-          const ratio = scale / current.scale;
-          return {
-            scale,
-            // Keep the point under the cursor pinned while scaling.
-            x: pointerX - (pointerX - current.x) * ratio,
-            y: pointerY - (pointerY - current.y) * ratio,
-          };
-        });
-        return;
-      }
-      operatorMovedViewRef.current = true;
-      setView((current) => ({
-        ...current,
-        x: current.x - event.deltaX,
-        y: current.y - event.deltaY,
-      }));
-    };
-    element.addEventListener("wheel", onWheel, { passive: false });
-    return () => element.removeEventListener("wheel", onWheel);
-  }, [panZoomMode]);
-
   const startCanvasPan = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (!panZoomMode || event.button !== 0) return;
     if (!shouldStartCanvasPan(event.target)) return;
@@ -283,18 +249,31 @@ export function StarMapScreen(props: StarMapScreenProps) {
     viewport?.classList.add("is-panning");
     const startX = event.clientX;
     const startY = event.clientY;
+    // Scale is captured for the whole gesture. A pinch mid-drag moves the
+    // live transform out of step with it until pointerup re-reads the real
+    // scale from state; the drag has always worked this way.
     const base = view;
-    let lastX = base.x;
-    let lastY = base.y;
+    /** Latest raw pointer position, unclamped. Both writers clamp it. */
+    let pointerX = base.x;
+    let pointerY = base.y;
     let frame = 0;
+    const bounds = { canvas: panZoomCanvas, viewport: viewportSize };
     const move = (pointerEvent: globalThis.PointerEvent) => {
-      lastX = base.x + pointerEvent.clientX - startX;
-      lastY = base.y + pointerEvent.clientY - startY;
+      pointerX = base.x + pointerEvent.clientX - startX;
+      pointerY = base.y + pointerEvent.clientY - startY;
       if (!frame) {
         frame = requestAnimationFrame(() => {
           frame = 0;
+          // Clamped per frame, not only on release: the drag writes the
+          // transform straight onto the canvas, so an unclamped live path
+          // would let the map leave the window and then jump back on
+          // pointerup when the clamped state landed.
+          const clamped = clampStarMapView({
+            view: { x: pointerX, y: pointerY, scale: base.scale },
+            ...bounds,
+          });
           canvas.style.transform =
-            `translate(${lastX}px, ${lastY}px) scale(${base.scale})`;
+            `translate(${clamped.x}px, ${clamped.y}px) scale(${base.scale})`;
         });
       }
     };
@@ -308,7 +287,18 @@ export function StarMapScreen(props: StarMapScreenProps) {
       }
       viewport?.classList.remove("is-panning");
       operatorMovedViewRef.current = true;
-      setView((current) => ({ ...current, x: lastX, y: lastY }));
+      // Clamps the raw pointer position independently of the frame above,
+      // rather than committing whatever that frame happened to compute.
+      // The committed value is what every later gesture builds on, so it
+      // has to be in bounds on its own account — and a flick released
+      // before any frame ran still commits where the pointer actually
+      // ended up.
+      setView((current) =>
+        clampStarMapView({
+          view: { ...current, x: pointerX, y: pointerY },
+          ...bounds,
+        }),
+      );
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", stop);
@@ -611,6 +601,63 @@ export function StarMapScreen(props: StarMapScreenProps) {
     ? { width: orbit.canvasWidth, height: orbit.canvasHeight }
     : { width: projectLayout.canvasWidth, height: projectLayout.canvasHeight };
 
+  // Trackpad: two-finger drag pans, pinch (ctrl+wheel) zooms about the
+  // pointer. Registered natively because the listener must not be passive.
+  // Sits below panZoomCanvas because the clamp needs the canvas size.
+  useEffect(() => {
+    const element = viewportRef.current;
+    if (!element || !panZoomMode) return;
+    const bounds = {
+      canvas: { width: panZoomCanvas.width, height: panZoomCanvas.height },
+      viewport: { width: viewportSize.width, height: viewportSize.height },
+    };
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      if (event.ctrlKey) {
+        operatorMovedViewRef.current = true;
+        const rect = element.getBoundingClientRect();
+        const pointerX = event.clientX - rect.left;
+        const pointerY = event.clientY - rect.top;
+        setView((current) => {
+          const scale = Math.min(
+            MAX_ZOOM,
+            Math.max(MIN_ZOOM, current.scale * (1 - event.deltaY / 240)),
+          );
+          const ratio = scale / current.scale;
+          return clampStarMapView({
+            view: {
+              scale,
+              // Keep the point under the cursor pinned while scaling.
+              x: pointerX - (pointerX - current.x) * ratio,
+              y: pointerY - (pointerY - current.y) * ratio,
+            },
+            ...bounds,
+          });
+        });
+        return;
+      }
+      operatorMovedViewRef.current = true;
+      setView((current) =>
+        clampStarMapView({
+          view: {
+            ...current,
+            x: current.x - event.deltaX,
+            y: current.y - event.deltaY,
+          },
+          ...bounds,
+        }),
+      );
+    };
+    element.addEventListener("wheel", onWheel, { passive: false });
+    return () => element.removeEventListener("wheel", onWheel);
+  }, [
+    panZoomMode,
+    panZoomCanvas.width,
+    panZoomCanvas.height,
+    viewportSize.width,
+    viewportSize.height,
+  ]);
+
   // A lens switch is a different map, so the view starts centred again.
   useEffect(() => {
     operatorMovedViewRef.current = false;
@@ -633,11 +680,43 @@ export function StarMapScreen(props: StarMapScreenProps) {
       setView({ x: 0, y: 0, scale: 1 });
       return;
     }
-    setView({
-      x: (viewportSize.width - panZoomCanvas.width) / 2,
-      y: (viewportSize.height - panZoomCanvas.height) / 2,
-      scale: 1,
-    });
+    setView(
+      centerStarMapView({
+        canvas: { width: panZoomCanvas.width, height: panZoomCanvas.height },
+        viewport: { width: viewportSize.width, height: viewportSize.height },
+      }),
+    );
+  }, [
+    panZoomMode,
+    panZoomCanvas.width,
+    panZoomCanvas.height,
+    viewportSize.width,
+    viewportSize.height,
+  ]);
+
+  /**
+   * "Reset view": put the map back where it opens and hand ownership of the
+   * view back to the app.
+   *
+   * Needed because the ownership rule is sticky for the life of the mounted
+   * map — once the operator has moved the view, nothing else may place it.
+   * That is right while they are working, but it leaves no way back from a
+   * view that has drifted off the interesting part of the map, and the
+   * clamp deliberately does not re-run when a cloud resizes. Clearing the
+   * ref as well as re-centring means auto-centring resumes afterwards.
+   */
+  const resetView = useCallback(() => {
+    operatorMovedViewRef.current = false;
+    if (!panZoomMode) {
+      setView({ x: 0, y: 0, scale: 1 });
+      return;
+    }
+    setView(
+      centerStarMapView({
+        canvas: { width: panZoomCanvas.width, height: panZoomCanvas.height },
+        viewport: { width: viewportSize.width, height: viewportSize.height },
+      }),
+    );
   }, [
     panZoomMode,
     panZoomCanvas.width,
@@ -1306,6 +1385,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
             setPreferences(next);
             writeStoredPreferences(next);
           }}
+          onResetView={panZoomMode ? resetView : undefined}
         />
       </div>
       <div className="star-map__filters" role="group" aria-label="Attention filters">

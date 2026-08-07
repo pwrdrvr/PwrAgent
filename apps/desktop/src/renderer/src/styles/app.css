@@ -9820,6 +9820,29 @@ textarea,
   color: var(--text-primary);
 }
 
+/* Action row in the View popover ("Reset view"). Reads as the layout
+   switch's sibling rather than a new control species. */
+.star-map__view-action {
+  padding: 4px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.star-map__view-action:hover {
+  border-color: var(--accent-border);
+  color: var(--text-primary);
+}
+
+.star-map__view-action:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .star-map__view-heading {
   margin: 4px 0 2px;
   color: var(--text-muted);
