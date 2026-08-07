@@ -180,6 +180,89 @@ describe("rbac policy store", () => {
     expect(readRbacPolicy(storeOptions).enforced).toBe(false);
   });
 
+  it("drops persisted roles that reuse a built-in id, and reports them", () => {
+    const configPath = resolveRbacConfigPath(storeOptions);
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(
+      configPath,
+      [
+        "[messaging.rbac]",
+        "enforced = true",
+        "",
+        // A hand-edit trying to redefine the built-in Chat User with a
+        // full-access grant. Must not shadow the real built-in.
+        "[[messaging.rbac.roles]]",
+        `id = "${RBAC_BUILT_IN_ROLE_IDS.chatUser}"`,
+        'name = "Chat User"',
+        'permissions = ["thread.execution.full_access"]',
+        "",
+        "[[messaging.rbac.roles]]",
+        'id = "role_ok"',
+        'name = "OK"',
+        'permissions = ["message.reply"]',
+        "",
+      ].join("\n"),
+    );
+    const state = readRbacPolicyState(storeOptions);
+    expect(state.ignoredReservedRoleIds).toEqual([
+      RBAC_BUILT_IN_ROLE_IDS.chatUser,
+    ]);
+    expect(state.policy.roles.map((r) => r.id)).toEqual(["role_ok"]);
+
+    // The genuine built-in still resolves, and the impostor's grant is gone.
+    const service = new RbacPolicyService(storeOptions);
+    const chatUser = service
+      .allRoles()
+      .filter((role) => role.id === RBAC_BUILT_IN_ROLE_IDS.chatUser);
+    expect(chatUser).toHaveLength(1);
+    expect(chatUser[0].permissions).not.toContain("thread.execution.full_access");
+
+    service.upsertAttachment({
+      subject: { kind: "actor", platform: "slack", actorId: "U1" },
+      roleIds: [RBAC_BUILT_IN_ROLE_IDS.chatUser],
+    });
+    const resolution = service.providerFor("slack").resolve({ actorId: "U1" });
+    expect(resolution.permissions.has("thread.execution.full_access")).toBe(false);
+    expect(resolution.permissions.has("message.reply")).toBe(true);
+  });
+
+  it("re-reads the policy when the config changes underneath the cache", () => {
+    const configPath = resolveRbacConfigPath(storeOptions);
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    const write = (roleIds: string) =>
+      fs.writeFileSync(
+        configPath,
+        [
+          "[messaging.rbac]",
+          "enforced = true",
+          "",
+          "[[messaging.rbac.attachments]]",
+          'platform = "slack"',
+          'subject_kind = "actor"',
+          'actor_id = "U1"',
+          `role_ids = ${roleIds}`,
+          "",
+        ].join("\n"),
+      );
+
+    write(`["${RBAC_BUILT_IN_ROLE_IDS.admin}"]`);
+    const service = new RbacPolicyService(storeOptions);
+    const provider = service.providerFor("slack");
+    expect(
+      provider.resolve({ actorId: "U1" }).permissions.has("thread.resume"),
+    ).toBe(true);
+
+    // Simulate an external edit (hand-edit, or another instance on this
+    // profile) revoking the role. The fingerprint must invalidate the cache.
+    write("[]");
+    const stat = fs.statSync(configPath);
+    fs.utimesSync(configPath, stat.atime, new Date(stat.mtimeMs + 5_000));
+
+    const after = provider.resolve({ actorId: "U1" });
+    expect(after.rejected).toBe(true);
+    expect(after.permissions.has("thread.resume")).toBe(false);
+  });
+
   it("reports failClosed via readRbacPolicyState only on fail-closed paths", () => {
     // Absent config: not configured, not fail-closed.
     expect(readRbacPolicyState(storeOptions).failClosed).toBe(false);

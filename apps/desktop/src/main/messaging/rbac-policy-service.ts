@@ -1,6 +1,6 @@
 import {
   BUILT_IN_ROLES,
-  RBAC_BUILT_IN_ROLE_IDS,
+  isBuiltInRbacRoleId,
   resolveEffectivePermissions,
   roleIsDangerous,
   type MessagingChannelKind,
@@ -15,6 +15,7 @@ import {
 import { MESSAGING_PERMISSION_CATALOG } from "@pwragent/shared";
 
 import {
+  rbacPolicySourceFingerprint,
   readRbacPolicyState,
   writeRbacPolicy,
   type RbacPolicyReadState,
@@ -57,6 +58,8 @@ export type RbacPolicyAuditSink = (
  */
 export class RbacPolicyService {
   private cache: RbacPolicyReadState | null = null;
+  /** Fingerprint of the backing files at the time `cache` was loaded. */
+  private cacheFingerprint: string | null = null;
 
   constructor(
     private readonly options?: RbacPolicyStoreOptions,
@@ -66,11 +69,23 @@ export class RbacPolicyService {
   /** Drop the cache so the next read re-loads from disk (call after writes). */
   reload(): void {
     this.cache = null;
+    this.cacheFingerprint = null;
   }
 
+  /**
+   * The cached policy, re-read whenever the backing files changed underneath
+   * us. Our own writes update the cache in place, so the fingerprint check is
+   * for edits we did NOT make: a hand-edited `config.toml`, or another app
+   * instance sharing this profile. Without it a revoked role kept working in
+   * every other instance until restart — revocation that needs a relaunch is
+   * not revocation. The cost is one `statSync` per authorization, which is
+   * far cheaper than re-parsing the config each time.
+   */
   private state(): RbacPolicyReadState {
-    if (!this.cache) {
+    const fingerprint = rbacPolicySourceFingerprint(this.options);
+    if (!this.cache || fingerprint !== this.cacheFingerprint) {
       this.cache = readRbacPolicyState(this.options);
+      this.cacheFingerprint = fingerprint;
     }
     return this.cache;
   }
@@ -115,13 +130,16 @@ export class RbacPolicyService {
 
   /** The full policy view for the Access Control settings pane. */
   read(): ReadRbacPolicyResponse {
-    const policy = this.policy();
+    const state = this.state();
     return {
-      enforced: policy.enforced,
+      enforced: state.policy.enforced,
       roles: this.allRoles(),
-      attachments: policy.attachments,
+      attachments: state.policy.attachments,
       permissionCatalog: MESSAGING_PERMISSION_CATALOG,
-      ...(this.isFailClosed() ? { failClosed: true } : {}),
+      ...(state.failClosed ? { failClosed: true } : {}),
+      ...(state.ignoredReservedRoleIds.length > 0
+        ? { ignoredReservedRoleIds: [...state.ignoredReservedRoleIds] }
+        : {}),
     };
   }
 
@@ -132,7 +150,14 @@ export class RbacPolicyService {
   private mutate(next: (policy: RbacPolicy) => RbacPolicy): void {
     const updated = next(structuredClonePolicy(this.policy()));
     writeRbacPolicy(updated, this.options);
-    this.cache = { policy: updated, failClosed: false };
+    // Adopt the write directly, and re-fingerprint so our own write doesn't
+    // read back as an external change on the next resolve.
+    this.cache = {
+      policy: updated,
+      failClosed: false,
+      ignoredReservedRoleIds: [],
+    };
+    this.cacheFingerprint = rbacPolicySourceFingerprint(this.options);
   }
 
   /**
@@ -404,8 +429,9 @@ export function resetRbacPolicyServiceForTests(): void {
   sharedService = null;
 }
 
+/** Re-exported under the desktop-local name; one definition lives in shared. */
 export function isBuiltInRoleId(roleId: string): boolean {
-  return (Object.values(RBAC_BUILT_IN_ROLE_IDS) as string[]).includes(roleId);
+  return isBuiltInRbacRoleId(roleId);
 }
 
 export function sameSubject(a: RbacSubject, b: RbacSubject): boolean {

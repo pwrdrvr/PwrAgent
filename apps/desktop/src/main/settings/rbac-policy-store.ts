@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   RBAC_POLICY_VERSION,
   emptyRbacPolicy,
+  isBuiltInRbacRoleId,
   type RbacAttachment,
   type RbacBucketKind,
   type RbacPolicy,
@@ -131,9 +132,15 @@ export type RbacPolicyReadState = {
    * to repair the file instead of puzzling over an empty enforced graph.
    */
   failClosed: boolean;
+  /**
+   * Reserved built-in ids found on persisted roles and discarded. Surfaced so
+   * a hand-edit that tries to redefine a built-in is visible rather than
+   * silently ignored (the built-in itself still resolves normally).
+   */
+  ignoredReservedRoleIds: string[];
 };
 
-/** `readRbacPolicy` plus the fail-closed flag for surfacing in the UI. */
+/** `readRbacPolicy` plus the flags the Access Control pane surfaces. */
 export function readRbacPolicyState(
   options?: RbacPolicyStoreOptions,
 ): RbacPolicyReadState {
@@ -150,15 +157,44 @@ export function readRbacPolicyState(
       tables = parseTomlTables(source, configPath);
     } catch {
       return RBAC_HEADER_PATTERN.test(source)
-        ? { policy: failClosedRbacPolicy(), failClosed: true }
+        ? {
+            policy: failClosedRbacPolicy(),
+            failClosed: true,
+            ignoredReservedRoleIds: [],
+          }
         : readLegacyJsonPolicyState(options);
     }
     const section = tables[RBAC_SECTION];
     if (section !== undefined) {
-      return { policy: policyFromSection(section), failClosed: false };
+      return policyFromSection(section);
     }
   }
   return readLegacyJsonPolicyState(options);
+}
+
+/**
+ * Cheap change-detector for the policy's backing files. The service compares
+ * this between resolves so an edit made outside our own writer — a hand-edited
+ * `config.toml`, or another app instance sharing the profile — takes effect on
+ * the next authorization instead of lingering until restart. Revocation that
+ * only applies after a relaunch is not revocation.
+ */
+export function rbacPolicySourceFingerprint(
+  options?: RbacPolicyStoreOptions,
+): string {
+  return [
+    resolveRbacConfigPath(options),
+    resolveLegacyRbacPolicyJsonPath(options),
+  ]
+    .map((filePath) => {
+      try {
+        const stat = fs.statSync(filePath);
+        return `${stat.mtimeMs}:${stat.size}`;
+      } catch {
+        return "-";
+      }
+    })
+    .join("|");
 }
 
 /**
@@ -243,21 +279,33 @@ function attachmentToRow(attachment: RbacAttachment): TomlRow {
   };
 }
 
-function policyFromSection(section: Record<string, TomlValue>): RbacPolicy {
+function policyFromSection(
+  section: Record<string, TomlValue>,
+): RbacPolicyReadState {
+  const parsedRoles = rowsOf(section.roles)
+    .map(roleFromRow)
+    .filter((role): role is RbacRoleDefinition => role !== null);
+  // A persisted role reusing a built-in id would shadow that built-in in the
+  // resolver's role map. Discard the impostor and report it.
+  const ignoredReservedRoleIds = parsedRoles
+    .filter((role) => isBuiltInRbacRoleId(role.id))
+    .map((role) => role.id);
   return {
-    policyVersion:
-      typeof section.policy_version === "number"
-        ? section.policy_version
-        : RBAC_POLICY_VERSION,
-    // The section exists, so RBAC is configured: only a clean `enforced =
-    // false` turns enforcement off. A missing or garbled flag fails closed.
-    enforced: section.enforced !== false,
-    roles: rowsOf(section.roles)
-      .map(roleFromRow)
-      .filter((role): role is RbacRoleDefinition => role !== null),
-    attachments: rowsOf(section.attachments)
-      .map(attachmentFromRow)
-      .filter((attachment): attachment is RbacAttachment => attachment !== null),
+    policy: {
+      policyVersion:
+        typeof section.policy_version === "number"
+          ? section.policy_version
+          : RBAC_POLICY_VERSION,
+      // The section exists, so RBAC is configured: only a clean `enforced =
+      // false` turns enforcement off. A missing or garbled flag fails closed.
+      enforced: section.enforced !== false,
+      roles: parsedRoles.filter((role) => !isBuiltInRbacRoleId(role.id)),
+      attachments: rowsOf(section.attachments)
+        .map(attachmentFromRow)
+        .filter((attachment): attachment is RbacAttachment => attachment !== null),
+    },
+    failClosed: false,
+    ignoredReservedRoleIds,
   };
 }
 
@@ -334,7 +382,11 @@ function readLegacyJsonPolicyState(
 ): RbacPolicyReadState {
   const legacyPath = resolveLegacyRbacPolicyJsonPath(options);
   if (!fs.existsSync(legacyPath)) {
-    return { policy: emptyRbacPolicy(), failClosed: false };
+    return {
+      policy: emptyRbacPolicy(),
+      failClosed: false,
+      ignoredReservedRoleIds: [],
+    };
   }
   // From here on RBAC data demonstrably exists — unreadable or unparseable
   // states fail closed rather than falling open to everyone-is-Admin.
@@ -342,12 +394,31 @@ function readLegacyJsonPolicyState(
   try {
     parsed = JSON.parse(fs.readFileSync(legacyPath, "utf8"));
   } catch {
-    return { policy: failClosedRbacPolicy(), failClosed: true };
+    return {
+      policy: failClosedRbacPolicy(),
+      failClosed: true,
+      ignoredReservedRoleIds: [],
+    };
   }
   if (typeof parsed !== "object" || parsed === null) {
-    return { policy: failClosedRbacPolicy(), failClosed: true };
+    return {
+      policy: failClosedRbacPolicy(),
+      failClosed: true,
+      ignoredReservedRoleIds: [],
+    };
   }
-  return { policy: sanitizeRbacPolicy(parsed), failClosed: false };
+  const policy = sanitizeRbacPolicy(parsed);
+  const ignoredReservedRoleIds = policy.roles
+    .filter((role) => isBuiltInRbacRoleId(role.id))
+    .map((role) => role.id);
+  return {
+    policy: {
+      ...policy,
+      roles: policy.roles.filter((role) => !isBuiltInRbacRoleId(role.id)),
+    },
+    failClosed: false,
+    ignoredReservedRoleIds,
+  };
 }
 
 /**

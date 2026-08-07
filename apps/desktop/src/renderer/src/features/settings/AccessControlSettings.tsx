@@ -466,6 +466,7 @@ export function AccessControlSettings(props: { desktopApi: DesktopApi }) {
 
   const enforced = policy?.enforced ?? false;
   const failClosed = policy?.failClosed === true;
+  const ignoredReservedRoleIds = policy?.ignoredReservedRoleIds ?? [];
   const roles = policy?.roles ?? [];
   const catalog = policy?.permissionCatalog ?? [];
 
@@ -503,6 +504,35 @@ export function AccessControlSettings(props: { desktopApi: DesktopApi }) {
           <div>
             <div className="rbac-callout__title">Something went wrong</div>
             <div className="rbac-callout__body">{error}</div>
+          </div>
+        </div>
+      ) : null}
+
+      {ignoredReservedRoleIds.length > 0 ? (
+        <div className="rbac-callout is-danger" role="alert">
+          <span className="rbac-callout__icon">
+            <Alert />
+          </span>
+          <div>
+            <div className="rbac-callout__title">
+              Ignored {ignoredReservedRoleIds.length === 1 ? "a role that reuses" : "roles that reuse"}{" "}
+              a built-in name
+            </div>
+            <div className="rbac-callout__body">
+              This profile&apos;s <code>config.toml</code> defines{" "}
+              {ignoredReservedRoleIds.map((roleId, index) => (
+                <span key={roleId}>
+                  {index > 0 ? ", " : ""}
+                  <code>{roleId}</code>
+                </span>
+              ))}{" "}
+              under <code>[[messaging.rbac.roles]]</code>. Built-in roles ship
+              with the app and cannot be redefined, so{" "}
+              {ignoredReservedRoleIds.length === 1 ? "that entry was" : "those entries were"}{" "}
+              discarded and the built-in definition is in effect. Rename the
+              custom {ignoredReservedRoleIds.length === 1 ? "role" : "roles"} to
+              a unique id if you meant to add your own.
+            </div>
           </div>
         </div>
       ) : null}

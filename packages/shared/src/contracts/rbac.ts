@@ -320,6 +320,23 @@ export function roleIsDangerous(
 }
 
 /**
+ * Whether `roleId` is a reserved built-in id.
+ *
+ * Built-in roles are code constants, never persisted, and `allRoles()` lists
+ * them BEFORE custom roles — so a persisted role reusing a built-in id would
+ * win the `roleById` map in `resolveEffectivePermissions` and silently
+ * redefine that built-in (e.g. a hand-edited `chat_user` granting full
+ * access). The IPC path already refuses to write reserved ids; the store uses
+ * this to drop them on READ too, so hand-edited config can't shadow a
+ * built-in. Callers that surface the drop should say which ids were ignored
+ * rather than failing the whole policy — the built-in still resolves
+ * correctly, only the impostor is discarded.
+ */
+export function isBuiltInRbacRoleId(roleId: string): boolean {
+  return (Object.values(RBAC_BUILT_IN_ROLE_IDS) as string[]).includes(roleId);
+}
+
+/**
  * Power User: everything a thread operator needs EXCEPT approving escalations
  * and selecting full access. Enumerated explicitly (not computed) so a newly
  * added permission is opt-in for Power User rather than silently granted.
@@ -818,6 +835,12 @@ export type ReadRbacPolicyResponse = {
    * puzzlingly empty enforced graph.
    */
   failClosed?: boolean;
+  /**
+   * Reserved built-in role ids found on persisted roles and discarded on read
+   * (a hand-edit trying to redefine a built-in). Present only when non-empty;
+   * the pane warns so the drop is visible rather than silent.
+   */
+  ignoredReservedRoleIds?: string[];
 };
 
 export type WriteRbacRoleRequest = {

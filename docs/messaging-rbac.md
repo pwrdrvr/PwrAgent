@@ -215,6 +215,17 @@ when the store affirmatively knows it is off:
   instead of a puzzlingly empty enforced graph.
 - Individually malformed role/attachment rows are dropped row by row, which is
   itself fail-closed: a dropped attachment grants nothing.
+- A persisted role that **reuses a reserved built-in id** is discarded on read.
+  Built-ins are listed before custom roles when resolving, so an impostor row
+  would otherwise win the role map and silently redefine that built-in (a
+  hand-edited `chat_user` granting full access, say). The genuine built-in
+  still resolves; the pane names the ignored ids so the drop isn't silent.
+
+**Policy edits take effect without a restart.** The service caches the parsed
+policy but fingerprints the backing files (mtime + size) on every
+authorization, so an edit it did not make — a hand-edited `config.toml`, or
+another app instance sharing the profile — is picked up on the next check.
+Revocation that only applied after a relaunch would not be revocation.
 
 ## Full-access guardrails
 

@@ -106,6 +106,27 @@ describe("AccessControlSettings", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("warns when a persisted role reused a built-in id", async () => {
+    const api = makeApi({
+      readRbacPolicy: vi.fn(async () => ({
+        enforced: true,
+        roles: [...BUILT_IN_ROLES],
+        attachments: [],
+        permissionCatalog: MESSAGING_PERMISSION_CATALOG,
+        ignoredReservedRoleIds: [RBAC_BUILT_IN_ROLE_IDS.chatUser],
+      })),
+    });
+    render(<AccessControlSettings desktopApi={api} />);
+    await waitFor(() =>
+      expect(
+        screen.getByText(/reuses a built-in name/i),
+      ).toBeInTheDocument(),
+    );
+    expect(
+      screen.getByText(/Built-in roles ship with the app/i),
+    ).toBeInTheDocument();
+  });
+
   it("shows the repair callout when the policy failed closed", async () => {
     const api = makeApi({
       readRbacPolicy: vi.fn(async () => ({
