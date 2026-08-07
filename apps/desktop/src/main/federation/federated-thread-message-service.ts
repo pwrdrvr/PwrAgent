@@ -18,6 +18,7 @@ import type {
 import { getMainLogger } from "../log";
 import type { RemoteThreadTargetStore } from "../state/remote-thread-target-store";
 import type { FederationBackendOperations } from "./federation-backend-bridge";
+import { isFederationPeerUnavailableError } from "./federation-peer-unavailable-error";
 import {
   getDesktopFederationRuntime,
   type DesktopFederationRuntime,
@@ -295,90 +296,39 @@ async function controlRemoteThread(
     threadId: request.threadId,
   });
 
-  const backends = await match.backend.listBackends({ includeUnavailable: true });
-  const backend = backends.backends.find(
-    (candidate) => candidate.kind === request.backend,
-  );
-  if (!backend?.available) {
-    throw new PwrAgentFederatedThreadMessageError(
-      "unsupported_backend",
-      `Backend ${request.backend} is not available on federation instance ${match.peer.label}.`,
-    );
-  }
-  const capability = request.operation === "stop" ? "interruptTurn" : "steerTurn";
-  if (!backend.capabilities[capability]) {
+  if (!match.backend.controlActiveTurn) {
     throw new PwrAgentFederatedThreadMessageError(
       "unsupported_capability",
-      `Backend ${request.backend} on federation instance ${match.peer.label} does not support ${request.operation === "stop" ? "turn interruption" : "turn steering"}.`,
-    );
-  }
-
-  let active: { turnId?: string };
-  try {
-    active = await match.backend.resolveActiveTurn({
-      backend: request.backend,
-      threadId: request.threadId,
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (/unsupported|unknown method|not implemented/i.test(message)) {
-      throw new PwrAgentFederatedThreadMessageError(
-        "unsupported_capability",
-        `Federation instance ${match.peer.label} does not support active-turn resolution required for remote ${request.operation}.`,
-      );
-    }
-    throw error;
-  }
-  const activeTurnId = active.turnId;
-  if (!activeTurnId) {
-    throw new PwrAgentFederatedThreadMessageError(
-      "no_active_turn",
-      `Thread ${request.threadId} has no active turn on federation instance ${match.peer.label}.`,
-    );
-  }
-  if (
-    request.expectedTurnId
-    && request.expectedTurnId !== activeTurnId
-  ) {
-    throw new PwrAgentFederatedThreadMessageError(
-      "stale_target",
-      `Thread ${request.threadId} now has active turn ${activeTurnId}, not expected turn ${request.expectedTurnId}.`,
+      `Federation instance ${match.peer.label} does not support atomic active-turn control required for remote ${request.operation}.`,
     );
   }
 
   try {
-    if (request.operation === "stop") {
-      const stopped = await match.backend.interruptTurn({
-        backend: request.backend,
-        threadId: request.threadId,
-        turnId: activeTurnId,
-      });
-      return {
-        backend: stopped.backend,
-        threadId: stopped.threadId,
-        turnId: stopped.turnId,
-        disposition: "interrupted",
-        instanceId: match.peer.target.instanceId,
-        instanceLabel: match.peer.label,
-      };
-    }
-    const steered = await match.backend.steerTurn({
+    const controlled = await match.backend.controlActiveTurn({
+      operation: request.operation,
       backend: request.backend,
       threadId: request.threadId,
-      expectedTurnId: activeTurnId,
       requestId: request.requestId,
-      input: request.input ?? [],
+      ...(request.expectedTurnId
+        ? { expectedTurnId: request.expectedTurnId }
+        : {}),
+      ...(request.input ? { input: request.input } : {}),
+      ...(request.messageOrigin
+        ? { messageOrigin: request.messageOrigin }
+        : {}),
     });
-    if (steered.disposition && steered.disposition !== "steered") {
-      throw new Error(
-        `Owning instance returned ${steered.disposition} instead of steering the active turn.`,
+    if (!controlled.ok) {
+      throw new PwrAgentFederatedThreadMessageError(
+        controlled.error.code,
+        controlled.error.message,
       );
     }
     return {
-      backend: steered.backend,
-      threadId: steered.threadId,
-      turnId: steered.turnId,
-      disposition: "steered",
+      backend: controlled.backend,
+      threadId: controlled.threadId,
+      turnId: controlled.turnId,
+      disposition: controlled.disposition,
+      ...(controlled.idempotentReplay ? { idempotentReplay: true } : {}),
       instanceId: match.peer.target.instanceId,
       instanceLabel: match.peer.label,
     };
@@ -387,10 +337,21 @@ async function controlRemoteThread(
       throw error;
     }
     const message = error instanceof Error ? error.message : String(error);
+    if (
+      isFederationPeerUnavailableError(error)
+      || /federation request timed out/i.test(message)
+    ) {
+      throw new PwrAgentFederatedThreadMessageError(
+        "peer_unavailable",
+        `Federation instance ${match.peer.label} became unavailable while attempting remote ${request.operation}: ${message}`,
+      );
+    }
     throw new PwrAgentFederatedThreadMessageError(
       /unsupported|does not support/i.test(message)
         ? "unsupported_capability"
-        : "stale_target",
+        : /active|expected turn|stale|in progress/i.test(message)
+          ? "stale_target"
+          : "internal_error",
       message,
     );
   }

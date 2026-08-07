@@ -99,6 +99,8 @@ import {
   type CancelQueuedTurnResponse,
   type CheckThreadBranchDriftRequest,
   type CheckThreadBranchDriftResponse,
+  type ControlActiveTurnRequest,
+  type ControlActiveTurnResponse,
   type ForkThreadRequest,
   type ForkThreadResponse,
   isBranchDrifted,
@@ -6097,6 +6099,22 @@ type AcceptedThreadControlRequest = {
   signature: string;
 };
 
+type AcceptedActiveTurnControlRequest = {
+  promise: Promise<ControlActiveTurnResponse>;
+  signature: string;
+};
+
+class ActiveTurnControlPreconditionError extends Error {
+  constructor(
+    readonly code: "no_active_turn" | "stale_target",
+    message: string,
+    readonly activeTurnId?: string,
+  ) {
+    super(message);
+    this.name = "ActiveTurnControlPreconditionError";
+  }
+}
+
 const MAX_ACCEPTED_THREAD_CONTROL_REQUESTS = 512;
 
 function buildSteerRequestKey(params: SteerTurnRequest): string {
@@ -6292,6 +6310,10 @@ export class DesktopBackendRegistry {
     string,
     AcceptedThreadControlRequest
   >();
+  private readonly acceptedActiveTurnControlRequests = new Map<
+    string,
+    AcceptedActiveTurnControlRequest
+  >();
   private readonly codexRetryableTurnStarts = new Map<
     string,
     CodexRetryableTurnStart
@@ -6466,6 +6488,7 @@ export class DesktopBackendRegistry {
   >();
   private readonly queuedExecutionModeFlushes = new Map<string, Promise<void>>();
   private readonly acpSessionPromptLocks = new PerKeyAsyncLock();
+  private readonly activeTurnControlLocks = new PerKeyAsyncLock();
   private readonly queuedAcpRuntimeOptions = new Map<
     string,
     {
@@ -12248,30 +12271,281 @@ export class DesktopBackendRegistry {
     }
   }
 
+  async controlActiveTurn(
+    request: ControlActiveTurnRequest,
+  ): Promise<ControlActiveTurnResponse> {
+    const requestKey = [
+      request.backend,
+      request.threadId,
+      request.requestId,
+    ].join("\u0000");
+    const signature = createHash("sha256")
+      .update(JSON.stringify({
+        expectedTurnId: request.expectedTurnId ?? null,
+        input: request.input ?? [],
+        messageOrigin: request.messageOrigin ?? null,
+        operation: request.operation,
+      }))
+      .digest("hex");
+    const accepted = this.acceptedActiveTurnControlRequests.get(requestKey);
+    if (accepted) {
+      if (accepted.signature !== signature) {
+        return {
+          ok: false,
+          backend: request.backend,
+          threadId: request.threadId,
+          requestId: request.requestId,
+          error: {
+            code: "invalid_arguments",
+            message:
+              `Turn control request id ${request.requestId} was reused with different arguments.`,
+          },
+        };
+      }
+      const response = await accepted.promise;
+      return response.ok
+        ? { ...response, idempotentReplay: true }
+        : response;
+    }
+
+    const promise = this.submitActiveTurnControl(request);
+    if (
+      this.acceptedActiveTurnControlRequests.size
+      >= MAX_ACCEPTED_THREAD_CONTROL_REQUESTS
+    ) {
+      const oldestKey =
+        this.acceptedActiveTurnControlRequests.keys().next().value;
+      if (oldestKey) {
+        this.acceptedActiveTurnControlRequests.delete(oldestKey);
+      }
+    }
+    this.acceptedActiveTurnControlRequests.set(requestKey, {
+      promise,
+      signature,
+    });
+    try {
+      const response = await promise;
+      if (
+        !response.ok
+        && this.acceptedActiveTurnControlRequests.get(requestKey)?.promise
+          === promise
+      ) {
+        this.acceptedActiveTurnControlRequests.delete(requestKey);
+      }
+      return response;
+    } catch (error) {
+      if (
+        this.acceptedActiveTurnControlRequests.get(requestKey)?.promise
+        === promise
+      ) {
+        this.acceptedActiveTurnControlRequests.delete(requestKey);
+      }
+      throw error;
+    }
+  }
+
+  private async submitActiveTurnControl(
+    request: ControlActiveTurnRequest,
+  ): Promise<ControlActiveTurnResponse> {
+    const failure = (
+      code:
+        | "invalid_arguments"
+        | "no_active_turn"
+        | "stale_target"
+        | "unsupported_backend"
+        | "unsupported_capability",
+      message: string,
+      details: { activeTurnId?: string; expectedTurnId?: string } = {},
+    ): ControlActiveTurnResponse => ({
+      ok: false,
+      backend: request.backend,
+      threadId: request.threadId,
+      requestId: request.requestId,
+      error: { code, message, ...details },
+    });
+    const lockKey = executionModeQueueKey(request.backend, request.threadId);
+    const perform = async (): Promise<ControlActiveTurnResponse> => {
+      const backend = (
+        await this.listBackends({ includeUnavailable: true })
+      ).backends.find((candidate) => candidate.kind === request.backend);
+      if (!backend?.available) {
+        return failure(
+          "unsupported_backend",
+          `Backend ${request.backend} is not available on this instance.`,
+        );
+      }
+      const capability = request.operation === "stop"
+        ? "interruptTurn"
+        : "steerTurn";
+      if (!backend.capabilities[capability]) {
+        return failure(
+          "unsupported_capability",
+          `Backend ${request.backend} does not support ${request.operation === "stop" ? "turn interruption" : "turn steering"}.`,
+        );
+      }
+      if (request.operation === "steer" && !(request.input?.length)) {
+        return failure(
+          "invalid_arguments",
+          "Steering an active turn requires non-empty input.",
+        );
+      }
+
+      const active = this.getActiveTurnForThread({
+        backend: request.backend,
+        threadId: request.threadId,
+      });
+      if (!active) {
+        return failure(
+          "no_active_turn",
+          `Thread ${request.threadId} has no active turn.`,
+        );
+      }
+      if (
+        request.expectedTurnId
+        && request.expectedTurnId !== active.turnId
+      ) {
+        return failure(
+          "stale_target",
+          `Thread ${request.threadId} now has active turn ${active.turnId}, not expected turn ${request.expectedTurnId}.`,
+          {
+            activeTurnId: active.turnId,
+            expectedTurnId: request.expectedTurnId,
+          },
+        );
+      }
+
+      try {
+        if (request.operation === "stop") {
+          const stopped = isAcpBackendId(request.backend)
+            ? await this.interruptAcpTurn(active, true)
+            : await this.interruptTurn(active);
+          return {
+            ok: true,
+            backend: stopped.backend,
+            threadId: stopped.threadId,
+            requestId: request.requestId,
+            turnId: stopped.turnId,
+            disposition: "interrupted",
+          };
+        }
+        const steered = await this.steerTurn(
+          {
+            backend: request.backend,
+            threadId: request.threadId,
+            expectedTurnId: active.turnId,
+            requestId: request.requestId,
+            input: request.input ?? [],
+          },
+          request.messageOrigin,
+        );
+        if (steered.disposition === "scheduled") {
+          return failure(
+            "stale_target",
+            "The active turn changed before steering; no queued fallback was created.",
+            {
+              expectedTurnId: active.turnId,
+            },
+          );
+        }
+        return {
+          ok: true,
+          backend: steered.backend,
+          threadId: steered.threadId,
+          requestId: request.requestId,
+          turnId: steered.turnId,
+          disposition: "steered",
+        };
+      } catch (error) {
+        if (error instanceof ActiveTurnControlPreconditionError) {
+          return failure(error.code, error.message, {
+            ...(error.activeTurnId
+              ? { activeTurnId: error.activeTurnId }
+              : {}),
+            ...(request.expectedTurnId
+              ? { expectedTurnId: request.expectedTurnId }
+              : {}),
+          });
+        }
+        const message = error instanceof Error ? error.message : String(error);
+        if (/unsupported|does not support/i.test(message)) {
+          return failure("unsupported_capability", message);
+        }
+        if (/active|expected turn|stale|in progress/i.test(message)) {
+          return failure("stale_target", message, {
+            expectedTurnId: active.turnId,
+          });
+        }
+        throw error;
+      }
+    };
+
+    return await this.activeTurnControlLocks.run(
+      lockKey,
+      async () =>
+        isAcpBackendId(request.backend)
+          ? await this.acpSessionPromptLocks.run(lockKey, perform)
+          : await perform(),
+    );
+  }
+
+  private async interruptAcpTurn(
+    params: {
+      backend: AppServerBackendKind;
+      threadId: string;
+      turnId: string;
+    },
+    validateActiveTurn = false,
+  ): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
+    if (!isAcpBackendId(params.backend)) {
+      throw new Error(`Backend ${params.backend} is not an ACP backend.`);
+    }
+    const client = await this.acpBackend.getClient(params.backend);
+    if (validateActiveTurn) {
+      const active = this.getActiveTurnForThread(params);
+      if (!active) {
+        throw new ActiveTurnControlPreconditionError(
+          "no_active_turn",
+          `Thread ${params.threadId} has no active turn.`,
+        );
+      }
+      if (active.turnId !== params.turnId) {
+        throw new ActiveTurnControlPreconditionError(
+          "stale_target",
+          `Thread ${params.threadId} now has active turn ${active.turnId}, not expected turn ${params.turnId}.`,
+          active.turnId,
+        );
+      }
+    }
+    // Invoke cancel without an intervening await after the final active-turn
+    // check. The shared ACP prompt lock prevents the next queued prompt from
+    // starting until this cancellation request has been delivered.
+    const cancellation = client.cancelSession(params.threadId);
+    await cancellation;
+    await this.emit({
+      backend: params.backend,
+      notification: {
+        method: "turn/cancelled",
+        params: {
+          threadId: params.threadId,
+          turnId: params.turnId,
+          turn: {
+            id: params.turnId,
+            status: "cancelled",
+            completedAt: Date.now(),
+          },
+        },
+      },
+    });
+    return params;
+  }
+
   async interruptTurn(params: {
     backend: AppServerBackendKind;
     threadId: string;
     turnId: string;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
     if (isAcpBackendId(params.backend)) {
-      const client = await this.acpBackend.getClient(params.backend);
-      await client.cancelSession(params.threadId);
-      await this.emit({
-        backend: params.backend,
-        notification: {
-          method: "turn/cancelled",
-          params: {
-            threadId: params.threadId,
-            turnId: params.turnId,
-            turn: {
-              id: params.turnId,
-              status: "cancelled",
-              completedAt: Date.now(),
-            },
-          },
-        },
-      });
-      return params;
+      return await this.interruptAcpTurn(params);
     }
 
     const managedReview = this.findManagedReviewForParentTurn({
@@ -15516,6 +15790,8 @@ export class DesktopBackendRegistry {
   async close(): Promise<void> {
     this.closed = true;
     this.acceptedSteerRequests.clear();
+    this.acceptedThreadControlRequests.clear();
+    this.acceptedActiveTurnControlRequests.clear();
     this.workingStateByWorktree.clear();
     this.workingStateCacheLoad = undefined;
     if (this.taskMonitorWatchdogTimer) {
@@ -22537,6 +22813,13 @@ export class DesktopBackendRegistry {
             input: [{ type: "text" as const, text: request.args.prompt }],
           }
         : {}),
+      messageOrigin: {
+        kind: "agent" as const,
+        sourceThread: {
+          backend: request.context.backend,
+          threadId: request.context.threadId,
+        },
+      },
     };
 
     try {
@@ -22547,6 +22830,7 @@ export class DesktopBackendRegistry {
             threadId: string;
             turnId: string;
             disposition: "interrupted" | "steered";
+            idempotentReplay?: boolean;
           }
         | undefined;
       const rememberedRemote =
@@ -22598,58 +22882,32 @@ export class DesktopBackendRegistry {
               { backend, threadId },
             );
           }
-          const active = this.getActiveTurnForThread({ backend, threadId });
-          if (!active) {
+          const controlled = await this.controlActiveTurn(remoteRequest);
+          if (!controlled.ok) {
             return threadOrchestrationFailure(
-              "no_active_turn",
-              `Thread ${threadId} has no active turn.`,
-              { backend, threadId },
-            );
-          }
-          if (
-            request.args.expectedTurnId
-            && request.args.expectedTurnId !== active.turnId
-          ) {
-            return threadOrchestrationFailure(
-              "stale_target",
-              `Thread ${threadId} now has active turn ${active.turnId}, not expected turn ${request.args.expectedTurnId}.`,
+              controlled.error.code,
+              controlled.error.message,
               {
-                activeTurnId: active.turnId,
+                ...(controlled.error.activeTurnId
+                  ? { activeTurnId: controlled.error.activeTurnId }
+                  : {}),
                 backend,
-                expectedTurnId: request.args.expectedTurnId,
+                ...(controlled.error.expectedTurnId
+                  ? { expectedTurnId: controlled.error.expectedTurnId }
+                  : {}),
                 threadId,
               },
             );
           }
-          if (request.operation === "stop_thread") {
-            const stopped = await this.interruptTurn(active);
-            result = { ...stopped, disposition: "interrupted" };
-          } else {
-            const steered = await this.steerTurn(
-              {
-                backend,
-                threadId,
-                expectedTurnId: active.turnId,
-                requestId: request.args.requestId,
-                input: [{ type: "text", text: request.args.prompt }],
-              },
-              {
-                kind: "agent",
-                sourceThread: {
-                  backend: request.context.backend,
-                  threadId: request.context.threadId,
-                },
-              },
-            );
-            if (steered.disposition === "scheduled") {
-              return threadOrchestrationFailure(
-                "stale_target",
-                "The active turn changed before steering; no queued fallback was created.",
-                { backend, threadId },
-              );
-            }
-            result = { ...steered, disposition: "steered" };
-          }
+          result = {
+            backend: controlled.backend,
+            threadId: controlled.threadId,
+            turnId: controlled.turnId,
+            disposition: controlled.disposition,
+            ...(controlled.idempotentReplay
+              ? { idempotentReplay: true }
+              : {}),
+          };
         } else if (includeRemote && this.federatedThreadControlHandler) {
           const discovered = await this.federatedThreadControlHandler({
             ...remoteRequest,
@@ -22687,6 +22945,7 @@ export class DesktopBackendRegistry {
         ...(targetInstanceId ? { instanceId: targetInstanceId } : {}),
         requestId: request.args.requestId,
         turnId: result.turnId,
+        ...(result.idempotentReplay ? { idempotentReplay: true } : {}),
       };
       return request.operation === "stop_thread"
         ? {

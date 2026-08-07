@@ -91,6 +91,7 @@ export type PwrAgentFederatedThreadControlRequest = {
   requestId: string;
   expectedTurnId?: string;
   input?: AppServerTurnInputItem[];
+  messageOrigin?: AppServerThreadMessageOrigin;
 };
 
 export type PwrAgentFederatedThreadControlResult = {
@@ -98,6 +99,7 @@ export type PwrAgentFederatedThreadControlResult = {
   threadId: StopThreadToolArgs["threadId"];
   turnId: string;
   disposition: "interrupted" | "steered";
+  idempotentReplay?: boolean;
   instanceId: string;
   instanceLabel: string;
 };
@@ -110,6 +112,8 @@ export class PwrAgentFederatedThreadMessageError extends Error {
   constructor(
     readonly code:
       | "ambiguous_owner"
+      | "internal_error"
+      | "invalid_arguments"
       | "no_active_turn"
       | "peer_unavailable"
       | "stale_target"

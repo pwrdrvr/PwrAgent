@@ -10,6 +10,7 @@ import type {
   CancelThreadExecutionModeQueueResponse,
   CheckThreadBranchDriftResponse,
   CompactThreadResponse,
+  ControlActiveTurnResponse,
   CreateScheduledThreadActionRequest,
   CodexEnvironmentSetupProgressEvent,
   FederationCapability,
@@ -90,6 +91,7 @@ import {
   type CelestialIconId,
   type CheckThreadBranchDriftRequest,
   type CompactThreadRequest,
+  type ControlActiveTurnRequest,
   type ForkThreadRequest,
   type FederationRemoteTarget,
   type DesktopApplicationsSnapshot,
@@ -3830,6 +3832,11 @@ function localBackendOperations(): FederationBackendOperations {
       request: CompactThreadRequest,
     ): Promise<CompactThreadResponse> {
       return await getDesktopBackendRegistry().compactThread(request);
+    },
+    async controlActiveTurn(
+      request: ControlActiveTurnRequest,
+    ): Promise<ControlActiveTurnResponse> {
+      return await getDesktopBackendRegistry().controlActiveTurn(request);
     },
     async resolveActiveTurn(
       request: ResolveActiveTurnRequest,

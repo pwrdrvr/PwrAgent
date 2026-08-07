@@ -320,6 +320,46 @@ export type ResolveActiveTurnResponse = {
   turnId?: string;
 };
 
+export type ControlActiveTurnRequest = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  operation: "stop" | "steer";
+  requestId: string;
+  expectedTurnId?: string;
+  input?: AppServerTurnInputItem[];
+  messageOrigin?: AppServerThreadMessageOrigin;
+};
+
+export type ControlActiveTurnErrorCode =
+  | "invalid_arguments"
+  | "no_active_turn"
+  | "stale_target"
+  | "unsupported_backend"
+  | "unsupported_capability";
+
+export type ControlActiveTurnResponse =
+  | {
+      ok: true;
+      backend: AppServerBackendKind;
+      threadId: ThreadIdentifier;
+      requestId: string;
+      turnId: string;
+      disposition: "interrupted" | "steered";
+      idempotentReplay?: boolean;
+    }
+  | {
+      ok: false;
+      backend: AppServerBackendKind;
+      threadId: ThreadIdentifier;
+      requestId: string;
+      error: {
+        code: ControlActiveTurnErrorCode;
+        message: string;
+        activeTurnId?: string;
+        expectedTurnId?: string;
+      };
+    };
+
 export type StopSubAgentRequest = {
   backend: AppServerBackendKind;
   federationTarget?: FederationTarget;

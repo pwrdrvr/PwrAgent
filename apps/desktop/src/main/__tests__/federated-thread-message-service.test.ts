@@ -1,10 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
-import type { StartTurnResponse, SteerTurnResponse } from "@pwragent/shared";
+import type {
+  ControlActiveTurnRequest,
+  ControlActiveTurnResponse,
+  StartTurnResponse,
+  SteerTurnResponse,
+} from "@pwragent/shared";
 import type { DesktopFederationRuntime } from "../federation/federation-runtime";
 import {
   createFederatedThreadControlHandler,
   createFederatedThreadMessageHandler,
 } from "../federation/federated-thread-message-service";
+import { FederationPeerUnavailableError } from "../federation/federation-peer-unavailable-error";
 
 const request = {
   backend: "codex" as const,
@@ -105,6 +111,63 @@ function buildRuntime(params: {
             : [],
         },
       }));
+      const controlActiveTurn = vi.fn(
+        async (
+          controlRequest: ControlActiveTurnRequest,
+        ): Promise<ControlActiveTurnResponse> => {
+          const base = {
+            backend: "codex" as const,
+            threadId: request.threadId,
+            requestId: controlRequest.requestId,
+          };
+          if (!activeTurnId) {
+            return {
+              ok: false,
+              ...base,
+              error: {
+                code: "no_active_turn",
+                message: `Thread ${request.threadId} has no active turn.`,
+              },
+            };
+          }
+          if (
+            controlRequest.expectedTurnId
+            && controlRequest.expectedTurnId !== activeTurnId
+          ) {
+            return {
+              ok: false,
+              ...base,
+              error: {
+                code: "stale_target",
+                message: "The active turn changed.",
+                activeTurnId,
+                expectedTurnId: controlRequest.expectedTurnId,
+              },
+            };
+          }
+          if (
+            (controlRequest.operation === "stop" && peer.interruptTurn === false)
+            || (controlRequest.operation === "steer" && peer.steerTurn === false)
+          ) {
+            return {
+              ok: false,
+              ...base,
+              error: {
+                code: "unsupported_capability",
+                message: "The backend does not support this control operation.",
+              },
+            };
+          }
+          return {
+            ok: true,
+            ...base,
+            turnId: activeTurnId,
+            disposition: controlRequest.operation === "stop"
+              ? "interrupted"
+              : "steered",
+          };
+        },
+      );
       const resolveActiveTurn = vi.fn(async () => ({
         backend: "codex" as const,
         threadId: request.threadId,
@@ -122,6 +185,7 @@ function buildRuntime(params: {
         disposition: "steered" as const,
       }));
       return [peer.instanceId, {
+        controlActiveTurn,
         interruptTurn,
         listBackends,
         listThreads,
@@ -476,15 +540,17 @@ describe("federated thread message service", () => {
       instanceId: "pwr_owner",
       instanceLabel: "Owner Mac",
     });
-    expect(backends.get("pwr_owner")?.interruptTurn).toHaveBeenCalledWith({
+    expect(backends.get("pwr_owner")?.controlActiveTurn).toHaveBeenCalledWith({
+      operation: "stop",
       backend: "codex",
       threadId: request.threadId,
-      turnId: "turn-live",
+      requestId: "stop-1",
     });
+    expect(backends.get("pwr_owner")?.interruptTurn).not.toHaveBeenCalled();
     expect(backends.get("pwr_owner")?.startTurn).not.toHaveBeenCalled();
   });
 
-  it("steers at the active turn boundary and never disguises a scheduled fallback", async () => {
+  it("delegates steer atomically and preserves a stale owner disposition", async () => {
     const { backends, runtime } = buildRuntime({
       peers: [{
         instanceId: "pwr_owner",
@@ -508,20 +574,25 @@ describe("federated thread message service", () => {
       turnId: "turn-live",
       disposition: "steered",
     });
-    expect(backends.get("pwr_owner")?.steerTurn).toHaveBeenCalledWith({
+    expect(backends.get("pwr_owner")?.controlActiveTurn).toHaveBeenCalledWith({
+      operation: "steer",
       backend: "codex",
       threadId: request.threadId,
-      expectedTurnId: "turn-live",
       requestId: "steer-1",
       input,
     });
+    expect(backends.get("pwr_owner")?.steerTurn).not.toHaveBeenCalled();
     expect(backends.get("pwr_owner")?.startTurn).not.toHaveBeenCalled();
 
-    backends.get("pwr_owner")?.steerTurn.mockResolvedValueOnce({
+    backends.get("pwr_owner")?.controlActiveTurn.mockResolvedValueOnce({
+      ok: false,
       backend: "codex",
       threadId: request.threadId,
-      turnId: "scheduled-action-1",
-      disposition: "scheduled",
+      requestId: "steer-2",
+      error: {
+        code: "stale_target",
+        message: "The active turn changed before steering.",
+      },
     });
     await expect(handler({
       operation: "steer",
@@ -586,6 +657,74 @@ describe("federated thread message service", () => {
       requestId: "steer-unsupported",
       input: [{ type: "text", text: "Stop." }],
     })).rejects.toMatchObject({ code: "unsupported_capability" });
+  });
+
+  it("preserves owner-side idempotent replay disposition", async () => {
+    const { backends, runtime } = buildRuntime({
+      peers: [{
+        instanceId: "pwr_owner",
+        label: "Owner Mac",
+        ownsThread: true,
+        activeTurnId: "turn-live",
+      }],
+    });
+    backends.get("pwr_owner")?.controlActiveTurn.mockResolvedValueOnce({
+      ok: true,
+      backend: "codex",
+      threadId: request.threadId,
+      requestId: "stop-retry",
+      turnId: "turn-live",
+      disposition: "interrupted",
+      idempotentReplay: true,
+    });
+
+    await expect(createFederatedThreadControlHandler({
+      runtime: () => runtime,
+    })({
+      operation: "stop",
+      backend: "codex",
+      threadId: request.threadId,
+      requestId: "stop-retry",
+    })).resolves.toMatchObject({
+      disposition: "interrupted",
+      idempotentReplay: true,
+    });
+  });
+
+  it("classifies control disconnects and timeouts as peer unavailable", async () => {
+    const { backends, runtime } = buildRuntime({
+      peers: [{
+        instanceId: "pwr_owner",
+        label: "Owner Mac",
+        ownsThread: true,
+        activeTurnId: "turn-live",
+      }],
+    });
+    const control = backends.get("pwr_owner")?.controlActiveTurn;
+    control?.mockRejectedValueOnce(
+      new FederationPeerUnavailableError("pwr_owner"),
+    );
+    const handler = createFederatedThreadControlHandler({
+      runtime: () => runtime,
+    });
+
+    await expect(handler({
+      operation: "stop",
+      backend: "codex",
+      threadId: request.threadId,
+      requestId: "stop-disconnected",
+    })).rejects.toMatchObject({ code: "peer_unavailable" });
+
+    control?.mockRejectedValueOnce(
+      new Error("Federation request timed out: backend.controlActiveTurn"),
+    );
+    await expect(handler({
+      operation: "steer",
+      backend: "codex",
+      threadId: request.threadId,
+      requestId: "steer-timeout",
+      input: [{ type: "text", text: "Stop." }],
+    })).rejects.toMatchObject({ code: "peer_unavailable" });
   });
 
   it("reports unavailable, ambiguous, and stale federation ownership structurally", async () => {

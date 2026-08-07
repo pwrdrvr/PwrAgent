@@ -26326,6 +26326,119 @@ script = "printf setup"
     });
     expect(codexClient.interruptTurnCallCount).toBe(1);
 
+    await expect(registry.controlActiveTurn({
+      operation: "stop",
+      backend: "codex",
+      threadId: "target-thread",
+      requestId: "stop-request-1",
+      expectedTurnId: "target-turn",
+      messageOrigin: {
+        kind: "agent",
+        sourceThread: {
+          backend: "codex",
+          threadId: "parent-thread",
+        },
+      },
+    })).resolves.toMatchObject({
+      ok: true,
+      disposition: "interrupted",
+      idempotentReplay: true,
+    });
+    expect(codexClient.interruptTurnCallCount).toBe(1);
+
+    await registry.close();
+  });
+
+  it("atomically rejects a stale ACP stop and replays an accepted owner stop", async () => {
+    const acpBackendId = "acp:kimi" as AcpBackendId;
+    const { acpClient, registry } = createKimiAcpRegistry({
+      acpBackendId,
+      sessionId: "acp-target-thread",
+      sessions: [{
+        backendId: acpBackendId,
+        sessionId: "acp-target-thread",
+        title: "ACP target thread",
+        createdAt: 1_000,
+        updatedAt: 1_000,
+        executionMode: "default",
+        status: "idle",
+      }],
+    });
+    await registry.publishLocalEvent({
+      backend: acpBackendId,
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "acp-target-thread",
+          turnId: "turn-a",
+          turn: { id: "turn-a" },
+        },
+      },
+    });
+    await registry.publishLocalEvent({
+      backend: acpBackendId,
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "acp-target-thread",
+          turnId: "turn-a",
+          turn: {
+            id: "turn-a",
+            status: "completed",
+            output: [],
+          },
+        },
+      },
+    });
+    await registry.publishLocalEvent({
+      backend: acpBackendId,
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "acp-target-thread",
+          turnId: "turn-b",
+          turn: { id: "turn-b" },
+        },
+      },
+    });
+
+    await expect(registry.controlActiveTurn({
+      operation: "stop",
+      backend: acpBackendId,
+      threadId: "acp-target-thread",
+      requestId: "stop-stale-a",
+      expectedTurnId: "turn-a",
+    })).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "stale_target",
+        activeTurnId: "turn-b",
+        expectedTurnId: "turn-a",
+      },
+    });
+    expect(acpClient.cancelSession).not.toHaveBeenCalled();
+
+    const acceptedRequest = {
+      operation: "stop" as const,
+      backend: acpBackendId,
+      threadId: "acp-target-thread",
+      requestId: "stop-turn-b",
+      expectedTurnId: "turn-b",
+    };
+    await expect(registry.controlActiveTurn(acceptedRequest)).resolves.toMatchObject({
+      ok: true,
+      turnId: "turn-b",
+      disposition: "interrupted",
+    });
+    await expect(registry.controlActiveTurn(acceptedRequest)).resolves.toMatchObject({
+      ok: true,
+      turnId: "turn-b",
+      disposition: "interrupted",
+      idempotentReplay: true,
+    });
+    expect(acpClient.cancelSession).toHaveBeenCalledTimes(1);
+    expect(acpClient.cancelSession).toHaveBeenCalledWith("acp-target-thread");
+
     await registry.close();
   });
 
@@ -27349,6 +27462,13 @@ script = "printf setup"
       instanceId: "pwr_studio",
       requestId: "steer-remote",
       input: [{ type: "text", text: "Avoid the expensive test lane." }],
+      messageOrigin: {
+        kind: "agent",
+        sourceThread: {
+          backend: "codex",
+          threadId: "parent-thread",
+        },
+      },
     });
 
     const stop = await callRegistryMcpTool({
