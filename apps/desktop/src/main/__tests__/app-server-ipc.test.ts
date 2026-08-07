@@ -53,9 +53,14 @@ const federationMock = vi.hoisted(() => {
   };
   const remoteThreadSummaries = {
     resolvePinnedThreads: vi.fn(
-      async (): Promise<{ threads: unknown[]; refreshed: unknown[] }> => ({
+      async (): Promise<{
+        threads: unknown[];
+        refreshed: unknown[];
+        archived: unknown[];
+      }> => ({
         threads: [],
         refreshed: [],
+        archived: [],
       }),
     ),
     searchForJump: vi.fn(async () => ({ results: [] })),
@@ -278,6 +283,7 @@ const reconcileNavigationSnapshot = vi.fn(async (params: unknown) => ({
 const rememberCompleteNavigationSnapshot = vi.fn();
 const listRemoteThreadPins = vi.fn(async (): Promise<unknown[]> => []);
 const updateRemoteThreadPinSnapshots = vi.fn(async () => {});
+const removeRemoteThreadPinStore = vi.fn(async () => true);
 const addRemoteThreadPinStore = vi.fn(
   async (params: { ref: unknown; instanceLabel: string }) => ({
     ref: params.ref,
@@ -750,6 +756,7 @@ vi.mock("../app-server/desktop-overlay-store", () => ({
     writeThreadGitWorkingStateCacheEntry,
     listRemoteThreadPins,
     updateRemoteThreadPinSnapshots,
+    removeRemoteThreadPin: removeRemoteThreadPinStore,
     addRemoteThreadPin: addRemoteThreadPinStore,
     hasRemoteThreadPin,
     setRemoteThreadLocalPin,
@@ -1825,6 +1832,7 @@ describe("app server ipc", () => {
     federationMock.remoteThreadSummaries.resolvePinnedThreads.mockResolvedValueOnce({
       threads: [remoteRow],
       refreshed: [{ ref, summary: remoteRow, instanceLabel: "Laptop" }],
+      archived: [],
     });
 
     registerAppServerIpcHandlers();
@@ -1862,6 +1870,38 @@ describe("app server ipc", () => {
       (directory) => directory.key === "directory:/repo/app",
     );
     expect(appDirectory?.threadKeys).toContain("codex:remote-1");
+  });
+
+  it("removes a viewer-side remote pin when the owner proves it is archived", async () => {
+    const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+    const { buildFederatedThreadRef } = await import("@pwragent/shared");
+
+    const ref = buildFederatedThreadRef({
+      backend: "codex",
+      instanceId: "peer-laptop",
+      threadId: "remote-archived",
+    });
+    const pin = { ref, addedAt: 1_000, instanceLabel: "Laptop" };
+    removeRemoteThreadPinStore.mockClear();
+    listRemoteThreadPins.mockResolvedValueOnce([pin]);
+    federationMock.remoteThreadSummaries.resolvePinnedThreads.mockResolvedValueOnce({
+      threads: [],
+      refreshed: [],
+      archived: [ref],
+    });
+
+    registerAppServerIpcHandlers();
+
+    const response = (await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.(
+      {},
+      {} satisfies GetNavigationSnapshotRequest,
+    )) as { threads: Array<{ id: string }> };
+
+    expect(removeRemoteThreadPinStore).toHaveBeenCalledWith({ ref });
+    expect(response.threads).not.toContainEqual(
+      expect.objectContaining({ id: "remote-archived" }),
+    );
   });
 
   it("groups a multi-directory remote thread into exactly one local project", async () => {
@@ -1948,6 +1988,7 @@ describe("app server ipc", () => {
         },
       ],
       refreshed: [],
+      archived: [],
     });
 
     registerAppServerIpcHandlers();
@@ -2003,6 +2044,7 @@ describe("app server ipc", () => {
         },
       ],
       refreshed: [],
+      archived: [],
     });
 
     registerAppServerIpcHandlers();
@@ -2284,6 +2326,7 @@ describe("app server ipc", () => {
         },
       ],
       refreshed: [],
+      archived: [],
     });
 
     registerAppServerIpcHandlers();
