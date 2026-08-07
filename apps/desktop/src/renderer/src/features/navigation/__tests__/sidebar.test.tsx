@@ -16,6 +16,22 @@ import type {
 } from "@pwragent/shared";
 import { Sidebar } from "../Sidebar";
 
+/**
+ * The whole row card for a thread, given its open-thread button.
+ *
+ * The button is only the title line: the chip flow is its SIBLING inside
+ * `.thread-row`, because chips carry buttons of their own and a button
+ * inside a button is invalid (see ThreadRow). Assertions about chips have
+ * to scope to the card, not to the button.
+ */
+function threadCard(openButton: HTMLElement): HTMLElement {
+  const card = openButton.closest(".thread-row");
+  if (!(card instanceof HTMLElement)) {
+    throw new Error("Expected the open-thread button to sit inside .thread-row");
+  }
+  return card;
+}
+
 async function clickElement(element: HTMLElement): Promise<void> {
   await act(async () => {
     fireEvent.click(element);
@@ -260,7 +276,7 @@ describe("Sidebar", () => {
     );
 
     expect(
-      screen.getByRole("button", { name: "Cross-project cleanup" }),
+      threadCard(screen.getByRole("button", { name: "Cross-project cleanup" })),
     ).toHaveClass("is-remote-offline");
     expect(
       screen.queryByText("Error invoking remote method: peer is not connected"),
@@ -1544,14 +1560,16 @@ describe("Sidebar", () => {
     );
 
     const browseSection = screen.getByRole("region", { name: "Thread browser" });
-    const threadButton = within(browseSection as HTMLElement).getByRole("button", {
-      name: /Cross-project cleanup/i,
-    });
+    const threadRow = threadCard(
+      within(browseSection as HTMLElement).getByRole("button", {
+        name: /Cross-project cleanup/i,
+      }),
+    );
 
-    expect(within(threadButton).getByLabelText("Copy path for worktree PwrAgent")).toHaveTextContent(
+    expect(within(threadRow).getByLabelText("Copy path for worktree PwrAgent")).toHaveTextContent(
       "PwrAgent"
     );
-    expect(within(threadButton).queryByText("worktree")).not.toBeInTheDocument();
+    expect(within(threadRow).queryByText("worktree")).not.toBeInTheDocument();
   });
 
   it("keeps kind chips for single-directory rows", () => {
@@ -1599,16 +1617,20 @@ describe("Sidebar", () => {
       .find((button) => button.hasAttribute("aria-expanded"));
     expect(directorySummary).toBeDefined();
     fireEvent.click(directorySummary!);
-    const worktreeThreadButton = within(browseSection as HTMLElement).getByRole("button", {
-      name: /Cross-project cleanup/i,
-    });
-    const localThreadButton = within(browseSection as HTMLElement).getByRole("button", {
-      name: /Local cleanup/i,
-    });
+    const worktreeThreadRow = threadCard(
+      within(browseSection as HTMLElement).getByRole("button", {
+        name: /Cross-project cleanup/i,
+      }),
+    );
+    const localThreadRow = threadCard(
+      within(browseSection as HTMLElement).getByRole("button", {
+        name: /Local cleanup/i,
+      }),
+    );
 
-    expect(within(worktreeThreadButton).getByText("worktree")).toBeInTheDocument();
-    expect(within(worktreeThreadButton).queryByText("PwrAgent")).not.toBeInTheDocument();
-    expect(within(localThreadButton).getByText("local")).toBeInTheDocument();
+    expect(within(worktreeThreadRow).getByText("worktree")).toBeInTheDocument();
+    expect(within(worktreeThreadRow).queryByText("PwrAgent")).not.toBeInTheDocument();
+    expect(within(localThreadRow).getByText("local")).toBeInTheDocument();
   });
 
   it("names every linked project in multi-directory rows", () => {
@@ -1673,21 +1695,23 @@ describe("Sidebar", () => {
       .find((button) => button.hasAttribute("aria-expanded"));
     expect(pwrGitDirectorySummary).toBeDefined();
     fireEvent.click(pwrGitDirectorySummary!);
-    const threadButton = within(browseSection as HTMLElement).getByRole("button", {
-      name: "Prepare PwrGit branding assets",
-    });
+    const threadRow = threadCard(
+      within(browseSection as HTMLElement).getByRole("button", {
+        name: "Prepare PwrGit branding assets",
+      }),
+    );
 
     expect(
-      within(threadButton).getByLabelText("Copy path for worktree PwrGit"),
+      within(threadRow).getByLabelText("Copy path for worktree PwrGit"),
     ).toHaveTextContent("PwrGit");
     expect(
-      within(threadButton).getByLabelText("Copy path for PwrAgnt"),
+      within(threadRow).getByLabelText("Copy path for PwrAgnt"),
     ).toHaveTextContent("PwrAgnt");
     expect(
-      within(threadButton).getByLabelText("Copy path for PwrSnap"),
+      within(threadRow).getByLabelText("Copy path for PwrSnap"),
     ).toHaveTextContent("PwrSnap");
-    expect(within(threadButton).queryByText("worktree")).not.toBeInTheDocument();
-    expect(within(threadButton).queryByText("local")).not.toBeInTheDocument();
+    expect(within(threadRow).queryByText("worktree")).not.toBeInTheDocument();
+    expect(within(threadRow).queryByText("local")).not.toBeInTheDocument();
   });
 
   it("opens the directory launchpad from the plus button", () => {
@@ -1967,11 +1991,13 @@ describe("Sidebar", () => {
     );
 
     const browseSection = screen.getByRole("region", { name: "Thread browser" });
-    const threadButton = within(browseSection as HTMLElement).getByRole("button", {
-      name: /Cross-project cleanup/i,
-    });
+    const threadRow = threadCard(
+      within(browseSection as HTMLElement).getByRole("button", {
+        name: /Cross-project cleanup/i,
+      }),
+    );
 
-    const approvalChip = within(threadButton).getByTitle("Waiting for approval");
+    const approvalChip = within(threadRow).getByTitle("Waiting for approval");
     expect(approvalChip).toHaveTextContent("Waiting for approval");
     expect(approvalChip).not.toHaveTextContent("!");
     expect(approvalChip).toHaveAttribute("title", "Waiting for approval");
@@ -1999,11 +2025,13 @@ describe("Sidebar", () => {
     );
 
     const browseSection = screen.getByRole("region", { name: "Thread browser" });
-    const threadButton = within(browseSection as HTMLElement).getByRole("button", {
-      name: /Cross-project cleanup/i,
-    });
+    const threadRow = threadCard(
+      within(browseSection as HTMLElement).getByRole("button", {
+        name: /Cross-project cleanup/i,
+      }),
+    );
 
-    const inputChip = within(threadButton).getByTitle("Input needed");
+    const inputChip = within(threadRow).getByTitle("Input needed");
     expect(inputChip).toHaveTextContent("Input needed");
     expect(inputChip).not.toHaveTextContent("Approve");
     expect(inputChip).toHaveAttribute("title", "Input needed");
@@ -2753,7 +2781,7 @@ describe("Sidebar", () => {
     });
     expect(rows[0]).toHaveTextContent("Updated thread");
     expect(
-      within(rows[0]).getByRole("button", { name: "Unpin thread" }),
+      within(threadCard(rows[0]!)).getByRole("button", { name: "Unpin thread" }),
     ).toBeInTheDocument();
     expect(screen.getByRole("separator", { name: "Unpinned threads" })).toBeInTheDocument();
 
@@ -2926,7 +2954,7 @@ describe("Sidebar", () => {
     });
     expect(rows[0]).toHaveTextContent("Updated thread");
     expect(
-      within(rows[0]).getByRole("img", { name: "Pinned" }),
+      within(threadCard(rows[0]!)).getByRole("img", { name: "Pinned" }),
     ).toBeInTheDocument();
     expect(rows[1]).toHaveTextContent("Cross-project cleanup");
   });

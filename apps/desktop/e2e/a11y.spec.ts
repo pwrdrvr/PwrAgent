@@ -71,19 +71,6 @@ async function launchAuditApp(options?: {
 // watermark behind them), so the map audits run against a fixture whose
 // threads are `threadStatus: "active"` and therefore populate a lane.
 //
-// That fixture's threads deliberately carry NO linked directories. A
-// project chip renders through `CopyableThreadChip`, which is a
-// `role="button" tabIndex={0}` span, and both the sidebar thread row and
-// the star-map card wrap their content in a real `<button>` — so any
-// fixture with a directory trips `nested-interactive` on BOTH surfaces.
-// That is pre-existing renderer debt, not a Star Map regression, and the
-// fix is a structural change to the row/card (hoist the chips out of the
-// button, the way `.star-map-card-shell` already hoists the kebab).
-// Waiving it here is not an option worth taking: `KNOWN_VIOLATIONS`
-// works by `exclude()`, so waiving the rule would drop the whole card
-// from the scan and blind the very contrast pairs this block exists to
-// audit. Tracked separately; when it lands, give these threads a
-// directory so the project chip is covered too.
 // Both themes ship, so both themes are gated. See the header note.
 // `as const`, not `readonly DesktopAppearanceTheme[]` — that type also
 // admits "system", which resolves through the OS and lands on light on
@@ -92,9 +79,25 @@ async function launchAuditApp(options?: {
 // nondeterministic third entry from typechecking its way in.
 const AUDIT_THEMES = ["dark", "light"] as const satisfies readonly DesktopAppearanceTheme[];
 
+// Its threads carry linked directories on purpose. A project chip renders
+// through `CopyableThreadChip`, a `role="button" tabIndex={0}` span, and
+// the row/card used to wrap their whole content in a real `<button>` — so
+// any fixture with a directory tripped `nested-interactive` on BOTH
+// surfaces, and these threads had to stay directory-less to keep the gate
+// green. That debt is paid: the chip flow is now a SIBLING of the
+// open-thread button on both surfaces (the shape `.star-map-card-shell`
+// already used for its kebab), so the chips are the point of the fixture
+// rather than a landmine in it. Keep the directories — they are what
+// stops the nesting from creeping back, on the card and on the sidebar
+// row behind it.
 const STAR_MAP_FIXTURE = path.resolve(
   specDir,
   "fixtures/star-map/replay.fixture.json",
+);
+
+const COPY_CHIP_FIXTURE = path.resolve(
+  specDir,
+  "fixtures/a11y-copy-chips/replay.fixture.json",
 );
 
 const WCAG_AA_TAGS = [
@@ -190,6 +193,47 @@ for (const theme of AUDIT_THEMES) {
         // thread" row is the proxy for "renderer has hydrated".
         await expect(
           app.window.getByRole("button", { name: /Replay smoke thread/i }).first(),
+        ).toBeVisible();
+        await runAxe(app.window);
+      } finally {
+        await app.close();
+      }
+    });
+
+    // The smoke thread above has no linked directories and no branch, so
+    // its row renders none of the click-to-copy chips
+    // (`CopyableThreadChip` — a `role="button"` span). Those chips are what
+    // made the row's own button a `nested-interactive` violation, so the
+    // block above cannot catch a regression of it. This one audits a row
+    // carrying all three chip flavours: a worktree directory, a local one,
+    // and a branch.
+    //
+    // Its own fixture, deliberately, on two counts. STAR_MAP_FIXTURE
+    // carries directories now, but its threads are
+    // `threadStatus: "active"`, so the thread view renders its
+    // `.transcript-list__pending` live region — a `role="status"` sibling
+    // of the `role="listitem"` entries inside `.transcript-list__items`,
+    // which is a `role="list"`. That trips `aria-required-children`,
+    // pre-existing transcript debt unrelated to the chips. (The map blocks
+    // below miss it only because the map layer covers the thread view.)
+    // Borrowing another spec's fixture would work too, but this gate's
+    // coverage would then hinge on a file it does not own: drop a directory
+    // there and this block goes quiet with no failure anywhere. An idle
+    // thread also keeps the scan UNSCOPED — narrowing it with `include` is
+    // the cheap way out and would stop this block catching anything outside
+    // the sidebar.
+    test("sidebar rows carrying copy chips have no violations", async () => {
+      const app = await launchAuditApp({
+        theme,
+        fixturePath: COPY_CHIP_FIXTURE,
+      });
+      try {
+        // The branch chip renders last of the row's copy chips, so waiting
+        // on it means the linked-directory chips are up too.
+        await expect(
+          app.window.getByRole("button", {
+            name: "Copy branch feature/copy-chip-audit",
+          }),
         ).toBeVisible();
         await runAxe(app.window);
       } finally {

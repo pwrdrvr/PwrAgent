@@ -383,10 +383,22 @@ export function computeOrbitPlacement(params: {
  *
  * Anything interactive owns its own gesture — cards drag themselves,
  * bodies open, chrome clicks — so a pan only begins on bare sky.
+ *
+ * `.star-map-card-shell` is listed explicitly because a thread card is no
+ * longer one big `<button>`: its open-thread button, kebab, and chips are
+ * siblings inside a plain container (see StarMapThreadCard), so the card's
+ * padding and the gaps between chips match none of the element selectors.
+ * The shell is the whole card's drag target, so pressing anywhere on it
+ * must never fall through to a canvas pan.
+ *
+ * Naming the shell also captures `.star-map-card__watermark`, which used
+ * to match nothing here and so started a pan. It is the card's own mark
+ * and overhangs the card's top-right corner, so dragging the card from it
+ * is the right behaviour — but it is a change, not just a port.
  */
 export function shouldStartCanvasPan(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return false;
   return !target.closest(
-    "button, a, input, label, .star-map__chrome, .star-map__filters",
+    "button, a, input, label, .star-map-card-shell, .star-map__chrome, .star-map__filters",
   );
 }

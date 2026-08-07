@@ -1066,8 +1066,15 @@ test("directory launchpad keeps new worktree as the sticky default after startin
       ownerThreadId: "thread-new-worktree",
     });
 
+    // Scope to the row CARD, not the open-thread button inside it: the chip
+    // flow is the button's sibling, because chips carry buttons of their own
+    // and a button inside a button is invalid (see ThreadRow).
     const startedThreadRow = app.window
-      .getByRole("button", { name: /Use a sticky worktree default/ })
+      .locator(".thread-row", {
+        has: app.window.getByRole("button", {
+          name: /Use a sticky worktree default/,
+        }),
+      })
       .first();
     // Renamed in the chip-flow refactor: meta + PR + binding + reactions
     // chips all share a single `.thread-row__chips` flex-wrap container.

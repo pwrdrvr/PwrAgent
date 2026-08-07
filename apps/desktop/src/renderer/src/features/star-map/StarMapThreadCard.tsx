@@ -159,9 +159,10 @@ export function StarMapThreadCard(props: {
   };
 
   return (
-    // Shell owns position, drag and stacking so the clickable surface can
-    // stay a plain button and the kebab can sit beside it rather than
-    // nested inside it.
+    // Shell owns position, drag and stacking so the card itself can stay a
+    // plain container and every interactive part — the open-thread button,
+    // the kebab, the chips — sits beside the others rather than nested
+    // inside one another.
     <div
       className={`star-map-card-shell${
         props.entering ? " star-map-card-shell--entering" : ""
@@ -180,64 +181,71 @@ export function StarMapThreadCard(props: {
       {props.menuActions && props.menuActions.length > 0 ? (
         <StarMapCardMenu actions={props.menuActions} threadTitle={thread.title} />
       ) : null}
-      <button
-        type="button"
-        className="star-map-card"
-        // Names the action rather than letting the button's whole content
-        // become its accessible name; the chips stay readable as content,
-        // and the kebab beside it gets a distinct name of its own.
-        aria-label={`Open thread: ${thread.title}`}
-        onClick={() => {
-          if (suppressClickRef.current) {
-            suppressClickRef.current = false;
-            return;
-          }
-          props.onOpen(thread);
-        }}
-      >
-      <span className="star-map-card__heading">
-        <ThreadRowStatus status={status} />
-        <span className="star-map-card__title" title={thread.title}>
-          {thread.title}
-        </span>
-      </span>
-      <span className="star-map-card__chips">
-        <ThreadMetaChips
-          thread={thread}
-          hasApprovalRequest={
-            props.sessionKeys?.approvalRequestThreadKeys?.[threadKey] === true
-          }
-          hasInputRequest={
-            props.sessionKeys?.inputRequestThreadKeys?.[threadKey] === true
-          }
-          includeLinkedDirectories={props.cardFields.primaryDirectory}
-          linkedDirectoryMode="label"
-          // In the instance lenses the lane and the watermark already say
-          // which machine this is; under the projects lens they do not.
-          hideInstanceChip={!props.showInstanceChip}
-          hidePinChip
-          chipVisibility={{
-            provider: props.cardFields.provider,
-            branch: props.cardFields.branch,
-            maxLinkedDirectories: props.cardFields.secondaryDirectories
-              ? undefined
-              : 1,
+      <div className="star-map-card">
+        {/* The card's primary action. It carries the heading line and
+            stretches over the whole card via `.star-map-card__open::after`
+            (see app.css), but it stays a SIBLING of the chip flow for the
+            same reason the kebab sits outside it: the chips own real
+            buttons (copy path, copy branch, PR links), and a button inside
+            a button is neither valid nor operable — axe reports it as
+            `nested-interactive`. */}
+        <button
+          type="button"
+          className="star-map-card__heading star-map-card__open"
+          // Names the action rather than letting the button's whole content
+          // become its accessible name; the chips stay readable as content,
+          // and the kebab beside it gets a distinct name of its own.
+          aria-label={`Open thread: ${thread.title}`}
+          onClick={() => {
+            if (suppressClickRef.current) {
+              suppressClickRef.current = false;
+              return;
+            }
+            props.onOpen(thread);
           }}
-        />
-        {visiblePullRequests(thread.prs, props.cardFields).map((pr) => (
-          <PrChip
-            key={`${pr.org}/${pr.repo}#${pr.number}`}
-            pr={pr}
-            showRepoPrefix={false}
-            onOpen={(url) => {
-              if (typeof window !== "undefined") {
-                window.open(url, "_blank", "noopener,noreferrer");
-              }
+        >
+          <ThreadRowStatus status={status} />
+          <span className="star-map-card__title" title={thread.title}>
+            {thread.title}
+          </span>
+        </button>
+        <span className="star-map-card__chips">
+          <ThreadMetaChips
+            thread={thread}
+            hasApprovalRequest={
+              props.sessionKeys?.approvalRequestThreadKeys?.[threadKey] === true
+            }
+            hasInputRequest={
+              props.sessionKeys?.inputRequestThreadKeys?.[threadKey] === true
+            }
+            includeLinkedDirectories={props.cardFields.primaryDirectory}
+            linkedDirectoryMode="label"
+            // In the instance lenses the lane and the watermark already say
+            // which machine this is; under the projects lens they do not.
+            hideInstanceChip={!props.showInstanceChip}
+            hidePinChip
+            chipVisibility={{
+              provider: props.cardFields.provider,
+              branch: props.cardFields.branch,
+              maxLinkedDirectories: props.cardFields.secondaryDirectories
+                ? undefined
+                : 1,
             }}
           />
-        ))}
-      </span>
-      </button>
+          {visiblePullRequests(thread.prs, props.cardFields).map((pr) => (
+            <PrChip
+              key={`${pr.org}/${pr.repo}#${pr.number}`}
+              pr={pr}
+              showRepoPrefix={false}
+              onOpen={(url) => {
+                if (typeof window !== "undefined") {
+                  window.open(url, "_blank", "noopener,noreferrer");
+                }
+              }}
+            />
+          ))}
+        </span>
+      </div>
     </div>
   );
 }
