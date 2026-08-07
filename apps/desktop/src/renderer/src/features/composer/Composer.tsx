@@ -7488,33 +7488,33 @@ export function Composer(props: ComposerProps) {
   };
 
   const removeImageAttachment = (id: string): void => {
-    setImageAttachments((current) => {
-      const nextAttachments = current.filter((attachment) => attachment.id !== id);
-      saveComposerDraftSnapshot(composerScopeKey, {
-        draft,
-        editorDocument,
-        imageAttachments: nextAttachments,
-        fileAttachments,
-        skillTokens,
-      });
-      persistLaunchpadImageAttachments(nextAttachments);
-      return nextAttachments;
+    const nextAttachments = imageAttachments.filter(
+      (attachment) => attachment.id !== id,
+    );
+    setImageAttachments(nextAttachments);
+    saveComposerDraftSnapshot(composerScopeKey, {
+      draft,
+      editorDocument,
+      imageAttachments: nextAttachments,
+      fileAttachments,
+      skillTokens,
     });
+    persistLaunchpadImageAttachments(nextAttachments);
   };
 
   const removeFileAttachment = (id: string): void => {
-    setFileAttachments((current) => {
-      const nextAttachments = current.filter((attachment) => attachment.id !== id);
-      saveComposerDraftSnapshot(composerScopeKey, {
-        draft,
-        editorDocument,
-        imageAttachments,
-        fileAttachments: nextAttachments,
-        skillTokens,
-      });
-      persistLaunchpadImageAttachments(imageAttachments, nextAttachments);
-      return nextAttachments;
+    const nextAttachments = fileAttachments.filter(
+      (attachment) => attachment.id !== id,
+    );
+    setFileAttachments(nextAttachments);
+    saveComposerDraftSnapshot(composerScopeKey, {
+      draft,
+      editorDocument,
+      imageAttachments,
+      fileAttachments: nextAttachments,
+      skillTokens,
     });
+    persistLaunchpadImageAttachments(imageAttachments, nextAttachments);
   };
 
   const persistLaunchpadImageAttachments = (
@@ -7837,8 +7837,8 @@ export function Composer(props: ComposerProps) {
 
       // Reject exact-duplicate pastes so the same image can't stack up. Toast
       // off the snapshot captured when this paste started — accurate for the
-      // sequential paste-the-same-image case — then re-check inside the state
-      // updater below against the freshest list for the rare paste race.
+      // sequential paste-the-same-image case — then re-check against the
+      // freshest snapshot below for the rare paste race.
       const { unique, duplicateCount } = partitionNewImageAttachments(
         pasteImageAttachments,
         nextAttachments,
@@ -7857,37 +7857,37 @@ export function Composer(props: ComposerProps) {
         return;
       }
 
-      setImageAttachments((current) => {
-        // Re-run de-dup and the cap against the latest state (not the snapshot
-        // captured when this paste began) so a second identical paste arriving
-        // while an earlier one is still normalizing can never slip a duplicate
-        // through or exceed the limit.
-        const { unique: freshlyUnique } = partitionNewImageAttachments(
-          current,
-          unique,
-          getImageSignature,
-        );
-        const mergedAttachments = [...current, ...freshlyUnique].slice(
-          0,
-          MAX_COMPOSER_IMAGE_ATTACHMENTS,
-        );
-        // Read file pills from the latest snapshot ref, not the paste-time
-        // closure — a mixed drop attaches files synchronously before this
-        // async image path lands, and the stale list would wipe them.
-        const latestFileAttachments =
-          latestDraftSnapshotRef.current.snapshot.fileAttachments ??
-          pasteFileAttachments;
-        const nextSnapshot = {
-          draft,
-          editorDocument,
-          imageAttachments: mergedAttachments,
-          fileAttachments: latestFileAttachments,
-          skillTokens,
-        };
-        saveComposerDraftSnapshot(pasteScope.key, nextSnapshot);
-        persistLaunchpadImageAttachments(mergedAttachments, latestFileAttachments);
-        return mergedAttachments;
-      });
+      // Re-run de-dup and the cap against the latest snapshot (not the one
+      // captured when this paste began) so concurrent normalizations cannot
+      // add a duplicate or exceed the limit. Update the ref synchronously so
+      // the next completion sees this one before React commits the state.
+      const latestSnapshot = latestDraftSnapshotRef.current.snapshot;
+      const { unique: freshlyUnique } = partitionNewImageAttachments(
+        latestSnapshot.imageAttachments,
+        unique,
+        getImageSignature,
+      );
+      const mergedAttachments = [
+        ...latestSnapshot.imageAttachments,
+        ...freshlyUnique,
+      ].slice(0, MAX_COMPOSER_IMAGE_ATTACHMENTS);
+      // Read file pills from the latest snapshot ref, not the paste-time
+      // closure — a mixed drop attaches files synchronously before this
+      // async image path lands, and the stale list would wipe them.
+      const latestFileAttachments =
+        latestSnapshot.fileAttachments ?? pasteFileAttachments;
+      const nextSnapshot = {
+        ...latestSnapshot,
+        imageAttachments: mergedAttachments,
+        fileAttachments: latestFileAttachments,
+      };
+      latestDraftSnapshotRef.current = {
+        scopeKey: pasteScope.key,
+        snapshot: nextSnapshot,
+      };
+      setImageAttachments(mergedAttachments);
+      saveComposerDraftSnapshot(pasteScope.key, nextSnapshot);
+      persistLaunchpadImageAttachments(mergedAttachments, latestFileAttachments);
     } catch (error) {
       if (activeComposerScopeKeyRef.current !== pasteScope.key) {
         return;
