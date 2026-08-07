@@ -275,6 +275,73 @@ describe("SqliteOverlayStore — remote thread pins", () => {
     expect(await store.hasRemoteThreadPin({ ref: ref("nope") })).toBe(false);
   });
 
+  it("skips byte-equal snapshot rewrites", async () => {
+    await store.addRemoteThreadPin({
+      ref: ref(),
+      summary: summary(),
+      instanceLabel: "Laptop",
+    });
+    // Count actual row rewrites — the merge refreshes payloads on every
+    // navigation snapshot, and unchanged data must not churn the db.
+    stateDb.raw.exec(
+      `CREATE TEMP TABLE pin_write_log(n INTEGER);
+       CREATE TEMP TRIGGER pin_update_log AFTER UPDATE ON remote_thread_pins
+       BEGIN INSERT INTO pin_write_log VALUES (1); END;`,
+    );
+    const entry = {
+      ref: ref(),
+      summary: summary(),
+      instanceLabel: "Laptop",
+    };
+    await store.updateRemoteThreadPinSnapshots([entry]);
+    await store.updateRemoteThreadPinSnapshots([entry]);
+    const unchangedWrites = stateDb.raw
+      .prepare("SELECT COUNT(*) AS count FROM pin_write_log")
+      .get() as { count: number };
+    expect(unchangedWrites.count).toBe(0);
+
+    await store.updateRemoteThreadPinSnapshots([
+      { ...entry, summary: summary({ title: "Changed" }) },
+    ]);
+    const changedWrites = stateDb.raw
+      .prepare("SELECT COUNT(*) AS count FROM pin_write_log")
+      .get() as { count: number };
+    expect(changedWrites.count).toBe(1);
+  });
+
+  it("removes every pin for one instance in a single call", async () => {
+    await store.addRemoteThreadPin({
+      ref: ref("t1", "peer-revoked"),
+      summary: summary({ id: "t1" }),
+      instanceLabel: "Old laptop",
+    });
+    await store.addRemoteThreadPin({
+      ref: ref("t2", "peer-revoked"),
+      summary: summary({ id: "t2" }),
+      instanceLabel: "Old laptop",
+    });
+    await store.addRemoteThreadPin({
+      ref: ref("t3", "peer-kept"),
+      summary: summary({ id: "t3" }),
+      instanceLabel: "Desktop",
+    });
+
+    expect(
+      await store.removeRemoteThreadPinsForInstance({
+        instanceId: "peer-revoked",
+      }),
+    ).toBe(2);
+    const listed = await store.listRemoteThreadPins();
+    expect(listed).toHaveLength(1);
+    expect(listed[0].ref.threadId).toBe("t3");
+
+    expect(
+      await store.removeRemoteThreadPinsForInstance({
+        instanceId: "peer-revoked",
+      }),
+    ).toBe(0);
+  });
+
   it("updates cached snapshots in batch", async () => {
     await store.addRemoteThreadPin({
       ref: ref("t1"),

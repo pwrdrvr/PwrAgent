@@ -1623,8 +1623,12 @@ export type AppServerNotification =
       params: {
         /** Instance the pinned/unpinned thread lives on. */
         instanceId: string;
-        threadId: string;
-        pinned: boolean;
+        /**
+         * Absent for instance-wide changes: a background pinned-summary
+         * refresh landing, or peer-revocation pin cleanup.
+         */
+        threadId?: string;
+        pinned?: boolean;
       };
     }
   | {

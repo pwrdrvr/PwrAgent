@@ -2029,18 +2029,38 @@ export class SqliteOverlayStore {
             parsed = {};
           }
         }
+        const nextPayload = JSON.stringify({
+          ...parsed,
+          instanceLabel: entry.instanceLabel,
+          summary: stripFederationStamp(entry.summary),
+        });
+        // The merge re-serves cached rows on every navigation refresh;
+        // skip the write when nothing actually changed.
+        if (row && row.payload === nextPayload) {
+          continue;
+        }
         update.run(
-          JSON.stringify({
-            ...parsed,
-            instanceLabel: entry.instanceLabel,
-            summary: stripFederationStamp(entry.summary),
-          }),
+          nextPayload,
           instanceId,
           entry.ref.backend,
           entry.ref.threadId,
         );
       }
     })();
+  }
+
+  /**
+   * Drop every pin owned by one instance — peer-revocation / forgotten-
+   * enrollment cleanup, where the rows would otherwise dim forever.
+   * Returns the number of pins removed.
+   */
+  async removeRemoteThreadPinsForInstance(params: {
+    instanceId: string;
+  }): Promise<number> {
+    const result = this.stateDb.raw
+      .prepare("DELETE FROM remote_thread_pins WHERE instance_id = ?")
+      .run(params.instanceId);
+    return result.changes;
   }
 
   async setThreadAgent(params: {
