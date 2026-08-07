@@ -2,6 +2,7 @@ import {
   isThreadLinkId,
   parseThreadUrl,
   type AppServerBackendKind,
+  type AppServerThreadTitleSource,
   type FederationInstanceId,
   type LinkedDirectorySummary,
   type NavigationThreadSummary,
@@ -23,6 +24,7 @@ export type ResolvedThreadLink = {
   instanceId?: FederationInstanceId;
   threadId: string;
   title: string;
+  titleSource?: AppServerThreadTitleSource;
   gitBranch?: string;
   linkedDirectories?: LinkedDirectorySummary[];
 };
@@ -52,6 +54,7 @@ function threadSummaryLink(thread: NavigationThreadSummary): ResolvedThreadLink 
     ...(target?.scope === "remote" ? { instanceId: target.instanceId } : {}),
     threadId: thread.id,
     title: thread.title,
+    titleSource: thread.titleSource,
     gitBranch: thread.gitBranch,
     linkedDirectories: thread.linkedDirectories,
   };
@@ -64,6 +67,7 @@ function sameThreadLink(
   return Boolean(
     left
     && left.title === right.title
+    && left.titleSource === right.titleSource
     && left.gitBranch === right.gitBranch
     && linkedDirectoryMetadata(left.linkedDirectories)
       === linkedDirectoryMetadata(right.linkedDirectories)
@@ -93,6 +97,7 @@ function threadLinkMetadataKey(threads: NavigationThreadSummary[]): string {
         : null,
       thread.id,
       thread.title,
+      thread.titleSource,
       thread.gitBranch ?? null,
       linkedDirectoryMetadata(thread.linkedDirectories),
     ]),

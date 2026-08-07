@@ -1414,6 +1414,7 @@ function resolveThreadSummaryReference(
       : {}),
     threadId: thread.id,
     title: thread.title,
+    titleSource: thread.titleSource,
     gitBranch: thread.gitBranch,
     linkedDirectories: thread.linkedDirectories,
   };

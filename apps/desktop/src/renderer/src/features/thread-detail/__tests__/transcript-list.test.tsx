@@ -244,6 +244,61 @@ describe("TranscriptList", () => {
     });
   });
 
+  it("prefers hydrated provenance over a cached fallback thread title", () => {
+    const sourceThreadId = "019fde92-318a-7541-9281-029bdc1508b5";
+    const sourceThread = {
+      id: sourceThreadId,
+      title: sourceThreadId,
+      titleSource: "fallback",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: true, unread: false },
+      federation: {
+        ref: {
+          backend: "codex",
+          target: { scope: "remote", instanceId: "pwr_remote" },
+          threadId: sourceThreadId,
+        },
+        instanceLabel: "Remote Mac",
+        peerStatus: "connected",
+      },
+    } as NavigationThreadSummary;
+
+    render(
+      <ThreadLinkProvider onShowThread={vi.fn()} threads={[sourceThread]}>
+        <TranscriptList
+          entries={[
+            {
+              type: "message",
+              id: "remote-message-after-title-hydration",
+              role: "user",
+              text: "The remote audit is complete.",
+              origin: {
+                kind: "agent",
+                sourceThread: {
+                  backend: "codex",
+                  instanceId: "pwr_remote",
+                  threadId: sourceThreadId,
+                  title: "Cloudflare Tunnel connector audit",
+                },
+              },
+            },
+          ]}
+          loading={false}
+          loadingMore={false}
+          onLoadOlder={async () => undefined}
+        />
+      </ThreadLinkProvider>,
+    );
+
+    expect(screen.getByRole("button", {
+      name: "Open thread Cloudflare Tunnel connector audit",
+    })).toBeInTheDocument();
+    expect(screen.queryByRole("button", {
+      name: `Open thread ${sourceThreadId}`,
+    })).not.toBeInTheDocument();
+  });
+
   it("attributes monitor handoffs and keeps their raw payload collapsed", () => {
     const task = "Monitor GitHub CI for PR #1107 until all checks finish.";
     const rawHandoff = [
