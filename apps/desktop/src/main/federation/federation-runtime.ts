@@ -224,6 +224,7 @@ const FEDERATION_PEER_DIRECTORY_METHOD = "federation.peerDirectory";
 const FEDERATION_CELESTIAL_ICONS_METHOD = "federation.celestialIcons";
 const FEDERATION_STAR_MAP_ARRANGEMENT_METHOD = "federation.starMapArrangement";
 const FEDERATION_EVENT_SUBSCRIPTION_METHOD = "federation.eventSubscription";
+const FEDERATION_EVENT_RELAY_MAX_HOPS = 4;
 const CELESTIAL_ICON_ASSIGNMENTS_META_KEY =
   "federation_celestial_icon_assignments";
 /**
@@ -1647,6 +1648,7 @@ export class DesktopFederationRuntime {
     // a live backend event stream. Keep the existing reconnect convergence.
     this.broadcastCelestialIcons();
     this.syncDesiredEventSubscriptions();
+    this.replayRelayedEventSubscriptions();
     if (pendingInviteToken) {
       getAppStateDb().setMeta(PENDING_INVITE_TOKEN_META_KEY, "");
     }
@@ -1768,7 +1770,7 @@ export class DesktopFederationRuntime {
     // remote PTY sessions alive.
     this.ptyService?.notifyPeerConnected(connection.peerId);
     this.publishPeerStatus(connection.peerId, "connected");
-    this.replayEventSubscriptionsForSource(connection.peerId);
+    this.replayRelayedEventSubscriptions(connection.peerId);
     this.syncDesiredEventSubscriptions();
     this.broadcastPeerDirectory();
     // Mirrors the broadcastPeerDirectory guard: connections registered
@@ -1839,6 +1841,12 @@ export class DesktopFederationRuntime {
     envelope: FederationProtocolEnvelope,
     sourcePeerId: FederationInstanceId,
   ): Promise<void> {
+    // Subscription relays authenticate their delegated subscriber and route
+    // explicitly inside applyEventSubscription. Other envelopes retain the
+    // router's stricter direct-or-configured-upstream origin check.
+    if (this.applyEventSubscription(envelope, sourcePeerId)) {
+      return;
+    }
     if (
       this.router
       && !this.router.authenticatesOrigin(envelope, sourcePeerId)
@@ -1847,9 +1855,6 @@ export class DesktopFederationRuntime {
         claimedSourceInstanceId: envelope.sourceInstanceId,
         sourcePeerId,
       });
-      return;
-    }
-    if (this.applyEventSubscription(envelope, sourcePeerId)) {
       return;
     }
     if (this.applyPeerDirectory(envelope)) {
@@ -2045,6 +2050,25 @@ export class DesktopFederationRuntime {
     }
 
     throw new FederationPeerUnavailableError(targetInstanceId);
+  }
+
+  private sendEnvelopeToEventSubscriber(
+    subscriberInstanceId: FederationInstanceId,
+    envelope: FederationProtocolEnvelope,
+  ): void {
+    if (this.router?.sendToPeer(subscriberInstanceId, envelope)) {
+      return;
+    }
+    const viaPeerId = this.incomingEventSubscriptions
+      .get(subscriberInstanceId)
+      ?.viaPeerId;
+    if (
+      viaPeerId
+      && this.router?.sendToPeer(viaPeerId, envelope)
+    ) {
+      return;
+    }
+    this.sendEnvelopeToTarget(subscriberInstanceId, envelope);
   }
 
   private visiblePeers(): FederationPeerSummary[] {
@@ -2628,7 +2652,7 @@ export class DesktopFederationRuntime {
         continue;
       }
       try {
-        this.sendEnvelopeToTarget(subscriberInstanceId, {
+        this.sendEnvelopeToEventSubscriber(subscriberInstanceId, {
           id: `federation-star-map:${randomUUID()}`,
           kind: "notification",
           method: FEDERATION_STAR_MAP_ARRANGEMENT_METHOD,
@@ -2665,7 +2689,7 @@ export class DesktopFederationRuntime {
           .get(subscriberInstanceId);
         if (!subscription?.eventClasses.has("star_map")) return;
         try {
-          this.sendEnvelopeToTarget(subscriberInstanceId, {
+          this.sendEnvelopeToEventSubscriber(subscriberInstanceId, {
             id: `federation-star-map:${randomUUID()}`,
             kind: "notification",
             method: FEDERATION_STAR_MAP_ARRANGEMENT_METHOD,
@@ -2912,12 +2936,17 @@ export class DesktopFederationRuntime {
       return true;
     }
     const sourceConnection = this.router?.getConnection(sourcePeerId);
+    const delegatedSubscriber = subscriberInstanceId !== sourcePeerId;
+    const authenticatedSubscriptionRelay =
+      delegatedSubscriber
+      && (envelope.hopCount ?? 0) >= 1
+      && (
+        sourcePeerId === this.gatewayInstanceId
+        || sourceConnection?.capabilities.includes("gateway_relay")
+      );
     if (
       !sourceConnection?.capabilities.includes("event_subscriptions")
-      || (
-        subscriberInstanceId !== sourcePeerId
-        && sourcePeerId !== this.gatewayInstanceId
-      )
+      || (delegatedSubscriber && !authenticatedSubscriptionRelay)
     ) {
       return true;
     }
@@ -2938,23 +2967,21 @@ export class DesktopFederationRuntime {
         sourceInstanceId,
         subscriberInstanceId,
       });
+      const relayedSubscription: RelayedEventSubscription = {
+        eventClasses: new Set(allowedClasses),
+        sourceInstanceId,
+        subscriberInstanceId,
+        viaPeerId: sourcePeerId,
+      };
       if (allowedClasses.length > 0) {
-        this.relayedEventSubscriptions.set(key, {
-          eventClasses: new Set(allowedClasses),
-          sourceInstanceId,
-          subscriberInstanceId,
-          viaPeerId: sourcePeerId,
-        });
+        this.relayedEventSubscriptions.set(key, relayedSubscription);
       } else {
         this.relayedEventSubscriptions.delete(key);
       }
-      void this.router?.routeEnvelope({
-        envelope: {
-          ...envelope,
-          params: { eventClasses: allowedClasses },
-        },
-        sourcePeerId,
-      });
+      this.sendRelayedEventSubscription(
+        relayedSubscription,
+        relayedSubscription.eventClasses,
+      );
       return true;
     }
 
@@ -3000,12 +3027,21 @@ export class DesktopFederationRuntime {
     if (!subscription?.eventClasses.has(eventClass)) return false;
     if (
       envelope.sourceInstanceId !== sourcePeerId
-      && sourcePeerId !== this.gatewayInstanceId
+      && !this.router?.authenticatesOrigin(envelope, sourcePeerId)
     ) {
       return false;
     }
-    void this.router?.routeEnvelope({ envelope, sourcePeerId });
-    return true;
+    const hopCount = envelope.hopCount ?? 0;
+    if (
+      hopCount >= FEDERATION_EVENT_RELAY_MAX_HOPS
+      || subscription.viaPeerId === sourcePeerId
+    ) {
+      return false;
+    }
+    return this.router?.sendToPeer(subscription.viaPeerId, {
+      ...envelope,
+      hopCount: hopCount + 1,
+    }) ?? false;
   }
 
   private removeEventSubscriptionsForPeer(peerId: FederationInstanceId): void {
@@ -3025,6 +3061,7 @@ export class DesktopFederationRuntime {
         continue;
       }
       if (subscription.viaPeerId === peerId) {
+        this.sendRelayedEventSubscription(subscription, new Set());
         this.relayedEventSubscriptions.delete(key);
       }
     }
@@ -3043,6 +3080,7 @@ export class DesktopFederationRuntime {
         protocolVersion: FEDERATION_PROTOCOL_VERSION,
         sourceInstanceId: subscription.subscriberInstanceId,
         targetInstanceId: subscription.sourceInstanceId,
+        hopCount: 1,
         createdAt: Date.now(),
       });
     } catch {
@@ -3050,11 +3088,14 @@ export class DesktopFederationRuntime {
     }
   }
 
-  private replayEventSubscriptionsForSource(
-    sourceInstanceId: FederationInstanceId,
+  private replayRelayedEventSubscriptions(
+    sourceInstanceId?: FederationInstanceId,
   ): void {
     for (const subscription of this.relayedEventSubscriptions.values()) {
-      if (subscription.sourceInstanceId === sourceInstanceId) {
+      if (
+        sourceInstanceId === undefined
+        || subscription.sourceInstanceId === sourceInstanceId
+      ) {
         this.sendRelayedEventSubscription(
           subscription,
           subscription.eventClasses,
@@ -3124,7 +3165,7 @@ export class DesktopFederationRuntime {
       this.incomingEventSubscriptions) {
       if (!subscription.eventClasses.has(eventClass)) continue;
       try {
-        this.sendEnvelopeToTarget(subscriberInstanceId, {
+        this.sendEnvelopeToEventSubscriber(subscriberInstanceId, {
           id: `federation-event:${randomUUID()}`,
           kind: "notification",
           method: FEDERATION_BACKEND_EVENT_METHOD,

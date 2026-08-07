@@ -90,6 +90,10 @@ type RuntimeHarness = {
   }) => void;
   disconnectAdvertisedPeers: (reason: string) => void;
   registerGatewayConnection: (connection: FederationGatewayConnection) => void;
+  unregisterPeer: (peerId: FederationInstanceId) => void;
+  replayRelayedEventSubscriptions: (
+    sourceInstanceId?: FederationInstanceId,
+  ) => void;
   remoteBackend: (target?: {
     scope: "remote";
     instanceId: FederationInstanceId;
@@ -202,6 +206,7 @@ function applyEventSubscription(params: {
   subscriberInstanceId: FederationInstanceId;
   sourcePeerId?: FederationInstanceId;
   eventClasses: FederationEventClass[];
+  hopCount?: number;
 }): void {
   expect(params.runtime.applyEventSubscription({
     id: `subscription:${params.subscriberInstanceId}`,
@@ -211,6 +216,7 @@ function applyEventSubscription(params: {
     protocolVersion: FEDERATION_PROTOCOL_VERSION,
     sourceInstanceId: params.subscriberInstanceId,
     targetInstanceId: params.sourceInstanceId,
+    ...(params.hopCount === undefined ? {} : { hopCount: params.hopCount }),
     createdAt: 1_000,
   }, params.sourcePeerId ?? params.subscriberInstanceId)).toBe(true);
 }
@@ -1107,6 +1113,50 @@ describe("DesktopFederationRuntime", () => {
     ]);
   });
 
+  it("replays retained downstream subscriptions after its upstream reconnects", () => {
+    const sentUpstream: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({ localInstanceId: "dual_one" });
+    router.registerConnection(createConnection({
+      peerId: "viewer_one",
+      capabilities: [
+        "gateway_relay",
+        "thread_detail",
+        "event_subscriptions",
+      ],
+    }));
+    const upstreamConnection = createConnection({
+      peerId: "gateway_one",
+      capabilities: ["gateway_relay", "event_subscriptions"],
+      sendEnvelope: (envelope) => sentUpstream.push(envelope),
+    });
+    router.registerConnection(upstreamConnection);
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.gatewayInstanceId = "gateway_one";
+    runtime.localInstanceId = "dual_one";
+    runtime.router = router;
+    applyEventSubscription({
+      runtime,
+      sourceInstanceId: "owner_one",
+      subscriberInstanceId: "viewer_one",
+      eventClasses: ["transcript"],
+    });
+    expect(sentUpstream).toHaveLength(1);
+
+    sentUpstream.length = 0;
+    runtime.unregisterPeer("gateway_one");
+    router.registerConnection(upstreamConnection);
+    runtime.replayRelayedEventSubscriptions();
+
+    expect(sentUpstream).toMatchObject([{
+      kind: "notification",
+      method: "federation.eventSubscription",
+      params: { eventClasses: ["transcript"] },
+      sourceInstanceId: "viewer_one",
+      targetInstanceId: "owner_one",
+      hopCount: 1,
+    }]);
+  });
+
   it("routes live transcript images back through their owning instance", () => {
     const forwarded: FederationProtocolEnvelope[] = [];
     const router = new FederationRouter({ localInstanceId: "gateway_one" });
@@ -1466,6 +1516,73 @@ describe("DesktopFederationRuntime", () => {
         hopCount: 1,
       },
     ]);
+  });
+
+  it("routes a delegated subscription and event through a dual instance", () => {
+    const sentToOwner: FederationProtocolEnvelope[] = [];
+    const sentToDual: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({ localInstanceId: "gateway_one" });
+    router.registerConnection(createConnection({
+      peerId: "dual_one",
+      capabilities: [
+        "gateway_relay",
+        "thread_detail",
+        "event_subscriptions",
+      ],
+      sendEnvelope: (envelope) => sentToDual.push(envelope),
+    }));
+    router.registerConnection(createConnection({
+      peerId: "owner_one",
+      capabilities: ["gateway_relay", "event_subscriptions"],
+      sendEnvelope: (envelope) => sentToOwner.push(envelope),
+    }));
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.localInstanceId = "gateway_one";
+    runtime.router = router;
+    applyEventSubscription({
+      runtime,
+      sourceInstanceId: "owner_one",
+      subscriberInstanceId: "viewer_one",
+      sourcePeerId: "dual_one",
+      eventClasses: ["transcript"],
+      hopCount: 1,
+    });
+
+    expect(sentToOwner).toMatchObject([{
+      method: "federation.eventSubscription",
+      sourceInstanceId: "viewer_one",
+      targetInstanceId: "owner_one",
+      hopCount: 1,
+    }]);
+
+    runtime.publishRemoteBackendEvent({
+      id: "event-via-dual",
+      kind: "notification",
+      method: FEDERATION_BACKEND_EVENT_METHOD,
+      params: {
+        backend: "codex",
+        notification: {
+          method: "item/agentMessage/delta",
+          params: {
+            delta: "hello",
+            itemId: "item-1",
+            threadId: "thread-1",
+            turnId: "turn-1",
+          },
+        },
+      },
+      protocolVersion: FEDERATION_PROTOCOL_VERSION,
+      sourceInstanceId: "owner_one",
+      targetInstanceId: "viewer_one",
+      createdAt: 2_000,
+    }, "owner_one");
+
+    expect(sentToDual).toMatchObject([{
+      id: "event-via-dual",
+      sourceInstanceId: "owner_one",
+      targetInstanceId: "viewer_one",
+      hopCount: 1,
+    }]);
   });
 
   it("relays scheduler lifecycle events only to an explicitly subscribed sibling", () => {

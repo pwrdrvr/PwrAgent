@@ -1555,7 +1555,10 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     }
     const instanceIds = new Set<string>();
     for (const binding of await getDesktopMessagingStore().findActiveBindings()) {
-      if (binding.federatedThread?.target.scope === "remote") {
+      if (
+        this.runningAdapters.has(binding.channel.channel)
+        && binding.federatedThread?.target.scope === "remote"
+      ) {
         instanceIds.add(binding.federatedThread.target.instanceId);
       }
     }

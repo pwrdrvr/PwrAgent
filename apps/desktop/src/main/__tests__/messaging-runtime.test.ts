@@ -111,7 +111,7 @@ describe("DesktopMessagingRuntime", () => {
     // regression there still fails fast instead of idling for the full 30s.
   }, process.platform === "win32" ? 30_000 : 15_000);
 
-  it("subscribes only to instances with active federated messaging bindings", async () => {
+  it("subscribes only to federated bindings on running adapters", async () => {
     const { runtime, bridge } = await createRuntimeHarness();
     const { getDesktopMessagingStore } = await import(
       "../messaging/desktop-messaging-store"
@@ -128,6 +128,23 @@ describe("DesktopMessagingRuntime", () => {
         backend: "codex",
         target: { scope: "remote", instanceId: "owner_one" },
         threadId: "thread-remote",
+      },
+      authorizedActorIds: ["user-1"],
+      createdAt: 1_000,
+      updatedAt: 1_000,
+    });
+    await getDesktopMessagingStore().upsertBinding({
+      id: "binding:inactive-discord",
+      channel: {
+        channel: "discord",
+        conversation: { id: "discord-chat-1", kind: "dm" },
+      },
+      backend: "codex",
+      threadId: "thread-inactive",
+      federatedThread: {
+        backend: "codex",
+        target: { scope: "remote", instanceId: "owner_two" },
+        threadId: "thread-inactive",
       },
       authorizedActorIds: ["user-1"],
       createdAt: 1_000,
