@@ -19696,14 +19696,23 @@ a.transcript-message__messaging-origin:focus-visible {
 }
 
 /* The typed "@" picker mirrors the compact scan pattern of the "+" reference
-   picker: folder + name on the left, path on the same row at right. Keep its
-   dense rows and accent-focused treatment while using the same full composer
-   width as the thread-reference autocomplete. */
+   picker: folder + name on the left, path on the same row at right. Keep the
+   autocomplete's keyboard/type-to-filter behavior, but share the reference
+   picker's panel width, density, and accent-focused row treatment. */
 .composer__autocomplete--directories {
+  right: auto;
+  width: min(100%, 440px);
   gap: 0;
   padding: 6px;
   border-color: var(--border-subtle);
   box-shadow: var(--shadow-popover);
+}
+
+/* Thread and PR results use the same compact popover width as the `@` picker;
+   full composer width leaves large rows mostly empty on wide chat panes. */
+.composer__autocomplete--hash-references {
+  right: auto;
+  width: min(100%, 440px);
 }
 
 .composer__autocomplete--directories .composer__autocomplete-option:not(.composer__autocomplete-option--action) {
