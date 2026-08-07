@@ -31,7 +31,11 @@ export function appNoticeReducer(
   if (action.type === "backend-error") {
     const current = findRelatedBackendNotice(state, action.signal);
     const notice = resolveBackendErrorNotice(action.signal, current);
-    return notice ? showNotice(state, notice) : state;
+    if (!notice) return state;
+    const nextState = action.signal.kind === "codex-invalid-id-recovery"
+      ? dismissSupersededRecoveryNotices(state, action.signal)
+      : state;
+    return showNotice(nextState, notice);
   }
 
   if (action.type === "dismiss") {
@@ -49,6 +53,32 @@ export function appNoticeReducer(
   );
   const transient = state.transient.filter(
     (notice) => !notice.id.startsWith(action.prefix),
+  );
+  if (
+    durable.length === state.durable.length
+    && transient.length === state.transient.length
+  ) return state;
+  return { durable, transient };
+}
+
+function dismissSupersededRecoveryNotices(
+  state: AppNoticeState,
+  signal: Extract<
+    BackendErrorSignal,
+    { kind: "codex-invalid-id-recovery" }
+  >,
+): AppNoticeState {
+  // Recovery status becomes the live UI for this incident. The persisted
+  // turn-failure and recovery audit remain in the thread transcript.
+  const supersededIds = new Set([
+    `turn-failed:codex:${signal.threadId}:${signal.turnId}`,
+    `system-error:codex:${signal.threadId}`,
+  ]);
+  const durable = state.durable.filter(
+    (notice) => !supersededIds.has(notice.id),
+  );
+  const transient = state.transient.filter(
+    (notice) => !supersededIds.has(notice.id),
   );
   if (
     durable.length === state.durable.length
