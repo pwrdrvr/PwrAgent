@@ -14,15 +14,15 @@ import {
 } from "@pwragent/shared";
 import { SearchIcon } from "../../icons";
 import { getDesktopApi } from "../../lib/desktop-api";
-import { readRendererFederationTarget } from "../../lib/federation-window";
+import {
+  FEDERATED_THREAD_SEARCH_LIMIT,
+  useFederatedThreadSearch,
+} from "../../lib/useFederatedThreadSearch";
 import { threadMatchesQuery } from "../thread-search/thread-match";
 import { AgentThreadChip } from "./AgentThreadChip";
 import { InstanceChip } from "../federation/InstanceGlyph";
 
 const MAX_RESULTS = 8;
-const MAX_REMOTE_RESULTS = 8;
-/** Remote querying waits for a typing pause; local filtering never does. */
-const REMOTE_SEARCH_DEBOUNCE_MS = 200;
 
 type SidebarSearchPopupProps = {
   threads: readonly NavigationThreadSummary[];
@@ -46,9 +46,6 @@ type SidebarSearchPopupProps = {
 export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement {
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
-  const [remoteResults, setRemoteResults] = useState<NavigationThreadSummary[]>([]);
-  const [remoteLoading, setRemoteLoading] = useState(false);
-  const remoteGenerationRef = useRef(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
 
@@ -72,41 +69,15 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
       .slice(0, MAX_RESULTS);
   }, [trimmed, props.threads]);
 
-  // A remote-viewer window already scopes to one peer; only the main window
-  // fans ⌘K out across the federation.
-  const remoteSearchAvailable =
-    !readRendererFederationTarget()
-    && typeof getDesktopApi()?.jumpSearchRemoteThreads === "function";
-
-  useEffect(() => {
-    const generation = remoteGenerationRef.current + 1;
-    remoteGenerationRef.current = generation;
-    if (!trimmed || !remoteSearchAvailable) {
-      setRemoteResults([]);
-      setRemoteLoading(false);
-      return;
-    }
-    setRemoteLoading(true);
-    const timer = setTimeout(() => {
-      getDesktopApi()
-        ?.jumpSearchRemoteThreads?.({ query: trimmed, limit: MAX_REMOTE_RESULTS })
-        .then((response) => {
-          if (remoteGenerationRef.current !== generation) {
-            return;
-          }
-          setRemoteResults(response.results);
-          setRemoteLoading(false);
-        })
-        .catch(() => {
-          if (remoteGenerationRef.current !== generation) {
-            return;
-          }
-          setRemoteResults([]);
-          setRemoteLoading(false);
-        });
-    }, REMOTE_SEARCH_DEBOUNCE_MS);
-    return () => clearTimeout(timer);
-  }, [trimmed, remoteSearchAvailable]);
+  const {
+    available: remoteSearchAvailable,
+    loading: remoteLoading,
+    results: remoteResults,
+  } = useFederatedThreadSearch({
+    query: trimmed,
+    limit: FEDERATED_THREAD_SEARCH_LIMIT,
+    search: getDesktopApi()?.jumpSearchRemoteThreads,
+  });
 
   // A remote thread already pinned into the local list surfaces as a local
   // hit; don't show it twice.

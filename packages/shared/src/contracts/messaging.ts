@@ -164,11 +164,13 @@ export type MessagingPlatformStatus = {
   health: MessagingPlatformHealth;
   /** Wall-clock ms when the health last changed. */
   changedAt: number;
+  /** Startup/config application rejected; survives cleanup suspension. */
+  startupFailure?: boolean;
   /** Public identity observed at adapter startup, e.g. bot username. */
   account?: string;
   /** Short public detail for the identity, e.g. API host or workspace. */
   detail?: string;
-  /** When errored, a human-readable reason for the UI tooltip. */
+  /** Human-readable failure reason for the UI tooltip and durable notice. */
   reason?: string;
   /** Transient provider/runtime reasons that make an enabled platform degraded. */
   degradationReasons?: MessagingDegradationReason[];
@@ -197,6 +199,7 @@ export type MessagingPlatformStatusEvent =
       account?: string;
       detail?: string;
       reason?: string;
+      startupFailure?: boolean;
       degradationReasons?: MessagingDegradationReason[];
       at: number;
     }

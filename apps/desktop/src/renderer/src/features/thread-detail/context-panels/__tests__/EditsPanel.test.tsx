@@ -55,6 +55,93 @@ function renderEditsPanel(groups: EditedFileGroup[]) {
 }
 
 describe("EditsPanel", () => {
+  it("shows unpublished commits and fetches a committed file diff on expansion", async () => {
+    const commitSha = "b".repeat(40);
+    const listWorktreeUnpublishedCommits = vi.fn(async () => ({
+      commits: [
+        {
+          sha: commitSha,
+          shortSha: "bbbbbbb",
+          subject: "Preserve remote callback evidence",
+          committedAt: 1_718_000_000_000,
+          files: [
+            {
+              path: "/repo/src/config.ts",
+              repoPath: "src/config.ts",
+              additions: 2,
+              removals: 1,
+            },
+          ],
+          totalFiles: 1,
+          filesTruncated: false,
+          additions: 2,
+          removals: 1,
+        },
+      ],
+      totalCommits: 1,
+      truncated: false,
+      maxCommits: 20,
+      maxFilesPerCommit: 50,
+    }));
+    const getWorktreeUnpublishedCommitDiff = vi.fn(async () => ({
+      detail: {
+        id: "commit-file",
+        kind: "write" as const,
+        label: "config.ts",
+        path: "/repo/src/config.ts",
+        fileDiff: {
+          kind: "update" as const,
+          diff: "@@ -1 +1,2 @@\n-old\n+new\n+line\n",
+          additions: 2,
+          removals: 1,
+        },
+      },
+    }));
+
+    render(
+      <EditsPanel
+        backend="codex"
+        groups={[]}
+        dock="sidebar"
+        onDockChange={vi.fn()}
+        threadId="thread-1"
+        worktreeRoot="/repo"
+        desktopApi={{
+          listWorktreeUnpublishedCommits,
+          getWorktreeUnpublishedCommitDiff,
+        }}
+      />,
+    );
+
+    expect(
+      await screen.findByRole("button", { name: /Unpublished 1 commit/i }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Preserve remote callback evidence"))
+      .toBeInTheDocument();
+    expect(screen.getByText("bbbbbbb")).toBeInTheDocument();
+    expect(listWorktreeUnpublishedCommits).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      worktreePath: "/repo",
+      maxCommits: 20,
+      maxFilesPerCommit: 50,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /config\.ts/i }));
+
+    await waitFor(() => {
+      expect(getWorktreeUnpublishedCommitDiff).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        worktreePath: "/repo",
+        commitSha,
+        path: "/repo/src/config.ts",
+        maxBytes: 200_000,
+      });
+    });
+    expect(await screen.findByText("new")).toBeInTheDocument();
+  });
+
   it("keeps the group header for a single edit history in the sidebar", () => {
     render(renderEditsPanel([editedGroup()]));
 
@@ -448,5 +535,130 @@ describe("EditsPanel", () => {
       expect(screen.getAllByLabelText("+9 -0")).toHaveLength(2);
     });
     expect(getWorktreeOtherChangeDiff).toHaveBeenCalledTimes(4);
+  });
+
+  it("refreshes unpublished commit metadata when the working-state probe advances", async () => {
+    let subject = "before amend";
+    const listWorktreeUnpublishedCommits = vi.fn(async () => ({
+      commits: [
+        {
+          sha: "b".repeat(40),
+          shortSha: "bbbbbbb",
+          subject,
+          files: [],
+          totalFiles: 0,
+          filesTruncated: false,
+          additions: 0,
+          removals: 0,
+        },
+      ],
+      totalCommits: 1,
+      truncated: false,
+      maxCommits: 20,
+      maxFilesPerCommit: 50,
+    }));
+    const panel = (refreshKey: string) => (
+      <EditsPanel
+        groups={[]}
+        dock="sidebar"
+        onDockChange={vi.fn()}
+        worktreeRoot="/repo"
+        workingStateRefreshKey={refreshKey}
+        desktopApi={{ listWorktreeUnpublishedCommits }}
+      />
+    );
+    const { rerender } = render(panel("probe-1"));
+
+    expect(await screen.findByText("before amend")).toBeInTheDocument();
+
+    subject = "after amend";
+    rerender(panel("probe-2"));
+
+    expect(await screen.findByText("after amend")).toBeInTheDocument();
+    expect(listWorktreeUnpublishedCommits).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps expanded unpublished diffs mounted during a same-worktree refresh", async () => {
+    const commitSha = "b".repeat(40);
+    const response = {
+      commits: [
+        {
+          sha: commitSha,
+          shortSha: "bbbbbbb",
+          subject: "preserve expanded diff",
+          files: [
+            {
+              path: "/repo/src/config.ts",
+              repoPath: "src/config.ts",
+              additions: 1,
+              removals: 0,
+            },
+          ],
+          totalFiles: 1,
+          filesTruncated: false,
+          additions: 1,
+          removals: 0,
+        },
+      ],
+      totalCommits: 1,
+      truncated: false,
+      maxCommits: 20,
+      maxFilesPerCommit: 50,
+    };
+    let resolveRefresh: ((value: typeof response) => void) | undefined;
+    const listWorktreeUnpublishedCommits = vi
+      .fn()
+      .mockResolvedValueOnce(response)
+      .mockImplementationOnce(
+        () => new Promise<typeof response>((resolve) => {
+          resolveRefresh = resolve;
+        }),
+      );
+    const getWorktreeUnpublishedCommitDiff = vi.fn(async () => ({
+      detail: {
+        id: "commit-file",
+        kind: "write" as const,
+        label: "config.ts",
+        path: "/repo/src/config.ts",
+        fileDiff: {
+          kind: "update" as const,
+          diff: "@@ -1 +1,2 @@\n old\n+preserved\n",
+          additions: 1,
+          removals: 0,
+        },
+      },
+    }));
+    const panel = (refreshKey: string) => (
+      <EditsPanel
+        groups={[]}
+        dock="sidebar"
+        onDockChange={vi.fn()}
+        worktreeRoot="/repo"
+        workingStateRefreshKey={refreshKey}
+        desktopApi={{
+          listWorktreeUnpublishedCommits,
+          getWorktreeUnpublishedCommitDiff,
+        }}
+      />
+    );
+    const { rerender } = render(panel("probe-1"));
+
+    fireEvent.click(await screen.findByRole("button", { name: /config\.ts/i }));
+    expect(await screen.findByText("preserved")).toBeInTheDocument();
+
+    rerender(panel("probe-2"));
+
+    await waitFor(() => {
+      expect(listWorktreeUnpublishedCommits).toHaveBeenCalledTimes(2);
+    });
+    expect(screen.getByText("preserved")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /config\.ts/i }))
+      .toHaveAttribute("aria-expanded", "true");
+
+    resolveRefresh?.(response);
+    await waitFor(() => {
+      expect(screen.getByText("preserved")).toBeInTheDocument();
+    });
+    expect(getWorktreeUnpublishedCommitDiff).toHaveBeenCalledTimes(1);
   });
 });

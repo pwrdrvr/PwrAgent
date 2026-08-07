@@ -1472,7 +1472,9 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       // message in that topic can populate `channel.conversation.title`
       // for the binding chip. Telegram has no other API to fetch this.
       this.captureForumTopicNameIfPresent(message);
-      const logServiceMessage = this.options.logger?.info ?? this.options.logger?.debug;
+      const logger = this.options.logger;
+      const logServiceMessage =
+        logger?.info?.bind(logger) ?? logger?.debug?.bind(logger);
       logServiceMessage?.("telegram inbound ignored service message", {
         chatId: message.chat.id,
         messageId: message.message_id,

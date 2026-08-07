@@ -307,7 +307,7 @@ export function PullRequestLinkProvider(props: {
         // Keep the parsed unknown summary as the chip's durable fallback. The
         // live hook hydrates it synchronously from the store, and can return to
         // it if the last matching navigation PR is later detached.
-        return parseGitHubPullRequestUrl(href);
+        return parsePullRequestUrl(href);
       },
       subscribe(pr, listener) {
         return store.subscribe(pr, listener);
@@ -375,6 +375,17 @@ export function resolvePullRequestHref(
 }
 
 export function parseGitHubPullRequestUrl(href: string): PrSummary | undefined {
+  const pullRequest = parsePullRequestUrl(href);
+  if (
+    pullRequest?.provider !== "github.com"
+    || !pullRequestPathMarker(href, "pull")
+  ) {
+    return undefined;
+  }
+  return pullRequest;
+}
+
+export function parsePullRequestUrl(href: string): PrSummary | undefined {
   let parsed: URL;
   try {
     parsed = new URL(href);
@@ -382,33 +393,58 @@ export function parseGitHubPullRequestUrl(href: string): PrSummary | undefined {
     return undefined;
   }
 
-  if (parsed.protocol !== "https:" || parsed.hostname.toLowerCase() !== "github.com") {
+  if (parsed.protocol !== "https:") {
     return undefined;
   }
 
   const segments = parsed.pathname.split("/").filter(Boolean);
-  if (segments.length < 4 || segments[2] !== "pull") {
+  const markerIndex = segments.findIndex(
+    (segment) => segment === "pull" || segment === "merge_requests",
+  );
+  if (markerIndex <= 0 || markerIndex >= segments.length - 1) {
     return undefined;
   }
-  const numberText = segments[3] ?? "";
+  const numberText = segments[markerIndex + 1] ?? "";
   if (!/^[1-9]\d*$/.test(numberText)) {
     return undefined;
   }
 
-  const org = decodeUrlSegment(segments[0] ?? "");
-  const repo = decodeUrlSegment(segments[1] ?? "");
+  const repoIndex = segments[markerIndex - 1] === "-"
+    ? markerIndex - 2
+    : markerIndex - 1;
+  if (repoIndex <= 0) {
+    return undefined;
+  }
+  const orgSegments = segments
+    .slice(0, repoIndex)
+    .map(decodeUrlSegment);
+  const org = orgSegments.every((segment): segment is string => Boolean(segment))
+    ? orgSegments.join("/")
+    : undefined;
+  const repo = decodeUrlSegment(segments[repoIndex] ?? "");
   if (!org || !repo) {
     return undefined;
   }
 
   return {
-    provider: "github.com",
+    provider: parsed.hostname.toLowerCase(),
     org,
     repo,
     number: Number.parseInt(numberText, 10),
     state: "unknown",
     url: href,
   };
+}
+
+function pullRequestPathMarker(
+  href: string,
+  marker: "pull" | "merge_requests",
+): boolean {
+  try {
+    return new URL(href).pathname.split("/").includes(marker);
+  } catch {
+    return false;
+  }
 }
 
 function decodeUrlSegment(value: string): string | undefined {

@@ -655,6 +655,10 @@ describe("Tangerine Terminal theme contract", () => {
       css,
       ".composer__autocomplete--directories",
     );
+    const hashAutocompleteRule = extractRuleBody(
+      css,
+      ".composer__autocomplete--hash-references",
+    );
     const directoryOptionRule = extractRuleBody(
       css,
       ".composer__autocomplete--directories .composer__autocomplete-option:not(.composer__autocomplete-option--action)",
@@ -672,6 +676,8 @@ describe("Tangerine Terminal theme contract", () => {
     expect(autocompleteRule).not.toContain("background: rgba(10, 10, 10, 0.98);");
     expect(directoryAutocompleteRule).toContain("right: auto;");
     expect(directoryAutocompleteRule).toContain("width: min(100%, 440px);");
+    expect(hashAutocompleteRule).toContain("right: auto;");
+    expect(hashAutocompleteRule).toContain("width: min(100%, 440px);");
     expect(directoryAutocompleteRule).toContain(
       "border-color: var(--border-subtle);",
     );

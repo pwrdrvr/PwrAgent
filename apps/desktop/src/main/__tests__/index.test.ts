@@ -144,6 +144,7 @@ const setPwrAgentFederationHandlerMock = vi.fn();
 const setFederatedThreadMessageHandlerMock = vi.fn();
 const setFederatedThreadInspectionHandlerMock = vi.fn();
 const setFederatedThreadMutationHandlerMock = vi.fn();
+const setFederatedThreadControlHandlerMock = vi.fn();
 const listThreadsMock = vi.fn<(request?: unknown) => Promise<unknown[]>>();
 const disposeDesktopMessagingRuntimeMock = vi.fn();
 const registerMessagingStatusIpcHandlersMock = vi.fn();
@@ -491,6 +492,7 @@ vi.mock("../app-server/backend-registry", () => ({
     setFederatedThreadInspectionHandler:
       setFederatedThreadInspectionHandlerMock,
     setFederatedThreadMutationHandler: setFederatedThreadMutationHandlerMock,
+    setFederatedThreadControlHandler: setFederatedThreadControlHandlerMock,
     setMessagingArchiveCleaner: setMessagingArchiveCleanerMock,
   })),
 }));
@@ -679,6 +681,7 @@ describe("bootstrapApp", () => {
     setFederatedThreadMessageHandlerMock.mockReset();
     setFederatedThreadInspectionHandlerMock.mockReset();
     setFederatedThreadMutationHandlerMock.mockReset();
+    setFederatedThreadControlHandlerMock.mockReset();
     listThreadsMock.mockReset();
     listThreadsMock.mockResolvedValue([]);
     disposeDesktopMessagingRuntimeMock.mockReset();

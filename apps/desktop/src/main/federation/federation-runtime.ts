@@ -10,6 +10,7 @@ import type {
   CancelThreadExecutionModeQueueResponse,
   CheckThreadBranchDriftResponse,
   CompactThreadResponse,
+  ControlActiveTurnResponse,
   CreateScheduledThreadActionRequest,
   CodexEnvironmentSetupProgressEvent,
   FederationCapability,
@@ -90,16 +91,23 @@ import {
   type CelestialIconId,
   type CheckThreadBranchDriftRequest,
   type CompactThreadRequest,
+  type ControlActiveTurnRequest,
   type ForkThreadRequest,
   type FederationRemoteTarget,
   type DesktopApplicationsSnapshot,
   type HandoffThreadWorkspaceRequest,
+  type GetWorktreeUnpublishedCommitDiffRequest,
+  type GetWorktreeUnpublishedCommitDiffResponse,
   type InterruptTurnRequest,
+  type ListWorktreeUnpublishedCommitsRequest,
+  type ListWorktreeUnpublishedCommitsResponse,
   type MaterializeDirectoryLaunchpadRequest,
   type MaterializeDirectoryLaunchpadOptions,
   type MarkThreadSeenRequest,
   type SetThreadPinRequest,
   type SetThreadPinResponse,
+  type SetThreadReactionRequest,
+  type SetThreadReactionResponse,
   type SetThreadPrAutoDispatchRequest,
   type SetThreadPrAutoDispatchResponse,
   type CancelThreadPrAutoDispatchRequest,
@@ -116,6 +124,8 @@ import {
   type RefreshDirectoryGitStatusesRequest,
   type RetainThreadBranchDriftRequest,
   type RenameThreadRequest,
+  type ResolveActiveTurnRequest,
+  type ResolveActiveTurnResponse,
   type RunCodexEnvironmentActionRequest,
   type SetAcpSessionRuntimeOptionRequest,
   type SetCelestialIconRequest,
@@ -390,6 +400,7 @@ const NAVIGATION_EVENT_METHODS = new Set<string>([
   "thread/pin/added",
   "thread/pin/removed",
   "thread/pin/reordered",
+  "thread/reactions/updated",
   "thread/prAutoDispatch/pendingUpdated",
   "thread/prAutoDispatch/updated",
   "thread/pullRequests/updated",
@@ -3494,7 +3505,10 @@ export class DesktopFederationRuntime {
       },
       notification: notification.params.notification,
     };
-    if (event.notification.method === "thread/pullRequests/updated") {
+    if (
+      event.notification.method === "thread/pullRequests/updated"
+      || event.notification.method === "thread/reactions/updated"
+    ) {
       this.remoteThreadSummaryCache?.invalidate(sourceInstanceId);
     }
     this.publishAgentEvent?.(event);
@@ -3536,6 +3550,33 @@ export function setFederationMessagingPlatformStatusReader(
     | undefined,
 ): void {
   messagingPlatformStatusReader = reader;
+}
+
+async function resolveFederatedWorktreeGitReadContext(request: {
+  backend?: ListWorktreeUnpublishedCommitsRequest["backend"];
+  threadId?: string;
+  worktreePath: string;
+}): Promise<{
+  acceptedPushedCommitShas: string[];
+  worktreePath: string;
+}> {
+  if (!request.backend || !request.threadId?.trim()) {
+    throw new Error(
+      "Federated unpublished commit reads require an owning thread identity.",
+    );
+  }
+  const context = await getDesktopBackendRegistry()
+    .resolveThreadWorktreeGitReadContext({
+      backend: request.backend,
+      threadId: request.threadId,
+      worktreePath: request.worktreePath,
+    });
+  if (!context) {
+    throw new Error(
+      "Federated unpublished commit reads must target the owning thread's worktree.",
+    );
+  }
+  return context;
 }
 
 function localBackendOperations(): FederationBackendOperations {
@@ -3648,6 +3689,33 @@ function localBackendOperations(): FederationBackendOperations {
         pinnedRank: overlay.pinnedRank,
       };
     },
+    async setThreadReaction(
+      request: SetThreadReactionRequest,
+    ): Promise<SetThreadReactionResponse> {
+      const backend = request.backend ?? "codex";
+      const overlay = await getDesktopOverlayStore().setThreadReaction({
+        backend,
+        threadId: request.threadId,
+        emoji: request.emoji,
+        present: request.present,
+      });
+      const reactions = overlay.reactions ?? [];
+      await getDesktopBackendRegistry().publishLocalEvent({
+        backend,
+        notification: {
+          method: "thread/reactions/updated",
+          params: {
+            threadId: request.threadId,
+            reactions,
+          },
+        },
+      });
+      return {
+        backend,
+        threadId: request.threadId,
+        reactions,
+      };
+    },
     async readMessagingPlatformStatuses(): Promise<MessagingPlatformStatus[]> {
       // Registered by the messaging IPC layer — messaging-runtime imports
       // this module for event fan-out, so importing it back would be a
@@ -3752,13 +3820,10 @@ function localBackendOperations(): FederationBackendOperations {
     async cancelQueuedTurn(
       request: CancelQueuedTurnRequest,
     ): Promise<CancelQueuedTurnResponse> {
-      return {
-        queueEntryId: request.queueEntryId,
-        cancelled: getDesktopBackendRegistry().cancelQueuedTurn(
-          request.queueEntryId,
-          "Cancelled from a federated desktop composer.",
-        ),
-      };
+      return getDesktopBackendRegistry().cancelQueuedTurnWithDisposition(
+        request.queueEntryId,
+        "Cancelled from a federated desktop composer.",
+      );
     },
     async listScheduledThreadActions(
       request: ListScheduledThreadActionsRequest = {},
@@ -3804,6 +3869,21 @@ function localBackendOperations(): FederationBackendOperations {
       request: CompactThreadRequest,
     ): Promise<CompactThreadResponse> {
       return await getDesktopBackendRegistry().compactThread(request);
+    },
+    async controlActiveTurn(
+      request: ControlActiveTurnRequest,
+    ): Promise<ControlActiveTurnResponse> {
+      return await getDesktopBackendRegistry().controlActiveTurn(request);
+    },
+    async resolveActiveTurn(
+      request: ResolveActiveTurnRequest,
+    ): Promise<ResolveActiveTurnResponse> {
+      const active = getDesktopBackendRegistry().getActiveTurnForThread(request);
+      return {
+        backend: request.backend,
+        threadId: request.threadId,
+        ...(active ? { turnId: active.turnId } : {}),
+      };
     },
     async interruptTurn(
       request: InterruptTurnRequest,
@@ -3898,6 +3978,33 @@ function localBackendOperations(): FederationBackendOperations {
       request: RefreshDirectoryGitStatusesRequest,
     ): Promise<RefreshDirectoryGitStatusesResponse> {
       return await getDesktopBackendRegistry().refreshDirectoryGitStatuses(request);
+    },
+    async listWorktreeUnpublishedCommits(
+      request: ListWorktreeUnpublishedCommitsRequest,
+    ): Promise<ListWorktreeUnpublishedCommitsResponse> {
+      const context = await resolveFederatedWorktreeGitReadContext(request);
+      return await getDesktopBackendRegistry().listWorktreeUnpublishedCommits(
+        context.worktreePath,
+        {
+          acceptedPushedCommitShas: context.acceptedPushedCommitShas,
+          maxCommits: request.maxCommits,
+          maxFilesPerCommit: request.maxFilesPerCommit,
+        },
+      );
+    },
+    async getWorktreeUnpublishedCommitDiff(
+      request: GetWorktreeUnpublishedCommitDiffRequest,
+    ): Promise<GetWorktreeUnpublishedCommitDiffResponse> {
+      const context = await resolveFederatedWorktreeGitReadContext(request);
+      return await getDesktopBackendRegistry().getWorktreeUnpublishedCommitDiff(
+        context.worktreePath,
+        request.commitSha,
+        request.path,
+        {
+          acceptedPushedCommitShas: context.acceptedPushedCommitShas,
+          maxBytes: request.maxBytes,
+        },
+      );
     },
     async materializeDirectoryLaunchpad(
       request: MaterializeDirectoryLaunchpadRequest,

@@ -6,7 +6,10 @@ import { createPwrAgentAppManagementHandler } from "./agent-tools/pwragent-app-m
 import { createFederationAgentToolsHandler } from "./federation/federation-agent-tools-service";
 import { createFederatedThreadInspectionHandler } from "./federation/federated-thread-inspection-service";
 import { createFederatedThreadMutationHandler } from "./federation/federated-thread-mutation-service";
-import { createFederatedThreadMessageHandler } from "./federation/federated-thread-message-service";
+import {
+  createFederatedThreadControlHandler,
+  createFederatedThreadMessageHandler,
+} from "./federation/federated-thread-message-service";
 import { disposeAgentIpcHandlers, registerAgentIpcHandlers } from "./ipc/agent-ipc";
 import {
   disposeScheduledActionIpcHandlers,
@@ -1024,6 +1027,11 @@ export function bootstrapApp(): void {
     );
     getDesktopBackendRegistry().setFederatedThreadMutationHandler(
       createFederatedThreadMutationHandler({
+        targetStore: getDesktopOverlayStore(),
+      }),
+    );
+    getDesktopBackendRegistry().setFederatedThreadControlHandler(
+      createFederatedThreadControlHandler({
         targetStore: getDesktopOverlayStore(),
       }),
     );

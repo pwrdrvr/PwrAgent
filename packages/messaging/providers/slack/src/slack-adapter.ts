@@ -2223,7 +2223,7 @@ export class SlackAdapter implements SlackProviderAdapter {
     conversationId: string;
     limit?: number;
   }): Promise<MessagingInboundEvent[]> {
-    const history = this.api.conversationsHistory;
+    const history = this.api.conversationsHistory?.bind(this.api);
     if (!history) return [];
     const channelId = request.conversationId;
     let messages: SlackHistoryMessageInfo[];

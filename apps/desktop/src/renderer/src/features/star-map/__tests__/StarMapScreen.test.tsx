@@ -619,4 +619,184 @@ describe("StarMapScreen", () => {
       window.localStorage.removeItem("pwragent.starMap.viewPreferences");
     }
   });
+
+  /** Body-relative position of a card, read off its rendered shell. */
+  function cardPosition(threadKey: string): { dx: number; dy: number } {
+    const shell = document.querySelector<HTMLElement>(
+      `[data-thread-key="${threadKey}"]`,
+    );
+    if (!shell) throw new Error(`no card shell for ${threadKey}`);
+    return {
+      dx: Number.parseFloat(shell.style.left),
+      dy: Number.parseFloat(shell.style.top),
+    };
+  }
+
+  function dragCard(
+    threadKey: string,
+    delta: { dx: number; dy: number },
+  ): void {
+    const shell = document.querySelector<HTMLElement>(
+      `[data-thread-key="${threadKey}"]`,
+    );
+    if (!shell) throw new Error(`no card shell for ${threadKey}`);
+    fireEvent.pointerDown(shell, { button: 0, clientX: 0, clientY: 0 });
+    fireEvent.pointerMove(window, { clientX: delta.dx, clientY: delta.dy });
+    fireEvent.pointerUp(window);
+  }
+
+  it("drops two cards from one cloud onto the same spot, whatever their slots", async () => {
+    // The whole point of a body-centred region: the drag geometry is a
+    // property of the cloud, not of where a card happens to start. Drives
+    // it through the real wiring, so a per-card radius would fail here
+    // even though the pure geometry tests pass.
+    const committed = new Map<string, { dx: number; dy: number }>();
+    const setStarMapCardPosition = vi.fn(
+      async (request: {
+        threadKey: string;
+        dx: number | null;
+        dy: number | null;
+      }) => {
+        committed.set(request.threadKey, {
+          dx: request.dx ?? 0,
+          dy: request.dy ?? 0,
+        });
+        return { entries: [] };
+      },
+    );
+    render(
+      <StarMapScreen
+        desktopApi={
+          { ...buildDesktopApi(), setStarMapCardPosition } as unknown as DesktopApi
+        }
+        localThreads={[unreadThread("t1"), unreadThread("t2")]}
+        sessionKeys={{}}
+        localInstanceLabel="Mac-Mini-M4"
+        floating={false}
+        onClose={() => undefined}
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /Open thread: Thread t1/ }),
+      ).toBeTruthy();
+    });
+
+    // Stacked in one lane, so the two cards start at different distances
+    // from the body — which used to hand them different regions.
+    const first = cardPosition("codex:t1");
+    const second = cardPosition("codex:t2");
+    expect(second.dy).not.toBeCloseTo(first.dy);
+
+    // Same destination for both, out past the detent so resistance applies.
+    const target = { dx: -900, dy: -600 };
+    dragCard("codex:t1", {
+      dx: target.dx - first.dx,
+      dy: target.dy - first.dy,
+    });
+    dragCard("codex:t2", {
+      dx: target.dx - second.dx,
+      dy: target.dy - second.dy,
+    });
+
+    await waitFor(() => {
+      expect(committed.size).toBe(2);
+    });
+    const landedFirst = {
+      dx: first.dx + committed.get("codex:t1")!.dx,
+      dy: first.dy + committed.get("codex:t1")!.dy,
+    };
+    const landedSecond = {
+      dx: second.dx + committed.get("codex:t2")!.dx,
+      dy: second.dy + committed.get("codex:t2")!.dy,
+    };
+    expect(landedFirst.dx).toBeCloseTo(landedSecond.dx);
+    expect(landedFirst.dy).toBeCloseTo(landedSecond.dy);
+    // And they got there: an island well outside the cloud, not a card
+    // pinned to the edge of its own little bubble.
+    expect(Math.hypot(landedFirst.dx, landedFirst.dy)).toBeGreaterThan(600);
+  });
+
+  it("offers a way back for a card parked away from its cloud", async () => {
+    const setStarMapCardPosition = vi.fn(async () => ({ entries: [] }));
+    const readStarMapArrangement = vi.fn(async () => ({
+      entries: [
+        {
+          instanceId: "pwr_local",
+          threadKey: "codex:t1",
+          dx: -1800,
+          dy: -1400,
+          updatedAt: 1,
+          by: "pwr_local",
+        },
+      ],
+    }));
+    render(
+      <StarMapScreen
+        desktopApi={
+          {
+            ...buildDesktopApi(),
+            readStarMapArrangement,
+            setStarMapCardPosition,
+          } as unknown as DesktopApi
+        }
+        localThreads={[unreadThread("t1")]}
+        sessionKeys={{}}
+        localInstanceLabel="Mac-Mini-M4"
+        floating={false}
+        onClose={() => undefined}
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+
+    // A lane does not pan, so a card dragged this far out is off the
+    // window with no way to grab it again.
+    await waitFor(() => {
+      expect(cardPosition("codex:t1").dx).toBeLessThan(-1000);
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Actions for Thread t1" }),
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Reset position" }));
+
+    await waitFor(() => {
+      expect(setStarMapCardPosition).toHaveBeenCalledWith(
+        expect.objectContaining({ threadKey: "codex:t1", dx: null, dy: null }),
+      );
+    });
+    // Optimistic, so the card is back in its slot without a round trip.
+    expect(cardPosition("codex:t1").dx).toBeCloseTo(0);
+  });
+
+  it("keeps the reset action off a card that has not been moved", async () => {
+    render(
+      <StarMapScreen
+        desktopApi={
+          {
+            ...buildDesktopApi(),
+            setStarMapCardPosition: vi.fn(async () => ({ entries: [] })),
+          } as unknown as DesktopApi
+        }
+        localThreads={[unreadThread("t1")]}
+        sessionKeys={{}}
+        localInstanceLabel="Mac-Mini-M4"
+        floating={false}
+        onClose={() => undefined}
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "Actions for Thread t1" }),
+      ).toBeTruthy();
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Actions for Thread t1" }),
+    );
+    expect(screen.queryByRole("menuitem", { name: "Reset position" })).toBeNull();
+  });
 });

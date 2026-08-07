@@ -67,6 +67,8 @@ export type NavigationLaunchpadAgent = Pick<
 >;
 
 export type NavigationThreadSummary = AppServerThreadSummary & {
+  /** Most recent completed probe for `gitWorkingState`, even when its value was unchanged. */
+  gitWorkingStateFetchedAt?: number;
   /** Present when this row describes a thread owned by another PwrAgent instance. */
   federation?: {
     ref: FederatedThreadRef;
@@ -911,6 +913,62 @@ export type GetWorktreeOtherChangeDiffResponse = {
   detail?: AppServerThreadActivityDetail;
 };
 
+export type WorktreeUnpublishedCommitFile = {
+  path: string;
+  repoPath: string;
+  binary?: boolean;
+  additions?: number;
+  removals?: number;
+};
+
+export type WorktreeUnpublishedCommit = {
+  sha: string;
+  shortSha: string;
+  subject: string;
+  committedAt?: number;
+  files: WorktreeUnpublishedCommitFile[];
+  totalFiles: number;
+  filesTruncated: boolean;
+  additions: number;
+  removals: number;
+};
+
+export type ListWorktreeUnpublishedCommitsRequest = {
+  /** Owning thread identity; required when `federationTarget` is remote. */
+  backend?: AppServerBackendKind;
+  threadId?: ThreadIdentifier;
+  federationTarget?: FederationTarget;
+  worktreePath: string;
+  /** Bounded by the main process; callers can request a smaller cap. */
+  maxCommits?: number;
+  /** Bounded per commit by the main process. */
+  maxFilesPerCommit?: number;
+};
+
+export type ListWorktreeUnpublishedCommitsResponse = {
+  commits: WorktreeUnpublishedCommit[];
+  totalCommits: number;
+  truncated: boolean;
+  maxCommits: number;
+  maxFilesPerCommit: number;
+};
+
+export type GetWorktreeUnpublishedCommitDiffRequest = {
+  /** Owning thread identity; required when `federationTarget` is remote. */
+  backend?: AppServerBackendKind;
+  threadId?: ThreadIdentifier;
+  federationTarget?: FederationTarget;
+  worktreePath: string;
+  commitSha: string;
+  path: string;
+  /** Bounded by the main process; callers can request a smaller cap. */
+  maxBytes?: number;
+};
+
+export type GetWorktreeUnpublishedCommitDiffResponse = {
+  detail?: AppServerThreadActivityDetail;
+};
+
 const ACP_BACKEND_ID_PREFIX = "acp:";
 const ACP_REGISTRY_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
 
@@ -1036,6 +1094,7 @@ export type MarkThreadSeenResponse = {
 
 export type SetThreadReactionRequest = {
   backend?: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   emoji: string;
   /** true → add the reaction; false → remove it */

@@ -23,6 +23,8 @@ describe("thread orchestration tool contracts", () => {
       "detach_thread_directory",
       "handoff_task",
       "move_thread_workspace",
+      "stop_thread",
+      "steer_thread",
       "send_message_to_thread",
       "start_review",
     ]);
@@ -32,9 +34,13 @@ describe("thread orchestration tool contracts", () => {
     expect(PWRAGENT_THREAD_ORCHESTRATION_ERROR_CODES).toEqual([
       "invalid_arguments",
       "not_found",
+      "no_active_turn",
       "peer_unavailable",
       "forbidden",
+      "stale_target",
+      "ambiguous_owner",
       "unsupported_backend",
+      "unsupported_capability",
       "unsupported_workspace",
       "unsupported_operation",
       "ambiguous_workspace",

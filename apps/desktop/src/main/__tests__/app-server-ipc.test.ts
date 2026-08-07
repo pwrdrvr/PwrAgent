@@ -44,12 +44,28 @@ const federationMock = vi.hoisted(() => {
       seenAt: request.seenAt ?? 6_000,
       seenUpdatedAt: request.seenUpdatedAt,
     })),
+    setThreadReaction: vi.fn(async (request: {
+      backend?: "codex" | "grok";
+      threadId: string;
+    }) => ({
+      backend: request.backend ?? "codex",
+      threadId: request.threadId,
+      reactions: ["✋", "👀"],
+    })),
     renameThread: vi.fn(async (request: RenameThreadRequest) => ({
       backend: request.backend,
       threadId: request.threadId,
       renamedAt: 6_000,
     })),
     refreshDirectoryGitStatuses: vi.fn(async () => ({ scheduledCount: 1 })),
+    listWorktreeUnpublishedCommits: vi.fn(async () => ({
+      commits: [],
+      totalCommits: 0,
+      truncated: false,
+      maxCommits: 20,
+      maxFilesPerCommit: 50,
+    })),
+    getWorktreeUnpublishedCommitDiff: vi.fn(async () => ({})),
   };
   const remoteThreadSummaries = {
     resolvePinnedThreads: vi.fn(
@@ -466,6 +482,17 @@ const markThreadSeen = vi.fn(async (request: MarkThreadSeenRequest) => ({
   seenAt: request.seenAt ?? 2000,
   seenUpdatedAt: request.seenUpdatedAt,
 }));
+const setThreadReactionOverlay = vi.fn(async (request: {
+  backend: "codex" | "grok";
+  threadId: string;
+  emoji: string;
+}) => ({
+  backend: request.backend,
+  threadId: request.threadId,
+  executionMode: "default" as const,
+  extraLinkedDirectories: [],
+  reactions: [request.emoji],
+}));
 const registerDirectoryFromDiskService = vi.fn(async (request: { path: string }) => {
   const directoryPath = path.resolve(request.path);
   return {
@@ -771,6 +798,7 @@ vi.mock("../app-server/desktop-overlay-store", () => ({
     addRemoteThreadPin: addRemoteThreadPinStore,
     hasRemoteThreadPin,
     setRemoteThreadLocalPin,
+    setThreadReaction: setThreadReactionOverlay,
     setThreadPin: setThreadPinOverlay,
     listPinnedThreadOverlayRanks,
     reorderThreadPins: reorderThreadPinsStore,
@@ -891,7 +919,10 @@ describe("app server ipc", () => {
     federationMock.remoteBackend.renameThread.mockClear();
     federationMock.remoteBackend.archiveThread.mockClear();
     federationMock.remoteBackend.markThreadSeen.mockClear();
+    federationMock.remoteBackend.setThreadReaction.mockClear();
     federationMock.remoteBackend.refreshDirectoryGitStatuses.mockClear();
+    federationMock.remoteBackend.listWorktreeUnpublishedCommits.mockClear();
+    federationMock.remoteBackend.getWorktreeUnpublishedCommitDiff.mockClear();
     federationMock.runtime.remoteBackend.mockClear();
     federationMock.runtime.remoteNavigationSnapshot.mockReset();
     listThreads.mockClear();
@@ -930,6 +961,7 @@ describe("app server ipc", () => {
     setThreadPrAutoDispatchBatch.mockClear();
     ensureDirectoryLaunchpad.mockClear();
     markThreadSeen.mockClear();
+    setThreadReactionOverlay.mockClear();
     registerDirectoryFromDiskService.mockClear();
     addLinkedDirectory.mockClear();
     removeLinkedDirectory.mockClear();
@@ -1887,6 +1919,71 @@ describe("app server ipc", () => {
     // The unread remote row bumps the group's "N to review" badge past the
     // reconcile-computed local count.
     expect(appDirectory?.needsAttentionCount).toBe(2);
+  });
+
+  it("marks a pinned remote snapshot changed when only reactions change", async () => {
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+    const { buildFederatedThreadRef } = await import("@pwragent/shared");
+    const ref = buildFederatedThreadRef({
+      backend: "codex",
+      instanceId: "peer-laptop",
+      threadId: "remote-reactions",
+    });
+    const pin = { ref, addedAt: 1_000, instanceLabel: "Laptop" };
+    const localSnapshot = (unchanged: boolean) => ({
+      backend: "all" as const,
+      fetchedAt: 1_000,
+      unchanged,
+      threads: [],
+      inboxThreadKeys: [],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    });
+    const remoteRow = (reactions: string[]) => ({
+      source: "codex" as const,
+      id: "remote-reactions",
+      title: "Remote reactions",
+      titleSource: "explicit" as const,
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+      reactions,
+      federation: {
+        ref,
+        instanceLabel: "Laptop",
+        peerStatus: "connected" as const,
+        capabilities: [],
+      },
+    });
+    reconcileNavigationSnapshot
+      .mockResolvedValueOnce(localSnapshot(false))
+      .mockResolvedValueOnce(localSnapshot(true));
+    listRemoteThreadPins
+      .mockResolvedValueOnce([pin])
+      .mockResolvedValueOnce([pin]);
+    federationMock.remoteThreadSummaries.resolvePinnedThreads
+      .mockResolvedValueOnce({
+        threads: [remoteRow(["✋"])],
+        refreshed: [],
+        archived: [],
+      })
+      .mockResolvedValueOnce({
+        threads: [remoteRow(["✋", "👀"])],
+        refreshed: [],
+        archived: [],
+      });
+    registerAppServerIpcHandlers();
+
+    const first = await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    const second = await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+
+    expect(first).toMatchObject({ unchanged: false });
+    expect(second).toMatchObject({
+      unchanged: false,
+      threads: [expect.objectContaining({ reactions: ["✋", "👀"] })],
+    });
   });
 
   it("removes a viewer-side remote pin when the owner proves it is archived", async () => {
@@ -3160,6 +3257,68 @@ describe("app server ipc", () => {
       threadId: "thread-remote",
       seenAt: 6_000,
       seenUpdatedAt: 3_000,
+    });
+  });
+
+  it("adds remote thread reactions on the owner without replacing its ordered reactions", async () => {
+    const { NAVIGATION_SET_THREAD_REACTION_CHANNEL } = await import(
+      "../../shared/ipc"
+    );
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "remote-instance",
+    };
+    registerAppServerIpcHandlers();
+
+    const response = await handlers.get(
+      NAVIGATION_SET_THREAD_REACTION_CHANNEL,
+    )?.({}, {
+      backend: "codex",
+      federationTarget,
+      threadId: "thread-remote",
+      emoji: "👀",
+      present: true,
+    });
+
+    expect(federationMock.runtime.remoteBackend).toHaveBeenCalledWith(
+      federationTarget,
+    );
+    expect(federationMock.remoteBackend.setThreadReaction).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-remote",
+      emoji: "👀",
+      present: true,
+    });
+    expect(setThreadReactionOverlay).not.toHaveBeenCalled();
+    expect(response).toEqual({
+      backend: "codex",
+      threadId: "thread-remote",
+      reactions: ["✋", "👀"],
+    });
+  });
+
+  it("publishes local reaction mutations to navigation subscribers", async () => {
+    const { NAVIGATION_SET_THREAD_REACTION_CHANNEL } = await import(
+      "../../shared/ipc"
+    );
+    registerAppServerIpcHandlers();
+
+    await handlers.get(NAVIGATION_SET_THREAD_REACTION_CHANNEL)?.({}, {
+      backend: "codex",
+      threadId: "thread-local",
+      emoji: "👀",
+      present: true,
+    });
+
+    expect(publishLocalEvent).toHaveBeenCalledWith({
+      backend: "codex",
+      notification: {
+        method: "thread/reactions/updated",
+        params: {
+          threadId: "thread-local",
+          reactions: ["👀"],
+        },
+      },
     });
   });
 
@@ -5675,6 +5834,62 @@ describe("app server ipc", () => {
     expect(invalidateDirectoryStatus).not.toHaveBeenCalled();
   });
 
+  it("routes remote unpublished commit reads to the owning federation peer", async () => {
+    const {
+      NAVIGATION_GET_WORKTREE_UNPUBLISHED_COMMIT_DIFF_CHANNEL,
+      NAVIGATION_LIST_WORKTREE_UNPUBLISHED_COMMITS_CHANNEL,
+    } = await import("../../shared/ipc");
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "remote-instance",
+    };
+    const baseRequest = {
+      backend: "codex" as const,
+      threadId: "thread-1",
+      worktreePath: "/remote/repo",
+      federationTarget,
+    };
+
+    registerAppServerIpcHandlers();
+
+    await handlers.get(NAVIGATION_LIST_WORKTREE_UNPUBLISHED_COMMITS_CHANNEL)?.(
+      {},
+      { ...baseRequest, maxCommits: 20, maxFilesPerCommit: 50 },
+    );
+    await handlers.get(NAVIGATION_GET_WORKTREE_UNPUBLISHED_COMMIT_DIFF_CHANNEL)?.(
+      {},
+      {
+        ...baseRequest,
+        commitSha: "a".repeat(40),
+        path: "/remote/repo/file.ts",
+        maxBytes: 200_000,
+      },
+    );
+
+    expect(federationMock.runtime.remoteBackend).toHaveBeenCalledWith(
+      federationTarget,
+    );
+    expect(
+      federationMock.remoteBackend.listWorktreeUnpublishedCommits,
+    ).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      worktreePath: "/remote/repo",
+      maxCommits: 20,
+      maxFilesPerCommit: 50,
+    });
+    expect(
+      federationMock.remoteBackend.getWorktreeUnpublishedCommitDiff,
+    ).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      worktreePath: "/remote/repo",
+      commitSha: "a".repeat(40),
+      path: "/remote/repo/file.ts",
+      maxBytes: 200_000,
+    });
+  });
+
   it("coalesces rapid forced directory git status re-enqueues for the same key", async () => {
     const {
       NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL,
@@ -5862,6 +6077,7 @@ describe("app server ipc", () => {
       unpushedCommits: 0,
       baseBranch: "main",
     };
+    const cachedFetchedAt = Date.now();
     listThreads.mockResolvedValue([
       {
         id: "thread-1",
@@ -5876,7 +6092,7 @@ describe("app server ipc", () => {
     readThreadGitWorkingStateCache.mockResolvedValueOnce({
       [worktreePath]: {
         worktreePath,
-        fetchedAt: Date.now(),
+        fetchedAt: cachedFetchedAt,
         gitWorkingState,
       },
     });
@@ -5893,6 +6109,14 @@ describe("app server ipc", () => {
     ).resolves.toEqual({ scheduled: false });
     expect(invalidateWorktreeWorkingState).not.toHaveBeenCalled();
 
+    readWorktreeWorkingStateEntries.mockImplementationOnce((worktreePaths) =>
+      (async function* () {
+        for (const path of worktreePaths) {
+          yield { worktreePath: path, gitWorkingState };
+        }
+      })(),
+    );
+    publishLocalEvent.mockClear();
     await expect(
       handlers.get(NAVIGATION_REFRESH_THREAD_GIT_WORKING_STATE_CHANNEL)?.(
         {},
@@ -5910,7 +6134,21 @@ describe("app server ipc", () => {
       expect(writeThreadGitWorkingStateCacheEntry).toHaveBeenCalledWith(
         expect.objectContaining({ worktreePath }),
       );
+      expect(publishLocalEvent).toHaveBeenCalledWith({
+        backend: "codex",
+        notification: {
+          method: "navigation/threadGitWorkingState/updated",
+          params: expect.objectContaining({
+            worktreePath,
+            gitWorkingState,
+            fetchedAt: expect.any(Number),
+          }),
+        },
+      });
     });
+    const refreshedCacheEntry = writeThreadGitWorkingStateCacheEntry.mock.calls
+      .at(-1)?.[0];
+    expect(refreshedCacheEntry?.fetchedAt).toBeGreaterThan(cachedFetchedAt);
   });
 
   it("hydrates working state from linked worktrees when the thread has no project key", async () => {
@@ -5960,6 +6198,7 @@ describe("app server ipc", () => {
         expect.objectContaining({
           id: "thread-1",
           gitWorkingState,
+          gitWorkingStateFetchedAt: 1000,
         }),
       ],
     });

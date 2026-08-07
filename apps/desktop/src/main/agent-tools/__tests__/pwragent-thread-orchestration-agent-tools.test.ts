@@ -100,13 +100,43 @@ describe("pwragent thread orchestration agent tools", () => {
           expect.objectContaining({
             type: "function",
             name: "send_message_to_thread",
-            description: expect.stringContaining("instanceId"),
+            description: expect.stringMatching(/schedules\/queues.*steer_thread/),
             deferLoading: false,
             inputSchema: expect.objectContaining({
               required: ["backend", "threadId", "prompt"],
               properties: expect.objectContaining({
                 instanceId: expect.objectContaining({ type: "string" }),
                 includeRemote: expect.objectContaining({ type: "boolean" }),
+              }),
+            }),
+          }),
+          expect.objectContaining({
+            type: "function",
+            name: "steer_thread",
+            description: expect.stringMatching(
+              /next tool completion or message boundary.*never reports a queued follow-up as steered/,
+            ),
+            deferLoading: false,
+            inputSchema: expect.objectContaining({
+              required: ["backend", "threadId", "requestId", "prompt"],
+              properties: expect.objectContaining({
+                instanceId: expect.objectContaining({ type: "string" }),
+                includeRemote: expect.objectContaining({ type: "boolean" }),
+                expectedTurnId: expect.objectContaining({ type: "string" }),
+              }),
+            }),
+          }),
+          expect.objectContaining({
+            type: "function",
+            name: "stop_thread",
+            description: expect.stringMatching(/high-urgency.*never queues text/),
+            deferLoading: false,
+            inputSchema: expect.objectContaining({
+              required: ["backend", "threadId", "requestId"],
+              properties: expect.objectContaining({
+                instanceId: expect.objectContaining({ type: "string" }),
+                includeRemote: expect.objectContaining({ type: "boolean" }),
+                expectedTurnId: expect.objectContaining({ type: "string" }),
               }),
             }),
           }),

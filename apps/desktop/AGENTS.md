@@ -288,13 +288,22 @@ Things to know when extending the audit:
   hand-written fixture (same class as `readme-recents-hero/`) whose
   threads are `threadStatus: "active"` for exactly that reason. Check
   what your surface renders before trusting a green run.
-- **`runAxe(window, { include })` narrows the scan to one subtree.** Use
-  it only when the block is about a specific composited surface — the
-  celestial-watermark blocks scope to `.thread-view__primary`, the
-  element the watermark is a child of, so the light-theme run measures
-  the watermark rather than unrelated window-wide light-theme debt.
-  Everything else stays unscoped, because an unscoped run is what catches
-  regressions nobody thought to point at.
+- **Every surface is audited in both themes.** The file wraps its
+  `describe` in `for (const theme of AUDIT_THEMES)` and threads the theme
+  into `launchAuditApp({ theme })`, so a new block is gated in light and
+  dark for free. This matters because contrast is the one rule class that
+  is genuinely theme-dependent — roles, names, and focus order are not.
+  The gate ran dark-only for its whole life, which is how three
+  token-level light-theme contrast failures shipped unnoticed.
+- **`runAxe(window, { include })` narrows the scan to one subtree.** No
+  block passes it today, and it is not a tool for silencing a failure —
+  everything outside the scope stops being gated. Prefer a
+  `KNOWN_VIOLATIONS` entry, which waives one selector for one rule and
+  leaves the rest of the surface audited. (It exists because the
+  celestial-watermark blocks once scoped to `.thread-view__primary` to
+  avoid measuring window-wide light-theme debt; that debt is fixed, light
+  theme is gated unscoped, and those blocks folded their
+  watermark-is-painted assertion into "open thread view".)
 - **Reduced motion has to reach the element that animates.** The gate
   emulates `prefers-reduced-motion: reduce` so it measures contrast at
   rest; a rule that zeroes the animation on the wrong selector leaves

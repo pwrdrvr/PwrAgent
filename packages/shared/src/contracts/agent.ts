@@ -268,6 +268,12 @@ export type CancelQueuedTurnRequest = {
 export type CancelQueuedTurnResponse = {
   queueEntryId: string;
   cancelled: boolean;
+  /**
+   * Owner-authoritative lifecycle result. Optional so a newer viewer remains
+   * compatible with peers that only return the legacy boolean.
+   */
+  disposition?: "cancelled" | "already_admitted" | "not_found";
+  turnId?: string;
 };
 
 export type StartReviewRequest = {
@@ -302,6 +308,57 @@ export type InterruptTurnResponse = {
   threadId: ThreadIdentifier;
   turnId: string;
 };
+
+export type ResolveActiveTurnRequest = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+};
+
+export type ResolveActiveTurnResponse = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  turnId?: string;
+};
+
+export type ControlActiveTurnRequest = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  operation: "stop" | "steer";
+  requestId: string;
+  expectedTurnId?: string;
+  input?: AppServerTurnInputItem[];
+  messageOrigin?: AppServerThreadMessageOrigin;
+};
+
+export type ControlActiveTurnErrorCode =
+  | "invalid_arguments"
+  | "no_active_turn"
+  | "stale_target"
+  | "unsupported_backend"
+  | "unsupported_capability";
+
+export type ControlActiveTurnResponse =
+  | {
+      ok: true;
+      backend: AppServerBackendKind;
+      threadId: ThreadIdentifier;
+      requestId: string;
+      turnId: string;
+      disposition: "interrupted" | "steered";
+      idempotentReplay?: boolean;
+    }
+  | {
+      ok: false;
+      backend: AppServerBackendKind;
+      threadId: ThreadIdentifier;
+      requestId: string;
+      error: {
+        code: ControlActiveTurnErrorCode;
+        message: string;
+        activeTurnId?: string;
+        expectedTurnId?: string;
+      };
+    };
 
 export type StopSubAgentRequest = {
   backend: AppServerBackendKind;

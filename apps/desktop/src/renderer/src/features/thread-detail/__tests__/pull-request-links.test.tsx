@@ -4,6 +4,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   parseGitHubPullRequestUrl,
+  parsePullRequestUrl,
   PullRequestLinkProvider,
 } from "../../../lib/pull-request-links";
 import { ThreadMarkdown } from "../ThreadMarkdown";
@@ -144,6 +145,23 @@ describe("pull request links in transcript markdown", () => {
     expect(screen.queryByRole("link", {
       name: "#13290 — Document JDK 17 for EMR jobs",
     })).not.toBeInTheDocument();
+  });
+
+  it("renders GitLab merge request links with the shared live status chip", () => {
+    const url = "https://gitlab.com/pwrdrvr/platform/PwrAgent/-/merge_requests/49";
+    const pullRequest = prSummary({
+      provider: "gitlab.com",
+      org: "pwrdrvr/platform",
+      repo: "PwrAgent",
+      number: 49,
+      url,
+    });
+    renderWithPullRequests(`Related change: [#49](${url})`, [pullRequest]);
+
+    expect(screen.getByRole("button", {
+      name: /Open pwrdrvr\/platform\/PwrAgent#49/,
+    })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "#49" })).not.toBeInTheDocument();
   });
 
   it("hydrates a bare PR number known on the active thread", () => {
@@ -544,5 +562,34 @@ describe("parseGitHubPullRequestUrl", () => {
     expect(parseGitHubPullRequestUrl(
       "https://github.com/%E0%A4%A/giphy-services/pull/13290",
     )).toBeUndefined();
+  });
+});
+
+describe("parsePullRequestUrl", () => {
+  it.each([
+    {
+      href: "https://github.corp.example/pwrdrvr/PwrAgent/pull/49/files",
+      expected: {
+        provider: "github.corp.example",
+        org: "pwrdrvr",
+        repo: "PwrAgent",
+        number: 49,
+      },
+    },
+    {
+      href: "https://gitlab.com/pwrdrvr/platform/PwrAgent/-/merge_requests/49",
+      expected: {
+        provider: "gitlab.com",
+        org: "pwrdrvr/platform",
+        repo: "PwrAgent",
+        number: 49,
+      },
+    },
+  ])("parses forge-aware pull request links for $href", ({ href, expected }) => {
+    expect(parsePullRequestUrl(href)).toMatchObject({
+      ...expected,
+      state: "unknown",
+      url: href,
+    });
   });
 });

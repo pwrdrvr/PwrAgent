@@ -19,6 +19,8 @@ import type {
   CheckThreadBranchDriftResponse,
   CompactThreadRequest,
   CompactThreadResponse,
+  ControlActiveTurnRequest,
+  ControlActiveTurnResponse,
   CreateScheduledThreadActionRequest,
   CodexEnvironmentSetupProgressEvent,
   DetachThreadPullRequestRequest,
@@ -28,6 +30,8 @@ import type {
   ForkThreadRequest,
   ForkThreadResponse,
   GetNavigationSnapshotRequest,
+  GetWorktreeUnpublishedCommitDiffRequest,
+  GetWorktreeUnpublishedCommitDiffResponse,
   HandoffThreadWorkspaceRequest,
   HandoffThreadWorkspaceResponse,
   InterruptTurnRequest,
@@ -36,6 +40,8 @@ import type {
   ListBackendsResponse,
   ListScheduledThreadActionsRequest,
   ListScheduledThreadActionsResponse,
+  ListWorktreeUnpublishedCommitsRequest,
+  ListWorktreeUnpublishedCommitsResponse,
   MaterializeDirectoryLaunchpadOptions,
   MaterializeDirectoryLaunchpadRequest,
   MaterializeDirectoryLaunchpadResponse,
@@ -43,6 +49,8 @@ import type {
   MarkThreadSeenResponse,
   MessagingPlatformStatus,
   PwrSnapConnectionStatus,
+  SetThreadReactionRequest,
+  SetThreadReactionResponse,
   SetThreadPinRequest,
   SetThreadPinResponse,
   SetThreadPrAutoDispatchRequest,
@@ -67,6 +75,8 @@ import type {
   RetainThreadBranchDriftResponse,
   RenameThreadRequest,
   RenameThreadResponse,
+  ResolveActiveTurnRequest,
+  ResolveActiveTurnResponse,
   RunCodexEnvironmentActionRequest,
   RunCodexEnvironmentActionResponse,
   ScheduledThreadActionIdRequest,
@@ -136,6 +146,7 @@ export const FEDERATION_BACKEND_METHODS = {
   listSkills: "backend.listSkills",
   listBackends: "backend.listBackends",
   markThreadSeen: "backend.markThreadSeen",
+  setThreadReaction: "backend.setThreadReaction",
   setThreadPin: "backend.setThreadPin",
   reorderThreadPins: "backend.reorderThreadPins",
   detachThreadPullRequest: "backend.detachThreadPullRequest",
@@ -154,6 +165,8 @@ export const FEDERATION_BACKEND_METHODS = {
   cancelScheduledThreadAction: "backend.cancelScheduledThreadAction",
   sendScheduledThreadActionNow: "backend.sendScheduledThreadActionNow",
   compactThread: "backend.compactThread",
+  controlActiveTurn: "backend.controlActiveTurn",
+  resolveActiveTurn: "backend.resolveActiveTurn",
   interruptTurn: "backend.interruptTurn",
   stopSubAgent: "backend.stopSubAgent",
   steerTurn: "backend.steerTurn",
@@ -171,6 +184,8 @@ export const FEDERATION_BACKEND_METHODS = {
   stopCodexEnvironmentAction: "backend.stopCodexEnvironmentAction",
   setCodexThreadEnvironment: "backend.setCodexThreadEnvironment",
   refreshDirectoryGitStatuses: "backend.refreshDirectoryGitStatuses",
+  listWorktreeUnpublishedCommits: "backend.listWorktreeUnpublishedCommits",
+  getWorktreeUnpublishedCommitDiff: "backend.getWorktreeUnpublishedCommitDiff",
   materializeDirectoryLaunchpad: "backend.materializeDirectoryLaunchpad",
   handoffThreadWorkspace: "backend.handoffThreadWorkspace",
   renameThread: "backend.renameThread",
@@ -212,6 +227,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.listSkills]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.listBackends]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.markThreadSeen]: "thread_navigation",
+  [FEDERATION_BACKEND_METHODS.setThreadReaction]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.setThreadPin]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.reorderThreadPins]: "thread_navigation",
   // PR detach cancels pending auto-dispatch work and auto-dispatch arms
@@ -233,6 +249,8 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.cancelScheduledThreadAction]: "scheduled_actions",
   [FEDERATION_BACKEND_METHODS.sendScheduledThreadActionNow]: "scheduled_actions",
   [FEDERATION_BACKEND_METHODS.compactThread]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.controlActiveTurn]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.resolveActiveTurn]: "turn_control",
   [FEDERATION_BACKEND_METHODS.interruptTurn]: "turn_control",
   [FEDERATION_BACKEND_METHODS.stopSubAgent]: "turn_control",
   [FEDERATION_BACKEND_METHODS.steerTurn]: "turn_control",
@@ -250,6 +268,8 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.stopCodexEnvironmentAction]: "environment_actions",
   [FEDERATION_BACKEND_METHODS.setCodexThreadEnvironment]: "environment_actions",
   [FEDERATION_BACKEND_METHODS.refreshDirectoryGitStatuses]: "thread_navigation",
+  [FEDERATION_BACKEND_METHODS.listWorktreeUnpublishedCommits]: "thread_detail",
+  [FEDERATION_BACKEND_METHODS.getWorktreeUnpublishedCommitDiff]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.materializeDirectoryLaunchpad]: "environment_actions",
   [FEDERATION_BACKEND_METHODS.handoffThreadWorkspace]: "turn_control",
   [FEDERATION_BACKEND_METHODS.renameThread]: "turn_control",
@@ -297,6 +317,9 @@ export type FederationBackendOperations = {
   ): Promise<AppServerListSkillsResponse>;
   listBackends(request?: ListBackendsRequest): Promise<ListBackendsResponse>;
   markThreadSeen(request: MarkThreadSeenRequest): Promise<MarkThreadSeenResponse>;
+  setThreadReaction(
+    request: SetThreadReactionRequest,
+  ): Promise<SetThreadReactionResponse>;
   setThreadPin(request: SetThreadPinRequest): Promise<SetThreadPinResponse>;
   reorderThreadPins(
     request: ReorderThreadPinsRequest,
@@ -343,6 +366,12 @@ export type FederationBackendOperations = {
     request: ScheduledThreadActionIdRequest,
   ): Promise<ScheduledThreadActionMutationResponse>;
   compactThread(request: CompactThreadRequest): Promise<CompactThreadResponse>;
+  controlActiveTurn?(
+    request: ControlActiveTurnRequest,
+  ): Promise<ControlActiveTurnResponse>;
+  resolveActiveTurn(
+    request: ResolveActiveTurnRequest,
+  ): Promise<ResolveActiveTurnResponse>;
   interruptTurn(request: InterruptTurnRequest): Promise<InterruptTurnResponse>;
   stopSubAgent(request: StopSubAgentRequest): Promise<StopSubAgentResponse>;
   steerTurn(request: SteerTurnRequest): Promise<SteerTurnResponse>;
@@ -388,6 +417,12 @@ export type FederationBackendOperations = {
   refreshDirectoryGitStatuses(
     request: RefreshDirectoryGitStatusesRequest,
   ): Promise<RefreshDirectoryGitStatusesResponse>;
+  listWorktreeUnpublishedCommits(
+    request: ListWorktreeUnpublishedCommitsRequest,
+  ): Promise<ListWorktreeUnpublishedCommitsResponse>;
+  getWorktreeUnpublishedCommitDiff(
+    request: GetWorktreeUnpublishedCommitDiffRequest,
+  ): Promise<GetWorktreeUnpublishedCommitDiffResponse>;
   materializeDirectoryLaunchpad(
     request: MaterializeDirectoryLaunchpadRequest,
     options?: MaterializeDirectoryLaunchpadOptions,
@@ -506,6 +541,13 @@ export function registerFederationBackendHandlers(params: {
     async (envelope) =>
       await params.backend.markThreadSeen(
         envelope.params as MarkThreadSeenRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.setThreadReaction,
+    async (envelope) =>
+      await params.backend.setThreadReaction(
+        envelope.params as SetThreadReactionRequest,
       ),
   );
   params.router.registerHandler(
@@ -642,6 +684,22 @@ export function registerFederationBackendHandlers(params: {
         envelope.params as CompactThreadRequest,
       ),
   );
+  if (params.backend.controlActiveTurn) {
+    params.router.registerHandler(
+      FEDERATION_BACKEND_METHODS.controlActiveTurn,
+      async (envelope) =>
+        await params.backend.controlActiveTurn!(
+          envelope.params as ControlActiveTurnRequest,
+        ),
+    );
+  }
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.resolveActiveTurn,
+    async (envelope) =>
+      await params.backend.resolveActiveTurn(
+        envelope.params as ResolveActiveTurnRequest,
+      ),
+  );
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.interruptTurn,
     async (envelope) =>
@@ -759,6 +817,20 @@ export function registerFederationBackendHandlers(params: {
     async (envelope) =>
       await params.backend.refreshDirectoryGitStatuses(
         envelope.params as RefreshDirectoryGitStatusesRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.listWorktreeUnpublishedCommits,
+    async (envelope) =>
+      await params.backend.listWorktreeUnpublishedCommits(
+        envelope.params as ListWorktreeUnpublishedCommitsRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.getWorktreeUnpublishedCommitDiff,
+    async (envelope) =>
+      await params.backend.getWorktreeUnpublishedCommitDiff(
+        envelope.params as GetWorktreeUnpublishedCommitDiffRequest,
       ),
   );
   params.router.registerHandler(
@@ -922,6 +994,15 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
     });
   }
 
+  async setThreadReaction(
+    request: SetThreadReactionRequest,
+  ): Promise<SetThreadReactionResponse> {
+    return await this.rpc.request<SetThreadReactionResponse>({
+      method: FEDERATION_BACKEND_METHODS.setThreadReaction,
+      params: request,
+    });
+  }
+
   async reorderThreadPins(
     request: ReorderThreadPinsRequest,
   ): Promise<ReorderThreadPinsResponse> {
@@ -1065,6 +1146,24 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   ): Promise<CompactThreadResponse> {
     return await this.rpc.request<CompactThreadResponse>({
       method: FEDERATION_BACKEND_METHODS.compactThread,
+      params: request,
+    });
+  }
+
+  async controlActiveTurn(
+    request: ControlActiveTurnRequest,
+  ): Promise<ControlActiveTurnResponse> {
+    return await this.rpc.request<ControlActiveTurnResponse>({
+      method: FEDERATION_BACKEND_METHODS.controlActiveTurn,
+      params: request,
+    });
+  }
+
+  async resolveActiveTurn(
+    request: ResolveActiveTurnRequest,
+  ): Promise<ResolveActiveTurnResponse> {
+    return await this.rpc.request<ResolveActiveTurnResponse>({
+      method: FEDERATION_BACKEND_METHODS.resolveActiveTurn,
       params: request,
     });
   }
@@ -1216,6 +1315,24 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   ): Promise<RefreshDirectoryGitStatusesResponse> {
     return await this.rpc.request<RefreshDirectoryGitStatusesResponse>({
       method: FEDERATION_BACKEND_METHODS.refreshDirectoryGitStatuses,
+      params: request,
+    });
+  }
+
+  async listWorktreeUnpublishedCommits(
+    request: ListWorktreeUnpublishedCommitsRequest,
+  ): Promise<ListWorktreeUnpublishedCommitsResponse> {
+    return await this.rpc.request<ListWorktreeUnpublishedCommitsResponse>({
+      method: FEDERATION_BACKEND_METHODS.listWorktreeUnpublishedCommits,
+      params: request,
+    });
+  }
+
+  async getWorktreeUnpublishedCommitDiff(
+    request: GetWorktreeUnpublishedCommitDiffRequest,
+  ): Promise<GetWorktreeUnpublishedCommitDiffResponse> {
+    return await this.rpc.request<GetWorktreeUnpublishedCommitDiffResponse>({
+      method: FEDERATION_BACKEND_METHODS.getWorktreeUnpublishedCommitDiff,
       params: request,
     });
   }

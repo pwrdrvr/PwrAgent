@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { StrictMode, useState, type ComponentProps } from "react";
 import {
   applyNavigationLaunchpadProviderSettingsPatch,
+  buildFederatedThreadRef,
   type BackendSummary,
   type CompactThreadRequest,
   type ComposerDraftRecoveryCandidate,
@@ -2035,6 +2036,376 @@ describe("Composer", () => {
     expect(screen.queryByText("Run setup")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Environment command")).not.toBeInTheDocument();
     expect(screen.queryByText("No command")).not.toBeInTheDocument();
+  });
+
+  it("inserts a hash-prefixed thread chip from the inline thread picker", async () => {
+    const currentThread: NavigationThreadSummary = {
+      id: "thread-current",
+      title: "Current thread",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const targetThread: NavigationThreadSummary = {
+      id: "019fbbbe-ad52-77c2-b7f7-28182d9a6f83",
+      title: "Bob's Best Thread 3000",
+      titleSource: "explicit",
+      source: "codex",
+      gitBranch: "agent/best-thread",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const startTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: currentThread.id,
+      turnId: "turn-1",
+    }));
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={currentThread}
+        threads={[currentThread, targetThread]}
+      />,
+    );
+
+    const textbox = screen.getByRole("textbox", { name: "Reply" });
+    fireEvent.change(textbox, { target: { value: "Ask #Bob's Best" } });
+    const listbox = await screen.findByRole("listbox", {
+      name: "Threads and pull requests",
+    });
+    expect(
+      within(listbox).getByRole("button", {
+        name: /#Bob's Best Thread 3000/,
+      }),
+    ).toBeInTheDocument();
+    fireEvent.keyDown(textbox, { key: "Enter" });
+
+    const chip = await waitFor(() =>
+      within(textbox)
+        .getByText("#Bob's Best Thread 3000")
+        .closest("[data-mention-kind]"),
+    );
+    expect(chip).toHaveAttribute("data-mention-kind", "thread");
+    expect(textbox).toHaveValue("Ask  ");
+
+    await clickButton("Send");
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: currentThread.id,
+        input: [
+          {
+            type: "text",
+            text: "Ask [Bob's Best Thread 3000](pwragent://thread/019fbbbe-ad52-77c2-b7f7-28182d9a6f83?backend=codex)",
+          },
+        ],
+      });
+    });
+  });
+
+  it("offers matching threads and a precise PR link for a numeric hash query", async () => {
+    const earlierPullRequest = {
+      provider: "github.com" as const,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      number: 44,
+      state: "passing" as const,
+      title: "Earlier stacked change",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/44",
+    };
+    const pullRequest = {
+      provider: "github.com" as const,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      number: 123,
+      state: "passing" as const,
+      title: "Ship channel-style thread references",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/123",
+    };
+    const currentThread: NavigationThreadSummary = {
+      id: "thread-current",
+      title: "Current thread",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const pullRequestThread: NavigationThreadSummary = {
+      id: "thread-pr-123",
+      title: "Implement hash references",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+      prs: [earlierPullRequest, pullRequest],
+    };
+    const startTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: currentThread.id,
+      turnId: "turn-1",
+    }));
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={currentThread}
+        threads={[currentThread, pullRequestThread]}
+      />,
+    );
+
+    const textbox = screen.getByRole("textbox", { name: "Reply" });
+    fireEvent.change(textbox, { target: { value: "See #123" } });
+    const listbox = await screen.findByRole("listbox", {
+      name: "Threads and pull requests",
+    });
+    const threadOption = within(listbox).getByRole("button", {
+      name: /#Implement hash references/,
+    });
+    expect(threadOption.querySelector(".composer__autocomplete-meta"))
+      .toHaveTextContent("#123");
+    expect(threadOption.querySelector(".composer__autocomplete-meta"))
+      .not.toHaveTextContent("#44");
+    fireEvent.click(
+      within(listbox).getByRole("button", { name: /pwrdrvr\/PwrAgent#123/ }),
+    );
+
+    const chip = await waitFor(() =>
+      within(textbox)
+        .getByText("#123")
+        .closest("[data-mention-kind]"),
+    );
+    expect(chip).toHaveAttribute("data-mention-kind", "pull-request");
+    expect(chip).toHaveAttribute("data-skill-path", pullRequest.url);
+
+    await clickButton("Send");
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: currentThread.id,
+        input: [
+          {
+            type: "text",
+            text: `See [#123](${pullRequest.url})`,
+          },
+        ],
+      });
+    });
+  });
+
+  it("rebuilds a GitLab merge request chip from a prompt-only launchpad restore", async () => {
+    const url = "https://gitlab.com/pwrdrvr/platform/PwrAgent/-/merge_requests/49";
+    const launchpad: NavigationLaunchpadDraft = {
+      directoryKey: "directory:/repo",
+      directoryKind: "directory",
+      directoryLabel: "Repo",
+      directoryPath: "/repo",
+      backend: "codex",
+      executionMode: "default",
+      prompt: `check [#49](${url}) please`,
+      workMode: "local",
+      branchName: "main",
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const onMaterializeLaunchpad = vi.fn(async () => undefined);
+
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        directory={{
+          key: "directory:/repo",
+          kind: "directory",
+          label: "Repo",
+          path: "/repo",
+          threadKeys: [],
+          needsAttentionCount: 0,
+        }}
+        draftStore={createComposerDraftStore()}
+        launchpad={launchpad}
+        onMaterializeLaunchpad={onMaterializeLaunchpad}
+        onUpdateLaunchpad={async () => undefined}
+        skills={[]}
+      />,
+    );
+
+    const richInput = screen.getByTestId("composer-tiptap-input");
+    const chip = await waitFor(() =>
+      within(richInput).getByText("#49").closest("[data-mention-kind]"),
+    );
+    expect(chip).toHaveAttribute("data-mention-kind", "pull-request");
+    expect(chip).toHaveAttribute("data-skill-path", url);
+
+    await clickButton("Start thread");
+    await waitFor(() => {
+      expect(onMaterializeLaunchpad).toHaveBeenCalledWith(
+        "directory:/repo",
+        [{ type: "text", text: `check [#49](${url}) please` }],
+        undefined,
+        undefined,
+        [],
+      );
+    });
+  });
+
+  it("appends Cmd+K federation results and inserts a remote thread link", async () => {
+    const currentThread: NavigationThreadSummary = {
+      id: "thread-current",
+      title: "Current thread",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const remoteThread: NavigationThreadSummary = {
+      id: "thread-remote",
+      title: "Remote fix",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+      federation: {
+        ref: buildFederatedThreadRef({
+          backend: "codex",
+          instanceId: "peer-laptop",
+          threadId: "thread-remote",
+        }),
+        instanceLabel: "Laptop",
+        peerStatus: "connected",
+        capabilities: [],
+      },
+    };
+    const jumpSearchRemoteThreads = vi.fn(async () => ({
+      results: [remoteThread],
+    }));
+    const startTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: currentThread.id,
+      turnId: "turn-1",
+    }));
+
+    render(
+      <Composer
+        desktopApi={{
+          jumpSearchRemoteThreads,
+          onAgentEvent: () => () => undefined,
+          startTurn,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={currentThread}
+        threads={[currentThread]}
+      />,
+    );
+
+    const textbox = screen.getByRole("textbox", { name: "Reply" });
+    fireEvent.change(textbox, { target: { value: "Ask #Remote" } });
+    expect(await screen.findByText("Searching other instances…"))
+      .toBeInTheDocument();
+
+    const listbox = await screen.findByRole("listbox", {
+      name: "Threads and pull requests",
+    });
+    const remoteOption = await within(listbox).findByRole("button", {
+      name: /#Remote fix/,
+    });
+    expect(jumpSearchRemoteThreads).toHaveBeenCalledWith({
+      query: "Remote",
+      limit: 8,
+    });
+    expect(within(listbox).getByText("Other instances")).toBeInTheDocument();
+    expect(within(remoteOption).getByLabelText("Runs on Laptop"))
+      .toBeInTheDocument();
+    fireEvent.click(remoteOption);
+
+    const chip = await waitFor(() =>
+      within(textbox)
+        .getByText("#Remote fix")
+        .closest("[data-mention-kind]"),
+    );
+    expect(chip).toHaveAttribute("data-mention-kind", "thread");
+    expect(chip).toHaveAttribute(
+      "data-skill-path",
+      "pwragent://thread/thread-remote?backend=codex&instanceId=peer-laptop",
+    );
+
+    await clickButton("Send");
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: currentThread.id,
+        input: [
+          {
+            type: "text",
+            text: "Ask [Remote fix](pwragent://thread/thread-remote?backend=codex&instanceId=peer-laptop)",
+          },
+        ],
+      });
+    });
+  });
+
+  it("submits while a hash reference has only a pending federation search", async () => {
+    const currentThread: NavigationThreadSummary = {
+      id: "thread-current",
+      title: "Current thread",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const remoteSearch = createDeferred<{ results: NavigationThreadSummary[] }>();
+    const jumpSearchRemoteThreads = vi.fn(() => remoteSearch.promise);
+    const startTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: currentThread.id,
+      turnId: "turn-1",
+    }));
+
+    render(
+      <Composer
+        desktopApi={{
+          jumpSearchRemoteThreads,
+          onAgentEvent: () => () => undefined,
+          startTurn,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={currentThread}
+        threads={[currentThread]}
+      />,
+    );
+
+    const textbox = screen.getByRole("textbox", { name: "Reply" });
+    fireEvent.change(textbox, { target: { value: "Ask #Remote" } });
+    expect(await screen.findByText("Searching other instances…"))
+      .toBeInTheDocument();
+    await waitFor(() => {
+      expect(jumpSearchRemoteThreads).toHaveBeenCalledWith({
+        query: "Remote",
+        limit: 8,
+      });
+    });
+
+    fireEvent.keyDown(textbox, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: currentThread.id,
+        input: [{ type: "text", text: "Ask #Remote" }],
+      });
+    });
   });
 
   it.each([
@@ -5087,6 +5458,228 @@ describe("Composer", () => {
         expect.objectContaining({ federationTarget }),
       );
     });
+  });
+
+  it("clears a remote queued projection when its owner already admitted it", async () => {
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "remote-instance",
+    };
+    const cancelQueuedTurn = vi.fn(async ({ queueEntryId }: {
+      queueEntryId: string;
+    }) => ({
+      queueEntryId,
+      cancelled: false,
+      disposition: "already_admitted" as const,
+      turnId: "turn-1",
+    }));
+    const steerTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    }));
+    render(
+      <Composer
+        activeTurnId="turn-1"
+        backends={[
+          {
+            ...backendSummary("codex"),
+            capabilities: {
+              ...backendSummary("codex").capabilities,
+              steerTurn: true,
+            },
+          },
+        ]}
+        desktopApi={{
+          cancelQueuedTurn,
+          onAgentEvent: () => () => undefined,
+          startTurn: vi.fn(async () => ({
+            backend: "codex" as const,
+            threadId: "thread-1",
+            turnId: "queue-entry-1",
+            queueStatus: "queued" as const,
+            queueEntryId: "queue-entry-1",
+          })),
+          steerTurn,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Remote active turn",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          federation: {
+            ref: {
+              backend: "codex",
+              target: federationTarget,
+              threadId: "thread-1",
+            },
+            instanceLabel: "Remote",
+            peerStatus: "connected",
+          },
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "Already admitted once" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+    await screen.findByLabelText("Queued message");
+
+    fireEvent.click(screen.getByRole("button", { name: "Steer" }));
+
+    await waitFor(() => {
+      expect(cancelQueuedTurn).toHaveBeenCalledWith({
+        federationTarget,
+        queueEntryId: "queue-entry-1",
+      });
+      expect(screen.queryByLabelText("Queued message")).not.toBeInTheDocument();
+    });
+    expect(steerTurn).not.toHaveBeenCalled();
+    expect(
+      screen.queryByText("The queued turn is no longer waiting."),
+    ).not.toBeInTheDocument();
+  });
+
+  it("preserves a remote queued projection while admission is still pending", async () => {
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex";
+          federationTarget?: {
+            scope: "remote";
+            instanceId: string;
+          };
+          notification: {
+            method: string;
+            params: Record<string, unknown>;
+          };
+        }) => void)
+      | undefined;
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "remote-instance",
+    };
+    const draftStore = createComposerDraftStore();
+    const cancelQueuedTurn = vi.fn(async ({ queueEntryId }: {
+      queueEntryId: string;
+    }) => ({
+      queueEntryId,
+      cancelled: false,
+      disposition: "already_admitted" as const,
+    }));
+    const steerTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    }));
+    render(
+      <Composer
+        activeTurnId="turn-1"
+        backends={[
+          {
+            ...backendSummary("codex"),
+            capabilities: {
+              ...backendSummary("codex").capabilities,
+              steerTurn: true,
+            },
+          },
+        ]}
+        desktopApi={{
+          cancelQueuedTurn,
+          onAgentEvent: (callback) => {
+            agentEventHandler = callback as typeof agentEventHandler;
+            return () => undefined;
+          },
+          startTurn: vi.fn(async () => ({
+            backend: "codex" as const,
+            threadId: "thread-1",
+            turnId: "queue-entry-1",
+            queueStatus: "queued" as const,
+            queueEntryId: "queue-entry-1",
+          })),
+          steerTurn,
+        }}
+        disabled={false}
+        draftStore={draftStore}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Remote active turn",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          federation: {
+            ref: {
+              backend: "codex",
+              target: federationTarget,
+              threadId: "thread-1",
+            },
+            instanceLabel: "Remote",
+            peerStatus: "connected",
+          },
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "Preserve until admitted" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+    await screen.findByLabelText("Queued message");
+
+    fireEvent.click(screen.getByRole("button", { name: "Steer" }));
+
+    await waitFor(() => {
+      expect(cancelQueuedTurn).toHaveBeenCalledWith({
+        federationTarget,
+        queueEntryId: "queue-entry-1",
+      });
+    });
+    expect(screen.getByLabelText("Queued message")).toHaveTextContent(
+      "Preserve until admitted",
+    );
+    expect(
+      draftStore.getQueuedTurn("thread:codex:thread-1"),
+    ).toMatchObject({
+      queueEntryId: "queue-entry-1",
+      text: "Preserve until admitted",
+    });
+    expect(steerTurn).not.toHaveBeenCalled();
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        federationTarget,
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        federationTarget,
+        notification: {
+          method: "thread/turnQueue/updated",
+          params: {
+            threadId: "thread-1",
+            queueEntryId: "queue-entry-1",
+            status: "failed",
+            errorMessage: "Remote queue startup failed",
+          },
+        },
+      });
+    });
+
+    expect(screen.queryByLabelText("Queued message")).not.toBeInTheDocument();
+    expect(screen.getByText("Remote queue startup failed")).toBeInTheDocument();
   });
 
   it("removes concurrently cancelled queue entries by stable id", async () => {
@@ -14626,7 +15219,7 @@ describe("Composer", () => {
     const richInput = screen.getByTestId("composer-tiptap-input");
     const chip = await waitFor(() => {
       const currentChip = within(richInput)
-        .getByText("Lovely child thread")
+        .getByText("#Lovely child thread")
         .closest("[data-mention-kind]");
       expect(currentChip).toHaveAttribute(
         "data-mention-kind",
@@ -14676,6 +15269,76 @@ describe("Composer", () => {
         ],
       });
     });
+  });
+
+  it("uses a live thread name when pasting an in-progress thread id", async () => {
+    const targetThreadId = "019fbbbe-ad52-77c2-b7f7-28182d9a6f83";
+    const currentThread: NavigationThreadSummary = {
+      id: "thread-1",
+      title: "Current thread",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const untitledTarget: NavigationThreadSummary = {
+      id: targetThreadId,
+      title: "Untitled thread",
+      titleSource: "fallback",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const onShowThread = vi.fn();
+    const { rerender } = render(
+      <ThreadLinkProvider
+        onShowThread={onShowThread}
+        threads={[currentThread, untitledTarget]}
+      >
+        <Composer
+          desktopApi={{ onAgentEvent: () => () => undefined }}
+          disabled={false}
+          skills={[]}
+          thread={currentThread}
+        />
+      </ThreadLinkProvider>,
+    );
+
+    rerender(
+      <ThreadLinkProvider
+        onShowThread={onShowThread}
+        threads={[
+          currentThread,
+          {
+            ...untitledTarget,
+            title: "Bob's Best Thread 3000",
+            titleSource: "explicit",
+          },
+        ]}
+      >
+        <Composer
+          desktopApi={{ onAgentEvent: () => () => undefined }}
+          disabled={false}
+          skills={[]}
+          thread={currentThread}
+        />
+      </ThreadLinkProvider>,
+    );
+
+    fireEvent.paste(screen.getByLabelText("Reply"), {
+      clipboardData: {
+        files: [],
+        getData: (type: string) => type === "text/plain" ? targetThreadId : "",
+        items: [],
+        types: ["text/plain"],
+      },
+    });
+
+    expect(
+      await within(screen.getByTestId("composer-tiptap-input"))
+        .findByText("#Bob's Best Thread 3000"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Untitled thread")).not.toBeInTheDocument();
   });
 
   it("replaces the selected composer text with a pasted thread chip", async () => {
@@ -14737,7 +15400,7 @@ describe("Composer", () => {
       expect(textbox).toHaveValue("keep  tail");
       expect(
         within(textbox)
-          .getByText("Lovely child thread")
+          .getByText("#Lovely child thread")
           .closest("[data-mention-kind]"),
       ).toHaveAttribute(
         "data-mention-kind",
@@ -14846,7 +15509,7 @@ describe("Composer", () => {
     });
 
     await waitFor(() => {
-      expect(within(textbox).getByText("Lovely child thread")).toBeInTheDocument();
+      expect(within(textbox).getByText("#Lovely child thread")).toBeInTheDocument();
     });
     expect(textbox.querySelector("h2")).toHaveTextContent("Heading");
     expect(textbox.querySelector("ul li")).toHaveTextContent("List item");
