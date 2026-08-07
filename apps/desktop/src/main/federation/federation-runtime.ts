@@ -25,6 +25,7 @@ import type {
   FederationInstanceId,
   FederationInstanceRole,
   FederationPeerSummary,
+  FederationPinDisposition,
   FederationProtocolEnvelope,
   FederationSessionId,
   ForkThreadResponse,
@@ -38,7 +39,10 @@ import type {
   PwrSnapConnectionStatus,
   OpenDesktopApplicationResponse,
   QueueThreadExecutionModeResponse,
+  ReadFederationPinImpactRequest,
+  ReadFederationPinImpactResponse,
   RefreshDirectoryGitStatusesResponse,
+  ResetFederationEnrollmentRequest,
   RetainThreadBranchDriftResponse,
   RenameThreadResponse,
   RunCodexEnvironmentActionResponse,
@@ -821,10 +825,13 @@ export class DesktopFederationRuntime {
    * the runtime. A client-only instance falls back to disabled mode so
    * it does not sit in a doomed reconnect loop against nothing.
    */
-  async resetEnrollment(): Promise<{ cleared: boolean }> {
+  async resetEnrollment(
+    request?: ResetFederationEnrollmentRequest,
+  ): Promise<{ cleared: boolean }> {
     const stateDb = getAppStateDb();
-    const gatewayInstanceId = stateDb.getMeta(GATEWAY_INSTANCE_ID_META_KEY);
-    const hadEnrollment = Boolean(gatewayInstanceId);
+    const hadEnrollment = Boolean(
+      stateDb.getMeta(GATEWAY_INSTANCE_ID_META_KEY),
+    );
     stateDb.setMeta(GATEWAY_INSTANCE_ID_META_KEY, "");
     stateDb.setMeta(GATEWAY_PUBLIC_KEY_META_KEY, "");
     stateDb.setMeta(GATEWAY_NOISE_PUBLIC_KEY_META_KEY, "");
@@ -877,11 +884,17 @@ export class DesktopFederationRuntime {
       this.persistCelestialAssignments();
       this.publishCelestialIconsChanged();
     }
-    if (gatewayInstanceId) {
-      // Pins for peers reached only THROUGH the forgotten gateway keep
-      // dimming until removed by hand — attribution is unreliable — but
-      // the gateway's own pins are provably dead pairing state.
-      await this.cleanupRemoteThreadPins(gatewayInstanceId);
+    // Every pinned instance reachable only through the forgotten gateway
+    // goes with it, not just the gateway's own threads — those rows are
+    // exactly as unreachable, and leaving them behind was the gap in the
+    // first cut of this cleanup.
+    const pinDisposition = request?.pinDisposition ?? "remember";
+    const pinCountsByInstance = await getDesktopOverlayStore()
+      .countRemoteThreadPinsByInstance();
+    for (const instanceId of this.enrollmentScopedPinInstanceIds(
+      pinCountsByInstance,
+    )) {
+      await this.cleanupRemoteThreadPins(instanceId, pinDisposition);
     }
     await this.restart();
     return { cleared: hadEnrollment };
@@ -905,7 +918,10 @@ export class DesktopFederationRuntime {
     };
   }
 
-  async revokePeer(peerId: FederationInstanceId): Promise<FederationPeerSummary> {
+  async revokePeer(
+    peerId: FederationInstanceId,
+    request?: { pinDisposition?: FederationPinDisposition },
+  ): Promise<FederationPeerSummary> {
     const store = this.store();
     const peer = store.getPeer(peerId);
     if (!peer) {
@@ -921,7 +937,11 @@ export class DesktopFederationRuntime {
     // Free the revoked instance's celestial icon and propagate the removal
     // so it cannot squat one of the five ids forever.
     this.removeCelestialAssignment(peerId, revokedAt);
-    await this.cleanupRemoteThreadPins(peerId);
+    await this.cleanupRemoteThreadPins(
+      peerId,
+      request?.pinDisposition ?? "remember",
+      revokedAt,
+    );
     return publicPeerSummary({
       ...peer,
       status: "revoked",
@@ -930,21 +950,41 @@ export class DesktopFederationRuntime {
   }
 
   /**
-   * A revoked (or forgotten) peer's pinned rows would otherwise dim
-   * forever — this viewer can never reach that instance again, so drop
-   * its pins and poke the renderer. Best-effort: pin cleanup must never
-   * block or fail the enrollment teardown itself.
+   * Put away (or discard) one instance's pinned rows. They must stop
+   * rendering either way: unlike a peer that is merely offline, a revoked
+   * instance is unreachable FOR CAUSE, so leaving the rows to dim would be
+   * noise the operator cannot act on.
+   *
+   * `remember` tombstones, and is the default. Revoking a peer and
+   * re-enrolling it to clear up a problem is a routine repair, and hard
+   * deletion would make the operator re-find and re-pin every thread each
+   * time. `forget` is reserved for the operator explicitly asking to
+   * discard. Best-effort throughout: pin bookkeeping must never block or
+   * fail the revocation itself.
    */
   private async cleanupRemoteThreadPins(
     instanceId: FederationInstanceId,
+    disposition: FederationPinDisposition,
+    revokedAt?: number,
   ): Promise<void> {
     try {
       this.remoteThreadSummaryCache?.invalidate(instanceId);
-      const removed = await getDesktopOverlayStore()
-        .removeRemoteThreadPinsForInstance({ instanceId });
-      if (removed === 0) {
+      const overlayStore = getDesktopOverlayStore();
+      const affected =
+        disposition === "forget"
+          ? await overlayStore.removeRemoteThreadPinsForInstance({ instanceId })
+          : await overlayStore.tombstoneRemoteThreadPinsForInstance({
+              instanceId,
+              revokedAt,
+            });
+      if (affected === 0) {
         return;
       }
+      log.info("remote thread pins cleaned up after revocation", {
+        instanceId,
+        disposition,
+        affected,
+      });
       await getDesktopBackendRegistry().publishLocalEvent({
         backend: "codex",
         notification: {
@@ -958,6 +998,94 @@ export class DesktopFederationRuntime {
         error: error instanceof Error ? error.message : String(error),
       });
     }
+  }
+
+  /**
+   * A peer that connects again has been re-enrolled (federation policy
+   * refuses revoked peers), so its tombstoned pins are live again. This is
+   * the payoff for tombstoning: the revoke → fix → re-enroll cycle returns
+   * the operator's curated list without them lifting a finger.
+   */
+  private async restoreRemoteThreadPins(
+    instanceId: FederationInstanceId,
+  ): Promise<void> {
+    try {
+      const restored = await getDesktopOverlayStore()
+        .restoreRemoteThreadPinsForInstance({ instanceId });
+      if (restored === 0) {
+        return;
+      }
+      this.remoteThreadSummaryCache?.invalidate(instanceId);
+      log.info("remote thread pins restored after re-enrollment", {
+        instanceId,
+        restored,
+      });
+      await getDesktopBackendRegistry().publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "navigation/remoteThreadPins/changed",
+          params: { instanceId, pinned: true },
+        },
+      });
+    } catch (error) {
+      log.warn("remote thread pin restore failed", {
+        instanceId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * How many pinned threads a pending revoke / forget would affect, so the
+   * renderer can skip the keep-or-forget prompt entirely when the operator
+   * has nothing pinned from the affected instances.
+   */
+  async readRemoteThreadPinImpact(
+    request: ReadFederationPinImpactRequest,
+  ): Promise<ReadFederationPinImpactResponse> {
+    const countsByInstance = await getDesktopOverlayStore()
+      .countRemoteThreadPinsByInstance();
+    const instanceIds =
+      request.scope.kind === "peer"
+        ? [request.scope.peerId]
+        : this.enrollmentScopedPinInstanceIds(countsByInstance);
+    let pinnedThreadCount = 0;
+    let tombstonedThreadCount = 0;
+    const instanceLabels: string[] = [];
+    let visible: FederationPeerSummary[];
+    try {
+      visible = this.visiblePeers();
+    } catch {
+      visible = [];
+    }
+    for (const instanceId of instanceIds) {
+      const counts = countsByInstance.get(instanceId);
+      if (!counts) {
+        continue;
+      }
+      pinnedThreadCount += counts.live;
+      tombstonedThreadCount += counts.revoked;
+      const peer = visible.find((candidate) => candidate.id === instanceId);
+      instanceLabels.push(
+        peer ? formatFederationPeerDisplayLabel(peer, visible) : instanceId,
+      );
+    }
+    return { pinnedThreadCount, tombstonedThreadCount, instanceLabels };
+  }
+
+  /**
+   * Instances whose pins a "forget gateway pairing" would affect: the
+   * gateway itself plus every pinned instance this viewer reaches only
+   * THROUGH it. A directly connected peer (a dual instance's own enrolled
+   * client) survives the upstream reset, so its pins must not be touched —
+   * the same reasoning `resetEnrollment` applies to celestial icons.
+   */
+  private enrollmentScopedPinInstanceIds(
+    countsByInstance: ReadonlyMap<string, unknown>,
+  ): FederationInstanceId[] {
+    return [...countsByInstance.keys()].filter(
+      (instanceId) => !this.router?.getConnection(instanceId),
+    );
   }
 
   async generateInvite(request: {
@@ -3223,6 +3351,13 @@ export class DesktopFederationRuntime {
       return;
     }
     this.publishedPeerStatuses.set(instanceId, { status, unavailableReason });
+    if (status === "connected") {
+      // Hooked to the status TRANSITION (this method already de-dupes
+      // repeats) rather than to a specific enrollment call site, so every
+      // way a peer can come back — invite redemption, gateway re-pairing,
+      // a relayed peer reappearing — restores its pins through one path.
+      void this.restoreRemoteThreadPins(instanceId);
+    }
     for (const listener of this.peerStatusListeners) {
       try {
         listener();

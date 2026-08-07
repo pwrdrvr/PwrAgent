@@ -11,8 +11,11 @@ import type {
   FederationEndpointStatus,
   FederationHealthStatus,
   FederationInstanceRole,
+  FederationPinDisposition,
+  FederationPinImpactScope,
   FederationTailscaleMode,
   FederationTailscaleStatus,
+  ReadFederationPinImpactResponse,
 } from "@pwragent/shared";
 import {
   CELESTIAL_ICON_IDS,
@@ -71,6 +74,18 @@ export function FederationSettings(props: FederationSettingsProps) {
   const [settingIconFor, setSettingIconFor] = useState<string>();
   const [confirmingForget, setConfirmingForget] = useState(false);
   const [forgetting, setForgetting] = useState(false);
+  // The revoke the operator is currently confirming, plus what it would do
+  // to their pinned threads. An absent `impact` means nothing is pinned
+  // from that instance — the common case, which must not raise a
+  // keep-or-forget question at all. Peer id and impact live in one state
+  // value so a slow impact read can never attach to a different peer.
+  const [revokeConfirm, setRevokeConfirm] = useState<{
+    peerId: string;
+    impact?: ReadFederationPinImpactResponse;
+  }>();
+  const [forgetPinImpact, setForgetPinImpact] =
+    useState<ReadFederationPinImpactResponse>();
+  const forgetImpactGenerationRef = useRef(0);
   const [mode, setMode] = useState<DesktopFederationMode>(
     props.snapshot.federation.mode.value,
   );
@@ -322,6 +337,91 @@ export function FederationSettings(props: FederationSettingsProps) {
       )
       .finally(() => setSettingIconFor(undefined));
   };
+  /**
+   * Read how many pinned threads a teardown would affect. A missing API
+   * (older preload) or a failed read resolves to undefined, which routes
+   * the caller through the plain confirm — never a silent forget.
+   */
+  const readPinImpact = async (
+    scope: FederationPinImpactScope,
+  ): Promise<ReadFederationPinImpactResponse | undefined> => {
+    if (!props.desktopApi?.readFederationPinImpact) return undefined;
+    try {
+      const impact = await props.desktopApi.readFederationPinImpact({ scope });
+      return impact.pinnedThreadCount + impact.tombstonedThreadCount > 0
+        ? impact
+        : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+
+  const beginRevokePeer = (peerId: string) => {
+    setActionError(undefined);
+    setRevokeConfirm({ peerId });
+    void readPinImpact({ kind: "peer", peerId }).then((impact) => {
+      // Drop a late read whose confirm the operator already dismissed or
+      // moved to another peer.
+      setRevokeConfirm((current) =>
+        current?.peerId === peerId ? { peerId, impact } : current,
+      );
+    });
+  };
+
+  const revokePeer = (
+    peerId: string,
+    pinDisposition: FederationPinDisposition,
+  ) => {
+    setActionError(undefined);
+    setRevokingPeerId(peerId);
+    props.desktopApi?.revokeFederationPeer?.({ peerId, pinDisposition })
+      .then(() => {
+        setRevokeConfirm(undefined);
+        return loadHealth();
+      })
+      .catch((err: unknown) =>
+        setActionError(err instanceof Error ? err.message : String(err)),
+      )
+      .finally(() => setRevokingPeerId(undefined));
+  };
+
+  const beginForgetGateway = () => {
+    setActionError(undefined);
+    setConfirmingForget(true);
+    setForgetPinImpact(undefined);
+    // Generation guard, the counterpart to the peer-id check on the revoke
+    // side: a read from a confirm the operator already cancelled must not
+    // paint its copy onto the next one.
+    const generation = ++forgetImpactGenerationRef.current;
+    void readPinImpact({ kind: "enrollment" }).then((impact) => {
+      if (forgetImpactGenerationRef.current === generation) {
+        setForgetPinImpact(impact);
+      }
+    });
+  };
+
+  const cancelForgetGateway = () => {
+    forgetImpactGenerationRef.current += 1;
+    setConfirmingForget(false);
+    setForgetPinImpact(undefined);
+  };
+
+  const forgetGateway = (pinDisposition: FederationPinDisposition) => {
+    setActionError(undefined);
+    setForgetting(true);
+    props.desktopApi?.resetFederationEnrollment?.({ pinDisposition })
+      .then(async () => {
+        setConfirmingForget(false);
+        setForgetPinImpact(undefined);
+        await props.onSettingsChanged();
+        await loadHealth();
+      })
+      .catch((err: unknown) =>
+        setActionError(err instanceof Error ? err.message : String(err)),
+      )
+      .finally(() => setForgetting(false));
+  };
+
   const connectionRemediation = effectiveHealth.unavailableReason
     ? remediationForConnectionFailure(effectiveHealth.unavailableReason)
     : undefined;
@@ -791,30 +891,29 @@ export function FederationSettings(props: FederationSettingsProps) {
                         className="button button--primary"
                         type="button"
                         disabled={forgetting}
-                        onClick={() => {
-                          setActionError(undefined);
-                          setForgetting(true);
-                          props.desktopApi?.resetFederationEnrollment?.({})
-                            .then(async () => {
-                              setConfirmingForget(false);
-                              await props.onSettingsChanged();
-                              await loadHealth();
-                            })
-                            .catch((err: unknown) =>
-                              setActionError(
-                                err instanceof Error ? err.message : String(err),
-                              ),
-                            )
-                            .finally(() => setForgetting(false));
-                        }}
+                        onClick={() => forgetGateway("remember")}
                       >
-                        {forgetting ? "Forgetting..." : "Confirm forget"}
+                        {forgetting
+                          ? "Forgetting..."
+                          : forgetPinImpact
+                            ? "Forget gateway, keep my threads"
+                            : "Confirm forget"}
                       </button>
+                      {forgetPinImpact ? (
+                        <button
+                          className="button button--ghost"
+                          type="button"
+                          disabled={forgetting}
+                          onClick={() => forgetGateway("forget")}
+                        >
+                          Forget gateway and threads
+                        </button>
+                      ) : null}
                       <button
                         className="button button--ghost"
                         type="button"
                         disabled={forgetting}
-                        onClick={() => setConfirmingForget(false)}
+                        onClick={cancelForgetGateway}
                       >
                         Cancel
                       </button>
@@ -824,7 +923,7 @@ export function FederationSettings(props: FederationSettingsProps) {
                       className="button button--ghost"
                       type="button"
                       disabled={!props.desktopApi?.resetFederationEnrollment}
-                      onClick={() => setConfirmingForget(true)}
+                      onClick={beginForgetGateway}
                     >
                       Forget gateway
                     </button>
@@ -835,6 +934,9 @@ export function FederationSettings(props: FederationSettingsProps) {
                     Forgetting removes the pinned gateway identity and keys
                     from this instance. Reconnecting later requires a fresh
                     invite from the gateway.
+                    {forgetPinImpact
+                      ? ` ${describePinImpact(forgetPinImpact)}`
+                      : ""}
                   </p>
                 ) : null}
               </>
@@ -1008,31 +1110,58 @@ export function FederationSettings(props: FederationSettingsProps) {
                     Browse remote threads
                   </button>
                   {peer.canRevoke ? (
-                    <button
-                      className="button button--ghost"
-                      type="button"
-                      disabled={
-                        peer.status === "revoked" ||
-                        revokingPeerId === peer.id ||
-                        !props.desktopApi?.revokeFederationPeer
-                      }
-                      onClick={() => {
-                        setActionError(undefined);
-                        setRevokingPeerId(peer.id);
-                        props.desktopApi?.revokeFederationPeer?.({
-                          peerId: peer.id,
-                        })
-                          .then(() => loadHealth())
-                          .catch((err: unknown) =>
-                            setActionError(
-                              err instanceof Error ? err.message : String(err),
-                            ),
-                          )
-                          .finally(() => setRevokingPeerId(undefined));
-                      }}
-                    >
-                      {revokingPeerId === peer.id ? "Revoking..." : "Revoke"}
-                    </button>
+                    revokeConfirm?.peerId === peer.id ? (
+                      <>
+                        <button
+                          className="button button--primary"
+                          type="button"
+                          disabled={revokingPeerId === peer.id}
+                          onClick={() => revokePeer(peer.id, "remember")}
+                        >
+                          {revokingPeerId === peer.id
+                            ? "Revoking..."
+                            : revokeConfirm.impact
+                              ? "Revoke, keep my threads"
+                              : "Confirm revoke"}
+                        </button>
+                        {revokeConfirm.impact ? (
+                          <button
+                            className="button button--ghost"
+                            type="button"
+                            disabled={revokingPeerId === peer.id}
+                            onClick={() => revokePeer(peer.id, "forget")}
+                          >
+                            Revoke and forget threads
+                          </button>
+                        ) : null}
+                        <button
+                          className="button button--ghost"
+                          type="button"
+                          disabled={revokingPeerId === peer.id}
+                          onClick={() => setRevokeConfirm(undefined)}
+                        >
+                          Cancel
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        className="button button--ghost"
+                        type="button"
+                        disabled={
+                          peer.status === "revoked" ||
+                          revokingPeerId === peer.id ||
+                          !props.desktopApi?.revokeFederationPeer
+                        }
+                        onClick={() => beginRevokePeer(peer.id)}
+                      >
+                        Revoke
+                      </button>
+                    )
+                  ) : null}
+                  {revokeConfirm?.peerId === peer.id && revokeConfirm.impact ? (
+                    <p className="federation-security-note">
+                      {describePinImpact(revokeConfirm.impact, peer.label)}
+                    </p>
                   ) : null}
                 </dd>
               </div>
@@ -1530,6 +1659,31 @@ function formatFederationCapabilities(
  * for transport-level failures where "keep retrying" is already the
  * right answer.
  */
+/**
+ * Explains what happens to the operator's pinned remote threads, and makes
+ * clear that keeping them is reversible while forgetting is not. Only
+ * rendered when something is actually pinned — see `readPinImpact`.
+ */
+function describePinImpact(
+  impact: ReadFederationPinImpactResponse,
+  peerLabel?: string,
+): string {
+  const source =
+    peerLabel
+    ?? (impact.instanceLabels.length === 1
+      ? impact.instanceLabels[0]
+      : `${impact.instanceLabels.length} instances`);
+  const pinned = impact.pinnedThreadCount;
+  const subject =
+    pinned === 1 ? "1 pinned thread" : `${pinned} pinned threads`;
+  if (pinned === 0) {
+    // Only tombstones left: an earlier revoke already put these away, so
+    // the live/forget distinction is about the remembered list itself.
+    return `Threads from ${source} are already put away. Keeping them means they return if you re-enroll; forgetting removes them for good.`;
+  }
+  return `${subject} from ${source} will stop showing in your list. Keeping them means they come back automatically if you re-enroll; forgetting removes them for good.`;
+}
+
 function remediationForConnectionFailure(reason: string): string | undefined {
   if (
     reason.includes("unknown_peer") ||

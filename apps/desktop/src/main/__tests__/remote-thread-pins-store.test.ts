@@ -309,6 +309,193 @@ describe("SqliteOverlayStore — remote thread pins", () => {
     expect(changedWrites.count).toBe(1);
   });
 
+  it("tombstones an instance's pins, hides them, and restores them", async () => {
+    await store.addRemoteThreadPin({
+      ref: ref("t1", "peer-revoked"),
+      summary: summary({ id: "t1" }),
+      instanceLabel: "Old laptop",
+      pinnedVia: "explicit",
+    });
+    await store.setRemoteThreadLocalPin({
+      ref: ref("t1", "peer-revoked"),
+      pinnedRank: "2048",
+    });
+    await store.addRemoteThreadPin({
+      ref: ref("t2", "peer-kept"),
+      summary: summary({ id: "t2" }),
+      instanceLabel: "Desktop",
+    });
+
+    expect(
+      await store.tombstoneRemoteThreadPinsForInstance({
+        instanceId: "peer-revoked",
+        revokedAt: 7_000,
+      }),
+    ).toBe(1);
+
+    // Hidden from the default list — the merge must never serve a row the
+    // viewer cannot reach for cause — but still on disk.
+    const live = await store.listRemoteThreadPins();
+    expect(live.map((pin) => pin.ref.threadId)).toEqual(["t2"]);
+    const all = await store.listRemoteThreadPins({ includeRevoked: true });
+    expect(all).toHaveLength(2);
+    expect(
+      all.find((pin) => pin.ref.threadId === "t1")?.revokedAt,
+    ).toBe(7_000);
+
+    // Re-enrolling brings the row back with its viewer-owned state intact.
+    expect(
+      await store.restoreRemoteThreadPinsForInstance({
+        instanceId: "peer-revoked",
+      }),
+    ).toBe(1);
+    const restored = await store.listRemoteThreadPins();
+    expect(restored).toHaveLength(2);
+    const t1 = restored.find((pin) => pin.ref.threadId === "t1");
+    expect(t1?.revokedAt).toBeUndefined();
+    expect(t1?.localPinnedRank).toBe("2048");
+    expect(t1?.pinnedVia).toBe("explicit");
+    expect(t1?.summary?.title).toBe("Remote fix");
+  });
+
+  it("re-pinning a tombstoned thread brings it straight back", async () => {
+    // Restoring on reconnect is best-effort. If it never ran, an explicit
+    // pin must still land visibly — otherwise the operator clicks pin, the
+    // write succeeds, and nothing appears.
+    await store.addRemoteThreadPin({
+      ref: ref(),
+      summary: summary({ title: "Old" }),
+      instanceLabel: "Laptop",
+    });
+    await store.tombstoneRemoteThreadPinsForInstance({
+      instanceId: "peer-laptop",
+    });
+    expect(await store.listRemoteThreadPins()).toHaveLength(0);
+
+    await store.addRemoteThreadPin({
+      ref: ref(),
+      summary: summary({ title: "Fresh" }),
+      instanceLabel: "Laptop",
+    });
+
+    const live = await store.listRemoteThreadPins();
+    expect(live).toHaveLength(1);
+    expect(live[0].revokedAt).toBeUndefined();
+    expect(live[0].summary?.title).toBe("Fresh");
+  });
+
+  it("reports a tombstoned pin as absent so it can be re-pinned", async () => {
+    // `hasRemoteThreadPin` gates companion-parent pinning. Counting a
+    // hidden row would skip a parent that never renders, stranding its
+    // child as a bare top-level row.
+    await store.addRemoteThreadPin({
+      ref: ref("parent"),
+      instanceLabel: "Laptop",
+    });
+    expect(await store.hasRemoteThreadPin({ ref: ref("parent") })).toBe(true);
+
+    await store.tombstoneRemoteThreadPinsForInstance({
+      instanceId: "peer-laptop",
+    });
+    expect(await store.hasRemoteThreadPin({ ref: ref("parent") })).toBe(false);
+
+    await store.restoreRemoteThreadPinsForInstance({
+      instanceId: "peer-laptop",
+    });
+    expect(await store.hasRemoteThreadPin({ ref: ref("parent") })).toBe(true);
+  });
+
+  it("keeps the original tombstone timestamp on a repeat revoke", async () => {
+    await store.addRemoteThreadPin({
+      ref: ref("t1", "peer-revoked"),
+      instanceLabel: "Old laptop",
+    });
+    await store.tombstoneRemoteThreadPinsForInstance({
+      instanceId: "peer-revoked",
+      revokedAt: 1_000,
+    });
+    // A second revoke touches nothing: restating when the list was put
+    // away would misreport how long it has been gone.
+    expect(
+      await store.tombstoneRemoteThreadPinsForInstance({
+        instanceId: "peer-revoked",
+        revokedAt: 9_000,
+      }),
+    ).toBe(0);
+    const all = await store.listRemoteThreadPins({ includeRevoked: true });
+    expect(all[0].revokedAt).toBe(1_000);
+  });
+
+  it("counts live and tombstoned pins per instance", async () => {
+    await store.addRemoteThreadPin({
+      ref: ref("t1", "peer-a"),
+      instanceLabel: "A",
+    });
+    await store.addRemoteThreadPin({
+      ref: ref("t2", "peer-a"),
+      instanceLabel: "A",
+    });
+    await store.addRemoteThreadPin({
+      ref: ref("t3", "peer-b"),
+      instanceLabel: "B",
+    });
+    await store.tombstoneRemoteThreadPinsForInstance({ instanceId: "peer-b" });
+
+    const counts = await store.countRemoteThreadPinsByInstance();
+    expect(counts.get("peer-a")).toEqual({ live: 2, revoked: 0 });
+    expect(counts.get("peer-b")).toEqual({ live: 0, revoked: 1 });
+    // An instance the operator never pinned from is simply absent, so the
+    // keep-or-forget prompt stays hidden.
+    expect(counts.get("peer-none")).toBeUndefined();
+    expect([...counts.keys()].sort()).toEqual(["peer-a", "peer-b"]);
+  });
+
+  it("migrates a v44 database to v45 with the revoked_at column", () => {
+    const { dbPath, tempDir } = createTempStateDb("pwragent-pin-tombstone-");
+    try {
+      const seeded = StateDb.open(dbPath);
+      seeded.raw.exec("DROP TABLE remote_thread_pins");
+      seeded.raw.exec(`
+CREATE TABLE remote_thread_pins (
+  instance_id TEXT NOT NULL,
+  backend     TEXT NOT NULL,
+  thread_id   TEXT NOT NULL,
+  added_at    INTEGER NOT NULL,
+  payload     TEXT NOT NULL,
+  PRIMARY KEY (instance_id, backend, thread_id)
+);`);
+      seeded.raw
+        .prepare(
+          `INSERT INTO remote_thread_pins(instance_id, backend, thread_id, added_at, payload)
+           VALUES (?, ?, ?, ?, ?)`,
+        )
+        .run("peer-laptop", "codex", "thread-1", 1_000, "{}");
+      seeded.raw.pragma("user_version = 44");
+      seeded.close();
+
+      const migrated = StateDb.open(dbPath);
+      try {
+        expect(migrated.raw.pragma("user_version", { simple: true })).toBe(
+          CURRENT_STATE_DB_USER_VERSION,
+        );
+        const columns = (
+          migrated.raw.prepare("PRAGMA table_info(remote_thread_pins)").all() as
+            Array<{ name: string }>
+        ).map((column) => column.name);
+        expect(columns).toContain("revoked_at");
+        // A pin that predates the column is live, not tombstoned.
+        const row = migrated.raw
+          .prepare("SELECT revoked_at FROM remote_thread_pins")
+          .get() as { revoked_at: number | null };
+        expect(row.revoked_at).toBeNull();
+      } finally {
+        migrated.close();
+      }
+    } finally {
+      removeTempStateDbDir(tempDir);
+    }
+  });
+
   it("removes every pin for one instance in a single call", async () => {
     await store.addRemoteThreadPin({
       ref: ref("t1", "peer-revoked"),
