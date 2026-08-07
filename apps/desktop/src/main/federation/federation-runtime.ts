@@ -392,6 +392,7 @@ const NAVIGATION_EVENT_METHODS = new Set<string>([
   "thread/pin/added",
   "thread/pin/removed",
   "thread/pin/reordered",
+  "thread/reactions/updated",
   "thread/prAutoDispatch/pendingUpdated",
   "thread/prAutoDispatch/updated",
   "thread/pullRequests/updated",
@@ -3496,7 +3497,10 @@ export class DesktopFederationRuntime {
       },
       notification: notification.params.notification,
     };
-    if (event.notification.method === "thread/pullRequests/updated") {
+    if (
+      event.notification.method === "thread/pullRequests/updated"
+      || event.notification.method === "thread/reactions/updated"
+    ) {
       this.remoteThreadSummaryCache?.invalidate(sourceInstanceId);
     }
     this.publishAgentEvent?.(event);
@@ -3654,10 +3658,21 @@ function localBackendOperations(): FederationBackendOperations {
         emoji: request.emoji,
         present: request.present,
       });
+      const reactions = overlay.reactions ?? [];
+      await getDesktopBackendRegistry().publishLocalEvent({
+        backend,
+        notification: {
+          method: "thread/reactions/updated",
+          params: {
+            threadId: request.threadId,
+            reactions,
+          },
+        },
+      });
       return {
         backend,
         threadId: request.threadId,
-        reactions: overlay.reactions ?? [],
+        reactions,
       };
     },
     async readMessagingPlatformStatuses(): Promise<MessagingPlatformStatus[]> {

@@ -1911,6 +1911,71 @@ describe("app server ipc", () => {
     expect(appDirectory?.needsAttentionCount).toBe(2);
   });
 
+  it("marks a pinned remote snapshot changed when only reactions change", async () => {
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+    const { buildFederatedThreadRef } = await import("@pwragent/shared");
+    const ref = buildFederatedThreadRef({
+      backend: "codex",
+      instanceId: "peer-laptop",
+      threadId: "remote-reactions",
+    });
+    const pin = { ref, addedAt: 1_000, instanceLabel: "Laptop" };
+    const localSnapshot = (unchanged: boolean) => ({
+      backend: "all" as const,
+      fetchedAt: 1_000,
+      unchanged,
+      threads: [],
+      inboxThreadKeys: [],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    });
+    const remoteRow = (reactions: string[]) => ({
+      source: "codex" as const,
+      id: "remote-reactions",
+      title: "Remote reactions",
+      titleSource: "explicit" as const,
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+      reactions,
+      federation: {
+        ref,
+        instanceLabel: "Laptop",
+        peerStatus: "connected" as const,
+        capabilities: [],
+      },
+    });
+    reconcileNavigationSnapshot
+      .mockResolvedValueOnce(localSnapshot(false))
+      .mockResolvedValueOnce(localSnapshot(true));
+    listRemoteThreadPins
+      .mockResolvedValueOnce([pin])
+      .mockResolvedValueOnce([pin]);
+    federationMock.remoteThreadSummaries.resolvePinnedThreads
+      .mockResolvedValueOnce({
+        threads: [remoteRow(["✋"])],
+        refreshed: [],
+        archived: [],
+      })
+      .mockResolvedValueOnce({
+        threads: [remoteRow(["✋", "👀"])],
+        refreshed: [],
+        archived: [],
+      });
+    registerAppServerIpcHandlers();
+
+    const first = await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    const second = await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+
+    expect(first).toMatchObject({ unchanged: false });
+    expect(second).toMatchObject({
+      unchanged: false,
+      threads: [expect.objectContaining({ reactions: ["✋", "👀"] })],
+    });
+  });
+
   it("removes a viewer-side remote pin when the owner proves it is archived", async () => {
     const { registerAppServerIpcHandlers } = await import("../ipc/app-server");
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
@@ -3219,6 +3284,31 @@ describe("app server ipc", () => {
       backend: "codex",
       threadId: "thread-remote",
       reactions: ["✋", "👀"],
+    });
+  });
+
+  it("publishes local reaction mutations to navigation subscribers", async () => {
+    const { NAVIGATION_SET_THREAD_REACTION_CHANNEL } = await import(
+      "../../shared/ipc"
+    );
+    registerAppServerIpcHandlers();
+
+    await handlers.get(NAVIGATION_SET_THREAD_REACTION_CHANNEL)?.({}, {
+      backend: "codex",
+      threadId: "thread-local",
+      emoji: "👀",
+      present: true,
+    });
+
+    expect(publishLocalEvent).toHaveBeenCalledWith({
+      backend: "codex",
+      notification: {
+        method: "thread/reactions/updated",
+        params: {
+          threadId: "thread-local",
+          reactions: ["👀"],
+        },
+      },
     });
   });
 

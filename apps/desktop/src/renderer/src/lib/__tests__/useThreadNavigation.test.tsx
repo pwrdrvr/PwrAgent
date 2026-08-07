@@ -8979,6 +8979,87 @@ describe("useThreadNavigation", () => {
     expect(result.current.threads[0]?.prs?.[0]?.number).toBe(999);
   });
 
+  it("applies a peer's reaction event only to its pinned row", async () => {
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "remote-instance",
+    };
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+      threads: [
+        {
+          id: "shared-thread-id",
+          title: "Local thread",
+          titleSource: "explicit" as const,
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: { inInbox: true },
+          reactions: ["🏠"],
+        },
+        {
+          id: "shared-thread-id",
+          title: "Pinned remote thread",
+          titleSource: "explicit" as const,
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: { inInbox: true },
+          reactions: ["✋"],
+          federation: {
+            instanceLabel: "Remote Mac",
+            ref: {
+              backend: "codex" as const,
+              target: federationTarget,
+              threadId: "shared-thread-id",
+            },
+          },
+        },
+      ],
+    }));
+    const desktopApi = {
+      getNavigationSnapshot,
+      onAgentEvent: (
+        callback: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0],
+      ) => {
+        agentEventHandler = callback;
+        return () => {
+          agentEventHandler = undefined;
+        };
+      },
+    } as unknown as DesktopApi;
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+    await waitFor(() => {
+      expect(result.current.threads).toHaveLength(2);
+    });
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        federationTarget,
+        notification: {
+          method: "thread/reactions/updated",
+          params: {
+            threadId: "shared-thread-id",
+            reactions: ["✋", "👀"],
+          },
+        },
+      } as never);
+    });
+
+    expect(result.current.threads[0]?.reactions).toEqual(["🏠"]);
+    expect(result.current.threads[1]?.reactions).toEqual(["✋", "👀"]);
+  });
+
   describe("pickAndRegisterDirectory (issue #223)", () => {
     const launchpadDefaults = {
       backend: "codex" as const,
