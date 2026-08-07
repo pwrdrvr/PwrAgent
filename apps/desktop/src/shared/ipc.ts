@@ -152,6 +152,8 @@ export const NAVIGATION_SET_DIRECTORY_THREADS_COLLAPSED_CHANNEL =
   "navigation:set-directory-threads-collapsed";
 export const NAVIGATION_REFRESH_THREAD_PRS_CHANNEL =
   "navigation:refresh-thread-prs";
+export const NAVIGATION_REFRESH_THREAD_GIT_WORKING_STATE_CHANNEL =
+  "navigation:refresh-thread-git-working-state";
 export const NAVIGATION_SET_PR_POLLING_FOCUS_CHANNEL =
   "navigation:set-pr-polling-focus";
 export const NAVIGATION_DETACH_THREAD_PR_CHANNEL =

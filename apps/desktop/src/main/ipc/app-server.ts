@@ -71,6 +71,8 @@ import {
   type DesktopSettingsSnapshot,
   type RefreshDirectoryGitStatusesRequest,
   type RefreshDirectoryGitStatusesResponse,
+  type RefreshThreadGitWorkingStateRequest,
+  type RefreshThreadGitWorkingStateResponse,
   type RefreshThreadPullRequestsRequest,
   type SetPullRequestPollingFocusRequest,
   type RefreshThreadPullRequestsResponse,
@@ -204,6 +206,7 @@ import {
   FOCUSED_DIFF_ANALYZE_CHANNEL,
   NAVIGATION_GET_GH_STATUS_CHANNEL,
   NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL,
+  NAVIGATION_REFRESH_THREAD_GIT_WORKING_STATE_CHANNEL,
   NAVIGATION_RESOLVE_EDIT_COMMIT_STATES_CHANNEL,
   NAVIGATION_LIST_WORKTREE_OTHER_CHANGES_CHANNEL,
   NAVIGATION_GET_WORKTREE_OTHER_CHANGE_DIFF_CHANNEL,
@@ -318,7 +321,7 @@ const DIRECTORY_GIT_STATUS_CACHE_MAX_AGE_MS = 5 * 60_000;
 // closes the sequential post-completion gap so "747, 732, 747, 747, 732,
 // 747" collapses to "747, 732".
 const DIRECTORY_GIT_STATUS_FORCE_COALESCE_WINDOW_MS = 3_000;
-const AUTOMATIC_WORKTREE_WORKING_STATE_REFRESH_LIMIT = 8;
+const BACKGROUND_WORKTREE_WORKING_STATE_REFRESH_BATCH_SIZE = 8;
 // PR discovery (Layer B): a slow branch-lookup rotation across ALL open threads
 // to catch newly opened PRs on projects the operator is not looking at. Tick
 // often, but sweep each thread rarely and only a few per tick, so discovery
@@ -2913,6 +2916,29 @@ class DesktopAppServerService {
     return worktreePaths.length;
   }
 
+  async refreshThreadGitWorkingState(
+    request: RefreshThreadGitWorkingStateRequest,
+  ): Promise<RefreshThreadGitWorkingStateResponse> {
+    const threadKey = buildThreadIdentityKey(request.backend, request.threadId);
+    const worktreePath = this.worktreePathByThreadKey.get(threadKey);
+    if (!worktreePath) {
+      return { scheduled: false };
+    }
+
+    await this.loadThreadGitWorkingStateCache();
+    const force = request.trigger === "user";
+    if (force) {
+      getDesktopBackendRegistry().invalidateWorktreeWorkingState(worktreePath);
+    }
+    return {
+      scheduled: this.startWorktreeWorkingStateRefresh({
+        automatic: false,
+        worktreePaths: [worktreePath],
+        force,
+      }) > 0,
+    };
+  }
+
   private selectWorktreeWorkingStateRefreshCandidates(params: {
     automatic: boolean;
     worktreePaths: string[];
@@ -2935,7 +2961,24 @@ class DesktopAppServerService {
       return candidates;
     }
 
-    return candidates.slice(0, AUTOMATIC_WORKTREE_WORKING_STATE_REFRESH_LIMIT);
+    // Stable thread ordering must not make the same prefix win forever.
+    // Unseen worktrees sort first; after that, rotate the oldest probes
+    // forward. Selected and hover-inspected threads use the focused/user lane.
+    candidates.sort((left, right) => {
+      const leftFetchedAt = this.workingStateByWorktree.get(left)?.fetchedAt;
+      const rightFetchedAt = this.workingStateByWorktree.get(right)?.fetchedAt;
+      if (leftFetchedAt === undefined) {
+        return rightFetchedAt === undefined ? 0 : -1;
+      }
+      if (rightFetchedAt === undefined) {
+        return 1;
+      }
+      return leftFetchedAt - rightFetchedAt;
+    });
+    return candidates.slice(
+      0,
+      BACKGROUND_WORKTREE_WORKING_STATE_REFRESH_BATCH_SIZE,
+    );
   }
 
   private async refreshWorktreeWorkingStates(
@@ -7180,6 +7223,21 @@ export function registerAppServerIpcHandlers(): void {
       });
     },
   );
+  ipcMain.removeHandler(NAVIGATION_REFRESH_THREAD_GIT_WORKING_STATE_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_REFRESH_THREAD_GIT_WORKING_STATE_CHANNEL,
+    async (
+      event,
+      request: RefreshThreadGitWorkingStateRequest,
+    ): Promise<RefreshThreadGitWorkingStateResponse> => {
+      if (isFederationWindowWebContents(event?.sender)) {
+        throw new Error(
+          "Git working-state refreshes for remote threads run on the owning instance.",
+        );
+      }
+      return await appServerService.refreshThreadGitWorkingState(request);
+    },
+  );
   ipcMain.removeHandler(NAVIGATION_SET_PR_POLLING_FOCUS_CHANNEL);
   ipcMain.handle(
     NAVIGATION_SET_PR_POLLING_FOCUS_CHANNEL,
@@ -7452,6 +7510,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_REACTION_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_AGENT_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_REFRESH_THREAD_GIT_WORKING_STATE_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_DETACH_THREAD_PR_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_REFRESH_DIRECTORY_GIT_STATUSES_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_RESOLVE_EDIT_COMMIT_STATES_CHANNEL);

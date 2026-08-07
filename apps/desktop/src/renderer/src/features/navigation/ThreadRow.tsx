@@ -79,6 +79,8 @@ type ThreadRowProps = {
    * thread key, respect terminal-state short-circuit on the main side).
    */
   onPrefetchPullRequests?: (thread: NavigationThreadSummary) => void;
+  /** Fired with the same hover intent signal to refresh local Git state. */
+  onPrefetchGitWorkingState?: (thread: NavigationThreadSummary) => void;
   onDetachPullRequest?: (
     thread: NavigationThreadSummary,
     pr: PrSummary,
@@ -192,11 +194,17 @@ export function ThreadRow(props: ThreadRowProps) {
     active,
   ]);
   const armHoverPrefetch = (): void => {
-    if (!props.onPrefetchPullRequests) return;
+    if (
+      !props.onPrefetchPullRequests
+      && !props.onPrefetchGitWorkingState
+    ) {
+      return;
+    }
     if (hoverTimerRef.current !== undefined) return;
     hoverTimerRef.current = window.setTimeout(() => {
       hoverTimerRef.current = undefined;
       props.onPrefetchPullRequests?.(props.thread);
+      props.onPrefetchGitWorkingState?.(props.thread);
     }, HOVER_PREFETCH_DELAY_MS);
   };
   const cancelHoverPrefetch = (): void => {
@@ -310,8 +318,16 @@ export function ThreadRow(props: ThreadRowProps) {
             flow so it cannot reserve a phantom wrapped row while hidden. */}
         <span
           className="thread-row__chips"
-          onMouseEnter={prs.length > 0 ? armHoverPrefetch : undefined}
-          onMouseLeave={prs.length > 0 ? cancelHoverPrefetch : undefined}
+          onMouseEnter={
+            prs.length > 0 || props.onPrefetchGitWorkingState
+              ? armHoverPrefetch
+              : undefined
+          }
+          onMouseLeave={
+            prs.length > 0 || props.onPrefetchGitWorkingState
+              ? cancelHoverPrefetch
+              : undefined
+          }
         >
           <ThreadMetaChips
             hasApprovalRequest={props.approvalRequestThreadKeys?.[threadKey] === true}

@@ -207,6 +207,7 @@ type SidebarProps = {
    * fresh PR status before they click in.
    */
   onPrefetchPullRequests?: (thread: NavigationThreadSummary) => void;
+  onPrefetchGitWorkingState?: (thread: NavigationThreadSummary) => void;
   onDetachPullRequest?: (
     thread: NavigationThreadSummary,
     pr: PrSummary,
@@ -1576,6 +1577,7 @@ export function Sidebar(props: SidebarProps) {
               onOpenThreadContextMenu={openThreadContextMenu}
               onOpenLaunchpad={props.onOpenLaunchpad}
               onPrefetchPullRequests={props.onPrefetchPullRequests}
+              onPrefetchGitWorkingState={props.onPrefetchGitWorkingState}
               onRevealSelectedThreadComplete={
                 props.onRevealSelectedThreadComplete
               }
@@ -1618,6 +1620,7 @@ export function Sidebar(props: SidebarProps) {
                 onOpenThreadContextMenu={openThreadContextMenu}
                 onOpenPullRequestContextMenu={openPullRequestContextMenu}
                 onPrefetchPullRequests={props.onPrefetchPullRequests}
+                onPrefetchGitWorkingState={props.onPrefetchGitWorkingState}
                 onRevealSelectedThreadComplete={
                   props.onRevealSelectedThreadComplete
                 }
