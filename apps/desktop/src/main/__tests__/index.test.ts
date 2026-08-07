@@ -103,14 +103,20 @@ const rendererEventSubscriptions = new Map<number, Array<{
   sourceInstanceId: string;
   eventClasses: string[];
 }>>();
-const setRendererEventSubscriptionsMock = vi.fn((
+const setRemoteWindowEventSubscriptionMock = vi.fn((
   webContentsId: number,
-  _consumerId: string,
-  subscriptions: Array<{
-    sourceInstanceId: string;
-    eventClasses: string[];
-  }>,
+  sourceInstanceId: string,
+  capabilities: string[],
 ) => {
+  const subscriptions = [{
+    sourceInstanceId,
+    eventClasses: [
+      ...(capabilities.includes("thread_navigation")
+        ? ["navigation", "star_map"]
+        : []),
+      ...(capabilities.includes("thread_detail") ? ["transcript"] : []),
+    ],
+  }];
   rendererEventSubscriptions.set(webContentsId, subscriptions);
   return subscriptions;
 });
@@ -433,7 +439,7 @@ vi.mock("../federation/federation-runtime", () => ({
     restart: federationRuntimeRestartMock,
     connectedPeerTargets: connectedPeerTargetsMock,
     onPeerStatusChanged: federationPeerStatusChangedMock,
-    setRendererEventSubscriptions: setRendererEventSubscriptionsMock,
+    setRemoteWindowEventSubscription: setRemoteWindowEventSubscriptionMock,
     clearRendererEventSubscriptions: clearRendererEventSubscriptionsMock,
     rendererWantsRemoteEvent: rendererWantsRemoteEventMock,
   })),
@@ -642,7 +648,7 @@ describe("bootstrapApp", () => {
     connectedPeerTargetsMock.mockReturnValue([]);
     federationPeerStatusChangedMock.mockClear();
     rendererEventSubscriptions.clear();
-    setRendererEventSubscriptionsMock.mockClear();
+    setRemoteWindowEventSubscriptionMock.mockClear();
     clearRendererEventSubscriptionsMock.mockClear();
     rendererWantsRemoteEventMock.mockClear();
     messagingLeaseStartMock.mockReset();
@@ -1308,13 +1314,10 @@ describe("bootstrapApp", () => {
       federationTarget: peer.target,
       initialThread: undefined,
     });
-    expect(setRendererEventSubscriptionsMock).toHaveBeenCalledWith(
+    expect(setRemoteWindowEventSubscriptionMock).toHaveBeenCalledWith(
       remoteWindow.webContents.id,
-      "remote-window",
-      [{
-        sourceInstanceId: peer.target.instanceId,
-        eventClasses: ["navigation", "transcript"],
-      }],
+      peer.target.instanceId,
+      peer.capabilities,
     );
 
     const {

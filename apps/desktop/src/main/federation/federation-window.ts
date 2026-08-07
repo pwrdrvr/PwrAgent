@@ -33,23 +33,11 @@ export function createFederationWindow(options: {
   });
   const runtime = getDesktopFederationRuntime();
   const webContentsId = window.webContents.id;
-  runtime.setRendererEventSubscriptions(webContentsId, "remote-window", [{
-    sourceInstanceId: peer.target.instanceId,
-    eventClasses: [
-      ...(peer.capabilities.includes("thread_navigation")
-        ? ["navigation" as const]
-        : []),
-      ...(peer.capabilities.includes("thread_detail")
-        ? ["transcript" as const]
-        : []),
-      ...(peer.capabilities.includes("pending_request_control")
-        ? ["pending_requests" as const]
-        : []),
-      ...(peer.capabilities.includes("scheduled_actions")
-        ? ["scheduled_actions" as const]
-        : []),
-    ],
-  }]);
+  runtime.setRemoteWindowEventSubscription(
+    webContentsId,
+    peer.target.instanceId,
+    peer.capabilities,
+  );
   window.once("closed", () => {
     runtime.clearRendererEventSubscriptions(webContentsId, "remote-window");
   });

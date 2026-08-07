@@ -130,6 +130,11 @@ type RuntimeHarness = {
     consumerId: "remote-window" | "star-map",
     subscriptions: readonly FederationEventSubscription[],
   ) => FederationEventSubscription[];
+  setRemoteWindowEventSubscription: (
+    webContentsId: number,
+    sourceInstanceId: FederationInstanceId,
+    capabilities: readonly FederationCapability[],
+  ) => FederationEventSubscription[];
   clearRendererEventSubscriptions: (
     webContentsId: number,
     consumerId?: "remote-window" | "star-map",
@@ -896,7 +901,7 @@ describe("DesktopFederationRuntime", () => {
     ]);
   });
 
-  it("keeps a viewer subscription while Star Map opens and closes in its window", () => {
+  it("keeps a whole-desktop viewer subscription while Star Map opens and closes", () => {
     const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
     runtime.localInstanceId = "viewer_one";
     runtime.router = new FederationRouter({ localInstanceId: "viewer_one" });
@@ -905,6 +910,8 @@ describe("DesktopFederationRuntime", () => {
       capabilities: [
         "thread_navigation",
         "thread_detail",
+        "pending_request_control",
+        "scheduled_actions",
         "event_subscriptions",
       ],
     }));
@@ -913,10 +920,13 @@ describe("DesktopFederationRuntime", () => {
       capabilities: ["thread_navigation", "event_subscriptions"],
     }));
 
-    runtime.setRendererEventSubscriptions(7, "remote-window", [{
-      sourceInstanceId: "owner_one",
-      eventClasses: ["navigation", "transcript"],
-    }]);
+    runtime.setRemoteWindowEventSubscription(7, "owner_one", [
+      "thread_navigation",
+      "thread_detail",
+      "pending_request_control",
+      "scheduled_actions",
+      "event_subscriptions",
+    ]);
     runtime.setRendererEventSubscriptions(7, "star-map", [{
       sourceInstanceId: "owner_one",
       eventClasses: ["navigation", "star_map"],
@@ -931,7 +941,11 @@ describe("DesktopFederationRuntime", () => {
     expect(runtime.rendererWantsRemoteEvent(7, "owner_one", "transcript"))
       .toBe(true);
     expect(runtime.rendererWantsRemoteEvent(7, "owner_one", "star_map"))
-      .toBe(false);
+      .toBe(true);
+    expect(runtime.rendererWantsRemoteEvent(7, "owner_one", "pending_requests"))
+      .toBe(true);
+    expect(runtime.rendererWantsRemoteEvent(7, "owner_one", "scheduled_actions"))
+      .toBe(true);
     expect(runtime.rendererWantsRemoteEvent(7, "owner_two", "navigation"))
       .toBe(false);
   });
