@@ -7,8 +7,9 @@ import { launchElectronApp } from "./fixtures/electron-app";
 /**
  * Issue #240 follow-up — covers the composer's height-growth contract:
  *
- *   - Empty composer is compact (~56px tall) so the transcript above
- *     keeps as much reading area as possible.
+ *   - Empty composer is compact (~48px tall — exactly one line) so the
+ *     transcript above keeps as much reading area as possible, and its
+ *     padding reads evenly above and below that line.
  *   - Typing more lines grows the composer.
  *   - The wrapper clamps at the 280px max — beyond that the inner
  *     editor scrolls inside the wrapper.
@@ -106,7 +107,13 @@ async function createComposerHeightFixture(): Promise<{
   };
 }
 
-const COMPOSER_MIN_HEIGHT = 56;
+// The empty composer is exactly one line tall: 14px text at
+// line-height 1.6 (22.4px) + 12px editor padding top and bottom +
+// the wrapper's 1px border on each side ≈ 48.4px. The CSS floor is
+// 48px, deliberately at-or-below that natural height so the floor
+// can never contribute surplus of its own (see the symmetry
+// assertion below for why that matters).
+const COMPOSER_MIN_HEIGHT = 48;
 const COMPOSER_MAX_HEIGHT = 280;
 
 // `box-sizing: border-box` is the renderer-wide default, so the
@@ -118,12 +125,23 @@ const COMPOSER_MAX_HEIGHT = 280;
 // few pixels.
 const HEIGHT_TOLERANCE_PX = 2;
 
-// How much extra above the floor counts as "still compact" — small
-// enough that a regression bumping `min-height` past 64px would
-// fail this assertion. Larger than HEIGHT_TOLERANCE_PX because the
-// floor includes the wrapper border + a single line of input that
-// renders slightly taller than 56 if the line-height rounds up.
-const EMPTY_FLOOR_SLACK_PX = 8;
+// The empty height is content-driven (48.4px) rather than pinned by
+// the floor, so it is deterministic and the plain 2px tolerance is
+// enough on both sides. It used to need an 8px slack because the old
+// 56px floor sat well above the natural line height; that slack is
+// what let the lopsided-padding regression hide, since a floor of
+// anything from 48 to 56 satisfied it.
+const EMPTY_FLOOR_SLACK_PX = HEIGHT_TOLERANCE_PX;
+
+// The empty composer must read as evenly padded: the gap above the
+// first line and the gap below it should match. Both are 13px
+// (1px wrapper border + 12px editor padding). This is the assertion
+// that actually pins the fix — the height bounds above would happily
+// pass a composer that is the right total height but has all its
+// slack pooled under the text, which is exactly the bug this
+// replaced (12px above, ~19.6px below, from a 56px floor over a
+// 46.4px line box that top-aligns its text).
+const PADDING_SYMMETRY_TOLERANCE_PX = 1;
 
 test("composer is compact when empty, grows with content, clamps at max-height", async () => {
   const fixture = await createComposerHeightFixture();
@@ -161,6 +179,34 @@ test("composer is compact when empty, grows with content, clamps at max-height",
         emptyHeight,
         "empty composer should not balloon past the floor before any input",
       ).toBeLessThanOrEqual(COMPOSER_MIN_HEIGHT + EMPTY_FLOOR_SLACK_PX);
+
+      // ---- Empty state is evenly padded above and below the line ----
+      // Measured against the first block the editor renders (ProseMirror
+      // always keeps at least one paragraph, even when empty), so this
+      // compares the real laid-out line box rather than assuming the
+      // padding values resolve the way the stylesheet reads.
+      const symmetry = await composerWrapper.evaluate((wrapper) => {
+        const line = wrapper.querySelector(
+          ".composer-tiptap-input__editor > *",
+        );
+        if (!line) {
+          return null;
+        }
+        const wrapperRect = wrapper.getBoundingClientRect();
+        const lineRect = line.getBoundingClientRect();
+        return {
+          above: lineRect.top - wrapperRect.top,
+          below: wrapperRect.bottom - lineRect.bottom,
+        };
+      });
+      expect(
+        symmetry,
+        "editor should render at least one line box to measure against",
+      ).not.toBeNull();
+      expect(
+        Math.abs((symmetry?.above ?? 0) - (symmetry?.below ?? 0)),
+        `empty composer padding should be even above and below the first line (got ${symmetry?.above}px above, ${symmetry?.below}px below)`,
+      ).toBeLessThanOrEqual(PADDING_SYMMETRY_TOLERANCE_PX);
 
       // ---- A few lines fits inside the cap and grows the wrapper ----
       const reply = app.window.getByRole("textbox", { name: "Reply" });

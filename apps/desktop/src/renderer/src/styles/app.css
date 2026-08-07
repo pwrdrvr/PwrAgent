@@ -3046,7 +3046,6 @@ textarea,
 .button:focus,
 .thread-row:focus,
 .transcript-activity__toggle:focus,
-.composer__input:focus,
 .composer-tiptap-input__editor:focus,
 .composer__select:focus,
 .composer__review-input:focus,
@@ -3057,7 +3056,6 @@ textarea,
 .button:focus-visible,
 .thread-row:focus-visible,
 .transcript-activity__toggle:focus-visible,
-.composer__input:focus-visible,
 .composer-tiptap-input__editor:focus-visible,
 .composer__select:focus-visible,
 .composer__review-input:focus-visible,
@@ -16727,20 +16725,15 @@ a.transcript-message__messaging-origin:focus-visible {
   scrollbar-color: var(--terminal-scrollbar-thumb) var(--terminal-bg);
 }
 
-.composer__input {
-  width: 100%;
-  /* Compact when empty — grows as the user types up to a max via the
-     contenteditable variant below. The previous 144px default
-     reserved ~6 lines of dead space when the input was empty, which
-     ate into the transcript's reading area on shorter viewports. */
-  min-height: 56px;
-  resize: vertical;
-  padding: 12px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  background: var(--bg-input);
-  color: var(--text-primary);
-}
+/* The `<textarea>` composer variant (`.composer__input`) was removed
+   here — the renderer has rendered the contenteditable
+   `.composer-tiptap-input` for some time and nothing referenced the
+   class any more. Its `min-height` had also stopped meaning anything:
+   a textarea's intrinsic height comes from its `rows` attribute
+   (default 2 ≈ 71px with this padding), so any floor below that never
+   applied, and the rule's claim of sharing the contenteditable's
+   empty-state floor was decorative. Reintroduce a real textarea with
+   its own measured height contract if the composer ever swaps back. */
 
 .composer__input-wrap {
   position: relative;
@@ -16749,12 +16742,17 @@ a.transcript-message__messaging-origin:focus-visible {
 .composer-tiptap-input {
   /* Compact when empty (issue #240 follow-up). The container grows
      with content — single line at 14/1.6 ≈ 22.4px, plus 12px top+
-     bottom padding on the inner editor ≈ 46.4px usable, so 56px
-     gives a comfortable empty-state with one full line visible.
+     bottom padding on the inner editor ≈ 46.4px, plus the 1px border
+     on each side ≈ 48.4px for a one-line empty state.
      Editing pushes the height up to the 280px cap (≈11 lines).
      Reclaiming the 88px the previous 144px floor was eating gives
-     the transcript that much more reading room on every viewport. */
-  min-height: 56px;
+     the transcript that much more reading room on every viewport.
+
+     The floor MUST NOT exceed that natural one-line height. The text
+     inside the editor is top-aligned, so any surplus from a taller
+     floor lands entirely below the caret line and reads as lopsided
+     padding (56px produced 12px above the text and ~19.6px below). */
+  min-height: 48px;
   max-height: 280px;
   overflow-y: auto;
   border: 1px solid var(--border-subtle);
@@ -16767,7 +16765,12 @@ a.transcript-message__messaging-origin:focus-visible {
 
 .composer-tiptap-input__editor {
   position: relative;
-  min-height: 54px;
+  /* Tracks the wrapper's floor minus its 1px border on each side, so
+     the editor fills the wrapper at the empty state without ever
+     exceeding one line's natural height (22.4px + 24px padding
+     ≈ 46.4px) — surplus here would show up as extra space under the
+     text, never above it. */
+  min-height: 46px;
   padding: 12px;
   overflow-wrap: anywhere;
   white-space: pre-wrap;

@@ -695,8 +695,16 @@ describe("Tangerine Terminal theme contract", () => {
     // pushes the picker rows off-screen on shorter viewports. Lock
     // them so a future innocuous-looking edit doesn't undo the
     // intent.
+    //
+    // 48px is the exact one-line height: 14px text at line-height 1.6
+    // (22.4px) + 12px padding top and bottom + 1px border each side
+    // ≈ 48.4px. It was 56px, which overshot by ~8px — and because the
+    // editor text is top-aligned, that surplus rendered entirely
+    // BELOW the caret line, so the empty composer read as 12px above
+    // the text and ~19.6px below. The floor must never exceed the
+    // natural one-line height or the asymmetry comes back.
     const tiptapRule = extractRuleBody(css, ".composer-tiptap-input");
-    expect(tiptapRule).toMatch(/min-height:\s*56px;/);
+    expect(tiptapRule).toMatch(/min-height:\s*48px;/);
     expect(tiptapRule).toMatch(/max-height:\s*280px;/);
     expect(tiptapRule).toMatch(/overflow-y:\s*auto;/);
 
@@ -704,13 +712,15 @@ describe("Tangerine Terminal theme contract", () => {
     // (-2 for the 1px border on each side of the wrapper) so the
     // editor visually fills the wrapper at the empty-state floor.
     const editorRule = extractRuleBody(css, ".composer-tiptap-input__editor");
-    expect(editorRule).toMatch(/min-height:\s*54px;/);
+    expect(editorRule).toMatch(/min-height:\s*46px;/);
 
-    // The unused-but-styled `<textarea>` variant (`.composer__input`)
-    // shares the same empty-state floor so a future swap to it
-    // doesn't surprise the reading area.
-    const textareaRule = extractRuleBody(css, ".composer__input");
-    expect(textareaRule).toMatch(/min-height:\s*56px;/);
+    // The dead `<textarea>` variant (`.composer__input`) used to be
+    // pinned here too, on the theory that it shared the floor. It had
+    // no renderer references and its floor never applied (a textarea
+    // sizes from `rows`, default 2), so the rule is gone. Assert it
+    // stays gone rather than silently growing a second, unrendered
+    // height contract to keep in sync.
+    expect(css).not.toContain(".composer__input {");
   });
 
   it("uses --accent (not --accent-bright) for every brand-accent mark", () => {
