@@ -101,6 +101,32 @@ describe("useThreadQueuedMessageIndicators", () => {
     expect(result.current.indicators).toEqual({ "codex:a": "scheduled" });
   });
 
+  it("classifies an unborn scheduled thread as scheduled without renderer queue state", () => {
+    const thread = {
+      ...makeThread("a"),
+      scheduledStart: {
+        actionId: "scheduled-action:1",
+        scheduledFor: Date.now() + 30_000,
+        state: "scheduled" as const,
+      },
+    };
+    const { result } = renderIndicators([thread]);
+    expect(result.current.indicators).toEqual({ "codex:a": "scheduled" });
+  });
+
+  it("does not chip an unborn thread whose scheduled start was cancelled", () => {
+    const thread = {
+      ...makeThread("a"),
+      scheduledStart: {
+        actionId: "scheduled-action:1",
+        scheduledFor: Date.now() + 30_000,
+        state: "cancelled" as const,
+      },
+    };
+    const { result } = renderIndicators([thread]);
+    expect(result.current.indicators).toEqual({});
+  });
+
   it("prefers 'scheduled' when a thread has both a scheduled and a plain queued turn", () => {
     const thread = makeThread("a");
     const { result } = renderIndicators([thread]);

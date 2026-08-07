@@ -3397,10 +3397,10 @@ describe("Composer", () => {
 
     expect(startTurn).not.toHaveBeenCalled();
     expect(textarea).toHaveValue("");
-    expect(screen.getByLabelText("Queued message")).toHaveTextContent(
-      "Sends in 15m"
+    expect(screen.getByLabelText("Scheduled message")).toHaveTextContent(
+      "Scheduled · sends in 15m"
     );
-    expect(screen.getByLabelText("Queued message")).toHaveTextContent(
+    expect(screen.getByLabelText("Scheduled message")).toHaveTextContent(
       "Check this in a bit"
     );
   });
@@ -3461,10 +3461,10 @@ describe("Composer", () => {
 
     expect(startTurn).not.toHaveBeenCalled();
     expect(textarea).toHaveValue("");
-    expect(screen.getByLabelText("Queued message")).toHaveTextContent(
-      "Sends in 1h"
+    expect(screen.getByLabelText("Scheduled message")).toHaveTextContent(
+      "Scheduled · sends in 1h"
     );
-    expect(screen.getByLabelText("Queued message")).toHaveTextContent(
+    expect(screen.getByLabelText("Scheduled message")).toHaveTextContent(
       "Edited scheduled text"
     );
   });
@@ -3676,10 +3676,10 @@ describe("Composer", () => {
 
     expect(startReview).not.toHaveBeenCalled();
     expect(screen.queryByRole("group", { name: "Review target" })).not.toBeInTheDocument();
-    expect(screen.getByLabelText("Queued message")).toHaveTextContent(
-      "Sends in 30m"
+    expect(screen.getByLabelText("Scheduled message")).toHaveTextContent(
+      "Scheduled · sends in 30m"
     );
-    expect(screen.getByLabelText("Queued message")).toHaveTextContent(
+    expect(screen.getByLabelText("Scheduled message")).toHaveTextContent(
       "Review changes against main"
     );
   });
@@ -3780,10 +3780,10 @@ describe("Composer", () => {
     });
 
     expect(startTurn).not.toHaveBeenCalled();
-    expect(screen.getByLabelText("Queued message")).toHaveTextContent(
-      "Sends in 2h 34m"
+    expect(screen.getByLabelText("Scheduled message")).toHaveTextContent(
+      "Scheduled · sends in 2h 34m"
     );
-    expect(screen.getByLabelText("Queued message")).toHaveTextContent(
+    expect(screen.getByLabelText("Scheduled message")).toHaveTextContent(
       "After the reset"
     );
   });
@@ -3811,11 +3811,52 @@ describe("Composer", () => {
 
     // The split collapses to a plain Send/Start pill: no caret, no divider.
     expect(
-      screen.queryByRole("button", { name: "Schedule message" })
+      screen.queryByRole("button", { name: "Schedule thread" })
     ).not.toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "Start thread" })
     ).toBeInTheDocument();
+  });
+
+  it("materializes a launchpad now with its first message scheduled for later", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-10T12:00:00Z"));
+    const onMaterializeLaunchpad = vi.fn(async () => undefined);
+
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        disabled={false}
+        launchpad={{
+          directoryKey: "directory:/repo/PwrAgent",
+          directoryKind: "directory",
+          directoryLabel: "PwrAgent",
+          directoryPath: "/repo/PwrAgent",
+          backend: "codex",
+          executionMode: "default",
+          prompt: "Kick off a new thread",
+          workMode: "local",
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+        onMaterializeLaunchpad={onMaterializeLaunchpad}
+        skills={[]}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Schedule thread" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: "Start in 30m" }));
+    });
+
+    expect(onMaterializeLaunchpad).toHaveBeenCalledWith(
+      "directory:/repo/PwrAgent",
+      [{ type: "text", text: "Kick off a new thread" }],
+      undefined,
+      undefined,
+      [],
+      Date.parse("2026-07-10T12:30:00Z"),
+    );
   });
 
   it("queues slash review submits while a turn start is pending", async () => {

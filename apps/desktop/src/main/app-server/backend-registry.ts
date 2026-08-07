@@ -90,6 +90,7 @@ import {
   type CodexEnvironmentStartupFailure,
   type CodexEnvironmentSetupProgressEvent,
   type CodexThreadEnvironmentRuntime,
+  type CreateScheduledThreadActionRequest,
   type BackendLaunchpadOptions,
   type BackendModelOption,
   type BackendRateLimitSummary,
@@ -146,6 +147,7 @@ import {
   type SetThreadModelSettingsResponse,
   type SetThreadPrAutoDispatchRequest,
   type SetThreadPrAutoDispatchResponse,
+  type ScheduledThreadActionMutationResponse,
   type CancelThreadPrAutoDispatchRequest,
   type CancelThreadPrAutoDispatchResponse,
   type SendThreadPrAutoDispatchNowRequest,
@@ -6221,6 +6223,10 @@ export class DesktopBackendRegistry {
   private readonly archivedMessagingCleanupCompleted = new Set<string>();
   private readonly archivedMessagingCleanupGeneration = new Map<string, number>();
   private readonly createScratchProjectDirectory: () => Promise<string>;
+  private createScheduledThreadActionFn?: (
+    request: CreateScheduledThreadActionRequest,
+    options: { id: string },
+  ) => Promise<ScheduledThreadActionMutationResponse>;
   private readonly threadTitleGenerationService?: ThreadTitleService;
   private readonly modelCatalog: BackendModelCatalog;
   private readonly codexEnvironmentCommandEnv?: NodeJS.ProcessEnv;
@@ -6546,6 +6552,10 @@ export class DesktopBackendRegistry {
     automationInspectionMcpCommand?: string;
     appManagementHandler?: PwrAgentAppManagementHandler | null;
     createScratchProjectDirectory?: () => Promise<string>;
+    createScheduledThreadAction?: (
+      request: CreateScheduledThreadActionRequest,
+      options: { id: string },
+    ) => Promise<ScheduledThreadActionMutationResponse>;
     codexEnvironmentCommandRunner?: CodexEnvironmentCommandRunner;
     codexEnvironmentHydrationStore?: CodexEnvironmentHydrationStoreLike;
     threadTitleGenerationService?: ThreadTitleService | null;
@@ -6845,6 +6855,7 @@ export class DesktopBackendRegistry {
       });
     this.createScratchProjectDirectory =
       options?.createScratchProjectDirectory ?? createScratchProjectDirectory;
+    this.createScheduledThreadActionFn = options?.createScheduledThreadAction;
     this.threadTitleGenerationService =
       options?.threadTitleGenerationService === null
         ? undefined
@@ -6972,6 +6983,17 @@ export class DesktopBackendRegistry {
         message: error instanceof Error ? error.message : String(error),
       });
     });
+  }
+
+  setScheduledThreadActionCreator(
+    creator:
+      | ((
+          request: CreateScheduledThreadActionRequest,
+          options: { id: string },
+        ) => Promise<ScheduledThreadActionMutationResponse>)
+      | undefined,
+  ): void {
+    this.createScheduledThreadActionFn = creator;
   }
 
   /**
@@ -15217,6 +15239,12 @@ export class DesktopBackendRegistry {
     if (!launchpad) {
       throw new Error(`No launchpad found for ${request.directoryKey}`);
     }
+    if (
+      request.scheduledFor !== undefined
+      && (!Number.isFinite(request.scheduledFor) || request.scheduledFor < 0)
+    ) {
+      throw new Error("Scheduled time must be a finite Unix timestamp.");
+    }
 
     const preparedWorkspace =
       await this.gitDirectoryService.prepareLaunchpadWorkspace(launchpad);
@@ -15409,11 +15437,95 @@ export class DesktopBackendRegistry {
         ? [{ type: "text", text: launchpad.prompt } as const]
         : []);
     let turnId: string | undefined;
+    let scheduledAction:
+      | MaterializeDirectoryLaunchpadResponse["scheduledAction"]
+      | undefined;
     let turnStartFailure:
       | MaterializeDirectoryLaunchpadResponse["turnStartFailure"]
       | undefined;
     if (codexEnvironmentStartupFailure) {
       turnId = undefined;
+    } else if (request.scheduledFor !== undefined) {
+      const actionId = `scheduled-action:${randomUUID()}`;
+      await this.overlayStore.setThreadScheduledStart({
+        backend: launchpad.backend,
+        threadId: startThreadResponse.threadId,
+        scheduledStart: {
+          actionId,
+          scheduledFor: request.scheduledFor,
+          state: "scheduled",
+        },
+      });
+      this.invalidateThreadListCache(launchpad.backend);
+      try {
+        const displayText =
+          extractFirstMeaningfulTextInput(input)
+          ?? (request.reviewTarget ? "Scheduled review" : "Scheduled message");
+        const createScheduledThreadAction = this.createScheduledThreadActionFn;
+        if (!createScheduledThreadAction) {
+          throw new Error("Scheduled thread action service is unavailable");
+        }
+        const response = await createScheduledThreadAction(
+          {
+            backend: launchpad.backend,
+            threadId: startThreadResponse.threadId,
+            kind: request.reviewTarget ? "review" : "turn",
+            origin: "desktop",
+            scheduledFor: request.scheduledFor,
+            displayText,
+            imageAttachments: launchpad.imageAttachments,
+            fileAttachments: launchpad.fileAttachments,
+            ...(request.reviewTarget
+              ? {
+                  review: {
+                    target: request.reviewTarget,
+                    draftText: displayText,
+                    delivery: "inline" as const,
+                    model: launchpad.model,
+                    reasoningEffort: launchpad.reasoningEffort,
+                    serviceTier: launchpad.serviceTier,
+                    fastMode:
+                      launchpad.backend === "codex"
+                        ? launchpad.fastMode
+                        : undefined,
+                  },
+                }
+              : {
+                  turn: {
+                    input,
+                    executionMode: launchpad.executionMode,
+                    model: launchpad.model,
+                    collaborationMode: request.collaborationMode,
+                    serviceTier: launchpad.serviceTier,
+                    reasoningEffort: launchpad.reasoningEffort,
+                    fastMode:
+                      launchpad.backend === "codex"
+                        ? launchpad.fastMode
+                        : undefined,
+                    messageOrigin: options?.messageOrigin,
+                  },
+                }),
+          },
+          { id: actionId },
+        );
+        scheduledAction = response.action;
+        this.scheduleThreadTitleGeneration({
+          backend: launchpad.backend,
+          threadId: startThreadResponse.threadId,
+          input,
+        });
+      } catch (error) {
+        await this.overlayStore.setThreadScheduledStart({
+          backend: launchpad.backend,
+          threadId: startThreadResponse.threadId,
+          scheduledStart: undefined,
+        });
+        this.invalidateThreadListCache(launchpad.backend);
+        turnStartFailure = {
+          message: error instanceof Error ? error.message : String(error),
+          phase: request.reviewTarget ? "review" : "turn",
+        };
+      }
     } else if (request.reviewTarget) {
       try {
         const reviewResponse = await this.startReview({
@@ -15468,8 +15580,80 @@ export class DesktopBackendRegistry {
     return {
       ...materializedThread,
       turnId,
+      scheduledAction,
       turnStartFailure,
     };
+  }
+
+  async markScheduledThreadBorn(params: {
+    actionId: string;
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<void> {
+    const current = await this.overlayStore.getThreadOverlayState({
+      backend: params.backend,
+      threadId: params.threadId,
+    });
+    if (current?.scheduledStart?.actionId !== params.actionId) {
+      return;
+    }
+    await this.overlayStore.setThreadScheduledStart({
+      backend: params.backend,
+      threadId: params.threadId,
+      scheduledStart: undefined,
+    });
+    this.invalidateThreadListCache(params.backend);
+  }
+
+  async markScheduledThreadStartTerminal(params: {
+    actionId: string;
+    backend: AppServerBackendKind;
+    state: "cancelled" | "failed";
+    threadId: string;
+  }): Promise<void> {
+    const current = await this.overlayStore.getThreadOverlayState({
+      backend: params.backend,
+      threadId: params.threadId,
+    });
+    if (current?.scheduledStart?.actionId !== params.actionId) {
+      return;
+    }
+    await this.overlayStore.setThreadScheduledStart({
+      backend: params.backend,
+      threadId: params.threadId,
+      scheduledStart: {
+        ...current.scheduledStart,
+        state: params.state,
+      },
+    });
+    this.invalidateThreadListCache(params.backend);
+  }
+
+  async updateScheduledThreadStartTime(params: {
+    actionId: string;
+    backend: AppServerBackendKind;
+    scheduledFor: number;
+    threadId: string;
+  }): Promise<void> {
+    const current = await this.overlayStore.getThreadOverlayState({
+      backend: params.backend,
+      threadId: params.threadId,
+    });
+    if (
+      current?.scheduledStart?.actionId !== params.actionId
+      || current.scheduledStart.state !== "scheduled"
+    ) {
+      return;
+    }
+    await this.overlayStore.setThreadScheduledStart({
+      backend: params.backend,
+      threadId: params.threadId,
+      scheduledStart: {
+        ...current.scheduledStart,
+        scheduledFor: params.scheduledFor,
+      },
+    });
+    this.invalidateThreadListCache(params.backend);
   }
 
   async close(): Promise<void> {

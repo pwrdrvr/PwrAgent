@@ -43,6 +43,7 @@ import type {
   BackendModelOption,
   BackendRateLimitSummary,
   CodexThreadEnvironmentRuntime,
+  CreateScheduledThreadActionRequest,
   DesktopProviderThreadModelMigration,
   LinkedDirectorySummary,
   NavigationLaunchpadDefaults,
@@ -756,6 +757,29 @@ function createOverlayStoreMock(params?: {
       const next = {
         ...current,
         pinnedRank: pinnedRank?.trim() || undefined,
+      } as ThreadOverlayState;
+      overlays.set(key, next);
+      return next;
+    },
+    setThreadScheduledStart: async ({
+      backend,
+      threadId,
+      scheduledStart,
+    }: {
+      backend: "codex" | "grok";
+      threadId: string;
+      scheduledStart?: ThreadOverlayState["scheduledStart"];
+    }) => {
+      const key = `${backend}:${threadId}`;
+      const current = overlays.get(key) ?? {
+        backend,
+        threadId,
+        executionMode: "default" as const,
+        extraLinkedDirectories: [],
+      };
+      const next = {
+        ...current,
+        scheduledStart,
       } as ThreadOverlayState;
       overlays.set(key, next);
       return next;
@@ -5519,6 +5543,109 @@ describe("DesktopBackendRegistry", () => {
         configValues: expect.objectContaining({ mode: "auto" }),
       }),
     });
+    await registry.close();
+  });
+
+  it("materializes and names a thread now while scheduling its first turn", async () => {
+    const scheduledFor = Date.parse("2026-08-08T14:00:00Z");
+    const titleService = {
+      generateTitle: vi.fn(async () => ({
+        status: "generated" as const,
+        title: "Scheduled launchpad work",
+      })),
+    };
+    const createScheduledThreadAction = vi.fn(async (
+      request: CreateScheduledThreadActionRequest,
+      options: { id: string },
+    ) => ({
+      action: {
+        ...request,
+        id: options.id,
+        origin: request.origin ?? "desktop" as const,
+        status: "scheduled" as const,
+        createdAt: 1_000,
+        updatedAt: 1_000,
+      },
+    }));
+    const overlayStore = createOverlayStoreMock();
+    const codexClient = new MockBackendClient({
+      initializeResult: {
+        methods: ["thread/start", "thread/name/set"],
+      },
+      threads: [],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({ threads: [] }),
+      overlayStore,
+      createScheduledThreadAction,
+      createScratchProjectDirectory: async () => "/tmp/pwragent-scheduled",
+      threadTitleGenerationService: titleService,
+    });
+
+    const response = await registry.materializeDirectoryLaunchpad({
+      directoryKey: "workspace:scheduled",
+      scheduledFor,
+      input: [{ type: "text", text: "Start this work tomorrow" }],
+      launchpad: {
+        directoryKey: "workspace:scheduled",
+        directoryKind: "workspace",
+        directoryLabel: "Workspaces",
+        backend: "codex",
+        executionMode: "full-access",
+        prompt: "Start this work tomorrow",
+        workMode: "local",
+        model: "gpt-5.6-sol",
+        reasoningEffort: "high",
+        createdAt: 1_000,
+        updatedAt: 2_000,
+      },
+    });
+
+    expect(response.scheduledAction).toMatchObject({
+      scheduledFor,
+      status: "scheduled",
+      threadId: "thread-1",
+    });
+    expect(createScheduledThreadAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        displayText: "Start this work tomorrow",
+        scheduledFor,
+        threadId: "thread-1",
+        turn: expect.objectContaining({
+          executionMode: "full-access",
+          input: [{ type: "text", text: "Start this work tomorrow" }],
+          model: "gpt-5.6-sol",
+          reasoningEffort: "high",
+        }),
+      }),
+      { id: expect.stringMatching(/^scheduled-action:/) },
+    );
+    expect(codexClient.startTurnCallCount).toBe(0);
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-1",
+      }),
+    ).resolves.toMatchObject({
+      scheduledStart: {
+        actionId: response.scheduledAction?.id,
+        scheduledFor,
+        state: "scheduled",
+      },
+    });
+    await waitForCondition(() => codexClient.lastRenameThreadParams !== undefined);
+    expect(titleService.generateTitle).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      userPrompt: "Start this work tomorrow",
+    });
+    expect(codexClient.lastRenameThreadParams).toEqual({
+      threadId: "thread-1",
+      name: "Scheduled launchpad work",
+    });
+
     await registry.close();
   });
 

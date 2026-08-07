@@ -254,6 +254,7 @@ export function materializeNavigationThreads(params: {
       worktreeSnapshots: overlay?.worktreeSnapshots ?? thread.worktreeSnapshots ?? [],
       reactions: overlay?.reactions ?? [],
       subAgents: overlay?.subAgents ?? [],
+      scheduledStart: overlay?.scheduledStart,
       pinnedRank: overlay?.pinnedRank,
       parentThreadId,
       forkSourceThreadId: overlay?.forkSourceThreadId,
@@ -446,6 +447,13 @@ export function buildNavigationSnapshotHash(params: {
       reasoningEffort: thread.reasoningEffort ?? null,
       serviceTier: thread.serviceTier ?? null,
       fastMode: thread.fastMode ?? null,
+      scheduledStart: thread.scheduledStart
+        ? {
+            actionId: thread.scheduledStart.actionId,
+            scheduledFor: thread.scheduledStart.scheduledFor,
+            state: thread.scheduledStart.state,
+          }
+        : null,
       prAutoDispatchEnabled: thread.prAutoDispatchEnabled ?? false,
       prAutoDispatchPending: thread.prAutoDispatchPending
         ? {

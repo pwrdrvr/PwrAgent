@@ -1523,7 +1523,8 @@ function DesktopAppShell(props: {
       input,
       collaborationMode,
       reviewTarget,
-      extraDirectoryPaths
+      extraDirectoryPaths,
+      scheduledFor,
     ) =>
       navigation.materializeDirectoryLaunchpad(
         directoryKey,
@@ -1531,7 +1532,8 @@ function DesktopAppShell(props: {
         collaborationMode,
         reviewTarget,
         undefined,
-        extraDirectoryPaths
+        extraDirectoryPaths,
+        scheduledFor,
       ),
     onPendingStatusChange: session.setPendingStatusText,
     onRefreshNavigation: navigation.refresh,
