@@ -51,6 +51,7 @@ import {
   normalizeGitOriginUrl,
   parseThreadUrl,
   readCodexEnvironmentActionRuns,
+  threadHasExactPrNumberMatch,
 } from "@pwragent/shared";
 import {
   BranchIcon,
@@ -105,7 +106,7 @@ import {
   canChangeExistingThreadAgentDesignation,
   createDesktopAgentThread,
 } from "../../lib/agent-thread";
-import { parseGitHubPullRequestUrl } from "../../lib/pull-request-links";
+import { parsePullRequestUrl } from "../../lib/pull-request-links";
 import {
   resolveThreadHref,
   resolveThreadIdText,
@@ -1311,9 +1312,16 @@ function HighlightedAutocompleteLabel(props: {
   );
 }
 
-function describeHashReferenceThread(thread: NavigationThreadSummary): string {
+function describeHashReferenceThread(
+  thread: NavigationThreadSummary,
+  query: string,
+): string {
   const parts: string[] = [];
-  const pullRequest = (thread.prs ?? [])[0];
+  const pullRequest = threadHasExactPrNumberMatch(thread, query)
+    ? (thread.prs ?? []).find(
+        (candidate) => candidate.number === Number(query.trim()),
+      )
+    : (thread.prs ?? [])[0];
   if (pullRequest) {
     parts.push(`#${pullRequest.number}`);
   }
@@ -1695,7 +1703,7 @@ function hydrateComposerDraft(
   // Thread and PR labels may legitimately begin with `$` or `@`, so recognize
   // their destinations before passing surrounding Markdown through the skill
   // and directory parser. Unknown links remain literal Markdown.
-  const referenceLinkPattern = /\[((?:\\.|[^\]\\\r\n])*)\]\((pwragent:\/\/thread\/[^)\s]+|https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/[1-9]\d*[^)\s]*)\)/gi;
+  const referenceLinkPattern = /\[((?:\\.|[^\]\\\r\n])*)\]\((pwragent:\/\/thread\/[^)\s]+|https:\/\/[^)\s]+)\)/gi;
   let cursor = 0;
   for (const match of canonicalDraft.matchAll(referenceLinkPattern)) {
     const matchIndex = match.index ?? 0;
@@ -1705,7 +1713,7 @@ function hydrateComposerDraft(
     if (resolvedThread) {
       skillTokens.push(createComposerThreadToken(resolvedThread, draft.length));
     } else {
-      const pullRequest = parseGitHubPullRequestUrl(href);
+      const pullRequest = parsePullRequestUrl(href);
       if (pullRequest) {
         skillTokens.push(
           createComposerPullRequestToken(pullRequest, draft.length),
@@ -10434,7 +10442,10 @@ export function Composer(props: ComposerProps) {
                   </span>
                 </span>
                 <span className="composer__autocomplete-meta">
-                  {describeHashReferenceThread(thread)}
+                  {describeHashReferenceThread(
+                    thread,
+                    hashReferenceTrigger?.query ?? "",
+                  )}
                 </span>
               </button>
             ))}

@@ -1607,6 +1607,10 @@ describe("ThreadView", () => {
       updatedAt: 1000,
       workMode: "worktree",
     } satisfies NavigationLaunchpadDraft;
+    const referenceThread = buildTimestampTargetThread(
+      "thread-reference",
+      "Bob's Best Thread 3000",
+    );
 
     render(
       <ThreadView
@@ -1669,6 +1673,7 @@ describe("ThreadView", () => {
         selectedDirectory={selectedDirectory}
         selectedLaunchpad={selectedLaunchpad}
         skills={[]}
+        threads={[referenceThread]}
         transcriptEntries={[]}
         onLoadOlder={async () => undefined}
         removeOptimisticMessage={(_id) => undefined}
@@ -1694,6 +1699,13 @@ describe("ThreadView", () => {
       expect(screen.getByLabelText(/Telegram: Enabled/)).toBeInTheDocument();
     });
     expect(screen.getByRole("group", { name: "Messaging platform status" })).toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole("textbox", { name: "New thread" }), {
+      target: { value: "Ask #Bob" },
+    });
+    expect(await screen.findByRole("listbox", {
+      name: "Threads and pull requests",
+    })).toHaveTextContent("#Bob's Best Thread 3000");
   });
 
   it("treats a main-window launchpad as remote from the active federation target", async () => {

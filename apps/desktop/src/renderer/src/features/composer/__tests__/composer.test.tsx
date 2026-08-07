@@ -2110,6 +2110,15 @@ describe("Composer", () => {
   });
 
   it("offers matching threads and a precise PR link for a numeric hash query", async () => {
+    const earlierPullRequest = {
+      provider: "github.com" as const,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      number: 44,
+      state: "passing" as const,
+      title: "Earlier stacked change",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/44",
+    };
     const pullRequest = {
       provider: "github.com" as const,
       org: "pwrdrvr",
@@ -2134,7 +2143,7 @@ describe("Composer", () => {
       source: "codex",
       linkedDirectories: [],
       inbox: { inInbox: false },
-      prs: [pullRequest],
+      prs: [earlierPullRequest, pullRequest],
     };
     const startTurn = vi.fn(async () => ({
       backend: "codex" as const,
@@ -2160,9 +2169,13 @@ describe("Composer", () => {
     const listbox = await screen.findByRole("listbox", {
       name: "Threads and pull requests",
     });
-    expect(
-      within(listbox).getByRole("button", { name: /#Implement hash references/ }),
-    ).toBeInTheDocument();
+    const threadOption = within(listbox).getByRole("button", {
+      name: /#Implement hash references/,
+    });
+    expect(threadOption.querySelector(".composer__autocomplete-meta"))
+      .toHaveTextContent("#123");
+    expect(threadOption.querySelector(".composer__autocomplete-meta"))
+      .not.toHaveTextContent("#44");
     fireEvent.click(
       within(listbox).getByRole("button", { name: /pwrdrvr\/PwrAgent#123/ }),
     );
@@ -2187,6 +2200,61 @@ describe("Composer", () => {
           },
         ],
       });
+    });
+  });
+
+  it("rebuilds a GitLab merge request chip from a prompt-only launchpad restore", async () => {
+    const url = "https://gitlab.com/pwrdrvr/platform/PwrAgent/-/merge_requests/49";
+    const launchpad: NavigationLaunchpadDraft = {
+      directoryKey: "directory:/repo",
+      directoryKind: "directory",
+      directoryLabel: "Repo",
+      directoryPath: "/repo",
+      backend: "codex",
+      executionMode: "default",
+      prompt: `check [#49](${url}) please`,
+      workMode: "local",
+      branchName: "main",
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const onMaterializeLaunchpad = vi.fn(async () => undefined);
+
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        directory={{
+          key: "directory:/repo",
+          kind: "directory",
+          label: "Repo",
+          path: "/repo",
+          threadKeys: [],
+          needsAttentionCount: 0,
+        }}
+        draftStore={createComposerDraftStore()}
+        launchpad={launchpad}
+        onMaterializeLaunchpad={onMaterializeLaunchpad}
+        onUpdateLaunchpad={async () => undefined}
+        skills={[]}
+      />,
+    );
+
+    const richInput = screen.getByTestId("composer-tiptap-input");
+    const chip = await waitFor(() =>
+      within(richInput).getByText("#49").closest("[data-mention-kind]"),
+    );
+    expect(chip).toHaveAttribute("data-mention-kind", "pull-request");
+    expect(chip).toHaveAttribute("data-skill-path", url);
+
+    await clickButton("Start thread");
+    await waitFor(() => {
+      expect(onMaterializeLaunchpad).toHaveBeenCalledWith(
+        "directory:/repo",
+        [{ type: "text", text: `check [#49](${url}) please` }],
+        undefined,
+        undefined,
+        [],
+      );
     });
   });
 

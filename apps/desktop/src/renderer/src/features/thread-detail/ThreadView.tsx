@@ -3023,6 +3023,7 @@ export function ThreadView(props: ThreadViewProps) {
                   onSelectDirectoryFromPicker={props.onSelectDirectoryFromPicker}
                   onSelectNoDirectoryFromPicker={props.onSelectNoDirectoryFromPicker}
                   onPickAndRegisterDirectory={props.onPickAndRegisterDirectory}
+                  threads={props.threads}
                   onPickAndAttachDirectoryToThread={
                     props.onPickAndAttachDirectoryToThread
                   }
