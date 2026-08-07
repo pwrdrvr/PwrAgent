@@ -2,6 +2,25 @@ version: 2
 
 updates:
   # pnpm workspace. Dependabot uses the npm ecosystem value for pnpm.
+  #
+  # Monorepo grouping strategy (why this shape exists):
+  # - Keep a single `directory: "/"` so version updates own the root
+  #   pnpm-lock.yaml and can rewrite every workspace package.json that
+  #   declares the dependency. Listing nested package paths as separate
+  #   `directories` tends to open package.json-only PRs without a lockfile
+  #   update (see PR #1337: `... in /apps/desktop`).
+  # - Official cross-directory `groups.*.group-by: dependency-name` only
+  #   applies when multiple `directories` are listed, and only for version
+  #   updates. We deliberately do not switch this monorepo to multi-directory
+  #   just to enable that key: with pnpm + one lockfile, root-owned updates
+  #   already collapse the same library across workspace packages into one
+  #   version-update PR.
+  # - Security updates are a separate pipeline. They ignore version-update
+  #   groups unless `applies-to: security-updates` is set, and they key off
+  #   alert manifest paths (`apps/desktop/package.json` vs `pnpm-lock.yaml`).
+  #   That is how the same library can still open two PRs (PRs #1337 + #1338
+  #   for pdfjs-dist). The `npm-security` group below groups security updates
+  #   for this npm entry so one library does not fan out per alert/manifest.
   - package-ecosystem: "npm"
     directory: "/"
     schedule:
@@ -62,6 +81,14 @@ updates:
         update-types:
           - "version-update:semver-major"
     groups:
+      # Security updates ignore the version-update groups below unless this
+      # applies-to is set. Group them so the same library does not open one PR
+      # per security alert / manifest path (package.json vs lockfile) in the
+      # monorepo — the failure mode behind PRs #1337 and #1338 for pdfjs-dist.
+      npm-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
       agent-kit:
         patterns:
           - "@pwrdrvr/agent-*"
@@ -110,6 +137,9 @@ updates:
         update-types:
           - "minor"
           - "patch"
+      # Catch-all version-update groups: batch unrelated production/dev
+      # minor+patch bumps into summary PRs so the monorepo does not open one
+      # PR per package. Special-cased groups above still win for their patterns.
       npm-production-minor-patch:
         patterns:
           - "*"
