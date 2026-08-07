@@ -2244,7 +2244,9 @@ export class MessagingController {
       await this.presentThreadCommandNeedsBinding(event);
       return;
     }
-    const list = this.options.backend.listScheduledThreadActions;
+    const list = this.options.backend.listScheduledThreadActions?.bind(
+      this.options.backend,
+    );
     if (!list) {
       await this.deliverScheduledActionError(
         binding,
@@ -4722,7 +4724,9 @@ export class MessagingController {
     targetSurface?: MessagingSurfaceRef;
     pendingIntentId?: string;
   }): Promise<void> {
-    const submitReview = this.options.backend.submitReview;
+    const submitReview = this.options.backend.submitReview?.bind(
+      this.options.backend,
+    );
     if (!submitReview || !await this.reviewSupportedForBinding(params.binding)) {
       await this.deliverReviewUnsupported(params.binding, params.event);
       return;
@@ -4733,7 +4737,7 @@ export class MessagingController {
         backend: params.binding.backend,
       });
       const settings = turnSettingsForBinding(params.binding, navigation);
-      const result = await submitReview.call(this.options.backend, {
+      const result = await submitReview({
         backend: params.binding.backend,
         threadId: params.binding.threadId,
         target: params.target,
@@ -6151,12 +6155,14 @@ export class MessagingController {
     event: AgentEvent,
     binding: MessagingBindingRecord,
   ): Promise<MessagingImagePart[]> {
-    const resolveImages = this.options.backend.resolveAssistantMessageImages;
+    const resolveImages = this.options.backend.resolveAssistantMessageImages?.bind(
+      this.options.backend,
+    );
     if (!resolveImages) {
       return [];
     }
     try {
-      const images = await resolveImages.call(this.options.backend, {
+      const images = await resolveImages({
         backend: binding.backend,
         itemId: assistantItemIdForBackendEvent(event),
         text,
@@ -6208,8 +6214,14 @@ export class MessagingController {
     binding: MessagingBindingRecord,
     options?: { important?: boolean },
   ): Promise<void> {
-    const readLastAssistantReply = this.options.backend.readThreadLastAssistantReply;
-    const readLastAssistantMessage = this.options.backend.readThreadLastAssistantMessage;
+    const readLastAssistantReply =
+      this.options.backend.readThreadLastAssistantReply?.bind(
+        this.options.backend,
+      );
+    const readLastAssistantMessage =
+      this.options.backend.readThreadLastAssistantMessage?.bind(
+        this.options.backend,
+      );
     if (!readLastAssistantReply && !readLastAssistantMessage) {
       return;
     }
@@ -6217,13 +6229,13 @@ export class MessagingController {
     let reply: MessagingLastAssistantReply | undefined;
     try {
       if (readLastAssistantReply) {
-        reply = await readLastAssistantReply.call(this.options.backend, {
+        reply = await readLastAssistantReply({
           backend: binding.backend,
           federationTarget: federationTargetForBinding(binding),
           threadId: binding.threadId,
         });
       } else if (readLastAssistantMessage) {
-        const text = await readLastAssistantMessage.call(this.options.backend, {
+        const text = await readLastAssistantMessage({
           backend: binding.backend,
           federationTarget: federationTargetForBinding(binding),
           threadId: binding.threadId,
@@ -16265,9 +16277,8 @@ export class MessagingController {
   private async resolveManagedConversationSummary(
     origin: ActiveAgentMessagingOrigin,
   ): Promise<PwrAgentMessagingManagedConversationSummary> {
-    const providerSupportsCreation = Boolean(
-      this.options.adapter.createManagedConversation,
-    );
+    const providerSupportsCreation =
+      typeof this.options.adapter.createManagedConversation === "function";
     if (!this.options.adapter.getManagedConversationRights) {
       const operation = {
         operation: "create_child" as const,

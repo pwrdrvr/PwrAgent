@@ -40,8 +40,8 @@ export function useThreadQueuedMessageIndicators(params: {
 }): Record<string, ThreadQueuedMessageState> {
   const { composerDraftStore, threads } = params;
   const version = useSyncExternalStore(
-    composerDraftStore.subscribeQueuedTurns,
-    composerDraftStore.getQueuedTurnVersion,
+    (listener) => composerDraftStore.subscribeQueuedTurns(listener),
+    () => composerDraftStore.getQueuedTurnVersion(),
   );
 
   return useMemo(() => {

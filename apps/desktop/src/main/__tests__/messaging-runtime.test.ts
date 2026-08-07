@@ -299,6 +299,19 @@ describe("DesktopMessagingRuntime", () => {
     );
   });
 
+  it("preserves the backend bridge receiver while syncing federation subscriptions", async () => {
+    const { runtime, bridge } = await createRuntimeHarness();
+    const subscriptions: FederationEventSubscription[][] = [];
+    bridge.setRemoteEventSubscriptions = function (next) {
+      expect(this).toBe(bridge);
+      subscriptions.push([...next]);
+    };
+
+    await runtime.start();
+
+    expect(subscriptions).toEqual([[]]);
+  });
+
   it("rehydrates enabled Monitor bindings after adapter startup", async () => {
     const { runtime, adapter } = await createRuntimeHarness();
     const { getDesktopMessagingStore } = await import(

@@ -63,7 +63,7 @@ function installStdioErrorHandlers(): void {
 
 function guardConsoleTransport(): void {
   const transport = electronLog.transports.console;
-  const writeFn = transport.writeFn;
+  const writeFn = transport.writeFn.bind(transport);
 
   transport.writeFn = (options) => {
     if (transport.level === false) {
