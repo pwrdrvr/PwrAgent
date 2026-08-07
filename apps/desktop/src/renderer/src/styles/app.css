@@ -2292,19 +2292,72 @@ textarea,
   background: var(--danger-surface);
 }
 
-.log-window__line-number {
+.log-window__line-gutter {
   display: inline-block;
   position: sticky;
   left: 0;
   width: 56px;
   margin-right: 12px;
-  padding: 0 10px;
   border-right: 1px solid var(--border-subtle);
   background: var(--bg-sidebar);
-  color: var(--text-subtle);
-  text-align: right;
   user-select: none;
   -webkit-user-select: none;
+}
+
+.log-window__line-number {
+  display: block;
+  padding: 0 10px;
+  color: var(--text-subtle);
+  text-align: right;
+  transition: opacity 120ms ease;
+}
+
+.log-window__line-copy {
+  display: inline-flex;
+  position: absolute;
+  inset: 0 5px 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 18px;
+  margin: auto 0;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: var(--bg-sidebar);
+  color: var(--text-muted);
+  opacity: 0;
+  cursor: pointer;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease,
+    opacity 120ms ease;
+}
+
+.log-window__line:hover .log-window__line-number,
+.log-window__line:focus-within .log-window__line-number,
+.log-window__line-copy[data-copied="true"] + .log-window__line-number {
+  opacity: 0;
+}
+
+.log-window__line:hover .log-window__line-copy,
+.log-window__line:focus-within .log-window__line-copy,
+.log-window__line-copy[data-copied="true"] {
+  opacity: 1;
+}
+
+.log-window__line-copy:hover,
+.log-window__line-copy:focus-visible,
+.log-window__line-copy[data-copied="true"] {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.log-window__line-copy:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
 }
 
 .log-window__line-text {
