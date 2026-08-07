@@ -318,7 +318,7 @@ const DIRECTORY_GIT_STATUS_CACHE_MAX_AGE_MS = 5 * 60_000;
 // closes the sequential post-completion gap so "747, 732, 747, 747, 732,
 // 747" collapses to "747, 732".
 const DIRECTORY_GIT_STATUS_FORCE_COALESCE_WINDOW_MS = 3_000;
-const STARTUP_WORKTREE_WORKING_STATE_REFRESH_LIMIT = 8;
+const AUTOMATIC_WORKTREE_WORKING_STATE_REFRESH_LIMIT = 8;
 // PR discovery (Layer B): a slow branch-lookup rotation across ALL open threads
 // to catch newly opened PRs on projects the operator is not looking at. Tick
 // often, but sweep each thread rarely and only a few per tick, so discovery
@@ -1339,7 +1339,6 @@ class DesktopAppServerService {
     WorktreeGitWorkingStateCacheEntry
   >();
   private workingStateCacheLoaded = false;
-  private automaticWorktreeWorkingStateRefreshesStarted = 0;
   private readonly pendingWorktreeWorkingStateRefreshes = new Map<
     string,
     Promise<void>
@@ -2868,9 +2867,9 @@ class DesktopAppServerService {
   /**
    * Schedule a background per-worktree working-state probe. Mirrors
    * `startDirectoryGitStatusRefresh`: concurrent same-key requests coalesce
-   * through `pendingWorktreeWorkingStateKeys`, automatic refreshes obey a
-   * startup budget + cache freshness, and `force` (event-driven invalidation)
-   * bypasses freshness. Returns the number of worktrees scheduled.
+   * through `pendingWorktreeWorkingStateKeys`, each automatic refresh obeys a
+   * bounded batch size + cache freshness, and `force` (event-driven
+   * invalidation) bypasses freshness. Returns the number of worktrees scheduled.
    */
   private startWorktreeWorkingStateRefresh(params: {
     automatic: boolean;
@@ -2892,9 +2891,6 @@ class DesktopAppServerService {
       return 0;
     }
 
-    if (params.automatic) {
-      this.automaticWorktreeWorkingStateRefreshesStarted += worktreePaths.length;
-    }
     for (const worktreePath of worktreePaths) {
       this.pendingWorktreeWorkingStateKeys.add(worktreePath);
     }
@@ -2939,13 +2935,7 @@ class DesktopAppServerService {
       return candidates;
     }
 
-    const remaining =
-      STARTUP_WORKTREE_WORKING_STATE_REFRESH_LIMIT -
-      this.automaticWorktreeWorkingStateRefreshesStarted;
-    if (remaining <= 0) {
-      return [];
-    }
-    return candidates.slice(0, remaining);
+    return candidates.slice(0, AUTOMATIC_WORKTREE_WORKING_STATE_REFRESH_LIMIT);
   }
 
   private async refreshWorktreeWorkingStates(
@@ -6506,7 +6496,6 @@ class DesktopAppServerService {
     this.pendingWorktreeWorkingStateKeys.clear();
     this.workingStateByWorktree.clear();
     this.workingStateCacheLoaded = false;
-    this.automaticWorktreeWorkingStateRefreshesStarted = 0;
     this.worktreePathByThreadKey.clear();
     this.prRefreshContextByThreadKey.clear();
     await disposeDesktopBackendRegistry();
