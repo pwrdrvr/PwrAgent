@@ -1407,6 +1407,7 @@ function DesktopAppShell(props: {
     selectedDirectory: navigation.selectedDirectory,
     selectedLaunchpad: navigation.selectedLaunchpad,
     selectedThread: navigation.selectedThread,
+    threads: navigation.threads,
     suppressBranchDriftDialog: mainView === "settings",
     directories: navigation.directories,
     fullAccessRiskWarningDismissed:

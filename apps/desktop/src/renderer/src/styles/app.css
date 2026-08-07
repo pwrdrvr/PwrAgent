@@ -17484,6 +17484,10 @@ a.transcript-message__messaging-origin:focus-visible {
   cursor: default;
 }
 
+.composer-tiptap-input__mention.composer-pr-chip {
+  cursor: default;
+}
+
 .composer__mentioned-skills {
   display: flex;
   flex-wrap: wrap;
@@ -19704,6 +19708,13 @@ a.transcript-message__messaging-origin:focus-visible {
   box-shadow: var(--shadow-popover);
 }
 
+/* Thread and PR results use the same compact popover width as the `@` picker;
+   full composer width leaves large rows mostly empty on wide chat panes. */
+.composer__autocomplete--hash-references {
+  right: auto;
+  width: min(100%, 440px);
+}
+
 .composer__autocomplete--directories .composer__autocomplete-option:not(.composer__autocomplete-option--action) {
   display: grid;
   grid-template-columns: minmax(0, 160px) minmax(0, 1fr);
@@ -19856,6 +19867,38 @@ a.transcript-message__messaging-origin:focus-visible {
   color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.45;
+}
+
+.composer__autocomplete-meta--thread {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+}
+
+.composer__autocomplete-meta--thread .chip--instance {
+  flex: none;
+  height: 18px;
+  padding: 0 6px;
+  font-size: 10px;
+}
+
+.composer__autocomplete-section-divider {
+  margin: 2px 4px 0;
+  padding: 6px 8px 2px;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.composer__autocomplete-remote-loading {
+  padding: 6px 12px 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-style: italic;
 }
 
 /* Divider between the matched options and the "Add directory… / Add
