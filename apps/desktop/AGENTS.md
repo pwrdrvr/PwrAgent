@@ -275,9 +275,32 @@ existing replay-fixture harness and runs `@axe-core/playwright`'s
 Things to know when extending the audit:
 
 - **Surface coverage.** Each `test(...)` block drives the renderer to a
-  state (open thread, settings overlay, settings → messaging) and then
-  calls `runAxe(window)`. Add a new block per surface you want gated;
-  reuse `launchElectronApp` with whatever fixture seeds that state.
+  state (open thread, settings overlay, settings → messaging, the Star
+  Map layer, the Star Map intake dialog) and then calls `runAxe(window)`.
+  Add a new block per surface you want gated; go through
+  `launchAuditApp()`, which emulates reduced motion and takes an optional
+  `fixturePath` / `theme`.
+- **Seed the fixture so the surface is actually populated.** The smoke
+  fixture's thread reaches no Star Map lane — `deriveInboxState` keeps a
+  first-snapshot thread out of the inbox, and an idle thread with no PR
+  and no unpushed commits matches no attention category — so auditing the
+  map on it would scan chrome and no cards. `e2e/fixtures/star-map/` is a
+  hand-written fixture (same class as `readme-recents-hero/`) whose
+  threads are `threadStatus: "active"` for exactly that reason. Check
+  what your surface renders before trusting a green run.
+- **`runAxe(window, { include })` narrows the scan to one subtree.** Use
+  it only when the block is about a specific composited surface — the
+  celestial-watermark blocks scope to `.thread-view__primary`, the
+  element the watermark is a child of, so the light-theme run measures
+  the watermark rather than unrelated window-wide light-theme debt.
+  Everything else stays unscoped, because an unscoped run is what catches
+  regressions nobody thought to point at.
+- **Reduced motion has to reach the element that animates.** The gate
+  emulates `prefers-reduced-motion: reduce` so it measures contrast at
+  rest; a rule that zeroes the animation on the wrong selector leaves
+  text mid-fade and axe reports a real-looking contrast miss. That is how
+  the Star Map card rise was caught: the animation lives on
+  `.star-map-card-shell`, the reduced-motion rule named `.star-map-card`.
 - **`setLegacyMode(true)` is required under Electron.** The default
   `AxeBuilder.analyze()` opens a worker page via
   `browserContext.newPage()` to scan cross-origin iframes; Electron's
