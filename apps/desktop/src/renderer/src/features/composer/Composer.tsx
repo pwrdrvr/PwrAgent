@@ -132,7 +132,10 @@ import {
   parseSkillMentionParts,
   buildSkillMentionMarkdown,
 } from "../../lib/skill-mentions";
-import { parseReviewCommand } from "../../../../shared/review-command";
+import {
+  formatReviewCommand,
+  parseReviewCommand,
+} from "../../../../shared/review-command";
 import {
   type ComposerInputChangeMetadata,
   type ComposerInputHandle,
@@ -212,7 +215,8 @@ type ComposerProps = {
      * Paths of tracked directories the draft references (`@`-inserted or
      * typed by hand). Linked to the new thread right after it is created.
      */
-    extraDirectoryPaths?: string[]
+    extraDirectoryPaths?: string[],
+    scheduledFor?: number,
   ) => Promise<void>;
   /** Discard this launchpad draft (the "Cancel" button next to "Start thread"). */
   onCancelLaunchpad?: (directoryKey: string) => void;
@@ -1266,23 +1270,6 @@ function notificationIncludesDraftContent(
 function parseStaleInterruptError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return message.toLowerCase().includes("no active turn to interrupt");
-}
-
-function reviewCommandToDraftText(command: {
-  cwd?: string;
-  target: AppServerReviewTarget;
-}): string {
-  const target = command.target;
-  if (target.type === "uncommittedChanges") {
-    return "/review";
-  }
-  if (target.type === "baseBranch") {
-    return `/review ${target.branch}`;
-  }
-  if (target.type === "commit") {
-    return `/review --commit ${[target.sha, target.title].filter(Boolean).join(" ")}`;
-  }
-  return `/review --custom ${target.instructions}`;
 }
 
 function reviewSubmissionKey(command: {
@@ -5702,6 +5689,13 @@ export function Composer(props: ComposerProps) {
       return;
     }
     if (futureScheduledDraftSendAt) {
+      if (props.launchpad) {
+        await scheduleLaunchpadMaterialization(
+          futureScheduledDraftSendAt,
+          configuredReviewCommand.target,
+        );
+        return;
+      }
       queueReviewCommand(configuredReviewCommand, {
         scheduledSendAt: futureScheduledDraftSendAt,
       });
@@ -6401,7 +6395,7 @@ export function Composer(props: ComposerProps) {
     options?: { scheduledSendAt?: number },
   ): Promise<void> | undefined => {
     const enqueue = async (): Promise<void> => {
-      const text = reviewCommandToDraftText(reviewCommand);
+      const text = formatReviewCommand(reviewCommand.target);
       if (!props.thread || !props.desktopApi?.createScheduledThreadAction) {
         throw new Error("Backend-owned review queuing is unavailable.");
       }
@@ -6486,12 +6480,131 @@ export function Composer(props: ComposerProps) {
       ) ||
       sendingRef.current);
 
+  const scheduleLaunchpadMaterialization = async (
+    scheduledSendAt: number,
+    reviewTarget?: AppServerReviewTarget,
+  ): Promise<void> => {
+    if (
+      !props.launchpad
+      || !props.onMaterializeLaunchpad
+      || props.disabled
+    ) {
+      return;
+    }
+
+    let input: AppServerTurnInputItem[] | undefined;
+    if (!reviewTarget) {
+      const payloadOrPromise = buildTurnPayload(
+        canonicalDraft,
+        imageAttachments,
+        fileAttachments,
+        skillTokens,
+      );
+      const payload = isPromiseLike(payloadOrPromise)
+        ? await payloadOrPromise
+        : payloadOrPromise;
+      if (payload.input.length === 0) {
+        return;
+      }
+      input = payload.input;
+    }
+
+    const collaborationMode =
+      !reviewTarget && planModeEnabled && supportsPlanMode
+        ? ({
+            mode: "plan",
+            settings: {
+              developerInstructions: null,
+            },
+          } satisfies AppServerCollaborationModeRequest)
+        : undefined;
+    const submittedScopeKey = composerScopeKey;
+    markComposerDraftSubmitted(submittedScopeKey);
+    setSendError(undefined);
+    updateSending(true);
+    props.onPendingStatusChange?.(
+      props.launchpad.codexEnvironmentId && selectedCodexEnvironment?.setupScript
+        ? "Running environment setup"
+        : "Scheduling thread",
+    );
+    try {
+      await props.onMaterializeLaunchpad(
+        props.launchpad.directoryKey,
+        input,
+        collaborationMode,
+        reviewTarget,
+        listDraftReferencedDirectories(
+          appendFileReferenceMarkdown(canonicalDraft, fileAttachments),
+          skillTokens,
+        )
+          .map((directory) => directory.path)
+          .filter((path): path is string => Boolean(path)),
+        scheduledSendAt,
+      );
+      clearSubmittedComposerDraft(submittedScopeKey);
+      setReviewConfig(undefined);
+      setScheduledDraftSendAt(undefined);
+      setScheduleArmed(true);
+      if (collaborationMode) {
+        setPlanModeEnabled(false);
+      }
+    } catch (error) {
+      unmarkComposerDraftSubmitted(submittedScopeKey);
+      setSendError(error instanceof Error ? error.message : String(error));
+    } finally {
+      props.onPendingStatusChange?.(undefined);
+      updateSending(false);
+    }
+  };
+
   const scheduleCurrentDraft = (scheduledSendAt: number): void => {
-    if (props.launchpad || props.disabled) {
+    if (props.disabled) {
       return;
     }
 
     const reviewCommand = parsedReviewCommand;
+    if (props.launchpad) {
+      if (reviewCommand) {
+        if (isBareReviewCommand) {
+          setScheduledDraftSendAt(scheduledSendAt);
+          setScheduleArmed(true);
+          setReviewConfig(
+            reviewConfig ??
+              createReviewConfig({
+                directory: props.directory,
+                thread: props.thread,
+              })
+          );
+          setSendError(undefined);
+          return;
+        }
+        if (imageAttachments.length > 0) {
+          setSendError("/review does not accept image attachments.");
+          return;
+        }
+        if (reviewWorkspaceSelectionRequired) {
+          setScheduledDraftSendAt(scheduledSendAt);
+          setScheduleArmed(true);
+          setReviewConfig(
+            createReviewConfig({
+              directory: props.directory,
+              reviewCommand,
+              thread: props.thread,
+            })
+          );
+          setSendError("Choose a project to review.");
+          return;
+        }
+        void scheduleLaunchpadMaterialization(
+          scheduledSendAt,
+          reviewCommand.target,
+        );
+        return;
+      }
+      void scheduleLaunchpadMaterialization(scheduledSendAt);
+      return;
+    }
+
     if (reviewCommand) {
       if (isBareReviewCommand) {
         setScheduledDraftSendAt(scheduledSendAt);
@@ -8586,15 +8699,20 @@ export function Composer(props: ComposerProps) {
       fileAttachments.length === 0);
   const scheduleButtonDisabled =
     sendButtonDisabled ||
-    Boolean(props.launchpad) ||
-    !props.thread ||
+    (!props.thread && !props.launchpad) ||
+    Boolean(props.launchpad && !props.onMaterializeLaunchpad) ||
     isCompactCommand;
   // Only surface the schedule caret where scheduling actually applies. In the
-  // launchpad, compact command, or a thread-less composer there is nothing to
-  // schedule, so the split collapses to a plain Send pill instead of parking a
-  // permanently-dimmed half-button next to it.
+  // compact command or a thread-less composer there is nothing to schedule,
+  // so the split collapses to a plain Send pill instead of parking a
+  // permanently-dimmed half-button next to it. A launchpad is schedulable:
+  // choosing a time materializes its workspace/thread immediately and defers
+  // only the first action.
   const scheduleAffordanceVisible =
-    Boolean(props.thread) && !props.launchpad && !isCompactCommand;
+    Boolean(
+      props.thread
+      || (props.launchpad && props.onMaterializeLaunchpad)
+    ) && !isCompactCommand;
   // A pending draft schedule (e.g. after editing a scheduled item) surfaces as
   // a checkable toggle between the caret and Send rather than hijacking the
   // Send label into a countdown. Armed → Send keeps the schedule; unarmed →
@@ -9724,7 +9842,7 @@ export function Composer(props: ComposerProps) {
         const queuedLabel = queued.errorMessage
           ? "Failed to send"
           : scheduledSendAt
-          ? `Sends in ${formatScheduledSendCountdown(scheduledSendAt, scheduleNow)}`
+          ? `Scheduled · sends in ${formatScheduledSendCountdown(scheduledSendAt, scheduleNow)}`
           : index === 0
             ? "Queued next"
             : `Queued #${index + 1}`;
@@ -9738,7 +9856,15 @@ export function Composer(props: ComposerProps) {
             ]
               .filter(Boolean)
               .join(" ")}
-            aria-label={index === 0 ? "Queued message" : `Queued message ${index + 1}`}
+            aria-label={
+              scheduledSendAt
+                ? index === 0
+                  ? "Scheduled message"
+                  : `Scheduled message ${index + 1}`
+                : index === 0
+                  ? "Queued message"
+                  : `Queued message ${index + 1}`
+            }
             key={queued.id}
           >
             <div className="composer__queued-copy">
@@ -11446,7 +11572,7 @@ export function Composer(props: ComposerProps) {
                 <button
                   aria-expanded={scheduleMenuOpen}
                   aria-haspopup="menu"
-                  aria-label="Schedule message"
+                  aria-label={props.launchpad ? "Schedule thread" : "Schedule message"}
                   className="button composer__send-schedule-button"
                   disabled={scheduleButtonDisabled}
                   type="button"
@@ -11524,7 +11650,9 @@ export function Composer(props: ComposerProps) {
                       );
                     }}
                   >
-                    {option.label}
+                    {props.launchpad
+                      ? option.label.replace(/^Send /, "Start ")
+                      : option.label}
                   </button>
                 ))}
               </div>

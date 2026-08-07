@@ -46,23 +46,31 @@ export type ScheduledThreadActionServiceOptions = {
 };
 
 let service: ScheduledThreadActionService | null = null;
+let serviceRegistry: DesktopBackendRegistry | null = null;
 
 export function getScheduledThreadActionService(
   registry = getDesktopBackendRegistry(),
 ): ScheduledThreadActionService {
   if (!service) {
-    service = new ScheduledThreadActionService({
+    const nextService = new ScheduledThreadActionService({
       registry,
       store: getAppScheduledThreadActionStore(),
     });
-    service.start();
+    registry.setScheduledThreadActionCreator((request, options) =>
+      nextService.create(request, options),
+    );
+    service = nextService;
+    serviceRegistry = registry;
+    nextService.start();
   }
   return service;
 }
 
 export function disposeScheduledThreadActionService(): void {
   service?.dispose();
+  serviceRegistry?.setScheduledThreadActionCreator(undefined);
   service = null;
+  serviceRegistry = null;
 }
 
 export class ScheduledThreadActionService {
@@ -171,6 +179,12 @@ export class ScheduledThreadActionService {
     if (!updated) {
       throw new Error("The scheduled action is already being dispatched.");
     }
+    await this.options.registry.updateScheduledThreadStartTime?.({
+      actionId: updated.id,
+      backend: updated.backend,
+      scheduledFor: updated.scheduledFor,
+      threadId: updated.threadId,
+    });
     await this.publish(updated);
     this.scheduleNextTimer();
     if (updated.scheduledFor <= this.now()) {
@@ -210,6 +224,7 @@ export class ScheduledThreadActionService {
     if (!cancelled) {
       throw new Error("The scheduled action can no longer be cancelled.");
     }
+    await this.clearScheduledStartIfBorn(cancelled);
     await this.publish(cancelled);
     this.scheduleNextTimer();
     return { action: cancelled };
@@ -277,7 +292,10 @@ export class ScheduledThreadActionService {
               this.now(),
               this.ownerId,
             );
-        if (updated) await this.publish(updated);
+        if (updated) {
+          await this.clearScheduledStartIfBorn(updated);
+          await this.publish(updated);
+        }
         return;
       }
       if (!action.turn) {
@@ -304,7 +322,10 @@ export class ScheduledThreadActionService {
             this.now(),
             this.ownerId,
           );
-      if (updated) await this.publish(updated);
+      if (updated) {
+        await this.clearScheduledStartIfBorn(updated);
+        await this.publish(updated);
+      }
     } catch (error) {
       const failed = this.options.store.markFailed(
         action.id,
@@ -312,7 +333,10 @@ export class ScheduledThreadActionService {
         this.now(),
         this.ownerId,
       );
-      if (failed) await this.publish(failed);
+      if (failed) {
+        await this.clearScheduledStartIfBorn(failed);
+        await this.publish(failed);
+      }
       scheduledActionLog.error("scheduled action dispatch failed", {
         actionId: action.id,
         backend: action.backend,
@@ -361,7 +385,10 @@ export class ScheduledThreadActionService {
     } else if (params.status === "cancelled") {
       updated = this.options.store.markCancelled(actionId, this.now());
     }
-    if (updated) await this.publish(updated);
+    if (updated) {
+      await this.clearScheduledStartIfBorn(updated);
+      await this.publish(updated);
+    }
   }
 
   private async handleReviewRegistryEvent(event: AgentEvent): Promise<void> {
@@ -394,7 +421,31 @@ export class ScheduledThreadActionService {
     } else if (params.status === "cancelled") {
       updated = this.options.store.markCancelled(action.id, this.now());
     }
-    if (updated) await this.publish(updated);
+    if (updated) {
+      await this.clearScheduledStartIfBorn(updated);
+      await this.publish(updated);
+    }
+  }
+
+  private async clearScheduledStartIfBorn(
+    action: ScheduledThreadAction,
+  ): Promise<void> {
+    if (action.status === "started") {
+      await this.options.registry.markScheduledThreadBorn?.({
+        actionId: action.id,
+        backend: action.backend,
+        threadId: action.threadId,
+      });
+      return;
+    }
+    if (action.status === "cancelled" || action.status === "failed") {
+      await this.options.registry.markScheduledThreadStartTerminal?.({
+        actionId: action.id,
+        backend: action.backend,
+        state: action.status,
+        threadId: action.threadId,
+      });
+    }
   }
 
   private async publish(action: ScheduledThreadAction): Promise<void> {

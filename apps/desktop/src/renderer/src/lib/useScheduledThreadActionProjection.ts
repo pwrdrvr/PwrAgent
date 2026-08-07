@@ -15,6 +15,7 @@ export function useScheduledThreadActionProjection(params: {
   composerDraftStore: ComposerDraftStore;
   desktopApi?: DesktopApi;
   federationTarget?: FederationTarget;
+  onThreadLifecycleChanged?: () => void;
   sources?: readonly ScheduledThreadActionProjectionSource[];
   /**
    * True while the federation peer behind `federationTarget` is
@@ -46,6 +47,7 @@ export function useScheduledThreadActionProjection(params: {
         desktopApi,
         federationTarget: source.federationTarget,
         listScheduledThreadActions,
+        onThreadLifecycleChanged: params.onThreadLifecycleChanged,
       }));
     return () => {
       for (const cleanup of cleanups) {
@@ -55,6 +57,7 @@ export function useScheduledThreadActionProjection(params: {
   }, [
     params.composerDraftStore,
     params.desktopApi,
+    params.onThreadLifecycleChanged,
     sourcesJson,
   ]);
 }
@@ -64,6 +67,7 @@ function startScheduledThreadActionProjection(params: {
   desktopApi: DesktopApi;
   federationTarget?: FederationTarget;
   listScheduledThreadActions: NonNullable<DesktopApi["listScheduledThreadActions"]>;
+  onThreadLifecycleChanged?: () => void;
 }): () => void {
   let refreshSequence = 0;
   let projectedScopeKeys = new Set<string>();
@@ -143,6 +147,13 @@ function startScheduledThreadActionProjection(params: {
         projectedFailures.set(action.id, action);
       } else {
         projectedFailures.delete(action.id);
+      }
+      if (
+        action.status === "started"
+        || action.status === "cancelled"
+        || action.status === "failed"
+      ) {
+        params.onThreadLifecycleChanged?.();
       }
       void refresh();
     }

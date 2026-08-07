@@ -728,6 +728,11 @@ export type MaterializeDirectoryLaunchpadRequest = {
   collaborationMode?: AppServerCollaborationModeRequest;
   reviewTarget?: AppServerReviewTarget;
   parentThreadId?: ThreadIdentifier;
+  /**
+   * Create the provider thread and prepare its workspace now, but defer the
+   * first turn or review until this wall-clock time.
+   */
+  scheduledFor?: number;
 };
 
 export type MaterializedDirectoryLaunchpadThread = {
@@ -754,6 +759,7 @@ export type MaterializeDirectoryLaunchpadOptions = {
 
 export type MaterializeDirectoryLaunchpadResponse = MaterializedDirectoryLaunchpadThread & {
   turnId?: string;
+  scheduledAction?: ScheduledThreadAction;
   turnStartFailure?: {
     message: string;
     phase: "turn" | "review";

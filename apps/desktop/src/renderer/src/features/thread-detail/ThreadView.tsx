@@ -1029,7 +1029,8 @@ export type ThreadViewProps = {
     input?: AppServerTurnInputItem[],
     collaborationMode?: AppServerCollaborationModeRequest,
     reviewTarget?: AppServerReviewTarget,
-    extraDirectoryPaths?: string[]
+    extraDirectoryPaths?: string[],
+    scheduledFor?: number,
   ) => Promise<void>;
   onCancelLaunchpad?: (directoryKey: string) => void;
   onPendingStatusChange?: (status?: string) => void;
@@ -2859,7 +2860,8 @@ export function ThreadView(props: ThreadViewProps) {
       input,
       collaborationMode,
       reviewTarget,
-      extraDirectoryPaths
+      extraDirectoryPaths,
+      scheduledFor,
     ) => {
       if (!props.onMaterializeLaunchpad) {
         return;
@@ -2873,7 +2875,8 @@ export function ThreadView(props: ThreadViewProps) {
           input,
           collaborationMode,
           reviewTarget,
-          extraDirectoryPaths
+          extraDirectoryPaths,
+          scheduledFor,
         );
       } catch (error) {
         setLaunchpadMaterializeError(

@@ -197,6 +197,17 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
   subAgents?: ThreadSubAgentSummary[];
   /** Durable origin metadata for threads created by an Agent handoff tool. */
   handoffOrigin?: ThreadHandoffOrigin;
+  /**
+   * The provider thread and workspace exist, but its first scheduled action
+   * has not started yet.
+   */
+  scheduledStart?: ThreadScheduledStart;
+};
+
+export type ThreadScheduledStart = {
+  actionId: string;
+  scheduledFor: number;
+  state: "scheduled" | "cancelled" | "failed";
 };
 
 export type ThreadQueuedTurnSummary = {
@@ -1636,6 +1647,8 @@ export type ThreadOverlayState = {
   subAgents?: ThreadSubAgentSummary[];
   /** Durable origin metadata for threads created by an Agent handoff tool. */
   handoffOrigin?: ThreadHandoffOrigin;
+  /** Durable unborn-thread marker, cleared when the first action starts. */
+  scheduledStart?: ThreadScheduledStart;
   /**
    * Pending permission mode change waiting for the active turn to end.
    * Lives in registry memory only — the overlay store does NOT serialize

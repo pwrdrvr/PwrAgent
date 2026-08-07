@@ -2219,6 +2219,7 @@ function buildOptimisticThreadFromLaunchpad(params: {
   optimisticActiveTurn?: NavigationThreadSummary["optimisticActiveTurn"];
   parentThreadId?: string;
   pinnedRank?: string;
+  scheduledStart?: NavigationThreadSummary["scheduledStart"];
 }): NavigationThreadSummary {
   const titlePrompt =
     params.optimisticUserMessage?.text?.trim() || params.launchpad.prompt.trim();
@@ -2259,6 +2260,7 @@ function buildOptimisticThreadFromLaunchpad(params: {
     codexEnvironmentRuntime: params.codexEnvironmentRuntime,
     optimisticUserMessage: params.optimisticUserMessage,
     optimisticActiveTurn: params.optimisticActiveTurn,
+    scheduledStart: params.scheduledStart,
     linkedDirectories:
       params.launchpad.directoryPath && params.launchpad.directoryKind !== "workspace"
         ? [
@@ -2436,6 +2438,7 @@ export function useThreadNavigation(
     reviewTarget?: AppServerReviewTarget,
     parentThreadId?: string,
     extraDirectoryPaths?: string[],
+    scheduledFor?: number,
   ) => Promise<void>;
   /** Directory the New Thread button resolves to by default, or undefined for the directory-less workspace. */
   newThreadDirectoryLabel?: string;
@@ -5468,6 +5471,7 @@ export function useThreadNavigation(
       reviewTarget?: AppServerReviewTarget,
       parentThreadId?: string,
       extraDirectoryPaths?: string[],
+      scheduledFor?: number,
     ): Promise<void> => {
       if (!desktopApi?.materializeDirectoryLaunchpad) {
         setLaunchpadError("Desktop bridge is missing materializeDirectoryLaunchpad().");
@@ -5502,6 +5506,7 @@ export function useThreadNavigation(
           input,
           collaborationMode,
           reviewTarget,
+          scheduledFor,
           ...(materializeParentThreadId
             ? { parentThreadId: materializeParentThreadId }
             : {}),
@@ -5533,6 +5538,7 @@ export function useThreadNavigation(
         workMode: response.workMode,
         codexEnvironmentRuntime: response.codexEnvironmentRuntime,
         optimisticUserMessage: response.turnStartFailure
+          || response.scheduledAction
           ? undefined
           : buildOptimisticUserMessage(input),
         optimisticActiveTurn: response.turnId && !response.turnStartFailure
@@ -5551,6 +5557,13 @@ export function useThreadNavigation(
           : undefined,
         parentThreadId: materializeParentThreadId,
         pinnedRank: response.pinnedRank,
+        scheduledStart: response.scheduledAction
+          ? {
+              actionId: response.scheduledAction.id,
+              scheduledFor: response.scheduledAction.scheduledFor,
+              state: "scheduled",
+            }
+          : undefined,
       });
       const nextThreadKey = buildThreadIdentityKey(response.backend, response.threadId);
       // Sub-thread launchpads drop the new child directly below their source

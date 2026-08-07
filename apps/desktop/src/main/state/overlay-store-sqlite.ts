@@ -1792,6 +1792,26 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     return nextState;
   }
 
+  async setThreadScheduledStart(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    scheduledStart?: ThreadOverlayState["scheduledStart"];
+  }): Promise<ThreadOverlayState> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.getThread(threadKey) ?? {
+      backend: params.backend,
+      threadId: params.threadId,
+      executionMode: "default" as const,
+      extraLinkedDirectories: [],
+    };
+    const nextState: ThreadOverlayState = {
+      ...current,
+      scheduledStart: params.scheduledStart,
+    };
+    this.putThread(threadKey, nextState);
+    return nextState;
+  }
+
   async setThreadPin(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;
@@ -6205,6 +6225,7 @@ export type OverlayStoreLike = Pick<
   | "upsertThreadSubAgent"
   | "setThreadReaction"
   | "setThreadArchiveTombstone"
+  | "setThreadScheduledStart"
   | "setThreadPin"
   | "setThreadParent"
   | "setThreadAgent"

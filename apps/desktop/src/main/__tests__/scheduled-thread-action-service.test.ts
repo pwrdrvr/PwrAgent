@@ -39,6 +39,8 @@ function createHarness(now = 1_000) {
   const cancelQueuedTurn = vi.fn(() => true);
   const cancelPendingReview = vi.fn(() => true);
   const publishLocalEvent = vi.fn(async () => undefined);
+  const markScheduledThreadBorn = vi.fn(async () => undefined);
+  const markScheduledThreadStartTerminal = vi.fn(async () => undefined);
   const registry = {
     cancelPendingReview,
     cancelQueuedTurn,
@@ -46,6 +48,8 @@ function createHarness(now = 1_000) {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+    markScheduledThreadBorn,
+    markScheduledThreadStartTerminal,
     publishLocalEvent,
     submitReview,
     submitTurn,
@@ -61,6 +65,8 @@ function createHarness(now = 1_000) {
     cancelPendingReview,
     cancelQueuedTurn,
     listeners,
+    markScheduledThreadBorn,
+    markScheduledThreadStartTerminal,
     publishLocalEvent,
     registry,
     service,
@@ -424,6 +430,12 @@ describe("ScheduledThreadActionService", () => {
       "Scheduled action cancelled.",
     );
     expect(response.action.status).toBe("cancelled");
+    expect(harness.markScheduledThreadStartTerminal).toHaveBeenCalledWith({
+      actionId: "scheduled-1",
+      backend: "codex",
+      state: "cancelled",
+      threadId: "thread-1",
+    });
   });
 
   it("accepts cancellation when the registry event wins the store race", async () => {
@@ -488,6 +500,11 @@ describe("ScheduledThreadActionService", () => {
     expect(store.get(response.action.id)).toMatchObject({
       status: "started",
       turnId: "review-turn-1",
+    });
+    expect(harness.markScheduledThreadBorn).toHaveBeenCalledWith({
+      actionId: response.action.id,
+      backend: "codex",
+      threadId: "thread-1",
     });
     harness.service.dispose();
   });

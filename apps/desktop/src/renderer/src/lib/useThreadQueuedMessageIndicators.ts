@@ -48,7 +48,10 @@ export function useThreadQueuedMessageIndicators(params: {
     const indicators: Record<string, ThreadQueuedMessageState> = {};
     const now = Date.now();
     for (const thread of threads) {
-      if (thread.prAutoDispatchPending) {
+      if (
+        thread.prAutoDispatchPending
+        || thread.scheduledStart?.state === "scheduled"
+      ) {
         indicators[buildThreadIdentityKey(thread.source, thread.id)] =
           "scheduled";
       }
