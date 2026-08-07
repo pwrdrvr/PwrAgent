@@ -381,6 +381,10 @@ export type SendMessageToThreadResult = {
   /** Owning remote instance when the target is federated. */
   instanceId?: FederationInstanceId;
   turnId: string;
+  /** Present when delivery was deferred behind an active target turn. */
+  queueStatus?: "queued";
+  queueEntryId?: string;
+  position?: number;
   promptPreview: string;
   /** Canonical `pwragent://thread/…` URL for the messaged thread. */
   threadUrl: string;

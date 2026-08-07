@@ -26120,6 +26120,285 @@ script = "printf setup"
     await registry.close();
   });
 
+  it("queues a follow-up prompt while the target thread has an active turn", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      threads: [{
+        id: "target-thread",
+        title: "target-thread",
+        titleSource: "fallback",
+        source: "codex",
+        linkedDirectories: [],
+      }],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null,
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "target-thread",
+          turnId: "target-turn",
+          turn: { id: "target-turn" },
+        },
+      },
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "parent-thread",
+          turnId: "parent-turn",
+          turn: { id: "parent-turn" },
+        },
+      },
+    });
+
+    const response = await callRegistryMcpTool({
+      registry,
+      backend: "codex",
+      threadId: "parent-thread",
+      turnId: "parent-turn",
+      tool: "send_message_to_thread",
+      args: {
+        backend: "codex",
+        threadId: "target-thread",
+        prompt: "The controller audit is complete.",
+      },
+    });
+
+    expect(response).toMatchObject({
+      structuredContent: {
+        backend: "codex",
+        threadId: "target-thread",
+        queueStatus: "queued",
+        queueEntryId: expect.stringMatching(/^thread-turn:/),
+      },
+    });
+    expect(codexClient.startTurnCallCount).toBe(0);
+
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "target-thread",
+          turnId: "target-turn",
+          turn: {
+            id: "target-turn",
+            status: "completed",
+            output: [],
+          },
+        },
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(codexClient.lastStartTurnParams).toMatchObject({
+        threadId: "target-thread",
+        input: [{ type: "text", text: "The controller audit is complete." }],
+      });
+    });
+
+    await registry.close();
+  });
+
+  it("queues a follow-up prompt while a Grok target has an active turn", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const grokClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      threads: [{
+        id: "grok-target-thread",
+        title: "grok-target-thread",
+        titleSource: "fallback",
+        source: "grok",
+        linkedDirectories: [],
+      }],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient,
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null,
+    });
+    await registry.publishLocalEvent({
+      backend: "grok",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "grok-target-thread",
+          turnId: "grok-target-turn",
+          turn: { id: "grok-target-turn" },
+        },
+      },
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "parent-thread",
+          turnId: "parent-turn",
+          turn: { id: "parent-turn" },
+        },
+      },
+    });
+
+    const response = await callRegistryMcpTool({
+      registry,
+      backend: "codex",
+      threadId: "parent-thread",
+      turnId: "parent-turn",
+      tool: "send_message_to_thread",
+      args: {
+        backend: "grok",
+        threadId: "grok-target-thread",
+        prompt: "The controller audit is complete.",
+      },
+    });
+
+    expect(response).toMatchObject({
+      structuredContent: {
+        backend: "grok",
+        threadId: "grok-target-thread",
+        queueStatus: "queued",
+        queueEntryId: expect.stringMatching(/^thread-turn:/),
+      },
+    });
+    expect(grokClient.startTurnCallCount).toBe(0);
+
+    await registry.publishLocalEvent({
+      backend: "grok",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "grok-target-thread",
+          turnId: "grok-target-turn",
+          turn: {
+            id: "grok-target-turn",
+            status: "completed",
+            output: [],
+          },
+        },
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(grokClient.lastStartTurnParams).toMatchObject({
+        threadId: "grok-target-thread",
+        input: [{ type: "text", text: "The controller audit is complete." }],
+      });
+    });
+
+    await registry.close();
+  });
+
+  it("queues a follow-up prompt while an ACP target has an active turn", async () => {
+    const acpBackendId = "acp:kimi" as AcpBackendId;
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const startPrompt = vi.fn((params: { sessionId: string }) => ({
+      sessionId: params.sessionId,
+      turnId: "queued-acp-turn",
+    }));
+    const { registry } = createKimiAcpRegistry({
+      acpBackendId,
+      codexClient,
+      sessionId: "acp-target-thread",
+      sessions: [{
+        backendId: acpBackendId,
+        sessionId: "acp-target-thread",
+        title: "ACP target thread",
+        createdAt: 1_000,
+        updatedAt: 1_000,
+        executionMode: "default",
+        status: "idle",
+      }],
+      startPrompt,
+    });
+    await registry.publishLocalEvent({
+      backend: acpBackendId,
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "acp-target-thread",
+          turnId: "acp-target-turn",
+          turn: { id: "acp-target-turn" },
+        },
+      },
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "parent-thread",
+          turnId: "parent-turn",
+          turn: { id: "parent-turn" },
+        },
+      },
+    });
+
+    const response = await callRegistryMcpTool({
+      registry,
+      backend: "codex",
+      threadId: "parent-thread",
+      turnId: "parent-turn",
+      tool: "send_message_to_thread",
+      args: {
+        backend: acpBackendId,
+        threadId: "acp-target-thread",
+        prompt: "The controller audit is complete.",
+      },
+    });
+
+    expect(response).toMatchObject({
+      structuredContent: {
+        backend: acpBackendId,
+        threadId: "acp-target-thread",
+        queueStatus: "queued",
+        queueEntryId: expect.stringMatching(/^thread-turn:/),
+      },
+    });
+    expect(startPrompt).not.toHaveBeenCalled();
+
+    await registry.publishLocalEvent({
+      backend: acpBackendId,
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "acp-target-thread",
+          turnId: "acp-target-turn",
+          turn: {
+            id: "acp-target-turn",
+            status: "completed",
+            output: [],
+          },
+        },
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(startPrompt).toHaveBeenCalledWith(expect.objectContaining({
+        sessionId: "acp-target-thread",
+        prompt: "The controller audit is complete.",
+      }));
+    });
+
+    await registry.close();
+  });
+
   it("hydrates persisted origins onto Grok replay messages without turn metadata", async () => {
     const replay: AppServerThreadReplay = {
       entries: [

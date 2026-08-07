@@ -6917,10 +6917,8 @@ export class DesktopBackendRegistry {
     this.threadTurnQueue = new ThreadTurnQueue({
       startTurn: async (entry) => await this.startTurnNow(entry),
       isThreadActive: ({ backend, threadId }) =>
-        backend === "codex"
-          ? this.threadHasActiveTurn(threadId)
-            || this.threadHasBlockingWorkspaceMove({ backend, threadId })
-          : false,
+        this.threadHasActiveTurn(threadId, backend)
+        || this.threadHasBlockingWorkspaceMove({ backend, threadId }),
       onLifecycle: async (event) => await this.emitTurnQueueLifecycle(event),
     });
     this.taskMonitorWatchdogTimer = setInterval(() => {
@@ -11387,9 +11385,12 @@ export class DesktopBackendRegistry {
     this.activeCodexTurnModes.delete(
       buildActiveTurnModeKey(params.threadId, syntheticStartedTurnId),
     );
-    if (params.backend === "codex") {
-      this.activeTurnKeys.delete(
-        buildActiveTurnKey(params.backend, params.threadId, syntheticStartedTurnId),
+    this.activeTurnKeys.delete(
+      buildActiveTurnKey(params.backend, params.threadId, syntheticStartedTurnId),
+    );
+    if (params.backend === "grok") {
+      this.activeTurnKeys.add(
+        buildActiveTurnKey(params.backend, result.threadId, result.turnId),
       );
     }
     if (
@@ -22253,7 +22254,14 @@ export class DesktopBackendRegistry {
       };
       let targetTitle: string | undefined;
       let targetInstanceId: string | undefined;
-      let turn: { backend: AppServerBackendKind; threadId: string; turnId: string };
+      let turn: {
+        backend: AppServerBackendKind;
+        threadId: string;
+        turnId: string;
+        queueStatus?: "queued";
+        queueEntryId?: string;
+        position?: number;
+      };
       let localResolutionError: unknown;
       let localThread: AppServerThreadSummary | undefined;
       const remoteRequest = {
@@ -22290,10 +22298,11 @@ export class DesktopBackendRegistry {
           localResolutionError = error;
         }
         if (localThread) {
-          turn = await this.startTurn({
+          const submitted = await this.submitTurn({
             backend,
             threadId,
             input,
+            origin: "manual",
             messageOrigin,
             executionMode: request.args.executionMode,
             model: request.args.model,
@@ -22303,6 +22312,20 @@ export class DesktopBackendRegistry {
             approvalPolicy: request.args.approvalPolicy,
             sandbox: request.args.sandbox,
           });
+          turn = submitted.status === "started"
+            ? {
+                backend: submitted.entry.backend,
+                threadId: submitted.entry.threadId,
+                turnId: submitted.turnId,
+              }
+            : {
+                backend: submitted.entry.backend,
+                threadId: submitted.entry.threadId,
+                turnId: submitted.entry.id,
+                queueStatus: "queued",
+                queueEntryId: submitted.entry.id,
+                position: submitted.position,
+              };
           targetTitle = localThread.title;
         } else if (this.federatedThreadMessageHandler) {
           const discoveredRemoteTurn = await this.federatedThreadMessageHandler({
@@ -22337,6 +22360,13 @@ export class DesktopBackendRegistry {
           threadId: turn.threadId,
           ...(targetInstanceId ? { instanceId: targetInstanceId } : {}),
           turnId: turn.turnId,
+          ...(turn.queueStatus === "queued"
+            ? {
+                queueStatus: turn.queueStatus,
+                queueEntryId: turn.queueEntryId,
+                ...(turn.position === undefined ? {} : { position: turn.position }),
+              }
+            : {}),
           promptPreview: truncateThreadInspectionText(prompt, 240),
           threadUrl: buildThreadUrl(threadLinkRef),
           threadLink: buildThreadMarkdownLink({

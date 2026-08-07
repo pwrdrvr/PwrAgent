@@ -197,6 +197,12 @@ async function sendToRemoteThread(
     backend: turn.backend,
     threadId: turn.threadId,
     turnId: turn.turnId,
+    ...(turn.queueStatus === "queued"
+      ? {
+          queueStatus: "queued" as const,
+          queueEntryId: turn.queueEntryId ?? turn.turnId,
+        }
+      : {}),
     title: match.thread.title,
     instanceId: match.peer.target.instanceId,
     instanceLabel: match.peer.label,

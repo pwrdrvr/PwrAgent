@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { StartTurnResponse } from "@pwragent/shared";
 import type { DesktopFederationRuntime } from "../federation/federation-runtime";
 import { createFederatedThreadMessageHandler } from "../federation/federated-thread-message-service";
 
@@ -46,7 +47,7 @@ function buildRuntime(params: {
         fetchedAt: 1_000,
         threads: peer.ownsThread ? [ownedThread] : [],
       }));
-      const startTurn = vi.fn(async () => ({
+      const startTurn = vi.fn(async (): Promise<StartTurnResponse> => ({
         backend: "codex" as const,
         threadId: request.threadId,
         turnId: "remote-turn-1",
@@ -107,6 +108,32 @@ describe("federated thread message service", () => {
       fastMode: undefined,
       approvalPolicy: undefined,
       sandbox: undefined,
+    });
+  });
+
+  it("preserves queued delivery metadata from the owning peer", async () => {
+    const { backends, runtime } = buildRuntime({
+      peers: [{
+        instanceId: "pwr_harold",
+        label: "Harold-Mac-Mini-M4",
+        ownsThread: true,
+      }],
+    });
+    backends.get("pwr_harold")!.startTurn.mockResolvedValueOnce({
+      backend: "codex",
+      threadId: request.threadId,
+      turnId: "thread-turn:queued-1",
+      queueStatus: "queued",
+      queueEntryId: "thread-turn:queued-1",
+    });
+    const handler = createFederatedThreadMessageHandler({
+      runtime: () => runtime,
+    });
+
+    await expect(handler(request)).resolves.toMatchObject({
+      turnId: "thread-turn:queued-1",
+      queueStatus: "queued",
+      queueEntryId: "thread-turn:queued-1",
     });
   });
 
