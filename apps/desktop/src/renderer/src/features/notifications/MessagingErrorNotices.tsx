@@ -90,7 +90,9 @@ export function MessagingErrorNotices(props: {
   useEffect(() => {
     if (!props.onNoticeChanged) return;
     for (const [platform, state] of statusByPlatform) {
-      const noticeKey = state.notice?.id ?? `healthy:${state.changedAt}`;
+      const noticeKey = state.notice
+        ? messagingNoticePublicationKey(state.notice)
+        : `healthy:${state.changedAt}`;
       if (publishedNoticeKeysRef.current.get(platform) === noticeKey) {
         continue;
       }
@@ -109,6 +111,21 @@ export function MessagingErrorNotices(props: {
       onDismiss={() => dismiss(platform)}
     />
   ));
+}
+
+function messagingNoticePublicationKey(
+  notice: AppNoticeToastNotice,
+): string {
+  // The notice id stays stable so App's durable stack replaces the active
+  // platform entry in place. Include visible content here so a materially new
+  // failure is still published after an earlier notice was dismissed.
+  return JSON.stringify({
+    detail: notice.detail,
+    id: notice.id,
+    message: notice.message,
+    title: notice.title,
+    tone: notice.tone,
+  });
 }
 
 function applyStatusSnapshot(

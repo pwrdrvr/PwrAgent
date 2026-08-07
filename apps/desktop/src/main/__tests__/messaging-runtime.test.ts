@@ -190,7 +190,10 @@ describe("DesktopMessagingRuntime", () => {
       "../messaging/messaging-runtime"
     );
     const runtime = trackRuntime(new Runtime({
-      adapterFactory: () => [telegramAdapter, discordAdapter],
+      adapterFactory: ({ config }) => [
+        ...(config.telegram ? [telegramAdapter] : []),
+        ...(config.discord ? [discordAdapter] : []),
+      ],
       backendBridge: bridge,
       config: {
         discord: {
@@ -222,7 +225,7 @@ describe("DesktopMessagingRuntime", () => {
       ]),
     );
 
-    await runtime.stop();
+    await runtime.stop({ preserveStartupFailures: true });
 
     expect(runtime.getPlatformStatuses()).toEqual(
       expect.arrayContaining([
@@ -237,6 +240,60 @@ describe("DesktopMessagingRuntime", () => {
           platform: "discord",
           reason: "Cannot read properties of undefined (reading 'federation')",
           startupFailure: true,
+        }),
+      ]),
+    );
+
+    await runtime.applyConfig({
+      discord: {
+        channel: "discord",
+        botToken: "discord-token",
+        authorizedActorIds: [{ id: "user-1", displayName: "" }],
+      },
+    });
+
+    expect(runtime.getPlatformStatuses()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          health: "suspended",
+          platform: "telegram",
+          reason: undefined,
+          startupFailure: undefined,
+        }),
+        expect.objectContaining({
+          health: "enabled",
+          platform: "discord",
+          startupFailure: undefined,
+        }),
+      ]),
+    );
+
+    vi.mocked(bridge.setRemoteEventSubscriptions)
+      .mockImplementationOnce(() => {
+        throw new Error("subscription refresh failed");
+      });
+    await expect(runtime.applyConfig({
+      discord: {
+        channel: "discord",
+        botToken: "discord-token",
+        authorizedActorIds: [{ id: "user-1", displayName: "" }],
+      },
+    })).rejects.toThrow("subscription refresh failed");
+
+    await runtime.applyConfig({ enabled: false });
+
+    expect(runtime.getPlatformStatuses()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          health: "suspended",
+          platform: "discord",
+          reason: undefined,
+          startupFailure: undefined,
+        }),
+        expect.objectContaining({
+          health: "suspended",
+          platform: "telegram",
+          startupFailure: undefined,
         }),
       ]),
     );

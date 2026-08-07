@@ -411,12 +411,14 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     });
   }
 
-  async stop(): Promise<void> {
+  async stop(
+    options: { preserveStartupFailures?: boolean } = {},
+  ): Promise<void> {
     const reason = "Messaging was stopped while adapter startup was still pending.";
     this.pendingAdapterStopReason = reason;
     this.cancelPendingAdapterStarts(reason);
     await this.enqueueLifecycle(async () => {
-      await this.stopNow();
+      await this.stopNow(options);
     });
   }
 
@@ -444,8 +446,13 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     };
   }
 
-  private async stopNow(): Promise<void> {
+  private async stopNow(
+    options: { preserveStartupFailures?: boolean } = {},
+  ): Promise<void> {
     if (!this.started) {
+      if (!options.preserveStartupFailures) {
+        this.clearRetainedStartupFailures();
+      }
       return;
     }
     this.started = false;
@@ -468,10 +475,15 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     // knows it's configured but currently off.
     for (const channel of stoppedChannels) {
       const previous = this.platformStatuses.get(channel);
+      const preserveStartupFailure =
+        options.preserveStartupFailures && previous?.startupFailure === true;
       this.setPlatformHealth(channel, "suspended", {
-        reason: previous?.startupFailure ? previous.reason : undefined,
-        startupFailure: previous?.startupFailure,
+        reason: preserveStartupFailure ? previous.reason : undefined,
+        startupFailure: preserveStartupFailure || undefined,
       });
+    }
+    if (!options.preserveStartupFailures) {
+      this.clearRetainedStartupFailures();
     }
   }
 
@@ -491,6 +503,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   ): Promise<void> {
     try {
       await this.applyConfigNow(config, options);
+      this.clearStartupFailuresForDisabledPlatforms(config);
     } catch (error) {
       // Config application can reject after adapters have already reported
       // enabled (for example, a post-start federation subscription sync).
@@ -504,6 +517,25 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
         });
       }
       throw error;
+    }
+  }
+
+  private clearRetainedStartupFailures(): void {
+    for (const [platform, status] of this.platformStatuses) {
+      if (!status.startupFailure) continue;
+      this.setPlatformHealth(platform, "suspended");
+    }
+  }
+
+  private clearStartupFailuresForDisabledPlatforms(
+    config: DesktopMessagingConfig,
+  ): void {
+    const configuredPlatforms = new Set<MessagingChannelKind>(
+      configuredMessagingProviderIds(config),
+    );
+    for (const [platform, status] of this.platformStatuses) {
+      if (!status.startupFailure || configuredPlatforms.has(platform)) continue;
+      this.setPlatformHealth(platform, "suspended");
     }
   }
 

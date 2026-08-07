@@ -63,9 +63,29 @@ describe("MessagingErrorNotices", () => {
     act(() => {
       emitStatus?.({
         kind: "health-changed",
-        platform: "slack",
+        platform: "discord",
         health: "errored",
         at: 1_785_926_400_002,
+        reason: "bot token was revoked",
+      });
+    });
+    await waitFor(() => {
+      expect(discordPublicationCount()).toBe(2);
+    });
+    expect(onNoticeChanged).toHaveBeenLastCalledWith(
+      "discord",
+      expect.objectContaining({
+        detail: "bot token was revoked",
+        id: "messaging-platform-error:discord:active",
+      }),
+    );
+
+    act(() => {
+      emitStatus?.({
+        kind: "health-changed",
+        platform: "slack",
+        health: "errored",
+        at: 1_785_926_400_003,
         reason: "socket disconnected",
       });
     });
@@ -75,14 +95,14 @@ describe("MessagingErrorNotices", () => {
         expect.objectContaining({ title: "Slack messaging failed" }),
       );
     });
-    expect(discordPublicationCount()).toBe(1);
+    expect(discordPublicationCount()).toBe(2);
 
     act(() => {
       emitStatus?.({
         kind: "health-changed",
         platform: "discord",
         health: "enabled",
-        at: 1_785_926_400_003,
+        at: 1_785_926_400_004,
       });
     });
     await waitFor(() => {
