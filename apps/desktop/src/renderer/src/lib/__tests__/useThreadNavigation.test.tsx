@@ -8778,6 +8778,129 @@ describe("useThreadNavigation", () => {
     expect(result.current.directories[0]?.directoryThreadsCollapsed).toBe(true);
   });
 
+  it("applies a peer's PR events to its pinned rows without touching local threads", async () => {
+    // A pinned remote row is the only place a peer's PR chip is shown,
+    // and the main window has no federation target, so these events do
+    // not match its window target. They still have to land — scoped to
+    // the peer that sent them.
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "remote-instance",
+    };
+    const buildPr = (overrides: Record<string, unknown>) => ({
+      number: 1270,
+      provider: "github" as const,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      title: "canonical PR status",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/1270",
+      state: "open" as const,
+      lifecycleState: "open" as const,
+      ...overrides,
+    });
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    // Both threads deliberately share an id: only the federation origin
+    // distinguishes them.
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+      threads: [
+        {
+          id: "shared-thread-id",
+          title: "Local thread",
+          titleSource: "explicit" as const,
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: { inInbox: true },
+          prs: [buildPr({ number: 999, url: "https://github.com/pwrdrvr/PwrAgent/pull/999" })],
+        },
+        {
+          id: "shared-thread-id",
+          title: "Pinned remote thread",
+          titleSource: "explicit" as const,
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: { inInbox: true },
+          federation: {
+            instanceLabel: "Remote Mac",
+            ref: {
+              backend: "codex" as const,
+              target: federationTarget,
+              threadId: "shared-thread-id",
+            },
+          },
+          prs: [buildPr({})],
+        },
+      ],
+    }));
+    const desktopApi = {
+      getNavigationSnapshot,
+      onAgentEvent: (
+        callback: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0],
+      ) => {
+        agentEventHandler = callback;
+        return () => {
+          agentEventHandler = undefined;
+        };
+      },
+    } as unknown as DesktopApi;
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+    await waitFor(() => {
+      expect(result.current.threads).toHaveLength(2);
+    });
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        federationTarget,
+        notification: {
+          method: "pullRequest/status/updated",
+          params: {
+            prKey: "github/pwrdrvr/pwragent#1270",
+            pr: buildPr({ state: "merged", lifecycleState: "merged" }),
+          },
+        },
+      } as never);
+    });
+
+    await waitFor(() => {
+      expect(result.current.threads[1]?.prs?.[0]?.lifecycleState).toBe("merged");
+    });
+    // The local thread carries a different PR and is untouched.
+    expect(result.current.threads[0]?.prs?.[0]?.number).toBe(999);
+
+    // A peer's attachment-list event must not rewrite the local thread
+    // that shares its id.
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        federationTarget,
+        notification: {
+          method: "thread/pullRequests/updated",
+          params: {
+            threadId: "shared-thread-id",
+            prs: [buildPr({ number: 4242 })],
+          },
+        },
+      } as never);
+    });
+
+    await waitFor(() => {
+      expect(result.current.threads[1]?.prs?.[0]?.number).toBe(4242);
+    });
+    expect(result.current.threads[0]?.prs?.[0]?.number).toBe(999);
+  });
+
   describe("pickAndRegisterDirectory (issue #223)", () => {
     const launchpadDefaults = {
       backend: "codex" as const,

@@ -362,11 +362,52 @@ Canonicalization failures degrade rather than propagate:
 overlay rows, because possibly-stale chips beat a failed snapshot (which
 for a viewer means a disconnected window).
 
-Known remaining gap: remote-stamped `pullRequest/status/updated` and
-`thread/pullRequests/updated` events are dropped by the main window's
-federation-target filter in `useThreadNavigation`, so viewer-side pinned
-remote rows converge on the next snapshot refresh rather than live.
-Dedicated remote windows do apply these events.
+### Who owns a PR's status when two instances can see it
+
+A window with no federation target shows local threads and pinned remote
+rows together, so the same GitHub PR can appear twice — once monitored
+by the local poller, once as a peer's observation. Two monitors writing
+the same rows from slightly different points in time reads as the status
+flickering. The rule is **local monitoring wins, and a peer only fills a
+gap it alone can see**:
+
+- `broadcastAgentEvent` drops a remote-stamped `pullRequest/status/updated`
+  before it reaches any non-federation window when
+  `registry.isPullRequestLocallyMonitored(prKey)` — the PR is attached to
+  a local thread's primary workspace, so our own poller owns it. The
+  resolver is injected from `DesktopAppServerService` and uses the same
+  test as `collectPrPollTargets`. Terminal PRs still count as ours: they
+  leave the poll rotation, but our last observation of them is final.
+- Federation windows always receive the event. The peer is their only
+  source of truth, and their renderer-side target filter decides whether
+  it belongs to the instance they front.
+- When we *do* own the PR, the pinned remote row still updates — local
+  `pullRequest/status/updated` matches by `prKey` across every thread in
+  the snapshot, so the local observation lands on the remote row too.
+  That is why dropping the peer's copy loses nothing.
+
+`thread/pullRequests/updated` is **not** gated: a thread's *attachment
+list* is owned by the instance the thread lives on, so a peer is always
+authoritative for its own threads' lists. It is instead scoped by origin
+in `applyThreadPullRequestsUpdate`, which matches the thread's
+`federation.ref.target` against the event's, so a peer's event cannot
+rewrite a local thread that happens to share an id. Do not "fix" the
+asymmetry by adding this method to the gate — status and attachment
+lists have different owners, and a test pins the distinction.
+
+Two deliberate cases where we defer to the peer rather than claim
+ownership, both because claiming it would assert a freshness we do not
+have:
+
+- **Non-primary attachments.** The test is the PR matching a local
+  thread's *primary* repository, matching `collectPrPollTargets`. A PR
+  attached to a local thread some other way is not polled by us either,
+  so the peer's observation is the fresher one.
+- **Before the first local snapshot.** `attachedPrsByThreadKey` is
+  populated by the local navigation-snapshot path, so until it first
+  runs every PR answers "not monitored" and peer observations flow
+  through. The local poller corrects any row it owns on its next
+  observation.
 
 ## Thread-State Update Bus
 

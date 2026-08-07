@@ -33,9 +33,14 @@ import type {
 
 const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
 const send = vi.fn();
+// A second subscriber standing in for a federation (remote viewer)
+// window, so PR-authority fan-out can be asserted per window kind.
+const federationWindowSend = vi.fn();
+const federationWindowWebContents = { send: federationWindowSend };
 let registryListener: ((event: AgentEvent) => void | Promise<void>) | undefined;
 
 const registry = {
+  isPullRequestLocallyMonitored: vi.fn((_prKey: string) => false),
   listBackends: vi.fn(async (_request?: ListBackendsRequest) => ({
     fetchedAt: 1,
     backends: [],
@@ -333,8 +338,18 @@ vi.mock("electron", () => ({
 // `BrowserWindow.getAllWindows()`. The test pretends a single
 // subscriber exists for any channel, which routes back to the
 // shared `send` mock above.
+// `broadcastAgentEvent` asks which remote instance a window fronts so a
+// peer's PR observation can be withheld from windows that have a local
+// monitor for the same PR. Only the federation subscriber has a target.
+vi.mock("../window", () => ({
+  federationWindowTargetForWebContents: (webContents: unknown) =>
+    webContents === federationWindowWebContents
+      ? { scope: "remote", instanceId: "peer-1" }
+      : undefined,
+}));
+
 vi.mock("../window-channels", () => ({
-  subscribersForChannel: () => [{ send }],
+  subscribersForChannel: () => [{ send }, federationWindowWebContents],
   WINDOW_KIND_MAIN: "main",
   WINDOW_KIND_MESSAGING_ACTIVITY: "messaging-activity",
   registerWindowChannels: () => undefined,
@@ -358,6 +373,9 @@ describe("agent ipc", () => {
   beforeEach(() => {
     handlers.clear();
     send.mockReset();
+    federationWindowSend.mockReset();
+    registry.isPullRequestLocallyMonitored.mockClear();
+    registry.isPullRequestLocallyMonitored.mockReturnValue(false);
     registry.listBackends.mockClear();
     registry.onEvent.mockClear();
     registry.startThread.mockClear();
@@ -1077,6 +1095,88 @@ describe("agent ipc", () => {
         }),
       }),
     );
+
+    disposeAgentIpcHandlers();
+  });
+
+  it("withholds a peer's PR status from windows that monitor the PR locally", async () => {
+    const { registerAgentIpcHandlers, disposeAgentIpcHandlers } = await import(
+      "../ipc/agent-ipc"
+    );
+    const { AGENT_EVENT_CHANNEL } = await import("../../shared/ipc");
+
+    registerAgentIpcHandlers();
+
+    const remotePrEvent = {
+      backend: "codex" as const,
+      federationTarget: { scope: "remote" as const, instanceId: "peer-1" },
+      notification: {
+        method: "pullRequest/status/updated" as const,
+        params: {
+          prKey: "github/pwrdrvr/pwragent#1270",
+          pr: {
+            number: 1270,
+            provider: "github" as const,
+            org: "pwrdrvr",
+            repo: "PwrAgent",
+            title: "canonical PR status",
+            url: "https://github.com/pwrdrvr/PwrAgent/pull/1270",
+            state: "open" as const,
+          },
+        },
+      },
+    };
+
+    // Not attached locally: the peer is the only observer, so every
+    // window — including the main one rendering a pinned remote row —
+    // needs it.
+    registry.isPullRequestLocallyMonitored.mockReturnValue(false);
+    await registryListener?.(remotePrEvent as unknown as AgentEvent);
+    expect(send).toHaveBeenCalledWith(
+      AGENT_EVENT_CHANNEL,
+      expect.objectContaining({ federationTarget: { scope: "remote", instanceId: "peer-1" } }),
+    );
+    expect(federationWindowSend).toHaveBeenCalledTimes(1);
+
+    // Attached locally: our own poller owns this PR and its events
+    // already patch the pinned row by prKey, so the peer's copy must not
+    // reach the main window. The federation window has no local monitor
+    // to defer to and still gets it.
+    send.mockReset();
+    federationWindowSend.mockReset();
+    registry.isPullRequestLocallyMonitored.mockReturnValue(true);
+    await registryListener?.(remotePrEvent as unknown as AgentEvent);
+    expect(send).not.toHaveBeenCalled();
+    expect(federationWindowSend).toHaveBeenCalledTimes(1);
+
+    // The gate is scoped to remote PR status: a local observation of the
+    // same PR still reaches every window.
+    send.mockReset();
+    await registryListener?.({
+      ...remotePrEvent,
+      federationTarget: undefined,
+    } as unknown as AgentEvent);
+    expect(send).toHaveBeenCalledTimes(1);
+
+    // A peer's ATTACHMENT LIST is never gated, even while we monitor a
+    // PR on that list ourselves: which PRs hang off a peer's thread is
+    // the peer's to declare, and only its own rows are rewritten (the
+    // renderer scopes that apply by federation origin). Widening the
+    // gate to cover this method would silently freeze pinned remote
+    // rows, so this asymmetry is pinned on purpose.
+    send.mockReset();
+    federationWindowSend.mockReset();
+    registry.isPullRequestLocallyMonitored.mockReturnValue(true);
+    await registryListener?.({
+      backend: "codex",
+      federationTarget: { scope: "remote", instanceId: "peer-1" },
+      notification: {
+        method: "thread/pullRequests/updated",
+        params: { threadId: "peer-thread-1", prs: [remotePrEvent.notification.params.pr] },
+      },
+    } as unknown as AgentEvent);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(federationWindowSend).toHaveBeenCalledTimes(1);
 
     disposeAgentIpcHandlers();
   });

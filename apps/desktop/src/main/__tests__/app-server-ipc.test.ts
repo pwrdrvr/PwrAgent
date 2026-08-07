@@ -413,6 +413,7 @@ function emitRegistryEvent(event: unknown): void {
 const publishLocalEvent = vi.fn(async () => undefined);
 const setThreadPullRequestStatusToolHandler = vi.fn();
 const setThreadPullRequestCanonicalizer = vi.fn();
+const setLocalPullRequestAuthorityResolver = vi.fn();
 const setThreadPullRequestWatchToolHandler = vi.fn();
 const setThreadPrAutoDispatchHandler = vi.fn();
 const setThreadPullRequestDetachHandler = vi.fn();
@@ -785,6 +786,7 @@ vi.mock("../app-server/backend-registry", () => {
     publishLocalEvent,
     setThreadPullRequestStatusToolHandler,
     setThreadPullRequestCanonicalizer,
+    setLocalPullRequestAuthorityResolver,
     setThreadPullRequestWatchToolHandler,
     setThreadPrAutoDispatchHandler,
     setThreadPullRequestDetachHandler,
@@ -890,6 +892,7 @@ describe("app server ipc", () => {
     publishLocalEvent.mockClear();
     setThreadPullRequestStatusToolHandler.mockClear();
     setThreadPullRequestCanonicalizer.mockClear();
+    setLocalPullRequestAuthorityResolver.mockClear();
     setThreadPullRequestWatchToolHandler.mockClear();
     setThreadPrAutoDispatchHandler.mockClear();
     setThreadPullRequestDetachHandler.mockClear();
