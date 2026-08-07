@@ -184,6 +184,7 @@ function useUnpublishedCommits(params: {
     totalCommits: number;
     truncated: boolean;
     loading: boolean;
+    worktreePath?: string;
   }>({ commits: [], totalCommits: 0, truncated: false, loading: false });
 
   useEffect(() => {
@@ -195,7 +196,17 @@ function useUnpublishedCommits(params: {
     }
 
     let cancelled = false;
-    setState({ commits: [], totalCommits: 0, truncated: false, loading: true });
+    setState((current) =>
+      current.worktreePath === worktreePath
+        ? { ...current, loading: true }
+        : {
+            commits: [],
+            totalCommits: 0,
+            truncated: false,
+            loading: true,
+            worktreePath,
+          },
+    );
     void listCommits({
       backend: params.backend,
       threadId: params.threadId,
@@ -210,17 +221,23 @@ function useUnpublishedCommits(params: {
             totalCommits: response.totalCommits,
             truncated: response.truncated,
             loading: false,
+            worktreePath,
           });
         }
       })
       .catch(() => {
         if (!cancelled) {
-          setState({
-            commits: [],
-            totalCommits: 0,
-            truncated: false,
-            loading: false,
-          });
+          setState((current) =>
+            current.worktreePath === worktreePath
+              ? { ...current, loading: false }
+              : {
+                  commits: [],
+                  totalCommits: 0,
+                  truncated: false,
+                  loading: false,
+                  worktreePath,
+                },
+          );
         }
       });
 

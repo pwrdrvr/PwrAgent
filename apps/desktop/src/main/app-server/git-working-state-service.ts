@@ -30,6 +30,7 @@ const DEFAULT_UNPUBLISHED_COMMITS_MAX = 20;
 const HARD_UNPUBLISHED_COMMITS_MAX = 50;
 const DEFAULT_UNPUBLISHED_COMMIT_FILES_MAX = 50;
 const HARD_UNPUBLISHED_COMMIT_FILES_MAX = 100;
+const UNPUBLISHED_COMMIT_SUMMARY_CONCURRENCY = 4;
 const UNTRACKED_DIRECTORY_EXPANSION_MAX_BYTES = 128_000;
 const UNTRACKED_DIRECTORY_EXPANSION_TIMEOUT_MS = 1_500;
 const MAX_BASE_BRANCH_CANDIDATES = 24;
@@ -1474,9 +1475,13 @@ export class GitWorkingStateService {
       /^[0-9a-f]{40}$/i.test(sha),
     );
     const visibleShas = shas.slice(0, maxCommits);
-    const summaries = await Promise.all(
-      visibleShas.map(async (sha) =>
-        parseUnpublishedCommitSummary(
+    const summaries: Array<WorktreeUnpublishedCommit | undefined> =
+      new Array(visibleShas.length);
+    for await (const entry of new IterableMapper(
+      visibleShas,
+      async (sha, index) => ({
+        index,
+        summary: parseUnpublishedCommitSummary(
           cwd,
           await noLocks([
             "show",
@@ -1491,8 +1496,14 @@ export class GitWorkingStateService {
           ]).catch(() => ""),
           maxFilesPerCommit,
         ),
-      ),
-    );
+      }),
+      {
+        concurrency: UNPUBLISHED_COMMIT_SUMMARY_CONCURRENCY,
+        maxUnread: UNPUBLISHED_COMMIT_SUMMARY_CONCURRENCY * 2,
+      },
+    )) {
+      summaries[entry.index] = entry.summary;
+    }
     const commits = summaries.filter(
       (commit): commit is WorktreeUnpublishedCommit => Boolean(commit),
     );

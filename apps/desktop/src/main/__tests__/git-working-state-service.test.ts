@@ -885,6 +885,45 @@ describe("GitWorkingStateService", () => {
       .toEqual(expect.arrayContaining(["--first-parent", "--numstat", "-z"]));
   });
 
+  it("bounds concurrent unpublished commit summary probes", async () => {
+    const shas = Array.from(
+      { length: 12 },
+      (_, index) => index.toString(16).padStart(40, "0"),
+    );
+    let activeShows = 0;
+    let maxActiveShows = 0;
+    const runGit = vi.fn(async (
+      _cwd: string,
+      args: string[],
+    ): Promise<string> => {
+      if (args[args.length - 1] === "remote") return "origin\n";
+      if (args.includes("--count")) return `${shas.length}\n`;
+      if (args.includes("--max-count=21")) return `${shas.join("\n")}\n`;
+      if (args.includes("show")) {
+        const sha = args.at(-2) ?? "";
+        activeShows += 1;
+        maxActiveShows = Math.max(maxActiveShows, activeShows);
+        await new Promise<void>((resolve) => setTimeout(resolve, 5));
+        activeShows -= 1;
+        return [
+          sha,
+          sha.slice(0, 7),
+          `commit ${sha.slice(-2)}`,
+          "1718000000",
+          "\n1\t0\tfile.txt",
+        ].join("\0") + "\0";
+      }
+      throw new Error(`unexpected git invocation: ${args.join(" ")}`);
+    });
+    const service = new GitWorkingStateService({ runGit });
+
+    const response = await service.listUnpublishedCommits("/repo/wt");
+
+    expect(response.commits.map((commit) => commit.sha)).toEqual(shas);
+    expect(maxActiveShows).toBeGreaterThan(1);
+    expect(maxActiveShows).toBeLessThanOrEqual(4);
+  });
+
   it("summarizes and loads a merge commit against its first parent", async () => {
     const root = await mkdtemp(makeTempPrefix());
     const repo = path.join(root, "repo");

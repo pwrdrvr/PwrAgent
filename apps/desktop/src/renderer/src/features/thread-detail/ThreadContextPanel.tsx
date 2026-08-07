@@ -35,6 +35,7 @@ import {
   type IconProps,
 } from "../../icons";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { resolveThreadWorkingStatePath } from "../../lib/thread-working-state-path";
 import { ThreadAutomationsPanel } from "../automations/ThreadAutomationsPanel";
 import { ThreadInfoPanel } from "./context-panels/ThreadInfoPanel";
 import { ProviderStatusPanel } from "./context-panels/ProviderStatusPanel";
@@ -193,6 +194,8 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   );
   const topTabs = visibleTabs.filter((tab) => !tab.bottom);
   const bottomTabs = visibleTabs.filter((tab) => tab.bottom);
+  const editsWorktreeRoot = props.editedFilesWorktreeRoot
+    ?? (props.thread ? resolveThreadWorkingStatePath(props.thread) : undefined);
 
   const rememberMousePosition = useCallback((event: MouseEvent<HTMLElement>) => {
     lastMousePositionRef.current = {
@@ -704,7 +707,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             backend={props.thread.source}
             groups={props.editedFileGroups ?? []}
             commitStatesByKey={props.editedFileCommitStates}
-            worktreeRoot={props.editedFilesWorktreeRoot}
+            worktreeRoot={editsWorktreeRoot}
             desktopApi={props.desktopApi}
             threadId={props.thread.id}
             workingStateRefreshKey={JSON.stringify({
