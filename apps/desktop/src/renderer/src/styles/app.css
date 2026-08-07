@@ -3907,6 +3907,58 @@ textarea,
   gap: 12px;
 }
 
+/* The row's open-thread action. It is the title line, NOT the card: the
+   chip flow below carries its own buttons (copy path, copy branch, unpin,
+   unbind, reactions, PR links) and nesting those inside the row button
+   made the row an invalid, unoperable control (axe `nested-interactive`).
+   `.star-map-card-shell` solved the same problem for its kebab. Reset the
+   UA button chrome so the title line looks exactly as it did when the
+   whole card was the button. */
+.thread-row__open {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  /* WCAG 2.5.8 wants a 24px target, and the title line alone is ~21px.
+     Bleed the button's box symmetrically over the row's padding — the
+     negative margin cancels the padding exactly, in every density, so
+     nothing on screen moves — and keep a 24px floor in case a density
+     ever shrinks the title line further. */
+  min-height: 24px;
+  margin-block: -4px;
+  padding-block: 4px;
+  padding-inline: 0;
+}
+
+/* …and stretch its hit area back over the whole card, so pressing the
+   card's padding or the gaps between chips still opens the thread. The
+   overlay sits at z-index 0; `.thread-row__chips` is lifted above it so
+   each chip keeps its own clicks. */
+.thread-row__open::after {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  content: "";
+}
+
+/* The overlay is invisible, so the focus ring belongs on the card it
+   covers — same ring the row drew when the card itself was the button.
+   Deliberately `:focus`, NOT `:focus-visible`: the rule this replaces
+   listed both, so a row drew its ring after a mouse click too, and the
+   desktop-shell snapshot captures exactly that. Narrowing it to
+   keyboard-only focus would be a silent visual change riding along with
+   an a11y fix. (`:focus-visible` is a subset of `:focus`, so keyboard
+   focus is still covered.) */
+.thread-row__open:focus {
+  outline: none;
+}
+
+.thread-row:has(.thread-row__open:focus) {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
 .thread-row__heading {
   display: flex;
   min-width: 0;
@@ -3997,9 +4049,19 @@ textarea,
    flex-wrap handles overflow naturally; no per-type containers. */
 .thread-row__chips {
   display: flex;
+  position: relative;
+  z-index: 1;
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
+  /* Above `.thread-row__open::after`, so a chip wins its own clicks —
+     but transparent to the pointer itself, so the gaps between chips
+     fall through to the overlay and still open the thread. */
+  pointer-events: none;
+}
+
+.thread-row__chips > * {
+  pointer-events: auto;
 }
 
 /* Focus ring for any role="button" chip in the flow (PR, binding,
@@ -9657,8 +9719,11 @@ textarea,
   pointer-events: none;
 }
 
-/* Positioned so the content paints above the watermark's z-index 0. */
-.star-map-card__heading,
+/* Positioned so the content paints above the watermark's z-index 0, and
+   above `.star-map-card__open::after` so each chip keeps its own clicks.
+   The heading is deliberately NOT positioned here: it is the open-thread
+   button, and its stretch overlay has to resolve against `.star-map-card`
+   rather than against the heading line itself. */
 .star-map-card__chips {
   position: relative;
   z-index: 1;
@@ -9679,12 +9744,66 @@ textarea,
   white-space: nowrap;
 }
 
+/* The card's open-thread action. It is the heading line, NOT the card:
+   the chips below own real buttons (copy path, copy branch, PR links),
+   and nesting those inside a card-sized button made the card an invalid,
+   unoperable control (axe `nested-interactive`) — the same reason the
+   kebab has always lived outside it. Reset the UA button chrome so the
+   heading looks exactly as it did when the card was the button. */
+.star-map-card__open {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  /* Same 24px-target bleed the sidebar row uses — the heading line alone
+     is under WCAG 2.5.8's minimum, and the negative margin cancels the
+     padding so the card's layout is unchanged. */
+  min-height: 24px;
+  margin-block: -4px;
+  padding-block: 4px;
+  padding-inline: 0;
+}
+
+/* …and stretch its hit area back over the whole card, so pressing the
+   card's padding or the gaps between chips still opens the thread. */
+.star-map-card__open::after {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  content: "";
+}
+
+/* The overlay is invisible, so the focus ring belongs on the card it
+   covers. `.star-map-card` clips its own children, so a ring drawn on
+   the button inside would be cut off; drawn on the card it is not.
+   `:focus-visible` here, unlike the sidebar row's `:focus`, because the
+   card carried no explicit focus rule before this — it was a bare
+   `<button>` drawing Chromium's UA ring, which is keyboard-only. Each
+   surface keeps the ring it already had. */
+.star-map-card__open:focus-visible {
+  outline: none;
+}
+
+.star-map-card:has(.star-map-card__open:focus-visible) {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
 .star-map-card__chips {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 4px;
   min-width: 0;
+  /* Transparent to the pointer so the gaps between chips fall through to
+     the open-thread overlay; each chip re-enables its own hits. */
+  pointer-events: none;
+}
+
+.star-map-card__chips > * {
+  pointer-events: auto;
 }
 
 /* New-thread "bubble in" entrance (AI intake). Fade only under reduced

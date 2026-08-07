@@ -193,10 +193,33 @@ describe("shouldStartCanvasPan", () => {
   });
 
   it("never steals a gesture from a card, body, or chrome", () => {
-    // Cards and instance bodies are buttons and drag/open themselves.
-    const card = element('<button class="star-map-card"><span>x</span></button>');
-    expect(shouldStartCanvasPan(card)).toBe(false);
-    expect(shouldStartCanvasPan(card.firstElementChild)).toBe(false);
+    // Instance bodies are buttons and drag/open themselves.
+    const body = element(
+      '<button class="star-map-instance__body"><span>x</span></button>',
+    );
+    expect(shouldStartCanvasPan(body)).toBe(false);
+    expect(shouldStartCanvasPan(body.firstElementChild)).toBe(false);
+
+    // A thread card is a shell holding sibling controls, so its container
+    // elements match no element selector — the shell has to be named.
+    const shell = element(
+      '<div class="star-map-card-shell">'
+      + '<div class="star-map-card">'
+      + '<button class="star-map-card__open">x</button>'
+      + '<span class="star-map-card__chips"><span class="thread-row__chip">y</span></span>'
+      + "</div>"
+      + "</div>",
+    );
+    expect(shouldStartCanvasPan(shell)).toBe(false);
+    expect(shouldStartCanvasPan(shell.querySelector(".star-map-card"))).toBe(
+      false,
+    );
+    expect(shouldStartCanvasPan(shell.querySelector(".star-map-card__chips"))).toBe(
+      false,
+    );
+    expect(shouldStartCanvasPan(shell.querySelector(".thread-row__chip"))).toBe(
+      false,
+    );
 
     const chrome = element(
       '<div class="star-map__chrome"><p>PwrAgent</p></div>',

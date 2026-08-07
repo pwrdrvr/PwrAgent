@@ -265,8 +265,14 @@ test.describe("federation remote window", () => {
       const locallyMountedRemoteRow = window.getByRole("button", {
         name: "Remote gateway thread one",
       });
+      // Row state (selection, offline dim) lives on the CARD; the button is
+      // only the title line inside it, because the chip flow beside it
+      // carries buttons of its own (see ThreadRow).
+      const locallyMountedRemoteCard = window.locator(".thread-row", {
+        has: locallyMountedRemoteRow,
+      });
       await expect(locallyMountedRemoteRow).toBeVisible({ timeout: 30_000 });
-      await expect(locallyMountedRemoteRow).not.toHaveClass(/is-remote-offline/);
+      await expect(locallyMountedRemoteCard).not.toHaveClass(/is-remote-offline/);
 
       // Local-only chrome stays hidden in the remote window.
       await expect(
@@ -300,6 +306,9 @@ test.describe("federation remote window", () => {
       // remote-PTY terminal toggle enabled (the gateway granted remote_pty).
       const remoteRowOne = remote.getByRole("button", {
         name: "Remote gateway thread one",
+      });
+      const remoteCardOne = remote.locator(".thread-row", {
+        has: remoteRowOne,
       });
       await remoteRowOne.click();
       await expect(
@@ -473,9 +482,9 @@ test.describe("federation remote window", () => {
       await expect(remoteReply).toContainText(recoveryDraft);
       await expect(sendButton).toBeDisabled();
       await expect(remoteRowOne).toBeVisible();
-      await expect(remoteRowOne).toHaveClass(/is-remote-offline/);
+      await expect(remoteCardOne).toHaveClass(/is-remote-offline/);
       await expect(locallyMountedRemoteRow).toBeVisible();
-      await expect(locallyMountedRemoteRow).toHaveClass(/is-remote-offline/);
+      await expect(locallyMountedRemoteCard).toHaveClass(/is-remote-offline/);
 
       // Recovery: the same identity returns on the same port; the client
       // reconnects on its own backoff and the window heals without a

@@ -136,7 +136,7 @@ export function ThreadRow(props: ThreadRowProps) {
   );
   const status = getThreadRowStatus(props.thread, props.thinkingThreadKeys);
   const [pickerOpen, setPickerOpen] = useState(false);
-  const rowButtonRef = useRef<HTMLButtonElement>(null);
+  const rowRef = useRef<HTMLDivElement>(null);
   const completedRevealRequestRef = useRef(0);
   const revealSelectedThreadRequest = props.revealSelectedThreadRequest ?? 0;
   const onRevealSelectedThreadComplete =
@@ -168,11 +168,11 @@ export function ThreadRow(props: ThreadRowProps) {
       return;
     }
 
-    if (typeof rowButtonRef.current?.scrollIntoView !== "function") {
+    if (typeof rowRef.current?.scrollIntoView !== "function") {
       return;
     }
 
-    rowButtonRef.current.scrollIntoView({
+    rowRef.current.scrollIntoView({
       block: "nearest",
     });
   }, [active, threadKey]);
@@ -265,42 +265,52 @@ export function ThreadRow(props: ThreadRowProps) {
           }}
         />
       ) : null}
-      <button
-        ref={rowButtonRef}
-        aria-label={props.thread.title}
-        aria-pressed={selected}
+      <div
+        ref={rowRef}
         className={`thread-row${props.compact ? " thread-row--compact" : ""}${
           selected ? " is-selected" : ""
         }${isComposerSource ? " is-composer-source" : ""}${
           isRemoteOffline ? " is-remote-offline" : ""
         }`}
-        type="button"
-        onKeyDown={(event) => {
-          // Reorder a pinned thread within its backend's pinned
-          // slice. Unified with the directory-pin shortcut
-          // (Cmd+Shift+Arrow) so users learn one keybind. Plain
-          // Cmd+Arrow used to drive this — that collided with
-          // macOS Finder's "go to parent folder" mental model and
-          // diverged from the directory shortcut.
-          if (
-            props.onMovePinnedThread &&
-            props.thread.pinnedRank &&
-            event.metaKey &&
-            event.shiftKey &&
-            !event.altKey &&
-            !event.ctrlKey &&
-            (event.key === "ArrowUp" || event.key === "ArrowDown")
-          ) {
-            event.preventDefault();
-            props.onMovePinnedThread(
-              props.thread,
-              event.key === "ArrowUp" ? "up" : "down",
-            );
-          }
-        }}
-        onClick={(event) => props.onSelectThread(props.thread, event)}
       >
-        <span className="thread-row__header">
+        {/* The card's primary action. It carries the title line and
+            stretches over the whole card via `.thread-row__open::after`
+            (see app.css), but it is a SIBLING of the chip flow rather
+            than its ancestor: the chips own real buttons (copy path,
+            copy branch, unpin, unbind, reactions, PR links) and a button
+            inside a button is neither valid nor operable — axe reports it
+            as `nested-interactive`. `.star-map-card-shell` uses the same
+            shape for its kebab. */}
+        <button
+          aria-label={props.thread.title}
+          aria-pressed={selected}
+          className="thread-row__header thread-row__open"
+          type="button"
+          onKeyDown={(event) => {
+            // Reorder a pinned thread within its backend's pinned
+            // slice. Unified with the directory-pin shortcut
+            // (Cmd+Shift+Arrow) so users learn one keybind. Plain
+            // Cmd+Arrow used to drive this — that collided with
+            // macOS Finder's "go to parent folder" mental model and
+            // diverged from the directory shortcut.
+            if (
+              props.onMovePinnedThread &&
+              props.thread.pinnedRank &&
+              event.metaKey &&
+              event.shiftKey &&
+              !event.altKey &&
+              !event.ctrlKey &&
+              (event.key === "ArrowUp" || event.key === "ArrowDown")
+            ) {
+              event.preventDefault();
+              props.onMovePinnedThread(
+                props.thread,
+                event.key === "ArrowUp" ? "up" : "down",
+              );
+            }
+          }}
+          onClick={(event) => props.onSelectThread(props.thread, event)}
+        >
           <span className="thread-row__heading">
             <ThreadRowStatus status={status} />
             <span className="thread-row__title">{props.thread.title}</span>
@@ -308,7 +318,7 @@ export function ThreadRow(props: ThreadRowProps) {
           <span className="thread-row__time">
             {formatRelativeTime(props.thread.updatedAt)}
           </span>
-        </span>
+        </button>
 
         {/* Single ordered chip flow: meta (provider / location / pinned /
             branch / drift) → messaging binding chips → PR chips →
@@ -394,7 +404,7 @@ export function ThreadRow(props: ThreadRowProps) {
           ))}
         </span>
 
-      </button>
+      </div>
 
       <div className="thread-row__actions">
         {canReact ? (

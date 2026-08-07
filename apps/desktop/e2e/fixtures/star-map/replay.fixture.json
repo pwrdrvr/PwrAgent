@@ -34,7 +34,16 @@
           "source": "codex",
           "executionMode": "default",
           "threadStatus": "active",
-          "linkedDirectories": [],
+          "gitBranch": "feature/star-map-audit",
+          "linkedDirectories": [
+            {
+              "id": "star-map-worktree-dir",
+              "kind": "worktree",
+              "label": "PwrAgent",
+              "path": "/repo/PwrAgent",
+              "worktreePath": "/repo/PwrAgent/.worktrees/feature-star-map-audit"
+            }
+          ],
           "inbox": {
             "inInbox": true,
             "reason": "new-thread"
@@ -49,7 +58,14 @@
           "source": "codex",
           "executionMode": "default",
           "threadStatus": "active",
-          "linkedDirectories": [],
+          "linkedDirectories": [
+            {
+              "id": "star-map-local-dir",
+              "kind": "local",
+              "label": "PwrSnap",
+              "path": "/repo/PwrSnap"
+            }
+          ],
           "inbox": {
             "inInbox": false
           },

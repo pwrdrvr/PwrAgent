@@ -10,6 +10,24 @@ import type { NavigationThreadSummary } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { StarMapScreen } from "../StarMapScreen";
 
+/**
+ * The whole card for a thread, given its open-thread button.
+ *
+ * The button is only the heading line: the chip flow is its SIBLING inside
+ * `.star-map-card`, because chips carry buttons of their own and a button
+ * inside a button is invalid (see StarMapThreadCard). Assertions about
+ * chips have to scope to the card, not to the button.
+ */
+function starMapCard(openButton: HTMLElement): HTMLElement {
+  const card = openButton.closest(".star-map-card");
+  if (!(card instanceof HTMLElement)) {
+    throw new Error(
+      "Expected the open-thread button to sit inside .star-map-card",
+    );
+  }
+  return card;
+}
+
 function buildDesktopApi(): DesktopApi {
   return {
     readFederationHealth: vi.fn(async () => ({
@@ -72,9 +90,10 @@ describe("StarMapScreen", () => {
     });
 
     const card = screen.getByRole("button", { name: /Open thread: Thread t1/ });
-    expect(card.textContent).toContain("PwrSnap");
-    expect(card.textContent).not.toMatch(/local/i);
-    expect(card.textContent).not.toMatch(/worktree/i);
+    const cardBody = starMapCard(card);
+    expect(cardBody.textContent).toContain("PwrSnap");
+    expect(cardBody.textContent).not.toMatch(/local/i);
+    expect(cardBody.textContent).not.toMatch(/worktree/i);
 
     // Clicking a card floats a chat card over the map rather than
     // navigating away from it; the full thread view is one click further,
@@ -425,7 +444,9 @@ describe("StarMapScreen", () => {
         onFocusLocalInstance={() => undefined}
       />,
     );
-    const card = await screen.findByRole("button", { name: /Open thread: Thread t7/ });
+    const card = starMapCard(
+      await screen.findByRole("button", { name: /Open thread: Thread t7/ }),
+    );
     // Project chip stays; provider and branch are opt-in.
     expect(card.textContent).toContain("PwrSnap");
     expect(card.textContent).not.toContain("OpenAI");
@@ -610,9 +631,11 @@ describe("StarMapScreen", () => {
       const sun = await screen.findByTitle("pwrsnap");
       expect(sun).toBeTruthy();
 
-      const card = screen.getByRole("button", {
-        name: /Open thread: Thread t1/,
-      });
+      const card = starMapCard(
+        screen.getByRole("button", {
+          name: /Open thread: Thread t1/,
+        }),
+      );
       // The project is the sun, so its chip is redundant here.
       expect(card.textContent).not.toContain("PwrSnap");
     } finally {
