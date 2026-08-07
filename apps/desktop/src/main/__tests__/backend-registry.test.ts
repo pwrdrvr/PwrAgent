@@ -30252,18 +30252,10 @@ script = "printf setup"
     await registry.close();
   });
 
-  it("resolves get_thread_status across Federation by default", async () => {
+  it("resolves enriched remote status when the local backend is unavailable", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/list", "thread/read"] },
-      threads: [
-        {
-          id: "agent-thread",
-          title: "Coordinator",
-          titleSource: "explicit",
-          source: "codex",
-          linkedDirectories: [],
-        },
-      ],
+      listThreadsError: new Error("local codex backend unavailable"),
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
@@ -30283,6 +30275,55 @@ script = "printf setup"
         titleSource: "explicit" as const,
         source: "codex" as const,
         linkedDirectories: [],
+      },
+      summary: {
+        id: "remote-thread",
+        title: "Remote collector",
+        titleSource: "explicit" as const,
+        source: "codex" as const,
+        linkedDirectories: [{
+          id: "remote-directory",
+          label: "PwrSuiteLab",
+          path: "/remote/PwrSuiteLab",
+          kind: "worktree" as const,
+        }],
+        inbox: { inInbox: false },
+        agent: {
+          name: "Collector",
+          instructionLineCount: 1,
+          instructionsTooLong: false,
+          updatedAt: 1_000,
+        },
+        handoffOrigin: {
+          sourceBackend: "codex" as const,
+          sourceThreadId: "coordinator-thread",
+          sourceTitle: "Coordinator",
+          seedMode: "clean" as const,
+          groupingMode: "none" as const,
+          createdAt: 900,
+          workspace: {
+            mode: "none" as const,
+            git: {
+              kind: "none" as const,
+              worktreeCreationAvailable: false as const,
+              unavailableReason: "No workspace requested.",
+            },
+          },
+        },
+        prs: [{
+          provider: "github.com",
+          org: "pwrdrvr",
+          repo: "PwrAgent",
+          number: 1317,
+          state: "passing" as const,
+          url: "https://github.com/pwrdrvr/PwrAgent/pull/1317",
+        }],
+        messagingBindings: [{
+          bindingId: "binding-1",
+          platform: "telegram" as const,
+          conversationKind: "topic" as const,
+          conversationTitle: "Federation",
+        }],
       },
       read: {
         backend: "codex" as const,
@@ -30340,6 +30381,17 @@ script = "printf setup"
       instanceLabel: "Remote Mac",
       title: "Remote collector",
       status: "idle",
+      threadLink: expect.stringContaining("instanceId=pwr_remote"),
+      agent: { name: "Collector" },
+      handoffOrigin: {
+        sourceThreadId: "coordinator-thread",
+      },
+      linkedDirectories: [{ id: "remote-directory" }],
+      pullRequests: [{ number: 1317 }],
+      messagingBindings: [{
+        bindingId: "binding-1",
+        platform: "telegram",
+      }],
     });
     expect(federatedInspection).toHaveBeenCalledWith({
       backend: "codex",
@@ -30776,9 +30828,10 @@ script = "printf setup"
     await registry.close();
   });
 
-  it("routes mutate_thread to a remote owner when no local thread matches", async () => {
+  it("routes mutate_thread remotely when local resolution fails", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/list"] },
+      listThreadsError: new Error("local codex backend unavailable"),
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
@@ -30818,7 +30871,6 @@ script = "printf setup"
         arguments: {
           backend: "codex",
           threadId: "remote-thread",
-          instanceId: "pwr_remote",
           title: "Remote title",
         },
       },
@@ -30837,7 +30889,6 @@ script = "printf setup"
     expect(mutationHandler).toHaveBeenCalledWith({
       backend: "codex",
       threadId: "remote-thread",
-      instanceId: "pwr_remote",
       title: "Remote title",
       dryRun: false,
     });

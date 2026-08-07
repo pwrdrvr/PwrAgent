@@ -21,10 +21,11 @@ export function createFederatedThreadInspectionHandler(
 ): PwrAgentFederatedThreadInspectionHandler {
   const runtime = options.runtime ?? getDesktopFederationRuntime;
   return async (request) => {
+    const activeRuntime = runtime();
     let match: ResolvedFederatedThreadTarget | undefined;
     try {
       match = await resolveFederatedThreadTarget({
-        runtime: runtime(),
+        runtime: activeRuntime,
         targetStore: options.targetStore,
         request,
       });
@@ -53,10 +54,16 @@ export function createFederatedThreadInspectionHandler(
       limit: request.limit,
       viewOnly: true,
     });
+    const summary = await activeRuntime.remoteThreadSummaries?.().threadFromPeer({
+      target: match.peer.target,
+      backend: request.backend,
+      threadId: request.threadId,
+    });
     return {
       instanceId: match.peer.target.instanceId,
       instanceLabel: match.peer.label,
       thread: match.thread,
+      ...(summary ? { summary } : {}),
       read,
     };
   };

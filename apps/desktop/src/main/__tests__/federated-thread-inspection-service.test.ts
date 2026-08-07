@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { NavigationThreadSummary } from "@pwragent/shared";
 import type { DesktopFederationRuntime } from "../federation/federation-runtime";
 import { createFederatedThreadInspectionHandler } from "../federation/federated-thread-inspection-service";
 
@@ -14,6 +15,9 @@ function buildRuntime(params: {
     >;
   }>;
 }) {
+  const threadFromPeer = vi.fn(
+    async (): Promise<NavigationThreadSummary | undefined> => undefined,
+  );
   const backends = new Map(
     params.peers.map((peer) => {
       const thread = {
@@ -59,8 +63,9 @@ function buildRuntime(params: {
       })),
     remoteBackend: (target: { instanceId: string }) =>
       backends.get(target.instanceId),
+    remoteThreadSummaries: () => ({ threadFromPeer }),
   } as unknown as DesktopFederationRuntime;
-  return { backends, runtime };
+  return { backends, runtime, threadFromPeer };
 }
 
 describe("federated thread inspection service", () => {
@@ -142,6 +147,60 @@ describe("federated thread inspection service", () => {
       includeTurns: false,
       limit: 0,
       viewOnly: true,
+    });
+  });
+
+  it("includes the enriched owner navigation summary when available", async () => {
+    const { runtime, threadFromPeer } = buildRuntime({
+      peers: [{
+        instanceId: "pwr_owner",
+        label: "Owner Mac",
+        ownsThread: true,
+      }],
+    });
+    threadFromPeer.mockResolvedValue({
+      source: "codex",
+      id: threadId,
+      title: "Remote collector result",
+      titleSource: "explicit",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+      agent: {
+        name: "Collector",
+        instructionLineCount: 1,
+        instructionsTooLong: false,
+        updatedAt: 1_000,
+      },
+      prs: [{
+        provider: "github.com",
+        org: "pwrdrvr",
+        repo: "PwrAgent",
+        number: 1317,
+        state: "passing",
+        url: "https://github.com/pwrdrvr/PwrAgent/pull/1317",
+      }],
+    });
+    const handler = createFederatedThreadInspectionHandler({
+      runtime: () => runtime,
+    });
+
+    await expect(handler({
+      backend: "codex",
+      threadId,
+      instanceId: "pwr_owner",
+      limit: 0,
+      includeTurns: false,
+    })).resolves.toMatchObject({
+      summary: {
+        id: threadId,
+        agent: { name: "Collector" },
+        prs: [{ number: 1317 }],
+      },
+    });
+    expect(threadFromPeer).toHaveBeenCalledWith({
+      target: { scope: "remote", instanceId: "pwr_owner" },
+      backend: "codex",
+      threadId,
     });
   });
 

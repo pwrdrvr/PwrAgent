@@ -122,6 +122,7 @@ import {
   type NavigationLaunchpadDraft,
   type NavigationLaunchpadDefaults,
   type NavigationSnapshot,
+  type NavigationThreadSummary,
   type ResetDirectoryLaunchpadRequest,
   type ResetDirectoryLaunchpadResponse,
   type RetainThreadBranchDriftRequest,
@@ -25652,68 +25653,75 @@ export class DesktopBackendRegistry {
       );
     }
 
+    let localError: unknown;
     if (!instanceId) {
-      const activeThreads = await this.listThreads({
-        backend: args.backend,
-        archived: false,
-        callerReason: "agent-thread-inspection",
-      });
-      let candidateThreads = activeThreads.filter(
-        (thread) => thread.id === threadId,
-      );
-      if (candidateThreads.length === 0) {
-        candidateThreads = (
-          await this.listThreads({
-            backend: args.backend,
-            archived: true,
-            callerReason: "agent-thread-inspection:archived",
-          })
-        ).filter((thread) => thread.id === threadId);
-      }
-      const [summary] =
-        await this.enrichThreadInspectionSummaries(candidateThreads);
-      if (summary) {
-        const status = await this.readThread({
+      try {
+        const activeThreads = await this.listThreads({
           backend: args.backend,
-          includeTurns: false,
-          limit: 0,
-          threadId,
-        })
-          .then(
-            (response) =>
-              response.threadStatus ?? response.replay.threadStatus,
-          )
-          .catch((): AppServerThreadStatus | undefined => undefined);
-        const queueKey = buildThreadIdentityKey(args.backend, threadId);
-        const queued = this.getQueuedExecutionModesSnapshot()[queueKey];
-        const pendingHandoffs = this.getPendingThreadHandoffsForInspection({
-          backend: args.backend,
-          sourceThreadId: threadId,
+          archived: false,
+          callerReason: "agent-thread-inspection",
         });
-        const pendingWorkspaceMoves =
-          this.getPendingThreadWorkspaceMovesForInspection({
+        let candidateThreads = activeThreads.filter(
+          (thread) => thread.id === threadId,
+        );
+        if (candidateThreads.length === 0) {
+          candidateThreads = (
+            await this.listThreads({
+              backend: args.backend,
+              archived: true,
+              callerReason: "agent-thread-inspection:archived",
+            })
+          ).filter((thread) => thread.id === threadId);
+        }
+        const [summary] =
+          await this.enrichThreadInspectionSummaries(candidateThreads);
+        if (summary) {
+          const status = await this.readThread({
+            backend: args.backend,
+            includeTurns: false,
+            limit: 0,
+            threadId,
+          })
+            .then(
+              (response) =>
+                response.threadStatus ?? response.replay.threadStatus,
+            )
+            .catch((): AppServerThreadStatus | undefined => undefined);
+          const queueKey = buildThreadIdentityKey(args.backend, threadId);
+          const queued = this.getQueuedExecutionModesSnapshot()[queueKey];
+          const pendingHandoffs = this.getPendingThreadHandoffsForInspection({
             backend: args.backend,
             sourceThreadId: threadId,
           });
-        const prAutomation =
-          await this.threadPrAutoDispatchHandler?.inspect?.({
-            backend: args.backend,
-            threadId,
-          });
-        return {
-          ok: true,
-          data: {
-            thread: {
-              ...summary,
-              status,
-              queuedExecutionMode: queued?.mode,
-              queuedExecutionModeAt: queued?.queuedAt,
-              ...(prAutomation ? { prAutomation } : {}),
-              ...(pendingHandoffs.length ? { pendingHandoffs } : {}),
-              ...(pendingWorkspaceMoves.length ? { pendingWorkspaceMoves } : {}),
+          const pendingWorkspaceMoves =
+            this.getPendingThreadWorkspaceMovesForInspection({
+              backend: args.backend,
+              sourceThreadId: threadId,
+            });
+          const prAutomation =
+            await this.threadPrAutoDispatchHandler?.inspect?.({
+              backend: args.backend,
+              threadId,
+            });
+          return {
+            ok: true,
+            data: {
+              thread: {
+                ...summary,
+                status,
+                queuedExecutionMode: queued?.mode,
+                queuedExecutionModeAt: queued?.queuedAt,
+                ...(prAutomation ? { prAutomation } : {}),
+                ...(pendingHandoffs.length ? { pendingHandoffs } : {}),
+                ...(pendingWorkspaceMoves.length
+                  ? { pendingWorkspaceMoves }
+                  : {}),
+              },
             },
-          },
-        };
+          };
+        }
+      } catch (error) {
+        localError = error;
       }
     }
 
@@ -25727,13 +25735,22 @@ export class DesktopBackendRegistry {
           includeTurns: false,
         });
         if (remote) {
+          const summary = remote.summary
+            ? toThreadInspectionSummaryFromNavigation(remote.summary)
+            : toThreadInspectionSummary(remote.thread, undefined, undefined);
           return {
             ok: true,
             data: {
               thread: {
-                ...toThreadInspectionSummary(remote.thread, undefined, undefined),
+                ...summary,
                 instanceId: remote.instanceId,
                 instanceLabel: remote.instanceLabel,
+                threadLink: buildThreadMarkdownLink({
+                  backend: args.backend,
+                  threadId,
+                  instanceId: remote.instanceId,
+                  title: summary.title,
+                }),
                 status:
                   remote.read.threadStatus
                   ?? remote.read.replay.threadStatus,
@@ -25744,6 +25761,10 @@ export class DesktopBackendRegistry {
       } catch (error) {
         return federatedThreadInspectionFailure(error);
       }
+    }
+
+    if (localError) {
+      return federatedThreadInspectionFailure(localError);
     }
 
     return threadInspectionFailure(
@@ -26121,12 +26142,18 @@ export class DesktopBackendRegistry {
       };
     }
 
-    const localSummary = !instanceId
-      ? await this.readThreadInspectionSummaryForMutation({
+    let localError: unknown;
+    let localSummary: ThreadInspectionSummary | undefined;
+    if (!instanceId) {
+      try {
+        localSummary = await this.readThreadInspectionSummaryForMutation({
           backend: args.backend,
           threadId,
-        })
-      : undefined;
+        });
+      } catch (error) {
+        localError = error;
+      }
+    }
     const localOverlay = !instanceId && !localSummary
       ? await this.overlayStore.getThreadOverlayState({
           backend: args.backend,
@@ -26153,6 +26180,9 @@ export class DesktopBackendRegistry {
       }
     }
     if (!mutateLocally && !remoteOwner) {
+      if (localError) {
+        return federatedThreadInspectionFailure(localError);
+      }
       return threadInspectionFailure(
         "not_found",
         `Thread ${args.backend}:${threadId} was not found${
@@ -27748,6 +27778,17 @@ function toThreadInspectionSummary(
     linkedDirectories,
     linkedRepositories: summarizeLinkedRepositories(linkedDirectories),
     ...(overlay?.prs?.length ? { pullRequests: overlay.prs } : {}),
+  };
+}
+
+function toThreadInspectionSummaryFromNavigation(
+  thread: NavigationThreadSummary,
+): ThreadInspectionSummary {
+  return {
+    ...toThreadInspectionSummary(thread, undefined, thread.messagingBindings),
+    agent: thread.agent,
+    handoffOrigin: thread.handoffOrigin,
+    ...(thread.prs?.length ? { pullRequests: thread.prs } : {}),
   };
 }
 
