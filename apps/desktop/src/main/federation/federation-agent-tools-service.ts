@@ -378,6 +378,11 @@ async function searchFederationThreads(
   const response = await service.search({
     query: args.query,
     limit: args.limit,
+    backend: args.backend,
+    includeArchived: args.includeArchived,
+    projectKeys: args.projectKeys,
+    updatedAfter: args.updatedAfter,
+    updatedBefore: args.updatedBefore,
   });
   const results = response.results.map(
     (entry): FederationThreadSearchResultSummary => {
@@ -393,6 +398,7 @@ async function searchFederationThreads(
         threadId: entry.thread.id,
         title: entry.thread.title,
         updatedAt: entry.thread.updatedAt,
+        archivedAt: entry.thread.archivedAt,
         projectKey: entry.thread.projectKey,
         gitBranch: entry.thread.gitBranch,
         score: entry.score,
@@ -421,6 +427,8 @@ async function searchFederationThreads(
   const result: SearchFederationThreadsResult = {
     query: response.query,
     results,
+    totalCount: response.totalCount,
+    truncated: response.truncated,
     searchedInstances: [
       ...(includeLocal && localId
         ? [

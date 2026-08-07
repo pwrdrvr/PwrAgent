@@ -253,6 +253,47 @@ describe("federated thread message service", () => {
     });
   });
 
+  it("does not dispatch to a thread that exists only in the remote archive", async () => {
+    const archivedThread = {
+      source: "codex" as const,
+      id: request.threadId,
+      title: "Archived remote work",
+      archivedAt: 2_000,
+      linkedDirectories: [],
+    };
+    const listThreads = vi.fn(async (params?: { archived?: boolean }) => ({
+      backend: "codex" as const,
+      fetchedAt: 1_000,
+      threads: params?.archived ? [archivedThread] : [],
+    }));
+    const startTurn = vi.fn();
+    const runtime = {
+      connectedPeerTargets: () => [{
+        target: { scope: "remote" as const, instanceId: "pwr_archive" },
+        label: "Archive Mac",
+        capabilities: ["thread_navigation", "turn_control"],
+      }],
+      remoteBackend: () => ({
+        resolveThread: vi.fn(async () => {
+          throw new Error("Unsupported federation method: backend.resolveThread");
+        }),
+        listThreads,
+        startTurn,
+      }),
+    } as unknown as DesktopFederationRuntime;
+    const handler = createFederatedThreadMessageHandler({
+      runtime: () => runtime,
+    });
+
+    await expect(handler(request)).resolves.toBeUndefined();
+    expect(startTurn).not.toHaveBeenCalled();
+    expect(listThreads).toHaveBeenCalledWith({ backend: "codex" });
+    expect(listThreads).not.toHaveBeenCalledWith({
+      backend: "codex",
+      archived: true,
+    });
+  });
+
   it("preserves queued delivery metadata from the owning peer", async () => {
     const { backends, runtime } = buildRuntime({
       peers: [{

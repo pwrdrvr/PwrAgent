@@ -121,7 +121,7 @@ function descriptionForOperation(operation: PwrAgentMessagingOperationName): str
     case "send_private_response":
       return "Send the terminal response privately to the user who initiated the current messaging turn. Use this only when the user explicitly asks for a private reply or the response contains secrets that should not be posted to the source conversation. On success, PwrAgent suppresses the normal final response on the source surface; end the turn without repeating the private content. Set awaitReply=true with replyInstructions when the private message asks the user for a response: their first reply starts a one-shot continuation turn whose final answer is delivered back to the originating surface, and PwrAgent then removes the temporary private-thread route. This cannot target an arbitrary user or be called outside an active messaging turn.";
     case "attach_thread_here":
-      return "Attach a known PwrAgent thread to the current messaging surface, creating a native child thread/topic when the provider supports it. This does not rename the PwrAgent thread.";
+      return "Attach a known PwrAgent thread to the current messaging surface, creating a native child thread/topic when the provider supports it. Pass instanceId for a remote thread when known; otherwise PwrAgent checks the local instance and then resolves a remembered or connected Federation peer. This does not rename the PwrAgent thread.";
     case "inspect_messaging_pdfs":
       return "List PDF attachments available only for the current active PwrAgent turn. The initial turn input already includes page metadata when probing succeeded; call this only for an attachment whose metadata was unavailable. Returns local metadata and render limits, not PDF bytes or extracted document text. In Codex Code Mode, JSON.parse the returned string; native MCP callers receive the response directly.";
     case "search_messaging_pdf_text":
@@ -179,6 +179,16 @@ function inputSchemaForOperation(
             type: "string",
           },
           threadId: { type: "string" },
+          instanceId: {
+            type: "string",
+            description:
+              "Federation instance that owns the thread. Omit to check the local instance, then remembered and connected peers.",
+          },
+          includeRemote: {
+            type: "boolean",
+            description:
+              "Whether to resolve the thread across connected Federation peers after checking locally. Defaults to true.",
+          },
           title: {
             type: "string",
             description:

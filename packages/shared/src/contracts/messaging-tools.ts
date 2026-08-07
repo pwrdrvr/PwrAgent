@@ -4,6 +4,7 @@ import type {
   ThreadExecutionMode,
   ThreadIdentifier,
 } from "./normalized-app-server";
+import type { FederationInstanceId } from "./federation";
 import type {
   MessagingBindingTargetKind,
   MessagingChannelKind,
@@ -51,6 +52,7 @@ export type PwrAgentMessagingOperationName =
 export const PWRAGENT_MESSAGING_ERROR_CODES = [
   "invalid_arguments",
   "not_found",
+  "peer_unavailable",
   "ambiguous_location",
   "forbidden",
   "unsupported_operation",
@@ -142,6 +144,13 @@ export type AttachThreadHerePlacement =
 export type AttachThreadHereToolArgs = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
+  /**
+   * Federation instance that owns the thread. When omitted, PwrAgent first
+   * checks the local instance, then resolves a remembered or connected peer.
+   */
+  instanceId?: FederationInstanceId;
+  /** Defaults to true. Set false to restrict resolution to the local instance. */
+  includeRemote?: boolean;
   placement?: AttachThreadHerePlacement;
   targetKind?: MessagingBindingTargetKind;
   title?: string;

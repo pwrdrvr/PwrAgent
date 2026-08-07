@@ -11,6 +11,11 @@ import type {
   ThreadWorkspaceHandoffDirection,
   ThreadWorkspaceHandoffStrategy,
 } from "./normalized-app-server";
+import type {
+  FederatedSearchInstanceSummary,
+  FederatedSearchPeerFailure,
+  FederationInstanceId,
+} from "./federation";
 import type { LinkedDirectorySummary } from "./normalized-app-server";
 import type {
   MessagingThreadBindingSummary,
@@ -61,6 +66,7 @@ export const MAX_THREAD_INSPECTION_SEARCH_LIMIT = 100;
 export const PWRAGENT_THREAD_INSPECTION_ERROR_CODES = [
   "invalid_arguments",
   "not_found",
+  "peer_unavailable",
   "forbidden",
   "unsupported_operation",
   "internal_error",
@@ -78,6 +84,10 @@ export type PwrAgentThreadInspectionContext = {
 export type SearchThreadsToolArgs = {
   query?: string;
   backend?: AppServerBackendKind | "all";
+  /** Restrict the search to one connected Federation instance. */
+  instanceId?: FederationInstanceId;
+  /** Defaults to true. Set false to search only the local instance. */
+  includeRemote?: boolean;
   includeArchived?: boolean;
   agentOnly?: boolean;
   projectKeys?: string[];
@@ -99,11 +109,29 @@ export type GetThreadStatusToolArgs = {
    * Defaults to the invoking PwrAgent thread id when omitted.
    */
   threadId?: ThreadIdentifier;
+  /**
+   * Federation instance that owns the thread. When omitted, PwrAgent first
+   * checks the local instance, then resolves a remembered or connected peer.
+   */
+  instanceId?: FederationInstanceId;
+  /**
+   * Defaults to true. Set false to restrict resolution to the local instance.
+   */
+  includeRemote?: boolean;
 };
 
 export type ReadThreadToolArgs = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
+  /**
+   * Federation instance that owns the thread. When omitted, PwrAgent first
+   * checks the local instance, then resolves a remembered or connected peer.
+   */
+  instanceId?: FederationInstanceId;
+  /**
+   * Defaults to true. Set false to restrict resolution to the local instance.
+   */
+  includeRemote?: boolean;
   /**
    * Provider pagination cursor returned by a previous read_thread response.
    */
@@ -136,6 +164,13 @@ export type ReadThreadToolArgs = {
 export type MutateThreadToolArgs = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
+  /**
+   * Federation instance that owns the thread. When omitted, PwrAgent first
+   * checks the local instance, then resolves a remembered or connected peer.
+   */
+  instanceId?: FederationInstanceId;
+  /** Defaults to true. Set false to restrict resolution to the local instance. */
+  includeRemote?: boolean;
   /**
    * Renames the PwrAgent thread itself. This does not rename any attached
    * Telegram topic, Discord thread, or other messaging surface.
@@ -279,6 +314,8 @@ export type ThreadMutationAppliedChange = {
 export type ThreadMutationResult = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
+  instanceId?: FederationInstanceId;
+  instanceLabel?: string;
   dryRun: boolean;
   changes: ThreadMutationAppliedChange[];
 };
@@ -286,6 +323,10 @@ export type ThreadMutationResult = {
 export type ThreadInspectionSummary = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
+  instanceId?: FederationInstanceId;
+  instanceLabel?: string;
+  /** Canonical navigation link, including the owning instance when remote. */
+  threadLink?: string;
   title: string;
   summary?: string;
   projectKey?: string;
@@ -462,6 +503,8 @@ export type ThreadReadEntrySummary =
 export type ThreadReadResult = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
+  instanceId?: FederationInstanceId;
+  instanceLabel?: string;
   limit: number;
   before?: string;
   maxCharsPerEntry: number;
@@ -515,6 +558,8 @@ export type PwrAgentThreadInspectionResponse =
             unavailableScopes?: ThreadSearchUnavailableScope[];
             contentMode?: ThreadSearchContentMode;
             semanticMode?: ThreadSearchSemanticMode;
+            searchedInstances?: FederatedSearchInstanceSummary[];
+            federationFailures?: FederatedSearchPeerFailure[];
           }
         | {
             read: ThreadReadResult;

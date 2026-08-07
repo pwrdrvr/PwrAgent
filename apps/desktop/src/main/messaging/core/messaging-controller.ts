@@ -139,6 +139,7 @@ import type {
   MessagingBackendBridge,
   MessagingLastAssistantReply,
 } from "./messaging-adapter.js";
+import { MessagingFederatedThreadTargetError } from "./messaging-adapter.js";
 import type { MessagingActivityLog } from "../messaging-activity-log.js";
 import {
   buildActivityIntent,
@@ -405,10 +406,26 @@ type AgentMessagingOriginResolution =
 type AttachTargetResolution =
   | {
       ok: true;
+      federatedThread?: FederatedThreadRef;
       navigation: NavigationSnapshot;
       thread: NavigationThreadSummary;
     }
   | Extract<PwrAgentMessagingResponse, { ok: false }>;
+
+function attachTargetNotFound(
+  backend: AppServerBackendKind,
+  threadId: string,
+): Extract<PwrAgentMessagingResponse, { ok: false }> {
+  return {
+    ok: false,
+    error: {
+      code: "not_found",
+      message:
+        `Thread ${backend}:${threadId} is not an active attachable thread. `
+        + "It may be archived, deleted, or unavailable; restore it in PwrAgent or choose another thread.",
+    },
+  };
+}
 
 type ExecutionModeResolution = {
   mode: ThreadExecutionMode | undefined;
@@ -15518,6 +15535,26 @@ export class MessagingController {
         },
       };
     }
+    const instanceId = args.instanceId?.trim();
+    const includeRemote = args.includeRemote !== false;
+    if (Object.hasOwn(args, "instanceId") && !instanceId) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message: "instanceId must be a non-empty string when provided.",
+        },
+      };
+    }
+    if (instanceId && !includeRemote) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message: "instanceId cannot be used when includeRemote is false.",
+        },
+      };
+    }
     const placement = args.placement ?? "auto";
     if (
       placement !== "auto" &&
@@ -15547,7 +15584,12 @@ export class MessagingController {
     if (!origin.ok) {
       return origin;
     }
-    const target = await this.resolveAttachTarget(args.backend, args.threadId);
+    const target = await this.resolveAttachTarget({
+      backend: args.backend,
+      threadId: args.threadId,
+      ...(instanceId ? { instanceId } : {}),
+      includeRemote,
+    });
     if (!target.ok) {
       return target;
     }
@@ -15613,6 +15655,7 @@ export class MessagingController {
 
     const binding = await this.bindChannelToThread(attachEvent, {
       backend: args.backend,
+      federatedThread: target.federatedThread,
       threadId: args.threadId,
       targetKind,
     });
@@ -16050,18 +16093,34 @@ export class MessagingController {
     };
   }
 
-  private async resolveAttachTarget(
-    backend: AppServerBackendKind,
-    threadId: string,
-  ): Promise<AttachTargetResolution> {
+  private async resolveAttachTarget(request: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    instanceId?: string;
+    includeRemote: boolean;
+  }): Promise<AttachTargetResolution> {
     let navigation: NavigationSnapshot;
     try {
-      navigation = await this.options.backend.getNavigationSnapshot({ backend });
+      if (this.options.backend.resolveThreadTarget) {
+        const resolved = await this.options.backend.resolveThreadTarget(request);
+        return resolved
+          ? { ok: true, ...resolved }
+          : attachTargetNotFound(request.backend, request.threadId);
+      }
+      if (request.instanceId || request.includeRemote === false) {
+        return attachTargetNotFound(request.backend, request.threadId);
+      }
+      navigation = await this.options.backend.getNavigationSnapshot({
+        backend: request.backend,
+      });
     } catch (error) {
       return {
         ok: false,
         error: {
-          code: "internal_error",
+          code:
+            error instanceof MessagingFederatedThreadTargetError
+              ? error.code
+              : "internal_error",
           message:
             error instanceof Error
               ? `Could not verify target thread before attaching: ${error.message}`
@@ -16071,18 +16130,12 @@ export class MessagingController {
     }
 
     const target = navigation.threads.find(
-      (thread) => thread.source === backend && thread.id === threadId,
+      (thread) =>
+        thread.source === request.backend
+        && thread.id === request.threadId,
     );
     if (!target) {
-      return {
-        ok: false,
-        error: {
-          code: "not_found",
-          message:
-            `Thread ${backend}:${threadId} is not an active attachable thread. ` +
-            "It may be archived, deleted, or unavailable; restore it in PwrAgent or choose another thread.",
-        },
-      };
+      return attachTargetNotFound(request.backend, request.threadId);
     }
 
     return { ok: true, navigation, thread: target };

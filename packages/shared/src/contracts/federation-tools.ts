@@ -168,6 +168,11 @@ export type FederationSearchScope = (typeof FEDERATION_SEARCH_SCOPES)[number];
 
 export type SearchFederationThreadsToolArgs = {
   query: string;
+  backend?: AppServerBackendKind | "all";
+  includeArchived?: boolean;
+  projectKeys?: string[];
+  updatedAfter?: number;
+  updatedBefore?: number;
   /**
    * Which instances to search: `all` (default) is local plus every
    * connected peer, `local` is this instance only, `remote` is every
@@ -188,6 +193,7 @@ export type FederationThreadSearchResultSummary = {
   threadId: ThreadIdentifier;
   title: string;
   updatedAt?: number;
+  archivedAt?: number;
   projectKey?: string;
   gitBranch?: string;
   score: number;
@@ -198,6 +204,8 @@ export type FederationThreadSearchResultSummary = {
 export type SearchFederationThreadsResult = {
   query: string;
   results: FederationThreadSearchResultSummary[];
+  totalCount: number;
+  truncated: boolean;
   searchedInstances: FederatedSearchInstanceSummary[];
   failures: FederatedSearchPeerFailure[];
 };

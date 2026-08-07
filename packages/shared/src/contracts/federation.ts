@@ -475,6 +475,10 @@ export type FederatedSearchRequest = {
   query: string;
   limit?: number;
   backend?: AppServerBackendScope;
+  includeArchived?: boolean;
+  projectKeys?: string[];
+  updatedAfter?: number;
+  updatedBefore?: number;
 };
 
 export type FederatedSearchResult = {
@@ -501,6 +505,8 @@ export type FederatedSearchResponse = {
   query: string;
   searchedAt: number;
   results: FederatedSearchResult[];
+  totalCount: number;
+  truncated: boolean;
   failures: FederatedSearchPeerFailure[];
   /** Peers that were queried successfully, so the UI can disclose scope. */
   searchedInstances?: FederatedSearchInstanceSummary[];

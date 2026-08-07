@@ -1469,6 +1469,7 @@ class MockBackendClient {
       nativeSubAgentThreads?: AppServerThreadSummary[];
       replay?: AppServerThreadReplay;
       readThreadReplays?: AppServerThreadReplay[];
+      readThreadError?: Error;
       readThreadDelay?: Promise<unknown>;
       skills?: Array<{
         commands?: AppServerAvailableCommandSummary[];
@@ -1646,6 +1647,9 @@ class MockBackendClient {
     const replay = this.options.readThreadReplays?.shift();
     if (this.options.readThreadDelay) {
       await this.options.readThreadDelay;
+    }
+    if (this.options.readThreadError) {
+      throw this.options.readThreadError;
     }
     if (replay) {
       return replay;
@@ -27465,6 +27469,67 @@ script = "printf setup"
     await registry.close();
   });
 
+  it("keeps send_message_to_thread local when includeRemote is false", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      threads: [{
+        source: "codex",
+        id: "local-thread",
+        title: "Local target",
+        titleSource: "explicit",
+        linkedDirectories: [],
+      }],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error(
+          "grok app server unavailable: XAI_API_KEY is not set",
+        ),
+      }),
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null,
+    });
+    const federatedSend = vi.fn();
+    registry.setFederatedThreadMessageHandler(federatedSend);
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "parent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await callRegistryMcpTool({
+      registry,
+      backend: "codex",
+      threadId: "parent-thread",
+      turnId: "turn-1",
+      tool: "send_message_to_thread",
+      args: {
+        backend: "codex",
+        threadId: "local-thread",
+        prompt: "Keep this local.",
+        includeRemote: false,
+      },
+    });
+
+    expect(response).toMatchObject({
+      structuredContent: {
+        backend: "codex",
+        threadId: "local-thread",
+      },
+    });
+    expect(federatedSend).not.toHaveBeenCalled();
+    expect(codexClient.startTurnCallCount).toBe(1);
+
+    await registry.close();
+  });
+
   it("routes stop and steer controls to an explicit federated owner", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
@@ -30187,6 +30252,305 @@ script = "printf setup"
     await registry.close();
   });
 
+  it("resolves enriched remote status when the local backend is unavailable", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "thread/read"] },
+      listThreadsError: new Error("local codex backend unavailable"),
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock({
+        overlays: { "codex:agent-thread": createAgentOverlay() },
+      }),
+    });
+    const federatedInspection = vi.fn(async () => ({
+      instanceId: "pwr_remote",
+      instanceLabel: "Remote Mac",
+      thread: {
+        id: "remote-thread",
+        title: "Remote collector",
+        titleSource: "explicit" as const,
+        source: "codex" as const,
+        linkedDirectories: [],
+      },
+      summary: {
+        id: "remote-thread",
+        title: "Remote collector",
+        titleSource: "explicit" as const,
+        source: "codex" as const,
+        linkedDirectories: [{
+          id: "remote-directory",
+          label: "PwrSuiteLab",
+          path: "/remote/PwrSuiteLab",
+          kind: "worktree" as const,
+        }],
+        inbox: { inInbox: false },
+        agent: {
+          name: "Collector",
+          instructionLineCount: 1,
+          instructionsTooLong: false,
+          updatedAt: 1_000,
+        },
+        handoffOrigin: {
+          sourceBackend: "codex" as const,
+          sourceThreadId: "coordinator-thread",
+          sourceTitle: "Coordinator",
+          seedMode: "clean" as const,
+          groupingMode: "none" as const,
+          createdAt: 900,
+          workspace: {
+            mode: "none" as const,
+            git: {
+              kind: "none" as const,
+              worktreeCreationAvailable: false as const,
+              unavailableReason: "No workspace requested.",
+            },
+          },
+        },
+        prs: [{
+          provider: "github.com",
+          org: "pwrdrvr",
+          repo: "PwrAgent",
+          number: 1317,
+          state: "passing" as const,
+          url: "https://github.com/pwrdrvr/PwrAgent/pull/1317",
+        }],
+        messagingBindings: [{
+          bindingId: "binding-1",
+          platform: "telegram" as const,
+          conversationKind: "topic" as const,
+          conversationTitle: "Federation",
+        }],
+      },
+      read: {
+        backend: "codex" as const,
+        fetchedAt: 2_000,
+        threadId: "remote-thread",
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+          threadStatus: "idle" as const,
+        },
+        threadStatus: "idle" as const,
+      },
+    }));
+    registry.setFederatedThreadInspectionHandler(federatedInspection);
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "agent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "agent-thread",
+        turnId: "turn-1",
+        callId: "call-remote-status",
+        requestId: "call-remote-status",
+        namespace: "pwragent",
+        tool: "get_thread_status",
+        arguments: {
+          backend: "codex",
+          threadId: "remote-thread",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toMatchObject({ success: true });
+    const payload = JSON.parse(
+      (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+    );
+    expect(payload.thread).toMatchObject({
+      backend: "codex",
+      threadId: "remote-thread",
+      instanceId: "pwr_remote",
+      instanceLabel: "Remote Mac",
+      title: "Remote collector",
+      status: "idle",
+      threadLink: expect.stringContaining("instanceId=pwr_remote"),
+      agent: { name: "Collector" },
+      handoffOrigin: {
+        sourceThreadId: "coordinator-thread",
+      },
+      linkedDirectories: [{ id: "remote-directory" }],
+      pullRequests: [{ number: 1317 }],
+      messagingBindings: [{
+        bindingId: "binding-1",
+        platform: "telegram",
+      }],
+    });
+    expect(federatedInspection).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "remote-thread",
+      limit: 0,
+      includeTurns: false,
+    });
+
+    await registry.close();
+  });
+
+  it("respects includeRemote false for thread status resolution", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list"] },
+      threads: [],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock({
+        overlays: { "codex:agent-thread": createAgentOverlay() },
+      }),
+    });
+    const federatedInspection = vi.fn();
+    registry.setFederatedThreadInspectionHandler(federatedInspection);
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "agent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "agent-thread",
+        turnId: "turn-1",
+        callId: "call-local-status",
+        requestId: "call-local-status",
+        namespace: "pwragent",
+        tool: "get_thread_status",
+        arguments: {
+          backend: "codex",
+          threadId: "remote-thread",
+          includeRemote: false,
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toMatchObject({ success: false });
+    expect(federatedInspection).not.toHaveBeenCalled();
+
+    await registry.close();
+  });
+
+  it("reads a remote transcript after local resolution fails", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/read"] },
+      readThreadError: new Error("thread not loaded"),
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok app server unavailable: XAI_API_KEY is not set"),
+      }),
+      overlayStore: createOverlayStoreMock({
+        overlays: { "codex:agent-thread": createAgentOverlay() },
+      }),
+    });
+    const federatedInspection = vi.fn(async () => ({
+      instanceId: "pwr_remote",
+      instanceLabel: "Remote Mac",
+      thread: {
+        id: "remote-thread",
+        title: "Remote collector",
+        titleSource: "explicit" as const,
+        source: "codex" as const,
+        linkedDirectories: [],
+      },
+      read: {
+        backend: "codex" as const,
+        fetchedAt: 2_000,
+        threadId: "remote-thread",
+        replay: {
+          entries: [],
+          messages: [
+            {
+              id: "remote-result",
+              role: "assistant" as const,
+              text: "Sanitized result",
+            },
+          ],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+          threadStatus: "idle" as const,
+        },
+        threadStatus: "idle" as const,
+      },
+    }));
+    registry.setFederatedThreadInspectionHandler(federatedInspection);
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "agent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "agent-thread",
+        turnId: "turn-1",
+        callId: "call-remote-read",
+        requestId: "call-remote-read",
+        namespace: "pwragent",
+        tool: "read_thread",
+        arguments: {
+          backend: "codex",
+          threadId: "remote-thread",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+
+    expect(response).toMatchObject({ success: true });
+    const payload = JSON.parse(
+      (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+    );
+    expect(payload.read).toMatchObject({
+      backend: "codex",
+      threadId: "remote-thread",
+      instanceId: "pwr_remote",
+      instanceLabel: "Remote Mac",
+      status: "idle",
+      messages: [{ text: "Sanitized result" }],
+    });
+    expect(federatedInspection).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "remote-thread",
+      limit: 10,
+      includeTurns: true,
+    });
+
+    await registry.close();
+  });
+
   it("reads bounded transcript content from another thread", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/read"] },
@@ -30325,6 +30689,210 @@ script = "printf setup"
       includeTurns: true,
       limit: 5,
     });
+
+    await registry.close();
+  });
+
+  it("combines local search_threads results with connected Federation metadata", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list"] },
+      threads: [{
+        id: "local-thread",
+        title: "Local collector",
+        titleSource: "explicit",
+        source: "codex",
+        linkedDirectories: [],
+        projectKey: "PwrSuiteLab",
+        updatedAt: 1_000,
+      }, {
+        id: "local-thread-2",
+        title: "Local collector follow-up",
+        titleSource: "explicit",
+        source: "codex",
+        linkedDirectories: [],
+        projectKey: "PwrSuiteLab",
+        updatedAt: 900,
+      }],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      overlayStore: createOverlayStoreMock({
+        overlays: { "codex:agent-thread": createAgentOverlay() },
+      }),
+    });
+    const federationHandler = vi.fn(async () => ({
+      ok: true as const,
+      data: {
+        query: "collector",
+        totalCount: 3,
+        truncated: true,
+        results: [{
+          instanceId: "pwr_remote",
+          instanceLabel: "Remote Mac",
+          isLocal: false,
+          backend: "codex" as const,
+          threadId: "remote-thread",
+          title: "Remote collector",
+          updatedAt: 2_000,
+          projectKey: "PwrSuiteLab",
+          score: 10_000,
+          threadLink: "[Remote collector](pwragent://thread/remote-thread)",
+        }, {
+          instanceId: "pwr_remote",
+          instanceLabel: "Remote Mac",
+          isLocal: false,
+          backend: "codex" as const,
+          threadId: "remote-thread-2",
+          title: "Remote collector follow-up",
+          updatedAt: 1_500,
+          projectKey: "PwrSuiteLab",
+          score: 9_000,
+          threadLink: "[Remote collector follow-up](pwragent://thread/remote-thread-2)",
+        }],
+        searchedInstances: [{
+          instanceId: "pwr_remote",
+          instanceLabel: "Remote Mac",
+          resultCount: 1,
+        }],
+        failures: [],
+      },
+    }));
+    registry.setPwrAgentFederationHandler(federationHandler);
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "agent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "agent-thread",
+        turnId: "turn-1",
+        callId: "call-search",
+        requestId: "call-search",
+        namespace: "pwragent",
+        tool: "search_threads",
+        arguments: {
+          query: "collector",
+          backend: "codex",
+          includeArchived: true,
+          projectKeys: ["PwrSuiteLab"],
+          updatedAfter: 500,
+          updatedBefore: 3_000,
+          limit: 2,
+        },
+      },
+    } as AppServerPendingRequestNotification);
+    const payload = JSON.parse(
+      (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+    );
+
+    expect(payload.threads).toEqual([
+      expect.objectContaining({
+        threadId: "remote-thread",
+        instanceId: "pwr_remote",
+        instanceLabel: "Remote Mac",
+        linkedDirectories: [],
+      }),
+      expect.objectContaining({ threadId: "local-thread" }),
+    ]);
+    expect(payload).toMatchObject({
+      totalCount: 5,
+      limit: 2,
+      truncated: true,
+    });
+    expect(federationHandler).toHaveBeenCalledWith(expect.objectContaining({
+      operation: "search_federation_threads",
+      args: {
+        scope: "remote",
+        query: "collector",
+        backend: "codex",
+        includeArchived: true,
+        projectKeys: ["PwrSuiteLab"],
+        updatedAfter: 500,
+        updatedBefore: 3_000,
+        limit: 2,
+      },
+    }));
+
+    await registry.close();
+  });
+
+  it("routes mutate_thread remotely when local resolution fails", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list"] },
+      listThreadsError: new Error("local codex backend unavailable"),
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      grokClient: new MockBackendClient({
+        initializeError: new Error("grok unavailable"),
+      }),
+      overlayStore: createOverlayStoreMock({
+        overlays: { "codex:agent-thread": createAgentOverlay() },
+      }),
+    });
+    const mutationHandler = vi.fn(async () => ({
+      instanceId: "pwr_remote",
+      instanceLabel: "Remote Mac",
+    }));
+    registry.setFederatedThreadMutationHandler(mutationHandler);
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "agent-thread",
+          turnId: "turn-1",
+          turn: { id: "turn-1" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "agent-thread",
+        turnId: "turn-1",
+        callId: "call-mutate",
+        requestId: "call-mutate",
+        namespace: "pwragent",
+        tool: "mutate_thread",
+        arguments: {
+          backend: "codex",
+          threadId: "remote-thread",
+          title: "Remote title",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+    const payload = JSON.parse(
+      (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+    );
+
+    expect(payload.mutation).toMatchObject({
+      backend: "codex",
+      threadId: "remote-thread",
+      instanceId: "pwr_remote",
+      instanceLabel: "Remote Mac",
+      dryRun: false,
+    });
+    expect(mutationHandler).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "remote-thread",
+      title: "Remote title",
+      dryRun: false,
+    });
+    expect(codexClient.lastRenameThreadParams).toBeUndefined();
 
     await registry.close();
   });

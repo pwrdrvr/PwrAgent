@@ -55,6 +55,8 @@ describe("federation tool contracts", () => {
 
     const result: SearchFederationThreadsResult = {
       query: "recorder crash",
+      totalCount: 1,
+      truncated: false,
       results: [
         {
           instanceId: "pwr_studio",

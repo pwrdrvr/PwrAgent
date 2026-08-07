@@ -3679,8 +3679,14 @@ function localBackendOperations(): FederationBackendOperations {
       const response = await getDesktopBackendRegistry().readThread({
         backend,
         threadId: request.threadId,
+        ...(request.includeTurns !== undefined
+          ? { includeTurns: request.includeTurns }
+          : {}),
         before: request.before,
         limit: request.limit,
+        ...(request.viewOnly !== undefined
+          ? { viewOnly: request.viewOnly }
+          : {}),
       });
       return rewriteTranscriptImageUrlsForRenderer(response);
     },

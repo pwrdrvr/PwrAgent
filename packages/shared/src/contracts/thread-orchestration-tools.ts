@@ -130,7 +130,9 @@ export type SendMessageToThreadToolArgs = {
    * local threads and legacy callers; PwrAgent falls back to durable lookup.
    */
   instanceId?: FederationInstanceId;
-  /** Defaults to true. Set false to restrict resolution to this instance. */
+  /**
+   * Defaults to true. Set false to restrict resolution to the local instance.
+   */
   includeRemote?: boolean;
   prompt: string;
   model?: string;

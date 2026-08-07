@@ -28,7 +28,10 @@ import type {
   SubmitServerRequestRequest,
   UpdateDirectoryLaunchpadRequest,
 } from "@pwragent/shared";
-import { applyNavigationLaunchpadProviderSettingsPatch } from "@pwragent/shared";
+import {
+  applyNavigationLaunchpadProviderSettingsPatch,
+  buildFederatedThreadRef,
+} from "@pwragent/shared";
 import {
   MESSAGING_CALLBACK_HANDLE_TTL_MS,
   type MessagingCapabilityProfile,
@@ -4058,6 +4061,80 @@ describe("MessagingController", () => {
       },
       targetKind: "thread",
       threadId: "thread-2",
+    });
+  });
+
+  it("attaches a remotely resolved thread with its Federation owner", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads.push({
+      id: "remote-thread",
+      title: "Remote collector",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+      updatedAt: 2_000,
+    });
+    const resolveThreadTarget = vi.fn(async () => ({
+      navigation,
+      thread: navigation.threads.at(-1)!,
+      federatedThread: buildFederatedThreadRef({
+        backend: "codex",
+        threadId: "remote-thread",
+        instanceId: "pwr_remote",
+      }),
+    }));
+    const harness = await createHarness({ resolveThreadTarget });
+    const event = buildTextEvent("attach remote here");
+    await harness.store.upsertBinding({
+      id: "binding:source",
+      authorizedActorIds: ["user-1"],
+      backend: "codex",
+      channel: event.channel,
+      createdAt: 1_000,
+      routingState: event.routingState,
+      targetKind: "agent_thread",
+      threadId: "thread-1",
+      updatedAt: 1_000,
+    });
+    await harness.controller.handleInboundEvent(event);
+
+    await expect(harness.controller.handlePwrAgentMessagingRequest({
+      operation: "attach_thread_here",
+      context: {
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-1",
+      },
+      args: {
+        backend: "codex",
+        threadId: "remote-thread",
+        instanceId: "pwr_remote",
+        placement: "current_conversation",
+      },
+    })).resolves.toMatchObject({
+      ok: true,
+      data: {
+        binding: { threadId: "remote-thread" },
+        placement: "current_conversation",
+      },
+    });
+    expect(resolveThreadTarget).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "remote-thread",
+      instanceId: "pwr_remote",
+      includeRemote: true,
+    });
+    await expect(
+      harness.store.findActiveBindingForChannel(event.channel),
+    ).resolves.toMatchObject({
+      backend: "codex",
+      threadId: "remote-thread",
+      federatedThread: {
+        backend: "codex",
+        threadId: "remote-thread",
+        target: { scope: "remote", instanceId: "pwr_remote" },
+      },
     });
   });
 
@@ -20887,6 +20964,7 @@ async function createHarness(options?: {
   readThreadLastAssistantReply?: NonNullable<
     MessagingBackendBridge["readThreadLastAssistantReply"]
   >;
+  resolveThreadTarget?: NonNullable<MessagingBackendBridge["resolveThreadTarget"]>;
   resolveAssistantMessageImages?: NonNullable<
     MessagingBackendBridge["resolveAssistantMessageImages"]
   >;
@@ -21370,6 +21448,9 @@ async function createHarness(options?: {
     readThreadLastAssistantReply,
     readThreadLastAssistantMessage,
     readThreadStatus,
+    ...(options?.resolveThreadTarget
+      ? { resolveThreadTarget: options.resolveThreadTarget }
+      : {}),
     ...(options?.resolveAssistantMessageImages
       ? { resolveAssistantMessageImages: options.resolveAssistantMessageImages }
       : {}),

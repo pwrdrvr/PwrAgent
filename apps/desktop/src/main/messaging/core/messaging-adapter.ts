@@ -18,6 +18,8 @@ import type {
   InterruptTurnResponse,
   GetNavigationSnapshotRequest,
   FederationTarget,
+  FederatedThreadRef,
+  FederationInstanceId,
   ListBackendsRequest,
   ListBackendsResponse,
   ListScheduledThreadActionsRequest,
@@ -26,6 +28,7 @@ import type {
   MaterializeDirectoryLaunchpadRequest,
   MaterializeDirectoryLaunchpadResponse,
   NavigationSnapshot,
+  NavigationThreadSummary,
   SetAcpSessionRuntimeOptionRequest,
   SetAcpSessionRuntimeOptionResponse,
   SetThreadExecutionModeRequest,
@@ -146,6 +149,16 @@ export type MessagingBackendBridge = {
   getNavigationSnapshot(
     request?: GetNavigationSnapshotRequest,
   ): Promise<NavigationSnapshot>;
+  resolveThreadTarget?(request: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    instanceId?: FederationInstanceId;
+    includeRemote?: boolean;
+  }): Promise<{
+    navigation: NavigationSnapshot;
+    thread: NavigationThreadSummary;
+    federatedThread?: FederatedThreadRef;
+  } | undefined>;
   readThreadAgentMetadata?(request: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -254,6 +267,16 @@ export type MessagingBackendBridge = {
     request: SubmitServerRequestRequest,
   ): Promise<SubmitServerRequestResponse>;
 };
+
+export class MessagingFederatedThreadTargetError extends Error {
+  constructor(
+    readonly code: "peer_unavailable",
+    message: string,
+  ) {
+    super(message);
+    this.name = "MessagingFederatedThreadTargetError";
+  }
+}
 
 export type MessagingInboundListener = (
   event: MessagingInboundEvent,

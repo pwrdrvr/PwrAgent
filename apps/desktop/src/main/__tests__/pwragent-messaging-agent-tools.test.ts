@@ -68,6 +68,17 @@ describe("PwrAgent messaging agent tools", () => {
       "send_private_response",
       "attach_thread_here",
     ]);
+    const attachTool = specs[0]?.type === "namespace"
+      ? specs[0].tools.find((tool) => tool.name === "attach_thread_here")
+      : undefined;
+    expect(attachTool).toMatchObject({
+      inputSchema: expect.objectContaining({
+        properties: expect.objectContaining({
+          instanceId: expect.objectContaining({ type: "string" }),
+          includeRemote: expect.objectContaining({ type: "boolean" }),
+        }),
+      }),
+    });
     expect(
       isPwrAgentMessagingDynamicToolCall({
         namespace: "pwragent_messaging",
