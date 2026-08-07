@@ -14,10 +14,20 @@ describe("scopeDesktopApiToFederationTarget", () => {
       availability: "running" as const,
       configured: true,
     }));
+    const listWorktreeUnpublishedCommits = vi.fn(async () => ({
+      commits: [],
+      totalCommits: 0,
+      truncated: false,
+      maxCommits: 20,
+      maxFilesPerCommit: 50,
+    }));
+    const getWorktreeUnpublishedCommitDiff = vi.fn(async () => ({}));
     const desktopApi = {
       openApplication,
       refreshDirectoryGitStatuses,
       readPwrSnapConnectionStatus,
+      listWorktreeUnpublishedCommits,
+      getWorktreeUnpublishedCommitDiff,
       connectPwrSnap: vi.fn(),
       openPwrSnap: vi.fn(),
       openPwrSnapDownload: vi.fn(),
@@ -47,6 +57,18 @@ describe("scopeDesktopApiToFederationTarget", () => {
       force: true,
     });
     await scopedApi?.readPwrSnapConnectionStatus?.();
+    await scopedApi?.listWorktreeUnpublishedCommits?.({
+      backend: "codex",
+      threadId: "thread-1",
+      worktreePath: "/remote/repo",
+    });
+    await scopedApi?.getWorktreeUnpublishedCommitDiff?.({
+      backend: "codex",
+      threadId: "thread-1",
+      worktreePath: "/remote/repo",
+      commitSha: "a".repeat(40),
+      path: "/remote/repo/file.ts",
+    });
 
     expect(openApplication).toHaveBeenCalledWith({
       applicationId: "vscode",
@@ -60,6 +82,20 @@ describe("scopeDesktopApiToFederationTarget", () => {
       federationTarget,
     });
     expect(readPwrSnapConnectionStatus).toHaveBeenCalledWith({
+      federationTarget,
+    });
+    expect(listWorktreeUnpublishedCommits).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      worktreePath: "/remote/repo",
+      federationTarget,
+    });
+    expect(getWorktreeUnpublishedCommitDiff).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      worktreePath: "/remote/repo",
+      commitSha: "a".repeat(40),
+      path: "/remote/repo/file.ts",
       federationTarget,
     });
     expect(scopedApi?.connectPwrSnap).toBeUndefined();

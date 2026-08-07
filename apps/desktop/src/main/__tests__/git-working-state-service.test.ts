@@ -775,6 +775,219 @@ describe("GitWorkingStateService", () => {
     }
   });
 
+  it("lists unpublished commit files and loads their diffs on demand", async () => {
+    const root = await mkdtemp(makeTempPrefix());
+    const repo = path.join(root, "repo");
+    const remote = path.join(root, "remote.git");
+
+    try {
+      await mkdir(repo);
+      await git(root, "init", "--bare", remote);
+      await git(repo, "init", "-b", "main");
+      await git(repo, "config", "user.email", "test@example.com");
+      await git(repo, "config", "user.name", "PwrAgent Test");
+      await writeFile(path.join(repo, "tracked.txt"), "base\n");
+      await git(repo, "add", "tracked.txt");
+      await git(repo, "commit", "-m", "base");
+      await git(repo, "remote", "add", "origin", remote);
+      await git(repo, "push", "-u", "origin", "main");
+      const pushedSha = (await git(repo, "rev-parse", "HEAD")).trim();
+
+      await writeFile(path.join(repo, "tracked.txt"), "base\nlocal\n");
+      await writeFile(path.join(repo, "café.txt"), "new\n");
+      await git(repo, "add", "tracked.txt", "café.txt");
+      await git(repo, "commit", "-m", "local changes");
+      const localSha = (await git(repo, "rev-parse", "HEAD")).trim();
+      await git(repo, "checkout", "--detach");
+
+      const service = new GitWorkingStateService();
+      const response = await service.listUnpublishedCommits(repo);
+
+      expect(response).toMatchObject({
+        totalCommits: 1,
+        truncated: false,
+        commits: [
+          {
+            sha: localSha,
+            subject: "local changes",
+            totalFiles: 2,
+            filesTruncated: false,
+            additions: 2,
+            removals: 0,
+          },
+        ],
+      });
+      expect(response.commits[0]?.files.map((file) => file.repoPath).sort())
+        .toEqual(["café.txt", "tracked.txt"]);
+
+      const detail = await service.getUnpublishedCommitDiff(
+        repo,
+        localSha,
+        path.join(repo, "tracked.txt"),
+      );
+      expect(detail.detail?.fileDiff).toMatchObject({
+        kind: "update",
+        additions: 1,
+        removals: 0,
+      });
+      expect(detail.detail?.fileDiff?.diff).toContain("+local");
+
+      const pushed = await service.getUnpublishedCommitDiff(
+        repo,
+        pushedSha,
+        path.join(repo, "tracked.txt"),
+      );
+      expect(pushed.detail).toBeUndefined();
+
+      const accepted = await service.listUnpublishedCommits(repo, {
+        acceptedPushedCommitShas: [localSha],
+      });
+      expect(accepted.commits).toEqual([]);
+      expect(accepted.totalCommits).toBe(0);
+    } finally {
+      await rm(root, {
+        recursive: true,
+        force: true,
+        maxRetries: 3,
+        retryDelay: 100,
+      });
+    }
+  }, 20_000);
+
+  it("preserves tabs and newlines in NUL-delimited unpublished paths", async () => {
+    const sha = "a".repeat(40);
+    const repoPath = "folder/odd\tline\nname.txt";
+    const summaryOutput = [
+      sha,
+      sha.slice(0, 7),
+      "odd path",
+      "1718000000",
+      `\n3\t1\t${repoPath}`,
+    ].join("\0") + "\0";
+    const { runGit, calls } = fakeGit((args) => {
+      if (args[args.length - 1] === "remote") return "origin\n";
+      if (args.includes("--count")) return "1\n";
+      if (args.includes("--max-count=21")) return `${sha}\n`;
+      if (args.includes("show")) return summaryOutput;
+      return undefined;
+    });
+    const service = new GitWorkingStateService({ runGit });
+
+    const response = await service.listUnpublishedCommits("/repo/wt");
+
+    expect(response.commits[0]?.files[0]).toMatchObject({
+      path: normalizeTestPath(path.join("/repo/wt", repoPath)),
+      repoPath,
+      additions: 3,
+      removals: 1,
+    });
+    expect(calls.find((call) => call.args.includes("show"))?.args)
+      .toEqual(expect.arrayContaining(["--first-parent", "--numstat", "-z"]));
+  });
+
+  it("bounds concurrent unpublished commit summary probes", async () => {
+    const shas = Array.from(
+      { length: 12 },
+      (_, index) => index.toString(16).padStart(40, "0"),
+    );
+    let activeShows = 0;
+    let maxActiveShows = 0;
+    const runGit = vi.fn(async (
+      _cwd: string,
+      args: string[],
+    ): Promise<string> => {
+      if (args[args.length - 1] === "remote") return "origin\n";
+      if (args.includes("--count")) return `${shas.length}\n`;
+      if (args.includes("--max-count=21")) return `${shas.join("\n")}\n`;
+      if (args.includes("show")) {
+        const sha = args.at(-2) ?? "";
+        activeShows += 1;
+        maxActiveShows = Math.max(maxActiveShows, activeShows);
+        await new Promise<void>((resolve) => setTimeout(resolve, 5));
+        activeShows -= 1;
+        return [
+          sha,
+          sha.slice(0, 7),
+          `commit ${sha.slice(-2)}`,
+          "1718000000",
+          "\n1\t0\tfile.txt",
+        ].join("\0") + "\0";
+      }
+      throw new Error(`unexpected git invocation: ${args.join(" ")}`);
+    });
+    const service = new GitWorkingStateService({ runGit });
+
+    const response = await service.listUnpublishedCommits("/repo/wt");
+
+    expect(response.commits.map((commit) => commit.sha)).toEqual(shas);
+    expect(maxActiveShows).toBeGreaterThan(1);
+    expect(maxActiveShows).toBeLessThanOrEqual(4);
+  });
+
+  it("summarizes and loads a merge commit against its first parent", async () => {
+    const root = await mkdtemp(makeTempPrefix());
+    const repo = path.join(root, "repo");
+    const remote = path.join(root, "remote.git");
+
+    try {
+      await mkdir(repo);
+      await git(root, "init", "--bare", remote);
+      await git(repo, "init", "-b", "main");
+      await git(repo, "config", "user.email", "test@example.com");
+      await git(repo, "config", "user.name", "PwrAgent Test");
+      await writeFile(path.join(repo, "base.txt"), "base\n");
+      await git(repo, "add", "base.txt");
+      await git(repo, "commit", "-m", "base");
+      await git(repo, "remote", "add", "origin", remote);
+      await git(repo, "push", "-u", "origin", "main");
+
+      await git(repo, "checkout", "-b", "feature");
+      await writeFile(path.join(repo, "feature.txt"), "merged content\n");
+      await git(repo, "add", "feature.txt");
+      await git(repo, "commit", "-m", "feature work");
+      await git(repo, "push", "-u", "origin", "feature");
+      await git(repo, "checkout", "main");
+      await git(repo, "merge", "--no-ff", "feature", "-m", "merge feature");
+      const mergeSha = (await git(repo, "rev-parse", "HEAD")).trim();
+
+      const service = new GitWorkingStateService();
+      const response = await service.listUnpublishedCommits(repo);
+
+      expect(response).toMatchObject({
+        totalCommits: 1,
+        commits: [
+          {
+            sha: mergeSha,
+            subject: "merge feature",
+            totalFiles: 1,
+            additions: 1,
+            removals: 0,
+          },
+        ],
+      });
+      expect(response.commits[0]?.files[0]?.repoPath).toBe("feature.txt");
+
+      const detail = await service.getUnpublishedCommitDiff(
+        repo,
+        mergeSha,
+        path.join(repo, "feature.txt"),
+      );
+      expect(detail.detail?.fileDiff).toMatchObject({
+        kind: "add",
+        additions: 1,
+        removals: 0,
+      });
+      expect(detail.detail?.fileDiff?.diff).toContain("+merged content");
+    } finally {
+      await rm(root, {
+        recursive: true,
+        force: true,
+        maxRetries: 3,
+        retryDelay: 100,
+      });
+    }
+  }, 20_000);
+
   it("builds a single-file diff on demand for an untracked file", async () => {
     const tmpRoot = await mkdtemp(makeTempPrefix());
     const filePath = path.join(tmpRoot, "note.txt");

@@ -177,6 +177,33 @@ afterEach(() => {
 });
 
 beforeEach(() => {
+  const emptyRect = {
+    bottom: 0,
+    height: 0,
+    left: 0,
+    right: 0,
+    toJSON: () => ({}),
+    top: 0,
+    width: 0,
+    x: 0,
+    y: 0,
+  } as DOMRect;
+  Object.defineProperty(Text.prototype, "getClientRects", {
+    configurable: true,
+    value: () => [],
+  });
+  Object.defineProperty(Text.prototype, "getBoundingClientRect", {
+    configurable: true,
+    value: () => emptyRect,
+  });
+  Object.defineProperty(Range.prototype, "getClientRects", {
+    configurable: true,
+    value: () => [] as unknown as DOMRectList,
+  });
+  Object.defineProperty(Range.prototype, "getBoundingClientRect", {
+    configurable: true,
+    value: () => emptyRect,
+  });
   vi.stubGlobal("Highlight", class {
     ranges: Range[];
     constructor(...ranges: Range[]) {
@@ -1607,6 +1634,10 @@ describe("ThreadView", () => {
       updatedAt: 1000,
       workMode: "worktree",
     } satisfies NavigationLaunchpadDraft;
+    const referenceThread = buildTimestampTargetThread(
+      "thread-reference",
+      "Bob's Best Thread 3000",
+    );
 
     render(
       <ThreadView
@@ -1669,6 +1700,7 @@ describe("ThreadView", () => {
         selectedDirectory={selectedDirectory}
         selectedLaunchpad={selectedLaunchpad}
         skills={[]}
+        threads={[referenceThread]}
         transcriptEntries={[]}
         onLoadOlder={async () => undefined}
         removeOptimisticMessage={(_id) => undefined}
@@ -1694,6 +1726,13 @@ describe("ThreadView", () => {
       expect(screen.getByLabelText(/Telegram: Enabled/)).toBeInTheDocument();
     });
     expect(screen.getByRole("group", { name: "Messaging platform status" })).toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole("textbox", { name: "New thread" }), {
+      target: { value: "Ask #Bob" },
+    });
+    expect(await screen.findByRole("listbox", {
+      name: "Threads and pull requests",
+    })).toHaveTextContent("#Bob's Best Thread 3000");
   });
 
   it("treats a main-window launchpad as remote from the active federation target", async () => {

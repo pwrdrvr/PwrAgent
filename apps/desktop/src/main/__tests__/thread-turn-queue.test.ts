@@ -218,10 +218,78 @@ describe("ThreadTurnQueue", () => {
 
     await queue.submit(buildEntry({ id: "queued-1" }));
 
-    expect(queue.cancelEntry("queued-1", "test cancel")).toMatchObject({
-      id: "queued-1",
+    expect(
+      queue.cancelEntryWithDisposition("queued-1", "test cancel"),
+    ).toMatchObject({
+      disposition: "cancelled",
+      entry: { id: "queued-1" },
     });
     expect(queue.getQueuedEntries({ backend: "codex", threadId: "thread-1" }))
       .toEqual([]);
+    expect(queue.cancelEntryWithDisposition("missing")).toEqual({
+      disposition: "not_found",
+    });
+  });
+
+  it("recognizes a queue entry that was already admitted", async () => {
+    const queue = new ThreadTurnQueue({
+      startTurn: async (entry) => ({
+        backend: entry.backend,
+        threadId: entry.threadId,
+        turnId: `turn-${entry.id}`,
+      }),
+    });
+
+    await queue.submit(buildEntry({ id: "admitted-1" }));
+
+    expect(queue.cancelEntryWithDisposition("admitted-1")).toMatchObject({
+      disposition: "already_admitted",
+      entryId: "admitted-1",
+      turnId: "turn-admitted-1",
+    });
+
+    await queue.releaseThread({
+      backend: "codex",
+      threadId: "thread-1",
+      turnId: "turn-admitted-1",
+    });
+    expect(queue.cancelEntryWithDisposition("admitted-1")).toMatchObject({
+      disposition: "already_admitted",
+      turnId: "turn-admitted-1",
+    });
+  });
+
+  it("reports an admission without a turn id while backend startup is pending", async () => {
+    let rejectStart!: (reason?: unknown) => void;
+    const starting = new Promise<never>((_resolve, reject) => {
+      rejectStart = reject;
+    });
+    const events: ThreadTurnQueueLifecycleEvent[] = [];
+    const queue = new ThreadTurnQueue({
+      startTurn: () => starting,
+      onLifecycle: (event) => {
+        events.push(event);
+      },
+    });
+
+    const submission = queue.submit(buildEntry({ id: "starting-1" }));
+    await Promise.resolve();
+
+    expect(queue.cancelEntryWithDisposition("starting-1")).toEqual({
+      disposition: "already_admitted",
+      entryId: "starting-1",
+    });
+
+    rejectStart(new Error("backend startup failed"));
+    await expect(submission).rejects.toThrow("backend startup failed");
+    expect(events).toEqual([
+      expect.objectContaining({
+        type: "failed",
+        entry: expect.objectContaining({ id: "starting-1" }),
+      }),
+    ]);
+    expect(queue.cancelEntryWithDisposition("starting-1")).toEqual({
+      disposition: "not_found",
+    });
   });
 });

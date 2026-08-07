@@ -204,12 +204,59 @@
    theme is active because the base they reference (e.g. --text-primary,
    --bg-panel) flips here. Only the bases need to override.
 
-   The Tangerine Terminal accent gets a darker variant (#c45200) for readable
-   contrast on white surfaces. Button text on accent flips from near-black to
-   pure white for the same reason.
+   The Tangerine Terminal accent gets darker variants for readable contrast on
+   white surfaces. Button text on accent flips from near-black to pure white
+   for the same reason.
 
-   This is a v1 light palette — designed but not Claude-Design-passed yet.
-   Worth a polish pass before shipping wide.
+   ACCENT RAMP DIRECTION. The accent -> accent-strong -> accent-bright ramp
+   means the same thing in both themes — increasing emphasis — but it travels
+   on opposite axes, because "more emphatic" on a dark surface is lighter and
+   on a light surface is darker:
+
+     dark   #ff8a1f -> #ffa33d -> #ffb35c   (emphasis = lightness)
+     light  #b74c00 -> #b34a00 -> #a35200   (emphasis = depth)
+
+   The original light palette flipped --accent-strong but left --accent-bright
+   travelling the dark-theme direction, which left ~100 `color: var(--accent-
+   bright)` text rules sitting at 3.0-3.4:1 on every light surface — e.g. the
+   active lens-switch tab at 3.17:1. It now runs with the rest of the ramp.
+
+   CONTRAST FLOOR. The four tokens below that this pass retuned (--accent,
+   --accent-bright, --text-muted, and by extension the ramp) clear WCAG 2 AA
+   (4.5:1) against the *darkest* background each can land on — not against
+   --bg-app. Measuring against white alone is what let --accent (4.61:1 on
+   white) ship at 4.20:1 on the sidebar and --text-muted (4.34:1 on white) at
+   3.82:1 on a hovered row.
+
+   "Darkest background" includes ACCENT-TINTED surfaces, not just the flat
+   --bg-* tokens. 34 rules pair `background: var(--accent-soft)` (12% accent)
+   with `color: var(--accent-bright)`, and that composite is darker than
+   --bg-panel-hover: over a hovered row it lands at #eddccc. --accent-bright
+   is therefore floored against the tint (4.64:1 there) rather than against
+   the flat surface (5.45:1), which is why it sits darker than a
+   flat-surface-only reading would suggest.
+
+   NOT COVERED — pre-existing light-theme debt this pass did NOT fix. Do not
+   read the block below as uniformly AA-clean:
+     --accent on --accent-soft            3.88-4.39  (7 rules: 6 onboarding
+                                          wizard + .launchpad-pending__status.
+                                          Darkening --accent to fix it would
+                                          cost the brand mark more than it is
+                                          worth — move those rules to
+                                          --accent-bright instead.)
+     --status-warning  #a86b00            3.87       (16 `color:` rules)
+     --info-teal       #0e9b95            3.01       (1 rule)
+     --text-subtle     rgba(26,22,18,.42) 2.38       (3 rules)
+     --status-ok       #2e7d3c            4.49       (2 rules, marginal)
+
+   apps/desktop/e2e/a11y.spec.ts gates light as well as dark, but it only
+   proves the surfaces it drives — the onboarding wizard is not one of them.
+   A green gate is not a claim about the whole app.
+
+   This is still a v1 light palette — designed, not Claude-Design-passed.
+   Worth a polish pass before shipping wide; keep the contrast floor above
+   intact through any such pass, and prefer clearing the list above to
+   adding new tokens beside it.
    =========================================================================== */
 :root[data-theme="light"] {
   color-scheme: light;
@@ -230,16 +277,33 @@
   /* Text — near-black primary, progressively lighter for hierarchy. */
   --text-primary: #1a1612;
   --text-secondary: #524a40;
-  --text-muted: #807870;
+  /* Warm neutral, same hue/saturation as the old #807870, darkened from
+     47% to 42% lightness. The old value cleared AA only against pure
+     white (4.34:1) and missed on every tinted surface it actually paints
+     on — 4.23:1 on --bg-panel (the six .context-grid dt thread-info
+     labels), 3.96:1 on the sidebar, 3.82:1 on a hovered row. Now 4.55:1
+     at worst. */
+  --text-muted: #736c64;
   --text-subtle: rgba(26, 22, 18, 0.42);
 
-  /* Accent — darker Tangerine variant for contrast on white. The
-     three derived accent-soft / -border / -shadow are color-mix() of
-     --accent in :root, so flipping the base above is sufficient — no
-     need to redefine the derivatives here. */
-  --accent: #c45200;
+  /* Accent — darker Tangerine variants for contrast on white. The three
+     derived accent-soft / -border / -shadow are color-mix() of --accent
+     in :root, so flipping the bases here is sufficient — no need to
+     redefine the derivatives.
+
+     Hue and saturation are held at the original values (25deg / 30deg,
+     fully saturated) so this stays the same tangerine; only lightness
+     moves. See the ramp-direction note in the block comment above.
+     Worst-case ratios: accent 4.57:1 and strong 4.74:1 against
+     --bg-panel-hover, the darkest flat surface (strong's value is
+     unchanged — it already cleared AA and still lands between the other
+     two). --accent-bright is floored against the --accent-soft tint
+     instead, at 4.64:1, because that is where 34 of its rules put it;
+     on flat surfaces it reads 5.45:1. White --accent-on /
+     --button-text on an --accent fill is 5.19:1. */
+  --accent: #b74c00;
   --accent-strong: #b34a00;
-  --accent-bright: #d96d00;
+  --accent-bright: #994c00;
   /* Light foreground on the darker light-theme accent fill. */
   --accent-on: #ffffff;
   --focus-ring: var(--accent);
@@ -9756,6 +9820,29 @@ textarea,
   color: var(--text-primary);
 }
 
+/* Action row in the View popover ("Reset view"). Reads as the layout
+   switch's sibling rather than a new control species. */
+.star-map__view-action {
+  padding: 4px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.star-map__view-action:hover {
+  border-color: var(--accent-border);
+  color: var(--text-primary);
+}
+
+.star-map__view-action:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .star-map__view-heading {
   margin: 4px 0 2px;
   color: var(--text-muted);
@@ -13308,6 +13395,95 @@ a.transcript-message__messaging-origin:focus-visible {
 
 .other-changes {
   margin: 8px 0 10px;
+}
+
+.unpublished-commits {
+  margin: 8px 0 10px;
+}
+
+.unpublished-commits__list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.unpublished-commit {
+  min-width: 0;
+  border-left: 1px solid var(--border-subtle);
+  padding-left: 4px;
+}
+
+.unpublished-commit__header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 4px 2px;
+}
+
+.unpublished-commit__toggle {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.unpublished-commit__toggle:hover {
+  color: var(--text-primary);
+}
+
+.unpublished-commit__toggle:focus-visible {
+  border-radius: 3px;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.unpublished-commit__toggle[aria-expanded="false"] .live-work-rail__chevron {
+  transform: rotate(-90deg);
+}
+
+.unpublished-commit__toggle[aria-expanded="true"] .live-work-rail__chevron {
+  transform: rotate(0deg);
+}
+
+.unpublished-commit__identity {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.unpublished-commit__subject {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.unpublished-commit__sha,
+.unpublished-commit__binary {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.unpublished-commit__binary {
+  flex: 0 0 auto;
+}
+
+.unpublished-commit .live-work-rail__file-list {
+  margin-top: 2px;
 }
 
 .other-changes__truncated,
@@ -17397,6 +17573,10 @@ a.transcript-message__messaging-origin:focus-visible {
   cursor: default;
 }
 
+.composer-tiptap-input__mention.composer-pr-chip {
+  cursor: default;
+}
+
 .composer__mentioned-skills {
   display: flex;
   flex-wrap: wrap;
@@ -19617,6 +19797,13 @@ a.transcript-message__messaging-origin:focus-visible {
   box-shadow: var(--shadow-popover);
 }
 
+/* Thread and PR results use the same compact popover width as the `@` picker;
+   full composer width leaves large rows mostly empty on wide chat panes. */
+.composer__autocomplete--hash-references {
+  right: auto;
+  width: min(100%, 440px);
+}
+
 .composer__autocomplete--directories .composer__autocomplete-option:not(.composer__autocomplete-option--action) {
   display: grid;
   grid-template-columns: minmax(0, 160px) minmax(0, 1fr);
@@ -19769,6 +19956,38 @@ a.transcript-message__messaging-origin:focus-visible {
   color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.45;
+}
+
+.composer__autocomplete-meta--thread {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+}
+
+.composer__autocomplete-meta--thread .chip--instance {
+  flex: none;
+  height: 18px;
+  padding: 0 6px;
+  font-size: 10px;
+}
+
+.composer__autocomplete-section-divider {
+  margin: 2px 4px 0;
+  padding: 6px 8px 2px;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.composer__autocomplete-remote-loading {
+  padding: 6px 12px 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-style: italic;
 }
 
 /* Divider between the matched options and the "Add directory… / Add

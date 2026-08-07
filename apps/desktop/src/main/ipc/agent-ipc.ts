@@ -597,13 +597,10 @@ export function registerAgentIpcHandlers(): void {
           .remoteBackend(federationTarget)
           .cancelQueuedTurn(remoteRequest);
       }
-      return {
-        queueEntryId: request.queueEntryId,
-        cancelled: registry.cancelQueuedTurn(
-          request.queueEntryId,
-          "Cancelled from the desktop composer.",
-        ),
-      };
+      return registry.cancelQueuedTurnWithDisposition(
+        request.queueEntryId,
+        "Cancelled from the desktop composer.",
+      );
     },
   );
 

@@ -335,7 +335,7 @@ export class RuntimeMessagingLeaseCoordinator {
   ): Promise<void> {
     this.stopHeartbeat();
     try {
-      await runtime.stop();
+      await runtime.stop({ preserveStartupFailures: true });
     } catch (error) {
       leaseLog.warn("messaging runtime stop failed during startup cleanup", {
         error: error instanceof Error ? error.message : String(error),

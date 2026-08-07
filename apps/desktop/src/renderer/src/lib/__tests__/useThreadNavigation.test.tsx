@@ -1813,6 +1813,13 @@ describe("useThreadNavigation", () => {
     });
     expect(result.current.threads[0]?.gitWorkingState).toBeUndefined();
 
+    const gitWorkingState = {
+      dirtyFiles: 3,
+      dirtyAdditions: 12,
+      dirtyDeletions: 4,
+      untrackedFiles: 1,
+      unpushedCommits: 2,
+    };
     await act(async () => {
       for (const listener of listeners) {
         listener({
@@ -1821,14 +1828,8 @@ describe("useThreadNavigation", () => {
             method: "navigation/threadGitWorkingState/updated",
             params: {
               worktreePath: "/repo/wt",
-              gitWorkingState: {
-                dirtyFiles: 3,
-                dirtyAdditions: 12,
-                dirtyDeletions: 4,
-                untrackedFiles: 1,
-                unpushedCommits: 2,
-              },
-              fetchedAt: Date.now(),
+              gitWorkingState,
+              fetchedAt: 1000,
             },
           },
         });
@@ -1841,6 +1842,26 @@ describe("useThreadNavigation", () => {
       dirtyFiles: 3,
       unpushedCommits: 2,
     });
+    expect(result.current.threads[0]?.gitWorkingStateFetchedAt).toBe(1000);
+
+    // An amend/rebase can replace commit metadata without changing any aggregate
+    // counts. The fetched-at token must still advance so detail panels reload.
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "navigation/threadGitWorkingState/updated",
+            params: {
+              worktreePath: "/repo/wt",
+              gitWorkingState,
+              fetchedAt: 2000,
+            },
+          },
+        });
+      }
+    });
+    expect(result.current.threads[0]?.gitWorkingStateFetchedAt).toBe(2000);
 
     // A clean probe (null) clears the chips.
     await act(async () => {
@@ -2257,6 +2278,77 @@ describe("useThreadNavigation", () => {
       pinnedRank: expect.any(String),
     });
     expect(setRemoteThreadLocalPin).not.toHaveBeenCalled();
+  });
+
+  it("adds reactions through the owner in a remote-viewer window", async () => {
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "remote-instance",
+    };
+    (window as typeof window & {
+      __pwragentFederationTarget?: unknown;
+    }).__pwragentFederationTarget = federationTarget;
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: 1_000,
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [
+        {
+          id: "thread-remote",
+          title: "Remote thread",
+          titleSource: "explicit" as const,
+          source: "codex" as const,
+          linkedDirectories: [],
+          reactions: ["✋"],
+          inbox: { inInbox: false },
+          federation: {
+            instanceLabel: "Remote Mac",
+            ref: {
+              backend: "codex" as const,
+              target: federationTarget,
+              threadId: "thread-remote",
+            },
+          },
+        },
+      ],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const setThreadReaction = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-remote",
+      reactions: ["✋", "👀"],
+    }));
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      setThreadReaction,
+      onAgentEvent: () => () => undefined,
+    };
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.threads[0]?.reactions).toEqual(["✋"]);
+    });
+    await act(async () => {
+      await result.current.setThreadReaction(
+        result.current.threads[0]!,
+        "👀",
+        true,
+      );
+    });
+
+    expect(setThreadReaction).toHaveBeenCalledWith({
+      backend: "codex",
+      federationTarget,
+      threadId: "thread-remote",
+      emoji: "👀",
+      present: true,
+    });
+    expect(result.current.threads[0]?.reactions).toEqual(["✋", "👀"]);
   });
 
   it("marks a remote snapshot unavailable and refreshes it after reconnect", async () => {
@@ -8906,6 +8998,87 @@ describe("useThreadNavigation", () => {
       expect(result.current.threads[1]?.prs?.[0]?.number).toBe(4242);
     });
     expect(result.current.threads[0]?.prs?.[0]?.number).toBe(999);
+  });
+
+  it("applies a peer's reaction event only to its pinned row", async () => {
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "remote-instance",
+    };
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+      threads: [
+        {
+          id: "shared-thread-id",
+          title: "Local thread",
+          titleSource: "explicit" as const,
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: { inInbox: true },
+          reactions: ["🏠"],
+        },
+        {
+          id: "shared-thread-id",
+          title: "Pinned remote thread",
+          titleSource: "explicit" as const,
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: { inInbox: true },
+          reactions: ["✋"],
+          federation: {
+            instanceLabel: "Remote Mac",
+            ref: {
+              backend: "codex" as const,
+              target: federationTarget,
+              threadId: "shared-thread-id",
+            },
+          },
+        },
+      ],
+    }));
+    const desktopApi = {
+      getNavigationSnapshot,
+      onAgentEvent: (
+        callback: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0],
+      ) => {
+        agentEventHandler = callback;
+        return () => {
+          agentEventHandler = undefined;
+        };
+      },
+    } as unknown as DesktopApi;
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+    await waitFor(() => {
+      expect(result.current.threads).toHaveLength(2);
+    });
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        federationTarget,
+        notification: {
+          method: "thread/reactions/updated",
+          params: {
+            threadId: "shared-thread-id",
+            reactions: ["✋", "👀"],
+          },
+        },
+      } as never);
+    });
+
+    expect(result.current.threads[0]?.reactions).toEqual(["🏠"]);
+    expect(result.current.threads[1]?.reactions).toEqual(["✋", "👀"]);
   });
 
   describe("pickAndRegisterDirectory (issue #223)", () => {

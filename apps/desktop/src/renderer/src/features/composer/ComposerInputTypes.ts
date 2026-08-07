@@ -16,11 +16,14 @@ import type { AppServerSkillSummary } from "@pwragent/shared";
  *   - thread references (`kind: "thread"`): `name` is the resolved thread
  *     title and `path` its canonical `pwragent://thread/...` URL; serializes
  *     to the same Markdown link the transcript recognizes as a thread chip.
+ *   - pull-request references (`kind: "pull-request"`): `name` is the short
+ *     `#123` label and `path` the repository-scoped PR URL; serializes to the
+ *     Markdown link the transcript hydrates into its live PR chip.
  */
 export type ComposerSkillToken = AppServerSkillSummary & {
   id: string;
   index: number;
-  kind?: "directory" | "file" | "thread";
+  kind?: "directory" | "file" | "pull-request" | "thread";
 };
 
 export type ComposerInputChangeMetadata = {

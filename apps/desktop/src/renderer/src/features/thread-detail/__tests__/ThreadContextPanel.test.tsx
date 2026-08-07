@@ -3029,8 +3029,46 @@ describe("ThreadContextPanel", () => {
     renderPanel({ activeTab: "edits", pinned: true });
 
     expect(
-      screen.getByText(/No uncommitted file edits yet/),
+      screen.getByText(/No uncommitted file edits or unpublished commits/),
     ).toBeInTheDocument();
+  });
+
+  it("loads unpublished commits from a linked worktree without a project key", async () => {
+    const listWorktreeUnpublishedCommits = vi.fn(async () => ({
+      commits: [],
+      totalCommits: 0,
+      truncated: false,
+      maxCommits: 20,
+      maxFilesPerCommit: 50,
+    }));
+
+    renderPanel({
+      activeTab: "edits",
+      desktopApi: { listWorktreeUnpublishedCommits },
+      pinned: true,
+      thread: {
+        ...baseThread,
+        linkedDirectories: [
+          {
+            id: "linked-worktree",
+            kind: "worktree",
+            label: "PwrAgent",
+            path: "/repo",
+            worktreePath: "/repo/.worktrees/thread-1",
+          },
+        ],
+      },
+    });
+
+    await waitFor(() => {
+      expect(listWorktreeUnpublishedCommits).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        worktreePath: "/repo/.worktrees/thread-1",
+        maxCommits: 20,
+        maxFilesPerCommit: 50,
+      });
+    });
   });
 
   it("renders accumulated edit groups on the Edits tab and toggles the dock", () => {

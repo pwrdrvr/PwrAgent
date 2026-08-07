@@ -22,6 +22,11 @@ const CARD_FIELD_ORDER: (keyof StarMapCardFields)[] = [
 export function StarMapViewOptions(props: {
   preferences: StarMapViewPreferences;
   onChange: (next: StarMapViewPreferences) => void;
+  /**
+   * Re-centre the map at 1:1. Omitted by lenses that fit the window and so
+   * have no view to lose.
+   */
+  onResetView?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -92,6 +97,21 @@ export function StarMapViewOptions(props: {
               </button>
             ))}
           </div>
+          {props.onResetView ? (
+            <>
+              <p className="star-map__view-heading">Position</p>
+              <button
+                type="button"
+                className="star-map__view-action"
+                onClick={() => {
+                  props.onResetView?.();
+                  setOpen(false);
+                }}
+              >
+                Reset view
+              </button>
+            </>
+          ) : null}
           <p className="star-map__view-heading">Card details</p>
           {CARD_FIELD_ORDER.map((field) => (
             <label key={field} className="star-map__view-row">

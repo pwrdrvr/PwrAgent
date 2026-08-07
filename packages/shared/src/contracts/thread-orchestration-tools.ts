@@ -20,6 +20,8 @@ export const PWRAGENT_THREAD_ORCHESTRATION_OPERATION_NAMES = [
   "detach_thread_directory",
   "handoff_task",
   "move_thread_workspace",
+  "stop_thread",
+  "steer_thread",
   "send_message_to_thread",
   "start_review",
 ] as const;
@@ -30,9 +32,13 @@ export type PwrAgentThreadOrchestrationOperationName =
 export const PWRAGENT_THREAD_ORCHESTRATION_ERROR_CODES = [
   "invalid_arguments",
   "not_found",
+  "no_active_turn",
   "peer_unavailable",
   "forbidden",
+  "stale_target",
+  "ambiguous_owner",
   "unsupported_backend",
+  "unsupported_capability",
   "unsupported_workspace",
   "unsupported_operation",
   "ambiguous_workspace",
@@ -124,6 +130,8 @@ export type SendMessageToThreadToolArgs = {
    * local threads and legacy callers; PwrAgent falls back to durable lookup.
    */
   instanceId?: FederationInstanceId;
+  /** Defaults to true. Set false to restrict resolution to this instance. */
+  includeRemote?: boolean;
   prompt: string;
   model?: string;
   reasoningEffort?: string;
@@ -132,6 +140,34 @@ export type SendMessageToThreadToolArgs = {
   executionMode?: ThreadExecutionMode;
   approvalPolicy?: string;
   sandbox?: string;
+};
+
+export type ThreadTurnControlToolTargetArgs = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  /**
+   * Owning remote instance when known. Omit for local threads and legacy
+   * links; PwrAgent falls back to durable ownership and peer discovery.
+   */
+  instanceId?: FederationInstanceId;
+  /** Defaults to true. Set false to restrict resolution to this instance. */
+  includeRemote?: boolean;
+  /**
+   * Stable caller-generated idempotency key. Retry the same action with the
+   * same value; never reuse it for different arguments.
+   */
+  requestId: string;
+  /**
+   * Optional compare-and-act guard. When supplied, PwrAgent refuses to act if
+   * the owning instance reports a different active turn.
+   */
+  expectedTurnId?: string;
+};
+
+export type StopThreadToolArgs = ThreadTurnControlToolTargetArgs;
+
+export type SteerThreadToolArgs = ThreadTurnControlToolTargetArgs & {
+  prompt: string;
 };
 
 export type StartReviewToolArgs = {
@@ -381,6 +417,10 @@ export type SendMessageToThreadResult = {
   /** Owning remote instance when the target is federated. */
   instanceId?: FederationInstanceId;
   turnId: string;
+  /** Present when delivery was deferred behind an active target turn. */
+  queueStatus?: "queued";
+  queueEntryId?: string;
+  position?: number;
   promptPreview: string;
   /** Canonical `pwragent://thread/…` URL for the messaged thread. */
   threadUrl: string;
@@ -395,6 +435,32 @@ export type SendMessageToThreadResult = {
     approvalPolicy?: string;
     sandbox?: string;
   };
+};
+
+export type StopThreadResult = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  /** Owning remote instance when the target is federated. */
+  instanceId?: FederationInstanceId;
+  requestId: string;
+  turnId: string;
+  disposition: "interrupted";
+  interruptedAt: number;
+  /** True when this response replays an already accepted requestId. */
+  idempotentReplay?: boolean;
+};
+
+export type SteerThreadResult = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  /** Owning remote instance when the target is federated. */
+  instanceId?: FederationInstanceId;
+  requestId: string;
+  turnId: string;
+  disposition: "steered";
+  promptPreview: string;
+  /** True when this response replays an already accepted requestId. */
+  idempotentReplay?: boolean;
 };
 
 export type StartReviewToolResult = {
@@ -415,6 +481,8 @@ export type PwrAgentThreadOrchestrationToolArgsByOperation = {
   handoff_task: HandoffTaskToolArgs;
   move_thread_workspace: MoveThreadWorkspaceToolArgs;
   send_message_to_thread: SendMessageToThreadToolArgs;
+  steer_thread: SteerThreadToolArgs;
+  stop_thread: StopThreadToolArgs;
   start_review: StartReviewToolArgs;
 };
 
@@ -443,6 +511,8 @@ export type PwrAgentThreadOrchestrationResponse =
         | HandoffTaskResult
         | MoveThreadWorkspaceResult
         | SendMessageToThreadResult
+        | SteerThreadResult
+        | StopThreadResult
         | StartReviewToolResult;
     }
   | {

@@ -191,6 +191,10 @@ import type {
   ListWorktreeOtherChangesResponse,
   GetWorktreeOtherChangeDiffRequest,
   GetWorktreeOtherChangeDiffResponse,
+  ListWorktreeUnpublishedCommitsRequest,
+  ListWorktreeUnpublishedCommitsResponse,
+  GetWorktreeUnpublishedCommitDiffRequest,
+  GetWorktreeUnpublishedCommitDiffResponse,
   NavigationSnapshot,
   ResetDirectoryLaunchpadRequest,
   ResetDirectoryLaunchpadResponse,
@@ -535,6 +539,8 @@ import {
   NAVIGATION_RESOLVE_EDIT_COMMIT_STATES_CHANNEL,
   NAVIGATION_LIST_WORKTREE_OTHER_CHANGES_CHANNEL,
   NAVIGATION_GET_WORKTREE_OTHER_CHANGE_DIFF_CHANNEL,
+  NAVIGATION_LIST_WORKTREE_UNPUBLISHED_COMMITS_CHANNEL,
+  NAVIGATION_GET_WORKTREE_UNPUBLISHED_COMMIT_DIFF_CHANNEL,
   FEDERATION_JUMP_SEARCH_CHANNEL,
   NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL,
   NAVIGATION_REMOVE_REMOTE_THREAD_PIN_CHANNEL,
@@ -1556,6 +1562,20 @@ const desktopApi = Object.freeze({
   ): Promise<GetWorktreeOtherChangeDiffResponse> =>
     await ipcRenderer.invoke(
       NAVIGATION_GET_WORKTREE_OTHER_CHANGE_DIFF_CHANNEL,
+      request,
+    ),
+  listWorktreeUnpublishedCommits: async (
+    request: ListWorktreeUnpublishedCommitsRequest,
+  ): Promise<ListWorktreeUnpublishedCommitsResponse> =>
+    await ipcRenderer.invoke(
+      NAVIGATION_LIST_WORKTREE_UNPUBLISHED_COMMITS_CHANNEL,
+      request,
+    ),
+  getWorktreeUnpublishedCommitDiff: async (
+    request: GetWorktreeUnpublishedCommitDiffRequest,
+  ): Promise<GetWorktreeUnpublishedCommitDiffResponse> =>
+    await ipcRenderer.invoke(
+      NAVIGATION_GET_WORKTREE_UNPUBLISHED_COMMIT_DIFF_CHANNEL,
       request,
     ),
   getGhStatus: async (request?: GetGhStatusRequest): Promise<GhStatus> =>

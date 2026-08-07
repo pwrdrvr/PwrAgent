@@ -1609,6 +1609,14 @@ export type AppServerNotification =
       };
     }
   | {
+      method: "thread/reactions/updated";
+      params: {
+        threadId: string;
+        /** Complete reaction set, ordered by insertion. */
+        reactions: string[];
+      };
+    }
+  | {
       method: "thread/pin/added";
       params: {
         threadId: string;

@@ -220,6 +220,10 @@ import type {
   ListWorktreeOtherChangesResponse,
   GetWorktreeOtherChangeDiffRequest,
   GetWorktreeOtherChangeDiffResponse,
+  ListWorktreeUnpublishedCommitsRequest,
+  ListWorktreeUnpublishedCommitsResponse,
+  GetWorktreeUnpublishedCommitDiffRequest,
+  GetWorktreeUnpublishedCommitDiffResponse,
   NavigationSnapshot,
   ResetDirectoryLaunchpadRequest,
   ResetDirectoryLaunchpadResponse,
@@ -875,6 +879,12 @@ export type DesktopApi = {
   getWorktreeOtherChangeDiff?: (
     request: GetWorktreeOtherChangeDiffRequest
   ) => Promise<GetWorktreeOtherChangeDiffResponse>;
+  listWorktreeUnpublishedCommits?: (
+    request: ListWorktreeUnpublishedCommitsRequest
+  ) => Promise<ListWorktreeUnpublishedCommitsResponse>;
+  getWorktreeUnpublishedCommitDiff?: (
+    request: GetWorktreeUnpublishedCommitDiffRequest
+  ) => Promise<GetWorktreeUnpublishedCommitDiffResponse>;
   getGhStatus?: (request?: GetGhStatusRequest) => Promise<GhStatus>;
   ensureDirectoryLaunchpad?: (
     request: EnsureDirectoryLaunchpadRequest

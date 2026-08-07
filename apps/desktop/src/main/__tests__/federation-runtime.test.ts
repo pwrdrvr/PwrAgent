@@ -1420,6 +1420,50 @@ describe("DesktopFederationRuntime", () => {
     expect(invalidated).toEqual(["client_one"]);
   });
 
+  it("invalidates cached remote summaries when a peer updates reactions", () => {
+    const invalidated: Array<string | undefined> = [];
+    const router = new FederationRouter({ localInstanceId: "gateway_one" });
+    router.registerConnection(createConnection({
+      peerId: "client_one",
+      capabilities: ["thread_navigation", "event_subscriptions"],
+    }));
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.localInstanceId = "gateway_one";
+    runtime.router = router;
+    runtime.setEventSubscriptions("viewer", [{
+      sourceInstanceId: "client_one",
+      eventClasses: ["navigation"],
+    }]);
+    runtime.remoteThreadSummaryCache = {
+      invalidate: (instanceId) => invalidated.push(instanceId),
+    };
+
+    runtime.publishRemoteBackendEvent(
+      {
+        id: "event-reactions",
+        kind: "notification",
+        method: FEDERATION_BACKEND_EVENT_METHOD,
+        params: {
+          backend: "codex",
+          notification: {
+            method: "thread/reactions/updated",
+            params: {
+              threadId: "thread-1",
+              reactions: ["✋", "👀"],
+            },
+          },
+        },
+        protocolVersion: FEDERATION_PROTOCOL_VERSION,
+        sourceInstanceId: "client_one",
+        targetInstanceId: "gateway_one",
+        createdAt: 2_000,
+      },
+      "client_one",
+    );
+
+    expect(invalidated).toEqual(["client_one"]);
+  });
+
   it("subscribes Cmd+K snapshot peers to navigation updates for the cache TTL", async () => {
     vi.useFakeTimers();
     const sent: FederationProtocolEnvelope[] = [];
