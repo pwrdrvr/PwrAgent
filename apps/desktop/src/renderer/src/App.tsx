@@ -61,6 +61,7 @@ import {
   readRendererFederationTarget,
 } from "./lib/federation-window";
 import { useFederationPeerConnectivity } from "./lib/useFederationPeerConnectivity";
+import { useFederationThreadEventSubscriptions } from "./lib/useFederationThreadEventSubscriptions";
 import { scopeDesktopApiToFederationTarget } from "./lib/federation-desktop-api";
 import { federationTargetsEqual } from "./lib/federated-thread-events";
 import { useRuntimeIdentity } from "./lib/runtime-identity";
@@ -804,6 +805,12 @@ function DesktopAppShell(props: {
     lightweightNavigationRefresh:
       settings.snapshot?.experimental.lightweightNavigationRefresh?.value ?? false,
     threadViewVisible: mainView === "thread",
+  });
+  useFederationThreadEventSubscriptions({
+    desktopApi,
+    enabled: !readRendererFederationTarget(),
+    selectedThread: navigation.selectedThread,
+    threads: navigation.threads,
   });
   const selectedThreadFederationTarget =
     navigation.selectedThread?.federation?.ref.target;

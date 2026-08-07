@@ -127,12 +127,12 @@ type RuntimeHarness = {
   ) => FederationEventSubscription[];
   setRendererEventSubscriptions: (
     webContentsId: number,
-    consumerId: "remote-window" | "star-map",
+    consumerId: "remote-window" | "star-map" | "thread-view",
     subscriptions: readonly FederationEventSubscription[],
   ) => FederationEventSubscription[];
   clearRendererEventSubscriptions: (
     webContentsId: number,
-    consumerId?: "remote-window" | "star-map",
+    consumerId?: "remote-window" | "star-map" | "thread-view",
   ) => void;
   rendererWantsRemoteEvent: (
     webContentsId: number,
@@ -896,7 +896,7 @@ describe("DesktopFederationRuntime", () => {
     ]);
   });
 
-  it("keeps a viewer subscription while Star Map opens and closes in its window", () => {
+  it("keeps viewer and thread subscriptions while Star Map opens and closes", () => {
     const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
     runtime.localInstanceId = "viewer_one";
     runtime.router = new FederationRouter({ localInstanceId: "viewer_one" });
@@ -924,6 +924,10 @@ describe("DesktopFederationRuntime", () => {
       sourceInstanceId: "owner_two",
       eventClasses: ["navigation", "star_map"],
     }]);
+    runtime.setRendererEventSubscriptions(7, "thread-view", [{
+      sourceInstanceId: "owner_two",
+      eventClasses: ["navigation"],
+    }]);
     runtime.clearRendererEventSubscriptions(7, "star-map");
 
     expect(runtime.rendererWantsRemoteEvent(7, "owner_one", "navigation"))
@@ -932,6 +936,9 @@ describe("DesktopFederationRuntime", () => {
       .toBe(true);
     expect(runtime.rendererWantsRemoteEvent(7, "owner_one", "star_map"))
       .toBe(false);
+    expect(runtime.rendererWantsRemoteEvent(7, "owner_two", "navigation"))
+      .toBe(true);
+    runtime.clearRendererEventSubscriptions(7, "thread-view");
     expect(runtime.rendererWantsRemoteEvent(7, "owner_two", "navigation"))
       .toBe(false);
   });

@@ -357,9 +357,13 @@ export function StarMapScreen(props: StarMapScreenProps) {
       sourceInstanceId: string;
       eventClasses: Array<"navigation" | "scheduled_actions" | "star_map">;
     }>;
-    void props.desktopApi.setFederationEventSubscriptions({ subscriptions });
+    void props.desktopApi.setFederationEventSubscriptions({
+      consumer: "star_map",
+      subscriptions,
+    });
     return () => {
       void props.desktopApi?.setFederationEventSubscriptions?.({
+        consumer: "star_map",
         subscriptions: [],
       });
     };

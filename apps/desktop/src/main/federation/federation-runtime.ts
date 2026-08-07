@@ -606,7 +606,7 @@ export class DesktopFederationRuntime {
 
   setRendererEventSubscriptions(
     webContentsId: number,
-    consumerId: "remote-window" | "star-map",
+    consumerId: "remote-window" | "star-map" | "thread-view",
     subscriptions: readonly FederationEventSubscription[],
   ): FederationEventSubscription[] {
     return this.setEventSubscriptions(
@@ -617,7 +617,7 @@ export class DesktopFederationRuntime {
 
   clearRendererEventSubscriptions(
     webContentsId: number,
-    consumerId?: "remote-window" | "star-map",
+    consumerId?: "remote-window" | "star-map" | "thread-view",
   ): void {
     const prefix = `renderer:${webContentsId}:`;
     if (consumerId) {
