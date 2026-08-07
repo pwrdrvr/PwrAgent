@@ -15306,6 +15306,76 @@ describe("Composer", () => {
     );
   });
 
+  it("does not update a launchpad parent while rendering image attachment changes", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const onUpdateLaunchpad = vi.fn();
+
+    function StatefulLaunchpadComposer() {
+      const [launchpad, setLaunchpad] = useState<NavigationLaunchpadDraft>({
+        directoryKey: "directory:/repo",
+        directoryKind: "directory",
+        directoryLabel: "PwrAgent",
+        directoryPath: "/repo",
+        backend: "codex",
+        executionMode: "default",
+        prompt: "",
+        workMode: "local",
+        createdAt: 1,
+        updatedAt: 1,
+      });
+
+      return (
+        <Composer
+          backends={[backendSummary("codex")]}
+          launchpad={launchpad}
+          onUpdateLaunchpad={async (_directoryKey, patch) => {
+            onUpdateLaunchpad(patch);
+            setLaunchpad((current) => ({
+              ...current,
+              ...patch,
+              updatedAt: current.updatedAt + 1,
+            }));
+          }}
+          skills={[]}
+        />
+      );
+    }
+
+    try {
+      render(
+        <StrictMode>
+          <StatefulLaunchpadComposer />
+        </StrictMode>,
+      );
+      const updateCallsBeforePaste = onUpdateLaunchpad.mock.calls.length;
+      const file = new File([new Uint8Array([1])], "shot.png", {
+        type: "image/png",
+      });
+
+      fireEvent.paste(screen.getByLabelText("Reply"), {
+        clipboardData: {
+          files: [],
+          items: [{ kind: "file", type: file.type, getAsFile: () => file }],
+        },
+      });
+
+      expect(await screen.findByText("32×24")).toBeInTheDocument();
+      expect(onUpdateLaunchpad).toHaveBeenCalledTimes(updateCallsBeforePaste + 1);
+      fireEvent.click(screen.getByRole("button", { name: "Remove shot.png" }));
+      await waitFor(() => {
+        expect(screen.queryByText("32×24")).not.toBeInTheDocument();
+      });
+      expect(onUpdateLaunchpad).toHaveBeenCalledTimes(updateCallsBeforePaste + 2);
+      expect(
+        consoleError.mock.calls.filter(([message]) =>
+          String(message).includes("Cannot update a component"),
+        ),
+      ).toHaveLength(0);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
   it("stops accepting pasted images at the attachment limit and shows a toast", async () => {
     const onShowNotice = vi.fn();
     const files = Array.from(
