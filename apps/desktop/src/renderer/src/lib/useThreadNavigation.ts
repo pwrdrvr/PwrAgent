@@ -714,6 +714,11 @@ function threadSummariesEqual(
     left.gitBranch === right.gitBranch &&
     left.observedGitBranch === right.observedGitBranch &&
     left.primaryGitRepository === right.primaryGitRepository &&
+    // Federation reachability changes independently of owner thread data.
+    // Include the whole stamp so a successful reconnect cannot reuse the
+    // previous disconnected row and leave it dimmed indefinitely.
+    JSON.stringify(left.federation ?? null) ===
+      JSON.stringify(right.federation ?? null) &&
     // Working state is probed on its own cadence (background refresh +
     // post-turn invalidation), independent of `updatedAt` — like PRs and
     // messaging bindings below. Without this check the reconciler would
@@ -2651,6 +2656,7 @@ export function useThreadNavigation(
   const focusRefreshQueuedRef = useRef(false);
   const lastFocusRefreshCompletedAtRef = useRef(0);
   const remoteRecoveryAttemptRef = useRef(0);
+  const remotePeerDisconnectedRef = useRef(false);
   const lastNavigationActivityAtRef = useRef(Date.now());
   const backgroundRefreshIdleRef = useRef(false);
   const launchpadUpdateRevisionRef = useRef(new Map<string, number>());
@@ -2739,6 +2745,14 @@ export function useThreadNavigation(
         return;
       }
 
+      const federationTarget = readRendererFederationTarget();
+      if (federationTarget && remotePeerDisconnectedRef.current) {
+        // Peer-status events are the live connectivity source. While the
+        // route is known down, preserve the current response and let the
+        // connected transition below schedule the one authoritative refresh.
+        return;
+      }
+
       setState((current) => ({
         ...current,
         loading: !current.response,
@@ -2752,7 +2766,6 @@ export function useThreadNavigation(
           hasCurrentResponse: Boolean(stateRef.current.response),
           preferredSelectionKey: preferredSelectionKey ?? null,
         });
-        const federationTarget = readRendererFederationTarget();
         const snapshotRequest =
           options?.forceRefresh || options?.refreshMode || federationTarget
             ? {
@@ -3257,12 +3270,14 @@ export function useThreadNavigation(
           unavailableReason?: string;
         };
         if (params.status === "connected") {
+          remotePeerDisconnectedRef.current = false;
           scheduleRefresh(undefined, undefined, false, {
             forceRefresh: true,
             refreshMode: "full",
           });
           return;
         }
+        remotePeerDisconnectedRef.current = true;
         setState((current) => ({
           ...current,
           // Patch the live peer status onto the affected rows so surfaces

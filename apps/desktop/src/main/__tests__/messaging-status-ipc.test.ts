@@ -61,6 +61,14 @@ const messagingRoutesServiceMock = vi.hoisted(() => ({
   resetDesktopMessagingToolUpdateBindings: vi.fn(),
   setDesktopMessagingDefaultAgent: vi.fn(),
 }));
+const federationMock = vi.hoisted(() => {
+  const readMessagingPlatformStatuses = vi.fn(async () => [] as unknown[]);
+  return {
+    readMessagingPlatformStatuses,
+    remoteBackend: vi.fn(() => ({ readMessagingPlatformStatuses })),
+    setStatusReader: vi.fn(),
+  };
+});
 
 vi.mock("electron", () => ({
   BrowserWindow: {
@@ -80,6 +88,13 @@ vi.mock("electron", () => ({
 
 vi.mock("../messaging/messaging-runtime", () => ({
   getDesktopMessagingRuntime: vi.fn(() => runtimeMock),
+}));
+
+vi.mock("../federation/federation-runtime", () => ({
+  getDesktopFederationRuntime: vi.fn(() => ({
+    remoteBackend: federationMock.remoteBackend,
+  })),
+  setFederationMessagingPlatformStatusReader: federationMock.setStatusReader,
 }));
 
 vi.mock("../settings/desktop-settings-singleton", () => ({
@@ -160,6 +175,65 @@ describe("messaging status ipc", () => {
     messagingRoutesServiceMock.listDesktopMessagingRoutes.mockReset();
     messagingRoutesServiceMock.resetDesktopMessagingToolUpdateBindings.mockReset();
     messagingRoutesServiceMock.setDesktopMessagingDefaultAgent.mockReset();
+    federationMock.readMessagingPlatformStatuses.mockReset();
+    federationMock.readMessagingPlatformStatuses.mockResolvedValue([]);
+    federationMock.remoteBackend.mockClear();
+    federationMock.setStatusReader.mockClear();
+  });
+
+  it("serves the last remote platform status during an expected disconnect", async () => {
+    const { FederationPeerUnavailableError } = await import(
+      "../federation/federation-peer-unavailable-error"
+    );
+    const { registerMessagingStatusIpcHandlers } = await import(
+      "../ipc/messaging-status"
+    );
+    const { MESSAGING_GET_PLATFORM_STATUSES_CHANNEL } = await import(
+      "../../shared/ipc"
+    );
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "peer_stale",
+    };
+    const fresh = [{
+      changedAt: 1_000,
+      health: "enabled",
+      platform: "telegram",
+    }];
+    federationMock.readMessagingPlatformStatuses
+      .mockResolvedValueOnce(fresh)
+      .mockRejectedValueOnce(
+        new FederationPeerUnavailableError("peer_stale"),
+      );
+
+    registerMessagingStatusIpcHandlers();
+    const handler = handlers.get(MESSAGING_GET_PLATFORM_STATUSES_CHANNEL);
+
+    await expect(handler?.({}, { federationTarget })).resolves.toBe(fresh);
+    await expect(handler?.({}, { federationTarget })).resolves.toBe(fresh);
+  });
+
+  it("keeps unexpected remote platform-status failures actionable", async () => {
+    const { registerMessagingStatusIpcHandlers } = await import(
+      "../ipc/messaging-status"
+    );
+    const { MESSAGING_GET_PLATFORM_STATUSES_CHANNEL } = await import(
+      "../../shared/ipc"
+    );
+    federationMock.readMessagingPlatformStatuses.mockRejectedValueOnce(
+      new Error("invalid remote messaging payload"),
+    );
+
+    registerMessagingStatusIpcHandlers();
+
+    await expect(
+      handlers.get(MESSAGING_GET_PLATFORM_STATUSES_CHANNEL)?.({}, {
+        federationTarget: {
+          scope: "remote",
+          instanceId: "peer_broken",
+        },
+      }),
+    ).rejects.toThrow("invalid remote messaging payload");
   });
 
   it("lists and mutates default Agent routes through IPC", async () => {

@@ -20,13 +20,19 @@ export function useBackendSummaries(
   options: {
     enabled?: boolean;
     federationTarget?: FederationTarget;
+    suspended?: boolean;
   } = {},
 ): BackendSummaryState {
   const enabled = options.enabled ?? true;
   const federationTarget = options.federationTarget;
+  const suspended = options.suspended ?? false;
   const [state, setState] = useState<BackendSummaryData>({
     backends: []
   });
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  const suspendedRef = useRef(suspended);
+  suspendedRef.current = suspended;
   const acpRefreshPromiseRef =
     useRef<Promise<BackendSummary[]> | undefined>(undefined);
 
@@ -37,6 +43,10 @@ export function useBackendSummaries(
         error: undefined
       });
       return [];
+    }
+
+    if (suspended) {
+      return stateRef.current.backends;
     }
 
     if (!desktopApi?.listBackends) {
@@ -58,13 +68,19 @@ export function useBackendSummaries(
       });
       return response.backends;
     } catch (error) {
+      // A peer-status event can suspend this hook while an earlier remote
+      // read is still in flight. Keep the last usable summaries in that race;
+      // reconnecting changes `suspended` and immediately refreshes them.
+      if (suspendedRef.current) {
+        return stateRef.current.backends;
+      }
       setState({
         backends: [],
         error: error instanceof Error ? error.message : String(error)
       });
       return [];
     }
-  }, [desktopApi, enabled, federationTarget]);
+  }, [desktopApi, enabled, federationTarget, suspended]);
 
   const refreshAcpAgents = useCallback(async (): Promise<BackendSummary[]> => {
     if (federationTarget?.scope === "remote") {

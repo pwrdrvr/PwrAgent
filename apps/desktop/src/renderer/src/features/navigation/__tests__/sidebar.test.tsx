@@ -227,6 +227,46 @@ afterEach(() => {
 });
 
 describe("Sidebar", () => {
+  it("keeps a loaded thread snapshot visible when its refresh fails", () => {
+    const staleThread: NavigationThreadSummary = {
+      ...sharedThread,
+      federation: {
+        ref: {
+          backend: "codex",
+          target: { scope: "remote", instanceId: "remote-instance" },
+          threadId: sharedThread.id,
+        },
+        instanceLabel: "Remote fixture",
+        peerStatus: "disconnected",
+      },
+    };
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        directories={directories}
+        error="Error invoking remote method: peer is not connected"
+        inboxThreads={[staleThread]}
+        loaded
+        loading={false}
+        selectedItemKey="codex:thread-1"
+        threads={[staleThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Cross-project cleanup" }),
+    ).toHaveClass("is-remote-offline");
+    expect(
+      screen.queryByText("Error invoking remote method: peer is not connected"),
+    ).not.toBeInTheDocument();
+  });
+
   it("labels a remote window without showing the controller's runtime identity", () => {
     (window as unknown as {
       __pwragentFederationLabel?: unknown;

@@ -6,6 +6,7 @@ import type {
   AppServerReadThreadRequest,
   AppServerReadThreadResponse,
   AppServerThreadSummary,
+  ListBackendsResponse,
   MaterializeDirectoryLaunchpadRequest,
   MaterializeDirectoryLaunchpadResponse,
   NavigationSnapshot,
@@ -205,9 +206,41 @@ export async function startInProcessFederationGateway(params: {
       calls.push({ method: "listSkills", params: {} });
       return { backend: "codex" as const, fetchedAt: Date.now(), data: [] };
     },
-    async listBackends() {
+    async listBackends(): Promise<ListBackendsResponse> {
       calls.push({ method: "listBackends", params: {} });
-      return { backends: [] };
+      return {
+        fetchedAt: Date.now(),
+        backends: [
+          {
+            kind: "codex",
+            label: "OpenAI",
+            available: true,
+            methods: ["thread/list", "thread/read", "turn/start"],
+            capabilities: {
+              listThreads: true,
+              createThread: true,
+              resumeThread: true,
+              renameThread: true,
+              readThread: true,
+              startTurn: true,
+              interruptTurn: true,
+              steerTurn: false,
+              transcriptPagination: false,
+              toolUse: false,
+              approvalRequests: false,
+              multiDirectoryThreads: true,
+            },
+            executionModes: [
+              {
+                mode: "default",
+                label: "Default",
+                available: true,
+                isDefault: true,
+              },
+            ],
+          },
+        ],
+      };
     },
     async markThreadSeen(request: { threadId: string }) {
       calls.push({ method: "markThreadSeen", params: request });

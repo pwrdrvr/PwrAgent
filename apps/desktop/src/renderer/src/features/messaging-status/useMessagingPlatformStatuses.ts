@@ -26,6 +26,7 @@ const REMOTE_STATUS_POLL_INTERVAL_MS = 30_000;
 export function useMessagingPlatformStatuses(
   desktopApi: DesktopApi | undefined,
   federationTarget?: FederationRemoteTarget,
+  suspended = false,
 ): {
   statuses: MessagingPlatformStatus[];
   activeAtByPlatform: Record<string, number>;
@@ -37,6 +38,9 @@ export function useMessagingPlatformStatuses(
 
   useEffect(() => {
     if (!desktopApi?.getMessagingPlatformStatuses) {
+      return;
+    }
+    if (federationTarget && suspended) {
       return;
     }
     let cancelled = false;
@@ -91,7 +95,7 @@ export function useMessagingPlatformStatuses(
       cancelled = true;
       unsubscribe?.();
     };
-  }, [desktopApi, federationTarget]);
+  }, [desktopApi, federationTarget, suspended]);
 
   // Sweep stale activity timestamps so the dot stops blinking even if
   // we never receive an "activity end" event (we don't; the runtime

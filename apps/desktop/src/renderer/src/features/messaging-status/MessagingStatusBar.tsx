@@ -14,6 +14,7 @@ import {
 } from "../../lib/messaging-platform-branding";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { readRendererFederationTarget } from "../../lib/federation-window";
+import { useFederationPeerConnectivity } from "../../lib/useFederationPeerConnectivity";
 import { SettingsIcon } from "../../icons/SettingsIcon";
 import { useMessagingPlatformStatuses } from "./useMessagingPlatformStatuses";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -76,9 +77,14 @@ export function MessagingStatusBar(props: {
   const federationTarget = useMemo(() => readRendererFederationTarget(), []);
   const isFederationWindow = Boolean(federationTarget);
   const desktopApi = isFederationWindow ? undefined : props.desktopApi;
+  const peerConnectivity = useFederationPeerConnectivity({
+    desktopApi: props.desktopApi,
+    target: federationTarget,
+  });
   const { statuses, activeAtByPlatform } = useMessagingPlatformStatuses(
     props.desktopApi,
     federationTarget,
+    !peerConnectivity.connected,
   );
   const [open, setOpen] = useState(false);
   const [pinned, setPinned] = useState(false);

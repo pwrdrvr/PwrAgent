@@ -17,6 +17,9 @@ import {
 } from "../../shared/ipc";
 import { getScheduledThreadActionService } from "../scheduled-actions/scheduled-thread-action-service";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
+import {
+  isFederationPeerUnavailableError,
+} from "../federation/federation-peer-unavailable-error";
 
 function remoteBackendFor(request: {
   federationTarget?: CreateScheduledThreadActionRequest["federationTarget"];
@@ -36,6 +39,58 @@ function stripFederationTarget<T extends {
 
 export function registerScheduledActionIpcHandlers(): void {
   getScheduledThreadActionService();
+  const cachedRemoteLists = new Map<
+    string,
+    ListScheduledThreadActionsResponse
+  >();
+  const pendingRemoteLists = new Map<
+    string,
+    Promise<ListScheduledThreadActionsResponse>
+  >();
+
+  const listRemoteActions = async (
+    request: ListScheduledThreadActionsRequest,
+  ): Promise<ListScheduledThreadActionsResponse> => {
+    const target = request.federationTarget;
+    if (!target || !isRemoteFederationTarget(target)) {
+      return getScheduledThreadActionService().list(request);
+    }
+    const localRequest = stripFederationTarget(request);
+    // terminalUpdatedAfter advances every reconciliation pass, but the last
+    // successful response remains the correct stale projection for this
+    // target/thread scope during an outage.
+    const cacheKey = JSON.stringify({
+      instanceId: target.instanceId,
+      backend: request.backend ?? "all",
+      threadId: request.threadId ?? "",
+    });
+    const pendingKey = JSON.stringify({ cacheKey, request: localRequest });
+    const pending = pendingRemoteLists.get(pendingKey);
+    if (pending) {
+      return await pending;
+    }
+    const operation = (async () => {
+      try {
+        const response = await getDesktopFederationRuntime()
+          .remoteBackend(target)
+          .listScheduledThreadActions(localRequest);
+        cachedRemoteLists.set(cacheKey, response);
+        return response;
+      } catch (error) {
+        if (!isFederationPeerUnavailableError(error)) {
+          throw error;
+        }
+        // Resolve normally so Electron never prints an expected disconnect
+        // stack. Do not advance observedAt: reconnect must resume from the
+        // last owner clock cursor and collect terminal actions from the gap.
+        return cachedRemoteLists.get(cacheKey) ?? { actions: [] };
+      }
+    })().finally(() => {
+      pendingRemoteLists.delete(pendingKey);
+    });
+    pendingRemoteLists.set(pendingKey, operation);
+    return await operation;
+  };
 
   ipcMain.removeHandler(SCHEDULED_ACTIONS_LIST_CHANNEL);
   ipcMain.handle(
@@ -45,12 +100,7 @@ export function registerScheduledActionIpcHandlers(): void {
       request?: ListScheduledThreadActionsRequest,
     ): Promise<ListScheduledThreadActionsResponse> => {
       const routedRequest = request ?? {};
-      const remote = remoteBackendFor(routedRequest);
-      return remote
-        ? await remote.listScheduledThreadActions(
-            stripFederationTarget(routedRequest),
-          )
-        : getScheduledThreadActionService().list(routedRequest);
+      return await listRemoteActions(routedRequest);
     },
   );
 

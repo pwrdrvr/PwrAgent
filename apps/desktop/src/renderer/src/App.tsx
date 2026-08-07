@@ -853,6 +853,7 @@ function DesktopAppShell(props: {
   const backendSummaries = useBackendSummaries(desktopApi, {
     enabled: normalAppEnabled,
     federationTarget: activeFederationTarget,
+    suspended: !peerConnectivity.connected,
   });
   const refreshAcpAgents = backendSummaries.refreshAcpAgents;
   const refreshSelectedAcpProvider = useCallback(
@@ -1656,6 +1657,7 @@ function DesktopAppShell(props: {
           activeProfile={profiles.activeProfile}
           profiles={profiles.profiles}
           launchpadError={navigation.launchpadError}
+          loaded={navigation.loaded}
           loading={navigation.loading}
           approvalRequestThreadKeys={session.approvalRequestThreadKeys}
           inputRequestThreadKeys={session.inputRequestThreadKeys}
