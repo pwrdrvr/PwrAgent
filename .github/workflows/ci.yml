@@ -222,6 +222,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
         timeout-minutes: 10
+        with:
+          persist-credentials: false
 
       # pwrdrvr/configure-nodejs is POSIX-only, so use a Windows-specific
       # setup action that activates the repo-pinned pnpm through Corepack.
