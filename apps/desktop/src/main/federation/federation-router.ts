@@ -19,8 +19,9 @@ export type FederationRequestHandler = (
   /**
    * The authenticated peer the envelope arrived from. For direct connections
    * this matches `envelope.sourceInstanceId`; for gateway-relayed requests it
-   * is the relaying gateway. Handlers that must be point-to-point (remote
-   * PTY) compare the two — the envelope field alone is peer-asserted.
+   * is the relaying gateway. Handlers that preserve end-to-end ownership
+   * compare the two and verify the relay hop — the envelope field alone is
+   * peer-asserted.
    */
   sourcePeerId?: FederationInstanceId,
 ) => Promise<unknown> | unknown;
@@ -41,6 +42,11 @@ export class FederationRouter {
       additionalRequiredCapabilities?: (
         envelope: FederationRequestEnvelope,
       ) => readonly FederationCapability[];
+      /** The one authenticated upstream gateway allowed to forward envelopes
+       * whose end-to-end origin differs from the transport peer. */
+      trustedRelayPeerId?:
+        | FederationInstanceId
+        | (() => FederationInstanceId | undefined);
       maxHopCount?: number;
       now?: () => number;
     },
@@ -80,6 +86,18 @@ export class FederationRouter {
     envelope: FederationProtocolEnvelope;
     sourcePeerId?: FederationInstanceId;
   }): Promise<FederationRouteResult> {
+    if (!this.authenticatesOrigin(params.envelope, params.sourcePeerId)) {
+      const failure = this.errorEnvelope(params.envelope, {
+        code: "relay_origin_mismatch",
+        message: "Federation relay origin is not authenticated by this connection.",
+      });
+      this.replyToSource(params.sourcePeerId, failure);
+      return {
+        status: "rejected",
+        code: failure.error.code,
+        message: failure.error.message,
+      };
+    }
     const deadlineFailure = this.checkDeadline(params.envelope);
     if (deadlineFailure) {
       this.replyToSource(params.sourcePeerId, deadlineFailure);
@@ -91,6 +109,18 @@ export class FederationRouter {
     }
 
     if (params.envelope.kind === "request") {
+      const capabilityFailure = this.checkCapability(
+        params.envelope,
+        params.sourcePeerId,
+      );
+      if (capabilityFailure) {
+        this.replyToSource(params.sourcePeerId, capabilityFailure);
+        return {
+          status: "rejected",
+          code: capabilityFailure.error.code,
+          message: capabilityFailure.error.message,
+        };
+      }
       const additionalCapabilityFailure = this.checkAdditionalCapabilities(
         params.envelope,
         params.sourcePeerId,
@@ -114,19 +144,6 @@ export class FederationRouter {
 
     if (params.envelope.kind !== "request") {
       return { status: "handled" };
-    }
-
-    const capabilityFailure = this.checkCapability(
-      params.envelope,
-      params.sourcePeerId,
-    );
-    if (capabilityFailure) {
-      this.replyToSource(params.sourcePeerId, capabilityFailure);
-      return {
-        status: "rejected",
-        code: capabilityFailure.error.code,
-        message: capabilityFailure.error.message,
-      };
     }
 
     const handler = this.handlers.get(params.envelope.method);
@@ -169,6 +186,24 @@ export class FederationRouter {
         message: failure.error.message,
       };
     }
+  }
+
+  /**
+   * Authenticate the claimed end-to-end source against the Noise-authenticated
+   * transport peer. A direct peer must name itself. Only this instance's
+   * configured upstream gateway may preserve another source after a relay hop.
+   */
+  authenticatesOrigin(
+    envelope: FederationProtocolEnvelope,
+    sourcePeerId: FederationInstanceId | undefined,
+  ): boolean {
+    if (!sourcePeerId) return true;
+    if (!envelope.sourceInstanceId) return false;
+    if (envelope.sourceInstanceId === sourcePeerId) return true;
+    return (
+      (envelope.hopCount ?? 0) >= 1
+      && this.trustedRelayPeerId() === sourcePeerId
+    );
   }
 
   private relayEnvelope(params: {
@@ -305,5 +340,10 @@ export class FederationRouter {
 
   private now(): number {
     return this.options.now?.() ?? Date.now();
+  }
+
+  private trustedRelayPeerId(): FederationInstanceId | undefined {
+    const configured = this.options.trustedRelayPeerId;
+    return typeof configured === "function" ? configured() : configured;
   }
 }

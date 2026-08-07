@@ -5,6 +5,7 @@ import type {
   FederationInstanceId,
   FederationRequestEnvelope,
 } from "@pwragent/shared";
+import { isFederationInstanceId } from "@pwragent/shared";
 import type { FederationRouter } from "./federation-router";
 import type { FederationRpcEndpoint } from "./federation-rpc";
 
@@ -14,9 +15,9 @@ import type { FederationRpcEndpoint } from "./federation-rpc";
  * Control plane (viewer → owner, capability-checked RPC requests):
  * `pty.open` / `pty.input` / `pty.resize` / `pty.ack` / `pty.close`.
  * Stream plane (owner → viewer, notifications): `pty.output` / `pty.exit` /
- * `pty.error`. Sessions are point-to-point with the owning instance — the
- * stream is never relayed through a gateway, and only the opener peer may
- * write input to or close a session.
+ * `pty.error`. Sessions stay bound end-to-end to the opener instance even
+ * when their frames transit a gateway: only the opener may write input to or
+ * close a session.
  *
  * This module must stay importable outside Electron (no settings singleton,
  * no electron imports): the in-process E2E federation gateway harness runs the
@@ -175,8 +176,8 @@ type FederationPtyServiceOptions = {
     backend: AppServerBackendKind;
     threadId: string;
   }) => Promise<string | undefined>;
-  /** Direct-to-peer notification send. MUST NOT fall back to gateway relay —
-   *  returns false when the peer has no direct connection. */
+  /** End-to-end notification send. May route through the enrolled gateway;
+   *  returns false when the opener is unreachable. */
   sendNotification: (
     peerId: FederationInstanceId,
     method: string,
@@ -571,32 +572,40 @@ export class FederationPtyService {
 }
 
 /**
- * Register the owner-side control handlers. The stream is point-to-point:
- * a request that reached this instance through a gateway relay (its
- * authenticated source peer differs from the envelope's origin) is rejected
- * outright rather than opening a session whose output could never be
- * delivered without relaying.
+ * Register the owner-side control handlers. A relayed request remains keyed
+ * to its end-to-end origin, not the gateway that carried it, so another
+ * client cannot operate the opener's session. Only a gateway-authorized,
+ * already-relayed envelope may name an origin other than its transport peer.
  */
 export function registerFederationPtyHandlers(params: {
   router: FederationRouter;
   service: FederationPtyService;
 }): void {
-  const direct = (
+  const requester = (
     envelope: FederationRequestEnvelope,
     sourcePeerId: FederationInstanceId | undefined,
   ): FederationInstanceId => {
-    if (!sourcePeerId || sourcePeerId !== envelope.sourceInstanceId) {
+    const originInstanceId = envelope.sourceInstanceId;
+    if (!sourcePeerId || !isFederationInstanceId(originInstanceId)) {
       throw new Error(
-        "Remote terminal sessions are point-to-point; gateway relay is not supported.",
+        "Remote terminal request is missing a valid authenticated origin.",
       );
     }
-    return sourcePeerId;
+    if (sourcePeerId === originInstanceId) {
+      return originInstanceId;
+    }
+    if (!params.router.authenticatesOrigin(envelope, sourcePeerId)) {
+      throw new Error(
+        "Remote terminal relay is not authorized for the claimed origin.",
+      );
+    }
+    return originInstanceId;
   };
   params.router.registerHandler(
     FEDERATION_PTY_METHODS.open,
     async (envelope, sourcePeerId) =>
       await params.service.open(
-        direct(envelope, sourcePeerId),
+        requester(envelope, sourcePeerId),
         envelope.params as FederationPtyOpenRequest,
       ),
   );
@@ -604,7 +613,7 @@ export function registerFederationPtyHandlers(params: {
     FEDERATION_PTY_METHODS.input,
     (envelope, sourcePeerId) => {
       params.service.input(
-        direct(envelope, sourcePeerId),
+        requester(envelope, sourcePeerId),
         envelope.params as FederationPtyInputRequest,
       );
       return {};
@@ -614,7 +623,7 @@ export function registerFederationPtyHandlers(params: {
     FEDERATION_PTY_METHODS.resize,
     (envelope, sourcePeerId) => {
       params.service.resize(
-        direct(envelope, sourcePeerId),
+        requester(envelope, sourcePeerId),
         envelope.params as FederationPtyResizeRequest,
       );
       return {};
@@ -624,7 +633,7 @@ export function registerFederationPtyHandlers(params: {
     FEDERATION_PTY_METHODS.ack,
     (envelope, sourcePeerId) => {
       params.service.ack(
-        direct(envelope, sourcePeerId),
+        requester(envelope, sourcePeerId),
         envelope.params as FederationPtyAckRequest,
       );
       return {};
@@ -634,7 +643,7 @@ export function registerFederationPtyHandlers(params: {
     FEDERATION_PTY_METHODS.close,
     (envelope, sourcePeerId) => {
       params.service.close(
-        direct(envelope, sourcePeerId),
+        requester(envelope, sourcePeerId),
         envelope.params as FederationPtyCloseRequest,
       );
       return {};

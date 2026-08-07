@@ -72,11 +72,8 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
     ref: FederatedThreadRef;
     instanceLabel: string;
     peerStatus?: FederationPeerSummary["status"];
-    /**
-     * Capabilities the owning instance granted this viewer over a DIRECT
-     * connection. `remote_pty` is stripped when the peer is only reachable
-     * through a gateway relay — PTY streams are point-to-point in v1.
-     */
+    /** Capabilities the owning instance granted this viewer, whether the
+     * peer is connected directly or advertised through a gateway relay. */
     capabilities?: FederationCapability[];
     /**
      * The owning instance's celestial identity icon, resolved from the

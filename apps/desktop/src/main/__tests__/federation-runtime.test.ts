@@ -44,7 +44,27 @@ type RuntimeHarness = {
     envelope: FederationProtocolEnvelope,
     sourcePeerId: FederationInstanceId,
   ) => boolean;
+  publishRemotePtyStreamEvent: (
+    envelope: FederationProtocolEnvelope,
+    sourcePeerId: FederationInstanceId,
+  ) => boolean;
+  sendPtyNotification: (
+    peerId: FederationInstanceId,
+    method: string,
+    params: unknown,
+  ) => boolean;
+  onRemotePtyEvent: (
+    listener: (event: {
+      kind: string;
+      peerId: FederationInstanceId;
+      params: unknown;
+    }) => void,
+  ) => () => void;
   remotePeerDirectory: Map<FederationInstanceId, unknown>;
+  ptyService?: {
+    notifyPeerConnected: (peerId: FederationInstanceId) => void;
+    notifyPeerDisconnected: (peerId: FederationInstanceId) => void;
+  };
   onPeerStatusChanged: (listener: () => void) => () => void;
   recordClientConnection: (params: {
     gatewayInstanceId: FederationInstanceId;
@@ -123,7 +143,10 @@ type RuntimeHarness = {
   revokePeer: (peerId: FederationInstanceId) => Promise<unknown>;
   visiblePeers: () => Array<{
     id: FederationInstanceId;
+    label?: string;
+    role?: "gateway" | "client" | "dual";
     status: string;
+    capabilities?: FederationCapability[];
   }>;
   connectedPeerTargets: () => Array<{
     target: { scope: "remote"; instanceId: FederationInstanceId };
@@ -217,7 +240,13 @@ describe("DesktopFederationRuntime", () => {
     });
     // remoteNavigationSnapshot also consults the live peer view for the
     // granted-capability set; there is no app state db in this harness.
-    runtime.visiblePeers = () => [];
+    runtime.visiblePeers = () => [{
+      id: "client_one",
+      label: "Studio Mac",
+      role: "client",
+      status: "connected",
+      capabilities: ["remote_pty"],
+    }];
 
     const snapshot = await runtime.remoteNavigationSnapshot(
       { scope: "remote", instanceId: "client_one" },
@@ -242,6 +271,7 @@ describe("DesktopFederationRuntime", () => {
     expect(snapshot.inboxThreadKeys).toEqual([]);
     expect(snapshot.directories[0]?.threadKeys).toEqual(["codex:thread-1"]);
     expect(snapshot.threads[0]?.gitWorkingState).toEqual(gitWorkingState);
+    expect(snapshot.threads[0]?.federation?.capabilities).toContain("remote_pty");
     expect(findPreferredReviewWorkspaceCwd(snapshot.threads[0])).toBe(
       pwrAgentWorktree,
     );
@@ -365,6 +395,70 @@ describe("DesktopFederationRuntime", () => {
     expect(visibleSnapshots).toEqual([
       ["gateway_one", "client_2018", "client_m5"],
     ]);
+  });
+
+  it("propagates advertised viewer disconnects and reconnects to remote PTY sessions", () => {
+    const connected: FederationInstanceId[] = [];
+    const disconnected: FederationInstanceId[] = [];
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.localInstanceId = "owner_one";
+    runtime.ptyService = {
+      notifyPeerConnected: (peerId) => connected.push(peerId),
+      notifyPeerDisconnected: (peerId) => disconnected.push(peerId),
+    };
+    const directory = (
+      id: string,
+      status?: "connected" | "disconnected",
+    ): FederationProtocolEnvelope => ({
+      id,
+      kind: "notification",
+      method: "federation.peerDirectory",
+      params: {
+        peers: status
+          ? [{
+              id: "viewer_one",
+              label: "Viewer",
+              role: "client",
+              status,
+              capabilities: ["remote_pty"],
+            }]
+          : [],
+      },
+      protocolVersion: FEDERATION_PROTOCOL_VERSION,
+      sourceInstanceId: "gateway_one",
+      targetInstanceId: "owner_one",
+      createdAt: 2_000,
+    });
+
+    runtime.applyPeerDirectory(directory("peers-1", "connected"));
+    expect(connected).toEqual(["viewer_one"]);
+    runtime.applyPeerDirectory(directory("peers-2", "disconnected"));
+    expect(disconnected).toEqual(["viewer_one"]);
+    runtime.applyPeerDirectory(directory("peers-3", "connected"));
+    expect(connected).toEqual(["viewer_one", "viewer_one"]);
+    runtime.applyPeerDirectory(directory("peers-4"));
+    expect(disconnected).toEqual(["viewer_one", "viewer_one"]);
+  });
+
+  it("disconnects every relayed PTY viewer when the upstream gateway closes", () => {
+    const disconnected: FederationInstanceId[] = [];
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.localInstanceId = "owner_one";
+    runtime.ptyService = {
+      notifyPeerConnected: () => undefined,
+      notifyPeerDisconnected: (peerId) => disconnected.push(peerId),
+    };
+    runtime.remotePeerDirectory.set("viewer_one", {
+      id: "viewer_one",
+      label: "Viewer",
+      role: "client",
+      status: "connected",
+      capabilities: ["remote_pty"],
+    });
+
+    runtime.disconnectAdvertisedPeers("Gateway disconnected.");
+
+    expect(disconnected).toEqual(["viewer_one"]);
   });
 
   it("records a successful client session and preserves its timing", () => {
@@ -612,7 +706,10 @@ describe("DesktopFederationRuntime", () => {
 
   it("resolves sibling RPC responses received from the gateway transport", async () => {
     const sentToGateway: FederationProtocolEnvelope[] = [];
-    const router = new FederationRouter({ localInstanceId: "client_one" });
+    const router = new FederationRouter({
+      localInstanceId: "client_one",
+      trustedRelayPeerId: "gateway_one",
+    });
     router.registerConnection(
       createConnection({
         peerId: "gateway_one",
@@ -640,6 +737,7 @@ describe("DesktopFederationRuntime", () => {
         sourceInstanceId: "client_two",
         targetInstanceId: "client_one",
         createdAt: 2_000,
+        hopCount: 1,
         result: { backend: "codex", fetchedAt: 2_000, threads: [] },
       },
       "gateway_one",
@@ -1124,6 +1222,106 @@ describe("DesktopFederationRuntime", () => {
         sourceInstanceId: "client_two",
         targetInstanceId: "client_one",
         hopCount: 1,
+      },
+    ]);
+  });
+
+  it("routes PTY stream notifications through a gateway and preserves the owner identity", () => {
+    const relayed: FederationProtocolEnvelope[] = [];
+    const gatewayRouter = new FederationRouter({ localInstanceId: "gateway_one" });
+    gatewayRouter.registerConnection(createConnection({
+      peerId: "owner_one",
+      capabilities: ["gateway_relay", "remote_pty"],
+    }));
+    gatewayRouter.registerConnection(createConnection({
+      peerId: "viewer_one",
+      capabilities: ["gateway_relay", "remote_pty"],
+      sendEnvelope: (envelope) => relayed.push(envelope),
+    }));
+    const gateway = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    gateway.localInstanceId = "gateway_one";
+    gateway.router = gatewayRouter;
+
+    expect(gateway.publishRemotePtyStreamEvent({
+      id: "pty-output-1",
+      kind: "notification",
+      method: "pty.output",
+      params: {
+        sessionId: "session-1",
+        seq: 1,
+        dataBase64: "b2s=",
+      },
+      protocolVersion: FEDERATION_PROTOCOL_VERSION,
+      sourceInstanceId: "owner_one",
+      targetInstanceId: "viewer_one",
+      createdAt: 2_000,
+    }, "owner_one")).toBe(true);
+    expect(relayed).toMatchObject([
+      {
+        method: "pty.output",
+        sourceInstanceId: "owner_one",
+        targetInstanceId: "viewer_one",
+        hopCount: 1,
+      },
+    ]);
+
+    const viewerRouter = new FederationRouter({
+      localInstanceId: "viewer_one",
+      trustedRelayPeerId: "gateway_one",
+    });
+    viewerRouter.registerConnection(createConnection({
+      peerId: "gateway_one",
+      capabilities: ["gateway_relay", "remote_pty"],
+    }));
+    const viewer = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    viewer.localInstanceId = "viewer_one";
+    viewer.router = viewerRouter;
+    const events: Array<{
+      kind: string;
+      peerId: FederationInstanceId;
+      params: unknown;
+    }> = [];
+    viewer.onRemotePtyEvent((event) => events.push(event));
+    expect(viewer.publishRemotePtyStreamEvent(relayed[0]!, "gateway_one")).toBe(true);
+    expect(events).toMatchObject([
+      {
+        kind: "output",
+        peerId: "owner_one",
+        params: { sessionId: "session-1", seq: 1 },
+      },
+    ]);
+
+    expect(viewer.publishRemotePtyStreamEvent(
+      relayed[0]!,
+      "other_peer",
+    )).toBe(true);
+    expect(events).toHaveLength(1);
+  });
+
+  it("sends owner PTY notifications through the enrolled gateway fallback", () => {
+    const sentToGateway: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({ localInstanceId: "owner_one" });
+    router.registerConnection(createConnection({
+      peerId: "gateway_one",
+      capabilities: ["gateway_relay", "remote_pty"],
+      sendEnvelope: (envelope) => sentToGateway.push(envelope),
+    }));
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.localInstanceId = "owner_one";
+    runtime.gatewayInstanceId = "gateway_one";
+    runtime.router = router;
+
+    expect(runtime.sendPtyNotification(
+      "viewer_one",
+      "pty.output",
+      { sessionId: "session-1", seq: 1, dataBase64: "b2s=" },
+    )).toBe(true);
+    expect(sentToGateway).toMatchObject([
+      {
+        kind: "notification",
+        method: "pty.output",
+        sourceInstanceId: "owner_one",
+        targetInstanceId: "viewer_one",
       },
     ]);
   });

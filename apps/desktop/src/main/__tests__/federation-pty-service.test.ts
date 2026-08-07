@@ -437,6 +437,7 @@ describe("federation pty router integration", () => {
     method: string,
     params: unknown,
     sourceInstanceId: string,
+    hopCount?: number,
   ): FederationRequestEnvelope {
     return {
       id: `req-${method}-${sourceInstanceId}`,
@@ -447,17 +448,19 @@ describe("federation pty router integration", () => {
       sourceInstanceId,
       targetInstanceId: "owner",
       createdAt: Date.now(),
+      hopCount,
     };
   }
 
   function createRouterHarness() {
-    const { service, sent } = createHarness();
+    const { pty, service, sent } = createHarness();
     const router = new FederationRouter({
       localInstanceId: "owner",
+      trustedRelayPeerId: "gateway",
       methodCapabilities: { ...FEDERATION_PTY_METHOD_CAPABILITIES },
     });
     registerFederationPtyHandlers({ router, service });
-    return { router, sent, service };
+    return { pty, router, sent, service };
   }
 
   it("rejects pty methods from a peer without remote_pty", async () => {
@@ -477,21 +480,91 @@ describe("federation pty router integration", () => {
     });
   });
 
-  it("rejects a gateway-relayed open instead of streaming through a relay", async () => {
+  it("keeps a gateway-relayed session bound to its originating viewer", async () => {
+    const { pty, router, service } = createRouterHarness();
+    router.registerConnection({
+      peerId: "gateway",
+      capabilities: ["remote_pty", "gateway_relay"],
+      sendEnvelope: () => undefined,
+    });
+    const opened = await router.routeEnvelope({
+      envelope: buildEnvelope(
+        FEDERATION_PTY_METHODS.open,
+        OPEN_REQUEST,
+        "viewer",
+        1,
+      ),
+      sourcePeerId: "gateway",
+    });
+    expect(opened).toMatchObject({ status: "handled" });
+    expect(service.sessionCountForPeer("viewer")).toBe(1);
+    expect(service.sessionCountForPeer("gateway")).toBe(0);
+    const sessionId = (
+      opened as { response: { result: { sessionId: string } } }
+    ).response.result.sessionId;
+
+    await expect(router.routeEnvelope({
+      envelope: buildEnvelope(
+        FEDERATION_PTY_METHODS.input,
+        {
+          sessionId,
+          dataBase64: Buffer.from("pwd\r").toString("base64"),
+        },
+        "viewer",
+        1,
+      ),
+      sourcePeerId: "gateway",
+    })).resolves.toMatchObject({ status: "handled" });
+    expect(pty.written).toEqual(["pwd\r"]);
+
+    await expect(router.routeEnvelope({
+      envelope: buildEnvelope(
+        FEDERATION_PTY_METHODS.input,
+        { sessionId, dataBase64: "" },
+        "other_viewer",
+        1,
+      ),
+      sourcePeerId: "gateway",
+    })).resolves.toMatchObject({ status: "rejected" });
+  });
+
+  it("rejects a claimed relayed origin without a relay hop", async () => {
     const { router } = createRouterHarness();
     router.registerConnection({
       peerId: "gateway",
       capabilities: ["remote_pty", "gateway_relay"],
       sendEnvelope: () => undefined,
     });
-    // The envelope claims to originate from "viewer" but arrived over the
-    // gateway's authenticated link.
     const result = await router.routeEnvelope({
       envelope: buildEnvelope(FEDERATION_PTY_METHODS.open, OPEN_REQUEST, "viewer"),
       sourcePeerId: "gateway",
     });
-    expect(result).toMatchObject({ status: "rejected" });
-    expect((result as { message?: string }).message).toMatch(/point-to-point/);
+    expect(result).toMatchObject({
+      status: "rejected",
+      code: "relay_origin_mismatch",
+    });
+  });
+
+  it("rejects a fabricated origin from a non-gateway peer", async () => {
+    const { router } = createRouterHarness();
+    router.registerConnection({
+      peerId: "other_peer",
+      capabilities: ["remote_pty", "gateway_relay"],
+      sendEnvelope: () => undefined,
+    });
+    const result = await router.routeEnvelope({
+      envelope: buildEnvelope(
+        FEDERATION_PTY_METHODS.open,
+        OPEN_REQUEST,
+        "fabricated_viewer",
+        1,
+      ),
+      sourcePeerId: "other_peer",
+    });
+    expect(result).toMatchObject({
+      status: "rejected",
+      code: "relay_origin_mismatch",
+    });
   });
 
   it("opens a session for a directly connected peer with remote_pty", async () => {

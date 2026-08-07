@@ -865,15 +865,13 @@ export class DesktopFederationRuntime {
     const instanceLabel = peer
       ? formatFederationPeerDisplayLabel(peer, visible)
       : target.instanceId;
-    // The granted set the viewer can act on. remote_pty is stripped when the
-    // peer is only reachable through a gateway relay: PTY streams are
-    // point-to-point in v1, so the toggle must read as unavailable there.
+    // The granted set the viewer can act on. Gateway-advertised capabilities
+    // remain authoritative for relayed peers just as live connection
+    // capabilities are for direct peers.
     const directConnection = this.router?.getConnection(target.instanceId);
     const capabilities = directConnection
       ? [...directConnection.capabilities]
-      : (visiblePeer?.capabilities ?? []).filter(
-          (capability) => capability !== "remote_pty",
-        );
+      : [...(visiblePeer?.capabilities ?? [])];
     const peerStatus = visiblePeer?.status ?? peer?.status;
     const threads = response.threads.map((thread) => {
       const ref = buildFederatedThreadRef({
@@ -980,6 +978,11 @@ export class DesktopFederationRuntime {
     const localInstanceId = this.ensureLocalInstanceId();
     const router = new FederationRouter({
       localInstanceId,
+      trustedRelayPeerId: () =>
+        this.gatewayInstanceId
+        ?? (isAppStateInitialized()
+          ? getAppStateDb().getMeta(GATEWAY_INSTANCE_ID_META_KEY) || undefined
+          : undefined),
       methodCapabilities: {
         ...FEDERATION_BACKEND_METHOD_CAPABILITIES,
         ...FEDERATION_PTY_METHOD_CAPABILITIES,
@@ -1585,6 +1588,9 @@ export class DesktopFederationRuntime {
         status: peer.status === "revoked" ? "revoked" : "disconnected",
         unavailableReason: reason,
       });
+      if (peer.status === "connected") {
+        this.ptyService?.notifyPeerDisconnected(peerId);
+      }
       this.publishPeerStatus(
         peerId,
         peer.status === "revoked" ? "revoked" : "disconnected",
@@ -1601,6 +1607,16 @@ export class DesktopFederationRuntime {
     envelope: FederationProtocolEnvelope,
     sourcePeerId: FederationInstanceId,
   ): Promise<void> {
+    if (
+      this.router
+      && !this.router.authenticatesOrigin(envelope, sourcePeerId)
+    ) {
+      log.warn("federation envelope claimed an unauthenticated relay origin", {
+        claimedSourceInstanceId: envelope.sourceInstanceId,
+        sourcePeerId,
+      });
+      return;
+    }
     if (this.applyPeerDirectory(envelope)) {
       return;
     }
@@ -1634,30 +1650,28 @@ export class DesktopFederationRuntime {
     await this.router?.routeEnvelope({ envelope, sourcePeerId });
   }
 
-  /**
-   * Owner → viewer PTY stream frame. Deliberately DIRECT-only: no gateway
-   * fallback, so `hopCount` stays 0 and a shell stream can never transit a
-   * relay. Returns false when the peer has no direct connection — the
-   * service's disconnect reap owns cleanup in that case.
-   */
+  /** Owner → viewer PTY stream frame, routed directly when possible and
+   * through this client's enrolled gateway otherwise. */
   private sendPtyNotification(
     peerId: FederationInstanceId,
     method: string,
     params: unknown,
   ): boolean {
-    const connection = this.router?.getConnection(peerId);
-    if (!connection) return false;
-    connection.sendEnvelope({
-      id: `federation-pty:${randomUUID()}`,
-      kind: "notification",
-      method,
-      params,
-      protocolVersion: FEDERATION_PROTOCOL_VERSION,
-      sourceInstanceId: this.ensureLocalInstanceId(),
-      targetInstanceId: peerId,
-      createdAt: Date.now(),
-    });
-    return true;
+    try {
+      this.sendEnvelopeToTarget(peerId, {
+        id: `federation-pty:${randomUUID()}`,
+        kind: "notification",
+        method,
+        params,
+        protocolVersion: FEDERATION_PROTOCOL_VERSION,
+        sourceInstanceId: this.ensureLocalInstanceId(),
+        targetInstanceId: peerId,
+        createdAt: Date.now(),
+      });
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private publishRemotePtyStreamEvent(
@@ -1670,19 +1684,22 @@ export class DesktopFederationRuntime {
     ) {
       return false;
     }
-    // Point-to-point invariant, receive side: a PTY frame addressed to some
-    // other instance is dropped, never relayed onward; and a frame whose
-    // claimed origin differs from the authenticated link it arrived on is
-    // spoofed, not trusted.
+    // Gateway hop: keep the end-to-end source/target intact and let the
+    // router enforce relay authorization + hop limits.
     if (
       envelope.targetInstanceId &&
       envelope.targetInstanceId !== this.ensureLocalInstanceId()
     ) {
+      void this.router?.routeEnvelope({ envelope, sourcePeerId });
+      return true;
+    }
+    const originInstanceId = envelope.sourceInstanceId ?? sourcePeerId;
+    if (!isFederationInstanceId(originInstanceId)) {
       return true;
     }
     if (
-      envelope.sourceInstanceId &&
-      envelope.sourceInstanceId !== sourcePeerId
+      originInstanceId !== sourcePeerId
+      && !this.router?.authenticatesOrigin(envelope, sourcePeerId)
     ) {
       return true;
     }
@@ -1694,7 +1711,7 @@ export class DesktopFederationRuntime {
           : "error";
     const event = {
       kind,
-      peerId: sourcePeerId,
+      peerId: originInstanceId,
       params: envelope.params,
     } as FederationPtyStreamEvent;
     for (const listener of this.remotePtyEventListeners) {
@@ -1952,6 +1969,13 @@ export class DesktopFederationRuntime {
           lastActivityAt: peer.lastActivityAt ?? previous?.lastActivityAt,
           canRevoke: false,
         });
+        if (peer.status === "connected") {
+          if (previous?.status !== "connected") {
+            this.ptyService?.notifyPeerConnected(peer.id);
+          }
+        } else if (previous?.status === "connected") {
+          this.ptyService?.notifyPeerDisconnected(peer.id);
+        }
         previousPeers.delete(peer.id);
       }
     }
@@ -1965,6 +1989,9 @@ export class DesktopFederationRuntime {
       this.publishPeerStatus(peer.id, peer.status, peer.unavailableReason);
     }
     for (const peerId of previousPeers.keys()) {
+      if (previousPeers.get(peerId)?.status === "connected") {
+        this.ptyService?.notifyPeerDisconnected(peerId);
+      }
       this.publishPeerStatus(
         peerId,
         "disconnected",

@@ -97,6 +97,127 @@ describe("FederationRouter", () => {
     ]);
   });
 
+  it("enforces method capabilities on the originating peer before relaying", async () => {
+    const replies: FederationProtocolEnvelope[] = [];
+    const relayed: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({
+      localInstanceId: "gateway_one",
+      methodCapabilities: {
+        "pty.open": "remote_pty",
+      },
+    });
+    router.registerConnection({
+      peerId: "client_one",
+      capabilities: ["gateway_relay"],
+      sendEnvelope: (envelope) => replies.push(envelope),
+    });
+    router.registerConnection({
+      peerId: "client_two",
+      capabilities: ["gateway_relay", "remote_pty"],
+      sendEnvelope: (envelope) => relayed.push(envelope),
+    });
+    const request = {
+      id: "pty-open-1",
+      kind: "request" as const,
+      method: "pty.open",
+      params: {},
+      protocolVersion: 1 as const,
+      sourceInstanceId: "client_one",
+      targetInstanceId: "client_two",
+      createdAt: 1_000,
+    };
+
+    await expect(router.routeEnvelope({
+      sourcePeerId: "client_one",
+      envelope: request,
+    })).resolves.toMatchObject({
+      status: "rejected",
+      code: "capability_denied",
+    });
+    expect(relayed).toEqual([]);
+    expect(replies).toMatchObject([
+      { kind: "error", error: { code: "capability_denied" } },
+    ]);
+
+    router.registerConnection({
+      peerId: "client_one",
+      capabilities: ["gateway_relay", "remote_pty"],
+      sendEnvelope: (envelope) => replies.push(envelope),
+    });
+    await expect(router.routeEnvelope({
+      sourcePeerId: "client_one",
+      envelope: request,
+    })).resolves.toMatchObject({ status: "relayed" });
+    expect(relayed).toMatchObject([
+      {
+        method: "pty.open",
+        sourceInstanceId: "client_one",
+        targetInstanceId: "client_two",
+        hopCount: 1,
+      },
+    ]);
+  });
+
+  it("authenticates relayed origins against the configured upstream gateway", async () => {
+    const relayed: FederationProtocolEnvelope[] = [];
+    const rejected: FederationProtocolEnvelope[] = [];
+    const gatewayRouter = new FederationRouter({
+      localInstanceId: "gateway_one",
+    });
+    gatewayRouter.registerConnection({
+      peerId: "client_one",
+      capabilities: ["gateway_relay"],
+      sendEnvelope: (envelope) => rejected.push(envelope),
+    });
+    gatewayRouter.registerConnection({
+      peerId: "client_two",
+      capabilities: ["gateway_relay"],
+      sendEnvelope: (envelope) => relayed.push(envelope),
+    });
+    const forged = {
+      id: "forged-relay-1",
+      kind: "request" as const,
+      method: "thread.read",
+      params: {},
+      protocolVersion: 1 as const,
+      sourceInstanceId: "fabricated_viewer",
+      targetInstanceId: "client_two",
+      createdAt: 1_000,
+      hopCount: 1,
+    };
+
+    await expect(gatewayRouter.routeEnvelope({
+      sourcePeerId: "client_one",
+      envelope: forged,
+    })).resolves.toMatchObject({
+      status: "rejected",
+      code: "relay_origin_mismatch",
+    });
+    expect(relayed).toEqual([]);
+    expect(rejected).toMatchObject([
+      { kind: "error", error: { code: "relay_origin_mismatch" } },
+    ]);
+
+    const ownerRouter = new FederationRouter({
+      localInstanceId: "client_two",
+      trustedRelayPeerId: "gateway_one",
+    });
+    ownerRouter.registerConnection({
+      peerId: "gateway_one",
+      capabilities: ["gateway_relay"],
+      sendEnvelope: () => undefined,
+    });
+    ownerRouter.registerHandler("thread.read", () => ({ ok: true }));
+    await expect(ownerRouter.routeEnvelope({
+      sourcePeerId: "gateway_one",
+      envelope: {
+        ...forged,
+        sourceInstanceId: "client_one",
+        targetInstanceId: "client_two",
+      },
+    })).resolves.toMatchObject({ status: "handled" });
+  });
+
   it("requires scheduler authorization before invoking a durable steer fallback", async () => {
     let handled = 0;
     const router = new FederationRouter({
