@@ -39,12 +39,21 @@ import {
   type StarMapCardSlot,
 } from "./star-map-layout";
 import {
+  cardRingSlots,
   computeOrbitPlacement,
   galaxyArmPath,
   shouldStartCanvasPan,
 } from "./star-map-orbit";
 import { buildFederationTopology } from "./star-map-topology";
+import {
+  groupThreadsByProject,
+  instanceIdByThreadKey,
+} from "./star-map-projects";
+import { computeProjectLayout } from "./star-map-project-layout";
+import { StarMapProjectBody } from "./StarMapProjectBody";
+import { readRendererFederationTarget } from "../../lib/federation-window";
 import { StarMapChatCard } from "./StarMapChatCard";
+import type { StarMapCardMenuAction } from "./StarMapCardMenu";
 import { useStarMapChatCards } from "./useStarMapChatCards";
 import { IntakeDialog, type IntakeDialogTarget } from "./IntakeDialog";
 import {
@@ -153,6 +162,8 @@ export function StarMapScreen(props: StarMapScreenProps) {
   // pans and zooms rather than compressing the map to fit.
   const [view, setView] = useState({ x: 0, y: 0, scale: 1 });
   const orbitMode = preferences.layout === "orbit";
+  /** Projects as suns: threads pooled across instances, one body per repo. */
+  const projectsMode = preferences.layout === "projects";
 
   // Focus the layer on open AND whenever the floating thread closes -
   // "Back to map" leaves focus inside <main>, and without a refocus the
@@ -429,6 +440,31 @@ export function StarMapScreen(props: StarMapScreenProps) {
     remote,
   ]);
 
+  const projects = useMemo(
+    () => groupThreadsByProject(attentionByInstance),
+    [attentionByInstance],
+  );
+
+  const projectThreadOwners = useMemo(
+    () => instanceIdByThreadKey(attentionByInstance),
+    [attentionByInstance],
+  );
+
+  const projectLayout = useMemo(
+    () =>
+      computeProjectLayout({
+        cardWidth: ORBIT_CARD_WIDTH,
+        projects: projects.map((project) => ({
+          key: project.key,
+          cardCount: Math.min(
+            project.threads.length,
+            ORBIT_MAX_CARDS_PER_INSTANCE,
+          ),
+        })),
+      }),
+    [projects],
+  );
+
   // What the agent chip is currently holding back: cards the attention
   // filters would show but this one excludes.
   const agentFilterCount = useMemo(() => {
@@ -678,6 +714,92 @@ export function StarMapScreen(props: StarMapScreenProps) {
     [desktopApi, onOpenLocalThread],
   );
 
+  const [cardError, setCardError] = useState<string | undefined>(undefined);
+
+  /**
+   * Refresh whichever cloud owns a thread. Archive removes it from the
+   * owning instance, so the map has to re-fetch rather than guess.
+   */
+  const refreshOwner = useCallback(
+    (instanceId: string) => {
+      if (instanceId === localInstanceId) {
+        props.onRefreshLocalThreads?.();
+      } else {
+        setRemoteRefreshNonce((nonce) => nonce + 1);
+      }
+    },
+    [localInstanceId, props],
+  );
+
+  const cardMenuActions = useCallback(
+    (
+      thread: NavigationThreadSummary,
+      instanceId: string,
+    ): StarMapCardMenuAction[] => {
+      const federationTarget =
+        thread.federation?.ref.target ?? readRendererFederationTarget();
+      const actions: StarMapCardMenuAction[] = [
+        {
+          key: "open-full",
+          label: "Open in full view",
+          onSelect: () => openThreadFully(thread),
+        },
+      ];
+      if (desktopApi?.markThreadSeen && thread.inbox.inInbox) {
+        actions.push({
+          key: "mark-seen",
+          label: "Mark as seen",
+          onSelect: () => {
+            void desktopApi
+              .markThreadSeen?.({
+                backend: thread.source,
+                federationTarget,
+                threadId: thread.id,
+              })
+              .then(() => refreshOwner(instanceId))
+              .catch((error: unknown) => {
+                setCardError(
+                  error instanceof Error
+                    ? error.message
+                    : "Could not mark that thread seen.",
+                );
+              });
+          },
+        });
+      }
+      if (desktopApi?.archiveThread) {
+        actions.push({
+          danger: true,
+          key: "archive",
+          label: "Archive thread",
+          onSelect: () => {
+            void desktopApi
+              .archiveThread?.({
+                backend: thread.source,
+                federationTarget,
+                threadId: thread.id,
+              })
+              .then(() => {
+                chatCards.close(
+                  buildThreadIdentityKey(thread.source, thread.id),
+                );
+                refreshOwner(instanceId);
+              })
+              .catch((error: unknown) => {
+                setCardError(
+                  error instanceof Error
+                    ? error.message
+                    : "Could not archive that thread.",
+                );
+              });
+          },
+        });
+      }
+      return actions;
+    },
+    [chatCards, desktopApi, openThreadFully, refreshOwner],
+  );
+
   const linkState = (peerId: string) => {
     const status = peerById.get(peerId)?.status
       ?? (peerId === localInstanceId ? "connected" : "disconnected");
@@ -745,6 +867,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
               centered={orbitMode}
               stackIndex={index}
               cardFields={preferences.cardFields}
+              menuActions={cardMenuActions(thread, position.instanceId)}
               onCommitOffset={
                 // Drags persist + sync only once the durable instance id is
                 // known; before that, cards stay in their default slots.
@@ -831,7 +954,9 @@ export function StarMapScreen(props: StarMapScreenProps) {
         </svg>
         <div
           ref={canvasRef}
-          className={`star-map__canvas${orbitMode ? " is-orbit" : ""}`}
+          className={`star-map__canvas${
+            orbitMode || projectsMode ? " is-orbit" : ""
+          }`}
           style={
             orbitMode
               ? {
@@ -839,9 +964,16 @@ export function StarMapScreen(props: StarMapScreenProps) {
                   height: orbit.canvasHeight,
                   transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`,
                 }
-              : undefined
+              : projectsMode
+                ? {
+                    width: projectLayout.canvasWidth,
+                    height: projectLayout.canvasHeight,
+                    transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`,
+                  }
+                : undefined
           }
         >
+        {projectsMode ? null : (
         <svg
           className="star-map__links"
           viewBox={
@@ -900,7 +1032,8 @@ export function StarMapScreen(props: StarMapScreenProps) {
             );
           })}
         </svg>
-        {bodies.map((position) => {
+        )}
+        {(projectsMode ? [] : bodies).map((position) => {
           const entry = instanceEntry(position.instanceId);
           return (
             <div
@@ -962,7 +1095,80 @@ export function StarMapScreen(props: StarMapScreenProps) {
             </div>
           );
         })}
-        {bodies.map((position) => renderCloud(position))}
+        {(projectsMode ? [] : bodies).map((position) => renderCloud(position))}
+        {projectsMode
+          ? projectLayout.projects.map((placement) => {
+              const project = projects.find(
+                (entry) => entry.key === placement.key,
+              );
+              if (!project) return null;
+              const visible = project.threads.slice(
+                0,
+                ORBIT_MAX_CARDS_PER_INSTANCE,
+              );
+              const slots = cardRingSlots(visible.length, ORBIT_CARD_WIDTH);
+              return (
+                <div
+                  key={`project:${placement.key}`}
+                  className="star-map__project-cloud"
+                  style={{ left: placement.x, top: placement.y }}
+                >
+                  <StarMapProjectBody
+                    label={project.label}
+                    projectKey={project.key}
+                    threadCount={project.threads.length}
+                  />
+                  {visible.map((thread, index) => {
+                    const threadKey = buildThreadIdentityKey(
+                      thread.source,
+                      thread.id,
+                    );
+                    // Every card here came out of `attentionByInstance`, so
+                    // the owner is always present; fall back to the local
+                    // instance rather than inventing an empty id.
+                    const owner =
+                      projectThreadOwners.get(threadKey) ?? localInstanceId;
+                    return (
+                      <StarMapThreadCard
+                        key={threadKey}
+                        thread={thread}
+                        sessionKeys={
+                          owner === localInstanceId
+                            ? props.sessionKeys
+                            : undefined
+                        }
+                        instanceIcon={celestialIcons.iconFor(
+                          owner === localInstanceId ? undefined : owner,
+                        )}
+                        baseSlot={slots[index]}
+                        // No drag here on purpose: arrangements are keyed
+                        // and synced per federation instance, and a project
+                        // is not an instance. Giving projects their own
+                        // arrangement space is protocol work, so cards in
+                        // this lens simply do not move rather than moving
+                        // and failing to persist.
+                        width={ORBIT_CARD_WIDTH}
+                        centered
+                        stackIndex={index}
+                        // The project IS the sun here, so the project chip
+                        // is redundant; the machine is what you cannot
+                        // otherwise tell, so the instance chip earns its
+                        // place instead.
+                        cardFields={{
+                          ...preferences.cardFields,
+                          primaryDirectory: false,
+                          secondaryDirectories: false,
+                        }}
+                        showInstanceChip
+                        menuActions={cardMenuActions(thread, owner)}
+                        onOpen={openThread}
+                      />
+                    );
+                  })}
+                </div>
+              );
+            })
+          : null}
         </div>
       </div>
       {intakeTarget ? (
@@ -1021,6 +1227,18 @@ export function StarMapScreen(props: StarMapScreenProps) {
           />
         );
       })}
+      {cardError ? (
+        <p className="star-map__card-error" role="alert">
+          {cardError}
+          <button
+            type="button"
+            aria-label="Dismiss error"
+            onClick={() => setCardError(undefined)}
+          >
+            ×
+          </button>
+        </p>
+      ) : null}
       {/* The map layer covers the app chrome, including the header toggle
           that opened it, so it must carry its own way out. */}
       <button

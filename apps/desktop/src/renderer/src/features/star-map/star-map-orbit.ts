@@ -204,9 +204,17 @@ export function cardRingExtent(
   if (count <= 0) {
     return { rx: EMPTY_INSTANCE_EXTENT, ry: EMPTY_INSTANCE_EXTENT };
   }
-  const rings = cardRings(count, cardWidth);
-  const outer = rings[rings.length - 1];
-  return { rx: outer.rx, ry: outer.ry };
+  // Half-extent of the DRAWN cloud, cards included — measured from the
+  // placed slots rather than the bare rings. Keep-out relief pushes some
+  // slots outside their ring, and slots hold card centres, so a caller
+  // spacing bodies on ring radii alone would let real cards collide.
+  let rx = 0;
+  let ry = 0;
+  for (const slot of cardRingSlots(count, cardWidth)) {
+    rx = Math.max(rx, Math.abs(slot.dx) + cardWidth / 2);
+    ry = Math.max(ry, Math.abs(slot.dy) + CARD_HALF_HEIGHT);
+  }
+  return { rx, ry };
 }
 
 /**

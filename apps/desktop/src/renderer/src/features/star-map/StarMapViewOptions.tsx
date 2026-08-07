@@ -72,7 +72,7 @@ export function StarMapViewOptions(props: {
         >
           <p className="star-map__view-heading">Layout</p>
           <div className="star-map__layout-switch" role="group" aria-label="Layout">
-            {(["lanes", "orbit"] as const).map((mode) => (
+            {(["lanes", "orbit", "projects"] as const).map((mode) => (
               <button
                 key={mode}
                 type="button"
@@ -84,7 +84,11 @@ export function StarMapViewOptions(props: {
                   props.onChange({ ...props.preferences, layout: mode })
                 }
               >
-                {mode === "lanes" ? "Lanes" : "Orbit"}
+                {mode === "lanes"
+                  ? "Lanes"
+                  : mode === "orbit"
+                    ? "Orbit"
+                    : "Projects"}
               </button>
             ))}
           </div>
